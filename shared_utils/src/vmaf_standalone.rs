@@ -1,11 +1,12 @@
 //! 🔥 Standalone VMAF Tool Integration
-//! 使用独立的 vmaf 命令行工具，绕过 ffmpeg libvmaf 依赖
+//! Uses standalone vmaf command-line tool, bypassing ffmpeg libvmaf dependency
 
 use anyhow::{Context, Result};
 use serde_json::Value;
 use std::path::Path;
 use std::process::Command;
 
+#[must_use]
 pub fn is_vmaf_available() -> bool {
     Command::new("vmaf")
         .arg("--version")
@@ -14,6 +15,17 @@ pub fn is_vmaf_available() -> bool {
         .unwrap_or(false)
 }
 
+/// Calculate MS-SSIM using the standalone `vmaf` tool.
+///
+/// This function converts both input files to Y4M format in temporary storage,
+/// runs the `vmaf` command, and parses the resulting JSON.
+///
+/// # Errors
+/// Returns an error if:
+/// - Temporary files cannot be created.
+/// - Y4M conversion fails.
+/// - The `vmaf` command fails to run or returns a non-zero exit code.
+/// - The resulting JSON is invalid or missing the MS-SSIM metric.
 pub fn calculate_ms_ssim_standalone(reference: &Path, distorted: &Path) -> Result<f64> {
     let ref_y4m_file = tempfile::Builder::new()
         .prefix("vmaf_ref_")
@@ -86,7 +98,7 @@ fn parse_vmaf_json(path: &Path) -> Result<f64> {
         .get("pooled_metrics")
         .and_then(|p| p.get("float_ms_ssim"))
         .and_then(|m| m.get("mean"))
-        .and_then(|v| v.as_f64())
+        .and_then(serde_json::Value::as_f64)
         .context("MS-SSIM not found in JSON")?;
 
     Ok(ms_ssim.clamp(0.0, 1.0))

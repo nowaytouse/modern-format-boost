@@ -1,0 +1,2612 @@
+{
+  "JSONInfo": {
+    "HDR10plusProfile": "B",
+    "Version": "1.0"
+  },
+  "SceneInfo": [
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 0,
+      "SceneId": 0,
+      "SequenceFrameIndex": 0
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 1,
+      "SceneId": 0,
+      "SequenceFrameIndex": 1
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 2,
+      "SceneId": 0,
+      "SequenceFrameIndex": 2
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 3,
+      "SceneId": 0,
+      "SequenceFrameIndex": 3
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 4,
+      "SceneId": 0,
+      "SequenceFrameIndex": 4
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 5,
+      "SceneId": 0,
+      "SequenceFrameIndex": 5
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 6,
+      "SceneId": 0,
+      "SequenceFrameIndex": 6
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 7,
+      "SceneId": 0,
+      "SequenceFrameIndex": 7
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 8,
+      "SceneId": 0,
+      "SequenceFrameIndex": 8
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 9,
+      "SceneId": 0,
+      "SequenceFrameIndex": 9
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 10,
+      "SceneId": 0,
+      "SequenceFrameIndex": 10
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 11,
+      "SceneId": 0,
+      "SequenceFrameIndex": 11
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 12,
+      "SceneId": 0,
+      "SequenceFrameIndex": 12
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 13,
+      "SceneId": 0,
+      "SequenceFrameIndex": 13
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 14,
+      "SceneId": 0,
+      "SequenceFrameIndex": 14
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 15,
+      "SceneId": 0,
+      "SequenceFrameIndex": 15
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 16,
+      "SceneId": 0,
+      "SequenceFrameIndex": 16
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 17,
+      "SceneId": 0,
+      "SequenceFrameIndex": 17
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 18,
+      "SceneId": 0,
+      "SequenceFrameIndex": 18
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 19,
+      "SceneId": 0,
+      "SequenceFrameIndex": 19
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 20,
+      "SceneId": 0,
+      "SequenceFrameIndex": 20
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 21,
+      "SceneId": 0,
+      "SequenceFrameIndex": 21
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 22,
+      "SceneId": 0,
+      "SequenceFrameIndex": 22
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 23,
+      "SceneId": 0,
+      "SequenceFrameIndex": 23
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 24,
+      "SceneId": 0,
+      "SequenceFrameIndex": 24
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 25,
+      "SceneId": 0,
+      "SequenceFrameIndex": 25
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 26,
+      "SceneId": 0,
+      "SequenceFrameIndex": 26
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 27,
+      "SceneId": 0,
+      "SequenceFrameIndex": 27
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 28,
+      "SceneId": 0,
+      "SequenceFrameIndex": 28
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 29,
+      "SceneId": 0,
+      "SequenceFrameIndex": 29
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 30,
+      "SceneId": 0,
+      "SequenceFrameIndex": 30
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 31,
+      "SceneId": 0,
+      "SequenceFrameIndex": 31
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 32,
+      "SceneId": 0,
+      "SequenceFrameIndex": 32
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 33,
+      "SceneId": 0,
+      "SequenceFrameIndex": 33
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 34,
+      "SceneId": 0,
+      "SequenceFrameIndex": 34
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 35,
+      "SceneId": 0,
+      "SequenceFrameIndex": 35
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 36,
+      "SceneId": 0,
+      "SequenceFrameIndex": 36
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 37,
+      "SceneId": 0,
+      "SequenceFrameIndex": 37
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 38,
+      "SceneId": 0,
+      "SequenceFrameIndex": 38
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 39,
+      "SceneId": 0,
+      "SequenceFrameIndex": 39
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 40,
+      "SceneId": 0,
+      "SequenceFrameIndex": 40
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 41,
+      "SceneId": 0,
+      "SequenceFrameIndex": 41
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 42,
+      "SceneId": 0,
+      "SequenceFrameIndex": 42
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 43,
+      "SceneId": 0,
+      "SequenceFrameIndex": 43
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 44,
+      "SceneId": 0,
+      "SequenceFrameIndex": 44
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 45,
+      "SceneId": 0,
+      "SequenceFrameIndex": 45
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 46,
+      "SceneId": 0,
+      "SequenceFrameIndex": 46
+    },
+    {
+      "BezierCurveData": {
+        "Anchors": [
+          0,
+          255,
+          511,
+          767,
+          1023,
+          1023,
+          1023,
+          1023,
+          1023
+        ],
+        "KneePointX": 17,
+        "KneePointY": 64
+      },
+      "LuminanceParameters": {
+        "AverageRGB": 100,
+        "LuminanceDistributions": {
+          "DistributionIndex": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ],
+          "DistributionValues": [
+            1,
+            5,
+            10,
+            25,
+            50,
+            75,
+            90,
+            95,
+            99
+          ]
+        },
+        "MaxScl": [
+          10000,
+          10000,
+          10000
+        ]
+      },
+      "NumberOfWindows": 1,
+      "TargetedSystemDisplayMaximumLuminance": 400,
+      "SceneFrameIndex": 47,
+      "SceneId": 0,
+      "SequenceFrameIndex": 47
+    }
+  ],
+  "SceneInfoSummary": {
+    "SceneFirstFrameIndex": [
+      0
+    ],
+    "SceneFrameNumbers": [
+      48
+    ]
+  },
+  "ToolInfo": {
+    "Tool": "hdr10plus_tool",
+    "Version": "1.7.2"
+  }
+}

@@ -3,7 +3,7 @@
 //! Pure analysis layer - detects video properties using ffprobe.
 //! Determines codec type, compression level, and archival suitability.
 //!
-//! Migrated from vid_hevc/vid_av1 detection_api.rs to eliminate duplication.
+//! Migrated from `vid_hevc/vid_av1` `detection_api.rs` to eliminate duplication.
 
 use crate::ffprobe::{probe_video, FFprobeError};
 use serde::{Deserialize, Serialize};
@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct VideoPrecisionMetadata {
     pub original_crf: Option<f32>,
     pub original_preset: Option<String>,
@@ -19,10 +20,14 @@ pub struct VideoPrecisionMetadata {
     pub is_lossless_deterministic: bool,
     /// 🚀 Hint: The last successful CRF value found during exploration (stored in cache)
     pub last_best_crf: Option<f32>,
+    /// 🚀 Hint: The last kept best-effort CRF value when exploration produced a usable
+    /// output but did not fully satisfy the quality target.
+    pub last_best_effort_crf: Option<f32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DetectedCodec {
+    Unknown(String),
     FFV1,
     H264,
     H265,
@@ -36,128 +41,144 @@ pub enum DetectedCodec {
     Uncompressed,
     HuffYUV,
     UTVideo,
-    Unknown(String),
+}
+
+impl Default for DetectedCodec {
+    fn default() -> Self {
+        Self::Unknown(String::new())
+    }
 }
 
 impl DetectedCodec {
+    #[must_use]
     pub fn from_ffprobe(codec_name: &str) -> Self {
         match codec_name.to_lowercase().as_str() {
-            "ffv1" => DetectedCodec::FFV1,
-            "h264" | "avc" | "libx264" => DetectedCodec::H264,
-            "hevc" | "h265" | "libx265" => DetectedCodec::H265,
-            "vp9" | "libvpx-vp9" => DetectedCodec::VP9,
-            "av1" | "libaom-av1" | "libsvtav1" => DetectedCodec::AV1,
-            "av2" => DetectedCodec::AV2,
-            "vvc" | "h266" => DetectedCodec::VVC,
-            "prores" | "prores_ks" => DetectedCodec::ProRes,
-            "dnxhd" | "dnxhr" => DetectedCodec::DNxHD,
-            "mjpeg" | "mjpegb" => DetectedCodec::MJPEG,
-            "rawvideo" => DetectedCodec::Uncompressed,
-            "huffyuv" | "ffvhuff" => DetectedCodec::HuffYUV,
-            "utvideo" => DetectedCodec::UTVideo,
-            "vc1" | "wmv3" => DetectedCodec::Unknown("VC-1".to_string()),
-            "dirac" => DetectedCodec::Unknown("Dirac".to_string()),
-            "theora" => DetectedCodec::Unknown("Theora".to_string()),
-            "vp8" | "libvpx" => DetectedCodec::Unknown("VP8".to_string()),
-            _ => DetectedCodec::Unknown(codec_name.to_string()),
+            "ffv1" => Self::FFV1,
+            "h264" | "avc" | "libx264" => Self::H264,
+            "hevc" | "h265" | "libx265" => Self::H265,
+            "vp9" | "libvpx-vp9" => Self::VP9,
+            "av1" | "libaom-av1" | "libsvtav1" => Self::AV1,
+            "av2" => Self::AV2,
+            "vvc" | "h266" => Self::VVC,
+            "prores" | "prores_ks" => Self::ProRes,
+            "dnxhd" | "dnxhr" => Self::DNxHD,
+            "mjpeg" | "mjpegb" => Self::MJPEG,
+            "rawvideo" => Self::Uncompressed,
+            "huffyuv" | "ffvhuff" => Self::HuffYUV,
+            "utvideo" => Self::UTVideo,
+            "vc1" | "wmv3" => Self::Unknown("VC-1".to_string()),
+            "dirac" => Self::Unknown("Dirac".to_string()),
+            "theora" => Self::Unknown("Theora".to_string()),
+            "vp8" | "libvpx" => Self::Unknown("VP8".to_string()),
+            _ => Self::Unknown(codec_name.to_string()),
         }
     }
 
-    pub fn is_lossless(&self) -> bool {
+    #[must_use]
+    pub const fn is_lossless(&self) -> bool {
         matches!(
             self,
-            DetectedCodec::FFV1
-                | DetectedCodec::Uncompressed
-                | DetectedCodec::HuffYUV
-                | DetectedCodec::UTVideo
+            Self::FFV1 | Self::Uncompressed | Self::HuffYUV | Self::UTVideo
         )
     }
 
-    pub fn can_be_lossless(&self) -> bool {
+    #[must_use]
+    pub const fn can_be_lossless(&self) -> bool {
         matches!(
             self,
-            DetectedCodec::FFV1
-                | DetectedCodec::Uncompressed
-                | DetectedCodec::HuffYUV
-                | DetectedCodec::UTVideo
-                | DetectedCodec::ProRes
-                | DetectedCodec::DNxHD
+            Self::FFV1
+                | Self::Uncompressed
+                | Self::HuffYUV
+                | Self::UTVideo
+                | Self::ProRes
+                | Self::DNxHD
         )
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         match self {
-            DetectedCodec::FFV1 => "FFV1",
-            DetectedCodec::H264 => "H.264",
-            DetectedCodec::H265 => "H.265",
-            DetectedCodec::VP9 => "VP9",
-            DetectedCodec::AV1 => "AV1",
-            DetectedCodec::AV2 => "AV2",
-            DetectedCodec::VVC => "H.266/VVC",
-            DetectedCodec::ProRes => "ProRes",
-            DetectedCodec::DNxHD => "DNxHD/DNxHR",
-            DetectedCodec::MJPEG => "MJPEG",
-            DetectedCodec::Uncompressed => "Uncompressed",
-            DetectedCodec::HuffYUV => "HuffYUV",
-            DetectedCodec::UTVideo => "UTVideo",
-            DetectedCodec::Unknown(s) => s,
+            Self::FFV1 => "FFV1",
+            Self::H264 => "H.264",
+            Self::H265 => "H.265",
+            Self::VP9 => "VP9",
+            Self::AV1 => "AV1",
+            Self::AV2 => "AV2",
+            Self::VVC => "H.266/VVC",
+            Self::ProRes => "ProRes",
+            Self::DNxHD => "DNxHD/DNxHR",
+            Self::MJPEG => "MJPEG",
+            Self::Uncompressed => "Uncompressed",
+            Self::HuffYUV => "HuffYUV",
+            Self::UTVideo => "UTVideo",
+            Self::Unknown(s) => s,
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum CompressionType {
     Lossless,
     VisuallyLossless,
     HighQuality,
+    #[default]
     Standard,
     LowQuality,
 }
 
 impl CompressionType {
-    pub fn as_str(&self) -> &str {
+    #[must_use]
+    pub const fn as_str(&self) -> &str {
         match self {
-            CompressionType::Lossless => "Lossless",
-            CompressionType::VisuallyLossless => "Visually Lossless",
-            CompressionType::HighQuality => "High Quality",
-            CompressionType::Standard => "Standard Quality",
-            CompressionType::LowQuality => "Low Quality",
+            Self::Lossless => "Lossless",
+            Self::VisuallyLossless => "Visually Lossless",
+            Self::HighQuality => "High Quality",
+            Self::Standard => "Standard Quality",
+            Self::LowQuality => "Low Quality",
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ColorSpace {
+    Unknown(String),
     BT709,
     BT2020,
     SRGB,
     AdobeRGB,
-    Unknown(String),
+}
+
+impl Default for ColorSpace {
+    fn default() -> Self {
+        Self::Unknown(String::new())
+    }
 }
 
 impl ColorSpace {
+    #[must_use]
     pub fn parse(s: &str) -> Self {
         match s.to_lowercase().as_str() {
-            "bt709" => ColorSpace::BT709,
-            "bt2020" | "bt2020nc" | "bt2020ncl" => ColorSpace::BT2020,
-            "srgb" | "iec61966-2-1" => ColorSpace::SRGB,
-            "adobergb" => ColorSpace::AdobeRGB,
-            _ => ColorSpace::Unknown(s.to_string()),
+            "bt709" => Self::BT709,
+            "bt2020" | "bt2020nc" | "bt2020ncl" => Self::BT2020,
+            "srgb" | "iec61966-2-1" => Self::SRGB,
+            "adobergb" => Self::AdobeRGB,
+            _ => Self::Unknown(s.to_string()),
         }
     }
 
-    pub fn as_str(&self) -> &str {
+    #[must_use]
+    pub const fn as_str(&self) -> &str {
         match self {
-            ColorSpace::BT709 => "bt709",
-            ColorSpace::BT2020 => "bt2020",
-            ColorSpace::SRGB => "srgb",
-            ColorSpace::AdobeRGB => "adobergb",
-            ColorSpace::Unknown(s) => s.as_str(),
+            Self::BT709 => "bt709",
+            Self::BT2020 => "bt2020",
+            Self::SRGB => "srgb",
+            Self::AdobeRGB => "adobergb",
+            Self::Unknown(s) => s.as_str(),
         }
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct VideoDetectionResult {
     pub file_path: String,
     pub format: String,
@@ -184,9 +205,9 @@ pub struct VideoDetectionResult {
     pub encoder_params: Option<String>,
     pub video_bitrate: Option<u64>,
     pub bits_per_pixel: f64,
-    /// color_primaries from ffprobe (e.g. "bt2020", "bt709")
+    /// `color_primaries` from ffprobe (e.g. "bt2020", "bt709")
     pub color_primaries: Option<String>,
-    /// color_transfer (TRC) from ffprobe (e.g. "smpte2084", "arib-std-b67", "bt709")
+    /// `color_transfer` (TRC) from ffprobe (e.g. "smpte2084", "arib-std-b67", "bt709")
     pub color_transfer: Option<String>,
     /// HDR10 mastering display metadata in ffmpeg format
     pub mastering_display: Option<String>,
@@ -220,6 +241,7 @@ pub struct VideoDetectionResult {
 
 impl VideoDetectionResult {
     /// Returns true when the content is any form of HDR (PQ, HLG, DV, HDR10, HDR10+)
+    #[must_use]
     pub fn is_hdr(&self) -> bool {
         self.is_dolby_vision
             || self.is_hdr10_plus
@@ -227,21 +249,28 @@ impl VideoDetectionResult {
             || self.max_cll.is_some()
             || matches!(
                 self.color_transfer.as_deref(),
-                Some("smpte2084") | Some("arib-std-b67")
+                Some("smpte2084" | "arib-std-b67")
             )
     }
 
     /// Returns true for high-bitrate archival-grade content
-    pub fn is_high_fidelity(&self) -> bool {
-        self.bit_depth >= 10 && matches!(self.compression, CompressionType::Lossless | CompressionType::VisuallyLossless)
+    #[must_use]
+    pub const fn is_high_fidelity(&self) -> bool {
+        self.bit_depth >= 10
+            && matches!(
+                self.compression,
+                CompressionType::Lossless | CompressionType::VisuallyLossless
+            )
     }
 
     /// High-precision VFR detection including slow-motion recording analysis
+    #[must_use]
     pub fn is_apple_slow_mo(&self) -> bool {
         self.tags.contains_key("com.apple.quicktime.fullframerate")
     }
 }
 
+#[must_use]
 pub fn determine_compression_type(
     codec: &DetectedCodec,
     bitrate: u64,
@@ -253,7 +282,7 @@ pub fn determine_compression_type(
     if codec.is_lossless() || precision.is_lossless_deterministic {
         return CompressionType::Lossless;
     }
-    
+
     // HEVC/AV1 Lossless often uses specific profiles or encoder params
     if let Some(ref settings) = precision.original_encoder {
         if settings.contains("lossless=1") || settings.contains("qp=0") {
@@ -269,9 +298,8 @@ pub fn determine_compression_type(
             return CompressionType::HighQuality;
         } else if crf <= 30.0 {
             return CompressionType::Standard;
-        } else {
-            return CompressionType::LowQuality;
         }
+        return CompressionType::LowQuality;
     }
 
     if matches!(codec, DetectedCodec::ProRes | DetectedCodec::DNxHD) {
@@ -279,7 +307,7 @@ pub fn determine_compression_type(
     }
 
     // BPP (Bits Per Pixel) thresholding for generic streams
-    let pixels_per_second = (width as f64) * (height as f64) * fps;
+    let pixels_per_second = f64::from(width) * f64::from(height) * fps;
     if pixels_per_second > 0.0 {
         let bits_per_pixel = (bitrate as f64 * 8.0) / pixels_per_second;
         if bits_per_pixel > 2.0 {
@@ -293,6 +321,7 @@ pub fn determine_compression_type(
     CompressionType::LowQuality
 }
 
+#[must_use]
 pub fn calculate_quality_score(
     compression: &CompressionType,
     bit_depth: u8,
@@ -316,42 +345,69 @@ pub fn calculate_quality_score(
     (base_score + depth_bonus + res_bonus).min(100)
 }
 
-/// Analyzes a video file with optional SQLite caching.
+/// Analyzes a video file with optional `SQLite` caching.
+///
+/// # Errors
+/// Returns an error if the file cannot be read, ffprobe fails, or cache access errors.
 pub fn detect_video_with_cache(
     path: &Path,
     cache: Option<&crate::analysis_cache::AnalysisCache>,
 ) -> Result<VideoDetectionResult, FFprobeError> {
     if let Some(cache) = cache {
-        if let Ok(Some(cached)) = cache.get_video_analysis(path) {
-            if std::env::var("IMGQUALITY_DEBUG").is_ok() {
-                eprintln!("🔍 [Video Cache] Hit: {}", path.display());
+        match cache.get_video_analysis(path) {
+            Ok(Some(cached)) => {
+                if std::env::var("IMGQUALITY_DEBUG").is_ok() {
+                    eprintln!("🔍 [Video Cache] Hit: {}", path.display());
+                }
+                return Ok(cached);
             }
-            return Ok(cached);
+            Ok(None) => {}
+            Err(err) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %err,
+                    "Failed to load cached video analysis"
+                );
+            }
         }
     }
 
     let result = detect_video(path)?;
 
     if let Some(cache) = cache {
-        let _ = cache.store_video_analysis(path, &result);
+        if let Err(err) = cache.store_video_analysis(path, &result) {
+            tracing::warn!(
+                path = %path.display(),
+                error = %err,
+                "Failed to store video analysis in cache"
+            );
+        }
     }
 
     Ok(result)
 }
 
+/// Detect video properties using ffprobe.
+///
+/// # Errors
+/// Returns `FFprobeError` if the file is invalid or ffprobe fails.
 pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
     let probe = probe_video(path)?;
 
     let codec = DetectedCodec::from_ffprobe(&probe.video_codec);
 
-    let pixels_per_second = (probe.width as f64) * (probe.height as f64) * probe.frame_rate;
+    let pixels_per_second = f64::from(probe.width) * f64::from(probe.height) * probe.frame_rate;
     let bits_per_pixel = if pixels_per_second > 0.0 {
         (probe.bit_rate as f64) / pixels_per_second
     } else {
         0.0
     };
 
-    let precision = extract_video_precision(&probe.tags, probe.encoder_settings.as_deref(), probe.max_b_frames);
+    let precision = extract_video_precision(
+        &probe.tags,
+        probe.encoder_settings.as_deref(),
+        probe.max_b_frames,
+    );
 
     let compression = determine_compression_type(
         &codec,
@@ -365,8 +421,9 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
     let color_space = probe
         .color_space
         .as_ref()
-        .map(|s| ColorSpace::parse(s))
-        .unwrap_or(ColorSpace::Unknown("unknown".to_string()));
+        .map_or(ColorSpace::Unknown("unknown".to_string()), |s| {
+            ColorSpace::parse(s)
+        });
 
     let quality_score = calculate_quality_score(
         &compression,
@@ -426,7 +483,11 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
     })
 }
 
-fn extract_video_precision(tags: &HashMap<String, String>, encoder_settings: Option<&str>, max_b_frames: u8) -> VideoPrecisionMetadata {
+fn extract_video_precision(
+    tags: &HashMap<String, String>,
+    encoder_settings: Option<&str>,
+    max_b_frames: u8,
+) -> VideoPrecisionMetadata {
     let mut precision = VideoPrecisionMetadata {
         original_max_b_frames: Some(max_b_frames),
         original_encoder: tags.get("encoder").cloned(),
@@ -444,17 +505,23 @@ fn extract_video_precision(tags: &HashMap<String, String>, encoder_settings: Opt
 
     if !search_string.is_empty() {
         let lower = search_string.to_lowercase();
-        
+
         // Extract CRF
         if let Some(crf_pos) = lower.find("crf=") {
             let sub = &lower[crf_pos + 4..];
-            let val: String = sub.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+            let val: String = sub
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '.')
+                .collect();
             if let Ok(v) = val.parse::<f32>() {
                 precision.original_crf = Some(v);
             }
         } else if let Some(qp_pos) = lower.find("qp=") {
             let sub = &lower[qp_pos + 4..];
-            let val: String = sub.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+            let val: String = sub
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '.')
+                .collect();
             if let Ok(v) = val.parse::<f32>() {
                 precision.original_crf = Some(v);
             }
@@ -463,12 +530,15 @@ fn extract_video_precision(tags: &HashMap<String, String>, encoder_settings: Opt
         // Extract Preset
         if let Some(preset_pos) = lower.find("preset=") {
             let sub = &lower[preset_pos + 7..];
-            let val: String = sub.chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+            let val: String = sub
+                .chars()
+                .take_while(char::is_ascii_alphanumeric)
+                .collect();
             if !val.is_empty() {
                 precision.original_preset = Some(val);
             }
         }
     }
-    
+
     precision
 }

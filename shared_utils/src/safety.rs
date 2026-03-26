@@ -27,6 +27,10 @@ const DANGEROUS_DIRS: &[&str] = &[
     "/opt",
 ];
 
+/// Check if a directory is dangerous to perform operations in.
+///
+/// # Errors
+/// Returns an error if the directory is considered dangerous.
 pub fn check_dangerous_directory(path: &Path) -> Result<(), String> {
     let path_str = path.to_string_lossy();
 
@@ -35,12 +39,11 @@ pub fn check_dangerous_directory(path: &Path) -> Result<(), String> {
             return Err(format!(
                 "🚨 DANGEROUS OPERATION BLOCKED!\n\
                  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\
-                 ❌ Target directory '{}' is a protected system directory.\n\
+                 ❌ Target directory '{dangerous}' is a protected system directory.\n\
                  ❌ Operating on this directory could cause IRREVERSIBLE DAMAGE to your system.\n\
                  \n\
                  💡 Please specify a safe subdirectory instead.\n\
-                 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-                dangerous
+                 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             ));
         }
     }
@@ -51,8 +54,9 @@ pub fn check_dangerous_directory(path: &Path) -> Result<(), String> {
     if components.len() <= 3 {
         let path_str = canonical.to_string_lossy();
         if (path_str.starts_with("/Users/") || path_str.starts_with("/home/"))
-            && components.len() <= 3 {
-                return Err(format!(
+            && components.len() <= 3
+        {
+            return Err(format!(
                     "🚨 DANGEROUS OPERATION BLOCKED!\n\
                      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\
                      ❌ Target '{}' is too close to your home directory root.\n\
@@ -62,12 +66,16 @@ pub fn check_dangerous_directory(path: &Path) -> Result<(), String> {
                      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
                     path.display()
                 ));
-            }
+        }
     }
 
     Ok(())
 }
 
+/// Check if a path is safe for destructive operations.
+///
+/// # Errors
+/// Returns an error if the operation is considered unsafe.
 pub fn check_safe_for_destructive(path: &Path, operation: &str) -> Result<(), String> {
     check_dangerous_directory(path)?;
 
@@ -87,11 +95,11 @@ pub fn check_safe_for_destructive(path: &Path, operation: &str) -> Result<(), St
     Ok(())
 }
 
+#[must_use]
 pub fn check_extension_whitelist(path: &Path, whitelist: &[&str]) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
-        .map(|e| whitelist.contains(&e.to_lowercase().as_str()))
-        .unwrap_or(false)
+        .is_some_and(|e| whitelist.contains(&e.to_lowercase().as_str()))
 }
 
 /// Check if a path is inside an Apple Photos library package
@@ -105,6 +113,10 @@ pub fn check_extension_whitelist(path: &Path, whitelist: &[&str]) -> bool {
 /// 2. Inside a directory ending with .photolibrary (older format)
 ///
 /// Returns an error if the path is inside a Photos library.
+/// Check if a path is an Apple Photos library.
+///
+/// # Errors
+/// Returns an error if the path is an Apple Photos library.
 pub fn check_apple_photos_library(path: &Path) -> Result<(), String> {
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 
@@ -177,9 +189,13 @@ mod tests {
         .is_err());
 
         // Test safe paths
-        assert!(check_apple_photos_library(Path::new("/Users/test/Pictures/Exports/IMG_1234.jpg"))
-            .is_ok());
-        assert!(check_apple_photos_library(Path::new("/Users/test/Documents/photos/IMG_1234.jpg"))
-            .is_ok());
+        assert!(
+            check_apple_photos_library(Path::new("/Users/test/Pictures/Exports/IMG_1234.jpg"))
+                .is_ok()
+        );
+        assert!(
+            check_apple_photos_library(Path::new("/Users/test/Documents/photos/IMG_1234.jpg"))
+                .is_ok()
+        );
     }
 }

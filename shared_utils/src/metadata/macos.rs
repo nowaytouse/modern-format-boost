@@ -1,14 +1,21 @@
 //! macOS native metadata preservation
 //!
 //! Uses `unsafe` only for FFI to system C APIs (`copyfile`, `getattrlist`).
-//! Invariants: CStrings and pointers are valid for the duration of each call; paths come from Rust `Path`.
+//! Invariants: `CStrings` and pointers are valid for the duration of each call; paths come from Rust `Path`.
 
 use std::ffi::CString;
 use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
-const COPYFILE_FLAGS: u32 = (1 << 0) | (1 << 1) | (1 << 2);
+// copyfile.h constants
+const COPYFILE_ACL: u32 = 1 << 0; // 0x1
+const COPYFILE_STAT: u32 = 1 << 1; // 0x2
+const COPYFILE_XATTR: u32 = 1 << 2; // 0x4
+const COPYFILE_RECURSIVE: u32 = 1 << 15; // 0x8000
+
+// COPYFILE_METADATA = COPYFILE_STAT | COPYFILE_ACL | COPYFILE_XATTR
+const COPYFILE_FLAGS: u32 = COPYFILE_STAT | COPYFILE_ACL | COPYFILE_XATTR | COPYFILE_RECURSIVE;
 
 pub fn copy_native_metadata(src: &Path, dst: &Path) -> io::Result<()> {
     extern "C" {
@@ -47,8 +54,8 @@ struct Attrlist {
     forkattr: u32,
 }
 
-const ATTR_CMN_CRTIME: u32 = 0x00000200;
-const ATTR_CMN_ADDEDTIME: u32 = 0x10000000;
+const ATTR_CMN_CRTIME: u32 = 0x0000_0200;
+const ATTR_CMN_ADDEDTIME: u32 = 0x1000_0000;
 const ATTR_BIT_MAP_COUNT: u16 = 5;
 
 #[repr(C)]
@@ -102,8 +109,8 @@ pub fn get_added_time(path: &Path) -> io::Result<std::time::SystemTime> {
     let ret = unsafe {
         getattrlist(
             c_path.as_ptr(),
-            &mut attr_list,
-            &mut buf as *mut _ as *mut std::ffi::c_void,
+            &raw mut attr_list,
+            (&raw mut buf).cast::<std::ffi::c_void>(),
             std::mem::size_of::<AttrBufAddedTime>(),
             0,
         )
@@ -141,14 +148,14 @@ fn set_time_attr(path: &Path, time: std::time::SystemTime, attr: u32) -> io::Res
         .map_err(io::Error::other)?;
     let mut buf = Timespec {
         tv_sec: duration.as_secs() as i64,
-        tv_nsec: duration.subsec_nanos() as i64,
+        tv_nsec: i64::from(duration.subsec_nanos()),
     };
     // SAFETY: c_path and local buffers are valid; setattrlist is synchronous and does not retain pointers.
     let ret = unsafe {
         setattrlist(
             c_path.as_ptr(),
-            &mut attr_list,
-            &mut buf as *mut _ as *mut std::ffi::c_void,
+            &raw mut attr_list,
+            (&raw mut buf).cast::<std::ffi::c_void>(),
             std::mem::size_of::<Timespec>(),
             0,
         )
@@ -156,5 +163,50 @@ fn set_time_attr(path: &Path, time: std::time::SystemTime, attr: u32) -> io::Res
     if ret != 0 {
         return Err(io::Error::last_os_error());
     }
+    Ok(())
+}
+
+/// Appends MFB branding to the macOS Finder comment (kMDItemFinderComment).
+///
+/// This uses `AppleScript` to ensure we interact properly with the Finder's database,
+/// as raw xattr writes for 'com.apple.metadata:kMDItemFinderComment' require
+/// complex binary plist encoding and may not trigger Spotlight index updates correctly.
+///
+/// # Errors
+/// Returns an `io::Result` if AppleScript execution fails.
+pub fn append_mfb_branding(path: &Path) -> io::Result<()> {
+    use std::process::Command;
+
+    let path_str = path.to_string_lossy();
+    let branding = "[Optimized by Modern Format Boost]";
+
+    // AppleScript logic:
+    // 1. Get existing comment.
+    // 2. If it contains the branding, skip.
+    // 3. Otherwise, prepend branding followed by a newline (if original comment existed).
+    let script = format!(
+        "tell application \"Finder\"
+            set theFile to (POSIX file \"{path}\" as alias)
+            set oldComment to (comment of theFile)
+            if oldComment does not contain \"{branding}\" then
+                if oldComment is \"\" then
+                    set newComment to \"{branding}\"
+                else
+                    set newComment to \"{branding}\" & return & oldComment
+                end if
+                set comment of theFile to newComment
+            end if
+        end tell",
+        path = path_str.replace('"', "\\\""),
+        branding = branding
+    );
+
+    let output = Command::new("osascript").arg("-e").arg(&script).output()?;
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        return Err(io::Error::other(format!("AppleScript failed: {err}")));
+    }
+
     Ok(())
 }

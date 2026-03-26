@@ -1,11 +1,11 @@
 //! File Sorting Module
 //!
-//! 🎯 优先处理小文件策略：
-//! - 快速看到进度反馈
-//! - 小文件处理快，可以更早发现问题
-//! - 大文件留到后面，避免长时间卡住
+//! 🎯 Small-file-first strategy:
+//! - Quick progress feedback
+//! - Small files process quickly, allowing for earlier issue detection
+//! - Large files are left for later to avoid long freezes
 //!
-//! 模块化设计，便于维护和测试
+//! Modular design for easy maintenance and testing
 
 use std::fs;
 use std::path::PathBuf;
@@ -17,8 +17,9 @@ pub struct FileInfo {
 }
 
 impl FileInfo {
+    #[must_use]
     pub fn new(path: PathBuf) -> Option<Self> {
-        fs::metadata(&path).ok().map(|meta| FileInfo {
+        fs::metadata(&path).ok().map(|meta| Self {
             path,
             size: meta.len(),
         })
@@ -38,10 +39,12 @@ pub struct FileSorter {
 }
 
 impl FileSorter {
-    pub fn new(strategy: SortStrategy) -> Self {
+    #[must_use]
+    pub const fn new(strategy: SortStrategy) -> Self {
         Self { strategy }
     }
 
+    #[must_use]
     pub fn sort(&self, files: Vec<PathBuf>) -> Vec<PathBuf> {
         match self.strategy {
             SortStrategy::None => files,
@@ -71,14 +74,17 @@ impl FileSorter {
     }
 }
 
+#[must_use]
 pub fn sort_by_size_ascending(files: Vec<PathBuf>) -> Vec<PathBuf> {
     FileSorter::new(SortStrategy::SizeAscending).sort(files)
 }
 
+#[must_use]
 pub fn sort_by_size_descending(files: Vec<PathBuf>) -> Vec<PathBuf> {
     FileSorter::new(SortStrategy::SizeDescending).sort(files)
 }
 
+#[must_use]
 pub fn sort_by_name(files: Vec<PathBuf>) -> Vec<PathBuf> {
     FileSorter::new(SortStrategy::NameAscending).sort(files)
 }
@@ -174,11 +180,11 @@ mod tests {
         let f2 = create_test_file(temp_dir.path(), "a.txt", 100);
         let f3 = create_test_file(temp_dir.path(), "m.txt", 500);
 
-        let files = vec![f1.clone(), f2.clone(), f3.clone()];
-        let sorter = FileSorter::new(SortStrategy::None);
-        let sorted = sorter.sort(files.clone());
+        let files = vec![f1, f2, f3];
+        let file_sorter = FileSorter::new(SortStrategy::None);
+        let sorted_results = file_sorter.sort(files.clone());
 
-        assert_eq!(sorted, files);
+        assert_eq!(sorted_results, files);
     }
 
     #[test]
@@ -208,7 +214,7 @@ mod tests {
         let f2 = create_test_file(temp_dir.path(), "file2.txt", 100);
         let f3 = create_test_file(temp_dir.path(), "file3.txt", 100);
 
-        let files = vec![f1.clone(), f2.clone(), f3.clone()];
+        let files = vec![f1, f2, f3];
         let sorted = sort_by_size_ascending(files);
 
         assert_eq!(sorted.len(), 3);
@@ -218,26 +224,26 @@ mod tests {
     fn test_strict_sorting_correctness() {
         let temp_dir = TempDir::new().unwrap();
 
-        let sizes = [5000, 100, 3000, 200, 4000, 50, 1000];
+        let size_samples = [5000, 100, 3000, 200, 4000, 50, 1000];
         let mut files = Vec::new();
 
-        for (i, size) in sizes.iter().enumerate() {
-            let file = create_test_file(temp_dir.path(), &format!("file{}.txt", i), *size);
+        for (i, size) in size_samples.iter().enumerate() {
+            let file = create_test_file(temp_dir.path(), &format!("file{i}.txt"), *size);
             files.push(file);
         }
 
-        let sorted = sort_by_size_ascending(files);
+        let sorted_paths = sort_by_size_ascending(files);
 
-        for i in 0..sorted.len() - 1 {
-            let size1 = fs::metadata(&sorted[i]).unwrap().len();
-            let size2 = fs::metadata(&sorted[i + 1]).unwrap().len();
+        for i in 0..sorted_paths.len() - 1 {
+            let first_size = fs::metadata(&sorted_paths[i]).unwrap().len();
+            let second_size = fs::metadata(&sorted_paths[i + 1]).unwrap().len();
             assert!(
-                size1 <= size2,
+                first_size <= second_size,
                 "STRICT: File {} ({}B) should be <= file {} ({}B)",
-                sorted[i].display(),
-                size1,
-                sorted[i + 1].display(),
-                size2
+                sorted_paths[i].display(),
+                first_size,
+                sorted_paths[i + 1].display(),
+                second_size
             );
         }
     }

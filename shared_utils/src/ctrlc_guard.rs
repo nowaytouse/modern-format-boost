@@ -28,7 +28,7 @@ static INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 /// Start-of-batch wall-clock epoch (seconds since boot, via Instant).
 /// We store the *value* of the Instant as elapsed nanos relative to an
-/// internal epoch — using a u64 allows Ordering::Relaxed atomic access.
+/// internal epoch — using a u64 allows `Ordering::Relaxed` atomic access.
 static START_EPOCH_NANOS: AtomicU64 = AtomicU64::new(0);
 
 // Thin wrapper so we can lazily encode a real Instant via OnceLock.
@@ -92,9 +92,12 @@ pub fn init() {
     }
 
     // Spawn the watcher thread (daemonized so it doesn't block process exit).
-    let _ = std::thread::Builder::new()
+    if let Err(err) = std::thread::Builder::new()
         .name("ctrlc-watcher".into())
-        .spawn(move || watcher_thread(signal_received));
+        .spawn(move || watcher_thread(signal_received))
+    {
+        eprintln!("  ⚠️  ctrlc_guard: failed to spawn Ctrl+C watcher thread: {err}");
+    }
 }
 
 // ─── Watcher thread ──────────────────────────────────────────────────────────
@@ -108,10 +111,7 @@ fn watcher_thread(signal_flag: Arc<AtomicBool>) {
             continue; // No signal yet.
         }
 
-        let elapsed_secs = START_INSTANT
-            .get()
-            .map(|t| t.elapsed().as_secs())
-            .unwrap_or(0);
+        let elapsed_secs = START_INSTANT.get().map_or(0, |t| t.elapsed().as_secs());
 
         if elapsed_secs < 270 {
             // Under 4.5 minutes → exit immediately (user made a deliberate Ctrl+C).
@@ -150,7 +150,10 @@ fn show_confirmation_prompt(elapsed_secs: u64) {
             out,
             "  \x1b[2mPress Enter to exit, or wait 10 s to resume automatically.\x1b[0m"
         );
-        let _ = write!(out, "  \x1b[1mConfirm exit? [y/N]\x1b[0m (auto-resume in 10 s): ");
+        let _ = write!(
+            out,
+            "  \x1b[1mConfirm exit? [y/N]\x1b[0m (auto-resume in 10 s): "
+        );
         let _ = out.flush();
     }
 
@@ -158,7 +161,7 @@ fn show_confirmation_prompt(elapsed_secs: u64) {
     // This avoids spawning a blocking thread that would get permanently stuck waiting for input
     // if the timeout expired, which previously broke subsequent Ctrl+C prompts.
     let mut should_exit = false;
-    
+
     #[cfg(unix)]
     {
         let mut pfd = libc::pollfd {
@@ -167,7 +170,7 @@ fn show_confirmation_prompt(elapsed_secs: u64) {
             revents: 0,
         };
         // Wait up to 10,000 milliseconds for input
-        let res = unsafe { libc::poll(&mut pfd, 1, 10_000) };
+        let res = unsafe { libc::poll(&raw mut pfd, 1, 10_000) };
         if res > 0 && (pfd.revents & libc::POLLIN) != 0 {
             let mut line = String::new();
             if io::stdin().read_line(&mut line).is_ok() {
@@ -176,7 +179,7 @@ fn show_confirmation_prompt(elapsed_secs: u64) {
             }
         }
     }
-    
+
     #[cfg(not(unix))]
     {
         // Fallback for non-unix platforms

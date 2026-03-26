@@ -1,17 +1,18 @@
-//! 🔥 v6.7: 纯视频流大小提取模块
+//! 🔥 v6.7: Pure Video Stream Size Extraction Module
 //!
-//! 使用 ffprobe 精确提取视频流和音频流大小，
-//! 用于探索阶段和最终验证阶段的纯媒体对比。
+//! Accurately extract video and audio stream sizes using ffprobe,
+//! used for pure media comparison during exploration and final verification stages.
 //!
-//! ## 核心功能
-//! - 提取纯视频流大小（排除容器开销）
-//! - 提取音频流大小（如有）
-//! - 计算容器开销
-//! - 支持多种提取方法（ffprobe 直接 / bitrate 计算 / 估算）
+//! ## Core Features
+//! - Extract pure video stream size (excluding container overhead)
+//! - Extract audio stream size (if present)
+//! - Calculate container overhead
+//! - Supports multiple extraction methods (direct ffprobe / bitrate calculation / estimation)
 
 use serde::Deserialize;
 use std::path::Path;
 use std::process::Command;
+use tracing::warn;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExtractionMethod {
@@ -21,19 +22,21 @@ pub enum ExtractionMethod {
 }
 
 impl ExtractionMethod {
-    pub fn description(&self) -> &'static str {
+    #[must_use]
+    pub const fn description(&self) -> &'static str {
         match self {
-            ExtractionMethod::FfprobeDirect => "ffprobe direct",
-            ExtractionMethod::BitrateCalculation => "bitrate × duration",
-            ExtractionMethod::Estimated => "estimated (file size − container overhead)",
+            Self::FfprobeDirect => "ffprobe direct",
+            Self::BitrateCalculation => "bitrate × duration",
+            Self::Estimated => "estimated (file size − container overhead)",
         }
     }
 
-    pub fn confidence(&self) -> f64 {
+    #[must_use]
+    pub const fn confidence(&self) -> f64 {
         match self {
-            ExtractionMethod::FfprobeDirect => 0.99,
-            ExtractionMethod::BitrateCalculation => 0.90,
-            ExtractionMethod::Estimated => 0.70,
+            Self::FfprobeDirect => 0.99,
+            Self::BitrateCalculation => 0.90,
+            Self::Estimated => 0.70,
         }
     }
 }
@@ -51,10 +54,12 @@ pub struct StreamSizeInfo {
 }
 
 impl StreamSizeInfo {
-    pub fn pure_media_size(&self) -> u64 {
+    #[must_use]
+    pub const fn pure_media_size(&self) -> u64 {
         self.video_stream_size + self.audio_stream_size
     }
 
+    #[must_use]
     pub fn container_overhead_percent(&self) -> f64 {
         if self.total_file_size == 0 {
             return 0.0;
@@ -62,31 +67,22 @@ impl StreamSizeInfo {
         self.container_overhead as f64 / self.total_file_size as f64 * 100.0
     }
 
+    #[must_use]
     pub fn is_overhead_excessive(&self) -> bool {
         self.container_overhead_percent() > 10.0
     }
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Deserialize, Default)]
 struct FfprobeStreamInfo {
     #[serde(default)]
     codec_type: String,
     #[serde(default)]
     bit_rate: Option<String>,
-    #[serde(default)]
-    duration: Option<String>,
-    #[serde(default)]
-    nb_frames: Option<String>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Deserialize, Default)]
 struct FfprobeFormatInfo {
-    #[serde(default)]
-    size: Option<String>,
-    #[serde(default)]
-    bit_rate: Option<String>,
     #[serde(default)]
     duration: Option<String>,
 }
@@ -104,11 +100,12 @@ pub const MP4_OVERHEAD_PERCENT: f64 = 0.001;
 pub const MKV_OVERHEAD_PERCENT: f64 = 0.0005;
 pub const DEFAULT_OVERHEAD_PERCENT: f64 = 0.002;
 
+#[must_use]
 pub fn get_container_overhead_percent(path: &Path) -> f64 {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
+        .map(str::to_lowercase)
         .unwrap_or_default();
 
     match ext.as_str() {
@@ -120,7 +117,17 @@ pub fn get_container_overhead_percent(path: &Path) -> f64 {
 }
 
 pub fn extract_stream_sizes(path: &Path) -> StreamSizeInfo {
-    let total_file_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    let total_file_size = match std::fs::metadata(path) {
+        Ok(metadata) => metadata.len(),
+        Err(err) => {
+            warn!(
+                path = %path.display(),
+                error = %err,
+                "Failed to read file metadata for stream-size extraction"
+            );
+            0
+        }
+    };
 
     if let Some(info) = try_ffprobe_extraction(path, total_file_size) {
         return info;
@@ -130,7 +137,7 @@ pub fn extract_stream_sizes(path: &Path) -> StreamSizeInfo {
 }
 
 fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<StreamSizeInfo> {
-    let output = Command::new("ffprobe")
+    let output = match Command::new("ffprobe")
         .args([
             "-v",
             "error",
@@ -142,14 +149,50 @@ fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<StreamSiz
         ])
         .arg(crate::safe_path_arg(path).as_ref())
         .output()
-        .ok()?;
+    {
+        Ok(output) => output,
+        Err(err) => {
+            warn!(
+                path = %path.display(),
+                error = %err,
+                "ffprobe stream-size extraction failed to start"
+            );
+            return None;
+        }
+    };
 
     if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        warn!(
+            path = %path.display(),
+            stderr = %stderr.trim(),
+            "ffprobe stream-size extraction returned non-zero status"
+        );
         return None;
     }
 
-    let json_str = String::from_utf8(output.stdout).ok()?;
-    let parsed: FfprobeFullOutput = serde_json::from_str(&json_str).ok()?;
+    let json_str = match String::from_utf8(output.stdout) {
+        Ok(json_str) => json_str,
+        Err(err) => {
+            warn!(
+                path = %path.display(),
+                error = %err,
+                "ffprobe stream-size extraction returned non-UTF-8 JSON"
+            );
+            return None;
+        }
+    };
+    let parsed: FfprobeFullOutput = match serde_json::from_str(&json_str) {
+        Ok(parsed) => parsed,
+        Err(err) => {
+            warn!(
+                path = %path.display(),
+                error = %err,
+                "ffprobe stream-size extraction JSON parse failed"
+            );
+            return None;
+        }
+    };
 
     let duration_secs = parsed
         .format
@@ -159,6 +202,11 @@ fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<StreamSiz
         .unwrap_or(0.0);
 
     if duration_secs <= 0.0 {
+        warn!(
+            path = %path.display(),
+            duration = duration_secs,
+            "ffprobe stream-size extraction reported invalid duration"
+        );
         return None;
     }
 
@@ -197,6 +245,10 @@ fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<StreamSiz
     };
 
     if video_stream_size == 0 {
+        warn!(
+            path = %path.display(),
+            "ffprobe stream-size extraction produced no usable video bitrate; falling back to estimated sizing"
+        );
         return None;
     }
 
@@ -243,6 +295,7 @@ pub fn can_compress_pure_video(
     result
 }
 
+#[must_use]
 pub fn get_output_video_stream_size(output_path: &Path) -> u64 {
     extract_stream_sizes(output_path).video_stream_size
 }
@@ -305,8 +358,8 @@ mod tests {
             container_overhead: 100,
             extraction_method: ExtractionMethod::BitrateCalculation,
             duration_secs: 10.0,
-            video_bitrate: Some(800000),
-            audio_bitrate: Some(128000),
+            video_bitrate: Some(800_000),
+            audio_bitrate: Some(128_000),
         };
 
         assert_eq!(info.pure_media_size(), 1100);
@@ -511,7 +564,7 @@ mod prop_tests {
             input_video_size in 1u64..1_000_000_000u64,
         ) {
             let expected_can_compress = output_video_size < input_video_size.saturating_add(1_048_576);
-            
+
             // Check tolerance=true manually (mirrors logic)
             prop_assert_eq!(
                 expected_can_compress,

@@ -1,6 +1,6 @@
 //! SSIM (Structural Similarity Index) Type-Safe Wrapper
 //!
-//! 提供编译期保证的 SSIM 值范围验证 (0.0-1.0)。
+//! Provides compile-time range validation for SSIM values (0.0-1.0).
 
 use std::fmt;
 
@@ -21,10 +21,10 @@ pub enum SsimError {
 impl fmt::Display for SsimError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SsimError::OutOfRange { value } => {
-                write!(f, "SSIM {:.6} out of range [0.0, 1.0]", value)
+            Self::OutOfRange { value } => {
+                write!(f, "SSIM {value:.6} out of range [0.0, 1.0]")
             }
-            SsimError::InvalidFloat => {
+            Self::InvalidFloat => {
                 write!(f, "Invalid SSIM: NaN or Infinity")
             }
         }
@@ -37,10 +37,14 @@ impl std::error::Error for SsimError {}
 pub struct Ssim(f64);
 
 impl Ssim {
-    pub const PERFECT: Ssim = Ssim(1.0);
+    pub const PERFECT: Self = Self(1.0);
 
-    pub const ZERO: Ssim = Ssim(0.0);
+    pub const ZERO: Self = Self(0.0);
 
+    /// Create a new SSIM value.
+    ///
+    /// # Errors
+    /// Returns an error if the value is out of range.
     pub fn new(value: f64) -> Result<Self, SsimError> {
         if value.is_nan() || value.is_infinite() {
             return Err(SsimError::InvalidFloat);
@@ -54,25 +58,30 @@ impl Ssim {
     }
 
     #[inline]
-    pub fn value(&self) -> f64 {
+    #[must_use]
+    pub const fn value(&self) -> f64 {
         self.0
     }
 
     #[inline]
+    #[must_use]
     pub fn approx_eq(&self, other: &Self) -> bool {
         (self.0 - other.0).abs() < SSIM_EPSILON
     }
 
+    #[must_use]
     pub fn display(&self) -> String {
         format!("{:.6}", self.0)
     }
 
     #[inline]
+    #[must_use]
     pub fn meets_threshold(&self, threshold: f64) -> bool {
         self.0 >= threshold - SSIM_EPSILON
     }
 
-    pub fn clamped(value: f64) -> Self {
+    #[must_use]
+    pub const fn clamped(value: f64) -> Self {
         let clamped = if value.is_nan() || value.is_infinite() {
             0.0
         } else {
@@ -81,10 +90,12 @@ impl Ssim {
         Self(clamped)
     }
 
+    #[must_use]
     pub fn as_percent(&self) -> String {
         format!("{:.2}%", self.0 * 100.0)
     }
 
+    #[must_use]
     pub fn quality_description(&self) -> &'static str {
         if self.0 >= 0.99 {
             "Excellent (visually lossless)"
@@ -153,7 +164,7 @@ mod tests {
 
     #[test]
     fn test_ssim_display_precision() {
-        let ssim = Ssim::new(0.123456789).unwrap();
+        let ssim = Ssim::new(0.123_456_789).unwrap();
         let display = ssim.display();
         assert_eq!(display, "0.123457");
         assert_eq!(display.len(), 8);

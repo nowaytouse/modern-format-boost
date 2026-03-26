@@ -1,9 +1,10 @@
 //! System memory detection for intelligent concurrency control.
 //!
-//! Used by thread_manager to reduce parallel_tasks and child_threads when
+//! Used by `thread_manager` to reduce `parallel_tasks` and `child_threads` when
 //! available memory is low, avoiding OOM kills (e.g. spinner/sleep or encoder processes).
 
 use std::process::Command;
+use tracing::warn;
 
 /// Memory pressure level derived from available vs total RAM.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,7 +17,8 @@ pub enum MemoryPressure {
     High,
 }
 
-/// Returns (available_mb, total_mb) if detection succeeds.
+/// Returns (`available_mb`, `total_mb`) if detection succeeds.
+#[must_use]
 pub fn get_memory_mb() -> Option<(u64, u64)> {
     let (available, total) = if cfg!(target_os = "macos") {
         get_memory_macos()
@@ -29,25 +31,30 @@ pub fn get_memory_mb() -> Option<(u64, u64)> {
 }
 
 /// Available memory in MB. None if detection fails or unsupported platform.
+#[must_use]
 pub fn get_available_memory_mb() -> Option<u64> {
     get_memory_mb().map(|(avail, _)| avail)
 }
 
 /// Total physical memory in MB. None if detection fails.
+#[must_use]
 pub fn get_total_memory_mb() -> Option<u64> {
     get_memory_mb().map(|(_, total)| total)
 }
 
 /// Classify current memory pressure from available/total. None if unknown.
+/// Enhanced thresholds to prevent OOM kills during heavy image processing.
+#[must_use]
 pub fn memory_pressure_level() -> Option<MemoryPressure> {
     let (available_mb, total_mb) = get_memory_mb()?;
     if total_mb == 0 {
         return None;
     }
     let ratio = available_mb as f64 / total_mb as f64;
-    let level = if ratio >= 0.25 && available_mb >= 2048 {
+    // More conservative thresholds to prevent OOM during cjxl/ImageMagick operations
+    let level = if ratio >= 0.30 && available_mb >= 3072 {
         MemoryPressure::Low
-    } else if ratio >= 0.10 || available_mb >= 1024 {
+    } else if ratio >= 0.15 || available_mb >= 1536 {
         MemoryPressure::Normal
     } else {
         MemoryPressure::High
@@ -55,7 +62,8 @@ pub fn memory_pressure_level() -> Option<MemoryPressure> {
     Some(level)
 }
 
-/// True if user requested low-memory mode via env (e.g. MFB_LOW_MEMORY=1).
+/// True if user requested low-memory mode via env (e.g. `MFB_LOW_MEMORY=1`).
+#[must_use]
 pub fn is_low_memory_env() -> bool {
     std::env::var("MFB_LOW_MEMORY")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true") || v == "yes")
@@ -63,24 +71,56 @@ pub fn is_low_memory_env() -> bool {
 }
 
 fn get_memory_macos() -> (u64, u64) {
-    let total = Command::new("sysctl")
-        .arg("-n")
-        .arg("hw.memsize")
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .and_then(|s| s.trim().parse::<u64>().ok())
-        .map(|bytes| bytes / (1024 * 1024))
-        .unwrap_or(0);
+    let total = match Command::new("sysctl").arg("-n").arg("hw.memsize").output() {
+        Ok(output) if output.status.success() => match String::from_utf8(output.stdout) {
+            Ok(stdout) => match stdout.trim().parse::<u64>() {
+                Ok(bytes) => bytes / (1024 * 1024),
+                Err(err) => {
+                    warn!(error = %err, "Failed to parse macOS total memory from sysctl");
+                    0
+                }
+            },
+            Err(err) => {
+                warn!(error = %err, "sysctl returned non-UTF-8 total memory output");
+                0
+            }
+        },
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            warn!(stderr = %stderr.trim(), "sysctl hw.memsize returned non-zero status");
+            0
+        }
+        Err(err) => {
+            warn!(error = %err, "Failed to execute sysctl hw.memsize");
+            0
+        }
+    };
 
-    let available = Command::new("vm_stat")
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .and_then(|out| parse_vm_stat_available(&out))
-        .unwrap_or(0);
+    let available = match Command::new("vm_stat").output() {
+        Ok(output) if output.status.success() => match String::from_utf8(output.stdout) {
+            Ok(stdout) => {
+                if let Some(available) = parse_vm_stat_available(&stdout) {
+                    available
+                } else {
+                    warn!("Failed to parse macOS available memory from vm_stat");
+                    0
+                }
+            }
+            Err(err) => {
+                warn!(error = %err, "vm_stat returned non-UTF-8 output");
+                0
+            }
+        },
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            warn!(stderr = %stderr.trim(), "vm_stat returned non-zero status");
+            0
+        }
+        Err(err) => {
+            warn!(error = %err, "Failed to execute vm_stat");
+            0
+        }
+    };
 
     (available, total)
 }
@@ -94,7 +134,10 @@ fn parse_vm_stat_available(out: &str) -> Option<u64> {
     for line in out.lines() {
         let line = line.trim();
         if line.starts_with("page size of ") {
-            if let Some(rest) = line.strip_prefix("page size of ").and_then(|s| s.strip_suffix(" bytes")) {
+            if let Some(rest) = line
+                .strip_prefix("page size of ")
+                .and_then(|s| s.strip_suffix(" bytes"))
+            {
                 if let Ok(n) = rest.replace(',', "").parse::<u64>() {
                     page_size = n;
                 }
@@ -121,7 +164,10 @@ fn parse_vm_stat_value(line: &str) -> Option<u64> {
 fn get_memory_linux() -> (u64, u64) {
     let content = match std::fs::read_to_string("/proc/meminfo") {
         Ok(c) => c,
-        Err(_) => return (0, 0),
+        Err(err) => {
+            warn!(error = %err, "Failed to read /proc/meminfo");
+            return (0, 0);
+        }
     };
     let mut mem_available = None::<u64>;
     let mut mem_total = None::<u64>;
@@ -140,9 +186,62 @@ fn get_memory_linux() -> (u64, u64) {
                 .map(|kb| kb / 1024);
         }
     }
+    if mem_available.is_none() || mem_total.is_none() {
+        warn!(
+            has_mem_available = mem_available.is_some(),
+            has_mem_total = mem_total.is_some(),
+            "Missing expected memory fields in /proc/meminfo"
+        );
+    }
     let available = mem_available.unwrap_or(0);
     let total = mem_total.unwrap_or(0);
     (available, total)
+}
+
+/// Returns available bytes on the filesystem containing `path`. None if detection fails.
+pub fn get_available_disk_bytes(path: &std::path::Path) -> Option<u64> {
+    // Resolve to an existing ancestor (the path itself may not exist yet, e.g. output dir).
+    let existing = {
+        let mut p = path;
+        loop {
+            if p.exists() {
+                break p.to_path_buf();
+            }
+            if let Some(parent) = p.parent() {
+                p = parent;
+            } else {
+                warn!(path = %path.display(), "No existing ancestor found for disk-space probe");
+                return None;
+            }
+        }
+    };
+
+    #[cfg(unix)]
+    {
+        use std::ffi::CString;
+        let c_path = match CString::new(existing.to_string_lossy().as_bytes()) {
+            Ok(c_path) => c_path,
+            Err(err) => {
+                warn!(path = %existing.display(), error = %err, "Failed to prepare path for statvfs");
+                return None;
+            }
+        };
+        let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+        let ret = unsafe { libc::statvfs(c_path.as_ptr(), &raw mut stat) };
+        if ret == 0 {
+            // f_bavail: blocks available to unprivileged processes; f_frsize: fundamental block size
+            let avail = u64::from(stat.f_bavail) * stat.f_frsize as u64;
+            return Some(avail);
+        }
+        warn!(path = %existing.display(), errno = std::io::Error::last_os_error().to_string(), "statvfs failed during disk-space probe");
+        None
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = existing;
+        None
+    }
 }
 
 #[cfg(test)]

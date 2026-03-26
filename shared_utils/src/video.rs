@@ -2,19 +2,20 @@
 //!
 //! Provides common video processing functionality:
 //! - Dimension validation and correction for chroma subsampling
-//! - FFmpeg filter generation
+//! - `FFmpeg` filter generation
 //! - Video format detection
 
-pub fn ensure_even_dimensions(width: u32, height: u32) -> (u32, u32, bool) {
-    let corrected_width = if !width.is_multiple_of(2) {
-        width - 1
-    } else {
+#[must_use]
+pub const fn ensure_even_dimensions(width: u32, height: u32) -> (u32, u32, bool) {
+    let corrected_width = if width.is_multiple_of(2) {
         width
-    };
-    let corrected_height = if !height.is_multiple_of(2) {
-        height - 1
     } else {
+        width - 1
+    };
+    let corrected_height = if height.is_multiple_of(2) {
         height
+    } else {
+        height - 1
     };
     let needs_correction = corrected_width != width || corrected_height != height;
 
@@ -22,35 +23,39 @@ pub fn ensure_even_dimensions(width: u32, height: u32) -> (u32, u32, bool) {
 }
 
 /// Even dimensions by padding (no pixel loss). For odd width/height, pad to next even.
-pub fn ensure_even_dimensions_pad(width: u32, height: u32) -> (u32, u32, bool) {
+#[must_use]
+pub const fn ensure_even_dimensions_pad(width: u32, height: u32) -> (u32, u32, bool) {
     let w = width + (width % 2);
     let h = height + (height % 2);
     let needs = w != width || h != height;
     (w, h, needs)
 }
 
+#[must_use]
 pub fn get_dimension_correction_filter(width: u32, height: u32) -> Option<String> {
     let (corrected_width, corrected_height, needs_correction) =
         ensure_even_dimensions(width, height);
 
     if needs_correction {
-        Some(format!("crop={}:{}:0:0", corrected_width, corrected_height))
+        Some(format!("crop={corrected_width}:{corrected_height}:0:0"))
     } else {
         None
     }
 }
 
 /// Pad to even dimensions (preserves full frame; use when encoder requires even size).
-/// FFmpeg: pad=width:height:0:0 with width/height rounded up to even.
+/// `FFmpeg`: pad=width:height:0:0 with width/height rounded up to even.
+#[must_use]
 pub fn get_dimension_pad_even_filter(width: u32, height: u32) -> Option<String> {
     let (padded_w, padded_h, needs) = ensure_even_dimensions_pad(width, height);
     if needs {
-        Some(format!("pad={}:{}:0:0", padded_w, padded_h))
+        Some(format!("pad={padded_w}:{padded_h}:0:0"))
     } else {
         None
     }
 }
 
+#[must_use]
 pub fn build_video_filter_chain(width: u32, height: u32, has_alpha: bool) -> String {
     let mut filters = Vec::new();
 
@@ -77,10 +82,12 @@ pub fn build_video_filter_chain(width: u32, height: u32, has_alpha: bool) -> Str
     }
 }
 
-pub fn is_yuv420_compatible(width: u32, height: u32) -> bool {
+#[must_use]
+pub const fn is_yuv420_compatible(width: u32, height: u32) -> bool {
     width.is_multiple_of(2) && height.is_multiple_of(2)
 }
 
+#[must_use]
 pub fn get_ffmpeg_dimension_args(width: u32, height: u32, has_alpha: bool) -> Vec<String> {
     let filter_chain = build_video_filter_chain(width, height, has_alpha);
     vec!["-vf".to_string(), filter_chain]

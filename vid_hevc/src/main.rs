@@ -2,11 +2,10 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tracing::info;
 
-use vid_hevc::{
-    auto_convert_with_cache, detect_video, determine_strategy, ConversionConfig,
-    VideoDetectionResult, VidQualityError,
-};
 use shared_utils::analysis_cache::AnalysisCache;
+use vid_hevc::{
+    auto_convert_with_cache, detect_video, determine_strategy, ConversionConfig, VidQualityError,
+};
 
 #[derive(Parser)]
 #[command(name = "vid-hevc")]
@@ -54,6 +53,10 @@ enum Commands {
         no_allow_size_tolerance: bool,
         #[arg(short, long)]
         verbose: bool,
+        #[arg(long, default_value_t = true)]
+        resume: bool,
+        #[arg(long)]
+        no_resume: bool,
     },
 
     Strategy {
@@ -63,10 +66,13 @@ enum Commands {
 }
 
 fn main() -> anyhow::Result<()> {
-    let _ = shared_utils::logging::init_logging(
-        "vid_hevc",
-        shared_utils::logging::LogConfig::default(),
-    );
+    if let Err(e) =
+        shared_utils::logging::init_logging("vid_hevc", shared_utils::logging::LogConfig::default())
+    {
+        eprintln!("⚠️ Failed to initialize logging: {e}");
+    }
+
+    shared_utils::ctrlc_guard::init();
 
     let cli = Cli::parse();
 
@@ -89,9 +95,12 @@ fn main() -> anyhow::Result<()> {
             allow_size_tolerance,
             no_allow_size_tolerance,
             verbose,
+            resume,
+            no_resume,
         } => {
             let apple_compat = apple_compat && !no_apple_compat;
             let allow_size_tolerance = allow_size_tolerance && !no_allow_size_tolerance;
+            let resume = resume && !no_resume;
 
             if let Err(e) = shared_utils::validate_flags_result_with_ultimate(
                 explore,
@@ -99,7 +108,7 @@ fn main() -> anyhow::Result<()> {
                 compress,
                 ultimate,
             ) {
-                eprintln!("{}", e);
+                eprintln!("{e}");
                 std::process::exit(1);
             }
 
@@ -129,9 +138,13 @@ fn main() -> anyhow::Result<()> {
             };
 
             shared_utils::progress_mode::set_verbose_mode(verbose);
-            // Run 时自动创建并写入 ./logs/vid_hevc_run_<timestamp>.log，无需任何 flag
+            // Automatically created and written to ./logs/vid_hevc_run_<timestamp>.log during run, no flags needed.
             if let Err(e) = shared_utils::progress_mode::set_default_run_log_file("vid_hevc") {
-                shared_utils::log_eprintln!("⚠️  {}: {}", "\x1b[33mCould not open run log file\x1b[0m", e);
+                shared_utils::log_eprintln!(
+                    "⚠️  {}: {}",
+                    "\x1b[33mCould not open run log file\x1b[0m",
+                    e
+                );
             }
             info!("🎬 Run Mode Conversion (HEVC/H.265)");
             info!("   Lossless sources → HEVC Lossless MKV");
@@ -159,7 +172,16 @@ fn main() -> anyhow::Result<()> {
             if force_ms_ssim_long {
                 info!("   ⚠️  Force MS-SSIM for long videos: ENABLED");
             }
-            let cache = AnalysisCache::default_local().ok();
+            let cache = match AnalysisCache::default_local() {
+                Ok(cache) => Some(cache),
+                Err(e) => {
+                    shared_utils::log_eprintln!(
+                        "⚠️ [Cache] Failed to initialize persistent cache: {}",
+                        e
+                    );
+                    None
+                }
+            };
             if cache.is_some() {
                 info!("   💽 Persistent Cache: ENABLED");
             }
@@ -179,8 +201,12 @@ fn main() -> anyhow::Result<()> {
                             None
                         }
                     }),
+                    resume,
                 },
-                |file| auto_convert_with_cache(file, &config, cache.as_ref()).map_err(|e: VidQualityError| anyhow::anyhow!(e)),
+                |file| {
+                    auto_convert_with_cache(file, &config, cache.as_ref())
+                        .map_err(|e: VidQualityError| anyhow::anyhow!(e))
+                },
             )?;
             shared_utils::progress_mode::xmp_merge_finalize();
             shared_utils::progress_mode::flush_log_file();
@@ -207,46 +233,3 @@ fn main() -> anyhow::Result<()> {
 
     Ok(())
 }
-
-#[allow(dead_code)]
-fn print_analysis_human(result: &VideoDetectionResult) {
-    println!("\n📊 Video Analysis Report (HEVC)");
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("📁 File: {}", result.file_path);
-    println!("📦 Format: {}", result.format);
-    println!(
-        "🎬 Codec: {} ({})",
-        result.codec.as_str(),
-        result.codec_long
-    );
-    println!("🔍 Compression: {}", result.compression.as_str());
-    println!();
-    println!("📐 Resolution: {}x{}", result.width, result.height);
-    println!("🎞️  Frames: {} @ {:.2} fps", result.frame_count, result.fps);
-    println!("⏱️  Duration: {:.2}s", result.duration_secs);
-    println!("🎨 Bit Depth: {}-bit", result.bit_depth);
-    println!("🌈 Pixel Format: {}", result.pix_fmt);
-    println!();
-    println!("💾 File Size: {} bytes", result.file_size);
-    println!("📊 Bitrate: {} bps", result.bitrate);
-    println!(
-        "🎵 Audio: {}",
-        if result.has_audio {
-            result.audio_codec.as_deref().unwrap_or("yes")
-        } else {
-            "no"
-        }
-    );
-    println!();
-    println!("⭐ Quality Score: {}/100", result.quality_score);
-    println!(
-        "📦 Archival Candidate: {}",
-        if result.archival_candidate {
-            "✅ Yes"
-        } else {
-            "❌ No"
-        }
-    );
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-}
-

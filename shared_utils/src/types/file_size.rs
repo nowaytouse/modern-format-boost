@@ -1,6 +1,6 @@
-//! FileSize Type-Safe Wrapper
+//! `FileSize` Type-Safe Wrapper
 //!
-//! 提供类型安全的文件大小操作，防止溢出和负数。
+//! Provides type-safe file size operations to prevent overflow and negative values.
 
 use std::fmt;
 
@@ -8,49 +8,56 @@ pub const METADATA_MARGIN_PERCENT: f64 = 0.005;
 
 pub const METADATA_MARGIN_MIN: u64 = 2048;
 
-pub const METADATA_MARGIN_MAX: u64 = 102400;
+pub const METADATA_MARGIN_MAX: u64 = 102_400;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FileSize(u64);
 
 impl FileSize {
-    pub const ZERO: FileSize = FileSize(0);
+    pub const ZERO: Self = Self(0);
 
     pub const KB: u64 = 1024;
     pub const MB: u64 = 1_048_576;
     pub const GB: u64 = 1_048_576 * 1024;
 
     #[inline]
+    #[must_use]
     pub const fn new(bytes: u64) -> Self {
         Self(bytes)
     }
 
     #[inline]
+    #[must_use]
     pub const fn from_kb(kb: u64) -> Self {
         Self(kb * Self::KB)
     }
 
     #[inline]
+    #[must_use]
     pub const fn from_mb(mb: u64) -> Self {
         Self(mb * Self::MB)
     }
 
     #[inline]
+    #[must_use]
     pub const fn bytes(&self) -> u64 {
         self.0
     }
 
     #[inline]
-    pub fn saturating_sub(&self, other: FileSize) -> FileSize {
-        FileSize(self.0.saturating_sub(other.0))
+    #[must_use]
+    pub const fn saturating_sub(&self, other: Self) -> Self {
+        Self(self.0.saturating_sub(other.0))
     }
 
     #[inline]
-    pub fn saturating_add(&self, other: FileSize) -> FileSize {
-        FileSize(self.0.saturating_add(other.0))
+    #[must_use]
+    pub const fn saturating_add(&self, other: Self) -> Self {
+        Self(self.0.saturating_add(other.0))
     }
 
-    pub fn compression_ratio(&self, original: FileSize) -> Option<f64> {
+    #[must_use]
+    pub fn compression_ratio(&self, original: Self) -> Option<f64> {
         if original.0 == 0 {
             None
         } else {
@@ -58,7 +65,8 @@ impl FileSize {
         }
     }
 
-    pub fn size_change_percent(&self, original: FileSize) -> Option<f64> {
+    #[must_use]
+    pub fn size_change_percent(&self, original: Self) -> Option<f64> {
         if original.0 == 0 {
             None
         } else {
@@ -66,6 +74,7 @@ impl FileSize {
         }
     }
 
+    #[must_use]
     pub fn display(&self) -> String {
         if self.0 >= Self::GB {
             format!("{:.2} GB", self.0 as f64 / Self::GB as f64)
@@ -78,22 +87,26 @@ impl FileSize {
         }
     }
 
-    pub fn metadata_margin(&self) -> FileSize {
+    #[must_use]
+    pub fn metadata_margin(&self) -> Self {
         let percent_based = (self.0 as f64 * METADATA_MARGIN_PERCENT) as u64;
         let margin = percent_based.clamp(METADATA_MARGIN_MIN, METADATA_MARGIN_MAX);
-        FileSize(margin)
+        Self(margin)
     }
 
-    pub fn compression_target(&self) -> FileSize {
+    #[must_use]
+    pub fn compression_target(&self) -> Self {
         self.saturating_sub(self.metadata_margin())
     }
 
-    pub fn can_compress_to(&self, target: FileSize) -> bool {
+    #[must_use]
+    pub const fn can_compress_to(&self, target: Self) -> bool {
         self.0 > target.0
     }
 
     #[inline]
-    pub fn is_zero(&self) -> bool {
+    #[must_use]
+    pub const fn is_zero(&self) -> bool {
         self.0 == 0
     }
 }
@@ -189,7 +202,7 @@ mod tests {
         assert_eq!(small.metadata_margin().bytes(), METADATA_MARGIN_MIN);
 
         let medium = FileSize::new(10 * 1_048_576);
-        let expected = (10 * 1_048_576) as f64 * METADATA_MARGIN_PERCENT;
+        let expected = f64::from(10 * 1_048_576) * METADATA_MARGIN_PERCENT;
         assert_eq!(medium.metadata_margin().bytes(), expected as u64);
 
         let large = FileSize::new(100 * 1_048_576 * 1024);

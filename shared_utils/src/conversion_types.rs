@@ -11,21 +11,23 @@ pub enum TargetVideoFormat {
 }
 
 impl TargetVideoFormat {
-    pub fn extension(&self) -> &str {
+    #[must_use]
+    pub const fn extension(&self) -> &str {
         match self {
-            TargetVideoFormat::Ffv1Mkv | TargetVideoFormat::HevcLosslessMkv => "mkv",
-            TargetVideoFormat::Av1Mp4 | TargetVideoFormat::HevcMp4 => "mp4",
-            TargetVideoFormat::Skip => "",
+            Self::Ffv1Mkv | Self::HevcLosslessMkv => "MKV",
+            Self::Av1Mp4 | Self::HevcMp4 => "MP4",
+            Self::Skip => "",
         }
     }
 
-    pub fn as_str(&self) -> &str {
+    #[must_use]
+    pub const fn as_str(&self) -> &str {
         match self {
-            TargetVideoFormat::Ffv1Mkv => "FFV1 MKV (Archival)",
-            TargetVideoFormat::Av1Mp4 => "AV1 MP4 (High Quality)",
-            TargetVideoFormat::HevcLosslessMkv => "HEVC Lossless MKV (Archival)",
-            TargetVideoFormat::HevcMp4 => "HEVC MP4 (High Quality)",
-            TargetVideoFormat::Skip => "Skip",
+            Self::Ffv1Mkv => "FFV1 MKV (Archival)",
+            Self::Av1Mp4 => "AV1 MP4 (High Quality)",
+            Self::HevcLosslessMkv => "HEVC Lossless MKV (Archival)",
+            Self::HevcMp4 => "HEVC MP4 (High Quality)",
+            Self::Skip => "Skip",
         }
     }
 }
@@ -60,7 +62,7 @@ pub struct ConversionConfig {
 
     pub child_threads: usize,
     /// When true (default): "oversized" threshold is size increase < 1MB (KB-level tolerance). Video path may treat
-    /// `video_compression_ratio < 1.01` as acceptable for require_compression / Apple fallback.
+    /// `video_compression_ratio < 1.01` as acceptable for `require_compression` / Apple fallback.
     /// Does not relax compress goal: compress still requires output < input.
     pub allow_size_tolerance: bool,
 }
@@ -89,7 +91,8 @@ impl Default for ConversionConfig {
 }
 
 impl ConversionConfig {
-    pub fn should_delete_original(&self) -> bool {
+    #[must_use]
+    pub const fn should_delete_original(&self) -> bool {
         self.delete_original || self.in_place
     }
 }

@@ -1,11 +1,11 @@
-//! LRU Cache Module - 带容量限制的最近最少使用缓存
+//! LRU Cache Module - Least Recently Used cache with capacity limits
 //!
-//! 🔥 v5.72: 解决长时间运行内存泄漏问题
+//! 🔥 v5.72: Solves long-running memory leak issues
 //!
-//! ## 功能
-//! - 容量限制：超过上限自动驱逐最旧条目
-//! - LRU追踪：访问时更新时间戳
-//! - 序列化支持：可持久化到JSON文件
+//! ## Features
+//! - Capacity Limit: Automatically evicts oldest entries when the limit is exceeded
+//! - LRU Tracking: Updates timestamps upon access
+//! - Serialization Support: Persistent storage to JSON files
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -52,6 +52,7 @@ pub struct LruCache<K, V> {
 }
 
 impl<K: Hash + Eq + Clone, V: Clone> LruCache<K, V> {
+    #[must_use]
     pub fn new(capacity: usize) -> Self {
         Self {
             capacity: capacity.max(1),
@@ -91,19 +92,23 @@ impl<K: Hash + Eq + Clone, V: Clone> LruCache<K, V> {
         self.entries.contains_key(key)
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
-    pub fn capacity(&self) -> usize {
+    #[must_use]
+    pub const fn capacity(&self) -> usize {
         self.capacity
     }
 
-    pub fn eviction_count(&self) -> u64 {
+    #[must_use]
+    pub const fn eviction_count(&self) -> u64 {
         self.eviction_count
     }
 
@@ -140,6 +145,10 @@ pub struct SerializableCache<K, V> {
 }
 
 impl<K: Hash + Eq + Clone + Serialize, V: Clone + Serialize> LruCache<K, V> {
+    /// Convert the cache to JSON.
+    ///
+    /// # Errors
+    /// Returns a `serde_json::Error` if serialization fails.
     pub fn to_json(&self) -> Result<String, serde_json::Error>
     where
         K: Serialize,
@@ -160,6 +169,10 @@ impl<K: Hash + Eq + Clone + Serialize, V: Clone + Serialize> LruCache<K, V> {
 impl<K: Hash + Eq + Clone + for<'de> Deserialize<'de>, V: Clone + for<'de> Deserialize<'de>>
     LruCache<K, V>
 {
+    /// Restore the cache from JSON.
+    ///
+    /// # Errors
+    /// Returns a `serde_json::Error` if deserialization fails.
     pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
         let data: SerializableCache<K, V> = serde_json::from_str(json)?;
         let mut cache = Self::new(data.capacity);
@@ -169,6 +182,10 @@ impl<K: Hash + Eq + Clone + for<'de> Deserialize<'de>, V: Clone + for<'de> Deser
         Ok(cache)
     }
 
+    /// Save the cache to a file.
+    ///
+    /// # Errors
+    /// Returns an `io::Result` if saving fails.
     pub fn save_to_file(&self, path: &std::path::Path) -> std::io::Result<()>
     where
         K: Serialize,
@@ -180,6 +197,7 @@ impl<K: Hash + Eq + Clone + for<'de> Deserialize<'de>, V: Clone + for<'de> Deser
         std::fs::write(path, json)
     }
 
+    #[must_use]
     pub fn load_from_file(path: &std::path::Path, capacity: usize) -> Self {
         match std::fs::read_to_string(path) {
             Ok(json) => match Self::from_json(&json) {
@@ -192,10 +210,7 @@ impl<K: Hash + Eq + Clone + for<'de> Deserialize<'de>, V: Clone + for<'de> Deser
                     cache
                 }
                 Err(e) => {
-                    eprintln!(
-                        "⚠️ LRU Cache: failed to parse cache file, starting fresh: {}",
-                        e
-                    );
+                    eprintln!("⚠️ LRU Cache: failed to parse cache file, starting fresh: {e}");
                     Self::new(capacity)
                 }
             },
@@ -314,23 +329,19 @@ mod prop_tests {
 
             assert!(
                 cache.get(&1).is_some(),
-                "Seed {}: Entry 1 should be kept (recently accessed)",
-                seed
+                "Seed {seed}: Entry 1 should be kept (recently accessed)"
             );
             assert!(
                 cache.get(&2).is_none(),
-                "Seed {}: Entry 2 should be evicted (oldest)",
-                seed
+                "Seed {seed}: Entry 2 should be evicted (oldest)"
             );
             assert!(
                 cache.get(&3).is_some(),
-                "Seed {}: Entry 3 should be kept",
-                seed
+                "Seed {seed}: Entry 3 should be kept"
             );
             assert!(
                 cache.get(&4).is_some(),
-                "Seed {}: Entry 4 should be kept (just inserted)",
-                seed
+                "Seed {seed}: Entry 4 should be kept (just inserted)"
             );
         }
     }
@@ -357,30 +368,24 @@ mod prop_tests {
             assert_eq!(
                 original.len(),
                 restored.len(),
-                "Seed {}: Length mismatch after round-trip",
-                seed
+                "Seed {seed}: Length mismatch after round-trip"
             );
             assert_eq!(
                 original.capacity(),
                 restored.capacity(),
-                "Seed {}: Capacity mismatch after round-trip",
-                seed
+                "Seed {seed}: Capacity mismatch after round-trip"
             );
 
             for (key, entry) in &original.entries {
                 let restored_entry = restored.entries.get(key);
                 assert!(
                     restored_entry.is_some(),
-                    "Seed {}: Key {} missing after round-trip",
-                    seed,
-                    key
+                    "Seed {seed}: Key {key} missing after round-trip"
                 );
                 assert_eq!(
                     entry.value,
                     restored_entry.unwrap().value,
-                    "Seed {}: Value mismatch for key {}",
-                    seed,
-                    key
+                    "Seed {seed}: Value mismatch for key {key}"
                 );
             }
         }
@@ -402,7 +407,7 @@ mod prop_tests {
 
         for (i, corrupted) in corrupted_jsons.iter().enumerate() {
             let temp_dir = std::env::temp_dir();
-            let temp_file = temp_dir.join(format!("test_corrupted_cache_{}.json", i));
+            let temp_file = temp_dir.join(format!("test_corrupted_cache_{i}.json"));
 
             let mut file = std::fs::File::create(&temp_file).unwrap();
             file.write_all(corrupted.as_bytes()).unwrap();
@@ -411,17 +416,15 @@ mod prop_tests {
             assert_eq!(
                 cache.len(),
                 0,
-                "Corrupted JSON #{} should result in empty cache",
-                i
+                "Corrupted JSON #{i} should result in empty cache"
             );
             assert_eq!(
                 cache.capacity(),
                 10,
-                "Corrupted JSON #{} should use provided capacity",
-                i
+                "Corrupted JSON #{i} should use provided capacity"
             );
 
-            let _ = std::fs::remove_file(&temp_file);
+            let _ = crate::io_utils::safe_remove_file(&temp_file);
         }
     }
 }

@@ -1,6 +1,6 @@
 //! Quality Matcher Module
 //!
-//! Unified quality matching algorithm for all modern_format_boost tools.
+//! Unified quality matching algorithm for all `modern_format_boost` tools.
 //! Calculates optimal encoding parameters (CRF/distance) based on input quality analysis.
 //!
 //! ## Supported Encoders
@@ -27,7 +27,7 @@
 //! - Final CRF is always clamped to encoder range (AV1 [15, 40], HEVC [0, 35]) as the last line
 //!   of defense against content-type adjustment and bias pushing out of range.
 //!
-//! ## 🔥 Quality Manifesto (质量宣言)
+//! ## 🔥 Quality Manifesto
 //!
 //! - **No silent fallback**: If quality analysis fails, report error loudly
 //! - **No hardcoded defaults**: All parameters derived from actual content analysis
@@ -92,83 +92,75 @@ impl SourceCodec {
     /// Relative encoding efficiency vs. H.264 (1.0). Lower value = more efficient at same quality.
     /// H.265/HEVC ≈ 0.65 and AV1 ≈ 0.50 are empirical from bitrate comparison studies; no single
     /// canonical reference—values tuned for CRF mapping consistency across codecs.
-    pub fn efficiency_factor(&self) -> f64 {
+    #[must_use]
+    pub const fn efficiency_factor(&self) -> f64 {
         match self {
-            SourceCodec::H264 => 1.0,
-            SourceCodec::H265 => 0.65,
-            SourceCodec::Vp8 => 0.85,
-            SourceCodec::Vp9 => 0.70,
-            SourceCodec::Av1 => 0.50,
-            SourceCodec::Vvc => 0.35,
-            SourceCodec::Av2 => 0.35,
+            Self::Av1 => 0.50,
+            Self::Vp9 => 0.70,
+            Self::Vp8 => 0.85,
+            Self::Vvc | Self::Av2 => 0.35,
+            Self::H265 | Self::Heic => 0.65,
 
-            SourceCodec::Mpeg4 => 1.3,
-            SourceCodec::Mpeg2 => 1.8,
-            SourceCodec::Mpeg1 => 2.5,
-            SourceCodec::Wmv => 1.1,
-            SourceCodec::Theora => 1.2,
-            SourceCodec::RealVideo => 2.0,
-            SourceCodec::FlashVideo => 1.5,
+            Self::Mpeg4 => 1.3,
+            Self::Mpeg1 | Self::Mjpeg => 2.5,
+            Self::Wmv => 1.1,
+            Self::Theora | Self::Tiff => 1.2,
+            Self::RealVideo => 2.0,
+            Self::FlashVideo | Self::Png => 1.5,
+            Self::Mpeg2 | Self::ProRes | Self::DnxHD | Self::Apng => 1.8,
 
-            SourceCodec::ProRes => 1.8,
-            SourceCodec::DnxHD => 1.8,
-            SourceCodec::Mjpeg => 2.5,
+            Self::Gif | Self::Bmp => 3.0,
+            Self::WebpAnimated => 0.9,
+            Self::JpegXl => 0.6,
+            Self::WebpStatic => 0.75,
+            Self::Avif => 0.55,
 
-            SourceCodec::Ffv1 => 1.0,
-            SourceCodec::UtVideo => 1.0,
-            SourceCodec::HuffYuv => 1.0,
-            SourceCodec::RawVideo => 1.0,
-            SourceCodec::Lagarith => 1.0,
-            SourceCodec::MagicYuv => 1.0,
-
-            SourceCodec::Gif => 3.0,
-            SourceCodec::Apng => 1.8,
-            SourceCodec::WebpAnimated => 0.9,
-
-            SourceCodec::Jpeg => 1.0,
-            SourceCodec::JpegXl => 0.6,
-            SourceCodec::Png => 1.5,
-            SourceCodec::WebpStatic => 0.75,
-            SourceCodec::Avif => 0.55,
-            SourceCodec::Heic => 0.65,
-            SourceCodec::Bmp => 3.0,
-            SourceCodec::Tiff => 1.2,
-
-            SourceCodec::Unknown => 1.0,
+            Self::H264
+            | Self::Ffv1
+            | Self::UtVideo
+            | Self::HuffYuv
+            | Self::RawVideo
+            | Self::Lagarith
+            | Self::MagicYuv
+            | Self::Jpeg
+            | Self::Unknown => 1.0,
         }
     }
 
-    pub fn is_lossless(&self) -> bool {
+    #[must_use]
+    pub const fn is_lossless(&self) -> bool {
         matches!(
             self,
-            SourceCodec::Ffv1
-                | SourceCodec::UtVideo
-                | SourceCodec::HuffYuv
-                | SourceCodec::RawVideo
-                | SourceCodec::Lagarith
-                | SourceCodec::MagicYuv
-                | SourceCodec::Png
-                | SourceCodec::Apng
-                | SourceCodec::Bmp
+            Self::Ffv1
+                | Self::UtVideo
+                | Self::HuffYuv
+                | Self::RawVideo
+                | Self::Lagarith
+                | Self::MagicYuv
+                | Self::Png
+                | Self::Apng
+                | Self::Bmp
         )
     }
 
-    pub fn is_modern(&self) -> bool {
+    #[must_use]
+    pub const fn is_modern(&self) -> bool {
         matches!(
             self,
-            SourceCodec::H265
-                | SourceCodec::Av1
-                | SourceCodec::Vp9
-                | SourceCodec::Vvc
-                | SourceCodec::Av2
-                | SourceCodec::JpegXl
-                | SourceCodec::Avif
-                | SourceCodec::Heic
+            Self::H265
+                | Self::Av1
+                | Self::Vp9
+                | Self::Vvc
+                | Self::Av2
+                | Self::JpegXl
+                | Self::Avif
+                | Self::Heic
         )
     }
 
-    pub fn is_cutting_edge(&self) -> bool {
-        matches!(self, SourceCodec::Vvc | SourceCodec::Av2)
+    #[must_use]
+    pub const fn is_cutting_edge(&self) -> bool {
+        matches!(self, Self::Vvc | Self::Av2)
     }
 }
 
@@ -237,14 +229,14 @@ pub enum ContentType {
 }
 
 impl ContentType {
-    pub fn crf_adjustment(&self) -> i8 {
+    #[must_use]
+    pub const fn crf_adjustment(&self) -> i8 {
         match self {
-            ContentType::Animation => 4,
-            ContentType::ScreenRecording => 5,
-            ContentType::LiveAction => 0,
-            ContentType::Gaming => -1,
-            ContentType::FilmGrain => -3,
-            ContentType::Unknown => 0,
+            Self::Animation => 4,
+            Self::ScreenRecording => 5,
+            Self::LiveAction | Self::Unknown => 0,
+            Self::Gaming => -1,
+            Self::FilmGrain => -3,
         }
     }
 }
@@ -288,11 +280,13 @@ pub struct MatchedQuality {
 
 impl MatchedQuality {
     #[inline]
+    #[must_use]
     pub fn crf_hevc_typed(&self) -> Option<crate::types::Crf<crate::types::HevcEncoder>> {
         crate::types::Crf::<crate::types::HevcEncoder>::new(self.crf).ok()
     }
 
     #[inline]
+    #[must_use]
     pub fn crf_av1_typed(&self) -> Option<crate::types::Crf<crate::types::Av1Encoder>> {
         crate::types::Crf::<crate::types::Av1Encoder>::new(self.crf).ok()
     }
@@ -327,7 +321,7 @@ pub struct AnalysisDetails {
     pub quality_bias: QualityBias,
 }
 
-fn default_one() -> f64 {
+const fn default_one() -> f64 {
     1.0
 }
 
@@ -368,10 +362,18 @@ const AV1_CRF_CLAMP_MAX: f32 = 51.0;
 const HEVC_CRF_CLAMP_MIN: f32 = 0.0;
 const HEVC_CRF_CLAMP_MAX: f32 = 51.0;
 
+/// Calculate AV1 CRF.
+///
+/// # Errors
+/// Returns an error message if calculation fails.
 pub fn calculate_av1_crf(analysis: &QualityAnalysis) -> Result<MatchedQuality, String> {
     calculate_av1_crf_with_options(analysis, MatchMode::Quality, QualityBias::Balanced)
 }
 
+/// Calculate AV1 CRF with options.
+///
+/// # Errors
+/// Returns an error if calculation fails.
 pub fn calculate_av1_crf_with_options(
     analysis: &QualityAnalysis,
     mode: MatchMode,
@@ -404,14 +406,14 @@ pub fn calculate_av1_crf_with_options(
     effective_bpp = effective_bpp.clamp(SAFE_BPP_MIN, SAFE_BPP_MAX);
 
     let crf_float = if effective_bpp < 0.03 {
-        35.0_f64.min(50.0 - 6.0 * (effective_bpp * 100.0).max(0.001).log2())
+        35.0_f64.min(6.0f64.mul_add(-(effective_bpp * 100.0).max(0.001).log2(), 50.0))
     } else if effective_bpp > 2.0 {
-        18.0_f64.max(50.0 - 6.0 * (effective_bpp * 100.0).log2())
+        18.0_f64.max(6.0f64.mul_add(-(effective_bpp * 100.0).log2(), 50.0))
     } else {
-        50.0 - 6.0 * (effective_bpp * 100.0).log2()
+        6.0f64.mul_add(-(effective_bpp * 100.0).log2(), 50.0)
     };
 
-    let crf_with_content = crf_float + details.content_type_adjustment as f64;
+    let crf_with_content = crf_float + f64::from(details.content_type_adjustment);
 
     let crf_with_bias = match bias {
         QualityBias::Conservative => crf_with_content - 2.0,
@@ -431,10 +433,18 @@ pub fn calculate_av1_crf_with_options(
     })
 }
 
+/// Calculate HEVC CRF.
+///
+/// # Errors
+/// Returns an error if calculation fails.
 pub fn calculate_hevc_crf(analysis: &QualityAnalysis) -> Result<MatchedQuality, String> {
     calculate_hevc_crf_with_options(analysis, MatchMode::Quality, QualityBias::Balanced)
 }
 
+/// Calculate HEVC CRF with options.
+///
+/// # Errors
+/// Returns an error if calculation fails.
 pub fn calculate_hevc_crf_with_options(
     analysis: &QualityAnalysis,
     mode: MatchMode,
@@ -466,14 +476,14 @@ pub fn calculate_hevc_crf_with_options(
     effective_bpp = effective_bpp.clamp(SAFE_BPP_MIN, SAFE_BPP_MAX);
 
     let crf_float = if effective_bpp < 0.02 {
-        35.0_f64.min(46.0 - 5.0 * (effective_bpp * 100.0).max(0.001).log2())
+        35.0_f64.min(5.0f64.mul_add(-(effective_bpp * 100.0).max(0.001).log2(), 46.0))
     } else if effective_bpp > 2.0 {
-        15.0_f64.max(46.0 - 5.0 * (effective_bpp * 100.0).log2())
+        15.0_f64.max(5.0f64.mul_add(-(effective_bpp * 100.0).log2(), 46.0))
     } else {
-        46.0 - 5.0 * (effective_bpp * 100.0).log2()
+        5.0f64.mul_add(-(effective_bpp * 100.0).log2(), 46.0)
     };
 
-    let crf_with_content = crf_float + details.content_type_adjustment as f64;
+    let crf_with_content = crf_float + f64::from(details.content_type_adjustment);
 
     let crf_with_bias = match bias {
         QualityBias::Conservative => crf_with_content - 2.0,
@@ -492,17 +502,25 @@ pub fn calculate_hevc_crf_with_options(
     })
 }
 
+/// Calculate JXL distance.
+///
+/// # Errors
+/// Returns an error if calculation fails.
 pub fn calculate_jxl_distance(analysis: &QualityAnalysis) -> Result<MatchedQuality, String> {
     calculate_jxl_distance_with_options(analysis, MatchMode::Quality, QualityBias::Balanced)
 }
 
+/// Calculate JXL distance with options.
+///
+/// # Errors
+/// Returns an error if calculation fails.
 pub fn calculate_jxl_distance_with_options(
     analysis: &QualityAnalysis,
     mode: MatchMode,
     bias: QualityBias,
 ) -> Result<MatchedQuality, String> {
     if let Some(quality) = analysis.estimated_quality {
-        let base_distance = (100.0 - quality as f32) / 10.0;
+        let base_distance = (100.0 - f32::from(quality)) / 10.0;
 
         let biased_distance = match bias {
             QualityBias::Conservative => base_distance - 0.2,
@@ -517,7 +535,7 @@ pub fn calculate_jxl_distance_with_options(
             distance: clamped,
             effective_bpp: analysis.bpp,
             analysis_details: AnalysisDetails {
-                confidence: 0.9,
+                confidence: calculate_confidence_v3(analysis),
                 match_mode: mode,
                 quality_bias: bias,
                 ..Default::default()
@@ -541,12 +559,12 @@ pub fn calculate_jxl_distance_with_options(
         ));
     }
 
-    let estimated_quality = 70.0 + 15.0 * (effective_bpp * 5.0).max(0.001).log2();
+    let estimated_quality = 15.0f64.mul_add((effective_bpp * 5.0).max(0.001).log2(), 70.0);
 
     let clamped_quality = estimated_quality.clamp(50.0, 100.0);
     let base_distance = ((100.0 - clamped_quality) / 10.0) as f32;
 
-    let content_adj = details.content_type_adjustment as f32 * 0.1;
+    let content_adj = f32::from(details.content_type_adjustment) * 0.1;
     let distance_with_content = base_distance - content_adj;
 
     let distance_with_bias = match bias {
@@ -575,7 +593,7 @@ fn calculate_effective_bpp_with_options(
         return Err("❌ Invalid dimensions: width or height is 0".to_string());
     }
 
-    let pixels = (analysis.width as u64) * (analysis.height as u64);
+    let pixels = u64::from(analysis.width) * u64::from(analysis.height);
 
     let raw_bpp = calculate_raw_bpp(analysis, pixels)?;
 
@@ -690,7 +708,9 @@ fn calculate_raw_bpp(analysis: &QualityAnalysis, pixels: u64) -> Result<f64, Str
     if analysis.file_size > 0 {
         if let Some(duration) = analysis.duration_secs {
             if duration > 0.0 {
-                let fps = analysis.fps.ok_or_else(|| "Missing FPS for BPP calculation".to_string())?;
+                let fps = analysis
+                    .fps
+                    .ok_or_else(|| "Missing FPS for BPP calculation".to_string())?;
                 let total_frames = (duration * fps) as u64;
                 let bits_per_frame = (analysis.file_size * 8) as f64 / total_frames.max(1) as f64;
                 return Ok(bits_per_frame / pixels as f64);
@@ -706,11 +726,10 @@ fn calculate_gop_factor(gop_size: Option<u32>, b_frames: u8) -> f64 {
     let gop_base = match gop_size {
         Some(1) => 0.70,
         Some(2..=10) => 0.85,
-        Some(11..=50) => 1.0,
+        Some(11..=50) | None => 1.0,
         Some(51..=150) => 1.15,
         Some(151..=300) => 1.20,
         Some(_) => 1.25,
-        None => 1.0,
     };
 
     let b_pyramid_bonus = match b_frames {
@@ -790,13 +809,13 @@ fn calculate_codec_efficiency(codec: SourceCodec, preset: Option<&str>) -> f64 {
 fn calculate_resolution_factor(pixels: u64) -> f64 {
     let megapixels = pixels as f64 / 1_000_000.0;
     if megapixels > 8.0 {
-        0.80 + 0.05 * (8.0 / megapixels).min(1.0)
+        0.05f64.mul_add((8.0 / megapixels).min(1.0), 0.80)
     } else if megapixels > 2.0 {
-        0.85 + 0.05 * ((8.0 - megapixels) / 6.0)
+        0.05f64.mul_add((8.0 - megapixels) / 6.0, 0.85)
     } else if megapixels > 0.5 {
-        0.90 + 0.05 * ((2.0 - megapixels) / 1.5)
+        0.05f64.mul_add((2.0 - megapixels) / 1.5, 0.90)
     } else {
-        0.95 + 0.05 * ((0.5 - megapixels) / 0.5).min(1.0)
+        0.05f64.mul_add(((0.5 - megapixels) / 0.5).min(1.0), 0.95)
     }
 }
 
@@ -817,7 +836,7 @@ fn calculate_color_depth_factor(bit_depth: u8, codec: SourceCodec) -> f64 {
 }
 
 fn calculate_aspect_factor(width: u32, height: u32) -> f64 {
-    let aspect_ratio = width as f64 / height.max(1) as f64;
+    let aspect_ratio = f64::from(width) / f64::from(height.max(1));
     if aspect_ratio > 2.5 {
         1.08
     } else if aspect_ratio > 2.0 {
@@ -867,7 +886,7 @@ fn calculate_complexity_factor(si: Option<f64>, ti: Option<f64>, raw_bpp: f64, p
     if ratio > 2.0 {
         1.15
     } else if ratio > 1.0 {
-        1.0 + 0.15 * ((ratio - 1.0) / 1.0)
+        0.15f64.mul_add((ratio - 1.0) / 1.0, 1.0)
     } else if ratio > 0.5 {
         1.0
     } else {
@@ -956,15 +975,14 @@ fn calculate_confidence_v3(analysis: &QualityAnalysis) -> f64 {
     }
 
     if let (Some(fps), Some(duration)) = (analysis.fps, analysis.duration_secs) {
-        if fps > 0.0 && duration > 0.0
-            && (1.0..=240.0).contains(&fps) {
-                score += 2.0;
-                max_score += 2.0;
-            }
+        if fps > 0.0 && duration > 0.0 && (1.0..=240.0).contains(&fps) {
+            score += 2.0;
+            max_score += 2.0;
+        }
     }
 
     if let (Some(video_bitrate), Some(fps)) = (analysis.video_bitrate, analysis.fps) {
-        let pixels = (analysis.width as u64) * (analysis.height as u64);
+        let pixels = u64::from(analysis.width) * u64::from(analysis.height);
         if pixels > 0 && video_bitrate > 0 {
             let bpp_estimate = video_bitrate as f64 / (pixels as f64 * fps);
             if (0.01..=5.0).contains(&bpp_estimate) {
@@ -977,6 +995,7 @@ fn calculate_confidence_v3(analysis: &QualityAnalysis) -> f64 {
     (score / max_score).clamp(0.0, 1.0)
 }
 
+#[must_use]
 pub fn parse_source_codec(codec_str: &str) -> SourceCodec {
     let codec_lower = codec_str.to_lowercase();
 
@@ -1099,9 +1118,8 @@ pub fn parse_source_codec(codec_str: &str) -> SourceCodec {
     if codec_lower.contains("webp") {
         if codec_lower.contains("anim") {
             return SourceCodec::WebpAnimated;
-        } else {
-            return SourceCodec::WebpStatic;
         }
+        return SourceCodec::WebpStatic;
     }
 
     if codec_lower.contains("jpeg") || codec_lower.contains("jpg") {
@@ -1137,7 +1155,7 @@ pub fn log_quality_analysis(
     let d = &result.analysis_details;
     let codec = parse_source_codec(&analysis.source_codec);
 
-    eprintln!("   Quality Analysis v3.0 ({}):", encoder_name);
+    eprintln!("   Quality Analysis v3.0 ({encoder_name}):");
     eprintln!(
         "      Mode: {:?} | Bias: {:?}",
         d.match_mode, d.quality_bias
@@ -1183,7 +1201,7 @@ pub fn log_quality_analysis(
     }
     eprintln!("         Chroma factor: {:.2}", d.chroma_factor);
     if let Some(ref pf) = analysis.pix_fmt {
-        eprintln!("            └─ Pixel format: {}", pf);
+        eprintln!("            └─ Pixel format: {pf}");
     }
     eprintln!("         HDR factor: {:.2}", d.hdr_factor);
     if analysis.is_hdr == Some(true) {
@@ -1195,7 +1213,7 @@ pub fn log_quality_analysis(
             d.content_type_adjustment
         );
         if let Some(ct) = analysis.content_type {
-            eprintln!("            └─ Type: {:?}", ct);
+            eprintln!("            └─ Type: {ct:?}");
         }
     }
     eprintln!();
@@ -1217,10 +1235,10 @@ pub fn log_quality_analysis(
     eprintln!("      Result:");
     eprintln!("         Effective BPP: {:.4}", result.effective_bpp);
     if let Some(fps) = analysis.fps {
-        eprintln!("         FPS: {:.2}", fps);
+        eprintln!("         FPS: {fps:.2}");
     }
     if let Some(duration) = analysis.duration_secs {
-        eprintln!("         Duration: {:.1}s", duration);
+        eprintln!("         Duration: {duration:.1}s");
     }
 
     match encoder {
@@ -1233,6 +1251,7 @@ pub fn log_quality_analysis(
     }
 }
 
+#[must_use]
 pub fn from_video_detection(
     file_path: &str,
     codec: &str,
@@ -1245,20 +1264,17 @@ pub fn from_video_detection(
     bit_depth: u8,
     file_size: u64,
 ) -> QualityAnalysis {
-    let pixels_per_frame = (width as f64) * (height as f64);
+    let pixels_per_frame = f64::from(width) * f64::from(height);
     let pixels_per_second = pixels_per_frame * fps;
 
     let bpp = if pixels_per_second > 0.0 && bitrate > 0 {
         (bitrate as f64) / pixels_per_second
     } else {
         if pixels_per_second <= 0.0 {
-            eprintln!(
-                "   ⚠️  Warning: pixels_per_second is {} for {}",
-                pixels_per_second, file_path
-            );
+            eprintln!("   ⚠️  Warning: pixels_per_second is {pixels_per_second} for {file_path}");
         }
         if bitrate == 0 {
-            eprintln!("   ⚠️  Warning: bitrate is 0 for {}", file_path);
+            eprintln!("   ⚠️  Warning: bitrate is 0 for {file_path}");
         }
         0.0
     };
@@ -1285,10 +1301,12 @@ pub struct VideoAnalysisBuilder {
 }
 
 impl VideoAnalysisBuilder {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[must_use]
     pub fn basic(
         mut self,
         codec: &str,
@@ -1305,66 +1323,77 @@ impl VideoAnalysisBuilder {
         self
     }
 
-    pub fn file_size(mut self, size: u64) -> Self {
+    #[must_use]
+    pub const fn file_size(mut self, size: u64) -> Self {
         self.analysis.file_size = size;
         self
     }
 
+    #[must_use]
     pub fn video_bitrate(mut self, bitrate: u64) -> Self {
         self.analysis.video_bitrate = Some(bitrate);
         if let (Some(fps), w, h) = (self.analysis.fps, self.analysis.width, self.analysis.height) {
             if fps > 0.0 && w > 0 && h > 0 {
-                let pixels = (w as f64) * (h as f64);
+                let pixels = f64::from(w) * f64::from(h);
                 self.analysis.bpp = (bitrate as f64 / fps) / pixels;
             }
         }
         self
     }
 
-    pub fn gop(mut self, gop_size: u32, b_frames: u8) -> Self {
+    #[must_use]
+    pub const fn gop(mut self, gop_size: u32, b_frames: u8) -> Self {
         self.analysis.gop_size = Some(gop_size);
         self.analysis.b_frame_count = Some(b_frames);
         self.analysis.has_b_frames = b_frames > 0;
         self
     }
 
+    #[must_use]
     pub fn pix_fmt(mut self, fmt: &str) -> Self {
         self.analysis.pix_fmt = Some(fmt.to_string());
         self
     }
 
+    #[must_use]
     pub fn color(mut self, color_space: &str, is_hdr: bool) -> Self {
         self.analysis.color_space = Some(color_space.to_string());
         self.analysis.is_hdr = Some(is_hdr);
         self
     }
 
-    pub fn content_type(mut self, ct: ContentType) -> Self {
+    #[must_use]
+    pub const fn content_type(mut self, ct: ContentType) -> Self {
         self.analysis.content_type = Some(ct);
         self
     }
 
-    pub fn bit_depth(mut self, depth: u8) -> Self {
+    #[must_use]
+    pub const fn bit_depth(mut self, depth: u8) -> Self {
         self.analysis.bit_depth = depth;
         self
     }
 
-    pub fn complexity(mut self, spatial: f64, temporal: f64) -> Self {
+    #[must_use]
+    pub const fn complexity(mut self, spatial: f64, temporal: f64) -> Self {
         self.analysis.spatial_complexity = Some(spatial);
         self.analysis.temporal_complexity = Some(temporal);
         self
     }
 
-    pub fn film_grain(mut self, has_grain: bool) -> Self {
+    #[must_use]
+    pub const fn film_grain(mut self, has_grain: bool) -> Self {
         self.analysis.has_film_grain = Some(has_grain);
         self
     }
 
+    #[must_use]
     pub fn preset(mut self, preset: &str) -> Self {
         self.analysis.encoder_preset = Some(preset.to_string());
         self
     }
 
+    #[must_use]
     pub fn build(self) -> QualityAnalysis {
         self.analysis
     }
@@ -1377,6 +1406,7 @@ pub struct SkipDecision {
     pub codec: SourceCodec,
 }
 
+#[must_use]
 pub fn should_skip_video_codec(codec_str: &str) -> SkipDecision {
     let codec = parse_source_codec(codec_str);
 
@@ -1384,7 +1414,11 @@ pub fn should_skip_video_codec(codec_str: &str) -> SkipDecision {
     // Only when Apple-compat flag is on do we convert AV1/VP9/VVC/AV2 via should_skip_video_codec_apple_compat (skip HEVC only).
     let should_skip = matches!(
         codec,
-        SourceCodec::H265 | SourceCodec::Av1 | SourceCodec::Vp9 | SourceCodec::Vvc | SourceCodec::Av2
+        SourceCodec::H265
+            | SourceCodec::Av1
+            | SourceCodec::Vp9
+            | SourceCodec::Vvc
+            | SourceCodec::Av2
     );
 
     let reason = if should_skip {
@@ -1397,8 +1431,7 @@ pub fn should_skip_video_codec(codec_str: &str) -> SkipDecision {
             _ => "modern codec",
         };
         format!(
-            "Source is {} - skipping (modern format; use Apple-compat mode to convert to HEVC)",
-            codec_name
+            "Source is {codec_name} - skipping (modern format; use Apple-compat mode to convert to HEVC)"
         )
     } else {
         String::new()
@@ -1411,6 +1444,7 @@ pub fn should_skip_video_codec(codec_str: &str) -> SkipDecision {
     }
 }
 
+#[must_use]
 pub fn should_skip_video_codec_apple_compat(codec_str: &str) -> SkipDecision {
     let codec = parse_source_codec(codec_str);
 
@@ -1430,6 +1464,7 @@ pub fn should_skip_video_codec_apple_compat(codec_str: &str) -> SkipDecision {
 }
 
 /// True when the source codec is one that Apple devices do not support (or support poorly).
+#[must_use]
 pub fn is_apple_incompatible_video_codec(codec_str: &str) -> bool {
     should_keep_best_effort_output_on_failure(codec_str)
 }
@@ -1438,6 +1473,7 @@ pub fn is_apple_incompatible_video_codec(codec_str: &str) -> bool {
 /// - Apple-incompatible (AV1, VP9, VVC, AV2): user still gets an importable file.
 /// - ProRes/DNxHD are NOT included: they must pass strict size-shrink + SSIM; failure must not
 ///   keep output when size got bigger — decision is strictly by SSIM and size balance, never allow larger output.
+#[must_use]
 pub fn should_keep_best_effort_output_on_failure(codec_str: &str) -> bool {
     let codec = parse_source_codec(codec_str);
     matches!(
@@ -1446,10 +1482,12 @@ pub fn should_keep_best_effort_output_on_failure(codec_str: &str) -> bool {
     )
 }
 
-/// Single predicate for keeping Apple-compat fallback HEVC output (explore failure or require_compression path).
+/// Single predicate for keeping Apple-compat fallback HEVC output (explore failure or `require_compression` path).
+///
 /// **User-facing behavior is based on total file size only** (video stream remains an internal metric).
 /// Returns true only when: Apple compat is on, source is not GIF, source codec is Apple-incompatible (AV1/VP9/VVC/AV2),
-/// and either total file got smaller or (allow_size_tolerance && total_size_ratio < 1.01).
+/// and either total file got smaller or (`allow_size_tolerance` && `total_size_ratio` < 1.01).
+#[must_use]
 pub fn should_keep_apple_fallback_hevc_output(
     codec_str: &str,
     total_file_compressed: bool,
@@ -1464,6 +1502,7 @@ pub fn should_keep_apple_fallback_hevc_output(
     total_file_compressed || (allow_size_tolerance && total_size_ratio < 1.01)
 }
 
+#[must_use]
 pub fn should_skip_image_format(format_str: &str, is_lossless: bool) -> SkipDecision {
     let codec = parse_source_codec(format_str);
 
@@ -1493,10 +1532,7 @@ pub fn should_skip_image_format(format_str: &str, is_lossless: bool) -> SkipDeci
             SourceCodec::JpegXl => "JPEG XL (already optimal)",
             _ => "modern lossy format",
         };
-        format!(
-            "Source is {} - skipping to avoid generational loss",
-            codec_name
-        )
+        format!("Source is {codec_name} - skipping to avoid generational loss")
     } else if is_heic_lossless {
         // Lossless HEIC/HEIF is not skipped; it will be converted to JXL.
         String::new()
@@ -1511,6 +1547,7 @@ pub fn should_skip_image_format(format_str: &str, is_lossless: bool) -> SkipDeci
     }
 }
 
+#[must_use]
 pub fn from_image_analysis(
     format: &str,
     width: u32,
@@ -1522,7 +1559,7 @@ pub fn from_image_analysis(
     fps: Option<f64>,
     estimated_quality: Option<u8>,
 ) -> QualityAnalysis {
-    let pixels = (width as u64) * (height as u64);
+    let pixels = u64::from(width) * u64::from(height);
 
     let bpp = if let (Some(duration), Some(frame_rate)) = (duration_secs, fps) {
         if duration > 0.0 && frame_rate > 0.0 {
@@ -1884,8 +1921,7 @@ mod tests {
         let crf_diff = anim_result.crf as i32 - base_result.crf as i32;
         assert!(
             (2..=6).contains(&crf_diff),
-            "Animation CRF adjustment: expected +2 to +6, got {:+}",
-            crf_diff
+            "Animation CRF adjustment: expected +2 to +6, got {crf_diff:+}"
         );
     }
 
@@ -2154,6 +2190,17 @@ mod tests {
             (result.distance - 1.5).abs() < 0.3,
             "JPEG Q85 should produce distance ~1.5, got {}",
             result.distance
+        );
+        assert!(
+            (result.analysis_details.confidence - calculate_confidence_v3(&jpeg)).abs()
+                < f64::EPSILON,
+            "JPEG estimated-quality path should use calculated confidence, got {}",
+            result.analysis_details.confidence
+        );
+        assert!(
+            result.analysis_details.confidence < 0.9,
+            "Sparse JPEG metadata should not be reported as fixed 0.9 confidence, got {}",
+            result.analysis_details.confidence
         );
     }
 

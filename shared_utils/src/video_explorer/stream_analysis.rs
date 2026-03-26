@@ -1,11 +1,11 @@
-//! Stream Analysis Module - 视频流分析模块
+//! Stream Analysis Module
 //!
-//! 本模块负责视频流的分析和质量评估，包括：
-//! - SSIM (Structural Similarity Index) 计算
-//! - PSNR (Peak Signal-to-Noise Ratio) 计算
-//! - MS-SSIM (Multi-Scale SSIM) 计算
-//! - 视频时长检测
-//! - 质量阈值验证
+//! This module is responsible for video stream analysis and quality assessment, including:
+//! - SSIM (Structural Similarity Index) calculation
+//! - PSNR (Peak Signal-to-Noise Ratio) calculation
+//! - MS-SSIM (Multi-Scale SSIM) calculation
+//! - Video duration detection
+//! - Quality threshold validation
 
 use std::path::Path;
 use std::process::Command;
@@ -48,16 +48,35 @@ pub fn get_video_duration(input: &Path) -> Option<f64> {
         .output()
         .ok()?;
 
-    String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .parse::<f64>()
-        .ok()
+    if !output.status.success() {
+        warn!(
+            path = %input.display(),
+            stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+            "ffprobe failed to read video duration"
+        );
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let trimmed = stdout.trim();
+    match trimmed.parse::<f64>() {
+        Ok(duration) => Some(duration),
+        Err(err) => {
+            warn!(
+                path = %input.display(),
+                output = %trimmed,
+                error = %err,
+                "Failed to parse ffprobe duration output"
+            );
+            None
+        }
+    }
 }
 
 pub fn calculate_ssim_enhanced(input: &Path, output: &Path) -> Option<f64> {
     let filters: &[(&str, &str)] = &[
         ("standard", "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];[ref][1:v]ssim"),
-        ("format_convert", "[0:v]format=yuv420p,scale='iw-mod(iw,2)':'ih-mod(ih,2)'[ref];[1:v]format=yuv420p[cmp];[ref][cmp]ssim"),
+        ("format_convert", "[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[ref];[1:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[cmp];[ref][cmp]ssim"),
         ("simple", "ssim"),
     ];
 
@@ -133,6 +152,7 @@ fn run_ssim_all_filter(input: &Path, output: &Path, lavfi: &str) -> Option<(f64,
 /// 2. Format normalization (GIF palette / odd-size → yuv420p even).
 /// 3. Alpha flatten: composite input on black (same as encoder) then compare,
 ///    so transparent GIF/WebP/PNG matches HEVC output that has no alpha.
+#[must_use]
 pub fn calculate_ssim_all(input: &Path, output: &Path) -> Option<(f64, f64, f64, f64)> {
     const DIRECT: &str = "[0:v][1:v]ssim";
     const FORMAT_NORM: &str = "[0:v]format=yuv420p,scale='iw-mod(iw,2)':'ih-mod(ih,2)'[ref];[1:v]format=yuv420p,scale='iw-mod(iw,2)':'ih-mod(ih,2)'[cmp];[ref][cmp]ssim";

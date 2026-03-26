@@ -4,7 +4,7 @@
 //! (skipped from video conversion) or converted to HEVC video:
 //!
 //! 1. **Veto rules** (hard constraints): extreme cases bypass scoring entirely
-//!    - NEW: known meme-CDN app-extension blocks (GIPHY / Tenor) → hard KeepGif
+//!    - NEW: known meme-CDN app-extension blocks (GIPHY / Tenor) → hard `KeepGif`
 //! 2. **Dynamic weighting**: dimension scores adjust based on inter-relationships
 //! 3. **Confidence intervals**: uncertain cases (0.40-0.60) default to keeping GIF
 //! 4. **Compression ratio**: bytes-per-pixel as a zero-cost strong feature
@@ -19,11 +19,11 @@
 //!   - sharpness       (0.38): Low bytes/pixel → simple palette → meme-like
 //!   - resolution      (0.18): Small canvas → meme-like (≤200² ≈ 1.0, ≥1080p ≈ 0.0)
 //!   - duration        (0.20): Short loop → meme-like (≤1 s ≈ 1.0, ≥10 s ≈ 0.0)
-//!   - aspect_ratio    (0.09): Square canvas → meme-like
+//!   - `aspect_ratio`    (0.09): Square canvas → meme-like
 //!   - filename        (0.08): Human single-word name → meme-like (complexity-hedged)
-//!   - loop_frequency  (0.04): High loop rate → meme-like
+//!   - `loop_frequency`  (0.04): High loop rate → meme-like
 //!   - palette         (0.05): Small power-of-2 palette → synthetic/meme-like (NEW)
-//!   - fps             (0.00): DEPRECATED — High frame rate memes (Live2D) exist.
+//!   - fps             (0.00): DEPRECATED — High frame rate memes (`Live2D`) exist.
 //!
 //! ## Filename complexity hedging
 //!
@@ -36,12 +36,12 @@
 //!
 //! where `phys_complexity = 0.6 × spatial + 0.4 × temporal` and `attenuation`
 //! depends on naming origin:
-//!   - HumanSemantic  (e.g. "laugh", "滑稽"):  attenuation = 0.85
-//!   - MachineGenerated (hash / mmexport / ts):  attenuation = 0.95  (near-neutral for HD)
+//!   - `HumanSemantic`  (e.g. "laugh", "funny"):  attenuation = 0.85
+//!   - `MachineGenerated` (hash / mmexport / ts):  attenuation = 0.95  (near-neutral for HD)
 //!   - Ambiguous (multi-word etc.):              attenuation = 1.00
 //!   - filename        (0.08): Single-word name → meme-like (NEW)
-//!   - loop_frequency  (0.04): High loop rate → meme-like (NEW)
-//!   - fps             (0.00): DEPRECATED - High frame rate memes (Live2D) exist.
+//!   - `loop_frequency`  (0.04): High loop rate → meme-like (NEW)
+//!   - fps             (0.00): DEPRECATED - High frame rate memes (`Live2D`) exist.
 
 /// Meta-information about an animated GIF derived from ffprobe / image-analyzer.
 #[derive(Debug, Clone)]
@@ -96,7 +96,7 @@ pub struct MemeScore {
     pub filename_score: f64,
     /// Loop frequency score.
     pub loop_frequency_score: f64,
-    /// Palette-entropy score (0.5 when palette_size is unavailable).
+    /// Palette-entropy score (0.5 when `palette_size` is unavailable).
     pub palette_score: f64,
     /// Raw bytes-per-pixel value (diagnostic only).
     pub bytes_per_pixel: f64,
@@ -145,12 +145,12 @@ const CONF_CONVERT: f64 = 0.40;
 
 // ── Known meme-platform app-extension prefixes ────────────────────────────────
 /// If any app-extension vendor string *starts with* one of these, the GIF
-/// originates from a meme CDN and is vetoed as KeepGif regardless of resolution.
+/// originates from a meme CDN and is vetoed as `KeepGif` regardless of resolution.
 const MEME_PLATFORM_PREFIXES: &[&str] = &[
-    "GIPHY    ",  // GIPHY (8-byte padded as per GIF spec)
+    "GIPHY    ", // GIPHY (8-byte padded as per GIF spec)
     "TENOR    ",
     "STICKER  ",
-    "GIPHY",      // unpadded variants seen in the wild
+    "GIPHY", // unpadded variants seen in the wild
     "TENOR",
     "STICKER",
 ];
@@ -174,7 +174,21 @@ fn normalize(value: f64, low: f64, high: f64) -> f64 {
 /// the kind determines how aggressively the score is attenuated by physical
 /// features in `score_gif`.
 fn analyze_filename(name: Option<&str>) -> FilenameAnalysis {
-    let neutral = FilenameAnalysis { raw: 0.5, kind: FilenameKind::Ambiguous };
+    const MACHINE_PREFIXES: &[&str] = &[
+        "mmexport",
+        "wx_camera",
+        "wx_image",
+        "IMG_",
+        "VID_",
+        "Screenshot_",
+        "signal-",
+        "telegram-",
+    ];
+
+    let neutral = FilenameAnalysis {
+        raw: 0.5,
+        kind: FilenameKind::Ambiguous,
+    };
 
     let name = match name {
         Some(n) if !n.is_empty() => n,
@@ -182,32 +196,34 @@ fn analyze_filename(name: Option<&str>) -> FilenameAnalysis {
     };
 
     // Strip extension
-    let stem = name.rsplit_once('.').map(|(s, _)| s).unwrap_or(name);
+    let stem = name.rsplit_once('.').map_or(name, |(s, _)| s);
 
     // ── Machine-generated patterns ─────────────────────────────────────────
     // MD5-style 32-char hex → social-media cache name
-    let is_hex32 = stem.len() == 32
-        && stem.chars().all(|c| c.is_ascii_hexdigit());
+    let is_hex32 = stem.len() == 32 && stem.chars().all(|c| c.is_ascii_hexdigit());
     if is_hex32 {
-        return FilenameAnalysis { raw: 0.60, kind: FilenameKind::MachineGenerated };
+        return FilenameAnalysis {
+            raw: 0.60,
+            kind: FilenameKind::MachineGenerated,
+        };
     }
 
     // WeChat / common social-app export prefixes
-    const MACHINE_PREFIXES: &[&str] = &[
-        "mmexport", "wx_camera", "wx_image",
-        "IMG_",     "VID_",     "Screenshot_",
-        "signal-",  "telegram-",
-    ];
     if MACHINE_PREFIXES.iter().any(|p| stem.starts_with(p)) {
-        return FilenameAnalysis { raw: 0.60, kind: FilenameKind::MachineGenerated };
+        return FilenameAnalysis {
+            raw: 0.60,
+            kind: FilenameKind::MachineGenerated,
+        };
     }
 
     // Pure numeric timestamp (10–16 digits → Unix epoch or ms epoch)
-    let is_timestamp = stem.len() >= 10
-        && stem.len() <= 16
-        && stem.chars().all(|c| c.is_ascii_digit());
+    let is_timestamp =
+        stem.len() >= 10 && stem.len() <= 16 && stem.chars().all(|c| c.is_ascii_digit());
     if is_timestamp {
-        return FilenameAnalysis { raw: 0.58, kind: FilenameKind::MachineGenerated };
+        return FilenameAnalysis {
+            raw: 0.58,
+            kind: FilenameKind::MachineGenerated,
+        };
     }
 
     // ── Word-count analysis for everything else ───────────────────────────
@@ -231,7 +247,7 @@ fn analyze_filename(name: Option<&str>) -> FilenameAnalysis {
             let is_cjk = ('\u{4E00}'..='\u{9FFF}').contains(&ch)  // CJK Unified
                 || ('\u{3040}'..='\u{309F}').contains(&ch)         // Hiragana
                 || ('\u{30A0}'..='\u{30FF}').contains(&ch)         // Katakana
-                || ('\u{AC00}'..='\u{D7AF}').contains(&ch);        // Hangul
+                || ('\u{AC00}'..='\u{D7AF}').contains(&ch); // Hangul
 
             if is_cjk {
                 cjk_run += 1;
@@ -252,10 +268,12 @@ fn analyze_filename(name: Option<&str>) -> FilenameAnalysis {
         if cjk_run > 0 || part.chars().any(|c| ('\u{4E00}'..='\u{9FFF}').contains(&c)) {
             let cjk_total = part
                 .chars()
-                .filter(|&c| ('\u{4E00}'..='\u{9FFF}').contains(&c)
-                    || ('\u{3040}'..='\u{309F}').contains(&c)
-                    || ('\u{30A0}'..='\u{30FF}').contains(&c)
-                    || ('\u{AC00}'..='\u{D7AF}').contains(&c))
+                .filter(|&c| {
+                    ('\u{4E00}'..='\u{9FFF}').contains(&c)
+                        || ('\u{3040}'..='\u{309F}').contains(&c)
+                        || ('\u{30A0}'..='\u{30FF}').contains(&c)
+                        || ('\u{AC00}'..='\u{D7AF}').contains(&c)
+                })
                 .count();
             // Treat every ~4 CJK chars as one logical "word"
             word_count += ((cjk_total as f64 / 4.0).ceil() as usize).max(1);
@@ -266,10 +284,10 @@ fn analyze_filename(name: Option<&str>) -> FilenameAnalysis {
 
     // Single-word human name: strong meme signal
     let (raw, kind) = match total_words {
-        0 | 1 => (1.0,  FilenameKind::HumanSemantic),
-        2     => (0.70, FilenameKind::HumanSemantic),   // borderline human
-        3     => (0.35, FilenameKind::Ambiguous),
-        _     => (0.20, FilenameKind::Ambiguous),
+        0 | 1 => (1.0, FilenameKind::HumanSemantic),
+        2 => (0.70, FilenameKind::HumanSemantic), // borderline human
+        3 => (0.35, FilenameKind::Ambiguous),
+        _ => (0.20, FilenameKind::Ambiguous),
     };
 
     FilenameAnalysis { raw, kind }
@@ -306,7 +324,11 @@ fn score_palette(palette_size: Option<u32>) -> Option<f64> {
     };
     // Bonus for exact power-of-two sizes (sign of deliberate palette tuning)
     let is_pow2 = sz.is_power_of_two();
-    Some(if is_pow2 { score } else { (score * 0.85).max(0.10) })
+    Some(if is_pow2 {
+        score
+    } else {
+        (score * 0.85).max(0.10)
+    })
 }
 
 /// Calculate loop frequency score.
@@ -316,16 +338,16 @@ fn score_loop_frequency(duration_secs: f64, frame_count: u64) -> f64 {
     if duration_secs <= 0.01 || frame_count == 0 {
         return 0.5; // neutral
     }
-    
+
     // Calculate loops per minute (assuming the animation loops)
     let loops_per_minute = 60.0 / duration_secs;
-    
+
     // Meme/stickers typically loop very frequently (>10 times/min)
     // Video clips loop slowly (<3 times/min)
-    // 
+    //
     // Also consider frame density: very few frames → likely a simple loop
     let frame_density = frame_count as f64 / duration_secs;
-    
+
     // High loop rate score
     let loop_score: f64 = if loops_per_minute >= 20.0 {
         1.0 // Very fast loop (≤3s) → definitely meme-like
@@ -338,7 +360,7 @@ fn score_loop_frequency(duration_secs: f64, frame_count: u64) -> f64 {
     } else {
         0.2 // Very slow loop (>30s) → definitely video
     };
-    
+
     // Low frame density bonus (simple animations are more meme-like)
     let density_bonus: f64 = if frame_density < 5.0 {
         0.2 // Very simple animation
@@ -347,7 +369,7 @@ fn score_loop_frequency(duration_secs: f64, frame_count: u64) -> f64 {
     } else {
         0.0 // Complex animation
     };
-    
+
     (loop_score + density_bonus).min(1.0)
 }
 
@@ -356,7 +378,7 @@ fn score_loop_frequency(duration_secs: f64, frame_count: u64) -> f64 {
 /// Apply veto rules based on extreme metadata values.
 /// Returns `KeepGif` / `ConvertVideo` for clear-cut cases; `Undecided` otherwise.
 fn apply_veto(meta: &GifMeta, bytes_per_pixel: f64) -> VetoVerdict {
-    let pixel_count = (meta.width as u64 * meta.height as u64) as f64;
+    let pixel_count = (u64::from(meta.width) * u64::from(meta.height)) as f64;
 
     // ── Hard KEEP via meme-platform signature ─────────────────────────────
     // If the GIF carries an application-extension block from a known meme CDN,
@@ -417,21 +439,22 @@ fn apply_veto(meta: &GifMeta, bytes_per_pixel: f64) -> VetoVerdict {
 ///   MachineGenerated → 0.95   (almost zero contribution at 1080p)
 ///   Ambiguous        → 1.00
 /// ```
+#[must_use]
 pub fn score_gif(meta: &GifMeta) -> MemeScore {
-    let pixels = (meta.width as u64 * meta.height as u64).max(1);
+    let pixels = (u64::from(meta.width) * u64::from(meta.height)).max(1);
     let total_frames = meta.frame_count.max(1);
     let bytes_per_pixel = meta.file_size_bytes as f64 / (pixels * total_frames) as f64;
 
     // ── Per-dimension scores ──────────────────────────────────────────────
 
-    let sharpness_score     = 1.0 - normalize(bytes_per_pixel, BPP_LOW, BPP_HIGH);
-    let pixel_count         = pixels as f64;
-    let resolution_score    = 1.0 - normalize(pixel_count, PIXELS_SMALL, PIXELS_1080P);
-    let duration_score      = 1.0 - normalize(meta.duration_secs, 1.0, 10.0);
-    let fps_score           = 0.5; // deprecated; neutral
+    let sharpness_score = 1.0 - normalize(bytes_per_pixel, BPP_LOW, BPP_HIGH);
+    let pixel_count = pixels as f64;
+    let resolution_score = 1.0 - normalize(pixel_count, PIXELS_SMALL, PIXELS_1080P);
+    let duration_score = 1.0 - normalize(meta.duration_secs, 1.0, 10.0);
+    let fps_score = 0.5; // deprecated; neutral
 
     let ratio = if meta.height > 0 {
-        meta.width as f64 / meta.height as f64
+        f64::from(meta.width) / f64::from(meta.height)
     } else {
         1.0
     };
@@ -451,52 +474,67 @@ pub fn score_gif(meta: &GifMeta) -> MemeScore {
     let fa = analyze_filename(meta.file_name.as_deref());
 
     // Physical-complexity proxy: high when the GIF is large AND/OR long
-    let spatial_complexity  = normalize(pixel_count, PIXELS_SMALL, PIXELS_1080P);
+    let spatial_complexity = normalize(pixel_count, PIXELS_SMALL, PIXELS_1080P);
     let temporal_complexity = normalize(meta.duration_secs, 1.0, 15.0);
-    let phys_complexity     = spatial_complexity * 0.6 + temporal_complexity * 0.4;
+    let phys_complexity = spatial_complexity * 0.6 + temporal_complexity * 0.4;
 
     let attenuation = match fa.kind {
-        FilenameKind::HumanSemantic    => 0.85,
+        FilenameKind::HumanSemantic => 0.85,
         FilenameKind::MachineGenerated => 0.95,
-        FilenameKind::Ambiguous        => 1.00,
+        FilenameKind::Ambiguous => 1.00,
     };
     let effective_filename_score = fa.raw * (1.0 - attenuation * phys_complexity);
 
     // ── Dynamic weights ───────────────────────────────────────────────────
     let complexity = normalize(bytes_per_pixel, BPP_LOW, BPP_HIGH);
 
-    let w_sharpness  = 0.38;
-    let w_resolution = 0.18 + 0.10 * complexity;
-    let w_duration   = 0.20 + 0.08 * complexity;
-    let w_aspect     = 0.09 * (1.0 - 0.3 * complexity);
-    let w_fps        = 0.00;
-    let w_filename   = 0.08;
-    let w_loop_freq  = 0.04;
-    let w_palette    = 0.05;
+    let w_sharpness = 0.38;
+    let w_resolution = 0.10f64.mul_add(complexity, 0.18);
+    let w_duration = 0.08f64.mul_add(complexity, 0.20);
+    let w_aspect = 0.09 * 0.3f64.mul_add(-complexity, 1.0);
+    let w_fps = 0.00;
+    let w_filename = 0.08;
+    let w_loop_freq = 0.04;
+    let w_palette = 0.05;
 
-    let w_sum = w_sharpness + w_resolution + w_duration + w_aspect
-        + w_fps + w_filename + w_loop_freq + w_palette;
+    let w_sum = w_sharpness
+        + w_resolution
+        + w_duration
+        + w_aspect
+        + w_fps
+        + w_filename
+        + w_loop_freq
+        + w_palette;
 
-    let (w_sharpness, w_resolution, w_duration, w_aspect, w_fps,
-         w_filename, w_loop_freq, w_palette) = (
-        w_sharpness  / w_sum,
+    let (
+        w_sharpness,
+        w_resolution,
+        w_duration,
+        w_aspect,
+        w_fps,
+        w_filename,
+        w_loop_freq,
+        w_palette,
+    ) = (
+        w_sharpness / w_sum,
         w_resolution / w_sum,
-        w_duration   / w_sum,
-        w_aspect     / w_sum,
-        w_fps        / w_sum,
-        w_filename   / w_sum,
-        w_loop_freq  / w_sum,
-        w_palette    / w_sum,
+        w_duration / w_sum,
+        w_aspect / w_sum,
+        w_fps / w_sum,
+        w_filename / w_sum,
+        w_loop_freq / w_sum,
+        w_palette / w_sum,
     );
 
-    let total = sharpness_score       * w_sharpness
-        + resolution_score            * w_resolution
-        + duration_score              * w_duration
-        + aspect_score                * w_aspect
-        + fps_score                   * w_fps
-        + effective_filename_score    * w_filename
-        + loop_frequency_score        * w_loop_freq
-        + palette_score               * w_palette;
+    let total = loop_frequency_score.mul_add(
+        w_loop_freq,
+        sharpness_score * w_sharpness
+            + resolution_score * w_resolution
+            + duration_score * w_duration
+            + aspect_score * w_aspect
+            + fps_score * w_fps
+            + effective_filename_score * w_filename,
+    ) + palette_score * w_palette;
 
     MemeScore {
         total,
@@ -517,11 +555,12 @@ pub fn score_gif(meta: &GifMeta) -> MemeScore {
 /// Decide whether to keep a GIF as-is or convert it to video.
 ///
 /// ## Decision pipeline
-/// 1. **Veto** (app-extension CDN marker → KeepGif; extreme physical → convert/keep)
+/// 1. **Veto** (app-extension CDN marker → `KeepGif`; extreme physical → convert/keep)
 /// 2. **Weighted score** with complexity-hedged filename signal
 /// 3. **Confidence interval**: ≥0.60 keep · ≤0.40 convert · middle → keep
+#[must_use]
 pub fn should_keep_as_gif(meta: &GifMeta) -> bool {
-    let pixels = (meta.width as u64 * meta.height as u64).max(1) as f64;
+    let pixels = (u64::from(meta.width) * u64::from(meta.height)).max(1) as f64;
     let bpp = meta.file_size_bytes as f64 / (pixels * meta.frame_count.max(1) as f64);
 
     match apply_veto(meta, bpp) {
@@ -529,7 +568,9 @@ pub fn should_keep_as_gif(meta: &GifMeta) -> bool {
             crate::progress_mode::emit_stderr(&format!(
                 "🎞️  GIF [{}] → KEEP GIF (veto: bpp={:.3} px={:.0} dur={:.1}s)",
                 meta.file_name.as_deref().unwrap_or("?"),
-                bpp, pixels, meta.duration_secs
+                bpp,
+                pixels,
+                meta.duration_secs
             ));
             return true;
         }
@@ -537,7 +578,9 @@ pub fn should_keep_as_gif(meta: &GifMeta) -> bool {
             crate::progress_mode::emit_stderr(&format!(
                 "🎞️  GIF [{}] → CONVERT→VIDEO (veto: bpp={:.3} px={:.0} dur={:.1}s)",
                 meta.file_name.as_deref().unwrap_or("?"),
-                bpp, pixels, meta.duration_secs
+                bpp,
+                pixels,
+                meta.duration_secs
             ));
             return false;
         }
@@ -568,9 +611,11 @@ pub fn should_keep_as_gif(meta: &GifMeta) -> bool {
 // ── Builder helpers ───────────────────────────────────────────────────────────
 
 /// Build a [`GifMeta`] from an [`crate::ffprobe::FFprobeResult`] and file size.
+///
 /// Returns `None` if the probe has no usable video dimensions.
 /// `palette_size` and `app_extensions` are left `None`; populate them via
 /// [`scan_gif_headers`] if a cheap header-scan is acceptable.
+#[must_use]
 pub fn gif_meta_from_probe(
     probe: &crate::ffprobe::FFprobeResult,
     file_size_bytes: u64,
@@ -594,6 +639,7 @@ pub fn gif_meta_from_probe(
 /// Build a [`GifMeta`] from probe result + file path.
 /// Does NOT perform a GIF header scan; call [`scan_gif_headers`] separately
 /// if palette / app-extension data is needed.
+#[must_use]
 pub fn gif_meta_from_probe_with_path(
     probe: &crate::ffprobe::FFprobeResult,
     file_size_bytes: u64,
@@ -605,7 +651,7 @@ pub fn gif_meta_from_probe_with_path(
     let file_name = file_path
         .file_name()
         .and_then(|s| s.to_str())
-        .map(|s| s.to_string());
+        .map(std::string::ToString::to_string);
 
     let duration = if probe.duration > 0.0 {
         probe.duration
@@ -637,12 +683,16 @@ pub fn gif_meta_from_probe_with_path(
 /// with the ffprobe-only path.
 ///
 /// ## Usage
-/// ```rust
+/// ```ignore
 /// let mut meta = gif_meta_from_probe_with_path(&probe, size, path)?;
 /// let (pal, exts) = scan_gif_headers(path).unwrap_or_default();
 /// meta.palette_size   = pal;
 /// meta.app_extensions = exts;
 /// ```
+/// Perform a cheap byte-scan of a GIF file to extract palette size and app extensions.
+///
+/// # Errors
+/// Returns an I/O error if the file cannot be opened or read.
 pub fn scan_gif_headers(
     path: &std::path::Path,
 ) -> std::io::Result<(Option<u32>, Option<Vec<String>>)> {
@@ -669,7 +719,7 @@ pub fn scan_gif_headers(
     let packed = buf[10];
     let has_gct = (packed & 0x80) != 0;
     let palette_size: Option<u32> = if has_gct {
-        let n = (packed & 0x07) as u32;
+        let n = u32::from(packed & 0x07);
         Some(2u32.pow(n + 1))
     } else {
         None
@@ -729,26 +779,34 @@ mod tests {
     use super::*;
 
     fn make_meta(duration: f64, w: u32, h: u32, fps: f64, frames: u64, size: u64) -> GifMeta {
-        GifMeta { 
-            duration_secs: duration, 
-            width: w, 
-            height: h, 
-            fps, 
-            frame_count: frames, 
+        GifMeta {
+            duration_secs: duration,
+            width: w,
+            height: h,
+            fps,
+            frame_count: frames,
             file_size_bytes: size,
             file_name: None,
             palette_size: None,
             app_extensions: None,
         }
     }
-    
-    fn make_meta_with_name(duration: f64, w: u32, h: u32, fps: f64, frames: u64, size: u64, name: &str) -> GifMeta {
-        GifMeta { 
-            duration_secs: duration, 
-            width: w, 
-            height: h, 
-            fps, 
-            frame_count: frames, 
+
+    fn make_meta_with_name(
+        duration: f64,
+        w: u32,
+        h: u32,
+        fps: f64,
+        frames: u64,
+        size: u64,
+        name: &str,
+    ) -> GifMeta {
+        GifMeta {
+            duration_secs: duration,
+            width: w,
+            height: h,
+            fps,
+            frame_count: frames,
             file_size_bytes: size,
             file_name: Some(name.to_string()),
             palette_size: None,
@@ -763,7 +821,11 @@ mod tests {
         // 200×200, 2s, 10fps, 20 frames, tiny file → should score ≥ 0.5
         let meta = make_meta(2.0, 200, 200, 10.0, 20, 40_000);
         let s = score_gif(&meta);
-        assert!(s.total >= 0.50, "expected meme score ≥ 0.5, got {:.3}", s.total);
+        assert!(
+            s.total >= 0.50,
+            "expected meme score ≥ 0.5, got {:.3}",
+            s.total
+        );
     }
 
     #[test]
@@ -771,7 +833,11 @@ mod tests {
         // 1920×1080, 30s, 30fps, 900 frames, large file → should score < 0.5
         let meta = make_meta(30.0, 1920, 1080, 30.0, 900, 15_000_000);
         let s = score_gif(&meta);
-        assert!(s.total < 0.50, "expected video score < 0.5, got {:.3}", s.total);
+        assert!(
+            s.total < 0.50,
+            "expected video score < 0.5, got {:.3}",
+            s.total
+        );
     }
 
     #[test]
@@ -779,14 +845,20 @@ mod tests {
         let meta = make_meta(3.0, 300, 300, 12.0, 36, 270_000);
         let s = score_gif(&meta);
         // bpp = 270_000 / (90_000 * 36) ≈ 0.0833
-        assert!(s.bytes_per_pixel > 0.0, "bytes_per_pixel should be positive");
+        assert!(
+            s.bytes_per_pixel > 0.0,
+            "bytes_per_pixel should be positive"
+        );
     }
 
     #[test]
     fn square_aspect_ratio_maxes_out() {
         let meta = make_meta(3.0, 300, 300, 12.0, 36, 200_000);
         let s = score_gif(&meta);
-        assert!((s.aspect_ratio - 1.0).abs() < 1e-9, "square → aspect_ratio=1.0");
+        assert!(
+            (s.aspect_ratio - 1.0).abs() < 1e-9,
+            "square → aspect_ratio=1.0"
+        );
     }
 
     // ── normalize tests ───────────────────────────────────────────────────────
@@ -825,9 +897,10 @@ mod tests {
     #[test]
     fn veto_keep_ultra_compressed_tiny() {
         // bpp < 0.03 AND pixels < 200×200 → keep
-        let meta = make_meta(3.0, 100, 100, 10.0, 30,
-            // bpp = 1000 / (10_000*30) ≈ 0.003
-            1_000);
+        let meta = make_meta(
+            3.0, 100, 100, 10.0, 30, // bpp = 1000 / (10_000*30) ≈ 0.003
+            1_000,
+        );
         assert_eq!(apply_veto(&meta, 0.003), VetoVerdict::KeepGif);
     }
 
@@ -858,7 +931,10 @@ mod tests {
     fn should_convert_veto_long_large() {
         // 20 s, 1080p → convert veto
         let meta = make_meta(20.0, 1920, 1080, 30.0, 600, 5_000_000);
-        assert!(!should_keep_as_gif(&meta), "long 1080p should always convert");
+        assert!(
+            !should_keep_as_gif(&meta),
+            "long 1080p should always convert"
+        );
     }
 
     #[test]
@@ -869,7 +945,10 @@ mod tests {
         let s = score_gif(&meta);
         // If score is in the uncertain zone, should_keep_as_gif returns true
         if s.total > CONF_CONVERT && s.total < CONF_KEEP {
-            assert!(should_keep_as_gif(&meta), "uncertain zone must default to keep");
+            assert!(
+                should_keep_as_gif(&meta),
+                "uncertain zone must default to keep"
+            );
         }
         // If it landed outside the zone, just verify no panic
     }
@@ -883,60 +962,85 @@ mod tests {
 
     // Helper that bypasses ffprobe for unit testing
     fn gif_meta_from_probe_raw(
-        w: u32, h: u32, duration: f64, fps: f64, frames: u64, size: u64,
+        w: u32,
+        h: u32,
+        duration: f64,
+        fps: f64,
+        frames: u64,
+        size: u64,
     ) -> Option<GifMeta> {
         if w == 0 || h == 0 {
             return None;
         }
-        Some(GifMeta { 
-            duration_secs: duration, 
-            width: w, 
-            height: h, 
-            fps, 
-            frame_count: frames, 
+        Some(GifMeta {
+            duration_secs: duration,
+            width: w,
+            height: h,
+            fps,
+            frame_count: frames,
             file_size_bytes: size,
             file_name: None,
             palette_size: None,
             app_extensions: None,
         })
     }
-    
+
     // ── New dimension tests ───────────────────────────────────────────────────
-    
+
     #[test]
     fn filename_single_word_scores_high() {
         let meta = make_meta_with_name(3.0, 300, 300, 12.0, 36, 200_000, "laugh");
         let s = score_gif(&meta);
-        assert!(s.filename_score >= 0.9, "single word should score high: {:.2}", s.filename_score);
+        assert!(
+            s.filename_score >= 0.9,
+            "single word should score high: {:.2}",
+            s.filename_score
+        );
     }
-    
+
     #[test]
     fn filename_multi_word_scores_low() {
         let meta = make_meta_with_name(3.0, 300, 300, 12.0, 36, 200_000, "my_vacation_video_2024");
         let s = score_gif(&meta);
-        assert!(s.filename_score <= 0.5, "multi-word should score low: {:.2}", s.filename_score);
+        assert!(
+            s.filename_score <= 0.5,
+            "multi-word should score low: {:.2}",
+            s.filename_score
+        );
     }
-    
+
     #[test]
     fn filename_chinese_single_char() {
-        let meta = make_meta_with_name(3.0, 300, 300, 12.0, 36, 200_000, "笑");
+        let meta = make_meta_with_name(3.0, 300, 300, 12.0, 36, 200_000, "laugh");
         let s = score_gif(&meta);
-        assert!(s.filename_score >= 0.9, "single CJK char should score high: {:.2}", s.filename_score);
+        assert!(
+            s.filename_score >= 0.9,
+            "single CJK char should score high: {:.2}",
+            s.filename_score
+        );
     }
-    
+
     #[test]
     fn loop_frequency_fast_loop_scores_high() {
         // 2s duration → 30 loops/min
         let meta = make_meta(2.0, 300, 300, 10.0, 20, 100_000);
         let s = score_gif(&meta);
-        assert!(s.loop_frequency_score >= 0.8, "fast loop should score high: {:.2}", s.loop_frequency_score);
+        assert!(
+            s.loop_frequency_score >= 0.8,
+            "fast loop should score high: {:.2}",
+            s.loop_frequency_score
+        );
     }
-    
+
     #[test]
     fn loop_frequency_slow_loop_scores_low() {
         // 40s duration → 1.5 loops/min
         let meta = make_meta(40.0, 1920, 1080, 30.0, 1200, 5_000_000);
         let s = score_gif(&meta);
-        assert!(s.loop_frequency_score <= 0.4, "slow loop should score low: {:.2}", s.loop_frequency_score);
+        assert!(
+            s.loop_frequency_score <= 0.4,
+            "slow loop should score low: {:.2}",
+            s.loop_frequency_score
+        );
     }
 }

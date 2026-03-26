@@ -1,12 +1,13 @@
-//! PSNR→SSIM 动态映射模块
+//! PSNR→SSIM Dynamic Mapping Module
 //!
-//! v5.74: 用于透明度数据预测，不影响搜索目标
+//! v5.74: Used for transparency data prediction; does not affect search targets
 
 use serde::{Deserialize, Serialize};
 
 /// Uncalibrated PSNR→SSIM estimate used when no mapping/calibration is available.
-/// Single formula shared by explore_strategy and other fallbacks so quality decisions are consistent.
+/// Single formula shared by `explore_strategy` and other fallbacks so quality decisions are consistent.
 #[inline]
+#[must_use]
 pub fn psnr_to_ssim_estimate(psnr_db: f64) -> f64 {
     (1.0 - 10_f64.powf(-psnr_db / 20.0)).min(0.9999)
 }
@@ -19,6 +20,7 @@ pub struct MappingPoint {
 
 impl MappingPoint {
     #[inline]
+    #[must_use]
     pub fn ssim_typed(&self) -> Option<crate::types::Ssim> {
         crate::types::Ssim::new(self.ssim).ok()
     }
@@ -30,11 +32,21 @@ pub struct PsnrSsimMapping {
 }
 
 impl PsnrSsimMapping {
-    pub fn new() -> Self {
+    #[must_use]
+    pub const fn new() -> Self {
         Self { points: Vec::new() }
     }
 
     pub fn insert(&mut self, psnr: f64, ssim: f64) {
+        if let Some(existing) = self
+            .points
+            .iter_mut()
+            .find(|point| (point.psnr - psnr).abs() < f64::EPSILON)
+        {
+            existing.ssim = ssim;
+            return;
+        }
+
         let point = MappingPoint { psnr, ssim };
         let pos = self
             .points
@@ -44,23 +56,38 @@ impl PsnrSsimMapping {
         self.points.insert(pos, point);
     }
 
-    pub fn has_enough_points(&self) -> bool {
+    #[inline]
+    fn interpolate_or_clamp(p1: &MappingPoint, p2: &MappingPoint, psnr: f64) -> f64 {
+        let delta = p2.psnr - p1.psnr;
+        if delta.abs() < f64::EPSILON {
+            return p2.ssim;
+        }
+        let ratio = (psnr - p1.psnr) / delta;
+        ratio.mul_add(p2.ssim - p1.ssim, p1.ssim)
+    }
+
+    #[must_use]
+    pub const fn has_enough_points(&self) -> bool {
         self.points.len() >= 3
     }
 
-    pub fn len(&self) -> usize {
+    #[must_use]
+    pub const fn len(&self) -> usize {
         self.points.len()
     }
 
-    pub fn is_empty(&self) -> bool {
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
         self.points.is_empty()
     }
 
+    #[must_use]
     pub fn predict_ssim_typed(&self, psnr: f64) -> Option<crate::types::Ssim> {
         self.predict_ssim(psnr)
             .and_then(|v| crate::types::Ssim::new(v).ok())
     }
 
+    #[must_use]
     pub fn predict_ssim(&self, psnr: f64) -> Option<f64> {
         if self.points.len() < 2 {
             return None;
@@ -83,16 +110,14 @@ impl PsnrSsimMapping {
             (Some(l), Some(u)) => {
                 let p1 = &self.points[l];
                 let p2 = &self.points[u];
-                let ratio = (psnr - p1.psnr) / (p2.psnr - p1.psnr);
-                Some(p1.ssim + ratio * (p2.ssim - p1.ssim))
+                Some(Self::interpolate_or_clamp(p1, p2, psnr))
             }
             (Some(_), None) => {
                 let n = self.points.len();
                 if n >= 2 {
                     let p1 = &self.points[n - 2];
                     let p2 = &self.points[n - 1];
-                    let ratio = (psnr - p1.psnr) / (p2.psnr - p1.psnr);
-                    Some(p1.ssim + ratio * (p2.ssim - p1.ssim))
+                    Some(Self::interpolate_or_clamp(p1, p2, psnr))
                 } else {
                     None
                 }
@@ -101,8 +126,7 @@ impl PsnrSsimMapping {
                 if self.points.len() >= 2 {
                     let p1 = &self.points[0];
                     let p2 = &self.points[1];
-                    let ratio = (psnr - p1.psnr) / (p2.psnr - p1.psnr);
-                    Some(p1.ssim + ratio * (p2.ssim - p1.ssim))
+                    Some(Self::interpolate_or_clamp(p1, p2, psnr))
                 } else {
                     None
                 }
@@ -124,6 +148,7 @@ impl PsnrSsimMapping {
         }
     }
 
+    #[must_use]
     pub fn get_points(&self) -> &[MappingPoint] {
         &self.points
     }
@@ -167,6 +192,36 @@ mod tests {
         assert_eq!(mapping.len(), 1);
         assert!((mapping.get_points()[0].ssim - 0.91).abs() < 0.001);
     }
+
+    #[test]
+    fn test_insert_replaces_exact_duplicate_psnr() {
+        let mut mapping = PsnrSsimMapping::new();
+        mapping.insert(30.0, 0.90);
+        mapping.insert(30.0, 0.92);
+
+        assert_eq!(mapping.len(), 1);
+        assert!((mapping.get_points()[0].ssim - 0.92).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_predict_ssim_with_duplicate_psnr_points_stays_finite() {
+        let mapping = PsnrSsimMapping {
+            points: vec![
+                MappingPoint {
+                    psnr: 30.0,
+                    ssim: 0.90,
+                },
+                MappingPoint {
+                    psnr: 30.0,
+                    ssim: 0.92,
+                },
+            ],
+        };
+
+        let predicted = mapping.predict_ssim(35.0).expect("prediction should exist");
+        assert!(predicted.is_finite());
+        assert!((predicted - 0.92).abs() < 0.001);
+    }
 }
 
 #[cfg(test)]
@@ -192,10 +247,10 @@ mod prop_tests {
             mapping.insert(p2_psnr, p2_ssim);
             mapping.insert(p3_psnr, p3_ssim);
 
-            let query_psnr = p1_psnr + query_ratio * (p2_psnr - p1_psnr);
+            let query_psnr = query_ratio.mul_add(p2_psnr - p1_psnr, p1_psnr);
             let predicted = mapping.predict_ssim(query_psnr).unwrap();
 
-            let expected = p1_ssim + query_ratio * (p2_ssim - p1_ssim);
+            let expected = query_ratio.mul_add(p2_ssim - p1_ssim, p1_ssim);
             prop_assert!((predicted - expected).abs() < 0.0001,
                 "Interpolation error: predicted={}, expected={}", predicted, expected);
         }

@@ -1,35 +1,37 @@
 //! Common Utilities Module
 //!
-//! 🔥 v7.8: 通用工具函数集合
+//! 🔥 v7.8: Collection of common utility functions
 //!
-//! 本模块提取了项目中重复出现的常见模式，包括：
-//! - 文件操作辅助函数
-//! - 字符串处理工具
-//! - 命令执行辅助函数
-//! - 路径处理工具
+//! This module extracts common patterns recurring in the project, including:
+//! - File operation helper functions
+//! - String processing tools
+//! - Command execution helper functions
+//! - Path processing tools
 //!
-//! ## 设计原则
-//! - 单一职责：每个函数只做一件事
-//! - 可复用性：函数设计通用，不依赖特定上下文
-//! - 错误透明：所有错误都包含详细上下文
-//! - 完整文档：每个函数都有清晰的文档和示例
+//! ## Design Principles
+//! - Single Responsibility: Each function does one thing
+//! - Reusability: Functions are designed to be generic and context-independent
+//! - Error Transparency: All errors include detailed context
+//! - Comprehensive Documentation: Each function has clear docs and examples
 
+use crate::types::ProcessHistory;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info};
-use crate::types::ProcessHistory;
 
 #[inline]
+#[must_use]
 pub fn get_extension_lowercase(path: &Path) -> String {
     path.extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
+        .map(str::to_lowercase)
         .unwrap_or_default()
 }
 
 /// Returns the current processing history (version and timestamp)
+#[must_use]
 pub fn get_current_history() -> ProcessHistory {
     ProcessHistory {
         software_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -41,21 +43,22 @@ pub fn get_current_history() -> ProcessHistory {
 }
 
 #[inline]
+#[must_use]
 pub fn has_extension(path: &Path, extensions: &[&str]) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
-        .map(|e| extensions.iter().any(|ext| ext.eq_ignore_ascii_case(e)))
-        .unwrap_or(false)
+        .is_some_and(|e| extensions.iter().any(|ext| ext.eq_ignore_ascii_case(e)))
 }
 
 #[inline]
+#[must_use]
 pub fn is_hidden_file(path: &Path) -> bool {
     path.file_name()
         .and_then(|n| n.to_str())
-        .map(|n| n.starts_with('.'))
-        .unwrap_or(false)
+        .is_some_and(|n| n.starts_with('.'))
 }
 
+#[must_use]
 pub fn extract_suggested_extension(error_msg: &str) -> Option<String> {
     if let Some(start) = error_msg.find("looks more like a ") {
         let rest = &error_msg[start + "looks more like a ".len()..];
@@ -66,11 +69,19 @@ pub fn extract_suggested_extension(error_msg: &str) -> Option<String> {
     None
 }
 
+/// Ensure that a directory exists, creating it if necessary.
+///
+/// # Errors
+/// Returns an I/O error if the directory cannot be created.
 pub fn ensure_dir_exists(dir: &Path) -> Result<()> {
     std::fs::create_dir_all(dir)
         .with_context(|| format!("Failed to create directory: {}", dir.display()))
 }
 
+/// Ensure that the parent directory of a file exists.
+///
+/// # Errors
+/// Returns an I/O error if the parent directory cannot be created.
 pub fn ensure_parent_dir_exists(file_path: &Path) -> Result<()> {
     if let Some(parent) = file_path.parent() {
         ensure_dir_exists(parent)?;
@@ -78,12 +89,16 @@ pub fn ensure_parent_dir_exists(file_path: &Path) -> Result<()> {
     Ok(())
 }
 
+#[must_use]
 pub fn compute_relative_path(path: &Path, base: &Path) -> PathBuf {
     path.strip_prefix(base)
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|_| path.to_path_buf())
+        .map_or_else(|_| path.to_path_buf(), std::path::Path::to_path_buf)
 }
 
+/// Copy a file and preserve its metadata context if possible.
+///
+/// # Errors
+/// Returns an I/O error if the copy fails.
 pub fn copy_file_with_context(source: &Path, dest: &Path) -> Result<u64> {
     std::fs::copy(source, dest).with_context(|| {
         format!(
@@ -94,6 +109,7 @@ pub fn copy_file_with_context(source: &Path, dest: &Path) -> Result<u64> {
     })
 }
 
+#[must_use]
 pub fn detect_real_extension(path: &Path) -> Option<&'static str> {
     use std::io::Read;
     let mut file = std::fs::File::open(path).ok()?;
@@ -178,6 +194,7 @@ pub fn detect_real_extension(path: &Path) -> Option<&'static str> {
     None
 }
 
+#[must_use]
 pub fn normalize_path_string(path_str: &str) -> String {
     let mut result = path_str.replace('\\', "/");
     while result.contains("//") {
@@ -186,6 +203,7 @@ pub fn normalize_path_string(path_str: &str) -> String {
     result
 }
 
+#[must_use]
 pub fn truncate_string(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         s.to_string()
@@ -196,16 +214,22 @@ pub fn truncate_string(s: &str, max_len: usize) -> String {
     }
 }
 
+#[must_use]
 pub fn extract_digits(s: &str) -> String {
-    s.chars().filter(|c| c.is_ascii_digit()).collect()
+    s.chars().filter(char::is_ascii_digit).collect()
 }
 
+#[must_use]
 pub fn parse_float_or_default(s: &str, default: f64) -> f64 {
     s.parse::<f64>().unwrap_or(default)
 }
 
+/// Execute a command and log its output.
+///
+/// # Errors
+/// Returns an error if the command fails to execute.
 pub fn execute_command_with_logging(cmd: &mut Command) -> Result<Output> {
-    let command_str = format!("{:?}", cmd);
+    let command_str = format!("{cmd:?}");
 
     info!(
         command = %command_str,
@@ -214,7 +238,7 @@ pub fn execute_command_with_logging(cmd: &mut Command) -> Result<Output> {
 
     let output = cmd
         .output()
-        .with_context(|| format!("Failed to execute command: {}", command_str))?;
+        .with_context(|| format!("Failed to execute command: {command_str}"))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -245,25 +269,32 @@ pub fn execute_command_with_logging(cmd: &mut Command) -> Result<Output> {
 
 /// Recursively find a box by type and return its payload (excluding size + type).
 /// Used by ISO BMFF formats (AVIF, HEIC, JXL container).
-/// 
+///
 /// This version correctly handles:
 /// - Standard boxes (size + type + payload)
 /// - Extended size boxes (size=1, followed by 64-bit size)
 /// - Full boxes (with version + flags after type)
+#[must_use]
 pub fn find_box_data_recursive<'a>(data: &'a [u8], box_type: &[u8; 4]) -> Option<&'a [u8]> {
     find_box_data_recursive_impl(data, box_type, 0, 32)
 }
 
-fn find_box_data_recursive_impl<'a>(data: &'a [u8], box_type: &[u8; 4], depth: u32, max_depth: u32) -> Option<&'a [u8]> {
+fn find_box_data_recursive_impl<'a>(
+    data: &'a [u8],
+    box_type: &[u8; 4],
+    depth: u32,
+    max_depth: u32,
+) -> Option<&'a [u8]> {
     if depth >= max_depth {
         return None;
     }
-    
+
     let mut pos = 0;
     while pos + 8 <= data.len() {
-        let size = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
+        let size =
+            u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
         let current_type = &data[pos + 4..pos + 8];
-        
+
         let (payload_start, next_pos) = if size == 0 {
             // Size 0 means "to end of file"
             (pos + 8, data.len())
@@ -274,8 +305,14 @@ fn find_box_data_recursive_impl<'a>(data: &'a [u8], box_type: &[u8; 4], depth: u
                 continue;
             }
             let ext = u64::from_be_bytes([
-                data[pos + 8], data[pos + 9], data[pos + 10], data[pos + 11],
-                data[pos + 12], data[pos + 13], data[pos + 14], data[pos + 15],
+                data[pos + 8],
+                data[pos + 9],
+                data[pos + 10],
+                data[pos + 11],
+                data[pos + 12],
+                data[pos + 13],
+                data[pos + 14],
+                data[pos + 15],
             ]) as usize;
             if ext < 16 || pos + ext > data.len() {
                 pos += 16;
@@ -293,18 +330,29 @@ fn find_box_data_recursive_impl<'a>(data: &'a [u8], box_type: &[u8; 4], depth: u
             }
             (pos + 8, pos + size)
         };
-        
+
         if current_type == box_type {
             if next_pos <= data.len() && payload_start < next_pos {
                 return Some(&data[payload_start..next_pos]);
             }
             return None;
         }
-        
+
         // Recursively search in container boxes
         // Common container boxes in HEIC: moov, trak, mdia, minf, stbl, meta, iprp, ipco
-        if matches!(current_type, b"moov" | b"trak" | b"mdia" | b"minf" | b"stbl" | b"meta" | b"iprp" | b"ipco" | b"moof" | b"traf")
-            && next_pos > payload_start
+        if matches!(
+            current_type,
+            b"moov"
+                | b"trak"
+                | b"mdia"
+                | b"minf"
+                | b"stbl"
+                | b"meta"
+                | b"iprp"
+                | b"ipco"
+                | b"moof"
+                | b"traf"
+        ) && next_pos > payload_start
         {
             // For 'meta' box, skip version/flags (4 bytes) if present
             let sub_start = if current_type == b"meta" && payload_start + 4 <= next_pos {
@@ -312,25 +360,29 @@ fn find_box_data_recursive_impl<'a>(data: &'a [u8], box_type: &[u8; 4], depth: u
             } else {
                 payload_start
             };
-            
+
             if sub_start < next_pos {
                 let sub = &data[sub_start..next_pos];
-                if let Some(payload) = find_box_data_recursive_impl(sub, box_type, depth + 1, max_depth) {
+                if let Some(payload) =
+                    find_box_data_recursive_impl(sub, box_type, depth + 1, max_depth)
+                {
                     return Some(payload);
                 }
             }
         }
-        
+
         pos = next_pos;
     }
     None
 }
 
 /// Recursively search for a box type in ISO BMFF data (e.g. "jbrd" inside "JXL " container).
+#[must_use]
 pub fn find_any_box_recursive(data: &[u8], box_type: &[u8; 4]) -> bool {
     let mut pos = 0;
     while pos + 8 <= data.len() {
-        let size = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
+        let size =
+            u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
         let current_type = &data[pos + 4..pos + 8];
         if current_type == box_type {
             return true;
@@ -343,8 +395,14 @@ pub fn find_any_box_recursive(data: &[u8], box_type: &[u8; 4]) -> bool {
                 continue;
             }
             let ext = u64::from_be_bytes([
-                data[pos + 8], data[pos + 9], data[pos + 10], data[pos + 11],
-                data[pos + 12], data[pos + 13], data[pos + 14], data[pos + 15],
+                data[pos + 8],
+                data[pos + 9],
+                data[pos + 10],
+                data[pos + 11],
+                data[pos + 12],
+                data[pos + 13],
+                data[pos + 14],
+                data[pos + 15],
             ]) as usize;
             (pos + 16, (pos + ext).min(data.len()))
         } else if size < 8 {
@@ -353,7 +411,9 @@ pub fn find_any_box_recursive(data: &[u8], box_type: &[u8; 4]) -> bool {
         } else {
             (pos + 8, (pos + size).min(data.len()))
         };
-        if next_pos > payload_start && find_any_box_recursive(&data[payload_start..next_pos], box_type) {
+        if next_pos > payload_start
+            && find_any_box_recursive(&data[payload_start..next_pos], box_type)
+        {
             return true;
         }
         pos = next_pos;
@@ -361,6 +421,7 @@ pub fn find_any_box_recursive(data: &[u8], box_type: &[u8; 4]) -> bool {
     false
 }
 
+#[must_use]
 pub fn is_command_available(command_name: &str) -> bool {
     Command::new(command_name)
         .arg("--version")
@@ -370,6 +431,7 @@ pub fn is_command_available(command_name: &str) -> bool {
         .unwrap_or(false)
 }
 
+#[must_use]
 pub fn get_command_version(command_name: &str) -> Option<String> {
     let output = Command::new(command_name)
         .arg("--version")
@@ -379,12 +441,13 @@ pub fn get_command_version(command_name: &str) -> Option<String> {
 
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
-        stdout.lines().next().map(|s| s.to_string())
+        stdout.lines().next().map(std::string::ToString::to_string)
     } else {
         None
     }
 }
 
+#[must_use]
 pub fn format_command_string(command: &str, args: &[&str]) -> String {
     if args.is_empty() {
         command.to_string()
@@ -393,6 +456,10 @@ pub fn format_command_string(command: &str, args: &[&str]) -> String {
     }
 }
 
+/// Validate that a file is not empty and is readable.
+///
+/// # Errors
+/// Returns an error if the file is missing, empty, or unreadable.
 pub fn validate_file_integrity(path: &std::path::Path) -> anyhow::Result<()> {
     let metadata = std::fs::metadata(path)?;
     let size = metadata.len();
@@ -408,16 +475,16 @@ pub fn validate_file_integrity(path: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Validate that a file does not exceed a specific size limit.
+///
+/// # Errors
+/// Returns an error if the file size cannot be determined or exceeds the limit.
 pub fn validate_file_size_limit(path: &std::path::Path, max_bytes: u64) -> anyhow::Result<()> {
     let metadata = std::fs::metadata(path)?;
     let size = metadata.len();
 
     if size > max_bytes {
-        anyhow::bail!(
-            "File is too large ({} bytes > {} max allowed)",
-            size,
-            max_bytes
-        );
+        anyhow::bail!("File is too large ({size} bytes > {max_bytes} max allowed)");
     }
 
     Ok(())
@@ -425,6 +492,7 @@ pub fn validate_file_size_limit(path: &std::path::Path, max_bytes: u64) -> anyho
 
 /// Escape a path for safe display in error messages.
 /// Prevents ANSI escape code injection by escaping control characters.
+#[must_use]
 pub fn escape_path_for_display(path: &std::path::Path) -> String {
     path.display().to_string().escape_default().to_string()
 }

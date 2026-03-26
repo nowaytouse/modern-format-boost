@@ -1,19 +1,19 @@
 //! x265 Direct CPU Encoder Module
 //!
-//! 🔥 v6.9.17: CPU编码架构 - 使用x265命令行工具直接编码
+//! 🔥 v6.9.17: CPU Encoding Architecture - Direct encoding using x265 command-line tool
 //!
-//! ## 架构设计
+//! ## Architectural Design
 //!
-//! 由于系统FFmpeg缺少libx265支持，采用三步编码流程：
-//! 1. FFmpeg解码 → Y4M (raw YUV)
-//! 2. x265编码 → HEVC bitstream
-//! 3. FFmpeg封装 → MP4容器
+//! Due to the lack of libx265 support in the system `FFmpeg`, a three-step encoding process is used:
+//! 1. `FFmpeg Decoding` → Y4M (raw YUV)
+//! 2. x265 Encoding → HEVC bitstream
+//! 3. `FFmpeg Muxing` → MP4 Container
 //!
-//! ## 优势
-//! - 不依赖FFmpeg编译选项
-//! - 完整的CRF控制（sub-integer精度）
-//! - 更高的SSIM质量（≥0.98 vs VideoToolbox ~0.95）
-//! - 严格的CPU编码路径（无GPU fallback）
+//! ## Advantages
+//! - `Independent of FFmpeg compilation options`
+//! - Full CRF control (sub-integer precision)
+//! - Higher SSIM quality (≥0.98 vs `VideoToolbox` ~0.95)
+//! - Strict CPU encoding path (no GPU fallback)
 
 use anyhow::{bail, Context, Result};
 use std::path::Path;
@@ -68,19 +68,22 @@ impl Default for X265Config {
     }
 }
 
+/// Encode an image to HEVC using x265.
+///
+/// # Errors
+/// Returns an error if encoding fails.
 pub fn encode_with_x265(
     input: &Path,
     output: &Path,
     config: &X265Config,
     vf_args: &[String],
 ) -> Result<u64> {
+    use crate::universal_heartbeat::{HeartbeatConfig, HeartbeatGuard};
     debug!(
         "🖥️ CPU encoding started: CRF {:.1}, preset={}",
-        config.crf,
-        config.preset
+        config.crf, config.preset
     );
 
-    use crate::universal_heartbeat::{HeartbeatConfig, HeartbeatGuard};
     let _heartbeat = HeartbeatGuard::new(
         HeartbeatConfig::medium("x265 CLI Encoding").with_info(format!("CRF {:.1}", config.crf)),
     );
@@ -115,15 +118,18 @@ pub fn encode_with_x265(
     Ok(output_size)
 }
 
-/// Encode a .y4m file directly with x265 (no FFmpeg pipe). Avoids Broken pipe when
-/// the pipeline FFmpeg stdout → x265 stdin is used with low-fps or odd y4m streams.
+/// Encode a .y4m file directly with x265 (no `FFmpeg` pipe). Avoids Broken pipe when
+/// the pipeline `FFmpeg` stdout → x265 stdin is used with low-fps or odd y4m streams.
 fn encode_y4m_direct(
     input: &Path,
     hevc_output: &Path,
     config: &X265Config,
     start_time: std::time::Instant,
 ) -> Result<bool> {
-    debug!("Starting x265 encoding with CRF {:.1}, preset {}", config.crf, config.preset);
+    debug!(
+        "Starting x265 encoding with CRF {:.1}, preset {}",
+        config.crf, config.preset
+    );
 
     let output = Command::new("x265")
         .arg("--y4m")
@@ -153,9 +159,12 @@ fn encode_y4m_direct(
             "x265 direct encode failed"
         );
         if !stderr.is_empty() {
-            eprintln!("x265 stderr:\n{}", stderr);
+            eprintln!("x265 stderr:\n{stderr}");
         }
-        bail!("x265 encode failed with exit code {:?}", output.status.code());
+        bail!(
+            "x265 encode failed with exit code {:?}",
+            output.status.code()
+        );
     }
 
     debug!(
@@ -178,8 +187,7 @@ fn encode_to_hevc(
     // to avoid FFmpeg→pipe→x265 which can cause Broken pipe (x265 closing stdin early).
     let is_y4m = input
         .extension()
-        .map(|e| e.eq_ignore_ascii_case("y4m"))
-        .unwrap_or(false);
+        .is_some_and(|e| e.eq_ignore_ascii_case("y4m"));
     if is_y4m {
         return encode_y4m_direct(input, hevc_output, config, start_time);
     }
@@ -223,11 +231,12 @@ fn encode_to_hevc(
     let is_hdr_content = config.pix_fmt.contains("10")
         || config.mastering_display.is_some()
         || config.max_cll.is_some()
-        || matches!(config.color_trc.as_deref(), Some("smpte2084") | Some("arib-std-b67"));
+        || matches!(
+            config.color_trc.as_deref(),
+            Some("smpte2084" | "arib-std-b67")
+        );
     if is_hdr_content {
-        x265_cmd
-            .arg("--hdr10-opt")
-            .arg("--repeat-headers");
+        x265_cmd.arg("--hdr10-opt").arg("--repeat-headers");
 
         if let Some(ref cp) = config.color_primaries {
             x265_cmd.arg("--colorprim").arg(cp);
@@ -264,12 +273,21 @@ fn encode_to_hevc(
             use std::io::{BufRead, BufReader, Read};
             let reader = BufReader::with_capacity(8192, stderr.take(10 * 1024 * 1024));
             let mut output = String::with_capacity(64 * 1024);
-            for line in reader.lines().take(100_000).map_while(Result::ok) {
-                if output.len() + line.len() + 1 > 1024 * 1024 {
-                    break;
+            for line in reader.lines().take(100_000) {
+                match line {
+                    Ok(line) => {
+                        if output.len() + line.len() + 1 > 1024 * 1024 {
+                            break;
+                        }
+                        output.push_str(&line);
+                        output.push('\n');
+                    }
+                    Err(err) => {
+                        warn!("Failed to read ffmpeg decode stderr: {}", err);
+                        output.push_str(&format!("[stderr read error: {err}]\n"));
+                        break;
+                    }
                 }
-                output.push_str(&line);
-                output.push('\n');
             }
             output
         })
@@ -280,12 +298,21 @@ fn encode_to_hevc(
             use std::io::{BufRead, BufReader, Read};
             let reader = BufReader::with_capacity(8192, stderr.take(10 * 1024 * 1024));
             let mut output = String::with_capacity(64 * 1024);
-            for line in reader.lines().take(100_000).map_while(Result::ok) {
-                if output.len() + line.len() + 1 > 1024 * 1024 {
-                    break;
+            for line in reader.lines().take(100_000) {
+                match line {
+                    Ok(line) => {
+                        if output.len() + line.len() + 1 > 1024 * 1024 {
+                            break;
+                        }
+                        output.push_str(&line);
+                        output.push('\n');
+                    }
+                    Err(err) => {
+                        warn!("Failed to read x265 stderr: {}", err);
+                        output.push_str(&format!("[stderr read error: {err}]\n"));
+                        break;
+                    }
                 }
-                output.push_str(&line);
-                output.push('\n');
             }
             output
         })
@@ -328,11 +355,11 @@ fn encode_to_hevc(
             if is_broken_pipe {
                 warn!("Pipe broken: reader (x265) likely closed stdin first; x265 may have exited or rejected the stream");
                 if !x265_stderr.is_empty() {
-                    eprintln!("x265 stderr (often shows why pipe closed):\n{}", x265_stderr);
+                    eprintln!("x265 stderr (often shows why pipe closed):\n{x265_stderr}");
                 }
             }
             if !ffmpeg_stderr.is_empty() {
-                eprintln!("FFmpeg error output:\n{}", ffmpeg_stderr);
+                eprintln!("FFmpeg error output:\n{ffmpeg_stderr}");
             }
             bail!("FFmpeg decode failed");
         }
@@ -349,7 +376,7 @@ fn encode_to_hevc(
                 warn!("Pipe broken: encoder (x265) likely exited first; check x265 stderr above");
             }
             if !x265_stderr.is_empty() {
-                eprintln!("x265 error output:\n{}", x265_stderr);
+                eprintln!("x265 error output:\n{x265_stderr}");
             }
             bail!("x265 encode failed with exit code {:?}", x265_status.code());
         }
@@ -361,13 +388,13 @@ fn encode_to_hevc(
                 "Pipe copy failed (decoder and encoder both reported success)"
             );
             if is_broken_pipe {
-                bail!("Pipe broken during copy (ffmpeg→x265): {}", io_err);
+                bail!("Pipe broken during copy (ffmpeg→x265): {io_err}");
             }
-            bail!("Pipe I/O error: {}", io_err);
+            bail!("Pipe I/O error: {io_err}");
         }
         if let Err(join_err) = copy_result {
             error!("Pipe copy thread panicked: {:?}", join_err);
-            bail!("Pipe copy thread panicked: {:?}", join_err);
+            bail!("Pipe copy thread panicked: {join_err:?}");
         }
 
         debug!(
@@ -421,10 +448,8 @@ fn mux_hevc_to_container(
         cmd.arg("-c:v").arg("copy");
 
         // Audio: copy when compatible, transcode only for incompatible codecs
-        let audio_args = crate::audio_args_for_container(
-            config.audio_codec.as_deref(),
-            &config.container,
-        );
+        let audio_args =
+            crate::audio_args_for_container(config.audio_codec.as_deref(), &config.container);
         for arg in &audio_args {
             // Skip -an since we already have -map 1:a?
             if arg != "-an" {
@@ -472,7 +497,7 @@ fn mux_hevc_to_container(
             stderr = %stderr,
             "FFmpeg mux failed"
         );
-        bail!("FFmpeg mux failed: {}", stderr);
+        bail!("FFmpeg mux failed: {stderr}");
     }
 
     debug!(

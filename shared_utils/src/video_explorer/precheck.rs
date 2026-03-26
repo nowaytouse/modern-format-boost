@@ -1,11 +1,12 @@
 //! Video precheck and processing recommendation
 
+use crate::quality_matcher::parse_source_codec;
 use anyhow::{bail, Context, Result};
 use std::path::Path;
 use std::process::Command;
 use tracing::{error, info, warn};
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Compressibility {
     VeryHigh,
     High,
@@ -14,7 +15,7 @@ pub enum Compressibility {
     VeryLow,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProcessingRecommendation {
     StronglyRecommended { codec: String, reason: String },
     Recommended { reason: String },
@@ -43,7 +44,7 @@ pub struct VideoInfo {
     pub is_hdr: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FpsCategory {
     Normal,
     Extended,
@@ -52,31 +53,34 @@ pub enum FpsCategory {
 }
 
 impl FpsCategory {
+    #[must_use]
     pub fn from_fps(fps: f64) -> Self {
         if fps <= 0.0 || fps > FPS_THRESHOLD_INVALID {
-            FpsCategory::Invalid
+            Self::Invalid
         } else if fps < FPS_RANGE_NORMAL.1 {
-            FpsCategory::Normal
+            Self::Normal
         } else if fps <= FPS_RANGE_EXTENDED.1 {
-            FpsCategory::Extended
+            Self::Extended
         } else if fps <= FPS_RANGE_EXTREME.1 {
-            FpsCategory::Extreme
+            Self::Extreme
         } else {
-            FpsCategory::Invalid
+            Self::Invalid
         }
     }
 
-    pub fn description(&self) -> &'static str {
+    #[must_use]
+    pub const fn description(&self) -> &'static str {
         match self {
-            FpsCategory::Normal => "normal range (1–239 fps)",
-            FpsCategory::Extended => "extended range (240–2000 fps)",
-            FpsCategory::Extreme => "extreme range (2000-10000 fps)",
-            FpsCategory::Invalid => "invalid (>10000 fps, possible metadata error)",
+            Self::Normal => "normal range (1–239 fps)",
+            Self::Extended => "extended range (240–2000 fps)",
+            Self::Extreme => "extreme range (2000-10000 fps)",
+            Self::Invalid => "invalid (>10000 fps, possible metadata error)",
         }
     }
 
-    pub fn is_valid(&self) -> bool {
-        !matches!(self, FpsCategory::Invalid)
+    #[must_use]
+    pub const fn is_valid(&self) -> bool {
+        !matches!(self, Self::Invalid)
     }
 }
 
@@ -119,7 +123,7 @@ const FPS_RANGE_EXTENDED: (f64, f64) = (240.0, 2000.0);
 const FPS_RANGE_EXTREME: (f64, f64) = (2000.0, 10000.0);
 const FPS_THRESHOLD_INVALID: f64 = 10000.0;
 
-/// Single ffprobe run for precheck: stream (codec, size, duration, fps, bit_rate, color) + format.duration.
+/// Single ffprobe run for precheck: stream (codec, size, duration, fps, `bit_rate`, color) + format.duration.
 fn run_precheck_ffprobe(input: &Path) -> Result<serde_json::Value> {
     let output = Command::new("ffprobe")
         .args([
@@ -167,18 +171,17 @@ fn parse_rational_fps(value: &serde_json::Value) -> Option<f64> {
     })
 }
 
-/// Prefer avg_frame_rate (actual frames per second); fallback to r_frame_rate.
-/// r_frame_rate can be the time_base reciprocal (e.g. 90000) rather than real FPS — callers
-/// should use fps_sanitise_for_validation when fps may be time_base.
+/// Prefer `avg_frame_rate` (actual frames per second); fallback to `r_frame_rate`.
+/// `r_frame_rate` can be the `time_base` reciprocal (e.g. 90000) rather than real FPS — callers
+/// should use `fps_sanitise_for_validation` when fps may be `time_base`.
 fn parse_fps_from_stream(stream: &serde_json::Value) -> Option<f64> {
     let avg = parse_rational_fps(&stream["avg_frame_rate"])
         .filter(|&v| v > 0.0 && v.is_finite() && v <= FPS_THRESHOLD_INVALID);
-    let r_fps = parse_rational_fps(&stream["r_frame_rate"])
-        .filter(|&v| v > 0.0 && v.is_finite());
+    let r_fps = parse_rational_fps(&stream["r_frame_rate"]).filter(|&v| v > 0.0 && v.is_finite());
     avg.or(r_fps)
 }
 
-/// If fps looks like time_base (e.g. 90000) rather than real FPS, derive from frame_count/duration.
+/// If fps looks like `time_base` (e.g. 90000) rather than real FPS, derive from `frame_count/duration`.
 fn fps_sanitise_for_validation(fps: f64, duration: f64, frame_count: u64) -> f64 {
     if fps > FPS_THRESHOLD_INVALID && frame_count > 0 && duration >= 0.001 {
         let inferred = frame_count as f64 / duration;
@@ -196,7 +199,7 @@ fn parse_duration_from_precheck_json(
     input: &Path,
 ) -> Result<(f64, f64, u64)> {
     let stream = json["streams"].get(0);
-    
+
     // If frame_count is 0, try to get nb_read_frames (for formats like APNG that need -count_frames)
     if frame_count == 0 {
         if let Some(nb_read_frames) = stream
@@ -204,10 +207,13 @@ fn parse_duration_from_precheck_json(
             .and_then(|s| s.parse::<u64>().ok())
         {
             frame_count = nb_read_frames;
-            info!(nb_read_frames = frame_count, "Using nb_read_frames for frame count");
+            info!(
+                nb_read_frames = frame_count,
+                "Using nb_read_frames for frame count"
+            );
         }
     }
-    
+
     let stream_duration: Option<f64> = stream
         .and_then(|s| s["duration"].as_str())
         .and_then(|s| s.parse().ok())
@@ -252,12 +258,8 @@ fn parse_duration_from_precheck_json(
     bail!("Failed to detect video duration - all methods failed")
 }
 
-/// P3: Compute only BPP from precheck JSON (one ffprobe, no full VideoInfo).
-fn bpp_from_precheck_json(
-    json: &serde_json::Value,
-    file_size: u64,
-    input: &Path,
-) -> Result<f64> {
+/// P3: Compute only BPP from precheck JSON (one ffprobe, no full `VideoInfo`).
+fn bpp_from_precheck_json(json: &serde_json::Value, file_size: u64, input: &Path) -> Result<f64> {
     let stream = json["streams"]
         .get(0)
         .context("No video stream in ffprobe output")?;
@@ -269,7 +271,8 @@ fn bpp_from_precheck_json(
         .as_u64()
         .and_then(|h| u32::try_from(h).ok())
         .context("Missing or invalid video height")?;
-    let fps = parse_fps_from_stream(stream).context("Could not determine FPS for BPP calculation")?;
+    let fps =
+        parse_fps_from_stream(stream).context("Could not determine FPS for BPP calculation")?;
     let frame_count_raw: u64 = stream["nb_frames"]
         .as_str()
         .and_then(|s| s.parse().ok())
@@ -287,14 +290,13 @@ fn bpp_from_precheck_json(
         .as_str()
         .and_then(|s| s.parse::<u64>().ok())
         .filter(|&br| br > 0)
-        .map(|br| (br as f64 * duration / 8.0) as u64)
-        .unwrap_or(0);
+        .map_or(0, |br| (br as f64 * duration / 8.0) as u64);
     let bytes_for_bpp = if video_bytes > 0 {
         video_bytes
     } else {
         file_size
     };
-    let total_pixels = width as u64 * height as u64 * frame_count;
+    let total_pixels = u64::from(width) * u64::from(height) * frame_count;
     if total_pixels > 0 {
         Ok((bytes_for_bpp as f64 * 8.0) / total_pixels as f64)
     } else {
@@ -302,6 +304,10 @@ fn bpp_from_precheck_json(
     }
 }
 
+/// Detect video duration comprehensively using multiple methods.
+///
+/// # Errors
+/// Returns an error if duration detection fails.
 pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'static str)> {
     let output = Command::new("ffprobe")
         .args([
@@ -330,7 +336,8 @@ pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'s
         serde_json::from_str(&json_str).context("ffprobe JSON parse failed")?;
 
     let stream = json["streams"].get(0).context("No video stream")?;
-    let fps: f64 = parse_fps_from_stream(stream).context("Could not determine FPS for duration calculation")?;
+    let fps: f64 = parse_fps_from_stream(stream)
+        .context("Could not determine FPS for duration calculation")?;
 
     let frame_count: u64 = json["streams"]
         .get(0)
@@ -385,6 +392,10 @@ pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'s
     bail!("Failed to detect video duration - all methods failed")
 }
 
+/// Get comprehensive video information for a file.
+///
+/// # Errors
+/// Returns an error if information gathering fails.
 pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
     let file_size = std::fs::metadata(input)
         .context("Failed to read file metadata")?
@@ -416,7 +427,7 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
     // Fallback for formats where ffprobe returns 0x0 (e.g., animated WebP)
     let (width, height) = if width == 0 || height == 0 {
         crate::conversion::get_input_dimensions(input)
-            .map_err(|e| anyhow::anyhow!("Failed to get dimensions via fallback: {}", e))?
+            .map_err(|e| anyhow::anyhow!("Failed to get dimensions via fallback: {e}"))?
     } else {
         (width, height)
     };
@@ -440,35 +451,34 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
     let bitrate_kbps = stream["bit_rate"]
         .as_str()
         .and_then(|s| s.parse::<f64>().ok())
-        .map(|bps| bps / 1000.0)
-        .unwrap_or_else(|| {
-            if duration > 0.0 {
-                (file_size as f64 * 8.0) / (duration * 1000.0)
-            } else {
-                0.0
-            }
-        });
+        .map_or_else(
+            || {
+                if duration > 0.0 {
+                    (file_size as f64 * 8.0) / (duration * 1000.0)
+                } else {
+                    0.0
+                }
+            },
+            |bps| bps / 1000.0,
+        );
 
     let video_bytes = stream["bit_rate"]
         .as_str()
         .and_then(|s| s.parse::<u64>().ok())
         .filter(|&br| br > 0)
-        .map(|br| (br as f64 * duration / 8.0) as u64)
-        .unwrap_or(0);
+        .map_or(0, |br| (br as f64 * duration / 8.0) as u64);
     let bytes_for_bpp = if video_bytes > 0 {
         video_bytes
     } else {
         file_size
     };
-    let total_pixels = width as u64 * height as u64 * frame_count;
+    let total_pixels = u64::from(width) * u64::from(height) * frame_count;
     let bpp = if total_pixels > 0 {
         (bytes_for_bpp as f64 * 8.0) / total_pixels as f64
     } else {
         bail!("Total pixels is 0, cannot calculate BPP");
     };
 
-
-    use crate::quality_matcher::parse_source_codec;
     let source_codec_enum = parse_source_codec(&codec);
 
     let compressibility = if source_codec_enum.is_modern() {
@@ -512,18 +522,14 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
     // HDR: require BT.2020 (or 2020) and PQ/HLG transfer; 10-bit alone is not HDR (ProRes/DPX SDR).
     let is_hdr = color_space
         .as_ref()
-        .map(|cs| cs.contains("bt2020") || cs.contains("2020"))
-        .unwrap_or(false)
-        && color_transfer
-            .as_ref()
-            .map(|t| {
-                let lower = t.to_lowercase();
-                lower.contains("smpte2084")
-                    || lower.contains("arib-std-b67")
-                    || lower.contains("pq")
-                    || lower.contains("hlg")
-            })
-            .unwrap_or(false);
+        .is_some_and(|cs| cs.contains("bt2020") || cs.contains("2020"))
+        && color_transfer.as_ref().is_some_and(|t| {
+            let lower = t.to_lowercase();
+            lower.contains("smpte2084")
+                || lower.contains("arib-std-b67")
+                || lower.contains("pq")
+                || lower.contains("hlg")
+        });
 
     Ok(VideoInfo {
         width,
@@ -545,7 +551,7 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
     })
 }
 
-/// Caller must pass lowercase codec (e.g. from get_video_info).
+/// Caller must pass lowercase codec (e.g. from `get_video_info`).
 fn evaluate_processing_recommendation(
     codec: &str,
     width: u32,
@@ -557,34 +563,32 @@ fn evaluate_processing_recommendation(
 ) -> ProcessingRecommendation {
     if width < 16 || height < 16 {
         return ProcessingRecommendation::CannotProcess {
-            reason: format!("Resolution too small {}x{} (< 16px)", width, height),
+            reason: format!("Resolution too small {width}x{height} (< 16px)"),
         };
     }
     if width > 16384 || height > 16384 {
         return ProcessingRecommendation::CannotProcess {
-            reason: format!("Resolution too large {}x{} (> 16K)", width, height),
+            reason: format!("Resolution too large {width}x{height} (> 16K)"),
         };
     }
 
     if duration < 0.001 {
         return ProcessingRecommendation::CannotProcess {
             reason: format!(
-                "Duration read as {:.3}s (possible metadata issue, will attempt conversion)",
-                duration
+                "Duration read as {duration:.3}s (possible metadata issue, will attempt conversion)"
             ),
         };
     }
 
     if fps <= 0.0 {
         return ProcessingRecommendation::CannotProcess {
-            reason: format!("Invalid FPS ({:.2})", fps),
+            reason: format!("Invalid FPS ({fps:.2})"),
         };
     }
     if fps > FPS_THRESHOLD_INVALID {
         return ProcessingRecommendation::CannotProcess {
             reason: format!(
-                "Abnormal FPS ({:.0} > {}, likely metadata error)",
-                fps, FPS_THRESHOLD_INVALID
+                "Abnormal FPS ({fps:.0} > {FPS_THRESHOLD_INVALID}, likely metadata error)"
             ),
         };
     }
@@ -618,8 +622,7 @@ fn evaluate_processing_recommendation(
         return ProcessingRecommendation::StronglyRecommended {
             codec: codec.to_string(),
             reason: format!(
-                "Detected {}, strongly recommended to upgrade to modern codec (expect 10-50x better compression)",
-                codec_category
+                "Detected {codec_category}, strongly recommended to upgrade to modern codec (expect 10-50x better compression)"
             ),
         };
     }
@@ -632,11 +635,10 @@ fn evaluate_processing_recommendation(
         };
     }
 
-    use crate::quality_matcher::parse_source_codec;
     let source_codec = parse_source_codec(codec);
     let codec_efficiency = source_codec.efficiency_factor();
 
-    let resolution_factor = (width * height) as f64 / (1920.0 * 1080.0);
+    let resolution_factor = f64::from(width * height) / (1920.0 * 1080.0);
     let fps_factor = fps / 30.0;
 
     let base_bitrate_1080p30_h264 = 2500.0;
@@ -665,23 +667,27 @@ fn evaluate_processing_recommendation(
     if bitrate_kbps > 0.0 && bitrate_kbps < expected_min_bitrate && bpp < bpp_threshold_low {
         return ProcessingRecommendation::Recommended {
             reason: format!(
-                "File has some compression (bitrate: {:.0} kbps), but modern codecs can optimize further",
-                bitrate_kbps
+                "File has some compression (bitrate: {bitrate_kbps:.0} kbps), but modern codecs can optimize further"
             ),
         };
     }
 
     ProcessingRecommendation::Recommended {
         reason: format!(
-            "Standard codec ({}), suggest upgrading to HEVC/AV1 for better compression and quality",
-            codec
+            "Standard codec ({codec}), suggest upgrading to HEVC/AV1 for better compression and quality"
         ),
     }
 }
 
 /// Returns bits-per-pixel from video stream (one ffprobe, minimal parse; P3 lightweight path).
+/// Calculate the bits per pixel (BPP) for a video file.
+///
+/// # Errors
+/// Returns an error if calculation fails.
 pub fn calculate_bpp(input: &Path) -> Result<f64> {
-    let file_size = std::fs::metadata(input).context("Failed to read file metadata")?.len();
+    let file_size = std::fs::metadata(input)
+        .context("Failed to read file metadata")?
+        .len();
     let json = run_precheck_ffprobe(input)?;
     bpp_from_precheck_json(&json, file_size, input)
 }
@@ -700,7 +706,11 @@ pub fn print_precheck_report(info: &VideoInfo) {
         "│ Duration: {:.1}s ({} frames)",
         info.duration, info.frame_count
     ));
-    lines.push(format!("│ FPS: {:.2} {}", info.fps, info.fps_category.description()));
+    lines.push(format!(
+        "│ FPS: {:.2} {}",
+        info.fps,
+        info.fps_category.description()
+    ));
     lines.push(format!(
         "│ File Size: {:.2} MB",
         info.file_size as f64 / 1024.0 / 1024.0
@@ -712,13 +722,13 @@ pub fn print_precheck_report(info: &VideoInfo) {
         lines.push("├─────────────────────────────────────────────────────".to_string());
         if let Some(ref cs) = info.color_space {
             let hdr_indicator = if info.is_hdr { " HDR" } else { "" };
-            lines.push(format!("│ Color Space: {}{}", cs, hdr_indicator));
+            lines.push(format!("│ Color Space: {cs}{hdr_indicator}"));
         }
         if let Some(ref pf) = info.pix_fmt {
-            lines.push(format!("│ Pixel Format: {}", pf));
+            lines.push(format!("│ Pixel Format: {pf}"));
         }
         if let Some(bd) = info.bit_depth {
-            lines.push(format!("│ Bit Depth: {}-bit", bd));
+            lines.push(format!("│ Bit Depth: {bd}-bit"));
         }
     }
 
@@ -752,25 +762,25 @@ pub fn print_precheck_report(info: &VideoInfo) {
     match &info.recommendation {
         ProcessingRecommendation::StronglyRecommended { codec, reason } => {
             lines.push("│ STRONGLY RECOMMENDED: Upgrade to modern codec!".to_string());
-            lines.push(format!("│    → Source: {} (legacy/inefficient)", codec));
-            lines.push(format!("│    → {}", reason));
+            lines.push(format!("│    → Source: {codec} (legacy/inefficient)"));
+            lines.push(format!("│    → {reason}"));
         }
         ProcessingRecommendation::Recommended { reason } => {
             lines.push("│ ✅ RECOMMENDED: Convert to modern codec".to_string());
-            lines.push(format!("│    → {}", reason));
+            lines.push(format!("│    → {reason}"));
         }
         ProcessingRecommendation::Optional { reason } => {
             lines.push("│ OPTIONAL: Marginal benefit expected".to_string());
-            lines.push(format!("│    → {}", reason));
+            lines.push(format!("│    → {reason}"));
         }
         ProcessingRecommendation::NotRecommended { codec, reason } => {
             lines.push("│ ⚠️  NOT RECOMMENDED: Already optimal".to_string());
-            lines.push(format!("│    → Codec: {}", codec));
-            lines.push(format!("│    → {}", reason));
+            lines.push(format!("│    → Codec: {codec}"));
+            lines.push(format!("│    → {reason}"));
         }
         ProcessingRecommendation::CannotProcess { reason } => {
             lines.push("│ ❌ CANNOT PROCESS: File issue detected".to_string());
-            lines.push(format!("│    → {}", reason));
+            lines.push(format!("│    → {reason}"));
         }
     }
 
@@ -780,6 +790,10 @@ pub fn print_precheck_report(info: &VideoInfo) {
     }
 }
 
+/// Run pre-exploration checks on a video file.
+///
+/// # Errors
+/// Returns an error if precheck fails.
 pub fn run_precheck(input: &Path) -> Result<VideoInfo> {
     let info = get_video_info(input)?;
     print_precheck_report(&info);
@@ -787,7 +801,7 @@ pub fn run_precheck(input: &Path) -> Result<VideoInfo> {
     match &info.recommendation {
         ProcessingRecommendation::CannotProcess { reason } => {
             warn!(reason = %reason, "PRECHECK: cannot process");
-            bail!("Precheck cannot process this file: {}", reason);
+            bail!("Precheck cannot process this file: {reason}");
         }
 
         ProcessingRecommendation::NotRecommended { codec, reason } => {

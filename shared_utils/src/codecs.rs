@@ -53,83 +53,82 @@ pub enum DetectedCodec {
 }
 
 impl DetectedCodec {
+    #[must_use]
     pub fn from_ffprobe(codec_name: &str) -> Self {
         match codec_name.to_lowercase().as_str() {
-            "ffv1" => DetectedCodec::FFV1,
-            "prores" | "prores_ks" => DetectedCodec::ProRes,
-            "dnxhd" | "dnxhr" => DetectedCodec::DNxHD,
-            "huffyuv" | "ffvhuff" => DetectedCodec::HuffYUV,
-            "utvideo" => DetectedCodec::UTVideo,
-            "rawvideo" => DetectedCodec::RawVideo,
-            "hevc" | "h265" | "libx265" => DetectedCodec::H265,
-            "av1" | "libaom-av1" | "libsvtav1" => DetectedCodec::AV1,
-            "vp9" | "libvpx-vp9" => DetectedCodec::VP9,
-            "vvc" | "h266" | "libvvenc" => DetectedCodec::VVC,
-            "h264" | "avc" | "libx264" => DetectedCodec::H264,
-            "vp8" | "libvpx" => DetectedCodec::VP8,
-            "mpeg4" | "xvid" | "divx" => DetectedCodec::MPEG4,
-            "mpeg2video" => DetectedCodec::MPEG2,
-            "mpeg1video" => DetectedCodec::MPEG1,
-            "wmv1" | "wmv2" | "wmv3" | "vc1" => DetectedCodec::WMV,
-            "gif" => DetectedCodec::GIF,
-            "apng" => DetectedCodec::APNG,
-            "webp" => DetectedCodec::WebPAnim,
-            _ => DetectedCodec::Unknown(codec_name.to_string()),
+            "ffv1" => Self::FFV1,
+            "prores" | "prores_ks" => Self::ProRes,
+            "dnxhd" | "dnxhr" => Self::DNxHD,
+            "huffyuv" | "ffvhuff" => Self::HuffYUV,
+            "utvideo" => Self::UTVideo,
+            "rawvideo" => Self::RawVideo,
+            "hevc" | "h265" | "libx265" => Self::H265,
+            "av1" | "libaom-av1" | "libsvtav1" => Self::AV1,
+            "vp9" | "libvpx-vp9" => Self::VP9,
+            "vvc" | "h266" | "libvvenc" => Self::VVC,
+            "h264" | "avc" | "libx264" => Self::H264,
+            "vp8" | "libvpx" => Self::VP8,
+            "mpeg4" | "xvid" | "divx" => Self::MPEG4,
+            "mpeg2video" => Self::MPEG2,
+            "mpeg1video" => Self::MPEG1,
+            "wmv1" | "wmv2" | "wmv3" | "vc1" => Self::WMV,
+            "gif" => Self::GIF,
+            "apng" => Self::APNG,
+            "webp" => Self::WebPAnim,
+            _ => Self::Unknown(codec_name.to_string()),
         }
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         match self {
-            DetectedCodec::FFV1 => "FFV1",
-            DetectedCodec::ProRes => "ProRes",
-            DetectedCodec::DNxHD => "DNxHD",
-            DetectedCodec::HuffYUV => "HuffYUV",
-            DetectedCodec::UTVideo => "UT Video",
-            DetectedCodec::RawVideo => "Raw Video",
-            DetectedCodec::H265 => "H.265/HEVC",
-            DetectedCodec::AV1 => "AV1",
-            DetectedCodec::AV2 => "AV2",
-            DetectedCodec::VP9 => "VP9",
-            DetectedCodec::VVC => "H.266/VVC",
-            DetectedCodec::H264 => "H.264/AVC",
-            DetectedCodec::VP8 => "VP8",
-            DetectedCodec::MPEG4 => "MPEG-4",
-            DetectedCodec::MPEG2 => "MPEG-2",
-            DetectedCodec::MPEG1 => "MPEG-1",
-            DetectedCodec::WMV => "WMV",
-            DetectedCodec::GIF => "GIF",
-            DetectedCodec::APNG => "APNG",
-            DetectedCodec::WebPAnim => "WebP (Animated)",
-            DetectedCodec::Unknown(s) => s,
+            Self::FFV1 => "FFV1",
+            Self::ProRes => "ProRes",
+            Self::DNxHD => "DNxHD",
+            Self::HuffYUV => "HuffYUV",
+            Self::UTVideo => "UT Video",
+            Self::RawVideo => "Raw Video",
+            Self::H265 => "H.265/HEVC",
+            Self::AV1 => "AV1",
+            Self::AV2 => "AV2",
+            Self::VP9 => "VP9",
+            Self::VVC => "H.266/VVC",
+            Self::H264 => "H.264/AVC",
+            Self::VP8 => "VP8",
+            Self::MPEG4 => "MPEG-4",
+            Self::MPEG2 => "MPEG-2",
+            Self::MPEG1 => "MPEG-1",
+            Self::WMV => "WMV",
+            Self::GIF => "GIF",
+            Self::APNG => "APNG",
+            Self::WebPAnim => "WebP (Animated)",
+            Self::Unknown(s) => s,
         }
     }
 
-    pub fn is_modern(&self) -> bool {
+    #[must_use]
+    pub const fn is_modern(&self) -> bool {
         matches!(
             self,
-            DetectedCodec::H265
-                | DetectedCodec::AV1
-                | DetectedCodec::AV2
-                | DetectedCodec::VP9
-                | DetectedCodec::VVC
+            Self::H265 | Self::AV1 | Self::AV2 | Self::VP9 | Self::VVC
         )
     }
 
-    pub fn is_lossless(&self) -> bool {
+    #[must_use]
+    pub const fn is_lossless(&self) -> bool {
         matches!(
             self,
-            DetectedCodec::FFV1
-                | DetectedCodec::HuffYUV
-                | DetectedCodec::UTVideo
-                | DetectedCodec::RawVideo
+            Self::FFV1 | Self::HuffYUV | Self::UTVideo | Self::RawVideo
         )
     }
 
-    pub fn is_production(&self) -> bool {
-        matches!(self, DetectedCodec::ProRes | DetectedCodec::DNxHD)
+    #[must_use]
+    pub const fn is_production(&self) -> bool {
+        matches!(self, Self::ProRes | Self::DNxHD)
     }
 }
 
+#[must_use]
 pub fn get_codec_info(codec_name: &str) -> CodecInfo {
     match codec_name.to_lowercase().as_str() {
         "ffv1" => CodecInfo {
@@ -271,8 +270,7 @@ mod tests {
             assert_eq!(
                 DetectedCodec::from_ffprobe(input),
                 *expected,
-                "from_ffprobe({:?}) mismatch",
-                input
+                "from_ffprobe({input:?}) mismatch"
             );
         }
     }
@@ -306,13 +304,12 @@ mod tests {
         ];
 
         for (codec, modern, lossless, production) in cases {
-            assert_eq!(codec.is_modern(), *modern, "{:?}.is_modern()", codec);
-            assert_eq!(codec.is_lossless(), *lossless, "{:?}.is_lossless()", codec);
+            assert_eq!(codec.is_modern(), *modern, "{codec:?}.is_modern()");
+            assert_eq!(codec.is_lossless(), *lossless, "{codec:?}.is_lossless()");
             assert_eq!(
                 codec.is_production(),
                 *production,
-                "{:?}.is_production()",
-                codec
+                "{codec:?}.is_production()"
             );
         }
     }

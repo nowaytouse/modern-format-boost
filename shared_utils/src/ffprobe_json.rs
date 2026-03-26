@@ -1,5 +1,5 @@
-//! 🔥 v6.5: FFprobe JSON 解析模块
-//! 使用 serde_json 替代手动字符串解析
+//! 🔥 v6.5: `FFprobe` JSON Parsing Module
+//! Uses `serde_json` instead of manual string parsing
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -68,10 +68,12 @@ pub struct ColorInfo {
     pub max_cll: Option<String>,
     pub is_dolby_vision: bool,
     pub is_hdr10_plus: bool,
+    pub is_float: bool,
 }
 
 impl ColorInfo {
     /// Returns true when the content is any form of HDR (PQ, HLG, DV, HDR10, HDR10+)
+    #[must_use]
     pub fn is_hdr(&self) -> bool {
         self.is_dolby_vision
             || self.is_hdr10_plus
@@ -79,7 +81,7 @@ impl ColorInfo {
             || self.max_cll.is_some()
             || matches!(
                 self.color_transfer.as_deref(),
-                Some("smpte2084") | Some("arib-std-b67")
+                Some("smpte2084" | "arib-std-b67")
             )
     }
 }
@@ -90,16 +92,26 @@ fn rational_to_50k(v: &serde_json::Value) -> Option<u64> {
             if let Some((n, d)) = s.split_once('/') {
                 let n: f64 = n.trim().parse().ok()?;
                 let d: f64 = d.trim().parse().ok()?;
-                if d == 0.0 { return None; }
+                if d == 0.0 {
+                    return None;
+                }
                 Some(((n / d) * 50000.0).round() as u64)
             } else {
                 let f: f64 = s.trim().parse().ok()?;
-                if f <= 1.0 { Some((f * 50000.0).round() as u64) } else { Some(f.round() as u64) }
+                if f <= 1.0 {
+                    Some((f * 50000.0).round() as u64)
+                } else {
+                    Some(f.round() as u64)
+                }
             }
         }
         serde_json::Value::Number(n) => {
             let f = n.as_f64()?;
-            if f <= 1.0 { Some((f * 50000.0).round() as u64) } else { Some(f.round() as u64) }
+            if f <= 1.0 {
+                Some((f * 50000.0).round() as u64)
+            } else {
+                Some(f.round() as u64)
+            }
         }
         _ => None,
     }
@@ -111,16 +123,26 @@ fn rational_to_10k(v: &serde_json::Value) -> Option<u64> {
             if let Some((n, d)) = s.split_once('/') {
                 let n: f64 = n.trim().parse().ok()?;
                 let d: f64 = d.trim().parse().ok()?;
-                if d == 0.0 { return None; }
+                if d == 0.0 {
+                    return None;
+                }
                 Some(((n / d) * 10000.0).round() as u64)
             } else {
                 let f: f64 = s.trim().parse().ok()?;
-                if f <= 10000.0 { Some((f * 10000.0).round() as u64) } else { Some(f.round() as u64) }
+                if f <= 10000.0 {
+                    Some((f * 10000.0).round() as u64)
+                } else {
+                    Some(f.round() as u64)
+                }
             }
         }
         serde_json::Value::Number(n) => {
             let f = n.as_f64()?;
-            if f <= 10000.0 { Some((f * 10000.0).round() as u64) } else { Some(f.round() as u64) }
+            if f <= 10000.0 {
+                Some((f * 10000.0).round() as u64)
+            } else {
+                Some(f.round() as u64)
+            }
         }
         _ => None,
     }
@@ -139,11 +161,25 @@ fn parse_side_data_list(
         if sd_type.contains("dolby vision") || sd_type.contains("dovi") {
             *is_dolby_vision = true;
         }
-        if sd_type.contains("hdr dynamic") || sd_type.contains("st2094") || sd_type.contains("hdr10+") {
+        if sd_type.contains("hdr dynamic")
+            || sd_type.contains("st2094")
+            || sd_type.contains("hdr10+")
+        {
             *is_hdr10_plus = true;
         }
         if sd_type.contains("mastering display") && mastering_display.is_none() {
-            if let (Some(gx), Some(gy), Some(bx), Some(by_), Some(rx), Some(ry), Some(wx), Some(wy), Some(lmax), Some(lmin)) = (
+            if let (
+                Some(gx),
+                Some(gy),
+                Some(bx),
+                Some(by_),
+                Some(rx),
+                Some(ry),
+                Some(wx),
+                Some(wy),
+                Some(lmax),
+                Some(lmin),
+            ) = (
                 sd.green_x.as_ref().and_then(rational_to_50k),
                 sd.green_y.as_ref().and_then(rational_to_50k),
                 sd.blue_x.as_ref().and_then(rational_to_50k),
@@ -162,7 +198,7 @@ fn parse_side_data_list(
         }
         if sd_type.contains("content light level") && max_cll.is_none() {
             if let (Some(mc), Some(ma)) = (sd.max_content, sd.max_average) {
-                *max_cll = Some(format!("{},{}", mc, ma));
+                *max_cll = Some(format!("{mc},{ma}"));
             }
         }
     }
@@ -174,7 +210,7 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
     let output = match Command::new("ffprobe")
         .args([
             "-v",
-            "error",  // Use "error" instead of "quiet" to capture stderr for fallback detection
+            "error", // Use "error" instead of "quiet" to capture stderr for fallback detection
             "-print_format",
             "json",
             "-show_streams",
@@ -192,7 +228,9 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
         Ok(o) => {
             // Check if failure is due to image2 demuxer pattern matching (e.g., filenames with [])
             let stderr = String::from_utf8_lossy(&o.stderr);
-            if stderr.contains("Could find no file with path") && stderr.contains("and index in the range") {
+            if stderr.contains("Could find no file with path")
+                && stderr.contains("and index in the range")
+            {
                 crate::log_rare_error!("FFprobe", "Image2 demuxer pattern matching failed for file: {} - Retrying with -pattern_type none", input_str);
                 // Retry with -pattern_type none to disable sequence pattern matching
                 match Command::new("ffprobe")
@@ -215,13 +253,44 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
                     .output()
                 {
                     Ok(retry_o) if retry_o.status.success() => retry_o,
-                    _ => {
-                        crate::log_rare_error!("FFprobe", "Pattern_type fallback also failed for: {}", input_str);
+                    Ok(retry_o) => {
+                        let retry_stderr = String::from_utf8_lossy(&retry_o.stderr);
+                        warn!(
+                            input = %input_str,
+                            stderr = %retry_stderr.trim(),
+                            "FFprobe pattern_type fallback returned non-zero exit"
+                        );
+                        crate::log_rare_error!(
+                            "FFprobe",
+                            "Pattern_type fallback also failed for: {}",
+                            input_str
+                        );
+                        return ColorInfo::default();
+                    }
+                    Err(err) => {
+                        warn!(
+                            input = %input_str,
+                            error = %err,
+                            "FFprobe pattern_type fallback failed to start"
+                        );
+                        crate::log_rare_error!(
+                            "FFprobe",
+                            "Pattern_type fallback also failed for: {}",
+                            input_str
+                        );
                         return ColorInfo::default();
                     }
                 }
             } else {
-                warn!(input = %input_str, "FFPROBE FAILED: non-zero exit");
+                // For JPEG/image files, ffprobe failure is often expected (not a video stream)
+                // Only log as warning if stderr suggests a real error (not just "no video stream")
+                let stderr_lower = stderr.to_lowercase();
+                if !stderr_lower.contains("no such file")
+                    && !stderr_lower.contains("invalid data")
+                    && !stderr_lower.is_empty()
+                {
+                    warn!(input = %input_str, stderr = %stderr.trim(), "FFPROBE FAILED: non-zero exit");
+                }
                 return ColorInfo::default();
             }
         }
@@ -247,9 +316,9 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
         }
     };
 
-    let stream = match parsed.streams.first() {
-        Some(s) => s,
-        None => return ColorInfo::default(),
+    let Some(stream) = parsed.streams.first() else {
+        warn!(input = %input_str, "FFPROBE JSON contained no video streams");
+        return ColorInfo::default();
     };
 
     let bit_depth = stream
@@ -257,9 +326,18 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
         .as_ref()
         .and_then(|s| s.parse::<u8>().ok());
 
-    let color_space = stream.color_space.clone().filter(|s| !s.is_empty() && s != "unknown");
-    let color_transfer = stream.color_transfer.clone().filter(|s| !s.is_empty() && s != "unknown");
-    let color_primaries = stream.color_primaries.clone().filter(|s| !s.is_empty() && s != "unknown");
+    let color_space = stream
+        .color_space
+        .clone()
+        .filter(|s| !s.is_empty() && s != "unknown");
+    let color_transfer = stream
+        .color_transfer
+        .clone()
+        .filter(|s| !s.is_empty() && s != "unknown");
+    let color_primaries = stream
+        .color_primaries
+        .clone()
+        .filter(|s| !s.is_empty() && s != "unknown");
 
     let mut is_dolby_vision = false;
     let mut is_hdr10_plus = false;
@@ -284,6 +362,23 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
         );
     }
 
+    let mut is_float = false;
+    if let Some(ref pf) = stream.pix_fmt {
+        let pf_lower = pf.to_lowercase();
+        if pf_lower.contains('f')
+            && (pf_lower.contains("32") || pf_lower.contains("16") || pf_lower.contains("64"))
+        {
+            // Check for common floating point formats in FFmpeg (e.g., gbrpf32le, rgbaf32le)
+            if pf_lower.contains("pf32")
+                || pf_lower.contains("f32")
+                || pf_lower.contains("pf16")
+                || pf_lower.contains("f16")
+            {
+                is_float = true;
+            }
+        }
+    }
+
     ColorInfo {
         color_space,
         color_transfer,
@@ -294,6 +389,7 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
         max_cll,
         is_dolby_vision,
         is_hdr10_plus,
+        is_float,
     }
 }
 
@@ -367,8 +463,7 @@ mod prop_tests {
             bd in 8u8..=16
         ) {
             let json = format!(
-                r#"{{"streams":[{{"color_space":"{}","pix_fmt":"{}","bits_per_raw_sample":"{}"}}]}}"#,
-                cs, pf, bd
+                r#"{{"streams":[{{"color_space":"{cs}","pix_fmt":"{pf}","bits_per_raw_sample":"{bd}"}}]}}"#
             );
             let parsed: Result<FfprobeOutput, _> = serde_json::from_str(&json);
             prop_assert!(parsed.is_ok());

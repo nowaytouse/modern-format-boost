@@ -3,7 +3,7 @@
 //! Provides:
 //! - Output file health (exists, non-empty, minimal size, readable)
 //! - Optional input vs output sanity (duration match, video codec present)
-//! - Integration with [crate::checkpoint::verify_output_integrity] and [crate::ffprobe].
+//! - Integration with [`crate::checkpoint::verify_output_integrity`] and [`crate::ffprobe`].
 
 use std::path::Path;
 
@@ -17,18 +17,18 @@ pub const DEFAULT_MIN_FILE_SIZE: u64 = 32;
 #[derive(Clone, Debug, Default)]
 #[must_use]
 pub struct VerifyOptions {
-    /// Minimum output file size in bytes. If 0, uses [DEFAULT_MIN_FILE_SIZE].
+    /// Minimum output file size in bytes. If 0, uses [`DEFAULT_MIN_FILE_SIZE`].
     pub min_file_size: u64,
     /// If true, require input and output duration to match within tolerance.
     pub require_duration_match: bool,
-    /// Duration tolerance in seconds (input vs output). Used when [require_duration_match] is true.
+    /// Duration tolerance in seconds (input vs output). Used when [`Self::require_duration_match`] is true.
     pub duration_tolerance_secs: f64,
     /// If true, require output to have a video stream (ffprobe).
     pub require_video_stream: bool,
 }
 
 impl VerifyOptions {
-    pub fn strict_video() -> Self {
+    pub const fn strict_video() -> Self {
         Self {
             min_file_size: DEFAULT_MIN_FILE_SIZE,
             require_duration_match: true,
@@ -39,7 +39,7 @@ impl VerifyOptions {
 
     /// Relaxed verification for animated images (GIF, WebP, AVIF) with variable frame delays.
     /// Uses a larger duration tolerance to accommodate frame timing variations during conversion.
-    pub fn relaxed_animated_image() -> Self {
+    pub const fn relaxed_animated_image() -> Self {
         Self {
             min_file_size: DEFAULT_MIN_FILE_SIZE,
             require_duration_match: true,
@@ -48,7 +48,7 @@ impl VerifyOptions {
         }
     }
 
-    pub fn minimal() -> Self {
+    pub const fn minimal() -> Self {
         Self {
             min_file_size: DEFAULT_MIN_FILE_SIZE,
             require_duration_match: false,
@@ -57,7 +57,7 @@ impl VerifyOptions {
         }
     }
 
-    fn effective_min_size(&self) -> u64 {
+    const fn effective_min_size(&self) -> u64 {
         if self.min_file_size > 0 {
             self.min_file_size
         } else {
@@ -80,12 +80,12 @@ pub struct EnhancedVerifyResult {
 impl EnhancedVerifyResult {
     /// True only when file is OK and no required check explicitly failed.
     /// None = check was not required (treat as pass); Some(false) = required check failed (do not fake success).
+    #[must_use]
     pub fn passed(&self) -> bool {
-        self.file_ok
-            && self.duration_match != Some(false)
-            && self.has_video_stream != Some(false)
+        self.file_ok && self.duration_match != Some(false) && self.has_video_stream != Some(false)
     }
 
+    #[must_use]
     pub fn summary(&self) -> String {
         if self.passed() {
             "✅ Enhanced verification passed".to_string()
@@ -97,6 +97,9 @@ impl EnhancedVerifyResult {
 
 /// Run basic output file health check (exists, size, readable).
 /// Does not require ffprobe.
+///
+/// # Errors
+/// Returns an error if the output file is missing, empty, too small, or unreadable.
 pub fn verify_output_file(output: &Path, min_size: u64) -> Result<(), String> {
     let size = if min_size == 0 {
         DEFAULT_MIN_FILE_SIZE
@@ -118,11 +121,11 @@ pub fn verify_after_encode(
     // 1) File integrity
     let file_ok = match verify_output_integrity(output, min_size) {
         Ok(()) => {
-            details.push(format!("Output file OK (≥ {} bytes)", min_size));
+            details.push(format!("Output file OK (≥ {min_size} bytes)"));
             true
         }
         Err(e) => {
-            details.push(format!("Output file check failed: {}", e));
+            details.push(format!("Output file check failed: {e}"));
             return EnhancedVerifyResult {
                 file_ok: false,
                 duration_match: None,
@@ -169,7 +172,7 @@ pub fn verify_after_encode(
             }
             (Err(e), _) => {
                 probe_failed = true;
-                details.push(format!("Input probe failed: {}", e));
+                details.push(format!("Input probe failed: {e}"));
                 if options.require_duration_match {
                     duration_match = Some(false);
                 }
@@ -179,7 +182,7 @@ pub fn verify_after_encode(
             }
             (_, Err(e)) => {
                 probe_failed = true;
-                details.push(format!("Output probe failed: {}", e));
+                details.push(format!("Output probe failed: {e}"));
                 if options.require_duration_match {
                     duration_match = Some(false);
                 }
@@ -244,7 +247,7 @@ mod tests {
         let _ = std::fs::File::create(&empty).and_then(|f| f.sync_all());
         let r = verify_output_file(&empty, 1);
         assert!(r.is_err()); // 0 bytes < 1
-        let _ = std::fs::remove_file(&empty);
+        let _ = crate::io_utils::safe_remove_file(&empty);
 
         let small = dir.join("quality_verifier_test_small");
         let mut f = std::fs::File::create(&small).unwrap();
@@ -253,7 +256,7 @@ mod tests {
         drop(f);
         let r = verify_output_file(&small, 32);
         assert!(r.is_ok());
-        let _ = std::fs::remove_file(&small);
+        let _ = crate::io_utils::safe_remove_file(&small);
     }
 
     #[test]
@@ -284,7 +287,7 @@ mod tests {
         assert!(!r3.passed());
     }
 
-    /// Regression: use only temp copies (no original folder). When input/output are not valid video, probe fails and enhanced_verify_fail_reason is set.
+    /// Regression: use only temp copies (no original folder). When input/output are not valid video, probe fails and `enhanced_verify_fail_reason` is set.
     #[test]
     fn test_verify_after_encode_with_temp_copies_probe_fails() {
         let dir = std::env::temp_dir();
@@ -293,14 +296,13 @@ mod tests {
         let minimal: [u8; 64] = [0u8; 64];
         std::fs::write(&input_copy, minimal).unwrap();
         std::fs::write(&output_copy, minimal).unwrap();
-        let result = verify_after_encode(
-            &input_copy,
-            &output_copy,
-            &VerifyOptions::strict_video(),
+        let result = verify_after_encode(&input_copy, &output_copy, &VerifyOptions::strict_video());
+        let _ = crate::io_utils::safe_remove_file(&input_copy);
+        let _ = crate::io_utils::safe_remove_file(&output_copy);
+        assert!(
+            !result.passed(),
+            "non-video files should fail strict verification"
         );
-        let _ = std::fs::remove_file(&input_copy);
-        let _ = std::fs::remove_file(&output_copy);
-        assert!(!result.passed(), "non-video files should fail strict verification");
         assert!(
             result.message.contains("Probe") || result.message.contains("probe"),
             "expected probe-related message, got: {}",

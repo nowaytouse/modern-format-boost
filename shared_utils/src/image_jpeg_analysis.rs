@@ -46,19 +46,19 @@ const IJG_CHROMINANCE_BASE: [[u16; 8]; 8] = [
 ];
 
 fn generate_standard_qt(quality: u8, base_table: &[[u16; 8]; 8]) -> [[u16; 8]; 8] {
-    let q = quality.clamp(1, 100) as f64;
+    let q = f64::from(quality.clamp(1, 100));
 
     let scale = if q < 50.0 {
         5000.0 / q
     } else {
-        200.0 - 2.0 * q
+        2.0f64.mul_add(-q, 200.0)
     };
 
     let mut result = [[0u16; 8]; 8];
 
     for i in 0..8 {
         for j in 0..8 {
-            let value = ((scale * base_table[i][j] as f64) + 50.0) / 100.0;
+            let value = ((scale * f64::from(base_table[i][j])) + 50.0) / 100.0;
             result[i][j] = value.floor().clamp(1.0, 255.0) as u16;
         }
     }
@@ -83,7 +83,7 @@ fn calculate_weighted_sse(table1: &[[u16; 8]; 8], table2: &[[u16; 8]; 8]) -> f64
 
     for i in 0..8 {
         for j in 0..8 {
-            let diff = table1[i][j] as f64 - table2[i][j] as f64;
+            let diff = f64::from(table1[i][j]) - f64::from(table2[i][j]);
             let weight = WEIGHTS[i][j];
             weighted_sse += weight * diff * diff;
             total_weight += weight;
@@ -97,7 +97,7 @@ fn calculate_sse(table1: &[[u16; 8]; 8], table2: &[[u16; 8]; 8]) -> f64 {
     let mut sse = 0.0;
     for i in 0..8 {
         for j in 0..8 {
-            let diff = table1[i][j] as f64 - table2[i][j] as f64;
+            let diff = f64::from(table1[i][j]) - f64::from(table2[i][j]);
             sse += diff * diff;
         }
     }
@@ -145,7 +145,7 @@ fn estimate_quality_precise(
                 sse: 0.0,
                 weighted_sse: 0.0,
                 is_exact_match: true,
-                interpolated_quality: q as f64,
+                interpolated_quality: f64::from(q),
             };
         }
     }
@@ -157,9 +157,9 @@ fn estimate_quality_precise(
         } else {
             -1.0
         };
-        best_quality as f64 + direction * ratio * 0.5
+        (direction * ratio).mul_add(0.5, f64::from(best_quality))
     } else {
-        best_quality as f64
+        f64::from(best_quality)
     };
 
     QualityEstimate {
@@ -171,6 +171,7 @@ fn estimate_quality_precise(
     }
 }
 
+#[must_use]
 pub fn estimate_quality_from_table(
     extracted_qt: &[[u16; 8]; 8],
     is_luminance: bool,
@@ -198,11 +199,13 @@ fn calculate_confidence(
         return 0.98;
     }
 
-    let luma_confidence = 1.0 / (1.0 + luma_estimate.weighted_sse * 0.01);
+    let luma_confidence = 1.0 / luma_estimate.weighted_sse.mul_add(0.01, 1.0);
 
     if let Some(chroma) = chroma_estimate {
-        let chroma_confidence = 1.0 / (1.0 + chroma.weighted_sse * 0.01);
-        (0.7 * luma_confidence + 0.3 * chroma_confidence).clamp(0.0, 1.0)
+        let chroma_confidence = 1.0 / chroma.weighted_sse.mul_add(0.01, 1.0);
+        0.7f64
+            .mul_add(luma_confidence, 0.3 * chroma_confidence)
+            .clamp(0.0, 1.0)
     } else {
         luma_confidence.clamp(0.0, 1.0)
     }
@@ -267,6 +270,10 @@ const MARKER_DQT: u8 = 0xDB;
 const MARKER_SOS: u8 = 0xDA;
 const MARKER_EOI: u8 = 0xD9;
 
+/// Extract quantization tables from JPEG raw bytes.
+///
+/// # Errors
+/// Returns an error if the JPEG data is corrupted or missing DQT markers.
 pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, String> {
     let mut tables = Vec::new();
 
@@ -323,7 +330,7 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
                     for i in 0..64 {
                         let row = ZIGZAG_ORDER[i] / 8;
                         let col = ZIGZAG_ORDER[i] % 8;
-                        table[row][col] = data[seg_pos] as u16;
+                        table[row][col] = u16::from(data[seg_pos]);
                         seg_pos += 1;
                     }
                 } else {
@@ -334,7 +341,7 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
                         let row = ZIGZAG_ORDER[i] / 8;
                         let col = ZIGZAG_ORDER[i] % 8;
                         table[row][col] =
-                            ((data[seg_pos] as u16) << 8) | (data[seg_pos + 1] as u16);
+                            (u16::from(data[seg_pos]) << 8) | u16::from(data[seg_pos + 1]);
                         seg_pos += 2;
                     }
                 }
@@ -363,6 +370,10 @@ const ZIGZAG_ORDER: [usize; 64] = [
     52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
 ];
 
+/// Analyze JPEG quality by inspecting DQT (Define Quantization Table) markers.
+///
+/// # Errors
+/// Returns an error if the JPEG data is invalid or DQT markers are missing.
 pub fn analyze_jpeg_quality(data: &[u8]) -> Result<JpegQualityAnalysis, String> {
     let tables = extract_quantization_tables(data)?;
 
@@ -383,9 +394,10 @@ pub fn analyze_jpeg_quality(data: &[u8]) -> Result<JpegQualityAnalysis, String> 
     let final_quality = if let Some(ref chroma) = chroma_estimate {
         if luma_estimate.is_exact_match && chroma.is_exact_match {
             luma_estimate.quality
-        } else if (luma_estimate.quality as i16 - chroma.quality as i16).abs() <= 2 {
-            let weighted =
-                luma_estimate.interpolated_quality * 0.7 + chroma.interpolated_quality * 0.3;
+        } else if (i16::from(luma_estimate.quality) - i16::from(chroma.quality)).abs() <= 2 {
+            let weighted = luma_estimate
+                .interpolated_quality
+                .mul_add(0.7, chroma.interpolated_quality * 0.3);
             weighted.round() as u8
         } else {
             luma_estimate.quality
@@ -430,8 +442,12 @@ pub fn analyze_jpeg_quality(data: &[u8]) -> Result<JpegQualityAnalysis, String> 
     })
 }
 
+/// Analyze JPEG quality from a file path.
+///
+/// # Errors
+/// Returns an error if the file cannot be read or is not a valid JPEG.
 pub fn analyze_jpeg_file(path: &std::path::Path) -> Result<JpegQualityAnalysis, String> {
-    let data = std::fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
+    let data = std::fs::read(path).map_err(|e| format!("Failed to read file: {e}"))?;
     analyze_jpeg_quality(&data)
 }
 
@@ -462,6 +478,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn test_sse_identical() {
         let table = IJG_LUMINANCE_BASE;
         let sse = calculate_sse(&table, &table);
@@ -469,6 +486,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn test_weighted_sse_identical() {
         let table = IJG_LUMINANCE_BASE;
         let wsse = calculate_weighted_sse(&table, &table);
@@ -476,6 +494,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn test_estimate_quality_perfect_match() {
         let qt = generate_standard_qt(75, &IJG_LUMINANCE_BASE);
         let (quality, sse, is_standard) = estimate_quality_from_table(&qt, true);
@@ -485,12 +504,13 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn test_estimate_quality_all_levels() {
         for expected_q in 1..=100 {
             let qt = generate_standard_qt(expected_q, &IJG_LUMINANCE_BASE);
             let (detected_q, sse, _) = estimate_quality_from_table(&qt, true);
-            assert_eq!(detected_q, expected_q, "Failed to detect Q={}", expected_q);
-            assert_eq!(sse, 0.0, "Non-zero SSE for Q={}", expected_q);
+            assert_eq!(detected_q, expected_q, "Failed to detect Q={expected_q}");
+            assert_eq!(sse, 0.0, "Non-zero SSE for Q={expected_q}");
         }
     }
 
@@ -506,14 +526,14 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn test_chrominance_detection() {
-        for expected_q in [50, 75, 90, 95].iter() {
+        for expected_q in &[50, 75, 90, 95] {
             let qt = generate_standard_qt(*expected_q, &IJG_CHROMINANCE_BASE);
             let (detected_q, sse, _) = estimate_quality_from_table(&qt, false);
             assert_eq!(
                 detected_q, *expected_q,
-                "Failed to detect chroma Q={}",
-                expected_q
+                "Failed to detect chroma Q={expected_q}"
             );
             assert_eq!(sse, 0.0);
         }

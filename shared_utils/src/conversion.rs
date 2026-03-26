@@ -1,8 +1,8 @@
 //! Conversion Utilities Module
 //!
 //! Provides common conversion functionality shared across all tools:
-//! - ConversionResult: Unified result structure
-//! - ConvertOptions: Common conversion options
+//! - `ConversionResult`: Unified result structure
+//! - `ConvertOptions`: Common conversion options
 //! - Anti-duplicate mechanism: Track processed files
 //! - Result builders: Reduce boilerplate code
 //! - Size formatting: Unified message formatting
@@ -16,24 +16,48 @@
 //! **Any** `output_size >= input_size` (including equal) is rejected — goal not achieved.
 //! All size checks use `>=` for this; do not change to `>`.
 //!
-//! ## allow_size_tolerance (default true)
+//! ## `allow_size_tolerance` (default true)
 //! When true: "oversized" threshold is `output size increase < 1_048_576 bytes` (accept). Video path may treat
-//! `video_compression_ratio < 1.01` as acceptable when require_compression is checked.
-//! Does **not** mean "accept up to 1_048_576 bytes larger as success" for compress goal — compress still requires output < input.
+//! `video_compression_ratio < 1.01` as acceptable when `require_compression` is checked.
+//! Does **not** mean "accept up to `1_048_576` bytes larger as success" for compress goal — compress still requires output < input.
 
 #![cfg_attr(test, allow(clippy::field_reassign_with_default))]
 
+use crate::modern_ui::{colors, symbols};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
-use std::path::{Path, PathBuf};
-use crate::modern_ui::{colors, symbols};
-use std::sync::{LazyLock, Mutex};
-use rand::RngExt;
+use std::path::{Component, Path, PathBuf};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    LazyLock, Mutex,
+};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 static PROCESSED_FILES: LazyLock<Mutex<HashSet<String>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
+static TEMP_OUTPUT_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn next_temp_output_suffix() -> String {
+    const ALPHABET: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let pid = u128::from(std::process::id());
+    let counter = u128::from(TEMP_OUTPUT_COUNTER.fetch_add(1, Ordering::Relaxed));
+    let mut value = timestamp ^ (pid << 32) ^ counter;
+    let mut suffix = [b'0'; 10];
+
+    for slot in suffix.iter_mut().rev() {
+        let idx = (value % ALPHABET.len() as u128) as usize;
+        *slot = ALPHABET[idx];
+        value /= ALPHABET.len() as u128;
+    }
+
+    String::from_utf8_lossy(&suffix).into_owned()
+}
 
 pub fn is_already_processed(path: &Path) -> bool {
     let canonical = path
@@ -42,7 +66,9 @@ pub fn is_already_processed(path: &Path) -> bool {
         .and_then(|p| p.to_str().map(String::from))
         .unwrap_or_else(|| path.display().to_string());
 
-    let processed = PROCESSED_FILES.lock().unwrap_or_else(|e| e.into_inner());
+    let processed = PROCESSED_FILES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     processed.contains(&canonical)
 }
 
@@ -53,18 +79,22 @@ pub fn mark_as_processed(path: &Path) {
         .and_then(|p| p.to_str().map(String::from))
         .unwrap_or_else(|| path.display().to_string());
 
-    let mut processed = PROCESSED_FILES.lock().unwrap_or_else(|e| e.into_inner());
+    let mut processed = PROCESSED_FILES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     processed.insert(canonical);
 }
 
 pub fn clear_processed_list() {
-    let mut processed = PROCESSED_FILES.lock().unwrap_or_else(|e| e.into_inner());
+    let mut processed = PROCESSED_FILES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     processed.clear();
 }
 
 pub use crate::checkpoint::{
-    safe_delete_original, verify_output_integrity,
-    MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE, MIN_OUTPUT_SIZE_BEFORE_DELETE_VIDEO,
+    safe_delete_original, verify_output_integrity, MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
+    MIN_OUTPUT_SIZE_BEFORE_DELETE_VIDEO,
 };
 
 #[cfg(unix)]
@@ -88,6 +118,11 @@ impl Drop for ProcessedListLockGuard {
     }
 }
 
+/// Load the processed files list.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be read or deserialized.
 pub fn load_processed_list(list_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     if !list_path.exists() {
         return Ok(());
@@ -99,17 +134,43 @@ pub fn load_processed_list(list_path: &Path) -> Result<(), Box<dyn std::error::E
     #[cfg(unix)]
     let _flock_guard = ProcessedListLockGuard(std::os::unix::io::AsRawFd::as_raw_fd(&file));
     let reader = BufReader::new(&file);
-    let mut processed = PROCESSED_FILES.lock().unwrap_or_else(|e| e.into_inner());
+    let mut loaded = HashSet::new();
 
-    for path in reader.lines().map_while(Result::ok) {
-        processed.insert(path);
+    let mut read_error = None;
+    for line in reader.lines() {
+        match line {
+            Ok(path) => {
+                loaded.insert(path);
+            }
+            Err(err) => {
+                if read_error.is_none() {
+                    read_error = Some(err);
+                }
+            }
+        }
     }
+
+    if let Some(err) = read_error {
+        return Err(Box::new(err));
+    }
+
+    let mut processed = PROCESSED_FILES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    processed.extend(loaded);
 
     Ok(())
 }
 
+/// Save the processed files list.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be written or serialized.
 pub fn save_processed_list(list_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let processed = PROCESSED_FILES.lock().unwrap_or_else(|e| e.into_inner());
+    let processed = PROCESSED_FILES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut file = fs::File::create(list_path)?;
     #[cfg(unix)]
     flock_exclusive(&file)?;
@@ -117,7 +178,7 @@ pub fn save_processed_list(list_path: &Path) -> Result<(), Box<dyn std::error::E
     let _flock_guard = ProcessedListLockGuard(std::os::unix::io::AsRawFd::as_raw_fd(&file));
 
     for path in processed.iter() {
-        writeln!(file, "{}", path)?;
+        writeln!(file, "{path}")?;
     }
     file.flush()?;
 
@@ -138,10 +199,13 @@ pub struct ConversionResult {
 }
 
 impl ConversionResult {
+    #[must_use]
     pub fn is_jpeg_transcode(&self) -> bool {
-        self.message.contains("JPEG transcoding") || self.message.contains("JPEG lossless")
+        // After terminology fix, "transcoding" is only used for JPEG bitstream reconstruction (lossless JXL)
+        self.message.contains("transcoding") || self.message.contains("JPEG lossless")
     }
 
+    #[must_use]
     pub fn skipped_duplicate(input: &Path) -> Self {
         Self {
             success: true,
@@ -156,6 +220,7 @@ impl ConversionResult {
         }
     }
 
+    #[must_use]
     pub fn skipped_exists(input: &Path, output: &Path) -> Self {
         let input_size = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
         Self {
@@ -171,6 +236,7 @@ impl ConversionResult {
         }
     }
 
+    #[must_use]
     pub fn skipped_custom(input: &Path, input_size: u64, reason: &str, skip_reason: &str) -> Self {
         Self {
             success: true,
@@ -185,6 +251,7 @@ impl ConversionResult {
         }
     }
 
+    #[must_use]
     pub fn skipped_size_increase(input: &Path, input_size: u64, output_size: u64) -> Self {
         let diff_bytes = output_size as i64 - input_size as i64;
         let size_diff = crate::modern_ui::format_size_diff(diff_bytes);
@@ -195,13 +262,14 @@ impl ConversionResult {
             input_size,
             output_size: None,
             size_reduction: None,
-            message: format!("Skipped: Output would be larger ({})", size_diff),
+            message: format!("Skipped: Output would be larger ({size_diff})"),
             skipped: true,
             skip_reason: Some("size_increase".to_string()),
         }
     }
 
     /// Used when compress mode is on and output size equals input (goal: must be strictly smaller).
+    #[must_use]
     pub fn skipped_size_unchanged(input: &Path, input_size: u64, format_label: &str) -> Self {
         Self {
             success: true,
@@ -211,14 +279,14 @@ impl ConversionResult {
             output_size: None,
             size_reduction: None,
             message: format!(
-                "Skipped: {} output size unchanged (compression goal not achieved)",
-                format_label
+                "Skipped: {format_label} output size unchanged (compression goal not achieved)"
             ),
             skipped: true,
             skip_reason: Some("size_unchanged".to_string()),
         }
     }
 
+    #[must_use]
     pub fn success(
         input: &Path,
         output: &Path,
@@ -237,30 +305,46 @@ impl ConversionResult {
 
         // Build size-change suffix: "-14.5%" (saved) or "+2.1MB" (grew) with ANSI colors
         let size_tag = if reduction >= 0.0 {
-            format!("\x1b[1;32m-{:.1}%\x1b[0m", reduction_pct)
+            format!("\x1b[1;32m-{reduction_pct:.1}%\x1b[0m")
         } else {
             let diff_bytes = output_size as i64 - input_size as i64;
             let size_diff = crate::modern_ui::format_size_diff(diff_bytes);
-            format!("\x1b[1;33m{}\x1b[0m", size_diff)
+            format!("\x1b[1;33m{size_diff}\x1b[0m")
         };
 
-        // Message body (no \u2705 here — caller (log_eprintln!) already emits it).
-        // Format: "「Quality」 ✅ <FormatName> transcoding: -14.5%"
-        let core_msg = match extra_info {
-            Some(info) => format!("{} transcoding ({}): {}", format_name, info, size_tag),
-            None       => format!("{} transcoding: {}",          format_name,          size_tag),
+        // Determine technically accurate verb:
+        // - "transcoding" specifically for bitstream reconstruction (JPEG -> JXL)
+        // - "encoding" for all other conversions from source pixels
+        let is_jpeg = input.extension().map_or(false, |e| {
+            let ext = e.to_string_lossy().to_lowercase();
+            matches!(
+                ext.as_str(),
+                "jpg" | "jpeg" | "jpe" | "jif" | "jfif" | "jfi" | "jxr"
+            )
+        }) || extra_info.map_or(false, |i| i.to_lowercase().contains("jpeg"));
+
+        let action = if is_jpeg && format_name.eq_ignore_ascii_case("JXL") {
+            "transcoding"
+        } else {
+            "encoding"
         };
-        
+
+        // Message body (no ✅ here — caller already emits it).
+        // Format: "✅ <FormatName> <Action>: -14.5%"
+        let core_msg = match extra_info {
+            Some(info) => format!("{format_name} {action} ({info}): {size_tag}"),
+            None => format!("{format_name} {action}: {size_tag}"),
+        };
+
         let message = if let Some(q) = quality_label {
             if q.is_empty() {
-                format!("✅ {}", core_msg)
+                format!("✅ {core_msg}")
             } else {
-                format!("✅ {} | {}", q, core_msg)
+                format!("✅ {q} | {core_msg}")
             }
         } else {
-            format!("✅ {}", core_msg)
+            format!("✅ {core_msg}")
         };
-        
 
         Self {
             success: true,
@@ -320,10 +404,15 @@ impl Default for ConvertOptions {
 }
 
 impl ConvertOptions {
-    pub fn should_delete_original(&self) -> bool {
+    #[must_use]
+    pub const fn should_delete_original(&self) -> bool {
         self.delete_original || self.in_place
     }
 
+    /// Determine the flag mode from options.
+    ///
+    /// # Errors
+    /// Returns an error message if flag combination is invalid.
     pub fn flag_mode(&self) -> Result<crate::flag_validator::FlagMode, String> {
         crate::flag_validator::validate_flags_result_with_ultimate(
             self.explore,
@@ -333,12 +422,17 @@ impl ConvertOptions {
         )
     }
 
-    pub fn explore_mode(&self) -> crate::video_explorer::ExploreMode {
+    #[must_use]
+    pub const fn explore_mode(&self) -> crate::video_explorer::ExploreMode {
         // flag_mode() result is irrelevant — always use PreciseQualityMatchWithCompression
         crate::video_explorer::ExploreMode::PreciseQualityMatchWithCompression
     }
 }
 
+/// Determine the output path for a file.
+///
+/// # Errors
+/// Returns an error message if determination fails.
 pub fn determine_output_path(
     input: &Path,
     extension: &str,
@@ -349,12 +443,15 @@ pub fn determine_output_path(
         .and_then(|s| s.to_str())
         .unwrap_or("output");
 
+    let up_ext = extension.to_uppercase();
     let output = match output_dir {
         Some(dir) => {
-            let _ = fs::create_dir_all(dir);
-            dir.join(format!("{}.{}", stem, extension))
+            fs::create_dir_all(dir).map_err(|e| {
+                format!("Failed to create output directory {}: {}", dir.display(), e)
+            })?;
+            dir.join(format!("{stem}.{up_ext}"))
         }
-        None => input.with_extension(extension),
+        None => input.with_extension(up_ext),
     };
 
     let input_canonical = input.canonicalize().unwrap_or_else(|_| input.to_path_buf());
@@ -373,12 +470,24 @@ pub fn determine_output_path(
     }
 
     if let Some(parent) = output.parent() {
-        let _ = fs::create_dir_all(parent);
+        fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "Failed to create output parent directory {}: {}",
+                parent.display(),
+                e
+            )
+        })?;
     }
+
+    validate_output_path(&output, None)?;
 
     Ok(output)
 }
 
+/// Determine the output path with a base directory.
+///
+/// # Errors
+/// Returns an error message if determination fails.
 pub fn determine_output_path_with_base(
     input: &Path,
     base_dir: &Path,
@@ -390,6 +499,7 @@ pub fn determine_output_path_with_base(
         .and_then(|s| s.to_str())
         .unwrap_or("output");
 
+    let up_ext = extension.to_uppercase();
     let output = match output_dir {
         Some(dir) => {
             let rel_path = input
@@ -399,11 +509,17 @@ pub fn determine_output_path_with_base(
                 .unwrap_or(Path::new(""));
 
             let out_subdir = dir.join(rel_path);
-            let _ = fs::create_dir_all(&out_subdir);
+            fs::create_dir_all(&out_subdir).map_err(|e| {
+                format!(
+                    "Failed to create output directory {}: {}",
+                    out_subdir.display(),
+                    e
+                )
+            })?;
 
-            out_subdir.join(format!("{}.{}", stem, extension))
+            out_subdir.join(format!("{stem}.{up_ext}"))
         }
-        None => input.with_extension(extension),
+        None => input.with_extension(up_ext),
     };
 
     let input_canonical = input.canonicalize().unwrap_or_else(|_| input.to_path_buf());
@@ -422,29 +538,42 @@ pub fn determine_output_path_with_base(
     }
 
     if let Some(parent) = output.parent() {
-        let _ = fs::create_dir_all(parent);
+        fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "Failed to create output parent directory {}: {}",
+                parent.display(),
+                e
+            )
+        })?;
     }
+
+    validate_output_path(&output, Some(base_dir))?;
 
     Ok(output)
 }
 
+#[must_use]
 pub fn format_size_change(input_size: u64, output_size: u64) -> String {
     let reduction = if input_size == 0 {
         0.0
     } else {
-        1.0 - (output_size as f64 / input_size as f64)
+        #[allow(clippy::cast_precision_loss)]
+        let red = 1.0 - (output_size as f64 / input_size as f64);
+        red
     };
     let reduction_pct = reduction * 100.0;
 
     if reduction >= 0.0 {
-        format!("size reduced {:.1}%", reduction_pct)
+        format!("size reduced {reduction_pct:.1}%")
     } else {
-        let diff_bytes = output_size as i64 - input_size as i64;
+        #[allow(clippy::cast_possible_wrap)]
+        let diff_bytes = (output_size as i64).saturating_sub(input_size as i64);
         let size_diff = crate::modern_ui::format_size_diff(diff_bytes);
-        format!("size increased {}", size_diff)
+        format!("size increased {:.1}% ({})", -reduction_pct, size_diff)
     }
 }
 
+#[must_use]
 pub fn calculate_size_reduction(input_size: u64, output_size: u64) -> f64 {
     if input_size == 0 {
         return 0.0;
@@ -457,6 +586,7 @@ pub fn calculate_size_reduction(input_size: u64, output_size: u64) -> f64 {
 /// **TOCTOU note**: The `output.exists()` check here is advisory only.
 /// Callers MUST use `temp_path_for_output()` + `commit_temp_to_output()`
 /// to write atomically; do NOT rely on this check as a write guard.
+#[must_use]
 pub fn pre_conversion_check(
     input: &Path,
     output: &Path,
@@ -473,6 +603,10 @@ pub fn pre_conversion_check(
     None
 }
 
+/// Finalize the conversion process.
+///
+/// # Errors
+/// Returns an `io::Result` if finalization fails.
 pub fn finalize_conversion(
     input: &Path,
     output: &Path,
@@ -483,10 +617,8 @@ pub fn finalize_conversion(
 ) -> std::io::Result<ConversionResult> {
     let output_size = std::fs::metadata(output)?.len();
 
-    if let Err(e) = crate::preserve_metadata(input, output) {
-        eprintln!("\u{26a0}\u{fe0f} Failed to preserve metadata: {}", e);
-    }
-    crate::metadata::merge_xmp_sidecar_into_dest(input, output);
+    // Metadata already preserved by commit_temp_to_output_with_metadata
+    // (includes EXIF, XMP, xattrs, permissions, and timestamps)
 
     mark_as_processed(input);
 
@@ -495,7 +627,7 @@ pub fn finalize_conversion(
     }
 
     if options.should_delete_original() {
-        let _ = safe_delete_original(input, output, MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE);
+        safe_delete_original(input, output, MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE)?;
     }
 
     Ok(ConversionResult::success(
@@ -509,13 +641,17 @@ pub fn finalize_conversion(
     ))
 }
 
+/// Perform post-conversion actions.
+///
+/// # Errors
+/// Returns an `io::Result` if actions fail.
 pub fn post_conversion_actions(
     input: &Path,
     output: &Path,
     options: &ConvertOptions,
 ) -> std::io::Result<()> {
     if let Err(e) = crate::preserve_metadata(input, output) {
-        eprintln!("⚠️ Failed to preserve metadata: {}", e);
+        eprintln!("⚠️ Failed to preserve metadata: {e}");
     }
 
     mark_as_processed(input);
@@ -530,11 +666,13 @@ pub fn post_conversion_actions(
 // --- Atomic output (TOCTOU mitigation) ---
 
 /// Guard that removes the temp file on drop if it still exists (e.g. conversion failed before commit).
+///
 /// Hold this for the lifetime of conversion; after successful `commit_temp_to_output` the file is gone so drop is a no-op.
 pub struct TempOutputGuard(PathBuf);
 
 impl TempOutputGuard {
-    pub fn new(path: PathBuf) -> Self {
+    #[must_use]
+    pub const fn new(path: PathBuf) -> Self {
         Self(path)
     }
 }
@@ -542,15 +680,16 @@ impl TempOutputGuard {
 impl Drop for TempOutputGuard {
     fn drop(&mut self) {
         if self.0.exists() {
-            let _ = fs::remove_file(&self.0);
+            let _ = crate::io_utils::safe_remove_file(&self.0);
         }
     }
 }
 
 /// Returns a path for temporary output in the same directory as `output`, so that
 /// `fs::rename(temp, output)` is atomic on the same filesystem. Use with `commit_temp_to_output`.
-/// Uses stem + ".tmp." + extension (e.g. file.mov → file.tmp.mov) so FFmpeg and other
+/// Uses stem + ".tmp." + extension (e.g. file.mov → file.tmp.mov) so `FFmpeg` and other
 /// tools that infer format from extension still see the correct extension (mov, mp4, mkv, etc.).
+#[must_use]
 pub fn temp_path_for_output(output: &Path) -> PathBuf {
     let stem = output
         .file_stem()
@@ -561,27 +700,48 @@ pub fn temp_path_for_output(output: &Path) -> PathBuf {
         .map(|e| e.to_string_lossy())
         .unwrap_or_default();
     let parent = output.parent().unwrap_or_else(|| Path::new("."));
-    
-    // Add unique random string for security (prevents collision with user files)
-    let random_id: String = (0..8)
-        .map(|_| {
-            let idx = rand::rng().random_range(0..62);
-            match idx {
-                0..=25 => (b'a' + idx) as char,
-                26..=51 => (b'A' + (idx - 26)) as char,
-                _ => (b'0' + (idx - 52)) as char,
-            }
-        })
-        .collect();
 
-    parent.join(format!("{}.tmp.{}.{}", stem, random_id, ext))
+    // Use a timestamp/pid/counter suffix so temp naming stays branch-agnostic across rand APIs.
+    let random_id = next_temp_output_suffix();
+
+    parent.join(format!("{stem}.tmp.{random_id}.{ext}"))
 }
 
-/// Commits a temp file to the final output path. Reduces TOCTOU window to the instant before rename.
-/// - Rejects empty output: if `temp` exists and has size 0, returns `Err` (caller must not commit or delete original).
-/// - If `!force` and `output` already exists: removes `temp` and returns `Ok(false)` (caller should treat as skip).
-/// - Otherwise: renames `temp` → `output` (overwriting if `force` and target exists on Unix) and returns `Ok(true)`.
-pub fn commit_temp_to_output(temp: &Path, output: &Path, force: bool) -> std::io::Result<bool> {
+/// **DEPRECATED AND REMOVED**: This function has been removed.
+///
+/// All conversions MUST preserve metadata. Use `commit_temp_to_output_with_metadata` instead.
+///
+/// This function previously did NOT preserve metadata (timestamps, EXIF, XMP, xattrs, permissions),
+/// which violated the program's core requirement of comprehensive metadata preservation.
+#[deprecated(
+    since = "0.10.71",
+    note = "Removed. Use commit_temp_to_output_with_metadata instead."
+)]
+/// Commit a temporary file to the final output location.
+///
+/// # Errors
+/// Returns an `io::Result` if commit fails.
+pub fn commit_temp_to_output(_temp: &Path, _output: &Path, _force: bool) -> std::io::Result<bool> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "commit_temp_to_output has been removed; use commit_temp_to_output_with_metadata instead",
+    ))
+}
+
+/// Commits a temp file with complete metadata preservation from the original file.
+/// Preserves: timestamps (atime, mtime, btime), xattrs, permissions, EXIF data, XMP sidecars.
+/// Commit a temporary file to the final output location with metadata preservation.
+///
+/// # Errors
+/// Returns an `io::Result` if commit fails.
+pub fn commit_temp_to_output_with_metadata(
+    temp: &Path,
+    output: &Path,
+    force: bool,
+    original: Option<&Path>,
+) -> std::io::Result<bool> {
+    validate_output_path(output, None).map_err(std::io::Error::other)?;
+
     if temp.exists() {
         let size = fs::metadata(temp)?.len();
         if size == 0 {
@@ -592,27 +752,56 @@ pub fn commit_temp_to_output(temp: &Path, output: &Path, force: bool) -> std::io
         }
     }
     if !force && output.exists() {
-        let _ = fs::remove_file(temp);
+        let _ = crate::io_utils::safe_remove_file(temp);
         return Ok(false);
     }
-    #[cfg(unix)]
-    {
-        fs::rename(temp, output)?;
-        Ok(true)
-    }
-    #[cfg(not(unix))]
-    {
-        if output.exists() {
-            fs::remove_file(output)?;
+    fs::rename(temp, output)?;
+
+    // Preserve complete metadata from original file if provided
+    if let Some(src) = original {
+        // Step 1: Preserve metadata (EXIF, XMP, xattrs, permissions)
+        // This may modify the file (e.g., ExifTool writes EXIF/XMP), which changes timestamps
+        if let Err(e) = crate::metadata::preserve_metadata(src, output) {
+            crate::log_upstream_error!(
+                "Metadata preservation",
+                "Failed to preserve metadata for {}: {}",
+                output.display(),
+                e
+            );
         }
-        fs::rename(temp, output)?;
-        Ok(true)
+        crate::metadata::merge_xmp_sidecar_into_dest(src, output);
+
+        // Step 2: Finder comment branding — only on the committed conversion output
+        #[cfg(target_os = "macos")]
+        {
+            let ext = output
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(str::to_lowercase)
+                .unwrap_or_default();
+            if ext == "jxl" || ext == "mov" || ext == "mp4" || ext == "heic" || ext == "avif" {
+                if let Err(e) = crate::metadata::append_mfb_branding(output) {
+                    tracing::debug!("Failed to append MFB branding to Finder comment: {}", e);
+                }
+            }
+        }
+
+        // Step 3: Apply timestamps AFTER all file modifications
+        // This is critical because ExifTool and other tools reset creation time to current time
+        // We must reapply timestamps as the final step to preserve original creation time
+        crate::metadata::apply_file_timestamps(src, output);
     }
+
+    Ok(true)
 }
 
-/// Get image/video dimensions using ffprobe → image crate → ImageMagick fallback chain.
+/// Get image/video dimensions using ffprobe → image crate → `ImageMagick` fallback chain.
 ///
 /// Returns (width, height) or an error if all methods fail.
+/// Get dimensions of an input video file using ffprobe.
+///
+/// # Errors
+/// Returns an error message if ffprobe fails.
 pub fn get_input_dimensions(input: &Path) -> Result<(u32, u32), String> {
     // Method 1: ffprobe
     if let Ok(probe) = crate::probe_video(input) {
@@ -667,19 +856,25 @@ pub fn get_input_dimensions(input: &Path) -> Result<(u32, u32), String> {
 /// Check if output exceeds size tolerance and clean up if so.
 ///
 /// **Two independent but coordinated flags:**
-/// - `allow_size_tolerance`: when true, allows size increase < 1_048_576 bytes; when false, requires `output <= input`.
+/// - `allow_size_tolerance`: when true, allows size increase < `1_048_576` bytes; when false, requires `output <= input`.
 ///   This absolute byte tolerance is fairer to all file sizes than percentage-based.
 /// - `compress`: when true, **goal is to make output smaller than input**.
-///   **BUT: respects `allow_size_tolerance` when enabled** - if increase < 1_048_576 bytes, still accepts.
-///   Only when increase ≥ 1_048_576 bytes (or tolerance disabled), compress mode rejects the output.
+///   **BUT: respects `allow_size_tolerance` when enabled** - if increase < `1_048_576` bytes, still accepts.
+///   Only when increase ≥ `1_048_576` bytes (or tolerance disabled), compress mode rejects the output.
 ///
 /// **Logic flow:**
-/// 1. Check oversized threshold (tolerance-based): if increase ≥ 1_048_576 bytes → reject
+/// 1. Check oversized threshold (tolerance-based): if increase ≥ `1_048_576` bytes → reject
 /// 2. Check compress goal: if compress=true AND increase ≥ tolerance → reject
 /// 3. Otherwise: accept
 ///
 /// Returns `Some(ConversionResult)` if the output should be rejected (caller should return it),
 /// or `None` if the output passes the size check.
+#[must_use]
+#[allow(
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::cast_precision_loss
+)]
 pub fn check_size_tolerance(
     input: &Path,
     output: &Path,
@@ -690,10 +885,9 @@ pub fn check_size_tolerance(
 ) -> Option<ConversionResult> {
     // Tolerance: allow size increase < 1_048_576 bytes (1MB)
     const TOLERANCE_BYTES: u64 = 1_048_576; // 1MB absolute value
-    
+
     let max_allowed_size = if options.allow_size_tolerance {
         input_size.saturating_add(TOLERANCE_BYTES - 1) // up to 1_048_576 - 1 bytes
-
     } else {
         input_size
     };
@@ -708,22 +902,26 @@ pub fn check_size_tolerance(
         } else {
             ((output_size as f64 / input_size as f64) - 1.0) * 100.0
         };
-        
+
         // Always log deletion (not just in verbose mode)
         let mode = if options.allow_size_tolerance {
             "tolerance: absolute (< 1_048_576 bytes increase)".to_string()
         } else {
             "strict mode: no tolerance".to_string()
         };
-        
+
         // Display in KB or MB depending on size
         if size_increase_mb >= 1.0 {
             crate::log_eprintln!(
                 "   {} {} output discarded │ {}ratio: {:.1}%{} │ {}increase: +{:.2}MB{} │ {}",
                 symbols::CROSS,
                 format_label,
-                colors::BOLD, 100.0 + size_increase_pct, colors::RESET,
-                colors::MFB_ORANGE, size_increase_mb, colors::RESET,
+                colors::BOLD,
+                100.0 + size_increase_pct,
+                colors::RESET,
+                colors::MFB_ORANGE,
+                size_increase_mb,
+                colors::RESET,
                 mode
             );
             crate::log_eprintln!(
@@ -738,8 +936,12 @@ pub fn check_size_tolerance(
                 "   {} {} output discarded │ {}ratio: {:.1}%{} │ {}increase: +{:.1}KB{} │ {}",
                 symbols::CROSS,
                 format_label,
-                colors::BOLD, 100.0 + size_increase_pct, colors::RESET,
-                colors::MFB_ORANGE, size_increase_kb, colors::RESET,
+                colors::BOLD,
+                100.0 + size_increase_pct,
+                colors::RESET,
+                colors::MFB_ORANGE,
+                size_increase_kb,
+                colors::RESET,
                 mode
             );
             crate::log_eprintln!(
@@ -750,11 +952,11 @@ pub fn check_size_tolerance(
                 size_increase_kb
             );
         }
-        
+
         if let Err(e) = fs::remove_file(output) {
             crate::log_eprintln!("   {} Cleanup failed: {}", symbols::WARNING, e);
         }
-        
+
         // Copy original to output directory
         match crate::copy_on_skip_or_fail(
             input,
@@ -763,16 +965,20 @@ pub fn check_size_tolerance(
             false,
         ) {
             Ok(Some(dest)) => {
-                crate::log_eprintln!("   {} Original preserved: {}", symbols::SHIELD, format!("{}{}{}", colors::DIM, dest.display(), colors::RESET));
+                crate::log_eprintln!(
+                    "   {} Original preserved: {}",
+                    symbols::SHIELD,
+                    format!("{}{}{}", colors::DIM, dest.display(), colors::RESET)
+                );
             }
             Ok(None) => {
                 // No output_dir specified, nothing to copy
             }
             Err(e) => {
-                eprintln!("   ⚠️  Failed to copy original: {}", e);
+                eprintln!("   ⚠️  Failed to copy original: {e}");
             }
         }
-        
+
         mark_as_processed(input);
         return Some(ConversionResult::skipped_size_increase(
             input,
@@ -785,22 +991,22 @@ pub fn check_size_tolerance(
     // BUT: respect tolerance setting when enabled
     if options.compress && output_size >= input_size {
         let size_increase_bytes = output_size.saturating_sub(input_size);
-        
+
         // If tolerance is enabled and increase is within tolerance (< 1_048_576 bytes), accept it
         if options.allow_size_tolerance && size_increase_bytes < TOLERANCE_BYTES {
             // Within tolerance, accept the output
             return None;
         }
-        
+
         // Beyond tolerance or tolerance disabled: reject
-        let size_change_kb = size_increase_bytes as f64 / 1024.0;
-        let size_change_mb = size_increase_bytes as f64 / (1024.0 * 1024.0);
+        let kb_delta = size_increase_bytes as f64 / 1024.0;
+        let mb_delta = size_increase_bytes as f64 / (1024.0 * 1024.0);
         let change_pct = if input_size == 0 {
             0.0
         } else {
             ((output_size as f64 / input_size as f64) - 1.0) * 100.0
         };
-        
+
         if change_pct.abs() < 0.01 {
             crate::log_eprintln!(
                 "   🗑️  {} output deleted: {}",
@@ -812,35 +1018,43 @@ pub fn check_size_tolerance(
                 format!("\x1b[2m{}\x1b[0m", input_size),
                 format!("\x1b[2m{}\x1b[0m", output_size)
             );
-        } else if size_change_mb >= 1.0 {
+        } else if mb_delta >= 1.0 {
             crate::log_eprintln!(
                 "   {} {} output discarded │ {}ratio: {:.1}%{} │ {}increase: +{:.2}MB{}",
                 symbols::CROSS,
                 format_label,
-                colors::BOLD, change_pct + 100.0, colors::RESET,
-                colors::MFB_ORANGE, size_change_mb, colors::RESET
+                colors::BOLD,
+                change_pct + 100.0,
+                colors::RESET,
+                colors::MFB_ORANGE,
+                mb_delta,
+                colors::RESET
             );
             crate::log_eprintln!(
                 "   {} Size: {} → {} (Δ +{:.2}MB)",
                 symbols::CHART,
                 format!("{}{}{} bytes", colors::DIM, input_size, colors::RESET),
                 format!("{}{}{} bytes", colors::MFB_RED, output_size, colors::RESET),
-                size_change_mb
+                mb_delta
             );
         } else {
             crate::log_eprintln!(
                 "   {} {} output discarded │ {}ratio: {:.1}%{} │ {}increase: +{:.1}KB{}",
                 symbols::CROSS,
                 format_label,
-                colors::BOLD, change_pct + 100.0, colors::RESET,
-                colors::MFB_ORANGE, size_change_kb, colors::RESET
+                colors::BOLD,
+                change_pct + 100.0,
+                colors::RESET,
+                colors::MFB_ORANGE,
+                kb_delta,
+                colors::RESET
             );
             crate::log_eprintln!(
                 "   {} Size: {} → {} (Δ +{:.1}KB)",
                 symbols::CHART,
                 format!("{}{}{} bytes", colors::DIM, input_size, colors::RESET),
                 format!("{}{}{} bytes", colors::MFB_RED, output_size, colors::RESET),
-                size_change_kb
+                kb_delta
             );
         }
 
@@ -856,16 +1070,23 @@ pub fn check_size_tolerance(
             false,
         ) {
             Ok(Some(dest)) => {
-                crate::log_eprintln!("   📋 Original copied to: {}", format!("\x1b[2m{}\x1b[0m", dest.display()));
+                crate::log_eprintln!(
+                    "   📋 Original copied to: {}",
+                    format!("\x1b[2m{}\x1b[0m", dest.display())
+                );
             }
             Ok(None) => {
                 // No output_dir specified, nothing to copy
             }
             Err(e) => {
-                crate::log_upstream_error!("File copy", "Failed to copy original to output dir: {}", e);
+                crate::log_upstream_error!(
+                    "File copy",
+                    "Failed to copy original to output dir: {}",
+                    e
+                );
             }
         }
-        
+
         mark_as_processed(input);
         return Some(ConversionResult::skipped_size_unchanged(
             input,
@@ -884,7 +1105,20 @@ pub fn check_size_tolerance(
 /// - File is readable
 ///
 /// Returns Ok(()) if valid, Err with descriptive message otherwise.
+/// Validate an input file before conversion.
+///
+/// # Errors
+/// Returns an error message if validation fails.
 pub fn validate_input_file(input: &Path) -> Result<(), String> {
+    crate::path_validator::validate_path(input).map_err(|e| e.to_string())?;
+
+    if input.to_str().is_none() {
+        return Err(format!(
+            "Input path contains non-UTF-8 bytes and cannot be passed safely to external tools: {}",
+            input.display()
+        ));
+    }
+
     // Check if path exists
     if !input.exists() {
         return Err(format!("Input file does not exist: {}", input.display()));
@@ -908,11 +1142,7 @@ pub fn validate_input_file(input: &Path) -> Result<(), String> {
 
     // Check if file is readable by attempting to open it
     if let Err(e) = fs::File::open(input) {
-        return Err(format!(
-            "Cannot read input file {}: {}",
-            input.display(),
-            e
-        ));
+        return Err(format!("Cannot read input file {}: {}", input.display(), e));
     }
 
     Ok(())
@@ -926,10 +1156,22 @@ pub fn validate_input_file(input: &Path) -> Result<(), String> {
 ///
 /// Note: Path traversal check removed - output paths are generated programmatically
 /// and may intentionally be in adjacent directories (e.g., _optimized suffix mode).
-pub fn validate_output_path(
-    output: &Path,
-    _base_dir: Option<&Path>,
-) -> Result<(), String> {
+/// Validate an output path before conversion.
+///
+/// # Errors
+/// Returns an error message if validation fails.
+pub fn validate_output_path(output: &Path, _base_dir: Option<&Path>) -> Result<(), String> {
+    crate::path_validator::validate_path(output).map_err(|e| e.to_string())?;
+
+    if output.to_str().is_none() {
+        return Err(format!(
+            "Output path contains non-UTF-8 bytes and cannot be passed safely to external tools: {}",
+            output.display()
+        ));
+    }
+
+    ensure_no_symlink_components(output)?;
+
     // Check if output is a symbolic link
     if output.exists() && output.is_symlink() {
         return Err(format!(
@@ -941,11 +1183,56 @@ pub fn validate_output_path(
     Ok(())
 }
 
+fn ensure_no_symlink_components(path: &Path) -> Result<(), String> {
+    let mut current = if path.is_absolute() {
+        PathBuf::new()
+    } else {
+        std::env::current_dir().map_err(|e| {
+            format!(
+                "Failed to resolve current directory for {}: {}",
+                path.display(),
+                e
+            )
+        })?
+    };
+
+    for component in path.components() {
+        match component {
+            Component::CurDir => continue,
+            Component::ParentDir => {
+                current.push(component.as_os_str());
+            }
+            _ => current.push(component.as_os_str()),
+        }
+
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() {
+                    return Err(format!(
+                        "Output path traverses symbolic link component, refusing to write: {}",
+                        current.display()
+                    ));
+                }
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => break,
+            Err(err) => {
+                return Err(format!(
+                    "Failed to inspect output path component {}: {}",
+                    current.display(),
+                    err
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Handle Apple AAE (Apple Adjustment Envelope) files.
 /// AAE files store photo editing metadata from iPhone/Photos.app.
 /// When the source image is converted, the AAE becomes orphaned.
 ///
-/// - In apple_compat mode: migrate AAE to output directory
+/// - In `apple_compat` mode: migrate AAE to output directory
 /// - Otherwise: delete orphaned AAE file
 pub fn handle_aae_file(input: &Path, output: &Path, apple_compat: bool) {
     let aae_path = input.with_extension("AAE");
@@ -966,14 +1253,14 @@ pub fn handle_aae_file(input: &Path, output: &Path, apple_compat: bool) {
                 if let Some(filename) = aae.file_name() {
                     let target_aae = output_dir.join(filename);
                     if let Err(e) = fs::copy(&aae, &target_aae) {
-                        eprintln!("⚠️  Failed to migrate AAE file: {}", e);
+                        eprintln!("⚠️  Failed to migrate AAE file: {e}");
                     }
                 }
             }
         } else {
             // Delete orphaned AAE file
             if let Err(e) = fs::remove_file(&aae) {
-                eprintln!("⚠️  Failed to delete orphaned AAE file: {}", e);
+                eprintln!("⚠️  Failed to delete orphaned AAE file: {e}");
             }
         }
     }
@@ -981,6 +1268,7 @@ pub fn handle_aae_file(input: &Path, output: &Path, apple_compat: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::{tempdir_in, NamedTempFile};
 
     #[test]
     fn test_strict_size_reduction_formula() {
@@ -1000,17 +1288,11 @@ mod tests {
 
             assert!(
                 (result - expected).abs() < 0.001,
-                "STRICT: {}->{}  expected {}, got {}",
-                input,
-                output,
-                expected,
-                result
+                "STRICT: {input}->{output}  expected {expected}, got {result}"
             );
             assert!(
                 (result - expected_calc).abs() < 0.0001,
-                "STRICT: Formula mismatch for {}->{}",
-                input,
-                output
+                "STRICT: Formula mismatch for {input}->{output}"
             );
         }
     }
@@ -1020,15 +1302,13 @@ mod tests {
         let reduction = calculate_size_reduction(10_000_000_000, 5_000_000_000);
         assert!(
             (reduction - 50.0).abs() < 0.001,
-            "STRICT: 10GB->5GB should be exactly 50%, got {}",
-            reduction
+            "STRICT: 10GB->5GB should be exactly 50%, got {reduction}"
         );
 
         let reduction = calculate_size_reduction(100_000_000_000, 25_000_000_000);
         assert!(
             (reduction - 75.0).abs() < 0.001,
-            "STRICT: 100GB->25GB should be exactly 75%, got {}",
-            reduction
+            "STRICT: 100GB->25GB should be exactly 75%, got {reduction}"
         );
     }
 
@@ -1037,8 +1317,7 @@ mod tests {
         let reduction = calculate_size_reduction(100, 50);
         assert!(
             (reduction - 50.0).abs() < 0.001,
-            "STRICT: 100->50 bytes should be exactly 50%, got {}",
-            reduction
+            "STRICT: 100->50 bytes should be exactly 50%, got {reduction}"
         );
     }
 
@@ -1055,21 +1334,90 @@ mod tests {
     #[test]
     fn test_temp_path_for_output_keeps_extension() {
         // Temp path must end with same extension as output so FFmpeg/muxers see correct format.
-        let path1 = temp_path_for_output(Path::new("/dir/file.mov")).to_string_lossy().to_string();
+        let path1 = temp_path_for_output(Path::new("/dir/file.mov"))
+            .to_string_lossy()
+            .to_string();
         assert!(path1.starts_with("/dir/file.tmp."));
         assert!(path1.ends_with(".mov"));
 
-        let path2 = temp_path_for_output(Path::new("out.mp4")).to_string_lossy().to_string();
+        let path2 = temp_path_for_output(Path::new("out.mp4"))
+            .to_string_lossy()
+            .to_string();
         assert!(path2.starts_with("out.tmp."));
         assert!(path2.ends_with(".mp4"));
 
-        let path3 = temp_path_for_output(Path::new("a/b/c.mkv")).to_string_lossy().to_string();
+        let path3 = temp_path_for_output(Path::new("a/b/c.mkv"))
+            .to_string_lossy()
+            .to_string();
         assert!(path3.starts_with("a/b/c.tmp."));
         assert!(path3.ends_with(".mkv"));
 
-        let path4 = temp_path_for_output(Path::new("name.with.dots.mov")).to_string_lossy().to_string();
+        let path4 = temp_path_for_output(Path::new("name.with.dots.mov"))
+            .to_string_lossy()
+            .to_string();
         assert!(path4.starts_with("name.with.dots.tmp."));
         assert!(path4.ends_with(".mov"));
+    }
+
+    #[test]
+    fn test_removed_commit_temp_to_output_returns_error() {
+        #[expect(deprecated, reason = "regression test for removed compatibility shim")]
+        let err = commit_temp_to_output(Path::new("temp.tmp"), Path::new("out.mp4"), false)
+            .expect_err("removed API should return an error instead of panicking");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::Unsupported);
+        assert!(
+            err.to_string()
+                .contains("commit_temp_to_output has been removed"),
+            "unexpected error message: {err}"
+        );
+    }
+
+    #[test]
+    fn test_load_processed_list_is_atomic_on_invalid_utf8() {
+        clear_processed_list();
+
+        let tracked = std::env::temp_dir().join("mfb-processed-track.mp4");
+        let tracked_canonical = tracked.display().to_string();
+        let mut list = NamedTempFile::new().expect("failed to create processed list");
+        list.write_all(tracked_canonical.as_bytes())
+            .expect("failed to write valid entry");
+        list.write_all(b"\n\xff\n")
+            .expect("failed to write invalid utf8");
+
+        let err = load_processed_list(list.path())
+            .expect_err("invalid utf8 should fail instead of partially loading state");
+        assert!(
+            !is_already_processed(&tracked),
+            "processed list should not be partially updated on read failure"
+        );
+        assert!(
+            err.to_string()
+                .contains("stream did not contain valid UTF-8"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_input_file_rejects_newlines() {
+        let err = validate_input_file(Path::new("bad\nname.png"))
+            .expect_err("newline path should be rejected before filesystem access");
+        assert!(err.contains("PATH SECURITY ERROR"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_validate_output_path_rejects_symlink_parent() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let real_dir = temp.path().join("real");
+        fs::create_dir_all(&real_dir).expect("real dir");
+        let link_dir = temp.path().join("link");
+        symlink(&real_dir, &link_dir).expect("symlink");
+
+        let err = validate_output_path(&link_dir.join("out.jxl"), None)
+            .expect_err("symlinked parent directory should be rejected");
+        assert!(err.contains("symbolic link component"));
     }
 
     #[test]
@@ -1094,28 +1442,31 @@ mod tests {
 
     #[test]
     fn test_determine_output_path() {
-        let input = Path::new("/path/to/image.png");
-        let output = determine_output_path(input, "jxl", &None).unwrap();
-        assert_eq!(output, Path::new("/path/to/image.jxl"));
+        let temp = tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let input = temp.path().join("nested/image.png");
+        let output = determine_output_path(&input, "jxl", &None).unwrap();
+        assert_eq!(output, temp.path().join("nested/image.JXL"));
     }
 
     #[test]
     fn test_determine_output_path_with_dir() {
-        let input = Path::new("/path/to/image.png");
-        let output_dir = Some(PathBuf::from("/output"));
-        let output = determine_output_path(input, "avif", &output_dir).unwrap();
-        assert_eq!(output, Path::new("/output/image.avif"));
+        let temp = tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let input = temp.path().join("nested/image.png");
+        let output_dir = Some(temp.path().join("output"));
+        let output = determine_output_path(&input, "avif", &output_dir).unwrap();
+        assert_eq!(output, temp.path().join("output/image.AVIF"));
     }
 
     #[test]
     fn test_determine_output_path_various_extensions() {
-        let input = Path::new("/path/to/video.mp4");
+        let temp = tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let input = temp.path().join("nested/video.mp4");
 
-        let webm = determine_output_path(input, "webm", &None).unwrap();
-        assert_eq!(webm, Path::new("/path/to/video.webm"));
+        let webm = determine_output_path(&input, "webm", &None).unwrap();
+        assert_eq!(webm, temp.path().join("nested/video.WEBM"));
 
-        let mkv = determine_output_path(input, "mkv", &None).unwrap();
-        assert_eq!(mkv, Path::new("/path/to/video.mkv"));
+        let mkv = determine_output_path(&input, "mkv", &None).unwrap();
+        assert_eq!(mkv, temp.path().join("nested/video.MKV"));
     }
 
     #[test]
@@ -1130,8 +1481,16 @@ mod tests {
         assert_eq!(result.input_size, 1000);
         assert_eq!(result.output_size, Some(500));
         assert!((result.size_reduction.unwrap() - 50.0).abs() < 0.1);
-        assert!(result.message.contains("transcoding"), "expected 'transcoding' in: {}", result.message);
-        assert!(result.message.contains("-50.0%"), "expected '-50.0%' in: {}", result.message);
+        assert!(
+            result.message.contains("transcoding"),
+            "expected 'transcoding' in: {}",
+            result.message
+        );
+        assert!(
+            result.message.contains("-50.0%"),
+            "expected '-50.0%' in: {}",
+            result.message
+        );
     }
 
     #[test]
@@ -1150,8 +1509,7 @@ mod tests {
     fn test_conversion_result_size_unchanged() {
         let input = Path::new("/test/input.png");
 
-        let result =
-            ConversionResult::skipped_size_unchanged(input, 1000, "JXL");
+        let result = ConversionResult::skipped_size_unchanged(input, 1000, "JXL");
 
         assert!(result.success);
         assert!(result.skipped);
@@ -1221,21 +1579,24 @@ mod tests {
 
     #[test]
     fn test_only_recommended_flags_valid_with_gpu_cpu() {
-        let mut opts_gpu = ConvertOptions::default();
-        opts_gpu.explore = true;
-        opts_gpu.match_quality = true;
-        opts_gpu.compress = true;
-        opts_gpu.use_gpu = true;
-        assert!(opts_gpu.flag_mode().is_ok());
+        let mut gpu_config = ConvertOptions::default();
+        gpu_config.explore = true;
+        gpu_config.match_quality = true;
+        gpu_config.compress = true;
+        gpu_config.use_gpu = true;
+        assert!(gpu_config.flag_mode().is_ok());
 
-        let mut opts_cpu = ConvertOptions::default();
-        opts_cpu.explore = true;
-        opts_cpu.match_quality = true;
-        opts_cpu.compress = true;
-        opts_cpu.use_gpu = false;
-        assert!(opts_cpu.flag_mode().is_ok());
+        let mut cpu_config = ConvertOptions::default();
+        cpu_config.explore = true;
+        cpu_config.match_quality = true;
+        cpu_config.compress = true;
+        cpu_config.use_gpu = false;
+        assert!(cpu_config.flag_mode().is_ok());
 
-        assert_eq!(opts_gpu.flag_mode().unwrap(), opts_cpu.flag_mode().unwrap());
+        assert_eq!(
+            gpu_config.flag_mode().unwrap(),
+            cpu_config.flag_mode().unwrap()
+        );
     }
 
     #[test]
@@ -1254,10 +1615,7 @@ mod tests {
             opts.compress = compress;
             assert!(
                 opts.flag_mode().is_err(),
-                "({}, {}, {}) should be invalid",
-                explore,
-                match_quality,
-                compress
+                "({explore}, {match_quality}, {compress}) should be invalid"
             );
         }
     }

@@ -1,7 +1,7 @@
 //! Conversion API Module
 //!
 //! Pure conversion layer - transforms images based on detection results.
-//! Takes DetectionResult as input and performs smart conversions.
+//! Takes `DetectionResult` as input and performs smart conversions.
 
 use crate::detection_api::{CompressionType, DetectedFormat, DetectionResult, ImageType};
 use crate::{ImgQualityError, Result};
@@ -35,7 +35,7 @@ pub struct ConversionConfig {
     pub preserve_metadata: bool,
     /// When true, conversion is only accepted if output is strictly smaller than input (unchanged = goal not achieved).
     pub compress: bool,
-    /// When true, JXL uses --compress_boxes=0 for Apple compatibility.
+    /// When true, JXL uses --`compress_boxes=0` for Apple compatibility.
     pub apple_compat: bool,
 }
 
@@ -51,11 +51,30 @@ pub struct ConversionOutput {
 }
 
 impl ConversionOutput {
+    #[must_use]
     pub fn is_jpeg_transcode(&self) -> bool {
-        self.message.contains("JPEG transcoding") || self.message.contains("JPEG lossless")
+        // After terminology fix, "transcoding" is only used for JPEG bitstream reconstruction (lossless JXL)
+        self.message.contains("transcoding") || self.message.contains("JPEG lossless")
     }
 }
 
+fn cleanup_output_file(path: &Path, context: &str) {
+    if let Err(e) = std::fs::remove_file(path) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            eprintln!(
+                "⚠️ [img-hevc] Failed to remove {} {}: {}",
+                context,
+                path.display(),
+                e
+            );
+        }
+    }
+}
+
+/// Determine the best conversion strategy based on image detection results.
+///
+/// # Errors
+/// Returns an error if the detection results are invalid or no strategy can be determined.
 pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrategy> {
     if detection.format.is_modern_format() {
         return Ok(ConversionStrategy {
@@ -76,7 +95,7 @@ pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrat
     ) {
         (ImageType::Static, _, DetectedFormat::JPEG) => {
             let input_path = &detection.file_path;
-            let output_path = Path::new(input_path).with_extension("jxl");
+            let output_path = Path::new(input_path).with_extension("JXL");
             Ok(ConversionStrategy {
                 target: TargetFormat::JXL,
                 reason: "JPEG lossless transcode to JXL, preserving DCT coefficients".to_string(),
@@ -91,7 +110,7 @@ pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrat
 
         (ImageType::Static, CompressionType::Lossless, _) => {
             let input_path = &detection.file_path;
-            let output_path = Path::new(input_path).with_extension("jxl");
+            let output_path = Path::new(input_path).with_extension("JXL");
             Ok(ConversionStrategy {
                 target: TargetFormat::JXL,
                 reason: "Static lossless image, recommend JXL for better compression".to_string(),
@@ -106,10 +125,12 @@ pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrat
 
         (ImageType::Animated, CompressionType::Lossless, _) => {
             let input_path = &detection.file_path;
-            let output_path = Path::new(input_path).with_extension("mp4");
-            let fps = detection.fps.ok_or_else(|| ImgQualityError::AnalysisError(
-                format!("Cannot determine FPS for animated image: {}", input_path)
-            ))?;
+            let output_path = Path::new(input_path).with_extension("MP4");
+            let fps = detection.fps.ok_or_else(|| {
+                ImgQualityError::AnalysisError(format!(
+                    "Cannot determine FPS for animated image: {input_path}"
+                ))
+            })?;
             Ok(ConversionStrategy {
                 target: TargetFormat::HEVCMP4,
                 reason:
@@ -134,10 +155,12 @@ pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrat
 
         (ImageType::Static, CompressionType::Lossy, _) => {
             let input_path = &detection.file_path;
-            let output_path = Path::new(input_path).with_extension("avif");
-            let quality = detection.estimated_quality.ok_or_else(|| ImgQualityError::AnalysisError(
-                format!("Cannot determine estimated quality for lossy image: {}", input_path)
-            ))?;
+            let output_path = Path::new(input_path).with_extension("AVIF");
+            let quality = detection.estimated_quality.ok_or_else(|| {
+                ImgQualityError::AnalysisError(format!(
+                    "Cannot determine estimated quality for lossy image: {input_path}"
+                ))
+            })?;
             Ok(ConversionStrategy {
                 target: TargetFormat::AVIF,
                 reason: "Static lossy image (non-JPEG), recommend AVIF for better compression"
@@ -154,6 +177,10 @@ pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrat
     }
 }
 
+/// Execute the selected conversion strategy.
+///
+/// # Errors
+/// Returns an error if the conversion process fails (e.g., tool execution error).
 pub fn execute_conversion(
     detection: &DetectionResult,
     strategy: &ConversionStrategy,
@@ -182,9 +209,9 @@ pub fn execute_conversion(
     }
 
     let extension = match strategy.target {
-        TargetFormat::JXL => "jxl",
-        TargetFormat::AVIF => "avif",
-        TargetFormat::HEVCMP4 => "mp4",
+        TargetFormat::JXL => "JXL",
+        TargetFormat::AVIF => "AVIF",
+        TargetFormat::HEVCMP4 => "MP4",
         TargetFormat::NoConversion => {
             return Err(ImgQualityError::ConversionError(
                 "No conversion".to_string(),
@@ -192,8 +219,9 @@ pub fn execute_conversion(
         }
     };
 
-    let output_path =
-        resolve_output_path(input_path, config.output_dir.as_deref(), extension)?;
+    let output_path = resolve_output_path(input_path, config.output_dir.as_deref(), extension)?;
+    shared_utils::conversion::validate_output_path(&output_path, config.base_dir.as_deref())
+        .map_err(ImgQualityError::ConversionError)?;
 
     if output_path.exists() && !config.force {
         return Ok(ConversionOutput {
@@ -229,12 +257,17 @@ pub fn execute_conversion(
     };
 
     if let Err(e) = result {
-        let _ = std::fs::remove_file(&temp_path);
+        cleanup_output_file(&temp_path, "temporary output after conversion failure");
         return Err(ImgQualityError::ConversionError(e.to_string()));
     }
 
-    if !shared_utils::conversion::commit_temp_to_output(&temp_path, &output_path, config.force)
-        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?
+    if !shared_utils::conversion::commit_temp_to_output_with_metadata(
+        &temp_path,
+        &output_path,
+        config.force,
+        Some(input_path),
+    )
+    .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?
     {
         return Ok(ConversionOutput {
             original_path: detection.file_path.clone(),
@@ -260,7 +293,7 @@ pub fn execute_conversion(
     if config.compress {
         let out_size = output_size.unwrap_or(0);
         if out_size >= detection.file_size {
-            let _ = std::fs::remove_file(&output_path);
+            cleanup_output_file(&output_path, "oversized output in compress mode");
             shared_utils::copy_on_skip_or_fail(
                 input_path,
                 config.output_dir.as_deref(),
@@ -290,24 +323,28 @@ pub fn execute_conversion(
     }
 
     if config.delete_original {
-        if let Err(e) =
-            shared_utils::conversion::safe_delete_original(
-                input_path,
-                &output_path,
-                shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
-            )
-        {
-            eprintln!("   ⚠️  Safe delete failed: {}", e);
+        if let Err(e) = shared_utils::conversion::safe_delete_original(
+            input_path,
+            &output_path,
+            shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
+        ) {
+            eprintln!("   ⚠️  Safe delete failed: {e}");
         }
     }
 
+    let action = if detection.format == shared_utils::image_analyzer::DetectedFormat::JPEG {
+        "transcoding"
+    } else {
+        "encoding"
+    };
+
     let reduction = size_reduction.unwrap_or(0.0);
     let message = if reduction >= 0.0 {
-        format!("✅ JXL transcoding: -{:.1}%", reduction)
+        format!("✅ JXL {action}: -{reduction:.1}%")
     } else {
         let diff_bytes = output_size.unwrap_or(0) as i64 - detection.file_size as i64;
         let size_diff = shared_utils::modern_ui::format_size_diff(diff_bytes);
-        format!("✅ JXL transcoding: {}", size_diff)
+        format!("✅ JXL {action}: {size_diff}")
     };
 
     Ok(ConversionOutput {
@@ -326,20 +363,23 @@ fn canonicalize_input(input: &Path) -> PathBuf {
     std::fs::canonicalize(input).unwrap_or_else(|_| input.to_path_buf())
 }
 
-/// Resolve output path: if output_dir is set, join dir + stem + extension; else same dir as input with new extension.
+/// Resolve output path: if `output_dir` is set, join dir + stem + extension; else same dir as input with new extension.
 fn resolve_output_path(
     input: &Path,
     output_dir: Option<&Path>,
     extension: &str,
 ) -> Result<PathBuf> {
-    let file_stem = input
-        .file_stem()
-        .ok_or_else(|| ImgQualityError::ConversionError("Invalid file path: no file stem".to_string()))?;
-    Ok(if let Some(dir) = output_dir {
+    let file_stem = input.file_stem().ok_or_else(|| {
+        ImgQualityError::ConversionError("Invalid file path: no file stem".to_string())
+    })?;
+    let output = if let Some(dir) = output_dir {
         dir.join(file_stem).with_extension(extension)
     } else {
         input.with_extension(extension)
-    })
+    };
+    shared_utils::conversion::validate_output_path(&output, None)
+        .map_err(ImgQualityError::ConversionError)?;
+    Ok(output)
 }
 
 fn convert_to_jxl(
@@ -380,10 +420,10 @@ fn convert_to_jxl(
 
     // Verify output file
     let output_size = std::fs::metadata(output)
-        .map_err(|e| ImgQualityError::ConversionError(format!("Failed to read JXL output: {}", e)))?
+        .map_err(|e| ImgQualityError::ConversionError(format!("Failed to read JXL output: {e}")))?
         .len();
     if output_size == 0 {
-        let _ = std::fs::remove_file(output);
+        cleanup_output_file(output, "empty JXL output");
         return Err(ImgQualityError::ConversionError(
             "JXL output file is empty (encoding may have failed)".to_string(),
         ));
@@ -391,22 +431,21 @@ fn convert_to_jxl(
 
     // Verify JXL file integrity
     if let Err(e) = shared_utils::jxl_utils::verify_jxl_health(output) {
-        let _ = std::fs::remove_file(output);
+        cleanup_output_file(output, "unhealthy JXL output");
         return Err(ImgQualityError::ConversionError(format!(
-            "JXL health check failed: {}", e
+            "JXL health check failed: {e}"
         )));
     }
 
     // Compress mode: only accept if output is strictly smaller than input
     if config.compress {
         let input_size = std::fs::metadata(input)
-            .map_err(|e| ImgQualityError::ConversionError(format!("Failed to read input: {}", e)))?
+            .map_err(|e| ImgQualityError::ConversionError(format!("Failed to read input: {e}")))?
             .len();
         if output_size >= input_size {
-            let _ = std::fs::remove_file(output);
+            cleanup_output_file(output, "non-compressing JXL output");
             return Err(ImgQualityError::ConversionError(format!(
-                "Compress mode: output ({} bytes) not smaller than input ({} bytes)",
-                output_size, input_size
+                "Compress mode: output ({output_size} bytes) not smaller than input ({input_size} bytes)"
             )));
         }
     }
@@ -432,7 +471,9 @@ fn convert_to_avif(
     config: &ConversionConfig,
 ) -> Result<()> {
     let q = quality
-        .ok_or_else(|| ImgQualityError::AnalysisError("Missing quality for AVIF conversion".to_string()))?
+        .ok_or_else(|| {
+            ImgQualityError::AnalysisError("Missing quality for AVIF conversion".to_string())
+        })?
         .to_string();
     let input_abs = canonicalize_input(input);
     let output_abs = resolve_output_absolute(output);
@@ -452,7 +493,7 @@ fn convert_to_avif(
     // Verify output file
     let output_size = std::fs::metadata(output)?.len();
     if output_size == 0 {
-        let _ = std::fs::remove_file(output);
+        cleanup_output_file(output, "empty AVIF output");
         return Err(ImgQualityError::ConversionError(
             "AVIF output file is empty (encoding may have failed)".to_string(),
         ));
@@ -460,9 +501,9 @@ fn convert_to_avif(
 
     // Verify AVIF file integrity
     if let Err(e) = shared_utils::avif_av1_health::verify_avif_health(output) {
-        let _ = std::fs::remove_file(output);
+        cleanup_output_file(output, "unhealthy AVIF output");
         return Err(ImgQualityError::ConversionError(format!(
-            "AVIF health check failed: {}", e
+            "AVIF health check failed: {e}"
         )));
     }
 
@@ -470,10 +511,9 @@ fn convert_to_avif(
     if config.compress {
         let input_size = std::fs::metadata(input)?.len();
         if output_size >= input_size {
-            let _ = std::fs::remove_file(output);
+            cleanup_output_file(output, "non-compressing AVIF output");
             return Err(ImgQualityError::ConversionError(format!(
-                "Compress mode: output ({} bytes) not smaller than input ({} bytes)",
-                output_size, input_size
+                "Compress mode: output ({output_size} bytes) not smaller than input ({input_size} bytes)"
             )));
         }
     }
@@ -491,13 +531,15 @@ fn convert_to_hevc_mp4(
 ) -> Result<()> {
     use shared_utils::ffmpeg_process::FfmpegProcess;
 
-    let fps_val = fps.ok_or_else(|| ImgQualityError::AnalysisError("Missing FPS for HEVC MP4 conversion".to_string()))?;
+    let fps_val = fps.ok_or_else(|| {
+        ImgQualityError::AnalysisError("Missing FPS for HEVC MP4 conversion".to_string())
+    })?;
     let fps_str = fps_val.to_string();
 
     let vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, false);
 
     let max_threads = shared_utils::thread_manager::get_ffmpeg_threads();
-    let x265_params = format!("log-level=error:pools={}", max_threads);
+    let x265_params = format!("log-level=error:pools={max_threads}");
 
     let input_abs = canonicalize_input(input);
     let output_abs = resolve_output_absolute(output);
@@ -534,14 +576,14 @@ fn convert_to_hevc_mp4(
         .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
 
     if !status.success() {
-        let _ = std::fs::remove_file(output);
+        cleanup_output_file(output, "failed HEVC output");
         return Err(ImgQualityError::ConversionError(stderr));
     }
 
     // Verify output file
     let output_size = std::fs::metadata(output)?.len();
     if output_size == 0 {
-        let _ = std::fs::remove_file(output);
+        cleanup_output_file(output, "empty HEVC output");
         return Err(ImgQualityError::ConversionError(
             "HEVC output file is empty (encoding may have failed)".to_string(),
         ));
@@ -549,7 +591,7 @@ fn convert_to_hevc_mp4(
 
     // Check if output is readable
     if shared_utils::conversion::get_input_dimensions(output).is_err() {
-        let _ = std::fs::remove_file(output);
+        cleanup_output_file(output, "invalid HEVC output");
         return Err(ImgQualityError::ConversionError(
             "HEVC output file is not readable (invalid or corrupted)".to_string(),
         ));
@@ -559,18 +601,15 @@ fn convert_to_hevc_mp4(
     if config.compress {
         let input_size = std::fs::metadata(input)?.len();
         if output_size >= input_size {
-            let _ = std::fs::remove_file(output);
+            cleanup_output_file(output, "non-compressing HEVC output");
             return Err(ImgQualityError::ConversionError(format!(
-                "Compress mode: output ({} bytes) not smaller than input ({} bytes)",
-                output_size, input_size
+                "Compress mode: output ({output_size} bytes) not smaller than input ({input_size} bytes)"
             )));
         }
     }
 
     Ok(())
 }
-
-
 
 fn preserve_timestamps(source: &Path, dest: &Path) -> Result<()> {
     shared_utils::copy_metadata(source, dest);
@@ -582,6 +621,10 @@ fn preserve_metadata(source: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Deep-analysis based conversion with intelligent parameter matching.
+///
+/// # Errors
+/// Returns an error if analysis or conversion fails.
 pub fn smart_convert(path: &Path, config: &ConversionConfig) -> Result<ConversionOutput> {
     use crate::detection_api::detect_image;
 
@@ -592,23 +635,26 @@ pub fn smart_convert(path: &Path, config: &ConversionConfig) -> Result<Conversio
     execute_conversion(&detection, &strategy, config)
 }
 
-/// Simplified wrapper: builds a default ConversionConfig and delegates to smart_convert.
-/// Use smart_convert when you need compress, preserve_metadata, preserve_timestamps, delete_original, or apple_compat.
+/// Simplified wrapper: builds a default `ConversionConfig` and delegates to `smart_convert`.
+///
+/// Use `smart_convert` when you need compress, `preserve_metadata`, `preserve_timestamps`, `delete_original`, or `apple_compat`.
+/// Simple conversion using default settings.
+///
+/// # Errors
+/// Returns an error if conversion fails.
 pub fn simple_convert(path: &Path, output_dir: Option<&Path>) -> Result<ConversionOutput> {
     let config = ConversionConfig {
         output_dir: output_dir.map(PathBuf::from),
         base_dir: None,
         force: false,
         delete_original: false,
-        preserve_timestamps: false,
-        preserve_metadata: false,
+        preserve_timestamps: true, // Changed: Always preserve timestamps by default
+        preserve_metadata: true,   // Changed: Always preserve metadata by default
         compress: false,
         apple_compat: false,
     };
     smart_convert(path, &config)
 }
-
-
 
 #[cfg(test)]
 mod tests {

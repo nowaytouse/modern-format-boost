@@ -1,11 +1,11 @@
 //! CRF (Constant Rate Factor) Type-Safe Wrapper
 //!
-//! 提供编译期保证的 CRF 值范围验证。
+//! Provides compile-time range validation for CRF values.
 //!
-//! ## 设计原理
-//! - 使用泛型 `Crf<E>` 区分不同编码器的 CRF 范围
-//! - `EncoderBounds` trait 定义编码器特定的边界
-//! - 创建时验证，运行时无需重复检查
+//! ## Design Principles
+//! - Use generic `Crf<E>` to distinguish CRF ranges for different encoders
+//! - `EncoderBounds` trait defines encoder-specific boundaries
+//! - Validated at creation, no redundant runtime checks needed
 
 use crate::float_compare::approx_eq_f32;
 use std::fmt;
@@ -86,7 +86,7 @@ pub enum CrfError {
 impl fmt::Display for CrfError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CrfError::OutOfRange {
+            Self::OutOfRange {
                 value,
                 min,
                 max,
@@ -94,15 +94,14 @@ impl fmt::Display for CrfError {
             } => {
                 write!(
                     f,
-                    "{} CRF {:.2} out of range [{:.1}, {:.1}]",
-                    encoder, value, min, max
+                    "{encoder} CRF {value:.2} out of range [{min:.1}, {max:.1}]"
                 )
             }
-            CrfError::InvalidCacheKey { key, encoder } => {
-                write!(f, "Invalid {} CRF cache key: {}", encoder, key)
+            Self::InvalidCacheKey { key, encoder } => {
+                write!(f, "Invalid {encoder} CRF cache key: {key}")
             }
-            CrfError::InvalidFloat { encoder } => {
-                write!(f, "Invalid {} CRF: NaN or Infinity", encoder)
+            Self::InvalidFloat { encoder } => {
+                write!(f, "Invalid {encoder} CRF: NaN or Infinity")
             }
         }
     }
@@ -117,6 +116,10 @@ pub struct Crf<E: EncoderBounds> {
 }
 
 impl<E: EncoderBounds> Crf<E> {
+    /// Create a new CRF value.
+    ///
+    /// # Errors
+    /// Returns an error if the value is out of range.
     pub fn new(value: f32) -> Result<Self, CrfError> {
         if value.is_nan() || value.is_infinite() {
             return Err(CrfError::InvalidFloat { encoder: E::NAME });
@@ -137,14 +140,16 @@ impl<E: EncoderBounds> Crf<E> {
         })
     }
 
-    pub fn default_value() -> Self {
+    #[must_use]
+    pub const fn default_value() -> Self {
         Self {
             value: E::DEFAULT,
             _marker: PhantomData,
         }
     }
 
-    pub fn visually_lossless() -> Self {
+    #[must_use]
+    pub const fn visually_lossless() -> Self {
         Self {
             value: E::VISUALLY_LOSSLESS,
             _marker: PhantomData,
@@ -152,15 +157,21 @@ impl<E: EncoderBounds> Crf<E> {
     }
 
     #[inline]
-    pub fn value(&self) -> f32 {
+    #[must_use]
+    pub const fn value(&self) -> f32 {
         self.value
     }
 
     #[inline]
+    #[must_use]
     pub fn to_cache_key(&self) -> u32 {
         (self.value * CRF_CACHE_KEY_MULTIPLIER).round() as u32
     }
 
+    /// Create a CRF value from a cache key.
+    ///
+    /// # Errors
+    /// Returns an error if the key is invalid.
     pub fn from_cache_key(key: u32) -> Result<Self, CrfError> {
         let value = key as f32 / CRF_CACHE_KEY_MULTIPLIER;
         Self::new(value).map_err(|_| CrfError::InvalidCacheKey {
@@ -170,21 +181,25 @@ impl<E: EncoderBounds> Crf<E> {
     }
 
     #[inline]
+    #[must_use]
     pub fn approx_eq(&self, other: &Self) -> bool {
         approx_eq_f32(self.value, other.value)
     }
 
     #[inline]
-    pub fn encoder_name(&self) -> &'static str {
+    #[must_use]
+    pub const fn encoder_name(&self) -> &'static str {
         E::NAME
     }
 
     #[inline]
-    pub fn valid_range() -> (f32, f32) {
+    #[must_use]
+    pub const fn valid_range() -> (f32, f32) {
         (E::MIN, E::MAX)
     }
 
-    pub fn clamped(value: f32) -> Self {
+    #[must_use]
+    pub const fn clamped(value: f32) -> Self {
         let clamped = if value.is_nan() || value.is_infinite() {
             E::DEFAULT
         } else {
@@ -281,7 +296,7 @@ mod tests {
     #[test]
     fn test_crf_display() {
         let crf = Crf::<HevcEncoder>::new(23.5).unwrap();
-        assert_eq!(format!("{}", crf), "23.5");
-        assert_eq!(format!("{:?}", crf), "Crf<HEVC>(23.50)");
+        assert_eq!(format!("{crf}"), "23.5");
+        assert_eq!(format!("{crf:?}"), "Crf<HEVC>(23.50)");
     }
 }

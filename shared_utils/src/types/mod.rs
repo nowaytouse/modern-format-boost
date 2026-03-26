@@ -1,24 +1,24 @@
 //! Type-Safe Wrappers Module
 //!
-//! 提供类型安全的包装器，将数学假设从注释提升到类型系统层面。
+//! Provides type-safe wrappers to elevate mathematical assumptions to the type system level.
 //!
-//! ## 模块列表
-//! - `crf`: CRF (Constant Rate Factor) 类型安全包装
-//! - `ssim`: SSIM (Structural Similarity Index) 类型安全包装
-//! - `file_size`: 文件大小类型安全包装
-//! - `iteration`: 迭代次数守卫
+//! ## Module List
+//! - `crf`: Type-safe wrapper for CRF (Constant Rate Factor)
+//! - `ssim`: Type-safe wrapper for SSIM (Structural Similarity Index)
+//! - `file_size`: Type-safe wrapper for file sizes
+//! - `iteration`: Guard for iteration counts
 
 pub mod crf;
 pub mod file_size;
 pub mod iteration;
-pub mod ssim;
 pub mod perception;
+pub mod ssim;
 
 pub use crf::{Av1Encoder, Crf, CrfError, EncoderBounds, HevcEncoder, Vp9Encoder, X264Encoder};
 pub use file_size::FileSize;
 pub use iteration::{IterationError, IterationGuard};
-pub use ssim::{Ssim, SsimError, SSIM_EPSILON};
 pub use perception::{ProcessHistory, VisualPerception};
+pub use ssim::{Ssim, SsimError, SSIM_EPSILON};
 
 #[cfg(test)]
 mod property_tests {

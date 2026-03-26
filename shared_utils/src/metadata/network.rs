@@ -1,39 +1,72 @@
-//! Network & cloud-related metadata verification (macOS xattrs).
+//! Network & cloud-related metadata preservation (macOS xattrs).
 //!
-//! When preserving metadata from source to destination (e.g. after re-encode or copy),
-//! this module checks that **network/download-related extended attributes** are not
-//! silently lost on the destination. It does not copy them (copy is done elsewhere);
-//! it only verifies and warns if critical xattrs were present on source but missing on dst.
+//! Copies AND verifies network/download-related extended attributes from src to dst.
 //!
-//! **Checked xattrs (macOS):**
-//! - `com.apple.metadata:kMDItemWhereFroms` — download source (URL)
-//! - `com.apple.metadata:kMDItemUserTags` — Finder tags
-//! - `com.apple.quarantine` — quarantine flag (intentionally not copied; missing on dst is not warned)
-//!
-//! Used by [crate::metadata::preserve_pro] and [crate::metadata::preserve_metadata] on all platforms;
-//! the xattr keys are macOS-specific but the `xattr` crate no-ops on non-macOS for unknown keys.
+//! **Handled xattrs:**
+//! - `com.apple.metadata:kMDItemWhereFroms` — download source URL (copied)
+//! - `com.apple.metadata:kMDItemUserTags`   — Finder tags (copied)
+//! - `com.apple.quarantine`                 — quarantine flag (intentionally NOT copied)
 
 use std::io;
 use std::path::Path;
 
-/// Verifies that critical network/cloud xattrs present on `src` are present on `dst`; warns if missing.
-/// `com.apple.quarantine` is excluded from the missing check (often intentionally not copied).
-pub fn verify_network_metadata(src: &Path, dst: &Path) -> io::Result<()> {
-    let critical_xattrs = [
+/// Copy critical network/cloud xattrs from `src` to `dst`, then verify.
+/// `com.apple.quarantine` is intentionally skipped (security boundary).
+/// All errors are tolerated — missing xattr support on the filesystem is not fatal.
+pub fn preserve_network_metadata(src: &Path, dst: &Path) -> io::Result<()> {
+    // Keys to copy (quarantine intentionally excluded)
+    const COPY_KEYS: &[&str] = &[
         "com.apple.metadata:kMDItemWhereFroms",
         "com.apple.metadata:kMDItemUserTags",
-        "com.apple.quarantine",
     ];
 
-    for &key in &critical_xattrs {
-        if let Ok(Some(_)) = xattr::get(src, key) {
-            if xattr::get(dst, key).ok().flatten().is_none() && key != "com.apple.quarantine" {
+    for &key in COPY_KEYS {
+        match xattr::get(src, key) {
+            Ok(Some(value)) => {
+                if let Err(e) = xattr::set(dst, key, &value) {
+                    // Non-fatal: target filesystem may not support xattrs (e.g. FAT32, some network mounts)
+                    eprintln!("⚠️ [metadata] Could not copy xattr '{key}': {e}");
+                }
+            }
+            Ok(None) => {} // not present on source, nothing to do
+            Err(e) => {
                 eprintln!(
-                    "⚠️ [metadata] Network metadata '{}' missing on destination.",
-                    key
+                    "⚠️ [metadata] Could not read source xattr '{}' from {}: {}",
+                    key,
+                    src.display(),
+                    e
                 );
             }
         }
     }
+
+    // Verify after copy
+    for &key in COPY_KEYS {
+        match xattr::get(src, key) {
+            Ok(Some(_)) => match xattr::get(dst, key) {
+                Ok(Some(_)) => {}
+                Ok(None) => {
+                    eprintln!(
+                        "⚠️ [metadata] xattr '{key}' present on source but missing on destination after copy attempt."
+                    );
+                }
+                Err(e) => {
+                    eprintln!(
+                        "⚠️ [metadata] Could not verify destination xattr '{}' on {}: {}",
+                        key,
+                        dst.display(),
+                        e
+                    );
+                }
+            },
+            Ok(None) => {}
+            Err(e) => {
+                eprintln!(
+                    "⚠️ [metadata] Could not re-read source xattr '{key}' during verification: {e}"
+                );
+            }
+        }
+    }
+
     Ok(())
 }

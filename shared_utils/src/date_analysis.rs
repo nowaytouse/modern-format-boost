@@ -10,7 +10,7 @@
 //! 5. EXIF:CreateDate - Generic creation
 //! 6. XMP-xmp:MetadataDate - When metadata was last modified
 //!
-//! ⚠️ FileModifyDate is EXCLUDED as it's unreliable (download/copy time)
+//! ⚠️ `FileModifyDate` is EXCLUDED as it's unreliable (download/copy time)
 
 use chrono::{Datelike, NaiveDateTime};
 use serde::{Deserialize, Serialize};
@@ -30,27 +30,29 @@ pub enum DateSource {
 }
 
 impl DateSource {
-    pub fn priority(&self) -> u8 {
+    #[must_use]
+    pub const fn priority(&self) -> u8 {
         match self {
-            DateSource::XmpPhotoshop => 6,
-            DateSource::XmpCreateDate => 5,
-            DateSource::XmpHistory => 4,
-            DateSource::ExifOriginal => 3,
-            DateSource::ExifCreateDate => 2,
-            DateSource::XmpMetadata => 1,
-            DateSource::None => 0,
+            Self::XmpPhotoshop => 6,
+            Self::XmpCreateDate => 5,
+            Self::XmpHistory => 4,
+            Self::ExifOriginal => 3,
+            Self::ExifCreateDate => 2,
+            Self::XmpMetadata => 1,
+            Self::None => 0,
         }
     }
 
-    pub fn name(&self) -> &'static str {
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
         match self {
-            DateSource::XmpPhotoshop => "XMP-Photoshop",
-            DateSource::XmpCreateDate => "XMP-CreateDate",
-            DateSource::XmpHistory => "XMP-History",
-            DateSource::ExifOriginal => "EXIF-Original",
-            DateSource::ExifCreateDate => "EXIF-CreateDate",
-            DateSource::XmpMetadata => "XMP-Metadata",
-            DateSource::None => "None",
+            Self::XmpPhotoshop => "XMP-Photoshop",
+            Self::XmpCreateDate => "XMP-CreateDate",
+            Self::XmpHistory => "XMP-History",
+            Self::ExifOriginal => "EXIF-Original",
+            Self::ExifCreateDate => "EXIF-CreateDate",
+            Self::XmpMetadata => "XMP-Metadata",
+            Self::None => "None",
         }
     }
 }
@@ -108,7 +110,6 @@ impl Default for DateAnalysisConfig {
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 struct ExiftoolOutput {
     #[serde(rename = "SourceFile")]
     source_file: Option<String>,
@@ -120,18 +121,18 @@ struct ExiftoolOutput {
     xmp_created: Option<String>,
     #[serde(rename = "XMP-xmp:MetadataDate")]
     xmp_metadata: Option<String>,
-    #[serde(rename = "XMP-xmp:ModifyDate")]
-    xmp_modified: Option<String>,
     #[serde(rename = "XMP-xmpMM:HistoryWhen")]
     xmp_history: Option<serde_json::Value>,
     #[serde(rename = "EXIF:DateTimeOriginal")]
     exif_original: Option<String>,
     #[serde(rename = "EXIF:CreateDate")]
     exif_created: Option<String>,
-    #[serde(rename = "EXIF:ModifyDate")]
-    exif_modified: Option<String>,
 }
 
+/// Analyze a directory for potential date-based improvements.
+///
+/// # Errors
+/// Returns an error message if analysis fails.
 pub fn analyze_directory(
     dir: &Path,
     config: &DateAnalysisConfig,
@@ -161,12 +162,12 @@ pub fn analyze_directory(
         )
         .arg(dir)
         .output()
-        .map_err(|e| format!("Failed to run exiftool: {}", e))?;
+        .map_err(|e| format!("Failed to run exiftool: {e}"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         if !stderr.contains("No matching files") {
-            return Err(format!("exiftool failed: {}", stderr));
+            return Err(format!("exiftool failed: {stderr}"));
         }
     }
 
@@ -186,7 +187,7 @@ pub fn analyze_directory(
     }
 
     let raw_data: Vec<ExiftoolOutput> = serde_json::from_str(&json_str)
-        .map_err(|e| format!("Failed to parse exiftool JSON: {}", e))?;
+        .map_err(|e| format!("Failed to parse exiftool JSON: {e}"))?;
 
     let mut files: Vec<FileDateInfo> = Vec::new();
     let mut by_source: HashMap<String, usize> = HashMap::new();
@@ -214,13 +215,13 @@ pub fn analyze_directory(
     let earliest = files_with_dates
         .iter()
         .min_by_key(|f| f.best_date)
-        .cloned()
+        .copied()
         .cloned();
 
     let latest = files_with_dates
         .iter()
         .max_by_key(|f| f.best_date)
-        .cloned()
+        .copied()
         .cloned();
 
     let files_with_dates_count = files_with_dates.len();
@@ -263,9 +264,10 @@ fn extract_best_date(item: &ExiftoolOutput, config: &DateAnalysisConfig) -> File
 
     let xmp_history_str = match &item.xmp_history {
         Some(serde_json::Value::String(s)) => Some(s.clone()),
-        Some(serde_json::Value::Array(arr)) => {
-            arr.first().and_then(|v| v.as_str()).map(|s| s.to_string())
-        }
+        Some(serde_json::Value::Array(arr)) => arr
+            .first()
+            .and_then(|v| v.as_str())
+            .map(std::string::ToString::to_string),
         _ => None,
     };
     if let Some(d) = &xmp_history_str {
@@ -346,7 +348,7 @@ pub fn print_analysis(result: &DateAnalysisResult) {
     let mut sources: Vec<_> = result.by_source.iter().collect();
     sources.sort_by(|a, b| b.1.cmp(a.1));
     for (source, count) in sources {
-        println!("   {}: {} files", source, count);
+        println!("   {source}: {count} files");
     }
 
     if let Some(earliest) = &result.earliest {
@@ -375,7 +377,7 @@ pub fn print_analysis(result: &DateAnalysisResult) {
         for (year, count) in years {
             let pct = (*count as f64 / total * 100.0) as usize;
             let bar: String = "█".repeat(pct / 3 + 1);
-            println!("   {}: {:4} files ({:2}%) {}", year, count, pct, bar);
+            println!("   {year}: {count:4} files ({pct:2}%) {bar}");
         }
     }
 
@@ -384,7 +386,7 @@ pub fn print_analysis(result: &DateAnalysisResult) {
         let mut months: Vec<_> = result.by_month.iter().collect();
         months.sort_by(|a, b| b.1.cmp(a.1));
         for (month, count) in months.iter().take(15) {
-            println!("   {}: {:4} files", month, count);
+            println!("   {month}: {count:4} files");
         }
     }
 

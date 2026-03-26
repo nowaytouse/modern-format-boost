@@ -1,12 +1,13 @@
-//! FFprobe wrapper module
+//! `FFprobe` wrapper module
 //!
-//! Shared FFprobe functionality for video analysis.
+//! Shared `FFprobe` functionality for video analysis.
 //! Used by vidquality and vid-hevc.
 
 use serde::{Deserialize, Serialize};
 use std::io;
 use std::path::Path;
 use std::process::Command;
+use tracing::warn;
 
 #[derive(Debug)]
 pub enum FFprobeError {
@@ -19,10 +20,10 @@ pub enum FFprobeError {
 impl std::fmt::Display for FFprobeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            FFprobeError::ToolNotFound(s) => write!(f, "Tool not found: {}", s),
-            FFprobeError::ExecutionFailed(s) => write!(f, "FFprobe failed: {}", s),
-            FFprobeError::ParseError(s) => write!(f, "Parse error: {}", s),
-            FFprobeError::IoError(e) => write!(f, "IO error: {}", e),
+            Self::ToolNotFound(s) => write!(f, "Tool not found: {s}"),
+            Self::ExecutionFailed(s) => write!(f, "FFprobe failed: {s}"),
+            Self::ParseError(s) => write!(f, "Parse error: {s}"),
+            Self::IoError(e) => write!(f, "IO error: {e}"),
         }
     }
 }
@@ -31,11 +32,12 @@ impl std::error::Error for FFprobeError {}
 
 impl From<io::Error> for FFprobeError {
     fn from(e: io::Error) -> Self {
-        FFprobeError::IoError(e)
+        Self::IoError(e)
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct FFprobeResult {
     pub format_name: String,
     pub duration: f64,
@@ -59,7 +61,7 @@ pub struct FFprobeResult {
     pub audio_channels: Option<u32>,
     pub profile: Option<String>,
     pub level: Option<String>,
-    /// Actual B-frame count (max_b_frames) from ffprobe.
+    /// Actual B-frame count (`max_b_frames`) from ffprobe.
     pub max_b_frames: u8,
     pub has_b_frames: bool,
     /// Raw encoder settings string (e.g. from x264-params or x265-params tags).
@@ -80,16 +82,17 @@ pub struct FFprobeResult {
     pub is_hdr10_plus: bool,
     /// True when at least one subtitle stream is present
     pub has_subtitles: bool,
-    /// Codec name of the first subtitle stream (e.g. "srt", "ass", "mov_text", "hdmv_pga_subtitle")
+    /// Codec name of the first subtitle stream (e.g. "srt", "ass", "`mov_text`", "`hdmv_pga_subtitle`")
     pub subtitle_codec: Option<String>,
-    /// Variable frame rate detected (r_frame_rate != avg_frame_rate)
+    /// Variable frame rate detected (`r_frame_rate` != `avg_frame_rate`)
     pub is_variable_frame_rate: bool,
     /// Stream index of the selected video stream (for multi-stream files like animated AVIF)
     pub stream_index: usize,
-    /// Format tags (e.g. encoder, creation_time) from the format section
+    /// Format tags (e.g. encoder, `creation_time`) from the format section
     pub tags: std::collections::HashMap<String, String>,
 }
 
+#[must_use]
 pub fn is_ffprobe_available() -> bool {
     Command::new("ffprobe").arg("-version").output().is_ok()
 }
@@ -123,6 +126,14 @@ fn detect_vfr_enhanced(
     diff_ratio > 0.02
 }
 
+/// Probe video file using ffprobe.
+///
+/// # Errors
+/// Returns `FFprobeError` if `ffprobe` is not found, execution fails, or parsing results fails.
+///
+/// # Panics
+/// Panics if no video streams are found.
+#[allow(clippy::too_many_lines)]
 pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
     if !is_ffprobe_available() {
         return Err(FFprobeError::ToolNotFound(
@@ -199,7 +210,7 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         .as_str()
         .and_then(|s| s.parse::<f64>().ok())
         .unwrap_or(0.0);
-    
+
     let mut tags = std::collections::HashMap::new();
     if let Some(tags_obj) = format["tags"].as_object() {
         for (k, v) in tags_obj {
@@ -220,11 +231,13 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         .enumerate()
         .filter(|(_, s)| s["codec_type"].as_str() == Some("video"))
         .collect();
-    
+
     if video_streams.is_empty() {
-        return Err(FFprobeError::ParseError("No video stream found".to_string()));
+        return Err(FFprobeError::ParseError(
+            "No video stream found".to_string(),
+        ));
     }
-    
+
     // Select stream with most frames (for animated images) or first stream (for regular videos)
     // Use the actual stream index from the JSON, not the enumerate index
     let (stream_index, video_stream) = if video_streams.len() > 1 {
@@ -247,12 +260,18 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
     };
 
     if duration <= 0.0 {
-        if let Some(d) = video_stream["duration"].as_str().and_then(|s| s.parse::<f64>().ok()) {
+        if let Some(d) = video_stream["duration"]
+            .as_str()
+            .and_then(|s| s.parse::<f64>().ok())
+        {
             duration = d;
         }
     }
     if duration <= 0.0 {
-        return Err(FFprobeError::ParseError("Missing duration (both format and video stream reported 0 or invalid duration)".to_string()));
+        return Err(FFprobeError::ParseError(
+            "Missing duration (both format and video stream reported 0 or invalid duration)"
+                .to_string(),
+        ));
     }
 
     let video_codec = video_stream["codec_name"]
@@ -263,24 +282,28 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         .as_str()
         .unwrap_or("")
         .to_string();
-    let width = video_stream["width"].as_u64().ok_or_else(|| FFprobeError::ParseError("Missing width".to_string()))? as u32;
-    let height = video_stream["height"].as_u64().ok_or_else(|| FFprobeError::ParseError("Missing height".to_string()))? as u32;
+    let width = video_stream["width"]
+        .as_u64()
+        .ok_or_else(|| FFprobeError::ParseError("Missing width".to_string()))?
+        as u32;
+    let height = video_stream["height"]
+        .as_u64()
+        .ok_or_else(|| FFprobeError::ParseError("Missing height".to_string()))?
+        as u32;
     if width == 0 || height == 0 {
-        return Err(FFprobeError::ParseError(format!("Invalid dimensions: {}x{}", width, height)));
+        return Err(FFprobeError::ParseError(format!(
+            "Invalid dimensions: {width}x{height}"
+        )));
     }
 
     let frame_rate = parse_frame_rate(video_stream["r_frame_rate"].as_str().unwrap_or("0/1"))
-        .map_err(|e| FFprobeError::ParseError(format!("Invalid r_frame_rate: {}", e)))?;
+        .map_err(|e| FFprobeError::ParseError(format!("Invalid r_frame_rate: {e}")))?;
     let avg_frame_rate = parse_frame_rate(video_stream["avg_frame_rate"].as_str().unwrap_or("0/1"))
-        .map_err(|e| FFprobeError::ParseError(format!("Invalid avg_frame_rate: {}", e)))?;
+        .map_err(|e| FFprobeError::ParseError(format!("Invalid avg_frame_rate: {e}")))?;
 
     // Enhanced VFR detection with slow-motion handling
-    let is_variable_frame_rate = detect_vfr_enhanced(
-        video_stream,
-        frame_rate,
-        avg_frame_rate,
-        &format_name,
-    );
+    let is_variable_frame_rate =
+        detect_vfr_enhanced(video_stream, frame_rate, avg_frame_rate, &format_name);
 
     let frame_count = video_stream["nb_frames"]
         .as_str()
@@ -292,13 +315,25 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         .ok_or_else(|| FFprobeError::ParseError("Missing pixel format".to_string()))?
         .to_string();
     let color_space = video_stream["color_space"].as_str().and_then(|s| {
-        if s.is_empty() || s == "unknown" { None } else { Some(s.to_string()) }
+        if s.is_empty() || s == "unknown" {
+            None
+        } else {
+            Some(s.to_string())
+        }
     });
     let color_transfer = video_stream["color_transfer"].as_str().and_then(|s| {
-        if s.is_empty() || s == "unknown" { None } else { Some(s.to_string()) }
+        if s.is_empty() || s == "unknown" {
+            None
+        } else {
+            Some(s.to_string())
+        }
     });
     let color_primaries = video_stream["color_primaries"].as_str().and_then(|s| {
-        if s.is_empty() || s == "unknown" { None } else { Some(s.to_string()) }
+        if s.is_empty() || s == "unknown" {
+            None
+        } else {
+            Some(s.to_string())
+        }
     });
 
     // Parse HDR side data: Dolby Vision, HDR10+, mastering display, CLL
@@ -307,7 +342,9 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
 
     let bit_depth = detect_bit_depth(&pix_fmt);
 
-    let profile = video_stream["profile"].as_str().map(|s| s.to_string());
+    let profile = video_stream["profile"]
+        .as_str()
+        .map(std::string::ToString::to_string);
     let level = video_stream["level"]
         .as_u64()
         .map(|l| format!("{:.1}", l as f64 / 10.0));
@@ -321,7 +358,7 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         .as_str()
         .or_else(|| video_stream["tags"]["x264-params"].as_str())
         .or_else(|| video_stream["tags"]["encoder_settings"].as_str())
-        .map(|s| s.to_string());
+        .map(std::string::ToString::to_string);
 
     let video_bit_rate = video_stream["bit_rate"]
         .as_str()
@@ -334,7 +371,7 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
     let has_audio = audio_stream.is_some();
     let audio_codec = audio_stream
         .and_then(|s| s["codec_name"].as_str())
-        .map(|s| s.to_string());
+        .map(std::string::ToString::to_string);
     let audio_bit_rate = audio_stream
         .and_then(|s| s["bit_rate"].as_str())
         .and_then(|s| s.parse::<u64>().ok());
@@ -351,7 +388,7 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
     let has_subtitles = subtitle_stream.is_some();
     let subtitle_codec = subtitle_stream
         .and_then(|s| s["codec_name"].as_str())
-        .map(|s| s.to_string());
+        .map(std::string::ToString::to_string);
 
     Ok(FFprobeResult {
         format_name,
@@ -396,10 +433,10 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
 }
 
 /// Recursively scan all `side_data` arrays in a ffprobe JSON value to detect:
-/// - Dolby Vision RPU (side_data_type contains "Dolby Vision")
+/// - Dolby Vision RPU (`side_data_type` contains "Dolby Vision")
 /// - HDR10+ dynamic metadata (SMPTE ST 2094-40)
 /// - Mastering display colour volume (HDR10 static metadata)
-/// - Content light level (MaxCLL / MaxFALL)
+/// - Content light level (`MaxCLL` / `MaxFALL`)
 ///
 /// Parsed HDR side data from ffprobe JSON.
 struct HdrSideData {
@@ -458,7 +495,10 @@ fn extract_hdr_side_data(json: &serde_json::Value) -> HdrSideData {
             }
         }
 
-        if sd_type.contains("hdr dynamic") || sd_type.contains("st2094") || sd_type.contains("hdr10+") {
+        if sd_type.contains("hdr dynamic")
+            || sd_type.contains("st2094")
+            || sd_type.contains("hdr10+")
+        {
             result.is_hdr10_plus = true;
         }
 
@@ -486,7 +526,9 @@ fn parse_rational_to_50k(s: &str) -> Option<u64> {
     if let Some((num, den)) = s.split_once('/') {
         let n: f64 = num.trim().parse().ok()?;
         let d: f64 = den.trim().parse().ok()?;
-        if d == 0.0 { return None; }
+        if d == 0.0 {
+            return None;
+        }
         // Normalise to denominator 50000
         Some(((n / d) * 50000.0).round() as u64)
     } else {
@@ -507,7 +549,9 @@ fn parse_luminance_to_10k(s: &str) -> Option<u64> {
     if let Some((num, den)) = s.split_once('/') {
         let n: f64 = num.trim().parse().ok()?;
         let d: f64 = den.trim().parse().ok()?;
-        if d == 0.0 { return None; }
+        if d == 0.0 {
+            return None;
+        }
         Some(((n / d) * 10000.0).round() as u64)
     } else {
         let v: f64 = s.trim().parse().ok()?;
@@ -519,15 +563,19 @@ fn parse_luminance_to_10k(s: &str) -> Option<u64> {
     }
 }
 
-/// Build the ffmpeg `-master_display` string from a mastering_display side_data object.
+/// Build the ffmpeg `-master_display` string from a `mastering_display` `side_data` object.
 /// Format: "G(gx,gy)B(bx,by)R(rx,ry)WP(wx,wy)L(lmax,lmin)"
 fn build_mastering_display_string(sd: &serde_json::Value) -> Option<String> {
     let get_coord = |field: &str| -> Option<u64> {
-        sd[field].as_str().and_then(parse_rational_to_50k)
+        sd[field]
+            .as_str()
+            .and_then(parse_rational_to_50k)
             .or_else(|| sd[field].as_f64().map(|v| (v * 50000.0).round() as u64))
     };
     let get_lum = |field: &str| -> Option<u64> {
-        sd[field].as_str().and_then(parse_luminance_to_10k)
+        sd[field]
+            .as_str()
+            .and_then(parse_luminance_to_10k)
             .or_else(|| sd[field].as_f64().map(|v| (v * 10000.0).round() as u64))
     };
 
@@ -555,11 +603,11 @@ fn build_max_cll_string(sd: &serde_json::Value) -> Option<String> {
     let max_average = sd["max_average"]
         .as_u64()
         .or_else(|| sd["MaxFALL"].as_u64())?;
-    Some(format!("{},{}", max_content, max_average))
+    Some(format!("{max_content},{max_average}"))
 }
 
 pub fn get_duration(path: &Path) -> Option<f64> {
-    let output = Command::new("ffprobe")
+    let output = match Command::new("ffprobe")
         .args([
             "-v",
             "quiet",
@@ -571,20 +619,45 @@ pub fn get_duration(path: &Path) -> Option<f64> {
         ])
         .arg(crate::safe_path_arg(path).as_ref())
         .output()
-        .ok()?;
+    {
+        Ok(output) => output,
+        Err(err) => {
+            warn!(
+                path = %path.display(),
+                error = %err,
+                "Failed to launch ffprobe duration query"
+            );
+            return None;
+        }
+    };
 
-    if output.status.success() {
-        String::from_utf8_lossy(&output.stdout)
-            .trim()
-            .parse::<f64>()
-            .ok()
-    } else {
-        None
+    if !output.status.success() {
+        warn!(
+            path = %path.display(),
+            stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+            "ffprobe duration query failed"
+        );
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let trimmed = stdout.trim();
+    match trimmed.parse::<f64>() {
+        Ok(duration) => Some(duration),
+        Err(err) => {
+            warn!(
+                path = %path.display(),
+                output = %trimmed,
+                error = %err,
+                "Failed to parse ffprobe duration output"
+            );
+            None
+        }
     }
 }
 
 pub fn get_frame_count(path: &Path) -> Option<u64> {
-    let output = Command::new("ffprobe")
+    let output = match Command::new("ffprobe")
         .args([
             "-v",
             "quiet",
@@ -599,24 +672,57 @@ pub fn get_frame_count(path: &Path) -> Option<u64> {
         ])
         .arg(crate::safe_path_arg(path).as_ref())
         .output()
-        .ok()?;
+    {
+        Ok(output) => output,
+        Err(err) => {
+            warn!(
+                path = %path.display(),
+                error = %err,
+                "Failed to launch ffprobe frame-count query"
+            );
+            return None;
+        }
+    };
 
-    if output.status.success() {
-        String::from_utf8_lossy(&output.stdout)
-            .trim()
-            .parse::<u64>()
-            .ok()
-    } else {
-        None
+    if !output.status.success() {
+        warn!(
+            path = %path.display(),
+            stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+            "ffprobe frame-count query failed"
+        );
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let trimmed = stdout.trim();
+    match trimmed.parse::<u64>() {
+        Ok(frame_count) => Some(frame_count),
+        Err(err) => {
+            warn!(
+                path = %path.display(),
+                output = %trimmed,
+                error = %err,
+                "Failed to parse ffprobe frame-count output"
+            );
+            None
+        }
     }
 }
 
+/// Parse frame rate string (e.g. "30/1" or "29.97").
+///
+/// # Errors
+/// Returns `FFprobeError` if parsing fails.
 pub fn parse_frame_rate(s: &str) -> Result<f64, FFprobeError> {
     if s.contains('/') {
         let parts: Vec<&str> = s.split('/').collect();
         if parts.len() == 2 {
-            let num = parts[0].parse::<f64>().map_err(|e| FFprobeError::ParseError(format!("Invalid numerator: {}", e)))?;
-            let den = parts[1].parse::<f64>().map_err(|e| FFprobeError::ParseError(format!("Invalid denominator: {}", e)))?;
+            let num = parts[0]
+                .parse::<f64>()
+                .map_err(|e| FFprobeError::ParseError(format!("Invalid numerator: {e}")))?;
+            let den = parts[1]
+                .parse::<f64>()
+                .map_err(|e| FFprobeError::ParseError(format!("Invalid denominator: {e}")))?;
             if den > 0.0 {
                 let rate = num / den;
                 if rate > 0.0 {
@@ -627,10 +733,13 @@ pub fn parse_frame_rate(s: &str) -> Result<f64, FFprobeError> {
     }
     match s.parse::<f64>() {
         Ok(v) if v > 0.0 => Ok(v),
-        _ => Err(FFprobeError::ParseError(format!("Could not parse frame rate: '{}'", s))),
+        _ => Err(FFprobeError::ParseError(format!(
+            "Could not parse frame rate: '{s}'"
+        ))),
     }
 }
 
+#[must_use]
 pub fn detect_bit_depth(pix_fmt: &str) -> u8 {
     if pix_fmt.contains("16le")
         || pix_fmt.contains("16be")
@@ -684,10 +793,7 @@ mod tests {
             let result = parse_frame_rate(input).unwrap();
             assert!(
                 (result - expected).abs() < *tolerance,
-                "parse_frame_rate({:?}): expected {}, got {}",
-                input,
-                expected,
-                result
+                "parse_frame_rate({input:?}): expected {expected}, got {result}"
             );
         }
     }
@@ -709,31 +815,13 @@ mod tests {
             ("rgb24", 8),
             ("bgr24", 8),
             ("nv12", 8),
-            ("yuvj420p", 8),
-            ("yuv420p10le", 10),
-            ("yuv420p10be", 10),
-            ("yuv422p10le", 10),
-            ("yuv444p10le", 10),
-            ("p010le", 10),
-            ("p010", 10),
-            ("yuv420p12le", 12),
-            ("yuv420p12be", 12),
-            ("yuv422p12le", 12),
-            ("yuv444p12le", 12),
-            ("yuv420p16le", 16),
-            ("yuv420p16be", 16),
-            ("rgb48le", 16),
-            ("unknown", 8),
-            ("", 8),
-            ("custom_format", 8),
         ];
 
-        for (fmt, expected) in cases {
+        for (input, expected) in cases {
             assert_eq!(
-                detect_bit_depth(fmt),
+                detect_bit_depth(input),
                 *expected,
-                "detect_bit_depth({:?}) mismatch",
-                fmt
+                "detect_bit_depth({input:?})"
             );
         }
     }

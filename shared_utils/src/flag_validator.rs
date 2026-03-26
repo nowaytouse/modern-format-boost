@@ -1,8 +1,8 @@
-//! Flag 组合验证器 - 简化逻辑，仅支持推荐组合
+//! Flag Combination Validator - Simplified logic, supporting recommended combinations only.
 //!
-//! 有效组合仅一种（均为默认开启）：
-//! - `explore + match_quality + compress`（可选 `--ultimate`）
-//!   其他组合一律 Invalid，不再兼容老旧单独/部分组合。
+//! Only one valid combination (all enabled by default):
+//! - `explore + match_quality + compress` (optional `--ultimate`)
+//!   All other combinations are Invalid; no longer compatible with legacy individual or partial combinations.
 
 use std::fmt;
 
@@ -15,10 +15,10 @@ pub enum FlagMode {
 impl fmt::Display for FlagMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            FlagMode::PreciseQualityWithCompress => {
+            Self::PreciseQualityWithCompress => {
                 write!(f, "--explore --match-quality --compress")
             }
-            FlagMode::UltimateExplore => {
+            Self::UltimateExplore => {
                 write!(f, "--explore --match-quality --compress --ultimate")
             }
         }
@@ -26,15 +26,17 @@ impl fmt::Display for FlagMode {
 }
 
 impl FlagMode {
-    pub fn description_en(&self) -> &'static str {
+    #[must_use]
+    pub const fn description_en(&self) -> &'static str {
         match self {
-            FlagMode::PreciseQualityWithCompress => "Precise quality match + must compress",
-            FlagMode::UltimateExplore => "🔥 Ultimate explore (SSIM saturation) [GPU+CPU]",
+            Self::PreciseQualityWithCompress => "Precise quality match + must compress",
+            Self::UltimateExplore => "🔥 Ultimate explore (SSIM saturation) [GPU+CPU]",
         }
     }
 
-    pub fn is_ultimate(&self) -> bool {
-        matches!(self, FlagMode::UltimateExplore)
+    #[must_use]
+    pub const fn is_ultimate(&self) -> bool {
+        matches!(self, Self::UltimateExplore)
     }
 }
 
@@ -44,10 +46,12 @@ pub enum FlagValidation {
     Invalid(String),
 }
 
+#[must_use]
 pub fn validate_flags(explore: bool, match_quality: bool, compress: bool) -> FlagValidation {
     validate_flags_with_ultimate(explore, match_quality, compress, false)
 }
 
+#[must_use]
 pub fn validate_flags_with_ultimate(
     explore: bool,
     match_quality: bool,
@@ -66,6 +70,10 @@ pub fn validate_flags_with_ultimate(
     FlagValidation::Valid(FlagMode::PreciseQualityWithCompress)
 }
 
+/// Validate flags and determine the final operation mode.
+///
+/// # Errors
+/// Returns an error message if flag combination is invalid.
 pub fn validate_flags_result(
     explore: bool,
     match_quality: bool,
@@ -77,6 +85,10 @@ pub fn validate_flags_result(
     }
 }
 
+/// Validate flags with ultimate mode considered.
+///
+/// # Errors
+/// Returns an error message if flag combination is invalid.
 pub fn validate_flags_result_with_ultimate(
     explore: bool,
     match_quality: bool,
@@ -162,7 +174,9 @@ mod tests {
         assert!(FlagMode::PreciseQualityWithCompress
             .description_en()
             .contains("Precise"));
-        assert!(FlagMode::UltimateExplore.description_en().contains("Ultimate"));
+        assert!(FlagMode::UltimateExplore
+            .description_en()
+            .contains("Ultimate"));
         assert!(FlagMode::UltimateExplore.is_ultimate());
         assert!(!FlagMode::PreciseQualityWithCompress.is_ultimate());
     }

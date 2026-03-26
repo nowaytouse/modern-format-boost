@@ -1,10 +1,10 @@
-//! Logging Module - 统一的日志系统
+//! Logging Module - Unified logging system
 //!
-//! 本模块提供基于tracing框架的统一日志系统，支持：
-//! - 日志输出到系统临时目录
-//! - 日志文件大小限制和自动轮转
-//! - 结构化日志记录
-//! - 外部工具调用的详细日志
+//! This module provides a unified logging system based on the tracing framework, supporting:
+//! - Log output to the system temporary directory
+//! - Log file size limits and automatic rotation
+//! - Structured logging
+//! - Detailed logs for external tool invocations
 //!
 //! # Examples
 //!
@@ -12,32 +12,32 @@
 //! use shared_utils::logging::{LogConfig, init_logging};
 //! use tracing::{info, error};
 //!
-//! // 初始化日志系统
+//! // Initialize logging system
 //! let config = LogConfig::default();
 //! init_logging("my_program", config).expect("Failed to initialize logging");
 //!
-//! // 使用tracing宏记录日志
+//! // Use tracing macros for logging
 //! info!("Program started");
 //! error!(error = "something went wrong", "Operation failed");
 //! ```
 
+use crate::modern_ui::{colors, symbols};
 use anyhow::{Context, Result};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
+use tracing::field::Field;
 use tracing::Level;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{
+    field::Visit,
     filter::FilterFn,
     fmt::{self, format::FormatEvent, writer::MakeWriter, FmtContext, FormatFields},
     layer::{Layer, SubscriberExt},
     registry::LookupSpan,
     util::SubscriberInitExt,
     EnvFilter,
-    field::Visit,
 };
-use tracing::field::Field;
-use crate::modern_ui::{colors, symbols};
 
 struct ModernFormatter;
 
@@ -54,9 +54,14 @@ where
     ) -> std::fmt::Result {
         let metadata = event.metadata();
         let level = *metadata.level();
+        let progress_line = crate::progress::active_progress_line();
 
         // Pause output if the Ctrl+C confirmation prompt is currently waiting for input
         crate::ctrlc_guard::wait_if_prompt_active();
+
+        if progress_line.is_some() {
+            write!(writer, "\r\x1b[K")?;
+        }
 
         // 1. Level Design / Hierarchy
         let (icon, color, label) = match level {
@@ -69,7 +74,14 @@ where
 
         if level != tracing::Level::INFO {
             write!(writer, "{}{}{} ", color, icon, colors::RESET)?;
-            write!(writer, "{}{}{}{} ", colors::DIM, color, label, colors::RESET)?;
+            write!(
+                writer,
+                "{}{}{}{} ",
+                colors::DIM,
+                color,
+                label,
+                colors::RESET
+            )?;
         }
 
         // 2. Message and Fields
@@ -86,10 +98,16 @@ where
         if level <= tracing::Level::INFO {
             let stats = crate::progress_mode::get_current_stats_string();
             // Align stats for tracing logs
-            write!(writer, "  {}", stats)?;
+            write!(writer, "  {stats}")?;
         }
 
-        writeln!(writer)
+        writeln!(writer)?;
+
+        if let Some(progress_line) = progress_line {
+            write!(writer, "\r\x1b[K{progress_line}")?;
+        }
+
+        Ok(())
     }
 }
 
@@ -99,19 +117,25 @@ struct FieldVisitor<'a, 'b> {
     has_message: bool,
 }
 
-impl<'a, 'b> Visit for FieldVisitor<'a, 'b> {
+impl Visit for FieldVisitor<'_, '_> {
     fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-        if field.name() == "message" {
-            let msg = format!("{:?}", value);
+        // Filter out tracing internal metadata fields
+        let field_name = field.name();
+        if field_name.starts_with("log.") {
+            return;
+        }
+
+        if field_name == "message" {
+            let msg = format!("{value:?}");
             // Strip quotes from Debug format of string
             let msg = msg.trim_start_matches('"').trim_end_matches('"');
-            let _ = write!(self.writer, "{}", msg);
+            let _ = write!(self.writer, "{msg}");
             self.has_message = true;
         } else {
             if !self.is_first || self.has_message {
                 let _ = write!(self.writer, " ");
             }
-            
+
             let _ = write!(
                 self.writer,
                 "{}{}={}{:?}{}",
@@ -127,10 +151,11 @@ impl<'a, 'b> Visit for FieldVisitor<'a, 'b> {
 }
 
 // ── Current log level: so progress_mode direct writes respect the same level as the tracing filter ──
-/// Cached level from init_logging; used by progress_mode::write_to_log_at_level so direct run-log writes respect the level.
+/// Cached level from `init_logging`; used by `progress_mode::write_to_log_at_level` so direct run-log writes respect the level.
 static CURRENT_LOG_LEVEL: OnceLock<Level> = OnceLock::new();
 
 /// Returns true if an event at this level should be logged. Uses tracing order: TRACE > DEBUG > INFO > WARN > ERROR (more verbose = greater).
+///
 /// So config INFO passes INFO, WARN, ERROR; config TRACE passes all.
 pub fn should_log(level: Level) -> bool {
     match CURRENT_LOG_LEVEL.get() {
@@ -141,30 +166,35 @@ pub fn should_log(level: Level) -> bool {
 
 // ── Run log forwarder: when progress_mode sets a run log file, tracing events are also written there ──
 
-/// Store the "Logging system initialized" line so progress_mode can write it to the run log when it opens (run log is set after init).
+/// Store the "Logging system initialized" line so `progress_mode` can write it to the run log when it opens (run log is set after init).
 fn store_init_message_for_run_log(msg: String) {
-    if let Ok(mut guard) = INIT_MESSAGE_FOR_RUN_LOG.lock() {
-        *guard = Some(msg);
-    }
+    let mut guard = INIT_MESSAGE_FOR_RUN_LOG.lock().unwrap_or_else(|err| {
+        eprintln!("⚠️ [Logging] init-message mutex was poisoned; recovering state");
+        err.into_inner()
+    });
+    *guard = Some(msg);
 }
 
 /// Take the stored init message and clear it so it is written to the run log exactly once.
 pub fn take_init_message_for_run_log() -> Option<String> {
-    if let Ok(mut guard) = INIT_MESSAGE_FOR_RUN_LOG.lock() {
-        guard.take()
-    } else {
-        None
-    }
+    let mut guard = INIT_MESSAGE_FOR_RUN_LOG.lock().unwrap_or_else(|err| {
+        eprintln!("⚠️ [Logging] init-message mutex was poisoned during take; recovering state");
+        err.into_inner()
+    });
+    guard.take()
 }
 
 static INIT_MESSAGE_FOR_RUN_LOG: Mutex<Option<String>> = Mutex::new(None);
 
 /// Register a callback so that when tracing events are formatted, each line is also written to the run log.
-/// Called by progress_mode::set_log_file so the run log gets complete output (all tracing + progress).
+///
+/// Called by `progress_mode::set_log_file` so the run log gets complete output (all tracing + progress).
 pub fn register_run_log_forwarder(f: Box<dyn Fn(&str) + Send>) {
-    if let Ok(mut guard) = RUN_LOG_FORWARDER.lock() {
-        *guard = Some(f);
-    }
+    let mut guard = RUN_LOG_FORWARDER.lock().unwrap_or_else(|err| {
+        eprintln!("⚠️ [Logging] run-log forwarder mutex was poisoned; recovering state");
+        err.into_inner()
+    });
+    *guard = Some(f);
 }
 
 static RUN_LOG_FORWARDER: Mutex<Option<Box<dyn Fn(&str) + Send>>> = Mutex::new(None);
@@ -175,31 +205,39 @@ struct RunLogWriter;
 
 impl Write for RunLogWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let mut buffer = RUN_LOG_BUFFER.lock().map_err(|e| io::Error::other(e.to_string()))?;
+        let mut buffer = RUN_LOG_BUFFER
+            .lock()
+            .map_err(|e| io::Error::other(e.to_string()))?;
         buffer.extend_from_slice(buf);
         while let Some(i) = buffer.iter().position(|&b| b == b'\n') {
             let line: Vec<u8> = buffer.drain(..=i).collect();
             let line_str = String::from_utf8_lossy(&line);
             let stripped = strip_ansi_str(line_str.trim_end_matches('\n'));
-            if let Ok(guard) = RUN_LOG_FORWARDER.lock() {
-                if let Some(ref f) = *guard {
-                    f(&stripped);
-                }
+            let guard = RUN_LOG_FORWARDER.lock().unwrap_or_else(|err| {
+                eprintln!("⚠️ [Logging] run-log forwarder mutex was poisoned during write; recovering state");
+                err.into_inner()
+            });
+            if let Some(ref f) = *guard {
+                f(&stripped);
             }
         }
         Ok(buf.len())
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        let mut buffer = RUN_LOG_BUFFER.lock().map_err(|e| io::Error::other(e.to_string()))?;
+        let mut buffer = RUN_LOG_BUFFER
+            .lock()
+            .map_err(|e| io::Error::other(e.to_string()))?;
         if !buffer.is_empty() {
             let line = String::from_utf8_lossy(&buffer);
             let stripped = strip_ansi_str(line.trim_end_matches('\n'));
             if !stripped.is_empty() {
-                if let Ok(guard) = RUN_LOG_FORWARDER.lock() {
-                    if let Some(ref f) = *guard {
-                        f(&stripped);
-                    }
+                let guard = RUN_LOG_FORWARDER.lock().unwrap_or_else(|err| {
+                    eprintln!("⚠️ [Logging] run-log forwarder mutex was poisoned during flush; recovering state");
+                    err.into_inner()
+                });
+                if let Some(ref f) = *guard {
+                    f(&stripped);
                 }
             }
             buffer.clear();
@@ -223,6 +261,7 @@ impl<'a> MakeWriter<'a> for RunLogMaker {
 /// Handles all CSI sequences (`ESC [ <params> <final>` where final is `0x40–0x7E`),
 /// including SGR colour codes (`ESC[…m`), cursor-movement codes, and others.
 /// Non-escape characters (including multi-byte UTF-8) are passed through unchanged.
+#[must_use]
 pub fn strip_ansi_str(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = String::with_capacity(s.len());
@@ -250,9 +289,8 @@ pub fn strip_ansi_str(s: &str) -> String {
 
 /// Strip ANSI escape sequences (e.g. `\x1b[92m`) so log files are plain text, not raw codes.
 fn strip_ansi_bytes(buf: &[u8]) -> Vec<u8> {
-    let s = match std::str::from_utf8(buf) {
-        Ok(s) => s,
-        Err(_) => return buf.to_vec(),
+    let Ok(s) = std::str::from_utf8(buf) else {
+        return buf.to_vec();
     };
     let mut result = String::new();
     let mut in_escape = false;
@@ -277,7 +315,7 @@ struct StripAnsiWriter<W: Write + Send> {
 }
 
 impl<W: Write + Send> StripAnsiWriter<W> {
-    fn new(inner: W) -> Self {
+    const fn new(inner: W) -> Self {
         Self {
             buffer: Vec::new(),
             inner: Mutex::new(inner),
@@ -290,7 +328,10 @@ impl<W: Write + Send> StripAnsiWriter<W> {
         }
         let stripped = strip_ansi_bytes(&self.buffer);
         self.buffer.clear();
-        let mut w = self.inner.lock().map_err(|e| io::Error::other(e.to_string()))?;
+        let mut w = self
+            .inner
+            .lock()
+            .map_err(|e| io::Error::other(e.to_string()))?;
         w.write_all(&stripped)?;
         Ok(())
     }
@@ -303,7 +344,10 @@ impl<W: Write + Send> Write for StripAnsiWriter<W> {
         while let Some(i) = self.buffer.iter().position(|&b| b == b'\n') {
             let line: Vec<u8> = self.buffer.drain(..=i).collect();
             let stripped = strip_ansi_bytes(&line);
-            let mut w = self.inner.lock().map_err(|e| io::Error::other(e.to_string()))?;
+            let mut w = self
+                .inner
+                .lock()
+                .map_err(|e| io::Error::other(e.to_string()))?;
             w.write_all(&stripped)?;
         }
         Ok(buf.len())
@@ -311,7 +355,10 @@ impl<W: Write + Send> Write for StripAnsiWriter<W> {
 
     fn flush(&mut self) -> io::Result<()> {
         self.flush_buffer()?;
-        let mut w = self.inner.lock().map_err(|e| io::Error::other(e.to_string()))?;
+        let mut w = self
+            .inner
+            .lock()
+            .map_err(|e| io::Error::other(e.to_string()))?;
         w.flush()?;
         Ok(())
     }
@@ -324,9 +371,9 @@ unsafe impl<W: Write + Send> Send for StripAnsiWriter<W> {}
 #[derive(Debug, Clone)]
 pub struct LogConfig {
     pub log_dir: PathBuf,
-    /// Max size per log file (bytes). Default u64::MAX = no limit.
+    /// Max size per log file (bytes). Default `u64::MAX` = no limit.
     pub max_file_size: u64,
-    /// Max number of log files to keep in log_dir; older ones are deleted. Default usize::MAX = no limit.
+    /// Max number of log files to keep in `log_dir`; older ones are deleted. Default `usize::MAX` = no limit.
     pub max_files: usize,
     /// Minimum level (TRACE = most comprehensive).
     pub level: Level,
@@ -344,44 +391,55 @@ impl Default for LogConfig {
 }
 
 impl LogConfig {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[must_use]
     pub fn with_log_dir<P: AsRef<Path>>(mut self, dir: P) -> Self {
         self.log_dir = dir.as_ref().to_path_buf();
         self
     }
 
-    pub fn with_max_file_size(mut self, size: u64) -> Self {
+    #[must_use]
+    pub const fn with_max_file_size(mut self, size: u64) -> Self {
         self.max_file_size = size;
         self
     }
 
-    pub fn with_max_files(mut self, count: usize) -> Self {
+    #[must_use]
+    pub const fn with_max_files(mut self, count: usize) -> Self {
         self.max_files = count;
         self
     }
 
-    pub fn with_level(mut self, level: Level) -> Self {
+    #[must_use]
+    pub const fn with_level(mut self, level: Level) -> Self {
         self.level = level;
         self
     }
 }
 
+/// Initialize the logging system.
+///
+/// # Errors
+/// Returns an error if initialization fails.
 pub fn init_logging(program_name: &str, config: LogConfig) -> Result<()> {
     if std::env::var("FORCE_COLOR").is_ok() {
         console::set_colors_enabled(true);
         console::set_colors_enabled_stderr(true);
     }
 
-    let _ = CURRENT_LOG_LEVEL.set(config.level);
+    if CURRENT_LOG_LEVEL.set(config.level).is_err() {
+        eprintln!("⚠️ [Logging] log level was already initialized earlier; keeping previous level");
+    }
     std::fs::create_dir_all(&config.log_dir)
         .with_context(|| format!("Failed to create log directory: {:?}", config.log_dir))?;
 
     // Timestamp in filename so each run gets a unique file in system/temp dir (no overwrite).
     let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
-    let log_file_name = format!("{}_{}.log", program_name, timestamp);
+    let log_file_name = format!("{program_name}_{timestamp}.log");
 
     let file_appender = RollingFileAppender::new(Rotation::DAILY, &config.log_dir, &log_file_name);
     let file_writer = Mutex::new(StripAnsiWriter::new(file_appender));
@@ -435,7 +493,7 @@ pub fn init_logging(program_name: &str, config: LogConfig) -> Result<()> {
     );
     // Note: We don't call append_stats_to_line here to avoid potential circular dependency during init.
     // The run log writer will handle it if we pass it through.
-    
+
     tracing::info!("{}", init_msg);
     store_init_message_for_run_log(init_msg);
 
@@ -451,7 +509,7 @@ fn cleanup_old_logs(log_dir: &Path, program_name: &str, max_files: usize) -> Res
     use std::fs;
 
     let entries = fs::read_dir(log_dir)
-        .with_context(|| format!("Failed to read log directory: {:?}", log_dir))?;
+        .with_context(|| format!("Failed to read log directory: {log_dir:?}"))?;
 
     let mut log_files: Vec<(PathBuf, std::time::SystemTime)> = Vec::new();
 
@@ -466,9 +524,23 @@ fn cleanup_old_logs(log_dir: &Path, program_name: &str, max_files: usize) -> Res
         if let Some(file_name) = path.file_name() {
             let file_name_str = file_name.to_string_lossy();
             if file_name_str.starts_with(program_name) && file_name_str.ends_with(".log") {
-                if let Ok(metadata) = fs::metadata(&path) {
-                    if let Ok(modified) = metadata.modified() {
-                        log_files.push((path, modified));
+                match fs::metadata(&path) {
+                    Ok(metadata) => match metadata.modified() {
+                        Ok(modified) => log_files.push((path, modified)),
+                        Err(err) => {
+                            tracing::warn!(
+                                path = %path.display(),
+                                error = %err,
+                                "Failed to read log file modification time during cleanup"
+                            );
+                        }
+                    },
+                    Err(err) => {
+                        tracing::warn!(
+                            path = %path.display(),
+                            error = %err,
+                            "Failed to read log file metadata during cleanup"
+                        );
                     }
                 }
             }
@@ -537,7 +609,7 @@ pub fn log_external_tool(
                 command = %command,
                 duration_secs = duration.as_secs_f64(),
                 output = %output,
-                "External tool terminated without exit code"
+                "☢️ External tool TERMINATED by signal (OOM kill or Crash). Check system logs (dmesg/Console.app) for details."
             );
         }
     }
@@ -551,6 +623,10 @@ pub struct ExternalCommandResult {
     pub duration: std::time::Duration,
 }
 
+/// Execute an external tool and return its result.
+///
+/// # Errors
+/// Returns an error if the tool fails to start.
 pub fn execute_external_command(tool_name: &str, args: &[&str]) -> Result<ExternalCommandResult> {
     use std::process::Command;
 
@@ -567,7 +643,7 @@ pub fn execute_external_command(tool_name: &str, args: &[&str]) -> Result<Extern
     let output = Command::new(tool_name)
         .args(args)
         .output()
-        .with_context(|| format!("Failed to execute command: {}", command_str))?;
+        .with_context(|| format!("Failed to execute command: {command_str}"))?;
 
     let duration = start_time.elapsed();
 
@@ -576,7 +652,7 @@ pub fn execute_external_command(tool_name: &str, args: &[&str]) -> Result<Extern
     let exit_code = output.status.code();
 
     let combined_output = if !stdout.is_empty() && !stderr.is_empty() {
-        format!("STDOUT:\n{}\n\nSTDERR:\n{}", stdout, stderr)
+        format!("STDOUT:\n{stdout}\n\nSTDERR:\n{stderr}")
     } else if !stdout.is_empty() {
         stdout.clone()
     } else {
@@ -593,6 +669,10 @@ pub fn execute_external_command(tool_name: &str, args: &[&str]) -> Result<Extern
     })
 }
 
+/// Execute an external command and ensure it succeeds.
+///
+/// # Errors
+/// Returns an error if the command fails to start or exits with a non-zero status.
 pub fn execute_external_command_checked(
     tool_name: &str,
     args: &[&str],
@@ -683,8 +763,8 @@ mod tests {
         let program_name = "test_program";
 
         for i in 0..10 {
-            let file_path = temp_dir.path().join(format!("{}.{}.log", program_name, i));
-            fs::write(&file_path, format!("log content {}", i)).unwrap();
+            let file_path = temp_dir.path().join(format!("{program_name}.{i}.log"));
+            fs::write(&file_path, format!("log content {i}")).unwrap();
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
 
@@ -692,7 +772,7 @@ mod tests {
 
         let remaining_files: Vec<_> = fs::read_dir(temp_dir.path())
             .unwrap()
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
             .filter(|e| e.file_name().to_string_lossy().starts_with(program_name))
             .collect();
 
@@ -707,7 +787,10 @@ mod tests {
         let result = result.unwrap();
         assert_eq!(result.exit_code, Some(0));
         assert!(result.stdout.contains("hello"));
-        assert!(result.duration.as_secs() <= 10, "echo should complete within 10s");
+        assert!(
+            result.duration.as_secs() <= 10,
+            "echo should complete within 10s"
+        );
     }
 
     #[test]

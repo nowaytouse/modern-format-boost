@@ -9,6 +9,10 @@ const MIN_FILE_LEN: u64 = 32;
 
 /// Verify AVIF output exists and has minimal size. Optional ffprobe or
 /// signature checks can be added later.
+/// Verify the health of an AVIF file using local tools.
+///
+/// # Errors
+/// Returns an error message if the file is corrupt or tools fail.
 pub fn verify_avif_health(path: &Path) -> Result<(), String> {
     let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
     if !meta.is_file() {
@@ -22,6 +26,10 @@ pub fn verify_avif_health(path: &Path) -> Result<(), String> {
 
 /// Verify AV1-in-MP4 output exists and has minimal size. Optional ffprobe
 /// or duration checks can be added later.
+/// Verify the health of an AV1 MP4 file.
+///
+/// # Errors
+/// Returns an error message if the file is corrupt.
 pub fn verify_av1_mp4_health(path: &Path) -> Result<(), String> {
     let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
     if !meta.is_file() {
