@@ -2572,17 +2572,18 @@ fn cpu_fine_tune_from_gpu_boundary(
                     "{}Phase 4: [CPU] Extreme Mode 0.01-Granularity Fine-Tune (Sprint & Backtrack){}",
                     BRIGHT_MAGENTA, RESET
                 );
+
+                let base_step = 0.01;
+                let mut current_step = base_step;
+                let max_sprint_step = 1.28; // Increased from 0.20 down to a reasonable max sprint
+
                 crate::log_eprintln!(
-                    "   {}Starting from 0.1 optimum (CRF {:.2}) with adaptive step (0.01 → 0.05 sprint){}",
-                    DIM, best, RESET
+                    "   {}Starting from 0.1 optimum (CRF {:.2}) with adaptive step (0.01 → {:.2} sprint){}",
+                    DIM, best, max_sprint_step, RESET
                 );
 
                 let mut current_best = best;
                 let mut current_best_size = best_size.unwrap_or(0);
-
-                let base_step = 0.01;
-                let mut current_step = base_step;
-                let max_sprint_step = 0.20;
                 let mut test_crf = best - current_step;
                 let mut fine_failures = 0;
                 let max_fine_failures = 3;
