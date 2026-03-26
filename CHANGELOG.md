@@ -7,14 +7,16 @@ All notable changes to this project will be documented in this file.
 
 ## [0.10.104] - 2026-03-26
 
-### ⚡ Performance Optimization
-- **Smart Deceleration in Sprint Search**: Fixed iteration waste when Sprint acceleration approaches search boundaries
-  - Problem: When step size accelerates to 0.05 but only 0.04 remains to floor (0.0), the algorithm would waste many iterations testing unnecessary CRF values
-  - Solution: Added intelligent deceleration logic that halves step size when distance to floor < step × 2
+### ⚡ Quality Optimization
+- **Smart Deceleration in Sprint Search**: Fixed opportunity loss when Sprint acceleration approaches search boundaries
+  - **Problem**: When step size accelerates to 0.05 near floor (0.0), algorithm skips many intermediate CRF values that could yield better compression
+  - **Example**: Testing 1.37, 1.32, 1.27... with 0.05 steps misses 1.35, 1.30, 1.25... which might have superior quality/size ratios
+  - **Impact**: Opportunity loss - potentially missing optimal CRF values in the critical low-CRF range
+  - **Solution**: Added intelligent deceleration that halves step size when distance to floor < step × 2
+  - **Result**: Increases test density near boundaries - more exploration opportunities, better quality discovery
   - Applies to both Phase 3 (GPU coarse search) and Phase 4 (CPU fine-tune) Sprint modes
-  - Example: Step 0.05 → 0.025 → 0.0125 when approaching floor, instead of continuing with 0.05
-  - Reduces wasted iterations by up to 50% in extreme quality searches
-  - Maintains search precision while improving efficiency
+  - Example progression: 0.05 → 0.025 → 0.0125 when approaching floor
+  - **Benefit**: More thorough exploration of quality space, reduced risk of missing optimal compression points
 
 ### 🐛 Bug Fixes
 - **JPEG Extension Recognition & Universal Format Detection**: Fixed `.jpe` file extension handling by implementing magic bytes detection using the `infer` crate. The implementation now supports **all convertible image formats**:
