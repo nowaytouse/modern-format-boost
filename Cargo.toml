@@ -106,7 +106,6 @@ tempfile = { git = "https://github.com/Stebalien/tempfile" }
 proptest = { git = "https://github.com/proptest-rs/proptest" }
 flate2 = { git = "https://github.com/rust-lang/flate2-rs" }
 ctrlc = { git = "https://github.com/Detegr/rust-ctrlc" }
-rand = { git = "https://github.com/rust-random/rand" }
 rmp-serde = { git = "https://github.com/3Hren/msgpack-rust" }
 infer = { git = "https://github.com/bojand/infer" }
 xattr = { git = "https://github.com/Stebalien/xattr" }
@@ -114,13 +113,14 @@ libheif-rs = { git = "https://github.com/Cykooz/libheif-rs" }
 crc32fast = { git = "https://github.com/srijs/rust-crc32fast" }
 rayon-core = { git = "https://github.com/rayon-rs/rayon" }
 tracing-core = { git = "https://github.com/tokio-rs/tracing" }
+serde_core = { git = "https://github.com/serde-rs/serde" }
 serde_derive = { git = "https://github.com/serde-rs/serde" }
+thiserror-impl = { git = "https://github.com/dtolnay/thiserror" }
 
 # Force all transitive dependencies to use GitHub nightly (eliminate duplicates)
 getrandom = { git = "https://github.com/rust-random/getrandom" }
 hashbrown = { git = "https://github.com/rust-lang/hashbrown" }
 indexmap = { git = "https://github.com/indexmap-rs/indexmap" }
-regex = { git = "https://github.com/rust-lang/regex" }
 syn = { git = "https://github.com/dtolnay/syn" }
 quote = { git = "https://github.com/dtolnay/quote" }
 proc-macro2 = { git = "https://github.com/dtolnay/proc-macro2" }
