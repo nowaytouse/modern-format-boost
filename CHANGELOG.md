@@ -13,14 +13,16 @@ This release marks a major milestone in the Modern Format Boost project, consoli
 - **🛡️ Cinema-Grade Fidelity (OpenEXR Support)**: Unified 8/16/32-bit float intermediate pipeline ensures zero precision loss for HDR and high-dynamic-range sources by leveraging OpenEXR (`.exr`) for intermediate processing.
 - **📈 Relaxed 3D Quality Gate**: Optimized the "Ultimate" mode thresholds by ~10% to improve pass rates for high-fidelity video iterations while maintaining a premium quality floor (VMAF-Y ≥ 92.0, PSNR-UV ≥ 34.0, CAMBI ≤ 6.0).
 - **🛠️ Scanner Fortification & Automation**: A professional-grade quality scanner (`check_all.sh`) featuring parallel execution and automated fixes via `cargo fix`.
-- **☢️ Unified Diagnostic Hardening**: System-wide transition to a "No-Swallowed-Errors" policy:
-  - **Premium Error Symbols**: Introduced **☢️** (rare internal bug) and **⛔️** (upstream tool failure) for immediate diagnostic clarity in terminal and logs.
-  - **Unified Safe I/O**: Centralized all file removals through `safe_remove_file` to ensure permissions/locking issues are durably logged.
-  - **Background Thread Monitoring**: Hardened all background threads (FFmpeg/cjxl stderr draining) to log panics and read failures instead of failing silently.
-- **🔍 Intelligent Image Handling**: Content-aware format identification using the `infer` crate, independent of file extensions.
+- **☢️ Unified Diagnostic Hardening**: System-wide transition to a "No-Swallowed-Errors" policy, introducing **☢️** (internal bug) and **⛔️** (tool failure) symbols for high-visibility error reporting.
+- **🔍 Content-Aware Format Intelligence**: Integrated the `infer` crate for content-based format identification (Magic Bytes), ensuring accurate detection independent of file extension.
+- **🛠️ Technically Accurate Terminology**: Refactored the conversion pipeline to distinguish between "transcoding" (JPEG bitstream reconstruction) and "encoding" (pixel-based conversion from PNG, WebP, etc.).
+- **🦋 Robust JPEG Recognition**: Enhanced JPEG identification to include `.jpe`, `.jfif`, `.jif`, and other legacy extensions, backed by content-byte verification.
+- **✨ Terminal UI Polish**:
+  - Suppressed redundant batch statistics (`X:0 I:0 P:0`) during initialization to minimize visual noise.
+  - Fixed a regression in `drag_and_drop_processor.sh` where ANSI escape codes were printed literally instead of as colors.
 - **⚡ Search Performance Optimization**: Smart Sprint deceleration halves search steps near boundaries to discover optimal CRF values.
-- **🧹 Proactive Housekeeping & Build Safety**: Integrated `kondo` into both `check_all.sh` and `smart_build.sh` for surgical repository cleanup (excluding `/Volumes` and `~/Library`).
-- **📦 CI/CD Pipeline Modernization**: Migrated GitHub Actions to `dtolnay/rust-toolchain@stable` to resolve build failures across all release lineages.
+- **🧹 Proactive Housekeeping**: Integrated `kondo` into build and quality script pipelines for surgical repository cleanup.
+- **📦 CI/CD Pipeline Modernization**: Migrated GitHub Actions to `dtolnay/rust-toolchain@stable` to resolve build failures.
 
 ---
 

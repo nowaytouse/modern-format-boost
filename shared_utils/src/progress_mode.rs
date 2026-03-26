@@ -734,6 +734,43 @@ pub fn append_stats_to_line(line: &str) -> String {
         return trimmed.to_string();
     }
 
+    // 🚀 Terminology/UI refinement: Only append stats if something has actually happened
+    // and the message is a "Result" line (e.g. marked with ✅, ❌, ⏭️) or a Progress Bar.
+    // This avoids cluttering initialization logs and general info messages.
+    let img_ok = IMAGE_SUCCESS_COUNT.load(Ordering::Relaxed);
+    let img_fail = IMAGE_FAIL_COUNT.load(Ordering::Relaxed);
+    let img_skip = IMAGE_SKIP_COUNT.load(Ordering::Relaxed);
+    let xmp_ok = XMP_SUCCESS_COUNT.load(Ordering::Relaxed);
+    let preprocess_ok = PREPROCESSING_COUNT.load(Ordering::Relaxed);
+    let vid_ok = VIDEO_SUCCESS_COUNT.load(Ordering::Relaxed);
+    let vid_fail = VIDEO_FAIL_COUNT.load(Ordering::Relaxed);
+    let vid_skip = VIDEO_SKIP_COUNT.load(Ordering::Relaxed);
+
+    if xmp_ok == 0
+        && img_ok == 0
+        && img_fail == 0
+        && img_skip == 0
+        && vid_ok == 0
+        && vid_fail == 0
+        && vid_skip == 0
+        && preprocess_ok == 0
+    {
+        return trimmed.to_string();
+    }
+
+    // Only append to "Active" or "Result" lines
+    let is_result = plain.contains('✅')
+        || plain.contains('❌')
+        || plain.contains('⏭️')
+        || plain.contains('⚡')
+        || plain.contains('☢️')
+        || plain.contains('⛔️');
+    let is_progress = plain.contains("▕") && plain.contains('▏');
+
+    if !is_result && !is_progress {
+        return trimmed.to_string();
+    }
+
     let stats_string = get_current_stats_string();
 
     // Check if it ends with \x1b[0m

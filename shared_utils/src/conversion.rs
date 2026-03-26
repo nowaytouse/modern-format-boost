@@ -201,7 +201,8 @@ pub struct ConversionResult {
 impl ConversionResult {
     #[must_use]
     pub fn is_jpeg_transcode(&self) -> bool {
-        self.message.contains("JPEG transcoding") || self.message.contains("JPEG lossless")
+        // After terminology fix, "transcoding" is only used for JPEG bitstream reconstruction (lossless JXL)
+        self.message.contains("transcoding") || self.message.contains("JPEG lossless")
     }
 
     #[must_use]
@@ -311,11 +312,28 @@ impl ConversionResult {
             format!("\x1b[1;33m{size_diff}\x1b[0m")
         };
 
-        // Message body (no \u2705 here — caller (log_eprintln!) already emits it).
-        // Format: "「Quality」 ✅ <FormatName> transcoding: -14.5%"
+        // Determine technically accurate verb:
+        // - "transcoding" specifically for bitstream reconstruction (JPEG -> JXL)
+        // - "encoding" for all other conversions from source pixels
+        let is_jpeg = input.extension().map_or(false, |e| {
+            let ext = e.to_string_lossy().to_lowercase();
+            matches!(
+                ext.as_str(),
+                "jpg" | "jpeg" | "jpe" | "jif" | "jfif" | "jfi" | "jxr"
+            )
+        }) || extra_info.map_or(false, |i| i.to_lowercase().contains("jpeg"));
+
+        let action = if is_jpeg && format_name.eq_ignore_ascii_case("JXL") {
+            "transcoding"
+        } else {
+            "encoding"
+        };
+
+        // Message body (no ✅ here — caller already emits it).
+        // Format: "✅ <FormatName> <Action>: -14.5%"
         let core_msg = match extra_info {
-            Some(info) => format!("{format_name} transcoding ({info}): {size_tag}"),
-            None => format!("{format_name} transcoding: {size_tag}"),
+            Some(info) => format!("{format_name} {action} ({info}): {size_tag}"),
+            None => format!("{format_name} {action}: {size_tag}"),
         };
 
         let message = if let Some(q) = quality_label {

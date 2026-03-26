@@ -53,7 +53,8 @@ pub struct ConversionOutput {
 impl ConversionOutput {
     #[must_use]
     pub fn is_jpeg_transcode(&self) -> bool {
-        self.message.contains("JPEG transcoding") || self.message.contains("JPEG lossless")
+        // After terminology fix, "transcoding" is only used for JPEG bitstream reconstruction (lossless JXL)
+        self.message.contains("transcoding") || self.message.contains("JPEG lossless")
     }
 }
 
@@ -331,13 +332,19 @@ pub fn execute_conversion(
         }
     }
 
+    let action = if detection.format == shared_utils::image_analyzer::DetectedFormat::JPEG {
+        "transcoding"
+    } else {
+        "encoding"
+    };
+
     let reduction = size_reduction.unwrap_or(0.0);
     let message = if reduction >= 0.0 {
-        format!("✅ JXL transcoding: -{reduction:.1}%")
+        format!("✅ JXL {action}: -{reduction:.1}%")
     } else {
         let diff_bytes = output_size.unwrap_or(0) as i64 - detection.file_size as i64;
         let size_diff = shared_utils::modern_ui::format_size_diff(diff_bytes);
-        format!("✅ JXL transcoding: {size_diff}")
+        format!("✅ JXL {action}: {size_diff}")
     };
 
     Ok(ConversionOutput {
