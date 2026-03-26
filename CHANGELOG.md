@@ -28,6 +28,8 @@ This release marks a major milestone in the Modern Format Boost project, consoli
   - Replaced `char`-literal `contains` with `str`-literal in `progress_mode.rs` (emoji multi-byte chars).
   - Cleaned up trailing whitespace and indentation in `lossless_converter.rs` (img_av1, img_hevc), `io_utils.rs`, and `universal_heartbeat.rs`.
   - Fixed test `test_conversion_result_success`: corrected assertion from `"transcoding"` → `"encoding"` for PNG→AVIF (pixel-based) conversion.
+  - Resolved optional warnings in shell scripts: removed trailing whitespace in `check_all.sh`, fixed indentation in `smart_build.sh`.
+  - Enhanced `check_all.sh`: skip `common.sh` from shfmt check (zsh-specific syntax), treat cargo geiger exit 1 with unsafe warnings as informational PASS.
 
 ---
 
