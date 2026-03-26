@@ -19,7 +19,8 @@ This release marks a major milestone in the Modern Format Boost project, consoli
   - **Background Thread Monitoring**: Hardened all background threads (FFmpeg/cjxl stderr draining) to log panics and read failures instead of failing silently.
 - **🔍 Intelligent Image Handling**: Content-aware format identification using the `infer` crate, independent of file extensions.
 - **⚡ Search Performance Optimization**: Smart Sprint deceleration halves search steps near boundaries to discover optimal CRF values.
-- **🧹 Proactive Housekeeping & Stability**: Integrated Kondo cleanup and 100% clean Clippy/ShellCheck status.
+- **🧹 Proactive Housekeeping & Build Safety**: Integrated `kondo` into both `check_all.sh` and `smart_build.sh` for surgical repository cleanup (excluding `/Volumes` and `~/Library`).
+- **📦 CI/CD Pipeline Modernization**: Migrated GitHub Actions to `dtolnay/rust-toolchain@stable` to resolve build failures across all release lineages.
 
 ---
 
