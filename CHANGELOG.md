@@ -13,6 +13,7 @@ All notable changes to this project will be documented in this file.
   - **Example**: Testing 1.37, 1.32, 1.27... with 0.05 steps misses 1.35, 1.30, 1.25... which might have superior quality/size ratios
   - **Impact**: Opportunity loss - potentially missing optimal CRF values in the critical low-CRF range
   - **Solution**: Added intelligent deceleration that halves step size when distance to floor < step × 2
+  - **Anti-Oscillation**: Deceleration check runs BEFORE Sprint to prevent oscillation (Sprint accelerates → deceleration reduces → repeat)
   - **Result**: Increases test density near boundaries - more exploration opportunities, better quality discovery
   - Applies to both Phase 3 (GPU coarse search) and Phase 4 (CPU fine-tune) Sprint modes
   - Example progression: 0.05 → 0.025 → 0.0125 when approaching floor

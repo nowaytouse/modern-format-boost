@@ -2410,30 +2410,16 @@ fn cpu_fine_tune_from_gpu_boundary(
                     prev_ssim_opt = current_ssim_opt;
                     prev_size = size;
 
-                    // Sprint: double the step for faster iteration (after 2 consecutive successes)
-                    consecutive_01_successes += 1;
-
-                    if consecutive_01_successes >= 2 && current_step < 1.6 {
-                        let old_step = current_step;
-                        current_step = (current_step * 2.0).min(1.6);
-                        crate::verbose_eprintln!(
-                            "   {}SPRINT:{} {:.2} → {:.2} (accelerated search)",
-                            BRIGHT_CYAN,
-                            RESET,
-                            old_step,
-                            current_step
-                        );
-                    }
-
-                    // Smart deceleration: reduce step size when approaching floor
-                    // to avoid wasting iterations with oversized steps
+                    // Smart deceleration check: if approaching floor, deceleration takes priority
                     let distance_to_floor = test_crf - search_floor;
-                    if distance_to_floor < current_step * 2.0
-                        && current_step > PHASE3_DOWNWARD_STEP + 0.001
-                    {
+                    let should_decelerate = distance_to_floor < current_step * 2.0
+                        && current_step > PHASE3_DOWNWARD_STEP + 0.001;
+
+                    if should_decelerate {
+                        // Deceleration mode: disable Sprint to avoid oscillation
                         let old_step = current_step;
-                        // Reduce step to half, but not below PHASE3_DOWNWARD_STEP
                         current_step = (current_step / 2.0).max(PHASE3_DOWNWARD_STEP);
+                        consecutive_01_successes = 0; // Reset to prevent Sprint re-activation
                         crate::verbose_eprintln!(
                             "   {}🎯 Smart deceleration: step {:.2} → {:.2} (approaching floor {:.2}){}",
                             BRIGHT_YELLOW,
@@ -2442,6 +2428,21 @@ fn cpu_fine_tune_from_gpu_boundary(
                             search_floor,
                             RESET
                         );
+                    } else {
+                        // Sprint: double the step for faster iteration (after 2 consecutive successes)
+                        consecutive_01_successes += 1;
+
+                        if consecutive_01_successes >= 2 && current_step < 1.6 {
+                            let old_step = current_step;
+                            current_step = (current_step * 2.0).min(1.6);
+                            crate::verbose_eprintln!(
+                                "   {}SPRINT:{} {:.2} → {:.2} (accelerated search)",
+                                BRIGHT_CYAN,
+                                RESET,
+                                old_step,
+                                current_step
+                            );
+                        }
                     }
 
                     test_crf -= current_step;
@@ -2648,17 +2649,37 @@ fn cpu_fine_tune_from_gpu_boundary(
                             step_info
                         );
 
-                        // Sprint: double step after 2 consecutive successes (max 0.05)
-                        if consecutive_successes >= 2 && current_step < max_sprint_step {
+                        // Smart deceleration check: if approaching floor, deceleration takes priority
+                        let distance_to_floor = test_crf - search_floor;
+                        let should_decelerate = distance_to_floor < current_step * 2.0
+                            && current_step > base_step + 0.001;
+
+                        if should_decelerate {
+                            // Deceleration mode: disable Sprint to avoid oscillation
                             let old_step = current_step;
-                            current_step = (current_step * 2.0).min(max_sprint_step);
+                            current_step = (current_step / 2.0).max(base_step);
+                            consecutive_successes = 0; // Reset to prevent Sprint re-activation
                             crate::log_eprintln!(
-                                "   {}⚡ Sprint activated: step {:.2} → {:.2}{}",
-                                BRIGHT_CYAN,
+                                "   {}🎯 Smart deceleration: step {:.2} → {:.2} (approaching floor {:.2}){}",
+                                BRIGHT_YELLOW,
                                 old_step,
                                 current_step,
+                                search_floor,
                                 RESET
                             );
+                        } else {
+                            // Sprint: double step after 2 consecutive successes (max 0.05)
+                            if consecutive_successes >= 2 && current_step < max_sprint_step {
+                                let old_step = current_step;
+                                current_step = (current_step * 2.0).min(max_sprint_step);
+                                crate::log_eprintln!(
+                                    "   {}⚡ Sprint activated: step {:.2} → {:.2}{}",
+                                    BRIGHT_CYAN,
+                                    old_step,
+                                    current_step,
+                                    RESET
+                                );
+                            }
                         }
                     } else {
                         fine_failures += 1;
@@ -2702,23 +2723,6 @@ fn cpu_fine_tune_from_gpu_boundary(
                             );
                             break;
                         }
-                    }
-
-                    // Smart deceleration: reduce step size when approaching floor
-                    // to avoid wasting iterations with oversized steps
-                    let distance_to_floor = test_crf - search_floor;
-                    if distance_to_floor < current_step * 2.0 && current_step > base_step + 0.001 {
-                        let old_step = current_step;
-                        // Reduce step to half, but not below base_step
-                        current_step = (current_step / 2.0).max(base_step);
-                        crate::log_eprintln!(
-                            "   {}🎯 Smart deceleration: step {:.2} → {:.2} (approaching floor {:.2}){}",
-                            BRIGHT_YELLOW,
-                            old_step,
-                            current_step,
-                            search_floor,
-                            RESET
-                        );
                     }
 
                     test_crf -= current_step;
