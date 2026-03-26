@@ -1419,12 +1419,41 @@ fn prepare_input_for_cjxl(
     };
 
     // Determine target bit depth (match source if > 8-bit, else 8-bit)
-    let is_float = hdr_info.is_float;
+    let mut is_float = hdr_info.is_float;
+    
+    // Safety Fallback: Use extension as a hint if ffprobe failed to detect float
+    if !is_float {
+        if let Some(ext) = input.extension().and_then(|e| e.to_str()) {
+            let ext_lower = ext.to_lowercase();
+            if ext_lower == "exr" || ext_lower == "hdr" {
+                is_float = true;
+                if options.verbose {
+                    tracing::warn!(input = %input.display(), "ffprobe float detection failed, using extension hint (EXR/HDR)");
+                }
+            }
+        }
+    }
+
     let is_high_bit_depth =
         hdr_info.bit_depth.is_some_and(|d| d > 8) || hdr_info.is_hdr() || is_float;
+    
+    // Safety Fallback: Use extension as a hint for high-bit integer if ffprobe failed
+    let mut bit_depth = hdr_info.bit_depth;
+    if bit_depth.is_none() && !is_float {
+         if let Some(ext) = input.extension().and_then(|e| e.to_str()) {
+            let ext_lower = ext.to_lowercase();
+            if ext_lower == "tif" || ext_lower == "tiff" || ext_lower == "dng" {
+                bit_depth = Some(16); // Safe assumption for these pro formats
+                if options.verbose {
+                    tracing::warn!(input = %input.display(), "ffprobe bit-depth detection failed, using extension hint (16-bit TIFF/DNG)");
+                }
+            }
+        }
+    }
+
     let depth_str = if is_float {
         "32"
-    } else if is_high_bit_depth {
+    } else if is_high_bit_depth || bit_depth.is_some_and(|d| d > 8) {
         "16"
     } else {
         "8"
