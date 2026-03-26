@@ -29,7 +29,7 @@ Think of it as a "smart compressor" that **never degrades your media**:
 - 🎬 **Videos**: H.264/VP9/AV1 → HEVC with GPU-accelerated quality search
 - 🍎 **Apple ecosystem first**: Full Apple compatibility mode, Live Photo detection, AAE sidecar handling
 - 🔒 **Metadata guardian**: Preserves EXIF, XMP, ICC profiles, creation timestamps, macOS xattrs, Finder tags
-- ⚡ **Perceived Speed Optimization**: "Quick-Wins" sorting strategy—finishes small/shallow files first to provide instant feedback and maximum throughput.
+- ⚡ **Perceived Speed Optimization**: "Deep-First" sorting strategy—prioritizes deeper directory levels first, then sorts by file size and format, to ensure efficient batching and maximum throughput.
 - 🎞️ **HDR10+ Dynamic Metadata**: Full retention of SMPTE 2094-40 metadata via extraction sidecars and x265 SEI injection.
 
 ## ⚠️ Disclaimer & Important Notes
@@ -281,7 +281,7 @@ All Rust dependencies are managed via `Cargo.toml` and fall under their respecti
 - 🎬 **视频**：H.264/VP9/AV1 → HEVC，配合 GPU 加速质量搜索
 - 🍎 **苹果生态优先**：完整的 Apple 兼容模式、Live Photo 检测、AAE 编辑指令保留
 - 🔒 **元数据守护**：保留 EXIF、XMP、ICC 色彩配置文件、创建时间、macOS 扩展属性、Finder 标签
-- ⚡ **感官速度优化**：“先易后难”排序策略——优先处理小文件和浅层目录，提供即时反馈并最大化吞吐量。
+- ⚡ **感官速度优化**："深层优先"排序策略——按目录深度从深到浅、同深度内按文件大小和格式排序，确保高效批处理并最大化吞吐量。
 - 🎞️ **HDR10+ 动态元数据**：通过侧信道提取与 x265 SEI 注入，完整保留 SMPTE 2094-40 动态元数据。
 
 ## ⚠️ 免责声明与重要提示
