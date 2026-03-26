@@ -2582,7 +2582,7 @@ fn cpu_fine_tune_from_gpu_boundary(
 
                 let base_step = 0.01;
                 let mut current_step = base_step;
-                let max_sprint_step = 0.05;
+                let max_sprint_step = 0.20;
                 let mut test_crf = best - current_step;
                 let mut fine_failures = 0;
                 let max_fine_failures = 3;
@@ -2668,10 +2668,11 @@ fn cpu_fine_tune_from_gpu_boundary(
                                 RESET
                             );
                         } else {
-                            // Sprint: double step after 2 consecutive successes (max 0.05)
+                            // Sprint: double step after 2 consecutive successes (max 0.20)
                             if consecutive_successes >= 2 && current_step < max_sprint_step {
                                 let old_step = current_step;
                                 current_step = (current_step * 2.0).min(max_sprint_step);
+                                consecutive_successes = 0; // reset so next sprint needs 2 more wins
                                 crate::log_eprintln!(
                                     "   {}⚡ Sprint activated: step {:.2} → {:.2}{}",
                                     BRIGHT_CYAN,
@@ -2699,10 +2700,11 @@ fn cpu_fine_tune_from_gpu_boundary(
                             RESET
                         );
 
-                        // Backtrack: reset to base step and retry from last good CRF
+                        // Backtrack: halve step gradually (mirrors sprint), retry from last good CRF
                         if current_step > base_step + 0.001 {
                             let old_step = current_step;
-                            current_step = base_step;
+                            current_step = (current_step / 2.0).max(base_step);
+                            consecutive_successes = 0;
                             test_crf = current_best - current_step;
                             crate::log_eprintln!(
                                 "   {}↩️  Backtrack: step {:.2} → {:.2}, retry from CRF {:.2}{}",

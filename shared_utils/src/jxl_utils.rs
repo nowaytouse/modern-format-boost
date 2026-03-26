@@ -199,6 +199,16 @@ fn is_decode_or_pixel_cjxl_error(stderr: &str) -> bool {
         || s.contains("decode failed")
 }
 
+/// True when cjxl was killed by signal (OOM/crash) — stderr has version/encoding lines but no error.
+/// In this case retrying at lower effort may succeed.
+fn is_cjxl_signal_killed(stderr: &str) -> bool {
+    let has_started = stderr.contains("JPEG XL encoder") || stderr.contains("Encoding [");
+    let has_error = stderr.to_lowercase().contains("error")
+        || stderr.contains("failed")
+        || stderr.contains("Error");
+    has_started && !has_error
+}
+
 /// Read the bit depth from a PNG file's IHDR chunk (byte offset 24).
 /// Returns None if the file is not a valid PNG or cannot be read.
 #[must_use]
@@ -229,6 +239,7 @@ fn run_imagemagick_cjxl_pipeline(
     depth: u8,
     normalize_icc: bool,
     apple_compat: bool,
+    effort: u8,
 ) -> std::result::Result<(), (bool, bool, String)> {
     use std::process::Stdio;
 
@@ -288,7 +299,7 @@ fn run_imagemagick_cjxl_pipeline(
         .arg("-d")
         .arg(format!("{distance:.1}"))
         .arg("-e")
-        .arg("7")
+        .arg(effort.to_string())
         .arg("-j")
         .arg(max_threads.to_string());
     if apple_compat {
@@ -451,6 +462,7 @@ pub fn try_imagemagick_fallback(
         16,
         false,
         apple_compat,
+        7,
     ) {
         Ok(()) => {
             crate::progress_mode::emit_stderr(&format!(
@@ -490,6 +502,7 @@ pub fn try_imagemagick_fallback(
                     16,
                     false,
                     apple_compat,
+                    7,
                 ) {
                     Ok(()) => {
                         crate::progress_mode::emit_stderr(&format!(
@@ -532,6 +545,7 @@ pub fn try_imagemagick_fallback(
                                     8,
                                     false,
                                     apple_compat,
+                                    7,
                                 ) {
                                     Ok(()) => {
                                         crate::progress_mode::emit_stderr(&format!(
@@ -562,6 +576,7 @@ pub fn try_imagemagick_fallback(
                                     16,
                                     true,
                                     apple_compat,
+                                    7,
                                 ) == Ok(())
                                 {
                                     crate::progress_mode::emit_stderr(&format!(
@@ -598,6 +613,7 @@ pub fn try_imagemagick_fallback(
                         8,
                         false,
                         apple_compat,
+                        7,
                     ) {
                         Ok(()) => {
                             crate::progress_mode::emit_stderr(&format!(
@@ -628,6 +644,7 @@ pub fn try_imagemagick_fallback(
                         16,
                         true,
                         apple_compat,
+                        7,
                     ) == Ok(())
                     {
                         crate::progress_mode::emit_stderr(&format!(
@@ -659,6 +676,7 @@ pub fn try_imagemagick_fallback(
                     16,
                     false,
                     apple_compat,
+                    7,
                 ) {
                     Ok(()) => {
                         crate::progress_mode::emit_stderr(&format!(
@@ -671,6 +689,39 @@ pub fn try_imagemagick_fallback(
                     Err(_) => {
                         crate::progress_mode::emit_stderr(&format!(
                             "   {} Final attempt failed",
+                            style("❌").red()
+                        ));
+                    }
+                }
+            }
+
+            // Signal-kill retry: cjxl crashed (OOM/SIGSEGV) at effort 7 — retry at effort 3
+            if magick_ok && !cjxl_ok && is_cjxl_signal_killed(&stderr) {
+                crate::progress_mode::emit_stderr(
+                    "   🔄 Attempt (signal-kill retry): cjxl crash detected, retrying at effort 3",
+                );
+                match run_imagemagick_cjxl_pipeline(
+                    input,
+                    output,
+                    distance,
+                    max_threads,
+                    false,
+                    16,
+                    false,
+                    apple_compat,
+                    3,
+                ) {
+                    Ok(()) => {
+                        crate::progress_mode::emit_stderr(&format!(
+                            "   {} Signal-kill retry succeeded (effort 3)",
+                            style("✅").green()
+                        ));
+                        crate::progress_mode::fallback_success();
+                        return Ok(());
+                    }
+                    Err(_) => {
+                        crate::progress_mode::emit_stderr(&format!(
+                            "   {} Signal-kill retry failed",
                             style("❌").red()
                         ));
                     }

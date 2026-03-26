@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
 
+## [0.11.1] - 2026-03-27
+
+### 🐛 Bug Fixes
+
+- **⚡ Sprint acceleration fix (Phase 4)**: Sprint step was capped at 0.05 and never grew further due to `consecutive_successes` not being reset after activation. Fixed:
+  - Raised `max_sprint_step` from `0.05` → `0.20` for more aggressive acceleration
+  - Reset `consecutive_successes = 0` after each sprint activation so the next sprint requires 2 new wins
+  - Backtrack now halves the step gradually (`current_step / 2`) instead of snapping directly to `base_step`, mirroring the sprint ramp-up symmetrically
+
+- **🔧 cjxl signal-kill retry**: When cjxl is killed by signal (OOM/SIGSEGV) during the ImageMagick pipeline at effort 7, the pipeline now retries at effort 3 before giving up. Detects signal-kill by checking that cjxl started encoding (version/encoding lines in stderr) but produced no error message.
+
+---
+
 ## [0.11.0] - 2026-03-26
 
 ### 🌟 Unified Production Consolidation
