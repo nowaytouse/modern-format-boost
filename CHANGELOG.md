@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
 
+## [0.10.108] - 2026-03-26
+
+### 🧹 Project Cleanup & Safety Hardening
+- **Integrated Kondo Cleanup**: Added `kondo` support to `check_all.sh` for safe, automated project cleanup.
+  - **Safety-First Strategy**: Explicitly excludes `/Volumes` (Time Machine) and `~/Library` (Application Data) to prevent system instability.
+  - **Project-Local Scope**: Configured to target only the current repository (`REPO_ROOT`) to avoid confusing other users and ensure precision.
+  - **Automated Mode**: Runs full cleanup when `--fix` is active; provides a dry-run report during standard quality scans.
+
 ## [0.10.107] - 2026-03-26
 
 ### 🛠️ Scanner Fortification & Rust Quality Automation

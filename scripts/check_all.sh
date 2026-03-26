@@ -233,6 +233,14 @@ if [[ ${AUTO_FIX} -eq 1 ]]; then
 	cargo fix --workspace --all-targets --all-features --allow-dirty --allow-staged
 	echo -e "${BLUE}Applying cargo clippy --fix...${NC}"
 	cargo clippy --fix --workspace --all-targets --all-features --allow-dirty --allow-staged
+	
+	if has_command kondo; then
+		echo -e "${BLUE}Applying kondo project cleanup...${NC}"
+		# Target only this repository to avoid confusing other users.
+		# Exclude Time Machine and Application data for absolute safety.
+		# Use -a for non-interactive cleanup.
+		kondo -a -I /Volumes -I ~/Library "${REPO_ROOT}" || true
+	fi
 	echo -e "${GREEN}Auto-fix completed${NC}"
 fi
 
@@ -423,12 +431,18 @@ if [[ ${RUN_OPTIONAL} -eq 1 ]]; then
 				env MIRIFLAGS="-Zmiri-disable-isolation" cargo +nightly miri test -p shared_utils --lib test_signature_stability
 		elif has_nightly_toolchain; then
 			skip_optional "cargo miri test" "miri component not installed nightly"
-		else
-			skip_optional "cargo miri test" "nightly toolchain missing"
 		fi
-	else
-		skip_optional "expensive optional checks" "disabled by --no-expensive"
 	fi
+
+	if has_command kondo; then
+		# Add a dry-run check to report potential savings for the current project.
+		run_optional "kondo dry-run (current project)" \
+			kondo -n -I /Volumes -I ~/Library "${REPO_ROOT}"
+	else
+		skip_optional "kondo" "kondo not installed"
+	fi
+else
+	skip_optional "expensive optional checks" "disabled by --no-expensive"
 fi
 
 echo -e "\n${BLUE}========================================${NC}"
