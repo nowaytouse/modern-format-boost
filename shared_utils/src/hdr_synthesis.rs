@@ -46,12 +46,16 @@ pub fn convert_heic_with_gainmap_to_jxl_hdr(
 ) -> Result<()> {
     let data = std::fs::read(input).context("Failed to read HEIC file")?;
     let ctx = HeifContext::read_from_bytes(&data).context("Failed to parse HEIC context")?;
-    let primary_handle = ctx
+    let handle = ctx
         .primary_image_handle()
-        .context("No primary image in HEIC")?;
+        .map_err(|e| anyhow!("Failed to get primary image handle: {}", e))?;
 
-    // 1. Detect and find Gainmap auxiliary image
-    let aux_images = primary_handle.auxiliary_images(None);
+    // 1. Color Space Awareness: Only convert to sRGB if the source is P3
+    // Use manual box parsing from the full data buffer
+    let needs_p3_conversion = is_display_p3(&data);
+
+    // 2. Detect and find Gainmap auxiliary image
+    let aux_images = handle.auxiliary_images(None);
     let mut gainmap_handle: Option<ImageHandle> = None;
 
     for aux in aux_images {
@@ -68,22 +72,22 @@ pub fn convert_heic_with_gainmap_to_jxl_hdr(
         gainmap_handle.ok_or_else(|| anyhow!("No gainmap found in auxiliary images"))?;
 
     // 2. Decode SDR and Gainmap
-    let sdr_img = decode_heif_handle(&primary_handle, ColorSpace::Rgb(RgbChroma::Rgb))
+    let sdr = decode_heif_handle(&handle, ColorSpace::Rgb(RgbChroma::Rgb))
         .context("Failed to decode SDR base image from HEIC")?;
-    let gain_img = decode_heif_handle(&gain_handle, ColorSpace::Monochrome)
+    let gain = decode_heif_handle(&gain_handle, ColorSpace::Monochrome)
         .context("Failed to decode Gainmap auxiliary image from HEIC")?;
 
     // 3. Parse XMP parameters
-    let params = parse_gainmap_params(&primary_handle).unwrap_or_default();
+    let params = parse_gainmap_params(&handle).unwrap_or_default();
     info!("Gainmap parameters: {:?}", params);
 
     // 4. Perform Synthesis
-    let hdr_pixels = synthesize_hdr(&sdr_img, &gain_img, &params)
-        .context("HDR synthesis math failed (linear light mapping)")?;
+    let hdr_pixels = synthesize_hdr(&sdr, &gain, &params, needs_p3_conversion)
+        .context("☢️ HDR synthesis math failure")?;
 
     // 5. Write intermediate EXR
     let tmp_exr = output.with_extension("tmp_hdr.exr");
-    write_exr(&hdr_pixels, sdr_img.width(), sdr_img.height(), &tmp_exr)
+    write_exr(&hdr_pixels, sdr.width(), sdr.height(), &tmp_exr)
         .context("Failed to write intermediate 32-bit OpenEXR buffer")?;
 
     // 6. Invoke cjxl
@@ -140,7 +144,7 @@ fn decode_heif_handle(handle: &ImageHandle, color_space: ColorSpace) -> Result<D
             let r_plane = planes
                 .interleaved
                 .ok_or_else(|| anyhow!("No RGB interleaved plane"))?;
-            
+
             if bit_depth > 8 {
                 // Handle 10/12/16-bit (data is actually u16 even if returned as &[u8])
                 let data_u16: &[u16] = unsafe {
@@ -173,7 +177,7 @@ fn decode_heif_handle(handle: &ImageHandle, color_space: ColorSpace) -> Result<D
         ColorSpace::Monochrome => {
             let planes = img.planes();
             let y_plane = planes.y.ok_or_else(|| anyhow!("No Y plane"))?;
-            
+
             if bit_depth > 8 {
                 let data_u16: &[u16] = unsafe {
                     std::slice::from_raw_parts(
@@ -200,6 +204,30 @@ fn decode_heif_handle(handle: &ImageHandle, color_space: ColorSpace) -> Result<D
         }
         _ => Err(anyhow!("Unsupported color space for synthesis")),
     }
+}
+
+fn is_display_p3(data: &[u8]) -> bool {
+    use crate::common_utils::find_box_data_recursive;
+
+    // 1. Check colr/nclx box (Common in HEIC/AVIF/JXL containers)
+    if let Some(colr_data) = find_box_data_recursive(data, b"colr") {
+        if colr_data.len() >= 11 && &colr_data[0..4] == b"nclx" {
+            // flavour: nclx
+            // colour_primaries: bytes 8-9 (u16 BE)
+            let primaries = u16::from_be_bytes([colr_data[8], colr_data[9]]);
+            return primaries == 12; // 12 = Display P3, 1 = Rec.709/sRGB
+        }
+    }
+
+    // 2. Fallback: Search for "Display P3" or "P3" in raw data (Heuristic for ICC)
+    // We search the whole buffer for the signature of Display P3 ICC profile
+    let search_limit = 1024 * 1024; // limit search to first 1MB for performance
+    let end = data.len().min(search_limit);
+    let slice = &data[..end];
+
+    // Check for common Display P3 signatures in ICC profiles
+    slice.windows(10).any(|w| w == b"Display P3")
+        || slice.windows(2).any(|w| w == b"P3") && slice.windows(4).any(|w| w == b"colr")
 }
 
 fn parse_gainmap_params(handle: &ImageHandle) -> Option<GainMapParams> {
@@ -291,6 +319,7 @@ fn synthesize_hdr(
     sdr: &DynamicImage,
     gain: &DynamicImage,
     params: &GainMapParams,
+    needs_p3_conversion: bool,
 ) -> Result<Vec<f32>> {
     use image::GenericImageView;
     let (width, height) = sdr.dimensions();
@@ -304,27 +333,59 @@ fn synthesize_hdr(
     let mut hdr_pixels = Vec::with_capacity((width * height * 3) as usize);
 
     // Get typed buffers to avoid scale-to-u8 bug in GenericImageView::get_pixel
-    let sdr_8 = if sdr.color().bits_per_pixel() <= 24 { Some(sdr.to_rgb8()) } else { None };
-    let sdr_16 = if sdr.color().bits_per_pixel() > 24 { Some(sdr.to_rgb16()) } else { None };
-    
-    let gain_8 = if gain_resized.color().bits_per_pixel() <= 8 { Some(gain_resized.to_luma8()) } else { None };
-    let gain_16 = if gain_resized.color().bits_per_pixel() > 8 { Some(gain_resized.to_luma16()) } else { None };
-    let gain_rgb16 = if gain_resized.color().has_color() && gain_resized.color().bits_per_pixel() > 24 { Some(gain_resized.to_rgb16()) } else { None };
-    let gain_rgb8 = if gain_resized.color().has_color() && gain_resized.color().bits_per_pixel() <= 24 { Some(gain_resized.to_rgb8()) } else { None };
+    let sdr_8 = if sdr.color().bits_per_pixel() <= 24 {
+        Some(sdr.to_rgb8())
+    } else {
+        None
+    };
+    let sdr_16 = if sdr.color().bits_per_pixel() > 24 {
+        Some(sdr.to_rgb16())
+    } else {
+        None
+    };
+
+    let gain_8 = if gain_resized.color().bits_per_pixel() <= 8 {
+        Some(gain_resized.to_luma8())
+    } else {
+        None
+    };
+    let gain_16 = if gain_resized.color().bits_per_pixel() > 8 {
+        Some(gain_resized.to_luma16())
+    } else {
+        None
+    };
+    let gain_rgb16 =
+        if gain_resized.color().has_color() && gain_resized.color().bits_per_pixel() > 24 {
+            Some(gain_resized.to_rgb16())
+        } else {
+            None
+        };
+    let gain_rgb8 =
+        if gain_resized.color().has_color() && gain_resized.color().bits_per_pixel() <= 24 {
+            Some(gain_resized.to_rgb8())
+        } else {
+            None
+        };
 
     for y in 0..height {
         for x in 0..width {
             // 1. Get Normalized SDR (Linearized later)
             let (r_norm, g_norm, b_norm) = if let Some(ref buf) = sdr_16 {
                 let px = buf.get_pixel(x, y);
-                (px[0] as f32 / 65535.0, px[1] as f32 / 65535.0, px[2] as f32 / 65535.0)
+                (
+                    px[0] as f32 / 65535.0,
+                    px[1] as f32 / 65535.0,
+                    px[2] as f32 / 65535.0,
+                )
             } else if let Some(ref buf) = sdr_8 {
                 let px = buf.get_pixel(x, y);
-                (px[0] as f32 / 255.0, px[1] as f32 / 255.0, px[2] as f32 / 255.0)
+                (
+                    px[0] as f32 / 255.0,
+                    px[1] as f32 / 255.0,
+                    px[2] as f32 / 255.0,
+                )
             } else {
-                let px = sdr.to_rgb8();
-                let p = px.get_pixel(x, y);
-                (p[0] as f32 / 255.0, p[1] as f32 / 255.0, p[2] as f32 / 255.0)
+                unreachable!("SDR buffer type mismatch");
             };
 
             // SDR to Linear (sRGB/Rec.709 Transfer function)
@@ -336,7 +397,8 @@ fn synthesize_hdr(
             let apply_gain = |val_raw: f32, max_val: f32| -> f32 {
                 let val_norm = val_raw / max_val;
                 let gain_px_corrected = val_norm.powf(1.0 / params.gamma.max(0.1));
-                let log2_gain = gain_px_corrected * (params.gain_map_max - params.gain_map_min) + params.gain_map_min;
+                let log2_gain = gain_px_corrected * (params.gain_map_max - params.gain_map_min)
+                    + params.gain_map_min;
                 2.0_f32.powf(log2_gain)
             };
 
@@ -344,10 +406,18 @@ fn synthesize_hdr(
             let (gain_r, gain_g, gain_b) = if gain_channels >= 3 {
                 if let Some(ref buf) = gain_rgb16 {
                     let p = buf.get_pixel(x, y);
-                    (apply_gain(p[0] as f32, 65535.0), apply_gain(p[1] as f32, 65535.0), apply_gain(p[2] as f32, 65535.0))
+                    (
+                        apply_gain(p[0] as f32, 65535.0),
+                        apply_gain(p[1] as f32, 65535.0),
+                        apply_gain(p[2] as f32, 65535.0),
+                    )
                 } else if let Some(ref buf) = gain_rgb8 {
                     let p = buf.get_pixel(x, y);
-                    (apply_gain(p[0] as f32, 255.0), apply_gain(p[1] as f32, 255.0), apply_gain(p[2] as f32, 255.0))
+                    (
+                        apply_gain(p[0] as f32, 255.0),
+                        apply_gain(p[1] as f32, 255.0),
+                        apply_gain(p[2] as f32, 255.0),
+                    )
                 } else {
                     let g_val = apply_gain(128.0, 255.0);
                     (g_val, g_val, g_val)
@@ -363,20 +433,26 @@ fn synthesize_hdr(
                 (g_val, g_val, g_val)
             };
 
-            // 3. Apply Gain (Assuming source is Display P3)
-            let r_p3 = (r_lin + params.offset_sdr) * gain_r - params.offset_hdr;
-            let g_p3 = (g_lin + params.offset_sdr) * gain_g - params.offset_hdr;
-            let b_p3 = (b_lin + params.offset_sdr) * gain_b - params.offset_hdr;
+            // 3. Apply Gain
+            let r_hdr = (r_lin + params.offset_sdr) * gain_r - params.offset_hdr;
+            let g_hdr = (g_lin + params.offset_sdr) * gain_g - params.offset_hdr;
+            let b_hdr = (b_lin + params.offset_sdr) * gain_b - params.offset_hdr;
 
-            // 4. Color Primaries: Linear P3 -> Linear sRGB (Rec.709)
-            // Matrix for D65 Display P3 to D65 Rec.709
-            let r_srgb =  1.2249 * r_p3 - 0.2247 * g_p3 - 0.0001 * b_p3;
-            let g_srgb = -0.0420 * r_p3 + 1.0419 * g_p3 + 0.0001 * b_p3;
-            let b_srgb = -0.0197 * r_p3 - 0.0786 * g_p3 + 1.0983 * b_p3;
+            // 4. Color Primaries: Conditionally convert Linear P3 -> Linear sRGB (Rec.709)
+            if needs_p3_conversion {
+                // Matrix for D65 Display P3 to D65 Rec.709
+                let r_srgb = 1.2249 * r_hdr - 0.2247 * g_hdr - 0.0001 * b_hdr;
+                let g_srgb = -0.0420 * r_hdr + 1.0419 * g_hdr + 0.0001 * b_hdr;
+                let b_srgb = -0.0197 * r_hdr - 0.0786 * g_hdr + 1.0983 * b_hdr;
 
-            hdr_pixels.push(r_srgb.max(0.0));
-            hdr_pixels.push(g_srgb.max(0.0));
-            hdr_pixels.push(b_srgb.max(0.0));
+                hdr_pixels.push(r_srgb.max(0.0));
+                hdr_pixels.push(g_srgb.max(0.0));
+                hdr_pixels.push(b_srgb.max(0.0));
+            } else {
+                hdr_pixels.push(r_hdr.max(0.0));
+                hdr_pixels.push(g_hdr.max(0.0));
+                hdr_pixels.push(b_hdr.max(0.0));
+            }
         }
     }
 
