@@ -36,6 +36,7 @@ crc32fast = { workspace = true }
 infer = { workspace = true }
 quick-xml = { workspace = true }
 exr = { workspace = true }
+proptest = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
