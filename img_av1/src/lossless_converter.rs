@@ -933,9 +933,45 @@ fn prepare_input_for_cjxl(
     };
 
     // Determine target bit depth (match source if > 8-bit, else 8-bit)
-    let is_float = hdr_info.is_float;
-    let is_high_bit_depth = hdr_info.bit_depth.is_some_and(|d| d > 8) || hdr_info.is_hdr() || is_float;
-    let depth_str = if is_float { "32" } else if is_high_bit_depth { "16" } else { "8" };
+    let mut is_float = hdr_info.is_float;
+    
+    // Safety Fallback: Use extension as a hint if ffprobe failed to detect float
+    if !is_float {
+        if let Some(ext) = input.extension().and_then(|e| e.to_str()) {
+            let ext_lower = ext.to_lowercase();
+            if ext_lower == "exr" || ext_lower == "hdr" {
+                is_float = true;
+                if options.verbose {
+                    tracing::warn!(input = %input.display(), "ffprobe float detection failed, using extension hint (EXR/HDR)");
+                }
+            }
+        }
+    }
+
+    let is_high_bit_depth =
+        hdr_info.bit_depth.is_some_and(|d| d > 8) || hdr_info.is_hdr() || is_float;
+    
+    // Safety Fallback: Use extension as a hint for high-bit integer if ffprobe failed
+    let mut bit_depth = hdr_info.bit_depth;
+    if bit_depth.is_none() && !is_float {
+         if let Some(ext) = input.extension().and_then(|e| e.to_str()) {
+            let ext_lower = ext.to_lowercase();
+            if ext_lower == "tif" || ext_lower == "tiff" || ext_lower == "dng" {
+                bit_depth = Some(16); // Safe assumption for these pro formats
+                if options.verbose {
+                    tracing::warn!(input = %input.display(), "ffprobe bit-depth detection failed, using extension hint (16-bit TIFF/DNG)");
+                }
+            }
+        }
+    }
+
+    let depth_str = if is_float {
+        "32"
+    } else if is_high_bit_depth || bit_depth.is_some_and(|d| d > 8) {
+        "16"
+    } else {
+        "8"
+    };
     let intermediate_suffix = if is_float { ".exr" } else { ".png" };
 
     if is_float && options.verbose {
@@ -1032,7 +1068,9 @@ fn prepare_input_for_cjxl(
                     style("Corrupted JPEG header detected, using ImageMagick to sanitize").yellow()
                 );
 
-                let temp_file = tempfile::Builder::new().suffix(intermediate_suffix).tempfile()?;
+                let temp_file = tempfile::Builder::new()
+                    .suffix(intermediate_suffix)
+                    .tempfile()?;
                 let temp_path = temp_file.path().to_path_buf();
 
                 let mut cmd = Command::new("magick");
@@ -1042,7 +1080,7 @@ fn prepare_input_for_cjxl(
                 if is_float {
                     cmd.arg("-format").arg("exr");
                 }
-                
+
                 cmd.arg("-depth")
                     .arg(depth_str)
                     .arg(shared_utils::safe_path_arg(&temp_path).as_ref());
@@ -1051,7 +1089,11 @@ fn prepare_input_for_cjxl(
 
                 match result {
                     Ok(output) if output.status.success() && temp_path.exists() => {
-                        let label = if is_float { "OpenEXR" } else { "ImageMagick PNG" };
+                        let label = if is_float {
+                            "OpenEXR"
+                        } else {
+                            "ImageMagick PNG"
+                        };
                         eprintln!(
                             "   {} {} {} sanitization successful",
                             style("✅").green(),
@@ -1081,22 +1123,29 @@ fn prepare_input_for_cjxl(
         ),
 
         "tiff" | "tif" => {
-            let label = if is_float { "32-bit float OpenEXR" } else { &format!("{depth_str}-bit PNG") };
-            let temp_file = tempfile::Builder::new().suffix(intermediate_suffix).tempfile().map_err(ImgQualityError::IoError)?;
+            let label = if is_float {
+                "32-bit float OpenEXR"
+            } else {
+                &format!("{depth_str}-bit PNG")
+            };
+            let temp_file = tempfile::Builder::new()
+                .suffix(intermediate_suffix)
+                .tempfile()
+                .map_err(ImgQualityError::IoError)?;
             let temp_path = temp_file.path().to_path_buf();
-            
+
             let mut cmd = Command::new("magick");
             cmd.arg("--")
                 .arg(shared_utils::safe_path_arg(input).as_ref());
-            
+
             if is_float {
                 cmd.arg("-format").arg("exr");
             }
-            
+
             cmd.arg("-depth")
                 .arg(depth_str)
                 .arg(shared_utils::safe_path_arg(&temp_path).as_ref());
-            
+
             let out = cmd.output().map_err(ImgQualityError::IoError)?;
             if out.status.success() && temp_path.exists() {
                 if options.verbose {
@@ -1105,27 +1154,36 @@ fn prepare_input_for_cjxl(
                 Ok((temp_path, Some(temp_file)))
             } else {
                 let err = String::from_utf8_lossy(&out.stderr);
-                Err(ImgQualityError::ConversionError(format!("magick TIFF conversion failed: {err}")))
+                Err(ImgQualityError::ConversionError(format!(
+                    "magick TIFF conversion failed: {err}"
+                )))
             }
         }
 
         "bmp" => {
-            let label = if is_float { "32-bit float OpenEXR" } else { &format!("{depth_str}-bit PNG") };
-            let temp_file = tempfile::Builder::new().suffix(intermediate_suffix).tempfile().map_err(ImgQualityError::IoError)?;
+            let label = if is_float {
+                "32-bit float OpenEXR"
+            } else {
+                &format!("{depth_str}-bit PNG")
+            };
+            let temp_file = tempfile::Builder::new()
+                .suffix(intermediate_suffix)
+                .tempfile()
+                .map_err(ImgQualityError::IoError)?;
             let temp_path = temp_file.path().to_path_buf();
-            
+
             let mut cmd = Command::new("magick");
             cmd.arg("--")
                 .arg(shared_utils::safe_path_arg(input).as_ref());
-            
+
             if is_float {
                 cmd.arg("-format").arg("exr");
             }
-            
+
             cmd.arg("-depth")
                 .arg(depth_str)
                 .arg(shared_utils::safe_path_arg(&temp_path).as_ref());
-            
+
             let out = cmd.output().map_err(ImgQualityError::IoError)?;
             if out.status.success() && temp_path.exists() {
                 if options.verbose {
@@ -1134,7 +1192,9 @@ fn prepare_input_for_cjxl(
                 Ok((temp_path, Some(temp_file)))
             } else {
                 let err = String::from_utf8_lossy(&out.stderr);
-                Err(ImgQualityError::ConversionError(format!("magick BMP conversion failed: {err}")))
+                Err(ImgQualityError::ConversionError(format!(
+                    "magick BMP conversion failed: {err}"
+                )))
             }
         }
 
@@ -1166,17 +1226,19 @@ fn prepare_input_for_cjxl(
                 }
                 _ => {
                     eprintln!("   ⚠️  sips failed, trying ImageMagick...");
-                    let temp_file = tempfile::Builder::new().suffix(intermediate_suffix).tempfile()?;
+                    let temp_file = tempfile::Builder::new()
+                        .suffix(intermediate_suffix)
+                        .tempfile()?;
                     let temp_path = temp_file.path().to_path_buf();
-                    
+
                     let mut cmd = Command::new("magick");
                     cmd.arg("--")
                         .arg(shared_utils::safe_path_arg(input).as_ref());
-                    
+
                     if is_float {
                         cmd.arg("-format").arg("exr");
                     }
-                    
+
                     cmd.arg("-depth")
                         .arg(depth_str)
                         .arg(shared_utils::safe_path_arg(&temp_path).as_ref());
