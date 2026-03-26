@@ -70,7 +70,7 @@ Every file goes through a multi-stage decision pipeline:
 ### Video Pipeline: Three-Phase Saturation Search
 1. **Phase 1: GPU Coarse Search**: Binary search on hardware encoders (VideoToolbox/NVENC) to find the "quality knee".
 2. **Phase 2: CPU Fine-Tune**: Maps GPU CRF to `x265` scale. Uses **Sprint & Backtrack** (double step on success, reset to 0.1 on overshoot).
-3. **Phase 3: Ultimate 3D Quality Gate**: Requires simultaneous pass of VMAF-Y ≥ 93.0, CAMBI ≤ 5.0 (banding), and PSNR-UV ≥ 35.0 dB. 
+3. **Phase 3: Ultimate 3D Quality Gate**: Requires simultaneous pass of VMAF-Y ≥ 92.0, CAMBI ≤ 6.0 (banding), and PSNR-UV ≥ 34.0 dB. 
    - **Fusion Scoring**: Combines MS-SSIM + SSIM_All (0.6/0.4 weight) for robust structural analysis.
    - **Chroma Guard**: Automatically detects small resolutions that would crash libvmaf MS-SSIM and falls back to Y-only scoring to ensure processing reliability.
    - *Note: In `--ultimate` mode, the search only terminates after **50 consecutive samples** show zero quality gain, ensuring absolute saturation.*
@@ -321,7 +321,7 @@ All Rust dependencies are managed via `Cargo.toml` and fall under their respecti
 ### 视频处理：三阶段饱和搜索
 1. **第一阶段：GPU 粗搜索**：利用硬件编码器进行快速二分搜索，定位“画质拐点”。
 2. **第二阶段：CPU 精调**：将结果映射至 `x265` 刻度。使用 **Sprint & Backtrack（冲刺与回退）算法**：连续成功时步长翻倍，过冲时立即降至 0.1 步长。
-3. **第三阶段：极致 3D 质量门控**：必须同时通过 VMAF-Y ≥ 93.0（感知画质）、CAMBI ≤ 5.0（色带检测）及 PSNR-UV ≥ 35.0 dB。
+3. **第三阶段：极致 3D 质量门控**：必须同时通过 VMAF-Y ≥ 92.0（感知画质）、CAMBI ≤ 6.0（色带检测）及 PSNR-UV ≥ 34.0 dB。
    - **融合得分系统**：结合 MS-SSIM + SSIM_All (0.6/0.4 权重)，提供超高精度的结构分析。
    - **色度通道保护**：自动识别会导致 libvmaf MS-SSIM 崩溃的极小分辨率，并无缝回退至单通道 Y-only 评分，确保流程稳健。
    - *注：在 `--ultimate` 极致模式下，搜索算法要求连续 **50 次采样** 均达到零画质增益方可停机，确保绝对画质饱和。*

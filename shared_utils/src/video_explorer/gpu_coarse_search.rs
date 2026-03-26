@@ -19,8 +19,8 @@ use crate::modern_ui::colors::{
     MFB_BLUE, RESET, YELLOW,
 };
 
-const VMAF_Y_MIN: f64 = 93.0;
-const PSNR_UV_MIN: f64 = 35.0;
+const VMAF_Y_MIN: f64 = 92.0;
+const PSNR_UV_MIN: f64 = 34.0;
 const MAX_CONSECUTIVE_COMPRESSIONS: u32 = 3;
 const MAX_CONSECUTIVE_FAILURES: u32 = 3;
 const VMAF_DURATION_THRESHOLD_SECS: f64 = 300.0;
@@ -28,7 +28,7 @@ const VMAF_DURATION_THRESHOLD_ULTIMATE_SECS: f64 = 1500.0;
 const ZERO_GAIN_THRESHOLD: f64 = 0.00005;
 const DECAY_FACTOR: f32 = 0.4;
 const MIN_STEP: f32 = 0.1;
-const CAMBI_MAX: f64 = 5.0;
+const CAMBI_MAX: f64 = 6.0;
 const MS_SSIM_WEIGHT: f64 = 0.6;
 const SSIM_ALL_WEIGHT: f64 = 0.4;
 const PHASE3_DOWNWARD_STEP: f32 = 0.1;
@@ -535,9 +535,9 @@ pub fn explore_with_gpu_coarse_search(
 
         // Display quality metrics that triggered early insight
         if let Some(vmaf) = best_vmaf_tracked {
-            let vmaf_pass = vmaf >= 93.0;
+            let vmaf_pass = vmaf >= 92.0;
             crate::log_eprintln!(
-                "   VMAF-Y: {:.2} {} 93.0 {}",
+                "   VMAF-Y: {:.2} {} 92.0 {}",
                 vmaf,
                 if vmaf_pass { "≥" } else { "<" },
                 if vmaf_pass { "✅" } else { "❌" }
@@ -625,8 +625,8 @@ pub fn explore_with_gpu_coarse_search(
             if ultimate_mode {
                 // ── Ultimate Mode: 3D Quality Gate ────────────────────────────
                 // Three independent dimensions must ALL pass:
-                //   1. VMAF-Y   ≥ 93.0   (perceptual quality, Netflix standard)
-                //   2. CAMBI    ≤ 5.0    (banding detection, lower = better, Netflix standard)
+                //   1. VMAF-Y   ≥ 92.0   (perceptual quality, Netflix standard)
+                //   2. CAMBI    ≤ 6.0    (banding detection, lower = better, Netflix standard)
                 //   3. PSNR-UV  ≥ 38.0 dB (chroma fidelity)
                 crate::log_eprintln!("   Enabling precision quality gate (Ultimate Mode)...");
 
@@ -1843,7 +1843,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                     // this encode is not credible. Abort immediately.
                     if ultimate_mode && quality_wall_triggered {
                         // VMAF and PSNR thresholds defined at module level
-                        const PSNR_UV_MIN: f64 = 35.0;
+                        const PSNR_UV_MIN: f64 = 34.0;
 
                         let Some(vmaf_metric) = best_vmaf_tracked else {
                             crate::log_eprintln!(
@@ -2372,7 +2372,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                     if ultimate_mode {
                         // Only trigger if quality already meets final settlement thresholds
                         // VMAF and PSNR thresholds defined at module level
-                        const PSNR_UV_MIN: f64 = 35.0;
+                        const PSNR_UV_MIN: f64 = 34.0;
 
                         let any_metric_fails =
                             if let (Some(v), Some(uv)) = (current_vmaf_val, current_psnr_val) {
