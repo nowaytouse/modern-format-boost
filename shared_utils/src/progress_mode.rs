@@ -885,8 +885,8 @@ fn format_video_stats_line(
         parts.push(xmp_msg);
     }
 
-    // Video Stats: V: 12✓
-    let vid_msg = if vid_fail > 0 || vid_skip > 0 {
+    // Video Stats: V: 12✓ (Only show if > 0 or has failures/skips)
+    let vid_msg = if vid_ok > 0 || vid_fail > 0 || vid_skip > 0 {
         let mut v_stat = format!("{}V:{}{}✓", colors::MFB_PURPLE, colors::MFB_GREEN, vid_ok);
         if vid_skip > 0 {
             v_stat.push_str(&format!(
@@ -902,13 +902,8 @@ fn format_video_stats_line(
         v_stat.push_str(colors::RESET);
         v_stat
     } else {
-        format!(
-            "{}V:{}{}✓{}",
-            colors::MFB_PURPLE,
-            colors::MFB_GREEN,
-            vid_ok,
-            colors::RESET
-        )
+        // All zeros - don't show V:0✓
+        return String::new();
     };
     parts.push(vid_msg);
 
