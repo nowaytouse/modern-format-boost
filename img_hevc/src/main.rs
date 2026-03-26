@@ -659,6 +659,16 @@ fn dispatch_static_conversion(
 
     Ok(match (format, is_lossless) {
         ("WebP" | "AVIF" | "TIFF" | "HEIC" | "HEIF", true) => {
+            if format == "HEIC" || format == "HEIF" {
+                if let Some(h) = &analysis.heic_analysis {
+                    if h.has_gainmap {
+                        println!("🌈 HDR Synthesis: {} (Gainmap detected)", input.display());
+                        return Ok(img_hevc::lossless_converter::convert_heic_gainmap_to_jxl(
+                            input, options,
+                        )?);
+                    }
+                }
+            }
             if config.verbose {
                 println!("🔄 Modern Lossless→JXL: {}", input.display());
             }

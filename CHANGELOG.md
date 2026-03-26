@@ -5,6 +5,51 @@ All notable changes to this project will be documented in this file.
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
 
+## [0.11.2] - 2026-03-27
+
+### 🌟 High-Fidelity HDR Synthesis (HEIC Gainmap)
+This release introduces a professional-grade HDR synthesis pipeline for high-dynamic-range media, enabling the conversion of standard 8-bit HEIC files (Apple/Samsung/ISO) with gainmaps into true 32-bit linear HDR JPEG XL files.
+
+- **🌈 HEIC Gainmap HDR Synthesis**: New high-fidelity pipeline that intercepts HEIC files containing standard-compliant Gainmap metadata (Apple `urn:com:apple:photo:2020:aux:hdrgainmap` or ISO 21496-1).
+  - **32-bit Linear Processing**: Synthesizes linear-light HDR intensities using log2-based gain application, preserved via intermediate **OpenEXR (.exr)** files to ensure zero precision loss.
+  - **XMP Parameter Parsing**: Integrates `quick-xml` for robust extraction of industry-standard gainmap parameters (`GainMapMax`, `GainMapMin`, `OffsetSdr`, `OffsetHdr`) regardless of vendor prefix.
+  - **CICP/ICC Preservation**: Automatically injects correct HDR color metadata (CICP/ICC) into the final JXL container for native OS-level HDR playback.
+- **🔄 Intelligent Skip Refactoring**: Refactored the `img_av1` skip policy to prioritize HDR synthesis. HEIC files that were previously skipped to avoid "generational loss" are now processed if a Gainmap is detected, yielding a significant dynamic range upgrade.
+- **🛠️ Dependency Hardening**: 
+  - Integrated `exr` crate for native 32-bit float buffer support.
+  - Integrated `quick-xml` for high-performance XMP metadata parsing.
+
+### 🧹 Code Quality & Maintenance
+- **🔧 Clippy "Disease" Eradication**: Fixed all functional and stylistic warnings across the workspace, including:
+  - Simplified `Option::map_or(false, …)` → `Option::is_some_and(…)` in HEIC analysis.
+  - Removed unnecessary `usize` casts in HDR synthesis loops.
+  - Collapsed nested `if` statements in JPEG analysis for cleaner control flow.
+- **✨ Format Standardization**: Applied `cargo fmt` across the entire codebase to maintain a uniform, production-ready aesthetic.
+
+---
+
+## [0.11.1] - 2026-03-27
+
+### 🐛 Bug Fixes
+
+- **⚡ Sprint acceleration fix (Phase 4)**: Sprint step was capped at 0.05 and never grew further due to `consecutive_successes` not being reset after activation. Fixed:
+  - Raised `max_sprint_step` from `0.05` → `0.20` for more aggressive acceleration
+  - Reset `consecutive_successes = 0` after each sprint activation so the next sprint requires 2 new wins
+  - Backtrack now halves the step gradually (`current_step / 2`) instead of snapping directly to `base_step`, mirroring the sprint ramp-up symmetrically
+
+- **🔧 cjxl signal-kill retry**: When cjxl is killed by signal (OOM/SIGSEGV) during the ImageMagick pipeline at effort 7, the pipeline now retries at effort 3 before giving up. Detects signal-kill by checking that cjxl started encoding (version/encoding lines in stderr) but produced no error message.
+
+### 🔍 Metadata Detection & Warnings
+
+- **🌅 UltraHDR JPEG detection** (`is_ultra_hdr_jpeg` / `is_ultra_hdr_jpeg_file`): Scans JPEG APP1/APP2 segments for `hdrgm:` XMP namespace and MPF multi-picture markers. Emits a warning before JPEG→JXL conversion that the embedded gainmap image will be lost (XMP metadata is still preserved via exiftool).
+
+- **🖼️ HEIC gainmap & vendor metadata detection**: New fields `has_gainmap` and `has_vendor_metadata` added to `HeicAnalysis`. `extract_xmp_from_heic_data` scans raw HEIC bytes for XMP packets and detects:
+  - Apple/Google gainmap (`hdrgm:`, `GainMap`, `GCamera: + HDR`)
+  - Samsung (`urn:samsung:image:`) / Google (`com.google.android.camera`) vendor namespaces
+  - Emits distinct warnings for each during `analyze_heic_image`: depth/focus auxiliary loss, gainmap loss, vendor XMP rendering note.
+
+---
+
 ## [0.11.0] - 2026-03-26
 
 ### 🌟 Unified Production Consolidation

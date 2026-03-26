@@ -451,6 +451,88 @@ pub fn analyze_jpeg_file(path: &std::path::Path) -> Result<JpegQualityAnalysis, 
     analyze_jpeg_quality(&data)
 }
 
+/// Detect Google UltraHDR JPEG (gainmap embedded via MPF + XMP `hdrgm:` namespace).
+///
+/// UltraHDR JPEGs contain:
+/// - APP2 segment with XMP containing `hdrgm:` or `GainMap` namespace
+/// - APP2 MPF (Multi-Picture Format) segment with secondary gainmap image
+///
+/// Returns true if the file is a UltraHDR JPEG with embedded gainmap.
+#[must_use]
+pub fn is_ultra_hdr_jpeg(data: &[u8]) -> bool {
+    if data.len() < 4 || data[0] != 0xFF || data[1] != 0xD8 {
+        return false;
+    }
+
+    let mut has_gainmap_xmp = false;
+    let mut has_mpf = false;
+
+    let mut pos = 2;
+    while pos + 3 < data.len() {
+        if data[pos] != 0xFF {
+            break;
+        }
+        let marker = data[pos + 1];
+        // Skip fill bytes
+        if marker == 0xFF {
+            pos += 1;
+            continue;
+        }
+        // SOI/EOI have no length
+        if marker == 0xD8 || marker == 0xD9 {
+            pos += 2;
+            continue;
+        }
+        if pos + 4 > data.len() {
+            break;
+        }
+        let seg_len = u16::from_be_bytes([data[pos + 2], data[pos + 3]]) as usize;
+        if seg_len < 2 || pos + 2 + seg_len > data.len() {
+            break;
+        }
+        let payload = &data[pos + 4..pos + 2 + seg_len];
+
+        // APP2 (0xE2): check for XMP gainmap or MPF
+        if marker == 0xE2 {
+            // XMP namespace: starts with "http://ns.adobe.com/xap/1.0/\0"
+            if payload.starts_with(b"http://ns.adobe.com/xap/1.0/\0") {
+                let xmp = String::from_utf8_lossy(&payload[29..]);
+                if xmp.contains("hdrgm:") || xmp.contains("GainMap") || xmp.contains("gainmap") {
+                    has_gainmap_xmp = true;
+                }
+            }
+            // MPF: starts with "MPF\0"
+            if payload.starts_with(b"MPF\0") {
+                has_mpf = true;
+            }
+        }
+        // APP1 (0xE1): extended XMP or standard XMP
+        if marker == 0xE1 && payload.starts_with(b"http://ns.adobe.com/xap/1.0/\0") {
+            let xmp = String::from_utf8_lossy(&payload[29..]);
+            if xmp.contains("hdrgm:") || xmp.contains("GainMap") || xmp.contains("gainmap") {
+                has_gainmap_xmp = true;
+            }
+        }
+
+        if has_gainmap_xmp && has_mpf {
+            return true;
+        }
+
+        pos += 2 + seg_len;
+    }
+
+    // XMP gainmap alone (without MPF) is still UltraHDR
+    has_gainmap_xmp
+}
+
+/// Detect UltraHDR from file path.
+#[must_use]
+pub fn is_ultra_hdr_jpeg_file(path: &std::path::Path) -> bool {
+    std::fs::read(path)
+        .map(|data| is_ultra_hdr_jpeg(&data))
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

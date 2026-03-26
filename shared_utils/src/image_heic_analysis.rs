@@ -20,6 +20,10 @@ pub struct HeicAnalysis {
     pub image_count: usize,
     pub is_hdr: bool,
     pub is_dolby_vision: bool,
+    /// Apple Gainmap / Google GCamera HDR gainmap detected in XMP
+    pub has_gainmap: bool,
+    /// Samsung/Google vendor-specific XMP metadata detected
+    pub has_vendor_metadata: bool,
 }
 
 /// Detect HEIC/HEIF lossless encoding — multi-dimension analysis.
@@ -462,6 +466,20 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
     let image_count = ctx.image_ids().len();
     let has_auxiliary = handle.number_of_depth_images() > 0;
 
+    // Detect gainmap and vendor-specific metadata from XMP in raw HEIC data
+    let xmp_str = extract_xmp_from_heic_data(&data);
+    let has_gainmap = xmp_str.as_deref().is_some_and(|xmp: &str| {
+        xmp.contains("hdrgm:")
+            || xmp.contains("GainMap")
+            || xmp.contains("gainmap")
+            || (xmp.contains("GCamera:") && xmp.contains("HDR"))
+    });
+    let has_vendor_metadata = xmp_str.as_deref().is_some_and(|xmp: &str| {
+        xmp.contains("urn:samsung:image:")
+            || xmp.contains("GCamera:")
+            || xmp.contains("com.google.android.camera")
+    });
+
     let decoded_image = lib_heif
         .decode(&handle, ColorSpace::Rgb(RgbChroma::Rgb), None)
         .map_err(|e| ImgQualityError::ImageReadError(format!("Failed to decode HEIC: {e}")))?;
@@ -486,6 +504,8 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
         image_count,
         is_hdr,
         is_dolby_vision,
+        has_gainmap,
+        has_vendor_metadata,
     };
 
     Ok((img, analysis))
@@ -517,6 +537,28 @@ pub fn is_heic_file(path: &Path) -> bool {
         }
     }
     false
+}
+
+/// Extract XMP packet string from raw HEIC/HEIF binary data.
+///
+/// HEIC files store XMP in an `xml ` item. This scanner looks for the canonical
+/// XMP packet header (`<?xpacket begin`) or the `<x:xmpmeta` root element directly
+/// in the raw bytes (they are always UTF-8 / ASCII-compatible).
+///
+/// Returns `None` if no XMP data is found.
+fn extract_xmp_from_heic_data(data: &[u8]) -> Option<String> {
+    // XMP packet starts with <?xpacket begin or <x:xmpmeta or <rdf:RDF
+    let markers: &[&[u8]] = &[b"<?xpacket begin", b"<x:xmpmeta", b"<rdf:RDF"];
+    for marker in markers {
+        if let Some(start) = data.windows(marker.len()).position(|w| w == *marker) {
+            // XMP is always UTF-8; grab up to 64 KB from the start marker
+            let end = (start + 65536).min(data.len());
+            return String::from_utf8_lossy(&data[start..end])
+                .into_owned()
+                .into();
+        }
+    }
+    None
 }
 
 /// Fallback: find box payload by direct magic byte search.

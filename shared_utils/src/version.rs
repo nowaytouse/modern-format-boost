@@ -62,6 +62,7 @@ pub const PROGRAM_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// - v1102: Zero-warning state & EXR/JP2 detection (v0.10.102)
 /// - v1108: Scanner fortification & Bit-depth hardening (v0.10.108)
 /// - v1100: Unified Production Consolidation (v0.11.0)
+/// - v1101: Sprint acceleration fix + cjxl signal-kill retry (v0.11.1)
 static CACHE_ALGORITHM_VERSION: LazyLock<i32> =
     LazyLock::new(|| parse_version_to_code(PROGRAM_VERSION, "Cache Algorithm"));
 
