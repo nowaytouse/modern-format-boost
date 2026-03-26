@@ -609,7 +609,7 @@ pub fn log_external_tool(
                 command = %command,
                 duration_secs = duration.as_secs_f64(),
                 output = %output,
-                "External tool terminated without exit code"
+                "☢️ External tool TERMINATED by signal (OOM kill or Crash). Check system logs (dmesg/Console.app) for details."
             );
         }
     }

@@ -275,9 +275,10 @@ fn run_imagemagick_cjxl_pipeline(
             use std::io::Read;
             let mut s = String::new();
             if let Err(err) = stderr.take(1024 * 1024).read_to_string(&mut s) {
-                crate::progress_mode::emit_stderr(&format!(
-                    "   ⚠️ Failed to read ImageMagick stderr output: {err}"
-                ));
+                crate::log_rare_error!(
+                    "Stderr Pipe",
+                    "Failed to read ImageMagick stderr: {err}"
+                );
             }
             s
         })
@@ -318,9 +319,7 @@ fn run_imagemagick_cjxl_pipeline(
             use std::io::Read;
             let mut s = String::new();
             if let Err(err) = stderr.take(1024 * 1024).read_to_string(&mut s) {
-                crate::progress_mode::emit_stderr(&format!(
-                    "   ⚠️ Failed to read cjxl stderr output: {err}"
-                ));
+                crate::log_rare_error!("Stderr Pipe", "Failed to read cjxl stderr: {err}");
             }
             s.trim().to_string()
         })
@@ -334,8 +333,9 @@ fn run_imagemagick_cjxl_pipeline(
             if let Ok(stderr) = handle.join() {
                 stderr
             } else {
-                crate::progress_mode::emit_stderr(
-                    "   ⚠️ ImageMagick stderr capture thread panicked",
+                crate::log_rare_error!(
+                    "Background Thread",
+                    "ImageMagick stderr capture thread panicked"
                 );
                 String::new()
             }
@@ -347,7 +347,10 @@ fn run_imagemagick_cjxl_pipeline(
             if let Ok(stderr) = handle.join() {
                 stderr
             } else {
-                crate::progress_mode::emit_stderr("   ⚠️ cjxl stderr capture thread panicked");
+                crate::log_rare_error!(
+                    "Background Thread",
+                    "cjxl stderr capture thread panicked"
+                );
                 String::new()
             }
         }

@@ -30,17 +30,8 @@ fn copy_original_on_skip(input: &Path, options: &ConvertOptions) -> Option<std::
     .unwrap_or_default()
 }
 
-fn cleanup_temp_output(temp_output: &Path, input: &Path) {
-    if let Err(e) = fs::remove_file(temp_output) {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            eprintln!(
-                "⚠️ [img-hevc] Failed to remove temporary output {} for {}: {}",
-                temp_output.display(),
-                input.display(),
-                e
-            );
-        }
-    }
+fn cleanup_temp_output(temp_output: &Path, _input: &Path) {
+    let _ = shared_utils::io_utils::safe_remove_file(temp_output);
 }
 
 /// Finalize conversion with size check and metadata preservation.
@@ -435,16 +426,16 @@ pub fn convert_to_jxl(
                                                 use std::io::Read;
                                                 let mut buf = String::with_capacity(64 * 1024);
                                                 if let Err(err) = stderr
-                                                    .take(
-                                                        crate::constants::STDERR_BUFFER_MAX as u64,
-                                                    )
-                                                    .read_to_string(&mut buf)
-                                                {
-                                                    let line = format!(
-                                                    "   ⚠️ Failed to read cjxl stderr output: {err}"
-                                                );
-                                                    shared_utils::progress_mode::emit_stderr(&line);
-                                                }
+                                                     .take(
+                                                         crate::constants::STDERR_BUFFER_MAX as u64,
+                                                     )
+                                                     .read_to_string(&mut buf)
+                                                 {
+                                                     shared_utils::log_rare_error!(
+                                                         "Stderr Pipe",
+                                                         "Failed to read cjxl stderr: {err}"
+                                                     );
+                                                 }
                                                 buf
                                             })
                                         });
@@ -455,13 +446,14 @@ pub fn convert_to_jxl(
                                     let ffmpeg_stderr_str = match ffmpeg_stderr_thread {
                                         Some(handle) => {
                                             if let Ok(s) = handle.join() {
-                                                s
-                                            } else {
-                                                shared_utils::progress_mode::emit_stderr(
-                                                    "   ⚠️ FFmpeg stderr thread panicked",
-                                                );
-                                                String::new()
-                                            }
+                                                 s
+                                             } else {
+                                                 shared_utils::log_rare_error!(
+                                                     "Background Thread",
+                                                     "FFmpeg stderr thread panicked"
+                                                 );
+                                                 String::new()
+                                             }
                                         }
                                         None => String::new(),
                                     };

@@ -365,9 +365,15 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
     let mut is_float = false;
     if let Some(ref pf) = stream.pix_fmt {
         let pf_lower = pf.to_lowercase();
-        if pf_lower.contains('f') && (pf_lower.contains("32") || pf_lower.contains("16") || pf_lower.contains("64")) {
+        if pf_lower.contains('f')
+            && (pf_lower.contains("32") || pf_lower.contains("16") || pf_lower.contains("64"))
+        {
             // Check for common floating point formats in FFmpeg (e.g., gbrpf32le, rgbaf32le)
-            if pf_lower.contains("pf32") || pf_lower.contains("f32") || pf_lower.contains("pf16") || pf_lower.contains("f16") {
+            if pf_lower.contains("pf32")
+                || pf_lower.contains("f32")
+                || pf_lower.contains("pf16")
+                || pf_lower.contains("f16")
+            {
                 is_float = true;
             }
         }

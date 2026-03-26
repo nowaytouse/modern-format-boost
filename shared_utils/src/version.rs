@@ -59,8 +59,9 @@ pub const PROGRAM_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// - v1089: HDR10+ metadata retention and MS-SSIM chroma channel resolution guard
 /// - v1090: Intelligent checkpoint reset on output directory deletion
 /// - v1091: Documentation binding (removed in v1097)
-/// - v1100: Intelligence & refactor hardening (v0.10.100)
 /// - v1102: Zero-warning state & EXR/JP2 detection (v0.10.102)
+/// - v1108: Scanner fortification & Bit-depth hardening (v0.10.108)
+/// - v1100: Unified Production Consolidation (v0.11.0)
 static CACHE_ALGORITHM_VERSION: LazyLock<i32> =
     LazyLock::new(|| parse_version_to_code(PROGRAM_VERSION, "Cache Algorithm"));
 
@@ -178,6 +179,7 @@ mod tests {
 
     #[test]
     fn test_version_parsing() {
+        assert_eq!(parse_version_to_code("0.11.0", "Test"), 1100);
         assert_eq!(parse_version_to_code("0.10.102", "Test"), 1102);
         assert_eq!(parse_version_to_code("1.2.3", "Test"), 10203);
         assert_eq!(parse_version_to_code("10.20.30", "Test"), 102_030);
