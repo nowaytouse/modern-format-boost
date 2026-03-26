@@ -2482,19 +2482,19 @@ fn cpu_fine_tune_from_gpu_boundary(
                         MAX_CONSECUTIVE_FAILURES
                     );
 
-                    // Backtrack: if we were sprinting and hit a wall, reset to precision mode
+                    // Backtrack: halve step gradually (mirrors sprint), retry from last good size
                     if current_step > PHASE3_DOWNWARD_STEP + 0.01 && consecutive_01_successes >= 2 {
                         let old_step = current_step;
-                        current_step = PHASE3_DOWNWARD_STEP;
+                        current_step = (current_step / 2.0).max(PHASE3_DOWNWARD_STEP);
                         consecutive_01_successes = 0;
                         crate::log_eprintln!(
-                            "   {}BACKTRACK:{} {:.2} → {:.2} (overshoot correction)",
+                            "   {}↩️  BACKTRACK:{} {:.2} → {:.2} (overshoot correction)",
                             BRIGHT_YELLOW,
                             RESET,
                             old_step,
                             current_step
                         );
-                        test_crf = compress_point - current_step;
+                        test_crf = best_crf.unwrap_or(test_crf + old_step) - current_step;
                         continue;
                     }
 
@@ -2572,17 +2572,18 @@ fn cpu_fine_tune_from_gpu_boundary(
                     "{}Phase 4: [CPU] Extreme Mode 0.01-Granularity Fine-Tune (Sprint & Backtrack){}",
                     BRIGHT_MAGENTA, RESET
                 );
+
+                let base_step = 0.01;
+                let mut current_step = base_step;
+                let max_sprint_step = 1.28; // Increased from 0.20 down to a reasonable max sprint
+
                 crate::log_eprintln!(
-                    "   {}Starting from 0.1 optimum (CRF {:.2}) with adaptive step (0.01 → 0.05 sprint){}",
-                    DIM, best, RESET
+                    "   {}Starting from 0.1 optimum (CRF {:.2}) with adaptive step (0.01 → {:.2} sprint){}",
+                    DIM, best, max_sprint_step, RESET
                 );
 
                 let mut current_best = best;
                 let mut current_best_size = best_size.unwrap_or(0);
-
-                let base_step = 0.01;
-                let mut current_step = base_step;
-                let max_sprint_step = 0.20;
                 let mut test_crf = best - current_step;
                 let mut fine_failures = 0;
                 let max_fine_failures = 3;
@@ -2668,11 +2669,11 @@ fn cpu_fine_tune_from_gpu_boundary(
                                 RESET
                             );
                         } else {
-                            // Sprint: double step after 2 consecutive successes (max 0.20)
+                            // Sprint: double step after 2 consecutive successes (max 1.28)
                             if consecutive_successes >= 2 && current_step < max_sprint_step {
                                 let old_step = current_step;
                                 current_step = (current_step * 2.0).min(max_sprint_step);
-                                consecutive_successes = 0; // reset so next sprint needs 2 more wins
+                                // No reset here means we keep doubling on every success if we stay in sprint mode
                                 crate::log_eprintln!(
                                     "   {}⚡ Sprint activated: step {:.2} → {:.2}{}",
                                     BRIGHT_CYAN,
