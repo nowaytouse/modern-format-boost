@@ -32,7 +32,7 @@ ctrlc = { workspace = true }
 rusqlite = { workspace = true }
 blake3 = { workspace = true }
 rmp-serde = { workspace = true }
-crc32fast = "1.4"
+crc32fast = { workspace = true }
 infer = { workspace = true }
 
 [dev-dependencies]
