@@ -29,9 +29,12 @@ Adds depth map preservation for HEIC files with auxiliary depth images.
   - All `cargo clippy -D warnings` checks passing
   - All `cargo fmt` checks passing
   - 4 new unit tests for depth_channel module
+- **Dependencies**:
+  - All GitHub-sourced dependencies updated to latest commits (2026-03-27)
 
 ### 📦 Dependency Updates
 - **New**: `jpegxl-rs = "0.12"` with `vendored` feature
+- **Updated**: All workspace dependencies to latest GitHub commits
 
 ---
 
