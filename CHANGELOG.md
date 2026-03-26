@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
 
+## [0.10.105] - 2026-03-26
+
+### 🛠️ Nightly Infrastructure & Dependency Hardening (Nightly ONLY)
+- **Bleeding-Edge Dependency Sync**: Synchronized all workspace dependencies with their absolute latest upstream iterations from GitHub Git sources.
+  - **Full Git-Source Migration**: Converted remaining stable dependencies (`xattr`, `libheif-rs`, `crc32fast`) to Git versions to support rapid iteration.
+  - **Transitive Consistency**: Comprehensive `[patch.crates-io]` overrides for `anyhow`, `thiserror`, `serde`, `tracing`, `rayon`, `indicatif`, and `clap` to ensure total consistency across the dependency graph.
+- **Dependency Conflict Resolution**:
+  - Fixed compilation errors in `tracing-subscriber` caused by internal architectural changes in `serde` (splitting into `serde_core`).
+  - Added specific patches for `serde_core`, `serde_derive`, `rayon-core`, and `tracing-core` to unify native library links and trait definitions.
+- **Workspace Hygiene**:
+  - Consolidated `crc32fast` into the workspace `Cargo.toml`.
+  - Eliminated `cargo fetch` warnings by removing unused or incompatible `rand` and `regex` patches.
+
 ## [0.10.104] - 2026-03-26
 
 ### ⚡ Quality Optimization
