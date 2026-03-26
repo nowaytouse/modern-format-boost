@@ -27,6 +27,7 @@ tempfile = { workspace = true }
 image = { workspace = true }
 rayon = { workspace = true }
 libheif-rs = { workspace = true }
+jpegxl-rs = { version = "0.12", features = ["vendored"] }
 flate2 = { workspace = true }
 ctrlc = { workspace = true }
 rusqlite = { workspace = true }

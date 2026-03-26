@@ -315,11 +315,11 @@ pub fn execute_conversion(
     }
 
     if config.preserve_metadata {
-        preserve_metadata(input_path, &output_path)?;
+        preserve_metadata(input_path, &output_path);
     }
 
     if config.preserve_timestamps {
-        preserve_timestamps(input_path, &output_path)?;
+        preserve_timestamps(input_path, &output_path);
     }
 
     if config.delete_original {
@@ -611,14 +611,12 @@ fn convert_to_hevc_mp4(
     Ok(())
 }
 
-fn preserve_timestamps(source: &Path, dest: &Path) -> Result<()> {
+fn preserve_timestamps(source: &Path, dest: &Path) {
     shared_utils::copy_metadata(source, dest);
-    Ok(())
 }
 
-fn preserve_metadata(source: &Path, dest: &Path) -> Result<()> {
+fn preserve_metadata(source: &Path, dest: &Path) {
     shared_utils::metadata::copy_metadata(source, dest);
-    Ok(())
 }
 
 /// Deep-analysis based conversion with intelligent parameter matching.

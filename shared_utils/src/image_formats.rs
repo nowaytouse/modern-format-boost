@@ -299,7 +299,7 @@ pub mod webp {
                 let vp8_data = &data[payload_start..payload_end];
                 if vp8_data.len() >= 10 && vp8_data[3..6] == [0x9D, 0x01, 0x2A] {
                     let y_ac_qi = vp8_data[10] & 0x7F;
-                    let quality = ((127 - y_ac_qi) * 100 / 127).min(100);
+                    let quality = ((127 - y_ac_qi) as u32 * 100 / 127).min(100) as u8;
                     return Ok(quality);
                 }
             }

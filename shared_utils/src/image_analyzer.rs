@@ -525,13 +525,13 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
             // Warn about auxiliary data that will be lost on conversion
             if heic_analysis.has_auxiliary {
                 log_eprintln!(
-                    "⚠️  HEIC depth/focus auxiliary images detected in {} — these will be lost on conversion (libheif write API limitation)",
+                    "⚠️  HEIC depth/focus auxiliary images detected in {} — depth will be saved as sidecar file (e.g., .depth.png)",
                     path.display()
                 );
             }
             if heic_analysis.has_gainmap {
                 log_eprintln!(
-                    "⚠️  HEIC Apple/Google gainmap detected in {} — gainmap will be lost on conversion (JXL extra channel not yet supported via cjxl CLI)",
+                    "🌈 HEIC Apple/Google gainmap detected in {} — HDR synthesis will be performed (gainmap → JXL HDR via EXR/PNG intermediate)",
                     path.display()
                 );
             }
