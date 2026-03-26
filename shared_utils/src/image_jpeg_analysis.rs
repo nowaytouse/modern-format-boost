@@ -7,7 +7,9 @@
 
 #![allow(clippy::needless_range_loop, clippy::manual_range_contains)]
 
+use image::{DynamicImage, GenericImageView};
 use serde::{Deserialize, Serialize};
+use tracing::{info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JpegQualityAnalysis {
@@ -533,6 +535,501 @@ pub fn is_ultra_hdr_jpeg_file(path: &std::path::Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Extract XMP metadata string from JPEG data.
+///
+/// Searches for XMP segment (APP1) starting with "http://ns.adobe.com/xap/1.0/\0".
+///
+/// # Returns
+/// - `Some(String)`: XMP metadata content
+/// - `None`: No XMP segment found
+pub fn extract_xmp_from_jpeg_data(data: &[u8]) -> Option<String> {
+    if data.len() < 4 || data[0] != 0xFF || data[1] != 0xD8 {
+        warn!("Invalid JPEG signature for XMP extraction");
+        return None;
+    }
+
+    let mut pos = 2;
+    while pos + 4 < data.len() {
+        if data[pos] != 0xFF {
+            return None;
+        }
+        let marker = data[pos + 1];
+        if marker == 0xFF {
+            pos += 1;
+            continue;
+        }
+        if marker == 0xD8 || marker == 0xD9 {
+            pos += 2;
+            continue;
+        }
+        if pos + 4 > data.len() {
+            warn!("Truncated JPEG segment at position {}", pos);
+            return None;
+        }
+        let seg_len = u16::from_be_bytes([data[pos + 2], data[pos + 3]]) as usize;
+        if seg_len < 2 || pos + 2 + seg_len > data.len() {
+            warn!("Invalid segment length {} at position {}", seg_len, pos);
+            return None;
+        }
+        let payload = &data[pos + 4..pos + 2 + seg_len];
+
+        // APP1 (0xE1): XMP
+        if marker == 0xE1 && payload.starts_with(b"http://ns.adobe.com/xap/1.0/\0") {
+            let xmp = String::from_utf8_lossy(&payload[29..]).to_string();
+            info!("Extracted XMP from JPEG: {} bytes", xmp.len());
+            return Some(xmp);
+        }
+
+        pos += 2 + seg_len;
+    }
+
+    None
+}
+
+/// Extract gainmap image from UltraHDR JPEG.
+///
+/// Returns (base_image, gainmap_image) as DynamicImages.
+/// The gainmap is extracted from the MPF (Multi-Picture Format) segment.
+///
+/// # Errors
+/// Returns an error if:
+/// - The JPEG data is invalid or corrupted
+/// - No MPF segment is found (not a valid UltraHDR JPEG)
+/// - The extracted gainmap has invalid dimensions
+/// - Base image decoding fails
+/// - MPF parsing fails
+pub fn extract_gainmap_from_jpeg(data: &[u8]) -> Result<(DynamicImage, DynamicImage), String> {
+    use image::ImageReader;
+    use std::io::Cursor;
+
+    // Validate JPEG signature
+    if data.len() < 4 || data[0] != 0xFF || data[1] != 0xD8 {
+        return Err(format!(
+            "Invalid JPEG signature: expected FFD8, got {:02X}{:02X}. \
+             File size: {} bytes. This is not a valid JPEG file.",
+            data.first().copied().unwrap_or(0),
+            data.get(1).copied().unwrap_or(0),
+            data.len()
+        ));
+    }
+
+    // Decode base image with detailed error reporting
+    let base_image = ImageReader::new(Cursor::new(data))
+        .with_guessed_format()
+        .map_err(|e| format!("Failed to create JPEG reader: {}", e))?
+        .decode()
+        .map_err(|e| {
+            format!(
+                "Failed to decode base JPEG image: {}. \
+                 File size: {} bytes. The file may be corrupted or truncated.",
+                e,
+                data.len()
+            )
+        })?;
+
+    let base_dims = base_image.dimensions();
+    if base_dims.0 == 0 || base_dims.1 == 0 {
+        return Err(format!(
+            "Invalid base image dimensions: {}x{} (must be > 0x0). \
+             This indicates a corrupted JPEG file or decoder bug.",
+            base_dims.0, base_dims.1
+        ));
+    }
+
+    info!("Base image decoded: {}x{} pixels", base_dims.0, base_dims.1);
+
+    // Find and parse MPF segment
+    let mpf_segment = find_mpf_segment(data)?;
+    info!("MPF segment found: {} bytes", mpf_segment.len());
+
+    // Extract gainmap from MPF
+    let gainmap_data = extract_gainmap_from_mpf(data, &mpf_segment)?;
+    info!("Gainmap extracted: {} bytes", gainmap_data.len());
+
+    // Decode gainmap image
+    let gainmap_image = ImageReader::new(Cursor::new(&gainmap_data))
+        .with_guessed_format()
+        .map_err(|e| format!("Failed to create gainmap JPEG reader: {}", e))?
+        .decode()
+        .map_err(|e| {
+            format!(
+                "Failed to decode gainmap image: {}. \
+                 Extracted data: {} bytes. The gainmap may be corrupted.",
+                e,
+                gainmap_data.len()
+            )
+        })?;
+
+    let gainmap_dims = gainmap_image.dimensions();
+    if gainmap_dims.0 == 0 || gainmap_dims.1 == 0 {
+        return Err(format!(
+            "Invalid gainmap dimensions: {}x{} (must be > 0x0). \
+             This indicates a corrupted gainmap or decoder bug.",
+            gainmap_dims.0, gainmap_dims.1
+        ));
+    }
+
+    // Validate gainmap aspect ratio matches base image
+    let base_aspect = base_dims.0 as f64 / base_dims.1 as f64;
+    let gainmap_aspect = gainmap_dims.0 as f64 / gainmap_dims.1 as f64;
+    let aspect_diff = (base_aspect - gainmap_aspect).abs();
+    if aspect_diff > 0.01 {
+        warn!(
+            "Aspect ratio mismatch: base={:.4} ({}x{}), gainmap={:.4} ({}x{}). \
+             Difference: {:.4}. This may indicate incorrect gainmap extraction.",
+            base_aspect,
+            base_dims.0,
+            base_dims.1,
+            gainmap_aspect,
+            gainmap_dims.0,
+            gainmap_dims.1,
+            aspect_diff
+        );
+    }
+
+    info!(
+        "Gainmap extracted successfully: base={}x{}, gainmap={}x{}, aspect_diff={:.4}",
+        base_dims.0, base_dims.1, gainmap_dims.0, gainmap_dims.1, aspect_diff
+    );
+
+    Ok((base_image, gainmap_image))
+}
+
+/// MPF (Multi-Picture Format) structure constants
+mod mpf {
+    // MPF identifier: "MPF\0"
+    pub const MPF_IDENTIFIER: &[u8] = b"MPF\0";
+
+    // TIFF big-endian marker: "MM\0*"
+    pub const TIFF_BIG_ENDIAN: &[u8] = b"MM\0*";
+    // TIFF little-endian marker: "II*\0"
+    pub const TIFF_LITTLE_ENDIAN: &[u8] = b"II*\0";
+
+    // MPF tags
+    pub const TAG_NUMBER_OF_IMAGES: u16 = 0xB001;
+    pub const TAG_MP_ENTRY: u16 = 0xB002;
+}
+
+/// Find MPF segment in JPEG data
+/// Returns the MPF payload (after "MPF\0" identifier)
+fn find_mpf_segment(data: &[u8]) -> Result<Vec<u8>, String> {
+    let mut pos = 2;
+
+    while pos + 4 < data.len() {
+        if data[pos] != 0xFF {
+            return Err(format!(
+                "Invalid JPEG structure: expected marker 0xFF at position {}, found 0x{:02X}",
+                pos, data[pos]
+            ));
+        }
+
+        let marker = data[pos + 1];
+
+        // Skip fill bytes
+        if marker == 0xFF {
+            pos += 1;
+            continue;
+        }
+
+        // SOI/EOI have no length field
+        if marker == 0xD8 || marker == 0xD9 {
+            pos += 2;
+            continue;
+        }
+
+        if pos + 4 > data.len() {
+            return Err(format!(
+                "Truncated JPEG segment at position {}: insufficient data for length field",
+                pos
+            ));
+        }
+
+        let seg_len = u16::from_be_bytes([data[pos + 2], data[pos + 3]]) as usize;
+
+        if seg_len < 2 {
+            return Err(format!(
+                "Invalid segment length {} at position {} (marker 0x{:02X})",
+                seg_len, pos, marker
+            ));
+        }
+
+        if pos + 2 + seg_len > data.len() {
+            return Err(format!(
+                "Truncated segment at position {}: declared length {} exceeds file size {}",
+                pos,
+                seg_len,
+                data.len()
+            ));
+        }
+
+        let payload = &data[pos + 4..pos + 2 + seg_len];
+
+        // APP2 (0xE2): Check for MPF
+        if marker == 0xE2 && payload.starts_with(mpf::MPF_IDENTIFIER) {
+            // Return MPF data after the 4-byte identifier
+            let mpf_data = payload[4..].to_vec();
+            return Ok(mpf_data);
+        }
+
+        pos += 2 + seg_len;
+    }
+
+    Err("No MPF (Multi-Picture Format) segment found in APP2 markers".to_string())
+}
+
+/// Extract gainmap image data from MPF segment
+fn extract_gainmap_from_mpf(jpeg_data: &[u8], mpf_data: &[u8]) -> Result<Vec<u8>, String> {
+    // Determine endianness
+    let is_big_endian = if mpf_data.starts_with(mpf::TIFF_BIG_ENDIAN) {
+        true
+    } else if mpf_data.starts_with(mpf::TIFF_LITTLE_ENDIAN) {
+        false
+    } else {
+        return Err(format!(
+            "Invalid MPF endianness marker: expected 'MM\\0*' or 'II*\\0', got {:02X} {:02X} {:02X} {:02X}",
+            mpf_data.first().copied().unwrap_or(0),
+            mpf_data.get(1).copied().unwrap_or(0),
+            mpf_data.get(2).copied().unwrap_or(0),
+            mpf_data.get(3).copied().unwrap_or(0)
+        ));
+    };
+
+    info!(
+        "MPF endianness: {}",
+        if is_big_endian {
+            "big-endian (MM)"
+        } else {
+            "little-endian (II)"
+        }
+    );
+
+    // Read first IFD offset (4 bytes after endianness marker)
+    let first_ifd_offset = read_u32(&mpf_data[4..8], is_big_endian)?;
+    info!("First IFD offset: {}", first_ifd_offset);
+
+    // Navigate to first IFD
+    if first_ifd_offset as usize + 2 > mpf_data.len() {
+        return Err(format!(
+            "Invalid first IFD offset {}: exceeds MPF data size {}",
+            first_ifd_offset,
+            mpf_data.len()
+        ));
+    }
+
+    // Read number of entries in IFD
+    let num_entries = read_u16(&mpf_data[first_ifd_offset as usize..], is_big_endian)?;
+    info!("IFD entries: {}", num_entries);
+
+    // Find MPEntry tag
+    let mut mp_entry_offset: Option<u32> = None;
+    let mut num_images: Option<u32> = None;
+
+    let ifd_start = first_ifd_offset as usize;
+    for i in 0..num_entries {
+        let entry_offset = ifd_start + 2 + (i as usize * 12);
+        if entry_offset + 12 > mpf_data.len() {
+            return Err(format!(
+                "IFD entry {} offset {} exceeds MPF data size {}",
+                i,
+                entry_offset,
+                mpf_data.len()
+            ));
+        }
+
+        let tag = read_u16(&mpf_data[entry_offset..], is_big_endian)?;
+        let _data_type = read_u16(&mpf_data[entry_offset + 2..], is_big_endian)?;
+        let num_components = read_u32(&mpf_data[entry_offset + 4..], is_big_endian)?;
+        let value_offset = read_u32(&mpf_data[entry_offset + 8..], is_big_endian)?;
+
+        match tag {
+            mpf::TAG_NUMBER_OF_IMAGES => {
+                num_images = Some(num_components); // For LONG type, value is in num_components
+                info!("NumberOfImages: {}", num_images.unwrap());
+            }
+            mpf::TAG_MP_ENTRY => {
+                mp_entry_offset = Some(value_offset);
+                info!(
+                    "MPEntry offset: {}, count: {}",
+                    value_offset, num_components
+                );
+            }
+            _ => {}
+        }
+    }
+
+    let mp_entry_offset = mp_entry_offset.ok_or_else(|| {
+        "MPEntry tag (0xB002) not found in IFD. This is not a valid MPF structure.".to_string()
+    })?;
+
+    let num_images =
+        num_images.ok_or_else(|| "NumberOfImages tag (0xB001) not found in IFD.".to_string())?;
+
+    if num_images < 2 {
+        return Err(format!(
+            "MPF contains only {} image(s). UltraHDR requires at least 2 images (base + gainmap).",
+            num_images
+        ));
+    }
+
+    // Navigate to MP Entry array
+    let mp_entry_array_offset = mp_entry_offset as usize;
+    if mp_entry_array_offset + 16 > mpf_data.len() {
+        return Err(format!(
+            "MP entry array offset {} exceeds MPF data size {}",
+            mp_entry_array_offset,
+            mpf_data.len()
+        ));
+    }
+
+    // Read MP entries - entry 0 is primary image, entry 1 is gainmap
+    // Each entry is 16 bytes:
+    // - Attributes: 4 bytes
+    // - Image data length: 4 bytes
+    // - Data offset: 4 bytes
+    // - Dependency indices: 2 + 2 = 4 bytes
+    let gainmap_entry_offset = mp_entry_array_offset + 16; // Skip first entry (primary image)
+
+    if gainmap_entry_offset + 16 > mpf_data.len() {
+        return Err(format!(
+            "Gainmap entry offset {} exceeds MPF data size {}",
+            gainmap_entry_offset,
+            mpf_data.len()
+        ));
+    }
+
+    let _attributes = read_u32(&mpf_data[gainmap_entry_offset..], is_big_endian)?;
+    let gainmap_length = read_u32(&mpf_data[gainmap_entry_offset + 4..], is_big_endian)?;
+    let gainmap_offset = read_u32(&mpf_data[gainmap_entry_offset + 8..], is_big_endian)?;
+
+    info!(
+        "Gainmap entry: attributes=0x{:08X}, length={}, offset={}",
+        _attributes, gainmap_length, gainmap_offset
+    );
+
+    // Validate gainmap length
+    if gainmap_length == 0 {
+        return Err("Gainmap length is 0. Invalid MPF structure.".to_string());
+    }
+
+    if gainmap_length > jpeg_data.len() as u32 {
+        return Err(format!(
+            "Gainmap length {} exceeds JPEG file size {}",
+            gainmap_length,
+            jpeg_data.len()
+        ));
+    }
+
+    // Calculate absolute position of gainmap data
+    // MPF offset is relative to the MPF base (position after "MPF\0")
+    // We need to find the absolute position in the JPEG file
+    let mpf_base_pos = find_mpf_base_position(jpeg_data)?;
+    let gainmap_abs_pos = mpf_base_pos + gainmap_offset as usize;
+
+    if gainmap_abs_pos + gainmap_length as usize > jpeg_data.len() {
+        return Err(format!(
+            "Gainmap data at position {} with length {} exceeds JPEG file size {}",
+            gainmap_abs_pos,
+            gainmap_length,
+            jpeg_data.len()
+        ));
+    }
+
+    // Verify gainmap starts with JPEG SOI
+    if jpeg_data[gainmap_abs_pos] != 0xFF || jpeg_data[gainmap_abs_pos + 1] != 0xD8 {
+        return Err(format!(
+            "Gainmap does not start with JPEG SOI (FFD8): found {:02X} {:02X} at position {}",
+            jpeg_data[gainmap_abs_pos],
+            jpeg_data[gainmap_abs_pos + 1],
+            gainmap_abs_pos
+        ));
+    }
+
+    // Extract gainmap data
+    let gainmap_data =
+        jpeg_data[gainmap_abs_pos..gainmap_abs_pos + gainmap_length as usize].to_vec();
+
+    Ok(gainmap_data)
+}
+
+/// Find the absolute position of MPF base in JPEG data
+fn find_mpf_base_position(jpeg_data: &[u8]) -> Result<usize, String> {
+    let mut pos = 2;
+
+    while pos + 4 < jpeg_data.len() {
+        if jpeg_data[pos] != 0xFF {
+            return Err(format!("Invalid JPEG structure at position {}", pos));
+        }
+
+        let marker = jpeg_data[pos + 1];
+
+        if marker == 0xFF {
+            pos += 1;
+            continue;
+        }
+
+        if marker == 0xD8 || marker == 0xD9 {
+            pos += 2;
+            continue;
+        }
+
+        if pos + 4 > jpeg_data.len() {
+            return Err(format!("Truncated segment at position {}", pos));
+        }
+
+        let seg_len = u16::from_be_bytes([jpeg_data[pos + 2], jpeg_data[pos + 3]]) as usize;
+
+        if seg_len < 2 {
+            return Err(format!("Invalid segment length at position {}", pos));
+        }
+
+        if pos + 2 + seg_len > jpeg_data.len() {
+            return Err(format!("Truncated segment at position {}", pos));
+        }
+
+        let payload = &jpeg_data[pos + 4..pos + 2 + seg_len];
+
+        // APP2 (0xE2): Check for MPF
+        if marker == 0xE2 && payload.starts_with(mpf::MPF_IDENTIFIER) {
+            // MPF base is the position after "MPF\0" (4 bytes)
+            return Ok(pos + 4 + 4); // marker + length + "MPF\0"
+        }
+
+        pos += 2 + seg_len;
+    }
+
+    Err("MPF segment not found".to_string())
+}
+
+/// Read u16 from bytes with specified endianness
+fn read_u16(data: &[u8], big_endian: bool) -> Result<u16, String> {
+    if data.len() < 2 {
+        return Err(format!(
+            "Insufficient data for u16 read: {} bytes",
+            data.len()
+        ));
+    }
+    Ok(if big_endian {
+        u16::from_be_bytes([data[0], data[1]])
+    } else {
+        u16::from_le_bytes([data[0], data[1]])
+    })
+}
+
+/// Read u32 from bytes with specified endianness
+fn read_u32(data: &[u8], big_endian: bool) -> Result<u32, String> {
+    if data.len() < 4 {
+        return Err(format!(
+            "Insufficient data for u32 read: {} bytes",
+            data.len()
+        ));
+    }
+    Ok(if big_endian {
+        u32::from_be_bytes([data[0], data[1], data[2], data[3]])
+    } else {
+        u32::from_le_bytes([data[0], data[1], data[2], data[3]])
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -619,5 +1116,171 @@ mod tests {
             );
             assert_eq!(sse, 0.0);
         }
+    }
+
+    // ==================== UltraHDR / Gainmap Tests ====================
+
+    #[test]
+    fn test_extract_xmp_from_jpeg_data_invalid_signature() {
+        let invalid = b"not a jpeg";
+        let result = extract_xmp_from_jpeg_data(invalid);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_extract_xmp_from_jpeg_data_no_xmp() {
+        let jpeg_without_xmp = vec![
+            0xFF, 0xD8, // SOI
+            0xFF, 0xE0, 0x00, 0x10, // APP0 (not XMP)
+            b'J', b'F', b'I', b'F', 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+            0xFF, 0xD9, // EOI
+        ];
+        let result = extract_xmp_from_jpeg_data(&jpeg_without_xmp);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_extract_xmp_from_jpeg_data_with_xmp() {
+        let xmp_header = b"http://ns.adobe.com/xap/1.0/\0";
+        let xmp_content = b"<x:xmpmeta>test content</x:xmpmeta>";
+
+        let mut jpeg_with_xmp = vec![
+            0xFF, 0xD8, // SOI
+            0xFF, 0xE1, // APP1 for XMP
+        ];
+        let xmp_len = (xmp_header.len() + xmp_content.len() + 2) as u16;
+        jpeg_with_xmp.extend_from_slice(&xmp_len.to_be_bytes());
+        jpeg_with_xmp.extend_from_slice(xmp_header);
+        jpeg_with_xmp.extend_from_slice(xmp_content);
+        jpeg_with_xmp.extend_from_slice(&[0xFF, 0xD9]); // EOI
+
+        let extracted = extract_xmp_from_jpeg_data(&jpeg_with_xmp);
+        assert!(extracted.is_some());
+        let xmp_str = extracted.unwrap();
+        assert!(xmp_str.contains("<x:xmpmeta>"));
+        assert!(xmp_str.contains("test content"));
+    }
+
+    #[test]
+    fn test_is_ultra_hdr_jpeg_false_for_standard_jpeg() {
+        let jpeg_data = vec![
+            0xFF, 0xD8, // SOI
+            0xFF, 0xE0, 0x00, 0x10, // APP0
+            b'J', b'F', b'I', b'F', 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+            0xFF, 0xD9, // EOI
+        ];
+        assert!(!is_ultra_hdr_jpeg(&jpeg_data));
+    }
+
+    #[test]
+    fn test_is_ultra_hdr_jpeg_true_with_xmp_gainmap() {
+        let xmp_header = b"http://ns.adobe.com/xap/1.0/\0";
+        // Use actual gainmap metadata format that contains "hdrgm:"
+        let xmp_content = b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF><rdf:Description hdrgm:GainMapMax=\"1.0\" xmlns:hdrgm=\"http://ns.adobe.com/hdr-gain-map/1.0/\"/></rdf:RDF></x:xmpmeta>";
+
+        let mut jpeg_with_gainmap = vec![
+            0xFF, 0xD8, // SOI
+            0xFF, 0xE1, // APP1 for XMP
+        ];
+        let xmp_len = (xmp_header.len() + xmp_content.len() + 2) as u16;
+        jpeg_with_gainmap.extend_from_slice(&xmp_len.to_be_bytes());
+        jpeg_with_gainmap.extend_from_slice(xmp_header);
+        jpeg_with_gainmap.extend_from_slice(xmp_content);
+        jpeg_with_gainmap.extend_from_slice(&[0xFF, 0xD9]); // EOI
+
+        assert!(is_ultra_hdr_jpeg(&jpeg_with_gainmap));
+    }
+
+    #[test]
+    fn test_extract_gainmap_from_jpeg_invalid_signature() {
+        let invalid_data = b"not a jpeg";
+        let result = extract_gainmap_from_jpeg(invalid_data);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err();
+        assert!(err_msg.contains("Invalid JPEG signature"));
+        assert!(err_msg.contains("FFD8"));
+    }
+
+    #[test]
+    fn test_extract_gainmap_from_jpeg_empty() {
+        let empty_data: &[u8] = &[];
+        let result = extract_gainmap_from_jpeg(empty_data);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid JPEG signature"));
+    }
+
+    #[test]
+    fn test_extract_gainmap_from_jpeg_truncated() {
+        // Test with truncated JPEG (valid signature but incomplete)
+        let truncated = vec![0xFF, 0xD8, 0xFF, 0xE0]; // SOI + APP0 marker only
+        let result = extract_gainmap_from_jpeg(&truncated);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err();
+        assert!(
+            err_msg.contains("Truncated")
+                || err_msg.contains("Failed to decode")
+                || err_msg.contains("corrupted")
+        );
+    }
+
+    #[test]
+    fn test_extract_gainmap_from_jpeg_no_mpf_detailed_error() {
+        // Create a minimal valid JPEG structure without MPF
+        // This tests the detailed error message for missing MPF
+        let jpeg_no_mpf = vec![
+            0xFF, 0xD8, // SOI
+            0xFF, 0xE0, 0x00, 0x10, // APP0
+            b'J', b'F', b'I', b'F', 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+            0xFF, 0xD9, // EOI
+        ];
+        let result = extract_gainmap_from_jpeg(&jpeg_no_mpf);
+        // Should fail because it's not a decodable image or no MPF
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_gainmap_params_default() {
+        use crate::hdr_synthesis::GainMapParams;
+        let params = GainMapParams::default();
+        assert_eq!(params.gain_map_max, 1.0);
+        assert_eq!(params.gain_map_min, 0.0);
+        assert_eq!(params.gamma, 1.0);
+        assert!((params.offset_sdr - 1.0 / 64.0).abs() < f32::EPSILON);
+        assert!((params.offset_hdr - 1.0 / 64.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_hdr_intermediate_format_default() {
+        use crate::hdr_synthesis::HdrIntermediateFormat;
+        let format = HdrIntermediateFormat::default();
+        assert_eq!(format, HdrIntermediateFormat::OpenExr32);
+    }
+
+    #[test]
+    fn test_hdr_intermediate_format_debug() {
+        use crate::hdr_synthesis::HdrIntermediateFormat;
+        let exr = HdrIntermediateFormat::OpenExr32;
+        let png = HdrIntermediateFormat::Png16;
+
+        // Test Debug trait
+        let exr_debug = format!("{:?}", exr);
+        let png_debug = format!("{:?}", png);
+
+        assert!(exr_debug.contains("OpenExr32"));
+        assert!(png_debug.contains("Png16"));
+    }
+
+    #[test]
+    fn test_hdr_intermediate_format_equality() {
+        use crate::hdr_synthesis::HdrIntermediateFormat;
+        assert_eq!(
+            HdrIntermediateFormat::OpenExr32,
+            HdrIntermediateFormat::OpenExr32
+        );
+        assert_eq!(HdrIntermediateFormat::Png16, HdrIntermediateFormat::Png16);
+        assert_ne!(
+            HdrIntermediateFormat::OpenExr32,
+            HdrIntermediateFormat::Png16
+        );
     }
 }

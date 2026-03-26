@@ -126,6 +126,7 @@ pub mod media_passthrough;
 pub mod video_detection;
 pub use media_passthrough::{audio_args_for_container, subtitle_args_for_container};
 
+pub mod depth_channel;
 pub mod gif_meme_score;
 pub mod hdr_synthesis;
 pub mod image_analyzer;
@@ -137,11 +138,17 @@ pub mod image_metrics;
 pub mod image_recommender;
 pub mod img_errors;
 pub mod live_photo;
+pub use depth_channel::{
+    encode_jxl_depth_fallback, encode_jxl_with_depth, extract_depth_from_heic, DepthMap, DepthType,
+};
 pub use gif_meme_score::{
     gif_meta_from_probe, gif_meta_from_probe_with_path, scan_gif_headers, should_keep_as_gif,
     GifMeta, MemeScore,
 };
-pub use hdr_synthesis::{convert_heic_with_gainmap_to_jxl_hdr, GainMapParams};
+pub use hdr_synthesis::{
+    convert_heic_with_gainmap_to_jxl_hdr, convert_ultrahdr_jpeg_to_jxl_hdr, GainMapParams,
+    HdrIntermediateFormat,
+};
 
 pub use batch::*;
 pub use codecs::*;

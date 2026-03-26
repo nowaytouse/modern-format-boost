@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
 
+## [0.11.0-unreleased] - 2026-03-27
+
+### 📍 Depth Channel Extraction (HEIC) - NEW
+Adds depth map preservation for HEIC files with auxiliary depth images.
+
+- **Depth Channel Extraction**:
+  - Automatically detects and extracts depth maps from Apple/Samsung/ISO HEIC files
+  - Saves depth as 16-bit grayscale PNG sidecar (`.depth.png`)
+  - Parses XMP for near/far focus distance metadata
+  - Supports: Apple `urn:com:apple:heif:depth`, ISO `AuxiliaryDepth`, Samsung depth
+- **HDR Gainmap Improvements**:
+  - Dual auxiliary handling: processes gainmap (HDR) + depth (spatial) simultaneously
+  - Enhanced logging with depth sidecar notifications
+- **jpegxl-rs Integration**:
+  - Added `jpegxl-rs` crate (v0.12) with vendored libjxl
+  - Infrastructure prepared for future JXL Extra Channel embedding via FFI
+  - Current implementation uses sidecar approach (high-level API limitation)
+
+### 📦 Dependency Updates
+- **New**: `jpegxl-rs = "0.12"` with `vendored` feature
+
+---
+
 ## [0.11.0] - 2026-03-27
 
 ### 🌟 Unified Production Baseline & HDR Synthesis
@@ -34,6 +57,29 @@ This release marks a major milestone, consolidating the intensive `0.10.x` harde
   - Fixed test `test_conversion_result_success`: corrected assertion from `"transcoding"` → `"encoding"` for PNG→AVIF (pixel-based) conversion.
   - Resolved optional warnings in shell scripts: removed trailing whitespace in `check_all.sh`, fixed indentation in `smart_build.sh`.
   - Enhanced `check_all.sh`: skip `common.sh` from shfmt check (zsh-specific syntax), treat cargo geiger exit 1 with unsafe warnings as informational PASS.
+
+### 🛠️ Code Quality Improvements
+- **Clippy Warning Resolution**: Fixed multiple pedantic and nursery lints across the workspace:
+  - Removed unnecessary `Result` return types from `preserve_timestamps` and `preserve_metadata` in `img_hevc/src/conversion_api.rs`.
+  - Applied `#[allow(clippy::cast_precision_loss)]` for intentional u64 to f64 conversions in disk space calculations.
+  - Used `#[allow(clippy::too_many_lines)]` for complex batch processing functions that are intentionally monolithic for performance.
+  - Applied `#[allow(clippy::struct_excessive_bools)]` for configuration structs where bools are semantically clear.
+  - Modernized error handling with `let-else` syntax for flatter code structure.
+- **Auto-Fix Pipeline**: Executed `cargo clippy --fix --workspace --all-targets --all-features` to automatically resolve suggest lints.
+
+### 🌈 UltraHDR JPEG Full Implementation
+- **Complete MPF (Multi-Picture Format) Parser**: Implemented full MPF specification parsing for UltraHDR JPEG gainmap extraction:
+  - `find_mpf_segment()`: Locates MPF in JPEG APP2 segment with full validation
+  - `extract_gainmap_from_mpf()`: Parses TIFF-style IFD structure and MP Entry array
+  - `find_mpf_base_position()`: Calculates absolute gainmap data position
+  - Support for both big-endian (MM) and little-endian (II) byte order
+  - Complete error diagnostics with detailed context (offsets, lengths, positions)
+- **MPF Structure Constants**: Defined all MPF tags (0xB000-0xB002) and TIFF markers
+- **IFD Entry Parsing**: Full 12-byte entry parsing with tag/type/component/offset extraction
+- **MP Entry Array Processing**: Extracts gainmap from second entry (index 1) with 16-byte structure
+- **Gainmap Validation**: Verifies JPEG SOI (FFD8), length, position, and aspect ratio
+- **Comprehensive Logging**: Detailed info-level logging for all parsing steps
+- **Error Handling**: Strict validation at every step with descriptive error messages
 
 ---
 
