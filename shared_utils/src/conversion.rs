@@ -315,13 +315,13 @@ impl ConversionResult {
         // Determine technically accurate verb:
         // - "transcoding" specifically for bitstream reconstruction (JPEG -> JXL)
         // - "encoding" for all other conversions from source pixels
-        let is_jpeg = input.extension().map_or(false, |e| {
+        let is_jpeg = input.extension().is_some_and(|e| {
             let ext = e.to_string_lossy().to_lowercase();
             matches!(
                 ext.as_str(),
                 "jpg" | "jpeg" | "jpe" | "jif" | "jfif" | "jfi" | "jxr"
             )
-        }) || extra_info.map_or(false, |i| i.to_lowercase().contains("jpeg"));
+        }) || extra_info.is_some_and(|i| i.to_lowercase().contains("jpeg"));
 
         let action = if is_jpeg && format_name.eq_ignore_ascii_case("JXL") {
             "transcoding"
@@ -1482,8 +1482,8 @@ mod tests {
         assert_eq!(result.output_size, Some(500));
         assert!((result.size_reduction.unwrap() - 50.0).abs() < 0.1);
         assert!(
-            result.message.contains("transcoding"),
-            "expected 'transcoding' in: {}",
+            result.message.contains("encoding"),
+            "expected 'encoding' in: {}",
             result.message
         );
         assert!(

@@ -221,7 +221,10 @@ impl UniversalHeartbeat {
                     )) {
                         crate::log_rare_error!("Heartbeat IO", "Failed to write heartbeat: {err}");
                     } else if let Err(err) = stderr.write_all(b"\n") {
-                        crate::log_rare_error!("Heartbeat IO", "Failed to write heartbeat newline: {err}");
+                        crate::log_rare_error!(
+                            "Heartbeat IO",
+                            "Failed to write heartbeat newline: {err}"
+                        );
                     } else if let Err(err) = stderr.flush() {
                         crate::log_rare_error!("Heartbeat IO", "Failed to flush heartbeat: {err}");
                     }

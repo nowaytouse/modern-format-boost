@@ -759,12 +759,12 @@ pub fn append_stats_to_line(line: &str) -> String {
     }
 
     // Only append to "Active" or "Result" lines
-    let is_result = plain.contains('✅')
-        || plain.contains('❌')
-        || plain.contains('⏭️')
-        || plain.contains('⚡')
-        || plain.contains('☢️')
-        || plain.contains('⛔️');
+    let is_result = plain.contains("✅")
+        || plain.contains("❌")
+        || plain.contains("⏭️")
+        || plain.contains("⚡")
+        || plain.contains("☢️")
+        || plain.contains("⛔️");
     let is_progress = plain.contains("▕") && plain.contains('▏');
 
     if !is_result && !is_progress {

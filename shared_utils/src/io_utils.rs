@@ -1,5 +1,5 @@
 //! IO Utilities - Safe file operations and hardened cleanup
-//! 
+//!
 //! Provides unified error handling for common I/O tasks like temporary
 //! file removal, ensuring that genuine system errors are logged while
 //! expected "not found" cases are handled silently.
@@ -9,8 +9,8 @@ use std::path::Path;
 use tracing::warn;
 
 /// Safely remove a file, ignoring its absence but logging other errors.
-/// 
-/// This is preferred over `let _ = fs::remove_file(path)` as it ensures 
+///
+/// This is preferred over `let _ = fs::remove_file(path)` as it ensures
 /// that permission issues or locked file errors are surfaced as warnings
 /// in the run logs and terminal, while missing files (common in temp cleanups)
 /// are handled silently.
