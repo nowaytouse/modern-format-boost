@@ -201,7 +201,8 @@ fn is_decode_or_pixel_cjxl_error(stderr: &str) -> bool {
 
 /// Read the bit depth from a PNG file's IHDR chunk (byte offset 24).
 /// Returns None if the file is not a valid PNG or cannot be read.
-fn get_png_bit_depth(path: &Path) -> Option<u8> {
+#[must_use]
+pub fn get_png_bit_depth(path: &Path) -> Option<u8> {
     use std::io::Read;
     let mut f = std::fs::File::open(path).ok()?;
     let mut buf = [0u8; 25];

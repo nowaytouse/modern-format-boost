@@ -918,14 +918,43 @@ fn convert_to_temp_png(
     )
     .map_err(ImgQualityError::IoError)
 }
-
 fn prepare_input_for_cjxl(
     input: &Path,
     options: &ConvertOptions,
     hdr_info: Option<&shared_utils::ColorInfo>,
 ) -> Result<(std::path::PathBuf, Option<tempfile::NamedTempFile>)> {
-    // Check if we need HDR decoding first
-    if shared_utils::needs_hdr_decode(hdr_info) {
+    // Ensure we have color info for bit depth detection if not provided
+    let local_hdr_info;
+    let hdr_info = if let Some(info) = hdr_info {
+        info
+    } else {
+        local_hdr_info = shared_utils::ffprobe_json::extract_color_info(input);
+        &local_hdr_info
+    };
+
+    // Determine target bit depth (match source if > 8-bit, else 8-bit)
+    let is_float = hdr_info.is_float;
+    let is_high_bit_depth = hdr_info.bit_depth.is_some_and(|d| d > 8) || hdr_info.is_hdr() || is_float;
+    let depth_str = if is_float { "32" } else if is_high_bit_depth { "16" } else { "8" };
+    let intermediate_suffix = if is_float { ".exr" } else { ".png" };
+
+    if is_float && options.verbose {
+        use console::style;
+        eprintln!(
+            "   {} Source is 32-bit float (HDR), using OpenEXR intermediate format",
+            style("🚀").cyan().bold()
+        );
+    } else if is_high_bit_depth && options.verbose {
+        use console::style;
+        eprintln!(
+            "   {} Source is {}-bit, using 16-bit intermediate format",
+            style("💎").cyan(),
+            hdr_info.bit_depth.unwrap_or(10)
+        );
+    }
+
+    // Check if we need HDR decoding (explicitly requested or high bit depth)
+    if shared_utils::needs_hdr_decode(Some(hdr_info)) {
         use console::style;
         eprintln!(
             "   {} {}",
@@ -933,7 +962,7 @@ fn prepare_input_for_cjxl(
             style("Using FFmpeg to preserve high bit-depth").cyan()
         );
 
-        match shared_utils::decode_hdr_image_to_png16(input, hdr_info.unwrap()) {
+        match shared_utils::decode_hdr_image_to_png16(input, hdr_info) {
             Ok((png16_path, temp_file)) => {
                 eprintln!(
                     "   {} {}",
@@ -965,10 +994,13 @@ fn prepare_input_for_cjxl(
             && !((real == "jpg" && literal_ext == "jpeg")
                 || (real == "jpeg" && literal_ext == "jpg"))
         {
+            use console::style;
             eprintln!(
-                "   ⚠️  EXTENSION MISMATCH: {} is actually {}, adjusting pre-processing...",
+                "   {} '{}' (disguised as .{}) -> actually {}, will process as actual format",
+                style("⚠️  [Smart fix] Extension mismatch:").yellow().bold(),
                 input.display(),
-                real
+                literal_ext,
+                real.to_uppercase()
             );
         }
         real.to_string()
@@ -1000,25 +1032,33 @@ fn prepare_input_for_cjxl(
                     style("Corrupted JPEG header detected, using ImageMagick to sanitize").yellow()
                 );
 
-                let temp_png_file = tempfile::Builder::new().suffix(".png").tempfile()?;
-                let temp_png = temp_png_file.path().to_path_buf();
+                let temp_file = tempfile::Builder::new().suffix(intermediate_suffix).tempfile()?;
+                let temp_path = temp_file.path().to_path_buf();
 
-                let result = Command::new("magick")
-                    .arg("--")
-                    .arg(shared_utils::safe_path_arg(input).as_ref())
-                    .arg(shared_utils::safe_path_arg(&temp_png).as_ref())
-                    .output();
+                let mut cmd = Command::new("magick");
+                cmd.arg("--")
+                    .arg(shared_utils::safe_path_arg(input).as_ref());
+
+                if is_float {
+                    cmd.arg("-format").arg("exr");
+                }
+                
+                cmd.arg("-depth")
+                    .arg(depth_str)
+                    .arg(shared_utils::safe_path_arg(&temp_path).as_ref());
+
+                let result = cmd.output();
 
                 match result {
-                    Ok(output) if output.status.success() && temp_png.exists() => {
+                    Ok(output) if output.status.success() && temp_path.exists() => {
+                        let label = if is_float { "OpenEXR" } else { "ImageMagick PNG" };
                         eprintln!(
-                            "   {} {}",
+                            "   {} {} {} sanitization successful",
                             style("✅").green(),
-                            style("ImageMagick JPEG sanitization successful")
-                                .green()
-                                .bold()
+                            style(label).green().bold(),
+                            style("JPEG").dim()
                         );
-                        Ok((temp_png, Some(temp_png_file)))
+                        Ok((temp_path, Some(temp_file)))
                     }
                     _ => {
                         eprintln!(
@@ -1040,24 +1080,71 @@ fn prepare_input_for_cjxl(
             "WebP detected, using dwebp for ICC profile compatibility",
         ),
 
-        "tiff" | "tif" => convert_to_temp_png(
-            input,
-            "magick",
-            &["--"],
-            &["-depth", "16", "__OUTPUT__"],
-            "TIFF detected, using ImageMagick for cjxl compatibility",
-        ),
+        "tiff" | "tif" => {
+            let label = if is_float { "32-bit float OpenEXR" } else { &format!("{depth_str}-bit PNG") };
+            let temp_file = tempfile::Builder::new().suffix(intermediate_suffix).tempfile().map_err(ImgQualityError::IoError)?;
+            let temp_path = temp_file.path().to_path_buf();
+            
+            let mut cmd = Command::new("magick");
+            cmd.arg("--")
+                .arg(shared_utils::safe_path_arg(input).as_ref());
+            
+            if is_float {
+                cmd.arg("-format").arg("exr");
+            }
+            
+            cmd.arg("-depth")
+                .arg(depth_str)
+                .arg(shared_utils::safe_path_arg(&temp_path).as_ref());
+            
+            let out = cmd.output().map_err(ImgQualityError::IoError)?;
+            if out.status.success() && temp_path.exists() {
+                if options.verbose {
+                    eprintln!("   ✅ TIFF detected, using ImageMagick to emit {label}");
+                }
+                Ok((temp_path, Some(temp_file)))
+            } else {
+                let err = String::from_utf8_lossy(&out.stderr);
+                Err(ImgQualityError::ConversionError(format!("magick TIFF conversion failed: {err}")))
+            }
+        }
 
-        "bmp" => convert_to_temp_png(
-            input,
-            "magick",
-            &["--"],
-            &["__OUTPUT__"],
-            "BMP detected, using ImageMagick for cjxl compatibility",
-        ),
+        "bmp" => {
+            let label = if is_float { "32-bit float OpenEXR" } else { &format!("{depth_str}-bit PNG") };
+            let temp_file = tempfile::Builder::new().suffix(intermediate_suffix).tempfile().map_err(ImgQualityError::IoError)?;
+            let temp_path = temp_file.path().to_path_buf();
+            
+            let mut cmd = Command::new("magick");
+            cmd.arg("--")
+                .arg(shared_utils::safe_path_arg(input).as_ref());
+            
+            if is_float {
+                cmd.arg("-format").arg("exr");
+            }
+            
+            cmd.arg("-depth")
+                .arg(depth_str)
+                .arg(shared_utils::safe_path_arg(&temp_path).as_ref());
+            
+            let out = cmd.output().map_err(ImgQualityError::IoError)?;
+            if out.status.success() && temp_path.exists() {
+                if options.verbose {
+                    eprintln!("   ✅ BMP detected, using ImageMagick to emit {label}");
+                }
+                Ok((temp_path, Some(temp_file)))
+            } else {
+                let err = String::from_utf8_lossy(&out.stderr);
+                Err(ImgQualityError::ConversionError(format!("magick BMP conversion failed: {err}")))
+            }
+        }
 
         "heic" | "heif" => {
-            eprintln!("   🔧 PRE-PROCESSING: HEIC/HEIF detected, using sips/ImageMagick for cjxl compatibility");
+            use console::style;
+            eprintln!(
+                "   {} {}",
+                style("🔧 PRE-PROCESSING:").cyan().bold(),
+                style("HEIC/HEIF detected, using sips/ImageMagick for cjxl compatibility").dim()
+            );
 
             let temp_png_file = tempfile::Builder::new().suffix(".png").tempfile()?;
             let temp_png = temp_png_file.path().to_path_buf();
@@ -1079,16 +1166,25 @@ fn prepare_input_for_cjxl(
                 }
                 _ => {
                     eprintln!("   ⚠️  sips failed, trying ImageMagick...");
-                    let result = Command::new("magick")
-                        .arg("--")
-                        .arg(shared_utils::safe_path_arg(input).as_ref())
-                        .arg(shared_utils::safe_path_arg(&temp_png).as_ref())
-                        .output();
+                    let temp_file = tempfile::Builder::new().suffix(intermediate_suffix).tempfile()?;
+                    let temp_path = temp_file.path().to_path_buf();
+                    
+                    let mut cmd = Command::new("magick");
+                    cmd.arg("--")
+                        .arg(shared_utils::safe_path_arg(input).as_ref());
+                    
+                    if is_float {
+                        cmd.arg("-format").arg("exr");
+                    }
+                    
+                    cmd.arg("-depth")
+                        .arg(depth_str)
+                        .arg(shared_utils::safe_path_arg(&temp_path).as_ref());
 
-                    match result {
-                        Ok(output) if output.status.success() && temp_png.exists() => {
+                    match cmd.output() {
+                        Ok(output) if output.status.success() && temp_path.exists() => {
                             eprintln!("   ✅ ImageMagick HEIC pre-processing successful");
-                            Ok((temp_png, Some(temp_png_file)))
+                            Ok((temp_path, Some(temp_file)))
                         }
                         _ => {
                             eprintln!(

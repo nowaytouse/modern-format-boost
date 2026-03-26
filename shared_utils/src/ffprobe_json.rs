@@ -68,6 +68,7 @@ pub struct ColorInfo {
     pub max_cll: Option<String>,
     pub is_dolby_vision: bool,
     pub is_hdr10_plus: bool,
+    pub is_float: bool,
 }
 
 impl ColorInfo {
@@ -361,6 +362,17 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
         );
     }
 
+    let mut is_float = false;
+    if let Some(ref pf) = stream.pix_fmt {
+        let pf_lower = pf.to_lowercase();
+        if pf_lower.contains('f') && (pf_lower.contains("32") || pf_lower.contains("16") || pf_lower.contains("64")) {
+            // Check for common floating point formats in FFmpeg (e.g., gbrpf32le, rgbaf32le)
+            if pf_lower.contains("pf32") || pf_lower.contains("f32") || pf_lower.contains("pf16") || pf_lower.contains("f16") {
+                is_float = true;
+            }
+        }
+    }
+
     ColorInfo {
         color_space,
         color_transfer,
@@ -371,6 +383,7 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
         max_cll,
         is_dolby_vision,
         is_hdr10_plus,
+        is_float,
     }
 }
 

@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
 
+## [0.10.106] - 2026-03-26
+
+### 🛡️ Hardened Bit-Depth Pipeline (Image Hardening)
+- **Universal Bit-Depth Awareness**: Implemented a three-tier "Bit-Depth Matched" intermediate pipeline for JPEG XL conversion. This ensures that the intermediate file used to "escort" data to the `cjxl` encoder always matches the source's precision, eliminating banding and rounding errors.
+  - **Tier 1: Standard (8-bit)**: Uses standard 8-bit PNG for non-HDR sources.
+  - **Tier 2: High-Precision (10/12/16-bit)**: Uses 16-bit PNG (`magick -depth 16`) for HDR and high-bit integer sources.
+  - **Tier 3: Movie-Grade (32-bit Float)**: Uses **OpenEXR (.exr)** with 32-bit float precision for cinema-grade and scientific-grade imagery (e.g., HDR-TIFF, EXR) to prevent clipping and precision loss.
+- **Proactive Precision Detection**: 
+  - Enhanced `shared_utils::ffprobe_json` to detect 32-bit floating point pixel formats from `ffprobe` output.
+  - Updated `prepare_input_for_cjxl` to perform a "probe-first" check for all convertible formats, ensuring internal `cjxl` decoding only proceeds if bit-depth matches.
+- **Improved Fallback Integrity**: 
+  - Updated the FFmpeg pipe in `img-hevc` and `img_av1` to use `rgb48le` (16-bit) when the source is high-bit, ensuring consistency even when direct tool calls fail.
+- **Unified ImageMagick Dispatch**: Refactored `prepare_input_for_cjxl` to handle multiple intermediate formats (PNG/EXR) and bit-depths (8/16/32) through a unified `magick` dispatch logic.
+
 ## [0.10.105] - 2026-03-26
 
 ### 🛠️ Nightly Infrastructure & Dependency Hardening (Nightly ONLY)
