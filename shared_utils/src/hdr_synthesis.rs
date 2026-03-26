@@ -260,9 +260,7 @@ fn synthesize_hdr(
     let (width, height) = sdr.dimensions();
 
     let gain_resized: DynamicImage = if gain.dimensions() != (width, height) {
-        let mut tmp = gain.clone();
-        tmp.resize(width, height, image::imageops::FilterType::Triangle);
-        tmp
+        gain.resize_exact(width, height, image::imageops::FilterType::Triangle)
     } else {
         gain.clone()
     };
