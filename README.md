@@ -28,6 +28,9 @@ Think of it as a "smart compressor" that **never degrades your media**:
 - 📸 **Images**: JPEG → JXL lossless reconstruction (bit-exact, ~20% smaller); PNG/WebP/TIFF/HEIC → JXL
 - 🎬 **Videos**: H.264/VP9/AV1 → HEVC with GPU-accelerated quality search
 - 🍎 **Apple ecosystem first**: Full Apple compatibility mode, Live Photo detection, AAE sidecar handling
+- 🔒 **Metadata guardian**: Preserves EXIF, XMP, ICC profiles, creation timestamps, macOS xattrs, Finder tags
+- ⚡ **Perceived Speed Optimization**: "Deep-First" sorting strategy—prioritizes deeper directory levels first, then sorts by file size and format, to ensure efficient batching and maximum throughput.
+- 🎞️ **HDR10+ Dynamic Metadata**: Full retention of SMPTE 2094-40 metadata via extraction sidecars and x265 SEI injection.
 - 🌅 **HDR Gainmap Synthesis**: Automatically synthesizes high-fidelity 32-bit linear HDR buffers from Apple/Samsung/ISO HEIC Gainmaps, ensuring maximum dynamic range is preserved when converting to JXL.
 - **🔍 Vendor Metadata Awareness**: Intelligent scanning for Samsung/Google specific XMP namespaces in HEIC files to ensure maximum context preservation.
 
@@ -283,7 +286,8 @@ All Rust dependencies are managed via `Cargo.toml` and fall under their respecti
 - 📸 **图片**：JPEG → JXL 无损重建（位一致，体积减少约 20%）；PNG/WebP/TIFF/HEIC → JXL
 - 🎬 **视频**：H.264/VP9/AV1 → HEVC，配合 GPU 加速质量搜索
 - 🍎 **苹果生态优先**：完整的 Apple 兼容模式、Live Photo 检测、AAE 编辑指令保留
-- 🔒 **元数据守护**：保留 EXIF、XMP、ICC 色彩配置文件、创建时间、macOS 扩展属性、Finder 标签。新增 **UltraHDR (Google)** 与 **HEIC Gainmap (Apple/Samsung)** 检测及损耗预警。
+- 🔒 **元数据守护**：保留 EXIF、XMP、ICC 色彩配置文件、创建时间、macOS 扩展属性、Finder 标签
+- 🌅 **HDR 高动态范围合成**：针对 Apple/Samsung/ISO 规范的 HEIC Gainmap 进行 32 位线性光融合，直出真 HDR 容量的 JXL；对 UltraHDR JPEG 提供检测与损耗预警。
 - ⚡ **感官速度优化**："深层优先"排序策略——按目录深度从深到浅、同深度内按文件大小和格式排序，确保高效批处理并最大化吞吐量。
 - 🎞️ **HDR10+ 动态元数据**：通过侧信道提取与 x265 SEI 注入，完整保留 SMPTE 2094-40 动态元数据。
 - 🌅 **厂商元数据感应**：智能扫描 HEIC 文件中的三星/谷歌特定 XMP 命名空间工作流，确保上下文信息最大化保留。
