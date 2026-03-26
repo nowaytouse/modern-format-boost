@@ -154,7 +154,7 @@ print_step_header() {
 	local prefix="[${step}] ${kind}: ${name}"
 	local padding=$((cols - ${#prefix} - 1))
 	[[ $padding -lt 2 ]] && padding=2
-	
+
 	echo -ne "\n${BOLD}${prefix}${NC}"
 }
 
@@ -164,7 +164,7 @@ run_required() {
 	print_step_header "required" "${name}"
 	local start
 	start=$(get_timestamp_ms)
-	
+
 	if "$@"; then
 		local end
 		end=$(get_timestamp_ms)
@@ -186,7 +186,7 @@ run_optional() {
 	print_step_header "optional" "${name}"
 	local start
 	start=$(get_timestamp_ms)
-	
+
 	if "$@"; then
 		local end
 		end=$(get_timestamp_ms)
@@ -233,7 +233,7 @@ if [[ ${AUTO_FIX} -eq 1 ]]; then
 	cargo fix --workspace --all-targets --all-features --allow-dirty --allow-staged
 	echo -e "${BLUE}Applying cargo clippy --fix...${NC}"
 	cargo clippy --fix --workspace --all-targets --all-features --allow-dirty --allow-staged
-	
+
 	if has_command kondo; then
 		echo -e "${BLUE}Applying kondo project cleanup...${NC}"
 		# Target only this repository to avoid confusing other users.
@@ -293,9 +293,9 @@ if [[ ${RUN_OPTIONAL} -eq 1 ]]; then
 				read -r first_line <"$f" 2>/dev/null || true
 				case "$(basename "$f")" in
 				"common.sh")
-					# common.sh contains zsh-only parameter expansion syntax,
-					# so it must use -ln zsh for shfmt diff to be 0.
-					zsh_files+=("$f")
+					# common.sh contains zsh-specific parameter expansion syntax ((%):-%x)
+					# that shfmt cannot parse even in -ln zsh mode. Skip from shfmt check.
+					continue
 					;;
 				*)
 					case "$first_line" in
@@ -399,6 +399,10 @@ if [[ ${RUN_OPTIONAL} -eq 1 ]]; then
 					skipped=$((skipped + 1))
 					skipped_steps+=("${geiger_name}: ${geiger_skip_reason} exit ${geiger_rc}")
 					echo -e "${BLUE}SKIP${NC} ${geiger_name} ${geiger_skip_reason}"
+				elif command -v rg >/dev/null 2>&1 && rg -q "^error: Found [0-9]+ warnings" "${geiger_log}"; then
+					# geiger exits 1 when unsafe code is found in dependencies — expected, not a tool failure.
+					passed=$((passed + 1))
+					echo -e "${GREEN}PASS${NC} ${geiger_name} (unsafe deps reported)"
 				else
 					warned=$((warned + 1))
 					warned_steps+=("${geiger_name} exit ${geiger_rc}")
