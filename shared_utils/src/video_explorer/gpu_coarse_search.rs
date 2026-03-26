@@ -544,10 +544,10 @@ pub fn explore_with_gpu_coarse_search(
             );
         }
         if let Some((u, v)) = best_psnr_uv_tracked {
-            let u_pass = u >= 35.0;
-            let v_pass = v >= 35.0;
+            let u_pass = u >= 34.0;
+            let v_pass = v >= 34.0;
             crate::log_eprintln!(
-                "   PSNR-UV: U={:.2} dB {}, V={:.2} dB {} (min ≥ 35.0 dB)",
+                "   PSNR-UV: U={:.2} dB {}, V={:.2} dB {} (min ≥ 34.0 dB)",
                 u,
                 if u_pass { "✅" } else { "❌" },
                 v,
@@ -627,7 +627,7 @@ pub fn explore_with_gpu_coarse_search(
                 // Three independent dimensions must ALL pass:
                 //   1. VMAF-Y   ≥ 92.0   (perceptual quality, Netflix standard)
                 //   2. CAMBI    ≤ 6.0    (banding detection, lower = better, Netflix standard)
-                //   3. PSNR-UV  ≥ 38.0 dB (chroma fidelity)
+                //   3. PSNR-UV  ≥ 34.0 dB (chroma fidelity)
                 crate::log_eprintln!("   Enabling precision quality gate (Ultimate Mode)...");
 
                 // Determine sample rate from duration (mirrors calculate_ms_ssim_yuv logic)
