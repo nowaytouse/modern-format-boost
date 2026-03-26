@@ -122,6 +122,21 @@ clean_old_binaries() {
 }
 
 # ═══════════════════════════════════════════════════════════════
+# 🔥 v8.3: Kondo 深度清理
+# ═══════════════════════════════════════════════════════════════
+clean_with_kondo() {
+	if ! command -v kondo >/dev/null 2>&1; then
+		echo -e "${DIM}⚠️  kondo not found; skipping deep cleanup.${NC}"
+		return 0
+	fi
+
+	echo -e "${YELLOW}🧹 Project Deep Cleanup (kondo)...${NC}"
+	# 使用安全参数：仅清理本项目，排除时间机器和用户库
+	kondo -n -I /Volumes -I ~/Library .
+	echo ""
+}
+
+# ═══════════════════════════════════════════════════════════════
 # 时间戳函数
 # ═══════════════════════════════════════════════════════════════
 get_newest_source_mtime() {
@@ -292,6 +307,10 @@ build_project() {
 parse_args() {
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
+		--kondo)
+			DO_KONDO=true
+			shift
+			;;
 		--force | -f)
 			FORCE_REBUILD=true
 			shift
@@ -345,6 +364,7 @@ parse_args() {
 			echo "  --av1             Build AV1 tools"
 			echo "  --img             Build image tools"
 			echo "  --vid             Build video tools"
+			echo "  --kondo           Perform deep project cleanup using kondo"
 			echo "  --no-verify-timestamps  Disable timestamp verification after build"
 			echo "  --help, -h        Show this help"
 			echo ""
@@ -396,9 +416,17 @@ main() {
 		echo -e "${YELLOW}🧹 Cleaning build artifacts...${NC}"
 		for proj_dir in "${projects_to_build[@]}"; do
 			rm -rf "$proj_dir/target/release/deps" 2>/dev/null || true
+			rm -rf "$proj_dir/target/release/.fingerprint" 2>/dev/null || true
 		done
 		rm -rf "shared_utils/target/release/deps" 2>/dev/null || true
 		echo ""
+
+		# 🔥 v8.3: 自动触发 kondo 清理
+		clean_with_kondo
+	fi
+
+	if [[ "$DO_KONDO" == "true" ]]; then
+		clean_with_kondo
 	fi
 
 	local rebuilt=0
