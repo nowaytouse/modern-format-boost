@@ -825,6 +825,14 @@ pub fn convert_jpeg_to_jxl(
         return Ok(ConversionResult::skipped_duplicate(input));
     }
 
+    // Warn about UltraHDR gainmap loss before conversion
+    if shared_utils::image_jpeg_analysis::is_ultra_hdr_jpeg_file(input) {
+        shared_utils::progress_mode::emit_stderr(&format!(
+            "   ⚠️  UltraHDR detected: {} contains embedded gainmap (MPF). Gainmap image will be lost in JXL output — XMP metadata preserved.",
+            input.file_name().unwrap_or_default().to_string_lossy()
+        ));
+    }
+
     let input_size = fs::metadata(input)?.len();
     let output = get_output_path(input, "jxl", options)?;
 

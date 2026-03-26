@@ -16,6 +16,15 @@ All notable changes to this project will be documented in this file.
 
 - **🔧 cjxl signal-kill retry**: When cjxl is killed by signal (OOM/SIGSEGV) during the ImageMagick pipeline at effort 7, the pipeline now retries at effort 3 before giving up. Detects signal-kill by checking that cjxl started encoding (version/encoding lines in stderr) but produced no error message.
 
+### 🔍 Metadata Detection & Warnings
+
+- **🌅 UltraHDR JPEG detection** (`is_ultra_hdr_jpeg` / `is_ultra_hdr_jpeg_file`): Scans JPEG APP1/APP2 segments for `hdrgm:` XMP namespace and MPF multi-picture markers. Emits a warning before JPEG→JXL conversion that the embedded gainmap image will be lost (XMP metadata is still preserved via exiftool).
+
+- **🖼️ HEIC gainmap & vendor metadata detection**: New fields `has_gainmap` and `has_vendor_metadata` added to `HeicAnalysis`. `extract_xmp_from_heic_data` scans raw HEIC bytes for XMP packets and detects:
+  - Apple/Google gainmap (`hdrgm:`, `GainMap`, `GCamera: + HDR`)
+  - Samsung (`urn:samsung:image:`) / Google (`com.google.android.camera`) vendor namespaces
+  - Emits distinct warnings for each during `analyze_heic_image`: depth/focus auxiliary loss, gainmap loss, vendor XMP rendering note.
+
 ---
 
 ## [0.11.0] - 2026-03-26

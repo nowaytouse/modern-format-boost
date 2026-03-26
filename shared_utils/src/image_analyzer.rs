@@ -522,6 +522,26 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
                 return Err(ImgQualityError::SkipFile(reason.to_string()));
             }
 
+            // Warn about auxiliary data that will be lost on conversion
+            if heic_analysis.has_auxiliary {
+                log_eprintln!(
+                    "⚠️  HEIC depth/focus auxiliary images detected in {} — these will be lost on conversion (libheif write API limitation)",
+                    path.display()
+                );
+            }
+            if heic_analysis.has_gainmap {
+                log_eprintln!(
+                    "⚠️  HEIC Apple/Google gainmap detected in {} — gainmap will be lost on conversion (JXL extra channel not yet supported via cjxl CLI)",
+                    path.display()
+                );
+            }
+            if heic_analysis.has_vendor_metadata {
+                log_eprintln!(
+                    "⚠️  HEIC Samsung/Google vendor XMP metadata detected in {} — XMP will be preserved via exiftool, but vendor-specific rendering may differ",
+                    path.display()
+                );
+            }
+
             let (w, h) = img.dimensions();
             let feats = calculate_image_features(&img, file_size);
 
