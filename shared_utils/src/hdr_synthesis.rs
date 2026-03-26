@@ -9,7 +9,7 @@
 //! markers, the synthesis path is currently optimized for HEIC auxiliary image streams.
 
 use anyhow::{anyhow, Context, Result};
-use image::{DynamicImage, GenericImageView, ImageBuffer, Rgb};
+use image::{DynamicImage, ImageBuffer};
 use libheif_rs::{ColorSpace, HeifContext, ImageHandle, ItemId, RgbChroma};
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
@@ -42,7 +42,7 @@ impl Default for GainMapParams {
 pub fn convert_heic_with_gainmap_to_jxl_hdr(
     input: &Path,
     output: &Path,
-    apple_compat: bool,
+    _apple_compat: bool,
 ) -> Result<()> {
     let data = std::fs::read(input).context("Failed to read HEIC file")?;
     let ctx = HeifContext::read_from_bytes(&data).context("Failed to parse HEIC context")?;
@@ -100,11 +100,8 @@ pub fn convert_heic_with_gainmap_to_jxl_hdr(
         .arg("--transfer_function")
         .arg("linear");
 
-    if apple_compat {
-        cmd.arg("--color_space").arg("RGB_D65_P3_Rel_Lin");
-    } else {
-        cmd.arg("--color_space").arg("RGB_D65_SRG_Rel_Lin");
-    }
+    // After matrix conversion in synthesis, the primaries are Rec.709 (sRGB)
+    cmd.arg("-x").arg("color_space=sRGB");
 
     let status = cmd
         .status()
@@ -135,6 +132,7 @@ fn decode_heif_handle(handle: &ImageHandle, color_space: ColorSpace) -> Result<D
 
     let width = img.width();
     let height = img.height();
+    let bit_depth = handle.luma_bits_per_pixel();
 
     match color_space {
         ColorSpace::Rgb(_) => {
@@ -142,26 +140,63 @@ fn decode_heif_handle(handle: &ImageHandle, color_space: ColorSpace) -> Result<D
             let r_plane = planes
                 .interleaved
                 .ok_or_else(|| anyhow!("No RGB interleaved plane"))?;
-            let mut buffer = ImageBuffer::new(width, height);
-            for (x, y, pixel) in buffer.enumerate_pixels_mut() {
-                let offset = y as usize * r_plane.stride + x as usize * 3;
-                let r = r_plane.data[offset];
-                let g = r_plane.data[offset + 1];
-                let b = r_plane.data[offset + 2];
-                *pixel = Rgb([r, g, b]);
+            
+            if bit_depth > 8 {
+                // Handle 10/12/16-bit (data is actually u16 even if returned as &[u8])
+                let data_u16: &[u16] = unsafe {
+                    std::slice::from_raw_parts(
+                        r_plane.data.as_ptr() as *const u16,
+                        r_plane.data.len() / 2,
+                    )
+                };
+                let mut buffer = ImageBuffer::new(width, height);
+                for (x, y, pixel) in buffer.enumerate_pixels_mut() {
+                    let offset = y as usize * (r_plane.stride / 2) + x as usize * 3;
+                    let r = data_u16[offset];
+                    let g = data_u16[offset + 1];
+                    let b = data_u16[offset + 2];
+                    *pixel = image::Rgb([r, g, b]);
+                }
+                Ok(DynamicImage::ImageRgb16(buffer))
+            } else {
+                let mut buffer = ImageBuffer::new(width, height);
+                for (x, y, pixel) in buffer.enumerate_pixels_mut() {
+                    let offset = y as usize * r_plane.stride + x as usize * 3;
+                    let r = r_plane.data[offset];
+                    let g = r_plane.data[offset + 1];
+                    let b = r_plane.data[offset + 2];
+                    *pixel = image::Rgb([r, g, b]);
+                }
+                Ok(DynamicImage::ImageRgb8(buffer))
             }
-            Ok(DynamicImage::ImageRgb8(buffer))
         }
         ColorSpace::Monochrome => {
             let planes = img.planes();
             let y_plane = planes.y.ok_or_else(|| anyhow!("No Y plane"))?;
-            let mut buffer = ImageBuffer::new(width, height);
-            for (x, y, pixel) in buffer.enumerate_pixels_mut() {
-                let offset = y as usize * y_plane.stride + x as usize;
-                let val = y_plane.data[offset];
-                *pixel = image::Luma([val]);
+            
+            if bit_depth > 8 {
+                let data_u16: &[u16] = unsafe {
+                    std::slice::from_raw_parts(
+                        y_plane.data.as_ptr() as *const u16,
+                        y_plane.data.len() / 2,
+                    )
+                };
+                let mut buffer = ImageBuffer::new(width, height);
+                for (x, y, pixel) in buffer.enumerate_pixels_mut() {
+                    let offset = y as usize * (y_plane.stride / 2) + x as usize;
+                    let val = data_u16[offset];
+                    *pixel = image::Luma([val]);
+                }
+                Ok(DynamicImage::ImageLuma16(buffer))
+            } else {
+                let mut buffer = ImageBuffer::new(width, height);
+                for (x, y, pixel) in buffer.enumerate_pixels_mut() {
+                    let offset = y as usize * y_plane.stride + x as usize;
+                    let val = y_plane.data[offset];
+                    *pixel = image::Luma([val]);
+                }
+                Ok(DynamicImage::ImageLuma8(buffer))
             }
-            Ok(DynamicImage::ImageLuma8(buffer))
         }
         _ => Err(anyhow!("Unsupported color space for synthesis")),
     }
@@ -257,6 +292,7 @@ fn synthesize_hdr(
     gain: &DynamicImage,
     params: &GainMapParams,
 ) -> Result<Vec<f32>> {
+    use image::GenericImageView;
     let (width, height) = sdr.dimensions();
 
     let gain_resized: DynamicImage = if gain.dimensions() != (width, height) {
@@ -265,33 +301,82 @@ fn synthesize_hdr(
         gain.clone()
     };
 
-    let sdr_rgb = sdr.to_rgb8();
-    let gain_luma = gain_resized.to_luma8();
     let mut hdr_pixels = Vec::with_capacity((width * height * 3) as usize);
+
+    // Get typed buffers to avoid scale-to-u8 bug in GenericImageView::get_pixel
+    let sdr_8 = if sdr.color().bits_per_pixel() <= 24 { Some(sdr.to_rgb8()) } else { None };
+    let sdr_16 = if sdr.color().bits_per_pixel() > 24 { Some(sdr.to_rgb16()) } else { None };
+    
+    let gain_8 = if gain_resized.color().bits_per_pixel() <= 8 { Some(gain_resized.to_luma8()) } else { None };
+    let gain_16 = if gain_resized.color().bits_per_pixel() > 8 { Some(gain_resized.to_luma16()) } else { None };
+    let gain_rgb16 = if gain_resized.color().has_color() && gain_resized.color().bits_per_pixel() > 24 { Some(gain_resized.to_rgb16()) } else { None };
+    let gain_rgb8 = if gain_resized.color().has_color() && gain_resized.color().bits_per_pixel() <= 24 { Some(gain_resized.to_rgb8()) } else { None };
 
     for y in 0..height {
         for x in 0..width {
-            let sdr_px = sdr_rgb.get_pixel(x, y);
-            let gain_px = gain_luma.get_pixel(x, y).0[0] as f32 / 255.0;
+            // 1. Get Normalized SDR (Linearized later)
+            let (r_norm, g_norm, b_norm) = if let Some(ref buf) = sdr_16 {
+                let px = buf.get_pixel(x, y);
+                (px[0] as f32 / 65535.0, px[1] as f32 / 65535.0, px[2] as f32 / 65535.0)
+            } else if let Some(ref buf) = sdr_8 {
+                let px = buf.get_pixel(x, y);
+                (px[0] as f32 / 255.0, px[1] as f32 / 255.0, px[2] as f32 / 255.0)
+            } else {
+                let px = sdr.to_rgb8();
+                let p = px.get_pixel(x, y);
+                (p[0] as f32 / 255.0, p[1] as f32 / 255.0, p[2] as f32 / 255.0)
+            };
 
-            // 1. SDR to Linear
-            let r_lin = srgb_to_linear(sdr_px[0] as f32 / 255.0);
-            let g_lin = srgb_to_linear(sdr_px[1] as f32 / 255.0);
-            let b_lin = srgb_to_linear(sdr_px[2] as f32 / 255.0);
+            // SDR to Linear (sRGB/Rec.709 Transfer function)
+            let r_lin = srgb_to_linear(r_norm);
+            let g_lin = srgb_to_linear(g_norm);
+            let b_lin = srgb_to_linear(b_norm);
 
             // 2. Decode Gain
-            let log2_gain =
-                gain_px * (params.gain_map_max - params.gain_map_min) + params.gain_map_min;
-            let gain_val = 2.0_f32.powf(log2_gain);
+            let apply_gain = |val_raw: f32, max_val: f32| -> f32 {
+                let val_norm = val_raw / max_val;
+                let gain_px_corrected = val_norm.powf(1.0 / params.gamma.max(0.1));
+                let log2_gain = gain_px_corrected * (params.gain_map_max - params.gain_map_min) + params.gain_map_min;
+                2.0_f32.powf(log2_gain)
+            };
 
-            // 3. Apply Gain
-            let r_hdr = (r_lin + params.offset_sdr) * gain_val - params.offset_hdr;
-            let g_hdr = (g_lin + params.offset_sdr) * gain_val - params.offset_hdr;
-            let b_hdr = (b_lin + params.offset_sdr) * gain_val - params.offset_hdr;
+            let gain_channels = gain_resized.color().channel_count();
+            let (gain_r, gain_g, gain_b) = if gain_channels >= 3 {
+                if let Some(ref buf) = gain_rgb16 {
+                    let p = buf.get_pixel(x, y);
+                    (apply_gain(p[0] as f32, 65535.0), apply_gain(p[1] as f32, 65535.0), apply_gain(p[2] as f32, 65535.0))
+                } else if let Some(ref buf) = gain_rgb8 {
+                    let p = buf.get_pixel(x, y);
+                    (apply_gain(p[0] as f32, 255.0), apply_gain(p[1] as f32, 255.0), apply_gain(p[2] as f32, 255.0))
+                } else {
+                    let g_val = apply_gain(128.0, 255.0);
+                    (g_val, g_val, g_val)
+                }
+            } else {
+                let g_val = if let Some(ref buf) = gain_16 {
+                    apply_gain(buf.get_pixel(x, y)[0] as f32, 65535.0)
+                } else if let Some(ref buf) = gain_8 {
+                    apply_gain(buf.get_pixel(x, y)[0] as f32, 255.0)
+                } else {
+                    apply_gain(128.0, 255.0)
+                };
+                (g_val, g_val, g_val)
+            };
 
-            hdr_pixels.push(r_hdr.max(0.0));
-            hdr_pixels.push(g_hdr.max(0.0));
-            hdr_pixels.push(b_hdr.max(0.0));
+            // 3. Apply Gain (Assuming source is Display P3)
+            let r_p3 = (r_lin + params.offset_sdr) * gain_r - params.offset_hdr;
+            let g_p3 = (g_lin + params.offset_sdr) * gain_g - params.offset_hdr;
+            let b_p3 = (b_lin + params.offset_sdr) * gain_b - params.offset_hdr;
+
+            // 4. Color Primaries: Linear P3 -> Linear sRGB (Rec.709)
+            // Matrix for D65 Display P3 to D65 Rec.709
+            let r_srgb =  1.2249 * r_p3 - 0.2247 * g_p3 - 0.0001 * b_p3;
+            let g_srgb = -0.0420 * r_p3 + 1.0419 * g_p3 + 0.0001 * b_p3;
+            let b_srgb = -0.0197 * r_p3 - 0.0786 * g_p3 + 1.0983 * b_p3;
+
+            hdr_pixels.push(r_srgb.max(0.0));
+            hdr_pixels.push(g_srgb.max(0.0));
+            hdr_pixels.push(b_srgb.max(0.0));
         }
     }
 
