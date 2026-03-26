@@ -129,7 +129,10 @@ impl HeartbeatConfig {
     #[must_use]
     pub fn custom(operation: &str, interval_secs: u64) -> Self {
         let interval = if interval_secs < 5 {
-            eprintln!("⚠️  Heartbeat interval too short ({interval_secs} < 5s), using 5s");
+            crate::log_rare_error!(
+                "Heartbeat Config",
+                "Heartbeat interval too short ({interval_secs} < 5s), using 5s"
+            );
             5
         } else {
             interval_secs
@@ -216,18 +219,18 @@ impl UniversalHeartbeat {
                         "💓 [{}] Active (elapsed: {}, Beijing Time: {}){}",
                         config.operation, elapsed_str, beijing_time, extra
                     )) {
-                        eprintln!("⚠️ Heartbeat write failed: {err}");
+                        crate::log_rare_error!("Heartbeat IO", "Failed to write heartbeat: {err}");
                     } else if let Err(err) = stderr.write_all(b"\n") {
-                        eprintln!("⚠️ Heartbeat newline write failed: {err}");
+                        crate::log_rare_error!("Heartbeat IO", "Failed to write heartbeat newline: {err}");
                     } else if let Err(err) = stderr.flush() {
-                        eprintln!("⚠️ Heartbeat flush failed: {err}");
+                        crate::log_rare_error!("Heartbeat IO", "Failed to flush heartbeat: {err}");
                     }
                 }
             }
         }));
 
         if let Err(e) = result {
-            eprintln!("❌ Heartbeat thread panicked: {e:?}");
+            crate::log_rare_error!("Heartbeat Thread", "Thread panicked during loop: {e:?}");
         }
     }
 
@@ -247,7 +250,7 @@ impl UniversalHeartbeat {
         self.running.store(false, Ordering::Relaxed);
         if let Some(handle) = self.handle.take() {
             if handle.join().is_err() {
-                eprintln!("⚠️ Heartbeat thread panicked while stopping");
+                crate::log_rare_error!("Heartbeat Thread", "Thread panicked while stopping");
             }
         }
         crate::heartbeat_manager::HeartbeatManager::unregister_heartbeat(&self.config.operation);
@@ -259,7 +262,7 @@ impl Drop for UniversalHeartbeat {
         self.running.store(false, Ordering::Relaxed);
         if let Some(handle) = self.handle.take() {
             if handle.join().is_err() {
-                eprintln!("⚠️ Heartbeat thread panicked during drop");
+                crate::log_rare_error!("Heartbeat Thread", "Thread panicked during drop");
             }
         }
         crate::heartbeat_manager::HeartbeatManager::unregister_heartbeat(&self.config.operation);

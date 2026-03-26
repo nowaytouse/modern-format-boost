@@ -103,6 +103,8 @@ pub mod symbols {
     pub const MEDAL: &str = "🥇";
     pub const SHIELD: &str = "🛡️";
     pub const LINK: &str = "🔗";
+    pub const BUG: &str = "☢️";
+    pub const STOP: &str = "⛔️";
 }
 
 pub mod progress_style {

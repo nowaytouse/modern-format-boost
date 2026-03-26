@@ -662,15 +662,7 @@ impl TempOutputGuard {
 impl Drop for TempOutputGuard {
     fn drop(&mut self) {
         if self.0.exists() {
-            if let Err(e) = fs::remove_file(&self.0) {
-                if e.kind() != std::io::ErrorKind::NotFound {
-                    eprintln!(
-                        "⚠️ [conversion] Failed to remove temp output on drop {}: {}",
-                        self.0.display(),
-                        e
-                    );
-                }
-            }
+            let _ = crate::io_utils::safe_remove_file(&self.0);
         }
     }
 }
@@ -742,15 +734,7 @@ pub fn commit_temp_to_output_with_metadata(
         }
     }
     if !force && output.exists() {
-        if let Err(e) = fs::remove_file(temp) {
-            if e.kind() != std::io::ErrorKind::NotFound {
-                eprintln!(
-                    "⚠️ [conversion] Failed to remove temp output {} after concurrent output detection: {}",
-                    temp.display(),
-                    e
-                );
-            }
-        }
+        let _ = crate::io_utils::safe_remove_file(temp);
         return Ok(false);
     }
     fs::rename(temp, output)?;
@@ -760,7 +744,12 @@ pub fn commit_temp_to_output_with_metadata(
         // Step 1: Preserve metadata (EXIF, XMP, xattrs, permissions)
         // This may modify the file (e.g., ExifTool writes EXIF/XMP), which changes timestamps
         if let Err(e) = crate::metadata::preserve_metadata(src, output) {
-            eprintln!("⚠️ Failed to preserve metadata: {e}");
+            crate::log_upstream_error!(
+                "Metadata preservation",
+                "Failed to preserve metadata for {}: {}",
+                output.display(),
+                e
+            );
         }
         crate::metadata::merge_xmp_sidecar_into_dest(src, output);
 

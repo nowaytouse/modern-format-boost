@@ -247,7 +247,7 @@ mod tests {
         let _ = std::fs::File::create(&empty).and_then(|f| f.sync_all());
         let r = verify_output_file(&empty, 1);
         assert!(r.is_err()); // 0 bytes < 1
-        let _ = std::fs::remove_file(&empty);
+        let _ = crate::io_utils::safe_remove_file(&empty);
 
         let small = dir.join("quality_verifier_test_small");
         let mut f = std::fs::File::create(&small).unwrap();
@@ -256,7 +256,7 @@ mod tests {
         drop(f);
         let r = verify_output_file(&small, 32);
         assert!(r.is_ok());
-        let _ = std::fs::remove_file(&small);
+        let _ = crate::io_utils::safe_remove_file(&small);
     }
 
     #[test]
@@ -297,8 +297,8 @@ mod tests {
         std::fs::write(&input_copy, minimal).unwrap();
         std::fs::write(&output_copy, minimal).unwrap();
         let result = verify_after_encode(&input_copy, &output_copy, &VerifyOptions::strict_video());
-        let _ = std::fs::remove_file(&input_copy);
-        let _ = std::fs::remove_file(&output_copy);
+        let _ = crate::io_utils::safe_remove_file(&input_copy);
+        let _ = crate::io_utils::safe_remove_file(&output_copy);
         assert!(
             !result.passed(),
             "non-video files should fail strict verification"

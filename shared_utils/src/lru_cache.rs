@@ -424,7 +424,7 @@ mod prop_tests {
                 "Corrupted JSON #{i} should use provided capacity"
             );
 
-            let _ = std::fs::remove_file(&temp_file);
+            let _ = crate::io_utils::safe_remove_file(&temp_file);
         }
     }
 }

@@ -24,17 +24,8 @@ fn copy_original_on_skip(input: &Path, options: &ConvertOptions) -> Option<std::
     .unwrap_or_default()
 }
 
-fn cleanup_temp_output(temp_output: &Path, input: &Path) {
-    if let Err(e) = fs::remove_file(temp_output) {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            eprintln!(
-                "⚠️ [img-av1] Failed to remove temporary output {} for {}: {}",
-                temp_output.display(),
-                input.display(),
-                e
-            );
-        }
-    }
+fn cleanup_temp_output(temp_output: &Path, _input: &Path) {
+    let _ = shared_utils::io_utils::safe_remove_file(temp_output);
 }
 
 /// Finalize conversion with size check and metadata preservation.
