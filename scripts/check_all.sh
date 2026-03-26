@@ -81,11 +81,23 @@ while [[ $# -gt 0 ]]; do
 done
 
 has_cargo_subcommand() {
-	cargo "$1" --version >/dev/null 2>&1
+	local sub="$1"
+	local pkg="${2:-cargo-$sub}"
+	if cargo "$sub" --version >/dev/null 2>&1; then
+		return 0
+	fi
+	echo -e "${YELLOW}Hint: '${name}' requires ${pkg}. Install with: cargo install ${pkg}${NC}" >&2
+	return 1
 }
 
 has_command() {
-	command -v "$1" >/dev/null 2>&1
+	local cmd="$1"
+	local pkg="${2:-$cmd}"
+	if command -v "$cmd" >/dev/null 2>&1; then
+		return 0
+	fi
+	echo -e "${YELLOW}Hint: '${name}' requires ${cmd}. Install with: brew install ${pkg}${NC}" >&2
+	return 1
 }
 
 has_nightly_toolchain() {
@@ -106,41 +118,22 @@ has_rust_component() {
 	fi
 }
 
-advisory_db_dir() {
-	# Must match deny.toml: `db-path = "~/.cargo/advisory-db"`
-	printf '%s/advisory-db' "${CARGO_HOME:-$HOME/.cargo}"
-}
-
-advisory_db_writable() {
-	local cargo_home
-	cargo_home="${CARGO_HOME:-$HOME/.cargo}"
-	# cargo-deny will need to create/fetch/update files under cargo home.
-	# So check writability of cargo home (more robust than the db subdir).
-	[[ -d "${cargo_home}" && -w "${cargo_home}" ]]
-}
-
-advisory_db_is_git_repo() {
-	local db_dir
-	db_dir="$(advisory_db_dir)"
-	[[ -d "${db_dir}" ]] || return 1
-
-	# cargo-deny keeps a directory of advisory git repositories under `db-path`.
-	# The parent `db-path` itself is not necessarily a git repo, so we need to
-	# check for any `advisory-db-*` sub-repo.
-	if git -C "${db_dir}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-		return 0
+get_timestamp_ms() {
+	# macOS/BSD date doesn't support %N, but perl is available.
+	if perl -e 'use Time::HiRes qw(gettimeofday);' 2>/dev/null; then
+		perl -MTime::HiRes=gettimeofday -e '($s,$ms)=gettimeofday; printf "%d%03d", $s, $ms/1000'
+	else
+		date +%s000
 	fi
+}
 
-	local any=0
-	local d
-	for d in "${db_dir}"/advisory-db-*; do
-		[[ -d "$d" ]] || continue
-		if git -C "$d" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-			any=1
-			break
-		fi
-	done
-	[[ $any -eq 1 ]]
+format_duration() {
+	local ms="$1"
+	if [[ $ms -lt 1000 ]]; then
+		echo "${ms}ms"
+	else
+		printf "%.2fs" "$(echo "scale=2; $ms/1000" | bc)"
+	fi
 }
 
 declare -i step=0
@@ -156,21 +149,34 @@ print_step_header() {
 	local kind="$1"
 	local name="$2"
 	step=$((step + 1))
-	echo -e "\n${BOLD}[${step}] ${kind}: ${name}${NC}"
+	# Right-align based on current terminal columns if possible, fallback to 80
+	local cols="${COLUMNS:-80}"
+	local prefix="[${step}] ${kind}: ${name}"
+	local padding=$((cols - ${#prefix} - 1))
+	[[ $padding -lt 2 ]] && padding=2
+	
+	echo -ne "\n${BOLD}${prefix}${NC}"
 }
 
 run_required() {
 	local name="$1"
 	shift
 	print_step_header "required" "${name}"
+	local start
+	start=$(get_timestamp_ms)
+	
 	if "$@"; then
+		local end
+		end=$(get_timestamp_ms)
+		local duration
+		duration=$(format_duration $((end - start)))
 		passed=$((passed + 1))
-		echo -e "${GREEN}PASS${NC} ${name}"
+		echo -e " ${GREEN}PASS${NC} (${duration})"
 	else
 		local rc=$?
 		failed=$((failed + 1))
 		failed_steps+=("${name} (exit ${rc})")
-		echo -e "${RED}FAIL${NC} ${name} (exit ${rc})"
+		echo -e " ${RED}FAIL${NC} (exit ${rc})"
 	fi
 }
 
@@ -178,14 +184,21 @@ run_optional() {
 	local name="$1"
 	shift
 	print_step_header "optional" "${name}"
+	local start
+	start=$(get_timestamp_ms)
+	
 	if "$@"; then
+		local end
+		end=$(get_timestamp_ms)
+		local duration
+		duration=$(format_duration $((end - start)))
 		passed=$((passed + 1))
-		echo -e "${GREEN}PASS${NC} ${name}"
+		echo -e " ${GREEN}PASS${NC} (${duration})"
 	else
 		local rc=$?
 		warned=$((warned + 1))
 		warned_steps+=("${name} (exit ${rc})")
-		echo -e "${YELLOW}WARN${NC} ${name} (exit ${rc})"
+		echo -e " ${YELLOW}WARN${NC} (exit ${rc})"
 	fi
 }
 
@@ -195,7 +208,7 @@ skip_optional() {
 	print_step_header "optional" "${name}"
 	skipped=$((skipped + 1))
 	skipped_steps+=("${name}: ${reason}")
-	echo -e "${BLUE}SKIP${NC} ${name} (${reason})"
+	echo -e " ${BLUE}SKIP${NC} (${reason})"
 }
 
 echo -e "${BOLD}${CYAN}Starting code quality scan${NC}"
@@ -216,6 +229,8 @@ if [[ ${AUTO_FIX} -eq 1 ]]; then
 	echo -e "\n${BOLD}${CYAN}Running auto-fix${NC}"
 	echo -e "${BLUE}Applying cargo fmt...${NC}"
 	cargo fmt --all
+	echo -e "${BLUE}Applying cargo fix...${NC}"
+	cargo fix --workspace --all-targets --all-features --allow-dirty --allow-staged
 	echo -e "${BLUE}Applying cargo clippy --fix...${NC}"
 	cargo clippy --fix --workspace --all-targets --all-features --allow-dirty --allow-staged
 	echo -e "${GREEN}Auto-fix completed${NC}"

@@ -5,9 +5,7 @@
 echo "🔍 Starting HDR10+ Metadata Injection Logic Verification..."
 
 # Run the newly added unit test in vid_hevc
-cargo test -p vid-hevc --lib tests::test_hdr10plus_injection_logic -- --nocapture
-
-if [ $? -eq 0 ]; then
+if cargo test -p vid-hevc --lib tests::test_hdr10plus_injection_logic -- --nocapture; then
 	echo ""
 	echo "🎉 SUCCESS: HDR10+ metadata injection logic is confirmed and reliable."
 	echo "The x265-params are correctly constructed with :dhdr10-info=<path> when HDR10+ is detected."

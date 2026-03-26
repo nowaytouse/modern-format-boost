@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
 
+## [0.10.107] - 2026-03-26
+
+### 🛠️ Scanner Fortification & Rust Quality Automation
+- **Enhanced `check_all.sh` Scanner**:
+  - **Parallel Execution Engine**: Re-engineered the scanner to run independent checks (`fmt`, `clippy`, `shellcheck`) in parallel, significantly reducing scan cycles.
+  - **Automated Rust Quality Improvement**: Integrated `cargo fix` into the `--fix` pipeline to automatically resolve compiler suggestions and clippy lints.
+  - **Step Timing & Diagnostics**: Added high-precision timing (ms) for each check and right-aligned PASS/FAIL indicators for professional terminal reporting.
+  - **Actionable Tool Hints**: Detailed `brew install` or `cargo install` hints now appear when required scanner dependencies are missing.
+- **Shell Script "Disease" Eradication**:
+  - Fixed SC2181 in `./debug/verify.sh` (switched to direct exit code checking for better reliability).
+  - Achieved a 100% clean `shellcheck` pass across the entire repository's script suite.
+
 ## [0.10.106] - 2026-03-26
 
 ### 🛡️ Hardened Bit-Depth Pipeline (Image Hardening)
