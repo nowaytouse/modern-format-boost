@@ -2482,19 +2482,19 @@ fn cpu_fine_tune_from_gpu_boundary(
                         MAX_CONSECUTIVE_FAILURES
                     );
 
-                    // Backtrack: if we were sprinting and hit a wall, reset to precision mode
+                    // Backtrack: halve step gradually (mirrors sprint), retry from last good size
                     if current_step > PHASE3_DOWNWARD_STEP + 0.01 && consecutive_01_successes >= 2 {
                         let old_step = current_step;
-                        current_step = PHASE3_DOWNWARD_STEP;
+                        current_step = (current_step / 2.0).max(PHASE3_DOWNWARD_STEP);
                         consecutive_01_successes = 0;
                         crate::log_eprintln!(
-                            "   {}BACKTRACK:{} {:.2} → {:.2} (overshoot correction)",
+                            "   {}↩️  BACKTRACK:{} {:.2} → {:.2} (overshoot correction)",
                             BRIGHT_YELLOW,
                             RESET,
                             old_step,
                             current_step
                         );
-                        test_crf = compress_point - current_step;
+                        test_crf = best_crf.unwrap_or(test_crf + old_step) - current_step;
                         continue;
                     }
 
@@ -2669,11 +2669,11 @@ fn cpu_fine_tune_from_gpu_boundary(
                                 RESET
                             );
                         } else {
-                            // Sprint: double step after 2 consecutive successes (max 0.20)
+                            // Sprint: double step after 2 consecutive successes (max 1.28)
                             if consecutive_successes >= 2 && current_step < max_sprint_step {
                                 let old_step = current_step;
                                 current_step = (current_step * 2.0).min(max_sprint_step);
-                                consecutive_successes = 0; // reset so next sprint needs 2 more wins
+                                // No reset here means we keep doubling on every success if we stay in sprint mode
                                 crate::log_eprintln!(
                                     "   {}⚡ Sprint activated: step {:.2} → {:.2}{}",
                                     BRIGHT_CYAN,
