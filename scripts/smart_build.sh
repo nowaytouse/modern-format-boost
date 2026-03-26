@@ -240,7 +240,7 @@ verify_binary_timestamp() {
 	if [[ $binary_mtime -lt $compile_start_time ]]; then
 		echo -e "${RED}⚠️  TIMESTAMP VERIFICATION FAILED${NC}"
 		echo -e "${DIM}   Binary mtime: $(date -r "$binary_mtime" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date -d @"$binary_mtime" '+%Y-%m-%d %H:%M:%S' 2>/dev/null)${NC}"
-                echo -e "${DIM}   Compile start: $(date -r "$compile_start_time" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date -d @"$compile_start_time" '+%Y-%m-%d %H:%M:%S' 2>/dev/null)${NC}"
+		echo -e "${DIM}   Compile start: $(date -r "$compile_start_time" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date -d @"$compile_start_time" '+%Y-%m-%d %H:%M:%S' 2>/dev/null)${NC}"
 		echo -e "${YELLOW}   ⚠️  Binary timestamp is older than compile time!${NC}"
 		return 1
 	fi
