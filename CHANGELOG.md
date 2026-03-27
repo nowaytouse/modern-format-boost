@@ -18,11 +18,13 @@ Significant overhaul of the Python automation layer to provide a high-end, profe
   - **Config Dashboard**: Replaced text-based configuration with a structured `rich.Table` dashboard, integrating live **System Health Snapshots** (CPU/RAM usage).
   - **Session Analytics**: Added a visual **Success Rate Progress Bar** (█░) and efficiency metrics to final batch reports.
   - **Window Resizing**: Restored automatic terminal window resizing (40x100) to ensure the premium UI layout is always perfectly framed.
-- **Cinema-Grade Terminal Refresh (120Hz)**: 
-  - Upgraded the global Rust rendering standard to **120Hz** (8ms cycles) for the ultimate "zero-stutter" experience.
-  - Harmonized sub-10ms steady ticks and debounce timers across the entire `shared_utils` progress infrastructure.
-  - **Native PTY Relay**: Transitioned the Python automation layer to a full **Pseudo-Terminal (PTY)** master/slave architecture. This tricks the Rust binary into seeing a genuine TTY, unlocking its most optimized high-frequency rendering mode.
-  - Reduced Python's GIL switch interval to **0.5ms** to ensure terminal relaying priority during heavy CPU loads (e.g. HDR synthesis).
+- **Cinema-Grade Terminal Refresh (30Hz)**: 
+  - Optimized the global Rust rendering standard to a balanced **30Hz** (33ms cycles). This maintains smooth animations while significantly reducing CPU overhead during heavy media processing.
+  - Harmonized sub-33ms steady ticks and debounce timers across the entire `shared_utils` progress infrastructure.
+  - **Native PTY Relay**: Transitioned the Python automation layer to a full **Pseudo-Terminal (PTY)** master/slave architecture for 100% performance parity with direct Bash execution.
+- **Project-Wide Cache Centralization**:
+  - Eliminated `.cache` folders from working directories by centralizing all metadata and analysis databases in **`~/.modern_format_boost/cache/`**.
+  - Renamed the analysis database to **`image_analysis_v2_main.db`** for precise session/branch distinction.
 - **Terminal Dimension Locking**:
   - Synchronous environment-aware rendering: Enforced a 100x40 column lock via the `COLUMNS` and `LINES` environment variables, ensuring progress bars remain full-width when piped through the Python wrapper.
   - Verified 100% preservation of VT100/ANSI icons (📊, ✓), colors, and `\r` carriage return updates during piped execution.

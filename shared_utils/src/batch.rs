@@ -439,9 +439,9 @@ fn build_cached_image_entry(root: &Path, path: &Path) -> Option<CachedImageSortE
 }
 
 fn project_cache_dir() -> io::Result<PathBuf> {
-    let mut dir = std::env::current_dir()?;
-    dir.push(".cache");
-    dir.push(PATH_TREE_CACHE_DIR);
+    let dir = crate::common_utils::get_user_project_cache_dir()
+        .map_err(io::Error::other)?
+        .join(PATH_TREE_CACHE_DIR);
     fs::create_dir_all(&dir)?;
     Ok(dir)
 }

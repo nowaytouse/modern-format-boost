@@ -50,7 +50,7 @@ def show_stats(cache_dir, db_file, log_dir, mfb_progress_dir):
 
         if db_file.is_file():
             db_size = get_dir_size(db_file)
-            print(f"   🗄️  Database:  {DIM}image_analysis_v2.db{RESET} ({db_size})")
+            print(f"   🗄️  Database:  {DIM}{db_file.name}{RESET} ({db_size})")
     else:
         print(f"   {YELLOW}Empty: No cache directory found.{RESET}")
 
@@ -66,8 +66,8 @@ def main():
     script_dir = Path(__file__).parent.resolve()
     project_root = script_dir.parent
 
-    cache_dir = project_root / ".cache"
-    db_file = cache_dir / "image_analysis_v2.db"
+    cache_dir = Path.home() / ".modern_format_boost" / "cache"
+    db_file = cache_dir / "image_analysis_v2_main.db"
     log_dir = project_root / "logs"
     mfb_progress_dir = Path.home() / ".mfb_progress"
 

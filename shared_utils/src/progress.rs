@@ -333,7 +333,7 @@ impl CoarseProgressBar {
         }
 
         if let Ok(mut last) = self.last_render.try_lock() {
-            if last.elapsed() >= Duration::from_millis(5) {
+            if last.elapsed() >= Duration::from_millis(33) {
                 self.render();
                 *last = Instant::now();
             }
@@ -525,7 +525,7 @@ impl DetailedCoarseProgressBar {
         }
 
         if let Ok(mut last) = self.last_render.try_lock() {
-            if last.elapsed() < Duration::from_millis(8) {
+            if last.elapsed() < Duration::from_millis(33) {
                 return;
             }
             *last = Instant::now();
@@ -716,9 +716,9 @@ impl FixedBottomProgress {
                 .tick_chars(progress_style::SPINNER_CHARS),
         );
         bar.set_prefix(prefix.to_string());
-        bar.enable_steady_tick(Duration::from_millis(8));
+        bar.enable_steady_tick(Duration::from_millis(33));
 
-        bar.set_draw_target(ProgressDrawTarget::stderr_with_hz(120));
+        bar.set_draw_target(ProgressDrawTarget::stderr_with_hz(30));
 
         Self {
             bar,

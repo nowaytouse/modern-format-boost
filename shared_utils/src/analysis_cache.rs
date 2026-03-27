@@ -765,10 +765,8 @@ impl AnalysisCache {
     /// Returns `anyhow::Error` if the current directory cannot be determined,
     /// cache directory cannot be created, or `AnalysisCache::new` fails.
     pub fn default_local() -> Result<Self> {
-        let mut path = std::env::current_dir()?;
-        path.push(".cache");
-        std::fs::create_dir_all(&path)?;
-        path.push("image_analysis_v2.db");
+        let mut path = crate::common_utils::get_user_project_cache_dir()?;
+        path.push("image_analysis_v2_main.db");
         Self::new(&path)
     }
 
