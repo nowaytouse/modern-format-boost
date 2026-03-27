@@ -18,8 +18,12 @@ Significant overhaul of the Python automation layer to provide a high-end, profe
   - **Config Dashboard**: Replaced text-based configuration with a structured `rich.Table` dashboard, integrating live **System Health Snapshots** (CPU/RAM usage).
   - **Session Analytics**: Added a visual **Success Rate Progress Bar** (█░) and efficiency metrics to final batch reports.
   - **Window Resizing**: Restored automatic terminal window resizing (40x100) to ensure the premium UI layout is always perfectly framed.
-- **Zero-Interference Logging**: 
-  - Re-engineered the log passthrough to use raw buffer writes, ensuring 100% preservation of the Rust tools' original icons (📊, ✓), colors, and `\r` carriage return updates.
+- **Smooth Real-Time Progress Relay**: 
+  - Transitioned the Python automation layer to low-level `os.read()` for non-buffered progress synchronization, eliminating 'PPT-style' stuttering.
+  - Implemented high-frequency terminal flushing (2ms cycle) for perfect parity with the Rust tools' native `indicatif` experience.
+- **Terminal Dimension Locking**:
+  - Synchronous environment-aware rendering: Enforced a 100x40 column lock via the `COLUMNS` and `LINES` environment variables, ensuring progress bars remain full-width when piped through the Python wrapper.
+  - Verified 100% preservation of VT100/ANSI icons (📊, ✓), colors, and `\r` carriage return updates during piped execution.
 
 ### 🛡️ Infrastructure & Reliability Hardening
 - **Watch Mode Optimization**: Switched to `on_closed` and `on_moved` Watchdog events to ensure large media files are fully written before processing triggers, preventing infinite debounce loops.
