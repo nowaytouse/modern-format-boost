@@ -469,34 +469,36 @@ fn parse_gainmap_from_xmp(xmp_str: &str) -> GainMapParams {
 
                 if name.contains("GainMapMax") {
                     if let Ok(val) = reader.read_text(e.name()) {
-                        let text = val.as_ref();
+                        let text = String::from_utf8_lossy(val.as_ref());
                         if let Ok(f) = text.parse::<f32>() {
                             params.gain_map_max = f;
                         }
                     }
                 } else if name.contains("GainMapMin") {
                     if let Ok(val) = reader.read_text(e.name()) {
-                        let text = val.as_ref();
+                        let text = String::from_utf8_lossy(val.as_ref());
                         if let Ok(f) = text.parse::<f32>() {
                             params.gain_map_min = f;
                         }
                     }
                 } else if name.contains("OffsetSDR") || name.contains("OffsetSdr") {
                     if let Ok(val) = reader.read_text(e.name()) {
-                        let text = val.as_ref();
+                        let text = String::from_utf8_lossy(val.as_ref());
                         if let Ok(f) = text.parse::<f32>() {
                             params.offset_sdr = f;
                         }
                     }
                 } else if name.contains("OffsetHDR") || name.contains("OffsetHdr") {
                     if let Ok(val) = reader.read_text(e.name()) {
-                        if let Ok(f) = val.as_ref().parse::<f32>() {
+                        let text = String::from_utf8_lossy(val.as_ref());
+                        if let Ok(f) = text.parse::<f32>() {
                             params.offset_hdr = f;
                         }
                     }
                 } else if name.contains("Gamma") {
                     if let Ok(val) = reader.read_text(e.name()) {
-                        if let Ok(f) = val.as_ref().parse::<f32>() {
+                        let text = String::from_utf8_lossy(val.as_ref());
+                        if let Ok(f) = text.parse::<f32>() {
                             params.gamma = f;
                         }
                     }
@@ -522,8 +524,8 @@ fn synthesize_hdr(
     let gain_resized: DynamicImage = if gain.dimensions() == (width, height) {
         gain.clone()
     } else {
-        let g = gain.clone();
-        gain.resize_exact(width, height, image::imageops::FilterType::Triangle);
+        let mut g = gain.clone();
+        g.resize_exact(width, height, image::imageops::FilterType::Triangle);
         g
     };
 
