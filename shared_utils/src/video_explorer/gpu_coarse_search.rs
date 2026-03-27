@@ -212,7 +212,17 @@ pub fn explore_with_gpu_coarse_search(
     } else {
         0.0
     };
-    let is_high_complexity = bitrate_bps > 5_000_000.0; // > 5 Mbps
+
+    let is_gif_magic = super::stream_analysis::is_gif_magic(input);
+    if is_gif_magic {
+        crate::log_eprintln!(
+            "   {}ℹ️  GIF magic bytes detected — bypassing GPU search for precise CPU exploration{}",
+            BRIGHT_CYAN,
+            RESET
+        );
+    }
+
+    let is_high_complexity = bitrate_bps > 5_000_000.0 && !is_gif_magic; // > 5 Mbps
 
     let mut gpu_executed = false;
     let (cpu_min_crf, cpu_max_crf, cpu_center_crf) = if gpu.is_available()
@@ -582,7 +592,7 @@ pub fn explore_with_gpu_coarse_search(
         } else {
             VMAF_DURATION_THRESHOLD_SECS
         };
-        let is_gif_format = probe_result.format_name.eq_ignore_ascii_case("gif");
+        let is_gif_format = is_gif_magic || probe_result.format_name.eq_ignore_ascii_case("gif");
 
         let should_run_vmaf =
             !is_gif_format && (duration <= ms_ssim_duration_threshold_secs || force_ms_ssim_long);

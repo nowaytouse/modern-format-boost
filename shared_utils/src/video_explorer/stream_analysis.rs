@@ -74,15 +74,24 @@ pub fn get_video_duration(input: &Path) -> Option<f64> {
     }
 }
 
+pub fn is_gif_magic(path: &Path) -> bool {
+    let mut magic = [0u8; 4];
+    std::fs::File::open(path)
+        .and_then(|mut f| {
+            use std::io::Read;
+            f.read_exact(&mut magic)?;
+            Ok(())
+        })
+        .map(|_| &magic == b"GIF8")
+        .unwrap_or(false)
+}
+
 pub fn calculate_ssim_enhanced(input: &Path, output: &Path) -> Option<f64> {
     // GIF-specific path: force palette → yuv420p conversion on the reference side
     // before comparing with the yuv420p-encoded output.  This avoids all three
     // generic filters silently failing because ffmpeg cannot decode a GIF palette
     // stream into the same raw pixel layout as the HEVC output.
-    let is_gif = input
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("gif"));
+    let is_gif = is_gif_magic(input);
 
     let gif_filters: &[(&str, &str)] = &[
         // Best attempt: render GIF frames through the palette filter chain to yuv420p
@@ -202,10 +211,7 @@ pub fn calculate_ssim_all(input: &Path, output: &Path) -> Option<(f64, f64, f64,
     // swscale path) then convert to yuv420p for comparison.
     const ALPHA_FLATTEN: &str = "[0:v]format=rgb24,format=yuv420p,scale='iw-mod(iw,2)':'ih-mod(ih,2)'[ref];[1:v]format=yuv420p,scale='iw-mod(iw,2)':'ih-mod(ih,2)'[cmp];[ref][cmp]ssim";
 
-    let is_gif = input
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("gif"));
+    let is_gif = is_gif_magic(input);
 
     if is_gif {
         run_ssim_all_filter(input, output, GIF_RGB24)

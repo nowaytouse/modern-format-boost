@@ -11,7 +11,8 @@ All notable changes to this project will be documented in this file.
 
 #### 🎞️ GIF→HEVC SSIM Verification Fix
 - **Root Cause Resolved**: `calculate_ssim_all` was calling `premultiply=inplace=1` which has been removed/renamed in newer ffmpeg builds, causing all three fallback filter chains to silently fail with `ALL SSIM CALCULATION METHODS FAILED` for every GIF input.
-- **GIF-Aware Filter Chain**: Both `calculate_ssim_all` and `calculate_ssim_enhanced` now detect GIF sources via file extension and use a dedicated palette-aware filter chain (`format=rgb24 → yuv420p`) as the primary method, bypassing the generic YUV filters that cannot handle indexed-colour GIF streams.
+- **GIF-Aware Filter Chain**: Both `calculate_ssim_all` and `calculate_ssim_enhanced` now use a dedicated palette-aware filter chain (`format=rgb24 → yuv420p`) as the primary method, bypassing the generic YUV filters that cannot handle indexed-colour GIF streams.
+- **Robust GIF Detection & GPU Bypass**: GIF detection is now strictly based on file magic bytes (`GIF8`) rather than filename extensions. When detected, the pipeline automatically bypasses the GPU coarse search phase entirely, saving significant compute on short, simple animations, and directly initiates a fully precise CPU exploration.
 - **Fixed Alpha-Flatten Fallback**: Replaced deprecated `premultiply=inplace=1` with a simple `format=rgb24` conversion (which discards alpha via ffmpeg's swscale, equivalent to compositing on black), matching the actual HEVC encoder behaviour.
 - **CRF=0 SSIM Bypass**: When `optimal_crf == 0.0` (lossless encode), the entire SSIM/VMAF Phase 3 gate is now skipped. The codec guarantees bit-exact YUV reproduction at CRF=0, making perceptual metrics redundant. A lightweight integrity check (`check_lossless_integrity`) is run instead:
   - **Frame count match**: verifies the output contains ≥ input frames via `ffprobe -count_packets` (no decoding required).
