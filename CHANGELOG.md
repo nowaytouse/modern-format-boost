@@ -7,34 +7,6 @@ All notable changes to this project will be documented in this file.
 
 ## [0.11.0] - 2026-03-27
 
-### 📍 Depth Channel Extraction (HEIC) - NEW
-Adds depth map preservation for HEIC files with auxiliary depth images.
-
-- **Refined Extreme Mode (Ultimate Mode) Logic**:
-  - **Ultra-Conservative Deceleration**: Adjusted the smart deceleration trigger to **0.5x** in Ultimate Mode, allowing the search to push deeper into the quality ceiling before slowing down.
-  - **Integer Milestone Logs**: Added terminal output for CRF integer boundary crossings (e.g., `💠 Entering CRF 16.x zone`) to provide better visual progress tracking during adaptive sub-integer steps.
-- **Logging & Terminal Hygiene**:
-  - **Structured Heartbeat**: Moved periodic heartbeat reports (💓) from the terminal to structured file logs (`tracing::info!`), preserving history in `vid_hevc.log` or `./logs/` while reducing terminal noise.
-  - **Search Visibility**: Promoted Phase 1/2 boundary-finding logs to standard output to clarify adaptive search behaviors.
-- **Metadata Preservation Hardening**:
-  - **JXL ICC Fallback**: Added a post-conversion verification step (`verify_jxl_has_icc`) to ensure JXL outputs always contain an ICC profile, falling back to ExifTool injection if native embedding fails.
-  - **Authoritative Source Priority**: Implemented strict hierarchical extraction (ICC binary > CICP/nclx > EXIF) to ensure the most accurate color metadata is preserved.
-  - **Video Metadata Protection**: Confirmed explicit forwarding of VUI parameters (primaries, trc, space) and HDR10+ / Dolby Vision RPU metadata to prevent HDR-to-SDR washing.
-- **Enhanced HEIC Depth Support**:
-  - Added explicit support for **Google** depth maps in HEIC auxiliary images.
-  - Improved robust matching for **Samsung** and **ISO** depth types using case-insensitive string scanning.
-- **Code Quality**:
-  - Achieved a **Zero-Warning** state across the entire workspace (Clippy, Fmt, and Geiger verified via `check_all.sh`).
-  - Resolved `write_with_newline`, `needless_lifetimes`, and `similar_names` clippy warnings.
-
-### 📦 Dependency Updates
-- **New**: `jpegxl-rs = "0.12"` with `vendored` feature
-- **Updated**: All workspace dependencies to latest GitHub commits
-
----
-
-## [0.11.0] - 2026-03-27
-
 ### 🌟 Unified Production Baseline & HDR Synthesis
 This release marks a major milestone, consolidating the intensive `0.10.x` hardening cycle into a Cinema-Grade production baseline with advanced HDR processing.
 
@@ -42,51 +14,49 @@ This release marks a major milestone, consolidating the intensive `0.10.x` harde
   - **32-bit Linear processing**: Synthesizes intensities using log2-based gain application, preserved via **OpenEXR (.exr)** intermediate files.
   - **Color Space Awareness**: Automatically detects **Display P3** vs. **sRGB** via binary `nclx`/`colr` box parsing and applies conditional matrix transformations.
   - **Precision Loop**: Refactored the synthesis loop to use typed buffers (16-bit/8-bit) directly, eliminating truncation and performance-heavy fallback branches.
-- **⚡ Search Performance Optimization (Phase 4 Sprint)**: 
-  - **Aggressive Acceleration**: Raised `max_sprint_step` to **1.28** for Phase 4 extreme mode, enabling rapid convergence on complex files (e.g., Live2D animations).
-  - **Smart Sprint Logic**: Step size doubles every 2 consecutive wins; symmetrically halves during backtrack overshoot correction.
-- **🛡️ Unified Diagnostic Hardening**: System-wide transition to "No-Swallowed-Errors" policy, introducing **☢️** (internal bug) and **⛔️** (tool failure) indicators.
-- **📈 Professional Quality Gate**:
-  - VMAF-Y ≥ 92.0, PSNR-UV ≥ 34.0, CAMBI ≤ 6.0 thresholds for "Ultimate" mode.
-  - Integrated `quality_verifier_enhanced` with relaxed duration tolerance for animated images.
-- **🔍 Content-Aware Format Intelligence**: Integrated `infer` crate (Magic Bytes) for accurate format detection independent of extension.
-- **🛠️ Scanner Fortification**: A professional-grade quality scanner (`check_all.sh`) featuring parallel execution (fmt, clippy, shellcheck) and automated fixes.
-- **📦 CI/CD Pipeline Modernization**: Migrated GitHub Actions to `dtolnay/rust-toolchain@stable` for build stability.
-- **🔧 Code Quality Hardening**: Applied workspace-wide `cargo fmt`, `cargo fix`, and `cargo clippy --fix`.
-- **🧹 Proactive Housekeeping**: Integrated `kondo` into build and quality script pipelines for surgical repository cleanup.
-- **📦 CI/CD Pipeline Modernization**: Migrated GitHub Actions to `dtolnay/rust-toolchain@stable` to resolve build failures.
-- **🔧 Code Quality Hardening**: Applied `cargo fmt`, `cargo fix`, and `cargo clippy --fix` across the workspace:
-  - Modernized `Option::map_or(false, …)` → `Option::is_some_and(…)` in `conversion.rs` and `jxl_utils.rs`.
-  - Replaced `char`-literal `contains` with `str`-literal in `progress_mode.rs` (emoji multi-byte chars).
-  - Cleaned up trailing whitespace and indentation in `lossless_converter.rs` (img_av1, img_hevc), `io_utils.rs`, and `universal_heartbeat.rs`.
-  - Fixed test `test_conversion_result_success`: corrected assertion from `"transcoding"` → `"encoding"` for PNG→AVIF (pixel-based) conversion.
-  - Resolved optional warnings in shell scripts: removed trailing whitespace in `check_all.sh`, fixed indentation in `smart_build.sh`.
-  - Enhanced `check_all.sh`: skip `common.sh` from shfmt check (zsh-specific syntax), treat cargo geiger exit 1 with unsafe warnings as informational PASS.
+- **🌈 UltraHDR JPEG Full Implementation**:
+  - **Complete MPF (Multi-Picture Format) Parser**: Implemented full MPF specification parsing for UltraHDR JPEG gainmap extraction.
+  - **Enhanced Extraction**: Support for both big-endian (MM) and little-endia++++n (II) byte order, IFD entry parsing, and MP Entry array processing.
+  - **Gainmap Validation**: Verifies JPEG SOI (FFD8), length, position, and aspect ratio.
 
-### 🛠️ Code Quality Improvements
-- **Clippy Warning Resolution**: Fixed multiple pedantic and nursery lints across the workspace:
-  - Removed unnecessary `Result` return types from `preserve_timestamps` and `preserve_metadata` in `img_hevc/src/conversion_api.rs`.
-  - Applied `#[allow(clippy::cast_precision_loss)]` for intentional u64 to f64 conversions in disk space calculations.
-  - Used `#[allow(clippy::too_many_lines)]` for complex batch processing functions that are intentionally monolithic for performance.
-  - Applied `#[allow(clippy::struct_excessive_bools)]` for configuration structs where bools are semantically clear.
-  - Modernized error handling with `let-else` syntax for flatter code structure.
-- **Auto-Fix Pipeline**: Executed `cargo clippy --fix --workspace --all-targets --all-features` to automatically resolve suggest lints.
+### 📍 Depth Channel Extraction (HEIC) - NEW
+Adds depth map preservation for HEIC files with auxiliary depth images.
 
-### 🌈 UltraHDR JPEG Full Implementation
-- **Complete MPF (Multi-Picture Format) Parser**: Implemented full MPF specification parsing for UltraHDR JPEG gainmap extraction:
-  - `find_mpf_segment()`: Locates MPF in JPEG APP2 segment with full validation
-  - `extract_gainmap_from_mpf()`: Parses TIFF-style IFD structure and MP Entry array
-  - `find_mpf_base_position()`: Calculates absolute gainmap data position
-  - Support for both big-endian (MM) and little-endian (II) byte order
-  - Complete error diagnostics with detailed context (offsets, lengths, positions)
-- **MPF Structure Constants**: Defined all MPF tags (0xB000-0xB002) and TIFF markers
-- **IFD Entry Parsing**: Full 12-byte entry parsing with tag/type/component/offset extraction
-- **MP Entry Array Processing**: Extracts gainmap from second entry (index 1) with 16-byte structure
-- **Gainmap Validation**: Verifies JPEG SOI (FFD8), length, position, and aspect ratio
-- **Comprehensive Logging**: Detailed info-level logging for all parsing steps
-- **Error Handling**: Strict validation at every step with descriptive error messages
+- **Enhanced HEIC Depth Support**:
+  - Added explicit support for **Google** depth maps in HEIC auxiliary images.
+  - Improved robust matching for **Samsung** and **ISO** depth types using case-insensitive string scanning.
+  - Extracts depth maps from HEIC using `libheif-rs` and normalizes to 16-bit grayscale.
 
----
+### ⚡ Search Performance Optimization
+- **Phase 4 Sprint Logic**: Aggressive acceleration (max step **1.28**) enabling rapid convergence on complex files. Smart Sprint logic doubles step size every 2 consecutive wins.
+- **Refined Extreme Mode (Ultimate Mode) Logic**:
+  - **Ultra-Conservative Deceleration**: Adjusted the smart deceleration trigger to **0.5x** in Ultimate Mode, allowing the search to push deeper into the quality ceiling.
+  - **Integer Milestone Logs**: Added terminal output for CRF integer boundary crossings (e.g., `💠 Entering CRF 16.x zone`) for better visual progress tracking.
+
+### 🛡️ Metadata & Diagnostic Hardening
+- **Metadata Protection**:
+  - **JXL ICC Fallback**: Added a post-conversion verification step (`verify_jxl_has_icc`) to ensure JXL outputs always contain an ICC profile.
+  - **Authoritative Source Priority**: Implemented strict hierarchical extraction (ICC binary > CICP/nclx > EXIF).
+  - **Video Metadata Protection**: Confirmed explicit forwarding of VUI parameters (primaries, trc, space) and HDR10+ / Dolby Vision RPU metadata.
+- **Unified Diagnostic Hardening**: System-wide transition to "No-Swallowed-Errors" policy, introducing **☢️** (internal bug) and **⛔️** (tool failure) indicators.
+- **Logging & Terminal Hygiene**:
+  - **Structured Heartbeat**: Moved periodic heartbeat reports (💓) from the terminal to structured file logs (`tracing::info!`), reducing terminal noise.
+  - **Search Visibility**: Promoted Phase 1/2 boundary-finding logs to standard output.
+
+### 📈 Professional Quality & Automation
+- **Quality Gate**: VMAF-Y ≥ 92.0, PSNR-UV ≥ 34.0, CAMBI ≤ 6.0 thresholds for "Ultimate" mode.
+- **Scanner & Infrastructure**:
+  - **Scanner Fortification**: Professional-grade quality scanner (`check_all.sh`) with parallel execution.
+  - **CI/CD Pipeline Modernization**: Migrated GitHub Actions to `dtolnay/rust-toolchain@stable`.
+  - **Proactive Housekeeping**: Integrated `kondo` into build pipelines for surgical repository cleanup.
+- **Zero-Warning Workspace**:
+  - Achieved a **Zero-Warning** state across the entire workspace (Clippy, Fmt, and Geiger verified).
+  - Resolved `write_with_newline`, `needless_lifetimes`, and `similar_names` clippy warnings.
+  - Modernized code using `Option::is_some_and(…)` and `let-else` syntax.
+
+### 📦 Dependency Updates
+- **New**: `jpegxl-rs = "0.12"` with `vendored` feature.
+- **Updated**: All workspace dependencies to latest stable equivalents (main) or GitHub commits (nightly).
 
 ## [0.10.108] - 2026-03-26
 
