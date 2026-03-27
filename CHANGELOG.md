@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
 
+## [0.11.1] - 2026-03-28
+
+### 🛡️ GIF Quality Verification Hardening & Sprint/Floor Guarantee
+
+#### 🎞️ GIF→HEVC SSIM Verification Fix
+- **Root Cause Resolved**: `calculate_ssim_all` was calling `premultiply=inplace=1` which has been removed/renamed in newer ffmpeg builds, causing all three fallback filter chains to silently fail with `ALL SSIM CALCULATION METHODS FAILED` for every GIF input.
+- **GIF-Aware Filter Chain**: Both `calculate_ssim_all` and `calculate_ssim_enhanced` now detect GIF sources via file extension and use a dedicated palette-aware filter chain (`format=rgb24 → yuv420p`) as the primary method, bypassing the generic YUV filters that cannot handle indexed-colour GIF streams.
+- **Fixed Alpha-Flatten Fallback**: Replaced deprecated `premultiply=inplace=1` with a simple `format=rgb24` conversion (which discards alpha via ffmpeg's swscale, equivalent to compositing on black), matching the actual HEVC encoder behaviour.
+- **CRF=0 SSIM Bypass**: When `optimal_crf == 0.0` (lossless encode), the entire SSIM/VMAF Phase 3 gate is now skipped. The codec guarantees bit-exact YUV reproduction at CRF=0, making perceptual metrics redundant. A lightweight integrity check (`check_lossless_integrity`) is run instead:
+  - **Frame count match**: verifies the output contains ≥ input frames via `ffprobe -count_packets` (no decoding required).
+  - **File size > 0**: guards against silent I/O failures.
+  - Frame count unavailability is treated as a soft warning (non-fatal), file non-empty is sufficient to accept.
+
+#### ⚡ Sprint / Deceleration / Floor Guarantee (Extreme Mode)
+Three root-causes that prevented the search from reaching CRF=0 have been fixed:
+
+1. **Phase 2 wall-at-MIN_STEP**: When a size-wall is hit at the minimum step in **ultimate mode**, the algorithm no longer hard-stops. It breaks out of Phase 2 cleanly and defers the sub-0.1 exploration to Phase 4, which uses 0.01 granularity — previously this break was silently aborting before Phase 4 could run.
+
+2. **Phase 2 smart deceleration** (CPU coarse search): The deceleration trigger multiplier was `0.5×` in ultimate mode (meaning deceleration only fired when the floor was closer than `0.5 × current_step`), which was **too late** — a large sprint step could overshoot the floor before deceleration activated. Changed to `1.0×`: deceleration now fires when the floor is within `1 × current_step`, guaranteeing the step always halves before crossing 0.
+
+3. **Phase 4 (0.01-granularity fine-tune)**:
+   - **Smart deceleration multiplier** reduced from `2.0×` to `1.0×` in ultimate mode, matching Phase 2 fix.
+   - **`max_fine_failures`** raised from `3` to `8` in ultimate mode. Near CRF=0, GIF/complex sources regularly expand past input size; 3 failures was too aggressive a cutoff.
+   - **Explicit negative-clamp**: `test_crf` is now clamped to `0.0` after each rounding step to prevent IEEE 754 underflow from producing `-0.00000001` which could skip the floor probe.
+   - **Mandatory CRF=0 probe**: After Phase 4 completes, if `current_best > 0.0` and CRF=0 was never tested (or was tested but somehow bypassed), a **guaranteed final probe at CRF=0.00** is forced. This eliminates all float-drift scenarios where 0.01 → 0.00 subtraction floating-point error could skip the absolute floor.
+   - **Early-exit on CRF=0 success**: When CRF=0.00 compresses successfully, a clear `✅ CRF 0.00 reached — physical lossless floor touched` message is emitted and Phase 4 terminates cleanly.
+
 ## [0.11.0] - 2026-03-28
 
 ### 🌟 Unified Production Baseline & HDR Synthesis

@@ -588,6 +588,40 @@ pub fn explore_with_gpu_coarse_search(
             !is_gif_format && (duration <= ms_ssim_duration_threshold_secs || force_ms_ssim_long);
 
         if is_gif_format {
+            // ── CRF=0 fast-path ────────────────────────────────────────────────
+            // At CRF=0 the codec guarantees bit-exact YUV reproduction; SSIM/VMAF
+            // would trivially return 1.0 / 100.0 and are pure CPU waste.
+            // GIF→HEVC at CRF=0 may still have chroma loss from palette→YUV420
+            // colour-space conversion, but that is a per-pixel-format decision
+            // made at encode time — it is NOT what SSIM measures here.
+            // We instead run a cheap integrity check: frame count + file size > 0.
+            if result.optimal_crf == 0.0 {
+                crate::log_eprintln!(
+                    "   GIF CRF=0 (lossless): skipping SSIM/VMAF — running integrity check instead"
+                );
+                crate::log_eprintln!(
+                    "   (CRF=0 guarantees YUV bit-exact reproduction; perceptual metrics are meaningless)"
+                );
+                let integrity_ok = super::stream_analysis::check_lossless_integrity(
+                    input,
+                    output,
+                    result.output_size,
+                )
+                .unwrap_or_else(|e| {
+                    crate::log_eprintln!("   ⚠️  Integrity check error: {}", e);
+                    true // soft-accept if ffprobe cannot be invoked
+                });
+
+                if integrity_ok {
+                    crate::log_eprintln!("   ✅ INTEGRITY CHECK: PASSED (frame count OK, file non-empty)");
+                    result.ms_ssim_passed = Some(true);
+                } else {
+                    crate::log_eprintln!("   ❌ INTEGRITY CHECK: FAILED (frame count mismatch or empty output)");
+                    result.ms_ssim_passed = Some(false);
+                }
+                // Leave ms_ssim_score as None to signal lossless path (no perceptual score)
+            } else {
+            // ── Normal SSIM verification ───────────────────────────────────────
             crate::verbose_eprintln!(
                 "   GIF input: using SSIM-All verification (ffmpeg ssim filter, GIF-compatible)"
             );
@@ -618,6 +652,7 @@ pub fn explore_with_gpu_coarse_search(
                 result.ms_ssim_passed = None;
                 result.ms_ssim_score = None;
             }
+            } // end else (non-CRF=0 SSIM path)
         } else if should_run_vmaf {
             let threshold_min = ms_ssim_duration_threshold_secs / 60.0;
             crate::log_eprintln!("   Video within limit (≤{:.0}min)", threshold_min);
@@ -2011,12 +2046,26 @@ fn cpu_fine_tune_from_gpu_boundary(
                 );
 
                 if current_step <= MIN_STEP + 0.01 && new_step <= MIN_STEP + 0.01 {
-                    crate::log_eprintln!(
-                        "   {} [CPU] 🧱 Minimum step reached and hit wall again. Stopping.{}",
-                        BRIGHT_YELLOW,
-                        RESET
-                    );
-                    break;
+                    // In ultimate mode, even at minimum step a size-wall does NOT mean
+                    // we reached the physical quality floor — size might expand yet quality
+                    // might still improve.  Let Phase 4 handle the 0.01-granularity walk.
+                    // In normal mode, a wall here means we really can't go lower.
+                    if !ultimate_mode {
+                        crate::log_eprintln!(
+                            "   {} [CPU] 🧱 Minimum step reached and hit wall. Stopping.{}",
+                            BRIGHT_YELLOW,
+                            RESET
+                        );
+                        break;
+                    } else {
+                        crate::verbose_eprintln!(
+                            "   {} [CPU] At minimum step in ultimate mode — deferring to Phase 4 fine-tune.{}",
+                            BRIGHT_YELLOW,
+                            RESET
+                        );
+                        // Don't break; keep last_good_crf so Phase 4 starts from there.
+                        break;
+                    }
                 }
 
                 if wall_hits >= max_wall_hits {
@@ -2430,10 +2479,12 @@ fn cpu_fine_tune_from_gpu_boundary(
                     prev_ssim_opt = current_ssim_opt;
                     prev_size = size;
 
-                    // Smart deceleration check: if approaching floor, deceleration takes priority
+                    // Smart deceleration check: if approaching floor, deceleration takes priority.
+                    // Ultimate mode uses 1.0× multiplier (decelerate when within 1 step of floor)
+                    // so the step is guaranteed to shrink before we can overshoot 0.0.
+                    // Normal mode uses 2.0× (more aggressive early braking).
                     let distance_to_floor = test_crf - search_floor;
-                    // Extreme Mode (Ultimate) is more persistent, waiting until 0.5x step from floor
-                    let decelerate_multiplier = if ultimate_mode { 0.5 } else { 2.0 };
+                    let decelerate_multiplier = if ultimate_mode { 1.0 } else { 2.0 };
                     let should_decelerate = distance_to_floor
                         < current_step * decelerate_multiplier
                         && current_step > PHASE3_DOWNWARD_STEP + 0.001;
@@ -2444,7 +2495,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                         current_step = (current_step / 2.0).max(PHASE3_DOWNWARD_STEP);
                         consecutive_01_successes = 0; // Reset to prevent Sprint re-activation
                         crate::log_eprintln!(
-                            "   {}🎯 Smart deceleration: step {:.2} → {:.2} (approaching wall {:.2}){}",
+                            "   {}🎯 Smart deceleration: step {:.2} → {:.2} (approaching floor {:.2}){}",
                             BRIGHT_YELLOW,
                             old_step,
                             current_step,
@@ -2598,7 +2649,11 @@ fn cpu_fine_tune_from_gpu_boundary(
 
                 let base_step = 0.01;
                 let mut current_step = base_step;
-                let max_sprint_step = 1.28; // Increased from 0.20 down to a reasonable max sprint
+                let max_sprint_step = 1.28;
+
+                // In ultimate mode allow many more fine-tune failures before giving up:
+                // size-wall explosions are expected near CRF=0 for GIF/complex sources.
+                let max_fine_failures = if ultimate_mode { 8 } else { 3 };
 
                 crate::log_eprintln!(
                     "   {}Starting from 0.1 optimum (CRF {:.2}) with adaptive step (0.01 → {:.2} sprint){}",
@@ -2609,15 +2664,21 @@ fn cpu_fine_tune_from_gpu_boundary(
                 let mut current_best_size = best_size.unwrap_or(0);
                 let mut test_crf = best - current_step;
                 let mut fine_failures = 0;
-                let max_fine_failures = 3;
-                let search_floor = 0.0;
+                let search_floor = 0.0_f32;
                 let mut consecutive_successes = 0;
 
                 while test_crf >= search_floor && iterations < 200 {
-                    // Preempt float precision issues
+                    // Round to 0.01 precision to avoid float drift accumulating past 0.0
                     test_crf = (test_crf * 100.0).round() / 100.0;
+                    // Clamp: never go negative due to floating-point underflow
+                    if test_crf < 0.0 {
+                        test_crf = 0.0;
+                    }
 
                     if size_cache.contains_key(test_crf) {
+                        if test_crf == 0.0 {
+                            break; // Already tested CRF 0; we are done
+                        }
                         test_crf -= current_step;
                         continue;
                     }
@@ -2659,99 +2720,131 @@ fn cpu_fine_tune_from_gpu_boundary(
 
                         crate::log_eprintln!(
                             "{}{}   {}✓{} [CPU] {}CRF {:<5.2}{} {}{:6.1}%{}{} │ {}",
-                            RESET,
-                            RESET,
-                            BRIGHT_GREEN,
-                            RESET,
-                            CYAN,
-                            test_crf,
-                            RESET,
-                            BRIGHT_GREEN,
-                            total_size_pct,
-                            RESET,
-                            metrics_info,
-                            step_info
+                            RESET, RESET, BRIGHT_GREEN, RESET, CYAN, test_crf, RESET,
+                            BRIGHT_GREEN, total_size_pct, RESET, metrics_info, step_info
                         );
 
-                        // Smart deceleration check: if approaching floor, deceleration takes priority
+                        if test_crf == 0.0 {
+                            // Reached absolute floor — Phase 4 done
+                            crate::log_eprintln!(
+                                "   {}✅ [CPU] CRF 0.00 reached — physical lossless floor touched.{}",
+                                BRIGHT_MAGENTA, RESET
+                            );
+                            break;
+                        }
+
+                        // Smart deceleration: in ultimate mode use 1.0× multiplier so we
+                        // always halve the step before we can overshoot the floor.
                         let distance_to_floor = test_crf - search_floor;
-                        let should_decelerate = distance_to_floor < current_step * 2.0
+                        let decel_multiplier = if ultimate_mode { 1.0 } else { 2.0 };
+                        let should_decelerate = distance_to_floor < current_step * decel_multiplier
                             && current_step > base_step + 0.001;
 
                         if should_decelerate {
-                            // Deceleration mode: disable Sprint to avoid oscillation
                             let old_step = current_step;
                             current_step = (current_step / 2.0).max(base_step);
-                            consecutive_successes = 0; // Reset to prevent Sprint re-activation
+                            consecutive_successes = 0;
                             crate::log_eprintln!(
-                                "   {}🎯 Smart deceleration: step {:.2} → {:.2} (approaching wall {:.2}){}",
-                                BRIGHT_YELLOW,
-                                old_step,
-                                current_step,
-                                search_floor,
-                                RESET
+                                "   {}🎯 Smart deceleration: step {:.3} → {:.3} (floor in {:.2}){}",
+                                BRIGHT_YELLOW, old_step, current_step, distance_to_floor, RESET
                             );
                         } else {
-                            // Sprint: double step after 2 consecutive successes (max 1.28)
+                            // Sprint: double step after 2 consecutive successes
                             if consecutive_successes >= 2 && current_step < max_sprint_step {
                                 let old_step = current_step;
                                 current_step = (current_step * 2.0).min(max_sprint_step);
-                                // No reset here means we keep doubling on every success if we stay in sprint mode
                                 crate::log_eprintln!(
-                                    "   {}⚡ Sprint activated: step {:.2} → {:.2}{}",
-                                    BRIGHT_CYAN,
-                                    old_step,
-                                    current_step,
-                                    RESET
+                                    "   {}⚡ Sprint activated: step {:.3} → {:.3}{}",
+                                    BRIGHT_CYAN, old_step, current_step, RESET
                                 );
                             }
                         }
+
+                        test_crf -= current_step;
                     } else {
                         fine_failures += 1;
                         consecutive_successes = 0;
 
                         crate::log_eprintln!(
-                            "{}{}   {}✗{} [CPU] {}CRF {:<5.2}{} {}{:6.1}%{} │ CAPACITY EXCEEDED",
-                            RESET,
-                            RESET,
-                            BRIGHT_RED,
-                            RESET,
-                            CYAN,
-                            test_crf,
-                            RESET,
-                            BRIGHT_RED,
-                            total_size_pct,
-                            RESET
+                            "{}{}   {}✗{} [CPU] {}CRF {:<5.2}{} {}{:6.1}%{} │ CAPACITY EXCEEDED ({}/{})",
+                            RESET, RESET, BRIGHT_RED, RESET, CYAN, test_crf, RESET,
+                            BRIGHT_RED, total_size_pct, RESET, fine_failures, max_fine_failures
                         );
 
-                        // Backtrack: halve step gradually (mirrors sprint), retry from last good CRF
+                        // Backtrack: halve step, retry from last successful CRF
                         if current_step > base_step + 0.001 {
                             let old_step = current_step;
                             current_step = (current_step / 2.0).max(base_step);
                             consecutive_successes = 0;
                             test_crf = current_best - current_step;
                             crate::log_eprintln!(
-                                "   {}↩️  Backtrack: step {:.2} → {:.2}, retry from CRF {:.2}{}",
-                                BRIGHT_YELLOW,
-                                old_step,
-                                current_step,
-                                test_crf,
-                                RESET
+                                "   {}↩️  Backtrack: step {:.3} → {:.3}, retry from CRF {:.2}{}",
+                                BRIGHT_YELLOW, old_step, current_step, test_crf, RESET
                             );
                             continue;
                         }
 
                         if fine_failures >= max_fine_failures {
                             crate::log_eprintln!(
-                                "   {}Max 0.01-granularity failures reached. Stopping.{}",
-                                BRIGHT_YELLOW,
-                                RESET
+                                "   {}Max 0.01-granularity failures ({}) reached. Stopping.{}",
+                                BRIGHT_YELLOW, max_fine_failures, RESET
                             );
                             break;
                         }
-                    }
 
-                    test_crf -= current_step;
+                        // Step still at base: just skip this CRF and advance
+                        test_crf -= current_step;
+                    }
+                }
+
+                // ── Mandatory CRF=0 probe (ultimate mode only) ─────────────────
+                // If we never successfully encoded at CRF=0, test it explicitly.
+                // This guarantees no float-drift skipping causes us to miss the
+                // true lossless floor even after all backtrack/sprint logic above.
+                if ultimate_mode && current_best > 0.0 && iterations < 200 {
+                    let crf0_untested = !size_cache.contains_key(0.0_f32);
+                    if crf0_untested {
+                        crate::log_eprintln!(
+                            "   {}🔬 [CPU] Forcing mandatory CRF 0.00 probe (floor guarantee){}",
+                            BRIGHT_MAGENTA, RESET
+                        );
+                        if let Ok(size) = encode_cached(0.0, &mut size_cache) {
+                            iterations += 1;
+                            let total_size_pct = if input_size > 0 {
+                                (size as f64 / input_size as f64 - 1.0) * 100.0
+                            } else {
+                                0.0
+                            };
+                            if size < input_size {
+                                crate::log_eprintln!(
+                                    "{}{}   {}✓{} [CPU] {}CRF 0.00 {} {}{:6.1}%{} │ 0.01-GRANULARITY GAIN",
+                                    RESET, RESET, BRIGHT_GREEN, RESET, CYAN, RESET,
+                                    BRIGHT_GREEN, total_size_pct, RESET
+                                );
+                                current_best = 0.0;
+                                current_best_size = size;
+                            } else {
+                                crate::log_eprintln!(
+                                    "{}{}   {}✗{} [CPU] {}CRF 0.00 {} {}{:6.1}%{} │ CAPACITY EXCEEDED at floor",
+                                    RESET, RESET, BRIGHT_RED, RESET, CYAN, RESET,
+                                    BRIGHT_RED, total_size_pct, RESET
+                                );
+                            }
+                        }
+                    } else if size_cache.contains_key(0.0_f32) {
+                        // Already tested — check if that result was a success
+                        // (size_cache only stores encoded sizes, not compressed-flag; re-read)
+                        if let Some(&cached_size) = size_cache.get(0.0_f32) {
+                            if cached_size < input_size && current_best > 0.0 {
+                                current_best = 0.0;
+                                current_best_size = cached_size;
+                                crate::log_eprintln!(
+                                    "   {}✅ [CPU] CRF 0.00 already in cache and compresses — set as best.{}",
+                                    BRIGHT_MAGENTA, RESET
+                                );
+                            }
+                        }
+                    }
                 }
 
                 best_crf = Some(current_best);

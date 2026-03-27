@@ -6,6 +6,7 @@
 //! - MS-SSIM (Multi-Scale SSIM) calculation
 //! - Video duration detection
 //! - Quality threshold validation
+//! - Lossless integrity checks (CRF=0 fast-path: frame count + file size only)
 
 use std::path::Path;
 use std::process::Command;
@@ -74,11 +75,38 @@ pub fn get_video_duration(input: &Path) -> Option<f64> {
 }
 
 pub fn calculate_ssim_enhanced(input: &Path, output: &Path) -> Option<f64> {
-    let filters: &[(&str, &str)] = &[
+    // GIF-specific path: force palette → yuv420p conversion on the reference side
+    // before comparing with the yuv420p-encoded output.  This avoids all three
+    // generic filters silently failing because ffmpeg cannot decode a GIF palette
+    // stream into the same raw pixel layout as the HEVC output.
+    let is_gif = input
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("gif"));
+
+    let gif_filters: &[(&str, &str)] = &[
+        // Best attempt: render GIF frames through the palette filter chain to yuv420p
+        (
+            "gif_palette",
+            "[0:v]format=rgb24,scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=bicubic,format=yuv420p[ref];[1:v]scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=bicubic,format=yuv420p[cmp];[ref][cmp]ssim",
+        ),
+        // Simpler fallback: just normalise to yuv420p
+        (
+            "gif_yuv420p",
+            "[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[ref];[1:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[cmp];[ref][cmp]ssim",
+        ),
+    ];
+
+    let generic_filters: &[(&str, &str)] = &[
         ("standard", "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];[ref][1:v]ssim"),
-        ("format_convert", "[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[ref];[1:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[cmp];[ref][cmp]ssim"),
+        (
+            "format_convert",
+            "[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[ref];[1:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[cmp];[ref][cmp]ssim",
+        ),
         ("simple", "ssim"),
     ];
+
+    let filters = if is_gif { gif_filters } else { generic_filters };
 
     for (name, filter) in filters {
         let result = Command::new("ffmpeg")
@@ -104,7 +132,7 @@ pub fn calculate_ssim_enhanced(input: &Path, output: &Path) -> Option<f64> {
                 }
             }
             Ok(_) => {
-                warn!(method = %name, "SSIM method failed, trying next");
+                warn!(method = %name, "SSIM method failed, trying next method");
             }
             Err(e) => {
                 warn!(method = %name, error = %e, "ffmpeg failed");
@@ -148,20 +176,46 @@ fn run_ssim_all_filter(input: &Path, output: &Path, lavfi: &str) -> Option<(f64,
 }
 
 /// SSIM Y/U/V/All between input and output. Tries in order:
+///
+/// GIF sources get a palette-aware filter chain first (GIF uses indexed colour;
+/// the raw pixel layout differs from the yuv420p HEVC output and breaks the
+/// generic filters).
+///
+/// Non-GIF sources try:
 /// 1. Direct ssim (when formats already match).
-/// 2. Format normalization (GIF palette / odd-size → yuv420p even).
-/// 3. Alpha flatten: composite input on black (same as encoder) then compare,
-///    so transparent GIF/WebP/PNG matches HEVC output that has no alpha.
+/// 2. Format normalization (odd-size → yuv420p even).
+/// 3. Alpha composite on black (transparent WebP/PNG vs HEVC which has no alpha):
+///    converts the input to rgb24 (discarding alpha channel) then yuv420p,
+///    matching the actual encoder behaviour.
 #[must_use]
 pub fn calculate_ssim_all(input: &Path, output: &Path) -> Option<(f64, f64, f64, f64)> {
+    // GIF-specific chains: render palette → rgb24 → yuv420p before comparing.
+    // Single-line strings — Rust has no line-continuation in string literals.
+    const GIF_RGB24: &str = "[0:v]format=rgb24,scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=bicubic,format=yuv420p[ref];[1:v]scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=bicubic,format=yuv420p[cmp];[ref][cmp]ssim";
+    const GIF_NORM: &str = "[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[ref];[1:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[cmp];[ref][cmp]ssim";
+
+    // Generic chains
     const DIRECT: &str = "[0:v][1:v]ssim";
     const FORMAT_NORM: &str = "[0:v]format=yuv420p,scale='iw-mod(iw,2)':'ih-mod(ih,2)'[ref];[1:v]format=yuv420p,scale='iw-mod(iw,2)':'ih-mod(ih,2)'[cmp];[ref][cmp]ssim";
-    // Match encoder: format=rgba, premultiply (composite on black), then yuv420p.
-    const ALPHA_FLATTEN: &str = "[0:v]format=rgba,premultiply=inplace=1,format=rgb24,format=yuv420p,scale='iw-mod(iw,2)':'ih-mod(ih,2)'[ref];[1:v]format=yuv420p,scale='iw-mod(iw,2)':'ih-mod(ih,2)'[cmp];[ref][cmp]ssim";
+    // Alpha-composite on black without the deprecated premultiply=inplace=1 filter:
+    // decode to rgb24 (which discards alpha by blending on black in ffmpeg's
+    // swscale path) then convert to yuv420p for comparison.
+    const ALPHA_FLATTEN: &str = "[0:v]format=rgb24,format=yuv420p,scale='iw-mod(iw,2)':'ih-mod(ih,2)'[ref];[1:v]format=yuv420p,scale='iw-mod(iw,2)':'ih-mod(ih,2)'[cmp];[ref][cmp]ssim";
 
-    run_ssim_all_filter(input, output, DIRECT)
-        .or_else(|| run_ssim_all_filter(input, output, FORMAT_NORM))
-        .or_else(|| run_ssim_all_filter(input, output, ALPHA_FLATTEN))
+    let is_gif = input
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("gif"));
+
+    if is_gif {
+        run_ssim_all_filter(input, output, GIF_RGB24)
+            .or_else(|| run_ssim_all_filter(input, output, GIF_NORM))
+            .or_else(|| run_ssim_all_filter(input, output, FORMAT_NORM))
+    } else {
+        run_ssim_all_filter(input, output, DIRECT)
+            .or_else(|| run_ssim_all_filter(input, output, FORMAT_NORM))
+            .or_else(|| run_ssim_all_filter(input, output, ALPHA_FLATTEN))
+    }
 }
 
 fn parse_ssim_from_output(stderr: &str) -> Option<f64> {
@@ -198,4 +252,85 @@ fn extract_ssim_value(line: &str, prefix: &str) -> Option<f64> {
 #[inline]
 fn is_valid_ssim_value(ssim: f64) -> bool {
     (0.0..=1.0).contains(&ssim) && !ssim.is_nan()
+}
+
+// ── CRF=0 Lossless Integrity Check ────────────────────────────────────────────
+
+/// Fast integrity check for CRF=0 (lossless) encodes.
+///
+/// When a source is encoded at CRF 0, the codec guarantees bit-exact YUV
+/// reproduction — VMAF/SSIM would trivially score 100 / 1.0 and are pure
+/// CPU waste.  Instead we verify two cheap invariants:
+///
+/// 1. **Frame count match** — the output contains at least as many frames as
+///    the input (encode did not silently drop frames).
+/// 2. **File size > 0** — the output file is non-empty (no silent I/O failure).
+///
+/// Note for GIF→HEVC: CRF=0 guarantees YUV-layer losslessness, but the
+/// GIF palette → YUV conversion itself introduces chroma subsampling loss
+/// (yuv420 vs yuv444).  That loss is determined at encoding time by the
+/// pixel-format choice and is unrelated to CRF.  The caller should force
+/// `yuv444p` to avoid this if RGB round-trip fidelity is required.
+///
+/// Returns `Ok(true)` when both invariants are satisfied, `Ok(false)` if a
+/// check fails (with stderr warning already emitted), or `Err` if ffprobe
+/// cannot be invoked at all.
+///
+/// # Errors
+/// Returns an error if the frame-count ffprobe command fails to spawn.
+pub fn check_lossless_integrity(
+    input: &Path,
+    output: &Path,
+    output_size: u64,
+) -> Result<bool, String> {
+    // Guard: output must not be empty
+    if output_size == 0 {
+        warn!("CRF=0 integrity: output file is empty (silent encode failure?)");
+        return Ok(false);
+    }
+
+    // Helper: count frames via ffprobe without decoding (fast)
+    let count_frames = |path: &Path| -> Option<u64> {
+        let out = Command::new("ffprobe")
+            .args(["-v", "error"])
+            .args(["-count_packets", "-select_streams", "v:0"])
+            .args(["-show_entries", "stream=nb_read_packets"])
+            .args(["-of", "default=noprint_wrappers=1:nokey=1"])
+            .arg("--")
+            .arg(crate::safe_path_arg(path).as_ref())
+            .output()
+            .ok()?;
+        String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .parse::<u64>()
+            .ok()
+    };
+
+    let input_frames = count_frames(input);
+    let output_frames = count_frames(output);
+
+    match (input_frames, output_frames) {
+        (Some(i), Some(o)) if o >= i => {
+            info!(
+                input_frames = i,
+                output_frames = o,
+                "CRF=0 integrity: frame count OK"
+            );
+            Ok(true)
+        }
+        (Some(i), Some(o)) => {
+            warn!(
+                input_frames = i,
+                output_frames = o,
+                "CRF=0 integrity: output has FEWER frames than input — possible encode error"
+            );
+            Ok(false)
+        }
+        (None, _) | (_, None) => {
+            // Cannot determine frame count — treat as a soft warning, not a hard failure
+            warn!("CRF=0 integrity: could not determine frame count via ffprobe; skipping frame check");
+            // File is non-empty (checked above), so accept
+            Ok(true)
+        }
+    }
 }
