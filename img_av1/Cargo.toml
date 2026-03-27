@@ -21,3 +21,6 @@ console = { workspace = true }
 [features]
 default = ["v1_21"]
 v1_21 = ["shared_utils/v1_21"]
+
+[lints]
+workspace = true

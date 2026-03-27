@@ -1524,7 +1524,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     } else {
         "initial boundary"
     };
-    crate::verbose_eprintln!("{}Phase 1: Verify {}{}", BRIGHT_CYAN, boundary_label, RESET);
+    crate::log_eprintln!("{}Phase 1: Verify {}{}", BRIGHT_CYAN, boundary_label, RESET);
 
     let gpu_size = encode_cached(gpu_boundary_crf, &mut size_cache).map_err(|e| {
         crate::log_eprintln!(
@@ -1587,7 +1587,7 @@ fn cpu_fine_tune_from_gpu_boundary(
             metrics_display
         );
         crate::log_eprintln!();
-        crate::verbose_eprintln!(
+        crate::log_eprintln!(
             "{}Phase 2: Maximum SSIM Search - Smart Wall Collision (v5.93){}",
             BRIGHT_CYAN,
             RESET
@@ -1709,7 +1709,27 @@ fn cpu_fine_tune_from_gpu_boundary(
         // Ultimate Mode has NO floor (0.0) to allow hitting the true physical wall.
         let search_floor = if ultimate_mode { 0.0 } else { min_crf };
 
+        // Milestone tracking to ensure "integer stages" are visible in the terminal
+        let mut last_logged_int_crf = gpu_boundary_crf.floor() as i32;
+        crate::log_eprintln!(
+            "{}💠 Entering CRF {}.x zone{}",
+            BRIGHT_CYAN,
+            last_logged_int_crf,
+            RESET
+        );
+
         while iterations < max_iterations_for_video && test_crf >= search_floor {
+            // Milestone logging check
+            let current_int_crf = test_crf.floor() as i32;
+            if current_int_crf != last_logged_int_crf {
+                last_logged_int_crf = current_int_crf;
+                crate::log_eprintln!(
+                    "{}💠 Entering CRF {}.x zone{}",
+                    BRIGHT_CYAN,
+                    last_logged_int_crf,
+                    RESET
+                );
+            }
             if test_crf < search_floor {
                 if current_step > MIN_STEP + 0.01 {
                     crate::verbose_eprintln!(
@@ -2412,7 +2432,10 @@ fn cpu_fine_tune_from_gpu_boundary(
 
                     // Smart deceleration check: if approaching floor, deceleration takes priority
                     let distance_to_floor = test_crf - search_floor;
-                    let should_decelerate = distance_to_floor < current_step * 2.0
+                    // Extreme Mode (Ultimate) is more persistent, waiting until 0.5x step from floor
+                    let decelerate_multiplier = if ultimate_mode { 0.5 } else { 2.0 };
+                    let should_decelerate = distance_to_floor
+                        < current_step * decelerate_multiplier
                         && current_step > PHASE3_DOWNWARD_STEP + 0.001;
 
                     if should_decelerate {
@@ -2420,8 +2443,8 @@ fn cpu_fine_tune_from_gpu_boundary(
                         let old_step = current_step;
                         current_step = (current_step / 2.0).max(PHASE3_DOWNWARD_STEP);
                         consecutive_01_successes = 0; // Reset to prevent Sprint re-activation
-                        crate::verbose_eprintln!(
-                            "   {}🎯 Smart deceleration: step {:.2} → {:.2} (approaching floor {:.2}){}",
+                        crate::log_eprintln!(
+                            "   {}🎯 Smart deceleration: step {:.2} → {:.2} (approaching wall {:.2}){}",
                             BRIGHT_YELLOW,
                             old_step,
                             current_step,
@@ -2661,7 +2684,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                             current_step = (current_step / 2.0).max(base_step);
                             consecutive_successes = 0; // Reset to prevent Sprint re-activation
                             crate::log_eprintln!(
-                                "   {}🎯 Smart deceleration: step {:.2} → {:.2} (approaching floor {:.2}){}",
+                                "   {}🎯 Smart deceleration: step {:.2} → {:.2} (approaching wall {:.2}){}",
                                 BRIGHT_YELLOW,
                                 old_step,
                                 current_step,

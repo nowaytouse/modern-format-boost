@@ -952,10 +952,10 @@ pub fn convert_jpeg_to_jxl(
     }
 
     // Standard JPEG conversion (non-UltraHDR)
-    shared_utils::progress_mode::emit_stderr(&format!(
-        "   ⚠️  UltraHDR not detected: {} - standard JPEG transcoding",
+    tracing::trace!(
+        "UltraHDR not detected for {}: performing standard JPEG transcoding",
         input.file_name().unwrap_or_default().to_string_lossy()
-    ));
+    );
 
     let input_size = fs::metadata(input)?.len();
     let output = get_output_path(input, "jxl", options)?;

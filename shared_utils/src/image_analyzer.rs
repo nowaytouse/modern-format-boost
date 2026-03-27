@@ -332,7 +332,7 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
             path.display()
         ))
     })?;
-    let format_str = format_to_string(&format);
+    let format_str = format_to_string(format);
 
     let mut extension_mismatch = false;
     let mut real_extension_suggestion = String::new();
@@ -382,10 +382,10 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
     let color_depth = detect_color_depth(&img);
     let color_space = detect_color_space(&img);
 
-    let is_animated = is_animated_format(path, &format)?;
+    let is_animated = is_animated_format(path, format)?;
 
     let is_lossless =
-        detect_lossless(&format, path).unwrap_or_else(|_| pixel_fallback_lossless(path));
+        detect_lossless(format, path).unwrap_or_else(|_| pixel_fallback_lossless(path));
 
     let jpeg_analysis = if format == ImageFormat::Jpeg {
         match analyze_jpeg_file(path) {
@@ -405,7 +405,7 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
 
     let features = calculate_image_features(&img, file_size);
 
-    let jxl_indicator = generate_jxl_indicator(&format, is_lossless, &jpeg_analysis, path);
+    let jxl_indicator = generate_jxl_indicator(format, is_lossless, &jpeg_analysis, path);
 
     let (psnr, ssim) = if let Some(ref jpeg) = jpeg_analysis {
         let estimated_psnr = estimate_psnr_from_quality(jpeg.estimated_quality);
@@ -685,7 +685,7 @@ fn analyze_jpeg_fast_path(path: &Path, file_size: u64) -> Result<ImageAnalysis> 
     };
 
     let metadata = extract_metadata(path).unwrap_or_default();
-    let jxl_indicator = generate_jxl_indicator(&ImageFormat::Jpeg, false, &jpeg_analysis, path);
+    let jxl_indicator = generate_jxl_indicator(ImageFormat::Jpeg, false, &jpeg_analysis, path);
 
     let (psnr, ssim) = if let Some(ref jpeg) = jpeg_analysis {
         (
@@ -732,7 +732,7 @@ fn analyze_jpeg_fast_path(path: &Path, file_size: u64) -> Result<ImageAnalysis> 
 }
 
 fn generate_jxl_indicator(
-    format: &ImageFormat,
+    format: ImageFormat,
     is_lossless: bool,
     jpeg_analysis: &Option<JpegQualityAnalysis>,
     path: &Path,
@@ -888,7 +888,7 @@ fn estimate_ssim_from_quality(quality: u8) -> f64 {
     }
 }
 
-fn format_to_string(format: &ImageFormat) -> String {
+fn format_to_string(format: ImageFormat) -> String {
     match format {
         ImageFormat::Png => "PNG".to_string(),
         ImageFormat::Jpeg => "JPEG".to_string(),
@@ -939,7 +939,7 @@ fn detect_color_space(img: &DynamicImage) -> String {
     }
 }
 
-fn is_animated_format(path: &Path, format: &ImageFormat) -> Result<bool> {
+fn is_animated_format(path: &Path, format: ImageFormat) -> Result<bool> {
     match format {
         ImageFormat::Gif => Ok(check_gif_animation(path)?),
         ImageFormat::WebP => Ok(check_webp_animation(path)?),
@@ -1515,7 +1515,7 @@ fn try_get_frame_count(path: &Path) -> Option<u32> {
 
 /// Determines if the image is stored in a lossless way for conversion decisions.
 /// Uses `image_detection::detect_compression` for PNG, TIFF, WebP, AVIF (and HEIC/JXL in their own analyzers).
-fn detect_lossless(format: &ImageFormat, path: &Path) -> Result<bool> {
+fn detect_lossless(format: ImageFormat, path: &Path) -> Result<bool> {
     use crate::image_detection::{
         detect_compression, detect_format_from_bytes, CompressionType, DetectedFormat,
     };

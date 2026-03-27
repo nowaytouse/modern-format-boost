@@ -121,7 +121,29 @@ pub fn verify_jxl_health(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Check whether a JXL file already contains an embedded ICC profile.
+///
+/// Uses `exiftool -icc_profile -b` — returns `true` if the profile blob is non-empty.
+/// Falls back to `false` on any error (tool missing, I/O failure) so the caller can safely
+/// decide whether to inject ICC via ExifTool as a fallback.
+#[must_use]
+pub fn verify_jxl_has_icc(path: &Path) -> bool {
+    if which::which("exiftool").is_err() {
+        return false; // Cannot verify; assume absent to trigger fallback
+    }
+    let result = Command::new("exiftool")
+        .arg("-icc_profile")
+        .arg("-b")
+        .arg(crate::safe_path_arg(path).as_ref())
+        .output();
+    match result {
+        Ok(out) => out.status.success() && !out.stdout.is_empty(),
+        Err(_) => false,
+    }
+}
+
 /// Run an external tool to convert input to a temp PNG.
+///
 /// Returns (`temp_path`, `temp_handle`) on success, or (`original_input`, None) on failure (graceful fallback).
 /// Decode a file to a temporary PNG for analysis.
 ///
@@ -171,6 +193,7 @@ pub fn convert_to_temp_png(
 }
 
 /// True when cjxl failed due to grayscale PNG + ICC profile (libpng: "RGB color space not permitted on grayscale").
+///
 /// Only then do we retry with -strip to avoid metadata loss in the general case.
 /// Enhanced to catch more variants of the error message.
 #[must_use]
@@ -435,7 +458,7 @@ fn run_imagemagick_cjxl_pipeline(
 /// - decode/pixel error + 16-bit source → normalize ICC to sRGB, keep depth 16
 ///   - still fails → error, refuse to silently downgrade
 ///
-/// Fallback to ImageMagick for conversion if native tools fail.
+/// Fallback to `ImageMagick` for conversion if native tools fail.
 ///
 /// # Errors
 /// Returns an I/O error if conversion fails.
@@ -745,6 +768,7 @@ pub fn try_imagemagick_fallback(
 }
 
 /// Losslessly strip trailing data after JPEG EOI (0xFF 0xD9) so cjxl can use bitstream reconstruction.
+///
 /// Returns (`temp_path`, guard) if tail was stripped, or None if no tail or strip failed.
 /// Strip JPEG extra data (trailing bytes) to a temporary file.
 ///

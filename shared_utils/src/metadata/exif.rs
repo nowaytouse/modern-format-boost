@@ -216,20 +216,46 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
     let is_nuclear_format = ext == "jxl" || ext == "jpg" || ext == "jpeg" || ext == "webp";
     let apple_compat = std::env::var("MODERN_FORMAT_BOOST_APPLE_COMPAT").is_ok();
 
-    let mut output = Command::new("exiftool")
-        .arg("-tagsfromfile")
+    // ICC priority: cjxl/native tool embeds ICC from container (colr box, iCCP chunk, APP2)
+    // which is more authoritative than ExifTool re-extraction. For JXL output, exclude
+    // -ICC_Profile<ICC_Profile so ExifTool doesn't overwrite the tool-embedded ICC.
+    // For other formats, include it as those tools may not handle ICC natively.
+    let is_jxl_output = ext == "jxl";
+
+    // For JXL output: skip ICC copy if cjxl already embedded it (authoritative source).
+    // Fallback: if JXL has no ICC (source had no container ICC, only EXIF ColorSpace tag),
+    // allow exiftool to inject it as a safety net so the output is never ICC-less.
+    let jxl_already_has_icc = is_jxl_output && crate::jxl_utils::verify_jxl_has_icc(dst);
+    if jxl_already_has_icc {
+        tracing::debug!(
+            dst = %dst.display(),
+            "JXL already has embedded ICC — skipping ExifTool ICC injection"
+        );
+    } else if is_jxl_output {
+        tracing::debug!(
+            dst = %dst.display(),
+            "JXL has no embedded ICC — ExifTool fallback will inject ICC"
+        );
+    }
+
+    let mut cmd = Command::new("exiftool");
+    cmd.arg("-tagsfromfile")
         .arg(crate::safe_path_arg(src).as_ref())
         .arg("-all:all")
-        .arg("-unsafe")
-        .arg("-ICC_Profile<ICC_Profile")
-        .arg("-use")
+        .arg("-unsafe");
+    if !jxl_already_has_icc {
+        // Non-JXL OR JXL without embedded ICC: inject via ExifTool as fallback
+        cmd.arg("-ICC_Profile<ICC_Profile");
+    }
+    // JXL with already-embedded ICC: skip to preserve cjxl's authoritative profile
+    cmd.arg("-use")
         .arg("MWG")
         .arg("-api")
         .arg("LargeFileSupport=1")
         .arg("-q")
         .arg("-m")
-        .arg(crate::safe_path_arg(dst).as_ref())
-        .output()?;
+        .arg(crate::safe_path_arg(dst).as_ref());
+    let mut output = cmd.output()?;
 
     // Log exiftool stderr to file (debug/warn level only — never reaches terminal).
     // This surfaces warnings like "[minor] Will wrap JXL codestream" and any exiftool

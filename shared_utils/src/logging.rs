@@ -488,8 +488,8 @@ pub fn init_logging(program_name: &str, config: LogConfig) -> Result<()> {
         .init();
 
     let init_msg = format!(
-        "Logging system initialized program=\"{}\" log_dir=\"{:?}\" log_file=\"{}\" max_file_size={} max_files={} level={:?}",
-        program_name, config.log_dir, log_file_name, config.max_file_size, config.max_files, config.level
+        "Logging system initialized program=\"{}\" log_dir=\"{}\" log_file=\"{}\" max_file_size={} max_files={} level={:?}",
+        program_name, config.log_dir.display(), log_file_name, config.max_file_size, config.max_files, config.level
     );
     // Note: We don't call append_stats_to_line here to avoid potential circular dependency during init.
     // The run log writer will handle it if we pass it through.
@@ -509,7 +509,7 @@ fn cleanup_old_logs(log_dir: &Path, program_name: &str, max_files: usize) -> Res
     use std::fs;
 
     let entries = fs::read_dir(log_dir)
-        .with_context(|| format!("Failed to read log directory: {log_dir:?}"))?;
+        .with_context(|| format!("Failed to read log directory: {}", log_dir.display()))?;
 
     let mut log_files: Vec<(PathBuf, std::time::SystemTime)> = Vec::new();
 

@@ -285,6 +285,7 @@ fn lock_log_writer() -> std::sync::MutexGuard<'static, Option<BufWriter<File>>> 
 }
 
 /// Open (or create) the log file and take an advisory exclusive lock so it is not truncated by others.
+///
 /// Call once at startup. Registers a forwarder so tracing events are also written to this run log.
 /// Set the log file for the current process.
 ///

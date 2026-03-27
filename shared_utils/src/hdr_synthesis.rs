@@ -3,10 +3,10 @@
 //! High-fidelity HDR synthesis pipeline for images containing gainmap metadata.
 //! Supports:
 //! - **HEIC/HEIF**: Apple (ProRAW/HDRHEIC), Samsung (Super HDR HEIC), ISO 21496-1
-//! - **UltraHDR JPEG**: Google's JPEG-based gainmap format (MPF + XMP)
+//! - **`UltraHDR` JPEG**: Google's JPEG-based gainmap format (MPF + XMP)
 //!
 //! Output formats:
-//! - **32-bit OpenEXR**: Full HDR precision for cinema/scientific grade
+//! - **32-bit `OpenEXR`**: Full HDR precision for cinema/scientific grade
 //! - **16-bit PNG**: High precision integer for compatibility
 //!
 //! # Depth Channel Support
@@ -25,7 +25,7 @@ use tracing::{info, warn};
 /// HDR intermediate format selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HdrIntermediateFormat {
-    /// 32-bit float OpenEXR - maximum precision
+    /// 32-bit float `OpenEXR` - maximum precision
     #[default]
     OpenExr32,
     /// 16-bit integer PNG - high precision with better compatibility
@@ -64,7 +64,7 @@ pub fn convert_heic_with_gainmap_to_jxl_hdr(
     let ctx = HeifContext::read_from_bytes(&data).context("Failed to parse HEIC context")?;
     let handle = ctx
         .primary_image_handle()
-        .map_err(|e| anyhow!("Failed to get primary image handle: {}", e))?;
+        .map_err(|e| anyhow!("Failed to get primary image handle: {e}"))?;
 
     // 1. Color Space Awareness: Only convert to sRGB if the source is P3
     // Use manual box parsing from the full data buffer
@@ -90,7 +90,7 @@ pub fn convert_heic_with_gainmap_to_jxl_hdr(
     // Get fresh handle for gainmap
     let gain_handle = ctx
         .image_handle(gainmap_item)
-        .map_err(|e| anyhow!("Failed to get gainmap handle: {}", e))?;
+        .map_err(|e| anyhow!("Failed to get gainmap handle: {e}"))?;
 
     // 2b. Extract Depth Map if present (save as sidecar)
     // Search for depth auxiliary image
@@ -108,7 +108,7 @@ pub fn convert_heic_with_gainmap_to_jxl_hdr(
     let depth_handle: Option<ImageHandle> = if let Some(depth_id) = depth_item_id {
         Some(
             ctx.image_handle(depth_id)
-                .map_err(|e| anyhow!("Failed to get depth handle: {}", e))?,
+                .map_err(|e| anyhow!("Failed to get depth handle: {e}"))?,
         )
     } else {
         None
@@ -145,7 +145,7 @@ pub fn convert_heic_with_gainmap_to_jxl_hdr(
             write_exr(&hdr_pixels, sdr.width(), sdr.height(), &tmp_exr)
                 .context("Failed to write intermediate 32-bit OpenEXR buffer")?;
             // intensity_target = 203 * 2^GainMapMax
-            (tmp_exr, 203.0 * 2.0_f32.powf(params.gain_map_max))
+            (tmp_exr, 203.0 * params.gain_map_max.exp2())
         }
         HdrIntermediateFormat::Png16 => {
             let tmp_png = output.with_extension("tmp_hdr.png");
@@ -163,17 +163,13 @@ pub fn convert_heic_with_gainmap_to_jxl_hdr(
         .arg("-d")
         .arg("1.0")
         .arg("--intensity_target")
-        .arg(format!("{:.0}", intensity_target));
+        .arg(format!("{intensity_target:.0}"));
 
     // After matrix conversion in synthesis, the primaries are Rec.709 (sRGB)
     cmd.arg("-x").arg("color_space=sRGB");
 
-    // For PNG16, specify transfer function
-    if intermediate_format == HdrIntermediateFormat::Png16 {
-        cmd.arg("--transfer_function").arg("pq"); // PQ for HDR
-    } else {
-        cmd.arg("--transfer_function").arg("linear");
-    }
+    // For PNG16, we currently rely on intensity_target and color_space=sRGB
+    // (cjxl will handle the high dynamic range via intensity_target)
 
     let status = cmd
         .status()
@@ -184,8 +180,7 @@ pub fn convert_heic_with_gainmap_to_jxl_hdr(
             let _ = std::fs::remove_file(&tmp_file);
         }
         return Err(anyhow!(
-            "cjxl encoding failed with status {} during HDR synthesis; dynamic range parameters might be invalid",
-            status
+            "cjxl encoding failed with status {status} during HDR synthesis; dynamic range parameters might be invalid"
         ));
     }
 
@@ -213,9 +208,9 @@ pub fn convert_heic_with_gainmap_to_jxl_hdr(
     Ok(())
 }
 
-/// Main entry point for converting an UltraHDR JPEG to an HDR JXL via intermediate format.
+/// Main entry point for converting an `UltraHDR` JPEG to an HDR JXL via intermediate format.
 ///
-/// UltraHDR JPEGs contain:
+/// `UltraHDR` JPEGs contain:
 /// - Base SDR image (standard JPEG)
 /// - Gainmap image (embedded via MPF - Multi Picture Format)
 /// - XMP metadata with gainmap parameters (hdrgm: namespace)
@@ -236,7 +231,7 @@ pub fn convert_ultrahdr_jpeg_to_jxl_hdr(
 
     // 2. Extract base image and gainmap
     let (base_image, gainmap_image) = extract_gainmap_from_jpeg(&data)
-        .map_err(|e| anyhow!("☢️ Failed to extract gainmap from UltraHDR JPEG: {}", e))?;
+        .map_err(|e| anyhow!("☢️ Failed to extract gainmap from UltraHDR JPEG: {e}"))?;
 
     warn!(
         "⚠️  Gainmap extracted: {}x{} (base: {}x{})",
@@ -271,7 +266,7 @@ pub fn convert_ultrahdr_jpeg_to_jxl_hdr(
                 &tmp_exr,
             )
             .context("Failed to write intermediate 32-bit OpenEXR buffer")?;
-            (tmp_exr, 203.0 * 2.0_f32.powf(params.gain_map_max))
+            (tmp_exr, 203.0 * params.gain_map_max.exp2())
         }
         HdrIntermediateFormat::Png16 => {
             let tmp_png = output.with_extension("tmp_hdr.png");
@@ -293,15 +288,11 @@ pub fn convert_ultrahdr_jpeg_to_jxl_hdr(
         .arg("-d")
         .arg("1.0")
         .arg("--intensity_target")
-        .arg(format!("{:.0}", intensity_target))
+        .arg(format!("{intensity_target:.0}"))
         .arg("-x")
         .arg("color_space=sRGB");
 
-    if intermediate_format == HdrIntermediateFormat::Png16 {
-        cmd.arg("--transfer_function").arg("pq");
-    } else {
-        cmd.arg("--transfer_function").arg("linear");
-    }
+    // For PNG16, we rely on intensity_target and color_space=sRGB
 
     let status = cmd
         .status()
@@ -312,8 +303,7 @@ pub fn convert_ultrahdr_jpeg_to_jxl_hdr(
             let _ = std::fs::remove_file(&tmp_file);
         }
         return Err(anyhow!(
-            "cjxl encoding failed with status {} during UltraHDR JPEG HDR synthesis",
-            status
+            "cjxl encoding failed with status {status} during UltraHDR JPEG HDR synthesis"
         ));
     }
 
@@ -332,7 +322,7 @@ pub fn convert_ultrahdr_jpeg_to_jxl_hdr(
 fn decode_heif_handle(handle: &ImageHandle, color_space: ColorSpace) -> Result<DynamicImage> {
     let img = libheif_rs::LibHeif::new()
         .decode(handle, color_space, None)
-        .map_err(|e| anyhow!("HEIF decode error: {}", e))?;
+        .map_err(|e| anyhow!("HEIF decode error: {e}"))?;
 
     let width = img.width();
     let height = img.height();
@@ -347,9 +337,10 @@ fn decode_heif_handle(handle: &ImageHandle, color_space: ColorSpace) -> Result<D
 
             if bit_depth > 8 {
                 // Handle 10/12/16-bit (data is actually u16 even if returned as &[u8])
+                #[allow(clippy::cast_ptr_alignment)]
                 let data_u16: &[u16] = unsafe {
                     std::slice::from_raw_parts(
-                        r_plane.data.as_ptr() as *const u16,
+                        r_plane.data.as_ptr().cast::<u16>(),
                         r_plane.data.len() / 2,
                     )
                 };
@@ -379,9 +370,10 @@ fn decode_heif_handle(handle: &ImageHandle, color_space: ColorSpace) -> Result<D
             let y_plane = planes.y.ok_or_else(|| anyhow!("No Y plane"))?;
 
             if bit_depth > 8 {
+                #[allow(clippy::cast_ptr_alignment)]
                 let data_u16: &[u16] = unsafe {
                     std::slice::from_raw_parts(
-                        y_plane.data.as_ptr() as *const u16,
+                        y_plane.data.as_ptr().cast::<u16>(),
                         y_plane.data.len() / 2,
                     )
                 };
@@ -410,7 +402,7 @@ fn is_display_p3(data: &[u8]) -> bool {
     use crate::common_utils::find_box_data_recursive;
 
     // 1. Check colr/nclx box (Common in HEIC/AVIF/JXL containers)
-    if let Some(colr_data) = find_box_data_recursive(data, b"colr") {
+    if let Some(colr_data) = find_box_data_recursive(data, *b"colr") {
         if colr_data.len() >= 11 && &colr_data[0..4] == b"nclx" {
             // flavour: nclx
             // colour_primaries: bytes 8-9 (u16 BE)
@@ -449,7 +441,7 @@ fn parse_gainmap_from_xmp(xmp_str: &str) -> GainMapParams {
 
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+            Ok(Event::Start(e) | Event::Empty(e)) => {
                 // 1. Check Attributes (Common for Google/Samsung/ISO)
                 for attr in e.attributes().flatten() {
                     let local_name = attr.key.local_name();
@@ -461,10 +453,10 @@ fn parse_gainmap_from_xmp(xmp_str: &str) -> GainMapParams {
                             n if n.contains("GainMapMin") => params.gain_map_min = f,
                             n if n.contains("Gamma") => params.gamma = f,
                             n if n.contains("OffsetSDR") || n.contains("OffsetSdr") => {
-                                params.offset_sdr = f
+                                params.offset_sdr = f;
                             }
                             n if n.contains("OffsetHDR") || n.contains("OffsetHdr") => {
-                                params.offset_hdr = f
+                                params.offset_hdr = f;
                             }
                             _ => (),
                         }
@@ -529,12 +521,12 @@ fn synthesize_hdr(
     use image::GenericImageView;
     let (width, height) = sdr.dimensions();
 
-    let gain_resized: DynamicImage = if gain.dimensions() != (width, height) {
+    let gain_resized: DynamicImage = if gain.dimensions() == (width, height) {
+        gain.clone()
+    } else {
         let mut g = gain.clone();
         g.resize_exact(width, height, image::imageops::FilterType::Triangle);
         g
-    } else {
-        gain.clone()
     };
 
     let mut hdr_pixels = Vec::with_capacity((width * height * 3) as usize);
@@ -580,16 +572,16 @@ fn synthesize_hdr(
             let (r_norm, g_norm, b_norm) = if let Some(ref buf) = sdr_16 {
                 let px = buf.get_pixel(x, y);
                 (
-                    px[0] as f32 / 65535.0,
-                    px[1] as f32 / 65535.0,
-                    px[2] as f32 / 65535.0,
+                    f32::from(px[0]) / 65535.0,
+                    f32::from(px[1]) / 65535.0,
+                    f32::from(px[2]) / 65535.0,
                 )
             } else if let Some(ref buf) = sdr_8 {
                 let px = buf.get_pixel(x, y);
                 (
-                    px[0] as f32 / 255.0,
-                    px[1] as f32 / 255.0,
-                    px[2] as f32 / 255.0,
+                    f32::from(px[0]) / 255.0,
+                    f32::from(px[1]) / 255.0,
+                    f32::from(px[2]) / 255.0,
                 )
             } else {
                 unreachable!("SDR buffer type mismatch");
@@ -606,7 +598,7 @@ fn synthesize_hdr(
                 let gain_px_corrected = val_norm.powf(1.0 / params.gamma.max(0.1));
                 let log2_gain = gain_px_corrected * (params.gain_map_max - params.gain_map_min)
                     + params.gain_map_min;
-                2.0_f32.powf(log2_gain)
+                log2_gain.exp2()
             };
 
             let gain_channels = gain_resized.color().channel_count();
@@ -614,16 +606,16 @@ fn synthesize_hdr(
                 if let Some(ref buf) = gain_rgb16 {
                     let p: &image::Rgb<u16> = buf.get_pixel(x, y);
                     (
-                        apply_gain(p[0] as f32, 65535.0),
-                        apply_gain(p[1] as f32, 65535.0),
-                        apply_gain(p[2] as f32, 65535.0),
+                        apply_gain(f32::from(p[0]), 65535.0),
+                        apply_gain(f32::from(p[1]), 65535.0),
+                        apply_gain(f32::from(p[2]), 65535.0),
                     )
                 } else if let Some(ref buf) = gain_rgb8 {
                     let p: &image::Rgb<u8> = buf.get_pixel(x, y);
                     (
-                        apply_gain(p[0] as f32, 255.0),
-                        apply_gain(p[1] as f32, 255.0),
-                        apply_gain(p[2] as f32, 255.0),
+                        apply_gain(f32::from(p[0]), 255.0),
+                        apply_gain(f32::from(p[1]), 255.0),
+                        apply_gain(f32::from(p[2]), 255.0),
                     )
                 } else {
                     let g_val = apply_gain(128.0, 255.0);
@@ -632,10 +624,10 @@ fn synthesize_hdr(
             } else {
                 let g_val = if let Some(ref buf) = gain_16 {
                     let p: &image::Luma<u16> = buf.get_pixel(x, y);
-                    apply_gain(p[0] as f32, 65535.0)
+                    apply_gain(f32::from(p[0]), 65535.0)
                 } else if let Some(ref buf) = gain_8 {
                     let p: &image::Luma<u8> = buf.get_pixel(x, y);
-                    apply_gain(p[0] as f32, 255.0)
+                    apply_gain(f32::from(p[0]), 255.0)
                 } else {
                     apply_gain(128.0, 255.0)
                 };
@@ -643,16 +635,17 @@ fn synthesize_hdr(
             };
 
             // 3. Apply Gain
-            let r_hdr = (r_lin + params.offset_sdr) * gain_r - params.offset_hdr;
-            let g_hdr = (g_lin + params.offset_sdr) * gain_g - params.offset_hdr;
-            let b_hdr = (b_lin + params.offset_sdr) * gain_b - params.offset_hdr;
+            let r_hdr = (r_lin + params.offset_sdr).mul_add(gain_r, -params.offset_hdr);
+            let g_hdr = (g_lin + params.offset_sdr).mul_add(gain_g, -params.offset_hdr);
+            let b_hdr = (b_lin + params.offset_sdr).mul_add(gain_b, -params.offset_hdr);
 
             // 4. Color Primaries: Conditionally convert Linear P3 -> Linear sRGB (Rec.709)
             if needs_p3_conversion {
                 // Matrix for D65 Display P3 to D65 Rec.709
-                let r_srgb = 1.2249 * r_hdr - 0.2247 * g_hdr - 0.0001 * b_hdr;
-                let g_srgb = -0.0420 * r_hdr + 1.0419 * g_hdr + 0.0001 * b_hdr;
-                let b_srgb = -0.0197 * r_hdr - 0.0786 * g_hdr + 1.0983 * b_hdr;
+                let r_srgb = 0.0001f32.mul_add(-b_hdr, 1.2249f32.mul_add(r_hdr, -(0.2247 * g_hdr)));
+                let g_srgb = 0.0001f32.mul_add(b_hdr, (-0.0420f32).mul_add(r_hdr, 1.0419 * g_hdr));
+                let b_srgb =
+                    1.0983f32.mul_add(b_hdr, (-0.0197f32).mul_add(r_hdr, -(0.0786 * g_hdr)));
 
                 hdr_pixels.push(r_srgb.max(0.0));
                 hdr_pixels.push(g_srgb.max(0.0));
@@ -731,7 +724,7 @@ mod tests {
         assert_eq!(srgb_to_linear(0.0), 0.0);
         assert!((srgb_to_linear(1.0) - 1.0).abs() < 1e-6);
         // Middle grey roughly 0.214
-        assert!((srgb_to_linear(0.5) - 0.21404114).abs() < 1e-6);
+        assert!((srgb_to_linear(0.5) - 0.214_041_14).abs() < 1e-6);
     }
 
     #[test]

@@ -20,7 +20,7 @@ pub struct HeicAnalysis {
     pub image_count: usize,
     pub is_hdr: bool,
     pub is_dolby_vision: bool,
-    /// Apple Gainmap / Google GCamera HDR gainmap detected in XMP
+    /// Apple Gainmap / Google `GCamera` HDR gainmap detected in XMP
     pub has_gainmap: bool,
     /// Samsung/Google vendor-specific XMP metadata detected
     pub has_vendor_metadata: bool,
@@ -44,8 +44,8 @@ pub struct HeicAnalysis {
 pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
     // Try find_box_data_recursive first, then fallback to direct magic byte search
     // This handles cases where boxes are inside full boxes (e.g. meta box with version/flags)
-    let hvcc_from_recursive = find_box_data_recursive(data, b"hvcC");
-    let hvcc_from_magic = find_box_payload_by_magic(data, b"hvcC");
+    let hvcc_from_recursive = find_box_data_recursive(data, *b"hvcC");
+    let hvcc_from_magic = find_box_payload_by_magic(data, *b"hvcC");
 
     debug!("detect_heic_is_lossless for {}", path.display());
     debug!(
@@ -106,8 +106,8 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
                 let is_444 = chroma_format_idc == 3;
 
                 // Check colr box for Identity matrix (RGB = lossless indicator for RExt)
-                let has_rgb_identity_matrix = find_box_payload_by_magic(data, b"colr")
-                    .or_else(|| find_box_data_recursive(data, b"colr"))
+                let has_rgb_identity_matrix = find_box_payload_by_magic(data, *b"colr")
+                    .or_else(|| find_box_data_recursive(data, *b"colr"))
                     .and_then(|colr_data| {
                         if colr_data.len() >= 11 && &colr_data[0..4] == b"nclx" {
                             Some(u16::from_be_bytes([colr_data[8], colr_data[9]]))
@@ -122,8 +122,8 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
                 }
 
                 // Check pixi box for high bit depth
-                let has_high_bitdepth = find_box_payload_by_magic(data, b"pixi")
-                    .or_else(|| find_box_data_recursive(data, b"pixi"))
+                let has_high_bitdepth = find_box_payload_by_magic(data, *b"pixi")
+                    .or_else(|| find_box_data_recursive(data, *b"pixi"))
                     .and_then(|pixi_data| {
                         if pixi_data.is_empty() {
                             None
@@ -192,7 +192,7 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
 }
 
 fn detect_heic_lossless_via_mp4parse_data(data: &[u8]) -> Option<bool> {
-    let hvcc_data = find_box_data_recursive(data, b"hvcC")?;
+    let hvcc_data = find_box_data_recursive(data, *b"hvcC")?;
     parse_sps_for_transquant_bypass_flag(hvcc_data)
 }
 
@@ -447,7 +447,7 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
     let mut is_dolby_vision = false;
 
     // Quick scan for HDR/DV boxes in the already read data
-    if let Some(colr_data) = find_box_data_recursive(&data, b"colr") {
+    if let Some(colr_data) = find_box_data_recursive(&data, *b"colr") {
         if colr_data.len() >= 11 && &colr_data[0..4] == b"nclx" {
             let primaries = u16::from_be_bytes([colr_data[4], colr_data[5]]);
             let transfer = u16::from_be_bytes([colr_data[6], colr_data[7]]);
@@ -456,8 +456,8 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
             }
         }
     }
-    if find_box_data_recursive(&data, b"dvcC").is_some()
-        || find_box_data_recursive(&data, b"dvvC").is_some()
+    if find_box_data_recursive(&data, *b"dvcC").is_some()
+        || find_box_data_recursive(&data, *b"dvvC").is_some()
     {
         is_dolby_vision = true;
         is_hdr = true;
@@ -564,7 +564,7 @@ fn extract_xmp_from_heic_data(data: &[u8]) -> Option<String> {
 /// Fallback: find box payload by direct magic byte search.
 /// This handles cases where boxes are inside full boxes (e.g. meta box with version/flags)
 /// that `find_box_data_recursive` may not handle correctly.
-fn find_box_payload_by_magic<'a>(data: &'a [u8], box_type: &[u8; 4]) -> Option<&'a [u8]> {
+fn find_box_payload_by_magic(data: &[u8], box_type: [u8; 4]) -> Option<&[u8]> {
     if let Some(pos) = data.windows(4).position(|w| w == box_type) {
         if pos >= 4 {
             let size =

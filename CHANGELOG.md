@@ -10,27 +10,22 @@ All notable changes to this project will be documented in this file.
 ### 📍 Depth Channel Extraction (HEIC) - NEW
 Adds depth map preservation for HEIC files with auxiliary depth images.
 
-- **Depth Channel Extraction**:
-  - Automatically detects and extracts depth maps from Apple/Samsung/ISO HEIC files
-  - Saves depth as 16-bit grayscale PNG sidecar (`.depth.png`)
-  - Parses XMP for near/far focus distance metadata
-  - Supports: Apple `urn:com:apple:heif:depth`, ISO `AuxiliaryDepth`, Samsung depth
-- **HDR Gainmap Improvements**:
-  - Dual auxiliary handling: processes gainmap (HDR) + depth (spatial) simultaneously
-  - Enhanced logging with depth sidecar notifications
-- **jpegxl-rs Integration**:
-  - Added `jpegxl-rs` crate (v0.12) with vendored libjxl
-  - Infrastructure prepared for future JXL Extra Channel embedding via FFI
-  - Current implementation uses sidecar approach (high-level API limitation)
-- **Bug Fixes**:
-  - Fixed WebP quality estimation integer overflow (`image_formats.rs`)
-  - Fixed quick-xml API compatibility for official crates.io version
+- **Refined Extreme Mode (Ultimate Mode) Logic**:
+  - **Ultra-Conservative Deceleration**: Adjusted the smart deceleration trigger to **0.5x** in Ultimate Mode, allowing the search to push deeper into the quality ceiling before slowing down.
+  - **Integer Milestone Logs**: Added terminal output for CRF integer boundary crossings (e.g., `💠 Entering CRF 16.x zone`) to provide better visual progress tracking during adaptive sub-integer steps.
+- **Logging & Terminal Hygiene**:
+  - **Structured Heartbeat**: Moved periodic heartbeat reports (💓) from the terminal to structured file logs (`tracing::info!`), preserving history in `vid_hevc.log` or `./logs/` while reducing terminal noise.
+  - **Search Visibility**: Promoted Phase 1/2 boundary-finding logs to standard output to clarify adaptive search behaviors.
+- **Metadata Preservation Hardening**:
+  - **JXL ICC Fallback**: Added a post-conversion verification step (`verify_jxl_has_icc`) to ensure JXL outputs always contain an ICC profile, falling back to ExifTool injection if native embedding fails.
+  - **Authoritative Source Priority**: Implemented strict hierarchical extraction (ICC binary > CICP/nclx > EXIF) to ensure the most accurate color metadata is preserved.
+  - **Video Metadata Protection**: Confirmed explicit forwarding of VUI parameters (primaries, trc, space) and HDR10+ / Dolby Vision RPU metadata to prevent HDR-to-SDR washing.
+- **Enhanced HEIC Depth Support**:
+  - Added explicit support for **Google** depth maps in HEIC auxiliary images.
+  - Improved robust matching for **Samsung** and **ISO** depth types using case-insensitive string scanning.
 - **Code Quality**:
-  - All `cargo clippy -D warnings` checks passing
-  - All `cargo fmt` checks passing
-  - 4 new unit tests for depth_channel module
-- **Dependencies**:
-  - All GitHub-sourced dependencies updated to latest commits (2026-03-27)
+  - Achieved a **Zero-Warning** state across the entire workspace (Clippy, Fmt, and Geiger verified via `check_all.sh`).
+  - Resolved `write_with_newline`, `needless_lifetimes`, and `similar_names` clippy warnings.
 
 ### 📦 Dependency Updates
 - **New**: `jpegxl-rs = "0.12"` with `vendored` feature

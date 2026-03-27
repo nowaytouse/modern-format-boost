@@ -6,6 +6,9 @@ license.workspace = true
 authors.workspace = true
 description = "Shared utilities for modern_format_boost tools"
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = { workspace = true }
 thiserror = { workspace = true }

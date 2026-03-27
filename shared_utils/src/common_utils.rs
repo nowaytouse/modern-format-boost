@@ -275,13 +275,13 @@ pub fn execute_command_with_logging(cmd: &mut Command) -> Result<Output> {
 /// - Extended size boxes (size=1, followed by 64-bit size)
 /// - Full boxes (with version + flags after type)
 #[must_use]
-pub fn find_box_data_recursive<'a>(data: &'a [u8], box_type: &[u8; 4]) -> Option<&'a [u8]> {
+pub fn find_box_data_recursive<'a>(data: &'a [u8], box_type: [u8; 4]) -> Option<&'a [u8]> {
     find_box_data_recursive_impl(data, box_type, 0, 32)
 }
 
 fn find_box_data_recursive_impl<'a>(
     data: &'a [u8],
-    box_type: &[u8; 4],
+    box_type: [u8; 4],
     depth: u32,
     max_depth: u32,
 ) -> Option<&'a [u8]> {
@@ -378,7 +378,7 @@ fn find_box_data_recursive_impl<'a>(
 
 /// Recursively search for a box type in ISO BMFF data (e.g. "jbrd" inside "JXL " container).
 #[must_use]
-pub fn find_any_box_recursive(data: &[u8], box_type: &[u8; 4]) -> bool {
+pub fn find_any_box_recursive(data: &[u8], box_type: [u8; 4]) -> bool {
     let mut pos = 0;
     while pos + 8 <= data.len() {
         let size =

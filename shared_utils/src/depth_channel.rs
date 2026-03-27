@@ -48,6 +48,8 @@ pub enum DepthType {
     Apple,
     /// Samsung proprietary depth format
     Samsung,
+    /// Google proprietary depth format
+    Google,
     /// ISO standard depth format
     Iso,
     /// Unknown/other depth format
@@ -65,22 +67,26 @@ pub fn extract_depth_from_heic(input: &Path) -> Result<Option<DepthMap>> {
     let ctx = HeifContext::read_from_bytes(&data).context("Failed to parse HEIC context")?;
     let handle = ctx
         .primary_image_handle()
-        .map_err(|e| anyhow!("Failed to get primary image handle: {}", e))?;
+        .map_err(|e| anyhow!("Failed to get primary image handle: {e}"))?;
 
     // Search for depth auxiliary images
     let aux_images = handle.auxiliary_images(None);
 
     for aux in aux_images {
         if let Ok(aux_type) = aux.auxiliary_type() {
-            let aux_type_str: &str = &aux_type;
+            let aux_type_str = aux_type.to_lowercase();
 
-            // Detect depth map types
-            let depth_type = if aux_type_str.contains("apple") || aux_type_str.contains("depth") {
+            // Detect depth map types (prioritize specific vendors before generic 'depth')
+            let depth_type = if aux_type_str.contains("apple") {
                 Some(DepthType::Apple)
-            } else if aux_type_str.contains("AuxiliaryDepth") {
-                Some(DepthType::Iso)
             } else if aux_type_str.contains("samsung") {
                 Some(DepthType::Samsung)
+            } else if aux_type_str.contains("google") {
+                Some(DepthType::Google)
+            } else if aux_type_str.contains("auxiliarydepth") {
+                Some(DepthType::Iso)
+            } else if aux_type_str.contains("depth") {
+                Some(DepthType::Unknown)
             } else {
                 None
             };
@@ -111,7 +117,7 @@ pub fn extract_depth_from_heic(input: &Path) -> Result<Option<DepthMap>> {
 fn decode_depth_handle(handle: &ImageHandle) -> Result<DynamicImage> {
     let img = libheif_rs::LibHeif::new()
         .decode(handle, ColorSpace::Monochrome, None)
-        .map_err(|e| anyhow!("HEIF depth decode error: {}", e))?;
+        .map_err(|e| anyhow!("HEIF depth decode error: {e}"))?;
 
     let width = img.width();
     let height = img.height();
@@ -124,8 +130,9 @@ fn decode_depth_handle(handle: &ImageHandle) -> Result<DynamicImage> {
 
     // Depth maps are typically 8-bit or 16-bit
     if bit_depth > 8 {
+        #[allow(clippy::cast_ptr_alignment)]
         let data_u16: &[u16] = unsafe {
-            std::slice::from_raw_parts(y_plane.data.as_ptr() as *const u16, y_plane.data.len() / 2)
+            std::slice::from_raw_parts(y_plane.data.as_ptr().cast::<u16>(), y_plane.data.len() / 2)
         };
         let mut buffer: ImageBuffer<Luma<u16>, Vec<u16>> = ImageBuffer::new(width, height);
         for (x, y, pixel) in buffer.enumerate_pixels_mut() {
@@ -147,7 +154,7 @@ fn decode_depth_handle(handle: &ImageHandle) -> Result<DynamicImage> {
             height,
             |x, y| {
                 let val = buffer.get_pixel(x, y)[0];
-                Luma([(val as u16) << 8 | val as u16])
+                Luma([u16::from(val) << 8 | u16::from(val)])
             },
         )))
     }
@@ -165,7 +172,7 @@ fn parse_depth_metadata(handle: &ImageHandle) -> Result<(Option<f32>, Option<f32
 
     let xmp_data = handle
         .metadata(ids[0])
-        .map_err(|e| anyhow!("Failed to get XMP metadata from HEIC: {}", e))?;
+        .map_err(|e| anyhow!("Failed to get XMP metadata from HEIC: {e}"))?;
     let xmp_str = String::from_utf8_lossy(&xmp_data);
 
     let mut near = None;
@@ -175,7 +182,7 @@ fn parse_depth_metadata(handle: &ImageHandle) -> Result<(Option<f32>, Option<f32
 
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+            Ok(Event::Start(e) | Event::Empty(e)) => {
                 for attr in e.attributes().flatten() {
                     let local_name = attr.key.local_name();
                     let attr_name = String::from_utf8_lossy(local_name.as_ref());
@@ -207,7 +214,7 @@ fn parse_depth_metadata(handle: &ImageHandle) -> Result<(Option<f32>, Option<f32
 ///
 /// Note: Current jpegxl-rs API has limited extra channel support.
 /// This function encodes the main image. Depth map is saved separately
-/// as sidecar file since jpegxl-rs doesn't expose JxlEncoderSetExtraChannelBuffer.
+/// as sidecar file since jpegxl-rs doesn't expose `JxlEncoderSetExtraChannelBuffer`.
 pub fn encode_jxl_with_depth(
     main_image: &DynamicImage,
     _depth_map: &DepthMap,
@@ -226,14 +233,14 @@ pub fn encode_jxl_with_depth(
     // Create encoder builder
     let mut encoder = encoder_builder()
         .build()
-        .map_err(|e| anyhow!("Failed to create JXL encoder: {:?}", e))?;
+        .map_err(|e| anyhow!("Failed to create JXL encoder: {e:?}"))?;
 
     // Set lossless mode based on distance
     encoder.lossless = Some(distance <= 0.001);
 
     // Set quality (0-100 scale, convert from distance)
     // distance 0 = quality 100, distance 1 = quality ~70
-    encoder.quality = (100.0 - distance * 30.0).clamp(0.0, 100.0);
+    encoder.quality = distance.mul_add(-30.0, 100.0).clamp(0.0, 100.0);
 
     // Set encoding speed
     let speed = match effort {
@@ -245,12 +252,12 @@ pub fn encode_jxl_with_depth(
 
     // Encode main image using encoder.encode() method
     // Specify u16 for both input (RGBA) and output (encoded data)
-    let encoded: jpegxl_rs::encode::EncoderResult<u16> = encoder
+    let encode_result: jpegxl_rs::encode::EncoderResult<u16> = encoder
         .encode(&rgba_image, width, height)
-        .map_err(|e| anyhow!("Failed to encode JXL: {:?}", e))?;
+        .map_err(|e| anyhow!("Failed to encode JXL: {e:?}"))?;
 
     // Write output
-    std::fs::write(output, encoded.data).context("Failed to write JXL output")?;
+    std::fs::write(output, encode_result.data).context("Failed to write JXL output")?;
 
     // Note: Extra channel embedding requires direct libjxl FFI (jpegxl-sys)
     // Current jpegxl-rs high-level API doesn't expose JxlEncoderSetExtraChannelBuffer
@@ -332,6 +339,7 @@ mod tests {
     fn test_depth_type_display() {
         assert_eq!(format!("{:?}", DepthType::Apple), "Apple");
         assert_eq!(format!("{:?}", DepthType::Samsung), "Samsung");
+        assert_eq!(format!("{:?}", DepthType::Google), "Google");
         assert_eq!(format!("{:?}", DepthType::Iso), "Iso");
         assert_eq!(format!("{:?}", DepthType::Unknown), "Unknown");
     }
