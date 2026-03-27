@@ -89,6 +89,37 @@ pub fn ensure_parent_dir_exists(file_path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Returns the user's global project cache directory (~/.modern_format_boost/cache/).
+/// Creates the directory if it doesn't exist.
+///
+/// # Errors
+/// Returns an I/O error if the directory cannot be determined or created.
+pub fn get_user_project_cache_dir() -> anyhow::Result<PathBuf> {
+    let mut path = if let Ok(home) = std::env::var("HOME") {
+        PathBuf::from(home)
+    } else if let Ok(userprofile) = std::env::var("USERPROFILE") {
+        PathBuf::from(userprofile)
+    } else {
+        // Fallback to project root .cache if HOME is missing
+        match std::env::current_dir() {
+            Ok(curr) => curr,
+            Err(_) => PathBuf::from("."),
+        }
+    };
+
+    path.push(".modern_format_boost");
+    path.push("cache");
+
+    if let Err(_err) = std::fs::create_dir_all(&path) {
+        let mut fallback = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        fallback.push(".cache");
+        let _ = std::fs::create_dir_all(&fallback);
+        return Ok(fallback);
+    }
+
+    Ok(path)
+}
+
 #[must_use]
 pub fn compute_relative_path(path: &Path, base: &Path) -> PathBuf {
     path.strip_prefix(base)

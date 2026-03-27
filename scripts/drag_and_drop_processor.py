@@ -470,7 +470,6 @@ def check_system_resources(check_dir):
         pass
 
 def stream_and_log_process(cmd, parse_type):
-    global IMG_SUCCEEDED, IMG_SKIPPED, IMG_FAILED, VID_SUCCEEDED, VID_SKIPPED, VID_FAILED
     tmp_out = ""
     
     # Create a Pseudo-Terminal pair (Master/Slave)
@@ -506,10 +505,12 @@ def stream_and_log_process(cmd, parse_type):
             
             if not chunk:
                 if res.poll() is not None: break
+                time.sleep(0.001)
                 continue
             
             # 1:1 Relay to screen (native speed, zero buffering)
             os.write(sys.stdout.fileno(), chunk)
+            sys.stdout.flush()
             
             # Record for stats parsing
             try:
@@ -657,13 +658,13 @@ def merge_run_logs():
                 except Exception as e:
                     mf.write(f"\n⚠️  CRITICAL: Failed to merge/cleanup {log_path.name}: {e}\n")
 
-            mf.write("\n" + "="*70 + "\n")
             mf.write("🏁 END OF SESSION BUNDLE\n")
-            mf.write("="*70 + "\n")
     except Exception as e:
         print(f"   {RED}⚠️  Failed to merge logs: {e}{RESET}")
 
 def main():
+    # Optimization: Tighten GIL switch interval for smoother high-load terminal relaying
+    sys.setswitchinterval(0.0005)
     global ULTIMATE_MODE, VERBOSE_MODE, WATCH_MODE, TARGET_DIR, OUTPUT_MODE, OUTPUT_DIR
     os.environ["MFB_GUI_LAUNCH"] = "1"
     os.environ["FORCE_COLOR"] = "1"
