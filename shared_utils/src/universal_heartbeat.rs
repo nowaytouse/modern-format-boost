@@ -81,7 +81,6 @@
 
 use crate::progress_mode::format_duration_compact;
 use chrono::{DateTime, FixedOffset, Utc};
-use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -182,10 +181,18 @@ impl UniversalHeartbeat {
             || !crate::heartbeat_manager::HeartbeatManager::has_active_progress();
 
         let handle = if should_display {
+            tracing::info!(
+                "🧡 [Heartbeat] Starting for operation: {}",
+                config.operation
+            );
             Some(thread::spawn(move || {
                 Self::heartbeat_loop(running_clone, config_clone, start_time);
             }))
         } else {
+            tracing::info!(
+                "🧡 [Heartbeat] Silent mode for operation: {} (Active progress bar detected)",
+                config.operation
+            );
             None
         };
 
@@ -214,20 +221,13 @@ impl UniversalHeartbeat {
                         .map(|s| format!(" - {s}"))
                         .unwrap_or_default();
 
-                    let mut stderr = std::io::stderr();
-                    if let Err(err) = stderr.write_fmt(format_args!(
+                    tracing::info!(
                         "💓 [{}] Active (elapsed: {}, Beijing Time: {}){}",
-                        config.operation, elapsed_str, beijing_time, extra
-                    )) {
-                        crate::log_rare_error!("Heartbeat IO", "Failed to write heartbeat: {err}");
-                    } else if let Err(err) = stderr.write_all(b"\n") {
-                        crate::log_rare_error!(
-                            "Heartbeat IO",
-                            "Failed to write heartbeat newline: {err}"
-                        );
-                    } else if let Err(err) = stderr.flush() {
-                        crate::log_rare_error!("Heartbeat IO", "Failed to flush heartbeat: {err}");
-                    }
+                        config.operation,
+                        elapsed_str,
+                        beijing_time,
+                        extra
+                    );
                 }
             }
         }));

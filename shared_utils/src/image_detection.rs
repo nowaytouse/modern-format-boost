@@ -1459,7 +1459,7 @@ fn detect_dithering_pattern(img: &DynamicImage) -> f64 {
 
             let mut alternations = 0;
             for neighbor in &neighbors {
-                let diff = color_difference(center, neighbor);
+                let diff = color_difference(*center, **neighbor);
                 if diff > 30.0 && diff < 100.0 {
                     alternations += 1;
                 }
@@ -1492,8 +1492,8 @@ fn detect_dithering_pattern(img: &DynamicImage) -> f64 {
             let c10 = rgba.get_pixel(x + 1, y);
             let c01 = rgba.get_pixel(x, y + 1);
             let c11 = rgba.get_pixel(x + 1, y + 1);
-            let diag_diff = color_difference(c00, c11) + color_difference(c10, c01);
-            let cross_diff = color_difference(c00, c10) + color_difference(c00, c01);
+            let diag_diff = color_difference(*c00, *c11) + color_difference(*c10, *c01);
+            let cross_diff = color_difference(*c00, *c10) + color_difference(*c00, *c01);
             if cross_diff > 40.0 && diag_diff < cross_diff * 0.5 {
                 bayer_count += 1;
             }
@@ -1513,7 +1513,7 @@ fn detect_dithering_pattern(img: &DynamicImage) -> f64 {
 /// Human vision: green > red > blue sensitivity. Equal-weight Euclidean RGB
 /// under-weights green differences and over-weights blue, causing dithering
 /// detection to miss green-channel artifacts and false-trigger on blue noise.
-fn color_difference(a: &Rgba<u8>, b: &Rgba<u8>) -> f64 {
+fn color_difference(a: Rgba<u8>, b: Rgba<u8>) -> f64 {
     let rmean = f64::midpoint(f64::from(a[0]), f64::from(b[0]));
     let dr = f64::from(a[0]) - f64::from(b[0]);
     let dg = f64::from(a[1]) - f64::from(b[1]);

@@ -729,6 +729,7 @@ pub fn commit_temp_to_output(_temp: &Path, _output: &Path, _force: bool) -> std:
 }
 
 /// Commits a temp file with complete metadata preservation from the original file.
+///
 /// Preserves: timestamps (atime, mtime, btime), xattrs, permissions, EXIF data, XMP sidecars.
 /// Commit a temporary file to the final output location with metadata preservation.
 ///

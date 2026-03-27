@@ -453,13 +453,13 @@ pub fn analyze_jpeg_file(path: &std::path::Path) -> Result<JpegQualityAnalysis, 
     analyze_jpeg_quality(&data)
 }
 
-/// Detect Google UltraHDR JPEG (gainmap embedded via MPF + XMP `hdrgm:` namespace).
+/// Detect Google `UltraHDR` JPEG (gainmap embedded via MPF + XMP `hdrgm:` namespace).
 ///
-/// UltraHDR JPEGs contain:
+/// `UltraHDR` JPEGs contain:
 /// - APP2 segment with XMP containing `hdrgm:` or `GainMap` namespace
 /// - APP2 MPF (Multi-Picture Format) segment with secondary gainmap image
 ///
-/// Returns true if the file is a UltraHDR JPEG with embedded gainmap.
+/// Returns true if the file is a `UltraHDR` JPEG with embedded gainmap.
 #[must_use]
 pub fn is_ultra_hdr_jpeg(data: &[u8]) -> bool {
     if data.len() < 4 || data[0] != 0xFF || data[1] != 0xD8 {
@@ -470,46 +470,57 @@ pub fn is_ultra_hdr_jpeg(data: &[u8]) -> bool {
     let mut has_mpf = false;
 
     let mut pos = 2;
-    while pos + 3 < data.len() {
-        if data[pos] != 0xFF {
-            break;
-        }
-        let marker = data[pos + 1];
-        // Skip fill bytes
-        if marker == 0xFF {
+    while pos + 1 < data.len() {
+        // Skip leading 0xFFs including padding
+        while pos + 1 < data.len() && data[pos] == 0xFF && data[pos + 1] == 0xFF {
             pos += 1;
-            continue;
         }
-        // SOI/EOI have no length
-        if marker == 0xD8 || marker == 0xD9 {
-            pos += 2;
-            continue;
-        }
-        if pos + 4 > data.len() {
+
+        if pos + 1 >= data.len() || data[pos] != 0xFF {
             break;
         }
-        let seg_len = u16::from_be_bytes([data[pos + 2], data[pos + 3]]) as usize;
-        if seg_len < 2 || pos + 2 + seg_len > data.len() {
+
+        let marker = data[pos + 1];
+        pos += 2;
+
+        // Stop if we hit SOS or EOI - metadata is in the header
+        if marker == 0xDA || marker == 0xD9 {
             break;
         }
-        let payload = &data[pos + 4..pos + 2 + seg_len];
+
+        // Markers without length field
+        if marker == 0x01 || (0xD0..=0xD8).contains(&marker) {
+            continue;
+        }
+
+        // Read length
+        if pos + 2 > data.len() {
+            break;
+        }
+        let seg_len = u16::from_be_bytes([data[pos], data[pos + 1]]) as usize;
+        if seg_len < 2 || pos + seg_len > data.len() {
+            break;
+        }
+
+        let payload = &data[pos + 2..pos + seg_len];
 
         // APP2 (0xE2): check for XMP gainmap or MPF
         if marker == 0xE2 {
-            // XMP namespace: starts with "http://ns.adobe.com/xap/1.0/\0"
-            if payload.starts_with(b"http://ns.adobe.com/xap/1.0/\0") {
+            if payload.starts_with(b"http://ns.adobe.com/xap/1.0/\0") && payload.len() > 29 {
                 let xmp = String::from_utf8_lossy(&payload[29..]);
                 if xmp.contains("hdrgm:") || xmp.contains("GainMap") || xmp.contains("gainmap") {
                     has_gainmap_xmp = true;
                 }
             }
-            // MPF: starts with "MPF\0"
-            if payload.starts_with(b"MPF\0") {
+            if payload.starts_with(mpf::MPF_IDENTIFIER) {
                 has_mpf = true;
             }
         }
-        // APP1 (0xE1): extended XMP or standard XMP
-        if marker == 0xE1 && payload.starts_with(b"http://ns.adobe.com/xap/1.0/\0") {
+        // APP1 (0xE1): check for XMP gainmap
+        if marker == 0xE1
+            && payload.starts_with(b"http://ns.adobe.com/xap/1.0/\0")
+            && payload.len() > 29
+        {
             let xmp = String::from_utf8_lossy(&payload[29..]);
             if xmp.contains("hdrgm:") || xmp.contains("GainMap") || xmp.contains("gainmap") {
                 has_gainmap_xmp = true;
@@ -520,14 +531,14 @@ pub fn is_ultra_hdr_jpeg(data: &[u8]) -> bool {
             return true;
         }
 
-        pos += 2 + seg_len;
+        pos += seg_len;
     }
 
-    // XMP gainmap alone (without MPF) is still UltraHDR
-    has_gainmap_xmp
+    // UltraHDR requires BOTH the XMP metadata parameters AND the MPF-linked secondary image
+    has_gainmap_xmp && has_mpf
 }
 
-/// Detect UltraHDR from file path.
+/// Detect `UltraHDR` from file path.
 #[must_use]
 pub fn is_ultra_hdr_jpeg_file(path: &std::path::Path) -> bool {
     std::fs::read(path)
@@ -537,7 +548,7 @@ pub fn is_ultra_hdr_jpeg_file(path: &std::path::Path) -> bool {
 
 /// Extract XMP metadata string from JPEG data.
 ///
-/// Searches for XMP segment (APP1) starting with "http://ns.adobe.com/xap/1.0/\0".
+/// Searches for XMP segment (APP1) starting with "<http://ns.adobe.com/xap/1.0/\0>".
 ///
 /// # Returns
 /// - `Some(String)`: XMP metadata content
@@ -549,52 +560,62 @@ pub fn extract_xmp_from_jpeg_data(data: &[u8]) -> Option<String> {
     }
 
     let mut pos = 2;
-    while pos + 4 < data.len() {
-        if data[pos] != 0xFF {
-            return None;
-        }
-        let marker = data[pos + 1];
-        if marker == 0xFF {
+    while pos + 1 < data.len() {
+        // Skip padding
+        while pos + 1 < data.len() && data[pos] == 0xFF && data[pos + 1] == 0xFF {
             pos += 1;
+        }
+
+        if pos + 1 >= data.len() || data[pos] != 0xFF {
+            break;
+        }
+
+        let marker = data[pos + 1];
+        pos += 2;
+
+        if marker == 0xDA || marker == 0xD9 {
+            break;
+        }
+
+        if marker == 0x01 || (0xD0..=0xD8).contains(&marker) {
             continue;
         }
-        if marker == 0xD8 || marker == 0xD9 {
-            pos += 2;
-            continue;
+
+        if pos + 2 > data.len() {
+            break;
         }
-        if pos + 4 > data.len() {
-            warn!("Truncated JPEG segment at position {}", pos);
-            return None;
+        let seg_len = u16::from_be_bytes([data[pos], data[pos + 1]]) as usize;
+        if seg_len < 2 || pos + seg_len > data.len() {
+            break;
         }
-        let seg_len = u16::from_be_bytes([data[pos + 2], data[pos + 3]]) as usize;
-        if seg_len < 2 || pos + 2 + seg_len > data.len() {
-            warn!("Invalid segment length {} at position {}", seg_len, pos);
-            return None;
-        }
-        let payload = &data[pos + 4..pos + 2 + seg_len];
+
+        let payload = &data[pos + 2..pos + seg_len];
 
         // APP1 (0xE1): XMP
-        if marker == 0xE1 && payload.starts_with(b"http://ns.adobe.com/xap/1.0/\0") {
+        if marker == 0xE1
+            && payload.starts_with(b"http://ns.adobe.com/xap/1.0/\0")
+            && payload.len() > 29
+        {
             let xmp = String::from_utf8_lossy(&payload[29..]).to_string();
             info!("Extracted XMP from JPEG: {} bytes", xmp.len());
             return Some(xmp);
         }
 
-        pos += 2 + seg_len;
+        pos += seg_len;
     }
 
     None
 }
 
-/// Extract gainmap image from UltraHDR JPEG.
+/// Extract gainmap image from `UltraHDR` JPEG.
 ///
-/// Returns (base_image, gainmap_image) as DynamicImages.
+/// Returns (`base_image`, `gainmap_image`) as `DynamicImages`.
 /// The gainmap is extracted from the MPF (Multi-Picture Format) segment.
 ///
 /// # Errors
 /// Returns an error if:
 /// - The JPEG data is invalid or corrupted
-/// - No MPF segment is found (not a valid UltraHDR JPEG)
+/// - No MPF segment is found (not a valid `UltraHDR` JPEG)
 /// - The extracted gainmap has invalid dimensions
 /// - Base image decoding fails
 /// - MPF parsing fails
@@ -616,7 +637,7 @@ pub fn extract_gainmap_from_jpeg(data: &[u8]) -> Result<(DynamicImage, DynamicIm
     // Decode base image with detailed error reporting
     let base_image = ImageReader::new(Cursor::new(data))
         .with_guessed_format()
-        .map_err(|e| format!("Failed to create JPEG reader: {}", e))?
+        .map_err(|e| format!("Failed to create JPEG reader: {e}"))?
         .decode()
         .map_err(|e| {
             format!(
@@ -649,7 +670,7 @@ pub fn extract_gainmap_from_jpeg(data: &[u8]) -> Result<(DynamicImage, DynamicIm
     // Decode gainmap image
     let gainmap_image = ImageReader::new(Cursor::new(&gainmap_data))
         .with_guessed_format()
-        .map_err(|e| format!("Failed to create gainmap JPEG reader: {}", e))?
+        .map_err(|e| format!("Failed to create gainmap JPEG reader: {e}"))?
         .decode()
         .map_err(|e| {
             format!(
@@ -670,8 +691,8 @@ pub fn extract_gainmap_from_jpeg(data: &[u8]) -> Result<(DynamicImage, DynamicIm
     }
 
     // Validate gainmap aspect ratio matches base image
-    let base_aspect = base_dims.0 as f64 / base_dims.1 as f64;
-    let gainmap_aspect = gainmap_dims.0 as f64 / gainmap_dims.1 as f64;
+    let base_aspect = f64::from(base_dims.0) / f64::from(base_dims.1);
+    let gainmap_aspect = f64::from(gainmap_dims.0) / f64::from(gainmap_dims.1);
     let aspect_diff = (base_aspect - gainmap_aspect).abs();
     if aspect_diff > 0.01 {
         warn!(
@@ -715,63 +736,52 @@ mod mpf {
 fn find_mpf_segment(data: &[u8]) -> Result<Vec<u8>, String> {
     let mut pos = 2;
 
-    while pos + 4 < data.len() {
-        if data[pos] != 0xFF {
+    while pos + 1 < data.len() {
+        // Skip padding
+        while pos + 1 < data.len() && data[pos] == 0xFF && data[pos + 1] == 0xFF {
+            pos += 1;
+        }
+
+        if pos + 1 >= data.len() || data[pos] != 0xFF {
             return Err(format!(
                 "Invalid JPEG structure: expected marker 0xFF at position {}, found 0x{:02X}",
-                pos, data[pos]
+                pos,
+                data.get(pos).copied().unwrap_or(0)
             ));
         }
 
         let marker = data[pos + 1];
+        pos += 2;
 
-        // Skip fill bytes
-        if marker == 0xFF {
-            pos += 1;
+        if marker == 0xDA || marker == 0xD9 {
+            break;
+        }
+
+        if marker == 0x01 || (0xD0..=0xD8).contains(&marker) {
             continue;
         }
 
-        // SOI/EOI have no length field
-        if marker == 0xD8 || marker == 0xD9 {
-            pos += 2;
-            continue;
+        if pos + 2 > data.len() {
+            return Err(format!("Truncated segment at position {pos}"));
         }
 
-        if pos + 4 > data.len() {
+        let seg_len = u16::from_be_bytes([data[pos], data[pos + 1]]) as usize;
+        if seg_len < 2 || pos + seg_len > data.len() {
             return Err(format!(
-                "Truncated JPEG segment at position {}: insufficient data for length field",
-                pos
+                "Invalid segment length {seg_len} at position {pos} (marker 0x{marker:02X})"
             ));
         }
 
-        let seg_len = u16::from_be_bytes([data[pos + 2], data[pos + 3]]) as usize;
-
-        if seg_len < 2 {
-            return Err(format!(
-                "Invalid segment length {} at position {} (marker 0x{:02X})",
-                seg_len, pos, marker
-            ));
-        }
-
-        if pos + 2 + seg_len > data.len() {
-            return Err(format!(
-                "Truncated segment at position {}: declared length {} exceeds file size {}",
-                pos,
-                seg_len,
-                data.len()
-            ));
-        }
-
-        let payload = &data[pos + 4..pos + 2 + seg_len];
+        let payload = &data[pos + 2..pos + seg_len];
 
         // APP2 (0xE2): Check for MPF
-        if marker == 0xE2 && payload.starts_with(mpf::MPF_IDENTIFIER) {
+        if marker == 0xE2 && payload.starts_with(mpf::MPF_IDENTIFIER) && payload.len() > 4 {
             // Return MPF data after the 4-byte identifier
             let mpf_data = payload[4..].to_vec();
             return Ok(mpf_data);
         }
 
-        pos += 2 + seg_len;
+        pos += seg_len;
     }
 
     Err("No MPF (Multi-Picture Format) segment found in APP2 markers".to_string())
@@ -843,8 +853,18 @@ fn extract_gainmap_from_mpf(jpeg_data: &[u8], mpf_data: &[u8]) -> Result<Vec<u8>
 
         match tag {
             mpf::TAG_NUMBER_OF_IMAGES => {
-                num_images = Some(num_components); // For LONG type, value is in num_components
-                info!("NumberOfImages: {}", num_images.unwrap());
+                // For NumberOfImages (tag 0xB001), it's a LONG (type 4, size 4).
+                // If count is 1, the value is in value_offset.
+                if num_components == 1 {
+                    num_images = Some(value_offset);
+                    info!("NumberOfImages: {}", value_offset);
+                } else {
+                    warn!(
+                        "NumberOfImages has unexpected component count: {}",
+                        num_components
+                    );
+                    num_images = Some(num_components); // Fallback
+                }
             }
             mpf::TAG_MP_ENTRY => {
                 mp_entry_offset = Some(value_offset);
@@ -866,8 +886,7 @@ fn extract_gainmap_from_mpf(jpeg_data: &[u8], mpf_data: &[u8]) -> Result<Vec<u8>
 
     if num_images < 2 {
         return Err(format!(
-            "MPF contains only {} image(s). UltraHDR requires at least 2 images (base + gainmap).",
-            num_images
+            "MPF contains only {num_images} image(s). UltraHDR requires at least 2 images (base + gainmap)."
         ));
     }
 
@@ -955,46 +974,47 @@ fn extract_gainmap_from_mpf(jpeg_data: &[u8], mpf_data: &[u8]) -> Result<Vec<u8>
 fn find_mpf_base_position(jpeg_data: &[u8]) -> Result<usize, String> {
     let mut pos = 2;
 
-    while pos + 4 < jpeg_data.len() {
-        if jpeg_data[pos] != 0xFF {
-            return Err(format!("Invalid JPEG structure at position {}", pos));
+    while pos + 1 < jpeg_data.len() {
+        // Skip padding
+        while pos + 1 < jpeg_data.len() && jpeg_data[pos] == 0xFF && jpeg_data[pos + 1] == 0xFF {
+            pos += 1;
+        }
+
+        if pos + 1 >= jpeg_data.len() || jpeg_data[pos] != 0xFF {
+            break;
         }
 
         let marker = jpeg_data[pos + 1];
+        pos += 2;
 
-        if marker == 0xFF {
-            pos += 1;
+        if marker == 0xDA || marker == 0xD9 {
+            break;
+        }
+
+        if marker == 0x01 || (0xD0..=0xD8).contains(&marker) {
             continue;
         }
 
-        if marker == 0xD8 || marker == 0xD9 {
-            pos += 2;
-            continue;
+        if pos + 2 > jpeg_data.len() {
+            break;
         }
 
-        if pos + 4 > jpeg_data.len() {
-            return Err(format!("Truncated segment at position {}", pos));
+        let seg_len = u16::from_be_bytes([jpeg_data[pos], jpeg_data[pos + 1]]) as usize;
+        if seg_len < 2 || pos + seg_len > jpeg_data.len() {
+            break;
         }
 
-        let seg_len = u16::from_be_bytes([jpeg_data[pos + 2], jpeg_data[pos + 3]]) as usize;
-
-        if seg_len < 2 {
-            return Err(format!("Invalid segment length at position {}", pos));
-        }
-
-        if pos + 2 + seg_len > jpeg_data.len() {
-            return Err(format!("Truncated segment at position {}", pos));
-        }
-
-        let payload = &jpeg_data[pos + 4..pos + 2 + seg_len];
+        let payload = &jpeg_data[pos + 2..pos + seg_len];
 
         // APP2 (0xE2): Check for MPF
         if marker == 0xE2 && payload.starts_with(mpf::MPF_IDENTIFIER) {
-            // MPF base is the position after "MPF\0" (4 bytes)
-            return Ok(pos + 4 + 4); // marker + length + "MPF\0"
+            // MPF base is the position AFTER the TIFF header (which starts after "MPF\0")
+            // Actually, offsets in MPF are relative to the TIFF header (Endian marker 'II' or 'MM')
+            // The TIFF header starts 4 bytes into the APP2 payload (after "MPF\0")
+            return Ok(pos + 2 + 4);
         }
 
-        pos += 2 + seg_len;
+        pos += seg_len;
     }
 
     Err("MPF segment not found".to_string())
@@ -1186,6 +1206,14 @@ mod tests {
         jpeg_with_gainmap.extend_from_slice(&xmp_len.to_be_bytes());
         jpeg_with_gainmap.extend_from_slice(xmp_header);
         jpeg_with_gainmap.extend_from_slice(xmp_content);
+
+        // Add dummy MPF segment in APP2
+        jpeg_with_gainmap.extend_from_slice(&[
+            0xFF, 0xE2, // APP2
+            0x00, 0x06, // Length (2 + bytes("MPF\0")) = 6
+        ]);
+        jpeg_with_gainmap.extend_from_slice(mpf::MPF_IDENTIFIER);
+
         jpeg_with_gainmap.extend_from_slice(&[0xFF, 0xD9]); // EOI
 
         assert!(is_ultra_hdr_jpeg(&jpeg_with_gainmap));
@@ -1263,8 +1291,8 @@ mod tests {
         let png = HdrIntermediateFormat::Png16;
 
         // Test Debug trait
-        let exr_debug = format!("{:?}", exr);
-        let png_debug = format!("{:?}", png);
+        let exr_debug = format!("{exr:?}");
+        let png_debug = format!("{png:?}");
 
         assert!(exr_debug.contains("OpenExr32"));
         assert!(png_debug.contains("Png16"));
@@ -1282,5 +1310,44 @@ mod tests {
             HdrIntermediateFormat::OpenExr32,
             HdrIntermediateFormat::Png16
         );
+    }
+
+    #[test]
+    fn test_is_ultra_hdr_jpeg_with_padding_and_com() {
+        let xmp_header = b"http://ns.adobe.com/xap/1.0/\0";
+        let xmp_content = b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF><rdf:Description hdrgm:GainMapMax=\"1.0\" xmlns:hdrgm=\"http://ns.adobe.com/hdr-gain-map/1.0/\"/></rdf:RDF></x:xmpmeta>";
+
+        let mut data = vec![
+            0xFF, 0xD8, // SOI
+            0xFF, 0xFF, 0xFF, 0xE1, // APP1 with padding
+        ];
+        let xmp_len = (xmp_header.len() + xmp_content.len() + 2) as u16;
+        data.extend_from_slice(&xmp_len.to_be_bytes());
+        data.extend_from_slice(xmp_header);
+        data.extend_from_slice(xmp_content);
+
+        // Add a COM marker (0xFE) which caused failure before
+        data.extend_from_slice(&[0xFF, 0xFE, 0x00, 0x05, b't', b'a', b'g']);
+
+        // Add MPF
+        data.extend_from_slice(&[0xFF, 0xE2, 0x00, 0x0C]);
+        data.extend_from_slice(mpf::MPF_IDENTIFIER);
+        data.extend_from_slice(b"dummy");
+
+        data.extend_from_slice(&[0xFF, 0xD9]); // EOI
+
+        assert!(is_ultra_hdr_jpeg(&data));
+    }
+
+    #[test]
+    fn test_extract_xmp_stops_at_sos() {
+        let mut data = vec![0xFF, 0xD8];
+        // SOS before APP1
+        data.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3F, 0x00]);
+        // Compressed data (would look like markers if not skipped)
+        data.extend_from_slice(&[0xFF, 0xE1, 0x00, 0x10]);
+
+        let result = extract_xmp_from_jpeg_data(&data);
+        assert!(result.is_none()); // Should stop at SOS and not find the "fake" APP1 in scan data
     }
 }

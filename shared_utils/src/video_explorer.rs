@@ -9,6 +9,7 @@
 //! only need to call this module's helper functions, avoiding redundant implementations.
 
 use anyhow::{bail, Context, Result};
+use std::fmt::Write as _;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -908,7 +909,7 @@ impl VideoExplorer {
         })
     }
 
-    /// Create a new VideoExplorer.
+    /// Create a new `VideoExplorer`.
     ///
     /// # Errors
     /// Returns an error if initialization fails.
@@ -934,7 +935,7 @@ impl VideoExplorer {
         )
     }
 
-    /// Create a new VideoExplorer with GPU support.
+    /// Create a new `VideoExplorer` with GPU support.
     ///
     /// # Errors
     /// Returns an error if initialization fails.
@@ -961,7 +962,7 @@ impl VideoExplorer {
         )
     }
 
-    /// Create a new VideoExplorer with a specific preset.
+    /// Create a new `VideoExplorer` with a specific preset.
     ///
     /// # Errors
     /// Returns an error if initialization fails.
@@ -1129,7 +1130,7 @@ impl VideoExplorer {
 
         let mut quality_str = format!("SSIM: {:.4}", quality.0.unwrap_or(0.0));
         if let Some(vmaf) = quality.2 {
-            quality_str.push_str(&format!(", MS-SSIM: {vmaf:.2}"));
+            let _ = write!(quality_str, ", MS-SSIM: {vmaf:.2}");
         }
         log.push(format!(
             "   CRF {}: {} bytes ({:+.1}%), {}",

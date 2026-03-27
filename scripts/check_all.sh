@@ -118,6 +118,22 @@ has_rust_component() {
 	fi
 }
 
+advisory_db_dir() {
+	echo "${CARGO_HOME:-$HOME/.cargo}/advisory-db"
+}
+
+advisory_db_writable() {
+	local dir
+	dir=$(advisory_db_dir)
+	[[ -d "$dir" && -w "$dir" ]]
+}
+
+advisory_db_is_git_repo() {
+	local dir
+	dir=$(advisory_db_dir)
+	[[ -d "$dir/.git" ]]
+}
+
 get_timestamp_ms() {
 	# macOS/BSD date doesn't support %N, but perl is available.
 	if perl -e 'use Time::HiRes qw(gettimeofday);' 2>/dev/null; then

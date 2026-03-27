@@ -299,7 +299,7 @@ pub mod webp {
                 let vp8_data = &data[payload_start..payload_end];
                 if vp8_data.len() >= 10 && vp8_data[3..6] == [0x9D, 0x01, 0x2A] {
                     let y_ac_qi = vp8_data[10] & 0x7F;
-                    let quality = ((127 - y_ac_qi) as u32 * 100 / 127).min(100) as u8;
+                    let quality = (u32::from(127 - y_ac_qi) * 100 / 127).min(100) as u8;
                     return Ok(quality);
                 }
             }
@@ -535,7 +535,7 @@ pub mod avif {
     /// # Errors
     /// Returns an error if the format cannot be identified or parsed.
     pub fn is_lossless_from_bytes(data: &[u8], path: &Path) -> Result<bool> {
-        if let Some(av1c_data) = find_box_data_recursive(data, b"av1C") {
+        if let Some(av1c_data) = find_box_data_recursive(data, *b"av1C") {
             if av1c_data.len() >= 4 {
                 let byte1 = av1c_data[1];
                 let byte2 = av1c_data[2];
@@ -560,7 +560,7 @@ pub mod avif {
                 }
 
                 // Dimension 2: colr Identity matrix (MC=0)
-                if let Some(colr_data) = find_box_data_recursive(data, b"colr") {
+                if let Some(colr_data) = find_box_data_recursive(data, *b"colr") {
                     if colr_data.len() >= 11 && &colr_data[0..4] == b"nclx" {
                         let matrix_coefficients = u16::from_be_bytes([colr_data[8], colr_data[9]]);
                         if matrix_coefficients == 0 {
@@ -581,7 +581,7 @@ pub mod avif {
 
                 // Dimension 5: pixi box
                 if is_444 {
-                    if let Some(pixi_data) = find_box_data_recursive(data, b"pixi") {
+                    if let Some(pixi_data) = find_box_data_recursive(data, *b"pixi") {
                         if !pixi_data.is_empty() {
                             let num_ch = pixi_data[0] as usize;
                             if num_ch > 0 && pixi_data.len() > num_ch {
@@ -645,7 +645,7 @@ pub mod jxl {
         let is_naked = data[0] == 0xFF && data[1] == 0x0A;
 
         // Dimension 1: jbrd = JPEG bitstream reconstruction = lossless
-        if !is_naked && find_any_box_recursive(data, b"jbrd") {
+        if !is_naked && find_any_box_recursive(data, *b"jbrd") {
             return Ok(true);
         }
 
@@ -653,8 +653,8 @@ pub mod jxl {
         let codestream: Option<&[u8]> = if is_naked {
             Some(data)
         } else {
-            find_box_data_recursive(data, b"jxlc")
-                .or_else(|| find_box_data_recursive(data, b"jxlp"))
+            find_box_data_recursive(data, *b"jxlc")
+                .or_else(|| find_box_data_recursive(data, *b"jxlp"))
         };
 
         if let Some(cs) = codestream {

@@ -173,7 +173,7 @@ fn set_time_attr(path: &Path, time: std::time::SystemTime, attr: u32) -> io::Res
 /// complex binary plist encoding and may not trigger Spotlight index updates correctly.
 ///
 /// # Errors
-/// Returns an `io::Result` if AppleScript execution fails.
+/// Returns an `io::Result` if `AppleScript` execution fails.
 pub fn append_mfb_branding(path: &Path) -> io::Result<()> {
     use std::process::Command;
 

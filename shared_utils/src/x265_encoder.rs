@@ -16,6 +16,7 @@
 //! - Strict CPU encoding path (no GPU fallback)
 
 use anyhow::{bail, Context, Result};
+use std::fmt::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use tracing::{debug, error, warn};
@@ -284,7 +285,7 @@ fn encode_to_hevc(
                     }
                     Err(err) => {
                         warn!("Failed to read ffmpeg decode stderr: {}", err);
-                        output.push_str(&format!("[stderr read error: {err}]\n"));
+                        let _ = writeln!(output, "[stderr read error: {err}]");
                         break;
                     }
                 }
@@ -309,7 +310,7 @@ fn encode_to_hevc(
                     }
                     Err(err) => {
                         warn!("Failed to read x265 stderr: {}", err);
-                        output.push_str(&format!("[stderr read error: {err}]\n"));
+                        let _ = writeln!(output, "[stderr read error: {err}]");
                         break;
                     }
                 }
