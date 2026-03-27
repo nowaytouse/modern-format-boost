@@ -5,7 +5,10 @@ All notable changes to this project will be documented in this file.
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
 
-## [Unreleased] - 2026-03-28
+## [0.11.0] - 2026-03-28
+
+### 🌟 Unified Production Baseline & HDR Synthesis
+This release marks a major milestone, consolidating the intensive `0.10.x` hardening cycle into a Cinema-Grade production baseline with advanced HDR processing.
 
 ### 🎨 Premium UI/UX & Terminal Experience
 Significant overhaul of the Python automation layer to provide a high-end, professional terminal experience.
@@ -21,6 +24,8 @@ Significant overhaul of the Python automation layer to provide a high-end, profe
 ### 🛡️ Infrastructure & Reliability Hardening
 - **Watch Mode Optimization**: Switched to `on_closed` and `on_moved` Watchdog events to ensure large media files are fully written before processing triggers, preventing infinite debounce loops.
 - **Robustness Fixes**: 
+  - **Zero-Warning Production Workspace**: Achieved a 100% clean Clippy baseline across both `main` and `nightly` branches.
+  - **Thread-Safe Processing**: Fixed race conditions in Watch mode using `stats_lock` and persistent debouncing in `drag_and_drop_processor.py`.
   - Resolved `IndexError` in `check_all.py` during system tool output parsing.
   - Hardened `cache_cleaner.py` with stricter directory-name validation for safe log purging.
   - Refactored `count_files` locking granularity in `drag_and_drop_processor.py` to prevent blocking the UI/Watcher during deep directory scans.
@@ -29,7 +34,6 @@ Significant overhaul of the Python automation layer to provide a high-end, profe
   - **Semantic Accuracy**: Corrected summary table headers in quality scans to accurately reflect data categories (`Status`, `Description`, `Value`).
 - **Streamlined Workflow**: Removed the redundant Python-side SQLite `TaskTracker` in favor of the Rust tools' native, high-performance `--resume` capabilities.
 - **Session Isolation**: Implemented unique session identifiers for all log files (`MFB_[Project]_[Timestamp].log`), preventing overlaps when running multiple concurrent processes.
-- **Improved Code Safety**: Fixed threading race conditions in Watch mode using `stats_lock` and debouncing.
 
 ### 🐍 Script Infrastructure: Python-First Architecture
 Major refactoring of the automation layer, migrating core scripts from Bash to Python for improved maintainability and cross-platform compatibility.
@@ -43,9 +47,6 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 - **macOS App Wrapper Updated**:
   - `Modern Format Boost.app/Contents/MacOS/Modern Format Boost` now invokes `drag_and_drop_processor.py`.
   - Added virtual environment auto-activation (`.venv/bin/activate`) for seamless Python dependency management.
-- **Documentation Cleanup**:
-  - Removed bilingual (EN/ZH) README sections; now links to separate localized README files in `docs/`.
-  - Reduced README.md size by ~80% for better maintainability.
 - **Build System Refinements** (`smart_build.sh`):
   - Fixed workspace target path resolution for unified `target/release/` directory.
   - Added project deduplication to avoid double-building when flags overlap.
@@ -75,68 +76,27 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 - **`repair_apple_photos.py`**:
   - Fixed undefined `NC` variable reference — corrected to `RESET`.
 
-### 🌈 UltraHDR JPEG Handling
-- Detected UltraHDR JPEG gainmap files are now skipped for JXL encoding and the original file is copied as-is, avoiding silent quality loss due to `cjxl` gainmap incompatibility. Applies to both `img-hevc` and `img-av1`.
+### ⚡ Performance & Logic Refinements
+- **Optimized String Building**: Replaced redundant `push_str(&format!(...))` allocations with the more efficient `write!` macro in critical conversion paths.
+- **Memory & Iteration Density**: Optimized thread handle management in GPU acceleration by eliminating intermediate collections.
+- **Improved Formatting**: Standardized terminal path output using `.display()` and enhanced progress bar readability with named formatting arguments.
+- **Search Performance**: Phase 4 Sprint Logic now enables aggressive acceleration (max step **1.28**) for rapid convergence on complex files.
+- **Extreme Mode (Ultimate Mode)**: Adjusted the smart deceleration trigger to **0.5x** in Ultimate Mode, allowing the search to push deeper into the quality ceiling.
 
-### 📝 Notes
-- All Python scripts maintain strict behavioral parity with their Bash predecessors.
-- Terminal output, menu structures, and error handling remain identical for user familiarity.
-- The `scripts/old/` directory preserves original Bash implementations for reference during transition.
-- `smart_build.sh` is retained as the sole `.sh` script (merged `common.sh` dependencies inline) to serve CI/CD and workflow build needs.
-
----
-
-## [0.11.0] - 2026-03-27
-
-### 🌟 Unified Production Baseline & HDR Synthesis
-This release marks a major milestone, consolidating the intensive `0.10.x` hardening cycle into a Cinema-Grade production baseline with advanced HDR processing.
-
-- **🌈 High-Fidelity HDR Synthesis (HEIC Gainmap)**: Professional-grade metadata-aware HDR pipeline.
-  - **32-bit Linear processing**: Synthesizes intensities using log2-based gain application, preserved via **OpenEXR (.exr)** intermediate files.
-  - **Color Space Awareness**: Automatically detects **Display P3** vs. **sRGB** via binary `nclx`/`colr` box parsing and applies conditional matrix transformations.
-  - **Precision Loop**: Refactored the synthesis loop to use typed buffers (16-bit/8-bit) directly, eliminating truncation and performance-heavy fallback branches.
-- **🌈 UltraHDR JPEG Full Implementation**:
-  - **Complete MPF (Multi-Picture Format) Parser**: Implemented full MPF specification parsing for UltraHDR JPEG gainmap extraction.
-  - **Enhanced Extraction**: Support for both big-endian (MM) and little-endia++++n (II) byte order, IFD entry parsing, and MP Entry array processing.
-  - **Gainmap Validation**: Verifies JPEG SOI (FFD8), length, position, and aspect ratio.
-
-### 📍 Depth Channel Extraction (HEIC) - NEW
-Adds depth map preservation for HEIC files with auxiliary depth images.
-
-- **Enhanced HEIC Depth Support**:
-  - Added explicit support for **Google** depth maps in HEIC auxiliary images.
-  - Improved robust matching for **Samsung** and **ISO** depth types using case-insensitive string scanning.
-  - Extracts depth maps from HEIC using `libheif-rs` and normalizes to 16-bit grayscale.
-
-### ⚡ Search Performance Optimization
-- **Phase 4 Sprint Logic**: Aggressive acceleration (max step **1.28**) enabling rapid convergence on complex files. Smart Sprint logic doubles step size every 2 consecutive wins.
-- **Refined Extreme Mode (Ultimate Mode) Logic**:
-  - **Ultra-Conservative Deceleration**: Adjusted the smart deceleration trigger to **0.5x** in Ultimate Mode, allowing the search to push deeper into the quality ceiling.
-  - **Integer Milestone Logs**: Added terminal output for CRF integer boundary crossings (e.g., `💠 Entering CRF 16.x zone`) for better visual progress tracking.
+### 🌈 HDR & Advanced Formats
+- **🌈 High-Fidelity HDR Synthesis (HEIC Gainmap)**: Professional-grade metadata-aware HDR pipeline with 32-bit linear processing via **OpenEXR (.exr)**.
+- **🌈 UltraHDR JPEG Handling**: Detected UltraHDR JPEG gainmap files are now skipped or copied as-is to avoid silent quality loss.
+- **📍 Depth Channel Extraction (HEIC)**: Adds depth map preservation for HEIC files with auxiliary depth images, including Google, Samsung, and ISO types.
 
 ### 🛡️ Metadata & Diagnostic Hardening
-- **Metadata Protection**:
-  - **JXL ICC Fallback**: Added a post-conversion verification step (`verify_jxl_has_icc`) to ensure JXL outputs always contain an ICC profile.
-  - **Authoritative Source Priority**: Implemented strict hierarchical extraction (ICC binary > CICP/nclx > EXIF).
-  - **Video Metadata Protection**: Confirmed explicit forwarding of VUI parameters (primaries, trc, space) and HDR10+ / Dolby Vision RPU metadata.
-- **Unified Diagnostic Hardening**: System-wide transition to "No-Swallowed-Errors" policy, introducing **☢️** (internal bug) and **⛔️** (tool failure) indicators.
-- **Logging & Terminal Hygiene**:
-  - **Structured Heartbeat**: Moved periodic heartbeat reports (💓) from the terminal to structured file logs (`tracing::info!`), reducing terminal noise.
-  - **Search Visibility**: Promoted Phase 1/2 boundary-finding logs to standard output.
+- **Metadata Protection**: JXL ICC Fallback and authoritative source priority implementation.
+- **Video Metadata Protection**: Confirmed explicit forwarding of VUI parameters and HDR10+ / Dolby Vision RPU metadata.
+- **Unified Diagnostic Hardening**: System-wide transition to "No-Swallowed-Errors" policy (☢️/⛔️ indicators).
 
 ### 📈 Professional Quality & Automation
-- **Zero-Warning Production Workspace**:
-  - Achieved a **Zero-Warning** state across the entire workspace (Clippy, Fmt, and Geiger verified) on both `main` and `nightly` branches.
-  - Resolved `needless_lifetimes`, `implicit_hasher`, `needless_collect`, and `format_push_string` clippy warnings.
-  - Synchronized technical quality improvements between branches while maintaining version-specific dependency strategies.
-- **Performance & Logic Refinements**:
-  - **Optimized String Building**: Replaced redundant `push_str(&format!(...))` allocations with the more efficient `write!` macro in critical conversion paths.
-  - **Memory & Iteration Density**: Optimized thread handle management in GPU acceleration by eliminating intermediate collections.
-  - **Improved Formatting**: Standardized terminal path output using `.display()` and enhanced progress bar readability with named formatting arguments.
-- **Infrastructure Fortification**:
-  - Professional-grade quality scanner (`check_all.py`) with parallel execution.
-  - CI/CD Pipeline Modernization: Migrated GitHub Actions to `dtolnay/rust-toolchain@stable`.
-  - Proactive Housekeeping: Integrated `kondo` into build pipelines for surgical repository cleanup.
+- Professional-grade quality scanner (`check_all.py`) with parallel execution.
+- CI/CD Pipeline Modernization: Migrated GitHub Actions to `dtolnay/rust-toolchain@stable`.
+- Proactive Housekeeping: Integrated `kondo` into build pipelines for surgical repository cleanup.
 
 ### 📦 Dependency Updates
 - **New**: `jpegxl-rs = "0.12"` with `vendored` feature.
