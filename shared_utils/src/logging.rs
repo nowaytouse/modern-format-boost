@@ -435,7 +435,7 @@ pub fn init_logging(program_name: &str, config: LogConfig) -> Result<()> {
         eprintln!("⚠️ [Logging] log level was already initialized earlier; keeping previous level");
     }
     std::fs::create_dir_all(&config.log_dir)
-        .with_context(|| format!("Failed to create log directory: {:?}", config.log_dir))?;
+        .with_context(|| format!("Failed to create log directory: {}", config.log_dir.display()))?;
 
     // Timestamp in filename so each run gets a unique file in system/temp dir (no overwrite).
     let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();

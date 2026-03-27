@@ -30,7 +30,9 @@ pub const IMAGE_EXTENSIONS_FOR_CONVERT: &[&str] = &[
     "bmp", "ico", "svg", "jp2", "j2k",
 ];
 
-/// Video extensions for conversion input. **Do not exclude mov/mp4** by extension:
+/// Video extensions for conversion input.
+///
+/// **Do not exclude mov/mp4** by extension:
 /// .mov can contain `ProRes` (must convert) or HEVC (skip by codec); .mp4 can contain H.264 or HEVC.
 /// Skip vs convert is decided by **codec detection** (e.g. `should_skip_video_codec`), not by extension.
 pub const SUPPORTED_VIDEO_EXTENSIONS: &[&str] = &[

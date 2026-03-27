@@ -359,9 +359,11 @@ pub fn save_directory_timestamps(
     Ok(saved)
 }
 
-pub fn restore_directory_timestamps(
-    saved: &std::collections::HashMap<std::path::PathBuf, (filetime::FileTime, filetime::FileTime)>,
-) {
+pub fn restore_directory_timestamps<S>(
+    saved: &std::collections::HashMap<std::path::PathBuf, (filetime::FileTime, filetime::FileTime), S>,
+) where
+    S: std::hash::BuildHasher,
+{
     let mut failed_count = 0;
     let mut total_count = 0;
 
@@ -386,11 +388,13 @@ pub fn restore_directory_timestamps(
     }
 }
 
-pub fn apply_saved_timestamps_to_dst(
-    saved: &std::collections::HashMap<std::path::PathBuf, (filetime::FileTime, filetime::FileTime)>,
+pub fn apply_saved_timestamps_to_dst<S>(
+    saved: &std::collections::HashMap<std::path::PathBuf, (filetime::FileTime, filetime::FileTime), S>,
     src_root: &Path,
     dst_root: &Path,
-) {
+) where
+    S: std::hash::BuildHasher,
+{
     let mut failed_count = 0;
     let mut total_count = 0;
 
@@ -473,13 +477,17 @@ pub fn restore_timestamps_from_source_to_output(src_dir: &Path, dst_dir: &Path) 
     Ok(())
 }
 
-fn collect_dir_timestamps(
+fn collect_dir_timestamps<S>(
     dir: &Path,
     map: &mut std::collections::HashMap<
         std::path::PathBuf,
         (filetime::FileTime, filetime::FileTime),
+        S,
     >,
-) -> io::Result<()> {
+) -> io::Result<()>
+where
+    S: std::hash::BuildHasher,
+{
     let entries = std::fs::read_dir(dir)?;
     for entry in entries {
         let entry = entry?;
@@ -495,10 +503,13 @@ fn collect_dir_timestamps(
     Ok(())
 }
 
-fn collect_dir_metadata(
+fn collect_dir_metadata<S>(
     dir: &Path,
-    map: &mut std::collections::HashMap<std::path::PathBuf, std::fs::Metadata>,
-) -> io::Result<()> {
+    map: &mut std::collections::HashMap<std::path::PathBuf, std::fs::Metadata, S>,
+) -> io::Result<()>
+where
+    S: std::hash::BuildHasher,
+{
     let entries = std::fs::read_dir(dir)?;
     for entry in entries {
         let entry = entry?;

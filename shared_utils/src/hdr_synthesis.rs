@@ -469,35 +469,55 @@ fn parse_gainmap_from_xmp(xmp_str: &str) -> GainMapParams {
 
                 if name.contains("GainMapMax") {
                     if let Ok(val) = reader.read_text(e.name()) {
-                        let text = reader.decoder().decode(val.as_ref()).unwrap_or_default().to_string();
+                        let text = reader
+                            .decoder()
+                            .decode(val.as_ref())
+                            .unwrap_or_default()
+                            .to_string();
                         if let Ok(f) = text.parse::<f32>() {
                             params.gain_map_max = f;
                         }
                     }
                 } else if name.contains("GainMapMin") {
                     if let Ok(val) = reader.read_text(e.name()) {
-                        let text = reader.decoder().decode(val.as_ref()).unwrap_or_default().to_string();
+                        let text = reader
+                            .decoder()
+                            .decode(val.as_ref())
+                            .unwrap_or_default()
+                            .to_string();
                         if let Ok(f) = text.parse::<f32>() {
                             params.gain_map_min = f;
                         }
                     }
                 } else if name.contains("OffsetSDR") || name.contains("OffsetSdr") {
                     if let Ok(val) = reader.read_text(e.name()) {
-                        let text = reader.decoder().decode(val.as_ref()).unwrap_or_default().to_string();
+                        let text = reader
+                            .decoder()
+                            .decode(val.as_ref())
+                            .unwrap_or_default()
+                            .to_string();
                         if let Ok(f) = text.parse::<f32>() {
                             params.offset_sdr = f;
                         }
                     }
                 } else if name.contains("OffsetHDR") || name.contains("OffsetHdr") {
                     if let Ok(val) = reader.read_text(e.name()) {
-                        let text = reader.decoder().decode(val.as_ref()).unwrap_or_default().to_string();
+                        let text = reader
+                            .decoder()
+                            .decode(val.as_ref())
+                            .unwrap_or_default()
+                            .to_string();
                         if let Ok(f) = text.parse::<f32>() {
                             params.offset_hdr = f;
                         }
                     }
                 } else if name.contains("Gamma") {
                     if let Ok(val) = reader.read_text(e.name()) {
-                        let text = reader.decoder().decode(val.as_ref()).unwrap_or_default().to_string();
+                        let text = reader
+                            .decoder()
+                            .decode(val.as_ref())
+                            .unwrap_or_default()
+                            .to_string();
                         if let Ok(f) = text.parse::<f32>() {
                             params.gamma = f;
                         }
