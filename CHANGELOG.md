@@ -125,15 +125,18 @@ Adds depth map preservation for HEIC files with auxiliary depth images.
   - **Search Visibility**: Promoted Phase 1/2 boundary-finding logs to standard output.
 
 ### 📈 Professional Quality & Automation
-- **Quality Gate**: VMAF-Y ≥ 92.0, PSNR-UV ≥ 34.0, CAMBI ≤ 6.0 thresholds for "Ultimate" mode.
-- **Scanner & Infrastructure**:
-  - **Scanner Fortification**: Professional-grade quality scanner (`check_all.sh`) with parallel execution.
-  - **CI/CD Pipeline Modernization**: Migrated GitHub Actions to `dtolnay/rust-toolchain@stable`.
-  - **Proactive Housekeeping**: Integrated `kondo` into build pipelines for surgical repository cleanup.
-- **Zero-Warning Workspace**:
-  - Achieved a **Zero-Warning** state across the entire workspace (Clippy, Fmt, and Geiger verified).
-  - Resolved `write_with_newline`, `needless_lifetimes`, and `similar_names` clippy warnings.
-  - Modernized code using `Option::is_some_and(…)` and `let-else` syntax.
+- **Zero-Warning Production Workspace**:
+  - Achieved a **Zero-Warning** state across the entire workspace (Clippy, Fmt, and Geiger verified) on both `main` and `nightly` branches.
+  - Resolved `needless_lifetimes`, `implicit_hasher`, `needless_collect`, and `format_push_string` clippy warnings.
+  - Synchronized technical quality improvements between branches while maintaining version-specific dependency strategies.
+- **Performance & Logic Refinements**:
+  - **Optimized String Building**: Replaced redundant `push_str(&format!(...))` allocations with the more efficient `write!` macro in critical conversion paths.
+  - **Memory & Iteration Density**: Optimized thread handle management in GPU acceleration by eliminating intermediate collections.
+  - **Improved Formatting**: Standardized terminal path output using `.display()` and enhanced progress bar readability with named formatting arguments.
+- **Infrastructure Fortification**:
+  - Professional-grade quality scanner (`check_all.py`) with parallel execution.
+  - CI/CD Pipeline Modernization: Migrated GitHub Actions to `dtolnay/rust-toolchain@stable`.
+  - Proactive Housekeeping: Integrated `kondo` into build pipelines for surgical repository cleanup.
 
 ### 📦 Dependency Updates
 - **New**: `jpegxl-rs = "0.12"` with `vendored` feature.
