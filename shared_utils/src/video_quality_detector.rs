@@ -195,8 +195,10 @@ impl CompressionLevel {
     }
 }
 
-/// Analyze video quality (codec type, bpp, content type, compression level, etc.). Routing is
-/// handled by `video_detection` + `quality_matcher` in the main flow; this is for media info only. Consider using a struct (e.g. `VideoQualityInput`) when passing many arguments to avoid parameter order bugs.
+/// Analyze video quality (codec type, bpp, content type, compression level, etc.).
+///
+/// Routing is handled by `video_detection` + `quality_matcher` in the main flow; this is for media info only.
+/// Consider using a struct (e.g. `VideoQualityInput`) when passing many arguments to avoid parameter order bugs.
 ///
 /// # Errors
 /// Returns an error message if analysis fails.
@@ -307,8 +309,9 @@ pub fn analyze_video_quality(
     })
 }
 
-/// Build [`VideoQualityAnalysis`] from [`VideoDetectionResult`] for logging/display. Use when you
-/// already have detection (e.g. before SSIM exploration) and want media info for log file only.
+/// Build [`VideoQualityAnalysis`] from [`VideoDetectionResult`] for logging/display.
+///
+/// Use when you already have detection (e.g. before SSIM exploration) and want media info for log file only.
 /// Analyze video quality based on a previous detection result.
 ///
 /// # Errors

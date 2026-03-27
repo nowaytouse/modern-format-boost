@@ -5,6 +5,7 @@
 use crate::error_handler::ErrorCategory;
 use crate::types::{CrfError, IterationError, SsimError};
 use std::fmt;
+use std::fmt::Write;
 use std::path::PathBuf;
 
 #[derive(Debug)]
@@ -129,14 +130,14 @@ impl AppError {
             Self::FileNotFound { path, operation } => {
                 let mut msg = format!("❌ File not found: {}", path.display());
                 if let Some(op) = operation {
-                    msg.push_str(&format!("\n   Operation: {op}"));
+                    let _ = write!(msg, "\n   Operation: {op}");
                 }
                 msg
             }
             Self::DirectoryNotFound { path, operation } => {
                 let mut msg = format!("❌ Directory not found: {}", path.display());
                 if let Some(op) = operation {
-                    msg.push_str(&format!("\n   Operation: {op}"));
+                    let _ = write!(msg, "\n   Operation: {op}");
                 }
                 msg
             }
@@ -147,7 +148,7 @@ impl AppError {
             } => {
                 let mut msg = format!("❌ Failed to read file {}: {}", path.display(), source);
                 if let Some(op) = operation {
-                    msg.push_str(&format!("\n   Operation: {op}"));
+                    let _ = write!(msg, "\n   Operation: {op}");
                 }
                 msg
             }
@@ -158,7 +159,7 @@ impl AppError {
             } => {
                 let mut msg = format!("❌ Failed to write file {}: {}", path.display(), source);
                 if let Some(op) = operation {
-                    msg.push_str(&format!("\n   Operation: {op}"));
+                    let _ = write!(msg, "\n   Operation: {op}");
                 }
                 msg
             }
@@ -183,13 +184,13 @@ impl AppError {
                     .unwrap_or_default();
                 let mut msg = format!("❌ FFmpeg failed{code_str}: {message}");
                 if let Some(path) = file_path {
-                    msg.push_str(&format!("\n   File: {}", path.display()));
+                    let _ = write!(msg, "\n   File: {}", path.display());
                 }
                 if let Some(cmd) = command {
-                    msg.push_str(&format!("\n   Command: {cmd}"));
+                    let _ = write!(msg, "\n   Command: {cmd}");
                 }
                 if !stderr.is_empty() {
-                    msg.push_str(&format!("\n   Error output: {stderr}"));
+                    let _ = write!(msg, "\n   Error output: {stderr}");
                 }
                 msg
             }
@@ -201,13 +202,13 @@ impl AppError {
             } => {
                 let mut msg = format!("❌ FFprobe failed: {message}");
                 if let Some(path) = file_path {
-                    msg.push_str(&format!("\n   File: {}", path.display()));
+                    let _ = write!(msg, "\n   File: {}", path.display());
                 }
                 if let Some(cmd) = command {
-                    msg.push_str(&format!("\n   Command: {cmd}"));
+                    let _ = write!(msg, "\n   Command: {cmd}");
                 }
                 if !stderr.is_empty() {
-                    msg.push_str(&format!("\n   Error output: {stderr}"));
+                    let _ = write!(msg, "\n   Error output: {stderr}");
                 }
                 msg
             }
@@ -219,7 +220,7 @@ impl AppError {
                     "❌ Tool not found: {tool_name}\n💡 Please ensure {tool_name} is installed and in PATH"
                 );
                 if let Some(op) = operation {
-                    msg.push_str(&format!("\n   Needed for: {op}"));
+                    let _ = write!(msg, "\n   Needed for: {op}");
                 }
                 msg
             }
@@ -233,7 +234,7 @@ impl AppError {
                     "❌ Compression failed: output ({output_size} bytes) >= input ({input_size} bytes), ratio {ratio:.1}%"
                 );
                 if let Some(path) = file_path {
-                    msg.push_str(&format!("\n   File: {}", path.display()));
+                    let _ = write!(msg, "\n   File: {}", path.display());
                 }
                 msg
             }
@@ -246,14 +247,14 @@ impl AppError {
                     "❌ Quality validation failed: expected SSIM >= {expected_ssim:.4}, actual {actual_ssim:.4}"
                 );
                 if let Some(path) = file_path {
-                    msg.push_str(&format!("\n   File: {}", path.display()));
+                    let _ = write!(msg, "\n   File: {}", path.display());
                 }
                 msg
             }
             Self::OutputExists { path, operation } => {
                 let mut msg = format!("⏭️ Output file exists: {}", path.display());
                 if let Some(op) = operation {
-                    msg.push_str(&format!("\n   Operation: {op}"));
+                    let _ = write!(msg, "\n   Operation: {op}");
                 }
                 msg
             }

@@ -1877,12 +1877,14 @@ fn gpu_coarse_search_with_log_impl(
                 (duration * 0.90).max(duration - seg_dur),
             ];
 
-            let select_expr: Vec<String> = positions
-                .iter()
-                .map(|&pos| format!("between(t,{:.1},{:.1})", pos, pos + seg_dur))
-                .collect();
-            let select_filter =
-                format!("select='{}',setpts=N/FRAME_RATE/TB", select_expr.join("+"));
+            let select_filter = format!(
+                "select='{}',setpts=N/FRAME_RATE/TB",
+                positions
+                    .iter()
+                    .map(|&pos| format!("between(t,{:.1},{:.1})", pos, pos + seg_dur))
+                    .collect::<Vec<_>>()
+                    .join("+")
+            );
 
             cmd.arg("-vf").arg(&select_filter);
         }
@@ -2118,7 +2120,7 @@ fn gpu_coarse_search_with_log_impl(
                     (crf, size)
                 })
             })
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>() // We do need to collect here to ensure all threads are SPAWNED before joining
             .into_iter()
             .map(|h| {
                 h.join()
@@ -2139,8 +2141,6 @@ fn gpu_coarse_search_with_log_impl(
         cache.insert(crf, size);
         Ok(size)
     };
-
-    let mut size_history: Vec<(f32, u64)> = Vec::new();
 
     // Reserved for future variance-based early exit; currently unused.
     let _calc_window_variance = |history: &[(f32, u64)], _input_size: u64| -> f64 {
@@ -2196,7 +2196,6 @@ fn gpu_coarse_search_with_log_impl(
         if let Ok(size) = &single_result {
             size_cache.insert(test_crf, *size);
             iterations += 1;
-            size_history.push((test_crf, *size));
             if let Some(cb) = progress_cb {
                 cb(test_crf, *size);
             }
@@ -2217,7 +2216,6 @@ fn gpu_coarse_search_with_log_impl(
             if let Ok(size) = result {
                 size_cache.insert(*crf, *size);
                 iterations += 1;
-                size_history.push((*crf, *size));
                 if let Some(cb) = progress_cb {
                     cb(*crf, *size);
                 }

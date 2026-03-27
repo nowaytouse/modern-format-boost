@@ -5,8 +5,9 @@
 
 use crate::modern_ui::{colors, symbols};
 use std::cell::RefCell;
+use std::fmt::Write;
 use std::fs::{File, OpenOptions};
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Write as _};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -36,7 +37,8 @@ fn report_run_log_io_failure(context: &str, detail: &str) {
     }
 }
 
-/// Format duration as detailed string with progressive spacing strategy
+/// Format duration as detailed string with progressive spacing strategy.
+///
 /// Examples: "01Y   01M   01W   01D   01h 00m00s000ms" or "01M   01W   01D   01h 00m00s000ms" or "01W   01D   01h 00m00s000ms" or "01D   01h 00m00s000ms" or "01h 00m00s000ms" or "00m00s000ms" or "00s000ms"
 #[must_use]
 pub fn format_duration_compact(duration: Duration) -> String {
@@ -306,8 +308,9 @@ pub fn has_log_file() -> bool {
     lock_log_writer().is_some()
 }
 
-/// If no log file is configured, open a default run log under `./logs/`
-/// with a timestamp in the filename so each run gets a unique file
+/// If no log file is configured, open a default run log under `./logs/`.
+///
+/// Timestamped filename ensures each run gets a unique file
 /// (e.g. `./logs/img_hevc_run_2026-02-28_14-30-00.log`). That directory is gitignored.
 /// Call at Run startup so quality and progress are always written without requiring `--log-file`.
 /// Set the default log file for the current process.
@@ -890,15 +893,10 @@ fn format_video_stats_line(
     let vid_msg = if vid_ok > 0 || vid_fail > 0 || vid_skip > 0 {
         let mut v_stat = format!("{}V:{}{}✓", colors::MFB_PURPLE, colors::MFB_GREEN, vid_ok);
         if vid_skip > 0 {
-            v_stat.push_str(&format!(
-                "{}{}{}s",
-                colors::DIM,
-                colors::MFB_YELLOW,
-                vid_skip
-            ));
+            let _ = write!(v_stat, "{}{}{}s", colors::DIM, colors::MFB_YELLOW, vid_skip);
         }
         if vid_fail > 0 {
-            v_stat.push_str(&format!("{}{}{}✗", colors::DIM, colors::MFB_RED, vid_fail));
+            let _ = write!(v_stat, "{}{}{}✗", colors::DIM, colors::MFB_RED, vid_fail);
         }
         v_stat.push_str(colors::RESET);
         v_stat
@@ -972,15 +970,10 @@ fn format_xmp_jxl_images_line(
             images_ok
         );
         if img_skip > 0 {
-            i_stat.push_str(&format!(
-                "{}{}{}s",
-                colors::DIM,
-                colors::MFB_YELLOW,
-                img_skip
-            ));
+            let _ = write!(i_stat, "{}{}{}s", colors::DIM, colors::MFB_YELLOW, img_skip);
         }
         if img_fail > 0 {
-            i_stat.push_str(&format!("{}{}{}✗", colors::DIM, colors::MFB_RED, img_fail));
+            let _ = write!(i_stat, "{}{}{}✗", colors::DIM, colors::MFB_RED, img_fail);
         }
         i_stat.push_str(colors::RESET);
         i_stat
@@ -1068,7 +1061,7 @@ pub fn xmp_merge_finalize() {
                     format!("Videos: {vid_ok} OK")
                 };
                 if vid_skip > 0 {
-                    vid_part.push_str(&format!(" ({vid_skip} skipped)"));
+                    let _ = write!(vid_part, " ({vid_skip} skipped)");
                 }
                 parts.push(vid_part);
             }
@@ -1116,7 +1109,7 @@ pub fn xmp_merge_finalize() {
                 format!("Images: {images_ok} OK")
             };
             if img_skip > 0 {
-                img_part.push_str(&format!(" ({img_skip} skipped)"));
+                let _ = write!(img_part, " ({img_skip} skipped)");
             }
             parts.push(img_part);
         }

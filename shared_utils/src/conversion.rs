@@ -685,8 +685,9 @@ impl Drop for TempOutputGuard {
     }
 }
 
-/// Returns a path for temporary output in the same directory as `output`, so that
-/// `fs::rename(temp, output)` is atomic on the same filesystem. Use with `commit_temp_to_output`.
+/// Returns a path for temporary output in the same directory as `output`.
+///
+/// Ensures `fs::rename(temp, output)` is atomic on the same filesystem. Use with `commit_temp_to_output`.
 /// Uses stem + ".tmp." + extension (e.g. file.mov → file.tmp.mov) so `FFmpeg` and other
 /// tools that infer format from extension still see the correct extension (mov, mp4, mkv, etc.).
 #[must_use]
@@ -1339,25 +1340,25 @@ mod tests {
             .to_string_lossy()
             .to_string();
         assert!(path1.starts_with("/dir/file.tmp."));
-        assert!(path1.ends_with(".mov"));
+        assert!(path1.to_lowercase().ends_with(".mov"));
 
         let path2 = temp_path_for_output(Path::new("out.mp4"))
             .to_string_lossy()
             .to_string();
         assert!(path2.starts_with("out.tmp."));
-        assert!(path2.ends_with(".mp4"));
+        assert!(path2.to_lowercase().ends_with(".mp4"));
 
         let path3 = temp_path_for_output(Path::new("a/b/c.mkv"))
             .to_string_lossy()
             .to_string();
         assert!(path3.starts_with("a/b/c.tmp."));
-        assert!(path3.ends_with(".mkv"));
+        assert!(path3.to_lowercase().ends_with(".mkv"));
 
         let path4 = temp_path_for_output(Path::new("name.with.dots.mov"))
             .to_string_lossy()
             .to_string();
         assert!(path4.starts_with("name.with.dots.tmp."));
-        assert!(path4.ends_with(".mov"));
+        assert!(path4.to_lowercase().ends_with(".mov"));
     }
 
     #[test]

@@ -8,6 +8,148 @@ members = [
 ]
 resolver = "2"
 
+[workspace.lints.clippy]
+# Pedantic lints - prioritized for clean output
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+
+# Strategic suppression of non-constructive pedantic/nursery noise
+similar_names = "allow"
+module_name_repetitions = "allow"
+struct_excessive_bools = "allow"
+too_many_lines = "allow"
+cast_precision_loss = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_possible_wrap = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+doc_markdown = "allow"
+items_after_statements = "allow"
+bool_to_int_with_if = "allow"
+must_use_candidate = "allow"
+default_trait_access = "allow"
+wildcard_imports = "allow"
+enum_glob_use = "allow"
+expl_impl_clone_on_copy = "allow"
+used_underscore_binding = "allow"
+option_if_let_else = "allow"
+range_plus_one = "allow"
+significant_drop_in_scrutinee = "allow"
+redundant_pub_crate = "allow"
+significant_drop_tightening = "allow"
+missing_const_for_fn = "allow"
+future_not_send = "allow"
+manual_let_else = "allow"
+missing_fields_in_debug = "allow"
+cognitive_complexity = "allow"
+large_types_passed_by_value = "allow"
+match_bool = "allow"
+manual_string_new = "allow"
+type_complexity = "allow"
+needless_pass_by_value = "allow"
+ignored_unit_patterns = "allow"
+manual_range_contains = "allow"
+no_effect_underscore_binding = "allow"
+unused_self = "allow"
+redundant_closure_for_method_calls = "allow"
+manual_flatten = "allow"
+inconsistent_struct_constructor = "allow"
+many_single_char_names = "allow"
+explicit_iter_loop = "allow"
+naive_bytecount = "allow"
+manual_is_variant_and = "allow"
+manual_map = "allow"
+match_same_arms = "allow"
+single_match_else = "allow"
+unused_peekable = "allow"
+needless_doctest_main = "allow"
+derive_partial_eq_without_eq = "allow"
+manual_non_exhaustive = "allow"
+iter_on_single_items = "allow"
+readonly_write_lock = "allow"
+empty_line_after_outer_attr = "allow"
+redundant_feature_names = "allow"
+branches_sharing_code = "allow"
+unreadable_literal = "allow"
+redundant_closure = "allow"
+iter_on_empty_collections = "allow"
+or_fun_call = "allow"
+comparison_chain = "allow"
+option_as_ref_deref = "allow"
+manual_c_str_literals = "allow"
+manual_filter_map = "allow"
+manual_find_map = "allow"
+manual_split_once = "allow"
+manual_strip = "allow"
+manual_unwrap_or_default = "allow"
+match_wild_err_arm = "allow"
+match_wildcard_for_single_variants = "allow"
+maybe_infinite_iter = "allow"
+mem_forget = "allow"
+missing_inline_in_public_items = "allow"
+multiple_inherent_impl = "allow"
+mut_mut = "allow"
+mutex_atomic = "allow"
+mutex_integer = "allow"
+needless_bitwise_bool = "allow"
+needless_continue = "allow"
+needless_for_each = "allow"
+needless_raw_string_hashes = "allow"
+negative_feature_names = "allow"
+nonminimal_bool = "allow"
+path_buf_push_overwrite = "allow"
+ptr_as_ptr = "allow"
+ptr_cast_constness = "allow"
+pub_underscore_fields = "allow"
+range_minus_one = "allow"
+rc_buffer = "allow"
+rc_mutex = "allow"
+redundant_clone = "allow"
+redundant_else = "allow"
+ref_option = "allow"
+rest_pat_in_fully_bound_structs = "allow"
+same_functions_in_if_condition = "allow"
+semicolon_if_nothing_returned = "allow"
+single_char_pattern = "allow"
+single_match = "allow"
+string_add_assign = "allow"
+string_lit_as_bytes = "allow"
+suboptimal_flops = "allow"
+suspicious_operation_groupings = "allow"
+toplevel_ref_arg = "allow"
+trait_duplication_in_bounds = "allow"
+transmute_ptr_to_ptr = "allow"
+type_repetition_in_bounds = "allow"
+unnecessary_box_returns = "allow"
+unnecessary_cast = "allow"
+unnecessary_filter_map = "allow"
+unnecessary_find_map = "allow"
+unnecessary_fold = "allow"
+unnecessary_join = "allow"
+unnecessary_lazy_evaluations = "allow"
+unnecessary_mut_passed = "allow"
+unnecessary_operation = "allow"
+unnecessary_owned_empty_strings = "allow"
+unnecessary_self_imports = "allow"
+unnecessary_wraps = "allow"
+unneeded_field_pattern = "allow"
+unneeded_wildcard_pattern = "allow"
+unused_io_amount = "allow"
+unused_rounding = "allow"
+unused_unit = "allow"
+upper_case_acronyms = "allow"
+use_self = "allow"
+useless_asref = "allow"
+useless_conversion = "allow"
+useless_format = "allow"
+useless_let_if_seq = "allow"
+useless_transmute = "allow"
+vec_init_then_push = "allow"
+while_let_on_iterator = "allow"
+zero_prefixed_literal = "allow"
+zero_ptr = "allow"
+
 [workspace.package]
 version = "0.11.0"
 edition = "2021"
@@ -15,71 +157,120 @@ license = "MIT"
 authors = ["Modern Format Boost Contributors"]
 
 [workspace.dependencies]
-# Core error handling
-anyhow    = "1.0.95"
-thiserror = "2.0.11"
+# Core error handling - NIGHTLY: Using GitHub sources
+anyhow    = { git = "https://github.com/dtolnay/anyhow" }
+thiserror = { git = "https://github.com/dtolnay/thiserror" }
 
-# Logging and tracing
-tracing            = "0.1.41"
-tracing-subscriber = { version = "0.3.19", features = ["fmt", "env-filter", "json"] }
-tracing-appender   = "0.2.3"
+# Logging and tracing - NIGHTLY: Using GitHub sources
+tracing            = { git = "https://github.com/tokio-rs/tracing" }
+tracing-subscriber = { git = "https://github.com/tokio-rs/tracing", features = ["fmt", "env-filter", "json"] }
+tracing-appender   = { git = "https://github.com/tokio-rs/tracing" }
 
-# CLI
-clap = { version = "4.5.23", features = ["derive", "cargo"] }
+# CLI - NIGHTLY: Using GitHub sources
+clap = { git = "https://github.com/clap-rs/clap", features = ["derive", "cargo"] }
 
-# Serialization
-serde      = { version = "1.0.217", features = ["derive"] }
-serde_json = "1.0.134"
+# Serialization - NIGHTLY: Using GitHub sources
+serde      = { git = "https://github.com/serde-rs/serde", features = ["derive"] }
+serde_json = { git = "https://github.com/serde-rs/json" }
 
-# Parallelism
-rayon = "1.10.0"
+# Parallelism - NIGHTLY: Using GitHub sources
+rayon = { git = "https://github.com/rayon-rs/rayon" }
 
-# Progress indicators
-indicatif = { version = "0.18.4", features = ["rayon"] }
+# Progress indicators - NIGHTLY: Using GitHub sources
+indicatif = { git = "https://github.com/console-rs/indicatif", features = ["rayon"] }
 
-# File system utilities
-walkdir  = "2.5.0"
-filetime = "0.2.27"
-libc     = "0.2.169"
-xattr    = "1.6.1"
+# File system utilities - NIGHTLY: Using GitHub sources
+walkdir  = { git = "https://github.com/BurntSushi/walkdir" }
+filetime = { git = "https://github.com/alexcrichton/filetime" }
+libc     = { git = "https://github.com/rust-lang/libc" }
+xattr    = { git = "https://github.com/Stebalien/xattr" }
 
-# System utilities
-which = "8.0.2"
-log   = "0.4.29"
+# System utilities - NIGHTLY: Using GitHub sources
+which = { git = "https://github.com/harryfei/which-rs" }
+log   = { git = "https://github.com/rust-lang/log" }
 
-# Terminal
-console = "0.16.2"
-chrono  = { version = "0.4.44", features = ["serde"] }
+# Terminal - NIGHTLY: Using GitHub sources
+console = { git = "https://github.com/console-rs/console" }
+chrono  = { git = "https://github.com/chronotope/chrono", features = ["serde"] }
 
-# Image processing
-image       = { version = "0.25.5", features = ["png", "jpeg", "webp", "gif", "tiff", "avif", "avif-native"] }
-libheif-rs  = { version = "2.7.0", features = ["v1_21"] }
-mp4parse    = "0.14.0"
+# Image processing - NIGHTLY: Using GitHub sources for latest iterations
+image       = { git = "https://github.com/image-rs/image", features = ["png", "jpeg", "webp", "gif", "tiff", "avif", "avif-native"] }
+libheif-rs  = { git = "https://github.com/Cykooz/libheif-rs", features = ["v1_21"] }
+mp4parse    = { git = "https://github.com/mozilla/mp4parse-rust" }
 
-# Testing and compression
-tempfile = "3.16.0"
-proptest = "1.10.0"
-flate2   = "1.1.9"
+# Testing and compression - NIGHTLY: Using GitHub sources
+tempfile = { git = "https://github.com/Stebalien/tempfile" }
+proptest = { git = "https://github.com/proptest-rs/proptest" }
+flate2   = { git = "https://github.com/rust-lang/flate2-rs" }
 
-# Signal handling
-ctrlc = "3.4.5"
+# Signal handling - NIGHTLY: Using GitHub sources
+ctrlc = { git = "https://github.com/Detegr/rust-ctrlc" }
 
-# Randomization
-rand = "0.10"
+# Randomization - NIGHTLY: Using GitHub sources
+rand = { git = "https://github.com/rust-random/rand" }
 
-# Database and Caching
-rusqlite = { version = "0.33.0", features = ["bundled"] }
-blake3   = "1.6.0"
-rmp-serde = "1.3.0"
+# Database and Caching - NIGHTLY: Using GitHub sources for latest iterations
+rusqlite = { git = "https://github.com/rusqlite/rusqlite", features = ["bundled"] }
+blake3   = { git = "https://github.com/BLAKE3-team/BLAKE3" }
+rmp-serde = { git = "https://github.com/3Hren/msgpack-rust" }
 
-# File type detection
-infer = "0.16"
-crc32fast = "1.4.2"
-quick-xml = "0.31.0"
-exr = "1.7.2"
-jpegxl-rs = { version = "0.12", features = ["vendored"] }
+# File type detection - NIGHTLY: Using GitHub sources
+infer = { git = "https://github.com/bojand/infer" }
+crc32fast = { git = "https://github.com/srijs/rust-crc32fast" }
+quick-xml = { git = "https://github.com/tafia/quick-xml" }
+exr = { git = "https://github.com/johannesvollmer/exrs" }
 
 shared_utils = { path = "shared_utils" }
+
+# NIGHTLY ONLY: Patch section to unify duplicate dependencies and use GitHub nightly sources
+[patch.crates-io]
+# Core dependencies from GitHub for latest iterations
+anyhow = { git = "https://github.com/dtolnay/anyhow" }
+thiserror = { git = "https://github.com/dtolnay/thiserror" }
+serde = { git = "https://github.com/serde-rs/serde" }
+serde_json = { git = "https://github.com/serde-rs/json" }
+image = { git = "https://github.com/image-rs/image" }
+mp4parse = { git = "https://github.com/mozilla/mp4parse-rust" }
+rusqlite = { git = "https://github.com/rusqlite/rusqlite" }
+blake3 = { git = "https://github.com/BLAKE3-team/BLAKE3" }
+rayon = { git = "https://github.com/rayon-rs/rayon" }
+clap = { git = "https://github.com/clap-rs/clap" }
+tracing = { git = "https://github.com/tokio-rs/tracing" }
+tracing-subscriber = { git = "https://github.com/tokio-rs/tracing" }
+tracing-appender = { git = "https://github.com/tokio-rs/tracing" }
+indicatif = { git = "https://github.com/console-rs/indicatif" }
+console = { git = "https://github.com/console-rs/console" }
+chrono = { git = "https://github.com/chronotope/chrono" }
+walkdir = { git = "https://github.com/BurntSushi/walkdir" }
+filetime = { git = "https://github.com/alexcrichton/filetime" }
+libc = { git = "https://github.com/rust-lang/libc" }
+which = { git = "https://github.com/harryfei/which-rs" }
+log = { git = "https://github.com/rust-lang/log" }
+tempfile = { git = "https://github.com/Stebalien/tempfile" }
+proptest = { git = "https://github.com/proptest-rs/proptest" }
+flate2 = { git = "https://github.com/rust-lang/flate2-rs" }
+ctrlc = { git = "https://github.com/Detegr/rust-ctrlc" }
+rmp-serde = { git = "https://github.com/3Hren/msgpack-rust" }
+infer = { git = "https://github.com/bojand/infer" }
+xattr = { git = "https://github.com/Stebalien/xattr" }
+libheif-rs = { git = "https://github.com/Cykooz/libheif-rs" }
+crc32fast = { git = "https://github.com/srijs/rust-crc32fast" }
+quick-xml = { git = "https://github.com/tafia/quick-xml" }
+exr = { git = "https://github.com/johannesvollmer/exrs" }
+rayon-core = { git = "https://github.com/rayon-rs/rayon" }
+tracing-core = { git = "https://github.com/tokio-rs/tracing" }
+serde_core = { git = "https://github.com/serde-rs/serde" }
+serde_derive = { git = "https://github.com/serde-rs/serde" }
+thiserror-impl = { git = "https://github.com/dtolnay/thiserror" }
+
+# Force all transitive dependencies to use GitHub nightly (eliminate duplicates)
+getrandom = { git = "https://github.com/rust-random/getrandom" }
+hashbrown = { git = "https://github.com/rust-lang/hashbrown" }
+indexmap = { git = "https://github.com/indexmap-rs/indexmap" }
+syn = { git = "https://github.com/dtolnay/syn" }
+quote = { git = "https://github.com/dtolnay/quote" }
+proc-macro2 = { git = "https://github.com/dtolnay/proc-macro2" }
+
 
 [profile.release]
 lto            = true

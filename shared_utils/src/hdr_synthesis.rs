@@ -446,7 +446,7 @@ fn parse_gainmap_from_xmp(xmp_str: &str) -> GainMapParams {
                 for attr in e.attributes().flatten() {
                     let local_name = attr.key.local_name();
                     let attr_name = String::from_utf8_lossy(local_name.as_ref());
-                    let attr_val = String::from_utf8_lossy(&attr.value);
+                    let attr_val = String::from_utf8_lossy(attr.value.as_ref());
                     if let Ok(f) = attr_val.parse::<f32>() {
                         match attr_name.as_ref() {
                             n if n.contains("GainMapMax") => params.gain_map_max = f,
@@ -468,31 +468,56 @@ fn parse_gainmap_from_xmp(xmp_str: &str) -> GainMapParams {
                 let name = String::from_utf8_lossy(name_bytes.as_ref());
 
                 if name.contains("GainMapMax") {
-                    if let Ok(text) = reader.read_text(e.name()) {
+                    if let Ok(val) = reader.read_text(e.name()) {
+                        let text = reader
+                            .decoder()
+                            .decode(val.as_ref())
+                            .unwrap_or_default()
+                            .to_string();
                         if let Ok(f) = text.parse::<f32>() {
                             params.gain_map_max = f;
                         }
                     }
                 } else if name.contains("GainMapMin") {
-                    if let Ok(text) = reader.read_text(e.name()) {
+                    if let Ok(val) = reader.read_text(e.name()) {
+                        let text = reader
+                            .decoder()
+                            .decode(val.as_ref())
+                            .unwrap_or_default()
+                            .to_string();
                         if let Ok(f) = text.parse::<f32>() {
                             params.gain_map_min = f;
                         }
                     }
                 } else if name.contains("OffsetSDR") || name.contains("OffsetSdr") {
-                    if let Ok(text) = reader.read_text(e.name()) {
+                    if let Ok(val) = reader.read_text(e.name()) {
+                        let text = reader
+                            .decoder()
+                            .decode(val.as_ref())
+                            .unwrap_or_default()
+                            .to_string();
                         if let Ok(f) = text.parse::<f32>() {
                             params.offset_sdr = f;
                         }
                     }
                 } else if name.contains("OffsetHDR") || name.contains("OffsetHdr") {
-                    if let Ok(text) = reader.read_text(e.name()) {
+                    if let Ok(val) = reader.read_text(e.name()) {
+                        let text = reader
+                            .decoder()
+                            .decode(val.as_ref())
+                            .unwrap_or_default()
+                            .to_string();
                         if let Ok(f) = text.parse::<f32>() {
                             params.offset_hdr = f;
                         }
                     }
                 } else if name.contains("Gamma") {
-                    if let Ok(text) = reader.read_text(e.name()) {
+                    if let Ok(val) = reader.read_text(e.name()) {
+                        let text = reader
+                            .decoder()
+                            .decode(val.as_ref())
+                            .unwrap_or_default()
+                            .to_string();
                         if let Ok(f) = text.parse::<f32>() {
                             params.gamma = f;
                         }
@@ -519,7 +544,9 @@ fn synthesize_hdr(
     let gain_resized: DynamicImage = if gain.dimensions() == (width, height) {
         gain.clone()
     } else {
-        gain.resize_exact(width, height, image::imageops::FilterType::Triangle)
+        let mut g = gain.clone();
+        g.resize_exact(width, height, image::imageops::FilterType::Triangle);
+        g
     };
 
     let mut hdr_pixels = Vec::with_capacity((width * height * 3) as usize);
