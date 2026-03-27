@@ -43,6 +43,10 @@ Significant overhaul of the Python automation layer to provide a high-end, profe
 - **Streamlined Workflow**: Removed the redundant Python-side SQLite `TaskTracker` in favor of the Rust tools' native, high-performance `--resume` capabilities.
 - **Session Isolation**: Implemented unique session identifiers for all log files (`MFB_[Project]_[Timestamp].log`), preventing overlaps when running multiple concurrent processes.
 - **Zero-Functional-Loss Restoration**: Verified that all final stabilization fixes are logic-pure, targeting only metadata (lints) and formatting to restore a 100% clean baseline without regressing core conversion algorithms.
+- **Legacy Script Purge (MAIN Sync)**: 
+  - Deleted outdated `.sh` versions of the primary UI tools (`drag_and_drop_processor.sh`, `check_all.sh`, `cache_cleaner.sh`) to ensure a clean, Python-first user experience.
+  - Standardized the internal calling chain: All menu actions and quality scans now invoke the modernized Python implementations.
+  - Synchronized the latest PTY-relay and centralized cache architecture (`~/.modern_format_boost/cache/`) from the nightly branch to the production baseline.
 
 ### 🐍 Script Infrastructure: Python-First Architecture
 Major refactoring of the automation layer, migrating core scripts from Bash to Python for improved maintainability and cross-platform compatibility.
