@@ -1,30 +1,51 @@
 #!/usr/bin/env bash
-# Smart Build System v7.5 - 智能选择性构建
+# Smart Build System v7.5 - Intelligent Selective Build
 #
-# 🔥 v7.5 新增：
-# - ✅ 编译后时间戳验证（确保二进制确实更新）
-# - ✅ 多次验证失败自动强制重新编译
-# - ✅ 响亮报错机制（编译异常必须通知用户）
-# 🔥 v7.4.1 修复：
-# - ✅ 兼容 macOS bash 3.x（移除关联数组）
-# 🔥 v7.4 特性：
-# - ✅ 选择性构建（仅构建需要的项目）
-# - ✅ 智能清理过时二进制
-# - ✅ 智能时间戳比对
-# - ✅ 强制重新构建选项
-# - ✅ 准确的路径处理
+# 🔥 v7.5 New Features:
+# - ✅ Post-build timestamp verification (Ensures binary was truly updated)
+# - ✅ Automatic force rebuild on multiple verification failures
+# - ✅ Loud error reporting (Compilation errors MUST notify user)
+# 🔥 v7.4.1 Fixes:
+# - ✅ Compatibility with macOS bash 3.x (Removed associative arrays)
+# 🔥 v7.4 Features:
+# - ✅ Selective build (Build only required projects)
+# - ✅ Intelligent cleanup of obsolete binaries
+# - ✅ Intelligent timestamp comparison
+# - ✅ Force rebuild option
+# - ✅ Accurate path handling
+# (Merged common.sh dependencies)
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck disable=SC1091
-source "$SCRIPT_DIR/common.sh"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_ROOT"
 
 # ═══════════════════════════════════════════════════════════════
-# 项目配置 - 兼容 bash 3.x
+# Color Definitions
 # ═══════════════════════════════════════════════════════════════
-# 格式: "项目目录:二进制名称"
+if [[ -t 1 ]]; then
+	RED='\033[38;5;196m'
+	GREEN='\033[38;5;46m'
+	YELLOW='\033[38;5;226m'
+	CYAN='\033[38;5;51m'
+	BOLD='\033[1m'
+	DIM='\033[2m'
+	NC='\033[0m'
+else
+	RED=''
+	GREEN=''
+	YELLOW=''
+	CYAN=''
+	BOLD=''
+	DIM=''
+	NC=''
+fi
+
+# ═══════════════════════════════════════════════════════════════
+# Project Configuration - bash 3.x compatible
+# ═══════════════════════════════════════════════════════════════
+# Format: "project_dir:binary_name"
 ALL_PROJECTS=(
 	"img_hevc:img-hevc"
 	"vid_hevc:vid-hevc"
@@ -32,10 +53,10 @@ ALL_PROJECTS=(
 	"vid_av1:vid-av1"
 )
 
-# 默认构建项目（HEVC工具）
+# Default projects to build (HEVC tools)
 DEFAULT_PROJECTS=("img_hevc" "vid_hevc")
 
-# 辅助函数：根据项目目录获取二进制名称
+# Helper function: Get binary name from project directory
 get_binary_name() {
 	local project_dir="$1"
 	for entry in "${ALL_PROJECTS[@]}"; do
@@ -50,7 +71,7 @@ get_binary_name() {
 	return 1
 }
 
-# CLI 参数
+# CLI Arguments
 FORCE_REBUILD=false
 CLEAN_BUILD=false
 VERBOSE=false
@@ -58,12 +79,12 @@ CLEAN_OLD_BINARIES=true
 BUILD_ALL=false
 SELECTED_PROJECTS=()
 
-# 🔥 v7.5: 时间戳验证配置
+# 🔥 v7.5: Timestamp Verification Config
 VERIFY_TIMESTAMPS=true
-MAX_STALE_RETRIES=2 # 最多允许2次时间戳验证失败，第3次强制重新编译
+MAX_STALE_RETRIES=2 # Allow up to 2 timestamp verification failures, force rebuild on the 3rd
 
 # ═══════════════════════════════════════════════════════════════
-# 输出函数
+# Output Functions
 # ═══════════════════════════════════════════════════════════════
 print_header() {
 	echo ""
@@ -96,14 +117,14 @@ print_error() {
 }
 
 # ═══════════════════════════════════════════════════════════════
-# 🔥 v7.4: 智能清理过时二进制
+# 🔥 v7.4: Intelligent obsolete binary cleanup
 # ═══════════════════════════════════════════════════════════════
 clean_old_binaries() {
 	echo -e "${YELLOW}🧹 Cleaning old binaries...${NC}"
 
 	local cleaned=0
 
-	# 查找并删除所有旧的二进制文件（不在 target/release 中的）
+	# Find and remove all old binaries (not in target/release)
 	for entry in "${ALL_PROJECTS[@]}"; do
 		local binary_name="${entry##*:}"
 		while IFS= read -r -d '' old_binary; do
@@ -122,7 +143,7 @@ clean_old_binaries() {
 }
 
 # ═══════════════════════════════════════════════════════════════
-# 🔥 v8.3: Kondo 深度清理
+# 🔥 v8.3: Kondo Deep Cleanup
 # ═══════════════════════════════════════════════════════════════
 clean_with_kondo() {
 	if ! command -v kondo >/dev/null 2>&1; then
@@ -131,19 +152,19 @@ clean_with_kondo() {
 	fi
 
 	echo -e "${YELLOW}🧹 Project Deep Cleanup (kondo)...${NC}"
-	# 使用安全参数：仅清理本项目，排除时间机器和用户库
+	# Use safe parameters: Clean current project only, exclude Time Machine volumes and libraries
 	kondo -n -I /Volumes -I ~/Library .
 	echo ""
 }
 
 # ═══════════════════════════════════════════════════════════════
-# 时间戳函数
+# Timestamp Functions
 # ═══════════════════════════════════════════════════════════════
 get_newest_source_mtime() {
 	local project_dir="$1"
 	local newest=0
 
-	# 项目源代码
+	# Project source code
 	if [[ -d "$project_dir/src" ]]; then
 		while IFS= read -r -d '' file; do
 			local mtime
@@ -158,7 +179,7 @@ get_newest_source_mtime() {
 		[[ $mtime -gt $newest ]] && newest=$mtime
 	fi
 
-	# shared_utils 依赖
+	# shared_utils dependencies
 	if [[ -d "shared_utils/src" ]]; then
 		while IFS= read -r -d '' file; do
 			local mtime
@@ -186,13 +207,13 @@ get_binary_mtime() {
 }
 
 # ═══════════════════════════════════════════════════════════════
-# 编译决策
+# Build Decision Logic
 # ═══════════════════════════════════════════════════════════════
 decide_build_action() {
 	local project_dir="$1"
 	local binary_name="$2"
 
-	# 🔥 v7.5: 使用 get_binary_path 获取正确的二进制路径
+	# 🔥 v7.5: Use get_binary_path to locate the correct executable
 	local binary_path
 	binary_path=$(get_binary_path "$project_dir" "$binary_name")
 
@@ -209,7 +230,7 @@ decide_build_action() {
 }
 
 # ═══════════════════════════════════════════════════════════════
-# 🔥 v7.5: 时间戳验证函数
+# 🔥 v7.5: Timestamp Verification Functions
 # ═══════════════════════════════════════════════════════════════
 get_binary_path() {
 	local project_dir="$1"
@@ -236,7 +257,7 @@ verify_binary_timestamp() {
 	local binary_mtime
 	binary_mtime=$(get_binary_mtime "$binary_path")
 
-	# 二进制文件的修改时间应该 >= 编译开始时间
+	# Binary modification time should be >= compile start time
 	if [[ $binary_mtime -lt $compile_start_time ]]; then
 		echo -e "${RED}⚠️  TIMESTAMP VERIFICATION FAILED${NC}"
 		echo -e "${DIM}   Binary mtime: $(date -r "$binary_mtime" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date -d @"$binary_mtime" '+%Y-%m-%d %H:%M:%S' 2>/dev/null)${NC}"
@@ -249,24 +270,24 @@ verify_binary_timestamp() {
 }
 
 # ═══════════════════════════════════════════════════════════════
-# 编译函数
+# Build Functions
 # ═══════════════════════════════════════════════════════════════
 build_project() {
 	local project_dir="$1"
 	local binary_name="$2"
 	local retry_count="${3:-0}"
 
-	# 记录编译开始时间
+	# Record compilation start time
 	local compile_start_time
 	compile_start_time=$(date +%s)
 
-	# 🔥 修复：正确处理 cargo 输出和返回码
+	# 🔥 Fix: Handled cargo output and return codes correctly
 	if ! cargo build --release --manifest-path "$project_dir/Cargo.toml"; then
 		print_error "$project_dir"
 		return 1
 	fi
 
-	# 🔥 v7.5: 编译后验证时间戳
+	# 🔥 v7.5: Post-build timestamp verification
 	if [[ "$VERIFY_TIMESTAMPS" == "true" ]]; then
 		local binary_path
 		binary_path=$(get_binary_path "$project_dir" "$binary_name")
@@ -277,14 +298,14 @@ build_project() {
 			return 1
 		fi
 
-		# 等待1秒确保文件系统同步
+		# Wait for 1 second to ensure filesystem synchronization
 		sleep 1
 
 		if ! verify_binary_timestamp "$binary_path" "$compile_start_time"; then
-			# 时间戳验证失败
+			# Timestamp verification failed
 			if [[ $retry_count -lt $MAX_STALE_RETRIES ]]; then
 				echo -e "${YELLOW}🔄 Retry $((retry_count + 1))/$MAX_STALE_RETRIES: Rebuilding with clean...${NC}"
-				# 清理并重试
+				# Cleanup and retry
 				# 🔥 v8.3: Only clean root target
 				rm -rf "target/release/deps" 2>/dev/null || true
 				rm -rf "target/release/.fingerprint" 2>/dev/null || true
@@ -302,7 +323,7 @@ build_project() {
 }
 
 # ═══════════════════════════════════════════════════════════════
-# CLI 参数解析
+# CLI Parameter Parsing
 # ═══════════════════════════════════════════════════════════════
 parse_args() {
 	while [[ $# -gt 0 ]]; do
@@ -384,16 +405,16 @@ parse_args() {
 }
 
 # ═══════════════════════════════════════════════════════════════
-# 主函数
+# Main Function
 # ═══════════════════════════════════════════════════════════════
 main() {
 	parse_args "$@"
 	print_header
 
-	# 确定要构建的项目
+	# Determine projects to build
 	local projects_to_build=()
 	if [[ "$BUILD_ALL" == "true" ]]; then
-		# 构建所有项目 - 提取项目目录名
+		# Build all projects - Extract project directory names
 		for entry in "${ALL_PROJECTS[@]}"; do
 			projects_to_build+=("${entry%%:*}")
 		done
@@ -406,12 +427,12 @@ main() {
 	echo -e "${CYAN}📦 Building:${NC} ${BOLD}${projects_to_build[*]}${NC}"
 	echo ""
 
-	# 清理旧二进制
+	# Cleanup old binaries
 	if [[ "$CLEAN_OLD_BINARIES" == "true" ]]; then
 		clean_old_binaries
 	fi
 
-	# 清理构建产物
+	# Cleanup build artifacts
 	if [[ "$CLEAN_BUILD" == "true" ]]; then
 		echo -e "${YELLOW}🧹 Cleaning build artifacts...${NC}"
 		for proj_dir in "${projects_to_build[@]}"; do
@@ -421,7 +442,7 @@ main() {
 		rm -rf "shared_utils/target/release/deps" 2>/dev/null || true
 		echo ""
 
-		# 🔥 v8.3: 自动触发 kondo 清理
+		# 🔥 v8.3: Auto-trigger kondo cleanup
 		clean_with_kondo
 	fi
 
@@ -476,7 +497,7 @@ main() {
 		echo -e "${GREEN}✅ Built $rebuilt, skipped $skipped${NC}"
 	fi
 
-	# 显示二进制信息
+	# Show binary information
 	if [[ "$VERBOSE" == "true" ]] || [[ $rebuilt -gt 0 ]]; then
 		echo ""
 		echo -e "${DIM}Binary info:${NC}"

@@ -5,6 +5,87 @@ All notable changes to this project will be documented in this file.
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
 
+## [Unreleased] - 2026-03-28
+
+### 🎨 Premium UI/UX & Terminal Experience
+Significant overhaul of the Python automation layer to provide a high-end, professional terminal experience.
+
+- **Interactive Dashboard & Menu**:
+  - **Modern Selector**: Implemented a "Highlight Bar" (inverted background) selection menu in `drag_and_drop_processor.py` for superior visibility.
+  - **Config Dashboard**: Replaced text-based configuration with a structured `rich.Table` dashboard, integrating live **System Health Snapshots** (CPU/RAM usage).
+  - **Session Analytics**: Added a visual **Success Rate Progress Bar** (█░) and efficiency metrics to final batch reports.
+  - **Window Resizing**: Restored automatic terminal window resizing (40x100) to ensure the premium UI layout is always perfectly framed.
+- **Zero-Interference Logging**: 
+  - Re-engineered the log passthrough to use raw buffer writes, ensuring 100% preservation of the Rust tools' original icons (📊, ✓), colors, and `\r` carriage return updates.
+
+### 🛡️ Infrastructure & Reliability Hardening
+- **Watch Mode Optimization**: Switched to `on_closed` and `on_moved` Watchdog events to ensure large media files are fully written before processing triggers, preventing infinite debounce loops.
+- **Robustness Fixes**: 
+  - Resolved `IndexError` in `check_all.py` during system tool output parsing.
+  - Hardened `cache_cleaner.py` with stricter directory-name validation for safe log purging.
+  - Refactored `count_files` locking granularity in `drag_and_drop_processor.py` to prevent blocking the UI/Watcher during deep directory scans.
+- **Reporting & UI Polish**:
+  - **Standardized Styles**: Fixed non-standard Rich terminal tags (`[error]`, `[warning]`, `[info]`, `[success]`) across the script suite.
+  - **Semantic Accuracy**: Corrected summary table headers in quality scans to accurately reflect data categories (`Status`, `Description`, `Value`).
+- **Streamlined Workflow**: Removed the redundant Python-side SQLite `TaskTracker` in favor of the Rust tools' native, high-performance `--resume` capabilities.
+- **Session Isolation**: Implemented unique session identifiers for all log files (`MFB_[Project]_[Timestamp].log`), preventing overlaps when running multiple concurrent processes.
+- **Improved Code Safety**: Fixed threading race conditions in Watch mode using `stats_lock` and debouncing.
+
+### 🐍 Script Infrastructure: Python-First Architecture
+Major refactoring of the automation layer, migrating core scripts from Bash to Python for improved maintainability and cross-platform compatibility.
+
+- **Core Script Migration**:
+  - `drag_and_drop_processor.sh` → `drag_and_drop_processor.py`: Complete rewrite with strict parity to Bash logic.
+  - `check_all.sh` → `check_all.py`: Health check scanner ported to Python.
+  - `cache_cleaner.sh` → `cache_cleaner.py`: Cache purger migrated with identical functionality.
+  - `repair_apple_photos.sh` → `repair_apple_photos.py`: Apple Photos repair tool rewritten.
+  - Removed legacy Bash scripts to `scripts/old/` for archival.
+- **macOS App Wrapper Updated**:
+  - `Modern Format Boost.app/Contents/MacOS/Modern Format Boost` now invokes `drag_and_drop_processor.py`.
+  - Added virtual environment auto-activation (`.venv/bin/activate`) for seamless Python dependency management.
+- **Documentation Cleanup**:
+  - Removed bilingual (EN/ZH) README sections; now links to separate localized README files in `docs/`.
+  - Reduced README.md size by ~80% for better maintainability.
+- **Build System Refinements** (`smart_build.sh`):
+  - Fixed workspace target path resolution for unified `target/release/` directory.
+  - Added project deduplication to avoid double-building when flags overlap.
+  - Improved timestamp verification retry logic with proper error propagation.
+  - Enhanced kondo integration with correct flags (removed dry-run mode).
+
+### 🐛 Python Script Bug Fixes & Functional Parity
+- **`drag_and_drop_processor.py`**:
+  - Fixed broken `with open(...) if ... else None as lf` syntax (invalid Python) — replaced with explicit open/close pattern.
+  - Fixed `safety_check()` logic that previously triggered false-positives on user subdirectories (e.g. `~/Downloads/...`) due to over-aggressive `startswith` matching on `$HOME`. It now correctly distinguishes between system roots (recursive block) and user roots (exact block only), with added path resolution for robust matching.
+  - Fixed silent output during Rust binary execution in `drag_and_drop_processor.py` by switching from `read(64KB)` to `read1(1KB)`, ensuring real-time progress updates and correct `\r` carriage return handling.
+  - Enhanced safety for in-place optimization mode: Users must now type the full word `yes` (case-insensitive) to confirm, preventing accidental destructive operations.
+  - Optimized `drag_and_drop_processor.py` menu: Removed "Fix iCloud Import Errors" (moved to manual/external call only) to streamline main workflow.
+  - Enhanced `cache_cleaner.py` safety: Updated wording from "Purge Data" to "Cleanup Cache & Logs" and added a mandatory `yes` confirmation step that explicitly lists the cleanup scope (database, logs, and progress trackers).
+  - Increased `tmp_out` buffer size in `stream_and_log_process()` to 32KB to prevent truncation of final statistics in large batches.
+  - Restored missing `create_directory_structure()` — creates adjacent output directory tree with timestamp preservation via `shutil.copystat()`.
+  - Restored missing `merge_run_logs()` — merges img/vid run logs into a single session log when running via app (`FROM_APP`).
+  - Restored missing `drain_stdin()` — flushes stdin buffer before interactive prompts to prevent spurious key presses triggering menu actions.
+  - Added `drain_stdin()` calls before all interactive input prompts (target dir, in-place confirm, exit).
+  - Added `FORCE_COLOR=1` / `CLICOLOR_FORCE=1` environment setup matching Bash version.
+  - Added control character validation in `get_target_directory()` matching `validate_target_dir()` / `contains_control_chars()` from Bash.
+  - Eliminated double directory tree walk: `count_files()` now accumulates media byte size in the same pass, reused by `check_disk_space()`.
+  - Moved `import re` to top-level imports.
+- **`check_all.py`**:
+  - Fixed `has_command()` using broken `subprocess.run(["command", "-v", ...], shell=True)` — replaced with `shutil.which()`.
+  - Added missing `import shutil`.
+- **`repair_apple_photos.py`**:
+  - Fixed undefined `NC` variable reference — corrected to `RESET`.
+
+### 🌈 UltraHDR JPEG Handling
+- Detected UltraHDR JPEG gainmap files are now skipped for JXL encoding and the original file is copied as-is, avoiding silent quality loss due to `cjxl` gainmap incompatibility. Applies to both `img-hevc` and `img-av1`.
+
+### 📝 Notes
+- All Python scripts maintain strict behavioral parity with their Bash predecessors.
+- Terminal output, menu structures, and error handling remain identical for user familiarity.
+- The `scripts/old/` directory preserves original Bash implementations for reference during transition.
+- `smart_build.sh` is retained as the sole `.sh` script (merged `common.sh` dependencies inline) to serve CI/CD and workflow build needs.
+
+---
+
 ## [0.11.0] - 2026-03-27
 
 ### 🌟 Unified Production Baseline & HDR Synthesis
