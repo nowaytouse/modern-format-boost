@@ -17,6 +17,7 @@ All notable changes to this project will be documented in this file.
   - **Frame count match**: verifies the output contains ≥ input frames via `ffprobe -count_packets` (no decoding required).
   - **File size > 0**: guards against silent I/O failures.
   - Frame count unavailability is treated as a soft warning (non-fatal), file non-empty is sufficient to accept.
+- **x265 True Lossless Enforcement**: Appended `--lossless` (or `lossless=1`) to the encoder parameters when `CRF=0.0`. In `libx265`, `CRF=0` alone still attempts to use signbit hiding to save bits, altering values mathematically (non-lossless). `lossless=1` corrects this by disabling signhide.
 
 #### ⚡ Sprint / Deceleration / Floor Guarantee (Extreme Mode)
 Three root-causes that prevented the search from reaching CRF=0 have been fixed:

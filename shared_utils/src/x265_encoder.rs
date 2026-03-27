@@ -132,14 +132,20 @@ fn encode_y4m_direct(
         config.crf, config.preset
     );
 
-    let output = Command::new("x265")
-        .arg("--y4m")
+    let mut cmd = Command::new("x265");
+    cmd.arg("--y4m")
         .arg("--input")
         .arg(crate::safe_path_arg(input).as_ref())
         .arg("--output")
         .arg(crate::safe_path_arg(hevc_output).as_ref())
         .arg("--crf")
-        .arg(format!("{:.1}", config.crf))
+        .arg(format!("{:.1}", config.crf));
+
+    if config.crf == 0.0 {
+        cmd.arg("--lossless");
+    }
+
+    let output = cmd
         .arg("--preset")
         .arg(&config.preset)
         .arg("--pools")
@@ -220,7 +226,13 @@ fn encode_to_hevc(
         .arg("--output")
         .arg(crate::safe_path_arg(hevc_output).as_ref())
         .arg("--crf")
-        .arg(format!("{:.1}", config.crf))
+        .arg(format!("{:.1}", config.crf));
+
+    if config.crf == 0.0 {
+        x265_cmd.arg("--lossless");
+    }
+
+    x265_cmd
         .arg("--preset")
         .arg(&config.preset)
         .arg("--pools")

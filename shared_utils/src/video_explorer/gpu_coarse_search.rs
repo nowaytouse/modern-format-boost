@@ -1237,10 +1237,21 @@ fn cpu_fine_tune_from_gpu_boundary(
             .arg("-crf")
             .arg(format!("{crf:.2}"));
 
+        let adjusted_x265_params = if crf == 0.0 && encoder == crate::video_explorer::VideoEncoder::Hevc {
+            let existing = hdr_x265_params.as_deref().unwrap_or("");
+            if existing.is_empty() {
+                Some("lossless=1".to_string())
+            } else {
+                Some(format!("{existing}:lossless=1"))
+            }
+        } else {
+            hdr_x265_params.clone()
+        };
+
         for arg in encoder.extra_args_with_preset(
             max_threads,
             crate::video_explorer::EncoderPreset::default(),
-            hdr_x265_params.clone(),
+            adjusted_x265_params,
         ) {
             cmd.arg(arg);
         }
@@ -2050,20 +2061,19 @@ fn cpu_fine_tune_from_gpu_boundary(
                     // we reached the physical quality floor — size might expand yet quality
                     // might still improve.  Let Phase 4 handle the 0.01-granularity walk.
                     // In normal mode, a wall here means we really can't go lower.
-                    if !ultimate_mode {
-                        crate::log_eprintln!(
-                            "   {} [CPU] 🧱 Minimum step reached and hit wall. Stopping.{}",
-                            BRIGHT_YELLOW,
-                            RESET
-                        );
-                        break;
-                    } else {
+                    if ultimate_mode {
                         crate::verbose_eprintln!(
                             "   {} [CPU] At minimum step in ultimate mode — deferring to Phase 4 fine-tune.{}",
                             BRIGHT_YELLOW,
                             RESET
                         );
                         // Don't break; keep last_good_crf so Phase 4 starts from there.
+                    } else {
+                        crate::log_eprintln!(
+                            "   {} [CPU] 🧱 Minimum step reached and hit wall. Stopping.{}",
+                            BRIGHT_YELLOW,
+                            RESET
+                        );
                         break;
                     }
                 }
