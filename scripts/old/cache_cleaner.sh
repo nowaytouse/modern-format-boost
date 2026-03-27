@@ -39,6 +39,7 @@ show_stats() {
 		echo -e "   ${YELLOW}Empty: No cache directory found.${RESET}"
 	fi
 
+	local log_size
 	log_size=$(du -sh "$LOG_DIR" 2>/dev/null | cut -f1 || echo "0B")
 	echo -e "   📝 Logs:      ${DIM}$log_size${RESET}"
 

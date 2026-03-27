@@ -151,6 +151,7 @@ merge_run_logs() {
 		local img_log
 		# shellcheck disable=SC2012
 		img_log=$(ls -t "$LOG_DIR"/img_hevc_run_*.log 2>/dev/null | head -1)
+		local vid_log
 		# shellcheck disable=SC2012
 		vid_log=$(ls -t "$LOG_DIR"/vid_hevc_run_*.log 2>/dev/null | head -1)
 
@@ -244,7 +245,9 @@ draw_header() {
 	local width=70
 	local tag
 	tag=$(GET_BRANCH_TAG)
+	# Strip ANSI escape codes to get raw text for length calculation
 	local raw_tag
+	raw_tag=$(echo -e "$tag" | sed $'s/\033[[][^A-Za-z]*[A-Za-z]//g')
 	local version
 	version=$(grep -m1 '^version =' "$PROJECT_ROOT/Cargo.toml" | cut -d '"' -f2)
 	local title="🚀 MODERN FORMAT BOOST v${version}${raw_tag}"

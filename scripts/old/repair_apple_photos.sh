@@ -61,8 +61,11 @@ while IFS= read -r file; do
 
 	# 1. Identification
 	# Get current extension
-	ext="${filename##*.}"
-	ext=$(echo "$ext" | tr '[:upper:]' '[:lower:]')
+	ext=""
+	if [[ "$filename" == *.* ]]; then
+		ext="${filename##*.}"
+		ext=$(echo "$ext" | tr '[:upper:]' '[:lower:]')
+	fi
 
 	# Get real format via magic bytes
 	real_ext=$(exiftool -s -S -FileTypeExtension "$file" 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "")
@@ -74,6 +77,7 @@ while IFS= read -r file; do
 	reason=""
 	is_mismatch=0
 	check_meta=0
+	warnings=""
 
 	# Check 1: Extension Mismatch
 	if [[ "$ext" != "$real_ext" ]]; then

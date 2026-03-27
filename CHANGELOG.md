@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
 
+## [Unreleased] - 2026-03-27
+
+### 🐍 Script Infrastructure: Python-First Architecture
+Major refactoring of the automation layer, migrating core scripts from Bash to Python for improved maintainability and cross-platform compatibility.
+
+- **Core Script Migration**:
+  - `drag_and_drop_processor.sh` → `drag_and_drop_processor.py`: Complete rewrite with strict parity to Bash logic.
+  - `check_all.sh` → `check_all.py`: Health check scanner ported to Python.
+  - `cache_cleaner.sh` → `cache_cleaner.py`: Cache purger migrated with identical functionality.
+  - `repair_apple_photos.sh` → `repair_apple_photos.py`: Apple Photos repair tool rewritten.
+  - Removed legacy Bash scripts to `scripts/old/` for archival.
+- **macOS App Wrapper Updated**:
+  - `Modern Format Boost.app/Contents/MacOS/Modern Format Boost` now invokes `drag_and_drop_processor.py`.
+  - Added virtual environment auto-activation (`.venv/bin/activate`) for seamless Python dependency management.
+- **Documentation Cleanup**:
+  - Removed bilingual (EN/ZH) README sections; now links to separate localized README files in `docs/`.
+  - Reduced README.md size by ~80% for better maintainability.
+- **Build System Refinements** (`smart_build.sh`):
+  - Fixed workspace target path resolution for unified `target/release/` directory.
+  - Added project deduplication to avoid double-building when flags overlap.
+  - Improved timestamp verification retry logic with proper error propagation.
+  - Enhanced kondo integration with correct flags (removed dry-run mode).
+
+### 📝 Notes
+- All Python scripts maintain strict behavioral parity with their Bash predecessors.
+- Terminal output, menu structures, and error handling remain identical for user familiarity.
+- The `scripts/old/` directory preserves original Bash implementations for reference during transition.
+
+---
+
 ## [0.11.0] - 2026-03-27
 
 ### 🌟 Unified Production Baseline & HDR Synthesis

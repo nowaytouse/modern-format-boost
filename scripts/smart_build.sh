@@ -1,30 +1,265 @@
 #!/usr/bin/env bash
-# Smart Build System v7.5 - 智能选择性构建
-#
-# 🔥 v7.5 新增：
-# - ✅ 编译后时间戳验证（确保二进制确实更新）
-# - ✅ 多次验证失败自动强制重新编译
-# - ✅ 响亮报错机制（编译异常必须通知用户）
-# 🔥 v7.4.1 修复：
-# - ✅ 兼容 macOS bash 3.x（移除关联数组）
-# 🔥 v7.4 特性：
-# - ✅ 选择性构建（仅构建需要的项目）
-# - ✅ 智能清理过时二进制
-# - ✅ 智能时间戳比对
-# - ✅ 强制重新构建选项
-# - ✅ 准确的路径处理
+# Smart Build System v7.5 - Selective build for Rust workspace projects
+# Unified with common.sh (Path, Color, and Metadata Utilities)
 
-set -e
+set -Eeuo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck disable=SC1091
-source "$SCRIPT_DIR/common.sh"
+export LC_ALL=en_US.UTF-8
+export LANG=en_US.UTF-8
+
+# ═══════════════════════════════════════════════════════════════
+# 1. Path Setup & Unified Utilities (from common.sh)
+# ═══════════════════════════════════════════════════════════════
+if [[ -z "${SCRIPT_DIR:-}" ]]; then
+	if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+		SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+	elif [[ -n "${ZSH_VERSION:-}" ]]; then
+		# zsh: use prompt expansion to get the sourced file path reliably
+		# shellcheck disable=SC2296
+		SCRIPT_DIR="$(cd "$(dirname "${(%):-%x}")" && pwd)"
+	else
+		# Fallback for other shells
+		SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+	fi
+fi
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+append_path_if_exists() {
+	local dir="$1"
+	[[ -d "$dir" ]] || return 0
+	case ":${PATH:-}:" in
+	*":$dir:"*) ;;
+	*) PATH="$dir${PATH:+:$PATH}" ;;
+	esac
+}
+
+warn_shell() {
+	printf '⚠️ [MFB Shell] %s\n' "$*" >&2
+}
+
+warn_shell_once() {
+	local key="$1"
+	shift
+	local var_name="MFB_WARNED_${key}"
+	if eval "[[ -n \${$var_name:-} ]]"; then
+		return 0
+	fi
+	eval "$var_name=1"
+	export "${var_name?}"
+	warn_shell "$*"
+}
+
+normalize_cli_environment() {
+	export LC_ALL="${LC_ALL:-en_US.UTF-8}"
+	export LANG="${LANG:-en_US.UTF-8}"
+	export TERM="${TERM:-xterm-256color}"
+	export COLORTERM="${COLORTERM:-truecolor}"
+	export SHELL="${SHELL:-/bin/zsh}"
+	export HOME="${HOME:-/Users/$(id -un)}"
+	export TMPDIR="${TMPDIR:-/tmp}"
+	export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+	export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
+
+	append_path_if_exists "$CARGO_HOME/bin"
+	append_path_if_exists "/opt/homebrew/bin"
+	append_path_if_exists "/opt/homebrew/sbin"
+	append_path_if_exists "/usr/local/bin"
+	append_path_if_exists "/usr/local/sbin"
+	append_path_if_exists "/usr/bin"
+	append_path_if_exists "/bin"
+	append_path_if_exists "/usr/sbin"
+	append_path_if_exists "/sbin"
+	export PATH
+}
+
+refresh_terminal_dimensions() {
+	local tty_dev="/dev/tty"
+	local rows=""
+	local cols=""
+
+	[[ -c "$tty_dev" ]] || return 0
+
+	if read -r rows cols < <(stty size <"$tty_dev" 2>/dev/null); then
+		:
+	fi
+
+	if [[ -z "$cols" ]] && command -v tput >/dev/null 2>&1; then
+		if ! cols=$(tput cols 2>/dev/null); then
+			warn_shell_once "TPUT_COLS" "tput could not read terminal columns; continuing with fallback detection."
+			cols=""
+		fi
+		if ! rows=$(tput lines 2>/dev/null); then
+			warn_shell_once "TPUT_LINES" "tput could not read terminal rows; continuing with fallback detection."
+			rows=""
+		fi
+	fi
+
+	[[ "$cols" =~ ^[0-9]+$ && "$cols" -gt 0 ]] && export COLUMNS="$cols"
+	[[ "$rows" =~ ^[0-9]+$ && "$rows" -gt 0 ]] && export LINES="$rows"
+}
+
+ensure_wide_terminal_layout() {
+	local min_cols="${1:-120}"
+	local target_cols="${2:-140}"
+	local target_rows="${3:-42}"
+
+	refresh_terminal_dimensions
+	if [[ "${COLUMNS:-0}" =~ ^[0-9]+$ ]] && [[ "${COLUMNS:-0}" -ge "$min_cols" ]]; then
+		return 0
+	fi
+
+	if [[ -c /dev/tty ]]; then
+		if ! printf '\033[8;%s;%st' "$target_rows" "$target_cols" >/dev/tty 2>/dev/null; then
+			warn_shell_once "TTY_RESIZE_ESCAPE" "terminal did not accept ANSI resize escape; continuing with width fallback."
+		fi
+	fi
+
+	case "${TERM_PROGRAM:-}" in
+	Apple_Terminal)
+		if ! osascript >/dev/null 2>&1 <<'EOF'; then
+tell application "Terminal"
+    if (count of windows) > 0 then
+        set bounds of front window to {80, 60, 1720, 980}
+        activate
+    end if
+end tell
+EOF
+			warn_shell_once "APPLE_TERMINAL_RESIZE" "Apple Terminal window resize via AppleScript failed; continuing with width fallback."
+		fi
+		;;
+	iTerm.app)
+		if ! osascript >/dev/null 2>&1 <<'EOF'; then
+tell application "iTerm"
+    if (count of windows) > 0 then
+        set bounds of current window to {80, 60, 1720, 980}
+        activate
+    end if
+end tell
+EOF
+			warn_shell_once "ITERM_RESIZE" "iTerm window resize via AppleScript failed; continuing with width fallback."
+		fi
+		;;
+	esac
+
+	sleep 0.2
+	refresh_terminal_dimensions
+	if [[ "${COLUMNS:-0}" =~ ^[0-9]+$ ]] && [[ "${COLUMNS:-0}" -lt "$min_cols" ]]; then
+		export COLUMNS="$target_cols"
+	fi
+}
+
+normalize_cli_environment
+refresh_terminal_dimensions
+
+# ═══════════════════════════════════════════════════════════════
+# 2. Color Definitions (256-color compatible)
+# ═══════════════════════════════════════════════════════════════
+RESET='\033[0m'
+NC='\033[0m'
+BOLD='\033[1m'
+DIM='\033[2m'
+# shellcheck disable=SC2034
+RED='\033[38;5;196m'
+# shellcheck disable=SC2034
+GREEN='\033[38;5;46m'
+# shellcheck disable=SC2034
+YELLOW='\033[38;5;226m'
+# shellcheck disable=SC2034
+BLUE='\033[38;5;39m'
+# shellcheck disable=SC2034
+MAGENTA='\033[38;5;162m'
+# shellcheck disable=SC2034
+CYAN='\033[38;5;51m'
+# shellcheck disable=SC2034
+ORANGE='\033[38;5;208m'
+# shellcheck disable=SC2034
+WHITE='\033[38;5;255m'
+# shellcheck disable=SC2034
+GRAY='\033[38;5;240m'
+# shellcheck disable=SC2034
+BG_HEADER='\033[48;5;236m'
+
+# ═══════════════════════════════════════════════════════════════
+# 3. Versioning & Branch Awareness
+# ═══════════════════════════════════════════════════════════════
+GET_BRANCH_TAG() {
+	local branch
+	if [[ -d "$PROJECT_ROOT/.git" ]]; then
+		branch=$(git -C "$PROJECT_ROOT" symbolic-ref --short HEAD 2>/dev/null || git -C "$PROJECT_ROOT" rev-parse --short HEAD 2>/dev/null)
+	fi
+
+	case "${branch:-}" in
+	nightly)
+		echo -e " ${BOLD}${MAGENTA}[NIGHTLY]${RESET}"
+		;;
+	main)
+		echo -e " ${BOLD}${CYAN}[MAIN]${RESET}"
+		;;
+	*)
+		if [[ -n "$branch" ]]; then
+			echo -e " ${DIM}[$branch]${RESET}"
+		else
+			echo ""
+		fi
+		;;
+	esac
+}
+
+# ═══════════════════════════════════════════════════════════════
+# 4. Zsh-Specific Advanced Metadata Functions
+# ═══════════════════════════════════════════════════════════════
+# These only activate if running in Zsh (e.g., repair_apple_photos.sh)
+if [ -n "${ZSH_VERSION:-}" ]; then
+	typeset -gA dir_mtimes
+	typeset -gA dir_btimes
+
+	save_dir_timestamps() {
+		local target_dir="${1:?}"
+		echo -e "${DIM}🗂️  Saving directory timestamps...${NC}"
+		dir_mtimes=()
+		dir_btimes=()
+		while IFS= read -r d; do
+			local abs_d
+			abs_d=$(realpath "$d")
+			dir_mtimes["$abs_d"]=$(stat -f%m "$abs_d")
+			dir_btimes["$abs_d"]=$(stat -f%B "$abs_d" 2>/dev/null || echo "0")
+		done < <(find "$target_dir" -type d 2>/dev/null)
+	}
+
+	restore_dir_timestamps() {
+		echo -e "${DIM}🗂️  Restoring directory timestamps...${NC}"
+		# Use Zsh key expansion (@k) safely
+		# shellcheck disable=SC2296
+		local keys=("${(@k)dir_mtimes}")
+		local d m b
+		# Sort keys by length descending to restore child directories before parents
+		# shellcheck disable=SC2296
+		for d in ${(f)"$(printf '%s\n' "${keys[@]}" | awk '{ print length, $0 }' | sort -rn | cut -d' ' -f2-)"}; do
+			[[ -z "$d" ]] && continue
+			m="${dir_mtimes[$d]}"
+			b="${dir_btimes[$d]}"
+			if [[ -d "$d" ]]; then
+				if ! touch -mt "$(date -r "$m" +%Y%m%d%H%M.%S)" "$d" 2>/dev/null; then
+					warn_shell_once "RESTORE_DIR_MTIME" "failed to restore one or more directory modification times."
+				fi
+				if [[ "$b" != "0" ]] && ! SetFile -d "$(date -r "$b" +%m/%d/%Y\ %H:%M:%S)" "$d" 2>/dev/null; then
+					warn_shell_once "RESTORE_DIR_BTIME" "failed to restore one or more directory creation times."
+				fi
+			fi
+		done
+	}
+else
+	# Fallback for Bash (silent placeholders)
+	save_dir_timestamps() { :; }
+	restore_dir_timestamps() { :; }
+fi
+
+# ═══════════════════════════════════════════════════════════════
+# Smart Build System (from smart_build.sh)
+# ═══════════════════════════════════════════════════════════════
 cd "$PROJECT_ROOT"
 
-# ═══════════════════════════════════════════════════════════════
-# 项目配置 - 兼容 bash 3.x
-# ═══════════════════════════════════════════════════════════════
-# 格式: "项目目录:二进制名称"
+# Format: "project_dir:binary_name"
 ALL_PROJECTS=(
 	"img_hevc:img-hevc"
 	"vid_hevc:vid-hevc"
@@ -32,10 +267,10 @@ ALL_PROJECTS=(
 	"vid_av1:vid-av1"
 )
 
-# 默认构建项目（HEVC工具）
+# Default build targets (HEVC tools)
 DEFAULT_PROJECTS=("img_hevc" "vid_hevc")
 
-# 辅助函数：根据项目目录获取二进制名称
+# Helper: look up binary name by project directory
 get_binary_name() {
 	local project_dir="$1"
 	for entry in "${ALL_PROJECTS[@]}"; do
@@ -50,20 +285,23 @@ get_binary_name() {
 	return 1
 }
 
-# CLI 参数
+# ═══════════════════════════════════════════════════════════════
+# CLI flags
+# ═══════════════════════════════════════════════════════════════
 FORCE_REBUILD=false
 CLEAN_BUILD=false
 VERBOSE=false
 CLEAN_OLD_BINARIES=true
 BUILD_ALL=false
+DO_KONDO=false
 SELECTED_PROJECTS=()
 
-# 🔥 v7.5: 时间戳验证配置
+# Timestamp verification config
 VERIFY_TIMESTAMPS=true
-MAX_STALE_RETRIES=2 # 最多允许2次时间戳验证失败，第3次强制重新编译
+MAX_STALE_RETRIES=2     # Force full rebuild after this many verification failures
 
 # ═══════════════════════════════════════════════════════════════
-# 输出函数
+# Output helpers
 # ═══════════════════════════════════════════════════════════════
 print_header() {
 	echo ""
@@ -96,14 +334,13 @@ print_error() {
 }
 
 # ═══════════════════════════════════════════════════════════════
-# 🔥 v7.4: 智能清理过时二进制
+# Remove stale binaries outside target/
 # ═══════════════════════════════════════════════════════════════
 clean_old_binaries() {
 	echo -e "${YELLOW}🧹 Cleaning old binaries...${NC}"
 
 	local cleaned=0
 
-	# 查找并删除所有旧的二进制文件（不在 target/release 中的）
 	for entry in "${ALL_PROJECTS[@]}"; do
 		local binary_name="${entry##*:}"
 		while IFS= read -r -d '' old_binary; do
@@ -122,7 +359,7 @@ clean_old_binaries() {
 }
 
 # ═══════════════════════════════════════════════════════════════
-# 🔥 v8.3: Kondo 深度清理
+# Deep cleanup via kondo
 # ═══════════════════════════════════════════════════════════════
 clean_with_kondo() {
 	if ! command -v kondo >/dev/null 2>&1; then
@@ -131,19 +368,20 @@ clean_with_kondo() {
 	fi
 
 	echo -e "${YELLOW}🧹 Project Deep Cleanup (kondo)...${NC}"
-	# 使用安全参数：仅清理本项目，排除时间机器和用户库
-	kondo -n -I /Volumes -I ~/Library .
+	# Fix: removed -n (dry-run) flag so kondo actually deletes artifacts.
+	# -I flags exclude Time Machine and user Library volumes.
+	kondo -I /Volumes -I ~/Library .
 	echo ""
 }
 
 # ═══════════════════════════════════════════════════════════════
-# 时间戳函数
+# Timestamp helpers
 # ═══════════════════════════════════════════════════════════════
 get_newest_source_mtime() {
 	local project_dir="$1"
 	local newest=0
 
-	# 项目源代码
+	# Project source files
 	if [[ -d "$project_dir/src" ]]; then
 		while IFS= read -r -d '' file; do
 			local mtime
@@ -158,7 +396,7 @@ get_newest_source_mtime() {
 		[[ $mtime -gt $newest ]] && newest=$mtime
 	fi
 
-	# shared_utils 依赖
+	# Shared utility dependency
 	if [[ -d "shared_utils/src" ]]; then
 		while IFS= read -r -d '' file; do
 			local mtime
@@ -167,7 +405,7 @@ get_newest_source_mtime() {
 		done < <(find "shared_utils/src" -type f -name "*.rs" -print0 2>/dev/null)
 	fi
 
-	# 🔥 v8.2.4: Also check shared_utils/Cargo.toml and workspace Cargo.lock
+	# Also check shared_utils/Cargo.toml and workspace Cargo.lock
 	for dep_file in "shared_utils/Cargo.toml" "Cargo.lock"; do
 		if [[ -f "$dep_file" ]]; then
 			local mtime
@@ -186,13 +424,26 @@ get_binary_mtime() {
 }
 
 # ═══════════════════════════════════════════════════════════════
-# 编译决策
+# Resolve binary path (unified workspace target directory)
+# ═══════════════════════════════════════════════════════════════
+get_binary_path() {
+	local project_dir="$1"
+	local binary_name="$2"
+
+	if [[ -f "target/release/$binary_name" ]]; then
+		echo "target/release/$binary_name"
+	else
+		echo ""
+	fi
+}
+
+# ═══════════════════════════════════════════════════════════════
+# Decide whether a project needs rebuilding
 # ═══════════════════════════════════════════════════════════════
 decide_build_action() {
 	local project_dir="$1"
 	local binary_name="$2"
 
-	# 🔥 v7.5: 使用 get_binary_path 获取正确的二进制路径
 	local binary_path
 	binary_path=$(get_binary_path "$project_dir" "$binary_name")
 
@@ -209,20 +460,8 @@ decide_build_action() {
 }
 
 # ═══════════════════════════════════════════════════════════════
-# 🔥 v7.5: 时间戳验证函数
+# Verify that the binary was actually updated after compilation
 # ═══════════════════════════════════════════════════════════════
-get_binary_path() {
-	local project_dir="$1"
-	local binary_name="$2"
-
-	# 🔥 v8.3: Unified workspace target directory
-	if [[ -f "target/release/$binary_name" ]]; then
-		echo "target/release/$binary_name"
-	else
-		echo ""
-	fi
-}
-
 verify_binary_timestamp() {
 	local binary_path="$1"
 	local compile_start_time="$2"
@@ -236,10 +475,10 @@ verify_binary_timestamp() {
 	local binary_mtime
 	binary_mtime=$(get_binary_mtime "$binary_path")
 
-	# 二进制文件的修改时间应该 >= 编译开始时间
+	# Binary mtime must be >= compilation start time
 	if [[ $binary_mtime -lt $compile_start_time ]]; then
 		echo -e "${RED}⚠️  TIMESTAMP VERIFICATION FAILED${NC}"
-		echo -e "${DIM}   Binary mtime: $(date -r "$binary_mtime" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date -d @"$binary_mtime" '+%Y-%m-%d %H:%M:%S' 2>/dev/null)${NC}"
+		echo -e "${DIM}   Binary mtime:  $(date -r "$binary_mtime"      '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date -d @"$binary_mtime"      '+%Y-%m-%d %H:%M:%S' 2>/dev/null)${NC}"
 		echo -e "${DIM}   Compile start: $(date -r "$compile_start_time" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date -d @"$compile_start_time" '+%Y-%m-%d %H:%M:%S' 2>/dev/null)${NC}"
 		echo -e "${YELLOW}   ⚠️  Binary timestamp is older than compile time!${NC}"
 		return 1
@@ -249,24 +488,21 @@ verify_binary_timestamp() {
 }
 
 # ═══════════════════════════════════════════════════════════════
-# 编译函数
+# Compile a single project, with optional timestamp-verified retry
 # ═══════════════════════════════════════════════════════════════
 build_project() {
 	local project_dir="$1"
 	local binary_name="$2"
 	local retry_count="${3:-0}"
 
-	# 记录编译开始时间
 	local compile_start_time
 	compile_start_time=$(date +%s)
 
-	# 🔥 修复：正确处理 cargo 输出和返回码
 	if ! cargo build --release --manifest-path "$project_dir/Cargo.toml"; then
 		print_error "$project_dir"
 		return 1
 	fi
 
-	# 🔥 v7.5: 编译后验证时间戳
 	if [[ "$VERIFY_TIMESTAMPS" == "true" ]]; then
 		local binary_path
 		binary_path=$(get_binary_path "$project_dir" "$binary_name")
@@ -277,19 +513,20 @@ build_project() {
 			return 1
 		fi
 
-		# 等待1秒确保文件系统同步
+		# Wait for filesystem to flush
 		sleep 1
 
 		if ! verify_binary_timestamp "$binary_path" "$compile_start_time"; then
-			# 时间戳验证失败
 			if [[ $retry_count -lt $MAX_STALE_RETRIES ]]; then
 				echo -e "${YELLOW}🔄 Retry $((retry_count + 1))/$MAX_STALE_RETRIES: Rebuilding with clean...${NC}"
-				# 清理并重试
-				# 🔥 v8.3: Only clean root target
+				# Partial clean of workspace root target (not per-project paths)
 				rm -rf "target/release/deps" 2>/dev/null || true
 				rm -rf "target/release/.fingerprint" 2>/dev/null || true
-				build_project "$project_dir" "$binary_name" $((retry_count + 1))
-				return $?
+				# Fix: use if/return pattern so set -e doesn't swallow the failure
+				if ! build_project "$project_dir" "$binary_name" $((retry_count + 1)); then
+					return 1
+				fi
+				return 0
 			else
 				echo -e "${RED}❌ CRITICAL: Timestamp verification failed after $MAX_STALE_RETRIES retries${NC}"
 				echo -e "${YELLOW}💡 Suggestion: Try 'cargo clean' or check file system issues${NC}"
@@ -302,7 +539,7 @@ build_project() {
 }
 
 # ═══════════════════════════════════════════════════════════════
-# CLI 参数解析
+# CLI argument parsing
 # ═══════════════════════════════════════════════════════════════
 parse_args() {
 	while [[ $# -gt 0 ]]; do
@@ -372,7 +609,7 @@ parse_args() {
 			echo "  $0                # Build HEVC tools (default)"
 			echo "  $0 --all          # Build all projects"
 			echo "  $0 --hevc --force # Force rebuild HEVC tools"
-			echo "  $0 --img --av1    # Build AV1 image tools"
+			echo "  $0 --img --av1    # Build all image and AV1 tools"
 			exit 0
 			;;
 		*)
@@ -384,16 +621,15 @@ parse_args() {
 }
 
 # ═══════════════════════════════════════════════════════════════
-# 主函数
+# Main
 # ═══════════════════════════════════════════════════════════════
 main() {
 	parse_args "$@"
 	print_header
 
-	# 确定要构建的项目
+	# Determine which projects to build
 	local projects_to_build=()
 	if [[ "$BUILD_ALL" == "true" ]]; then
-		# 构建所有项目 - 提取项目目录名
 		for entry in "${ALL_PROJECTS[@]}"; do
 			projects_to_build+=("${entry%%:*}")
 		done
@@ -403,25 +639,39 @@ main() {
 		projects_to_build=("${DEFAULT_PROJECTS[@]}")
 	fi
 
+	# Fix: deduplicate project list to avoid double-building when flags overlap
+	# (e.g. --img --av1 both add img_av1)
+	local seen=()
+	local deduped=()
+	for proj in "${projects_to_build[@]}"; do
+		local already=false
+		for s in "${seen[@]}"; do
+			[[ "$s" == "$proj" ]] && already=true && break
+		done
+		if [[ "$already" == "false" ]]; then
+			seen+=("$proj")
+			deduped+=("$proj")
+		fi
+	done
+	projects_to_build=("${deduped[@]}")
+
 	echo -e "${CYAN}📦 Building:${NC} ${BOLD}${projects_to_build[*]}${NC}"
 	echo ""
 
-	# 清理旧二进制
+	# Remove stale binaries outside target/
 	if [[ "$CLEAN_OLD_BINARIES" == "true" ]]; then
 		clean_old_binaries
 	fi
 
-	# 清理构建产物
+	# Clean workspace root target/ artifacts (not per-project subdirectories)
 	if [[ "$CLEAN_BUILD" == "true" ]]; then
 		echo -e "${YELLOW}🧹 Cleaning build artifacts...${NC}"
-		for proj_dir in "${projects_to_build[@]}"; do
-			rm -rf "$proj_dir/target/release/deps" 2>/dev/null || true
-			rm -rf "$proj_dir/target/release/.fingerprint" 2>/dev/null || true
-		done
-		rm -rf "shared_utils/target/release/deps" 2>/dev/null || true
+		# Fix: workspace builds share a single root target/; clean that instead
+		rm -rf "target/release/deps" 2>/dev/null || true
+		rm -rf "target/release/.fingerprint" 2>/dev/null || true
 		echo ""
 
-		# 🔥 v8.3: 自动触发 kondo 清理
+		# Also run kondo deep clean when --clean is requested
 		clean_with_kondo
 	fi
 
@@ -476,19 +726,19 @@ main() {
 		echo -e "${GREEN}✅ Built $rebuilt, skipped $skipped${NC}"
 	fi
 
-	# 显示二进制信息
+	# Show binary details when verbose or after a fresh build
 	if [[ "$VERBOSE" == "true" ]] || [[ $rebuilt -gt 0 ]]; then
 		echo ""
 		echo -e "${DIM}Binary info:${NC}"
 		for proj_dir in "${projects_to_build[@]}"; do
 			local binary_name
 			binary_name=$(get_binary_name "$proj_dir")
-			if [[ -z "$binary_name" ]]; then
-				continue
-			fi
+			[[ -z "$binary_name" ]] && continue
 			local binary_path
 			binary_path=$(get_binary_path "$proj_dir" "$binary_name")
 			if [[ -n "$binary_path" ]] && [[ -f "$binary_path" ]]; then
+				# Fix: declare size and mtime as local variables
+				local size mtime
 				size=$(du -h "$binary_path" | awk '{print $1}')
 				mtime=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M" "$binary_path" 2>/dev/null || stat -c "%y" "$binary_path" 2>/dev/null | cut -d. -f1)
 				echo -e "  ${BOLD}$binary_name${NC}: $size, $mtime"

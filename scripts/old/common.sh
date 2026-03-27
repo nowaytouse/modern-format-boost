@@ -198,7 +198,7 @@ GET_BRANCH_TAG() {
 
 # 3. Zsh-Specific Advanced Metadata Functions
 # These only activate if running in Zsh (e.g., repair_apple_photos.sh)
-if [ -n "$ZSH_VERSION" ]; then
+if [ -n "${ZSH_VERSION:-}" ]; then
 	typeset -gA dir_mtimes
 	typeset -gA dir_btimes
 
