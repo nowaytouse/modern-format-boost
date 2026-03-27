@@ -562,19 +562,19 @@ fn synthesize_hdr(
     for y in 0..height {
         for x in 0..width {
             // 1. Get Normalized SDR (Linearized later)
-            let (r_norm, g_norm, b_norm) = if let Some(ref buf) = sdr_16 {
-                let px = buf.get_pixel(x, y);
+            let (r_norm, g_norm, b_norm) = if let Some(buf) = sdr_16.as_ref() {
+                let p = <image::ImageBuffer<image::Rgb<u16>, Vec<u16>>>::get_pixel(buf, x, y);
                 (
-                    f32::from(px[0]) / 65535.0,
-                    f32::from(px[1]) / 65535.0,
-                    f32::from(px[2]) / 65535.0,
+                    f32::from(p.0[0]) / 65535.0,
+                    f32::from(p.0[1]) / 65535.0,
+                    f32::from(p.0[2]) / 65535.0,
                 )
-            } else if let Some(ref buf) = sdr_8 {
-                let px = buf.get_pixel(x, y);
+            } else if let Some(buf) = sdr_8.as_ref() {
+                let p = <image::ImageBuffer<image::Rgb<u8>, Vec<u8>>>::get_pixel(buf, x, y);
                 (
-                    f32::from(px[0]) / 255.0,
-                    f32::from(px[1]) / 255.0,
-                    f32::from(px[2]) / 255.0,
+                    f32::from(p.0[0]) / 255.0,
+                    f32::from(p.0[1]) / 255.0,
+                    f32::from(p.0[2]) / 255.0,
                 )
             } else {
                 unreachable!("SDR buffer type mismatch");
@@ -596,31 +596,31 @@ fn synthesize_hdr(
 
             let gain_channels = gain_resized.color().channel_count();
             let (gain_r, gain_g, gain_b) = if gain_channels >= 3 {
-                if let Some(ref buf) = gain_rgb16 {
-                    let p: &image::Rgb<u16> = buf.get_pixel(x, y);
+                if let Some(buf) = gain_rgb16.as_ref() {
+                    let p = <image::ImageBuffer<image::Rgb<u16>, Vec<u16>>>::get_pixel(buf, x, y);
                     (
-                        apply_gain(f32::from(p[0]), 65535.0),
-                        apply_gain(f32::from(p[1]), 65535.0),
-                        apply_gain(f32::from(p[2]), 65535.0),
+                        apply_gain(f32::from(p.0[0]), 65535.0),
+                        apply_gain(f32::from(p.0[1]), 65535.0),
+                        apply_gain(f32::from(p.0[2]), 65535.0),
                     )
-                } else if let Some(ref buf) = gain_rgb8 {
-                    let p: &image::Rgb<u8> = buf.get_pixel(x, y);
+                } else if let Some(buf) = gain_rgb8.as_ref() {
+                    let p = <image::ImageBuffer<image::Rgb<u8>, Vec<u8>>>::get_pixel(buf, x, y);
                     (
-                        apply_gain(f32::from(p[0]), 255.0),
-                        apply_gain(f32::from(p[1]), 255.0),
-                        apply_gain(f32::from(p[2]), 255.0),
+                        apply_gain(f32::from(p.0[0]), 255.0),
+                        apply_gain(f32::from(p.0[1]), 255.0),
+                        apply_gain(f32::from(p.0[2]), 255.0),
                     )
                 } else {
                     let g_val = apply_gain(128.0, 255.0);
                     (g_val, g_val, g_val)
                 }
             } else {
-                let g_val = if let Some(ref buf) = gain_16 {
-                    let p: &image::Luma<u16> = buf.get_pixel(x, y);
-                    apply_gain(f32::from(p[0]), 65535.0)
-                } else if let Some(ref buf) = gain_8 {
-                    let p: &image::Luma<u8> = buf.get_pixel(x, y);
-                    apply_gain(f32::from(p[0]), 255.0)
+                let g_val = if let Some(buf) = gain_16.as_ref() {
+                    let p = <image::ImageBuffer<image::Luma<u16>, Vec<u16>>>::get_pixel(buf, x, y);
+                    apply_gain(f32::from(p.0[0]), 65535.0)
+                } else if let Some(buf) = gain_8.as_ref() {
+                    let p = <image::ImageBuffer<image::Luma<u8>, Vec<u8>>>::get_pixel(buf, x, y);
+                    apply_gain(f32::from(p.0[0]), 255.0)
                 } else {
                     apply_gain(128.0, 255.0)
                 };
