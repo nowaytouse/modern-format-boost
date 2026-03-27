@@ -446,7 +446,7 @@ fn parse_gainmap_from_xmp(xmp_str: &str) -> GainMapParams {
                 for attr in e.attributes().flatten() {
                     let local_name = attr.key.local_name();
                     let attr_name = String::from_utf8_lossy(local_name.as_ref());
-                    let attr_val = String::from_utf8_lossy(&attr.value);
+                    let attr_val = String::from_utf8_lossy(attr.value.as_ref());
                     if let Ok(f) = attr_val.parse::<f32>() {
                         match attr_name.as_ref() {
                             n if n.contains("GainMapMax") => params.gain_map_max = f,
@@ -469,35 +469,35 @@ fn parse_gainmap_from_xmp(xmp_str: &str) -> GainMapParams {
 
                 if name.contains("GainMapMax") {
                     if let Ok(val) = reader.read_text(e.name()) {
-                        let text = String::from_utf8_lossy(val.as_ref());
+                        let text = reader.decoder().decode(val.as_ref()).unwrap_or_default().to_string();
                         if let Ok(f) = text.parse::<f32>() {
                             params.gain_map_max = f;
                         }
                     }
                 } else if name.contains("GainMapMin") {
                     if let Ok(val) = reader.read_text(e.name()) {
-                        let text = String::from_utf8_lossy(val.as_ref());
+                        let text = reader.decoder().decode(val.as_ref()).unwrap_or_default().to_string();
                         if let Ok(f) = text.parse::<f32>() {
                             params.gain_map_min = f;
                         }
                     }
                 } else if name.contains("OffsetSDR") || name.contains("OffsetSdr") {
                     if let Ok(val) = reader.read_text(e.name()) {
-                        let text = String::from_utf8_lossy(val.as_ref());
+                        let text = reader.decoder().decode(val.as_ref()).unwrap_or_default().to_string();
                         if let Ok(f) = text.parse::<f32>() {
                             params.offset_sdr = f;
                         }
                     }
                 } else if name.contains("OffsetHDR") || name.contains("OffsetHdr") {
                     if let Ok(val) = reader.read_text(e.name()) {
-                        let text = String::from_utf8_lossy(val.as_ref());
+                        let text = reader.decoder().decode(val.as_ref()).unwrap_or_default().to_string();
                         if let Ok(f) = text.parse::<f32>() {
                             params.offset_hdr = f;
                         }
                     }
                 } else if name.contains("Gamma") {
                     if let Ok(val) = reader.read_text(e.name()) {
-                        let text = String::from_utf8_lossy(val.as_ref());
+                        let text = reader.decoder().decode(val.as_ref()).unwrap_or_default().to_string();
                         if let Ok(f) = text.parse::<f32>() {
                             params.gamma = f;
                         }
@@ -569,19 +569,19 @@ fn synthesize_hdr(
     for y in 0..height {
         for x in 0..width {
             // 1. Get Normalized SDR (Linearized later)
-            let (r_norm, g_norm, b_norm) = if let Some(ref buf) = sdr_16 {
-                let px = buf.get_pixel(x, y);
+            let (r_norm, g_norm, b_norm) = if let Some(buf) = sdr_16.as_ref() {
+                let p = <image::ImageBuffer<image::Rgb<u16>, Vec<u16>>>::get_pixel(buf, x, y);
                 (
-                    f32::from(px[0]) / 65535.0,
-                    f32::from(px[1]) / 65535.0,
-                    f32::from(px[2]) / 65535.0,
+                    f32::from(p.0[0]) / 65535.0,
+                    f32::from(p.0[1]) / 65535.0,
+                    f32::from(p.0[2]) / 65535.0,
                 )
-            } else if let Some(ref buf) = sdr_8 {
-                let px = buf.get_pixel(x, y);
+            } else if let Some(buf) = sdr_8.as_ref() {
+                let p = <image::ImageBuffer<image::Rgb<u8>, Vec<u8>>>::get_pixel(buf, x, y);
                 (
-                    f32::from(px[0]) / 255.0,
-                    f32::from(px[1]) / 255.0,
-                    f32::from(px[2]) / 255.0,
+                    f32::from(p.0[0]) / 255.0,
+                    f32::from(p.0[1]) / 255.0,
+                    f32::from(p.0[2]) / 255.0,
                 )
             } else {
                 unreachable!("SDR buffer type mismatch");
@@ -603,31 +603,31 @@ fn synthesize_hdr(
 
             let gain_channels = gain_resized.color().channel_count();
             let (gain_r, gain_g, gain_b) = if gain_channels >= 3 {
-                if let Some(ref buf) = gain_rgb16 {
-                    let p: &image::Rgb<u16> = buf.get_pixel(x, y);
+                if let Some(buf) = gain_rgb16.as_ref() {
+                    let p = <image::ImageBuffer<image::Rgb<u16>, Vec<u16>>>::get_pixel(buf, x, y);
                     (
-                        apply_gain(f32::from(p[0]), 65535.0),
-                        apply_gain(f32::from(p[1]), 65535.0),
-                        apply_gain(f32::from(p[2]), 65535.0),
+                        apply_gain(f32::from(p.0[0]), 65535.0),
+                        apply_gain(f32::from(p.0[1]), 65535.0),
+                        apply_gain(f32::from(p.0[2]), 65535.0),
                     )
-                } else if let Some(ref buf) = gain_rgb8 {
-                    let p: &image::Rgb<u8> = buf.get_pixel(x, y);
+                } else if let Some(buf) = gain_rgb8.as_ref() {
+                    let p = <image::ImageBuffer<image::Rgb<u8>, Vec<u8>>>::get_pixel(buf, x, y);
                     (
-                        apply_gain(f32::from(p[0]), 255.0),
-                        apply_gain(f32::from(p[1]), 255.0),
-                        apply_gain(f32::from(p[2]), 255.0),
+                        apply_gain(f32::from(p.0[0]), 255.0),
+                        apply_gain(f32::from(p.0[1]), 255.0),
+                        apply_gain(f32::from(p.0[2]), 255.0),
                     )
                 } else {
                     let g_val = apply_gain(128.0, 255.0);
                     (g_val, g_val, g_val)
                 }
             } else {
-                let g_val = if let Some(ref buf) = gain_16 {
-                    let p: &image::Luma<u16> = buf.get_pixel(x, y);
-                    apply_gain(f32::from(p[0]), 65535.0)
-                } else if let Some(ref buf) = gain_8 {
-                    let p: &image::Luma<u8> = buf.get_pixel(x, y);
-                    apply_gain(f32::from(p[0]), 255.0)
+                let g_val = if let Some(buf) = gain_16.as_ref() {
+                    let p = <image::ImageBuffer<image::Luma<u16>, Vec<u16>>>::get_pixel(buf, x, y);
+                    apply_gain(f32::from(p.0[0]), 65535.0)
+                } else if let Some(buf) = gain_8.as_ref() {
+                    let p = <image::ImageBuffer<image::Luma<u8>, Vec<u8>>>::get_pixel(buf, x, y);
+                    apply_gain(f32::from(p.0[0]), 255.0)
                 } else {
                     apply_gain(128.0, 255.0)
                 };
