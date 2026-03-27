@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Modern Format Boost - Drag & Drop Processor v7.0 (Python Edition)
+"""Modern Format Boost - Drag & Drop Processor (Python Edition)
 Usage: Drag folder onto this script or double-click to select
 """
 
@@ -72,6 +72,7 @@ LOG_FILE = ""
 VERBOSE_LOG_FILE = ""
 SESSION_START_TIME = ""
 WATCH_MODE = False
+BRANCH_TYPE = "NIGHTLY"
 
 # Threading & Control
 stats_lock = threading.Lock()
@@ -175,23 +176,10 @@ def rename_log_to_project():
         pass
 
 def get_branch_tag():
-    try:
-        if (PROJECT_ROOT / ".git").is_dir():
-            res = subprocess.run(["git", "-C", str(PROJECT_ROOT), "symbolic-ref", "--short", "HEAD"], capture_output=True, text=True)
-            if res.returncode == 0:
-                branch = res.stdout.strip()
-            else:
-                res = subprocess.run(["git", "-C", str(PROJECT_ROOT), "rev-parse", "--short", "HEAD"], capture_output=True, text=True)
-                branch = res.stdout.strip()
-
-            if branch == "nightly":
-                return f" {BOLD}{MAGENTA}[NIGHTLY]{RESET}"
-            elif branch == "main":
-                return f" {BOLD}{CYAN}[MAIN]{RESET}"
-            elif branch:
-                return f" {DIM}[{branch}]{RESET}"
-    except Exception:
-        pass
+    if BRANCH_TYPE == "NIGHTLY":
+        return f" {BOLD}{MAGENTA}[NIGHTLY]{RESET}"
+    elif BRANCH_TYPE == "MAIN":
+        return f" {BOLD}{CYAN}[MAIN]{RESET}"
     return ""
 
 def draw_header():
