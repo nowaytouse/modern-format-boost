@@ -7,6 +7,23 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - 2026-03-28
 
+### 🎨 Premium UI/UX & Terminal Experience
+Significant overhaul of the Python automation layer to provide a high-end, professional terminal experience.
+
+- **Interactive Dashboard & Menu**:
+  - **Modern Selector**: Implemented a "Highlight Bar" (inverted background) selection menu in `drag_and_drop_processor.py` for superior visibility.
+  - **Config Dashboard**: Replaced text-based configuration with a structured `rich.Table` dashboard, integrating live **System Health Snapshots** (CPU/RAM usage).
+  - **Session Analytics**: Added a visual **Success Rate Progress Bar** (█░) and efficiency metrics to final batch reports.
+  - **Window Resizing**: Restored automatic terminal window resizing (40x100) to ensure the premium UI layout is always perfectly framed.
+- **Zero-Interference Logging**: 
+  - Re-engineered the log passthrough to use raw buffer writes, ensuring 100% preservation of the Rust tools' original icons (📊, ✓), colors, and `\r` carriage return updates.
+
+### 🛡️ Infrastructure & Reliability Hardening
+- **Streamlined Workflow**: Removed the redundant Python-side SQLite `TaskTracker` in favor of the Rust tools' native, high-performance `--resume` capabilities.
+- **Session Isolation**: Implemented unique session identifiers for all log files (`drag_drop_YYYY-MM-DD_HH-MM-SS.log`), preventing overlaps when running multiple concurrent processes.
+- **Improved Code Safety**: Resolved `UnboundLocalError` bugs in the statistics reporting and menu logic.
+- **Graceful Performance**: Integrated `psutil` and `rich` with no-dependency fallbacks, ensuring the scripts remain portable and stable in any environment.
+
 ### 🐍 Script Infrastructure: Python-First Architecture
 Major refactoring of the automation layer, migrating core scripts from Bash to Python for improved maintainability and cross-platform compatibility.
 

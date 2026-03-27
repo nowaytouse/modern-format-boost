@@ -8,6 +8,13 @@ import shutil
 import time
 from pathlib import Path
 
+try:
+    from rich.console import Console
+    from rich.table import Table
+    console = Console()
+except ImportError:
+    console = None
+
 # ANSI Colors
 if sys.stdout.isatty():
     RED = '\033[0;31m'
@@ -357,30 +364,54 @@ def main():
     else:
         skip_optional(tracker, "expensive optional checks", "disabled by --no-expensive")
 
-    print(f"\n{BLUE}========================================{NC}")
-    print(f"{BOLD}Summary{NC}")
-    print(f"Passed: {GREEN}{tracker.passed}{NC}")
-    print(f"Required failures: {RED}{tracker.failed}{NC}")
-    print(f"Optional warnings: {YELLOW}{tracker.warned}{NC}")
-    print(f"Skipped: {BLUE}{tracker.skipped}{NC}")
-
-    if tracker.failed_steps:
-        print(f"\n{RED}Required failures:{NC}")
-        for s in tracker.failed_steps: print(f"  - {s}")
-
-    if tracker.warned_steps:
-        print(f"\n{YELLOW}Optional warnings:{NC}")
-        for s in tracker.warned_steps: print(f"  - {s}")
-
-    if tracker.skipped_steps:
-        print(f"\n{BLUE}Skipped checks:{NC}")
-        for s in tracker.skipped_steps: print(f"  - {s}")
+    if console:
+        # Professional Rich Summary
+        table = Table(title="Modern Format Boost - Quality Scan Summary", border_style="dim")
+        table.add_column("Result", justify="center")
+        table.add_column("Step Name", style="bold")
+        table.add_column("Type")
+        
+        # We need to map tracker data to table. 
+        # For simplicity, we'll just show the high level stats if the trackers aren't easily mappable 
+        # or we can recreate the logic. 
+        # Re-using the tracker categories:
+        table.add_row("[green]PASS[/green]", "Overall Passed", str(tracker.passed))
+        table.add_row("[red]FAIL[/red]", "Required Failures", str(tracker.failed))
+        table.add_row("[yellow]WARN[/yellow]", "Optional Warnings", str(tracker.warned))
+        table.add_row("[blue]SKIP[/blue]", "Skipped Checks", str(tracker.skipped))
+        
+        console.print("\n")
+        console.print(table)
+        
+        if tracker.failed > 0:
+            for s in tracker.failed_steps: console.print(f"  [red]✗[/red] {s}")
+    else:
+        print(f"\n{BLUE}========================================{NC}")
+        print(f"{BOLD}Summary{NC}")
+        print(f"Passed: {GREEN}{tracker.passed}{NC}")
+        print(f"Required failures: {RED}{tracker.failed}{NC}")
+        print(f"Optional warnings: {YELLOW}{tracker.warned}{NC}")
+        print(f"Skipped: {BLUE}{tracker.skipped}{NC}")
+    
+        if tracker.failed_steps:
+            print(f"\n{RED}Required failures:{NC}")
+            for s in tracker.failed_steps: print(f"  - {s}")
+    
+        if tracker.warned_steps:
+            print(f"\n{YELLOW}Optional warnings:{NC}")
+            for s in tracker.warned_steps: print(f"  - {s}")
+    
+        if tracker.skipped_steps:
+            print(f"\n{BLUE}Skipped checks:{NC}")
+            for s in tracker.skipped_steps: print(f"  - {s}")
 
     if tracker.failed > 0:
-        print(f"\n{RED}Quality scan completed with required check failures.{NC}")
+        if console: console.print(f"\n[error]Quality scan completed with required check failures.[/error]")
+        else: print(f"\n{RED}Quality scan completed with required check failures.{NC}")
         sys.exit(1)
 
-    print(f"\n{GREEN}Quality scan completed successfully (required checks passed).{NC}")
+    if console: console.print(f"\n[success]Quality scan completed successfully (required checks passed).[/success]")
+    else: print(f"\n{GREEN}Quality scan completed successfully (required checks passed).{NC}")
 
 if __name__ == "__main__":
     main()
