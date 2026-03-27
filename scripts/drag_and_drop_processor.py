@@ -469,6 +469,7 @@ def check_system_resources(check_dir):
         pass
 
 def stream_and_log_process(cmd, parse_type):
+    global IMG_SUCCEEDED, IMG_SKIPPED, IMG_FAILED, VID_SUCCEEDED, VID_SKIPPED, VID_FAILED
     tmp_out = ""
     # Explicitly pass current environment to preserve COLUMNS/LINES/COLOR flags
     res = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=os.environ.copy())
@@ -476,23 +477,31 @@ def stream_and_log_process(cmd, parse_type):
     lf = open(LOG_FILE, "ab") if LOG_FILE else None
     
     # Use low-level file descriptors for zero-buffering / zero-latency relay
-    fd = res.stdout.fileno()
+    pipe_fd = res.stdout.fileno()
+    out_fd = sys.stdout.fileno()
+    
+    # Kernel-level non-blocking mode for ultimate responsiveness
+    os.set_blocking(pipe_fd, False)
     
     try:
         while True:
-            # Low-level read from pipe without Python library buffering
-            # This is the most robust way to get flicker-free, real-time progress bars from indicatif
-            chunk = os.read(fd, 4096)
-            if not chunk:
+            try:
+                # Direct kernel read (non-buffered)
+                chunk = os.read(pipe_fd, 8192)
+            except BlockingIOError:
+                # No data: sub-millisecond sleep to ensure UI responsiveness while saving CPU
                 if res.poll() is not None: break
-                time.sleep(0.002) # Zero-latency cycle
+                time.sleep(0.001) 
                 continue
             
-            # Direct binary write to preserve VT100/ANSI sequences precisely
-            os.write(sys.stdout.fileno(), chunk)
-            sys.stdout.flush()
+            if not chunk:
+                if res.poll() is not None: break
+                continue
             
-            # Capture for stats parsing
+            # Direct kernel write (zero latency)
+            os.write(out_fd, chunk)
+            
+            # Capture for stats parsing (happens post-display)
             try:
                 s = chunk.decode('utf-8', errors='ignore')
                 tmp_out += s
