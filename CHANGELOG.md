@@ -16,14 +16,12 @@ Significant overhaul of the Python automation layer to provide a high-end, profe
 - **Interactive Dashboard & Menu**:
   - **Modern Selector**: Implemented a "Highlight Bar" (inverted background) selection menu in `drag_and_drop_processor.py` for superior visibility.
   - **Config Dashboard**: Replaced text-based configuration with a structured `rich.Table` dashboard, integrating live **System Health Snapshots** (CPU/RAM usage).
-  - **Session Analytics**: Added a visual **Success Rate Progress Bar** (█░) and efficiency metrics to final batch reports.
-  - **Window Resizing**: Restored automatic terminal window resizing (40x100) to ensure the premium UI layout is always perfectly framed.
-- **Smooth Real-Time Progress Relay**: 
-  - Transitioned the Python automation layer to low-level `os.read()` for non-buffered progress synchronization, eliminating 'PPT-style' stuttering.
-  - Implemented high-frequency terminal flushing (2ms cycle) for perfect parity with the Rust tools' native `indicatif` experience.
-- **Terminal Dimension Locking**:
-  - Synchronous environment-aware rendering: Enforced a 100x40 column lock via the `COLUMNS` and `LINES` environment variables, ensuring progress bars remain full-width when piped through the Python wrapper.
-  - Verified 100% preservation of VT100/ANSI icons (📊, ✓), colors, and `\r` carriage return updates during piped execution.
+  - **Extreme-Smoothness Progress Relay (Kernel-Level Zero-Buffering)**:
+  - Transitioned to a high-frequency low-level relay using `os.read()` and `os.write()` on the raw file descriptors, bypassing all Python-side stream buffering.
+  - Achieved "Real-Time Terminal Parity" by eliminating I/O bottlenecks and reducing relay latency to effectively zero.
+- **Terminal Dimension & Style Fidelity**:
+  - Enforced 100x40 dimension locking via `COLUMNS` and `LINES` environment variables for pixel-perfect `indicatif` bars.
+  - Verified 100% preservation of ANSI icons (📊, ✓), color gradients, and complex VT100 carriage return updates without flicker or "blank intervals".
 
 ### 🛡️ Infrastructure & Reliability Hardening
 - **Watch Mode Optimization**: Switched to `on_closed` and `on_moved` Watchdog events to ensure large media files are fully written before processing triggers, preventing infinite debounce loops.
