@@ -28,10 +28,16 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
   - Improved timestamp verification retry logic with proper error propagation.
   - Enhanced kondo integration with correct flags (removed dry-run mode).
 
-### 🐛 Python Script Bug Fixes & Performance
+### 🐛 Python Script Bug Fixes & Functional Parity
 - **`drag_and_drop_processor.py`**:
   - Fixed broken `with open(...) if ... else None as lf` syntax (invalid Python) — replaced with explicit open/close pattern.
   - Fixed `safety_check()` logic that silently passed all checks due to a dead loop body.
+  - Restored missing `create_directory_structure()` — creates adjacent output directory tree with timestamp preservation via `shutil.copystat()`.
+  - Restored missing `merge_run_logs()` — merges img/vid run logs into a single session log when running via app (`FROM_APP`).
+  - Restored missing `drain_stdin()` — flushes stdin buffer before interactive prompts to prevent spurious key presses triggering menu actions.
+  - Added `drain_stdin()` calls before all interactive input prompts (target dir, in-place confirm, exit).
+  - Added `FORCE_COLOR=1` / `CLICOLOR_FORCE=1` environment setup matching Bash version.
+  - Added control character validation in `get_target_directory()` matching `validate_target_dir()` / `contains_control_chars()` from Bash.
   - Eliminated double directory tree walk: `count_files()` now accumulates media byte size in the same pass, reused by `check_disk_space()`.
   - Increased I/O read buffer from 1 KB to 64 KB for significantly faster streaming of tool output.
   - Moved `import re` to top-level imports.

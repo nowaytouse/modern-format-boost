@@ -76,6 +76,14 @@ def clear_screen():
     sys.stdout.write('\033[2J\033[H')
     sys.stdout.flush()
 
+def drain_stdin():
+    """清空stdin缓冲区，防止菜单误触发"""
+    import termios
+    try:
+        termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
+    except Exception:
+        pass
+
 def _fmt_elapsed(t):
     t = max(0, t)
     s = t % 60
@@ -189,8 +197,13 @@ def get_target_directory():
         draw_header()
         print(f"{CYAN}📂 Waiting for input...{RESET}")
         print(f"{DIM}   Please drag and drop a folder here, then press Enter.{RESET}")
+        drain_stdin()
         TARGET_DIR = input(f"   {BOLD}> {RESET}").strip()
         TARGET_DIR = TARGET_DIR.strip("\"'")
+
+    if '\n' in TARGET_DIR or '\r' in TARGET_DIR:
+        print(f"\n{RED}❌ Error: Path contains unsupported control characters.{RESET}")
+        sys.exit(1)
 
     p = Path(TARGET_DIR)
     if not p.is_dir():
@@ -278,11 +291,12 @@ def select_mode():
         print(f"\n{GREEN}✅ ADJACENT MODE SELECTED{RESET}")
         print(f"   Output: {DIM}{OUTPUT_DIR}{RESET}")
         print(f"   {DIM}Creating directory structure...{RESET}")
-        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        create_directory_structure(TARGET_DIR, OUTPUT_DIR)
     elif selected == 1:
         OUTPUT_MODE = "inplace"
         print(f"\n{YELLOW}⚠️  IN-PLACE MODE SELECTED{RESET}")
         print(f"{DIM}   Original files will be replaced after successful conversion.{RESET}")
+        drain_stdin()
         confirm = input(f"   {BOLD}Are you sure? (y/N): {RESET}")
         if not confirm.lower().startswith('y'):
             sys.exit(0)
@@ -295,6 +309,27 @@ def select_mode():
         OUTPUT_MODE = "cache_clean"
         print(f"\n{RED}🔥 DATA PURGE MODE{RESET}")
         print(f"{DIM}   Analysis cache and ALL task progress will be permanently deleted.{RESET}\n")
+
+def create_directory_structure(src, dest):
+    """创建目录结构并保留时间戳"""
+    src_path = Path(src)
+    dest_path = Path(dest)
+    dest_path.mkdir(parents=True, exist_ok=True)
+    try:
+        shutil.copystat(src_path, dest_path)
+    except Exception:
+        pass
+
+    for root, dirs, _ in os.walk(src):
+        for d in dirs:
+            src_dir = Path(root) / d
+            rel = src_dir.relative_to(src_path)
+            dest_dir = dest_path / rel
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                shutil.copystat(src_dir, dest_dir)
+            except Exception:
+                pass
 
 IMG_COUNT = 0
 VID_COUNT = 0
@@ -446,22 +481,71 @@ def finish_log():
         f.write(f"End Time: {datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}\n\n")
         f.write(f"Images:  {IMG_SUCCEEDED} succeeded, {IMG_SKIPPED} skipped, {IMG_FAILED} failed\n")
         f.write(f"Videos:  {VID_SUCCEEDED} succeeded, {VID_SKIPPED} skipped, {VID_FAILED} failed\n\n")
-        
+
         tot_s = IMG_SUCCEEDED + VID_SUCCEEDED
         tot_sk = IMG_SKIPPED + VID_SKIPPED
         tot_f = IMG_FAILED + VID_FAILED
         tot_proc = tot_s + tot_sk + tot_f
-        
+
         f.write(f"Total:   {tot_s} succeeded, {tot_sk} skipped, {tot_f} failed\n")
         if tot_proc > 0:
             f.write(f"Success Rate: {(tot_s*100)//tot_proc}%\n")
         f.write("\n========================================\nSession completed.\n========================================\n")
     print(f"   {DIM}📝 Session log:  {LOG_FILE}{RESET}")
 
+def merge_run_logs():
+    """合并img和vid的运行日志"""
+    if not LOG_FILE or not SESSION_START_TIME: return
+    if not os.environ.get("FROM_APP"): return
+
+    merged_log = LOG_DIR / f"merged_{SESSION_START_TIME}.log"
+    img_logs = sorted(LOG_DIR.glob(f"img_hevc_run_*.log"), key=os.path.getmtime, reverse=True)
+    vid_logs = sorted(LOG_DIR.glob(f"vid_hevc_run_*.log"), key=os.path.getmtime, reverse=True)
+
+    img_log = img_logs[0] if img_logs else None
+    vid_log = vid_logs[0] if vid_logs else None
+
+    with open(merged_log, "w") as mf:
+        mf.write("========================================\n")
+        mf.write("📋 MERGED LOG - Modern Format Boost\n")
+        mf.write("========================================\n")
+        mf.write(f"Session: {SESSION_START_TIME}\n\n")
+
+        if LOG_FILE.exists():
+            mf.write("========================================\n")
+            mf.write("🔧 Drag & Drop Script Log\n")
+            mf.write("========================================\n")
+            mf.write(LOG_FILE.read_text())
+            mf.write("\n")
+
+        if img_log and img_log.exists():
+            mf.write("========================================\n")
+            mf.write("🖼️  Image Processing Log\n")
+            mf.write("========================================\n")
+            mf.write(img_log.read_text())
+            mf.write("\n")
+
+        if vid_log and vid_log.exists():
+            mf.write("========================================\n")
+            mf.write("🎬 Video Processing Log\n")
+            mf.write("========================================\n")
+            mf.write(vid_log.read_text())
+            mf.write("\n")
+
+        mf.write("========================================\n")
+        mf.write("✅ Log Merge Complete\n")
+        mf.write("========================================\n")
+
+    if LOG_FILE.exists(): LOG_FILE.unlink()
+    if img_log and img_log.exists(): img_log.unlink()
+    if vid_log and vid_log.exists(): vid_log.unlink()
+
 def main():
     global ULTIMATE_MODE, VERBOSE_MODE, TARGET_DIR
 
     os.environ["MFB_GUI_LAUNCH"] = "1"
+    os.environ["FORCE_COLOR"] = "1"
+    os.environ["CLICOLOR_FORCE"] = "1"
     init_log()
 
     args = sys.argv[1:]
@@ -547,11 +631,13 @@ def main():
             pass
             
     try:
+        drain_stdin()
         input(f"\n{DIM}Press Enter to exit...{RESET}")
     except (EOFError, KeyboardInterrupt):
         pass
 
     finish_log()
+    merge_run_logs()
 
 if __name__ == "__main__":
     try:
