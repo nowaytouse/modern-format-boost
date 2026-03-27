@@ -77,7 +77,7 @@ def clear_screen():
     sys.stdout.flush()
 
 def drain_stdin():
-    """清空stdin缓冲区，防止菜单误触发"""
+    """Flush stdin buffer to prevent accidental menu triggers"""
     import termios
     try:
         termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
@@ -212,12 +212,26 @@ def get_target_directory():
         sys.exit(1)
 
 def safety_check():
-    s = str(TARGET_DIR)
-    unsafe = ["/", "/System", "/usr", "/bin", "/sbin", str(Path.home()), str(Path.home()/"Desktop"), str(Path.home()/"Documents")]
-    for p in unsafe:
+    try:
+        # Standardize path to avoid bypasses and ensure correct matching
+        s = str(Path(TARGET_DIR).resolve())
+    except Exception:
+        s = str(TARGET_DIR)
+
+    # System roots: block the directory and all its subdirectories
+    system_unsafe = ["/", "/System", "/usr", "/bin", "/sbin"]
+    for p in system_unsafe:
         if s == p or s.startswith(p + "/"):
             print(f"\n{RED}⚠️  SAFETY BLOCK{RESET}")
             print(f"   System or root directories cannot be processed directly.")
+            sys.exit(1)
+
+    # User roots: block only the directory itself, allow subdirectories
+    user_unsafe = [str(Path.home()), str(Path.home() / "Desktop"), str(Path.home() / "Documents")]
+    for p in user_unsafe:
+        if s == p:
+            print(f"\n{RED}⚠️  SAFETY BLOCK{RESET}")
+            print(f"   Common user folders cannot be processed directly. Please process a subdirectory.")
             sys.exit(1)
 
 def read_key():
@@ -241,14 +255,12 @@ def select_mode():
     options = [
         "📂 Output to Adjacent Folder",
         "🚀 In-Place Optimization",
-        "🩹 Fix iCloud Import Errors",
-        "🧹 Purge Processing Data"
+        "🧹 Cleanup Cache & Logs"
     ]
     descriptions = [
         "Safe mode. Keeps originals untouched.",
         "Replaces original files. Saves disk space.",
-        "Fix corrupted Brotli EXIF metadata that prevents iCloud Photos import.",
-        "Clear analysis cache, session logs, and ALL resume progress."
+        "Clear analysis cache, session logs, and ALL task progress."
     ]
 
     while True:
@@ -297,21 +309,17 @@ def select_mode():
         print(f"\n{YELLOW}⚠️  IN-PLACE MODE SELECTED{RESET}")
         print(f"{DIM}   Original files will be replaced after successful conversion.{RESET}")
         drain_stdin()
-        confirm = input(f"   {BOLD}Are you sure? (y/N): {RESET}")
-        if not confirm.lower().startswith('y'):
+        confirm = input(f"   {BOLD}Type 'yes' to confirm in-place optimization (yes/N): {RESET}")
+        if confirm.lower() != 'yes':
+            print(f"\n{RED}❌ In-place optimization cancelled.{RESET}")
             sys.exit(0)
     elif selected == 2:
-        OUTPUT_MODE = "brotli_fix_only"
-        print(f"\n{MAGENTA}🩹 ICLOUD IMPORT FIX MODE{RESET}")
-        print(f"{DIM}   Only files with corrupted Brotli EXIF will be fixed.{RESET}")
-        print(f"{DIM}   This resolves 'Unable to import to iCloud Photos' errors.{RESET}\n")
-    else:
         OUTPUT_MODE = "cache_clean"
-        print(f"\n{RED}🔥 DATA PURGE MODE{RESET}")
+        print(f"\n{RED}🧹 CACHE & LOG CLEANUP MODE{RESET}")
         print(f"{DIM}   Analysis cache and ALL task progress will be permanently deleted.{RESET}\n")
 
 def create_directory_structure(src, dest):
-    """创建目录结构并保留时间戳"""
+    """Create directory structure and preserve timestamps"""
     src_path = Path(src)
     dest_path = Path(dest)
     dest_path.mkdir(parents=True, exist_ok=True)
@@ -388,16 +396,25 @@ def stream_and_log_process(cmd, parse_type):
     lf = open(LOG_FILE, "ab") if LOG_FILE else None
     try:
         while True:
-            chunk = res.stdout.read(65536)
-            if not chunk and res.poll() is not None:
-                break
+            # Use read1 (fallback to read) to get available output quickly, avoiding 64KB buffer "silence"
+            try:
+                chunk = res.stdout.read1(1024)
+            except AttributeError:
+                chunk = res.stdout.read(1024)
+
+            if not chunk:
+                if res.poll() is not None:
+                    break
+                time.sleep(0.02)  # Avoid busy waiting
+                continue
+
             if chunk:
                 sys.stdout.buffer.write(chunk)
                 sys.stdout.buffer.flush()
                 try:
-                    s = chunk.decode('utf-8')
-                    if len(tmp_out) > 4096:
-                        tmp_out = tmp_out[-2048:]
+                    s = chunk.decode('utf-8', errors='ignore')
+                    if len(tmp_out) > 32768: # Increase buffer size to prevent stats from being truncated
+                        tmp_out = tmp_out[-16384:]
                     tmp_out += s
                 except UnicodeDecodeError:
                     pass
@@ -494,7 +511,7 @@ def finish_log():
     print(f"   {DIM}📝 Session log:  {LOG_FILE}{RESET}")
 
 def merge_run_logs():
-    """合并img和vid的运行日志"""
+    """Merge img and vid run logs"""
     if not LOG_FILE or not SESSION_START_TIME: return
     if not os.environ.get("FROM_APP"): return
 
@@ -575,13 +592,7 @@ def main():
     while True:
         select_mode()
         
-        if OUTPUT_MODE == "brotli_fix_only":
-            repair_script = SCRIPT_DIR / "repair_apple_photos.py"
-            subprocess.run([sys.executable, str(repair_script), str(TARGET_DIR)])
-            print(f"\n{GREEN}✅ Brotli EXIF Fix Completed{RESET}\n")
-            input(f"{DIM}Press Enter to return to menu...{RESET}")
-            continue
-        elif OUTPUT_MODE == "cache_clean":
+        if OUTPUT_MODE == "cache_clean":
             cache_script = SCRIPT_DIR / "cache_cleaner.py"
             subprocess.run([sys.executable, str(cache_script)])
             continue

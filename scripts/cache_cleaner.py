@@ -27,7 +27,7 @@ def clear_screen():
 def draw_header():
     line = '─' * 60
     print(f"{BLUE}╭{line}╮{RESET}")
-    print(f"{BLUE}│{RESET}  {BOLD}{RED}🔥 DATA PURGE UTILITY v1.0{RESET}                            {BLUE}│{RESET}")
+    print(f"{BLUE}│{RESET}  {BOLD}{RED}🧹 CACHE & LOG CLEANUP UTILITY v1.0{RESET}                      {BLUE}│{RESET}")
     print(f"{BLUE}╰{line}╯{RESET}")
     print(f"   {RED}⚠️  WARNING: Critical processing data will be permanently deleted.{RESET}\n")
 
@@ -75,7 +75,18 @@ def main():
     draw_header()
     show_stats(cache_dir, db_file, log_dir, mfb_progress_dir)
 
-    print(f"{RED}🔥 Purging all analysis data, logs and progress trackers...{RESET}\n")
+    print(f"{RED}⚠️  The following will be PERMANENTLY deleted:{RESET}")
+    print(f"   - Image Analysis Database (Verification cache)")
+    print(f"   - All Session Logs & Tool Debug Records")
+    print(f"   - All Task Progress Trackers (Resume Capability)")
+    print("")
+
+    confirm = input(f"   {BOLD}Type 'yes' to confirm cleanup (yes/N): {RESET}")
+    if confirm.lower() != 'yes':
+        print(f"\n{GREEN}✅ Cleanup cancelled by user.{RESET}")
+        return
+
+    print(f"\n{YELLOW}🚀 Executing cleanup...{RESET}\n")
 
     # Vacuum database if sqlite3 is available
     if db_file.is_file() and shutil.which("sqlite3"):

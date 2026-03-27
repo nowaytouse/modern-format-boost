@@ -31,7 +31,12 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ### 🐛 Python Script Bug Fixes & Functional Parity
 - **`drag_and_drop_processor.py`**:
   - Fixed broken `with open(...) if ... else None as lf` syntax (invalid Python) — replaced with explicit open/close pattern.
-  - Fixed `safety_check()` logic that silently passed all checks due to a dead loop body.
+  - Fixed `safety_check()` logic that previously triggered false-positives on user subdirectories (e.g. `~/Downloads/...`) due to over-aggressive `startswith` matching on `$HOME`. It now correctly distinguishes between system roots (recursive block) and user roots (exact block only), with added path resolution for robust matching.
+  - Fixed silent output during Rust binary execution in `drag_and_drop_processor.py` by switching from `read(64KB)` to `read1(1KB)`, ensuring real-time progress updates and correct `\r` carriage return handling.
+  - Enhanced safety for in-place optimization mode: Users must now type the full word `yes` (case-insensitive) to confirm, preventing accidental destructive operations.
+  - Optimized `drag_and_drop_processor.py` menu: Removed "Fix iCloud Import Errors" (moved to manual/external call only) to streamline main workflow.
+  - Enhanced `cache_cleaner.py` safety: Updated wording from "Purge Data" to "Cleanup Cache & Logs" and added a mandatory `yes` confirmation step that explicitly lists the cleanup scope (database, logs, and progress trackers).
+  - Increased `tmp_out` buffer size in `stream_and_log_process()` to 32KB to prevent truncation of final statistics in large batches.
   - Restored missing `create_directory_structure()` — creates adjacent output directory tree with timestamp preservation via `shutil.copystat()`.
   - Restored missing `merge_run_logs()` — merges img/vid run logs into a single session log when running via app (`FROM_APP`).
   - Restored missing `drain_stdin()` — flushes stdin buffer before interactive prompts to prevent spurious key presses triggering menu actions.
@@ -39,7 +44,6 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
   - Added `FORCE_COLOR=1` / `CLICOLOR_FORCE=1` environment setup matching Bash version.
   - Added control character validation in `get_target_directory()` matching `validate_target_dir()` / `contains_control_chars()` from Bash.
   - Eliminated double directory tree walk: `count_files()` now accumulates media byte size in the same pass, reused by `check_disk_space()`.
-  - Increased I/O read buffer from 1 KB to 64 KB for significantly faster streaming of tool output.
   - Moved `import re` to top-level imports.
 - **`check_all.py`**:
   - Fixed `has_command()` using broken `subprocess.run(["command", "-v", ...], shell=True)` — replaced with `shutil.which()`.
