@@ -150,6 +150,9 @@ def init_log():
     if sys.stdout.isatty():
         sys.stdout.write('\033[8;40;100t')
         sys.stdout.flush()
+        # Lock terminal dimensions for subprocess progress bars (indicatif/console)
+        os.environ["COLUMNS"] = "100"
+        os.environ["LINES"] = "40"
     
     SESSION_START_TIME = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -466,25 +469,30 @@ def check_system_resources(check_dir):
         pass
 
 def stream_and_log_process(cmd, parse_type):
-    global IMG_SUCCEEDED, IMG_SKIPPED, IMG_FAILED, VID_SUCCEEDED, VID_SKIPPED, VID_FAILED
     tmp_out = ""
-    res = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    # Explicitly pass current environment to preserve COLUMNS/LINES/COLOR flags
+    res = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=os.environ.copy())
 
     lf = open(LOG_FILE, "ab") if LOG_FILE else None
+    
+    # Use low-level file descriptors for zero-buffering / zero-latency relay
+    fd = res.stdout.fileno()
+    
     try:
         while True:
-            # Zero-Interference Passthrough (Full TTY Support: Icons, \r, Colors)
-            chunk = res.stdout.read(1024)
+            # Low-level read from pipe without Python library buffering
+            # This is the most robust way to get flicker-free, real-time progress bars from indicatif
+            chunk = os.read(fd, 4096)
             if not chunk:
                 if res.poll() is not None: break
-                time.sleep(0.01) # Avoid busy-wait
+                time.sleep(0.002) # Zero-latency cycle
                 continue
             
-            # Direct buffer write to preserve VT100 sequences precisely
-            sys.stdout.buffer.write(chunk)
-            sys.stdout.buffer.flush()
+            # Direct binary write to preserve VT100/ANSI sequences precisely
+            os.write(sys.stdout.fileno(), chunk)
+            sys.stdout.flush()
             
-            # Capture for stats parsing (without messing with terminal display)
+            # Capture for stats parsing
             try:
                 s = chunk.decode('utf-8', errors='ignore')
                 tmp_out += s
