@@ -569,22 +569,20 @@ impl DetailedCoarseProgressBar {
 
         let color = "\x1b[32m";
         eprint!(
-            "\r\x1b[K{}{} {}{}{}{}▏ {:.1}% • CRF {:.1} | {:+.1}% {} | {} | {} | {}/{} • ⏱️ {:.1}s\x1b[0m",
-            color,
-            self.prefix,
-            progress_style::BAR_LEFT,
-            color,
-            bar,
-            color,
-            percent,
-            crf,
-            size_pct,
-            icon,
-            ssim_str,
-            best_str,
-            iter,
-            total,
-            elapsed.as_secs_f64()
+            "\r\x1b[K{color}{prefix} {bar_left}{color}{bar}{color}▏ {percent:.1}% • CRF {crf:.1} | {size:+.1}% {icon} | {ssim} | {best} | {iter}/{total} • ⏱️ {elapsed:.1}s\x1b[0m",
+            color = color,
+            prefix = self.prefix,
+            bar_left = progress_style::BAR_LEFT,
+            bar = bar,
+            percent = percent,
+            crf = crf,
+            size = size_pct,
+            icon = icon,
+            ssim = ssim_str,
+            best = best_str,
+            iter = iter,
+            total = total,
+            elapsed = elapsed.as_secs_f64()
         );
         let _ = io::stderr().flush();
     }
@@ -640,19 +638,17 @@ impl DetailedCoarseProgressBar {
         let color = "\x1b[32m";
 
         eprint!(
-            "\r\x1b[K{}{} {}{}{}{}▏ ✅ 100% • CRF {:.1} • {:+.1}% {} • {} • {} iterations • ⏱️ {:.1}s\x1b[0m\n",
-            color,
-            self.prefix,
-            progress_style::BAR_LEFT,
-            color,
-            bar,
-            color,
-            final_crf,
-            size_pct,
-            icon,
-            ssim_str,
-            iter,
-            elapsed.as_secs_f64()
+            "\r\x1b[K{color}{prefix} {bar_left}{color}{bar}{color}▏ ✅ 100% • CRF {final_crf:.1} • {size_pct:+.1}% {icon} • {ssim} • {iter} iterations • ⏱️ {elapsed:.1}s\x1b[0m\n",
+            color = color,
+            prefix = self.prefix,
+            bar_left = progress_style::BAR_LEFT,
+            bar = bar,
+            final_crf = final_crf,
+            size_pct = size_pct,
+            icon = icon,
+            ssim = ssim_str,
+            iter = iter,
+            elapsed = elapsed.as_secs_f64()
         );
 
         eprint!("\x1b[?25h");
@@ -1397,6 +1393,7 @@ impl GlobalProgressManager {
             .expect("main_bar set to Some immediately above")
     }
 
+    #[allow(clippy::literal_string_with_formatting_args)]
     pub fn create_sub(&mut self, prefix: &str) -> &ProgressBar {
         let bar = self.multi.add(ProgressBar::new_spinner());
 

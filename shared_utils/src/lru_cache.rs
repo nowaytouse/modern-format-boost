@@ -203,9 +203,9 @@ impl<K: Hash + Eq + Clone + for<'de> Deserialize<'de>, V: Clone + for<'de> Deser
             Ok(json) => match Self::from_json(&json) {
                 Ok(cache) => {
                     eprintln!(
-                        "📦 LRU Cache: loaded {} entries from {:?}",
+                        "📦 LRU Cache: loaded {} entries from {}",
                         cache.len(),
-                        path
+                        path.display()
                     );
                     cache
                 }

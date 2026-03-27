@@ -12,6 +12,7 @@ use shared_utils::analysis_cache::AnalysisCache;
 use shared_utils::conversion_types::{
     ConversionConfig, ConversionOutput, ConversionStrategy, TargetVideoFormat,
 };
+use std::fmt::Write as _;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -1439,16 +1440,17 @@ fn execute_hevc_conversion(
 
     // Inject DV RPU path and profile into x265 params when available
     if let Some(ref dv) = dv_rpu {
-        x265_params.push_str(&format!(
+        let _ = write!(
+            x265_params,
             ":dolby-vision-rpu={}:dolby-vision-profile={}",
             dv.rpu_path.display(),
             dv.profile_str
-        ));
+        );
     }
 
     // Inject HDR10+ metadata into x265 params
     if let Some(ref hdr) = hdr10plus {
-        x265_params.push_str(&format!(":dhdr10-info={}", hdr.json_path.display()));
+        let _ = write!(x265_params, ":dhdr10-info={}", hdr.json_path.display());
     }
 
     let pix_fmt = hdr_pix_fmt(detection);
@@ -1555,16 +1557,17 @@ fn execute_hevc_lossless(
 
     // Inject DV RPU path and profile into x265 params when available
     if let Some(ref dv) = dv_rpu {
-        x265_params.push_str(&format!(
+        let _ = write!(
+            x265_params,
             ":dolby-vision-rpu={}:dolby-vision-profile={}",
             dv.rpu_path.display(),
             dv.profile_str
-        ));
+        );
     }
 
     // Inject HDR10+ metadata into x265 params
     if let Some(ref hdr) = hdr10plus {
-        x265_params.push_str(&format!(":dhdr10-info={}", hdr.json_path.display()));
+        let _ = write!(x265_params, ":dhdr10-info={}", hdr.json_path.display());
     }
 
     let pix_fmt = hdr_pix_fmt(detection);
@@ -2359,7 +2362,7 @@ mod tests {
 
         // Simulate prepare_hdr10plus_metadata success
         let mock_json_path = PathBuf::from("/tmp/hdr10plus.json");
-        hdr_x265_params.push_str(&format!(":dhdr10-info={}", mock_json_path.display()));
+        let _ = write!(hdr_x265_params, ":dhdr10-info={}", mock_json_path.display());
 
         let is_hdr_content = detection.bit_depth >= 10
             || detection.is_dolby_vision

@@ -2053,8 +2053,7 @@ fn gpu_coarse_search_with_log_impl(
     };
 
     let encode_parallel = |crfs: &[f32]| -> Vec<(f32, anyhow::Result<u64>)> {
-        let handles: Vec<_> = crfs
-            .iter()
+        crfs.iter()
             .enumerate()
             .map(|(i, &crf)| {
                 let crf_args = gpu_encoder.get_crf_args(crf);
@@ -2119,9 +2118,7 @@ fn gpu_coarse_search_with_log_impl(
                     (crf, size)
                 })
             })
-            .collect();
-
-        handles
+            .collect::<Vec<_>>()
             .into_iter()
             .map(|h| {
                 h.join()
