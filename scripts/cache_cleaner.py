@@ -100,9 +100,9 @@ def main():
         shutil.rmtree(cache_dir, ignore_errors=True)
         print(f"   {GREEN}✅ Cache purged{RESET}")
 
-    # Clear logs (with safety check)
-    if log_dir.is_dir() and str(log_dir) != "/":
-        print(f"{DIM}   Clearing logs...{RESET}")
+    # Clear logs (with strict safety check)
+    if log_dir.is_dir() and log_dir.name == "logs" and log_dir.parent == project_root:
+        print(f"{DIM}   Clearing logs in {log_dir.name}...{RESET}")
         for log_file in log_dir.glob("*.log"):
             try:
                 log_file.unlink()

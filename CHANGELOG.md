@@ -19,10 +19,17 @@ Significant overhaul of the Python automation layer to provide a high-end, profe
   - Re-engineered the log passthrough to use raw buffer writes, ensuring 100% preservation of the Rust tools' original icons (📊, ✓), colors, and `\r` carriage return updates.
 
 ### 🛡️ Infrastructure & Reliability Hardening
+- **Watch Mode Optimization**: Switched to `on_closed` and `on_moved` Watchdog events to ensure large media files are fully written before processing triggers, preventing infinite debounce loops.
+- **Robustness Fixes**: 
+  - Resolved `IndexError` in `check_all.py` during system tool output parsing.
+  - Hardened `cache_cleaner.py` with stricter directory-name validation for safe log purging.
+  - Refactored `count_files` locking granularity in `drag_and_drop_processor.py` to prevent blocking the UI/Watcher during deep directory scans.
+- **Reporting & UI Polish**:
+  - **Standardized Styles**: Fixed non-standard Rich terminal tags (`[error]`, `[warning]`, `[info]`, `[success]`) across the script suite.
+  - **Semantic Accuracy**: Corrected summary table headers in quality scans to accurately reflect data categories (`Status`, `Description`, `Value`).
 - **Streamlined Workflow**: Removed the redundant Python-side SQLite `TaskTracker` in favor of the Rust tools' native, high-performance `--resume` capabilities.
-- **Session Isolation**: Implemented unique session identifiers for all log files (`drag_drop_YYYY-MM-DD_HH-MM-SS.log`), preventing overlaps when running multiple concurrent processes.
-- **Improved Code Safety**: Resolved `UnboundLocalError` bugs in the statistics reporting and menu logic.
-- **Graceful Performance**: Integrated `psutil` and `rich` with no-dependency fallbacks, ensuring the scripts remain portable and stable in any environment.
+- **Session Isolation**: Implemented unique session identifiers for all log files (`MFB_[Project]_[Timestamp].log`), preventing overlaps when running multiple concurrent processes.
+- **Improved Code Safety**: Fixed threading race conditions in Watch mode using `stats_lock` and debouncing.
 
 ### 🐍 Script Infrastructure: Python-First Architecture
 Major refactoring of the automation layer, migrating core scripts from Bash to Python for improved maintainability and cross-platform compatibility.

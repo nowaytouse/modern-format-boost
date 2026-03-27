@@ -69,7 +69,8 @@ def has_command(cmd, pkg=None):
 def has_nightly_toolchain():
     result = subprocess.run(["rustup", "toolchain", "list"], capture_output=True, text=True)
     for line in result.stdout.splitlines():
-        if line.split()[0].startswith("nightly"):
+        parts = line.split()
+        if parts and parts[0].startswith("nightly"):
             return True
     return False
 
@@ -82,7 +83,8 @@ def has_rust_component(component, toolchain=None):
     if result.returncode != 0:
         return False
     for line in result.stdout.splitlines():
-        if line.split()[0] == component:
+        parts = line.split()
+        if parts and parts[0] == component:
             return True
     return False
 
@@ -367,18 +369,18 @@ def main():
     if console:
         # Professional Rich Summary
         table = Table(title="Modern Format Boost - Quality Scan Summary", border_style="dim")
-        table.add_column("Result", justify="center")
-        table.add_column("Step Name", style="bold")
-        table.add_column("Type")
+        table.add_column("Status", justify="center")
+        table.add_column("Description", style="bold")
+        table.add_column("Value")
         
         # We need to map tracker data to table. 
         # For simplicity, we'll just show the high level stats if the trackers aren't easily mappable 
         # or we can recreate the logic. 
         # Re-using the tracker categories:
-        table.add_row("[green]PASS[/green]", "Overall Passed", str(tracker.passed))
+        table.add_row("[green]PASS[/green]", "Required Passed", str(tracker.passed))
         table.add_row("[red]FAIL[/red]", "Required Failures", str(tracker.failed))
         table.add_row("[yellow]WARN[/yellow]", "Optional Warnings", str(tracker.warned))
-        table.add_row("[blue]SKIP[/blue]", "Skipped Checks", str(tracker.skipped))
+        table.add_row("[blue]SKIP[/blue]", "Checks Skipped", str(tracker.skipped))
         
         console.print("\n")
         console.print(table)
@@ -406,11 +408,11 @@ def main():
             for s in tracker.skipped_steps: print(f"  - {s}")
 
     if tracker.failed > 0:
-        if console: console.print(f"\n[error]Quality scan completed with required check failures.[/error]")
+        if console: console.print(f"\n[bold red]Quality scan completed with required check failures.[/bold red]")
         else: print(f"\n{RED}Quality scan completed with required check failures.{NC}")
         sys.exit(1)
 
-    if console: console.print(f"\n[success]Quality scan completed successfully (required checks passed).[/success]")
+    if console: console.print(f"\n[bold green]Quality scan completed successfully (required checks passed).[/bold green]")
     else: print(f"\n{GREEN}Quality scan completed successfully (required checks passed).{NC}")
 
 if __name__ == "__main__":

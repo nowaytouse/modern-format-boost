@@ -11,7 +11,6 @@ import subprocess
 import shutil
 import threading
 import datetime
-import datetime
 from pathlib import Path
 
 try:
@@ -74,7 +73,11 @@ VERBOSE_LOG_FILE = ""
 SESSION_START_TIME = ""
 WATCH_MODE = False
 
-# Removed TaskTracker (using native --resume instead)
+# Threading & Control
+stats_lock = threading.Lock()
+watch_timer = None
+is_processing = False
+watch_debounce_seconds = 2.0
 
 def hide_cursor():
     sys.stdout.write('\033[?25l')
@@ -149,8 +152,27 @@ def init_log():
     
     SESSION_START_TIME = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    LOG_FILE = LOG_DIR / f"drag_drop_{SESSION_START_TIME}.log"
+    # Start with a generic name, we will rename it to the project name later
+    LOG_FILE = LOG_DIR / f"MFB_Session_{SESSION_START_TIME}.log"
     VERBOSE_LOG_FILE = LOG_DIR / f"verbose_{SESSION_START_TIME}.log"
+
+def rename_log_to_project():
+    """Rename the current session log to include the project/folder name"""
+    global LOG_FILE
+    if not TARGET_DIR or not LOG_FILE.exists(): return
+    
+    project_name = Path(TARGET_DIR).name
+    new_name = LOG_DIR / f"MFB_{project_name}_{SESSION_START_TIME}.log"
+    
+    try:
+        # If the file is already named correctly, skip
+        if LOG_FILE == new_name: return
+        
+        # Rename the physical file
+        os.rename(LOG_FILE, new_name)
+        LOG_FILE = new_name
+    except Exception:
+        pass
 
 def get_branch_tag():
     try:
@@ -211,6 +233,11 @@ def draw_header():
 
 def check_tools():
     build_script = SCRIPT_DIR / "smart_build.sh"
+    if not build_script.exists():
+        print(f"{RED}❌ Build script not found: {build_script}{RESET}")
+        print(f"{DIM}   Please ensure you are running from the repository root.{RESET}")
+        sys.exit(1)
+        
     res = subprocess.run([str(build_script)])
     if res.returncode != 0:
         print(f"{RED}❌ Build failed. Please check the logs.{RESET}")
@@ -404,7 +431,10 @@ def count_files():
                 except OSError: pass
 
     other = total - img - vid - xmp
-    IMG_COUNT, VID_COUNT, MEDIA_TOTAL_SIZE = img, vid, media_size
+    
+    # Lock ONLY for the final state update to avoid blocking file detection threads
+    with stats_lock:
+        IMG_COUNT, VID_COUNT, MEDIA_TOTAL_SIZE = img, vid, media_size
 
     print(f"   📁 Total Files: {BOLD}{total}{RESET}")
     print(f"   🖼️  Images:      {BOLD}{CYAN}{img}{RESET}")
@@ -422,19 +452,19 @@ def check_system_resources(check_dir):
             required_gb = (MEDIA_TOTAL_SIZE / (1024**3)) + 1.0 # Buffer
             
             if free_gb < required_gb:
-                console.print(f"[error]❌ Error: Insufficient disk space on {check_dir}[/error]")
+                console.print(f"[bold red]❌ Error: Insufficient disk space on {check_dir}[/bold red]")
                 console.print(f"   Available: {free_gb:.2f} GB, Required: {required_gb:.2f} GB")
                 sys.exit(1)
             
             # Memory Check
             mem = psutil.virtual_memory()
             if mem.percent > 95:
-                console.print(f"[warning]⚠️  Caution: System memory is very low ({mem.percent}% used).[/warning]")
+                console.print(f"[bold yellow]⚠️  Caution: System memory is very low ({mem.percent}% used).[/bold yellow]")
 
             # CPU Check
             cpu = psutil.cpu_percent(interval=0.1)
             if cpu > 90:
-                console.print(f"[warning]⚠️  Notice: System CPU usage is high ({cpu}%). Processing may take longer.[/warning]")
+                console.print(f"[bold yellow]⚠️  Notice: System CPU usage is high ({cpu}%). Processing may take longer.[/bold yellow]")
         else:
             # Fallback
             free = shutil.disk_usage(check_dir).free
@@ -459,6 +489,7 @@ def stream_and_log_process(cmd, parse_type):
             chunk = res.stdout.read(1024)
             if not chunk:
                 if res.poll() is not None: break
+                time.sleep(0.01) # Avoid busy-wait
                 continue
             
             # Direct buffer write to preserve VT100 sequences precisely
@@ -469,7 +500,7 @@ def stream_and_log_process(cmd, parse_type):
             try:
                 s = chunk.decode('utf-8', errors='ignore')
                 tmp_out += s
-            except: pass
+            except Exception: pass
             
             if lf:
                 lf.write(chunk)
@@ -490,9 +521,11 @@ def stream_and_log_process(cmd, parse_type):
     f_val = int(fail[-1]) if fail else 0
     
     if parse_type == "img":
-        IMG_SUCCEEDED, IMG_SKIPPED, IMG_FAILED = s_val, sk_val, f_val
+        with stats_lock:
+            IMG_SUCCEEDED, IMG_SKIPPED, IMG_FAILED = s_val, sk_val, f_val
     else:
-        VID_SUCCEEDED, VID_SKIPPED, VID_FAILED = s_val, sk_val, f_val
+        with stats_lock:
+            VID_SUCCEEDED, VID_SKIPPED, VID_FAILED = s_val, sk_val, f_val
 
 def process_images():
     if IMG_COUNT == 0: return
@@ -563,51 +596,55 @@ def finish_log():
     print(f"   {DIM}📝 Session log:  {LOG_FILE}{RESET}")
 
 def merge_run_logs():
-    """Merge img and vid run logs"""
+    """Merge internal tool run logs into the session bundle and cleanup fragments with high precision"""
     if not LOG_FILE or not SESSION_START_TIME: return
-    if not os.environ.get("FROM_APP"): return
 
-    merged_log = LOG_DIR / f"merged_{SESSION_START_TIME}.log"
-    img_logs = sorted(LOG_DIR.glob(f"img_hevc_run_*.log"), key=os.path.getmtime, reverse=True)
-    vid_logs = sorted(LOG_DIR.glob(f"vid_hevc_run_*.log"), key=os.path.getmtime, reverse=True)
+    # Convert session start time string back to datetime for comparison
+    try:
+        session_dt = datetime.datetime.strptime(SESSION_START_TIME, "%Y-%m-%d_%H-%M-%S")
+    except Exception:
+        session_dt = datetime.datetime.fromtimestamp(os.path.getmtime(LOG_FILE))
 
-    img_log = img_logs[0] if img_logs else None
-    vid_log = vid_logs[0] if vid_logs else None
+    # Look for tool logs created DURING this session
+    def is_current_session(f):
+        # File must be newer than session start
+        return datetime.datetime.fromtimestamp(f.stat().st_mtime) >= (session_dt - datetime.timedelta(seconds=5))
 
-    with open(merged_log, "w") as mf:
-        mf.write("========================================\n")
-        mf.write("📋 MERGED LOG - Modern Format Boost\n")
-        mf.write("========================================\n")
-        mf.write(f"Session: {SESSION_START_TIME}\n\n")
+    img_logs = [f for f in LOG_DIR.glob("img_hevc_*.log") if is_current_session(f)]
+    vid_logs = [f for f in LOG_DIR.glob("vid_hevc_*.log") if is_current_session(f)]
 
-        if LOG_FILE.exists():
-            mf.write("========================================\n")
-            mf.write("🔧 Drag & Drop Script Log\n")
-            mf.write("========================================\n")
-            mf.write(LOG_FILE.read_text())
-            mf.write("\n")
+    if not img_logs and not vid_logs:
+        return
 
-        if img_log and img_log.exists():
-            mf.write("========================================\n")
-            mf.write("🖼️  Image Processing Log\n")
-            mf.write("========================================\n")
-            mf.write(img_log.read_text())
-            mf.write("\n")
+    try:
+        with open(LOG_FILE, "a") as mf:
+            mf.write("\n" + "="*70 + "\n")
+            mf.write(f"📋 ATTACHED INTERNAL TOOL LOGS (Session: {SESSION_START_TIME})\n")
+            mf.write("="*70 + "\n")
 
-        if vid_log and vid_log.exists():
-            mf.write("========================================\n")
-            mf.write("🎬 Video Processing Log\n")
-            mf.write("========================================\n")
-            mf.write(vid_log.read_text())
-            mf.write("\n")
+            for log_path in sorted(img_logs + vid_logs, key=os.path.getmtime):
+                try:
+                    stats = log_path.stat()
+                    mtime = datetime.datetime.fromtimestamp(stats.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+                    
+                    mf.write(f"\n[SOURCE: {log_path.name}] [MODIFIED: {mtime}]\n")
+                    mf.write("-" * 70 + "\n")
+                    
+                    content = log_path.read_text(errors='ignore')
+                    mf.write(content)
+                    mf.write("\n" + "-" * 70 + "\n")
+                    
+                    # Cautious Deletion: Only delete if we successfully read the content
+                    if len(content) > 0:
+                        log_path.unlink()
+                except Exception as e:
+                    mf.write(f"\n⚠️  CRITICAL: Failed to merge/cleanup {log_path.name}: {e}\n")
 
-        mf.write("========================================\n")
-        mf.write("✅ Log Merge Complete\n")
-        mf.write("========================================\n")
-
-    if LOG_FILE.exists(): LOG_FILE.unlink()
-    if img_log and img_log.exists(): img_log.unlink()
-    if vid_log and vid_log.exists(): vid_log.unlink()
+            mf.write("\n" + "="*70 + "\n")
+            mf.write("🏁 END OF SESSION BUNDLE\n")
+            mf.write("="*70 + "\n")
+    except Exception as e:
+        print(f"   {RED}⚠️  Failed to merge logs: {e}{RESET}")
 
 def main():
     global ULTIMATE_MODE, VERBOSE_MODE, WATCH_MODE, TARGET_DIR, OUTPUT_MODE, OUTPUT_DIR
@@ -638,6 +675,7 @@ def main():
         
     check_tools()
     get_target_directory()
+    rename_log_to_project() # Rename log once project name is known
 
     if not os.environ.get("FROM_APP"):
         if 'Table' in globals():
@@ -687,17 +725,48 @@ def main():
     if WATCH_MODE:
         draw_separator("Watch Mode Enabled")
         console.print(f"[bold yellow]Monitoring:[/bold yellow] {TARGET_DIR}")
-        console.print("[dim]Press Ctrl+C to stop.[/dim]\n")
+        console.print("[dim]Press Ctrl+C to stop. Debouncing active.[/dim]\n")
         
+        def trigger_watch_processing():
+            global is_processing, watch_timer
+            with stats_lock:
+                if is_processing: return
+                is_processing = True
+            
+            try:
+                count_files()
+                process_images()
+                process_videos()
+            finally:
+                with stats_lock:
+                    is_processing = False
+                    watch_timer = None
+
         class Handler(FileSystemEventHandler):
-            def on_created(self, event):
+            def on_closed(self, event):
+                global watch_timer
                 if not event.is_directory:
                     p = Path(event.src_path)
-                    if p.suffix.lower() in {".jpg", ".png", ".heic", ".mp4", ".mov"}:
-                        console.print(f"  [info]New file detected:[/info] {p.name}")
-                        # Minimal logic: just re-trigger counts and processing
-                        # In a real app we'd queue these, but for this "enhancement" 
-                        # we'll just keep it simple.
+                    # Support multiple extensions for triggering
+                    if p.suffix.lower() in {".jpg", ".jpeg", ".png", ".heic", ".mp4", ".mov", ".mkv"}:
+                        console.print(f"  [bold cyan]File Activity Detected:[/bold cyan] {p.name}")
+                        with stats_lock:
+                            if watch_timer:
+                                watch_timer.cancel()
+                            watch_timer = threading.Timer(watch_debounce_seconds, trigger_watch_processing)
+                            watch_timer.start()
+            
+            def on_moved(self, event):
+                global watch_timer
+                if not event.is_directory:
+                    p = Path(event.dest_path)
+                    if p.suffix.lower() in {".jpg", ".jpeg", ".png", ".heic", ".mp4", ".mov", ".mkv"}:
+                        console.print(f"  [bold cyan]File Activity Detected (Moved):[/bold cyan] {p.name}")
+                        with stats_lock:
+                            if watch_timer:
+                                watch_timer.cancel()
+                            watch_timer = threading.Timer(watch_debounce_seconds, trigger_watch_processing)
+                            watch_timer.start()
         
         observer = Observer()
         observer.schedule(Handler(), str(TARGET_DIR), recursive=True)
@@ -713,15 +782,11 @@ def main():
         
     process_images()
     process_videos()
-    
     if IMG_COUNT > 0 or VID_COUNT > 0:
         stop_elapsed_spinner()
         
     if OUTPUT_MODE == "adjacent":
         sync_non_media_files()
-        
-    if IMG_COUNT > 0 or VID_COUNT > 0:
-        stop_elapsed_spinner()
         
     draw_separator("Task Completed")
     
