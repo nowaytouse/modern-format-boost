@@ -429,66 +429,22 @@ pub fn convert_jpeg_to_jxl(
         return Ok(ConversionResult::skipped_duplicate(input));
     }
 
-    // Check for UltraHDR JPEG and perform HDR synthesis
+    // Check for UltraHDR JPEG and skip conversion
     if shared_utils::image_jpeg_analysis::is_ultra_hdr_jpeg_file(input) {
         shared_utils::progress_mode::emit_stderr(&format!(
-            "   🌈 UltraHDR detected: {} - performing HDR gainmap synthesis",
+            "   🌈 UltraHDR detected: {} - skipping JXL encoding (tool limitation) and copying original",
             input.file_name().unwrap_or_default().to_string_lossy()
         ));
 
         let input_size = fs::metadata(input)?.len();
-        let output = get_output_path(input, "jxl", options)?;
-
-        if let Some(parent) = output.parent() {
-            fs::create_dir_all(parent)?;
-        }
-
-        if output.exists() && !options.force {
-            return Ok(ConversionResult::skipped_exists(input, &output));
-        }
-
-        let temp_output = shared_utils::conversion::temp_path_for_output(&output);
-
-        // Use 32-bit OpenEXR for maximum HDR precision
-        let intermediate_format = shared_utils::HdrIntermediateFormat::OpenExr32;
-
-        // Perform HDR synthesis
-        shared_utils::hdr_synthesis::convert_ultrahdr_jpeg_to_jxl_hdr(
+        copy_original_on_skip(input, options);
+        mark_as_processed(input);
+        return Ok(ConversionResult::skipped_custom(
             input,
-            &temp_output,
-            intermediate_format,
-        )
-        .map_err(|e| {
-            let msg = format!("☢️ UltraHDR JPEG HDR Synthesis Failure: {e}");
-            ImgQualityError::ConversionError(msg)
-        })?;
-
-        let output_size = fs::metadata(&temp_output)
-            .map_err(|e| {
-                ImgQualityError::ConversionError(format!(
-                    "☢️ Failed to retrieve HDR synthesis output metadata: {e}"
-                ))
-            })?
-            .len();
-
-        // Verify health
-        if let Err(e) = shared_utils::jxl_utils::verify_jxl_health(&temp_output) {
-            cleanup_temp_output(&temp_output, input);
-            return Err(ImgQualityError::ConversionError(format!(
-                "⛔️ Synthetic HDR JXL health check failed: {e}"
-            )));
-        }
-
-        return finalize_with_size_check(
-            input,
-            &temp_output,
-            &output,
             input_size,
-            output_size,
-            options,
-            "UltraHDR JPEG → HDR JXL (gainmap synthesized)",
-            None,
-        );
+            "UltraHDR JPEG",
+            "Skipped due to cjxl gainmap incompatibility",
+        ));
     }
 
     // Standard JPEG conversion (non-UltraHDR)

@@ -44,3 +44,6 @@ logs/
 # Local test data (user-specific paths)
 # /path/to/local/test/data
 .github/prompts/
+debug/
+__pycache__/
+__pycache__/

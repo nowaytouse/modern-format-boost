@@ -1,101 +1,117 @@
 #!/usr/bin/env python3
-"""Modern Format Boost - Cache Cleaner (Strict Parity Edition)"""
+"""Modern Format Boost - Cache Cleaner v1.0 (Python Edition)
+Cleans analysis and quality caches to free up space.
+"""
 
 import os
+import sys
 import subprocess
 import shutil
 from pathlib import Path
-from rich.console import Console
 
-console = Console()
+# ANSI Colors
+if sys.stdout.isatty():
+    RED = '\033[0;31m'
+    GREEN = '\033[0;32m'
+    YELLOW = '\033[1;33m'
+    BLUE = '\033[0;34m'
+    BOLD = '\033[1m'
+    DIM = '\033[2m'
+    RESET = '\033[0m'
+else:
+    RED = GREEN = YELLOW = BLUE = BOLD = DIM = RESET = ''
 
-class Config:
-    def __init__(self):
-        self.script_dir = Path(__file__).parent.resolve()
-        self.project_root = self.script_dir.parent
-        self.cache_dir = self.project_root / ".cache"
-        self.db_file = self.cache_dir / "image_analysis_v2.db"
-        self.log_dir = self.project_root / "logs"
-        self.mfb_progress_dir = Path.home() / ".mfb_progress"
+def clear_screen():
+    print('\033[2J\033[H', end="")
+
+def draw_header():
+    line = '─' * 60
+    print(f"{BLUE}╭{line}╮{RESET}")
+    print(f"{BLUE}│{RESET}  {BOLD}{RED}🔥 DATA PURGE UTILITY v1.0{RESET}                            {BLUE}│{RESET}")
+    print(f"{BLUE}╰{line}╯{RESET}")
+    print(f"   {RED}⚠️  WARNING: Critical processing data will be permanently deleted.{RESET}\n")
 
 def get_dir_size(path):
-    """严格调用系统 du -sh 保证输出格式一致"""
-    if not path.exists():
-        return "0B"
     try:
         result = subprocess.run(["du", "-sh", str(path)], capture_output=True, text=True)
         if result.returncode == 0:
-            return result.stdout.split('\t')[0].strip()
+            return result.stdout.split()[0]
     except Exception:
         pass
     return "0B"
 
-def draw_header():
-    console.print("[blue]╭" + "─" * 60 + "╮[/blue]")
-    console.print("[blue]│[/blue]  [bold red]🔥 DATA PURGE UTILITY v1.0[/bold red]                            [blue]│[/blue]")
-    console.print("[blue]╰" + "─" * 60 + "╯[/blue]")
-    console.print("   [red]⚠️  WARNING: Critical processing data will be permanently deleted.[/red]\n")
-
-def show_stats(config):
-    console.print("[bold]Current Cache Status:[/bold]")
+def show_stats(cache_dir, db_file, log_dir, mfb_progress_dir):
+    print(f"{BOLD}Current Cache Status:{RESET}")
     
-    if config.cache_dir.is_dir():
-        size = get_dir_size(config.cache_dir)
-        console.print(f"   📂 Directory: [dim]{config.cache_dir}[/dim]")
-        console.print(f"   📦 Total Size: [bold green]{size}[/bold green]")
+    if cache_dir.is_dir():
+        size = get_dir_size(cache_dir)
+        print(f"   📂 Directory: {DIM}{cache_dir}{RESET}")
+        print(f"   📦 Total Size: {BOLD}{GREEN}{size}{RESET}")
 
-        if config.db_file.is_file():
-            db_size = get_dir_size(config.db_file)
-            console.print(f"   🗄️  Database:  [dim]image_analysis_v2.db[/dim] ({db_size})")
+        if db_file.is_file():
+            db_size = get_dir_size(db_file)
+            print(f"   🗄️  Database:  {DIM}image_analysis_v2.db{RESET} ({db_size})")
     else:
-        console.print("   [yellow]Empty: No cache directory found.[/yellow]")
+        print(f"   {YELLOW}Empty: No cache directory found.{RESET}")
 
-    log_size = get_dir_size(config.log_dir)
-    console.print(f"   📝 Logs:      [dim]{log_size}[/dim]")
+    log_size = get_dir_size(log_dir) if log_dir.is_dir() else "0B"
+    print(f"   📝 Logs:      {DIM}{log_size}{RESET}")
 
-    if config.mfb_progress_dir.is_dir():
-        prog_size = get_dir_size(config.mfb_progress_dir)
-        console.print(f"   🔄 Progress:  [dim]{prog_size}[/dim]")
+    if mfb_progress_dir.is_dir():
+        prog_size = get_dir_size(mfb_progress_dir)
+        print(f"   🔄 Progress:  {DIM}{prog_size}{RESET}")
     print("")
 
 def main():
-    config = Config()
-    console.clear()
+    script_dir = Path(__file__).parent.resolve()
+    project_root = script_dir.parent
+
+    cache_dir = project_root / ".cache"
+    db_file = cache_dir / "image_analysis_v2.db"
+    log_dir = project_root / "logs"
+    mfb_progress_dir = Path.home() / ".mfb_progress"
+
+    clear_screen()
     draw_header()
-    show_stats(config)
+    show_stats(cache_dir, db_file, log_dir, mfb_progress_dir)
 
-    console.print("[red]🔥 Purging all analysis data, logs and progress trackers...[/red]\n")
+    print(f"{RED}🔥 Purging all analysis data, logs and progress trackers...{RESET}\n")
 
-    # 严格对齐: SQLite Vacuum
-    if shutil.which("sqlite3") and config.db_file.is_file():
-        console.print("[dim]   Vacuuming database...[/dim]")
-        subprocess.run(["sqlite3", str(config.db_file), "VACUUM;"], stderr=subprocess.DEVNULL)
-        console.print("   [green]✅ Database vacuumed[/green]")
+    # Vacuum database if sqlite3 is available
+    if db_file.is_file() and shutil.which("sqlite3"):
+        print(f"{DIM}   Vacuuming database...{RESET}")
+        subprocess.run(["sqlite3", str(db_file), "VACUUM;"], stderr=subprocess.DEVNULL)
+        print(f"   {GREEN}✅ Database vacuumed{RESET}")
 
-    # 严格对齐: rm -rf cache
-    if config.cache_dir.is_dir():
-        console.print("[dim]   Removing cache directory...[/dim]")
-        shutil.rmtree(config.cache_dir, ignore_errors=True)
-        console.print("   [green]✅ Cache purged[/green]")
+    # Purge cache directory
+    if cache_dir.is_dir():
+        print(f"{DIM}   Removing cache directory...{RESET}")
+        shutil.rmtree(cache_dir, ignore_errors=True)
+        print(f"   {GREEN}✅ Cache purged{RESET}")
 
-    # 严格对齐: rm -f logs/*.log
-    if config.log_dir.is_dir() and str(config.log_dir) != "/":
-        console.print("[dim]   Clearing logs...[/dim]")
-        for log_file in config.log_dir.glob("*.log"):
+    # Clear logs (with safety check)
+    if log_dir.is_dir() and str(log_dir) != "/":
+        print(f"{DIM}   Clearing logs...{RESET}")
+        for log_file in log_dir.glob("*.log"):
             try:
                 log_file.unlink()
             except Exception:
                 pass
-        console.print("   [green]✅ Logs cleared[/green]")
+        print(f"   {GREEN}✅ Logs cleared{RESET}")
 
-    # 严格对齐: rm -rf mfb_progress
-    if config.mfb_progress_dir.is_dir():
-        console.print("[dim]   Removing MFB progress directory...[/dim]")
-        shutil.rmtree(config.mfb_progress_dir, ignore_errors=True)
-        console.print("   [green]✅ MFB progress purged[/green]")
+    # Purge MFB progress directory
+    if mfb_progress_dir.is_dir():
+        print(f"{DIM}   Removing MFB progress directory...{RESET}")
+        shutil.rmtree(mfb_progress_dir, ignore_errors=True)
+        print(f"   {GREEN}✅ MFB progress purged{RESET}")
 
-    console.print("\n[green]✅ Cleanup Complete[/green]\n")
-    console.input("[dim]Press Enter to return to menu...[/dim]")
+    print(f"\n{GREEN}✅ Cleanup Complete{RESET}\n")
+    print(f"{DIM}Press Enter to return to menu...{RESET}")
+    
+    try:
+        input()
+    except (EOFError, KeyboardInterrupt):
+        pass
 
 if __name__ == "__main__":
     main()

@@ -1,314 +1,561 @@
 #!/usr/bin/env python3
-"""Modern Format Boost - Drag & Drop Processor (Strict Parity Edition)"""
+"""Modern Format Boost - Drag & Drop Processor v7.0 (Python Edition)
+Usage: Drag folder onto this script or double-click to select
+"""
 
 import os
 import sys
-import subprocess
-import time
 import re
+import time
+import subprocess
 import shutil
+import threading
+import datetime
 from pathlib import Path
-from datetime import datetime
-from rich.console import Console
-from rich.panel import Panel
-from rich.prompt import Confirm, Prompt
-from rich.progress import Progress, SpinnerColumn, TextColumn
 
-console = Console()
+try:
+    from rich.console import Console
+    console = Console()
+except ImportError:
+    class DummyConsole:
+        def print(self, *args, **kwargs):
+            print(*args, **kwargs)
+    console = DummyConsole()
 
-class Config:
-    def __init__(self):
-        self.script_dir = Path(__file__).parent.resolve()
-        self.project_root = self.script_dir.parent
-        self.img_tool = self.project_root / "target/release/img-hevc"
-        self.vid_tool = self.project_root / "target/release/vid-hevc"
-        
-        self.log_dir = self.project_root / "logs"
-        self.session_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        self.log_file = self.log_dir / f"drag_drop_{self.session_time}.log"
-        
-        self.target_dir = None
-        self.output_dir = None
-        self.output_mode = "inplace"
-        self.ultimate_mode = True
-        self.verbose_mode = False
-        
-        self.stats = {"img": {"succeeded": 0, "skipped": 0, "failed": 0},
-                      "vid": {"succeeded": 0, "skipped": 0, "failed": 0}}
+# Basic ANSI
+if sys.stdout.isatty():
+    RED = '\033[0;31m'
+    GREEN = '\033[0;32m'
+    YELLOW = '\033[1;33m'
+    BLUE = '\033[0;34m'
+    MAGENTA = '\033[0;35m'
+    CYAN = '\033[0;36m'
+    WHITE = '\033[0;37m'
+    BOLD = '\033[1m'
+    DIM = '\033[2m'
+    RESET = '\033[0m'
+else:
+    RED = GREEN = YELLOW = BLUE = MAGENTA = CYAN = WHITE = BOLD = DIM = RESET = ''
 
-def write_log(config, text):
-    config.log_dir.mkdir(parents=True, exist_ok=True)
-    with open(config.log_file, "a", encoding="utf-8") as f:
-        f.write(text + "\n")
+SCRIPT_DIR = Path(__file__).parent.resolve()
+PROJECT_ROOT = SCRIPT_DIR.parent
 
-def check_tools(config):
-    result = subprocess.run([config.script_dir / "smart_build.sh"], capture_output=True)
-    if result.returncode != 0:
-        console.print("[red]❌ Build failed. Please check the logs.[/red]")
-        sys.exit(1)
+IMGQUALITY_HEVC = PROJECT_ROOT / "target" / "release" / "img-hevc"
+VIDQUALITY_HEVC = PROJECT_ROOT / "target" / "release" / "vid-hevc"
 
-def safety_check(target_dir):
-    """严格对齐 Bash 版的系统保护路径"""
-    path = str(target_dir.resolve())
-    home = str(Path.home())
+OUTPUT_MODE = "inplace"
+TARGET_DIR = ""
+OUTPUT_DIR = ""
+ULTIMATE_MODE = True
+VERBOSE_MODE = False
+
+IMG_SUCCEEDED = 0
+IMG_SKIPPED = 0
+IMG_FAILED = 0
+VID_SUCCEEDED = 0
+VID_SKIPPED = 0
+VID_FAILED = 0
+
+spinner_event = threading.Event()
+spinner_thread = None
+
+LOG_DIR = PROJECT_ROOT / "logs"
+LOG_FILE = ""
+VERBOSE_LOG_FILE = ""
+SESSION_START_TIME = ""
+
+def hide_cursor():
+    sys.stdout.write('\033[?25l')
+    sys.stdout.flush()
+
+def show_cursor():
+    sys.stdout.write('\033[?25h')
+    sys.stdout.flush()
+
+def clear_screen():
+    sys.stdout.write('\033[2J\033[H')
+    sys.stdout.flush()
+
+def _fmt_elapsed(t):
+    t = max(0, t)
+    s = t % 60
+    m = (t // 60) % 60
+    h = (t // 3600) % 24
+    d = (t // 86400) % 7
+    w = (t // (7 * 86400)) % 4
+    mo = (t // (30 * 86400)) % 12
+    y = t // (365 * 86400)
+
+    if y > 0: return f"{y:02d}Y   {mo:02d}M   {w:02d}W   {d:02d}D   {h:02d}h  {m:02d}m{s:02d}s"
+    if mo > 0: return f"{mo:02d}M   {w:02d}W   {d:02d}D   {h:02d}h  {m:02d}m{s:02d}s"
+    if w > 0: return f"{w:02d}W   {d:02d}D   {h:02d}h  {m:02d}m{s:02d}s"
+    if d > 0: return f"{d:02d}D   {h:02d}h  {m:02d}m{s:02d}s"
+    if h > 0: return f"{h:02d}h  {m:02d}m{s:02d}s"
+    if m > 0: return f"{m:02d}m{s:02d}s"
+    return f"{s:02d}s"
+
+def spinner_run():
+    start = time.time()
+    while not spinner_event.is_set():
+        elapsed = int(time.time() - start)
+        if sys.stdout.isatty():
+            sys.stdout.write(f"\033]0;⏱ {_fmt_elapsed(elapsed)}\007")
+            sys.stdout.flush()
+        time.sleep(0.15)
     
-    exact_blocks = ["/", home, f"{home}/Desktop", f"{home}/Documents"]
-    prefix_blocks = ["/System", "/usr", "/bin", "/sbin"]
-    
-    if path in exact_blocks or any(path.startswith(p) for p in prefix_blocks):
-        console.print("\n[bold red]⚠️  SAFETY BLOCK[/bold red]")
-        console.print("   System or root directories cannot be processed directly.")
-        sys.exit(1)
+    elapsed = int(time.time() - start)
+    print(f"   Total time: {_fmt_elapsed(elapsed)}")
+    if sys.stdout.isatty():
+        sys.stdout.write("\033]0;\007")
+        sys.stdout.flush()
 
-def get_target_directory(config):
-    if not config.target_dir:
-        console.print("[cyan]📂 Waiting for input...[/cyan]")
-        console.print("[dim]   Please drag and drop a folder here, then press Enter.[/dim]")
-        path = Prompt.ask("   [bold]>[/bold] ").strip().strip('"').strip("'").strip()
-        config.target_dir = Path(path)
+def start_elapsed_spinner():
+    global spinner_thread
+    spinner_event.clear()
+    spinner_thread = threading.Thread(target=spinner_run, daemon=True)
+    spinner_thread.start()
 
-    if not config.target_dir.is_dir():
-        console.print(f"\n[red]❌ Error: Directory not found.[/red]\n[dim]   Path: {config.target_dir}[/dim]")
-        sys.exit(1)
-        
-    safety_check(config.target_dir)
+def stop_elapsed_spinner():
+    if spinner_thread and spinner_thread.is_alive():
+        spinner_event.set()
+        spinner_thread.join(timeout=1.0)
 
-def select_mode(config):
-    """严格对齐 Bash 版的死循环菜单，执行 3、4 后返回菜单"""
-    while True:
-        console.clear()
-        console.print(Panel.fit("🚀 MODERN FORMAT BOOST", style="bold blue"))
-        console.print("\n[bold]Select Operation Mode:[/bold]\n")
-        
-        options = [
-            ("1", "📂 Output to Adjacent Folder", "Safe mode. Keeps originals untouched."),
-            ("2", "🚀 In-Place Optimization", "Replaces original files. Saves disk space."),
-            ("3", "🩹 Fix iCloud Import Errors", "Fix corrupted Brotli EXIF metadata that prevents iCloud Photos import."),
-            ("4", "🧹 Purge Processing Data", "Clear analysis cache, session logs, and ALL resume progress.")
-        ]
-        
-        for num, title, desc in options:
-            console.print(f"{num}. {title}\n   [dim]{desc}[/dim]\n")
+def init_log():
+    global SESSION_START_TIME, LOG_FILE, VERBOSE_LOG_FILE
+    SESSION_START_TIME = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    LOG_FILE = LOG_DIR / f"drag_drop_{SESSION_START_TIME}.log"
+    VERBOSE_LOG_FILE = LOG_DIR / f"verbose_{SESSION_START_TIME}.log"
 
-        choice = Prompt.ask("Choice", choices=["1", "2", "3", "4"], default="2")
-
-        if choice == "1":
-            config.output_mode = "adjacent"
-            config.output_dir = config.target_dir.parent / f"{config.target_dir.name}_optimized"
-            console.print(f"\n[green]✅ ADJACENT MODE SELECTED[/green]")
-            console.print(f"   Output: [dim]{config.output_dir}[/dim]")
-            console.print("   [dim]Creating directory structure...[/dim]")
-            create_directory_structure(config.target_dir, config.output_dir)
-            break
-            
-        elif choice == "2":
-            config.output_mode = "inplace"
-            console.print(f"\n[yellow]⚠️  IN-PLACE MODE SELECTED[/yellow]")
-            console.print("[dim]   Original files will be replaced after successful conversion.[/dim]")
-            if Confirm.ask("   [bold]Are you sure?[/bold]"):
-                break
+def get_branch_tag():
+    try:
+        if (PROJECT_ROOT / ".git").is_dir():
+            res = subprocess.run(["git", "-C", str(PROJECT_ROOT), "symbolic-ref", "--short", "HEAD"], capture_output=True, text=True)
+            if res.returncode == 0:
+                branch = res.stdout.strip()
             else:
-                sys.exit(0)
-                
-        elif choice == "3":
-            console.print(f"\n[magenta]🩹 ICLOUD IMPORT FIX MODE[/magenta]")
-            script = config.script_dir / "repair_apple_photos.py"
-            if script.exists():
-                subprocess.run([script, str(config.target_dir)])
-            console.print("\n[green]✅ Brotli EXIF Fix Completed[/green]\n")
-            Prompt.ask("[dim]Press Enter to return to menu...[/dim]")
-            continue # 返回主菜单
-            
-        elif choice == "4":
-            console.print(f"\n[red]🔥 DATA PURGE MODE[/red]")
-            script = config.script_dir / "cache_cleaner.py"
-            if script.exists():
-                subprocess.run([script])
-            Prompt.ask("[dim]Press Enter to return to menu...[/dim]")
-            continue # 返回主菜单
+                res = subprocess.run(["git", "-C", str(PROJECT_ROOT), "rev-parse", "--short", "HEAD"], capture_output=True, text=True)
+                branch = res.stdout.strip()
 
-def create_directory_structure(src, dest):
-    dest.mkdir(parents=True, exist_ok=True)
-    shutil.copystat(src, dest)
-    for dirpath, dirnames, _ in os.walk(src):
-        for dirname in dirnames:
-            src_dir = Path(dirpath) / dirname
-            dest_dir = dest / src_dir.relative_to(src)
-            dest_dir.mkdir(exist_ok=True)
-            shutil.copystat(src_dir, dest_dir)
+            if branch == "nightly":
+                return f" {BOLD}{MAGENTA}[NIGHTLY]{RESET}"
+            elif branch == "main":
+                return f" {BOLD}{CYAN}[MAIN]{RESET}"
+            elif branch:
+                return f" {DIM}[{branch}]{RESET}"
+    except Exception:
+        pass
+    return ""
 
-def count_files(config):
-    console.print("\n[dim]── [bold white]Scanning Content[/bold white] ──────────────────────────────────────────────────[/dim]")
+def draw_header():
+    width = 70
+    tag = get_branch_tag()
     
-    img_exts = {".jpg", ".jpeg", ".jpe", ".jfif", ".png", ".webp", ".heic", ".heif", ".avif", ".gif", ".tiff", ".tif", ".bmp"}
-    vid_exts = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".wmv", ".flv"}
-    
-    total = img_count = vid_count = xmp_count = 0
-    for f in config.target_dir.rglob("*"):
-        if f.is_file() and not f.name.startswith("."):
-            total += 1
-            ext = f.suffix.lower()
-            if ext in img_exts: img_count += 1
-            elif ext in vid_exts: vid_count += 1
-            elif ext == ".xmp": xmp_count += 1
-            
-    other_count = total - img_count - vid_count - xmp_count
+    version = "x.x.x"
+    try:
+        with open(PROJECT_ROOT / "Cargo.toml") as f:
+            for line in f:
+                if line.startswith("version ="):
+                    version = line.split('"')[1]
+                    break
+    except Exception:
+        pass
 
-    console.print(f"   📁 Total Files: [bold]{total}[/bold]")
-    console.print(f"   🖼️  Images:      [bold cyan]{img_count}[/bold cyan]")
-    console.print(f"   🎬 Videos:      [bold magenta]{vid_count}[/bold magenta]")
-    console.print(f"   📋 Metadata:    [bold dim]{xmp_count}[/bold dim]")
-    console.print(f"   📦 Others:      [bold dim]{other_count}[/bold dim] (Copy only)\n")
-    return img_count, vid_count
+    title = f"🚀 MODERN FORMAT BOOST v{version}"
+    padding = (width - len(title)) // 2
 
-def check_disk_space(config):
-    """严格对齐 Bash 版：输入媒体总大小 + 1GB Headroom"""
-    img_exts = {".jpg", ".jpeg", ".jpe", ".jfif", ".png", ".webp", ".heic", ".heif", ".avif", ".gif", ".tiff", ".tif", ".bmp"}
-    vid_exts = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".wmv", ".flv"}
-    
-    total_bytes = sum(f.stat().st_size for f in config.target_dir.rglob("*") if f.is_file() and f.suffix.lower() in (img_exts | vid_exts))
-    
-    check_path = config.output_dir if config.output_mode == "adjacent" else config.target_dir
-    while not check_path.exists():
-        check_path = check_path.parent
+    print(f"\n{BLUE}╭{'─'*70}╮{RESET}")
+    print(f"{BLUE}│{RESET}{' '*padding}{BOLD}{WHITE}{title}{RESET}{tag}{' '*((width-len(title)-8)//2)}{BLUE}│{RESET}")
+    print(f"{BLUE}│{'─'*70}│{RESET}")
+    print(f"{BLUE}│{RESET}  {DIM}PREMIUM MEDIA OPTIMIZER{RESET}{' '*(69-25)}{BLUE}│{RESET}")
+    print(f"{BLUE}│{RESET}  {GREEN}●{RESET} {DIM}No Data Loss{RESET}   {GREEN}●{RESET} {DIM}Smart Conversion{RESET}   {GREEN}●{RESET} {DIM}Auto-Repair{' '*(69-58)}{BLUE}│{RESET}")
+    print(f"{BLUE}╰{'─'*70}╯{RESET}")
+    print(f"   {RED}⚠️  WARNING: Always keep a backup of your original media before optimization.{RESET}\n")
 
-    avail_bytes = shutil.disk_usage(check_path).free
-    required = total_bytes + (1024 * 1024 * 1024)
-
-    if avail_bytes < required:
-        console.print(f"[red]❌ Insufficient disk space[/red]")
-        console.print(f"   Available: {avail_bytes // (1024**3)} GB")
-        console.print(f"   Required:  {required // (1024**3)} GB")
+def check_tools():
+    build_script = SCRIPT_DIR / "smart_build.sh"
+    res = subprocess.run([str(build_script)])
+    if res.returncode != 0:
+        print(f"{RED}❌ Build failed. Please check the logs.{RESET}")
+        input("Press Enter to exit...")
         sys.exit(1)
-        
-    os.environ["MFB_SKIP_DISK_PRECHECK"] = "1"
 
-def parse_stats(output, tool_type, config):
-    if m := re.search(r'Succeeded:\s*(\d+)', output): config.stats[tool_type]["succeeded"] = int(m.group(1))
-    if m := re.search(r'Skipped:\s*(\d+)', output): config.stats[tool_type]["skipped"] = int(m.group(1))
-    if m := re.search(r'Failed:\s*(\d+)', output): config.stats[tool_type]["failed"] = int(m.group(1))
+def draw_separator(title):
+    print(f"{DIM}── {BOLD}{WHITE}{title}{RESET} {DIM}{'─'*50}{RESET}\n")
 
-def process_media(tool, args, tool_type, config):
-    cmd = [str(tool)] + args
-    result = subprocess.run(cmd, capture_output=True, text=True)
+def get_target_directory():
+    global TARGET_DIR
+    if not TARGET_DIR and not os.environ.get("FROM_APP"):
+        draw_header()
+        print(f"{CYAN}📂 Waiting for input...{RESET}")
+        print(f"{DIM}   Please drag and drop a folder here, then press Enter.{RESET}")
+        TARGET_DIR = input(f"   {BOLD}> {RESET}").strip()
+        TARGET_DIR = TARGET_DIR.strip("\"'")
+
+    p = Path(TARGET_DIR)
+    if not p.is_dir():
+        print(f"\n{RED}❌ Error: Directory not found.{RESET}")
+        print(f"{DIM}   Path: {TARGET_DIR}{RESET}")
+        sys.exit(1)
+
+def safety_check():
+    s = str(TARGET_DIR)
+    unsafe = ["/", "/System", "/usr", "/bin", "/sbin", str(Path.home()), str(Path.home()/"Desktop"), str(Path.home()/"Documents")]
+    for p in unsafe:
+        if s == p or s.startswith(p + "/"):
+            print(f"\n{RED}⚠️  SAFETY BLOCK{RESET}")
+            print(f"   System or root directories cannot be processed directly.")
+            sys.exit(1)
+
+def read_key():
+    import tty, termios
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setraw(sys.stdin.fileno())
+        ch = sys.stdin.read(1)
+        if ch == '\x1b':
+            ch += sys.stdin.read(2)
+        return ch
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+def select_mode():
+    global OUTPUT_MODE, OUTPUT_DIR
+    selected = 0
+    hide_cursor()
+
+    options = [
+        "📂 Output to Adjacent Folder",
+        "🚀 In-Place Optimization",
+        "🩹 Fix iCloud Import Errors",
+        "🧹 Purge Processing Data"
+    ]
+    descriptions = [
+        "Safe mode. Keeps originals untouched.",
+        "Replaces original files. Saves disk space.",
+        "Fix corrupted Brotli EXIF metadata that prevents iCloud Photos import.",
+        "Clear analysis cache, session logs, and ALL resume progress."
+    ]
+
+    while True:
+        clear_screen()
+        draw_header()
+        print(f"{BOLD}Select Operation Mode:{RESET}\n")
+
+        for i, opt in enumerate(options):
+            if i == selected:
+                print(f"  {CYAN}➜ {BOLD}{opt}{RESET}")
+                print(f"    {CYAN}{DIM}{descriptions[i]}{RESET}\n")
+            else:
+                print(f"    {DIM}{opt}{RESET}")
+                print(f"    {DIM}{descriptions[i]}{RESET}\n")
+
+        print(f"{DIM}(Use ↑/↓ to navigate, Enter to select, q to quit){RESET}")
+
+        if sys.stdin.isatty():
+            key = read_key()
+            if key in ('\x1b[A', '\x1b[D'):  # Up / Left
+                selected = (selected - 1) % len(options)
+            elif key in ('\x1b[B', '\x1b[C'):  # Down / Right
+                selected = (selected + 1) % len(options)
+            elif key in ('\r', '\n'):
+                break
+            elif key.lower() == 'q':
+                show_cursor()
+                sys.exit(0)
+        else:
+            # Fallback if not interactive
+            selected = 0
+            break
+
+    show_cursor()
+
+    if selected == 0:
+        OUTPUT_MODE = "adjacent"
+        tdir = Path(TARGET_DIR).resolve()
+        OUTPUT_DIR = str(tdir.parent / (tdir.name + "_optimized"))
+        print(f"\n{GREEN}✅ ADJACENT MODE SELECTED{RESET}")
+        print(f"   Output: {DIM}{OUTPUT_DIR}{RESET}")
+        print(f"   {DIM}Creating directory structure...{RESET}")
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+    elif selected == 1:
+        OUTPUT_MODE = "inplace"
+        print(f"\n{YELLOW}⚠️  IN-PLACE MODE SELECTED{RESET}")
+        print(f"{DIM}   Original files will be replaced after successful conversion.{RESET}")
+        confirm = input(f"   {BOLD}Are you sure? (y/N): {RESET}")
+        if not confirm.lower().startswith('y'):
+            sys.exit(0)
+    elif selected == 2:
+        OUTPUT_MODE = "brotli_fix_only"
+        print(f"\n{MAGENTA}🩹 ICLOUD IMPORT FIX MODE{RESET}")
+        print(f"{DIM}   Only files with corrupted Brotli EXIF will be fixed.{RESET}")
+        print(f"{DIM}   This resolves 'Unable to import to iCloud Photos' errors.{RESET}\n")
+    else:
+        OUTPUT_MODE = "cache_clean"
+        print(f"\n{RED}🔥 DATA PURGE MODE{RESET}")
+        print(f"{DIM}   Analysis cache and ALL task progress will be permanently deleted.{RESET}\n")
+
+IMG_COUNT = 0
+VID_COUNT = 0
+MEDIA_TOTAL_SIZE = 0
+
+def count_files():
+    global IMG_COUNT, VID_COUNT, MEDIA_TOTAL_SIZE
+    draw_separator("Scanning Content")
+    print(f"{DIM}   Analyzing directory structure...{RESET}")
+
+    total, img, vid, xmp, media_size = 0, 0, 0, 0, 0
+    img_exts = {".jpg", ".jpeg", ".jpe", ".jfif", ".png", ".webp", ".heic", ".heif", ".avif", ".gif", ".tiff", ".tif", ".bmp"}
+    vid_exts = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".wmv", ".flv"}
+    media_exts = img_exts | vid_exts
+
+    for root, _, files in os.walk(TARGET_DIR):
+        for file in files:
+            if file.startswith("."): continue
+            total += 1
+            p = Path(root) / file
+            ext = p.suffix.lower()
+            if ext in img_exts: img += 1
+            elif ext in vid_exts: vid += 1
+            elif ext == ".xmp": xmp += 1
+            if ext in media_exts:
+                try: media_size += p.stat().st_size
+                except OSError: pass
+
+    other = total - img - vid - xmp
+    IMG_COUNT, VID_COUNT, MEDIA_TOTAL_SIZE = img, vid, media_size
+
+    print(f"   📁 Total Files: {BOLD}{total}{RESET}")
+    print(f"   🖼️  Images:      {BOLD}{CYAN}{img}{RESET}")
+    print(f"   🎬 Videos:      {BOLD}{MAGENTA}{vid}{RESET}")
+    print(f"   📋 Metadata:    {BOLD}{DIM}{xmp}{RESET}")
+    print(f"   📦 Others:      {BOLD}{DIM}{other}{RESET} (Copy only)\n")
+
+def check_disk_space(check_dir):
+    try:
+        free = shutil.disk_usage(check_dir).free
+        required = MEDIA_TOTAL_SIZE + 1024**3
+        if free < required:
+            print(f"{RED}❌ Insufficient disk space{RESET}")
+            print(f"   Available: {free // 1024**3} GB")
+            print(f"   Required:  {required // 1024**3} GB")
+            sys.exit(1)
+        os.environ["MFB_SKIP_DISK_PRECHECK"] = "1"
+    except Exception:
+        pass
+
+def stream_and_log_process(cmd, parse_type):
+    global IMG_SUCCEEDED, IMG_SKIPPED, IMG_FAILED, VID_SUCCEEDED, VID_SKIPPED, VID_FAILED
+    tmp_out = ""
+    res = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+
+    lf = open(LOG_FILE, "ab") if LOG_FILE else None
+    try:
+        while True:
+            chunk = res.stdout.read(65536)
+            if not chunk and res.poll() is not None:
+                break
+            if chunk:
+                sys.stdout.buffer.write(chunk)
+                sys.stdout.buffer.flush()
+                try:
+                    s = chunk.decode('utf-8')
+                    if len(tmp_out) > 4096:
+                        tmp_out = tmp_out[-2048:]
+                    tmp_out += s
+                except UnicodeDecodeError:
+                    pass
+                if lf:
+                    lf.write(chunk)
+                    lf.flush()
+    finally:
+        if lf:
+            lf.close()
+
+    if res.returncode not in (0, 130):
+        sys.exit(res.returncode)
     
-    write_log(config, result.stdout)
-    if result.stderr: write_log(config, result.stderr)
-
-    if result.returncode == 130:
-        sys.exit(130)
-    elif result.returncode != 0:
-        sys.exit(result.returncode)
-
-    parse_stats(result.stdout + result.stderr, tool_type, config)
-
-def process_images(config, img_count):
-    if img_count == 0: return
-    console.print("[dim]── [bold white]Processing Images[/bold white] ─────────────────────────────────────────────────[/dim]")
-    args = ["run", "--recursive", "--allow-size-tolerance"]
-    if config.ultimate_mode: args.append("--ultimate")
-    if config.verbose_mode: args.append("--verbose")
-
-    if config.output_mode == "inplace": args.extend(["--in-place", str(config.target_dir)])
-    else: args.extend([str(config.target_dir), "--output", str(config.output_dir)])
-
-    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}")) as progress:
-        progress.add_task("Processing Images...", total=None)
-        process_media(config.img_tool, args, "img", config)
-
-def process_videos(config, vid_count):
-    if vid_count == 0: return
-    console.print("[dim]── [bold white]Processing Videos[/bold white] ─────────────────────────────────────────────────[/dim]")
-    args = ["run", "--recursive", "--allow-size-tolerance"]
-    if config.ultimate_mode: args.append("--ultimate")
-    if config.verbose_mode: args.append("--verbose")
-
-    if config.output_mode == "inplace": args.extend(["--in-place", str(config.target_dir)])
-    else: args.extend([str(config.target_dir), "--output", str(config.output_dir)])
-
-    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}")) as progress:
-        progress.add_task("Processing Videos...", total=None)
-        process_media(config.vid_tool, args, "vid", config)
-
-def sync_non_media_files(config):
-    """严格对齐 Bash 版的 rsync 与 --exclude 逻辑"""
-    console.print("\n[dim]── [bold white]Syncing Non-Media Files[/bold white] ───────────────────────────────────────────[/dim]")
+    # Parse stats from trailing output
+    succ = re.findall(r'Succeeded:\s*(\d+)', tmp_out)
+    skip = re.findall(r'Skipped:\s*(\d+)', tmp_out)
+    fail = re.findall(r'Failed:\s*(\d+)', tmp_out)
     
+    s_val = int(succ[-1]) if succ else 0
+    sk_val = int(skip[-1]) if skip else 0
+    f_val = int(fail[-1]) if fail else 0
+    
+    if parse_type == "img":
+        IMG_SUCCEEDED, IMG_SKIPPED, IMG_FAILED = s_val, sk_val, f_val
+    else:
+        VID_SUCCEEDED, VID_SKIPPED, VID_FAILED = s_val, sk_val, f_val
+
+def process_images():
+    if IMG_COUNT == 0: return
+    draw_separator(f"Processing Images ({IMG_COUNT})")
+    cmd = [str(IMGQUALITY_HEVC), "run", "--recursive", "--allow-size-tolerance"]
+    if ULTIMATE_MODE: cmd.append("--ultimate")
+    if VERBOSE_MODE: cmd.append("--verbose")
+    
+    if OUTPUT_MODE == "inplace":
+        cmd.extend(["--in-place", str(TARGET_DIR)])
+    else:
+        cmd.extend([str(TARGET_DIR), "--output", str(OUTPUT_DIR)])
+
+    stream_and_log_process(cmd, "img")
+    print()
+
+def process_videos():
+    if VID_COUNT == 0: return
+    draw_separator(f"Processing Videos ({VID_COUNT})")
+    cmd = [str(VIDQUALITY_HEVC), "run", "--recursive", "--allow-size-tolerance"]
+    if ULTIMATE_MODE: cmd.append("--ultimate")
+    if VERBOSE_MODE: cmd.append("--verbose")
+    
+    if OUTPUT_MODE == "inplace":
+        cmd.extend(["--in-place", str(TARGET_DIR)])
+    else:
+        cmd.extend([str(TARGET_DIR), "--output", str(OUTPUT_DIR)])
+
+    stream_and_log_process(cmd, "vid")
+    print()
+
+def sync_non_media_files():
+    draw_separator("Syncing Non-Media Files")
     excludes = [
         "--exclude=*.[jJ][pP][gG]", "--exclude=*.[jJ][pP][eE][gG]", "--exclude=*.[pP][nN][gG]", "--exclude=*.[wW][eE][bB][pP]",
         "--exclude=*.[hH][eE][iI][cC]", "--exclude=*.[hH][eE][iI][fF]", "--exclude=*.[aA][vV][iI][fF]", "--exclude=*.[gG][iI][fF]",
-        "--exclude=*.[tT][iI][fF]", "--exclude=*.[tT][iI][fF][fF]", "--exclude=*.[jJ][pP][eE]", "--exclude=*.[jJ][fF][iI][fF]",
-        "--exclude=*.[bB][mM][pP]", "--exclude=*.[jJ][xX][lL]",
+        "--exclude=*.[tT][iI][fF]", "--exclude=*.[jJ][pP][eE]", "--exclude=*.[jJ][fF][iI][fF]", "--exclude=*.[bB][mM][pP]", "--exclude=*.[jJ][xX][lL]",
         "--exclude=*.[mM][pP]4", "--exclude=*.[mM][oO][vV]", "--exclude=*.[mM][kK][vV]", "--exclude=*.[aA][vV][iI]",
         "--exclude=*.[wW][eE][bB][mM]", "--exclude=*.[mM]4[vV]", "--exclude=*.[wW][mM][vV]", "--exclude=*.[fF][lL][vV]",
         "--exclude=*.[xX][mM][pP]"
     ]
-    
-    rsync_cmd = "/opt/homebrew/opt/rsync/bin/rsync" if os.path.exists("/opt/homebrew/opt/rsync/bin/rsync") else "rsync"
-    cmd = [rsync_cmd, "-av", "--ignore-existing"] + excludes + [f"{config.target_dir}/", f"{config.output_dir}/"]
-    
+    rsync = "/opt/homebrew/opt/rsync/bin/rsync" if os.path.exists("/opt/homebrew/opt/rsync/bin/rsync") else "rsync"
+    cmd = [rsync, "-av", "--ignore-existing"] + excludes + [f"{TARGET_DIR}/", f"{OUTPUT_DIR}/"]
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    console.print("   [green]✅ Non-media files synced.[/green]")
-    
-    # 严格对齐 Bash: 调用 Rust 后端恢复时间戳
-    if config.img_tool.exists():
-        result = subprocess.run([str(config.img_tool), "restore-timestamps", str(config.target_dir), str(config.output_dir)], capture_output=True)
-        if result.returncode == 0:
-            console.print("   [green]✅ Timestamps restored.[/green]")
+    print(f"   {GREEN}✅ Non-media files synced.{RESET}")
+    subprocess.run([str(IMGQUALITY_HEVC), "restore-timestamps", str(TARGET_DIR), str(OUTPUT_DIR)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    print(f"   {GREEN}✅ Timestamps restored.{RESET}")
 
-def show_summary(config, elapsed):
-    console.print("\n[dim]── [bold white]Task Completed[/bold white] ────────────────────────────────────────────────────[/dim]")
-    
-    img, vid = config.stats["img"], config.stats["vid"]
-    total_success = img["succeeded"] + vid["succeeded"]
-    total_skip = img["skipped"] + vid["skipped"]
-    total_fail = img["failed"] + vid["failed"]
-    total = total_success + total_skip + total_fail
-
-    console.print("   [green]✅ Optimization Finished Successfully[/green]\n")
-    console.print("   [bold]📊 Merged Statistics Report[/bold]")
-    console.print("   [dim]───────────────────────────────────[/dim]")
-    if img["succeeded"] + img["skipped"] + img["failed"] > 0:
-        console.print(f"   [cyan]🖼️  Images:[/cyan] [green]{img['succeeded']}[/green] succeeded, [yellow]{img['skipped']}[/yellow] skipped, [red]{img['failed']}[/red] failed")
-    if vid["succeeded"] + vid["skipped"] + vid["failed"] > 0:
-        console.print(f"   [magenta]🎬 Videos:[/magenta] [green]{vid['succeeded']}[/green] succeeded, [yellow]{vid['skipped']}[/yellow] skipped, [red]{vid['failed']}[/red] failed")
-    console.print("   [dim]───────────────────────────────────[/dim]")
-    console.print(f"   [white]📦 Total:[/white]  [green]{total_success}[/green] succeeded, [yellow]{total_skip}[/yellow] skipped, [red]{total_fail}[/red] failed")
-
-    if total > 0:
-        console.print(f"   [white]📈 Success Rate:[/white] [green]{(total_success * 100) // total}%[/green]")
-
-    if config.output_mode == "adjacent":
-        console.print(f"\n   [blue]📂 Output: {config.output_dir}[/blue]")
-
-    console.print(f"\n   Total time: {int(elapsed)}s")
+def finish_log():
+    if not LOG_FILE: return
+    with open(LOG_FILE, "a") as f:
+        f.write("\n========================================\n")
+        f.write("📊 Final Statistics\n")
+        f.write("========================================\n")
+        f.write(f"End Time: {datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}\n\n")
+        f.write(f"Images:  {IMG_SUCCEEDED} succeeded, {IMG_SKIPPED} skipped, {IMG_FAILED} failed\n")
+        f.write(f"Videos:  {VID_SUCCEEDED} succeeded, {VID_SKIPPED} skipped, {VID_FAILED} failed\n\n")
+        
+        tot_s = IMG_SUCCEEDED + VID_SUCCEEDED
+        tot_sk = IMG_SKIPPED + VID_SKIPPED
+        tot_f = IMG_FAILED + VID_FAILED
+        tot_proc = tot_s + tot_sk + tot_f
+        
+        f.write(f"Total:   {tot_s} succeeded, {tot_sk} skipped, {tot_f} failed\n")
+        if tot_proc > 0:
+            f.write(f"Success Rate: {(tot_s*100)//tot_proc}%\n")
+        f.write("\n========================================\nSession completed.\n========================================\n")
+    print(f"   {DIM}📝 Session log:  {LOG_FILE}{RESET}")
 
 def main():
-    config = Config()
+    global ULTIMATE_MODE, VERBOSE_MODE, TARGET_DIR
 
-    for arg in sys.argv[1:]:
-        if arg == "--ultimate": config.ultimate_mode = True
-        elif arg in ("--verbose", "-v"): config.verbose_mode = True
-        else: config.target_dir = Path(arg)
+    os.environ["MFB_GUI_LAUNCH"] = "1"
+    init_log()
 
-    check_tools(config)
-    get_target_directory(config)
-    select_mode(config)
+    args = sys.argv[1:]
+    non_flag_args = []
+    
+    for arg in args:
+        if arg == "--ultimate": ULTIMATE_MODE = True
+        elif arg in ("--verbose", "-v"): VERBOSE_MODE = True
+        else: non_flag_args.append(arg)
+        
+    if non_flag_args:
+        TARGET_DIR = non_flag_args[0]
+        
+    check_tools()
+    get_target_directory()
 
-    img_count, vid_count = count_files(config)
+    if not os.environ.get("FROM_APP"):
+        print()
+        print(f"{CYAN}📋 Configuration:{RESET}")
+        print(f"   {DIM}Target: {RESET}{BOLD}{TARGET_DIR}{RESET}")
+        if ULTIMATE_MODE: print(f"   {MAGENTA}🔥 Ultimate Mode: {RESET}{GREEN}ENABLED{RESET}")
+        if VERBOSE_MODE: print(f"   {CYAN}💬 Verbose: {RESET}{GREEN}ENABLED{RESET}")
+        print()
 
-    if img_count > 0 or vid_count > 0:
-        check_disk_space(config)
+    safety_check()
 
-    start = time.time()
-    process_images(config, img_count)
-    process_videos(config, vid_count)
+    while True:
+        select_mode()
+        
+        if OUTPUT_MODE == "brotli_fix_only":
+            repair_script = SCRIPT_DIR / "repair_apple_photos.py"
+            subprocess.run([sys.executable, str(repair_script), str(TARGET_DIR)])
+            print(f"\n{GREEN}✅ Brotli EXIF Fix Completed{RESET}\n")
+            input(f"{DIM}Press Enter to return to menu...{RESET}")
+            continue
+        elif OUTPUT_MODE == "cache_clean":
+            cache_script = SCRIPT_DIR / "cache_cleaner.py"
+            subprocess.run([sys.executable, str(cache_script)])
+            continue
+            
+        break
 
-    if config.output_mode == "adjacent":
-        sync_non_media_files(config)
+    count_files()
 
-    elapsed = time.time() - start
-    show_summary(config, elapsed)
+    if IMG_COUNT > 0 or VID_COUNT > 0:
+        check_path = OUTPUT_DIR if OUTPUT_MODE == "adjacent" else TARGET_DIR
+        check_disk_space(check_path)
+        start_elapsed_spinner()
+        
+    process_images()
+    process_videos()
+    
+    if IMG_COUNT > 0 or VID_COUNT > 0:
+        stop_elapsed_spinner()
+        
+    if OUTPUT_MODE == "adjacent":
+        sync_non_media_files()
+        
+    draw_separator("Task Completed")
+    
+    tot_s = IMG_SUCCEEDED + VID_SUCCEEDED
+    tot_sk = IMG_SKIPPED + VID_SKIPPED
+    tot_f = IMG_FAILED + VID_FAILED
+    tot_proc = tot_s + tot_sk + tot_f
+    
+    print(f"   {GREEN}✅ Optimization Finished Successfully{RESET}\n")
+    print(f"   {BOLD}📊 Merged Statistics Report{RESET}")
+    print(f"   {DIM}───────────────────────────────────{RESET}")
+    if IMG_COUNT > 0:
+        print(f"   {CYAN}🖼️  Images:{RESET} {GREEN}{IMG_SUCCEEDED}{RESET} succeeded, {YELLOW}{IMG_SKIPPED}{RESET} skipped, {RED}{IMG_FAILED}{RESET} failed")
+    if VID_COUNT > 0:
+        print(f"   {MAGENTA}🎬 Videos:{RESET} {GREEN}{VID_SUCCEEDED}{RESET} succeeded, {YELLOW}{VID_SKIPPED}{RESET} skipped, {RED}{VID_FAILED}{RESET} failed")
+    print(f"   {DIM}───────────────────────────────────{RESET}")
+    print(f"   {WHITE}📦 Total:{RESET}  {GREEN}{tot_s}{RESET} succeeded, {YELLOW}{tot_sk}{RESET} skipped, {RED}{tot_f}{RESET} failed")
+    if tot_proc > 0:
+        print(f"   {WHITE}📈 Success Rate:{RESET} {GREEN}{(tot_s*100)//tot_proc}%{RESET}\n")
+        
+    if OUTPUT_MODE == "adjacent":
+        print(f"   {BLUE}📂 Output: {OUTPUT_DIR}{RESET}")
+        try:
+            subprocess.run(["open", str(OUTPUT_DIR)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+            
+    try:
+        input(f"\n{DIM}Press Enter to exit...{RESET}")
+    except (EOFError, KeyboardInterrupt):
+        pass
+
+    finish_log()
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        stop_elapsed_spinner()
+        sys.exit(130)

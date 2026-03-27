@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
 
-## [Unreleased] - 2026-03-27
+## [Unreleased] - 2026-03-28
 
 ### 🐍 Script Infrastructure: Python-First Architecture
 Major refactoring of the automation layer, migrating core scripts from Bash to Python for improved maintainability and cross-platform compatibility.
@@ -28,10 +28,27 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
   - Improved timestamp verification retry logic with proper error propagation.
   - Enhanced kondo integration with correct flags (removed dry-run mode).
 
+### 🐛 Python Script Bug Fixes & Performance
+- **`drag_and_drop_processor.py`**:
+  - Fixed broken `with open(...) if ... else None as lf` syntax (invalid Python) — replaced with explicit open/close pattern.
+  - Fixed `safety_check()` logic that silently passed all checks due to a dead loop body.
+  - Eliminated double directory tree walk: `count_files()` now accumulates media byte size in the same pass, reused by `check_disk_space()`.
+  - Increased I/O read buffer from 1 KB to 64 KB for significantly faster streaming of tool output.
+  - Moved `import re` to top-level imports.
+- **`check_all.py`**:
+  - Fixed `has_command()` using broken `subprocess.run(["command", "-v", ...], shell=True)` — replaced with `shutil.which()`.
+  - Added missing `import shutil`.
+- **`repair_apple_photos.py`**:
+  - Fixed undefined `NC` variable reference — corrected to `RESET`.
+
+### 🌈 UltraHDR JPEG Handling
+- Detected UltraHDR JPEG gainmap files are now skipped for JXL encoding and the original file is copied as-is, avoiding silent quality loss due to `cjxl` gainmap incompatibility. Applies to both `img-hevc` and `img-av1`.
+
 ### 📝 Notes
 - All Python scripts maintain strict behavioral parity with their Bash predecessors.
 - Terminal output, menu structures, and error handling remain identical for user familiarity.
 - The `scripts/old/` directory preserves original Bash implementations for reference during transition.
+- `smart_build.sh` is retained as the sole `.sh` script (merged `common.sh` dependencies inline) to serve CI/CD and workflow build needs.
 
 ---
 
