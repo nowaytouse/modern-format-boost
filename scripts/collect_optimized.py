@@ -41,28 +41,23 @@ def get_finder_comment(path):
     
     return False
 
-def main():
-    parser = argparse.ArgumentParser(description="Collect optimized media files while preserving structure and metadata.")
-    parser.add_argument("source", help="Source directory to scan")
-    parser.add_argument("destination", help="Target directory to move files into")
-    parser.add_argument("--dry-run", action="store_true", help="Preview moves without executing them")
-    args = parser.parse_args()
-
-    src_root = os.path.abspath(args.source)
-    dest_root = os.path.abspath(args.destination)
+def run_collection(source, destination, dry_run=False):
+    """Core logic to collect and move optimized files."""
+    src_root = os.path.abspath(source)
+    dest_root = os.path.abspath(destination)
 
     # 1. Path Conflict Check
     if dest_root == src_root or dest_root.startswith(src_root + os.sep):
         print(f"{RED}Error: Destination directory cannot be inside the source directory.{NC}")
-        sys.exit(1)
+        return False
 
     if not os.path.isdir(src_root):
         print(f"{RED}Error: Source {src_root} is not a directory.{NC}")
-        sys.exit(1)
+        return False
 
     # Inform user about destination root creation
     if not os.path.exists(dest_root):
-        if not args.dry_run:
+        if not dry_run:
             print(f"{BLUE}>>> Destination root does not exist. Creating: {dest_root}{NC}")
             os.makedirs(dest_root, exist_ok=True)
         else:
@@ -102,13 +97,13 @@ def main():
             print(f"{YELLOW}No optimized files found ({symlink_count} symlinks ignored).{NC}")
         else:
             print(f"{YELLOW}No optimized files found.{NC}")
-        sys.exit(0)
+        return True
 
     print(f"{BLUE}>>> Identified {len(to_move)} candidate files.{NC}")
     if symlink_count > 0:
         print(f"{YELLOW}>>> Note: {symlink_count} symlinks were ignored during the scan.{NC}")
         
-    if args.dry_run:
+    if dry_run:
         print(f"{YELLOW}--- DRY RUN MODE: No files will be moved ---{NC}")
 
     # 4. Movement with Detailed Tracking
@@ -121,7 +116,7 @@ def main():
         dest_file = os.path.join(dest_root, rel_path)
         dest_dir = os.path.dirname(dest_file)
 
-        if args.dry_run:
+        if dry_run:
             print(f"{NC}[DRY-RUN] Would move: {rel_path}")
             continue
 
@@ -140,7 +135,7 @@ def main():
             failed_moves.append((rel_path, str(e)))
 
     # 5. Metadata Restoration (Dual-Sync: Src and Dest)
-    if not args.dry_run:
+    if not dry_run:
         print(f"{BLUE}>>> Restoring metadata for all directories...{NC}")
         # Restore bottom-up: Child mtime update won't affect parent once parent is restored
         sorted_dirs = sorted(all_dir_metadata.keys(), key=len, reverse=True)
@@ -174,10 +169,22 @@ def main():
         for path, err in failed_moves:
             print(f"  - {path}: {err}")
     
-    if args.dry_run:
+    if dry_run:
         print(f"{YELLOW}Dry run complete. No changes were made.{NC}")
-    else:
-        print(f"{BLUE}Operation finished with zero structure or metadata loss.{NC}")
+        return True
+    
+    print(f"{BLUE}Operation finished with zero structure or metadata loss.{NC}")
+    return not failed_moves
+
+def main():
+    parser = argparse.ArgumentParser(description="Collect optimized media files while preserving structure and metadata.")
+    parser.add_argument("source", help="Source directory to scan")
+    parser.add_argument("destination", help="Target directory to move files into")
+    parser.add_argument("--dry-run", action="store_true", help="Preview moves without executing them")
+    args = parser.parse_args()
+
+    if not run_collection(args.source, args.destination, args.dry_run):
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
