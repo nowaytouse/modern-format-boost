@@ -150,6 +150,9 @@ def init_log():
     if sys.stdout.isatty():
         sys.stdout.write('\033[8;40;100t')
         sys.stdout.flush()
+        # Set environment variables for subprocesses (indicatif/console width)
+        os.environ["COLUMNS"] = "100"
+        os.environ["LINES"] = "40"
     
     SESSION_START_TIME = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -468,16 +471,19 @@ def check_system_resources(check_dir):
 def stream_and_log_process(cmd, parse_type):
     global IMG_SUCCEEDED, IMG_SKIPPED, IMG_FAILED, VID_SUCCEEDED, VID_SKIPPED, VID_FAILED
     tmp_out = ""
-    res = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    # Explicitly pass current environment to preserve COLUMNS/LINES/COLOR flags
+    res = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=os.environ.copy())
 
     lf = open(LOG_FILE, "ab") if LOG_FILE else None
     try:
         while True:
             # Zero-Interference Passthrough (Full TTY Support: Icons, \r, Colors)
-            chunk = res.stdout.read(1024)
+            # Use read1 to get whatever is available without blocking for the full size.
+            # This is critical for real-time progress bars (avoids "PPT-style" stuttering).
+            chunk = res.stdout.read1(2048)
             if not chunk:
                 if res.poll() is not None: break
-                time.sleep(0.01) # Avoid busy-wait
+                time.sleep(0.002) # Zero-latency refresh for smooth "indicatif" bars
                 continue
             
             # Direct buffer write to preserve VT100 sequences precisely
