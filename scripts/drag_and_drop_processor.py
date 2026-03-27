@@ -11,7 +11,6 @@ import subprocess
 import shutil
 import threading
 import datetime
-import pty
 from pathlib import Path
 
 try:
@@ -470,48 +469,30 @@ def check_system_resources(check_dir):
         pass
 
 def stream_and_log_process(cmd, parse_type):
-    global IMG_SUCCEEDED, IMG_SKIPPED, IMG_FAILED, VID_SUCCEEDED, VID_SKIPPED, VID_FAILED
     tmp_out = ""
-    
-    # Create a Pseudo-Terminal pair (Master/Slave)
-    # This tricks the Rust binary into thinking it's on a real TTY,
-    # forcing its most optimized, high-frequency "indicatif" rendering mode.
-    master_fd, slave_fd = pty.openpty()
-
-    # Launch process using the PTY slave as stdout/stderr
-    res = subprocess.Popen(
-        cmd, 
-        stdout=slave_fd, 
-        stderr=slave_fd, 
-        env=os.environ.copy()
-    )
-    
-    # Close the slave in the master process now that it's passed to the child
-    os.close(slave_fd)
+    # Explicitly pass current environment to preserve COLUMNS/LINES/COLOR flags
+    res = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=os.environ.copy())
 
     lf = open(LOG_FILE, "ab") if LOG_FILE else None
     
-    # Set master PTY to non-blocking for ultra-smooth capture
-    os.set_blocking(master_fd, False)
+    # Use low-level file descriptors for zero-buffering / zero-latency relay
+    fd = res.stdout.fileno()
     
     try:
         while True:
-            try:
-                # Kernel-level read from PTY Master
-                chunk = os.read(master_fd, 16384) # Larger buffer for high-throughput TTY data
-            except BlockingIOError:
-                if res.poll() is not None: break
-                time.sleep(0.001) # Sub-millisecond cycle
-                continue
-            
+            # Low-level read from pipe without Python library buffering
+            # This is the most robust way to get flicker-free, real-time progress bars from indicatif
+            chunk = os.read(fd, 4096)
             if not chunk:
                 if res.poll() is not None: break
+                time.sleep(0.002) # Zero-latency cycle
                 continue
             
-            # 1:1 Relay to screen (native speed, zero buffering)
+            # Direct binary write to preserve VT100/ANSI sequences precisely
             os.write(sys.stdout.fileno(), chunk)
+            sys.stdout.flush()
             
-            # Record for stats parsing
+            # Capture for stats parsing
             try:
                 s = chunk.decode('utf-8', errors='ignore')
                 tmp_out += s
@@ -522,8 +503,6 @@ def stream_and_log_process(cmd, parse_type):
                 lf.flush()
     finally:
         if lf: lf.close()
-        try: os.close(master_fd) 
-        except: pass
 
     if res.returncode not in (0, 130):
         sys.exit(res.returncode)

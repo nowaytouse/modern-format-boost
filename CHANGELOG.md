@@ -14,12 +14,17 @@ This release marks a major milestone, consolidating the intensive `0.10.x` harde
 Significant overhaul of the Python automation layer to provide a high-end, professional terminal experience.
 
 - **Interactive Dashboard & Menu**:
-- **Native TTY (PTY) Pipelining (Cinema-Grade Smoothness)**:
-  - Transitioned the progress relay to a Pseudo-Terminal (PTY) master/slave architecture. By tricking the Rust binaries into seeing a "real" TTY, the `indicatif` engine now operates in its most optimized, high-frequency rendering mode.
-  - Achieved 100% native performance parity, identical to direct Bash execution, while maintaining full capture for logs and analytics.
-- **PTY-Master Kernel Relay**:
-  - Implemented a zero-latency kernel-level relay from the PTY master to the system stdout, ensuring pixel-perfect 1:1 synchronization of complex VT100/ANSI animations.
-  - Eliminated all "blank intervals" and "stuttering" by bypassing standard OS pipe buffering in favor of TTY-line-discipline.
+  - **Modern Selector**: Implemented a "Highlight Bar" (inverted background) selection menu in `drag_and_drop_processor.py` for superior visibility.
+  - **Config Dashboard**: Replaced text-based configuration with a structured `rich.Table` dashboard, integrating live **System Health Snapshots** (CPU/RAM usage).
+  - **Session Analytics**: Added a visual **Success Rate Progress Bar** (█░) and efficiency metrics to final batch reports.
+  - **Window Resizing**: Restored automatic terminal window resizing (40x100) to ensure the premium UI layout is always perfectly framed.
+- **Cinema-Grade Terminal Refresh (60Hz)**: 
+  - Upgraded the global Rust rendering standard from 10Hz/20Hz to **60Hz** (16ms cycles).
+  - Harmonized sub-30ms steady ticks and debounce timers across the entire `shared_utils` progress infrastructure for extremely smooth terminal animations.
+  - Eliminated the last remnants of stuttering by aligning the Rust core with the high-frequency (500Hz) Python `os.read` relay.
+- **Terminal Dimension Locking**:
+  - Synchronous environment-aware rendering: Enforced a 100x40 column lock via the `COLUMNS` and `LINES` environment variables, ensuring progress bars remain full-width when piped through the Python wrapper.
+  - Verified 100% preservation of VT100/ANSI icons (📊, ✓), colors, and `\r` carriage return updates during piped execution.
 
 ### 🛡️ Infrastructure & Reliability Hardening
 - **Watch Mode Optimization**: Switched to `on_closed` and `on_moved` Watchdog events to ensure large media files are fully written before processing triggers, preventing infinite debounce loops.

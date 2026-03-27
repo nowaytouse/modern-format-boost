@@ -333,7 +333,7 @@ impl CoarseProgressBar {
         }
 
         if let Ok(mut last) = self.last_render.try_lock() {
-            if last.elapsed() >= Duration::from_millis(200) {
+            if last.elapsed() >= Duration::from_millis(30) {
                 self.render();
                 *last = Instant::now();
             }
@@ -525,7 +525,7 @@ impl DetailedCoarseProgressBar {
         }
 
         if let Ok(mut last) = self.last_render.try_lock() {
-            if last.elapsed() < Duration::from_millis(100) {
+            if last.elapsed() < Duration::from_millis(20) {
                 return;
             }
             *last = Instant::now();
@@ -716,9 +716,9 @@ impl FixedBottomProgress {
                 .tick_chars(progress_style::SPINNER_CHARS),
         );
         bar.set_prefix(prefix.to_string());
-        bar.enable_steady_tick(Duration::from_millis(100));
+        bar.enable_steady_tick(Duration::from_millis(16));
 
-        bar.set_draw_target(ProgressDrawTarget::stderr_with_hz(20));
+        bar.set_draw_target(ProgressDrawTarget::stderr_with_hz(60));
 
         Self {
             bar,
@@ -1068,7 +1068,7 @@ pub fn create_professional_spinner(prefix: &str) -> ProgressBar {
                 .tick_chars(progress_style::SPINNER_CHARS),
         );
         pb.set_prefix(prefix.to_string());
-        pb.enable_steady_tick(Duration::from_millis(100));
+        pb.enable_steady_tick(Duration::from_millis(16));
     }
     pb
 }
@@ -1090,7 +1090,7 @@ pub fn create_progress_bar(total: u64, prefix: &str) -> ProgressBar {
                 .tick_chars(progress_style::SPINNER_CHARS),
         );
         pb.set_prefix(prefix.to_string());
-        pb.enable_steady_tick(Duration::from_millis(100));
+        pb.enable_steady_tick(Duration::from_millis(16));
     }
     pb
 }
@@ -1110,8 +1110,8 @@ pub fn create_detailed_progress_bar(total: u64, prefix: &str) -> ProgressBar {
                 .tick_chars(progress_style::SPINNER_CHARS),
         );
         pb.set_prefix(prefix.to_string());
-        pb.enable_steady_tick(Duration::from_millis(100));
-        pb.set_draw_target(ProgressDrawTarget::stderr_with_hz(10));
+        pb.enable_steady_tick(Duration::from_millis(16));
+        pb.set_draw_target(ProgressDrawTarget::stderr_with_hz(60));
     }
     pb
 }
@@ -1130,7 +1130,7 @@ pub fn create_compact_progress_bar(total: u64, prefix: &str) -> ProgressBar {
                 .progress_chars(progress_style::PROGRESS_CHARS),
         );
         pb.set_prefix(prefix.to_string());
-        pb.enable_steady_tick(Duration::from_millis(200));
+        pb.enable_steady_tick(Duration::from_millis(30));
     }
     pb
 }
@@ -1165,7 +1165,7 @@ impl SmartProgressBar {
                     .tick_chars(progress_style::SPINNER_CHARS),
             );
             bar.set_prefix(prefix.to_string());
-            bar.enable_steady_tick(Duration::from_millis(100));
+            bar.enable_steady_tick(Duration::from_millis(16));
         }
 
         Self {
@@ -1249,7 +1249,7 @@ pub fn create_spinner(message: &str) -> ProgressBar {
                 .tick_chars(progress_style::SPINNER_CHARS),
         );
         spinner.set_message(message.to_string());
-        spinner.enable_steady_tick(Duration::from_millis(80));
+        spinner.enable_steady_tick(Duration::from_millis(16));
     }
     spinner
 }
@@ -1385,7 +1385,7 @@ impl GlobalProgressManager {
                     .tick_chars(progress_style::SPINNER_CHARS),
             );
             bar.set_prefix(prefix.to_string());
-            bar.enable_steady_tick(Duration::from_millis(100));
+            bar.enable_steady_tick(Duration::from_millis(16));
         }
         self.main_bar = Some(bar);
         self.main_bar
@@ -1407,7 +1407,7 @@ impl GlobalProgressManager {
                     .tick_chars(progress_style::SPINNER_CHARS),
             );
             bar.set_prefix(prefix.to_string());
-            bar.enable_steady_tick(Duration::from_millis(80));
+            bar.enable_steady_tick(Duration::from_millis(16));
         }
         self.sub_bar = Some(bar);
         self.sub_bar
