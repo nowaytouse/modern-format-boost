@@ -47,6 +47,9 @@ Significant overhaul of the Python automation layer to provide a high-end, profe
   - Deleted outdated `.sh` versions of the primary UI tools (`drag_and_drop_processor.sh`, `check_all.sh`, `cache_cleaner.sh`) to ensure a clean, Python-first user experience.
   - Standardized the internal calling chain: All menu actions and quality scans now invoke the modernized Python implementations.
   - Synchronized the latest PTY-relay and centralized cache architecture (`~/.modern_format_boost/cache/`) from the nightly branch to the production baseline.
+- **Enhanced Data Migration Safety**: 
+  - Refactored `collect_optimized.py` to extract the core migration engine into a testable unit.
+  - Implemented a comprehensive unit test suite (`scripts/test_collect_optimized.py`) validating path conflict resolution, metadata-aware scanning, and structure-preserving moves.
 
 ### 🐍 Script Infrastructure: Python-First Architecture
 Major refactoring of the automation layer, migrating core scripts from Bash to Python for improved maintainability and cross-platform compatibility.
