@@ -11,6 +11,7 @@ import subprocess
 import shutil
 import threading
 import datetime
+import pty
 from pathlib import Path
 
 try:
@@ -471,37 +472,46 @@ def check_system_resources(check_dir):
 def stream_and_log_process(cmd, parse_type):
     global IMG_SUCCEEDED, IMG_SKIPPED, IMG_FAILED, VID_SUCCEEDED, VID_SKIPPED, VID_FAILED
     tmp_out = ""
-    # Explicitly pass current environment to preserve COLUMNS/LINES/COLOR flags
-    res = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=os.environ.copy())
+    
+    # Create a Pseudo-Terminal pair (Master/Slave)
+    # This tricks the Rust binary into thinking it's on a real TTY,
+    # forcing its most optimized, high-frequency "indicatif" rendering mode.
+    master_fd, slave_fd = pty.openpty()
+
+    # Launch process using the PTY slave as stdout/stderr
+    res = subprocess.Popen(
+        cmd, 
+        stdout=slave_fd, 
+        stderr=slave_fd, 
+        env=os.environ.copy()
+    )
+    
+    # Close the slave in the master process now that it's passed to the child
+    os.close(slave_fd)
 
     lf = open(LOG_FILE, "ab") if LOG_FILE else None
     
-    # Use low-level file descriptors for zero-buffering / zero-latency relay
-    pipe_fd = res.stdout.fileno()
-    out_fd = sys.stdout.fileno()
-    
-    # Kernel-level non-blocking mode for ultimate responsiveness
-    os.set_blocking(pipe_fd, False)
+    # Set master PTY to non-blocking for ultra-smooth capture
+    os.set_blocking(master_fd, False)
     
     try:
         while True:
             try:
-                # Direct kernel read (non-buffered)
-                chunk = os.read(pipe_fd, 8192)
+                # Kernel-level read from PTY Master
+                chunk = os.read(master_fd, 16384) # Larger buffer for high-throughput TTY data
             except BlockingIOError:
-                # No data: sub-millisecond sleep to ensure UI responsiveness while saving CPU
                 if res.poll() is not None: break
-                time.sleep(0.001) 
+                time.sleep(0.001) # Sub-millisecond cycle
                 continue
             
             if not chunk:
                 if res.poll() is not None: break
                 continue
             
-            # Direct kernel write (zero latency)
-            os.write(out_fd, chunk)
+            # 1:1 Relay to screen (native speed, zero buffering)
+            os.write(sys.stdout.fileno(), chunk)
             
-            # Capture for stats parsing (happens post-display)
+            # Record for stats parsing
             try:
                 s = chunk.decode('utf-8', errors='ignore')
                 tmp_out += s
@@ -512,6 +522,8 @@ def stream_and_log_process(cmd, parse_type):
                 lf.flush()
     finally:
         if lf: lf.close()
+        try: os.close(master_fd) 
+        except: pass
 
     if res.returncode not in (0, 130):
         sys.exit(res.returncode)
