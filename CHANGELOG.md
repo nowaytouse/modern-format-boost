@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
 
-## [0.11.0-unreleased] - 2026-03-27
+## [0.11.0] - 2026-03-27
 
 ### 📍 Depth Channel Extraction (HEIC) - NEW
 Adds depth map preservation for HEIC files with auxiliary depth images.
