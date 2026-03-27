@@ -360,7 +360,11 @@ pub fn save_directory_timestamps(
 }
 
 pub fn restore_directory_timestamps<S>(
-    saved: &std::collections::HashMap<std::path::PathBuf, (filetime::FileTime, filetime::FileTime), S>,
+    saved: &std::collections::HashMap<
+        std::path::PathBuf,
+        (filetime::FileTime, filetime::FileTime),
+        S,
+    >,
 ) where
     S: std::hash::BuildHasher,
 {
@@ -389,7 +393,11 @@ pub fn restore_directory_timestamps<S>(
 }
 
 pub fn apply_saved_timestamps_to_dst<S>(
-    saved: &std::collections::HashMap<std::path::PathBuf, (filetime::FileTime, filetime::FileTime), S>,
+    saved: &std::collections::HashMap<
+        std::path::PathBuf,
+        (filetime::FileTime, filetime::FileTime),
+        S,
+    >,
     src_root: &Path,
     dst_root: &Path,
 ) where

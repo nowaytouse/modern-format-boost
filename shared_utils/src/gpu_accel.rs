@@ -2142,7 +2142,6 @@ fn gpu_coarse_search_with_log_impl(
         Ok(size)
     };
 
-
     // Reserved for future variance-based early exit; currently unused.
     let _calc_window_variance = |history: &[(f32, u64)], _input_size: u64| -> f64 {
         if history.len() < WINDOW_SIZE {

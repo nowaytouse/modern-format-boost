@@ -5,9 +5,9 @@
 
 use crate::modern_ui::{colors, symbols};
 use std::cell::RefCell;
+use std::fmt::Write;
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write as _};
-use std::fmt::Write;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -893,13 +893,7 @@ fn format_video_stats_line(
     let vid_msg = if vid_ok > 0 || vid_fail > 0 || vid_skip > 0 {
         let mut v_stat = format!("{}V:{}{}✓", colors::MFB_PURPLE, colors::MFB_GREEN, vid_ok);
         if vid_skip > 0 {
-            let _ = write!(
-                v_stat,
-                "{}{}{}s",
-                colors::DIM,
-                colors::MFB_YELLOW,
-                vid_skip
-            );
+            let _ = write!(v_stat, "{}{}{}s", colors::DIM, colors::MFB_YELLOW, vid_skip);
         }
         if vid_fail > 0 {
             let _ = write!(v_stat, "{}{}{}✗", colors::DIM, colors::MFB_RED, vid_fail);
@@ -976,13 +970,7 @@ fn format_xmp_jxl_images_line(
             images_ok
         );
         if img_skip > 0 {
-            let _ = write!(
-                i_stat,
-                "{}{}{}s",
-                colors::DIM,
-                colors::MFB_YELLOW,
-                img_skip
-            );
+            let _ = write!(i_stat, "{}{}{}s", colors::DIM, colors::MFB_YELLOW, img_skip);
         }
         if img_fail > 0 {
             let _ = write!(i_stat, "{}{}{}✗", colors::DIM, colors::MFB_RED, img_fail);
