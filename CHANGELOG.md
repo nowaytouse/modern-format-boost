@@ -5,11 +5,14 @@ All notable changes to this project will be documented in this file.
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
 
-### [0.11.3] - 2026-03-28
+### [0.11.1] - 2026-03-28
 
 #### 🛡️ Error Architecture & Reporting
-- **Refined Skip Logic**: Updated the `UnifiedError` system to categorize **CompressionFailed** (output >= input size) as **Optional** (⏭️) rather than **Recoverable** (❌). This ensures that files that do not benefit from compression are correctly reported as skips in the summary.
-- **Contextual Anomaly Tracking**: Enhanced `ResultAnomaly` to include operation context, providing clearer diagnostics when upstream tools return unexpected values.
+- **Strict Error Categorization**: Refactored the `UnifiedError` module to explicitly distinguish between **Fatal** (abort), **Recoverable** (fail & continue), and **Optional** (skip).
+- **Refined Skip Logic (No Gain)**: Updated the system to categorize **CompressionFailed** (output >= input size) as **Optional** (⏭️) rather than **Recoverable** (❌). This ensures that files that do not benefit from compression are correctly reported as skips in the summary, preventing "No Gain" files from cluttering error logs.
+- **Contextual Anomaly Tracking**: Introduced and refined the `ResultAnomaly` error variant to capture upstream data inconsistencies (e.g., `ffprobe` returning `N/A`) with operation context for clearer diagnostics.
+- **Improved Terminal Experience**: Updated the CLI runner to use the new classification system. Failures are now reported with the source file name and the specific error message, while skips are clearly marked with their reason.
+- **Automatic Original Copying**: Ensured that the pipeline correctly falls back to copying the original file when conversion is skipped or fails, maintaining output completeness even on abnormal source files.
 
 #### 🌍 Language & Format Standardization
 - **Global English Standardization**: Completed the project-wide transition to strictly English-only terminal messages and logs. Purged localized strings across the entire `shared_utils` library (including CLI runner, image detection, and format analysis).
@@ -17,26 +20,14 @@ All notable changes to this project will be documented in this file.
 - **Size Consistency**: Unified size threshold calculations across all crates (1MB = 1,048,576 bytes) for deterministic behavior.
 
 #### 🐍 Script Infrastructure
-- **Final Shell Purge**: Deleted the obsolete `scripts/check_all.sh` following the successful stabilization and deployment of the modernization `check_all.py`.
+- **Final Shell Purge & Modernization**: Deleted the obsolete `scripts/check_all.sh` following the successful stabilization and deployment of the modernized Python `check_all.py`.
 - **Batch Processing Sync**: Updated `drag_and_drop_processor.py` and the main pipeline to correctly interpret the new `Optional` error category for improved reporting.
-
-### [0.11.2] - 2026-03-28
-
-#### 🛡️ Error Handling Architecture & Reporting
-- **Strict Error Categorization**: Refactored the `UnifiedError` module to explicitly distinguish between **Fatal** (abort), **Recoverable** (fail & continue), and **Optional** (skip).
-- **Skip Reporting (No Gain)**: Result type `CompressionFailed` (where output size >= input size) is now strictly categorized as a **Skip** (⏭️) rather than a **Failure** (❌). This provides a cleaner summary report and prevents "No Gain" files from cluttering the error logs.
-- **Result Anomaly Tracking**: Introduced `ResultAnomaly` error variant to capture upstream data inconsistencies (e.g., `ffprobe` returning `N/A` for duration or missing codec info). These are reported as explicit failures to ensure data integrity.
-- **Improved Terminal Experience**: Updated the CLI runner to use the new classification system. Failures are now reported with the source file name and the specific error message, while skips are clearly marked with their reason.
-- **Automatic Original Copying**: Ensured that the pipeline correctly falls back to copying the original file when conversion is skipped or fails, maintaining output completeness even on abnormal source files.
+- **Legacy Script Archiving**: Moved the old `check_all.sh` to the `useless/` directory for historical reference.
 
 #### 🛡️ Stability & Quality Hardening
-- **Resolved Compilation Errors**: Fixed multiple issues in `shared_utils` and `img_hevc` including missing imports (`is_jpeg_complete`), ambiguous names (`E0659`), and type conversion mismatches (`Option<f32>` vs `Option<f64>`).
-- **Standardized Constants**: Consolidated and broadened precision re-exports in `video_explorer.rs` to ensure a single source of truth and resolve namespace collisions.
-- **Fixed Broken Tests**: Aligned `unified_error` tests with the new categorization logic.
-- **Legacy Script Archiving**: Recovered and moved the old `check_all.sh` to the `useless/` directory, ensuring the `scripts/` directory exclusively contains modernized Python tools.
+- **Resolved Compilation Errors**: Fixed multiple issues in `shared_utils` and `img_hevc` including missing imports (`is_jpeg_complete`), ambiguous names (`E0659`), and type conversion mismatches.
+- **Standardized Constants**: Consolidated re-exports in `video_explorer.rs` to ensure a single source of truth.
 - **Zero-Warning/Zero-Error Baseline**: Achieved a 100% clean sweep in `check_all.py` (clippy nursery/pedantic) for a production-ready codebase.
-
-### [0.11.1] - 2026-03-28
 
 ### 🛡️ Pipeline Hardening & Optimization Sync
 
