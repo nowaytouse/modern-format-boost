@@ -19,50 +19,35 @@ All notable changes to this project will be documented in this file.
 - **Magic Bytes Verification**: Standardized use of magic byte detection (e.g. `GIF8`) throughout the pipeline to ensure format detection reliability independent of file extensions.
 - **Size Consistency**: Unified size threshold calculations across all crates (1MB = 1,048,576 bytes) for deterministic behavior.
 
-#### 🐍 Script Infrastructure
+#### 🐍 Script Infrastructure & Build System
+- **Modernized `check_all.py` with Kondo**: Integrated `kondo` for surgical repo cleanup directly within the quality scanner. It now executes actual cleanups (no longer dry-run) to maintain a lean workspace.
+- **Automated Production Build**: Added a final `cargo build --release` step to the `check_all.py` pipeline, ensuring that every successful quality scan results in a verified, production-ready binary.
+- **Full-Spectrum Quality Audits**: Utilized the enhanced `check_all.py` to perform multiple comprehensive, project-wide code modernizations and rebuilds, achieving a zero-warning baseline and guaranteed project cleanliness.
 - **Final Shell Purge & Modernization**: Deleted the obsolete `scripts/check_all.sh` following the successful stabilization and deployment of the modernized Python `check_all.py`.
 - **Batch Processing Sync**: Updated `drag_and_drop_processor.py` and the main pipeline to correctly interpret the new `Optional` error category for improved reporting.
 - **Legacy Script Archiving**: Moved the old `check_all.sh` to the `useless/` directory for historical reference.
+
+#### 🛡️ Pipeline & Efficiency Hardening
+- **Smart CRF 0.00 Skip (Long Videos)**: Implemented a mandatory safety gate for long-duration videos (>20 min). The search algorithm now skips the expensive CRF 0.00 (lossless) probe unless a high-quality candidate (CRF < 5.0) has already succeeded. This prevents wasting significant compute time on extremely large lossless encodes that are unlikely to meet size requirements.
+- **GIF "Lossless-First" (Reverse Exploration)**: Implemented a specialized search path for GIF-to-video conversion. In `ultimate_mode`, the search now starts at **CRF 0.0**, achieving 1-pass success for ~90% of cases and bypassing redundant iterations.
+- **JPEG Integrity Verification & Hardening**:
+  - **EOI (End of Image) Probing**: Implemented `is_jpeg_complete` to detect missing `FF D9` markers. Truncated JPEGs are identified early, skipping expensive transcoding.
+  - **Sanitization Bypass**: Broken JPEGs now skip high-quality ImageMagick fallbacks, preventing oversized "repaired" files.
+  - **Metadata Injection**: Added `is_truncated` flag for better observability.
+- **UltraHDR Policy Enforcement**: Verified and hardened the UltraHDR detection logic (XMP gainmap + MPF segments). Confirmed that these files are preserved in their original format to prevent quality loss.
+- **APNG Detection Optimization**: Fixed logic errors where static PNGs with stray animation chunks triggered redundant `ffprobe` analysis. Refined `parse_apng_frames` for strict frame counting.
+- **GIF→HEVC SSIM Verification Fixes**:
+  - **GIF-Aware Filter Chain**: Implemented dedicated palette-aware filters (`format=rgb24 → yuv420p`) for reliable SSIM/VMAF calculation.
+  - **Robust GIF Detection**: Strictly magic-bytes based (`GIF8`) with automatic GPU search bypass.
+  - **Duration-Based Integrity**: Implemented duration ratio checks (>= 0.95) for VFR→CFR merges, resolving "frame count mismatch" false-positives.
+- **Extreme Mode (Sprint/Deceleration)**:
+  - **Smart Deceleration**: Step size halves when distance to floor < step × 2, avoiding overshoot near CRF 0.0.
+  - **Floor Guarantee**: Forces a final check at `CRF 0.00` in Phase 4 if the search is close.
 
 #### 🛡️ Stability & Quality Hardening
 - **Resolved Compilation Errors**: Fixed multiple issues in `shared_utils` and `img_hevc` including missing imports (`is_jpeg_complete`), ambiguous names (`E0659`), and type conversion mismatches.
 - **Standardized Constants**: Consolidated re-exports in `video_explorer.rs` to ensure a single source of truth.
 - **Zero-Warning/Zero-Error Baseline**: Achieved a 100% clean sweep in `check_all.py` (clippy nursery/pedantic) for a production-ready codebase.
-
-### 🛡️ Pipeline Hardening & Optimization Sync
-
-#### 🎥 Video CRF Search Optimization
-- **Smart CRF 0.00 Skip (Long Videos)**: Implemented a mandatory safety gate for long-duration videos (>20 min). The search algorithm now skips the expensive CRF 0.00 (lossless) probe unless a high-quality candidate (CRF < 5.0) has already succeeded. This prevents wasting significant compute time on extremely large lossless encodes that are unlikely to meet size requirements.
-- **GIF "Lossless-First" Path**: Implemented "Reverse Exploration" for GIF-to-video conversion. In `ultimate_mode`, the search now starts at **CRF 0.0**. Since GIFs are highly compressible, this achieves a 1-pass success (maximum quality + reduced size) for ~90% of cases, bypassing redundant iterations.
-
-#### 🛡️ JPEG Pipeline Hardening & Quality
-- **EOI (End of Image) Verification**: Implemented `is_jpeg_complete` to detect missing `FF D9` markers. Truncated JPEGs (e.g. from interrupted downloads) are now identified early.
-- **Improved JXL Fallback Logic**: 
-  - **Early Corruption Skip**: Pipeline detects truncation before attempting expensive JXL transcoding paths.
-  - **Sanitization Bypass**: Broken JPEGs now skip the high-quality ImageMagick fallback, preventing oversized "repaired" files.
-- **Metadata Injection**: Added `is_truncated` flag to image metadata for better observability of broken source files.
-
-#### 🎞️ APNG Detection Optimization
-- **Redundant Probe Elimination**: Fixed a logic error where static PNGs with stray animation chunks (common in social app stickers) would trigger redundant `ffprobe` and `ImageMagick` duration analysis.
-- **Strict Frame Counting**: The `parse_apng_frames` utility now correctly returns `is_animated=false` if the actual frame count is 1, even if animation control chunks are present.
-
-#### 🌈 UltraHDR Policy Confirmation
-- **Strict detection**: Verified and hardened the UltraHDR detection logic (requiring both XMP gainmap metadata AND MPF segments). Confirmed that these files are preserved in their original format until `cjxl` officially supports gainmap reconstruction.
-
-#### 🎞️ GIF→HEVC SSIM Verification Fix
-- **Root Cause Resolved**: Fixed `calculate_ssim_all` failure caused by deprecated `premultiply=inplace=1` flag in newer FFmpeg builds.
-- **GIF-Aware Filter Chain**: Implemented dedicated palette-aware filters (`format=rgb24 → yuv420p`) for reliable SSIM/VMAF calculation on indexed-color GIF streams.
-- **Robust GIF Detection & GPU Bypass**: GIF detection is now strictly magic-bytes based (`GIF8`). Pipeline automatically bypasses GPU search for precise CPU exploration.
-- **Fixed Alpha-Flatten Fallback**: Replaced deprecated alpha logic with `format=rgb24` conversion, matching HEVC encoder behavior.
-- **Duration-Based Integrity**: Implemented **duration ratio (>= 0.95)** check for VFR→CFR frame merges, resolving "frame count mismatch" false-positives while ensuring timeline integrity.
-- **x265 True Lossless Enforcement**: Appended `lossless=1` to encoder parameters when `CRF=0.0` to disable signhide and guarantee bit-exact reproduction.
-
-#### ⚡ Sprint / Deceleration / Floor Guarantee (Extreme Mode)
-- **Smart Deceleration (Ultimate Mode)**: Step size now correctly halves as it approaches 0.0, avoiding overshoot.
-- **Ultimate Fallback Floor Guarantee**: Phase 4 forces a final check at `CRF 0.00` if the search is close.
-- **Phase 2 wall-at-MIN_STEP**: Size-walls at minimum step no longer hard-stop; they defer to Phase 4 for 0.01 granularity exploration.
-- **Smart Deceleration Multiplier**: Improved from 0.5x to 1.0x to trigger earlier, preventing sprinters from overshooting the floor.
-- **Explicit negative-clamp**: Prevented IEEE 754 underflow from skipping the floor probe.
 
 ## [0.11.0] - 2026-03-28
 
