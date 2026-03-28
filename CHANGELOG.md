@@ -10,7 +10,7 @@ All notable changes to this project will be documented in this file.
 ### 🛡️ Pipeline Hardening & Optimization Sync
 
 #### 🎥 Video CRF Search Optimization
-- **Smart CRF 0.00 Skip (Long Videos)**: Implemented a mandatory safety gate for long-duration videos (>30 min). The search algorithm now skips the expensive CRF 0.00 (lossless) probe unless a high-quality candidate (CRF < 5.0) has already succeeded. This prevents wasting significant compute time on extremely large lossless encodes that are unlikely to meet size requirements.
+- **Smart CRF 0.00 Skip (Long Videos)**: Implemented a mandatory safety gate for long-duration videos (>20 min). The search algorithm now skips the expensive CRF 0.00 (lossless) probe unless a high-quality candidate (CRF < 5.0) has already succeeded. This prevents wasting significant compute time on extremely large lossless encodes that are unlikely to meet size requirements.
 - **GIF "Lossless-First" Path**: Implemented "Reverse Exploration" for GIF-to-video conversion. In `ultimate_mode`, the search now starts at **CRF 0.0**. Since GIFs are highly compressible, this achieves a 1-pass success (maximum quality + reduced size) for ~90% of cases, bypassing redundant iterations.
 
 #### 🛡️ JPEG Pipeline Hardening & Quality

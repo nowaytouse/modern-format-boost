@@ -11,8 +11,8 @@ use super::{
     bail, calculate_adaptive_max_walls, calculate_max_iterations_for_duration,
     calculate_ms_ssim_yuv, calculate_smart_thresholds, calculate_ssim_all, calculate_ssim_enhanced,
     calculate_zero_gains_for_duration_and_range, compression_target_size, ConfidenceBreakdown,
-    CrfCache, ExploreResult, VideoEncoder, ABSOLUTE_MIN_CRF, LONG_VIDEO_THRESHOLD_SECS,
-    NORMAL_MAX_WALL_HITS, VERY_LONG_VIDEO_THRESHOLD_SECS,
+    CrfCache, ExploreResult, VideoEncoder, ABSOLUTE_MIN_CRF, HEAVY_VIDEO_THRESHOLD_SECS,
+    LONG_VIDEO_THRESHOLD_SECS, NORMAL_MAX_WALL_HITS, VERY_LONG_VIDEO_THRESHOLD_SECS,
 };
 use crate::modern_ui::colors::{
     BRIGHT_CYAN, BRIGHT_GREEN, BRIGHT_MAGENTA, BRIGHT_RED, BRIGHT_YELLOW, CYAN, DIM, GREEN,
@@ -1816,12 +1816,12 @@ fn cpu_fine_tune_from_gpu_boundary(
                 }
             }
 
-            if (test_crf - 0.0).abs() < 0.001 && duration > LONG_VIDEO_THRESHOLD_SECS {
-                // For very long videos, only attempt CRF 0.00 if we have already achieved 
-                // a credible high-quality success (< 5.0) to avoid wasting hours.
+            if (test_crf - 0.0).abs() < 0.001 && duration > HEAVY_VIDEO_THRESHOLD_SECS {
+                // For heavy/long videos (> 30 min), only attempt CRF 0.00 if we have 
+                // already achieved a credible high-quality success (< 5.0) to avoid wasting hours.
                 if best_crf.map_or(true, |c| c >= 5.0) {
                     crate::log_eprintln!(
-                        "   {}⏳ Long video ({:.1} min): skipping CRF 0.00 probe as no high-quality success (< 5.0) confirmed yet.{}",
+                        "   {}⏳ Heavy video ({:.1} min): skipping CRF 0.00 probe as no high-quality success (< 5.0) confirmed yet.{}",
                         BRIGHT_CYAN, duration / 60.0, RESET
                     );
                     break;
