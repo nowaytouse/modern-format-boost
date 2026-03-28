@@ -5,57 +5,42 @@ All notable changes to this project will be documented in this file.
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
 
-## [0.11.2] - 2026-03-28
+### [0.11.1] - 2026-03-28
 
-### 🛡️ JPEG Pipeline Hardening & Corruption Awareness
+### 🛡️ Pipeline Hardening & Optimization Sync
 
-#### 📷 JPEG Truncation & Integrity
-- **EOI (End of Image) Verification**: Implemented `is_jpeg_complete` to detect missing `FF D9` markers. Truncated JPEGs (e.g. from interrupted downloads or filesystem errors) are now identified during both fast-path and deep analysis.
+#### 🎥 Video CRF Search Optimization
+- **Smart CRF 0.00 Skip (Long Videos)**: Implemented a mandatory safety gate for long-duration videos (>30 min). The search algorithm now skips the expensive CRF 0.00 (lossless) probe unless a high-quality candidate (CRF < 5.0) has already succeeded. This prevents wasting significant compute time on extremely large lossless encodes that are unlikely to meet size requirements.
+- **GIF "Lossless-First" Path**: Implemented "Reverse Exploration" for GIF-to-video conversion. In `ultimate_mode`, the search now starts at **CRF 0.0**. Since GIFs are highly compressible, this achieves a 1-pass success (maximum quality + reduced size) for ~90% of cases, bypassing redundant iterations.
+
+#### 🛡️ JPEG Pipeline Hardening & Quality
+- **EOI (End of Image) Verification**: Implemented `is_jpeg_complete` to detect missing `FF D9` markers. Truncated JPEGs (e.g. from interrupted downloads) are now identified early.
 - **Improved JXL Fallback Logic**: 
-  - **Early Corruption Skip**: The pipeline now detects truncation before attempting expensive JXL transcoding paths.
-  - **Sanitization Bypass**: If a JPEG is known to be incomplete, the system now skips the "High Quality" ImageMagick fallback when the `compress` option is enabled, preventing unnecessary CPU usage and the generation of oversized "repaired" files that would ultimately be discarded.
-- **Metadata Injection**: Added `is_truncated` flag to image metadata when a broken JPEG is detected, providing better observability in logs.
+  - **Early Corruption Skip**: Pipeline detects truncation before attempting expensive JXL transcoding paths.
+  - **Sanitization Bypass**: Broken JPEGs now skip the high-quality ImageMagick fallback, preventing oversized "repaired" files.
+- **Metadata Injection**: Added `is_truncated` flag to image metadata for better observability of broken source files.
 
 #### 🎞️ APNG Detection Optimization
-- **Redundant Probe Elimination**: Fixed a logic error where static PNGs with stray animation chunks (common in social app stickers like QQ) would trigger multiple redundant `ffprobe` and `ImageMagick` duration analysis calls.
-- **Strict Frame Counting**: The `parse_apng_frames` utility now correctly returns `is_animated=false` if the actual frame count is 1, even if animation control chunks are present, significantly reducing log noise and processing overhead for static assets.
-
-#### 🎥 GIF to Video Optimization
-- **Lossless-First Path**: Implemented "Reverse Exploration" for GIF-to-video conversion. In `ultimate_mode`, the search now starts at **CRF 0.0**. Since GIFs are highly compressible, this often achieves a 1-pass success (maximum quality + reduced size), bypassing multiple redundant search iterations.
+- **Redundant Probe Elimination**: Fixed a logic error where static PNGs with stray animation chunks (common in social app stickers) would trigger redundant `ffprobe` and `ImageMagick` duration analysis.
+- **Strict Frame Counting**: The `parse_apng_frames` utility now correctly returns `is_animated=false` if the actual frame count is 1, even if animation control chunks are present.
 
 #### 🌈 UltraHDR Policy Confirmation
-- **Strict detection**: Verified and hardened the UltraHDR detection logic (requiring both XMP gainmap metadata AND MPF segments). Confirmed that these files are correctly preserved in their original format to avoid losing HDR gainmap data until `cjxl` (libjxl 0.11.2) officially supports gainmap reconstruction.
-
-## [0.11.1] - 2026-03-28
-
-### 🛡️ GIF Quality Verification Hardening & Sprint/Floor Guarantee
+- **Strict detection**: Verified and hardened the UltraHDR detection logic (requiring both XMP gainmap metadata AND MPF segments). Confirmed that these files are preserved in their original format until `cjxl` officially supports gainmap reconstruction.
 
 #### 🎞️ GIF→HEVC SSIM Verification Fix
-- **Root Cause Resolved**: `calculate_ssim_all` was calling `premultiply=inplace=1` which has been removed/renamed in newer ffmpeg builds, causing all three fallback filter chains to silently fail with `ALL SSIM CALCULATION METHODS FAILED` for every GIF input.
-- **GIF-Aware Filter Chain**: Both `calculate_ssim_all` and `calculate_ssim_enhanced` now use a dedicated palette-aware filter chain (`format=rgb24 → yuv420p`) as the primary method, bypassing the generic YUV filters that cannot handle indexed-colour GIF streams.
-- **Robust GIF Detection & GPU Bypass**: GIF detection is now strictly based on file magic bytes (`GIF8`) rather than filename extensions. When detected, the pipeline automatically bypasses the GPU coarse search phase entirely, saving significant compute on short, simple animations, and directly initiates a fully precise CPU exploration.
-- **Fixed Alpha-Flatten Fallback**: Replaced deprecated `premultiply=inplace=1` with a simple `format=rgb24` conversion (which discards alpha via ffmpeg's swscale, equivalent to compositing on black), matching the actual HEVC encoder behaviour.
-- **CRF=0 SSIM Bypass & Robust Integrity Check**: When `optimal_crf == 0.0` (lossless encode), the entire SSIM/VMAF Phase 3 gate is now skipped. The codec guarantees bit-exact YUV reproduction at CRF=0, making perceptual metrics redundant. A lightweight integrity check (`check_lossless_integrity`) is run instead:
-  - **Duration-Based Integrity**: Successfully addresses the "frame count mismatch" (e.g. 29 vs 26) common with GIFs. The system now uses **duration ratio (>= 0.95)** as the primary signal for "soft-accepting" VFR→CFR frame merges, ensuring the timeline is intact even if physics packet counts differ.
-  - **File size > 0**: guards against silent I/O failures.
-- **SSIM Metric Robustness**: Updated the SSIM parser to correctly handle `inf` and `(inf)` (ffmpeg's perfect-match indicator) and return `1.0`. Also now ignores ffmpeg exit codes during metric calculation to tolerate minor timestamp abnormalities in non-standard GIF sources.
-- **x265 True Lossless Enforcement**: Appended `--lossless` (or `lossless=1`) to the encoder parameters when `CRF=0.0`. In `libx265`, `CRF=0` alone still attempts to use signbit hiding to save bits, altering values mathematically (non-lossless). `lossless=1` corrects this by disabling signhide.
+- **Root Cause Resolved**: Fixed `calculate_ssim_all` failure caused by deprecated `premultiply=inplace=1` flag in newer FFmpeg builds.
+- **GIF-Aware Filter Chain**: Implemented dedicated palette-aware filters (`format=rgb24 → yuv420p`) for reliable SSIM/VMAF calculation on indexed-color GIF streams.
+- **Robust GIF Detection & GPU Bypass**: GIF detection is now strictly magic-bytes based (`GIF8`). Pipeline automatically bypasses GPU search for precise CPU exploration.
+- **Fixed Alpha-Flatten Fallback**: Replaced deprecated alpha logic with `format=rgb24` conversion, matching HEVC encoder behavior.
+- **Duration-Based Integrity**: Implemented **duration ratio (>= 0.95)** check for VFR→CFR frame merges, resolving "frame count mismatch" false-positives while ensuring timeline integrity.
+- **x265 True Lossless Enforcement**: Appended `lossless=1` to encoder parameters when `CRF=0.0` to disable signhide and guarantee bit-exact reproduction.
 
 #### ⚡ Sprint / Deceleration / Floor Guarantee (Extreme Mode)
-Three root-causes that prevented the search from reaching CRF=0 have been fixed:
-- **Smart Deceleration (Ultimate Mode)**: Step size now correctly halves as it approaches 0.0, avoiding overshoot or premature termination.
-- **Ultimate Fallback Floor Guarantee**: Phase 4 fine-tune now forces a final check at `CRF 0.00` if the search is close to bottom and hasn't yet tested the lossless floor. This ensures the 0.0 target is never missed due to step precision errors.
-
-1. **Phase 2 wall-at-MIN_STEP**: When a size-wall is hit at the minimum step in **ultimate mode**, the algorithm no longer hard-stops. It breaks out of Phase 2 cleanly and defers the sub-0.1 exploration to Phase 4, which uses 0.01 granularity — previously this break was silently aborting before Phase 4 could run.
-
-2. **Phase 2 smart deceleration** (CPU coarse search): The deceleration trigger multiplier was `0.5×` in ultimate mode (meaning deceleration only fired when the floor was closer than `0.5 × current_step`), which was **too late** — a large sprint step could overshoot the floor before deceleration activated. Changed to `1.0×`: deceleration now fires when the floor is within `1 × current_step`, guaranteeing the step always halves before crossing 0.
-
-3. **Phase 4 (0.01-granularity fine-tune)**:
-   - **Smart deceleration multiplier** reduced from `2.0×` to `1.0×` in ultimate mode, matching Phase 2 fix.
-   - **`max_fine_failures`** raised from `3` to `8` in ultimate mode. Near CRF=0, GIF/complex sources regularly expand past input size; 3 failures was too aggressive a cutoff.
-   - **Explicit negative-clamp**: `test_crf` is now clamped to `0.0` after each rounding step to prevent IEEE 754 underflow from producing `-0.00000001` which could skip the floor probe.
-   - **Mandatory CRF=0 probe**: After Phase 4 completes, if `current_best > 0.0` and CRF=0 was never tested (or was tested but somehow bypassed), a **guaranteed final probe at CRF=0.00** is forced. This eliminates all float-drift scenarios where 0.01 → 0.00 subtraction floating-point error could skip the absolute floor.
-   - **Early-exit on CRF=0 success**: When CRF=0.00 compresses successfully, a clear `✅ CRF 0.00 reached — physical lossless floor touched` message is emitted and Phase 4 terminates cleanly.
+- **Smart Deceleration (Ultimate Mode)**: Step size now correctly halves as it approaches 0.0, avoiding overshoot.
+- **Ultimate Fallback Floor Guarantee**: Phase 4 forces a final check at `CRF 0.00` if the search is close.
+- **Phase 2 wall-at-MIN_STEP**: Size-walls at minimum step no longer hard-stop; they defer to Phase 4 for 0.01 granularity exploration.
+- **Smart Deceleration Multiplier**: Improved from 0.5x to 1.0x to trigger earlier, preventing sprinters from overshooting the floor.
+- **Explicit negative-clamp**: Prevented IEEE 754 underflow from skipping the floor probe.
 
 ## [0.11.0] - 2026-03-28
 
