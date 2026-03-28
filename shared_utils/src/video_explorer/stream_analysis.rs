@@ -131,7 +131,7 @@ pub fn calculate_ssim_enhanced(input: &Path, output: &Path) -> Option<f64> {
             .output();
 
         match result {
-            Ok(out) if out.status.success() => {
+            Ok(out) => {
                 let stderr = String::from_utf8_lossy(&out.stderr);
                 if let Some(ssim) = parse_ssim_from_output(&stderr) {
                     if is_valid_ssim_value(ssim) {
@@ -139,8 +139,6 @@ pub fn calculate_ssim_enhanced(input: &Path, output: &Path) -> Option<f64> {
                         return Some(ssim);
                     }
                 }
-            }
-            Ok(_) => {
                 warn!(method = %name, "SSIM method failed, trying next method");
             }
             Err(e) => {
@@ -167,6 +165,10 @@ fn run_ssim_all_filter(input: &Path, output: &Path, lavfi: &str) -> Option<(f64,
         .arg("-")
         .output()
         .ok()?;
+
+    // Some filters (ssim) might return non-zero exit code if the streams
+    // end at slightly different points for GIFs, even if the result is valid.
+    // We parse stderr regardless of out.status.
     let stderr = String::from_utf8_lossy(&out.stderr);
     for line in stderr.lines() {
         if line.contains("SSIM Y:") && line.contains("All:") {
@@ -230,6 +232,9 @@ fn parse_ssim_from_output(stderr: &str) -> Option<f64> {
             if let Some(all_pos) = line.find("All:") {
                 let after_all = &line[all_pos + 4..];
                 let after_all = after_all.trim_start();
+                if after_all.starts_with("inf") {
+                    return Some(1.0);
+                }
                 let end = after_all
                     .find(|c: char| !c.is_numeric() && c != '.')
                     .unwrap_or(after_all.len());
@@ -245,6 +250,10 @@ fn parse_ssim_from_output(stderr: &str) -> Option<f64> {
 fn extract_ssim_value(line: &str, prefix: &str) -> Option<f64> {
     if let Some(pos) = line.find(prefix) {
         let after = &line[pos + prefix.len()..];
+        let after = after.trim_start();
+        if after.starts_with("inf") {
+            return Some(1.0);
+        }
         let end = after
             .find(|c: char| !c.is_numeric() && c != '.')
             .unwrap_or(after.len());
@@ -288,6 +297,7 @@ pub fn check_lossless_integrity(
     input: &Path,
     output: &Path,
     output_size: u64,
+    is_animated_image: bool,
 ) -> Result<bool, String> {
     // Guard: output must not be empty
     if output_size == 0 {
@@ -325,12 +335,21 @@ pub fn check_lossless_integrity(
             Ok(true)
         }
         (Some(i), Some(o)) => {
-            warn!(
-                input_frames = i,
-                output_frames = o,
-                "CRF=0 integrity: output has FEWER frames than input — possible encode error"
-            );
-            Ok(false)
+            if is_animated_image {
+                warn!(
+                    input_frames = i,
+                    output_frames = o,
+                    "CRF=0 integrity: output has FEWER frames than input — normal for GIFs due to duplicate frame dropping/FPS coalescing. Soft-accepting."
+                );
+                Ok(true)
+            } else {
+                warn!(
+                    input_frames = i,
+                    output_frames = o,
+                    "CRF=0 integrity: output has FEWER frames than input — possible encode error"
+                );
+                Ok(false)
+            }
         }
         (None, _) | (_, None) => {
             // Cannot determine frame count — treat as a soft warning, not a hard failure

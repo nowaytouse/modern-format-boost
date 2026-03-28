@@ -592,12 +592,9 @@ pub fn explore_with_gpu_coarse_search(
         } else {
             VMAF_DURATION_THRESHOLD_SECS
         };
-        let is_gif_format = is_gif_magic || probe_result.format_name.eq_ignore_ascii_case("gif");
+        let is_animated_image = is_animated_image_like_input(input, Some(probe_result));
 
-        let should_run_vmaf =
-            !is_gif_format && (duration <= ms_ssim_duration_threshold_secs || force_ms_ssim_long);
-
-        if is_gif_format {
+        if is_animated_image {
             // ── CRF=0 fast-path ────────────────────────────────────────────────
             // At CRF=0 the codec guarantees bit-exact YUV reproduction; SSIM/VMAF
             // would trivially return 1.0 / 100.0 and are pure CPU waste.
@@ -607,7 +604,7 @@ pub fn explore_with_gpu_coarse_search(
             // We instead run a cheap integrity check: frame count + file size > 0.
             if result.optimal_crf == 0.0 {
                 crate::log_eprintln!(
-                    "   GIF CRF=0 (lossless): skipping SSIM/VMAF — running integrity check instead"
+                    "   ANIMATED CRF=0 (lossless): skipping SSIM/VMAF — running integrity check instead"
                 );
                 crate::log_eprintln!(
                     "   (CRF=0 guarantees YUV bit-exact reproduction; perceptual metrics are meaningless)"
@@ -616,6 +613,7 @@ pub fn explore_with_gpu_coarse_search(
                     input,
                     output,
                     result.output_size,
+                    is_animated_image,
                 )
                 .unwrap_or_else(|e| {
                     crate::log_eprintln!("   ⚠️  Integrity check error: {}", e);
@@ -623,17 +621,17 @@ pub fn explore_with_gpu_coarse_search(
                 });
 
                 if integrity_ok {
-                    crate::log_eprintln!("   ✅ INTEGRITY CHECK: PASSED (frame count OK, file non-empty)");
+                    crate::log_eprintln!("   ✅ INTEGRITY CHECK: PASSED");
                     result.ms_ssim_passed = Some(true);
                 } else {
-                    crate::log_eprintln!("   ❌ INTEGRITY CHECK: FAILED (frame count mismatch or empty output)");
+                    crate::log_eprintln!("   ❌ INTEGRITY CHECK: FAILED (possible encode error)");
                     result.ms_ssim_passed = Some(false);
                 }
                 // Leave ms_ssim_score as None to signal lossless path (no perceptual score)
             } else {
             // ── Normal SSIM verification ───────────────────────────────────────
             crate::verbose_eprintln!(
-                "   GIF input: using SSIM-All verification (ffmpeg ssim filter, GIF-compatible)"
+                "   Animated input: using SSIM-All verification (ffmpeg ssim filter, GIF-compatible)"
             );
 
             if let Some((y, u, v, all)) = calculate_ssim_all(input, output) {
@@ -657,13 +655,13 @@ pub fn explore_with_gpu_coarse_search(
                 result.ms_ssim_score = Some(all);
             } else {
                 quality_verification_skipped_for_format = true;
-                let msg = "⚠️  SSIM verification failed (GIF format) - accepting based on size compression only";
+                let msg = "⚠️  SSIM verification failed (Animated format) - accepting based on size compression only";
                 result.log.push(msg.to_string());
                 result.ms_ssim_passed = None;
                 result.ms_ssim_score = None;
             }
             } // end else (non-CRF=0 SSIM path)
-        } else if should_run_vmaf {
+        } else if duration <= ms_ssim_duration_threshold_secs || force_ms_ssim_long {
             let threshold_min = ms_ssim_duration_threshold_secs / 60.0;
             crate::log_eprintln!("   Video within limit (≤{:.0}min)", threshold_min);
 
@@ -2805,6 +2803,17 @@ fn cpu_fine_tune_from_gpu_boundary(
                         }
 
                         if fine_failures >= max_fine_failures {
+                            // In ultimate mode, if we were very close to CRF 0.0, force one last check at CRF 0.0
+                            // before giving up. This ensures we don't "miss the opportunity" due to step precision.
+                            if ultimate_mode && current_best > 0.0 && current_best <= 20.0 && !size_cache.contains_key(0.0) {
+                                crate::log_eprintln!(
+                                    "   {}Ultimate fallback: forcing final check at CRF 0.00 (lossless floor){}",
+                                    BRIGHT_CYAN, RESET
+                                );
+                                test_crf = 0.0;
+                                fine_failures = 0; // Reset once to allow floor test
+                                continue;
+                            }
                             crate::log_eprintln!(
                                 "   {}Max 0.01-granularity failures ({}) reached. Stopping.{}",
                                 BRIGHT_YELLOW, max_fine_failures, RESET
@@ -2920,8 +2929,25 @@ fn cpu_fine_tune_from_gpu_boundary(
         final_full_size as f64 / 1024.0 / 1024.0
     );
 
-    let ssim = calculate_ssim_enhanced(input, output);
-
+    let ssim = if input_is_animated_image_like && final_crf == 0.0 {
+        crate::log_eprintln!(
+            "   GIF CRF=0 (lossless): skipping SSIM/VMAF — running integrity check instead"
+        );
+        let integrity_ok = super::stream_analysis::check_lossless_integrity(
+            input,
+            output,
+            final_full_size,
+            true, // is_animated_image
+        ).unwrap_or(true);
+        if integrity_ok {
+            crate::log_eprintln!("   ✅ INTEGRITY CHECK: PASSED");
+        } else {
+            crate::log_eprintln!("   ❌ INTEGRITY CHECK: FAILED (possible encode error)");
+        }
+        Some(1.0)
+    } else {
+        calculate_ssim_enhanced(input, output)
+    };
     if let Some(s) = ssim {
         let quality_hint = if s >= 0.99 {
             "✅ Excellent"

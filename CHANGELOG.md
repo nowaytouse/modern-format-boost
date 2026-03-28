@@ -14,14 +14,17 @@ All notable changes to this project will be documented in this file.
 - **GIF-Aware Filter Chain**: Both `calculate_ssim_all` and `calculate_ssim_enhanced` now use a dedicated palette-aware filter chain (`format=rgb24 → yuv420p`) as the primary method, bypassing the generic YUV filters that cannot handle indexed-colour GIF streams.
 - **Robust GIF Detection & GPU Bypass**: GIF detection is now strictly based on file magic bytes (`GIF8`) rather than filename extensions. When detected, the pipeline automatically bypasses the GPU coarse search phase entirely, saving significant compute on short, simple animations, and directly initiates a fully precise CPU exploration.
 - **Fixed Alpha-Flatten Fallback**: Replaced deprecated `premultiply=inplace=1` with a simple `format=rgb24` conversion (which discards alpha via ffmpeg's swscale, equivalent to compositing on black), matching the actual HEVC encoder behaviour.
-- **CRF=0 SSIM Bypass**: When `optimal_crf == 0.0` (lossless encode), the entire SSIM/VMAF Phase 3 gate is now skipped. The codec guarantees bit-exact YUV reproduction at CRF=0, making perceptual metrics redundant. A lightweight integrity check (`check_lossless_integrity`) is run instead:
-  - **Frame count match**: verifies the output contains ≥ input frames via `ffprobe -count_packets` (no decoding required).
+- **CRF=0 SSIM Bypass & Robust Integrity Check**: When `optimal_crf == 0.0` (lossless encode), the entire SSIM/VMAF Phase 3 gate is now skipped. The codec guarantees bit-exact YUV reproduction at CRF=0, making perceptual metrics redundant. A lightweight integrity check (`check_lossless_integrity`) is run instead:
+  - **Frame count match**: verifies the output contains a valid frame count via `ffprobe -count_packets` (no decoding required).
+  - **Relaxed GIF Integrity**: Successfully addresses the "frame count mismatch" (e.g. 29 vs 26) common with GIFs by "soft-accepting" output videos with fewer frames than the source GIF, as FPS coalescing and duplicate dropping are normal for the format.
   - **File size > 0**: guards against silent I/O failures.
-  - Frame count unavailability is treated as a soft warning (non-fatal), file non-empty is sufficient to accept.
+- **SSIM Metric Robustness**: Updated the SSIM parser to correctly handle `inf` and `(inf)` (ffmpeg's perfect-match indicator) and return `1.0`. Also now ignores ffmpeg exit codes during metric calculation to tolerate minor timestamp abnormalities in non-standard GIF sources.
 - **x265 True Lossless Enforcement**: Appended `--lossless` (or `lossless=1`) to the encoder parameters when `CRF=0.0`. In `libx265`, `CRF=0` alone still attempts to use signbit hiding to save bits, altering values mathematically (non-lossless). `lossless=1` corrects this by disabling signhide.
 
 #### ⚡ Sprint / Deceleration / Floor Guarantee (Extreme Mode)
 Three root-causes that prevented the search from reaching CRF=0 have been fixed:
+- **Smart Deceleration (Ultimate Mode)**: Step size now correctly halves as it approaches 0.0, avoiding overshoot or premature termination.
+- **Ultimate Fallback Floor Guarantee**: Phase 4 fine-tune now forces a final check at `CRF 0.00` if the search is close to bottom and hasn't yet tested the lossless floor. This ensures the 0.0 target is never missed due to step precision errors.
 
 1. **Phase 2 wall-at-MIN_STEP**: When a size-wall is hit at the minimum step in **ultimate mode**, the algorithm no longer hard-stops. It breaks out of Phase 2 cleanly and defers the sub-0.1 exploration to Phase 4, which uses 0.01 granularity — previously this break was silently aborting before Phase 4 could run.
 
