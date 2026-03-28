@@ -979,14 +979,6 @@ fn check_png_animation(path: &Path) -> Result<bool> {
             log_eprintln!("🎞️  [Deep Research: APNG] Structural walk failed but internal byte-research confirmed fcTL markers: {}", path.display());
             return Ok(true);
         }
-
-        // Final tie-breaker for ambiguous cases
-        if let Some(duration) = get_animation_duration(path) {
-            if duration > 0.0 {
-                log_eprintln!("🎞️  [Joint Audit: APNG] Structural walk failed but bitstream hints and duration confirm animation: {}", path.display());
-                return Ok(true);
-            }
-        }
     }
 
     Ok(false)

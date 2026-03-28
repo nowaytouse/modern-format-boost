@@ -16,6 +16,10 @@ All notable changes to this project will be documented in this file.
   - **Sanitization Bypass**: If a JPEG is known to be incomplete, the system now skips the "High Quality" ImageMagick fallback when the `compress` option is enabled, preventing unnecessary CPU usage and the generation of oversized "repaired" files that would ultimately be discarded.
 - **Metadata Injection**: Added `is_truncated` flag to image metadata when a broken JPEG is detected, providing better observability in logs.
 
+#### 🎞️ APNG Detection Optimization
+- **Redundant Probe Elimination**: Fixed a logic error where static PNGs with stray animation chunks (common in social app stickers like QQ) would trigger multiple redundant `ffprobe` and `ImageMagick` duration analysis calls.
+- **Strict Frame Counting**: The `parse_apng_frames` utility now correctly returns `is_animated=false` if the actual frame count is 1, even if animation control chunks are present, significantly reducing log noise and processing overhead for static assets.
+
 #### 🌈 UltraHDR Policy Confirmation
 - **Strict detection**: Verified and hardened the UltraHDR detection logic (requiring both XMP gainmap metadata AND MPF segments). Confirmed that these files are correctly preserved in their original format to avoid losing HDR gainmap data until `cjxl` (libjxl 0.11.2) officially supports gainmap reconstruction.
 

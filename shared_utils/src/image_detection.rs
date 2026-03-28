@@ -2156,7 +2156,7 @@ pub(crate) fn parse_apng_frames(data: &[u8]) -> (bool, u32) {
                 // Read num_frames (first 4 bytes of acTL data)
                 let num_frames =
                     u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
-                return (true, num_frames.max(1));
+                return (num_frames > 1, num_frames.max(1));
             }
             return (true, 2); // Fallback if we can't read frame count
         }
