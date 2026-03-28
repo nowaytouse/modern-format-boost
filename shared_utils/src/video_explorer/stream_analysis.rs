@@ -336,12 +336,31 @@ pub fn check_lossless_integrity(
         }
         (Some(i), Some(o)) => {
             if is_animated_image {
-                warn!(
-                    input_frames = i,
-                    output_frames = o,
-                    "CRF=0 integrity: output has FEWER frames than input — normal for GIFs due to duplicate frame dropping/FPS coalescing. Soft-accepting."
-                );
-                Ok(true)
+                // For animated images (GIF/WebP), frame counts often decrease due to 
+                // FFmpeg's VFR-to-CFR alignment (merging frames into the same slot).
+                // We pivot to duration validation: if the timeline remains intact, the data is OK.
+                let i_dur = get_video_duration(input).unwrap_or(0.0);
+                let o_dur = get_video_duration(output).unwrap_or(0.0);
+                
+                let dur_ratio = if i_dur > 0.0 { o_dur / i_dur } else { 1.0 };
+                
+                if dur_ratio >= 0.95 {
+                    warn!(
+                        input_frames = i,
+                        output_frames = o,
+                        dur_ratio = format!("{:.4}", dur_ratio),
+                        "CRF=0 integrity: frame count decreased but duration OK (VFR→CFR alignment). Soft-accepting."
+                    );
+                    Ok(true)
+                } else {
+                    warn!(
+                        input_frames = i,
+                        output_frames = o,
+                        dur_ratio = format!("{:.4}", dur_ratio),
+                        "CRF=0 integrity: both frame count AND duration dropped significantly — possible frame drop error"
+                    );
+                    Ok(false)
+                }
             } else {
                 warn!(
                     input_frames = i,
