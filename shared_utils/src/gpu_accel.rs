@@ -471,6 +471,7 @@ impl GpuAccel {
         Self::default()
     }
 
+    #[cfg(target_os = "macos")]
     fn try_videotoolbox(encoders: &[String]) -> Option<Self> {
         let has_hevc = encoders.iter().any(|e| e.contains("hevc_videotoolbox"));
         let has_h264 = encoders.iter().any(|e| e.contains("h264_videotoolbox"));
@@ -516,7 +517,7 @@ impl GpuAccel {
         })
     }
 
-    #[cfg_attr(target_os = "macos", allow(dead_code))]
+    #[cfg(not(target_os = "macos"))]
     fn try_nvenc(encoders: &[String]) -> Option<Self> {
         let has_hevc = encoders.iter().any(|e| e.contains("hevc_nvenc"));
         let has_av1 = encoders.iter().any(|e| e.contains("av1_nvenc"));
@@ -593,7 +594,7 @@ impl GpuAccel {
         })
     }
 
-    #[cfg_attr(target_os = "macos", allow(dead_code))]
+    #[cfg(not(target_os = "macos"))]
     fn try_qsv(encoders: &[String]) -> Option<Self> {
         let has_hevc = encoders.iter().any(|e| e.contains("hevc_qsv"));
         let has_av1 = encoders.iter().any(|e| e.contains("av1_qsv"));
