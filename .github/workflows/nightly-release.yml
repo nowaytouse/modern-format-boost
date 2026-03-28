@@ -13,6 +13,7 @@ jobs:
     name: Build (macOS ${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - arch: arm64
@@ -31,7 +32,9 @@ jobs:
 
       - name: Install dependencies (Homebrew)
         run: |
-          brew install ffmpeg jpeg-xl exiftool imagemagick webp libheif nasm
+          brew install ffmpeg jpeg-xl exiftool imagemagick webp libheif nasm dav1d
+          BREW_PREFIX=$(brew --prefix)
+          echo "PKG_CONFIG_PATH=${BREW_PREFIX}/lib/pkgconfig:${BREW_PREFIX}/opt/dav1d/lib/pkgconfig:${BREW_PREFIX}/opt/jpeg-xl/lib/pkgconfig" >> "$GITHUB_ENV"
 
       - name: Build release binaries
         run: cargo build --release --target ${{ matrix.target }}
@@ -43,6 +46,7 @@ jobs:
           cp target/${{ matrix.target }}/release/img-av1 dist/
           cp target/${{ matrix.target }}/release/vid-hevc dist/
           cp target/${{ matrix.target }}/release/vid-av1 dist/
+          cp -r scripts dist/
           cp LICENSE README.md CHANGELOG.md dist/
           cd dist
           tar czf ../modern-format-boost-${{ matrix.target }}.tar.gz *
@@ -65,7 +69,35 @@ jobs:
       - name: Install dependencies (apt)
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg libimage-exiftool-perl imagemagick webp nasm cmake
+          sudo apt-get install -y pkg-config clang cmake nasm ninja-build meson \
+            libde265-dev libx265-dev libaom-dev \
+            libturbojpeg0-dev libpng-dev ffmpeg libimage-exiftool-perl imagemagick webp
+
+      - name: Build dav1d 1.5.1 from source
+        run: |
+          cd /tmp
+          curl -fsSL https://code.videolan.org/videolan/dav1d/-/archive/1.5.1/dav1d-1.5.1.tar.gz -o dav1d.tar.gz
+          tar xzf dav1d.tar.gz
+          cd dav1d-1.5.1
+          meson setup build --buildtype=release --prefix=/usr/local -Denable_tools=false -Denable_tests=false
+          ninja -C build
+          sudo ninja -C build install
+          sudo ldconfig
+
+      - name: Build libheif 1.21.0 from source
+        run: |
+          cd /tmp
+          curl -fsSL https://github.com/strukturag/libheif/releases/download/v1.21.0/libheif-1.21.0.tar.gz -o libheif.tar.gz
+          tar xzf libheif.tar.gz
+          cd libheif-1.21.0
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DWITH_EXAMPLES=OFF -DWITH_TESTING=OFF
+          cmake --build build --parallel
+          sudo cmake --install build
+          sudo ldconfig
+
+      - name: Set Environment Variables
+        run: |
+          echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig" >> "$GITHUB_ENV"
 
       - name: Build release binaries
         run: cargo build --release
@@ -77,6 +109,7 @@ jobs:
           cp target/release/img-av1 dist/
           cp target/release/vid-hevc dist/
           cp target/release/vid-av1 dist/
+          cp -r scripts dist/
           cp LICENSE README.md CHANGELOG.md dist/
           cd dist
           tar czf ../modern-format-boost-x86_64-unknown-linux-gnu.tar.gz *
@@ -112,12 +145,9 @@ jobs:
         run: find artifacts -type f | sort
 
       - name: Delete existing nightly release (if exists)
-        run: gh release delete nightly --yes || true
+        run: gh release delete nightly --yes --cleanup-tag || true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Delete existing nightly tag (if exists)
-        run: git push --delete origin nightly-release || true
 
       - name: Create nightly release
         uses: softprops/action-gh-release@v2
@@ -139,28 +169,13 @@ jobs:
             | macOS | x86_64 (Intel) | `modern-format-boost-x86_64-apple-darwin.tar.gz` |
             | Linux | x86_64 | `modern-format-boost-x86_64-unknown-linux-gnu.tar.gz` |
 
-            ### 📋 Quick Install
-
-            ```bash
-            # macOS ARM64 (Apple Silicon)
-            curl -LO https://github.com/${{ github.repository }}/releases/download/nightly/modern-format-boost-aarch64-apple-darwin.tar.gz
-            tar xzf modern-format-boost-aarch64-apple-darwin.tar.gz
-
-            # macOS Intel
-            curl -LO https://github.com/${{ github.repository }}/releases/download/nightly/modern-format-boost-x86_64-apple-darwin.tar.gz
-            tar xzf modern-format-boost-x86_64-apple-darwin.tar.gz
-
-            # Linux x86_64
-            curl -LO https://github.com/${{ github.repository }}/releases/download/nightly/modern-format-boost-x86_64-unknown-linux-gnu.tar.gz
-            tar xzf modern-format-boost-x86_64-unknown-linux-gnu.tar.gz
-            ```
-
-            ### 📖 What's Included
+            ### 📋 What's Included
 
             - `img-hevc` — Image optimization (→ JXL / HEVC)
             - `img-av1` — Image optimization (→ JXL / AV1)
             - `vid-hevc` — Video optimization (→ HEVC / H.265)
             - `vid-av1` — Video optimization (→ AV1 / SVT-AV1)
+            - `scripts/` — Full Python automation suite
 
             ---
             *Built from commit ${{ github.sha }} on ${{ github.event.head_commit.timestamp || 'nightly branch' }}*
