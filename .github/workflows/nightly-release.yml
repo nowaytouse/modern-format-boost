@@ -11,16 +11,14 @@ env:
 jobs:
   build-macos:
     name: Build (macOS ${{ matrix.arch }})
-    runs-on: ${{ matrix.runner }}
+    runs-on: macos-latest
     strategy:
       fail-fast: false
       matrix:
         include:
           - arch: arm64
-            runner: macos-14
             target: aarch64-apple-darwin
           - arch: x86_64
-            runner: macos-13
             target: x86_64-apple-darwin
     steps:
       - uses: actions/checkout@v4
@@ -30,11 +28,26 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install dependencies (Homebrew)
+      - name: Install dependencies (ARM64)
+        if: matrix.target == 'aarch64-apple-darwin'
         run: |
           brew install ffmpeg jpeg-xl exiftool imagemagick webp libheif nasm dav1d
           BREW_PREFIX=$(brew --prefix)
           echo "PKG_CONFIG_PATH=${BREW_PREFIX}/lib/pkgconfig:${BREW_PREFIX}/opt/dav1d/lib/pkgconfig:${BREW_PREFIX}/opt/jpeg-xl/lib/pkgconfig" >> "$GITHUB_ENV"
+
+      - name: Install dependencies (x86_64 Cross-compile)
+        if: matrix.target == 'x86_64-apple-darwin'
+        run: |
+          # Install Homebrew for x86_64 under Rosetta 2
+          if [ ! -f /usr/local/bin/brew ]; then
+            arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" <<< ""
+          fi
+          arch -x86_64 /usr/local/bin/brew install ffmpeg libheif dav1d jpeg-xl exiftool imagemagick webp nasm
+          
+          # Setup paths for cross-compilation
+          echo "PKG_CONFIG_PATH=/usr/local/opt/libheif/lib/pkgconfig:/usr/local/opt/dav1d/lib/pkgconfig:/usr/local/opt/jpeg-xl/lib/pkgconfig:/usr/local/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_ALLOW_CROSS=1" >> "$GITHUB_ENV"
+          echo "LIBRARY_PATH=/usr/local/lib:${LIBRARY_PATH:-}" >> "$GITHUB_ENV"
 
       - name: Build release binaries
         run: cargo build --release --target ${{ matrix.target }}
