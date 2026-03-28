@@ -20,6 +20,9 @@ All notable changes to this project will be documented in this file.
 - **Redundant Probe Elimination**: Fixed a logic error where static PNGs with stray animation chunks (common in social app stickers like QQ) would trigger multiple redundant `ffprobe` and `ImageMagick` duration analysis calls.
 - **Strict Frame Counting**: The `parse_apng_frames` utility now correctly returns `is_animated=false` if the actual frame count is 1, even if animation control chunks are present, significantly reducing log noise and processing overhead for static assets.
 
+#### 🎥 GIF to Video Optimization
+- **Lossless-First Path**: Implemented "Reverse Exploration" for GIF-to-video conversion. In `ultimate_mode`, the search now starts at **CRF 0.0**. Since GIFs are highly compressible, this often achieves a 1-pass success (maximum quality + reduced size), bypassing multiple redundant search iterations.
+
 #### 🌈 UltraHDR Policy Confirmation
 - **Strict detection**: Verified and hardened the UltraHDR detection logic (requiring both XMP gainmap metadata AND MPF segments). Confirmed that these files are correctly preserved in their original format to avoid losing HDR gainmap data until `cjxl` (libjxl 0.11.2) officially supports gainmap reconstruction.
 

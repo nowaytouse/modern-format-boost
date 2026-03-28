@@ -214,12 +214,25 @@ pub fn explore_with_gpu_coarse_search(
     };
 
     let is_gif_magic = super::stream_analysis::is_gif_magic(input);
+    let mut actual_initial_crf = initial_crf;
     if is_gif_magic {
         crate::log_eprintln!(
             "   {}ℹ️  GIF magic bytes detected — bypassing GPU search for precise CPU exploration{}",
             BRIGHT_CYAN,
             RESET
         );
+
+        // [Optimization] GIF "Lossless-First" (Reverse Exploration)
+        // GIFs (8-bit palette) are extremely compressible. CRF 0.0 is often < original size.
+        // Starting at 0.0 allows 1-pass success for the vast majority of cases in ultimate mode.
+        if ultimate_mode {
+            crate::log_eprintln!(
+                "   {}🚀 GIF Lossless-First Path: Probing CRF 0.0 for maximum efficiency{}",
+                crate::modern_ui::colors::BRIGHT_GREEN,
+                RESET
+            );
+            actual_initial_crf = 0.0;
+        }
     }
 
     let is_high_complexity = bitrate_bps > 5_000_000.0 && !is_gif_magic; // > 5 Mbps
@@ -264,7 +277,7 @@ pub fn explore_with_gpu_coarse_search(
 
         let gpu_step = if ultimate_mode { 0.5 } else { 2.0 };
         let gpu_config = GpuCoarseConfig {
-            initial_crf,
+            initial_crf: actual_initial_crf,
             min_crf: 0.0,
             max_crf,
             step: gpu_step,
@@ -485,7 +498,8 @@ pub fn explore_with_gpu_coarse_search(
                 encoder
             );
         }
-        (ABSOLUTE_MIN_CRF, max_crf, initial_crf)
+        // CPU-only search (Bypass GPU)
+        (ABSOLUTE_MIN_CRF, max_crf, actual_initial_crf)
     };
 
     crate::verbose_eprintln!("Phase 2: 🖥️  CPU Fine-Tune (0.5→0.1 step)");
