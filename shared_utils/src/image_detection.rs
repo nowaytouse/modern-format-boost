@@ -1001,17 +1001,19 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
                     ));
                 }
 
-                let (entropy, max_entropy, entropy_ratio) =
-                    if let Some(p_size) = png_info.palette_size {
-                        let pe = calculate_palette_index_entropy(&img, p_size);
-                        (pe.0, pe.1, pe.2)
-                    } else {
+                let (entropy, max_entropy, entropy_ratio) = png_info.palette_size.map_or_else(
+                    || {
                         let e = calculate_rgb_entropy(&img);
                         let ps = 256.0f64;
                         let me = ps.log2();
                         let ratio = if me > 0.0 { e / me } else { 0.0 };
                         (e, me, ratio)
-                    };
+                    },
+                    |p_size| {
+                        let pe = calculate_palette_index_entropy(&img, p_size);
+                        (pe.0, pe.1, pe.2)
+                    },
+                );
                 let palette_size = png_info.palette_size.unwrap_or(256) as f64;
                 if palette_size >= 64.0 && entropy_ratio < 0.6 && pixel_count > 10_000 {
                     factors.entropy_anomaly = (0.6 - entropy_ratio).mul_add(0.5, 0.5);
@@ -2404,13 +2406,8 @@ fn detect_exr_compression(path: &Path) -> Result<CompressionType> {
         }
     }
 
-    // All parts scanned
-    if found_any_compression {
-        Ok(CompressionType::Lossless)
-    } else {
-        // No compression attribute found — default lossless (NONE is the default in EXR spec)
-        Ok(CompressionType::Lossless)
-    }
+    let _ = found_any_compression; // silence found_any_compression if unused
+    Ok(CompressionType::Lossless)
 }
 
 /// Detect JPEG 2000 lossless vs lossy by parsing COD and COC markers.

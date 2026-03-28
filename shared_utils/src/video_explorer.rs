@@ -34,28 +34,40 @@ pub mod stream_analysis;
 pub use ssim_calculator::*;
 pub use stream_analysis::*;
 
+/// Minimum measurable CRF value (bit-exact).
 pub const ABSOLUTE_MIN_CRF: f32 = 0.0;
 
+/// Maximum measurable CRF value (codec limit).
 pub const ABSOLUTE_MAX_CRF: f32 = 51.0;
 
+/// Maximum iterations for Stage B1 (Coarse Search).
 pub const STAGE_B1_MAX_ITERATIONS: u32 = 20;
 
+/// Maximum iterations for Stage B2 (Fine Search).
 pub const STAGE_B2_MAX_ITERATIONS: u32 = 25;
 
+/// Maximum iterations for Bidirectional Phase B.
 pub const STAGE_B_BIDIRECTIONAL_MAX: u32 = 18;
 
+/// Maximum iterations for Binary Search phase.
 pub const BINARY_SEARCH_MAX_ITERATIONS: u32 = 12;
 
+/// Hard global limit for any single file exploration to prevent infinite loops.
 pub const GLOBAL_MAX_ITERATIONS: u32 = 60;
 
+/// Files below this size are considered "small" and may trigger more aggressive margins.
 pub const SMALL_FILE_THRESHOLD: u64 = 10 * 1024 * 1024;
 
+/// Minimum absolute metadata margin in bytes.
 pub const METADATA_MARGIN_MIN: u64 = 2048;
 
+/// Maximum absolute metadata margin in bytes.
 pub const METADATA_MARGIN_MAX: u64 = 102_400;
 
+/// Target metadata overhead percentage (0.5%).
 pub const METADATA_MARGIN_PERCENT: f64 = 0.005;
 
+/// Calculates the target metadata margin for a given input size.
 #[inline]
 #[must_use]
 pub fn calculate_metadata_margin(input_size: u64) -> u64 {
@@ -128,6 +140,8 @@ pub const fn verify_compression_simple(
         verify_compression_precise(output_size, input_size, actual_metadata_size);
     (can_compress, compare_size)
 }
+
+pub use precision::*;
 
 pub const ULTIMATE_MIN_WALL_HITS: u32 = 15;
 
@@ -279,6 +293,23 @@ pub const CONFIDENCE_WEIGHT_SAMPLING: f64 = 0.3;
 pub const CONFIDENCE_WEIGHT_PREDICTION: f64 = 0.3;
 pub const CONFIDENCE_WEIGHT_MARGIN: f64 = 0.2;
 pub const CONFIDENCE_WEIGHT_SSIM: f64 = 0.2;
+
+/// A specific state in the GPU-accelerated CRF exploration.
+#[derive(Debug, Clone)]
+pub struct CalibrationPoint {
+    /// The CRF used in the GPU probe.
+    pub gpu_crf: f32,
+    /// Resulting file size from GPU.
+    pub gpu_size: u64,
+    /// SSIM score from GPU (if measured).
+    pub gpu_ssim: Option<f64>,
+    /// The starting point predicted for the CPU fine-search.
+    pub predicted_cpu_crf: f32,
+    /// Confidence level in this prediction [0.0 - 1.0].
+    pub confidence: f64,
+    /// Human-readable rationale for the prediction adjustment.
+    pub reason: &'static str,
+}
 
 impl ConfidenceBreakdown {
     #[must_use]
@@ -1155,9 +1186,9 @@ impl VideoExplorer {
             optimal_crf: self.config.initial_crf,
             output_size,
             size_change_pct: self.calc_change_pct(output_size),
-            ssim: quality.0,
-            psnr: quality.1,
-            ms_ssim: quality.2,
+            ssim: quality.0.map(|x| x as f64),
+            psnr: quality.1.map(|x| x as f64),
+            ms_ssim: quality.2.map(|x| x as f64),
             iterations: 1,
             quality_passed,
             log,
@@ -1893,8 +1924,9 @@ impl VideoExplorer {
 
             log_header!("   Stage C: SSIM verification");
             progress_line("│ Computing SSIM... │".to_string());
-            let quality = validate_ssim(best_crf, &mut quality_cache, self)?;
-            let ssim = quality.0.unwrap_or(0.0);
+            let (ssim_opt, psnr_opt, ms_ssim_opt) =
+                validate_ssim(best_crf, &mut quality_cache, self)?;
+            let ssim = ssim_opt.unwrap_or(0.0) as f64;
 
             progress_done();
 
@@ -1918,9 +1950,9 @@ impl VideoExplorer {
                 optimal_crf: best_crf,
                 output_size: best_size,
                 size_change_pct: self.calc_change_pct(best_size),
-                ssim: quality.0,
-                psnr: quality.1,
-                ms_ssim: quality.2,
+                ssim: ssim_opt.map(|x| x as f64),
+                psnr: psnr_opt.map(|x| x as f64),
+                ms_ssim: ms_ssim_opt.map(|x| x as f64),
                 iterations,
                 quality_passed: true,
                 log,
@@ -1959,9 +1991,9 @@ impl VideoExplorer {
                 optimal_crf: self.config.max_crf,
                 output_size: max_size,
                 size_change_pct: self.calc_change_pct(max_size),
-                ssim: quality.0,
-                psnr: quality.1,
-                ms_ssim: quality.2,
+                ssim: quality.0.map(|x| x as f64),
+                psnr: quality.1.map(|x| x as f64),
+                ms_ssim: quality.2.map(|x| x as f64),
                 iterations,
                 quality_passed: false,
                 log,
@@ -2190,9 +2222,9 @@ impl VideoExplorer {
             optimal_crf: boundary_crf,
             output_size: final_size,
             size_change_pct,
-            ssim: quality.0,
-            psnr: quality.1,
-            ms_ssim: quality.2,
+            ssim: quality.0.map(|x| x as f64),
+            psnr: quality.1.map(|x| x as f64),
+            ms_ssim: quality.2.map(|x| x as f64),
             iterations,
             quality_passed: ssim >= self.config.quality_thresholds.min_ssim,
             log,
@@ -3494,7 +3526,6 @@ pub use gpu_coarse_search::{
 
 #[cfg(test)]
 mod tests {
-    use super::precision::*;
     use super::*;
 
     #[test]
@@ -4381,8 +4412,12 @@ mod tests {
             );
         }
 
-        assert_eq!(ULTRA_FINE_STEP, 0.25, "ULTRA_FINE_STEP should be 0.25");
-        assert_eq!(FINE_STEP, 0.5, "FINE_STEP should be 0.5");
+        assert_eq!(
+            precision::ULTRA_FINE_STEP,
+            0.25,
+            "ULTRA_FINE_STEP should be 0.25"
+        );
+        assert_eq!(precision::FINE_STEP, 0.5, "FINE_STEP should be 0.5");
     }
 
     #[test]

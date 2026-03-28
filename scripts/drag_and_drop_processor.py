@@ -229,12 +229,28 @@ def check_tools():
         print(f"{RED}❌ Build script not found: {build_script}{RESET}")
         print(f"{DIM}   Please ensure you are running from the repository root.{RESET}")
         sys.exit(1)
-        
+
     res = subprocess.run([str(build_script)])
     if res.returncode != 0:
         print(f"{RED}❌ Build failed. Please check the logs.{RESET}")
         input("Press Enter to exit...")
         sys.exit(1)
+
+def rebuild_tools():
+    """Attempt to rebuild tools automatically"""
+    build_script = SCRIPT_DIR / "smart_build.sh"
+    if not build_script.exists():
+        print(f"{RED}❌ Build script not found: {build_script}{RESET}")
+        return False
+    
+    print(f"\n{YELLOW}🔧 Attempting automatic rebuild...{RESET}")
+    res = subprocess.run([str(build_script)])
+    if res.returncode != 0:
+        print(f"{RED}❌ Automatic rebuild failed. Please check the logs.{RESET}")
+        return False
+    
+    print(f"{GREEN}✅ Rebuild completed successfully.{RESET}\n")
+    return True
 
 def draw_separator(title):
     print(f"{DIM}── {BOLD}{WHITE}{title}{RESET} {DIM}{'─'*50}{RESET}\n")
@@ -547,11 +563,31 @@ def stream_and_log_process(cmd, parse_type):
 
 def process_images():
     if IMG_COUNT == 0: return
+
+    # Existence check with auto-rebuild
+    if not IMGQUALITY_HEVC.exists():
+        print(f"\n{RED}❌ Critical Error: img-hevc binary not found{RESET}")
+        print(f"{DIM}   Expected path: {IMGQUALITY_HEVC}{RESET}")
+        print(f"{DIM}   The build may have failed or been cleaned.{RESET}")
+        
+        if not rebuild_tools():
+            print(f"{YELLOW}   Manual rebuild required: bash scripts/smart_build.sh{RESET}")
+            print(f"{DIM}   Or drag/drop again after build completes.{RESET}\n")
+            sys.exit(1)
+        
+        # Verify rebuild succeeded
+        if not IMGQUALITY_HEVC.exists():
+            print(f"{RED}❌ Rebuild verification failed: binary still missing.{RESET}\n")
+            sys.exit(1)
+        
+        # Rust tools have built-in cache/resume, so we just continue
+        print(f"{DIM}   ✓ Rust cache will resume from last completed file.{RESET}\n")
+    
     draw_separator(f"Processing Images ({IMG_COUNT})")
     cmd = [str(IMGQUALITY_HEVC), "run", "--recursive", "--allow-size-tolerance"]
     if ULTIMATE_MODE: cmd.append("--ultimate")
     if VERBOSE_MODE: cmd.append("--verbose")
-    
+
     if OUTPUT_MODE == "inplace":
         cmd.extend(["--in-place", str(TARGET_DIR)])
     else:
@@ -562,11 +598,31 @@ def process_images():
 
 def process_videos():
     if VID_COUNT == 0: return
+
+    # Existence check with auto-rebuild
+    if not VIDQUALITY_HEVC.exists():
+        print(f"\n{RED}❌ Critical Error: vid-hevc binary not found{RESET}")
+        print(f"{DIM}   Expected path: {VIDQUALITY_HEVC}{RESET}")
+        print(f"{DIM}   The build may have failed or been cleaned.{RESET}")
+        
+        if not rebuild_tools():
+            print(f"{YELLOW}   Manual rebuild required: bash scripts/smart_build.sh{RESET}")
+            print(f"{DIM}   Or drag/drop again after build completes.{RESET}\n")
+            sys.exit(1)
+        
+        # Verify rebuild succeeded
+        if not VIDQUALITY_HEVC.exists():
+            print(f"{RED}❌ Rebuild verification failed: binary still missing.{RESET}\n")
+            sys.exit(1)
+        
+        # Rust tools have built-in cache/resume, so we just continue
+        print(f"{DIM}   ✓ Rust cache will resume from last completed file.{RESET}\n")
+
     draw_separator(f"Processing Videos ({VID_COUNT})")
     cmd = [str(VIDQUALITY_HEVC), "run", "--recursive", "--allow-size-tolerance"]
     if ULTIMATE_MODE: cmd.append("--ultimate")
     if VERBOSE_MODE: cmd.append("--verbose")
-    
+
     if OUTPUT_MODE == "inplace":
         cmd.extend(["--in-place", str(TARGET_DIR)])
     else:

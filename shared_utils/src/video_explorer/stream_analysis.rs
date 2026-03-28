@@ -74,6 +74,7 @@ pub fn get_video_duration(input: &Path) -> Option<f64> {
     }
 }
 
+#[must_use]
 pub fn is_gif_magic(path: &Path) -> bool {
     let mut magic = [0u8; 4];
     std::fs::File::open(path)
@@ -82,7 +83,7 @@ pub fn is_gif_magic(path: &Path) -> bool {
             f.read_exact(&mut magic)?;
             Ok(())
         })
-        .map(|_| &magic == b"GIF8")
+        .map(|()| &magic == b"GIF8")
         .unwrap_or(false)
 }
 
@@ -336,14 +337,14 @@ pub fn check_lossless_integrity(
         }
         (Some(i), Some(o)) => {
             if is_animated_image {
-                // For animated images (GIF/WebP), frame counts often decrease due to 
+                // For animated images (GIF/WebP), frame counts often decrease due to
                 // FFmpeg's VFR-to-CFR alignment (merging frames into the same slot).
                 // We pivot to duration validation: if the timeline remains intact, the data is OK.
                 let i_dur = get_video_duration(input).unwrap_or(0.0);
                 let o_dur = get_video_duration(output).unwrap_or(0.0);
-                
+
                 let dur_ratio = if i_dur > 0.0 { o_dur / i_dur } else { 1.0 };
-                
+
                 if dur_ratio >= 0.95 {
                     warn!(
                         input_frames = i,

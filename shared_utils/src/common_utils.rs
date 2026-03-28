@@ -89,7 +89,7 @@ pub fn ensure_parent_dir_exists(file_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Returns the user's global project cache directory (~/.modern_format_boost/cache/).
+/// Returns the user's global project cache directory (~/.`modern_format_boost/cache`/).
 /// Creates the directory if it doesn't exist.
 ///
 /// # Errors

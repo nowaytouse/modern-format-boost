@@ -125,7 +125,7 @@ pub fn verify_jxl_health(path: &Path) -> Result<(), String> {
 ///
 /// Uses `exiftool -icc_profile -b` — returns `true` if the profile blob is non-empty.
 /// Falls back to `false` on any error (tool missing, I/O failure) so the caller can safely
-/// decide whether to inject ICC via ExifTool as a fallback.
+/// decide whether to inject ICC via `ExifTool` as a fallback.
 #[must_use]
 pub fn verify_jxl_has_icc(path: &Path) -> bool {
     if which::which("exiftool").is_err() {

@@ -10,6 +10,7 @@
 //! `convert_to_avif`, `convert_to_avif_lossless`, `convert_to_jxl_matched`.
 
 use crate::{ImgQualityError, Result};
+use shared_utils::image_jpeg_analysis::is_jpeg_complete;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -895,7 +896,9 @@ pub fn convert_jpeg_to_jxl(
 
     // Check for corruption early
     if !is_jpeg_complete(&std::fs::read(input).unwrap_or_default()) {
-        return Err(ImgQualityError::ConversionError("JPEG is truncated".to_string()));
+        return Err(ImgQualityError::ConversionError(
+            "JPEG is truncated".to_string(),
+        ));
     }
 
     // Check for UltraHDR JPEG and skip conversion

@@ -34,6 +34,8 @@ RUN_OPTIONAL = True
 RUN_EXPENSIVE = True
 ALLOW_FETCH = False
 AUTO_FIX = False
+UPDATE_DEPS = False
+RUN_BUILD = False
 
 def show_help():
     help_text = f"""Usage: scripts/check_all.py [options]
@@ -43,6 +45,8 @@ Options:
   --required-only        Run only required checks (fmt/clippy/tests).
   --no-expensive         Skip expensive optional checks (udeps/bloat/hack/miri).
   --fetch-advisory-db    Allow network fetch for cargo-audit/cargo-deny.
+  --update               Update dependencies (cargo update --workspace).
+  --build                Run cargo build --release --workspace.
   --fix                  Auto-fix issues (cargo fmt, cargo clippy --fix).
   -h, --help             Show this help.
 
@@ -84,7 +88,7 @@ def has_rust_component(component, toolchain=None):
         return False
     for line in result.stdout.splitlines():
         parts = line.split()
-        if parts and parts[0] == component:
+        if parts and parts[0].startswith(component):
             return True
     return False
 
@@ -154,17 +158,17 @@ def skip_optional(tracker, name, reason):
     print(f" {BLUE}SKIP{NC} ({reason})")
 
 def main():
-    global ENFORCE_BRANCH, RUN_OPTIONAL, RUN_EXPENSIVE, ALLOW_FETCH, AUTO_FIX
-    
+    global ENFORCE_BRANCH, RUN_OPTIONAL, RUN_EXPENSIVE, ALLOW_FETCH, AUTO_FIX, UPDATE_DEPS, RUN_BUILD
+
     script_dir = Path(__file__).parent.resolve()
     repo_root = script_dir.parent
-    
+
     if not (repo_root / "Cargo.toml").is_file():
         print(f"Error: REPO_ROOT '{repo_root}' does not look like a Cargo workspace (no Cargo.toml found).", file=sys.stderr)
         sys.exit(2)
-        
+
     os.chdir(repo_root)
-    
+
     # Args
     args = sys.argv[1:]
     while args:
@@ -173,6 +177,8 @@ def main():
         elif arg == "--required-only": RUN_OPTIONAL = False
         elif arg == "--no-expensive": RUN_EXPENSIVE = False
         elif arg == "--fetch-advisory-db": ALLOW_FETCH = True
+        elif arg == "--update": UPDATE_DEPS = True
+        elif arg == "--build": RUN_BUILD = True
         elif arg == "--fix": AUTO_FIX = True
         elif arg in ("-h", "--help"):
             show_help()
@@ -194,6 +200,16 @@ def main():
             print("Use --allow-non-nightly to bypass.")
             sys.exit(2)
 
+    if UPDATE_DEPS:
+        print(f"\n{BOLD}{CYAN}Updating dependencies{NC}")
+        print(f"{BLUE}Running cargo update --workspace...{NC}")
+        subprocess.run(["cargo", "update", "--workspace"])
+
+    if RUN_BUILD:
+        print(f"\n{BOLD}{CYAN}Building project{NC}")
+        print(f"{BLUE}Running cargo build --release --workspace...{NC}")
+        subprocess.run(["cargo", "build", "--release", "--workspace"])
+
     if AUTO_FIX:
         print(f"\n{BOLD}{CYAN}Running auto-fix{NC}")
         print(f"{BLUE}Applying cargo fmt...{NC}")
@@ -211,7 +227,11 @@ def main():
     tracker = Tracker()
 
     run_command(tracker, "required", "cargo fmt --all --check", ["cargo", "fmt", "--all", "--check"])
-    run_command(tracker, "required", "cargo clippy --workspace --all-targets --all-features -D warnings", 
+
+    if RUN_BUILD:
+        run_command(tracker, "required", "cargo build --release --workspace", ["cargo", "build", "--release", "--workspace"])
+
+    run_command(tracker, "required", "cargo clippy --workspace --all-targets --all-features -D warnings",
                 ["cargo", "clippy", "--workspace", "--all-targets", "--all-features", "--", "-D", "warnings"])
     
     if has_cargo_subcommand("nextest"):
@@ -360,7 +380,7 @@ def main():
                 skip_optional(tracker, "cargo miri test", "miri component not installed nightly")
 
         if has_command("kondo"):
-            run_command(tracker, "optional", "kondo dry-run (current project)", ["kondo", "-n", "-I", "/Volumes", "-I", os.path.expanduser("~/Library"), str(repo_root)])
+            run_command(tracker, "optional", "kondo cleanup (current project)", ["kondo", "-a", "-I", "/Volumes", "-I", os.path.expanduser("~/Library"), str(repo_root)])
         else:
             skip_optional(tracker, "kondo", "kondo not installed")
     else:
