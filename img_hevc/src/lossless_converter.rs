@@ -897,7 +897,7 @@ pub fn convert_jpeg_to_jxl(
     // Check for corruption early
     if !is_jpeg_complete(&std::fs::read(input).unwrap_or_default()) {
         return Err(ImgQualityError::ConversionError(
-            "JPEG is truncated".to_string(),
+            "JPEG is truncated or missing EOI".to_string(),
         ));
     }
 
@@ -1036,10 +1036,10 @@ pub fn convert_jpeg_to_jxl(
         // large JXL files that we eventually discard. We skip fallback if it's incomplete.
         if !is_jpeg_complete(&std::fs::read(input).unwrap_or_default()) {
             shared_utils::progress_mode::emit_stderr(
-                "   ⚠️  [Corruption] JPEG file is truncated (missing EOI), skipping expensive fallback.",
+                "   ⚠️  [Corruption] JPEG file is truncated or missing EOI, skipping expensive fallback.",
             );
             return Err(ImgQualityError::ConversionError(format!(
-                "JPEG is truncated and cjxl bitstream reconstruction failed: {stderr}"
+                "JPEG is truncated or missing EOI, and cjxl bitstream reconstruction failed: {stderr}"
             )));
         }
 

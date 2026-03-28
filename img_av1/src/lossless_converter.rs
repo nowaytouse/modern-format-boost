@@ -425,8 +425,20 @@ pub fn convert_jpeg_to_jxl(
     options: &ConvertOptions,
     hdr_info: Option<&shared_utils::ColorInfo>,
 ) -> Result<ConversionResult> {
+    // Validate input file
+    if let Err(e) = shared_utils::conversion::validate_input_file(input) {
+        return Err(ImgQualityError::ConversionError(e));
+    }
+
     if !options.force && is_already_processed(input) {
         return Ok(ConversionResult::skipped_duplicate(input));
+    }
+
+    // Check for corruption early
+    if !shared_utils::image_jpeg_analysis::is_jpeg_complete(&std::fs::read(input).unwrap_or_default()) {
+        return Err(ImgQualityError::ConversionError(
+            "JPEG is truncated or missing EOI".to_string(),
+        ));
     }
 
     // Check for UltraHDR JPEG and skip conversion

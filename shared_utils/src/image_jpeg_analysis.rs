@@ -373,21 +373,26 @@ const ZIGZAG_ORDER: [usize; 64] = [
     52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
 ];
 
-/// Returns true if the JPEG data contains the EOI (End of Image) marker at the end.
-/// Handles cases where there might be some trailing padding but basically checks the last few bytes.
+/// Returns true if the JPEG data is complete (starts with SOI and contains EOI).
+///
+/// This implementation is robust against trailing metadata (common in mobile captures like Vivo/Samsung)
+/// by searching for the EOI marker (FF D9) in the data.
 #[must_use]
 pub fn is_jpeg_complete(data: &[u8]) -> bool {
-    if data.len() < 2 {
+    if data.len() < 4 {
         return false;
     }
 
-    // Standard JPEG EOI marker is FF D9.
-    // Sometimes there is trailing garbage (like in web files or truncated downloads).
-    // We look for FF D9 in the last 32 bytes to be robust against minor trailing padding.
-    let search_start = data.len().saturating_sub(32);
-    data[search_start..]
-        .windows(2)
-        .any(|w| w[0] == 0xFF && w[1] == 0xD9)
+    // 1) Verify Start of Image (SOI): FF D8
+    if data[0] != 0xFF || data[1] != 0xD8 {
+        return false;
+    }
+
+    // 2) Verify End of Image (EOI): FF D9
+    // We search from the end because it's more likely to be near the end,
+    // even if there's a few hundred bytes of trailing metadata.
+    // In a valid JPEG bitstream, FF D9 should not appear in the scan data (due to byte stuffing).
+    data.windows(2).rev().any(|w| w[0] == 0xFF && w[1] == 0xD9)
 }
 
 /// Analyze JPEG quality by inspecting DQT (Define Quantization Table) markers.

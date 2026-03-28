@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
 
+## [0.11.2] - 2026-03-29
+
+#### 🛡️ JPEG Robustness & Metadata Handling
+- **Enhanced EOI Detection**: Re-implemented `is_jpeg_complete` to perform a full-file reverse search for the `FF D9` marker. This robustly handles JPEGs with large trailing metadata (common in mobile captures like Vivo/Samsung) that were previously misidentified as truncated.
+- **Fixed JPEG Tail Stripping**: Corrected the `strip_jpeg_tail_to_temp` logic to properly include the `EOI` (FF D9) marker in the sanitized output. This ensures `cjxl` bitstream reconstruction works correctly on files with extra trailing data.
+- **Strict SOI Validation**: Added mandatory `FF D8` (Start of Image) verification to all JPEG analysis functions to prevent processing non-JPEG files.
+- **Unified Corruption Checks**: Synchronized the early corruption check logic between `img_hevc` and `img_av1` crates, providing consistent error reporting ("JPEG is truncated or missing EOI") across the entire pipeline.
+
 ## [0.11.1] - 2026-03-28
 
 #### 🛡️ Error Architecture & Reporting
