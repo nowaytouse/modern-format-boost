@@ -27,13 +27,13 @@ use tracing::info;
 /// 📦 Program Version (from Cargo.toml)
 ///
 /// This is the single source of truth for the program version.
-/// Format: "MAJOR.MINOR.PATCH" (e.g., "0.10.102")
+/// Format: "MAJOR.MINOR.PATCH" (e.g., "0.11.1")
 pub const PROGRAM_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// 🧬 Cache Algorithm Version - Automatically bound to program version
 ///
 /// This value is automatically calculated from `CARGO_PKG_VERSION` at program initialization.
-/// Version Format: Major.Minor.Patch → `MajorMinorPatch` (e.g., 0.10.102 → 1102)
+/// Version Format: Major.Minor.Patch → `MajorMinorPatch` (e.g., 0.11.1 → 1101)
 ///
 /// **Purpose**: Automatic cache invalidation on ANY program update
 ///
@@ -180,6 +180,7 @@ mod tests {
 
     #[test]
     fn test_version_parsing() {
+        assert_eq!(parse_version_to_code("0.11.1", "Test"), 1101);
         assert_eq!(parse_version_to_code("0.11.0", "Test"), 1100);
         assert_eq!(parse_version_to_code("0.10.102", "Test"), 1102);
         assert_eq!(parse_version_to_code("1.2.3", "Test"), 10203);

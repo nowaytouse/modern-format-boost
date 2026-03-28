@@ -353,9 +353,9 @@ checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 
 [[package]]
 name = "cc"
-version = "1.2.57"
+version = "1.2.58"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a0dd1ca384932ff3641c8718a02769f1698e7563dc6974ffd03346116310423"
+checksum = "e1e928d4b69e3077709075a938a05ffbedfa53a84c8f766efbf8220bb1ff60e1"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -411,7 +411,7 @@ dependencies = [
 [[package]]
 name = "clap"
 version = "4.6.0"
-source = "git+https://github.com/clap-rs/clap#70f3bb31874ff24233f18c394982407ca90d0dcc"
+source = "git+https://github.com/clap-rs/clap#f0d30d961d26f8fb636b33242256fca73a717f77"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -420,7 +420,7 @@ dependencies = [
 [[package]]
 name = "clap_builder"
 version = "4.6.0"
-source = "git+https://github.com/clap-rs/clap#70f3bb31874ff24233f18c394982407ca90d0dcc"
+source = "git+https://github.com/clap-rs/clap#f0d30d961d26f8fb636b33242256fca73a717f77"
 dependencies = [
  "anstream",
  "anstyle",
@@ -431,7 +431,7 @@ dependencies = [
 [[package]]
 name = "clap_derive"
 version = "4.6.0"
-source = "git+https://github.com/clap-rs/clap#70f3bb31874ff24233f18c394982407ca90d0dcc"
+source = "git+https://github.com/clap-rs/clap#f0d30d961d26f8fb636b33242256fca73a717f77"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -442,7 +442,7 @@ dependencies = [
 [[package]]
 name = "clap_lex"
 version = "1.1.0"
-source = "git+https://github.com/clap-rs/clap#70f3bb31874ff24233f18c394982407ca90d0dcc"
+source = "git+https://github.com/clap-rs/clap#f0d30d961d26f8fb636b33242256fca73a717f77"
 
 [[package]]
 name = "cmake"
@@ -993,7 +993,7 @@ dependencies = [
 
 [[package]]
 name = "img-av1"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1009,7 +1009,7 @@ dependencies = [
 
 [[package]]
 name = "img-hevc"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1144,9 +1144,9 @@ dependencies = [
 
 [[package]]
 name = "js-sys"
-version = "0.3.91"
+version = "0.3.92"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b49715b7073f385ba4bc528e5747d02e66cb39c6146efb66b781f131f0fb399c"
+checksum = "cc4c90f45aa2e6eacbe8645f77fdea542ac97a494bcd117a67df9ff4d611f995"
 dependencies = [
  "once_cell",
  "wasm-bindgen",
@@ -1928,7 +1928,7 @@ dependencies = [
 
 [[package]]
 name = "shared_utils"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "blake3",
@@ -2181,7 +2181,7 @@ checksum = "d282ade6016312faf3e41e57ebbba0c073e4056dab1232ab1cb624199648f8ed"
 [[package]]
 name = "tracing"
 version = "0.1.44"
-source = "git+https://github.com/tokio-rs/tracing#412986fb2fcfcd231844eb14cf66665936c6ecfc"
+source = "git+https://github.com/tokio-rs/tracing#9545be16f5df3ce78df50340a66845e23372ff41"
 dependencies = [
  "pin-project-lite",
  "tracing-attributes",
@@ -2191,7 +2191,7 @@ dependencies = [
 [[package]]
 name = "tracing-appender"
 version = "0.2.4"
-source = "git+https://github.com/tokio-rs/tracing#412986fb2fcfcd231844eb14cf66665936c6ecfc"
+source = "git+https://github.com/tokio-rs/tracing#9545be16f5df3ce78df50340a66845e23372ff41"
 dependencies = [
  "crossbeam-channel",
  "symlink",
@@ -2203,7 +2203,7 @@ dependencies = [
 [[package]]
 name = "tracing-attributes"
 version = "0.1.31"
-source = "git+https://github.com/tokio-rs/tracing#412986fb2fcfcd231844eb14cf66665936c6ecfc"
+source = "git+https://github.com/tokio-rs/tracing#9545be16f5df3ce78df50340a66845e23372ff41"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2213,7 +2213,7 @@ dependencies = [
 [[package]]
 name = "tracing-core"
 version = "0.1.36"
-source = "git+https://github.com/tokio-rs/tracing#412986fb2fcfcd231844eb14cf66665936c6ecfc"
+source = "git+https://github.com/tokio-rs/tracing#9545be16f5df3ce78df50340a66845e23372ff41"
 dependencies = [
  "valuable",
 ]
@@ -2221,7 +2221,7 @@ dependencies = [
 [[package]]
 name = "tracing-log"
 version = "0.2.0"
-source = "git+https://github.com/tokio-rs/tracing#412986fb2fcfcd231844eb14cf66665936c6ecfc"
+source = "git+https://github.com/tokio-rs/tracing#9545be16f5df3ce78df50340a66845e23372ff41"
 dependencies = [
  "log",
  "once_cell",
@@ -2231,7 +2231,7 @@ dependencies = [
 [[package]]
 name = "tracing-serde"
 version = "0.2.0"
-source = "git+https://github.com/tokio-rs/tracing#412986fb2fcfcd231844eb14cf66665936c6ecfc"
+source = "git+https://github.com/tokio-rs/tracing#9545be16f5df3ce78df50340a66845e23372ff41"
 dependencies = [
  "serde",
  "tracing-core",
@@ -2240,7 +2240,7 @@ dependencies = [
 [[package]]
 name = "tracing-subscriber"
 version = "0.3.23"
-source = "git+https://github.com/tokio-rs/tracing#412986fb2fcfcd231844eb14cf66665936c6ecfc"
+source = "git+https://github.com/tokio-rs/tracing#9545be16f5df3ce78df50340a66845e23372ff41"
 dependencies = [
  "matchers",
  "nu-ansi-term",
@@ -2340,7 +2340,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vid-av1"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -2352,7 +2352,7 @@ dependencies = [
 
 [[package]]
 name = "vid-hevc"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -2400,9 +2400,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen"
-version = "0.2.114"
+version = "0.2.115"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6532f9a5c1ece3798cb1c2cfdba640b9b3ba884f5db45973a6f442510a87d38e"
+checksum = "6523d69017b7633e396a89c5efab138161ed5aafcbc8d3e5c5a42ae38f50495a"
 dependencies = [
  "cfg-if",
  "once_cell",
@@ -2413,9 +2413,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-macro"
-version = "0.2.114"
+version = "0.2.115"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "18a2d50fcf105fb33bb15f00e7a77b772945a2ee45dcf454961fd843e74c18e6"
+checksum = "4e3a6c758eb2f701ed3d052ff5737f5bfe6614326ea7f3bbac7156192dc32e67"
 dependencies = [
  "quote",
  "wasm-bindgen-macro-support",
@@ -2423,9 +2423,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-macro-support"
-version = "0.2.114"
+version = "0.2.115"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "03ce4caeaac547cdf713d280eda22a730824dd11e6b8c3ca9e42247b25c631e3"
+checksum = "921de2737904886b52bcbb237301552d05969a6f9c40d261eb0533c8b055fedf"
 dependencies = [
  "bumpalo",
  "proc-macro2",
@@ -2436,9 +2436,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-shared"
-version = "0.2.114"
+version = "0.2.115"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75a326b8c223ee17883a4251907455a2431acc2791c98c26279376490c378c16"
+checksum = "a93e946af942b58934c604527337bad9ae33ba1d5c6900bbb41c2c07c2364a93"
 dependencies = [
  "unicode-ident",
 ]

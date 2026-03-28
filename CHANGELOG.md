@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
 
-### [0.11.1] - 2026-03-28
+## [0.11.1] - 2026-03-28
 
 #### 🛡️ Error Architecture & Reporting
 - **Strict Error Categorization**: Refactored the `UnifiedError` module to explicitly distinguish between **Fatal** (abort), **Recoverable** (fail & continue), and **Optional** (skip).
