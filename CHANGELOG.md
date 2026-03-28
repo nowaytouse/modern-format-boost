@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
 
+## [0.11.2] - 2026-03-28
+
+### 🛡️ JPEG Pipeline Hardening & Corruption Awareness
+
+#### 📷 JPEG Truncation & Integrity
+- **EOI (End of Image) Verification**: Implemented `is_jpeg_complete` to detect missing `FF D9` markers. Truncated JPEGs (e.g. from interrupted downloads or filesystem errors) are now identified during both fast-path and deep analysis.
+- **Improved JXL Fallback Logic**: 
+  - **Early Corruption Skip**: The pipeline now detects truncation before attempting expensive JXL transcoding paths.
+  - **Sanitization Bypass**: If a JPEG is known to be incomplete, the system now skips the "High Quality" ImageMagick fallback when the `compress` option is enabled, preventing unnecessary CPU usage and the generation of oversized "repaired" files that would ultimately be discarded.
+- **Metadata Injection**: Added `is_truncated` flag to image metadata when a broken JPEG is detected, providing better observability in logs.
+
+#### 🌈 UltraHDR Policy Confirmation
+- **Strict detection**: Verified and hardened the UltraHDR detection logic (requiring both XMP gainmap metadata AND MPF segments). Confirmed that these files are correctly preserved in their original format to avoid losing HDR gainmap data until `cjxl` (libjxl 0.11.2) officially supports gainmap reconstruction.
+
 ## [0.11.1] - 2026-03-28
 
 ### 🛡️ GIF Quality Verification Hardening & Sprint/Floor Guarantee

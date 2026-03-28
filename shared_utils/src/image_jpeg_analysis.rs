@@ -22,6 +22,7 @@ pub struct JpegQualityAnalysis {
     pub chrominance_quality: Option<u8>,
     pub quality_description: String,
     pub is_high_quality_original: bool,
+    pub is_complete: bool,
     pub encoder_hint: Option<String>,
 }
 
@@ -372,6 +373,23 @@ const ZIGZAG_ORDER: [usize; 64] = [
     52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
 ];
 
+/// Returns true if the JPEG data contains the EOI (End of Image) marker at the end.
+/// Handles cases where there might be some trailing padding but basically checks the last few bytes.
+#[must_use]
+pub fn is_jpeg_complete(data: &[u8]) -> bool {
+    if data.len() < 2 {
+        return false;
+    }
+
+    // Standard JPEG EOI marker is FF D9.
+    // Sometimes there is trailing garbage (like in web files or truncated downloads).
+    // We look for FF D9 in the last 32 bytes to be robust against minor trailing padding.
+    let search_start = data.len().saturating_sub(32);
+    data[search_start..]
+        .windows(2)
+        .any(|w| w[0] == 0xFF && w[1] == 0xD9)
+}
+
 /// Analyze JPEG quality by inspecting DQT (Define Quantization Table) markers.
 ///
 /// # Errors
@@ -429,6 +447,7 @@ pub fn analyze_jpeg_quality(data: &[u8]) -> Result<JpegQualityAnalysis, String> 
     };
 
     let is_high_quality_original = final_quality >= 90 && is_standard_table && confidence >= 0.95;
+    let is_complete = is_jpeg_complete(data);
 
     Ok(JpegQualityAnalysis {
         estimated_quality: final_quality,
@@ -440,6 +459,7 @@ pub fn analyze_jpeg_quality(data: &[u8]) -> Result<JpegQualityAnalysis, String> 
         chrominance_quality: chroma_estimate.as_ref().map(|c| c.quality),
         quality_description,
         is_high_quality_original,
+        is_complete,
         encoder_hint,
     })
 }

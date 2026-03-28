@@ -893,6 +893,11 @@ pub fn convert_jpeg_to_jxl(
         return Ok(ConversionResult::skipped_duplicate(input));
     }
 
+    // Check for corruption early
+    if !is_jpeg_complete(&std::fs::read(input).unwrap_or_default()) {
+        return Err(ImgQualityError::ConversionError("JPEG is truncated".to_string()));
+    }
+
     // Check for UltraHDR JPEG and skip conversion
     if shared_utils::image_jpeg_analysis::is_ultra_hdr_jpeg_file(input) {
         shared_utils::progress_mode::emit_stderr(&format!(
@@ -1024,6 +1029,17 @@ pub fn convert_jpeg_to_jxl(
         || stderr.contains("Corrupt JPEG")
         || stderr.contains("Premature end")
     {
+        // For truncated JPEGs, the ImageMagick fallback often "repairs" them but results in
+        // large JXL files that we eventually discard. We skip fallback if it's incomplete.
+        if !is_jpeg_complete(&std::fs::read(input).unwrap_or_default()) {
+            shared_utils::progress_mode::emit_stderr(
+                "   ⚠️  [Corruption] JPEG file is truncated (missing EOI), skipping expensive fallback.",
+            );
+            return Err(ImgQualityError::ConversionError(format!(
+                "JPEG is truncated and cjxl bitstream reconstruction failed: {stderr}"
+            )));
+        }
+
         match shared_utils::jxl_utils::try_imagemagick_fallback(
             input,
             &temp_output,
