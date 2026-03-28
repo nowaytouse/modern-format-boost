@@ -225,13 +225,19 @@ pub fn explore_with_gpu_coarse_search(
         // [Optimization] GIF "Lossless-First" (Reverse Exploration)
         // GIFs (8-bit palette) are extremely compressible. CRF 0.0 is often < original size.
         // Starting at 0.0 allows 1-pass success for the vast majority of cases in ultimate mode.
+        // We only apply this if the GIF isn't excessively long to avoid huge first pass.
         if ultimate_mode {
-            crate::log_eprintln!(
-                "   {}🚀 GIF Lossless-First Path: Probing CRF 0.0 for maximum efficiency{}",
-                crate::modern_ui::colors::BRIGHT_GREEN,
-                RESET
-            );
-            actual_initial_crf = 0.0;
+            if is_gif_magic {
+                crate::log_eprintln!(
+                    "   {}🚀 GIF Lossless-First Path: Probing CRF 0.0 for maximum efficiency{}",
+                    crate::modern_ui::colors::BRIGHT_GREEN,
+                    RESET
+                );
+                actual_initial_crf = 0.0;
+            } else if duration < LONG_VIDEO_THRESHOLD_SECS {
+                crate::verbose_eprintln!("   🚀 Short video branch: Probing CRF 0.0 in Phase 1");
+                actual_initial_crf = 0.0;
+            }
         }
     }
 
@@ -1819,6 +1825,23 @@ fn cpu_fine_tune_from_gpu_boundary(
             if size_cache.contains_key(test_crf) {
                 test_crf -= current_step;
                 continue;
+            }
+
+            if test_crf <= 0.0 {
+                test_crf = 0.0;
+
+                // [Optimization] CRF 0.0 Safety Gate for Long Videos
+                // Lossless (0.0) encoding is exponentially heavier and bitrates can explode on natural long videos.
+                // We only allow probing 0.0 if the search has already reached a high-quality baseline (CRF < 2.0).
+                if duration >= LONG_VIDEO_THRESHOLD_SECS && !input_is_animated_image_like {
+                    if last_good_crf > 2.0 {
+                        crate::log_eprintln!(
+                            "   {} 🚪 Stop Search: Long video ({:.1}s) detected. Current best CRF ({:.1}) is too far from lossless boundary. Skipping CRF 0.0 probe to save time.{}",
+                            BRIGHT_YELLOW, duration, last_good_crf, RESET
+                        );
+                        break;
+                    }
+                }
             }
 
             let size = encode_cached(test_crf, &mut size_cache)?;
