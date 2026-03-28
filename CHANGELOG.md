@@ -8,6 +8,7 @@ All notable changes to this project will be documented in this file.
 ## [0.11.1] - 2026-03-28
 
 #### 🛡️ Error Architecture & Reporting
+- **Clarified Failure Logs**: Enhanced image conversion failure messages (e.g., for truncated JPEGs) to explicitly state that the original file was preserved and conversion was skipped, preventing confusion about "Critical" status.
 - **Strict Error Categorization**: Refactored the `UnifiedError` module to explicitly distinguish between **Fatal** (abort), **Recoverable** (fail & continue), and **Optional** (skip).
 - **Refined Skip Logic (No Gain)**: Updated the system to categorize **CompressionFailed** (output >= input size) as **Optional** (⏭️) rather than **Recoverable** (❌). This ensures that files that do not benefit from compression are correctly reported as skips in the summary, preventing "No Gain" files from cluttering error logs.
 - **Contextual Anomaly Tracking**: Introduced and refined the `ResultAnomaly` error variant to capture upstream data inconsistencies (e.g., `ffprobe` returning `N/A`) with operation context for clearer diagnostics.

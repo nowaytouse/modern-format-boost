@@ -1099,7 +1099,7 @@ fn auto_convert_directory(
                                 } else {
                                     shared_utils::log_auto_error!(
                                         "Image conversion",
-                                        "Failed {}: {}",
+                                        "Failed {}: {}. Preserved original (Skipped conversion).",
                                         path.display(),
                                         e
                                     );
