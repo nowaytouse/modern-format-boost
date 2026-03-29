@@ -18,7 +18,9 @@ All notable changes to this project will be documented in this file.
   - Implemented a training data review system (`ingest-samples` CLI) to populate the active learning database from curated sample sets.
   - Successfully integrated the intelligence engine into the image detection module to assist heuristic quality analysis.
 - **Hardened Transparency Handling**: Enforced `premultiply=inplace=1` across the global video pipeline for all transparent formats (WebP, GIF, AVIF, JXL) to prevent background artifact spill during video conversion.
+- **Comprehensive Dependency Upgrade**: Upgraded all project dependencies to their latest compatible and incompatible versions (e.g., `jpegxl-rs` v0.14+), ensuring the latest security patches and performance optimizations.
 - **Quality & Stability**: Achieved a 100% clean baseline (0 warnings, 0 errors) across the workspace using the `check_all.py` quality suite.
+- **Fixed Unit Tests**: Resolved broken regression tests in `shared_utils` following the constant cleanup and threshold simplification.
 
 #### 📚 Documentation & Research
 
