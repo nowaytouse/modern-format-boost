@@ -6,6 +6,20 @@ All notable changes to this project will be documented in this file.
 
 ## [0.11.1] - 2026-03-29
 
+#### 🎨 Color Fidelity & Content Intelligence (Meme Score v4)
+
+- **Fixed Hidden Color Accuracy Issues**: Implemented a proactive color metadata injection system. For sources without embedded color profiles (common in raw AVIF/WebP), the pipeline now explicitly assigns standard BT.709/sRGB (`nclx`) parameters to the FFmpeg filter chain, preventing players and renderers from misinterpreting the pixel data and causing yellowish/darkened shifts.
+- **Transparency-Linked Color Corrections (Alpha Pipeline Integration)**: Resolved a critical "dirty background" artifact where transparent areas of the source media would bleed underlying uninitialized color data (e.g., brownish-yellow hues) into the converted video or GIF.
+  - Developed an `alphamerge` pre-conversion pipeline to accurately reconstruct RGBA from multi-stream AVIF.
+  - Enforced a `premultiply=inplace=1` composite filter globally for all transparent sources to ensure clean blending against black backgrounds.
+- **Enhanced Meme Scoring System (v4)**:
+  - Shifted from keyword-based directory scoring to a multi-dimensional KNN-based **"Content Value"** inference engine.
+  - Integrated `aspect_ratio` and `pixel_density` as primary decision weights to identify low-value screenshots and memes.
+  - Implemented a training data review system (`ingest-samples` CLI) to populate the active learning database from curated sample sets.
+  - Successfully integrated the intelligence engine into the image detection module to assist heuristic quality analysis.
+- **Hardened Transparency Handling**: Enforced `premultiply=inplace=1` across the global video pipeline for all transparent formats (WebP, GIF, AVIF, JXL) to prevent background artifact spill during video conversion.
+- **Quality & Stability**: Achieved a 100% clean baseline (0 warnings, 0 errors) across the workspace using the `check_all.py` quality suite.
+
 #### 📚 Documentation & Research
 
 - **JPEG XL Distance Precision Study**: Published comprehensive research on cjxl `--distance` parameter precision limits and equivalence boundaries.

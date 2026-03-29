@@ -63,6 +63,15 @@ enum Commands {
         #[arg(value_name = "INPUT")]
         input: PathBuf,
     },
+
+    #[command(
+        name = "ingest-samples",
+        about = "Batch ingest unannotated GIF samples into SQLite database for Active Learning"
+    )]
+    IngestSamples {
+        #[arg(value_name = "INPUT_DIR")]
+        input: PathBuf,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -259,6 +268,25 @@ fn main() -> anyhow::Result<()> {
             println!("💡 Target: {}", strategy.target.as_str());
             println!("📝 Reason: {}", strategy.reason);
             println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        }
+
+        Commands::IngestSamples { input } => {
+            if !input.is_dir() {
+                shared_utils::log_eprintln!("❌ Input path must be a directory");
+                std::process::exit(1);
+            }
+            println!("📥 Ingesting GIF samples from: {}", input.display());
+            match shared_utils::gif_value_db::batch_ingest_samples(&input) {
+                Ok(count) => {
+                    println!(
+                        "✅ Successfully ingested {count} samples into SQLite database"
+                    );
+                }
+                Err(e) => {
+                    shared_utils::log_eprintln!("❌ Failed to ingest samples: {e}");
+                    std::process::exit(1);
+                }
+            }
         }
     }
 

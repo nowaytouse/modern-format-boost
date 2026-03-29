@@ -8,7 +8,6 @@ import subprocess
 import shutil
 import time
 import fcntl
-import os
 from pathlib import Path
 
 # ANSI Colors
@@ -72,12 +71,14 @@ def show_stats(cache_dir, db_file, log_dir, mfb_progress_dir):
     if mfb_progress_dir.is_dir():
         prog_size = get_dir_size(mfb_progress_dir)
         print(f"   🔄 Progress:  {DIM}{prog_size}{RESET}")
-    
+
     lock_dir = Path.home() / ".modern_format_boost" / "locks"
     if lock_dir.is_dir():
         lock_count = len(list(lock_dir.glob("*.lock")))
         if lock_count > 0:
-            print(f"   🔒 Session Locks: {BOLD}{YELLOW}{lock_count} active/stale{RESET}")
+            print(
+                f"   🔒 Session Locks: {BOLD}{YELLOW}{lock_count} active/stale{RESET}"
+            )
     print("")
 
 
@@ -104,7 +105,9 @@ def main():
     print("   - All STALE directory locks (Active locks will be skipped)")
     print("")
 
-    confirm = input(f"   {BOLD}Type 'yes' to confirm cleanup (yes/N) [Default: N]: {RESET}").strip()
+    confirm = input(
+        f"   {BOLD}Type 'yes' to confirm cleanup (yes/N) [Default: N]: {RESET}"
+    ).strip()
     if not confirm or confirm.lower() != "yes":
         print(f"\n{YELLOW}🚫 Cleanup cancelled by user.{RESET}")
         print(f"{DIM}   No action taken. Returning to menu...{RESET}")
@@ -163,14 +166,16 @@ def main():
                 f.close()
                 lock_file.unlink()
                 deleted_locks += 1
-            except (IOError, OSError):
+            except OSError:
                 # Lock is held by another process
                 active_locks += 1
-        
+
         if deleted_locks > 0:
             print(f"   {GREEN}✅ {deleted_locks} stale locks purged{RESET}")
         if active_locks > 0:
-            print(f"   {YELLOW}ℹ️  {active_locks} active sessions skipped (protected){RESET}")
+            print(
+                f"   {YELLOW}ℹ️  {active_locks} active sessions skipped (protected){RESET}"
+            )
 
     print(f"\n{GREEN}✅ Cleanup Complete{RESET}\n")
     print(f"{DIM}Press Enter to return to menu...{RESET}")

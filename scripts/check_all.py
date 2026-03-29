@@ -45,9 +45,7 @@ def _has_cargo_sub_internal(sub: str) -> bool:
         return False
 
 
-def has_command(
-    cmd: str, hint_pkg: str | None = None, verbose: bool = False
-) -> bool:
+def has_command(cmd: str, hint_pkg: str | None = None, verbose: bool = False) -> bool:
     """UI wrapper for command check, preserves hints regardless of cache."""
     found = _has_command_internal(cmd)
     if not found and verbose:
@@ -141,11 +139,15 @@ def check_bundle_metadata(tracker: Tracker) -> bool:
 
     try:
         # 1. Get Workspace Version
-        with open(cargo_path, "r", encoding="utf-8") as f:
+        with open(cargo_path, encoding="utf-8") as f:
             cargo_content = f.read()
-            version_match = re.search(r'\[workspace\.package\]\s*version\s*=\s*"([^"]+)"', cargo_content)
+            version_match = re.search(
+                r'\[workspace\.package\]\s*version\s*=\s*"([^"]+)"', cargo_content
+            )
             if not version_match:
-                raise ValueError("Could not find [workspace.package] version in Cargo.toml")
+                raise ValueError(
+                    "Could not find [workspace.package] version in Cargo.toml"
+                )
             workspace_version = version_match.group(1)
 
         # 2. Parse Info.plist
@@ -158,11 +160,21 @@ def check_bundle_metadata(tracker: Tracker) -> bool:
 
         errors = []
         if bundle_version != workspace_version:
-            errors.append(f"Version mismatch! Cargo.toml: {workspace_version} vs Info.plist: {bundle_version}")
+            errors.append(
+                f"Version mismatch! Cargo.toml: {workspace_version} vs Info.plist: {bundle_version}"
+            )
         if executable != "Modern Format Boost":
-            errors.append(f"Executable name mismatch! Expected 'Modern Format Boost', got '{executable}'")
-        
-        binary_path = root / "Modern Format Boost.app" / "Contents" / "MacOS" / "Modern Format Boost"
+            errors.append(
+                f"Executable name mismatch! Expected 'Modern Format Boost', got '{executable}'"
+            )
+
+        binary_path = (
+            root
+            / "Modern Format Boost.app"
+            / "Contents"
+            / "MacOS"
+            / "Modern Format Boost"
+        )
         if not binary_path.exists():
             errors.append(f"App binary wrapper missing at {binary_path}")
 
@@ -176,10 +188,12 @@ def check_bundle_metadata(tracker: Tracker) -> bool:
             return False
 
         if console:
-            console.print(f"  [green]✅ Verified: Version {workspace_version} aligned[/green]")
+            console.print(
+                f"  [green]✅ Verified: Version {workspace_version} aligned[/green]"
+            )
         else:
             print(f"  ✅ Verified: Version {workspace_version} aligned")
-        
+
         tracker.passed += 1
         return True
 
@@ -314,9 +328,14 @@ def main():
 
     # --- 1. Environment Guard ---
     try:
-        current_branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"], text=True).strip()
+        current_branch = subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"], text=True
+        ).strip()
         if not args.allow_non_nightly and current_branch != args.branch:
-            print(f"Fatal: Required branch '{args.branch}', but current is '{current_branch}'. Use --allow-non-nightly or --branch <name>.", file=sys.stderr)
+            print(
+                f"Fatal: Required branch '{args.branch}', but current is '{current_branch}'. Use --allow-non-nightly or --branch <name>.",
+                file=sys.stderr,
+            )
             sys.exit(2)
     except Exception:
         pass
@@ -542,9 +561,27 @@ def main():
         table.add_column("Details", style="dim")
 
         table.add_row("✅ Passed", str(tracker.passed), "[green]All clear[/green]")
-        table.add_row("❌ Failed", str(tracker.failed), f"[red]{escape(', '.join(tracker.failed_steps))}[/red]" if tracker.failed_steps else "-")
-        table.add_row("⚠️  Warned", str(tracker.warned), f"[yellow]{escape(', '.join(tracker.warned_steps))}[/yellow]" if tracker.warned_steps else "-")
-        table.add_row("⏭️  Skipped", str(tracker.skipped), f"[blue]{len(tracker.skipped_steps)} items[/blue]" if tracker.skipped_steps else "-")
+        table.add_row(
+            "❌ Failed",
+            str(tracker.failed),
+            f"[red]{escape(', '.join(tracker.failed_steps))}[/red]"
+            if tracker.failed_steps
+            else "-",
+        )
+        table.add_row(
+            "⚠️  Warned",
+            str(tracker.warned),
+            f"[yellow]{escape(', '.join(tracker.warned_steps))}[/yellow]"
+            if tracker.warned_steps
+            else "-",
+        )
+        table.add_row(
+            "⏭️  Skipped",
+            str(tracker.skipped),
+            f"[blue]{len(tracker.skipped_steps)} items[/blue]"
+            if tracker.skipped_steps
+            else "-",
+        )
 
         console.print(table)
 

@@ -337,7 +337,7 @@ def get_unique_output_path(base_path: Path) -> Path:
     """
     if not base_path.exists():
         return base_path
-    
+
     parent = base_path.parent
     name = base_path.name
     counter = 1
@@ -347,8 +347,10 @@ def get_unique_output_path(base_path: Path) -> Path:
             return new_path
         counter += 1
 
+
 # Global lock file object to prevent garbage collection and early release
 _GLOBAL_LOCK_FILE = None
+
 
 def acquire_global_lock(dir_path: str):
     """
@@ -362,37 +364,42 @@ def acquire_global_lock(dir_path: str):
             [str(IMGQUALITY_HEVC), "path-hash", dir_path],
             capture_output=True,
             text=True,
-            check=True
+            check=True,
         )
         lock_hash = result.stdout.strip()
-        
+
         # 2. Prepare lock directory
         lock_dir = Path.home() / ".modern_format_boost" / "locks"
         lock_dir.mkdir(parents=True, exist_ok=True)
-        
+
         lock_file_path = lock_dir / f"{lock_hash}.lock"
-        
+
         # 3. Open and flock
         _GLOBAL_LOCK_FILE = open(lock_file_path, "w")
         import fcntl
+
         try:
             # Non-blocking exclusive lock
             fcntl.flock(_GLOBAL_LOCK_FILE, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except (IOError, OSError):
+        except OSError:
             # Lock is already held
             print(f"\n{RED}❌ ERROR: Directory Already In Use!{RESET}")
             print(f"   Target: {DIM}{dir_path}{RESET}")
-            print(f"   {YELLOW}Another instance of Modern Format Boost is currently processing this folder.{RESET}")
+            print(
+                f"   {YELLOW}Another instance of Modern Format Boost is currently processing this folder.{RESET}"
+            )
             print(f"   {DIM}Please wait for the other task to complete.{RESET}")
             sys.exit(3)
-            
+
     except Exception:
         # If hash tool fails, we fall back to standard execution which will catch locks later
         pass
 
+
 def check_directory_exclusion(dir_path: str):
     # This is now replaced by the more robust acquire_global_lock
     acquire_global_lock(dir_path)
+
 
 def safety_check():
     try:
@@ -543,7 +550,11 @@ def select_mode():
                     if mode_sub_state == 0:
                         OUTPUT_MODE = "adjacent"
                         tdir = Path(TARGET_DIR).resolve()
-                        OUTPUT_DIR = str(get_unique_output_path(tdir.parent / (tdir.name + "_optimized")))
+                        OUTPUT_DIR = str(
+                            get_unique_output_path(
+                                tdir.parent / (tdir.name + "_optimized")
+                            )
+                        )
                         print(f"\n{GREEN}✅ ADJACENT MODE SELECTED{RESET}")
                         print(f"   Output: {DIM}{OUTPUT_DIR}{RESET}")
                         print(f"   {DIM}Creating directory structure...{RESET}")
@@ -1106,13 +1117,13 @@ def main():
             print()
 
     safety_check()
-    
+
     select_mode()
-    
+
     # Mutex logic: Only enforce exclusive locking if we are modifying original files (In-Place)
     if OUTPUT_MODE == "in_place":
         acquire_global_lock(str(TARGET_DIR))
-    
+
     count_files()
 
     if IMG_COUNT > 0 or VID_COUNT > 0:

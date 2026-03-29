@@ -34,6 +34,8 @@ pub struct FfprobeStream {
     #[serde(default)]
     pub color_primaries: Option<String>,
     #[serde(default)]
+    pub color_range: Option<String>,
+    #[serde(default)]
     pub pix_fmt: Option<String>,
     #[serde(default)]
     pub bits_per_raw_sample: Option<String>,
@@ -60,6 +62,7 @@ pub struct ColorInfo {
     pub color_space: Option<String>,
     pub color_transfer: Option<String>,
     pub color_primaries: Option<String>,
+    pub color_range: Option<String>,
     pub pix_fmt: Option<String>,
     pub bit_depth: Option<u8>,
     /// HDR10 mastering display string (ffmpeg format)
@@ -338,6 +341,10 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
         .color_primaries
         .clone()
         .filter(|s| !s.is_empty() && s != "unknown");
+    let color_range = stream
+        .color_range
+        .clone()
+        .filter(|s| !s.is_empty() && s != "unknown");
 
     let mut is_dolby_vision = false;
     let mut is_hdr10_plus = false;
@@ -383,6 +390,7 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
         color_space,
         color_transfer,
         color_primaries,
+        color_range,
         pix_fmt: stream.pix_fmt.clone(),
         bit_depth,
         mastering_display,

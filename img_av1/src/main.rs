@@ -746,11 +746,16 @@ fn dispatch_animated_conversion(
         shared_utils::probe_video(input).map_or(true, |p| {
             shared_utils::gif_meta_from_probe_with_path(&p, analysis.file_size, input).is_none_or(
                 |mut meta| {
-                    if let Ok((pal, exts)) = shared_utils::scan_gif_headers(input) {
+                    if let Ok((pal, exts, has_transparency, variation, delay_variation)) =
+                        shared_utils::scan_gif_headers(input)
+                    {
                         meta.palette_size = pal;
                         meta.app_extensions = exts;
+                        meta.has_transparency = has_transparency;
+                        meta.frame_payload_variation = variation;
+                        meta.frame_delay_variation = delay_variation;
                     }
-                    shared_utils::should_keep_as_gif(&meta)
+                    shared_utils::should_keep_as_gif_with_path(&meta, Some(input))
                 },
             )
         })

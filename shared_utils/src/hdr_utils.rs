@@ -76,22 +76,48 @@ pub fn color_info_to_cicp(info: &ColorInfo) -> Option<String> {
 /// Convert `ColorInfo` to `FFmpeg` color parameters for video encoding.
 /// Returns a vector of `FFmpeg` arguments: ["-colorspace", "bt2020nc", "-`color_trc`", "smpte2084", ...]
 #[must_use]
-pub fn color_info_to_ffmpeg_args(info: &ColorInfo) -> Vec<String> {
+pub fn color_info_to_ffmpeg_args(info: &ColorInfo, assume_srgb: bool) -> Vec<String> {
     let mut args = Vec::new();
+    let mut has_space = false;
+    let mut has_trc = false;
+    let mut has_primaries = false;
 
     if let Some(ref colorspace) = info.color_space {
         args.push("-colorspace".to_string());
         args.push(colorspace.clone());
+        has_space = true;
     }
 
     if let Some(ref trc) = info.color_transfer {
         args.push("-color_trc".to_string());
         args.push(trc.clone());
+        has_trc = true;
     }
 
     if let Some(ref primaries) = info.color_primaries {
         args.push("-color_primaries".to_string());
         args.push(primaries.clone());
+        has_primaries = true;
+    }
+
+    if let Some(ref range) = info.color_range {
+        args.push("-color_range".to_string());
+        args.push(range.clone());
+    }
+
+    if assume_srgb {
+        if !has_space {
+            args.push("-colorspace".to_string());
+            args.push("bt709".to_string());
+        }
+        if !has_trc {
+            args.push("-color_trc".to_string());
+            args.push("iec61966-2-1".to_string());
+        }
+        if !has_primaries {
+            args.push("-color_primaries".to_string());
+            args.push("bt709".to_string());
+        }
     }
 
     args
@@ -387,7 +413,7 @@ mod tests {
             color_space: Some("bt2020nc".to_string()),
             ..Default::default()
         };
-        let args = color_info_to_ffmpeg_args(&info);
+        let args = color_info_to_ffmpeg_args(&info, false);
         assert_eq!(
             args,
             vec![

@@ -66,6 +66,21 @@ pub struct GifMeta {
     /// Optional: application-extension vendor strings found in the GIF stream
     /// (e.g. `"NETSCAPE2.0"`, `"GIPHY    "`, `"STICKER  "`).
     pub app_extensions: Option<Vec<String>>,
+    /// True when at least one frame advertises transparent pixels.
+    pub has_transparency: bool,
+    /// Frame payload size coefficient of variation estimated from GIF sub-blocks.
+    pub frame_payload_variation: Option<f64>,
+    /// Frame delay coefficient of variation estimated from GCE delay fields.
+    pub frame_delay_variation: Option<f64>,
+    /// Original extension of the source asset (useful when the scorer is reused
+    /// for modern animated formats that may be transcoded to GIF).
+    pub source_extension: Option<String>,
+    /// Last few parent directory names from the source path.
+    pub parent_directories: Option<Vec<String>>,
+    /// True when the source carries an embedded ICC profile.
+    pub has_embedded_icc: bool,
+    /// True when probe metadata indicates non-sRGB / wide-gamut / HDR style colour handling.
+    pub has_complex_color_profile: bool,
 }
 
 /// Three-way verdict used internally before falling back to weighted scoring.
@@ -82,8 +97,8 @@ enum VetoVerdict {
 pub struct MemeScore {
     /// Combined score in [0.0, 1.0].  ≥ 0.60 → keep; ≤ 0.40 → convert; middle → keep.
     pub total: f64,
-    /// Sharpness proxy dimension score.
-    pub sharpness: f64,
+    /// Compression simplicity score.
+    pub compression: f64,
     /// Resolution dimension score.
     pub resolution: f64,
     /// Duration dimension score.
@@ -98,8 +113,22 @@ pub struct MemeScore {
     pub loop_frequency_score: f64,
     /// Palette-entropy score (0.5 when `palette_size` is unavailable).
     pub palette_score: f64,
-    /// Raw bytes-per-pixel value (diagnostic only).
-    pub bytes_per_pixel: f64,
+    /// Transparency score.
+    pub transparency_score: f64,
+    /// Frame payload variance score.
+    pub frame_variance_score: f64,
+    /// Timing irregularity / timing preservation score.
+    pub timing_value_score: f64,
+    /// Directory-context score (meme-ish parent folder names).
+    pub directory_score: f64,
+    /// Estimated tolerance for lossy simplification. Lower = preserve more.
+    pub loss_tolerance_score: f64,
+    /// Sparse slideshow-like timing penalty converted into meme-likelihood score.
+    pub cadence_score: f64,
+    /// Spatial bytes-per-pixel value (diagnostic only).
+    pub spatial_bpp: f64,
+    /// Temporal bytes-per-pixel value (diagnostic only).
+    pub temporal_bpp: f64,
 }
 
 // ── Internal filename analysis ────────────────────────────────────────────────
@@ -125,9 +154,13 @@ struct FilenameAnalysis {
 
 // ── Veto thresholds ───────────────────────────────────────────────────────────
 /// bytes/pixel above this value → video-like content (veto: convert)
-const BPP_HIGH: f64 = 0.60;
+const TEMPORAL_BPP_HIGH: f64 = 0.60;
 /// bytes/pixel below this value → highly compressed meme (veto: keep)
-const BPP_LOW: f64 = 0.03;
+const TEMPORAL_BPP_LOW: f64 = 0.03;
+/// large overall file density for a given canvas size → video-like.
+const SPATIAL_BPP_HIGH: f64 = 80.0;
+/// low overall file density for a given canvas size → meme-like.
+const SPATIAL_BPP_LOW: f64 = 2.0;
 /// pixel count above this → 1080p+
 const PIXELS_1080P: f64 = (1920 * 1080) as f64;
 /// pixel count below this → very small canvas (≤200×200)
@@ -139,9 +172,9 @@ const DURATION_ULTRA_SHORT: f64 = 0.7;
 
 // ── Confidence thresholds ─────────────────────────────────────────────────────
 /// Score above this → high-confidence meme → keep
-const CONF_KEEP: f64 = 0.60;
+const CONF_KEEP: f64 = 0.63;
 /// Score below this → high-confidence video → convert
-const CONF_CONVERT: f64 = 0.40;
+const CONF_CONVERT: f64 = 0.47;
 
 // ── Known meme-platform app-extension prefixes ────────────────────────────────
 /// If any app-extension vendor string *starts with* one of these, the GIF
@@ -153,6 +186,23 @@ const MEME_PLATFORM_PREFIXES: &[&str] = &[
     "GIPHY", // unpadded variants seen in the wild
     "TENOR",
     "STICKER",
+];
+
+const MEME_DIRECTORY_KEYWORDS: &[&str] = &[
+    "meme",
+    "memes",
+    "sticker",
+    "stickers",
+    "emoji",
+    "emojis",
+    "reaction",
+    "reactions",
+    "表情包",
+    "表情",
+    "贴纸",
+    "斗图",
+    "梗图",
+    "梗",
 ];
 
 // ── Helper: clamp-normalise ───────────────────────────────────────────────────
@@ -361,24 +411,93 @@ fn score_loop_frequency(duration_secs: f64, frame_count: u64) -> f64 {
         0.2 // Very slow loop (>30s) → definitely video
     };
 
-    // Low frame density bonus (simple animations are more meme-like)
-    let density_bonus: f64 = if frame_density < 5.0 {
-        0.2 // Very simple animation
-    } else if frame_density < 10.0 {
-        0.1 // Simple animation
+    // Sparse frame cadence often means slideshow / sampled clip, not sticker.
+    let density_adjustment: f64 = if frame_density < 1.2 {
+        -0.35
+    } else if frame_density < 3.0 {
+        -0.20
+    } else if frame_density < 6.0 {
+        -0.08
     } else {
-        0.0 // Complex animation
+        0.0
     };
 
-    (loop_score + density_bonus).min(1.0)
+    (loop_score + density_adjustment).clamp(0.0, 1.0)
+}
+
+fn score_sparse_cadence(duration_secs: f64, frame_count: u64) -> f64 {
+    if duration_secs <= 0.01 || frame_count <= 1 {
+        return 0.5;
+    }
+
+    let avg_frame_gap = duration_secs / frame_count as f64;
+    let frame_density = frame_count as f64 / duration_secs.max(0.01);
+
+    if duration_secs >= 2.0 && frame_count <= 24 && avg_frame_gap >= 0.25 {
+        return 0.05;
+    }
+    if duration_secs >= 1.5 && frame_density <= 3.0 {
+        return 0.15;
+    }
+    if duration_secs <= 1.2 && frame_density >= 8.0 {
+        return 0.95;
+    }
+    if duration_secs <= 2.0 && frame_density >= 6.0 {
+        return 0.80;
+    }
+
+    0.5
+}
+
+fn score_directory_context(parent_directories: Option<&[String]>) -> f64 {
+    let Some(parts) = parent_directories else {
+        return 0.5;
+    };
+
+    let has_meme_hint = parts.iter().rev().take(3).any(|part| {
+        let lower = part.to_lowercase();
+        MEME_DIRECTORY_KEYWORDS.iter().any(|kw| lower.contains(kw))
+    });
+
+    if has_meme_hint {
+        1.0
+    } else {
+        0.5
+    }
+}
+
+fn score_transparency(has_transparency: bool) -> f64 {
+    if has_transparency {
+        1.0
+    } else {
+        0.02
+    }
+}
+
+fn score_frame_variation(frame_payload_variation: Option<f64>) -> f64 {
+    let Some(variation) = frame_payload_variation else {
+        return 0.5;
+    };
+    normalize(variation, 0.08, 0.85)
+}
+
+fn score_timing_value(frame_delay_variation: Option<f64>, frame_count: u64) -> f64 {
+    let Some(variation) = frame_delay_variation else {
+        return if frame_count <= 1 { 0.0 } else { 0.35 };
+    };
+    normalize(variation, 0.05, 1.20)
 }
 
 // ── Veto rules ────────────────────────────────────────────────────────────────
 
 /// Apply veto rules based on extreme metadata values.
 /// Returns `KeepGif` / `ConvertVideo` for clear-cut cases; `Undecided` otherwise.
-fn apply_veto(meta: &GifMeta, bytes_per_pixel: f64) -> VetoVerdict {
+fn apply_veto(meta: &GifMeta, temporal_bpp: f64, spatial_bpp: f64) -> VetoVerdict {
     let pixel_count = (u64::from(meta.width) * u64::from(meta.height)) as f64;
+
+    if meta.has_complex_color_profile || meta.has_embedded_icc {
+        return VetoVerdict::ConvertVideo;
+    }
 
     // ── Hard KEEP via meme-platform signature ─────────────────────────────
     // If the GIF carries an application-extension block from a known meme CDN,
@@ -392,28 +511,32 @@ fn apply_veto(meta: &GifMeta, bytes_per_pixel: f64) -> VetoVerdict {
     }
 
     // ── Hard CONVERT vetos ────────────────────────────────────────────────
-    if bytes_per_pixel > BPP_HIGH && pixel_count >= PIXELS_1080P {
+    if temporal_bpp > TEMPORAL_BPP_HIGH && pixel_count >= PIXELS_1080P {
         return VetoVerdict::ConvertVideo;
     }
     if meta.duration_secs > 15.0 && pixel_count >= PIXELS_1080P {
         return VetoVerdict::ConvertVideo;
     }
+    if spatial_bpp > SPATIAL_BPP_HIGH && !meta.has_transparency {
+        return VetoVerdict::ConvertVideo;
+    }
 
     // ── Hard KEEP vetos ───────────────────────────────────────────────────
-    if bytes_per_pixel < BPP_LOW && pixel_count < PIXELS_SMALL {
+    if temporal_bpp < TEMPORAL_BPP_LOW && pixel_count < PIXELS_SMALL {
         return VetoVerdict::KeepGif;
     }
     if pixel_count <= PIXELS_TINY
         && meta.duration_secs <= DURATION_ULTRA_SHORT
-        && bytes_per_pixel <= 0.10
+        && temporal_bpp <= 0.10
         && meta.duration_secs > 0.01
     {
         return VetoVerdict::KeepGif;
     }
-    if meta.duration_secs <= 1.0 && meta.duration_secs > 0.01 {
-        return VetoVerdict::KeepGif;
-    }
-    if meta.frame_count > 0 && meta.frame_count <= 5 && bytes_per_pixel <= 0.20 {
+    if meta.has_transparency
+        && pixel_count <= PIXELS_SMALL
+        && meta.duration_secs <= 1.2
+        && meta.frame_count <= 24
+    {
         return VetoVerdict::KeepGif;
     }
 
@@ -443,11 +566,14 @@ fn apply_veto(meta: &GifMeta, bytes_per_pixel: f64) -> VetoVerdict {
 pub fn score_gif(meta: &GifMeta) -> MemeScore {
     let pixels = (u64::from(meta.width) * u64::from(meta.height)).max(1);
     let total_frames = meta.frame_count.max(1);
-    let bytes_per_pixel = meta.file_size_bytes as f64 / (pixels * total_frames) as f64;
+    let spatial_bpp = meta.file_size_bytes as f64 / pixels as f64;
+    let temporal_bpp = meta.file_size_bytes as f64 / (pixels * total_frames) as f64;
 
     // ── Per-dimension scores ──────────────────────────────────────────────
 
-    let sharpness_score = 1.0 - normalize(bytes_per_pixel, BPP_LOW, BPP_HIGH);
+    let temporal_density_score = 1.0 - normalize(temporal_bpp, TEMPORAL_BPP_LOW, TEMPORAL_BPP_HIGH);
+    let spatial_density_score = 1.0 - normalize(spatial_bpp, SPATIAL_BPP_LOW, SPATIAL_BPP_HIGH);
+    let compression_score = 0.7 * temporal_density_score + 0.3 * spatial_density_score;
     let pixel_count = pixels as f64;
     let resolution_score = 1.0 - normalize(pixel_count, PIXELS_SMALL, PIXELS_1080P);
     let duration_score = 1.0 - normalize(meta.duration_secs, 1.0, 10.0);
@@ -460,15 +586,23 @@ pub fn score_gif(meta: &GifMeta) -> MemeScore {
     };
     let aspect_score = if (0.75..=1.35).contains(&ratio) {
         1.0
+    } else if (0.68..=0.73).contains(&ratio) || (1.37..=1.48).contains(&ratio) {
+        0.05
+    } else if (0.56..=0.66).contains(&ratio) || (1.52..=1.85).contains(&ratio) {
+        0.18
     } else if !(0.5..=2.0).contains(&ratio) {
         0.1
     } else {
-        0.6
+        0.45
     };
 
     let loop_frequency_score = score_loop_frequency(meta.duration_secs, meta.frame_count);
-
+    let cadence_score = score_sparse_cadence(meta.duration_secs, meta.frame_count);
     let palette_score = score_palette(meta.palette_size).unwrap_or(0.5);
+    let transparency_score = score_transparency(meta.has_transparency);
+    let frame_variance_score = score_frame_variation(meta.frame_payload_variation);
+    let timing_value_score = score_timing_value(meta.frame_delay_variation, meta.frame_count);
+    let directory_score = score_directory_context(meta.parent_directories.as_deref());
 
     // ── Filename: classify → raw score → complexity hedging ───────────────
     let fa = analyze_filename(meta.file_name.as_deref());
@@ -486,28 +620,38 @@ pub fn score_gif(meta: &GifMeta) -> MemeScore {
     let effective_filename_score = fa.raw * (1.0 - attenuation * phys_complexity);
 
     // ── Dynamic weights ───────────────────────────────────────────────────
-    let complexity = normalize(bytes_per_pixel, BPP_LOW, BPP_HIGH);
+    let complexity = normalize(temporal_bpp, TEMPORAL_BPP_LOW, TEMPORAL_BPP_HIGH);
 
-    let w_sharpness = 0.38;
-    let w_resolution = 0.10f64.mul_add(complexity, 0.18);
-    let w_duration = 0.08f64.mul_add(complexity, 0.20);
-    let w_aspect = 0.09 * 0.3f64.mul_add(-complexity, 1.0);
+    let w_compression = 0.24;
+    let w_resolution = 0.10f64.mul_add(complexity, 0.16);
+    let w_duration = 0.08f64.mul_add(complexity, 0.16);
+    let w_aspect = 0.08 * 0.3f64.mul_add(-complexity, 1.0);
     let w_fps = 0.00;
-    let w_filename = 0.08;
-    let w_loop_freq = 0.04;
+    let w_filename = 0.05;
+    let w_loop_freq = 0.05;
     let w_palette = 0.05;
+    let w_directory = 0.06;
+    let w_cadence = 0.09;
+    let w_transparency = 0.17;
+    let w_variance = 0.09;
+    let w_timing = 0.11;
 
-    let w_sum = w_sharpness
+    let w_sum = w_compression
         + w_resolution
         + w_duration
         + w_aspect
         + w_fps
         + w_filename
         + w_loop_freq
-        + w_palette;
+        + w_palette
+        + w_directory
+        + w_cadence
+        + w_transparency
+        + w_variance
+        + w_timing;
 
     let (
-        w_sharpness,
+        w_compression,
         w_resolution,
         w_duration,
         w_aspect,
@@ -515,8 +659,13 @@ pub fn score_gif(meta: &GifMeta) -> MemeScore {
         w_filename,
         w_loop_freq,
         w_palette,
+        w_directory,
+        w_cadence,
+        w_transparency,
+        w_variance,
+        w_timing,
     ) = (
-        w_sharpness / w_sum,
+        w_compression / w_sum,
         w_resolution / w_sum,
         w_duration / w_sum,
         w_aspect / w_sum,
@@ -524,21 +673,48 @@ pub fn score_gif(meta: &GifMeta) -> MemeScore {
         w_filename / w_sum,
         w_loop_freq / w_sum,
         w_palette / w_sum,
+        w_directory / w_sum,
+        w_cadence / w_sum,
+        w_transparency / w_sum,
+        w_variance / w_sum,
+        w_timing / w_sum,
     );
 
     let total = loop_frequency_score.mul_add(
         w_loop_freq,
-        sharpness_score * w_sharpness
+        compression_score * w_compression
             + resolution_score * w_resolution
             + duration_score * w_duration
             + aspect_score * w_aspect
             + fps_score * w_fps
-            + effective_filename_score * w_filename,
+            + effective_filename_score * w_filename
+            + directory_score * w_directory
+            + cadence_score * w_cadence
+            + transparency_score * w_transparency
+            + frame_variance_score * w_variance
+            + timing_value_score * w_timing,
     ) + palette_score * w_palette;
+
+    let loss_tolerance_score = if meta.has_embedded_icc || meta.has_complex_color_profile {
+        0.0
+    } else if temporal_bpp < 0.03
+        || meta
+            .app_extensions
+            .as_deref()
+            .unwrap_or(&[])
+            .iter()
+            .any(|ext| {
+                ext.starts_with("GIPHY") || ext.starts_with("TENOR") || ext.starts_with("STICKER")
+            })
+    {
+        1.0
+    } else {
+        0.5
+    };
 
     MemeScore {
         total,
-        sharpness: sharpness_score,
+        compression: compression_score,
         resolution: resolution_score,
         duration: duration_score,
         fps: fps_score,
@@ -546,7 +722,14 @@ pub fn score_gif(meta: &GifMeta) -> MemeScore {
         filename_score: effective_filename_score,
         loop_frequency_score,
         palette_score,
-        bytes_per_pixel,
+        transparency_score,
+        frame_variance_score,
+        timing_value_score,
+        directory_score,
+        cadence_score,
+        spatial_bpp,
+        temporal_bpp,
+        loss_tolerance_score,
     }
 }
 
@@ -557,18 +740,25 @@ pub fn score_gif(meta: &GifMeta) -> MemeScore {
 /// ## Decision pipeline
 /// 1. **Veto** (app-extension CDN marker → `KeepGif`; extreme physical → convert/keep)
 /// 2. **Weighted score** with complexity-hedged filename signal
-/// 3. **Confidence interval**: ≥0.60 keep · ≤0.40 convert · middle → keep
+/// 3. **Confidence interval**: high-confidence keep / convert; middle defaults to convert
 #[must_use]
 pub fn should_keep_as_gif(meta: &GifMeta) -> bool {
-    let pixels = (u64::from(meta.width) * u64::from(meta.height)).max(1) as f64;
-    let bpp = meta.file_size_bytes as f64 / (pixels * meta.frame_count.max(1) as f64);
+    should_keep_as_gif_with_path(meta, None)
+}
 
-    match apply_veto(meta, bpp) {
+#[must_use]
+pub fn should_keep_as_gif_with_path(meta: &GifMeta, path: Option<&std::path::Path>) -> bool {
+    let pixels = (u64::from(meta.width) * u64::from(meta.height)).max(1) as f64;
+    let temporal_bpp = meta.file_size_bytes as f64 / (pixels * meta.frame_count.max(1) as f64);
+    let spatial_bpp = meta.file_size_bytes as f64 / pixels;
+
+    match apply_veto(meta, temporal_bpp, spatial_bpp) {
         VetoVerdict::KeepGif => {
             crate::progress_mode::emit_stderr(&format!(
-                "🎞️  GIF [{}] → KEEP GIF (veto: bpp={:.3} px={:.0} dur={:.1}s)",
+                "🎞️  GIF [{}] → KEEP GIF (veto: tbpp={:.3} sbpp={:.1} px={:.0} dur={:.1}s)",
                 meta.file_name.as_deref().unwrap_or("?"),
-                bpp,
+                temporal_bpp,
+                spatial_bpp,
                 pixels,
                 meta.duration_secs
             ));
@@ -576,15 +766,52 @@ pub fn should_keep_as_gif(meta: &GifMeta) -> bool {
         }
         VetoVerdict::ConvertVideo => {
             crate::progress_mode::emit_stderr(&format!(
-                "🎞️  GIF [{}] → CONVERT→VIDEO (veto: bpp={:.3} px={:.0} dur={:.1}s)",
+                "🎞️  GIF [{}] → CONVERT→VIDEO (veto: tbpp={:.3} sbpp={:.1} px={:.0} dur={:.1}s)",
                 meta.file_name.as_deref().unwrap_or("?"),
-                bpp,
+                temporal_bpp,
+                spatial_bpp,
                 pixels,
                 meta.duration_secs
             ));
             return false;
         }
         VetoVerdict::Undecided => {}
+    }
+
+    if let Some(sample_match) = crate::gif_value_db::lookup_similar_samples(meta, path) {
+        if let Some(label) = sample_match.exact_label {
+            crate::progress_mode::emit_stderr(&format!(
+                "🎞️  GIF [{}] → {} (sample-db exact match)",
+                meta.file_name.as_deref().unwrap_or("?"),
+                if label { "KEEP GIF" } else { "CONVERT→VIDEO" }
+            ));
+            return label;
+        }
+
+        if let (Some(prob), Some(mean_distance)) =
+            (sample_match.keep_probability, sample_match.mean_distance)
+        {
+            if sample_match.neighbor_count >= 4 && mean_distance <= 0.48 && prob >= 0.92 {
+                crate::progress_mode::emit_stderr(&format!(
+                    "🎞️  GIF [{}] → KEEP GIF (sample-db neighbors={} p={:.2} d={:.2})",
+                    meta.file_name.as_deref().unwrap_or("?"),
+                    sample_match.neighbor_count,
+                    prob,
+                    mean_distance
+                ));
+                return true;
+            }
+            if sample_match.neighbor_count >= 4 && mean_distance <= 0.48 && prob <= 0.08 {
+                crate::progress_mode::emit_stderr(&format!(
+                    "🎞️  GIF [{}] → CONVERT→VIDEO (sample-db neighbors={} p={:.2} d={:.2})",
+                    meta.file_name.as_deref().unwrap_or("?"),
+                    sample_match.neighbor_count,
+                    prob,
+                    mean_distance
+                ));
+                return false;
+            }
+        }
     }
 
     let s = score_gif(meta);
@@ -594,15 +821,16 @@ pub fn should_keep_as_gif(meta: &GifMeta) -> bool {
     } else if s.total <= CONF_CONVERT {
         false
     } else {
-        true // uncertain → conservative keep
+        false
     };
 
     crate::progress_mode::emit_stderr(&format!(
-        "🎞️  GIF [{}] → {} (score={:.3}) │ sharpness:{:.2} res:{:.2} dur:{:.2} name:{:.2} loop:{:.2} palette:{:.2}",
+        "🎞️  GIF [{}] → {} (score={:.3}) │ comp:{:.2} res:{:.2} dur:{:.2} alpha:{:.2} var:{:.2} timing:{:.2} name:{:.2} dir:{:.2} loop:{:.2} cadence:{:.2} palette:{:.2} tbpp:{:.3} sbpp:{:.1}",
         meta.file_name.as_deref().unwrap_or("?"),
         if keep { "KEEP GIF" } else { "CONVERT→VIDEO" },
-        s.total, s.sharpness, s.resolution, s.duration,
-        s.filename_score, s.loop_frequency_score, s.palette_score,
+        s.total, s.compression, s.resolution, s.duration, s.transparency_score,
+        s.frame_variance_score, s.timing_value_score, s.filename_score, s.directory_score, s.loop_frequency_score,
+        s.cadence_score, s.palette_score, s.temporal_bpp, s.spatial_bpp,
     ));
 
     keep
@@ -633,6 +861,13 @@ pub fn gif_meta_from_probe(
         file_name: None,
         palette_size: None,
         app_extensions: None,
+        has_transparency: false,
+        frame_payload_variation: None,
+        frame_delay_variation: None,
+        source_extension: None,
+        parent_directories: None,
+        has_embedded_icc: false,
+        has_complex_color_profile: probe.bit_depth > 8,
     })
 }
 
@@ -652,6 +887,32 @@ pub fn gif_meta_from_probe_with_path(
         .file_name()
         .and_then(|s| s.to_str())
         .map(std::string::ToString::to_string);
+    let source_extension = file_path
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(str::to_lowercase);
+    let parent_directories = file_path.parent().map(|parent| {
+        parent
+            .iter()
+            .rev()
+            .take(4)
+            .filter_map(|part| part.to_str().map(std::string::ToString::to_string))
+            .collect::<Vec<_>>()
+    });
+
+    let has_complex_color_profile = probe.bit_depth > 8
+        || probe
+            .color_space
+            .as_deref()
+            .is_some_and(|s| !matches!(s, "bt709" | "bt470bg" | "smpte170m" | "unknown"))
+        || probe
+            .color_transfer
+            .as_deref()
+            .is_some_and(|s| !matches!(s, "bt709" | "iec61966-2-1" | "srgb" | "unknown"))
+        || probe
+            .color_primaries
+            .as_deref()
+            .is_some_and(|s| !matches!(s, "bt709" | "smpte170m" | "unknown"));
 
     let duration = if probe.duration > 0.0 {
         probe.duration
@@ -670,48 +931,73 @@ pub fn gif_meta_from_probe_with_path(
         file_name,
         palette_size: None,
         app_extensions: None,
+        has_transparency: false,
+        frame_payload_variation: None,
+        frame_delay_variation: None,
+        source_extension,
+        parent_directories,
+        has_embedded_icc: has_embedded_icc_profile(file_path),
+        has_complex_color_profile,
     })
+}
+
+fn has_embedded_icc_profile(path: &std::path::Path) -> bool {
+    if which::which("exiftool").is_err() {
+        return false;
+    }
+
+    let output = std::process::Command::new("exiftool")
+        .arg("-b")
+        .arg("-ICC_Profile")
+        .arg(path)
+        .output();
+
+    matches!(output, Ok(o) if o.status.success() && !o.stdout.is_empty())
 }
 
 /// Perform a cheap byte-scan of a GIF file to extract:
 ///   - global colour-table size (from the Logical Screen Descriptor)
 ///   - application-extension vendor strings (e.g. `"NETSCAPE2.0"`, `"GIPHY    "`)
 ///
-/// The scan reads at most a few kilobytes from the file header and is
-/// intentionally allocation-light.  Returns `(palette_size, app_extensions)`.
-/// Any I/O error silently returns `(None, None)` so the caller can proceed
-/// with the ffprobe-only path.
+/// The scan reads the GIF bitstream once and extracts several cheap structural
+/// signals: palette size, app extension markers, transparency usage, and frame
+/// payload variance. Any I/O error silently returns neutral values so the
+/// caller can proceed with the ffprobe-only path.
 ///
 /// ## Usage
 /// ```ignore
 /// let mut meta = gif_meta_from_probe_with_path(&probe, size, path)?;
-/// let (pal, exts) = scan_gif_headers(path).unwrap_or_default();
-/// meta.palette_size   = pal;
+/// let (pal, exts, has_alpha, variation, delay_variation) =
+///     scan_gif_headers(path).unwrap_or_default();
+/// meta.palette_size = pal;
 /// meta.app_extensions = exts;
+/// meta.has_transparency = has_alpha;
+/// meta.frame_payload_variation = variation;
+/// meta.frame_delay_variation = delay_variation;
 /// ```
-/// Perform a cheap byte-scan of a GIF file to extract palette size and app extensions.
+/// Perform a cheap byte-scan of a GIF file to extract structural meme signals.
 ///
 /// # Errors
 /// Returns an I/O error if the file cannot be opened or read.
 pub fn scan_gif_headers(
     path: &std::path::Path,
-) -> std::io::Result<(Option<u32>, Option<Vec<String>>)> {
-    use std::io::Read;
-
-    let mut f = std::fs::File::open(path)?;
-
-    // Read the first 16 KiB; sufficient for header + early extension blocks
-    let mut buf = vec![0u8; 16 * 1024];
-    let n = f.read(&mut buf)?;
-    let buf = &buf[..n];
+) -> std::io::Result<(
+    Option<u32>,
+    Option<Vec<String>>,
+    bool,
+    Option<f64>,
+    Option<f64>,
+)> {
+    let buf = std::fs::read(path)?;
+    let n = buf.len();
 
     if n < 13 {
-        return Ok((None, None));
+        return Ok((None, None, false, None, None));
     }
 
     // GIF87a / GIF89a magic check
     if &buf[0..6] != b"GIF87a" && &buf[0..6] != b"GIF89a" {
-        return Ok((None, None));
+        return Ok((None, None, false, None, None));
     }
 
     // Logical Screen Descriptor: byte 10 = packed field
@@ -725,8 +1011,11 @@ pub fn scan_gif_headers(
         None
     };
 
-    // Scan for Application Extension blocks (0x21 0xFF)
+    // Scan for application extension blocks, GCE transparency flags, and image payloads.
     let mut app_extensions: Vec<String> = Vec::new();
+    let mut has_transparency = false;
+    let mut frame_payload_sizes: Vec<usize> = Vec::new();
+    let mut frame_delays_cs: Vec<u16> = Vec::new();
     let mut pos = 13usize;
     // Skip past Global Colour Table if present
     if has_gct {
@@ -735,33 +1024,70 @@ pub fn scan_gif_headers(
     }
 
     while pos + 2 < buf.len() {
-        if buf[pos] == 0x21 && buf[pos + 1] == 0xFF {
-            // Application Extension: next byte is block size (should be 11)
-            let block_size = buf.get(pos + 2).copied().unwrap_or(0) as usize;
-            if block_size == 11 && pos + 3 + block_size <= buf.len() {
-                let vendor = std::str::from_utf8(&buf[pos + 3..pos + 3 + block_size])
-                    .unwrap_or("")
-                    .to_owned();
-                if !vendor.is_empty() {
-                    app_extensions.push(vendor);
+        match buf[pos] {
+            0x21 if pos + 1 < buf.len() => match buf[pos + 1] {
+                0xFF => {
+                    let block_size = buf.get(pos + 2).copied().unwrap_or(0) as usize;
+                    if block_size == 11 && pos + 3 + block_size <= buf.len() {
+                        let vendor = std::str::from_utf8(&buf[pos + 3..pos + 3 + block_size])
+                            .unwrap_or("")
+                            .to_owned();
+                        if !vendor.is_empty() {
+                            app_extensions.push(vendor);
+                        }
+                    }
+                    pos += 3 + block_size;
+                    pos = skip_sub_blocks(&buf, pos);
                 }
-            }
-            // Advance past this extension
-            pos += 3 + block_size;
-            // Skip sub-blocks
-            loop {
-                let sub_size = buf.get(pos).copied().unwrap_or(0) as usize;
-                pos += 1;
-                if sub_size == 0 {
+                0xF9 => {
+                    if pos + 7 < buf.len() && buf[pos + 2] == 0x04 {
+                        if buf[pos + 3] & 0x01 != 0 {
+                            has_transparency = true;
+                        }
+                        let delay = u16::from(buf[pos + 4]) | (u16::from(buf[pos + 5]) << 8);
+                        frame_delays_cs.push(delay);
+                        pos += 8;
+                    } else {
+                        pos += 1;
+                    }
+                }
+                0xFE | 0x01 => {
+                    pos += 2;
+                    pos = skip_sub_blocks(&buf, pos);
+                }
+                _ => {
+                    pos += 1;
+                }
+            },
+            0x2C => {
+                if pos + 10 >= buf.len() {
                     break;
                 }
-                pos += sub_size;
+                let packed = buf[pos + 9];
+                pos += 10;
+                if (packed & 0x80) != 0 {
+                    let lct_size_pow = usize::from(packed & 0x07);
+                    let lct_size = 3 * (1usize << (lct_size_pow + 1));
+                    if pos + lct_size > buf.len() {
+                        break;
+                    }
+                    pos += lct_size;
+                }
                 if pos >= buf.len() {
                     break;
                 }
+                pos += 1; // LZW minimum code size
+                let payload_start = pos;
+                pos = skip_sub_blocks(&buf, pos);
+                let payload_size = pos.saturating_sub(payload_start);
+                if payload_size > 0 {
+                    frame_payload_sizes.push(payload_size);
+                }
             }
-        } else {
-            pos += 1;
+            0x3B => break,
+            _ => {
+                pos += 1;
+            }
         }
     }
 
@@ -771,7 +1097,69 @@ pub fn scan_gif_headers(
         Some(app_extensions)
     };
 
-    Ok((palette_size, app_extensions))
+    let frame_payload_variation = if frame_payload_sizes.len() >= 2 {
+        let mean =
+            frame_payload_sizes.iter().sum::<usize>() as f64 / frame_payload_sizes.len() as f64;
+        if mean > 0.0 {
+            let variance = frame_payload_sizes
+                .iter()
+                .map(|&size| {
+                    let diff = size as f64 - mean;
+                    diff * diff
+                })
+                .sum::<f64>()
+                / frame_payload_sizes.len() as f64;
+            Some((variance.sqrt() / mean).clamp(0.0, 2.0))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let frame_delay_variation = if frame_delays_cs.len() >= 2 {
+        let mean = frame_delays_cs.iter().map(|&d| f64::from(d)).sum::<f64>()
+            / frame_delays_cs.len() as f64;
+        if mean > 0.0 {
+            let variance = frame_delays_cs
+                .iter()
+                .map(|&delay| {
+                    let diff = f64::from(delay) - mean;
+                    diff * diff
+                })
+                .sum::<f64>()
+                / frame_delays_cs.len() as f64;
+            Some((variance.sqrt() / mean).clamp(0.0, 2.0))
+        } else {
+            Some(0.0)
+        }
+    } else {
+        None
+    };
+
+    Ok((
+        palette_size,
+        app_extensions,
+        has_transparency,
+        frame_payload_variation,
+        frame_delay_variation,
+    ))
+}
+
+fn skip_sub_blocks(buf: &[u8], mut pos: usize) -> usize {
+    loop {
+        let Some(&sub_size) = buf.get(pos) else {
+            return buf.len();
+        };
+        pos += 1;
+        if sub_size == 0 {
+            return pos;
+        }
+        pos = pos.saturating_add(sub_size as usize);
+        if pos > buf.len() {
+            return buf.len();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -789,6 +1177,13 @@ mod tests {
             file_name: None,
             palette_size: None,
             app_extensions: None,
+            has_transparency: false,
+            frame_payload_variation: None,
+            frame_delay_variation: None,
+            source_extension: None,
+            parent_directories: None,
+            has_embedded_icc: false,
+            has_complex_color_profile: false,
         }
     }
 
@@ -811,6 +1206,13 @@ mod tests {
             file_name: Some(name.to_string()),
             palette_size: None,
             app_extensions: None,
+            has_transparency: false,
+            frame_payload_variation: None,
+            frame_delay_variation: None,
+            source_extension: None,
+            parent_directories: None,
+            has_embedded_icc: false,
+            has_complex_color_profile: false,
         }
     }
 
@@ -844,10 +1246,9 @@ mod tests {
     fn score_gif_exposes_bytes_per_pixel() {
         let meta = make_meta(3.0, 300, 300, 12.0, 36, 270_000);
         let s = score_gif(&meta);
-        // bpp = 270_000 / (90_000 * 36) ≈ 0.0833
         assert!(
-            s.bytes_per_pixel > 0.0,
-            "bytes_per_pixel should be positive"
+            s.temporal_bpp > 0.0 && s.spatial_bpp > 0.0,
+            "bpp metrics should be positive"
         );
     }
 
@@ -883,7 +1284,7 @@ mod tests {
         // bpp > BPP_HIGH (0.60) AND pixels > PIXELS_1080P → convert
         let meta = make_meta(5.0, 1920, 1080, 24.0, 120, 1_000_000);
         // pass bpp explicitly above threshold
-        assert_eq!(apply_veto(&meta, 0.70), VetoVerdict::ConvertVideo);
+        assert_eq!(apply_veto(&meta, 0.70, 4.0), VetoVerdict::ConvertVideo);
     }
 
     #[test]
@@ -891,7 +1292,7 @@ mod tests {
         // duration > 15s AND pixels > PIXELS_1080P → convert
         let meta = make_meta(20.0, 1920, 1080, 24.0, 480, 5_000_000);
         // bpp doesn't matter for this rule; pass a low value to isolate
-        assert_eq!(apply_veto(&meta, 0.10), VetoVerdict::ConvertVideo);
+        assert_eq!(apply_veto(&meta, 0.10, 5.0), VetoVerdict::ConvertVideo);
     }
 
     #[test]
@@ -901,29 +1302,29 @@ mod tests {
             3.0, 100, 100, 10.0, 30, // bpp = 1000 / (10_000*30) ≈ 0.003
             1_000,
         );
-        assert_eq!(apply_veto(&meta, 0.003), VetoVerdict::KeepGif);
+        assert_eq!(apply_veto(&meta, 0.003, 0.1), VetoVerdict::KeepGif);
     }
 
     #[test]
-    fn veto_keep_very_short_loop() {
-        // duration ≤ 1 s → always keep
-        let meta = make_meta(0.8, 480, 480, 15.0, 12, 50_000);
-        assert_eq!(apply_veto(&meta, 0.20), VetoVerdict::KeepGif);
+    fn veto_keep_small_transparent_short_loop() {
+        let mut meta = make_meta(0.8, 180, 180, 15.0, 12, 50_000);
+        meta.has_transparency = true;
+        assert_eq!(apply_veto(&meta, 0.20, 1.6), VetoVerdict::KeepGif);
     }
 
     #[test]
     fn veto_undecided_middle_ground() {
         // Nothing extreme → undecided
         let meta = make_meta(5.0, 640, 480, 15.0, 75, 500_000);
-        assert_eq!(apply_veto(&meta, 0.10), VetoVerdict::Undecided);
+        assert_eq!(apply_veto(&meta, 0.10, 1.7), VetoVerdict::Undecided);
     }
 
     // ── should_keep_as_gif confidence tests ──────────────────────────────────
 
     #[test]
-    fn should_keep_veto_short_loop() {
-        // duration ≤ 1 s → keep regardless of other dims
-        let meta = make_meta(0.5, 1920, 1080, 30.0, 15, 10_000_000);
+    fn should_keep_transparent_short_loop() {
+        let mut meta = make_meta(0.5, 160, 160, 30.0, 15, 80_000);
+        meta.has_transparency = true;
         assert!(should_keep_as_gif(&meta), "short loop should always keep");
     }
 
@@ -938,16 +1339,16 @@ mod tests {
     }
 
     #[test]
-    fn uncertain_zone_defaults_to_keep() {
+    fn uncertain_zone_defaults_to_convert() {
         // Construct a case that lands in (0.35, 0.65) — moderate bpp, medium size/duration
         // 640×480, 6s, 15fps, 90 frames, moderate file
         let meta = make_meta(6.0, 640, 480, 15.0, 90, 800_000);
         let s = score_gif(&meta);
-        // If score is in the uncertain zone, should_keep_as_gif returns true
+        // If score is in the uncertain zone, should_keep_as_gif now biases toward convert.
         if s.total > CONF_CONVERT && s.total < CONF_KEEP {
             assert!(
-                should_keep_as_gif(&meta),
-                "uncertain zone must default to keep"
+                !should_keep_as_gif(&meta),
+                "uncertain zone must default to convert"
             );
         }
         // If it landed outside the zone, just verify no panic
@@ -982,7 +1383,52 @@ mod tests {
             file_name: None,
             palette_size: None,
             app_extensions: None,
+            has_transparency: false,
+            frame_payload_variation: None,
+            frame_delay_variation: None,
+            source_extension: None,
+            parent_directories: None,
+            has_embedded_icc: false,
+            has_complex_color_profile: false,
         })
+    }
+
+    #[test]
+    fn complex_color_profile_vetoes_to_video() {
+        let mut meta = make_meta(0.8, 320, 320, 12.0, 10, 50_000);
+        meta.has_complex_color_profile = true;
+        assert!(!should_keep_as_gif(&meta));
+    }
+
+    #[test]
+    fn directory_context_boosts_meme_score() {
+        let mut meta = make_meta(3.0, 320, 320, 12.0, 36, 100_000);
+        meta.parent_directories = Some(vec!["我的表情包".to_string()]);
+        let s = score_gif(&meta);
+        assert!(s.directory_score > 0.9);
+    }
+
+    #[test]
+    fn sparse_slideshow_cadence_scores_low() {
+        let meta = make_meta(6.0, 720, 1280, 1.0, 6, 500_000);
+        let s = score_gif(&meta);
+        assert!(s.cadence_score < 0.2);
+    }
+
+    #[test]
+    fn irregular_timing_scores_high() {
+        let mut meta = make_meta(3.0, 320, 320, 12.0, 12, 120_000);
+        meta.frame_delay_variation = Some(0.9);
+        let s = score_gif(&meta);
+        assert!(s.timing_value_score > 0.7);
+    }
+
+    #[test]
+    fn uniform_timing_scores_low() {
+        let mut meta = make_meta(3.0, 320, 320, 12.0, 12, 120_000);
+        meta.frame_delay_variation = Some(0.02);
+        let s = score_gif(&meta);
+        assert!(s.timing_value_score < 0.1);
     }
 
     // ── New dimension tests ───────────────────────────────────────────────────

@@ -256,8 +256,18 @@ fn is_gif_meme(path: &Path) -> bool {
     }
     let file_size = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     if let Ok(probe) = shared_utils::probe_video(path) {
-        if let Some(meta) = shared_utils::gif_meta_from_probe_with_path(&probe, file_size, path) {
-            return shared_utils::should_keep_as_gif(&meta);
+        if let Some(mut meta) = shared_utils::gif_meta_from_probe_with_path(&probe, file_size, path)
+        {
+            if let Ok((pal, exts, has_transparency, variation, delay_variation)) =
+                shared_utils::scan_gif_headers(path)
+            {
+                meta.palette_size = pal;
+                meta.app_extensions = exts;
+                meta.has_transparency = has_transparency;
+                meta.frame_payload_variation = variation;
+                meta.frame_delay_variation = delay_variation;
+            }
+            return shared_utils::should_keep_as_gif_with_path(&meta, Some(path));
         }
     }
     false
@@ -477,12 +487,79 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
                     });
                 }
             }
+        } else if input_ext == "avif" && {
+            let out = std::process::Command::new("ffprobe")
+                .args([
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "v",
+                    "-show_entries",
+                    "stream=index",
+                    "-of",
+                    "csv=p=0",
+                ])
+                .arg(input)
+                .output();
+            out.map(|o| String::from_utf8_lossy(&o.stdout).lines().count() > 1)
+                .unwrap_or(false)
+        } {
+            if options.verbose {
+                eprintln!("   🔧 Detected transparent AVIF format, pre-converting to APNG to retain alpha explicitly");
+            }
+            let temp_apng = tempfile::Builder::new().suffix(".apng").tempfile()?;
+            let temp_apng_path = temp_apng.path().to_path_buf();
+            let res = std::process::Command::new("ffmpeg")
+                .arg("-y")
+                .arg("-i")
+                .arg(input)
+                .arg("-filter_complex")
+                .arg("[0:v:0][0:v:1]alphamerge")
+                .arg("-plays")
+                .arg("0")
+                .arg("-c:v")
+                .arg("apng")
+                .arg(&temp_apng_path)
+                .output()?;
+            if res.status.success() {
+                (temp_apng_path, Some(temp_apng))
+            } else {
+                (input.to_path_buf(), None)
+            }
         } else {
             (input.to_path_buf(), None)
         };
 
     let (width, height) = get_input_dimensions(&actual_input)?;
-    let vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, false);
+    let has_alpha = input_ext == "webp"
+        || input_ext == "gif"
+        || input_ext == "jxl"
+        || (input_ext == "avif" && {
+            let out = std::process::Command::new("ffprobe")
+                .args([
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "v",
+                    "-show_entries",
+                    "stream=index",
+                    "-of",
+                    "csv=p=0",
+                ])
+                .arg(input)
+                .output();
+            out.map(|o| String::from_utf8_lossy(&o.stdout).lines().count() > 1)
+                .unwrap_or(false)
+        })
+        || input_ext == "apng"
+        || input_ext == "png";
+    let mut vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, has_alpha);
+
+    let color_info = shared_utils::ffprobe_json::extract_color_info(input);
+    vf_args.extend(shared_utils::hdr_utils::color_info_to_ffmpeg_args(
+        &color_info,
+        true,
+    ));
 
     let max_threads = get_max_threads(options);
     let svtav1_params = format!("tune=0:film-grain=0:lp={max_threads}");
@@ -813,6 +890,45 @@ pub fn convert_to_av1_mp4_matched(
                     });
                 }
             }
+        } else if input_ext == "avif" && {
+            let out = std::process::Command::new("ffprobe")
+                .args([
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "v",
+                    "-show_entries",
+                    "stream=index",
+                    "-of",
+                    "csv=p=0",
+                ])
+                .arg(input)
+                .output();
+            out.map(|o| String::from_utf8_lossy(&o.stdout).lines().count() > 1)
+                .unwrap_or(false)
+        } {
+            if options.verbose {
+                eprintln!("   🔧 Detected transparent AVIF format, pre-converting to APNG to retain alpha explicitly");
+            }
+            let temp_apng = tempfile::Builder::new().suffix(".apng").tempfile()?;
+            let temp_apng_path = temp_apng.path().to_path_buf();
+            let res = std::process::Command::new("ffmpeg")
+                .arg("-y")
+                .arg("-i")
+                .arg(input)
+                .arg("-filter_complex")
+                .arg("[0:v:0][0:v:1]alphamerge")
+                .arg("-plays")
+                .arg("0")
+                .arg("-c:v")
+                .arg("apng")
+                .arg(&temp_apng_path)
+                .output()?;
+            if res.status.success() {
+                (temp_apng_path, Some(temp_apng))
+            } else {
+                (input.to_path_buf(), None)
+            }
         } else {
             (input.to_path_buf(), None)
         };
@@ -903,7 +1019,13 @@ pub fn convert_to_av1_mp4_matched(
         };
 
     let (width, height) = get_input_dimensions(&final_input)?;
-    let vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, has_alpha);
+    let mut vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, has_alpha);
+
+    let color_info = shared_utils::ffprobe_json::extract_color_info(input);
+    vf_args.extend(shared_utils::hdr_utils::color_info_to_ffmpeg_args(
+        &color_info,
+        true,
+    ));
 
     let flag_mode = options
         .flag_mode()
@@ -1501,6 +1623,45 @@ pub fn convert_to_gif_apple_compat(
                     });
                 }
             }
+        } else if input_ext == "avif" && {
+            let out = std::process::Command::new("ffprobe")
+                .args([
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "v",
+                    "-show_entries",
+                    "stream=index",
+                    "-of",
+                    "csv=p=0",
+                ])
+                .arg(input)
+                .output();
+            out.map(|o| String::from_utf8_lossy(&o.stdout).lines().count() > 1)
+                .unwrap_or(false)
+        } {
+            if options.verbose {
+                eprintln!("   🔧 Detected transparent AVIF format, pre-converting to APNG to retain alpha explicitly");
+            }
+            let temp_apng = tempfile::Builder::new().suffix(".apng").tempfile()?;
+            let temp_apng_path = temp_apng.path().to_path_buf();
+            let res = std::process::Command::new("ffmpeg")
+                .arg("-y")
+                .arg("-i")
+                .arg(input)
+                .arg("-filter_complex")
+                .arg("[0:v:0][0:v:1]alphamerge")
+                .arg("-plays")
+                .arg("0")
+                .arg("-c:v")
+                .arg("apng")
+                .arg(&temp_apng_path)
+                .output()?;
+            if res.status.success() {
+                (temp_apng_path, Some(temp_apng))
+            } else {
+                (input.to_path_buf(), None)
+            }
         } else {
             (input.to_path_buf(), None)
         };
@@ -1547,15 +1708,27 @@ pub fn convert_to_gif_apple_compat(
     // This ensures consistent quality across all animated formats (AVIF/WebP/JXL/HEIC/etc)
     // Note: JXL is pre-converted to APNG above due to FFmpeg's incomplete jpegxl_anim decoder
     let ffmpeg_ok = {
+        let color_space_filter = {
+            let info = shared_utils::ffprobe_json::extract_color_info(input);
+            let cs = info.color_space.as_deref().unwrap_or("bt709");
+            let trc = info.color_transfer.as_deref().unwrap_or("iec61966-2-1");
+            let primaries = info.color_primaries.as_deref().unwrap_or("bt709");
+            let range_in = match info.color_range.as_deref() {
+                Some("pc" | "jpeg") => "pc",
+                _ => "tv",
+            };
+            format!("colorspace=all=bt709:iall={cs}:itrc={trc}:iprimaries={primaries}:irange={range_in}:range=pc")
+        };
+
         let filter = if has_multiple_streams {
             // Multi-stream: specify stream in filter
             format!(
-                "[0:{effective_stream_idx}]scale={width}:{height}:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=256[p];[s1][p]paletteuse=dither=bayer"
+                "[0:{effective_stream_idx}]{color_space_filter},format=rgba,scale={width}:{height}:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=256:stats_mode=full:reserve_transparent=1[p];[s1][p]paletteuse=dither=bayer:diff_mode=rectangle"
             )
         } else {
             // Single-stream: simple filter
             format!(
-                "scale={width}:{height}:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=256[p];[s1][p]paletteuse=dither=bayer"
+                "{color_space_filter},format=rgba,scale={width}:{height}:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=256:stats_mode=full:reserve_transparent=1[p];[s1][p]paletteuse=dither=bayer:diff_mode=rectangle"
             )
         };
 
