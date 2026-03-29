@@ -20,6 +20,11 @@ All notable changes to this project will be documented in this file.
   - **Root Cause**: The fallback pipeline previously routed frames through `Y4M (yuv4mpegpipe)` or allowed FFmpeg's default synchronization which forcefully conformed variable frame-rate sequences to CFR (Constant Frame Rate), leading to arbitrarily merged or dropped frames.
   - **Solution**: Completely deprecated and removed the legacy `encode_with_x265_cli` pipeline from the `video_explorer` core. Mandated `-fps_mode passthrough` globally across all FFmpeg CPU and GPU invocations, guaranteeing that every single frame and its original precise timestamp is bit-preserved into the output container without any flattening.
 
+- **Video Health Pre-check & Dynamic Fallback**: Added a proactive PTS (Presentation Time Stamp) integrity scanner to detect broken source files before encoding.
+  - **Functionality**: Scans the first 100 packets of the source to detect non-monotonic or duplicate timestamps.
+  - **Dynamic Fallback**: If the source is "Broken" (backward PTS), the pipeline automatically falls back from `passthrough` to `vfr` (Variable Frame Rate) mode. This allows FFmpeg to reconstruct a valid timeline, preventing the generation of unplayable/corrupt output files while still attempting to preserve frames.
+  - **Affected Files**: `ffprobe_json.rs`, `video_explorer.rs`, `gpu_coarse_search.rs`
+
 - **Fixed GIF Frame Loss in HEVC Conversion**: Resolved an issue where short-duration frames (e.g., 100ms) in GIFs were merged and lost during CPU HEVC conversion, leading to incorrect output duration and frame counts.
   - **Root Cause**: The fallback to `encode_with_x265_cli` routed frames through a Y4M pipe, forcing a constant frame rate, and `libx265` merged short B-frames.
   - **Solution**: Bypassed `encode_with_x265_cli` for all animated images, routing them directly through FFmpeg's `libx265` wrapper. Injected `-fps_mode passthrough`, `-video_track_timescale 1000`, and `-x265-params bframes=0` into the encoding parameters to strictly preserve variable timing and prevent B-frame merging.
