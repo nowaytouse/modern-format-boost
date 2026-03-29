@@ -98,7 +98,7 @@
 |:-------------|:---------:|:---------:|:-------|:-------|:-------|
 | JPEG | — | 否 | **无损成分重建** | `.jxl` | VarDCT (位一致) |
 | PNG | ✅ | 否 | **无损转换** | `.jxl` | Modular d=0.0 |
-| PNG (索引色) | ❌ | 否 | **画质匹配** | `.jxl` | d=0.1 |
+| PNG (索引色) | ❌ | 否 | **画质匹配** | `.jxl` | d=0.001 |
 | WebP | ✅ | 否 | **无损(绕路)** | `.jxl` | dwebp → JXL d=0.0 |
 | WebP | ❌ | 否 | **跳过** | (保留) | 避免代际损伤 |
 | WebP | — | 是 | **Meme Score 判定** | `.mov`/`.gif` | 转视频或保留 GIF |
@@ -107,7 +107,7 @@
 | HEIC/HEIF | ✅ | 否 | **无损(绕路)** | `.jxl` | `sips`/`magick` → PNG → d=0.0 |
 | HEIC/HEIF | ❌ | 否 | **跳过** | (保留) | 避免代际损伤 |
 | TIFF | ✅ | 否 | **无损(绕路)** | `.jxl` | `magick -depth 16` → PNG → d=0.0 |
-| TIFF | ❌ | 否 | **画质匹配** | `.jxl` | magick → JXL d=0.1 |
+| TIFF | ❌ | 否 | **画质匹配** | `.jxl` | magick → JXL d=0.001 |
 | BMP | ✅ | 否 | **无损(绕路)** | `.jxl` | `magick` → PNG → d=0.0 |
 | GIF | — | 是 | **Meme Score 判定** | `.mov`/`.gif` | 转视频或保留 GIF |
 | GIF | — | 否 | **单帧提取** | `.jxl` | ffmpeg → JXL |

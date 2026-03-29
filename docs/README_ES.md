@@ -111,7 +111,7 @@ Además de una **aplicación macOS de doble clic** (`Modern Format Boost.app`) p
 |:-------------|:---------:|:---------:|:-------|:-------|:-------|
 | JPEG | — | No | **Reconstrucción sin pérdida** | `.jxl` | `cjxl` VarDCT (bit-exact) |
 | PNG | ✅ | No | **Conversión sin pérdida** | `.jxl` | `cjxl` Modular `d=0.0` |
-| PNG (indexado) | ❌ | No | **Calidad igualada** | `.jxl` | d=0.1 |
+| PNG (indexado) | ❌ | No | **Calidad igualada** | `.jxl` | d=0.001 |
 | WebP | ✅ | No | **Desvío → sin pérdida** | `.jxl` | dwebp → JXL d=0.0 |
 | WebP | ❌ | No | **Omitir** | (mantener) | Evitar pérdida generacional |
 | WebP | — | ✅ | **Meme Score** | `.mov`/`.gif` | HEVC/AV1 o mantener GIF |
@@ -121,7 +121,7 @@ Además de una **aplicación macOS de doble clic** (`Modern Format Boost.app`) p
 | HEIC/HEIF | ❌ | No | **Síntesis HDR** | `.jxl` | Si existe Gainmap -> 32-bit EXR -> JXL |
 | HEIC/HEIF | ❌ | No | **Omitir** | (mantener) | HEIC estándar: evitar pérdida generacional |
 | TIFF | ✅ | No | **Desvío → sin pérdida** | `.jxl` | `magick -depth 16` → PNG → d=0.0 |
-| TIFF | ❌ | No | **Calidad igualada** | `.jxl` | magick → JXL d=0.1 |
+| TIFF | ❌ | No | **Calidad igualada** | `.jxl` | magick → JXL d=0.001 |
 | BMP | ✅ | No | **Desvío → sin pérdida** | `.jxl` | `magick` → PNG → d=0.0 |
 | GIF | — | ✅ | **Meme Score** | `.mov`/`.gif` | HEVC/AV1 o mantener GIF |
 | GIF | — | No | **Extracción de fotogramas** | `.jxl` | ffmpeg → JXL |

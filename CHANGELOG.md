@@ -857,7 +857,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 - **Heuristic v2 Estimation Engine**: Revolutionary quality detection using Efficiency-Weighted BPP and **Image Entropy (Edge Density/Complexity)** estimation.
 - **Lossless Detection Parity**: Deterministic identification for Modular JXL, WebP-L, and High-Bit-Depth (10-bit+) sources.
 - **Meme Score v3**: High-frame-rate aware heuristic engine for smart decisions on modern animations and Live2D stickers.
-- **Consistent High-Fidelity Path**: Unified all legacy static sources to the `Quality 100` (`d=0.1`) route unless lossless is recommended.
+- **Consistent High-Fidelity Path**: Unified all legacy static sources to the `Quality 100` (`d=0.001`) route unless lossless is recommended.
 
 #### Professional UI & Logging Infrastructure
 - **24-bit TrueColor Terminal Support**: Implemented a sophisticated, brand-aligned TrueColor UI with semantic "Card"-style summaries.

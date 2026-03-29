@@ -127,7 +127,7 @@ Plus a **double-click macOS app** (`Modern Format Boost.app`) for drag-and-drop 
 |:-------------|:---------:|:---------:|:-------|:-------|:-------|
 | JPEG | — | No | **Lossless reconstruct** | `.jxl` | `cjxl` VarDCT (bit-exact) |
 | PNG | ✅ | No | **Lossless convert** | `.jxl` | `cjxl` Modular `d=0.0` |
-| PNG (indexed) | ❌ | No | **Quality-matched** | `.jxl` | d=0.1 |
+| PNG (indexed) | ❌ | No | **Quality-matched** | `.jxl` | d=0.001 |
 | WebP | ✅ | No | **Detour → lossless** | `.jxl` | dwebp → JXL d=0.0 |
 | WebP | ❌ | No | **Skip** | (keep) | Avoid generational loss |
 | WebP | — | ✅ | **Meme Score** | `.mov`/`.gif` | HEVC/AV1 or keep GIF |
@@ -137,7 +137,7 @@ Plus a **double-click macOS app** (`Modern Format Boost.app`) for drag-and-drop 
 | HEIC/HEIF | ❌ | No | **HDR Synthesis** | `.jxl` | If Gainmap exists -> 32-bit EXR -> JXL |
 | HEIC/HEIF | ❌ | No | **Skip** | (keep) | Standard HEIC: avoid generational loss |
 | TIFF | ✅ | No | **Detour → lossless** | `.jxl` | `magick -depth 16` → PNG → d=0.0 |
-| TIFF | ❌ | No | **Quality-matched** | `.jxl` | magick → JXL d=0.1 |
+| TIFF | ❌ | No | **Quality-matched** | `.jxl` | magick → JXL d=0.001 |
 | BMP | ✅ | No | **Detour → lossless** | `.jxl` | `magick` → PNG → d=0.0 |
 | GIF | — | ✅ | **Meme Score** | `.mov`/`.gif` | HEVC/AV1 or keep GIF |
 | GIF | — | No | **Frame extract** | `.jxl` | ffmpeg → JXL |

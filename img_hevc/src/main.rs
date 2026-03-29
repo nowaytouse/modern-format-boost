@@ -866,7 +866,7 @@ fn dispatch_static_disguised_animated(
         ));
     }
 
-    let distance = if use_lossless { 0.0_f32 } else { 0.1_f32 };
+    let distance = if use_lossless { 0.0_f32 } else { 0.001_f32 };
     if config.verbose {
         println!(
             "🔄 Static GIF/Modern→JXL ({}): {}",

@@ -698,7 +698,7 @@ fn dispatch_static_conversion(
                 if config.verbose {
                     println!("🔄 Legacy Lossy→JXL (Quality 100): {}", input.display());
                 }
-                convert_to_jxl(input, options, 0.1_f32, analysis.hdr_info.as_ref())?
+                convert_to_jxl(input, options, 0.001_f32, analysis.hdr_info.as_ref())?
             }
         }
     })
@@ -806,7 +806,7 @@ fn dispatch_static_disguised_animated(
     } else if config.match_quality {
         convert_to_jxl_matched(input, options, analysis)?
     } else {
-        convert_to_jxl(input, options, 0.1_f32, analysis.hdr_info.as_ref())?
+        convert_to_jxl(input, options, 0.001_f32, analysis.hdr_info.as_ref())?
     })
 }
 
