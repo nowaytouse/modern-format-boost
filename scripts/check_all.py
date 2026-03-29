@@ -10,6 +10,8 @@ import subprocess
 import shutil
 import time
 import argparse
+import plistlib
+import re
 from pathlib import Path
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -111,6 +113,83 @@ def format_duration(seconds: float) -> str:
     if seconds < 1:
         return f"{int(seconds * 1000)}ms"
     return f"{seconds:.2f}s"
+
+
+def check_bundle_metadata(tracker: Tracker) -> bool:
+    """Audit macOS App Bundle Info.plist against Cargo.toml version."""
+    tracker.announce_step("required", "macOS App bundle metadata")
+    if sys.platform != "darwin":
+        if console:
+            console.print("  [dim]Skipped: non-macOS platform[/dim]")
+        else:
+            print("  Skipped: non-macOS platform")
+        tracker.skipped += 1
+        return True
+
+    root = get_repo_root()
+    plist_path = root / "Modern Format Boost.app" / "Contents" / "Info.plist"
+    cargo_path = root / "Cargo.toml"
+
+    if not plist_path.exists():
+        msg = f"❌ Error: Info.plist not found at {plist_path}"
+        if console:
+            console.print(f"  [red]{msg}[/red]")
+        else:
+            print(f"  {msg}")
+        tracker.failed += 1
+        return False
+
+    try:
+        # 1. Get Workspace Version
+        with open(cargo_path, "r", encoding="utf-8") as f:
+            cargo_content = f.read()
+            version_match = re.search(r'\[workspace\.package\]\s*version\s*=\s*"([^"]+)"', cargo_content)
+            if not version_match:
+                raise ValueError("Could not find [workspace.package] version in Cargo.toml")
+            workspace_version = version_match.group(1)
+
+        # 2. Parse Info.plist
+        with open(plist_path, "rb") as f:
+            pl = plistlib.load(f)
+
+        # 3. Validations
+        bundle_version = pl.get("CFBundleShortVersionString")
+        executable = pl.get("CFBundleExecutable")
+
+        errors = []
+        if bundle_version != workspace_version:
+            errors.append(f"Version mismatch! Cargo.toml: {workspace_version} vs Info.plist: {bundle_version}")
+        if executable != "Modern Format Boost":
+            errors.append(f"Executable name mismatch! Expected 'Modern Format Boost', got '{executable}'")
+        
+        binary_path = root / "Modern Format Boost.app" / "Contents" / "MacOS" / "Modern Format Boost"
+        if not binary_path.exists():
+            errors.append(f"App binary wrapper missing at {binary_path}")
+
+        if errors:
+            for err in errors:
+                if console:
+                    console.print(f"  [red]❌ {err}[/red]")
+                else:
+                    print(f"  ❌ {err}")
+            tracker.failed += 1
+            return False
+
+        if console:
+            console.print(f"  [green]✅ Verified: Version {workspace_version} aligned[/green]")
+        else:
+            print(f"  ✅ Verified: Version {workspace_version} aligned")
+        
+        tracker.passed += 1
+        return True
+
+    except Exception as e:
+        if console:
+            console.print(f"  [red]❌ Audit crashed: {e}[/red]")
+        else:
+            print(f"  ❌ Audit crashed: {e}")
+        tracker.failed += 1
+        return False
 
 
 def run_step(
@@ -393,6 +472,8 @@ def main():
                 )
 
         # Docs & Config
+        check_bundle_metadata(tracker)
+
         if md_files and has_command("markdownlint-cli2", verbose=args.verbose):
             run_step(
                 tracker,

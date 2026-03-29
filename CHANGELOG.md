@@ -50,6 +50,7 @@ All notable changes to this project will be documented in this file.
     - **Fixed Lock Life-cycle**: Resolved a bug where Rust lock guards were dropped too early. Locks are now held throughout the entire process life-cycle.
   - **macOS App Streamlining**: Improved the user experience for the `Modern Format Boost.app` shell by removing the redundant confirmation dialog after folder selection, allowing for a seamless transition directly into the Terminal processor.
   - **Dynamic Terminal UI**: Added automatic terminal window resizing (110x35 wide-screen format) at startup in `drag_and_drop_processor.py` to maximize visibility for progress bars and statistical tables.
+  - **Full-Stack Bundle Auditing**: Integrated `Modern Format Boost.app` metadata validation into `check_all.py`. The auditor now strictly enforces synchronization between `Cargo.toml` versions and macOS `Info.plist` bundle versions to ensure distribution consistency.
   - **Environment-Level Isolation (Ghost Mode)**: Persistent redirection of all transient IO to `~/.modern_format_boost/tmp/` to ensure absolute zero-pollution of user media folders and static directory timestamps.
   - **Automated Lifecycle Management**: Integrated `tmp/` and `locks/` purging into `cache_cleaner.py`.
   - **Stdin Draining**: Hardened interactive prompts against leftover input during process transitions.
