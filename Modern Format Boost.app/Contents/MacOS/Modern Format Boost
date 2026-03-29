@@ -102,31 +102,7 @@ else
         exit 1
     fi
 
-    # Safety confirmation: show path to be processed, 30-minute timeout; only execute if user clicks "Start"
-    TMPCONF=$(mktemp 2>/dev/null || echo "/tmp/mfb_confirm_$$.txt")
-    SELECTED_DIR_DIALOG=$(escape_applescript_string "$SELECTED_DIR")
-    osascript -e "display dialog \"Will optimize the following folder:\n\n$SELECTED_DIR_DIALOG\" with title \"Modern Format Boost\" buttons {\"Cancel\", \"Start Optimization\"} default button 2 cancel button 1 with icon caution" > "$TMPCONF" 2>/dev/null &
-    CPID=$!
-    for ((j = 0; j < TIMEOUT_SEC; j++)); do
-        if ! kill -0 "$CPID" 2>/dev/null; then
-            break
-        fi
-        sleep 1
-    done
-    if kill -0 "$CPID" 2>/dev/null; then
-        kill "$CPID" 2>/dev/null
-        wait "$CPID" 2>/dev/null
-        rm -f "$TMPCONF"
-        osascript -e 'display alert "Timeout" message "Confirmation dialog closed (no action for 30 minutes)." as critical'
-        exit 0
-    fi
-    CONFRES=$(cat "$TMPCONF" 2>/dev/null)
-    rm -f "$TMPCONF"
-    if [[ "$CONFRES" == *"Start Optimization"* ]]; then
-        # Execute osascript in background and exit immediately, so system-opened empty terminal only has shell, no "terminate running process" prompt on close
-        (
-            launch_in_terminal "$SELECTED_DIR"
-        ) &
-        exit 0
-    fi
+    # Directly launch terminal without redundant confirmation popups
+    launch_in_terminal "$SELECTED_DIR"
+    exit 0
 fi
