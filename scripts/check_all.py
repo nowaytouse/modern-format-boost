@@ -26,32 +26,40 @@ except ImportError:
 # --- Configuration & Helpers ---
 
 @lru_cache(maxsize=None)
+def _has_command_internal(cmd: str) -> bool:
+    """Internal cached check for command existence."""
+    return shutil.which(cmd) is not None
+
+@lru_cache(maxsize=None)
+def _has_cargo_sub_internal(sub: str) -> bool:
+    """Internal cached check for cargo subcommand."""
+    try:
+        res = subprocess.run(["cargo", sub, "--version"], capture_output=True)
+        return res.returncode == 0
+    except Exception:
+        return False
+
 def has_command(cmd: str, hint_pkg: Optional[str] = None, verbose: bool = False) -> bool:
-    if shutil.which(cmd) is not None:
-        return True
-    if verbose:
+    """UI wrapper for command check, preserves hints regardless of cache."""
+    found = _has_command_internal(cmd)
+    if not found and verbose:
         pkg = hint_pkg or cmd
         msg = f"  [yellow]Hint: '{cmd}' missing. Install: brew/npm/pip install {pkg}[/yellow]"
         if console: console.print(msg)
         else: print(msg)
-    return False
+    return found
 
-@lru_cache(maxsize=None)
 def has_cargo_subcommand(sub: str, verbose: bool = False) -> bool:
-    try:
-        res = subprocess.run(["cargo", sub, "--version"], capture_output=True)
-        if res.returncode == 0:
-            return True
-    except Exception:
-        pass
-    if verbose:
+    """UI wrapper for cargo sub check, preserves hints regardless of cache."""
+    found = _has_cargo_sub_internal(sub)
+    if not found and verbose:
         msg = f"  [yellow]Hint: cargo-{sub} missing. Install: cargo install cargo-{sub}[/yellow]"
         if console: console.print(msg)
         else: print(msg)
-    return False
+    return found
 
 def get_repo_root() -> Path:
-    """Dynamically identify repo root using git, fallback to script parent's parent."""
+    """Identify project root using git, fallback to script parent's parent."""
     try:
         root = subprocess.check_output(["git", "rev-parse", "--show-toplevel"], 
                                        stderr=subprocess.STDOUT, text=True).strip()
@@ -94,7 +102,6 @@ def run_step(tracker: Tracker, kind: str, name: str, cmd: List[str],
     if env_vars:
         env.update(env_vars)
         
-    # Combine stderr/stdout to ensure context is preserved in logs/capture
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, 
                                text=True, env=env, bufsize=1)
     
@@ -137,14 +144,17 @@ def skip_step(tracker: Tracker, name: str, reason: str):
 # --- Argument Parsing ---
 
 def parse_args():
+    # Use environment variables as defaults in argparse to maintain natural override order
+    default_branch = os.environ.get("CHECK_ALL_DEFAULT_BRANCH", "nightly")
+    
     parser = argparse.ArgumentParser(description="Modern Format Boost Multi-Language Auditor")
-    parser.add_argument("--allow-non-nightly", action="store_true", help="Don't enforce nightly branch check")
-    parser.add_argument("--required-only", action="store_true", help="Skip all optional/expensive checks")
-    parser.add_argument("--no-expensive", action="store_true", help="Skip the most time-consuming checks")
-    parser.add_argument("--fix", action="store_true", help="Auto-fix formatting/lint issues where possible")
-    parser.add_argument("--build", action="store_true", help="Run full release build as part of required checks")
-    parser.add_argument("--branch", default="nightly", help="Override required branch (default: nightly)")
-    parser.add_argument("--verbose", "-v", action="store_true", help="Show hints for missing tools")
+    parser.add_argument("--allow-non-nightly", action="store_true", help="Don't enforce branch check")
+    parser.add_argument("--required-only", action="store_true", help="Skip optional checks")
+    parser.add_argument("--no-expensive", action="store_true", help="Skip slow checks (bloat, hack)")
+    parser.add_argument("--fix", action="store_true", help="Auto-fix formatting")
+    parser.add_argument("--build", action="store_true", help="Run full release build")
+    parser.add_argument("--branch", default=default_branch, help=f"Required branch (default: {default_branch})")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Show tool install hints")
     return parser.parse_args()
 
 # --- Main Application ---
@@ -155,8 +165,6 @@ def main():
     os.chdir(repo_root)
     tracker = Tracker()
 
-    required_branch = os.environ.get("CHECK_ALL_DEFAULT_BRANCH", args.branch)
-
     if console:
         console.print(Panel(f"[bold cyan]🚀 Modern Quality Suite[/bold cyan]\n[dim]Root: {repo_root}[/dim]", border_style="blue"))
     else:
@@ -165,13 +173,13 @@ def main():
     # --- 1. Environment Guard ---
     try:
         current_branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"], text=True).strip()
-        if not args.allow_non_nightly and current_branch != required_branch:
-            print(f"Fatal: Required branch '{required_branch}', but current is '{current_branch}'. Use --allow-non-nightly to bypass.")
+        if not args.allow_non_nightly and current_branch != args.branch:
+            print(f"Fatal: Required branch '{args.branch}', but current is '{current_branch}'. Use --allow-non-nightly or --branch <name>.")
             sys.exit(2)
     except Exception:
         pass
 
-    # File Discovery using git ls-files for accurate scoping
+    # File Discovery
     try:
         git_files = subprocess.check_output(["git", "ls-files"], text=True).splitlines()
     except Exception:
@@ -191,14 +199,12 @@ def main():
         
         # Rust fixes
         subprocess.run(["cargo", "fmt", "--all"])
-        subprocess.run(["cargo", "clippy", "--fix", "--workspace", "--all-targets", "--allow-dirty", "--allow-staged"])
+        subprocess.run(["cargo", "clippy", "--fix", "--workspace", "--all-targets", "--all-features", "--allow-dirty", "--allow-staged"])
         
         # Python fixes
         if has_command("ruff"):
             subprocess.run(["ruff", "check", "--fix", "."], stderr=subprocess.DEVNULL)
             subprocess.run(["ruff", "format", "."], stderr=subprocess.DEVNULL)
-        
-        # In-place upgrades only on fix
         if has_command("pyupgrade") and py_files:
             subprocess.run(["pyupgrade", "--py311-plus"] + py_files)
             
@@ -219,15 +225,15 @@ def main():
 
     # --- 3. Required Checks ---
     run_step(tracker, "required", "cargo fmt --check", ["cargo", "fmt", "--all", "--check"])
-    run_step(tracker, "required", "cargo check --workspace", ["cargo", "check", "--workspace", "--all-targets"])
+    run_step(tracker, "required", "cargo check --workspace --all-features", ["cargo", "check", "--workspace", "--all-targets", "--all-features"])
     
-    # Python Syntax - Guarded against hanging on empty py_files
     if py_files:
         run_step(tracker, "required", f"python3 syntax ({len(py_files)} files)", [sys.executable, "-m", "py_compile"] + py_files)
     else:
-        skip_step(tracker, "python syntax check", "no .py files found")
+        skip_step(tracker, "python syntax check", "no scripts")
     
-    run_step(tracker, "required", "cargo clippy (strict)", ["cargo", "clippy", "--workspace", "--all-targets", "--", "-D", "warnings"])
+    clippy_all = ["cargo", "clippy", "--workspace", "--all-targets", "--all-features", "--", "-D", "warnings"]
+    run_step(tracker, "required", "cargo clippy (all-features)", clippy_all)
 
     # Optimized testing logic
     if has_cargo_subcommand("nextest"):
@@ -240,22 +246,22 @@ def main():
 
     # --- 4. Optional Checks ---
     if not args.required_only:
-        # Python Quality
-        if has_command("ruff", verbose=args.verbose) and py_files:
+        # Python
+        if py_files and has_command("ruff", verbose=args.verbose):
             run_step(tracker, "optional", "ruff linter", ["ruff", "check"] + py_files)
             run_step(tracker, "optional", "ruff format check", ["ruff", "format", "--check"] + py_files)
         elif not py_files:
-            skip_step(tracker, "python quality", "no scripts found")
+            skip_step(tracker, "python quality", "no scripts")
 
-        # Shell Quality
-        if has_command("shellcheck", verbose=args.verbose) and shell_files:
-            run_step(tracker, "optional", "shellcheck security suite", ["shellcheck", "--severity=error"] + shell_files)
+        # Shell
+        if shell_files:
+            if has_command("shellcheck", verbose=args.verbose):
+                run_step(tracker, "optional", "shellcheck security suite", ["shellcheck", "--severity=error"] + shell_files)
+            if has_command("shfmt", verbose=args.verbose):
+                run_step(tracker, "optional", "shfmt layout check", ["shfmt", "-d", "-i", "4"] + shell_files)
         
-        if has_command("shfmt", verbose=args.verbose) and shell_files:
-            run_step(tracker, "optional", "shfmt layout check", ["shfmt", "-d", "-i", "4"] + shell_files)
-        
-        # Docs & Config Styles
-        if has_command("markdownlint-cli2", verbose=args.verbose) and md_files:
+        # Docs & Config
+        if md_files and has_command("markdownlint-cli2", verbose=args.verbose) :
             run_step(tracker, "optional", "markdown formatting", ["markdownlint-cli2"] + md_files)
         
         if has_command("prettier", verbose=args.verbose):
@@ -263,7 +269,7 @@ def main():
             if targets:
                 run_step(tracker, "optional", "prettier styling check", ["prettier", "--check"] + targets)
 
-        if has_cargo_subcommand("taplo", verbose=args.verbose) and toml_files:
+        if toml_files and has_cargo_subcommand("taplo", verbose=args.verbose):
             run_step(tracker, "optional", "cargo toml formatting", ["cargo", "taplo", "fmt", "--check"])
 
         run_step(tracker, "optional", "cargo doc metadata", ["cargo", "doc", "--workspace", "--no-deps"])
@@ -299,22 +305,15 @@ def main():
              for s in tracker.warned_steps: console.print(f"  [yellow]! {s}[/yellow]")
     else:
         # Legacy/CLI Output
-        print(f"\n{'='*40}")
-        print(f"{'Summary':^40}")
-        print(f"{'='*40}")
-        print(f"Passed:   {tracker.passed}")
-        print(f"Failed:   {tracker.failed}")
-        print(f"Warned:   {tracker.warned}")
-        print(f"Skipped:  {tracker.skipped}")
+        print(f"\n{'='*40}\n{'Summary':^40}\n{'='*40}")
+        print(f"Passed:   {tracker.passed}\nFailed:   {tracker.failed}\nWarned:   {tracker.warned}\nSkipped:  {tracker.skipped}")
         
         if tracker.failed_steps:
             print("\nREQUIRED FAILURES:")
             for s in tracker.failed_steps: print(f"  [X] {s}")
-            
         if tracker.warned_steps:
             print("\nOPTIONAL WARNINGS:")
             for s in tracker.warned_steps: print(f"  [!] {s}")
-            
         if tracker.skipped_steps:
             print("\nSKIPPED CHECKS:")
             for s in tracker.skipped_steps: print(f"  [-] {s}")
