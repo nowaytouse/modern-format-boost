@@ -109,6 +109,12 @@ enum Commands {
         #[arg(value_name = "INPUT")]
         input: PathBuf,
     },
+
+    /// Internal: Get the lock hash for a directory
+    PathHash {
+        #[arg(value_name = "INPUT")]
+        input: PathBuf,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -137,6 +143,37 @@ fn main() -> anyhow::Result<()> {
     }
 
     let cli = Cli::parse();
+
+    // --- Unified Directory Locking (Ghost Mode & Mutex) ---
+    // Extract input path from relevant commands to lock the directory for the entire process life-cycle.
+    let input_to_lock = match &cli.command {
+        Commands::Run { input, .. }
+        | Commands::Verify {
+            original: input, ..
+        }
+        | Commands::RestoreTimestamps { source: input, .. }
+        | Commands::LockCheck { input } => Some(input),
+        _ => None,
+    };
+
+    let _lock_guard = if let Some(input) = input_to_lock {
+        let input_abs = std::fs::canonicalize(input).unwrap_or_else(|_| input.clone());
+        if input_abs.is_dir() {
+            match shared_utils::acquire_dir_lock(&input_abs) {
+                Ok(guard) => Some(guard),
+                Err(e) => {
+                    shared_utils::log_eprintln!("❌ {}", e);
+                    std::process::exit(3);
+                }
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    // ------------------------------------------------------
+
     match cli.command {
         Commands::Run {
             input,
@@ -236,18 +273,6 @@ fn main() -> anyhow::Result<()> {
                     colors::RESET
                 ));
             }
-            let input_abs = std::fs::canonicalize(&input).unwrap_or_else(|_| input.clone());
-            let _lock_guard = if input_abs.is_dir() {
-                match shared_utils::acquire_dir_lock(&input_abs) {
-                    Ok(guard) => Some(guard),
-                    Err(e) => {
-                        shared_utils::log_eprintln!("❌ {}", e);
-                        std::process::exit(3);
-                    }
-                }
-            } else {
-                None
-            };
 
             let config = AutoConvertConfig {
                 output_dir: output,
@@ -386,6 +411,13 @@ fn main() -> anyhow::Result<()> {
                 // Success: lock exists but is available, or was just acquired
                 println!("✅ Directory is available for processing.");
             }
+        }
+
+        Commands::PathHash { input } => {
+            let input_abs = std::fs::canonicalize(&input).unwrap_or_else(|_| input.clone());
+            let path_str = input_abs.to_string_lossy();
+            let hash = blake3::hash(path_str.as_bytes()).to_hex();
+            println!("{}", hash);
         }
     }
 

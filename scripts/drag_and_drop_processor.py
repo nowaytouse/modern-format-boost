@@ -324,31 +324,52 @@ def get_target_directory():
         sys.exit(1)
 
 
-def check_directory_exclusion(dir_path: str):
+# Global lock file object to prevent garbage collection and early release
+_GLOBAL_LOCK_FILE = None
+
+def acquire_global_lock(dir_path: str):
     """
-    Perform a pre-flight lock check using the Rust binary.
-    If the directory is already locked by another MFB instance, exit immediately.
+    Acquire a long-lived exclusive lock on the directory via the MFB central lock system.
+    Returns the file handle that must be kept alive.
     """
+    global _GLOBAL_LOCK_FILE
     try:
-        # Use img-hevc lock-check to perform a synchronized mutex check
+        # 1. Get the unified BLAKE3 hash from Rust
         result = subprocess.run(
-            [str(IMGQUALITY_HEVC), "lock-check", dir_path],
+            [str(IMGQUALITY_HEVC), "path-hash", dir_path],
             capture_output=True,
-            text=True
+            text=True,
+            check=True
         )
+        lock_hash = result.stdout.strip()
         
-        # Exit code 3 is our defined 'Lock Conflict' code
-        if result.returncode == 3:
+        # 2. Prepare lock directory
+        lock_dir = Path.home() / ".modern_format_boost" / "locks"
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        
+        lock_file_path = lock_dir / f"{lock_hash}.lock"
+        
+        # 3. Open and flock
+        _GLOBAL_LOCK_FILE = open(lock_file_path, "w")
+        import fcntl
+        try:
+            # Non-blocking exclusive lock
+            fcntl.flock(_GLOBAL_LOCK_FILE, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (IOError, OSError):
+            # Lock is already held
             print(f"\n{RED}❌ ERROR: Directory Already In Use!{RESET}")
             print(f"   Target: {DIM}{dir_path}{RESET}")
             print(f"   {YELLOW}Another instance of Modern Format Boost is currently processing this folder.{RESET}")
-            print(f"   {DIM}Please wait for the other task to complete or close its window.{RESET}")
+            print(f"   {DIM}Please wait for the other task to complete.{RESET}")
             sys.exit(3)
             
     except Exception as e:
-        # If binary is missing or failed (first run), we skip the pre-check
-        # and let the later process execution handle it.
+        # If hash tool fails, we fall back to standard execution which will catch locks later
         pass
+
+def check_directory_exclusion(dir_path: str):
+    # This is now replaced by the more robust acquire_global_lock
+    acquire_global_lock(dir_path)
 
 def safety_check():
     try:

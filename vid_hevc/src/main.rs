@@ -79,6 +79,30 @@ fn main() -> anyhow::Result<()> {
     shared_utils::ctrlc_guard::init();
 
     let cli = Cli::parse();
+    
+    // --- Unified Directory Locking (Ghost Mode & Mutex) ---
+    // Extract input path from relevant commands to lock the directory for the entire process life-cycle.
+    let input_to_lock = match &cli.command {
+        Commands::Run { input, .. } => Some(input),
+    };
+
+    let _lock_guard = if let Some(input) = input_to_lock {
+        let input_abs = std::fs::canonicalize(input).unwrap_or_else(|_| input.clone());
+        if input_abs.is_dir() {
+            match shared_utils::acquire_dir_lock(&input_abs) {
+                Ok(guard) => Some(guard),
+                Err(e) => {
+                    shared_utils::log_eprintln!("❌ {}", e);
+                    std::process::exit(3);
+                }
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    // ------------------------------------------------------
 
     match cli.command {
         Commands::Run {
@@ -115,19 +139,6 @@ fn main() -> anyhow::Result<()> {
                 eprintln!("{e}");
                 std::process::exit(1);
             }
-
-            let input_abs = std::fs::canonicalize(&input).unwrap_or_else(|_| input.clone());
-            let _lock_guard = if input_abs.is_dir() {
-                match shared_utils::acquire_dir_lock(&input_abs) {
-                    Ok(guard) => Some(guard),
-                    Err(e) => {
-                        eprintln!("❌ {e}");
-                        std::process::exit(3);
-                    }
-                }
-            } else {
-                None
-            };
 
             let base_dir =
                 shared_utils::cli_runner::resolve_video_run_base_dir(&input, recursive, base_dir);
