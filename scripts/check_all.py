@@ -19,6 +19,7 @@ try:
     from rich.console import Console
     from rich.table import Table
     from rich.panel import Panel
+    from rich.markup import escape
     console = Console()
 except ImportError:
     console = None
@@ -82,7 +83,8 @@ class Tracker:
         self.step_count += 1
         if console:
             icon = "🔍" if kind == "required" else "💡"
-            console.print(f"\n[bold][{self.step_count}] {icon} {kind.upper()}: {name}[/bold]")
+            # Use escape() to prevent names with brackets from breaking rich markup
+            console.print(f"\n[bold][{self.step_count}] {icon} {kind.upper()}: {escape(name)}[/bold]")
         else:
             print(f"\n[{self.step_count}] {kind.upper()}: {name}")
 
@@ -105,6 +107,8 @@ def run_step(tracker: Tracker, kind: str, name: str, cmd: List[str],
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, 
                                text=True, env=env, bufsize=1)
     
+    # NOTE: stdout/stderr must be fully consumed BEFORE calling wait() 
+    # to avoid potential OS pipe deadlocks when buffers are full (approx 64KB).
     if process.stdout:
         for line in process.stdout:
             sys.stdout.write(line)
