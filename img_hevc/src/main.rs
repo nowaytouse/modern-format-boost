@@ -145,10 +145,10 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     // --- Unified Directory Locking (Ghost Mode & Mutex) ---
-    // Extract input path from relevant commands to lock the directory for the entire process life-cycle.
+    // Extract input path from relevant commands to lock the directory ONLY if it involves destructive or interactive shared state.
     let input_to_lock = match &cli.command {
-        Commands::Run { input, .. }
-        | Commands::Verify {
+        Commands::Run { input, in_place, .. } if *in_place => Some(input),
+        Commands::Verify {
             original: input, ..
         }
         | Commands::RestoreTimestamps { source: input, .. }
@@ -403,20 +403,21 @@ fn main() -> anyhow::Result<()> {
         Commands::LockCheck { input } => {
             let input_abs = std::fs::canonicalize(&input).unwrap_or_else(|_| input.clone());
             if input_abs.is_dir() {
-                // Try to acquire lock. If it fails, acquire_dir_lock handles the error message and exits with code 3.
-                let _lock = shared_utils::acquire_dir_lock(&input_abs).map_err(|e| {
-                    shared_utils::log_eprintln!("❌ {}", e);
-                    std::process::exit(3);
-                })?;
-                // Success: lock exists but is available, or was just acquired
-                println!("✅ Directory is available for processing.");
+                // Try to acquire lock. If it fails, report and exit immediately with code 3.
+                match shared_utils::acquire_dir_lock(&input_abs) {
+                    Ok(_lock) => {
+                        println!("✅ Directory is available for processing.");
+                    }
+                    Err(e) => {
+                        shared_utils::log_eprintln!("❌ {}", e);
+                        std::process::exit(3);
+                    }
+                }
             }
         }
 
         Commands::PathHash { input } => {
-            let input_abs = std::fs::canonicalize(&input).unwrap_or_else(|_| input.clone());
-            let path_str = input_abs.to_string_lossy();
-            let hash = blake3::hash(path_str.as_bytes()).to_hex();
+            let hash = shared_utils::hash_path_to_hex(&input).unwrap_or_else(|_| "err".to_string());
             println!("{}", hash);
         }
     }

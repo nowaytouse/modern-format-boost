@@ -324,6 +324,22 @@ def get_target_directory():
         sys.exit(1)
 
 
+def get_unique_output_path(base_path: Path) -> Path:
+    """
+    If base_path exists, append (1), (2), etc. until a unique path is found.
+    """
+    if not base_path.exists():
+        return base_path
+    
+    parent = base_path.parent
+    name = base_path.name
+    counter = 1
+    while True:
+        new_path = parent / f"{name} ({counter})"
+        if not new_path.exists():
+            return new_path
+        counter += 1
+
 # Global lock file object to prevent garbage collection and early release
 _GLOBAL_LOCK_FILE = None
 
@@ -520,7 +536,7 @@ def select_mode():
                     if mode_sub_state == 0:
                         OUTPUT_MODE = "adjacent"
                         tdir = Path(TARGET_DIR).resolve()
-                        OUTPUT_DIR = str(tdir.parent / (tdir.name + "_optimized"))
+                        OUTPUT_DIR = str(get_unique_output_path(tdir.parent / (tdir.name + "_optimized")))
                         print(f"\n{GREEN}✅ ADJACENT MODE SELECTED{RESET}")
                         print(f"   Output: {DIM}{OUTPUT_DIR}{RESET}")
                         print(f"   {DIM}Creating directory structure...{RESET}")
@@ -552,6 +568,7 @@ def select_mode():
                             time.sleep(3)
                             continue  # Redraw menu
                         else:
+                            acquire_global_lock(TARGET_DIR)
                             show_cursor()
                             break  # Confirmed, start processing
                 elif selected == 1:
@@ -1078,10 +1095,12 @@ def main():
 
     safety_check()
     
-    # Pre-flight Lock Check: Stop immediately if directory is occupied
-    check_directory_exclusion(str(TARGET_DIR))
-    
     select_mode()
+    
+    # Mutex logic: Only enforce exclusive locking if we are modifying original files (In-Place)
+    if OUTPUT_MODE == "in_place":
+        acquire_global_lock(str(TARGET_DIR))
+    
     count_files()
 
     if IMG_COUNT > 0 or VID_COUNT > 0:

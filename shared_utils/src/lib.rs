@@ -333,7 +333,7 @@ pub use smart_file_copier::{
 };
 
 pub use live_photo::is_live_photo;
-pub use process_lock::{acquire_dir_lock, get_mfb_tmp_dir, init_ghost_mode};
+pub use process_lock::{acquire_dir_lock, get_mfb_tmp_dir, hash_path_to_hex, init_ghost_mode};
 
 pub use file_sorter::{
     sort_by_name, sort_by_size_ascending, sort_by_size_descending, FileInfo, FileSorter,

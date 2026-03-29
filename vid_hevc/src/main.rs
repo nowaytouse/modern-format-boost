@@ -81,9 +81,10 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     
     // --- Unified Directory Locking (Ghost Mode & Mutex) ---
-    // Extract input path from relevant commands to lock the directory for the entire process life-cycle.
+    // Extract input path from relevant commands to lock the directory ONLY if it involves destructive or interactive shared state.
     let input_to_lock = match &cli.command {
-        Commands::Run { input, .. } => Some(input),
+        Commands::Run { input, in_place, .. } if *in_place => Some(input),
+        _ => None,
     };
 
     let _lock_guard = if let Some(input) = input_to_lock {

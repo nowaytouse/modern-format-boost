@@ -26,6 +26,14 @@ pub fn get_mfb_tmp_dir() -> Result<PathBuf> {
     Ok(tmp)
 }
 
+/// Generates a unique hex hash for a directory's canonical path using BLAKE3.
+pub fn hash_path_to_hex(path: &Path) -> Result<String> {
+    let abs_path = fs::canonicalize(path)
+        .with_context(|| format!("Failed to canonicalize path for hashing: {}", path.display()))?;
+    let path_str = abs_path.to_string_lossy();
+    Ok(blake3::hash(path_str.as_bytes()).to_hex().to_string())
+}
+
 /// Attempts to acquire an exclusive advisory lock for a specific directory.
 ///
 /// The lock file is stored in a central location (~/.modern_format_boost/locks/)

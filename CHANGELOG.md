@@ -44,10 +44,13 @@ All notable changes to this project will be documented in this file.
   - **Fail-Safe Discovery**: Added mandatory empty-list guards for all tool calls, preventing process hangs.
   - **Performance Optimization**: Restored **`cargo-nextest`** support for high-throughput, concurrent testing.
   - **Cleanup Confirmation Safety**: Hardened the cache and log cleanup process to prevent accidental deletions. Empty inputs or simple Enters now default to "No" (cancellation) with clear `🚫` visual feedback.
-  - **MFB Ghost Mode (Self-Sovereign Zero-Pollution)**: Enforced a 100% non-invasive processing architecture directly in the Rust core. Binaries now automatically self-redirect their `TMPDIR` to `~/.modern_format_boost/tmp/` on startup, ensuring that source media folders remain untouched and directory `mtime` stays static, even when the binaries are used independently of any scripts.
-  - **Environment-Level Isolation**: Global `TMPDIR` injection in Python scripts automatically forces all sub-processes (FFmpeg, djxl, webpmux) and Rust core components to operate within the isolated sandbox.
-  - **Automated Lifecycle Management**: Integrated `tmp/` and `locks/` purging into `cache_cleaner.py`, providing a one-click solution for total system-level hygiene.
-  - **Stdin Draining**: Added stdin draining before entering sub-process confirmation prompts to ensure clean interactive sessions.
+  - **Simplified Smart Mutex Logic**: Re-engineered the concurrency model to balance flexibility and safety.
+    - **Isolation by Renaming**: Non-in-place modes (Adjacent/Custom Output) now automatically resolve path conflicts by appending suffixes like `(1)`, `(2)`, etc., allowing safe parallel processing of the same source folder.
+    - **Strict In-Place Protection**: Robust `flock` directory locking is now exclusively enforced for `In-Place` operations to prevent data corruption.
+    - **Fixed Lock Life-cycle**: Resolved a bug where Rust lock guards were dropped too early. Locks are now held throughout the entire process life-cycle.
+  - **Environment-Level Isolation (Ghost Mode)**: Persistent redirection of all transient IO to `~/.modern_format_boost/tmp/` to ensure absolute zero-pollution of user media folders and static directory timestamps.
+  - **Automated Lifecycle Management**: Integrated `tmp/` and `locks/` purging into `cache_cleaner.py`.
+  - **Stdin Draining**: Hardened interactive prompts against leftover input during process transitions.
 
 - **Fixed GIF Frame Loss in HEVC Conversion**: Resolved an issue where short-duration frames (e.g., 100ms) in GIFs were merged and lost during CPU HEVC conversion, leading to incorrect output duration and frame counts.
   - **Root Cause**: The fallback to `encode_with_x265_cli` routed frames through a Y4M pipe, forcing a constant frame rate, and `libx265` merged short B-frames.
