@@ -12,6 +12,13 @@ All notable changes to this project will be documented in this file.
 - **Transparency-Linked Color Corrections (Alpha Pipeline Integration)**: Resolved a critical "dirty background" artifact where transparent areas of the source media would bleed underlying uninitialized color data (e.g., brownish-yellow hues) into the converted video or GIF.
   - Developed an `alphamerge` pre-conversion pipeline to accurately reconstruct RGBA from multi-stream AVIF.
   - Enforced a `premultiply=inplace=1` composite filter globally for all transparent sources to ensure clean blending against black backgrounds.
+- **Heuristics Engine Re-Architecture (Content vs Metadata)**: Radically redefined how GIFs are scored to stop guessing content based on purely physical/technical metadata.
+  - **De-weighted Transparency**: Alpha channels are now treated as technical artifacts (0.05 weight) rather than a definitive "meme" signal (previously 0.17).
+  - **De-duplicated Temporal Signals**: Consolidated `loop_frequency_score`, `cadence_score`, and `duration_score` out of their overlapping biases.
+  - **Content Entropy Proxies**: Introduced strict physical exemptions based on `aspect_ratio` and `spatial_bpp`. Large, text-heavy square/portrait memes (low entropy) are now correctly preserved, while tiny but noisy video clips (high entropy) are correctly converted.
+- **Active Learning Database Hardening (KNN)**: Solved the "echo chamber" problem where machine-labeled metadata merely repeated the rule engine's biases.
+  - KNN predictions derived from `auto`-labeled samples now suffer a heavy distance penalty (0.8).
+  - Human-labeled samples (`cli_ingest`) strictly override overlapping rules.
 - **Enhanced Meme Scoring System (v4)**:
   - Shifted from keyword-based directory scoring to a multi-dimensional KNN-based **"Content Value"** inference engine.
   - Integrated `aspect_ratio` and `pixel_density` as primary decision weights to identify low-value screenshots and memes.

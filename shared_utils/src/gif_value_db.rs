@@ -33,6 +33,7 @@ struct SampleRow {
     frame_payload_variation: Option<f64>,
     frame_delay_variation: Option<f64>,
     aspect_ratio: Option<f64>,
+    labeled_by: Option<String>,
 }
 
 pub fn lookup_similar_samples(meta: &GifMeta, path: Option<&Path>) -> Option<SampleMatch> {
@@ -92,7 +93,7 @@ fn lookup_similar_samples_inner(
             temporal_bpp, spatial_bpp,
             has_transparency, has_embedded_icc, has_complex_color_profile,
             palette_size, frame_payload_variation, frame_delay_variation,
-            aspect_ratio
+            aspect_ratio, labeled_by
          FROM samples
          WHERE loss_tolerance IS NOT NULL
            AND (width * height) BETWEEN ?1 AND ?2
@@ -118,6 +119,7 @@ fn lookup_similar_samples_inner(
                 frame_payload_variation: row.get(11)?,
                 frame_delay_variation: row.get(12)?,
                 aspect_ratio: row.get(13)?,
+                labeled_by: row.get(14)?,
             })
         },
     )?;
@@ -471,6 +473,12 @@ fn sample_distance(
         _ => 0.15,
     };
 
+    let label_penalty = if sample.labeled_by.as_deref() == Some("auto") {
+        0.8 // Hefty penalty for auto-labeled heuristics to prevent an echo chamber
+    } else {
+        0.0 // True manual cli_ingest samples get zero penalty
+    };
+
     pixel_distance * 0.8
         + duration_distance * 0.7
         + frame_distance * 0.4
@@ -482,6 +490,7 @@ fn sample_distance(
         + payload_variation_distance * 0.7
         + delay_variation_distance * 0.8
         + aspect_distance * 0.9
+        + label_penalty
 }
 
 fn variation_distance(a: Option<f64>, b: Option<f64>, missing_penalty: f64) -> f64 {
@@ -612,6 +621,7 @@ mod tests {
             frame_payload_variation: Some(0.35),
             frame_delay_variation: Some(0.55),
             aspect_ratio: Some(1.0),
+            labeled_by: Some("cli_ingest".to_string()),
         };
         let far = SampleRow {
             loss_tolerance: Some("low".to_string()),
@@ -628,6 +638,7 @@ mod tests {
             frame_payload_variation: Some(0.05),
             frame_delay_variation: Some(0.02),
             aspect_ratio: Some(1.78),
+            labeled_by: Some("cli_ingest".to_string()),
         };
         let pixel_count = f64::from(meta.width) * f64::from(meta.height);
         let tbpp = meta.file_size_bytes as f64 / (pixel_count * meta.frame_count as f64);

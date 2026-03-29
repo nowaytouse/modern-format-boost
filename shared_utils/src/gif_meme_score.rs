@@ -621,18 +621,18 @@ pub fn score_gif(meta: &GifMeta) -> MemeScore {
     let complexity = normalize(temporal_bpp, TEMPORAL_BPP_LOW, TEMPORAL_BPP_HIGH);
 
     let w_compression = 0.24;
-    let w_resolution = 0.10f64.mul_add(complexity, 0.16);
-    let w_duration = 0.08f64.mul_add(complexity, 0.16);
-    let w_aspect = 0.08 * 0.3f64.mul_add(-complexity, 1.0);
+    let w_resolution = 0.10f64.mul_add(complexity, 0.15);
+    let w_duration = 0.05; // De-weighted temporal overlap
+    let w_aspect = 0.15; // Boost aspect ratio importance
     let w_fps = 0.00;
     let w_filename = 0.05;
-    let w_loop_freq = 0.05;
-    let w_palette = 0.05;
+    let w_loop_freq = 0.03; // De-weighted temporal overlap
+    let w_palette = 0.06;
     let w_directory = 0.06;
-    let w_cadence = 0.09;
-    let w_transparency = 0.17;
-    let w_variance = 0.09;
-    let w_timing = 0.11;
+    let w_cadence = 0.04; // De-weighted temporal overlap
+    let w_transparency = 0.05; // Extreme debuff (was 0.17)
+    let w_variance = 0.07;
+    let w_timing = 0.05;
 
     let w_sum = w_compression
         + w_resolution
@@ -678,7 +678,7 @@ pub fn score_gif(meta: &GifMeta) -> MemeScore {
         w_timing / w_sum,
     );
 
-    let total = loop_frequency_score.mul_add(
+    let mut total = loop_frequency_score.mul_add(
         w_loop_freq,
         compression_score * w_compression
             + resolution_score * w_resolution
@@ -692,6 +692,18 @@ pub fn score_gif(meta: &GifMeta) -> MemeScore {
             + frame_variance_score * w_variance
             + timing_value_score * w_timing,
     ) + palette_score * w_palette;
+
+    // Content Proxy Exemption:
+    // If the image is large and has a very specific "meme" aspect ratio (like square or extreme tall),
+    // AND has very low entropy/spatial-bpp, heavily boost it to save HQ subtitles/infographics.
+    // Conversely, if it's rectangular and extremely high-entropy (noisy video piece), strictly penalize it.
+    if spatial_bpp < 3.0 && aspect_score >= 0.95 {
+        total += 0.18;
+    } else if spatial_bpp > 25.0 && aspect_score <= 0.2 {
+        total -= 0.12;
+    }
+
+    let total = total.clamp(0.0, 1.0);
 
     let loss_tolerance_score = if meta.has_embedded_icc || meta.has_complex_color_profile {
         0.0
