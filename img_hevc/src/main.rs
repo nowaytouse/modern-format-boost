@@ -106,6 +106,10 @@ enum Commands {
 }
 
 fn main() -> anyhow::Result<()> {
+    if let Err(e) = shared_utils::init_ghost_mode() {
+        eprintln!("⚠️ Failed to initialize Ghost Mode isolation: {e}");
+    }
+
     if let Err(e) =
         shared_utils::logging::init_logging("img_hevc", shared_utils::logging::LogConfig::default())
     {
@@ -434,8 +438,8 @@ fn load_image_safe(path: &std::path::Path) -> anyhow::Result<image::DynamicImage
 
         let temp_png_file = tempfile::Builder::new()
             .suffix(".png")
-            .tempfile()
-            .map_err(|e| anyhow::anyhow!("Failed to create temp file: {e}"))?;
+            .tempfile_in(shared_utils::get_mfb_tmp_dir()?)
+            .map_err(|e| anyhow::anyhow!("Failed to create temp file in MFB tmp: {e}"))?;
 
         let temp_path = temp_png_file.path();
 

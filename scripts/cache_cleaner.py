@@ -90,6 +90,7 @@ def main():
     db_file = cache_dir / "image_analysis_v2_main.db"
     log_dir = project_root / "logs"
     mfb_progress_dir = Path.home() / ".mfb_progress"
+    mfb_tmp_dir = Path.home() / ".modern_format_boost" / "tmp"
 
     clear_screen()
     draw_header()
@@ -99,6 +100,7 @@ def main():
     print("   - Image Analysis Database (Verification cache)")
     print("   - All Session Logs & Tool Debug Records")
     print("   - All Task Progress Trackers (Resume Capability)")
+    print("   - All Isolated Temporary Files (Ghost Mode artifacts)")
     print("   - All STALE directory locks (Active locks will be skipped)")
     print("")
 
@@ -138,6 +140,14 @@ def main():
         print(f"{DIM}   Removing MFB progress directory...{RESET}")
         shutil.rmtree(mfb_progress_dir, ignore_errors=True)
         print(f"   {GREEN}✅ MFB progress purged{RESET}")
+
+    # Purge MFB temp directory
+    if mfb_tmp_dir.is_dir():
+        print(f"{DIM}   Purging isolated temp directory...{RESET}")
+        shutil.rmtree(mfb_tmp_dir, ignore_errors=True)
+        # Recreate to maintain readiness
+        mfb_tmp_dir.mkdir(parents=True, exist_ok=True)
+        print(f"   {GREEN}✅ Isolated temp space cleared{RESET}")
     # Purge stale session locks
     if lock_dir.is_dir():
         print(f"{DIM}   Scanning for stale session locks...{RESET}")

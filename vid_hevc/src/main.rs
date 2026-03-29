@@ -66,6 +66,10 @@ enum Commands {
 }
 
 fn main() -> anyhow::Result<()> {
+    if let Err(e) = shared_utils::init_ghost_mode() {
+        eprintln!("⚠️ Failed to initialize Ghost Mode isolation: {e}");
+    }
+
     if let Err(e) =
         shared_utils::logging::init_logging("vid_hevc", shared_utils::logging::LogConfig::default())
     {

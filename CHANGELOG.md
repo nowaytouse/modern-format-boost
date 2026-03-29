@@ -44,9 +44,9 @@ All notable changes to this project will be documented in this file.
   - **Fail-Safe Discovery**: Added mandatory empty-list guards for all tool calls, preventing process hangs.
   - **Performance Optimization**: Restored **`cargo-nextest`** support for high-throughput, concurrent testing.
   - **Cleanup Confirmation Safety**: Hardened the cache and log cleanup process to prevent accidental deletions. Empty inputs or simple Enters now default to "No" (cancellation) with clear `🚫` visual feedback.
-  - **Zero-Pollution Directory Mutual Exclusion**: Re-engineered the session locking mechanism to be 100% non-invasive. Locks are now stored centrally in `~/.modern_format_boost/locks/` using path hashing (BLAKE3), ensuring no files are created in user data directories and folder timestamps remain untouched.
-  - **Rust Core Protection**: Moved mutual exclusion logic into the Rust underlying binaries (`img-hevc`, `vid-hevc`), providing intrinsic protection regardless of the entry point.
-  - **Safe Lock Purging**: Enhanced `cache_cleaner.py` to automatically detect and remove stale process locks. The script intelligently uses `flock` to identify and skip active sessions, preventing interference with running tasks.
+  - **MFB Ghost Mode (Self-Sovereign Zero-Pollution)**: Enforced a 100% non-invasive processing architecture directly in the Rust core. Binaries now automatically self-redirect their `TMPDIR` to `~/.modern_format_boost/tmp/` on startup, ensuring that source media folders remain untouched and directory `mtime` stays static, even when the binaries are used independently of any scripts.
+  - **Environment-Level Isolation**: Global `TMPDIR` injection in Python scripts automatically forces all sub-processes (FFmpeg, djxl, webpmux) and Rust core components to operate within the isolated sandbox.
+  - **Automated Lifecycle Management**: Integrated `tmp/` and `locks/` purging into `cache_cleaner.py`, providing a one-click solution for total system-level hygiene.
   - **Stdin Draining**: Added stdin draining before entering sub-process confirmation prompts to ensure clean interactive sessions.
 
 - **Fixed GIF Frame Loss in HEVC Conversion**: Resolved an issue where short-duration frames (e.g., 100ms) in GIFs were merged and lost during CPU HEVC conversion, leading to incorrect output duration and frame counts.

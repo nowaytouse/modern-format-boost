@@ -57,6 +57,12 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 IMGQUALITY_HEVC = PROJECT_ROOT / "target" / "release" / "img-hevc"
 VIDQUALITY_HEVC = PROJECT_ROOT / "target" / "release" / "vid-hevc"
 
+# MFB Ghost Mode - Isolated Temporary Directory
+# This prevents folder mtime updates by redirecting all intermediate IO away from source folders
+MFB_TMP_ROOT = Path.home() / ".modern_format_boost" / "tmp"
+MFB_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+os.environ["TMPDIR"] = str(MFB_TMP_ROOT)
+
 OUTPUT_MODE = "adjacent"
 TARGET_DIR = ""
 OUTPUT_DIR = ""

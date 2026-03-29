@@ -3,6 +3,29 @@ use std::path::{Path, PathBuf};
 use std::os::unix::io::AsRawFd;
 use anyhow::{Context, Result, anyhow};
 
+/// Initializes Ghost Mode by redirecting the process's TMPDIR to the MFB isolated temp directory.
+/// This ensures zero-pollution even when the binary is used independently of any scripts.
+pub fn init_ghost_mode() -> Result<()> {
+    let tmp = get_mfb_tmp_dir()?;
+    std::env::set_var("TMPDIR", &tmp);
+    Ok(())
+}
+
+/// Returns the central home for MFB metadata and transient files (~/.modern_format_boost)
+pub fn get_mfb_root() -> Result<PathBuf> {
+    std::env::var("HOME").map(PathBuf::from)
+        .or_else(|_| std::env::var("USERPROFILE").map(PathBuf::from))
+        .map_err(|_| anyhow!("Could not find home directory environment variable"))
+        .map(|h| h.join(".modern_format_boost"))
+}
+
+/// Returns the central temporary storage for MFB, ensuring it exists.
+pub fn get_mfb_tmp_dir() -> Result<PathBuf> {
+    let tmp = get_mfb_root()?.join("tmp");
+    fs::create_dir_all(&tmp).context("Failed to create MFB tmp directory")?;
+    Ok(tmp)
+}
+
 /// Attempts to acquire an exclusive advisory lock for a specific directory.
 ///
 /// The lock file is stored in a central location (~/.modern_format_boost/locks/)
@@ -17,11 +40,7 @@ pub fn acquire_dir_lock(dir_path: &Path) -> Result<File> {
     let hash = blake3::hash(path_str.as_bytes()).to_hex();
     
     // 3. Prepare global lock directory (non-polluting)
-    let home = std::env::var("HOME").map(PathBuf::from)
-        .or_else(|_| std::env::var("USERPROFILE").map(PathBuf::from))
-        .map_err(|_| anyhow!("Could not find home directory environment variable"))?;
-    
-    let lock_dir = home.join(".modern_format_boost").join("locks");
+    let lock_dir = get_mfb_root()?.join("locks");
     fs::create_dir_all(&lock_dir).context("Failed to create lock directory")?;
 
     let lock_file_path = lock_dir.join(format!("{hash}.lock"));
@@ -33,7 +52,6 @@ pub fn acquire_dir_lock(dir_path: &Path) -> Result<File> {
     // 5. Apply flock (Exclusive, Non-blocking)
     let fd = file.as_raw_fd();
     // SAFETY: Using libc directly for lightweight advisory locking.
-    // LOCK_EX = Exclusive lock, LOCK_NB = Non-blocking.
     let result = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
 
     if result != 0 {
