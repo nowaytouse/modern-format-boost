@@ -74,6 +74,51 @@ pub fn get_video_duration(input: &Path) -> Option<f64> {
     }
 }
 
+fn count_video_frames(path: &Path) -> Option<u64> {
+    if is_gif_magic(path) {
+        let frames = crate::image_formats::gif::get_frame_count(path) as u64;
+        if frames > 0 {
+            return Some(frames);
+        }
+    }
+
+    let is_webp = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("webp"));
+    if is_webp {
+        let data = std::fs::read(path).ok()?;
+        let frames = crate::image_formats::webp::count_frames_from_bytes(&data) as u64;
+        if frames > 0 {
+            return Some(frames);
+        }
+    }
+
+    let try_ffprobe_count = |mode: &str, entry: &str| -> Option<u64> {
+        let out = Command::new("ffprobe")
+            .args(["-v", "error"])
+            .args([mode, "-select_streams", "v:0"])
+            .args(["-show_entries", entry])
+            .args(["-of", "default=noprint_wrappers=1:nokey=1"])
+            .arg("--")
+            .arg(crate::safe_path_arg(path).as_ref())
+            .output()
+            .ok()?;
+
+        if !out.status.success() {
+            return None;
+        }
+
+        String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .parse::<u64>()
+            .ok()
+    };
+
+    try_ffprobe_count("-count_frames", "stream=nb_read_frames")
+        .or_else(|| try_ffprobe_count("-count_packets", "stream=nb_read_packets"))
+}
+
 #[must_use]
 pub fn is_gif_magic(path: &Path) -> bool {
     let mut magic = [0u8; 4];
@@ -306,25 +351,8 @@ pub fn check_lossless_integrity(
         return Ok(false);
     }
 
-    // Helper: count frames via ffprobe without decoding (fast)
-    let count_frames = |path: &Path| -> Option<u64> {
-        let out = Command::new("ffprobe")
-            .args(["-v", "error"])
-            .args(["-count_packets", "-select_streams", "v:0"])
-            .args(["-show_entries", "stream=nb_read_packets"])
-            .args(["-of", "default=noprint_wrappers=1:nokey=1"])
-            .arg("--")
-            .arg(crate::safe_path_arg(path).as_ref())
-            .output()
-            .ok()?;
-        String::from_utf8_lossy(&out.stdout)
-            .trim()
-            .parse::<u64>()
-            .ok()
-    };
-
-    let input_frames = count_frames(input);
-    let output_frames = count_frames(output);
+    let input_frames = count_video_frames(input);
+    let output_frames = count_video_frames(output);
 
     match (input_frames, output_frames) {
         (Some(i), Some(o)) if o >= i => {

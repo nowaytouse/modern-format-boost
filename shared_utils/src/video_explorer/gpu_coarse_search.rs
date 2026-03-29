@@ -1302,6 +1302,14 @@ fn cpu_fine_tune_from_gpu_boundary(
             }
         }
 
+        if input_is_animated_image_like
+            || probe_info.is_some_and(|probe| probe.is_variable_frame_rate)
+        {
+            // Preserve source timing for GIF/WebP and other VFR inputs so FFmpeg
+            // does not silently collapse frames onto a CFR timeline.
+            cmd.arg("-vsync").arg("vfr");
+        }
+
         if input_is_image {
             cmd.arg("-an");
         } else {

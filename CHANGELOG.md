@@ -5,15 +5,38 @@ All notable changes to this project will be documented in this file.
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
 
-## [0.11.2] - 2026-03-29
+## [0.11.1] - 2026-03-29
+
+#### 📚 Documentation & Research
+- **JPEG XL Distance Precision Study**: Published comprehensive research on cjxl `--distance` parameter precision limits and equivalence boundaries.
+  - **Equivalence Range Identified**: All values in `0 < d ≤ 0.010` produce byte-exact identical output (verified with `cmp` across multiple images).
+  - **Exact Boundary**: Output first changes at `d ≈ 0.010000001` (float32 ULP limit at 0.01).
+  - **Lossless Threshold**: Values `d ≤ 1×10⁻⁴⁶` underflow to 0.0 in float32, unintentionally triggering Modular lossless mode (79% larger files, 15× slower encode).
+  - **Recommendation**: Use `d=0.01` for maximum VarDCT quality (simplest value in equivalence range); use `d=0.1` for general purpose (54% smaller, PSNR 43 dB).
+  - **Documentation**: `docs/CJXL_DISTANCE_PRECISION_STUDY_v4.md` contains full methodology, test results, and analysis.
+
+#### 🛡️ Animated Image Integrity & Frame Preservation
+- **Fixed CRF=0 Frame Drop Issue**: Resolved integrity check failures for GIF/WebP animated inputs where frame count and duration dropped significantly during encoding.
+  - **Root Cause**: FFmpeg's default CFR (Constant Frame Rate) behavior was forcing VFR (Variable Frame Rate) animated images into a fixed frame rate, causing frame drops.
+  - **Solution**: Added `-vsync vfr` flag to FFmpeg encoding commands for animated inputs, preserving the original timeline and all frames.
+  - **Affected Files**: `gpu_coarse_search.rs:1305`
+
+- **Enhanced Frame Counting Accuracy**: Replaced unreliable packet-based frame counting with format-specific parsers for accurate integrity verification.
+  - **GIF**: Uses native project structure parser for direct frame counting.
+  - **WebP**: Parses ANMF chunks directly for accurate frame count.
+  - **Fallback**: Uses `ffprobe -count_frames nb_read_frames` for other formats; falls back to packet counting only when all else fails.
+  - **Affected Files**: `stream_analysis.rs:77`
+
+- **Integrity Check Improvements**:
+  - Now compares frame count AND duration ratio between input and output.
+  - Warns when either metric drops significantly (threshold: duration ratio < 0.95).
+  - Prevents false-positive "lossless" claims when frames are actually dropped.
 
 #### 🛡️ JPEG Robustness & Metadata Handling
 - **Enhanced EOI Detection**: Re-implemented `is_jpeg_complete` to perform a full-file reverse search for the `FF D9` marker. This robustly handles JPEGs with large trailing metadata (common in mobile captures like Vivo/Samsung) that were previously misidentified as truncated.
 - **Fixed JPEG Tail Stripping**: Corrected the `strip_jpeg_tail_to_temp` logic to properly include the `EOI` (FF D9) marker in the sanitized output. This ensures `cjxl` bitstream reconstruction works correctly on files with extra trailing data.
 - **Strict SOI Validation**: Added mandatory `FF D8` (Start of Image) verification to all JPEG analysis functions to prevent processing non-JPEG files.
 - **Unified Corruption Checks**: Synchronized the early corruption check logic between `img_hevc` and `img_av1` crates, providing consistent error reporting ("JPEG is truncated or missing EOI") across the entire pipeline.
-
-## [0.11.1] - 2026-03-28
 
 #### 🛡️ Error Architecture & Reporting
 - **Clarified Failure Logs**: Enhanced image conversion failure messages (e.g., for truncated JPEGs) to explicitly state that the original file was preserved and conversion was skipped, preventing confusion about "Critical" status.
