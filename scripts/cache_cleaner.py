@@ -94,7 +94,7 @@ def main():
 
     confirm = input(f"   {BOLD}Type 'yes' to confirm cleanup (yes/N) [Default: N]: {RESET}").strip()
     if not confirm or confirm.lower() != "yes":
-        print(f"\n{GREEN}✅ Cleanup cancelled by user.{RESET}")
+        print(f"\n{YELLOW}🚫 Cleanup cancelled by user.{RESET}")
         print(f"{DIM}   No action taken. Returning to menu...{RESET}")
         time.sleep(1.5)
         return

@@ -43,7 +43,7 @@ All notable changes to this project will be documented in this file.
   - **UI Reliability**: Implemented `rich.markup.escape` and pipe-consumption safety to prevent UI crashes and process deadlocks.
   - **Fail-Safe Discovery**: Added mandatory empty-list guards for all tool calls, preventing process hangs.
   - **Performance Optimization**: Restored **`cargo-nextest`** support for high-throughput, concurrent testing.
-  - **Cleanup Confirmation Safety**: Hardened the cache and log cleanup process to prevent accidental deletions. Empty inputs or simple Enters now default to "No" (cancellation).
+  - **Cleanup Confirmation Safety**: Hardened the cache and log cleanup process to prevent accidental deletions. Empty inputs or simple Enters now default to "No" (cancellation) with clear `🚫` visual feedback.
   - **Input Buffering**: Added stdin draining before entering sub-process confirmation prompts to ensure clean interactive sessions.
 
 - **Fixed GIF Frame Loss in HEVC Conversion**: Resolved an issue where short-duration frames (e.g., 100ms) in GIFs were merged and lost during CPU HEVC conversion, leading to incorrect output duration and frame counts.
