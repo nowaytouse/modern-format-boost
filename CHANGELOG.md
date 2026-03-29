@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.11.2] - 2026-03-30
+
+#### 🛠️ Metadata & Branding
+- **Temporarily Disabled Branding**: Temporarily disabled the functionality that appends "[Optimized by Modern Format Boost]" to macOS Finder comments to streamline file processing and minimize metadata pollution during this iteration.
+
 ## [0.11.1] - 2026-03-29
 
 #### 🎨 Color Fidelity & Content Intelligence (Meme Score v4)
