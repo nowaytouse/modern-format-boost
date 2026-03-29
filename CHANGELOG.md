@@ -7,7 +7,8 @@ All notable changes to this project will be documented in this file.
 ## [0.11.2] - 2026-03-30
 
 #### 🛠️ Metadata & Branding
-- **Temporarily Disabled Branding**: Temporarily disabled the functionality that appends "[Optimized by Modern Format Boost]" to macOS Finder comments to streamline file processing and minimize metadata pollution during this iteration.
+- **Opt-in Branding Strategy**: Transitioned the "[Optimized by Modern Format Boost]" Finder comment to an opt-in model. The feature is now **disabled by default** to minimize metadata pollution.
+- **Activation**: Users can re-enable this functionality by setting the environment variable `MODERN_FORMAT_BOOST_ENABLE_BRANDING=1`.
 
 ## [0.11.1] - 2026-03-29
 
