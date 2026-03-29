@@ -37,11 +37,12 @@ All notable changes to this project will be documented in this file.
   - **Input Responsiveness**: Optimized key-reading logic (non-blocking `fcntl`) to eliminate input latency during menu navigation.
 
 - **Production-Grade Refactor of `check_all.py`**: Completely re-engineered the workspace auditor into a robust, multi-language quality suite.
-  - **Fail-Safe Discovery**: Added mandatory empty-list guards for all tool calls (Ruff, Prettier, etc.), preventing process hangs when no target files are present.
-  - **Performance Optimization**: Integrated `@lru_cache` for tool detection and restored **`cargo-nextest`** support for high-throughput, concurrent testing.
-  - **Modern Architecture**: Migrated to `argparse` for CLI, `dataclasses` for state tracking, and lazy `REPO_ROOT` detection.
-  - **Full-Stack Auditing**: Integrated `taplo` (TOML), YAML/JSON discovery, and multi-platform `kondo` logic.
-  - **Universal Summary**: Fixed Rich UI semantics and restored detailed verbose summaries for non-Rich terminal environments (CI/CD).
+  - **Logic De-coupling**: Separated low-level tool detection (`lru_cache`) from UI logic, ensuring hints (hints) are never missed while maintaining zero-latency detection.
+  - **Standardized CLI Priority**: Aligned `--branch` override logic with industry standards, where CLI arguments correctly supersede environment variables.
+  - **Full-Feature Audit**: Enforced `--all-features` for all required Rust stages (clippy/check) to ensure no hidden code paths are missed.
+  - **UI Reliability**: Implemented `rich.markup.escape` and pipe-consumption safety to prevent UI crashes and process deadlocks.
+  - **Fail-Safe Discovery**: Added mandatory empty-list guards for all tool calls, preventing process hangs.
+  - **Performance Optimization**: Restored **`cargo-nextest`** support for high-throughput, concurrent testing.
 
 - **Fixed GIF Frame Loss in HEVC Conversion**: Resolved an issue where short-duration frames (e.g., 100ms) in GIFs were merged and lost during CPU HEVC conversion, leading to incorrect output duration and frame counts.
   - **Root Cause**: The fallback to `encode_with_x265_cli` routed frames through a Y4M pipe, forcing a constant frame rate, and `libx265` merged short B-frames.
