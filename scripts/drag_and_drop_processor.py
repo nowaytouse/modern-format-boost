@@ -306,7 +306,11 @@ def read_key():
         tty.setraw(sys.stdin.fileno())
         ch = sys.stdin.read(1)
         if ch == '\x1b':
-            ch += sys.stdin.read(2)
+            # Handle sequences like arrows
+            import select
+            r, _, _ = select.select([sys.stdin], [], [], 0.1)
+            if r:
+                ch += sys.stdin.read(2)
         return ch
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
@@ -316,15 +320,13 @@ def select_mode():
     selected = 0
     hide_cursor()
 
+    # We merge the first two modes into one dynamic display item
+    # Internal state for the "Mode" item (0: adjacent, 1: inplace)
+    mode_sub_state = 0 if OUTPUT_MODE == "adjacent" else 1
+
     options = [
-        "📂 Output to Adjacent Folder",
-        "🚀 In-Place Optimization",
+        "📂 Optimization Mode",
         "🧹 Cleanup Cache & Logs"
-    ]
-    descriptions = [
-        "Safe mode. Keeps originals untouched.",
-        "Replaces original files. Saves disk space.",
-        "Clear analysis cache, session logs, and ALL task progress."
     ]
 
     while True:
@@ -333,22 +335,43 @@ def select_mode():
         print(f"{BOLD}Select Operation Mode:{RESET}\n")
 
         for i, opt in enumerate(options):
-            if i == selected:
-                if 'Console' in globals():
-                    console.print(f"  [bold #00aaff]➜[/bold #00aaff] [reverse #00aaff] {opt} [/reverse #00aaff]")
-                    console.print(f"     [#00ccff]{descriptions[i]}[/#00ccff]\n")
+            is_selected = (i == selected)
+            
+            if i == 0: # Combined Mode Item
+                display_text = "📂 Mode: Output to Adjacent Folder [Tab to Switch]" if mode_sub_state == 0 else "🚀 Mode: In-Place Optimization [Tab to Switch]"
+                description = "Safe mode. Keeps originals untouched." if mode_sub_state == 0 else "Replaces original files. Saves disk space."
+                
+                if is_selected:
+                    if 'Console' in globals():
+                        console.print(f"  [bold #00aaff]➜[/bold #00aaff] [reverse #00aaff] {display_text} [/reverse #00aaff]")
+                        console.print(f"     [#00ccff]{description}[/#00ccff]\n")
+                    else:
+                        print(f"  {CYAN}➜ {BOLD}{display_text}{RESET}")
+                        print(f"    {CYAN}{DIM}{description}{RESET}\n")
                 else:
-                    print(f"  {CYAN}➜ {BOLD}{opt}{RESET}")
-                    print(f"    {CYAN}{DIM}{descriptions[i]}{RESET}\n")
-            else:
-                if 'Console' in globals():
-                    console.print(f"     [dim]○ {opt}[/dim]")
-                    console.print(f"     [dim]{descriptions[i]}[/dim]\n")
+                    if 'Console' in globals():
+                        console.print(f"     [dim]○ {display_text}[/dim]")
+                        console.print(f"     [dim]{description}[/dim]\n")
+                    else:
+                        print(f"    {DIM}○ {display_text}{RESET}")
+                        print(f"    {DIM}{description}{RESET}\n")
+            else: # Other items
+                if is_selected:
+                    if 'Console' in globals():
+                        console.print(f"  [bold #00aaff]➜[/bold #00aaff] [reverse #00aaff] {opt} [/reverse #00aaff]")
+                        console.print(f"     [#00ccff]Clear analysis cache, session logs, and ALL task progress.[/#00ccff]\n")
+                    else:
+                        print(f"  {CYAN}➜ {BOLD}{opt}{RESET}")
+                        print(f"    {CYAN}{DIM}Clear analysis cache, session logs, and ALL task progress.{RESET}\n")
                 else:
-                    print(f"    {DIM}○ {opt}{RESET}")
-                    print(f"    {DIM}{descriptions[i]}{RESET}\n")
+                    if 'Console' in globals():
+                        console.print(f"     [dim]○ {opt}[/dim]")
+                        console.print(f"     [dim]Clear analysis cache, session logs, and ALL task progress.[/dim]\n")
+                    else:
+                        print(f"    {DIM}○ {opt}{RESET}")
+                        print(f"    {DIM}Clear analysis cache, session logs, and ALL task progress.{RESET}\n")
 
-        print(f"{DIM}(Use ↑/↓ to navigate, Enter to select, q to quit){RESET}")
+        print(f"{DIM}(Use ↑/↓ to navigate, Tab to toggle mode, Enter to select, q to quit){RESET}")
 
         if sys.stdin.isatty():
             key = read_key()
@@ -356,36 +379,45 @@ def select_mode():
                 selected = (selected - 1) % len(options)
             elif key in ('\x1b[B', '\x1b[C'):  # Down / Right
                 selected = (selected + 1) % len(options)
+            elif key == '\t': # Tab
+                if selected == 0:
+                    mode_sub_state = 1 - mode_sub_state
             elif key in ('\r', '\n'):
                 break
             elif key.lower() == 'q':
                 show_cursor()
                 sys.exit(0)
         else:
-            # Fallback if not interactive
             selected = 0
             break
 
     show_cursor()
 
     if selected == 0:
-        OUTPUT_MODE = "adjacent"
-        tdir = Path(TARGET_DIR).resolve()
-        OUTPUT_DIR = str(tdir.parent / (tdir.name + "_optimized"))
-        print(f"\n{GREEN}✅ ADJACENT MODE SELECTED{RESET}")
-        print(f"   Output: {DIM}{OUTPUT_DIR}{RESET}")
-        print(f"   {DIM}Creating directory structure...{RESET}")
-        create_directory_structure(TARGET_DIR, OUTPUT_DIR)
+        if mode_sub_state == 0:
+            OUTPUT_MODE = "adjacent"
+            tdir = Path(TARGET_DIR).resolve()
+            OUTPUT_DIR = str(tdir.parent / (tdir.name + "_optimized"))
+            print(f"\n{GREEN}✅ ADJACENT MODE SELECTED{RESET}")
+            print(f"   Output: {DIM}{OUTPUT_DIR}{RESET}")
+            print(f"   {DIM}Creating directory structure...{RESET}")
+            create_directory_structure(TARGET_DIR, OUTPUT_DIR)
+        else:
+            OUTPUT_MODE = "inplace"
+            print(f"\n{RED}⚠️  DANGER: IN-PLACE OPTIMIZATION SELECTED{RESET}")
+            print(f"{BOLD}{WHITE}   Original files will be replaced after successful conversion.{RESET}")
+            print(f"{YELLOW}   This action is irreversible if you don't have backups.{RESET}\n")
+            drain_stdin()
+            # Mandatory 'yes' input
+            confirm = input(f"   {BOLD}To proceed, type {RED}'yes'{RESET}{BOLD} (case-sensitive) and press Enter: {RESET}")
+            if confirm != 'yes':
+                print(f"\n{YELLOW}❌ In-place optimization aborted. Safety fallback to Adjacent Mode.{RESET}")
+                OUTPUT_MODE = "adjacent"
+                tdir = Path(TARGET_DIR).resolve()
+                OUTPUT_DIR = str(tdir.parent / (tdir.name + "_optimized"))
+                print(f"   Output: {DIM}{OUTPUT_DIR}{RESET}")
+                create_directory_structure(TARGET_DIR, OUTPUT_DIR)
     elif selected == 1:
-        OUTPUT_MODE = "inplace"
-        print(f"\n{YELLOW}⚠️  IN-PLACE MODE SELECTED{RESET}")
-        print(f"{DIM}   Original files will be replaced after successful conversion.{RESET}")
-        drain_stdin()
-        confirm = input(f"   {BOLD}Type 'yes' to confirm in-place optimization (yes/N): {RESET}")
-        if confirm.lower() != 'yes':
-            print(f"\n{RED}❌ In-place optimization cancelled.{RESET}")
-            sys.exit(0)
-    elif selected == 2:
         OUTPUT_MODE = "cache_clean"
         print(f"\n{RED}🧹 CACHE & LOG CLEANUP MODE{RESET}")
         print(f"{DIM}   Analysis cache and ALL task progress will be permanently deleted.{RESET}\n")
