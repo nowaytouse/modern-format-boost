@@ -21,6 +21,11 @@ All notable changes to this project will be documented in this file.
   - **Solution**: Added `-vsync vfr` flag to FFmpeg encoding commands for animated inputs, preserving the original timeline and all frames.
   - **Affected Files**: `gpu_coarse_search.rs:1305`
 
+- **Fixed GIF Frame Loss in HEVC Conversion**: Resolved an issue where short-duration frames (e.g., 100ms) in GIFs were merged and lost during CPU HEVC conversion, leading to incorrect output duration and frame counts.
+  - **Root Cause**: The fallback to `encode_with_x265_cli` routed frames through a Y4M pipe, forcing a constant frame rate, and `libx265` merged short B-frames.
+  - **Solution**: Bypassed `encode_with_x265_cli` for all animated images, routing them directly through FFmpeg's `libx265` wrapper. Injected `-fps_mode passthrough`, `-video_track_timescale 1000`, and `-x265-params bframes=0` into the encoding parameters to strictly preserve variable timing and prevent B-frame merging.
+  - **Affected Files**: `video_explorer.rs`
+
 - **Enhanced Frame Counting Accuracy**: Replaced unreliable packet-based frame counting with format-specific parsers for accurate integrity verification.
   - **GIF**: Uses native project structure parser for direct frame counting.
   - **WebP**: Parses ANMF chunks directly for accurate frame count.

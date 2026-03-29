@@ -2236,13 +2236,16 @@ impl VideoExplorer {
     }
 
     fn encode(&self, crf: f32) -> Result<u64> {
-        if !self.use_gpu && self.encoder == VideoEncoder::Hevc {
+        let ext = self.input_path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+        let is_animated = matches!(ext.as_str(), "gif" | "webp" | "avif" | "heic" | "heif" | "apng");
+
+        if !self.use_gpu && self.encoder == VideoEncoder::Hevc && !is_animated {
             return self.encode_with_x265_cli(crf);
         }
 
         let result = self.encode_with_ffmpeg(crf);
 
-        if result.is_err() && self.use_gpu && self.encoder == VideoEncoder::Hevc {
+        if result.is_err() && self.use_gpu && self.encoder == VideoEncoder::Hevc && !is_animated {
             crate::log_eprintln!("      ⚠️  GPU encoding failed, falling back to CPU (x265 CLI)");
             return self.encode_with_x265_cli(crf);
         }
@@ -2382,12 +2385,29 @@ impl VideoExplorer {
             .arg("-stats_period")
             .arg("0.5");
 
+        let ext = self.input_path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+        let is_animated = matches!(ext.as_str(), "gif" | "webp" | "avif" | "heic" | "heif" | "apng");
+        if is_animated {
+            cmd.arg("-fps_mode").arg("passthrough")
+               .arg("-video_track_timescale").arg("1000");
+        }
+
         if !self.use_gpu {
-            for arg in self.encoder.extra_args_with_preset(
+            let mut args = self.encoder.extra_args_with_preset(
                 self.max_threads,
                 self.preset,
                 self.hdr_x265_params.clone(),
-            ) {
+            );
+            
+            if self.encoder == VideoEncoder::Hevc && is_animated {
+                if let Some(pos) = args.iter().position(|x| x == "-x265-params") {
+                    if pos + 1 < args.len() {
+                        args[pos + 1].push_str(":bframes=0");
+                    }
+                }
+            }
+            
+            for arg in args {
                 cmd.arg(arg);
             }
         }
