@@ -44,7 +44,9 @@ All notable changes to this project will be documented in this file.
   - **Fail-Safe Discovery**: Added mandatory empty-list guards for all tool calls, preventing process hangs.
   - **Performance Optimization**: Restored **`cargo-nextest`** support for high-throughput, concurrent testing.
   - **Cleanup Confirmation Safety**: Hardened the cache and log cleanup process to prevent accidental deletions. Empty inputs or simple Enters now default to "No" (cancellation) with clear `🚫` visual feedback.
-  - **Input Buffering**: Added stdin draining before entering sub-process confirmation prompts to ensure clean interactive sessions.
+  - **Directory-Level Mutal Exclusion**: Implemented an advisory locking mechanism using `fcntl.flock`. This prevents multiple instances of MFB from processing the same directory simultaneously, eliminating data corruption risks.
+  - **Auto-Cleanup**: Locks are bound to file handles and managed via `atexit`, ensuring they are correctly released even during process crashes or manual interrupts.
+  - **Stdin Draining**: Added stdin draining before entering sub-process confirmation prompts to ensure clean interactive sessions.
 
 - **Fixed GIF Frame Loss in HEVC Conversion**: Resolved an issue where short-duration frames (e.g., 100ms) in GIFs were merged and lost during CPU HEVC conversion, leading to incorrect output duration and frame counts.
   - **Root Cause**: The fallback to `encode_with_x265_cli` routed frames through a Y4M pipe, forcing a constant frame rate, and `libx265` merged short B-frames.
