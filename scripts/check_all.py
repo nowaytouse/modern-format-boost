@@ -12,7 +12,6 @@ import time
 import argparse
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import List, Optional
 from functools import lru_cache
 
 try:
@@ -236,13 +235,9 @@ def main():
 
     # --- 1. Environment Guard ---
     try:
-        current_branch = subprocess.check_output(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"], text=True
-        ).strip()
+        current_branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"], text=True).strip()
         if not args.allow_non_nightly and current_branch != args.branch:
-            print(
-                f"Fatal: Required branch '{args.branch}', but current is '{current_branch}'. Use --allow-non-nightly or --branch <name>."
-            )
+            print(f"Fatal: Required branch '{args.branch}', but current is '{current_branch}'. Use --allow-non-nightly or --branch <name>.", file=sys.stderr)
             sys.exit(2)
     except Exception:
         pass
@@ -466,27 +461,9 @@ def main():
         table.add_column("Details", style="dim")
 
         table.add_row("✅ Passed", str(tracker.passed), "[green]All clear[/green]")
-        table.add_row(
-            "❌ Failed",
-            str(tracker.failed),
-            f"[red]{', '.join(tracker.failed_steps)}[/red]"
-            if tracker.failed_steps
-            else "-",
-        )
-        table.add_row(
-            "⚠️  Warned",
-            str(tracker.warned),
-            f"[yellow]{', '.join(tracker.warned_steps)}[/yellow]"
-            if tracker.warned_steps
-            else "-",
-        )
-        table.add_row(
-            "⏭️  Skipped",
-            str(tracker.skipped),
-            f"[blue]{len(tracker.skipped_steps)} items[/blue]"
-            if tracker.skipped_steps
-            else "-",
-        )
+        table.add_row("❌ Failed", str(tracker.failed), f"[red]{escape(', '.join(tracker.failed_steps))}[/red]" if tracker.failed_steps else "-")
+        table.add_row("⚠️  Warned", str(tracker.warned), f"[yellow]{escape(', '.join(tracker.warned_steps))}[/yellow]" if tracker.warned_steps else "-")
+        table.add_row("⏭️  Skipped", str(tracker.skipped), f"[blue]{len(tracker.skipped_steps)} items[/blue]" if tracker.skipped_steps else "-")
 
         console.print(table)
 
