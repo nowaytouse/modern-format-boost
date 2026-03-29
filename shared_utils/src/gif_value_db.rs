@@ -1,6 +1,8 @@
 use crate::gif_meme_score::{gif_meta_from_probe_with_path, scan_gif_headers, GifMeta};
 use anyhow::{Context, Result};
 use blake3::Hasher;
+use indicatif::{ProgressBar, ProgressStyle};
+use rayon::prelude::*;
 use rusqlite::{params, Connection, OpenFlags};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -503,7 +505,7 @@ fn variation_distance(a: Option<f64>, b: Option<f64>, missing_penalty: f64) -> f
 
 pub fn batch_ingest_samples(dataset_path: &Path) -> Result<usize> {
     let db_path = sample_db_path()?;
-    let conn = Connection::open_with_flags(
+    let mut conn = Connection::open_with_flags(
         &db_path,
         OpenFlags::SQLITE_OPEN_READ_WRITE
             | OpenFlags::SQLITE_OPEN_CREATE
@@ -512,68 +514,109 @@ pub fn batch_ingest_samples(dataset_path: &Path) -> Result<usize> {
 
     init_schema(&conn)?;
 
-    let mut count = 0;
-    let tx = conn.unchecked_transaction()?;
+    println!(
+        "🔍 Scanning for candidate assets in {}...",
+        dataset_path.display()
+    );
+    let mut candidate_paths = Vec::new();
     for entry in WalkDir::new(dataset_path)
         .follow_links(false)
         .into_iter()
         .flatten()
         .filter(|e| e.file_type().is_file())
     {
-        let path = entry.path();
+        let path = entry.path().to_path_buf();
         let ext = path
             .extension()
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .to_lowercase();
-        if !["gif", "webp", "mp4", "mov"].contains(&ext.as_str()) {
-            continue;
+        if ["gif", "webp", "mp4", "mov"].contains(&ext.as_str()) {
+            candidate_paths.push(path);
         }
+    }
 
-        if let Some(sample) = sample_from_path(path, "cli_ingest") {
-            let res = tx.execute(
-                "INSERT OR REPLACE INTO samples (
-                    file_hash, source_path, file_name, source_ext,
-                    width, height, duration_secs, frame_count, file_size_bytes, fps,
-                    has_embedded_icc, has_complex_color_profile, has_transparency,
-                    palette_size, frame_payload_variation, frame_delay_variation,
-                    temporal_bpp, spatial_bpp, loss_tolerance, labeled_by, aspect_ratio
-                 ) VALUES (
-                    ?1, ?2, ?3, ?4,
-                    ?5, ?6, ?7, ?8, ?9, ?10,
-                    ?11, ?12, ?13,
-                    ?14, ?15, ?16,
-                    ?17, ?18, ?19, ?20, ?21
-                 )",
-                params![
-                    sample.file_hash,
-                    sample.source_path,
-                    sample.file_name,
-                    sample.source_ext,
-                    sample.width,
-                    sample.height,
-                    sample.duration_secs,
-                    i64::try_from(sample.frame_count).unwrap_or(i64::MAX),
-                    i64::try_from(sample.file_size_bytes).unwrap_or(i64::MAX),
-                    sample.fps,
-                    i64::from(sample.has_embedded_icc),
-                    i64::from(sample.has_complex_color_profile),
-                    i64::from(sample.has_transparency),
-                    sample.palette_size,
-                    sample.frame_payload_variation,
-                    sample.frame_delay_variation,
-                    sample.temporal_bpp,
-                    sample.spatial_bpp,
-                    sample.loss_tolerance,
-                    sample.labeled_by,
-                    sample.aspect_ratio,
-                ],
-            );
+    if candidate_paths.is_empty() {
+        println!("⚠️ No matching assets found in designated path.");
+        return Ok(0);
+    }
+
+    let pb = ProgressBar::new(candidate_paths.len() as u64);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}")
+            .expect("Valid template")
+            .progress_chars("#>-"),
+    );
+
+    println!("🧠 Learning from {} samples...", candidate_paths.len());
+
+    // Process in parallel to speed up ffprobe and GIF header scanning
+    let samples: Vec<_> = candidate_paths
+        .par_iter()
+        .filter_map(|path| {
+            let res = sample_from_path(path, "cli_ingest");
+            pb.inc(1);
+            if let Some(s) = &res {
+                pb.set_message(format!("Learn: {}", s.file_name.as_deref().unwrap_or("?")));
+            }
+            res
+        })
+        .collect();
+
+    pb.finish_with_message("Learning complete.");
+
+    println!("💾 Persisting {} samples to database...", samples.len());
+    let tx = conn.transaction()?;
+    let mut count = 0;
+
+    {
+        let mut stmt = tx.prepare_cached(
+            "INSERT OR REPLACE INTO samples (
+                file_hash, source_path, file_name, source_ext,
+                width, height, duration_secs, frame_count, file_size_bytes, fps,
+                has_embedded_icc, has_complex_color_profile, has_transparency,
+                palette_size, frame_payload_variation, frame_delay_variation,
+                temporal_bpp, spatial_bpp, loss_tolerance, labeled_by, aspect_ratio
+             ) VALUES (
+                ?1, ?2, ?3, ?4,
+                ?5, ?6, ?7, ?8, ?9, ?10,
+                ?11, ?12, ?13,
+                ?14, ?15, ?16,
+                ?17, ?18, ?19, ?20, ?21
+             )",
+        )?;
+
+        for sample in samples {
+            let res = stmt.execute(params![
+                sample.file_hash,
+                sample.source_path,
+                sample.file_name,
+                sample.source_ext,
+                sample.width,
+                sample.height,
+                sample.duration_secs,
+                i64::try_from(sample.frame_count).unwrap_or(i64::MAX),
+                i64::try_from(sample.file_size_bytes).unwrap_or(i64::MAX),
+                sample.fps,
+                i64::from(sample.has_embedded_icc),
+                i64::from(sample.has_complex_color_profile),
+                i64::from(sample.has_transparency),
+                sample.palette_size,
+                sample.frame_payload_variation,
+                sample.frame_delay_variation,
+                sample.temporal_bpp,
+                sample.spatial_bpp,
+                sample.loss_tolerance,
+                sample.labeled_by,
+                sample.aspect_ratio,
+            ]);
             if res.is_ok() {
                 count += 1;
             }
         }
     }
+
     tx.commit()?;
     Ok(count)
 }
