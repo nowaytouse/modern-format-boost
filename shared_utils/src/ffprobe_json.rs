@@ -489,11 +489,16 @@ pub enum PtsIntegrity {
 pub fn check_pts_integrity(input: &Path) -> PtsIntegrity {
     let output = match Command::new("ffprobe")
         .args([
-            "-v", "error",
-            "-select_streams", "v:0",
-            "-show_entries", "packet=pts_time",
-            "-of", "csv=p=0",
-            "-read_intervals", "%+#100", // Check first 100 packets
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "packet=pts_time",
+            "-of",
+            "csv=p=0",
+            "-read_intervals",
+            "%+#100", // Check first 100 packets
             "--",
         ])
         .arg(crate::safe_path_arg(input).as_ref())

@@ -22,8 +22,22 @@ All notable changes to this project will be documented in this file.
 
 - **Video Health Pre-check & Dynamic Fallback**: Added a proactive PTS (Presentation Time Stamp) integrity scanner to detect broken source files before encoding.
   - **Functionality**: Scans the first 100 packets of the source to detect non-monotonic or duplicate timestamps.
-  - **Dynamic Fallback**: If the source is "Broken" (backward PTS), the pipeline automatically falls back from `passthrough` to `vfr` (Variable Frame Rate) mode. This allows FFmpeg to reconstruct a valid timeline, preventing the generation of unplayable/corrupt output files while still attempting to preserve frames.
+  - **Status Leveling**: Categorizes inputs into `Healthy`, `Duplicate`, or `Broken`.
+  - **Dynamic Fallback**: If the source is "Broken" (backward PTS), the pipeline automatically falls back from `passthrough` to `vfr` mode, allowing FFmpeg to reconstruct a valid timeline and preventing unplayable output.
   - **Affected Files**: `ffprobe_json.rs`, `video_explorer.rs`, `gpu_coarse_search.rs`
+
+#### 🛠️ Tooling & Scripting Improvements
+- **Enhanced `drag_and_drop_processor.py` UX**: Streamlined the interactive menu for a smoother, safer experience.
+  - **Menu Consolidation**: Merged "Adjacent Output" and "In-Place Optimization" into a single dynamic item.
+  - **Tab-to-Switch**: Users can now toggle between optimization modes using the **Tab** key within the menu.
+  - **In-Place Safety Block**: Mandatory `yes` (case-sensitive) confirmation for all in-place operations.
+  - **Graceful Error Recovery**: If confirmation fails, the script now displays a 3-second error countdown and returns to the main menu instead of exiting, allowing for instant retry.
+  - **Input Responsiveness**: Optimized key-reading logic (non-blocking `fcntl`) to eliminate input latency during menu navigation.
+
+- **Modernized `check_all.py` Quality Suite**: Expanded the codebase auditor to cover Python scripts.
+  - **Python Syntax Guard**: Added mandatory `py_compile` checks to the `REQUIRED` suite for all `.py` files.
+  - **Optional Linting**: Integrated `ruff check` (if installed) for high-performance Python code auditing.
+  - **Rust Fix Automation**: Improved the `--fix` path to automate `clippy` and `fmt` corrections across the workspace.
 
 - **Fixed GIF Frame Loss in HEVC Conversion**: Resolved an issue where short-duration frames (e.g., 100ms) in GIFs were merged and lost during CPU HEVC conversion, leading to incorrect output duration and frame counts.
   - **Root Cause**: The fallback to `encode_with_x265_cli` routed frames through a Y4M pipe, forcing a constant frame rate, and `libx265` merged short B-frames.

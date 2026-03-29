@@ -239,6 +239,19 @@ def main():
     else:
         run_command(tracker, "required", "cargo test --workspace --all-features", ["cargo", "test", "--workspace", "--all-features"])
 
+    # Python Script Quality Checks (Required)
+    py_files = []
+    for root, _, files in os.walk(repo_root):
+        if "__pycache__" in root or ".venv" in root or ".git" in root: continue
+        for file in files:
+            if file.endswith(".py"):
+                py_files.append(os.path.join(root, file))
+    
+    if py_files:
+        run_command(tracker, "required", f"python3 -m py_compile {len(py_files)} files", [sys.executable, "-m", "py_compile"] + py_files)
+    else:
+        skip_optional(tracker, "python syntax check", "no .py files found")
+
     if RUN_OPTIONAL:
         # File parsing for shell scripts
         shell_files = []
@@ -280,6 +293,14 @@ def main():
                 skip_optional(tracker, "shfmt -d *.sh", "no .sh files found under repo")
         else:
             skip_optional(tracker, "shfmt -d *.sh", "shfmt not installed")
+
+        if has_command("ruff"):
+            if py_files:
+                run_command(tracker, "optional", "ruff check", ["ruff", "check"] + py_files)
+            else:
+                skip_optional(tracker, "ruff check", "no .py files found")
+        else:
+            skip_optional(tracker, "ruff check", "ruff linter not installed")
 
         run_command(tracker, "optional", "cargo doc --workspace --no-deps", ["cargo", "doc", "--workspace", "--no-deps"])
         

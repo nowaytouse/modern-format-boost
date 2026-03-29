@@ -52,7 +52,7 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 IMGQUALITY_HEVC = PROJECT_ROOT / "target" / "release" / "img-hevc"
 VIDQUALITY_HEVC = PROJECT_ROOT / "target" / "release" / "vid-hevc"
 
-OUTPUT_MODE = "inplace"
+OUTPUT_MODE = "adjacent"
 TARGET_DIR = ""
 OUTPUT_DIR = ""
 ULTIMATE_MODE = True
@@ -303,14 +303,20 @@ def read_key():
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)
     try:
-        tty.setraw(sys.stdin.fileno())
+        tty.setraw(fd)
         ch = sys.stdin.read(1)
         if ch == '\x1b':
-            # Handle sequences like arrows
-            import select
-            r, _, _ = select.select([sys.stdin], [], [], 0.1)
-            if r:
-                ch += sys.stdin.read(2)
+            # Use non-blocking read to instantly capture arrow sequences
+            import fcntl
+            flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+            fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+            try:
+                next_chars = sys.stdin.read(2)
+                ch += next_chars
+            except IOError:
+                pass
+            finally:
+                fcntl.fcntl(fd, fcntl.F_SETFL, flags)
         return ch
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
@@ -383,44 +389,48 @@ def select_mode():
                 if selected == 0:
                     mode_sub_state = 1 - mode_sub_state
             elif key in ('\r', '\n'):
-                break
+                # Action based on selection
+                if selected == 0:
+                    if mode_sub_state == 0:
+                        OUTPUT_MODE = "adjacent"
+                        tdir = Path(TARGET_DIR).resolve()
+                        OUTPUT_DIR = str(tdir.parent / (tdir.name + "_optimized"))
+                        print(f"\n{GREEN}✅ ADJACENT MODE SELECTED{RESET}")
+                        print(f"   Output: {DIM}{OUTPUT_DIR}{RESET}")
+                        print(f"   {DIM}Creating directory structure...{RESET}")
+                        create_directory_structure(TARGET_DIR, OUTPUT_DIR)
+                        show_cursor()
+                        break # Exit select_mode and start processing
+                    else:
+                        OUTPUT_MODE = "inplace"
+                        print(f"\n{RED}⚠️  DANGER: IN-PLACE OPTIMIZATION SELECTED{RESET}")
+                        print(f"{BOLD}{WHITE}   Original files will be replaced after successful conversion.{RESET}")
+                        print(f"{YELLOW}   This action is irreversible if you don't have backups.{RESET}\n")
+                        drain_stdin()
+                        confirm = input(f"   {BOLD}To proceed, type {RED}'yes'{RESET}{BOLD} (case-sensitive) and press Enter: {RESET}")
+                        if confirm != 'yes':
+                            print(f"\n{RED}❌ Error: In-place optimization cancelled. Incorrect confirmation.{RESET}")
+                            print(f"{DIM}   Returning to main menu in 3 seconds...{RESET}")
+                            time.sleep(3)
+                            continue # Redraw menu
+                        else:
+                            show_cursor()
+                            break # Confirmed, start processing
+                elif selected == 1:
+                    OUTPUT_MODE = "cache_clean"
+                    print(f"\n{RED}🧹 CACHE & LOG CLEANUP MODE{RESET}")
+                    print(f"{DIM}   Analysis cache and ALL task progress will be permanently deleted.{RESET}\n")
+                    cache_script = SCRIPT_DIR / "cache_cleaner.py"
+                    subprocess.run([sys.executable, str(cache_script)])
+                    print(f"\n{DIM}   Returning to menu...{RESET}")
+                    time.sleep(2)
+                    continue
             elif key.lower() == 'q':
                 show_cursor()
                 sys.exit(0)
         else:
-            selected = 0
+            show_cursor()
             break
-
-    show_cursor()
-
-    if selected == 0:
-        if mode_sub_state == 0:
-            OUTPUT_MODE = "adjacent"
-            tdir = Path(TARGET_DIR).resolve()
-            OUTPUT_DIR = str(tdir.parent / (tdir.name + "_optimized"))
-            print(f"\n{GREEN}✅ ADJACENT MODE SELECTED{RESET}")
-            print(f"   Output: {DIM}{OUTPUT_DIR}{RESET}")
-            print(f"   {DIM}Creating directory structure...{RESET}")
-            create_directory_structure(TARGET_DIR, OUTPUT_DIR)
-        else:
-            OUTPUT_MODE = "inplace"
-            print(f"\n{RED}⚠️  DANGER: IN-PLACE OPTIMIZATION SELECTED{RESET}")
-            print(f"{BOLD}{WHITE}   Original files will be replaced after successful conversion.{RESET}")
-            print(f"{YELLOW}   This action is irreversible if you don't have backups.{RESET}\n")
-            drain_stdin()
-            # Mandatory 'yes' input
-            confirm = input(f"   {BOLD}To proceed, type {RED}'yes'{RESET}{BOLD} (case-sensitive) and press Enter: {RESET}")
-            if confirm != 'yes':
-                print(f"\n{YELLOW}❌ In-place optimization aborted. Safety fallback to Adjacent Mode.{RESET}")
-                OUTPUT_MODE = "adjacent"
-                tdir = Path(TARGET_DIR).resolve()
-                OUTPUT_DIR = str(tdir.parent / (tdir.name + "_optimized"))
-                print(f"   Output: {DIM}{OUTPUT_DIR}{RESET}")
-                create_directory_structure(TARGET_DIR, OUTPUT_DIR)
-    elif selected == 1:
-        OUTPUT_MODE = "cache_clean"
-        print(f"\n{RED}🧹 CACHE & LOG CLEANUP MODE{RESET}")
-        print(f"{DIM}   Analysis cache and ALL task progress will be permanently deleted.{RESET}\n")
 
 def create_directory_structure(src, dest):
     """Create directory structure and preserve timestamps"""
@@ -811,17 +821,7 @@ def main():
             print()
 
     safety_check()
-
-    while True:
-        select_mode()
-        
-        if OUTPUT_MODE == "cache_clean":
-            cache_script = SCRIPT_DIR / "cache_cleaner.py"
-            subprocess.run([sys.executable, str(cache_script)])
-            continue
-            
-        break
-
+    select_mode()
     count_files()
 
     if IMG_COUNT > 0 or VID_COUNT > 0:

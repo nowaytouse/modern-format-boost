@@ -435,7 +435,9 @@ pub fn convert_jpeg_to_jxl(
     }
 
     // Check for corruption early
-    if !shared_utils::image_jpeg_analysis::is_jpeg_complete(&std::fs::read(input).unwrap_or_default()) {
+    if !shared_utils::image_jpeg_analysis::is_jpeg_complete(
+        &std::fs::read(input).unwrap_or_default(),
+    ) {
         return Err(ImgQualityError::ConversionError(
             "JPEG is truncated or missing EOI".to_string(),
         ));

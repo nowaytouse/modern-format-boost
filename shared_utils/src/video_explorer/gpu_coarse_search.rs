@@ -1171,7 +1171,11 @@ fn cpu_fine_tune_from_gpu_boundary(
     if pts_integrity != crate::ffprobe_json::PtsIntegrity::Healthy {
         crate::log_eprintln!(
             "   ⚠️  {} input: {:?}, applying safety measures",
-            if pts_integrity == crate::ffprobe_json::PtsIntegrity::Broken { "Broken PTS" } else { "Duplicate PTS" },
+            if pts_integrity == crate::ffprobe_json::PtsIntegrity::Broken {
+                "Broken PTS"
+            } else {
+                "Duplicate PTS"
+            },
             pts_integrity
         );
     }

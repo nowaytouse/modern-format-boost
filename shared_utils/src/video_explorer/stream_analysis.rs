@@ -88,7 +88,7 @@ fn count_video_frames(path: &Path) -> Option<u64> {
         .is_some_and(|e| e.eq_ignore_ascii_case("webp"));
     if is_webp {
         let data = std::fs::read(path).ok()?;
-        let frames = crate::image_formats::webp::count_frames_from_bytes(&data) as u64;
+        let frames = u64::from(crate::image_formats::webp::count_frames_from_bytes(&data));
         if frames > 0 {
             return Some(frames);
         }

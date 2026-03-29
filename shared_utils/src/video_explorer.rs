@@ -2239,7 +2239,9 @@ impl VideoExplorer {
         let result = self.encode_with_ffmpeg(crf);
 
         if result.is_err() && self.use_gpu {
-            crate::log_eprintln!("      ⚠️  GPU encoding failed, falling back to CPU (FFmpeg Native)");
+            crate::log_eprintln!(
+                "      ⚠️  GPU encoding failed, falling back to CPU (FFmpeg Native)"
+            );
             let cpu_fallback = Self {
                 config: self.config.clone(),
                 encoder: self.encoder,
@@ -2258,8 +2260,6 @@ impl VideoExplorer {
 
         result
     }
-
-
 
     fn encode_with_ffmpeg(&self, crf: f32) -> Result<u64> {
         use std::io::{BufRead, BufReader, Write};
@@ -2361,14 +2361,26 @@ impl VideoExplorer {
         if pts_integrity != crate::ffprobe_json::PtsIntegrity::Healthy {
             crate::log_eprintln!(
                 "      ⚠️  {} input: {:?}, applying safety measures",
-                if pts_integrity == crate::ffprobe_json::PtsIntegrity::Broken { "Broken PTS" } else { "Duplicate PTS" },
+                if pts_integrity == crate::ffprobe_json::PtsIntegrity::Broken {
+                    "Broken PTS"
+                } else {
+                    "Duplicate PTS"
+                },
                 pts_integrity
             );
         }
 
-        let ext = self.input_path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
-        let is_animated = matches!(ext.as_str(), "gif" | "webp" | "avif" | "heic" | "heif" | "apng");
-        
+        let ext = self
+            .input_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        let is_animated = matches!(
+            ext.as_str(),
+            "gif" | "webp" | "avif" | "heic" | "heif" | "apng"
+        );
+
         // Globally enforce passthrough for ALL media (videos + animations)
         // unless PTS is severely broken, in which case we fallback to VFR for recovery.
         if pts_integrity == crate::ffprobe_json::PtsIntegrity::Broken {
@@ -2376,7 +2388,7 @@ impl VideoExplorer {
         } else {
             cmd.arg("-fps_mode").arg("passthrough");
         }
-        
+
         if is_animated {
             cmd.arg("-video_track_timescale").arg("1000");
         }
@@ -2387,7 +2399,7 @@ impl VideoExplorer {
                 self.preset,
                 self.hdr_x265_params.clone(),
             );
-            
+
             if self.encoder == VideoEncoder::Hevc && is_animated {
                 if let Some(pos) = args.iter().position(|x| x == "-x265-params") {
                     if pos + 1 < args.len() {
@@ -2395,7 +2407,7 @@ impl VideoExplorer {
                     }
                 }
             }
-            
+
             for arg in args {
                 cmd.arg(arg);
             }
