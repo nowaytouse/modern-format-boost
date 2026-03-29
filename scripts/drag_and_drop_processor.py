@@ -506,6 +506,7 @@ def select_mode():
                         f"{DIM}   Analysis cache and ALL task progress will be permanently deleted.{RESET}\n"
                     )
                     cache_script = SCRIPT_DIR / "cache_cleaner.py"
+                    drain_stdin()
                     subprocess.run([sys.executable, str(cache_script)])
                     print(f"\n{DIM}   Returning to menu...{RESET}")
                     time.sleep(2)

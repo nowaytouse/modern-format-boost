@@ -6,6 +6,7 @@ Cleans analysis and quality caches to free up space.
 import sys
 import subprocess
 import shutil
+import time
 from pathlib import Path
 
 # ANSI Colors
@@ -91,9 +92,11 @@ def main():
     print("   - All Task Progress Trackers (Resume Capability)")
     print("")
 
-    confirm = input(f"   {BOLD}Type 'yes' to confirm cleanup (yes/N): {RESET}")
-    if confirm.lower() != "yes":
+    confirm = input(f"   {BOLD}Type 'yes' to confirm cleanup (yes/N) [Default: N]: {RESET}").strip()
+    if not confirm or confirm.lower() != "yes":
         print(f"\n{GREEN}✅ Cleanup cancelled by user.{RESET}")
+        print(f"{DIM}   No action taken. Returning to menu...{RESET}")
+        time.sleep(1.5)
         return
 
     print(f"\n{YELLOW}🚀 Executing cleanup...{RESET}\n")
