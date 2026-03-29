@@ -418,7 +418,7 @@ fn main() -> anyhow::Result<()> {
 
         Commands::PathHash { input } => {
             let hash = shared_utils::hash_path_to_hex(&input).unwrap_or_else(|_| "err".to_string());
-            println!("{}", hash);
+            println!("{hash}");
         }
     }
 

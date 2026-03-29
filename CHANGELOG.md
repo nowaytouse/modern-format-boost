@@ -48,7 +48,9 @@ All notable changes to this project will be documented in this file.
     - **Isolation by Renaming**: Non-in-place modes (Adjacent/Custom Output) now automatically resolve path conflicts by appending suffixes like `(1)`, `(2)`, etc., allowing safe parallel processing of the same source folder.
     - **Strict In-Place Protection**: Robust `flock` directory locking is now exclusively enforced for `In-Place` operations to prevent data corruption.
     - **Fixed Lock Life-cycle**: Resolved a bug where Rust lock guards were dropped too early. Locks are now held throughout the entire process life-cycle.
-  - **macOS App Streamlining**: Improved the user experience for the `Modern Format Boost.app` shell by removing the redundant confirmation dialog after folder selection, allowing for a seamless transition directly into the Terminal processor.
+    - **macOS App Visual Optimization**: 
+      - **Widescreen Terminals**: The Terminal window now automatically launches in a 1200x700 widescreen format, providing a much better view for transcoding progress bars and multi-threaded reports compared to the default square window.
+      - **Streamlined Workflow**: Removed redundant confirmation dialogs after folder selection for a faster CLI-first transition.
   - **Environment-Level Isolation (Ghost Mode)**: Persistent redirection of all transient IO to `~/.modern_format_boost/tmp/` to ensure absolute zero-pollution of user media folders and static directory timestamps.
   - **Automated Lifecycle Management**: Integrated `tmp/` and `locks/` purging into `cache_cleaner.py`.
   - **Stdin Draining**: Hardened interactive prompts against leftover input during process transitions.
