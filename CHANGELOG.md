@@ -37,12 +37,11 @@ All notable changes to this project will be documented in this file.
   - **Input Responsiveness**: Optimized key-reading logic (non-blocking `fcntl`) to eliminate input latency during menu navigation.
 
 - **Production-Grade Refactor of `check_all.py`**: Completely re-engineered the workspace auditor into a robust, multi-language quality suite.
-  - **Modern Architecture**: Migrated to `argparse` for CLI, `dataclasses` for state tracking, and dynamic `REPO_ROOT` detection via `git rev-parse`.
-  - **High-Performance Discovery**: Switched to `git ls-files` for instant, `.gitignore`-aware file discovery.
-  - **Enhanced Execution Engine**: Rewrote the process runner to provide real-time `stderr` feedback and zero-latency output streaming.
-  - **Full-Stack Auditing**: Integrated `taplo` (TOML), YAML/JSON discovery, and multi-platform `kondo` cleanup logic.
-  - **Bug Fixes**: Resolved critical issues with `pyupgrade` (now properly limited to `--fix` mode) and shell glob expansion in tool calls.
-  - **Rich Summary UI**: Upgraded the final status table to include detailed breakdown of warned and skipped steps.
+  - **Fail-Safe Discovery**: Added mandatory empty-list guards for all tool calls (Ruff, Prettier, etc.), preventing process hangs when no target files are present.
+  - **Performance Optimization**: Integrated `@lru_cache` for tool detection and restored **`cargo-nextest`** support for high-throughput, concurrent testing.
+  - **Modern Architecture**: Migrated to `argparse` for CLI, `dataclasses` for state tracking, and lazy `REPO_ROOT` detection.
+  - **Full-Stack Auditing**: Integrated `taplo` (TOML), YAML/JSON discovery, and multi-platform `kondo` logic.
+  - **Universal Summary**: Fixed Rich UI semantics and restored detailed verbose summaries for non-Rich terminal environments (CI/CD).
 
 - **Fixed GIF Frame Loss in HEVC Conversion**: Resolved an issue where short-duration frames (e.g., 100ms) in GIFs were merged and lost during CPU HEVC conversion, leading to incorrect output duration and frame counts.
   - **Root Cause**: The fallback to `encode_with_x265_cli` routed frames through a Y4M pipe, forcing a constant frame rate, and `libx265` merged short B-frames.
