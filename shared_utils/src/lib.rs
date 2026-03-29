@@ -71,8 +71,8 @@ pub mod video_explorer;
 pub mod video_quality_detector;
 pub mod xmp_merger;
 
-pub mod process_lock;
 pub mod path_safety;
+pub mod process_lock;
 pub use path_safety::safe_path_arg;
 pub mod app_error;
 pub mod ffprobe_json;

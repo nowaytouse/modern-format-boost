@@ -79,11 +79,13 @@ fn main() -> anyhow::Result<()> {
     shared_utils::ctrlc_guard::init();
 
     let cli = Cli::parse();
-    
+
     // --- Unified Directory Locking (Ghost Mode & Mutex) ---
     // Extract input path from relevant commands to lock the directory ONLY if it involves destructive or interactive shared state.
     let input_to_lock = match &cli.command {
-        Commands::Run { input, in_place, .. } if *in_place => Some(input),
+        Commands::Run {
+            input, in_place, ..
+        } if *in_place => Some(input),
         _ => None,
     };
 
@@ -137,7 +139,7 @@ fn main() -> anyhow::Result<()> {
                 compress,
                 ultimate,
             ) {
-                eprintln!("{e}");
+                shared_utils::log_eprintln!("{e}");
                 std::process::exit(1);
             }
 

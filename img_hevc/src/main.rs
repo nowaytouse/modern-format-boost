@@ -147,7 +147,9 @@ fn main() -> anyhow::Result<()> {
     // --- Unified Directory Locking (Ghost Mode & Mutex) ---
     // Extract input path from relevant commands to lock the directory ONLY if it involves destructive or interactive shared state.
     let input_to_lock = match &cli.command {
-        Commands::Run { input, in_place, .. } if *in_place => Some(input),
+        Commands::Run {
+            input, in_place, ..
+        } if *in_place => Some(input),
         Commands::Verify {
             original: input, ..
         }
@@ -418,7 +420,7 @@ fn main() -> anyhow::Result<()> {
 
         Commands::PathHash { input } => {
             let hash = shared_utils::hash_path_to_hex(&input).unwrap_or_else(|_| "err".to_string());
-            println!("{}", hash);
+            println!("{hash}");
         }
     }
 

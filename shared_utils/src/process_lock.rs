@@ -1,7 +1,7 @@
+use anyhow::{anyhow, Context, Result};
 use std::fs::{self, File};
-use std::path::{Path, PathBuf};
 use std::os::unix::io::AsRawFd;
-use anyhow::{Context, Result, anyhow};
+use std::path::{Path, PathBuf};
 
 /// Initializes Ghost Mode by redirecting the process's TMPDIR to the MFB isolated temp directory.
 /// This ensures zero-pollution even when the binary is used independently of any scripts.
@@ -13,7 +13,8 @@ pub fn init_ghost_mode() -> Result<()> {
 
 /// Returns the central home for MFB metadata and transient files (~/.modern_format_boost)
 pub fn get_mfb_root() -> Result<PathBuf> {
-    std::env::var("HOME").map(PathBuf::from)
+    std::env::var("HOME")
+        .map(PathBuf::from)
         .or_else(|_| std::env::var("USERPROFILE").map(PathBuf::from))
         .map_err(|_| anyhow!("Could not find home directory environment variable"))
         .map(|h| h.join(".modern_format_boost"))
@@ -28,8 +29,12 @@ pub fn get_mfb_tmp_dir() -> Result<PathBuf> {
 
 /// Generates a unique hex hash for a directory's canonical path using BLAKE3.
 pub fn hash_path_to_hex(path: &Path) -> Result<String> {
-    let abs_path = fs::canonicalize(path)
-        .with_context(|| format!("Failed to canonicalize path for hashing: {}", path.display()))?;
+    let abs_path = fs::canonicalize(path).with_context(|| {
+        format!(
+            "Failed to canonicalize path for hashing: {}",
+            path.display()
+        )
+    })?;
     let path_str = abs_path.to_string_lossy();
     Ok(blake3::hash(path_str.as_bytes()).to_hex().to_string())
 }
@@ -46,7 +51,7 @@ pub fn acquire_dir_lock(dir_path: &Path) -> Result<File> {
 
     // 2. Generate a unique hash for this path using blake3
     let hash = blake3::hash(path_str.as_bytes()).to_hex();
-    
+
     // 3. Prepare global lock directory (non-polluting)
     let lock_dir = get_mfb_root()?.join("locks");
     fs::create_dir_all(&lock_dir).context("Failed to create lock directory")?;
