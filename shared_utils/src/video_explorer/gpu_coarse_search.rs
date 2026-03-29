@@ -1265,7 +1265,7 @@ fn cpu_fine_tune_from_gpu_boundary(
             .arg("-crf")
             .arg(format!("{crf:.2}"));
 
-        let adjusted_x265_params =
+        let mut adjusted_x265_params =
             if crf == 0.0 && encoder == crate::video_explorer::VideoEncoder::Hevc {
                 let existing = hdr_x265_params.as_deref().unwrap_or("");
                 if existing.is_empty() {
@@ -1276,6 +1276,15 @@ fn cpu_fine_tune_from_gpu_boundary(
             } else {
                 hdr_x265_params.clone()
             };
+
+        if input_is_animated_image_like && encoder == crate::video_explorer::VideoEncoder::Hevc {
+            let existing = adjusted_x265_params.as_deref().unwrap_or("");
+            if existing.is_empty() {
+                adjusted_x265_params = Some("bframes=0".to_string());
+            } else {
+                adjusted_x265_params = Some(format!("{existing}:bframes=0"));
+            }
+        }
 
         for arg in encoder.extra_args_with_preset(
             max_threads,
@@ -1302,12 +1311,10 @@ fn cpu_fine_tune_from_gpu_boundary(
             }
         }
 
-        if input_is_animated_image_like
-            || probe_info.is_some_and(|probe| probe.is_variable_frame_rate)
-        {
-            // Preserve source timing for GIF/WebP and other VFR inputs so FFmpeg
-            // does not silently collapse frames onto a CFR timeline.
-            cmd.arg("-vsync").arg("vfr");
+        cmd.arg("-fps_mode").arg("passthrough");
+
+        if input_is_animated_image_like {
+            cmd.arg("-video_track_timescale").arg("1000");
         }
 
         if input_is_image {
