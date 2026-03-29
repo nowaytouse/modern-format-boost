@@ -944,18 +944,6 @@ checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 
 [[package]]
 name = "image"
-version = "0.25.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "529feb3e6769d234375c4cf1ee2ce713682b8e76538cb13f9fc23e1400a591e7"
-dependencies = [
- "bytemuck",
- "byteorder-lite",
- "moxcms 0.7.11",
- "num-traits",
-]
-
-[[package]]
-name = "image"
 version = "0.25.9"
 source = "git+https://github.com/image-rs/image#21a3d0970b606acd7c2f0a4c20f4cbe78faa6a3b"
 dependencies = [
@@ -967,7 +955,7 @@ dependencies = [
  "gif",
  "image-webp",
  "jpeg-encoder",
- "moxcms 0.8.1",
+ "moxcms",
  "mp4parse",
  "num-traits",
  "pic-scale-safe",
@@ -998,7 +986,7 @@ dependencies = [
  "anyhow",
  "clap",
  "console",
- "image 0.25.9",
+ "image",
  "rayon",
  "serde",
  "shared_utils",
@@ -1014,7 +1002,7 @@ dependencies = [
  "anyhow",
  "clap",
  "console",
- "image 0.25.9",
+ "image",
  "rayon",
  "serde",
  "shared_utils",
@@ -1111,14 +1099,14 @@ checksum = "0b0b36cbb4e6704f12f5b5d7b01dac593982c6550859ebd5a66fb15c9ea27fd5"
 
 [[package]]
 name = "jpegxl-rs"
-version = "0.12.0+libjxl-0.11.1"
+version = "0.14.0+libjxl-0.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4bc73de4d7188a80badb62062780510e402a17947f663e50f6390ebb6e7b90ed"
+checksum = "9b7d16fe73fb6d2e16b986392b716409c6ae6fabd35769d66bea391b016cdbc9"
 dependencies = [
  "bon",
  "byteorder",
  "half",
- "image 0.25.8",
+ "image",
  "jpegxl-sys",
  "thiserror",
 ]
@@ -1301,16 +1289,6 @@ checksum = "b63fbc4a50860e98e7b2aa7804ded1db5cbc3aff9193adaff57a6931bf7c4b4c"
 dependencies = [
  "adler2",
  "simd-adler32",
-]
-
-[[package]]
-name = "moxcms"
-version = "0.7.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac9557c559cd6fc9867e122e20d2cbefc9ca29d80d027a8e39310920ed2f0a97"
-dependencies = [
- "num-traits",
- "pxfm",
 ]
 
 [[package]]
@@ -1939,7 +1917,7 @@ dependencies = [
  "exr",
  "filetime",
  "flate2",
- "image 0.25.9",
+ "image",
  "indicatif",
  "infer",
  "jpegxl-rs",
@@ -2695,18 +2673,18 @@ checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
 
 [[package]]
 name = "zerocopy"
-version = "0.8.47"
+version = "0.8.48"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "efbb2a062be311f2ba113ce66f697a4dc589f85e78a4aea276200804cea0ed87"
+checksum = "eed437bf9d6692032087e337407a86f04cd8d6a16a37199ed57949d415bd68e9"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.47"
+version = "0.8.48"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e8bc7269b54418e7aeeef514aa68f8690b8c0489a06b0136e5f57c4c5ccab89"
+checksum = "70e3cd084b1788766f53af483dd21f93881ff30d7320490ec3ef7526d203bad4"
 dependencies = [
  "proc-macro2",
  "quote",

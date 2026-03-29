@@ -30,7 +30,7 @@ tempfile = { workspace = true }
 image = { workspace = true }
 rayon = { workspace = true }
 libheif-rs = { workspace = true }
-jpegxl-rs = { version = "0.12", features = ["vendored"] }
+jpegxl-rs = { version = "0.14", features = ["vendored"] }
 flate2 = { workspace = true }
 ctrlc = { workspace = true }
 rusqlite = { workspace = true }
@@ -40,6 +40,9 @@ crc32fast = { workspace = true }
 infer = { workspace = true }
 quick-xml = { workspace = true }
 exr = { workspace = true }
+proptest = { workspace = true }
+
+[dev-dependencies]
 proptest = { workspace = true }
 
 [features]

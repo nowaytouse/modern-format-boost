@@ -1336,11 +1336,11 @@ mod tests {
         // 640×480, 6s, 15fps, 90 frames, moderate file
         let meta = make_meta(6.0, 640, 480, 15.0, 90, 800_000);
         let s = score_gif(&meta);
-        // If score is in the uncertain zone, should_keep_as_gif now biases toward convert.
-        if s.total > CONF_CONVERT && s.total < CONF_KEEP {
+        // If score is below keep threshold, it should default to convert.
+        if s.total < CONF_KEEP {
             assert!(
                 !should_keep_as_gif(&meta),
-                "uncertain zone must default to convert"
+                "below keep threshold must default to convert"
             );
         }
         // If it landed outside the zone, just verify no panic
