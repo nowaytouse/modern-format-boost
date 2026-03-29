@@ -226,6 +226,19 @@ fn main() -> anyhow::Result<()> {
                     colors::RESET
                 ));
             }
+            let input_abs = std::fs::canonicalize(&input).unwrap_or_else(|_| input.clone());
+            let _lock_guard = if input_abs.is_dir() {
+                match shared_utils::acquire_dir_lock(&input_abs) {
+                    Ok(guard) => Some(guard),
+                    Err(e) => {
+                        shared_utils::log_eprintln!("❌ {}", e);
+                        std::process::exit(3);
+                    }
+                }
+            } else {
+                None
+            };
+
             let config = AutoConvertConfig {
                 output_dir: output,
                 base_dir,

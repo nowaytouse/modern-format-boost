@@ -323,7 +323,7 @@ pub use types::{
 pub use app_error::AppError;
 
 pub use file_copier::{
-    copy_unsupported_files, count_files as count_all_files, verify_output_completeness, CopyResult,
+    copy_unsupported_files, count_files as count_all_files, verify_output_integrity, CopyResult,
     FileStats, VerifyResult, IMAGE_EXTENSIONS_ANALYZE, IMAGE_EXTENSIONS_FOR_CONVERT,
     SIDECAR_EXTENSIONS, SUPPORTED_IMAGE_EXTENSIONS, SUPPORTED_VIDEO_EXTENSIONS,
 };
@@ -332,6 +332,7 @@ pub use smart_file_copier::{
 };
 
 pub use live_photo::is_live_photo;
+pub use process_lock::acquire_dir_lock;
 
 pub use file_sorter::{
     sort_by_name, sort_by_size_ascending, sort_by_size_descending, FileInfo, FileSorter,

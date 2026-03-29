@@ -12,31 +12,9 @@ import shutil
 import threading
 import datetime
 import pty
-import fcntl
-import atexit
+import datetime
+import pty
 from pathlib import Path
-
-# Session/Directory locking
-dir_lock_file = None
-
-def release_directory_lock():
-    global dir_lock_file
-    if dir_lock_file:
-        try:
-            # Unlock and Close
-            fcntl.flock(dir_lock_file, fcntl.LOCK_UN)
-            # Get path before closing
-            lock_path = dir_lock_file.name
-            dir_lock_file.close()
-            # Cleanup the physical lock file
-            if os.path.exists(lock_path):
-                os.remove(lock_path)
-        except Exception:
-            pass
-        dir_lock_file = None
-
-# Register cleanup handler
-atexit.register(release_directory_lock)
 
 try:
     import psutil
@@ -339,35 +317,6 @@ def get_target_directory():
         print(f"{DIM}   Path: {TARGET_DIR}{RESET}")
         sys.exit(1)
 
-
-def acquire_directory_lock(dir_path: str):
-    """
-    Acquire a global advisory lock on a directory to prevent concurrent processing.
-    Uses fcntl.flock which automatically releases on process death.
-    """
-    global dir_lock_file
-    lock_path = Path(dir_path) / ".mfb_active_session.lock"
-    
-    try:
-        # Open lock file (create if not exists)
-        dir_lock_file = open(lock_path, "w")
-        # Attempt exclusive, non-blocking lock
-        fcntl.flock(dir_lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        
-        # Write PID for better diagnostics
-        dir_lock_file.write(f"PID: {os.getpid()}\n")
-        dir_lock_file.write(f"Start: {datetime.datetime.now()}\n")
-        dir_lock_file.flush()
-        
-    except (OSError, IOError) as e:
-        print(f"\n{RED}❌ ERROR: Directory Already In Use!{RESET}")
-        print(f"   Target: {DIM}{dir_path}{RESET}")
-        print(f"   {YELLOW}Another instance of Modern Format Boost is currently processing this folder.{RESET}")
-        print(f"   {DIM}Please wait for the other task to complete or close its window.{RESET}")
-        if dir_lock_file:
-            dir_lock_file.close()
-            dir_lock_file = None
-        sys.exit(3)
 
 def safety_check():
     try:
@@ -1076,11 +1025,6 @@ def main():
 
     safety_check()
     select_mode()
-    
-    # Process locking (only for media processing modes, not global cleanup)
-    if OUTPUT_MODE in ("adjacent", "inplace"):
-        acquire_directory_lock(TARGET_DIR)
-        
     count_files()
 
     if IMG_COUNT > 0 or VID_COUNT > 0:

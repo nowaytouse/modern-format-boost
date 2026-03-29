@@ -112,6 +112,19 @@ fn main() -> anyhow::Result<()> {
                 std::process::exit(1);
             }
 
+            let input_abs = std::fs::canonicalize(&input).unwrap_or_else(|_| input.clone());
+            let _lock_guard = if input_abs.is_dir() {
+                match shared_utils::acquire_dir_lock(&input_abs) {
+                    Ok(guard) => Some(guard),
+                    Err(e) => {
+                        eprintln!("❌ {e}");
+                        std::process::exit(3);
+                    }
+                }
+            } else {
+                None
+            };
+
             let base_dir =
                 shared_utils::cli_runner::resolve_video_run_base_dir(&input, recursive, base_dir);
 
