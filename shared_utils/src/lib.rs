@@ -71,6 +71,7 @@ pub mod video_explorer;
 pub mod video_quality_detector;
 pub mod xmp_merger;
 
+pub mod process_lock;
 pub mod path_safety;
 pub use path_safety::safe_path_arg;
 pub mod app_error;
@@ -323,7 +324,7 @@ pub use types::{
 pub use app_error::AppError;
 
 pub use file_copier::{
-    copy_unsupported_files, count_files as count_all_files, verify_output_integrity, CopyResult,
+    copy_unsupported_files, count_files as count_all_files, verify_output_completeness, CopyResult,
     FileStats, VerifyResult, IMAGE_EXTENSIONS_ANALYZE, IMAGE_EXTENSIONS_FOR_CONVERT,
     SIDECAR_EXTENSIONS, SUPPORTED_IMAGE_EXTENSIONS, SUPPORTED_VIDEO_EXTENSIONS,
 };
