@@ -12,8 +12,6 @@ import shutil
 import threading
 import datetime
 import pty
-import datetime
-import pty
 from pathlib import Path
 
 try:
@@ -388,7 +386,7 @@ def acquire_global_lock(dir_path: str):
             print(f"   {DIM}Please wait for the other task to complete.{RESET}")
             sys.exit(3)
             
-    except Exception as e:
+    except Exception:
         # If hash tool fails, we fall back to standard execution which will catch locks later
         pass
 
@@ -784,7 +782,7 @@ def stream_and_log_process(cmd, parse_type):
             lf.close()
         try:
             os.close(master_fd)
-        except:
+        except Exception:
             pass
 
     if res.returncode not in (0, 130):
@@ -801,9 +799,11 @@ def stream_and_log_process(cmd, parse_type):
 
     if parse_type == "img":
         with stats_lock:
+            global IMG_SUCCEEDED, IMG_SKIPPED, IMG_FAILED
             IMG_SUCCEEDED, IMG_SKIPPED, IMG_FAILED = s_val, sk_val, f_val
     else:
         with stats_lock:
+            global VID_SUCCEEDED, VID_SKIPPED, VID_FAILED
             VID_SUCCEEDED, VID_SKIPPED, VID_FAILED = s_val, sk_val, f_val
 
 

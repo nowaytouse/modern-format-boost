@@ -162,7 +162,7 @@ fn main() -> anyhow::Result<()> {
             match shared_utils::acquire_dir_lock(&input_abs) {
                 Ok(guard) => Some(guard),
                 Err(e) => {
-                    shared_utils::log_eprintln!("❌ {}", e);
+                    shared_utils::log_eprintln!("❌ {e}");
                     std::process::exit(3);
                 }
             }
@@ -409,7 +409,7 @@ fn main() -> anyhow::Result<()> {
                         println!("✅ Directory is available for processing.");
                     }
                     Err(e) => {
-                        shared_utils::log_eprintln!("❌ {}", e);
+                        shared_utils::log_eprintln!("❌ {e}");
                         std::process::exit(3);
                     }
                 }
