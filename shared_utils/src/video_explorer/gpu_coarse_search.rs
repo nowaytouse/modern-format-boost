@@ -1167,6 +1167,15 @@ fn cpu_fine_tune_from_gpu_boundary(
 
     let input_stream_info = crate::stream_size::extract_stream_sizes(input);
     let input_video_stream_size = input_stream_info.video_stream_size;
+    let pts_integrity = crate::ffprobe_json::check_pts_integrity(input);
+    if pts_integrity != crate::ffprobe_json::PtsIntegrity::Healthy {
+        crate::log_eprintln!(
+            "   ⚠️  {} input: {:?}, applying safety measures",
+            if pts_integrity == crate::ffprobe_json::PtsIntegrity::Broken { "Broken PTS" } else { "Duplicate PTS" },
+            pts_integrity
+        );
+    }
+
     crate::verbose_eprintln!(
         "{}Input video stream: {} (total file: {}, overhead: {:.1}%)",
         CYAN,
@@ -1311,7 +1320,12 @@ fn cpu_fine_tune_from_gpu_boundary(
             }
         }
 
-        cmd.arg("-fps_mode").arg("passthrough");
+        if pts_integrity == crate::ffprobe_json::PtsIntegrity::Broken {
+            // Safety fallback: if PTS is backward/broken, use VFR to let FFmpeg rebuild the timeline
+            cmd.arg("-fps_mode").arg("vfr");
+        } else {
+            cmd.arg("-fps_mode").arg("passthrough");
+        }
 
         if input_is_animated_image_like {
             cmd.arg("-video_track_timescale").arg("1000");

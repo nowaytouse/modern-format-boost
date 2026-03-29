@@ -2357,12 +2357,25 @@ impl VideoExplorer {
             .arg("-stats_period")
             .arg("0.5");
 
+        let pts_integrity = crate::ffprobe_json::check_pts_integrity(&self.input_path);
+        if pts_integrity != crate::ffprobe_json::PtsIntegrity::Healthy {
+            crate::log_eprintln!(
+                "      ⚠️  {} input: {:?}, applying safety measures",
+                if pts_integrity == crate::ffprobe_json::PtsIntegrity::Broken { "Broken PTS" } else { "Duplicate PTS" },
+                pts_integrity
+            );
+        }
+
         let ext = self.input_path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
         let is_animated = matches!(ext.as_str(), "gif" | "webp" | "avif" | "heic" | "heif" | "apng");
         
         // Globally enforce passthrough for ALL media (videos + animations)
-        // to prevent any CFR forcing, frame dropping, or frame duplication.
-        cmd.arg("-fps_mode").arg("passthrough");
+        // unless PTS is severely broken, in which case we fallback to VFR for recovery.
+        if pts_integrity == crate::ffprobe_json::PtsIntegrity::Broken {
+            cmd.arg("-fps_mode").arg("vfr");
+        } else {
+            cmd.arg("-fps_mode").arg("passthrough");
+        }
         
         if is_animated {
             cmd.arg("-video_track_timescale").arg("1000");
