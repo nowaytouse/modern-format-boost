@@ -48,6 +48,27 @@ def get_finder_comment(path):
     return False
 
 
+def is_hevc(path):
+    """Detects if a video file is HEVC using ffprobe."""
+    try:
+        cmd = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=codec_name",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            path,
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        return result.stdout.strip().lower() == "hevc"
+    except Exception:
+        return False
+
+
 def run_collection(source, destination, dry_run=False):
     """Core logic to collect and move optimized files."""
     src_root = os.path.abspath(source)
@@ -97,10 +118,19 @@ def run_collection(source, destination, dry_run=False):
                 symlink_count += 1
                 continue
 
-            ext = os.path.splitext(f)[1].lower()
-            if ext in EXTENSIONS:
-                if get_finder_comment(full_path):
+            ext_raw = os.path.splitext(f)[1]
+            # Condition: Extension must be clearly uppercase (e.g., .MOV, .JXL)
+            if not ext_raw[1:].isupper() if len(ext_raw) > 1 else False:
+                continue
+
+            if ext_raw == ".MOV":
+                # Select HEVC MOV only
+                if is_hevc(full_path):
                     to_move.append(full_path)
+            elif ext_raw == ".JXL":
+                # Select JXL only
+                to_move.append(full_path)
+            # All other formats (non-HEVC MOV, non-JXL images) are implicitly excluded
 
     # Refined exit logic for better UX
     if not to_move:

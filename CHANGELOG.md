@@ -10,6 +10,11 @@ All notable changes to this project will be documented in this file.
 - **Opt-in Branding Strategy**: Transitioned the "[Optimized by Modern Format Boost]" Finder comment to an opt-in model. The feature is now **disabled by default** to minimize metadata pollution.
 - **Activation**: Users can re-enable this functionality by setting the environment variable `MODERN_FORMAT_BOOST_ENABLE_BRANDING=1`.
 
+#### 🧹 Script Infrastructure
+- **Refined Collection Logic**: Updated `collect_optimized.py` to use a content-aware precision model.
+  - **Inclusion Criteria**: Now strictly targets **HEVC-encoded .MOV** and **.JXL** files with **uppercase extensions** (e.g., `.MOV`, `.JXL`).
+  - **Exclusion Strategy**: Automatically skips non-HEVC media and legacy formats (non-JXL images), providing a reliable collection mechanism even when Finder markers are disabled.
+
 ## [0.11.1] - 2026-03-29
 
 #### 🎨 Color Fidelity & Content Intelligence (Meme Score v4)
