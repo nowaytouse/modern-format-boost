@@ -4,10 +4,10 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
-
 ## [0.11.1] - 2026-03-29
 
 #### 📚 Documentation & Research
+
 - **JPEG XL Distance Precision Study**: Published comprehensive research on cjxl `--distance` parameter precision limits and equivalence boundaries.
   - **Equivalence Range Identified**: All values in `0 < d ≤ 0.010` produce byte-exact identical output (verified with `cmp` across multiple images).
   - **Exact Boundary**: Output first changes at `d ≈ 0.010000001` (float32 ULP limit at 0.01).
@@ -16,6 +16,7 @@ All notable changes to this project will be documented in this file.
   - **Documentation**: `docs/CJXL_DISTANCE_PRECISION_STUDY_v4.md` contains full methodology, test results, and analysis.
 
 #### 🛡️ Media Integrity & Frame Preservation
+
 - **Hardened Global Video Pipeline for VFR (Variable Frame Rate)**: Enforced strict zero frame-dropping and timestamp preservation for **all video conversions** (not just animated images).
   - **Root Cause**: The fallback pipeline previously routed frames through `Y4M (yuv4mpegpipe)` or allowed FFmpeg's default synchronization which forcefully conformed variable frame-rate sequences to CFR (Constant Frame Rate), leading to arbitrarily merged or dropped frames.
   - **Solution**: Completely deprecated and removed the legacy `encode_with_x265_cli` pipeline from the `video_explorer` core. Mandated `-fps_mode passthrough` globally across all FFmpeg CPU and GPU invocations, guaranteeing that every single frame and its original precise timestamp is bit-preserved into the output container without any flattening.
@@ -27,6 +28,7 @@ All notable changes to this project will be documented in this file.
   - **Affected Files**: `ffprobe_json.rs`, `video_explorer.rs`, `gpu_coarse_search.rs`
 
 #### 🛠️ Tooling & Scripting Improvements
+
 - **Enhanced `drag_and_drop_processor.py` UX**: Streamlined the interactive menu for a smoother, safer experience.
   - **Menu Consolidation**: Merged "Adjacent Output" and "In-Place Optimization" into a single dynamic item.
   - **Tab-to-Switch**: Users can now toggle between optimization modes using the **Tab** key within the menu.
@@ -34,10 +36,13 @@ All notable changes to this project will be documented in this file.
   - **Graceful Error Recovery**: If confirmation fails, the script now displays a 3-second error countdown and returns to the main menu instead of exiting, allowing for instant retry.
   - **Input Responsiveness**: Optimized key-reading logic (non-blocking `fcntl`) to eliminate input latency during menu navigation.
 
-- **Modernized `check_all.py` Quality Suite**: Expanded the codebase auditor to cover Python scripts.
-  - **Python Syntax Guard**: Added mandatory `py_compile` checks to the `REQUIRED` suite for all `.py` files.
-  - **Optional Linting**: Integrated `ruff check` (if installed) for high-performance Python code auditing.
-  - **Rust Fix Automation**: Improved the `--fix` path to automate `clippy` and `fmt` corrections across the workspace.
+- **Production-Grade Refactor of `check_all.py`**: Completely re-engineered the workspace auditor into a robust, multi-language quality suite.
+  - **Modern Architecture**: Migrated to `argparse` for CLI, `dataclasses` for state tracking, and dynamic `REPO_ROOT` detection via `git rev-parse`.
+  - **High-Performance Discovery**: Switched to `git ls-files` for instant, `.gitignore`-aware file discovery.
+  - **Enhanced Execution Engine**: Rewrote the process runner to provide real-time `stderr` feedback and zero-latency output streaming.
+  - **Full-Stack Auditing**: Integrated `taplo` (TOML), YAML/JSON discovery, and multi-platform `kondo` cleanup logic.
+  - **Bug Fixes**: Resolved critical issues with `pyupgrade` (now properly limited to `--fix` mode) and shell glob expansion in tool calls.
+  - **Rich Summary UI**: Upgraded the final status table to include detailed breakdown of warned and skipped steps.
 
 - **Fixed GIF Frame Loss in HEVC Conversion**: Resolved an issue where short-duration frames (e.g., 100ms) in GIFs were merged and lost during CPU HEVC conversion, leading to incorrect output duration and frame counts.
   - **Root Cause**: The fallback to `encode_with_x265_cli` routed frames through a Y4M pipe, forcing a constant frame rate, and `libx265` merged short B-frames.
@@ -56,12 +61,14 @@ All notable changes to this project will be documented in this file.
   - Prevents false-positive "lossless" claims when frames are actually dropped.
 
 #### 🛡️ JPEG Robustness & Metadata Handling
+
 - **Enhanced EOI Detection**: Re-implemented `is_jpeg_complete` to perform a full-file reverse search for the `FF D9` marker. This robustly handles JPEGs with large trailing metadata (common in mobile captures like Vivo/Samsung) that were previously misidentified as truncated.
 - **Fixed JPEG Tail Stripping**: Corrected the `strip_jpeg_tail_to_temp` logic to properly include the `EOI` (FF D9) marker in the sanitized output. This ensures `cjxl` bitstream reconstruction works correctly on files with extra trailing data.
 - **Strict SOI Validation**: Added mandatory `FF D8` (Start of Image) verification to all JPEG analysis functions to prevent processing non-JPEG files.
 - **Unified Corruption Checks**: Synchronized the early corruption check logic between `img_hevc` and `img_av1` crates, providing consistent error reporting ("JPEG is truncated or missing EOI") across the entire pipeline.
 
 #### 🛡️ Error Architecture & Reporting
+
 - **Clarified Failure Logs**: Enhanced image conversion failure messages (e.g., for truncated JPEGs) to explicitly state that the original file was preserved and conversion was skipped, preventing confusion about "Critical" status.
 - **Strict Error Categorization**: Refactored the `UnifiedError` module to explicitly distinguish between **Fatal** (abort), **Recoverable** (fail & continue), and **Optional** (skip).
 - **Refined Skip Logic (No Gain)**: Updated the system to categorize **CompressionFailed** (output >= input size) as **Optional** (⏭️) rather than **Recoverable** (❌). This ensures that files that do not benefit from compression are correctly reported as skips in the summary, preventing "No Gain" files from cluttering error logs.
@@ -70,11 +77,13 @@ All notable changes to this project will be documented in this file.
 - **Automatic Original Copying**: Ensured that the pipeline correctly falls back to copying the original file when conversion is skipped or fails, maintaining output completeness even on abnormal source files.
 
 #### 🌍 Language & Format Standardization
+
 - **Global English Standardization**: Completed the project-wide transition to strictly English-only terminal messages and logs. Purged localized strings across the entire `shared_utils` library (including CLI runner, image detection, and format analysis).
 - **Magic Bytes Verification**: Standardized use of magic byte detection (e.g. `GIF8`) throughout the pipeline to ensure format detection reliability independent of file extensions.
 - **Size Consistency**: Unified size threshold calculations across all crates (1MB = 1,048,576 bytes) for deterministic behavior.
 
 #### 🐍 Script Infrastructure & Build System
+
 - **Modernized `check_all.py` with Kondo**: Integrated `kondo` for surgical repo cleanup directly within the quality scanner. It now executes actual cleanups (no longer dry-run) to maintain a lean workspace.
 - **Automated Production Build**: Added a final `cargo build --release` step to the `check_all.py` pipeline, ensuring that every successful quality scan results in a verified, production-ready binary.
 - **Full-Spectrum Quality Audits**: Utilized the enhanced `check_all.py` to perform multiple comprehensive, project-wide code modernizations and rebuilds, achieving a zero-warning baseline and guaranteed project cleanliness.
@@ -83,6 +92,7 @@ All notable changes to this project will be documented in this file.
 - **Legacy Script Archiving**: Moved the old `check_all.sh` to the `useless/` directory for historical reference.
 
 #### 🛡️ Pipeline & Efficiency Hardening
+
 - **Smart CRF 0.00 Skip (Long Videos)**: Implemented a mandatory safety gate for long-duration videos (>20 min). The search algorithm now skips the expensive CRF 0.00 (lossless) probe unless a high-quality candidate (CRF < 5.0) has already succeeded. This prevents wasting significant compute time on extremely large lossless encodes that are unlikely to meet size requirements.
 - **GIF "Lossless-First" (Reverse Exploration)**: Implemented a specialized search path for GIF-to-video conversion. In `ultimate_mode`, the search now starts at **CRF 0.0**, achieving 1-pass success for ~90% of cases and bypassing redundant iterations.
 - **JPEG Integrity Verification & Hardening**:
@@ -100,6 +110,7 @@ All notable changes to this project will be documented in this file.
   - **Floor Guarantee**: Forces a final check at `CRF 0.00` in Phase 4 if the search is close.
 
 #### 🛡️ Stability & Quality Hardening
+
 - **Resolved Compilation Errors**: Fixed multiple issues in `shared_utils` and `img_hevc` including missing imports (`is_jpeg_complete`), ambiguous names (`E0659`), and type conversion mismatches.
 - **Standardized Constants**: Consolidated re-exports in `video_explorer.rs` to ensure a single source of truth.
 - **Zero-Warning/Zero-Error Baseline**: Achieved a 100% clean sweep in `check_all.py` (clippy nursery/pedantic) for a production-ready codebase.
@@ -107,9 +118,11 @@ All notable changes to this project will be documented in this file.
 ## [0.11.0] - 2026-03-28
 
 ### 🌟 Unified Production Baseline & HDR Synthesis
+
 This release marks a major milestone, consolidating the intensive `0.10.x` hardening cycle into a Cinema-Grade production baseline with advanced HDR processing.
 
 ### 🎨 Premium UI/UX & Terminal Experience
+
 Significant overhaul of the Python automation layer to provide a high-end, professional terminal experience.
 
 - **Interactive Dashboard & Menu**:
@@ -117,7 +130,7 @@ Significant overhaul of the Python automation layer to provide a high-end, profe
   - **Config Dashboard**: Replaced text-based configuration with a structured `rich.Table` dashboard, integrating live **System Health Snapshots** (CPU/RAM usage).
   - **Session Analytics**: Added a visual **Success Rate Progress Bar** (█░) and efficiency metrics to final batch reports.
   - **Window Resizing**: Restored automatic terminal window resizing (40x100) to ensure the premium UI layout is always perfectly framed.
-- **Cinema-Grade Terminal Refresh (30Hz)**: 
+- **Cinema-Grade Terminal Refresh (30Hz)**:
   - Optimized the global Rust rendering standard to a balanced **30Hz** (33ms cycles). This maintains smooth animations while significantly reducing CPU overhead during heavy media processing.
   - Harmonized sub-33ms steady ticks and debounce timers across the entire `shared_utils` progress infrastructure.
   - **Native PTY Relay**: Transitioned the Python automation layer to a full **Pseudo-Terminal (PTY)** master/slave architecture for 100% performance parity with direct Bash execution.
@@ -129,8 +142,9 @@ Significant overhaul of the Python automation layer to provide a high-end, profe
   - Verified 100% preservation of VT100/ANSI icons (📊, ✓), colors, and `\r` carriage return updates during piped execution.
 
 ### 🛡️ Infrastructure & Reliability Hardening
+
 - **Watch Mode Optimization**: Switched to `on_closed` and `on_moved` Watchdog events to ensure large media files are fully written before processing triggers, preventing infinite debounce loops.
-- **Robustness Fixes**: 
+- **Robustness Fixes**:
   - **Zero-Warning Production Workspace**: Achieved a 100% clean Clippy baseline across both `main` and `nightly` branches.
   - **Thread-Safe Processing**: Fixed race conditions in Watch mode using `stats_lock` and persistent debouncing in `drag_and_drop_processor.py`.
   - Resolved `IndexError` in `check_all.py` during system tool output parsing.
@@ -142,15 +156,16 @@ Significant overhaul of the Python automation layer to provide a high-end, profe
 - **Streamlined Workflow**: Removed the redundant Python-side SQLite `TaskTracker` in favor of the Rust tools' native, high-performance `--resume` capabilities.
 - **Session Isolation**: Implemented unique session identifiers for all log files (`MFB_[Project]_[Timestamp].log`), preventing overlaps when running multiple concurrent processes.
 - **Zero-Functional-Loss Restoration**: Verified that all final stabilization fixes are logic-pure, targeting only metadata (lints) and formatting to restore a 100% clean baseline without regressing core conversion algorithms.
-- **Legacy Script Purge (MAIN Sync)**: 
+- **Legacy Script Purge (MAIN Sync)**:
   - Deleted outdated `.sh` versions of the primary UI tools (`drag_and_drop_processor.sh`, `check_all.sh`, `cache_cleaner.sh`) to ensure a clean, Python-first user experience.
   - Standardized the internal calling chain: All menu actions and quality scans now invoke the modernized Python implementations.
   - Synchronized the latest PTY-relay and centralized cache architecture (`~/.modern_format_boost/cache/`) from the nightly branch to the production baseline.
-- **Enhanced Data Migration Safety**: 
+- **Enhanced Data Migration Safety**:
   - Refactored `collect_optimized.py` to extract the core migration engine into a testable unit.
   - Implemented a comprehensive unit test suite (`scripts/test_collect_optimized.py`) validating path conflict resolution, metadata-aware scanning, and structure-preserving moves.
 
 ### 🐍 Script Infrastructure: Python-First Architecture
+
 Major refactoring of the automation layer, migrating core scripts from Bash to Python for improved maintainability and cross-platform compatibility.
 
 - **Core Script Migration**:
@@ -169,6 +184,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
   - Enhanced kondo integration with correct flags (removed dry-run mode).
 
 ### 🐛 Python Script Bug Fixes & Functional Parity
+
 - **`drag_and_drop_processor.py`**:
   - Fixed broken `with open(...) if ... else None as lf` syntax (invalid Python) — replaced with explicit open/close pattern.
   - Fixed `safety_check()` logic that previously triggered false-positives on user subdirectories (e.g. `~/Downloads/...`) due to over-aggressive `startswith` matching on `$HOME`. It now correctly distinguishes between system roots (recursive block) and user roots (exact block only), with added path resolution for robust matching.
@@ -192,6 +208,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
   - Fixed undefined `NC` variable reference — corrected to `RESET`.
 
 ### ⚡ Performance & Logic Refinements
+
 - **Optimized String Building**: Replaced redundant `push_str(&format!(...))` allocations with the more efficient `write!` macro in critical conversion paths.
 - **Memory & Iteration Density**: Optimized thread handle management in GPU acceleration by eliminating intermediate collections.
 - **Improved Formatting**: Standardized terminal path output using `.display()` and enhanced progress bar readability with named formatting arguments.
@@ -199,16 +216,19 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 - **Extreme Mode (Ultimate Mode)**: Adjusted the smart deceleration trigger to **0.5x** in Ultimate Mode, allowing the search to push deeper into the quality ceiling.
 
 ### 🌈 HDR & Advanced Formats
+
 - **🌈 High-Fidelity HDR Synthesis (HEIC Gainmap)**: Professional-grade metadata-aware HDR pipeline with 32-bit linear processing via **OpenEXR (.exr)**.
 - **🌈 UltraHDR JPEG Handling**: Detected UltraHDR JPEG gainmap files are now skipped or copied as-is to avoid silent quality loss.
 - **📍 Depth Channel Extraction (HEIC)**: Adds depth map preservation for HEIC files with auxiliary depth images, including Google, Samsung, and ISO types.
 
 ### 🛡️ Metadata & Diagnostic Hardening
+
 - **Metadata Protection**: JXL ICC Fallback and authoritative source priority implementation.
 - **Video Metadata Protection**: Confirmed explicit forwarding of VUI parameters and HDR10+ / Dolby Vision RPU metadata.
 - **Unified Diagnostic Hardening**: System-wide transition to "No-Swallowed-Errors" policy (☢️/⛔️ indicators).
 
 ### 📈 Professional Quality & Automation
+
 - **Zero-Warning Production Workspace (Final Lockdown)**:
   - Achieved a **Zero-Warning/Zero-Error** baseline across the entire workspace (`fmt`, `clippy`, and `nextest`) on both `main` and `nightly` branches.
   - Resolved `E0602` unknown lint errors by cleaning up the workspace `Cargo.toml`.
@@ -218,12 +238,14 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
   - Proactive Housekeeping: Integrated `kondo` into build pipelines for surgical repository cleanup.
 
 ### 📦 Dependency Updates
+
 - **New**: `jpegxl-rs = "0.12"` with `vendored` feature.
 - **Updated**: All workspace dependencies to latest stable equivalents (main) or GitHub commits (nightly).
 
 ## [0.10.108] - 2026-03-26
 
 ### 🧹 Project Cleanup & Safety Hardening
+
 - **Integrated Kondo Cleanup**: Added `kondo` support to `check_all.sh` for safe, automated project cleanup.
   - **Safety-First Strategy**: Explicitly excludes `/Volumes` (Time Machine) and `~/Library` (Application Data) to prevent system instability.
   - **Project-Local Scope**: Configured to target only the current repository (`REPO_ROOT`) to avoid confusing other users and ensure precision.
@@ -232,6 +254,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.107] - 2026-03-26
 
 ### 🛠️ Scanner Fortification & Rust Quality Automation
+
 - **Enhanced `check_all.sh` Scanner**:
   - **Parallel Execution Engine**: Re-engineered the scanner to run independent checks (`fmt`, `clippy`, `shellcheck`) in parallel, significantly reducing scan cycles.
   - **Automated Rust Quality Improvement**: Integrated `cargo fix` into the `--fix` pipeline to automatically resolve compiler suggestions and clippy lints.
@@ -244,20 +267,22 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.106] - 2026-03-26
 
 ### 🛡️ Hardened Bit-Depth Pipeline (Image Hardening)
+
 - **Universal Bit-Depth Awareness**: Implemented a three-tier "Bit-Depth Matched" intermediate pipeline for JPEG XL conversion. This ensures that the intermediate file used to "escort" data to the `cjxl` encoder always matches the source's precision, eliminating banding and rounding errors.
   - **Tier 1: Standard (8-bit)**: Uses standard 8-bit PNG for non-HDR sources.
   - **Tier 2: High-Precision (10/12/16-bit)**: Uses 16-bit PNG (`magick -depth 16`) for HDR and high-bit integer sources.
   - **Tier 3: Movie-Grade (32-bit Float)**: Uses **OpenEXR (.exr)** with 32-bit float precision for cinema-grade and scientific-grade imagery (e.g., HDR-TIFF, EXR) to prevent clipping and precision loss.
-- **Proactive Precision Detection**: 
+- **Proactive Precision Detection**:
   - Enhanced `shared_utils::ffprobe_json` to detect 32-bit floating point pixel formats from `ffprobe` output.
   - Updated `prepare_input_for_cjxl` to perform a "probe-first" check for all convertible formats, ensuring internal `cjxl` decoding only proceeds if bit-depth matches.
-- **Improved Fallback Integrity**: 
+- **Improved Fallback Integrity**:
   - Updated the FFmpeg pipe in `img-hevc` and `img_av1` to use `rgb48le` (16-bit) when the source is high-bit, ensuring consistency even when direct tool calls fail.
 - **Unified ImageMagick Dispatch**: Refactored `prepare_input_for_cjxl` to handle multiple intermediate formats (PNG/EXR) and bit-depths (8/16/32) through a unified `magick` dispatch logic.
 
 ## [0.10.105] - 2026-03-26
 
 ### 🛠️ Nightly Infrastructure & Dependency Hardening (Nightly ONLY)
+
 - **Bleeding-Edge Dependency Sync**: Synchronized all workspace dependencies with their absolute latest upstream iterations from GitHub Git sources.
   - **Full Git-Source Migration**: Converted remaining stable dependencies (`xattr`, `libheif-rs`, `crc32fast`) to Git versions to support rapid iteration.
   - **Transitive Consistency**: Comprehensive `[patch.crates-io]` overrides for `anyhow`, `thiserror`, `serde`, `tracing`, `rayon`, `indicatif`, and `clap` to ensure total consistency across the dependency graph.
@@ -271,6 +296,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.104] - 2026-03-26
 
 ### ⚡ Quality Optimization
+
 - **Smart Deceleration in Sprint Search**: Fixed opportunity loss when Sprint acceleration approaches search boundaries
   - **Problem**: When step size accelerates to 0.05 near floor (0.0), algorithm skips many intermediate CRF values that could yield better compression
   - **Example**: Testing 1.37, 1.32, 1.27... with 0.05 steps misses 1.35, 1.30, 1.25... which might have superior quality/size ratios
@@ -283,6 +309,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
   - **Benefit**: More thorough exploration of quality space, reduced risk of missing optimal compression points
 
 ### 🐛 Bug Fixes
+
 - **JPEG Extension Recognition & Universal Format Detection**: Fixed `.jpe` file extension handling by implementing magic bytes detection using the `infer` crate. The implementation now supports **all convertible image formats**:
   - **Supported formats via magic bytes**: JPEG (including `.jpe`, `.jpg`, `.jpeg`), PNG, GIF, WebP, TIFF, BMP, ICO, AVIF
   - **Special handling formats**: HEIC/HEIF (via libheif-rs), JXL (via djxl/cjxl)
@@ -296,6 +323,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
   - Affected operations: dimension reading, image analysis, and all image processing pipelines
 
 ### 🛡️ Safety & Robustness Improvements
+
 - **Enhanced Error Handling & Data Loss Prevention**:
   - Improved error messages in `open_image_reader_with_magic_bytes()` to distinguish between magic bytes detection failures and extension-based detection failures
   - Added detailed logging when magic bytes detection fails, showing the specific error before falling back to extension-based detection
@@ -308,6 +336,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.103] - 2026-03-26
 
 ### 🐛 Bug Fixes
+
 - **Grayscale ICC Early Detection**: Optimized error handling for JPEG files with mismatched ICC profiles (RGB profile on grayscale image). Previously, these files would fail on the first `cjxl` attempt and only succeed after entering the ImageMagick fallback pipeline. Now, the system immediately detects the grayscale ICC mismatch error and routes directly to the ImageMagick fallback with `-strip` retry logic, eliminating the unnecessary FFmpeg pipeline attempt. This reduces processing time and log noise for these edge cases.
   - Affected files: 2 occurrences in 12k image batch (IMG_8321.JPG and similar)
   - Error pattern: `libpng warning: iCCP: profile 'icc': 'RGB ': RGB color space not permitted on grayscale PNG` + `Getting pixel data failed`
@@ -316,6 +345,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.102] - 2026-03-26
 
 ### 🛠️ Hardening & Technical Debt Cleanup
+
 - **Quality & Performance**:
   - **Zero-Warning Workspace**: Achieved a clean, warning-free build across all crates (`img_hevc`, `img_av1`, `shared_utils`) and shell scripts.
   - **Dependency Update**: Full workspace-wide dependency synchronization via `cargo update` to the latest stable and nightly-compatible versions.
@@ -330,10 +360,10 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
   - **GPU Coarse Search**: Fixed Sprint acceleration logic that was incorrectly resetting after first trigger, now allows continuous step doubling throughout the search phase for improved efficiency.
   - **Shell Path Detection**: Fixed `common.sh` to use `${(%):-%x}` for zsh when sourced, preventing incorrect path resolution in multi-script workflows.
 
-
 ## [0.10.101] - 2026-03-26
 
 ### 🛠️ Code Quality & Technical Debt
+
 - **Zero-Debt Architecture**: Achieved 100% Clippy compliance across `shared_utils` by resolving all `pedantic` and `nursery` blockers.
 - **Redundancy Elimination**: Consolidated redundant match arms in `quality_matcher.rs` and `unified_error.rs` (`match_same_arms`), reducing binary size and logic complexity.
 - **Modern Rust Idioms**: Migrated nested error handling and option unwrapping to `let-else` syntax across 12 files (including `ssim_calculator.rs` and `gpu_accel.rs`), improving code flatness and readability.
@@ -341,6 +371,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 - **Clean Documentation**: Fixed missing link targets and formatting issues in crate-root documentation.
 
 ### ✨ Features & Format Support
+
 - **OpenEXR & JPEG 2000 Integration**: Restored missing detection logic for `.exr`, `.jp2`, and `.j2k` formats.
   - Finished the `detect_compression` dispatcher: these formats are now correctly identified as lossless/lossy at the binary level.
   - Native Pipeline Hook: `img_hevc` and `img_av1` now support these formats as direct inputs to `cjxl` without unnecessary intermediate conversions.
@@ -352,62 +383,73 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.100] - 2026-03-25
 
 ### 🧪 Compatibility & Maintenance
+
 - **Legacy ICC Rounding Logic**: Added an on-demand retry path for an edge-case where very old `cjxl` versions (<= v0.10) might reject ICC profiles due to D50 rounding issues. **Note:** Verified as non-triggering/inactive on modern `cjxl v0.11.2` due to improved upstream tolerance. The logic remains purely as a non-intrusive safety net for legacy toolchains.
 - **JXL Container Handling**: Confirmed that `exiftool` (with `-m`) automatically handles containerization requirements for JXL codestreams. Reverted the unnecessary `--container=1` flag to maintain output purity.
 - **Dependency Refresh**: Updated 8 core crates to their latest security/bugfix releases.
 
 ### 🔍 Diagnostics
-- **Silent Fallback Logging**: All previously invisible fallback events now emit to log files (`DEBUG`/`WARN` level). Specifically: `exiftool` stderr (including `-m`-suppressed warnings) is now captured via `tracing::debug!`; `cjxl` decode failures that trigger the ImageMagick or FFmpeg fallback pipelines now emit `tracing::warn!` with the full upstream error before the retry begins. Terminal output is unchanged — all new entries are file-only.
 
+- **Silent Fallback Logging**: All previously invisible fallback events now emit to log files (`DEBUG`/`WARN` level). Specifically: `exiftool` stderr (including `-m`-suppressed warnings) is now captured via `tracing::debug!`; `cjxl` decode failures that trigger the ImageMagick or FFmpeg fallback pipelines now emit `tracing::warn!` with the full upstream error before the retry begins. Terminal output is unchanged — all new entries are file-only.
 
 ## [0.10.99] - 2026-03-24
 
 ### ✨ Features
+
 - **Robust Quality Metrics for Animated Sources**: Implemented "Compatible Quality Measurement Mode" for GIF, WebP, AVIF, HEIC, and APNG. The system now automatically switches to a more robust `SSIM-All` calculation (with format normalization and alpha flattening) if the fast SSIM path fails, ensuring consistent metrics across iterations.
 - **Probe-First Format Identification**: Upgraded animated image detection to prioritize `ffprobe format_name` over simple file extensions. This ensures files with non-standard extensions (e.g., `2.gif.file`) are correctly routed to the relaxed animation processing pipeline instead of strict video paths.
 
 ### 🐛 Bug Fixes
+
 - **GPU SSIM Resilience**: Refined GPU SSIM baseline handling to prevent interruptions when metrics measurements are unavailable, allowing the search to proceed seamlessly using CPU-based diagnostics.
 
 ## [0.10.98] - 2026-03-24
 
 ### 🐛 Bug Fixes
+
 - **GPU SSIM Baseline Tolerance**: Refactored `gpu_coarse_search.rs` to treat missing GPU SSIM baseline as a non-fatal warning. The search now gracefully continues with CPU delta-only exploration instead of bailing, improving reliability on systems with transient GPU metric failures.
 - **Temp File Lifecycle Management**: Implemented `TempOutputGuard` across all animated image conversion paths in `vid_hevc` and `vid_av1`. Ensures automatic cleanup of `*.tmp.*` files even during early returns or error propagation (`?`), preventing disk clutter from abandoned temporary artifacts.
 
 ### 🛠️ Code Quality
+
 - **Branch Synchronization**: Synchronized `main` and `nightly` branches with unified fix implementations while maintaining separate dependency philosophies (crates.io for main, GitHub/Git for nightly).
 
 ## [0.10.97] - 2026-03-24
 
 ### 🛠️ Code Quality
+
 - **Integrity Protection Removal**: Decoupled the build process from documentation content by removing the README/CHANGELOG signature verification mechanism.
 
 ## [0.10.96] - 2026-03-24
 
 ### 📝 Documentation & Localization
+
 - **Total Linguistic Standardization**: Translated all remaining Simplified Chinese comments and documentation headers to professional technical English across the entire `shared_utils` crate.
 - **Improved Code Readability**: Standardized documentation style for core modules including `terminal_logging`, `ffprobe_json`, `explore_strategy`, and the `types` submodule.
 - **Unicode Test Path Optimization**: Updated test paths in `path_validator.rs` to English while maintaining coverage for non-ASCII path handling.
 
 ### 🛠️ Code Quality
+
 - **Clippy Hardening**: Addressed remaining clippy warnings to ensure a 100% clean build in `shared_utils`.
 - **Macro Documentation**: Corrected and translated doc-comments for logging macros.
 
 ## [0.10.95] - 2026-03-24
 
 ### 🛠️ Code Quality (Shared Utils)
+
 - **Pedantic Clippy Hardening**: Achieved zero warnings in `shared_utils` (standard/pedantic) by addressing:
-    - `redundant_else`: Removed unnecessary `else` blocks after `return`/`break` in `gpu_accel.rs`, `quality_matcher.rs`, and `video_detection.rs`.
-    - `similar_names`: Applied `#[allow]` attributes to contextually appropriate naming (e.g., `ctime`/`btime` in cache, `vmaf`/`uvmaf` in video metrics).
-    - `missing_errors_doc` & `missing_panics_doc`: Added required documentation sections to public APIs in `checkpoint.rs`, `conversion.rs`, and `terminal_logging.rs`.
-    - `uninlined_format_args`: Inlined variables in `format!` macros across the crate.
-    - `unused_self`: Refactored `enhanced_logging.rs` to correctly acknowledge `self`.
-    - `map_unwrap_or`: Replaced with more idiomatic `map_or` in `checkpoint.rs`.
+  - `redundant_else`: Removed unnecessary `else` blocks after `return`/`break` in `gpu_accel.rs`, `quality_matcher.rs`, and `video_detection.rs`.
+  - `similar_names`: Applied `#[allow]` attributes to contextually appropriate naming (e.g., `ctime`/`btime` in cache, `vmaf`/`uvmaf` in video metrics).
+  - `missing_errors_doc` & `missing_panics_doc`: Added required documentation sections to public APIs in `checkpoint.rs`, `conversion.rs`, and `terminal_logging.rs`.
+  - `uninlined_format_args`: Inlined variables in `format!` macros across the crate.
+  - `unused_self`: Refactored `enhanced_logging.rs` to correctly acknowledge `self`.
+  - `map_unwrap_or`: Replaced with more idiomatic `map_or` in `checkpoint.rs`.
 - **Syntax Integrity**: Fixed a regression in `gpu_accel.rs` caused by redundant delimiter removal during clippy fixing.
+
 ## [0.10.94] - 2026-03-23
 
 ### 🛠️ Code Quality Tooling
+
 - **`scripts/check_all.sh` Reliability Rewrite**: Reworked the quality scan script with strict shell safety (`set -Eeuo pipefail`), deterministic repo-root execution, and structured pass/fail/warn/skip summaries.
 - **Nightly-First Branch Policy**: Added default git-branch enforcement to run checks on `nightly` unless explicitly bypassed with `--allow-non-nightly`.
 - **Required vs Optional Gates**: Split checks into required gates (`fmt`/`clippy`/tests) and optional deep scans, with required failures now correctly returning a non-zero exit code.
@@ -417,6 +459,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 - **Sandbox-Aware Deny Handling**: `check_all.sh` now auto-skips `cargo deny` when the advisory DB path is read-only or missing, preventing false-negative warnings in restricted environments.
 
 ### 🐛 Quality Fixes
+
 - **Clippy Compliance (Shared Utils)**: Fixed strict lint blockers in `ffmpeg_process.rs` by replacing newline `write!` with `writeln!` and simplifying `JoinHandle` result handling with `unwrap_or_else`.
 - **HEVC Strategy Test Compilation Repair**: Updated `vid_hevc/src/conversion_api.rs` tests to match the current `determine_strategy_with_apple_compat(result, apple_compat, force)` signature.
 - **Filesystem-Safe Test Paths**: Reworked affected image converter tests (`img_av1` and `img_hevc`) to use `tempfile` + canonicalized temp roots instead of hard-coded absolute paths (e.g. `/path`, `/output`, `/var`) that violate current path safety rules.
@@ -428,11 +471,13 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.93] - 2026-03-23
 
 ### 🐛 Bug Fixes
+
 - **cjxl Process Termination Detection**: Enhanced error handling in `jxl_utils.rs` to properly detect when cjxl is terminated by signal (SIGKILL/SIGSEGV). Now logs "Process terminated by signal (possible crash or OOM kill)" instead of generic "exit code: None", helping diagnose OOM issues.
 - **FFprobe Warning Reduction**: Improved error filtering in `ffprobe_json.rs` to reduce unnecessary warnings for JPEG/image files where ffprobe failure is expected (not video streams). Only logs warnings for genuine errors.
 - **ImageMagick Fallback Error Messages**: Added detailed error context when all ImageMagick+cjxl pipeline attempts fail, explaining possible causes (corrupted data, unsupported format, cjxl crash/OOM).
 
 ### ⚡ Performance & Memory Management
+
 - **Enhanced OOM Prevention**: Strengthened memory pressure detection thresholds in `system_memory.rs`:
   - Low pressure: now requires 30% available RAM (up from 25%) and 3GB minimum (up from 2GB)
   - Normal pressure: now requires 15% available RAM (up from 10%) and 1.5GB minimum (up from 1GB)
@@ -442,36 +487,41 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.92] - 2026-03-22
 
 ### 🛠️ Code Quality & Robustness (Shared Utils)
+
 - **Deadlock-Free FFmpeg Pipeline**: Re-engineered `ffmpeg_process.rs` with a dedicated asynchronous `stderr` drain thread. This prevents "pipe-buffer-full" deadlocks during resource-intensive transcode operations, ensuring 100% reliability for high-verbosity logging tasks.
 - **Analysis Cache Restoration**: Fixed corrupted function signatures in `analysis_cache.rs` for `compute_hash` logic. Restored the structural integrity of the caching engine, enabling accurate multi-version dependency and parameter fingerprinting.
-- **Exploration Strategy Optimization**: 
-    - Migrated legacy `Option` patterns to modern `is_some_and` idioms for improved readability.
-    - Integrated `mul_add` FMA (Fused Multiply-Add) optimization for CRF binary-search boundary calculations, reducing cumulative rounding errors during quality saturation seeks.
+- **Exploration Strategy Optimization**:
+  - Migrated legacy `Option` patterns to modern `is_some_and` idioms for improved readability.
+  - Integrated `mul_add` FMA (Fused Multiply-Add) optimization for CRF binary-search boundary calculations, reducing cumulative rounding errors during quality saturation seeks.
 - **Clippy-Compliant Hardening**: Standardized documentation (`# Errors`, `# Panics`), implemented `#[must_use]` on critical tool-check APIs, and converted performance-sensitive utility methods to `const fn`.
 - **Accurate Error Reporting**: Fixed a variable interpolation bug in `CompressionResult::error_message`, ensuring that quality comparison failures in the logs display correct source and target scores.
 
 ## [0.10.91] - 2026-03-22
 
 ### 🛡️ Integrity Protection
+
 - **Documentation Enforcement**: Bound `README.md` and `CHANGELOG.md` to the compilation process via `include_str!`. Compilation will now fail if these files are missing, ensuring the repository remains complete for all builds.
 
 ## [0.10.90] - 2026-03-22
 
 ### Fixed
+
 - 🔄 **Intelligent Checkpoint & Resume Reset**: Deleting a manually created output directory (e.g. `_optimized`) now correctly triggers a full re-conversion of the source directory, even in resume mode. The system now detects when the "optimized" destination is missing and clears stale progress state to ensure synchronization between source and output.
-- 🧪 **MS-SSIM/VMAF Quality Verification Re-engineering**: 
-    - **Exit Code Tolerance**: Prefers prioritized stdout JSON parsing over exit-code checks, eliminating false "Pixel format incompatibility" errors on legitimate HDR/10-bit video streams.
-    - **Chroma Resolution Guard**: Implemented a safety threshold (256×256 min) for MS-SSIM chroma channels. Fails with Y-only scoring instead of crashing on small-resolution chroma planes (downsampling protection).
-    - **False Error Suppression**: Tightened stderr parsing to ignore harmless logging fragments (like codec descriptions/metadata headers) that previously triggered false quality verification failures.
+- 🧪 **MS-SSIM/VMAF Quality Verification Re-engineering**:
+  - **Exit Code Tolerance**: Prefers prioritized stdout JSON parsing over exit-code checks, eliminating false "Pixel format incompatibility" errors on legitimate HDR/10-bit video streams.
+  - **Chroma Resolution Guard**: Implemented a safety threshold (256×256 min) for MS-SSIM chroma channels. Fails with Y-only scoring instead of crashing on small-resolution chroma planes (downsampling protection).
+  - **False Error Suppression**: Tightened stderr parsing to ignore harmless logging fragments (like codec descriptions/metadata headers) that previously triggered false quality verification failures.
 
 ## [0.10.89] - 2026-03-22
 
 ### ✨ Features
+
 - 🎞️ **HDR10+ Dynamic Metadata Retention**: Full support for extracting SMPTE 2094-40 metadata via `hdr10plus_tool` and injecting it into x265 outputs via `--dhdr10-info`.
 - 🛠️ **Testing Bypass**: Enhanced the `--force` flag to explicitly bypass the "already modern format" skip logic, enabling metadata retention testing on existing HEVC/AV1 content.
 - 🛡️ **Robust Extraction Strategy**: Implemented a "Strict-first, Skip-validation-fallback" strategy for HDR10+ extraction. The tool now prioritizes standard-compliant parsing but will gracefully fallback for real-world files with minor metadata quirks.
 
 ### Fixed
+
 - 🧪 **MS-SSIM/VMAF Exit Code Tolerance**: Fixed false "Pixel format incompatibility" errors in quality verification. The ffmpeg libvmaf pipeline now parses stdout for valid JSON results regardless of exit code, since ffmpeg can return non-zero even when metrics are successfully computed.
 - 📐 **Chroma Channel Resolution Guard**: Added minimum resolution check (256×256) for U/V chroma MS-SSIM channels. libvmaf MS-SSIM requires multi-scale downsampling and fails with "scale below 1x1" on small chroma planes. Now gracefully falls back to Y-only MS-SSIM instead of reporting a cryptic error.
 - 🔍 **False Error Detection Fix**: Tightened stderr error matching — previously `stderr.contains("format")` triggered on harmless ffmpeg log lines (e.g. codec format descriptions), causing false "Pixel format incompatibility" reports on every HDR video.
@@ -481,30 +531,36 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.87] - 2026-03-22
 
 ### Fixed
+
 - 🎞️ **Animated quality metrics no longer crash on odd/even dimension mismatches**: `VMAF-Y`, `PSNR-UV`, and `MS-SSIM` now normalize both reference and encoded streams to the same shared even resolution before running ffmpeg/libvmaf filters. This fixes `Error reinitializing filters` / `Invalid argument (-22)` failures seen during GIF and other animated-image CRF search when one side landed on odd dimensions.
 
 ### 🛡️ Comprehensive Privacy Purge & Repository Hardening
+
 - **Repository-Wide History Sanitization**: Executed deep Git history rewrite to completely eliminate accidental metadata, test assets, and sensitive path leaks from the global revision graph.
 - **Historical Documentation Archival**: Successfully extracted and localized 140+ legacy technical documents (Algorithms, Audits, Manuals) to the local `logs/` directory, while removing them from the remote Git footprint to ensure a lean, production-focused codebase.
 - **Dependency Architecture Bifurcation**:
-    - **Main (Stable)**: Locked to high-stability `crates.io` dependencies (e.g., `image v0.25.5`) for maximum reliability.
-    - **Nightly (Edge)**: Synchronized with the absolute latest upstream iterations from GitHub Git sources (e.g., `image v0.25.x HEAD`) to support rapid iteration.
+  - **Main (Stable)**: Locked to high-stability `crates.io` dependencies (e.g., `image v0.25.5`) for maximum reliability.
+  - **Nightly (Edge)**: Synchronized with the absolute latest upstream iterations from GitHub Git sources (e.g., `image v0.25.x HEAD`) to support rapid iteration.
 - **Changelog Reconstruction**: Recovered 2200+ lines of archival history following repository restructuring.
 
 ## [0.10.87-nightly] - 2026-03-22
 
 ### 🔨 Other Changes
+
 - build(nightly): synchronize and update GitHub dependencies to latest upstream iterations (v0.10.87-nightly)
 
 ## [0.10.86] - 2026-03-22
 
 ### ✨ Features
+
 - release: v0.10.86 - finalized v0.10.85 features and documentation
 
 ### 📝 Documentation
+
 - consolidate redundant documentation and release notes into docs/ directory
 
 ### 🔨 Other Changes
+
 - merge v0.10.86: sealed release with updated notes
 - force sync nightly to remote to resolve diversion
 - merge v0.10.86: synchronized after dual-branch privacy purge
@@ -514,25 +570,30 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ### 🚀 Key Improvements since v0.10.82
 
 #### 🖥️ Runtime & GUI Hardening
+
 - **Bootstrapped Environments**: Added robust environment stabilization (PATH, Cargo, Locale) for GUI and Finder-launched sessions, eliminating silent failures in sparse terminal environments.
 - **Terminal-Aware Progress**: CoarseProgressBar now dynamically adapts to terminal width, preventing redraw artifacts and line-wrapping in narrow CLI windows.
 - **Atomic Renaming**: Optimized output commitment on Windows to use direct atomic renaming (`MoveFileExW`), ensuring data integrity during process interruptions.
 
 #### 💾 Reliability & Storage Management
+
 - **Disk Exhaustion Pausing**: All batch tools now detect storage exhaustion mid-run, automatically pausing work, releasing locks, and preserving progress for easy resumption.
 - **Signature-Bound Checkpoints**: Resume state is now validated against file signatures (size/mtime/mtime/btime) and cache versions, preventing stale or inconsistent resume attempts.
 - **Automatic Resume Reset**: Manually deleting an output folder now automatically triggers a full-run reset, eliminating the need to manually clear checkpoint files.
 
 #### 🎞️ Video Encoding & Quality
+
 - **CRF Warm-Start Hints**: Refined the video CRF search anchor. Cached results now act as intelligent hints rather than rigid overrides, allowing for better adaptation to current system conditions.
 - **Best-Effort Persistence**: "Quality Miss" scenarios now store their results as reusable CRF hints, optimizing the next attempt even if the initial target wasn't met.
 - **Stream Mapping Fix**: Resolved odd-height cover art encoding failures by locking libx265 re-encoding to the primary video stream only.
 
 #### 📢 Error Visibility & Recovery
+
 - **Loud Failures (The "Wake Up All Silent Errors" Update)**: Surfaced dozens of previously silent failure points, including background thread panics, GPU watchdog issues, metadata preservation errors, and cache write conflicts.
 - **Probing Portability**: Standardized PID age detection across macOS and Linux, reducing false "stale lock" warnings while maintaining strict concurrency safety.
 
 #### 📦 Maintenance & Infrastructure
+
 - **Dependency Refresh**: Synchronized all workspace dependencies to their latest compatible versions across crates.io and GitHub sources.
 - **Metadata Scoping**: Restored precise scoping for Finder branding, ensuring MFB badges are only applied to successfully converted output files.
 - **Legacy Cleanup**: Removed redundant release notes and stale documentation from the repository root.
@@ -540,29 +601,33 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.83] - 2026-03-19
 
 ### Fixed
+
 - 🏷️ **Finder comment branding is now scoped to conversion output only**: `append_mfb_branding` was previously called inside `preserve_pro`, which fires on every metadata-preservation operation (including non-conversion paths). It is now called exclusively inside `commit_temp_to_output_with_metadata` after a successful atomic rename, ensuring the Finder comment is only written to files that were actually converted by MFB.
 - 🗑️ **Original-file deletion failures are no longer silent**: `safe_delete_original` errors in `finalize_conversion` are now propagated instead of being discarded with `let _ =`, so a failed delete surfaces as a conversion error rather than being silently ignored.
 
 ## [0.10.82-v0] - 2026-03-22
 
 ### 🐛 Bug Fixes
+
 - Fix odd-dimension metric normalization for animated quality checks
 
 ### 📝 Documentation
+
 - integrate translated historical 'loud failure' notes into unified changelog (v0.10.82-v0.10.87)
 
 ## [0.10.82] - 2026-03-18
 
 ### Fixed
+
 - 📽️ **FFmpeg Stream Mapping**: Added explicit mapping `-map 0:v:0 -map 0:a? -map 0:s?` to the video encoding pipeline to ensure only the primary video stream is re-encoded, fixing odd-height cover art errors.
 - 🛡️ **Atomic Output Switch**: Optimized `commit_temp_to_output_with_metadata` with direct atomic renaming (`MoveFileExW` on Windows) to prevent data loss during interruptions.
 - 🔒 **Path and Process Hardening**: Hardened output path generation (rejecting control characters/symlinks) and standardized Unix checkpoint lock age detection using `ps -o etimes`.
 - 📋 **Universal Loud Failures**: This milestone represents a project-wide push to surface previously "silent failures" into explicit, actionable errors:
-    - **Recovery & Batch Traversal**: Explicit warnings for fallback copies, run-log setup, and `walkdir` traversal failures.
-    - **PNG & Image Analysis**: Stricter corruption checking for PNG chunks and observable fallback explanations for JPEG/JXL duration probes.
-    - **Metadata Preservation**: Native `xattr`/ACL/permission/timestamp preservation on macOS/Linux/Windows now warns on real failures.
-    - **Resource & Cache**: Warns on RAM/disk/ffprobe-parse failures; Surfaces SQLite schema migration and POST-write cache size enforcement errors.
-    - **Cleanup & Rollback**: Temp-output guards and video quality cleanup failures are now fully visible instead of silently leaving stale artifacts.
+  - **Recovery & Batch Traversal**: Explicit warnings for fallback copies, run-log setup, and `walkdir` traversal failures.
+  - **PNG & Image Analysis**: Stricter corruption checking for PNG chunks and observable fallback explanations for JPEG/JXL duration probes.
+  - **Metadata Preservation**: Native `xattr`/ACL/permission/timestamp preservation on macOS/Linux/Windows now warns on real failures.
+  - **Resource & Cache**: Warns on RAM/disk/ffprobe-parse failures; Surfaces SQLite schema migration and POST-write cache size enforcement errors.
+  - **Cleanup & Rollback**: Temp-output guards and video quality cleanup failures are now fully visible instead of silently leaving stale artifacts.
 - ⏸️ **Mid-run disk exhaustion now pauses instead of cascading failures**: All four batch tools now cleanly pause, release locks, and preserve progress when storage runs out.
 
 ## [0.10.81] - 2026-03-17
@@ -570,16 +635,19 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ### 🚀 Key Highlights (Since v0.10.78)
 
 #### 🔄 Centralized Progress & Batch Resume (v0.10.79+)
+
 - 🌍 **Zero Directory Pollution**: All processing metadata folders (`.mfb_progress`) have been consolidated into a single, hidden location in the user's home directory (`~/.mfb_progress/`). Improved Privacy: Keeps your photo and video directories completely clean throughout the processing lifecycle.
 - 🛡️ **Atomic Resume Framework**: Introduced a robust, thread-safe checkpoint system. Simply restarting an interrupted job will skip already completed files with millisecond-level detection.
 - **Canonical Path Hashing**: Progress is keyed by the absolute canonical path hash of the target directory, ensuring reliable tracking even across symbolic links.
 - 🗑️ **Automatic Lifecycle Management**: Progress data for a specific folder is automatically and securely purged upon a 100% successful completion.
 
 #### 🔠 Extension Standardization
+
 - 🔠 **Uppercase File Extensions**: Standardized all output extensions to uppercase across all tools (e.g., `.JXL`, `.MP4`, `.MKV`, `.AVIF`, `.WEBM`) for better visibility in professional file managers and macOS Finder.
 - 🎯 **Path Logic Refinement**: Updated the internal `determine_output_path` API to enforce uppercase extensions while accurately preserving filename stems.
 
 #### 🛡️ System Robustness & UI Improvements
+
 - 🛡️ **Shell Path Escaping (macOS App)**: Fixed a critical bug in the macOS App wrapper's path quoting logic, correctly handling single quotes, emojis, and shell metacharacters.
 - 🧹 **Data Purge Branding**: Renamed "Clean Cache" to "Purge Processing Data" across all maintenance scripts (drag_and_drop_processor.sh, cache_cleaner.sh).
 - ⚖️ **Thread-Safe Testing**: Refactored the internal `CheckpointManager` test suite to use isolated temporary directories, avoiding CI/CD test collisions.
@@ -587,10 +655,12 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.80] - 2026-03-16
 
 ### Added
+
 - 🌍 **Centralized Progress Tracking**: Moved all `.mfb_progress` folders to `~/.mfb_progress/`.
 - 🛡️ **Enhanced UI Warnings**: Added prominent backup warnings to the drag-and-drop terminal interface.
 
 ### Changed
+
 - 🧹 **Data Purge Branding**: Renamed "Clean Cache" to "Purge Processing Data".
 - 🛠️ **Robust Cleanup**: Updated `cache_cleaner.sh` to include centralized progress data in the purging process.
 - 🔒 **Thread-Safe Test Suite**: Refactored `CheckpointManager` unit tests for reliable multi-threaded execution.
@@ -598,61 +668,74 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.79] - 2026-03-21
 
 ### 🔨 Other Changes
+
 - sync changelog for v0.10.79/0.10.80 and update progress tracking logic
 
 ## [0.10.78] - 2026-03-15
 
 ### 🏆 Documentation & Transparency
+
 - 📖 **Complete README Overhaul**: Rewritten with a professional bilingual (English/Chinese) structure and deep technical pipeline explanations.
 - ⚠️ **Stability Disclaimer**: Added guidance highlighting HEVC maturity lead over AV1 variants for production tasks.
 - ⚖️ **License Finalization**: Restored full runtime dependency license tables for compliance.
 
 ### 🛡️ Metadata & Data Integrity (Massive Overhaul)
+
 - 🗂️ **Multi-Platform Preservation**:
-    - **macOS**: Added native Date Added (`kMDItemDateAdded`) and Finder Tag preservation via `copyfile` and `setattrlist`.
-    - **Windows**: Added Alternate Data Streams (ADS) support via PowerShell.
-    - **Linux**: Standardized ACL restoration using `setfacl --restore`.
+  - **macOS**: Added native Date Added (`kMDItemDateAdded`) and Finder Tag preservation via `copyfile` and `setattrlist`.
+  - **Windows**: Added Alternate Data Streams (ADS) support via PowerShell.
+  - **Linux**: Standardized ACL restoration using `setfacl --restore`.
 - 📅 **QuickTime/EXIF Sync**: Overhauled `fix_quicktime_dates` to synchronize all capture date fields forcefully.
 - 🎨 **ICC Profiles**: Fixed ICC color space loss in JXL conversion; all JXL outputs now manually inject and verify source ICC profiles.
 - 💾 **Disk Space Pre-Check**: All tools now perform a pre-batch disk space validation.
 
 ### 🎬 Video Processing Stability
+
 - 🔧 **Odd-Dimension Fix**: Resolved EINVAL (-22) errors by adding automatic `scale=trunc(iw/2)*2` normalization.
 - 🛡️ **Ctrl+C Guard**: Unified the 4.5-minute confirmation guard across all binaries.
 
 ### 🧪 Algorithmic Improvements
+
 - 🎯 **PNG Quantization Detection (Meme Score v3)**: Added RGB-weighted banding analysis and dithering recognition for improved icons/pixel-art accuracy.
 - ✨ **AV1 Tools Parity**: Brought `img-av1` and `vid-av1` up to feature parity with HEVC tools, including unified finalization checks.
 
 ## [0.10.76] - 2026-03-20
 
 ### ✨ Features
+
 - level up AV1 tools maturity to parity with HEVC, implement CacheStats and GIF meme-score config parity; add GitHub workflow for nightly releases
 - complete av1 tools parity with hevc tools (small png optimization & finalize logic)
 
 ### 🐛 Bug Fixes
+
 - Fix VMAF/SSIM/PSNR filter graph -22 EINVAL on odd-dimension video
 
 ### 🔨 Other Changes
+
 - Merge branch 'main' into nightly
 
 ### 🚀 Performance & Refactoring
+
 - restore clean crates.io dependencies for main branch
 
 ## [0.10.75] - 2026-03-19
 
 ### 🐛 Bug Fixes
+
 - Fix stride bias in color frequency distribution sampling
 
 ## [0.10.74] - 2026-03-19
 
 ### ✨ Features
+
 - Add disk space pre-check to img-hevc
 
 ### 🐛 Bug Fixes
+
 - Script menu flow and disk space pre-check integration
 
 ### 🔨 Other Changes
+
 - PNG quantization heuristic accuracy overhaul
 - nightly: Restore GitHub dependencies for latest iterations
 - main: Restore crates.io dependencies for stable production use
@@ -660,60 +743,73 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.73] - 2026-03-19
 
 ### ✨ Features
+
 - Add disk space pre-check to img-hevc
 
 ### 🐛 Bug Fixes
+
 - Compilation warnings fixed and unified version management
 - Script menu flow and disk space pre-check integration
 
 ### 🔨 Other Changes
+
 - main: Restore crates.io dependencies for stable production use
 - nightly: Restore GitHub dependencies for latest iterations
 
 ## [0.10.72] - 2026-03-16
 
 ### ✨ Features
+
 - unified version management system
 - main branch uses stable crates.io dependencies
 - nightly branch uses GitHub dependencies for latest iterations
 - Enhanced cache system v3 with content fingerprint and integrity verification
 
 ### 🐛 Bug Fixes
+
 - Fix ICC Profile & Metadata Preservation
 
 ### 📝 Documentation
+
 - clarify nightly-only GitHub dependencies in Cargo.toml
 
 ## [0.10.71] - 2026-03-16
 
 ### 🐛 Bug Fixes
+
 - Complete metadata preservation fix
 
 ### 🔨 Other Changes
+
 - nightly: Restore GitHub dependencies for latest iterations
 
 ## [0.10.69] - 2026-03-16
 
 ### ✨ Features
+
 - Enhanced cache system v3 with content fingerprint and integrity verification
 - nightly branch uses GitHub dependencies for latest iterations
 - main branch uses stable crates.io dependencies
 - unified version management system
 
 ### 🐛 Bug Fixes
+
 - enable metadata preservation by default (v0.10.69)
 
 ### 📝 Documentation
+
 - clarify nightly-only GitHub dependencies in Cargo.toml
 
 ## [0.10.68] - 2026-03-16
 
 ### 🐛 Bug Fixes
+
 - comprehensive metadata preservation across all platforms (v0.10.68)
 
 ## [0.10.67] - 2026-03-16
 
 ### 🐛 Bug Fixes
+
 - preserve file creation time and clean log output (v0.10.67)
 - resolve all clippy warnings in workspace
 - clippy warnings - simplify logic and add allow attributes
@@ -721,6 +817,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.66] - 2026-03-15
 
 ### 🐛 Bug Fixes
+
 - enable v1_21 feature in img_hevc/img_av1 + increase HEIC limits to 15GB (v0.10.66)
 - enable v1_21 in shared_utils default feature (critical fix)
 - correct HEIC security limits API usage + restore fallback 2 (v0.10.66)
@@ -728,35 +825,43 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 - resolve all clippy warnings in workspace
 
 ### 📝 Documentation
+
 - integrate core historical release notes (v0.10.66, v0.10.64, v0.10.9) into unified changelog
 - docs/app: restore macOS application bundle stripped during repository sanitization
 
 ## [0.10.65] - 2026-03-15
 
 ### 🐛 Bug Fixes
+
 - apply HEIC security limits before reading file (v0.10.65)
 - remove LIBHEIF_SECURITY_LIMITS env var, use API-level limits only
 
 ## [0.10.64] - 2026-03-15
 
 ### ✨ Features
+
 - ci: restore release workflow and add v0.10.64 release notes
 
 ### 🐛 Bug Fixes
+
 - remove .clippy.toml from .gitignore (should be tracked)
 
 ### 🔨 Other Changes
+
 - Remove AI tool config folders from Git tracking
 
 ### 🚀 Performance & Refactoring
+
 - bump version to 0.10.64
 
 ## [0.10.63] - 2026-03-15
 
 ### 🐛 Bug Fixes
+
 - remove .clippy.toml from .gitignore (should be tracked)
 
 ### 🔨 Other Changes
+
 - Increase HEIC security limits
 - Remove AI tool config folders from Git tracking
 - bump version to 0.10.64
@@ -764,31 +869,38 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.62] - 2026-03-15
 
 ### ✨ Features
+
 - Add WebP/AVIF lossless detection verification
 
 ### 🔨 Other Changes
+
 - Unify dependencies to GitHub nightly sources
 
 ## [0.10.61] - 2026-03-15
 
 ### ✨ Features
+
 - Add WebP/AVIF lossless detection verification
 
 ### 🔨 Other Changes
+
 - Bind cache version to program version for automatic invalidation
 
 ## [0.10.60] - 2026-03-15
 
 ### 🔨 Other Changes
+
 - Log level optimization + dependency updates
 
 ## [0.10.59] - 2026-03-15
 
 ### ✨ Features
+
 - enhance detect_animation with ffprobe/libavformat fallback
 - implement global CRF warm start cache for video and dynamic images
 
 ### 🐛 Bug Fixes
+
 - Cache version control + HEIC lossless detection fix
 - set LIBHEIF_SECURITY_LIMITS at global program entry points
 - final V4 cleanup, remove panic and restore security limits
@@ -799,6 +911,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 - unnecessary parentheses around assigned value
 
 ### 🚀 Performance & Refactoring
+
 - rename to analyze_heic_file_v4 and add V4 diagnostic tags
 - fully trust ffprobe for ISOBMFF formats like AVIF to avoid false positives
 - update gitignore for local caches and tool configs
@@ -806,11 +919,13 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.57] - 2026-03-15
 
 ### ✨ Features
+
 - implement Video CRF search hint (warm start) v0.10.57
 - implement global CRF warm start cache for video and dynamic images
 - enhance detect_animation with ffprobe/libavformat fallback
 
 ### 🐛 Bug Fixes
+
 - unnecessary parentheses around assigned value
 - remove extension fallback from format detection to prevent NoFtypBox false errors
 - use numeric value for LIBHEIF_SECURITY_LIMITS to prevent NoFtypBox error
@@ -820,55 +935,67 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 - set LIBHEIF_SECURITY_LIMITS at global program entry points
 
 ### 🔨 Other Changes
+
 - update gitignore for local caches and tool configs
 
 ### 🚀 Performance & Refactoring
+
 - fully trust ffprobe for ISOBMFF formats like AVIF to avoid false positives
 - rename to analyze_heic_file_v4 and add V4 diagnostic tags
 
 ## [0.10.52] - 2026-03-15
 
 ### 🐛 Bug Fixes
+
 - simplify image classifiers usage and log all fallbacks
 
 ### 🔨 Other Changes
+
 - tune: sharpen gif meme-score for stickers and social-cache names
 - tune: refine gif meme-score heuristics for tiny stickers
 
 ### 🚀 Performance & Refactoring
+
 - bump version to 0.10.52 and perfected meme scoring mechanism
 
 ## [0.10.51] - 2026-03-15
 
 ### ✨ Features
+
 - implement 3-stage cross-audit with deep byte-level bitstream investigation
 - implement robust persistent cache with nanosecond change detection and SQL migration
 
 ### 🐛 Bug Fixes
+
 - simplify image classifiers usage and log all fallbacks
 - resolve GIF parser desync and implement performance-optimized Joint Audit
 - resolve compilation errors and implement internal deep byte-research for joint audit
 
 ### 🔨 Other Changes
+
 - tune: refine gif meme-score heuristics for tiny stickers
 - tune: sharpen gif meme-score for stickers and social-cache names
 
 ### 🚀 Performance & Refactoring
+
 - remove dynamic compression adjustment and legacy routing (v0.10.51)
 - bump version to 0.10.52 and perfected meme scoring mechanism
 
 ## [0.10.50] - 2026-03-14
 
 ### ✨ Features
+
 - explicit size units in logs (v0.10.50)
 
 ## [0.10.49] - 2026-03-14
 
 ### ✨ Features
+
 - Add HEVC transquant_bypass detection and mp4parse dependency
 - add lossless HEIC/HEIF to JXL conversion route
 
 ### 🐛 Bug Fixes
+
 - release: v0.10.49 - README overhaul and HEIC security fix
 - enrich analysis cache and fix UI labels
 - silence cache debug logs and prevent stack overflow
@@ -878,10 +1005,12 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.46] - 2026-03-14
 
 ### ✨ Features
+
 - add lossless HEIC/HEIF to JXL conversion route
 - Add HEVC transquant_bypass detection and mp4parse dependency
 
 ### 🐛 Bug Fixes
+
 - release v0.10.46 with enhanced modern-lossy-skip and heuristic fix
 - correct HEIC/HEIF skip logic to match WebP/AVIF pattern
 - restore safe fallback behavior for corrupted media files
@@ -893,12 +1022,14 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ### Mega-Release: Cumulative Evolution (v0.10.9 → v0.10.45)
 
 #### High-Fidelity Algorithm & Quality Logic
+
 - **Extreme Mode Saturation Search**: Implemented **0.01-precision** CRF fine-tuning to ensure video quality reaches the "Physical Red Line" (Saturation).
 - **3D 3rd-Generation Quality Gate**: Integrated **VMAF-Y** (Perceptual), **PSNR-UV** (Chroma保真度), and **CAMBI** (Banding detection) for exhaustive verification.
 - **Sprint & Backtrack Optimization**: Search performance leap using double-step sprints (up to 1.6x) and precise 0.1-step rollbacks on overshoot.
 - **Unified 1MB Size Tolerance**: Standardized size increase checks (1,048,576 bytes) workspace-wide to ensure high-quality leaps remain balanced with file size.
 
 #### Image Processing Intelligence (v2)
+
 - **JPEG Lossless Transcoding**: Mathematical bit-exact reconstruction using direct DQT mapping into **JXL varDCT** profiles.
 - **Heuristic v2 Estimation Engine**: Revolutionary quality detection using Efficiency-Weighted BPP and **Image Entropy (Edge Density/Complexity)** estimation.
 - **Lossless Detection Parity**: Deterministic identification for Modular JXL, WebP-L, and High-Bit-Depth (10-bit+) sources.
@@ -906,12 +1037,14 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 - **Consistent High-Fidelity Path**: Unified all legacy static sources to the `Quality 100` (`d=0.001`) route unless lossless is recommended.
 
 #### Professional UI & Logging Infrastructure
+
 - **24-bit TrueColor Terminal Support**: Implemented a sophisticated, brand-aligned TrueColor UI with semantic "Card"-style summaries.
 - **Minimalist Video Milestones**: Introduced abbreviated trackers (`V:`, `X:`, `P:`, `I:`) specifically tailored for high-concurrency video processing logs.
 - **Terminal Title-Bar Spinner**: Isolated background progress indicators using OSC escape sequences, preventing content clutter and TTY interference.
 - **Unified Error Classification**: Consolidated all project failures into a central system: 🚨 Critical, ⚠️ Rare, 📋 Metadata, and 🔧 Pipeline errors.
 
 #### Ecosystem & Safety Enhancements
+
 - **Apple Ecosystem Parity**: Full support for **AAE sidecars**, iPhone VFR (Slow-Mo) detection, and iCloud-standard metadata preservation.
 - **Collision-Resistant Temp Files**: Introduced 8-character random UUID prefixes for all temporary assets to ensure thread-safe processing and reliable cleanup.
 - **Ctrl+C (SIGINT) Job Guard**: Resilient interruption protection using libc-poll events, job duration awareness (4.5m), and auto-resume logic.
@@ -919,6 +1052,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.44] - 2026-03-14
 
 ### Fixed
+
 - **Hardcoded Quality Degradation in Image Routing**:
   - **Unified Quality 100 Path**: Eliminated hardcoded `d=1.0` routing for palette-quantized PNG and GIF sources.
   - **Static GIF Routing Unification**: 1-frame GIFs now correctly follow the `pixel_analysis` decision path, enabling `d=0.0` (Lossless) when appropriate.
@@ -928,6 +1062,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.43] - 2026-03-14
 
 ### Added
+
 - **Minimalist Abbreviated Milestones for Video Mode**:
   - Implemented `IS_VIDEO_MODE` detection and minimalist milestone formatting specifically for video tools.
   - Shortened all milestone labels to single characters (`X`, `I`, `P`, `V`) for maximum terminal space efficiency.
@@ -936,6 +1071,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
   - **Refined Aesthetics**: Removed the 📊 chart icon and extra spacing in video mode for a cleaner, stage-focused log appearance.
 
 ### Fixed
+
 - **Format String Errors**: Resolved critical `format!` macro argument count mismatches in the milestone reporting logic.
 - **Redundant Logic**: Cleaned up duplicate `enable_quiet_mode` definitions in `shared_utils`.
 - **Milestone Hook Integration**: Fixed missing video success/failure hooks in the shared CLI runner, ensuring accurate progress tracking for all video tools.
@@ -943,7 +1079,8 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.42] - 2026-03-13
 
 ### Changed
-- **Unified Milestone Statistics**: Milestone statistics (XMP, Img, Pre) are now appended to *every* image processing log line, including multi-line fallback and diagnostic messages.
+
+- **Unified Milestone Statistics**: Milestone statistics (XMP, Img, Pre) are now appended to _every_ image processing log line, including multi-line fallback and diagnostic messages.
   - **Multi-line Support**: Diagnostic messages such as `[QUALITY FALLBACK]` and `[Smart Fix]` now display milestones on every line for perfect terminal alignment.
   - **Consistent Progress Tracker**: The statistics bar (`│ 📊 XMP: ... Img: ... Pre: ...`) is now visible from the very first log entry, ensuring the conversion status is always available.
   - **Full Log Audit**: All tracing and verbose logs in the run log file now also include milestones, providing a synchronized timeline of system state and progress.
@@ -952,6 +1089,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.41] - 2026-03-13
 
 ### Changed
+
 - **Terminal Noise Reduction**: JPEG-related conversion logs (e.g., JPEG to JXL lossless transcoding) are now hidden from the terminal by default.
   - **Quiet Success**: These operations are considered routine and low-risk; hiding them keeps the terminal focused on more significant conversions (HEVC, AV1).
   - **Full Accountability**: All JPEG conversion details remain fully recorded in the run log file for auditing and verification.
@@ -960,6 +1098,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.40] - 2026-03-13
 
 ### Added
+
 - **JSON-based Image Classification Engine**: Refactored the hardcoded classification logic into a flexible, data-driven rule engine.
   - **Extensible Rules**: New categories added: `MOBILE_SCREENSHOT`, `GAME_CAPTURE`, `WEB_UI`, `MAP`, `DOCUMENT`, `NIGHT_PHOTO`, `MACRO_PHOTO`, and `MEME`.
   - **Dynamic Configuration**: Classification logic is now driven by `image_classifiers.json` (embedded in binary), allowing for rapid updates to thresholds, quality adjustments, and format recommendations.
@@ -969,6 +1108,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.39] - 2026-03-13
 
 ### Added
+
 - **Image Quality Metrics in Logs**: Added pixel-based quality analysis to terminal output.
   - **Dynamic Labels**: Automated detection of content types (`PHOTO`, `SCREENSHOT`, `ARTWORK`, etc.) and quality factors (e.g., `Q=95 Excellence`).
   - **Improved Formatting**: Success logs now prominently display quality metrics using a clean `✅ TYPE | QUALITY | ACTION` format.
@@ -976,16 +1116,19 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 - **Enhanced Image Analysis**: Integrated `ImageAnalysis` with a new `quality_summary` engine for consistent reporting across HEVC and AV1 tools.
 
 ### Added
+
 - **Container Overhead Tolerance**: Added 1MB tolerance for container overhead in `vid_hevc` size checks. Total file size is now accepted if it exceeds original size by less than 1MB, provided the video stream itself was compressed.
 - **Duplicate Path Diagnostics**: Enhanced "Already exists" logging in `smart_file_copier` to show file size and accessibility status, aiding in troubleshooting.
 
 ### Fixed
+
 - **Temp File Deletion**: Fixed an issue where temporary files (`.gpu_temp.mov`) were left behind when GPU coarse search failed or was interrupted.
 - **PSNR Calculation**: Fixed "PSNR calc failed" errors in GPU acceleration module by using explicit filter graph syntax `[0:v][1:v]psnr` instead of implicit inputs.
 
 ## [0.10.37] - 2026-03-13
 
 ### ✨ Features
+
 - skip quality verification when early insight triggered
 - increase GPU utilization in ultimate mode with precise exploration
 - restore 0.5-0.1 GPU steps and lower Stage 1 threshold
@@ -994,6 +1137,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 - Optimize GPU search efficiency for low bitrate videos (<5Mbps)
 
 ### 🐛 Bug Fixes
+
 - unified error handling, test fixes, and code cleanup (v0.10.37)
 - remove silent CRF defaults and fix Phase 2 algorithm issues
 - add VMAF/PSNR-UV early insight with integer-level improvement detection
@@ -1010,12 +1154,14 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 - release 0.10.38 - Fix temp file cleanup, PSNR calc, and container overhead
 
 ### 🔨 Other Changes
+
 - remove unused progress modules
 - Improve Phase 3 efficiency and GPU precision
 
 ## [0.10.36] - 2026-03-13
 
 ### Added
+
 - **Unified Error Handling System**: Consolidated 6 error handling modules into `unified_error.rs`
   - Centralized error types (VidQualityError, ImgQualityError, AppError) into `UnifiedError`
   - Added comprehensive error classification (Fatal/Recoverable/Optional)
@@ -1029,6 +1175,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
   - Unified visual style across all logging paths
 
 ### Changed
+
 - **Restored Sprint & Backtrack Mechanism**: Re-enabled accelerated search in Phase 3
   - **Sprint**: Double step (0.1 → 0.2 → 0.4...max 1.6) on consecutive successes
   - **Backtrack**: Reset to 0.1 precision on overshoot for accuracy
@@ -1037,6 +1184,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 - **Code Quality**: Removed silent fallback values and dead modules
 
 ### Fixed
+
 - **Phase 2 Duplicate Output**: Fixed duplicate logging in Phase 2 when ultimate_mode is enabled
   - Moved quality metrics check to only run when compression fails
   - Each CRF now outputs only once during exploration
@@ -1094,6 +1242,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.35] - 2026-03-13
 
 ### ✨ Features
+
 - optimize quality insight mechanism and 1MB tolerance logic (v0.10.35)
 - Add sprint and backtrack mechanism in CPU 0.1 fine-tuning phase
 - restore 453c6e0 precision detection + hardware-aware logging [GPU/CPU]
@@ -1101,14 +1250,17 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 - unified error handling, enhanced logging & algorithm optimizations
 
 ### 🔨 Other Changes
+
 - update test expectations for new constants
 
 ### 🚀 Performance & Refactoring
+
 - enhance GPU/CPU phase distinction in logs & clean up fake fallbacks
 
 ## [0.10.34] - 2026-03-12
 
 ### Added
+
 - **Unified Insight Evaluation Mechanism (3.0 pts)**: Standardized early termination across all search phases based on quality stagnation.
   - **Integer-Level Quality Tracking**: Now specifically monitors for integer improvements in VMAF-Y and PSNR-UV (ignoring decimal fluctuations).
   - **10-Sample Confirmation Window**: Replaces immediate adoption with a mandatory 10-iteration exploration. Each sample without integer quality gain adds 0.3 to the "Insight Index".
@@ -1118,6 +1270,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.33] - 2026-03-12
 
 ### Added
+
 - **CPU Fine-Tune Sprint & Backtrack**: Implemented an accelerated search algorithm for Phase 3 (Downward Search).
   - **Sprint**: Doubles the CRF step (0.1 → 0.2 → 0.4...) on successful compression to rapidly find the quality ceiling.
   - **Backtrack**: Immediately reverts to the last known good CRF and resets step to 0.1 upon overshooting, ensuring precision without sacrificing speed.
@@ -1125,6 +1278,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 - **Single-Line Failure Diagnostics**: Re-engineered the `VIDEO STREAM COMPRESSION FAILED` warning into a concise, professional single-line format with visual separators and localized size units (KB/MB).
 
 ### Changed
+
 - **Absolute Quality Freedom (Extreme Mode)**: Removed all artificial CRF barriers for high-fidelity sources.
   - Lowered `ABSOLUTE_MIN_CRF` and `EXPLORE_DEFAULT_MIN_CRF` to **0.0**.
   - Relaxed AV1 minimum CRF clamp from 15.0 to **0.0**.
@@ -1132,12 +1286,14 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 - **Smart Boundary Awareness**: Updated all search phases to use dynamic `search_floor` (0.0 in Ultimate Mode) instead of legacy hardcoded minimums.
 
 ### Fixed
+
 - **Size Tolerance Discrepancy**: Fixed a critical logic error where `conversion_api.rs` would fail an encode due to video stream growth even when `allow_size_tolerance` (1MB) was enabled.
 - **Phase 2 Efficiency**: Optimized Phase 2 (Upward Search) to terminate immediately if a Wall Hit occurs at the minimum step (0.1), preventing redundant iterations.
 
 ## [0.10.32] - 2026-03-12
 
 ### Added
+
 - **Sticky Quality Insights**: Failure credibility no longer resets on minor (decimal-level) quality fluctuations. Once a "Non-Viability Insight" is gained, it persists until a full recovery above the quality gate.
 - **Extreme Saturation Depth**: Increased `ULTIMATE_REQUIRED_ZERO_GAINS` to **50 consecutive samples**. This ensures the search firmly hits the "Physical Red Line" (Size Wall) for maximum archival quality.
 - **Enhanced Loop Logic**: Increased total iteration limits to 200 to accommodate deeper saturation searches.
@@ -1145,15 +1301,18 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.31] - 2026-03-12
 
 ### Added
+
 - **Credibility-Driven Abort Mechanism**: Replaced count-based fast-fail with a weighted "Failure Credibility Index" (threshold 3.0, +0.3 per low-quality insight).
 - **Unified 30-step Saturation**: Consolidated all saturation logic into a mandatory 30-step verification for Ultimate Mode.
 
 ## [0.10.30] - 2026-03-12 (Internal Release)
+
 - Preliminary logic cleanup for wall detection and metric caching.
 
 ## [0.10.29] - 2026-03-12
 
 ### Added
+
 - **Ultimate 'Dead-Wall' Detection**: Intelligent fast-fail for downward search paths.
   - If video quality is already below mandatory thresholds (VMAF 93 / UV 38) and exhibits saturation (3 consecutive zero-gains), the search aborts immediately.
   - Prevents wasting performance on up to 27 redundant iterations when a "Quality Gate" failure is statistically inevitable.
@@ -1162,25 +1321,29 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.28] - 2026-03-12
 
 ### Added
+
 - **Noise-Resistant Wall Detection**: Introduced a mandatory **10-sample confirmation window** for the "Ultimate Wall" (God Zone: VMAF > 98 / PSNR-UV > 48).
   - Effectively filters out VMAF/PSNR measurement noise and encoder jitter.
   - Prevents early stopping bias by ensuring the quality ceiling is statistically significant.
   - New UI indicator: `[SATURATED X/10]` shows the confirmation progress in purple.
 
 ### Changed
+
 - **Total Quality Awareness**: Standardized quality gate checks across both upward (Fast-Fail) and downward (Ceiling) search paths.
 
 ## [0.10.27] - 2026-03-12
 
 ### Changed
+
 - **Ultimate Saturation Depth**: Increased `ULTIMATE_REQUIRED_ZERO_GAINS` from 20 to **30 consecutive samples** to ensure absolute "Domain Wall" saturation for high-fidelity archival.
-- **Refined Quality Fast-Fail**: Upgraded the early-exit logic in Phase 2 Upward Search with a **3-sample confirmation counter**. 
+- **Refined Quality Fast-Fail**: Upgraded the early-exit logic in Phase 2 Upward Search with a **3-sample confirmation counter**.
   - Prevents premature aborts due to transient quality dips.
   - Only terminates the search if 3 consecutive CRF steps fail to meet the Phase III quality gate (VMAF 93.0 / PSNR-UV 38.0).
 
 ## [0.10.26] - 2026-03-11
 
 ### Added
+
 - **Ultimate Mode: Multi-Metric Wall Detection**: In Ultimate mode, the "CRF Wall" detection now uses a combination of **VMAF (Y)** and **PSNR (UV)** instead of relying solely on SSIM-ALL saturation.
   - Detects absolute quality ceilings (VMAF > 98 or PSNR-UV > 48) to prevent wasted bits when perceptual and chroma saturation is reached.
   - Provides detailed feedback: `📊 ULTIMATE WALL DETECTED: VMAF-Y=XX.XX, PSNR-UV=XX.XX`.
@@ -1193,21 +1356,25 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 - **Premium UI Enhancements**: Upgraded terminal aesthetics with double-line box drawing, new high-fidelity symbols (💠, 🥇, 🛡️), and improved result summary banners.
 
 ### Changed
+
 - **Unified 1MB Size Tolerance**: Implemented a mandatory 1MB (`1,048,576 bytes`) size increase tolerance across all video search phases when `--allow-size-tolerance` is enabled.
 - **Meme Scoring Rebalance**: Reduced FPS weight to 0.0 to accommodate modern high-frame-rate memes (e.g., Live2D stickers).
 - **Dependency Update**: Migrated all workspace dependencies to their latest stable versions (Anyhow 1.0.102, Thiserror 2.0.18, Clap 4.5.60, etc.) and switched from git tags to crates.io for improved stability.
 - **Drag & Drop Defaults**: Enabled `--allow-size-tolerance` by default in the macOS drag-and-drop processor script.
 
 ### Fixed
+
 - **Strict Metadata Policy**: Eliminated all occurrences of `unwrap_or(24.0)`, `unwrap_or(85)`, and other "irresponsible" silent fallbacks.
 - **Code Health & Reliability**: Fixed multiple Clippy warnings, type mismatches in AV1 conversion, and missing fields in unit tests.
 - **Scope & Truncation Errors**: Resolved critical scope issues in CRF exploration and ensured long file stability during builds.
 
 ## [0.10.25] - 2026-03-11 (Internal Release)
+
 - Preliminary transition to precision-first metadata.
 - Internal testing of enhanced heuristic engine.
 
 ### Added
+
 - **Absolute-Precision-First Strategy**: Completed the transition to a mandatory precision-first metadata policy. The system now refuses to "cheat" or "fake" critical metadata (FPS, dimensions, quality) through hardcoded defaults.
 - **Loud & Visible Fallback System**: Introduced a highly visible, ANSI-colored warning system for when precise metadata is unavailable and heuristics must be used.
   - Warnings now include the **full filename** for immediate troubleshooting.
@@ -1218,18 +1385,21 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
   - **Animation-Aware BPP**: BPP calculation now correctly accounts for frame count in animated sequences.
 
 ### Changed
+
 - **Meme Scoring Rebalance**: Significant update to the GIF/animated image "Meme Score" mechanism:
   - **FPS De-weighting**: Reduced FPS weight to 0.0 to accommodate modern high-frame-rate memes (e.g., Live2D stickers).
   - **Dimension Priority**: Shifted decision weight towards canvas resolution and duration as primary indicators.
 - **Unified strict Metadata Parsing**: Standardized `parse_frame_rate` and mandatory dimension checks across `shared_utils`, `vid_av1`, and `vid_hevc`.
 
 ### Fixed
+
 - **Silent Metadata Failure**: Eliminated all occurrences of `unwrap_or(24.0)`, `unwrap_or(85)`, and other "irresponsible" silent fallbacks that previously masked detection errors.
 - **Unreliable Repeat Rate**: Removed dependence on unreliable repetition metrics that could misidentify source materials as memes.
 
 ## [0.10.24] - 2026-03-11
 
 ### Added
+
 - **Precise-First Detection Strategy**: Significant refactor of the analysis pipeline to prioritize deterministic metadata over heuristics.
 - **Enhanced Video Metadata**: Added `ffprobe` tag extraction and `VideoPrecisionMetadata` to identify original encoder settings (CRF, preset), enabling more accurate quality categorization.
 - **GIF Optimization**: Updated GIF source handling to treat them as indexed-lossless, ensuring maximum fidelity when converting to modern formats.
@@ -1239,21 +1409,25 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.23] - 2026-03-11
 
 ### Added
+
 - **AV1 Animated Image Parity**: Synchronized `vid_av1` and `img_av1` with their HEVC counterparts to handle animated WebP and JXL inputs efficiently.
   - Implemented `webpmux` pre-extraction for animated WebP to APNG conversion.
   - Added multi-stream validation for animated HEIC/HEIF sequences.
 - **AV1 Mathematical Lossless Mode**: Added proper support for `libsvtav1` lossless parameters (`-svtav1-params lossless=1`) within `vid_av1`.
 
 ### Changed
+
 - **Delegated AV1 Processing**: Refactored `img_av1/lossless_converter` to delegate all animation-centric processes back to the shared `vid_av1::animated_image` logic, eliminating duplicate definitions and guaranteeing consistent handling.
 
 ### Fixed
+
 - **Error Muting in AV1 Conversion**: Fixed a bug inside `vid_av1`'s conversion API where failures returned by `copy_on_skip_or_fail` were quietly swallowed instead of aborting the operation.
 - **GIF Fallback Ignorance**: Fixed an issue where animated GIFs were subjected to standard Apple compatibility fallbacks, preventing proper skip preservation.
 
 ## [0.10.22] - 2026-03-11
 
 ### Added
+
 - **Precision-First Image Quality Detection**: Refactored the quality analysis pipeline to prioritize deterministic metadata extraction over heuristic estimates.
   - **PNG/GIF Palette Detection**: Explicitly parses PNG chunks and GIF Global Color Tables to get exact palette sizes, providing 100% accurate color diversity metrics for indexed formats.
   - **Lossless Determinism**: Implemented deterministic headers checks for WebP (VP8L), HEIC/AVIF (Profile/Chroma), and TIFF (Compression Tag) to accurately identify lossless sources.
@@ -1261,14 +1435,17 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
   - **Content Classification Override**: Integrated precise metadata into the content classifier, ensuring PNG-8 and GIF files are correctly identified as Graphics/Icons rather than Photos.
 
 ### Changed
+
 - **Unified Analysis Metadata**: Introduced `PrecisionMetadata` struct across `image_detection`, `image_analyzer`, and `image_quality_detector` modules to ensure consistent data propagation.
 
 ## [0.10.21] - 2026-03-11
 
 ### Fixed
+
 - **Ctrl+C Bypass Bug**: Fixed a severe issue where intercepting Ctrl+C failed to suspend active processing tasks. Previously, the confirmation prompt was displayed on a separate background thread without locking or notifying the `rayon` thread pool or global output buffers. Working tasks continued executing (and spamming the UI) while the prompt awaited user input. Now, `ctrlc_guard` explicitly exports its blocking state, intercepting both UI log emissions and core work allocation loops natively, effectively pausing all resource consumption until the user decides.
 
 ### Changed
+
 - **Standardized 1MB File Size Threshold**: Unified all 1MB size threshold checks across the codebase to exactly `1_048_576` bytes instead of using ambiguous limits (like `1_000_000`, `1000 * 1000`, or `1024 * 1024`).
 - **Translation**: Unified log messaging and CLI outputs. Removed all internal Simplified Chinese console messages (e.g. from `pure_media_verifier.rs` and `stream_size.rs`) to full English representation logic for better integration and consistency across regions.
 - **Deep UI Modernization & TrueColor Integration**: Revamped terminal aesthetics across the application. Added full RGB 24-bit TrueColor constants (`MFB_Blue`, `MFB_Purple`, `MFB_Pink`, `MFB_Green`) to `modern_ui.rs`.
@@ -1278,6 +1455,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.20] - 2026-03-11
 
 ### Fixed
+
 - **Terminal Color Restoration**: Fixed an issue where the terminal output lacked ANSI colors (leaving only black and white text) by ensuring the wrapper script `drag_and_drop_processor.sh` explicitly exports `FORCE_COLOR=1` down to the Rust binaries.
 - **Terminal Progress Stats Layout & Color Loss**: Replaced the ugly `\x1b[1A` cursor movement code that previously mangled terminal outputs when piped via `tee`. Global progress statistics are now generated dynamically and embedded as perfectly aligned inline content directly on the success logs (e.g. `XMP: 29✓ Img: 18✓`). ANSI color sequences (`\x1b[1;32m` for reduction, `\x1b[1;33m` for increases) were precisely restored inside string payloads to ensure the bash terminal accurately renders the colors.
 - **Image Conversion Summary UX**: Refined the spacing for the final `Images: X OK, Y failed` log block, shrinking the massive 25-space padding gap to align nicely and compactly with the rest of the output.
@@ -1288,6 +1466,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.19] - 2026-03-10
 
 ### Fixed
+
 - **TTY title bar padding causing clear-screen**: The `_tty_title()` function in the drag-and-drop script had thousands of spaces as padding to overwrite previous title content. This padding was leaking into the terminal output stream, causing periodic clear-screen effects and macOS Terminal notification badges
   - **Root cause**: The massive padding string (thousands of spaces) in the OSC escape sequence `\033]0;⏱ %s <spaces>\007` was somehow leaking into stdout/stderr, getting captured by `tee`, and dumped to the terminal
   - **Fix**: Removed all padding from `_tty_title()`. Modern terminals automatically clear the rest of the title bar, so padding is unnecessary
@@ -1318,31 +1497,35 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
   - **Root cause**: Used column 120 positioning and included 25 spaces of padding from `STATS_PREFIX_PAD`
   - **Fix**: Redesigned milestone format to be compact and beautiful:
     - Use `│` separator instead of excessive spacing
-    - Shortened text: "XMP: 80✓  Img: 81✓" instead of "XMP merge: 80 OK   Images: 81 OK"
+    - Shortened text: "XMP: 80✓ Img: 81✓" instead of "XMP merge: 80 OK Images: 81 OK"
     - Use `\x1b[999C\x1b[60D` (move to end, then back 60 chars) to align 📊 with ✅
     - Format: `  │ 📊 XMP: 80✓  Img: 81✓` (compact, narrow-screen friendly)
   - **Files modified**: `shared_utils/src/progress_mode.rs`
 
 ### Removed
+
 - **Unused milestone interval functions**: Removed `xmp_milestone_interval()` and `image_milestone_interval()` functions since milestones are now shown on every merge
   - **Files modified**: `shared_utils/src/progress_mode.rs`
 
 ## [0.10.18] - 2026-03-10
 
 ### Fixed
+
 - **Periodic screen clearing / terminal notification badges during batch processing**: Progress bar was created before `enable_quiet_mode()`, causing indicatif to render to stderr every 50ms
   - **Root cause**: `UnifiedProgressBar::new()` called before `enable_quiet_mode()` → bar created in non-quiet mode → rendered updates to stderr every 50ms → caused screen flicker and macOS Terminal notification badges when terminal was in the background
   - **Fix**: Swapped order — `enable_quiet_mode()` first, then create bar. Additionally removed all `pb` usage (creation, `set_position`, `set_message`, `finish_with_message`) from `img_hevc` and `img_av1` batch loops entirely since the title-bar spinner replaces them
   - **Files modified**: `img_hevc/src/main.rs`, `img_av1/src/main.rs`
 
 ### Added
+
 - **File-type emoji prefixes on per-file log lines**: `🖼️` for images, `🎬` for videos
   - Format: `🖼️ [Cache_4ac28036…jpg] JPEG lossless transcode: size reduced 27.5% ✅`
   - Emoji is added before the `[filename]` tag; message body alignment is unchanged
   - **Files modified**: `shared_utils/src/progress_mode.rs` (new `file_type_emoji()` helper, updated `format_log_line()`)
 
 ### Removed
-- **`--lossless` CLI flag from all 4 binaries** (`img-hevc`, `img-av1`, `vid-hevc`, `vid-av1`): Dead CLI surface — never passed by the drag-and-drop script. The internal lossless conversion logic remains intact: lossless sources are still converted losslessly by default (JPEG→JXL lossless transcode, lossless PNG→JXL, lossless animated→AV1 CRF 0). The flag only forced *all* conversions to mathematical lossless mode (very slow), which was never used in practice
+
+- **`--lossless` CLI flag from all 4 binaries** (`img-hevc`, `img-av1`, `vid-hevc`, `vid-av1`): Dead CLI surface — never passed by the drag-and-drop script. The internal lossless conversion logic remains intact: lossless sources are still converted losslessly by default (JPEG→JXL lossless transcode, lossless PNG→JXL, lossless animated→AV1 CRF 0). The flag only forced _all_ conversions to mathematical lossless mode (very slow), which was never used in practice
   - Removed from CLI arg definitions in `Commands::Run` enum
   - Removed from `AutoConvertConfig` / `ConversionConfig` structs
   - Removed conditional branches — always use smart quality matching path
@@ -1356,12 +1539,14 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
   - **Files modified**: `shared_utils/src/progress_mode.rs`
 
 ### Notes
+
 - **`--force` flag** (kept): Controls whether already-processed files and existing output files are overwritten. Used throughout the conversion pipeline. Essential for re-running conversions
 - **Behavior change**: With `--lossless` removed, animated GIFs/WebP/APNG always use smart quality matching. Static images still use lossless conversion paths unchanged
 
 ## [0.10.17] - 2026-03-10
 
 ### Fixed
+
 - **Memory limit exceeded for very large JPEGs (e.g. 99MB `mmexport1732810380466.jpeg`)**: The `image` crate's default memory allocation ceiling (~512MB) was too low to decode large JPEGs from high-resolution cameras. A 99MB JPEG can expand to ~800MB+ of raw pixel data when fully decoded
   - **Root cause**: `image::open()` uses conservative default `Limits::default()` which enforces a ~512MB `max_alloc` ceiling. The raw decoded pixels of a 100MP+ JPEG easily exceed this
   - **Fix**: Replaced all bare `image::open()` / `ImageReader::open()` calls with a shared `open_image_with_limits()` helper that raises `max_alloc` to 2GB. This covers 100MP+ images at full color depth (e.g. 300MP × 4 bytes = ~1.2GB max) while still rejecting pathologically large malicious inputs above 2GB
@@ -1369,6 +1554,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
   - **Files modified**: `shared_utils/src/image_detection.rs` (new `pub open_image_with_limits()`), `shared_utils/src/image_analyzer.rs`, `img_hevc/src/main.rs`
 
 ### Added
+
 - **Ctrl+C confirmation guard for long-running jobs**: Pressing Ctrl+C after 4.5 minutes of processing now shows a confirmation prompt before exiting, preventing accidental termination of large batch jobs
   - Before 4.5 min: Ctrl+C exits immediately (unchanged behavior)
   - After 4.5 min: Shows `Confirm exit? [y/N] (auto-resume in 8s)`
@@ -1380,6 +1566,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.16] - 2026-03-10
 
 ### Fixed
+
 - **Per-file success lines silent in batch mode**: `[filename] message ✅` lines were suppressed during parallel batch processing because `enable_quiet_mode()` routed them to the log file only, not the terminal
   - **Root cause**: The `is_quiet_mode()` branch was originally added to prevent per-file lines from colliding with the indicatif progress bar. Since the progress bar was moved to the terminal title bar (OSC escape), there is no longer anything in the terminal content area to collide with
   - **Fix**: Removed the quiet-mode branch in `img_hevc` and `img_av1` — always emit per-file result lines via `log_eprintln!` (→ `emit_stderr`) regardless of quiet mode
@@ -1388,6 +1575,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.15] - 2026-03-10
 
 ### Fixed
+
 - **Script syntax error on double-click (line 301)**: `bash -n` revealed a missing closing quote on line 218 in `draw_header()` — `echo -e "..." ` was missing the trailing `"`, causing bash to continue parsing the string literal across subsequent lines until it hit the `(` at line 301 and reported `syntax error near unexpected token '('`
   - **Root cause**: A single missing `"` at the end of an `echo -e` line in `draw_header()` caused bash to treat everything up to the next `"` (83 lines later) as a string continuation
   - **Fix**: Added the missing closing `"` on line 218
@@ -1401,6 +1589,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.14] - 2026-03-10
 
 ### Changed
+
 - **Beautiful log output with refined emoji usage**: Multiple iterations of log formatting improvements for better aesthetics, clarity, and intent
   - **Single-line format with visual separators**: Replaced multi-line cluttered logs with clean single-line format using `│` separators for better visual organization
   - **Precise emoji control**: Implemented exactly 4 emojis per log section (1 left, 3 right maximum) with logical consistency
@@ -1411,18 +1600,21 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
   - **Logical emoji consistency**: ✅ for success/pass, ❌ for failure/fail - no contradictory emoji states
 
 ### Improved
+
 - **Visual hierarchy and readability**: Enhanced log structure with clear indentation, proper spacing, and consistent formatting
 - **Information density**: Balanced between comprehensive detail and visual clarity - important information stands out without clutter
 - **Professional terminal display**: Optimized for terminal viewing with appropriate use of emojis, separators, and spacing
 - **Clear intent**: Log messages now clearly convey their purpose and status without ambiguity
 
 ### Technical Details
+
 - **Files modified**: `shared_utils/src/video_explorer/gpu_coarse_search.rs`, `vid_hevc/src/conversion_api.rs`, `vid_hevc/src/animated_image.rs`, `vid_av1/src/conversion_api.rs`
 - **Log format evolution**: Progressed from multi-line → forced single-line → beautiful single-line → emoji-controlled → logically consistent
 - **Emoji strategy**: Balanced visual appeal with functional clarity, avoiding emoji abuse while maintaining important visual cues
 - **Separator choice**: Used `│` (pipe) separators for clean visual division without overwhelming the display
 
 ### Fixed
+
 - **Terminal `Running: Xs` spinner text fusing into binary output lines**: The bash spinner writes `\r Running: Xs` to `/dev/tty` every 0.15s while binaries write progress to stderr on the same terminal, producing fused lines like `   | Running: 04s     [file] ✓ CRF 28.3:` and leftover spinner text after processing
   - **Root cause**: Spinner and binary both write to the terminal content area concurrently. `\r` moves cursor to column 0 without erasing, so binary output appends directly after spinner text. Any subsequent newline permanently commits the fused line to scrollback — no amount of pause/resume/clear can prevent this
   - **Fix**: Moved spinner display from terminal content area (`\r` writes) to the **terminal title bar** (OSC escape `\033]0;...\007`). The title bar is completely isolated from the content area, making collision fundamentally impossible. Binary output (`tee /dev/stderr`) flows normally in the terminal content with zero interference
@@ -1439,12 +1631,14 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.13] - 2026-03-10
 
 ### Changed
+
 - **Statistics lines now use 📊 emoji instead of `[Info]` tag**: The `[Info]` prefix on periodic stats lines (e.g. `XMP merge: 253 OK   Images: 200 OK`) was misleading — it resembles a log severity level, but these lines are counters/statistics, not informational log messages. Replaced with a `📊` emoji for clarity
 - **Visual separation for statistics lines**: Periodic mid-run stats lines now have a leading blank line (`\n`) before them so they stand out clearly when interleaved with per-file progress output, avoiding the previous ugly inline merging
 
 ## [0.10.12] - 2026-03-10
 
 ### Fixed
+
 - **Terminal colors not appearing when launched via drag-drop script or app**: Root cause was `console::style()` stripping ANSI codes when stderr is not a TTY (which is always the case when piped through `tee /dev/tty | tee -a logfile`)
   - **Fix**: Replaced all `console::style(...)` color calls with raw ANSI escape codes (`\x1b[1;32m`, `\x1b[1;33m`, etc.) so color codes are embedded in the string unconditionally
   - **Fix**: Rewrote `emit_stderr()` to use `writeln!(std::io::stderr(), ...)` directly instead of routing through `tracing::info!`, bypassing tracing-subscriber's own TTY detection which also stripped colors
@@ -1456,6 +1650,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.11] - 2026-03-09
 
 ### Changed
+
 - **App and script fully in English**: Converted all Chinese UI text in the macOS app wrapper and drag-and-drop script to English
   - App dialogs: "Select folder to process", "Will optimize the following folder", "Start Optimization", "Cancel", timeout alerts
   - App wrapper comments fully in English
@@ -1478,6 +1673,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.10] - 2026-03-09
 
 ### Added
+
 - **Enhanced error logging system**: Critical and rare error detection with color-coded severity levels
   - **Motivation**: Early detection of rare bugs (pipeline broken, metadata loss, upstream tool errors) to prevent data/quality loss
   - **Error severity levels**:
@@ -1512,6 +1708,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.9] - 2026-03-09
 
 ### Changed
+
 - **Size tolerance logic**: Changed from percentage-based (1%) to KB-level (< 1MB) tolerance
   - **Rationale**: Percentage-based tolerance was unfair to small files (1% of 10KB = 100 bytes is too strict)
   - **New behavior**: Accept output if size increase < 1MB, regardless of file size
@@ -1529,6 +1726,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
     | true | false | > 0 | ❌ reject |
 
 ### Fixed
+
 - **Comprehensive ImageMagick fallback logging**: Enhanced error handling and retry logic for JXL conversion fallback pipeline
   - **Root cause**: ImageMagick fallback had silent failures and incomplete retry logic
   - **Issues fixed**:
@@ -1554,7 +1752,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
   - **Root cause**: Compress mode always rejected output ≥ input, completely ignoring tolerance setting
   - **Impact**: Files with KB-level size increase (< 1MB) were incorrectly rejected even with tolerance enabled
   - **Example**: 238KB → 420KB (+177KB) was rejected, but should be accepted (< 1MB tolerance)
-  - **New behavior**: 
+  - **New behavior**:
     - `compress=true` + `tolerance=true`: accept if increase < 1MB ✅
     - `compress=true` + `tolerance=false`: reject if output ≥ input ❌
   - **File modified**: `shared_utils/src/conversion.rs`
@@ -1573,7 +1771,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 - **Enhanced size check logging and copy-on-fail feedback**: Improved visibility of file deletion and copy operations
   - **Root cause**: When output files were deleted due to size increase, logs only appeared in `--verbose` mode
   - **Impact**: Users couldn't see why conversions were skipped or where original files were copied
-  - **Fix**: 
+  - **Fix**:
     - Always log file deletion with clear reason (not just in verbose mode)
     - Show explicit "Original copied to: <path>" message when files are copied to output directory
     - Display size comparison for all skip scenarios
@@ -1624,7 +1822,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
   - **Example**: File `FB55N[I_R{KE)K}I141L%8V.jpeg` would fail with "FFPROBE FAILED: non-zero exit"
   - **Fix**: Added `--` separator before file path arguments in all ffprobe invocations to prevent interpretation as options/patterns
   - **Impact**: All files with special characters in names can now be processed correctly
-  - **Files modified**: 
+  - **Files modified**:
     - `shared_utils/src/ffprobe_json.rs` (extract_color_info - user files, direct trigger)
     - `shared_utils/src/stream_size.rs` (try_ffprobe_extraction - user files)
     - `shared_utils/src/video_explorer.rs` (get_input_duration - user files)
@@ -1639,6 +1837,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
   - **File modified**: `shared_utils/src/video_explorer/dynamic_mapping.rs`
 
 ### Technical Details
+
 - **FFprobe `--` separator**: The `--` argument tells ffprobe "all following arguments are file paths, not options"
   - Prevents `[` `]` from being interpreted as glob patterns
   - Prevents `{` `}` from being interpreted as format specifiers
@@ -1657,10 +1856,11 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.8] - 2026-03-09
 
 ### Fixed
+
 - **Multi-stream AVIF/HEIC stream selection bug**: Fixed critical bug where multi-stream animated files selected wrong stream
   - **Root cause**: `probe_video()` returned enumerate index instead of actual stream index from JSON
   - **Impact**: Animated AVIF/HEIC files with multiple streams (thumbnail + animation) only converted first frame instead of all frames
-  - **Fix**: 
+  - **Fix**:
     - Modified `probe_video()` to use actual stream `index` field from ffprobe JSON
     - Added multi-stream detection in `convert_to_hevc_mp4_matched()`
     - Convert multi-stream AVIF/HEIC to APNG before processing (preserves all frames)
@@ -1668,6 +1868,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
   - **Files modified**: `shared_utils/src/ffprobe.rs`, `vid_hevc/src/animated_image.rs`
 
 ### Technical Details
+
 - `probe_video()` now correctly extracts `stream["index"]` from JSON instead of using enumerate index
 - For multi-stream AVIF/HEIC in `convert_to_hevc_mp4_matched()`:
   - Detect multiple video streams using ffprobe
@@ -1677,6 +1878,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 - Temporary APNG files are automatically cleaned up
 
 ### Testing Results
+
 - ✅ AVIF GBR (3 frames) → MOV: 3 frames, 0.3s, 10fps, HEVC, YUV420p
 - ✅ AVIF GBR (3 frames) → GIF: 3 frames, 0.3s, 10fps
 - ✅ AVIF YUV (3 frames) → MOV: 3 frames, 0.3s, 10fps, HEVC, YUV420p
@@ -1686,6 +1888,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.7] - 2026-03-09
 
 ### Fixed
+
 - **WebP frame extraction and timing**: Complete rewrite of WebP → video conversion pipeline
   - **Root cause**: ImageMagick's WebP → APNG conversion was unreliable (frame duplication, incorrect timing)
   - **Fix**: Implemented proper WebP frame extraction using `webpmux` tool
@@ -1704,6 +1907,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
   - **Files modified**: `shared_utils/src/video_explorer/precheck.rs`
 
 ### Technical Details
+
 - `extract_webp_to_apng()` function now:
   - Parses WebP metadata using `webpmux -info` for accurate frame count and duration
   - Extracts each frame as WebP (not PNG) using `webpmux -get frame N`
@@ -1714,6 +1918,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 - Temporary WebP frames and PNG frames are automatically cleaned up via `tempfile::TempDir`
 
 ### Testing
+
 - Verified 3-frame WebP (100ms/frame) converts to:
   - GIF: 3 frames, 0.3s duration, 10fps ✅
   - MOV: 3 frames, 0.3s duration, 10fps, HEVC codec ✅
@@ -1722,6 +1927,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.6] - 2026-03-09
 
 ### Fixed
+
 - **AVIF GBR colorspace bug**: Fixed critical bug where AVIF files with GBR colorspace caused HEVC conversion to fail
   - **Root cause**: FFmpeg error "Error setting option colorspace to value gbr" - HEVC doesn't support RGB/GBR colorspace
   - **Fix**: Skip RGB/GBR colorspace parameters in FFmpeg commands; conversion to YUV420p happens in filter chain
@@ -1747,12 +1953,14 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
   - **Impact**: WebP → MOV/MP4 conversion now works correctly with proper duration
 
 ### Added
+
 - **Force video mode**: Added `--force-video` flag and `MODERN_FORMAT_BOOST_FORCE_VIDEO` environment variable
   - Skips meme-score check and forces all animated images to be converted to video (MOV/MP4)
   - Useful for advanced users who want consistent video output regardless of meme-score
   - Environment variable approach allows integration with external scripts
 
 ### Technical Details
+
 - RGB/GBR colorspace is now filtered out in `build_color_args_from_probe()` and color metadata building
 - WebP pre-processing uses FFmpeg (primary) to convert to APNG with proper timing metadata
 - ImageMagick is used as fallback if FFmpeg APNG encoding fails
@@ -1760,6 +1968,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 - Dimension fallback chain: ffprobe → image crate → ImageMagick
 
 ### Testing
+
 - Verified AVIF GBR → MOV conversion (no colorspace errors)
 - Verified WebP → MOV conversion (proper duration: 0.36s for 3 frames)
 - Verified WebP → GIF conversion (successful)
@@ -1768,9 +1977,10 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.5] - 2026-03-09
 
 ### Fixed
+
 - **Animated JXL support**: Fixed critical bug where animated JXL files could not be processed
   - **Root cause**: FFmpeg's `jpegxl_anim` decoder is incomplete and cannot properly decode animated JXL
-  - **Fix**: 
+  - **Fix**:
     - Added automatic JXL → APNG pre-conversion using `djxl` before FFmpeg processing
     - Duration detection now works for animated JXL (converts to APNG, counts frames)
     - Both GIF and MOV/MP4 conversion routes now support animated JXL
@@ -1783,12 +1993,14 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
   - **Impact**: Static JXL images are now correctly skipped (already optimal format)
 
 ### Added
+
 - **Static JXL skip logic**: Static JXL images are now explicitly skipped in img-hevc
   - Prevents unnecessary re-encoding of already optimal format
   - Original files are copied to output directory to ensure no data loss
   - Clear messaging: "Source is static JPEG XL (already optimal)"
 
 ### Technical Details
+
 - Modified `convert_to_gif_apple_compat()` and `convert_to_hevc_mp4()` to detect JXL format
 - Added `try_jxl_via_apng()` function for duration detection via temporary APNG conversion
 - Modified `is_jxl_animated_via_ffprobe()` to use djxl+ffprobe for accurate animation detection
@@ -1798,17 +2010,20 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.4] - 2026-03-09
 
 ### Changed
+
 - **Unified GIF conversion pipeline**: Removed ImageMagick fallback, now all formats use FFmpeg high-quality single-pass method
   - **Rationale**: Quality testing showed ImageMagick and FFmpeg both achieve 256 colors; FFmpeg is simpler and supports multi-stream files
   - **Method**: Single-pass `split+palettegen(256)+paletteuse(bayer)` for all animated formats (AVIF/WebP/JXL/HEIC/etc)
   - **Impact**: Consistent quality across all formats, simplified codebase, better multi-stream support
 
 ### Removed
+
 - **ImageMagick dependency**: Completely removed ImageMagick fallback for GIF conversion
   - **Reason**: No quality advantage over FFmpeg, adds complexity, doesn't support multi-stream files
   - **Fallback behavior**: If FFmpeg fails, copy original file and mark as failed (no silent quality degradation)
 
 ### Technical Debt Cleanup
+
 - Removed unnecessary ImageMagick code paths
 - Simplified GIF conversion logic to single high-quality method
 - All formats now use consistent color preservation approach
@@ -1816,9 +2031,10 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.10.3] - 2026-03-09
 
 ### Fixed
+
 - **Multi-stream animated files frame loss**: Fixed critical bug where multi-stream animated files (AVIF, HEIC, WebP) would only convert the first frame instead of all frames
   - **Root cause**: Files with multiple video streams (thumbnail + animation) defaulted to first stream (1 frame)
-  - **Fix**: 
+  - **Fix**:
     - `probe_video` now selects stream with most frames
     - Added `stream_index` field to track correct stream
     - FFmpeg uses `-map 0:N` to select animation stream
@@ -1831,6 +2047,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
   - **Impact**: Original frame rate maintained (e.g., 0.5 fps → 0.5 fps)
 
 ### Improved
+
 - **GIF conversion quality**: Upgraded to single-pass high-quality palette method
   - **Old method**: Two-pass with separate palette file (lower quality)
   - **New method**: Single-pass `split+palettegen+paletteuse` (reference: animate-avif best practices)
@@ -1842,18 +2059,21 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
   - FFmpeg `-filter_complex [0:N]...` for multi-stream GIF conversion
 
 ### Dependencies
+
 - **Updated to GitHub stable versions**: anyhow, thiserror, clap, walkdir, filetime, xattr, which, log, chrono, image, libheif-rs, tempfile, proptest, flate2
 - **Kept crates.io**: serde/serde_json (version coupling), rayon (dependency tree), tracing (feature complexity), indicatif/console (tag mismatch)
 
 ## [0.10.2] - 2026-03-09
 
 ### Fixed
+
 - **Animated AVIF/WebP to MOV conversion frame loss**: Fixed critical bug where animated images (AVIF, WebP, HEIC) converted to HEVC MOV/MP4 would only contain 1 frame instead of all frames. FFmpeg now explicitly receives `-r <fps>` parameter to preserve all frames during conversion.
   - **Root cause**: FFmpeg defaulted to extracting only the first frame when no frame rate was specified for animated image inputs.
   - **Fix**: Added frame rate probing before conversion and explicit `-r` flag in FFmpeg command.
   - **Impact**: Animated images now convert correctly with all frames preserved.
 
 ### Improved
+
 - **Meme-score system enhancements**: Improved GIF meme detection algorithm for more reliable identification of memes/stickers vs video clips:
   - **Tightened confidence intervals**: Reduced gray zone from 0.35-0.65 to 0.40-0.60 for more decisive classification
   - **Increased sharpness weight**: Boosted from 0.40 to 0.45 to better detect simple-palette memes
@@ -1861,11 +2081,13 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
   - **Result**: More accurate meme identification while maintaining conservative defaults
 
 ### Documentation
+
 - **Meme-score algorithm**: Updated documentation to reflect new confidence thresholds and weight distribution
 
 ## [0.10.1] - 2026-03-09
 
 ### Fixed
+
 - **FFmpeg libx265 error for animated image containers**: Fixed "Not yet implemented in FFmpeg, patches welcome" error when processing animated AVIF/HEIC/GIF/WebP files. Image containers now use `-map 0:v` (video only) and `-an` (no audio) flags instead of `-map 0` (all streams).
   - **Root cause**: FFmpeg's libx265 encoder failed when trying to map non-existent audio streams from image containers.
   - **Fix**: Added `is_image_container()` detection function and conditional stream mapping in `gpu_coarse_search.rs`.
@@ -1882,18 +2104,22 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 - **Precheck warning level**: Downgraded NotRecommended precheck messages from `warn` to `info` level to reduce log noise for expected cases.
 
 ### Changed
+
 - **Image container handling**: Image formats (AVIF/HEIC/GIF/WebP/PNG/JPG/JPEG/BMP/TIFF) now have explicit audio-free processing path in FFmpeg commands.
 - **FFmpeg command generation**: Improved logic to distinguish between image containers and video files for more appropriate encoding parameters.
 
 ### Code Quality
+
 - **Clippy warnings**: Resolved all clippy warnings for improved code quality and maintainability.
 
 ### Documentation
+
 - **MIT License**: Added MIT license file to the repository.
 - **Third-party licenses**: Added comprehensive third-party license information and acknowledgements.
 - **Acknowledgements cleanup**: Removed incorrect Czkawka acknowledgements.
 
 ### Dependencies
+
 - **Dependency updates**: Updated all dependencies to latest versions, including incompatible version upgrades where necessary.
 
 ## [0.9.9-3] - 2026-03-05
@@ -1901,6 +2127,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ### Apple Compatibility Enhancements
 
 #### Improved Variable Frame Rate (VFR) detection for iPhone slow-motion videos
+
 - **Enhanced VFR detection algorithm**: iPhone slow-motion videos use variable frame rate (VFR) to achieve the slow-motion effect. Without proper handling, ffmpeg converts VFR to constant frame rate (CFR), losing the slow-motion timing.
   - **Increased threshold from 1% to 2%**: Reduces false positives from minor frame rate variations in standard CFR videos.
   - **Apple slow-motion detection**: Checks for `com.apple.quicktime.fullframerate` tag (Apple's private metadata for slow-mo videos) - the most reliable indicator.
@@ -1910,6 +2137,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
   - **Impact**: Significantly reduced false positives while accurately detecting actual VFR content including iPhone slow-motion recordings.
 
 #### AAE file handling for Apple Photos editing metadata
+
 - **Added AAE file detection and handling**: AAE (Apple Adjustment Envelope) files store photo editing metadata from iPhone/Photos.app. When source images are converted to modern formats, AAE files become orphaned and lose their association.
   - **Function**: Added `handle_aae_file()` in `shared_utils/src/conversion.rs` to detect and handle AAE files (case-insensitive .aae/.AAE).
   - **Apple Compat mode**: AAE files are migrated to the output directory alongside converted images, preserving editing metadata.
@@ -1923,9 +2151,11 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ### Changes
 
 #### GIF conversion: ImageMagick-first strategy
+
 - **GIF encoding now tries ImageMagick first**, then falls back to ffmpeg two-pass palette. This eliminates the "⚠️ ffmpeg GIF encode failed" log noise and correctly handles animated WebP (ANIM/ANMF) which ffmpeg 8.x cannot decode.
 
 #### Fail-safe: all animated conversion failures copy original file
+
 - **`convert_to_hevc_mp4`**: ffmpeg encode failure or invalid output → copy original instead of returning `Err`.
 - **`convert_to_hevc_mkv_lossless`**: same fail-safe applied.
 - **`convert_to_hevc_mp4_matched`**: `quality_or_compat_ok=false` path now calls `mark_as_processed` to avoid re-processing.
@@ -1937,12 +2167,14 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ### Bug Fixes
 
 #### Animated WebP→GIF: ffmpeg fallback to ImageMagick
+
 - **Fixed animated WebP producing no output in apple_compat GIF route**: ffmpeg 8.x does not support animated WebP (ANIM/ANMF chunks) — palette generation silently failed, causing the second ffmpeg pass to error on a missing palette file, and the entire conversion to propagate an error with no output file.
   - **Root cause**: `convert_to_gif_apple_compat()` in `vid_hevc/src/animated_image.rs` only used ffmpeg two-pass palette approach with no fallback for formats ffmpeg cannot decode.
   - **Fix**: When ffmpeg palette generation fails or the palette file is not created, fall back to `magick`/`convert` (ImageMagick) with `-coalesce -layers optimize`. ImageMagick handles animated WebP correctly.
   - **Impact**: Animated WebP files in apple_compat mode now correctly produce GIF output instead of erroring out silently.
 
 #### Animated routing: unified meme-score strategy
+
 - **Removed hardcoded 4.5s duration threshold** from apple_compat animated routing. The old logic used `duration >= 4.5s || resolution >= 720p` to decide HEVC vs GIF. Both apple_compat and non-compat branches now use the meme-score multi-dimensional heuristic (duration, resolution, fps, aspect, bytes/pixel) for consistent decisions.
 - **Removed redundant internal short-animation skip** in `convert_to_hevc_mp4_matched()` and `convert_to_gif_apple_compat()` — these were double-checking duration after meme-score already made the decision, and were harmful in apple_compat mode (would copy non-playable originals).
 
@@ -1951,6 +2183,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ### Bug Fixes
 
 #### Animated Modern Format Detection — Comprehensive Fix
+
 - **Fixed animated AVIF passthrough bug**: Animated AVIF files (ISOBMFF major_brand `avis` or compatible_brand `msf1`) were incorrectly treated as static images, causing them to be copied to the output directory unchanged instead of being routed through the Apple Compat conversion pipeline (HEVC MP4 / GIF).
   - **Root cause (2 layers)**:
     1. `detect_animation()` in `image_detection.rs` had no AVIF branch — the `_ => Ok((false, 1, None))` fallback silently returned non-animated.
@@ -1969,6 +2202,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 - Affected tools: **img-hevc**, **img-av1** (both share `shared_utils` analysis layer)
 
 #### Deep Audit Fixes
+
 - **Fixed `make_routing_decision()` ignoring `is_animated` parameter**: The `_is_animated` parameter was unused (prefixed underscore), causing animated modern lossy formats (AVIF/JXL/HEIC/HEIF) to return `should_skip: true` even when animated. Now correctly allows animated modern formats to pass through to the animated conversion pipeline.
   - **File**: `shared_utils/src/image_quality_detector.rs`
 
@@ -1979,6 +2213,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 - **Fixed `--lossless_jpeg=0` applied to non-JPEG inputs**: `convert_to_jxl_matched()` in both img_hevc and img_av1 unconditionally passed `--lossless_jpeg=0` when `distance > 0`, even for PNG/WebP/TIFF inputs. Now only applied when `input_format` is JPEG.
 
 #### Apple Compat Size/Quality Guard Bypass
+
 - **Fixed apple_compat mode copying non-playable original on size guard trigger**: In `vid_hevc/src/animated_image.rs`, the `convert_to_hevc_mp4_matched()` size guard (output > input) would fall back to copying the original file in apple_compat mode. However, the original (e.g. animated AVIF) is not playable on Apple devices. A larger HEVC file is always preferable to a non-playable original.
   - **Fix**: Added `size_guard_active = !options.apple_compat` so the size guard is bypassed entirely in apple_compat mode.
 - **Fixed quality check gate blocking apple_compat HEVC output**: A second guard (`quality_passed=false` when video stream couldn't be compressed below input size) was also discarding the HEVC file and copying the original. Same apple_compat override applied.
@@ -1991,12 +2226,14 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ### Bug Fixes
 
 #### Linux ACL Preservation
+
 - **Fixed `dst` parameter never used bug**: The `preserve_linux_attributes()` function previously used `setfacl --restore=-` which restored ACL to the **source file itself**, completely ignoring the `dst` parameter.
   - **Root cause**: Piped `setfacl --restore=-` reads ACL from stdin but applies to the file specified, which was missing
   - **Fix**: Parse ACL output and apply each entry individually using `setfacl -m <entry> <dst>`
   - **Impact**: Linux file permissions and ACLs now correctly propagate to converted output files
 
 #### Error Propagation
+
 - **Propagate `copy_on_skip_or_fail` errors**: Multiple conversion paths previously swallowed errors with `let _ =`:
   - `img_hevc/src/conversion_api.rs`: 2 skip/compress paths
   - `vid_hevc/src/conversion_api.rs`: 6 paths (5 skip/compress + 1 temp commit)
@@ -2006,6 +2243,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 - **Propagate `commit_temp_to_output` errors**: Apple compatibility fallback path in `vid_hevc` now propagates temp-to-output commit failures with `?` instead of `let _ =`
 
 #### Apple Photos Library Protection
+
 - **Added Apple Photos library detection**: Prevents direct file manipulation inside `.photoslibrary` / `.photolibrary` packages
   - Checks at entry points before any processing (img_hevc, img_av1, vid_hevc, vid_av1)
   - Clear error message with guidance to export photos first
@@ -2015,6 +2253,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ---
 
 ### Code Quality
+
 - **Removed fabricated `ExitStatus::default()` in fallback pipelines**: The FFmpeg→cjxl and ImageMagick→cjxl fallback pipelines previously constructed a fake `std::process::Output { status: ExitStatus::default() }` to signal success — semantically incorrect and fragile. Refactored all fallback paths to early-return with proper `ConversionResult` via `finalize_with_size_check` / `finalize_fallback_jxl`, eliminating fake process output entirely.
   - Affected files: `img_hevc/src/lossless_converter.rs`, `img_av1/src/lossless_converter.rs`, `shared_utils/src/jxl_utils.rs`
   - `run_imagemagick_cjxl_pipeline` now returns `Result<(), ...>` instead of `Result<Output, ...>`
@@ -2023,26 +2262,31 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 ## [0.9.7] - 2026-03-03
 
 ### 🔨 Other Changes
+
 - ci: install pkgconfiglite on Windows; bump v0.9.7
 
 ## [0.9.6] - 2026-03-03
 
 ### ✨ Features
+
 - ci: add meson to Linux deps; bump v0.9.6
 
 ## [0.9.5] - 2026-03-03
 
 ### 🐛 Bug Fixes
+
 - ci: fix dav1d version + macOS x86_64 cross-compile; bump v0.9.5
 
 ## [0.9.4] - 2026-03-03
 
 ### 🐛 Bug Fixes
+
 - ci: fix all platform dependency issues; bump to v0.9.4
 
 ## [0.9.1] - 2026-03-04
 
 ### Image Conversion & ICC Profiles
+
 - **Fixed Grayscale PNG + RGB ICC incompatibility**: Resolved an issue where `cjxl` failed on certain grayscale images containing RGB ICC profiles (e.g., `IMG_8321.JPG`).
   - **Improved Detection**: Refined `is_grayscale_icc_cjxl_error()` logic in `shared_utils` to accurately identify this specific failure mode.
   - **Automatic Recovery**: The ImageMagick fallback pipeline now correctly triggers a `-strip` retry when this error is detected, removing the problematic ICC profile while preserving 16-bit depth for 16-bit sources.
@@ -2053,14 +2297,17 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
   4. 16-bit source failure: 16-bit + ICC normalization to sRGB.
 
 ### Video Quality Metrics
+
 - **Quality Metric Diagnostics**: Verified that certain log warnings (CAMBI calculation "failures" or MS-SSIM targets not met) are expected behaviors for specific video content rather than functional bugs.
 
 ### Documentation
+
 - **Consolidated error fix summary**: Merged `ERROR_FIX_SUMMARY.md` into `CHANGELOG.md`.
 
 ## [0.9.0] - 2026-03-03
 
 ### Critical Bug Fixes
+
 - **CAMBI calculation completely broken**: Fixed libvmaf filter invocation that caused all Ultimate Mode videos to be rejected
   - Root cause: libvmaf filter requires TWO inputs (main + reference), but code used single input with `-vf`
   - Error: "Error opening output files: Invalid argument" on every CAMBI calculation
@@ -2070,6 +2317,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
   - Threshold: Tightened CAMBI threshold from 10.0 → 5.0 (Netflix official standard)
 
 ### Quality Gate Improvements
+
 - **3D Quality Gate (Ultimate Mode)**: Now fully functional with three independent metrics
   - VMAF-Y ≥ 93.0 (perceptual quality, Netflix standard)
   - CAMBI ≤ 5.0 (banding detection, lower = better, Netflix standard)
@@ -2077,6 +2325,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
   - All three must pass for video to be accepted
 
 ### GIF Processing Enhancements
+
 - **GIF meme detection**: Multi-dimensional scoring system to identify meme GIFs
   - Five-layer edge-case suppression strategy
   - Prevents accidental conversion of meme GIFs to video format
@@ -2087,6 +2336,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
   - Prevents false rejections due to frame timing differences
 
 ### HEIC HDR/Dolby Vision Support
+
 - **HDR detection**: Automatic detection and preservation of HDR content
   - Scans ISO BMFF box structure (hvcC, dvcC, dvvC, colr/nclx)
   - Detects PQ (SMPTE 2084), HLG (Hybrid Log-Gamma), BT.2020 color space
@@ -2096,12 +2346,14 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
   - Prevents quality loss from HDR → SDR conversion
 
 ### Documentation
+
 - **Consolidated documentation**: Merged GIF_DURATION_FIX.md, HEIC_HDR_UPDATE.md, UPDATE_SUMMARY.md into CHANGELOG.md
 - **Removed redundant files**: Cleaned up scattered documentation files
 
 ## [0.8.9] - 2026-03-01
 
 ### Image conversion fixes
+
 - **apple_compat flag in ImageMagick fallback paths**: Fixed missing `apple_compat` flag in all ImageMagick→cjxl fallback call sites:
   - `shared_utils/src/jxl_utils.rs`: All 4 call sites now pass `options.apple_compat`
   - `img_av1/src/lossless_converter.rs`: Pass `options.apple_compat`
@@ -2118,6 +2370,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
   - Affects files like IMG_8321.JPG, IMG_6171.jpeg where magick succeeds but cjxl fails
 
 ### Code quality audit & security hardening
+
 - **Comprehensive security audit**: Fixed 11/11 issues (100% fix rate)
   - CRITICAL: 4/4 fixed (100%)
   - HIGH: 4/4 fixed (100%)
@@ -2134,6 +2387,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 - **Production readiness**: Ready for deployment
 
 ### Performance optimization (low-memory & multi-instance)
+
 - **Memory usage optimization**:
   - stderr buffer limit: 10MB → 1MB hard cap
   - Initial allocation: 1MB → 64KB (-94%)
@@ -2154,6 +2408,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 - **Performance rating**: 8/10 → 9.5/10
 
 ### Documentation
+
 - **Changelog consolidation**: Merged all changelog files (CHANGES_SUMMARY.md, RELEASE_NOTES.md, release_v0.8.8_notes.md) into CHANGELOG.md to avoid scattered documentation
 
 ## [0.8.8] - 2026-02-28
@@ -2161,14 +2416,17 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 All changes below are since 8.7.0.
 
 ### Version & docs
+
 - **Version numbering**: Switched from 8.x to **0.8.x**. Current release is **0.8.8**.
 - **Documentation**: README badge, RELEASE_NOTES, and CHANGELOG updated to 0.8.8.
 
 ### Quality validation & failure reporting
+
 - **Enhanced verification failure reason**: When quality and file size would pass but enhanced verification fails (duration mismatch or output probe failure), the real reason is now shown instead of "unknown reason" or "total file not smaller". Added `ExploreResult.enhanced_verify_fail_reason`; set from `verify_after_encode` when it does not pass. QualityCheck log line shows "QualityCheck: FAILED (quality met but enhanced verification failed: &lt;reason&gt;)". conversion_api and animated_image use `enhanced_verify_fail_reason` for the former "unknown reason" branch.
 - **Output probe failure** (video): When output probe fails, `duration_match` / `has_video_stream` are set to `None` so `passed()` accepts the output with "Output probe failed" / "Accepting output (probe unavailable)" in details.
 
 ### Logging system (overhaul)
+
 - **Log level has real effect**: Config level (default TRACE) and RUST_LOG apply to tracing; direct run-log writes use `write_to_log_at_level(level, line)` and `should_log(level)` so INFO/DEBUG/ERROR are respected everywhere.
 - **Run log comprehensive**: Init message, progress lines, emoji messages, and tracing events all reach the run log; forwarder and stored init message when run log opens.
 - **No `--log-file`**: Removed; run logs auto-created with timestamp under `./logs/`.
@@ -2177,36 +2435,47 @@ All changes below are since 8.7.0.
 - **Emoji/status in run log**: User-facing emoji messages and progress updates written to run log via emit_stderr / write_progress_line_to_run_log.
 
 ### XMP & progress
+
 - **XMP merge log**: JXL merged into "Images"; tag `[XMP]` → `[Info]`. Metadata Exiv2 fallback messages at INFO level.
 
 ### Conversion & failure logging
+
 - **Conversion failure**: `log_conversion_failure(path, error)` writes full error to run log. JPEG→JXL tail / allow_jpeg_reconstruction flow and cjxl stderr in run log.
 
 ### Regression tests
+
 - **Temp-copy test**: `test_verify_after_encode_with_temp_copies_probe_fails` (temp dir only). **QualityCheck line**: `format_quality_check_line` extracted; tests that enhanced reason is shown and "total file not smaller" is not when reason is set.
 
 ### Image quality & format detection
+
 - **Image quality reliability**: AVIF/HEIC/JXL/PNG/TIFF/WebP and format extensions (QOI/JP2/ICO/TGA/EXR/FLIF/PSD/PNM/DDS); detect_compression unified; skip when already JXL; IMAGE_EXTENSIONS_FOR_CONVERT documented. **AVIF pixel fallback** on format-level Err. **image_quality_core** removed; use image_quality_detector.
 
 ### Video codec & Apple fallback
+
 - **Normal**: Skip H.265/AV1/VP9/VVC/AV2. **Apple-compat**: Skip only H.265; convert AV1/VP9/VVC/AV2 to HEVC. **ProRes/DNxHD**: Strict only; no fallback on failure. **Apple fallback predicate**: by total file size only (total_size_ratio &lt; 1.01 with tolerance). P0–D6 audit: compress doc, safe_delete constants, reject size 0 temp.
 
 ### Animated & WebP
+
 - **Min duration**: ANIMATED_MIN_DURATION_FOR_VIDEO_SECS = 4.5s. **WebP**: Native ANMF duration parse; no 5.0s fake default when duration unknown.
 
 ### Resume
+
 - **img-hevc / img-av1**: --resume (default) / --no-resume; .mfb_processed in output or input dir.
 
 ### Pipelines & memory
+
 - **x265**: encode_y4m_direct() when input is .y4m; stderr drain in jxl_utils and lossless_converter; FfmpegProcess stdout drain. **Spinner**: Killed:9 suppression; elapsed ≥ 0; pipeline failed path in message. **system_memory** + thread_manager: MFB_LOW_MEMORY, pressure-based parallel_tasks/child_threads cap.
 
 ### Logging (additional)
-- Run logs under ./logs/ (gitignored); flush after each write; script save_log() merges VERBOSE_LOG_FILE into drag_drop_*.log.
+
+- Run logs under ./logs/ (gitignored); flush after each write; script save*log() merges VERBOSE_LOG_FILE into drag_drop*\*.log.
 
 ### Dependencies
+
 - libheif-rs 2.6.x; cargo update for transitive deps.
 
 ### Scripts
+
 - **drag_and_drop_processor.sh**: No longer passes `--log-file`.
 
 ---
@@ -2216,30 +2485,36 @@ All changes below are since 8.7.0.
 ### 🔧 Critical Bug Fixes
 
 #### GIF Quality Verification (Root Out False Success)
+
 - **Removed Unsafe Fallback**: GIF files no longer use SSIM-only or explore-SSIM as a兜底 (fallback) when MS-SSIM fails. Previously, this could mark verification as "passed" when it was incomplete.
 - **Explicit Error Reporting**: Now loudly reports error to stderr and `result.log` when GIF quality verification cannot be completed. `ms_ssim_passed = Some(false)` is set explicitly.
 - **Impact**: Prevents potential quality loss from false-positive verification results.
 
 #### Single-File Copy-on-Fail
+
 - **No Data Loss Guarantee**: When converting a single file with `--output` directory specified, if conversion fails, the original file is now copied to the output directory before returning the error.
 - **Implementation**: `cli_runner.rs` now calls `copy_on_skip_or_fail` before propagating `Err` in single-file mode.
 
 #### Calibration Diagnostics
+
 - **Full stderr Output**: When FFmpeg calibration fails (e.g., decode failed for CRF values), the complete FFmpeg stderr is now printed for troubleshooting.
 - **Y4M Extract**: Added `-an` (no audio) flag to Y4M extraction command to avoid unnecessary audio stream processing.
 
 ### 🍎 Apple Ecosystem
 
 #### Script Behavior Change
+
 - **No Auto-Repair**: Disabled automatic Apple Photos Compatibility Repair run in scripts. User confirmation is now required before processing.
 - **JXL Metadata Preservation**: Metadata stripping now only occurs on grayscale+ICC retry path, preserving metadata in normal conversion flows.
 
 #### Extension Mismatch Handling
+
 - **Format Confusion Prevention**: Fixed detection order to ensure GIF/WebP/AVIF are detected before video path, preventing animated images from being confused with video formats.
 
 ### 🔒 Code Quality & Audit
 
 #### Comprehensive Audit Completion
+
 - **CODE_AUDIT.md**: Completed with 39+ sections covering:
   - Path safety and argument sanitization
   - Concurrency and poison recovery
@@ -2248,24 +2523,29 @@ All changes below are since 8.7.0.
   - TOCTOU mitigation
 
 #### TOCTOU Mitigation
+
 - **Atomic Conversion**: Implemented temp file + atomic rename pattern in conversion APIs (`conversion.rs`) to prevent time-of-check-time-of-use race conditions.
 - **Safe Temp Paths**: Temp files now use pattern `stem.tmp.ext` for safer intermediate file handling.
 
 #### Dependency Updates
+
 - `libheif-rs`: 2.6.0 → 2.6.1
 - `tempfile`: 3.25 → 3.26
 
 ### 📊 Logging & UX
 
 #### Per-File Log Context
+
 - **Parallel Output Attribution**: When processing multiple files in parallel, each log line is now prefixed with `[filename]` so output can be attributed to the correct file.
 - **ANSI Stripping**: Color codes are stripped when output is not a TTY or when writing to log files.
 
 #### Progress Display Improvements
+
 - **Compact Milestones**: Images OK/failed counts now displayed on same line as XMP/JXL milestones.
 - **XMP Clarity**: XMP merge milestone lines use fixed `[XMP]` prefix to avoid confusion with Metadata total.
 
 #### Ultimate Mode Enhancement
+
 - **MS-SSIM Threshold**: Extended MS-SSIM skip threshold from 5 minutes to **25 minutes** in ultimate mode. Only videos >25 minutes will skip MS-SSIM and use SSIM-only verification.
 
 ### 🛠️ Technical
@@ -2292,14 +2572,17 @@ All changes below are since 8.7.0.
 ### 📋 Audit follow-up (文档与可见性)
 
 #### 算法与设计文档
+
 - **Phase 2 搜索**（`video_explorer.rs`）：补充注释——CRF–SSIM 单调性假设；为何采用单点黄金比例而非完整黄金分割搜索（实现简单、每轮同样 1 次编码，仅可能多 1～2 次编码）。
 - **迭代上限**（`video_explorer.rs`）：为长视频/超长视频的迭代上限常量添加文档，说明「更长视频 → 更低迭代上限」为有意为之的成本/精度权衡。
 - **效率因子**（`quality_matcher.rs`）：模块与 `efficiency_factor()` 的文档中注明 H.264/HEVC/AV1 等为经验相对效率，可参考编解码比较研究，无单一权威引用。
 
 #### 质量验证可见性
+
 - **长视频跳过 MS-SSIM**：在 `ssim_calculator.rs`、`gpu_coarse_search.rs`、`video_explorer.rs`、`msssim_sampling.rs` 四处，将「跳过 MS-SSIM」的日志统一为带 ⚠️ 的警告级表述（"Quality verification: … MS-SSIM skipped"），便于用户知晓质量验证降级为仅 SSIM。
 
 #### 审计文档
+
 - **CODE_AUDIT.md**：新增「为何不用完整黄金分割搜索」说明；与代码注释一致。
 
 ## [8.5.0] - 2026-02-23
@@ -2307,21 +2590,25 @@ All changes below are since 8.7.0.
 ### 📋 Logging & Concurrency
 
 #### Per-file log context (fix interleaved output)
+
 - **Thread-local log prefix**: When processing multiple files in parallel, every `log_eprintln!` / `verbose_eprintln!` line is prefixed with `[filename]` so output can be attributed to the correct file.
 - **Set at entry points**: `vid_hevc` `auto_convert()` and `img_hevc` `auto_convert_single_file()` set the prefix from the input file name and clear it on drop via `LogContextGuard`.
 - **XMP distinct**: XMP merge milestone lines use a fixed `[XMP]` prefix so they are clearly separate from file-tagged lines.
 
 #### Formatted indentation
+
 - **Fixed-width tag column** (`LOG_TAG_WIDTH = 34`): All message bodies align so `[file.jpeg]`, `[file.webp]`, and `[XMP]` lines start the message at the same column.
 - **Padding**: `pad_tag()` pads the tag so SSIM/CRF/XMP lines are visually aligned and easier to scan.
 
 #### UTF-8 safe prefix
+
 - **No panic on CJK filenames**: Prefix truncation now uses `truncate_to_char_boundary()` so we never slice through a multi-byte character (e.g. Chinese/Japanese in file names).
 - **Shorter default**: `LOG_PREFIX_MAX_LEN` reduced to 28 to reduce log noise.
 
 ### ⏱️ Duration detection
 
 #### ImageMagick fallback for WebP/GIF
+
 - **Problem**: Animated WebP (and some GIF) often have no `stream.duration`, `format.duration`, or usable `frame_count`/fps from ffprobe, causing "DURATION DETECTION FAILED" and conversion to abort.
 - **Solution**: In `detect_duration_comprehensive()` (precheck), after all ffprobe-based methods fail, try ImageMagick: `get_animation_duration_and_frames_imagemagick(path)` using `identify -format "%T"` to get (duration_secs, frame_count), then infer fps and return `(duration, fps, frame_count, "imagemagick")`.
 - **API**: `image_analyzer::get_animation_duration_and_frames_imagemagick(path)` returns `Option<(f64, u64)>` without logging; existing `try_imagemagick_identify` uses it and keeps the "WebP/GIF animation detected" log.
@@ -2329,9 +2616,11 @@ All changes below are since 8.7.0.
 ### 🎬 GIF / animated quality verification
 
 #### QualityCheck message when verification skipped
+
 - When GIF input uses the size-only path (SSIM-All verification failed or unavailable), the summary line is now **"QualityCheck: N/A (GIF/size-only, quality not measured)"** instead of "FAILED (quality not verified)", so batch logs are less alarming and reflect expected behavior.
 
 #### Real quality verification for GIF (and transparent inputs)
+
 - **Direct + format normalization**: `calculate_ssim_all()` now tries (1) direct `[0:v][1:v]ssim`, (2) format normalization: both streams to `yuv420p` and even dimensions so GIF palette and HEVC output are comparable.
 - **Alpha flatten (transparent GIF/WebP/PNG)**: Third fallback matches the encoder: input is converted with `format=rgba,premultiply=inplace=1,format=rgb24,format=yuv420p` (composite on black) then compared to HEVC output, so transparent pixels are evaluated on the same basis as the encoded file.
 - **Helper**: `run_ssim_all_filter(input, output, lavfi)` runs a given lavfi graph and parses SSIM Y/U/V/All from stderr with validity checks.
@@ -2348,6 +2637,7 @@ All changes below are since 8.7.0.
 ### 🔥 Critical Bug Fixes
 
 #### WebP/GIF Animation Duration Detection
+
 - **Fixed ffprobe N/A Issue**: ffprobe returns `N/A` for WebP/GIF animation duration metadata
 - **Added ImageMagick Identify Fallback**: New detection method using `identify -format "%T"` to read frame delays in centiseconds
 - **Accurate Duration Calculation**: Sums all frame delays to calculate total animation duration
@@ -2356,6 +2646,7 @@ All changes below are since 8.7.0.
   - Duration <3s → GIF (Bayer 256 colors)
 
 #### Extension Mismatch Handling
+
 - **Content-Aware Extension Correction**: Files are now renamed to match their actual content format before processing
   - `.jpeg` containing HEIC → renamed to `.heic`
   - `.jpeg` containing WebP → renamed to `.webp`
@@ -2364,6 +2655,7 @@ All changes below are since 8.7.0.
 - **Prevents Wrong Re-encoding**: Fixed issue where HEIC/WebP files with `.jpeg` extension were incorrectly re-encoded as JPEG by ImageMagick structural repair
 
 #### On-Demand Structural Repair
+
 - **Changed from Unconditional to On-Demand**: ImageMagick structural repair now only runs when exiftool detects metadata corruption
 - **Performance Improvement**: Saves 100-300ms per file for healthy files (no unnecessary re-encoding)
 - **Quality Protection**: Avoids unnecessary re-encoding for files without metadata issues
@@ -2371,17 +2663,20 @@ All changes below are since 8.7.0.
 ### 🌐 Internationalization
 
 #### Complete English Output
+
 - **All User-Facing Messages**: Converted from Simplified Chinese to English
 - **Error Messages**: Full English translations for all error outputs
 - **Console Output**: All processing logs, warnings, and success messages now in English
 - **Comments**: Code comments translated to English for better maintainability
 
 ### 📦 Dependencies Updated
+
 - `console`: 0.15 → 0.16
 - `tempfile`: 3.10 → 3.20
 - `proptest`: 1.4 → 1.7
 
 ### 🛠️ Technical Improvements
+
 - **Magic Bytes Detection**: Extended to support HEIC brands (heic, heix, heim, heis, mif1, msf1)
 - **Smart File Copier**: New module for content-aware extension correction
 - **Improved Error Handling**: Better fallback mechanisms for format detection failures
@@ -2389,12 +2684,14 @@ All changes below are since 8.7.0.
 ## [8.2.1] - 2026-02-20
 
 ### 🔧 UI Text Fixes
+
 - **Menu Option Renamed**: "Brotli EXIF Fix Only" → "Fix iCloud Import Errors"
 - **Clearer Description**: "Fix corrupted Brotli EXIF metadata that prevents iCloud Photos import"
 
 ## [8.2.0] - 2026-02-20
 
 ### 🍎 Apple Ecosystem Compatibility (Critical Fixes)
+
 - **"Unknown Error" Resolved**: Fixed a critical issue where Apple Photos refused to import files due to extension mismatch (e.g., WebP files renamed as .jpeg).
 - **WebP Disguised as JPEG**: Implemented `Magic Bytes` detection. The tool now ignores the literal file extension and inspects the file header. If a `.jpeg` is actually a WebP, it automatically routes it through `dwebp` pre-processing to ensure a valid JXL output.
 - **Corrupted JPEG Repair**: Added pre-processing for JPEGs with illegal headers (e.g., missing `FF D8` start bytes). These are now sanitized using ImageMagick before conversion, preventing decoder crashes.
@@ -2402,29 +2699,35 @@ All changes below are since 8.7.0.
 - **Directory Timestamp Preservation**: Fixed an issue where processing files would update the parent directory's modification time. The tool now recursively saves and restores timestamps for all affected directories (deepest-first).
 
 ### ⚡ Core Improvements
+
 - **Smart Format Detection**: Moved away from trusting file extensions. The core logic now relies on binary signatures for `jpg`, `png`, `gif`, `tif`, `webp`, and `mov`.
 - **Robust Pre-processing**: Integrated `magick` and `dwebp` deeply into the Rust pipeline to handle edge cases that previously caused `cjxl` to fail.
 
 ### 🎨 UI/UX
+
 - **Enhanced Logging**: Redesigned the CLI output with hierarchical styling.
   - **Important Alerts**: Now displayed in **Bold/Colored** text.
   - **Technical Details**: Now displayed in **Dimmed (Gray)** text to reduce visual noise.
 - **Status Indicators**: Added clearer emojis (`✅`, `⚠️`, `🔧`) for operation states.
 
 ## [8.1.0] - 2026-02-15
+
 - Initial release of the `modern_format_boost` Rust rewrites.
 
 ## 📜 Historical Archive (Pre-8.1.0 Foundation Era)
+
 This section reconstructs the detailed development history, transforming 1400+ raw commit logs into structured release milestones.
 
 ## [8.0.0] - 2026-02-20
 
 ### ✨ Features
+
 - Add JXL container to codestream converter for iCloud Photos compatibility
 - Add Brotli EXIF repair tool
 - Add Brotli EXIF corruption prevention to main pipeline
 
 ### 🐛 Bug Fixes
+
 - Fix directory structure preservation and enhance content-aware detection
 - 🔥 v8.0: Unified Progress Bar & Robustness Overhaul - Created UnifiedProgressBar in shared_utils - Migrated imgquality and video_explorer to unified progress system - Fixed high-risk unwrap() calls in production code - Cleaned up redundant UI path references
 - Fix pipe buffer deadlock in x265 encoder and update dependencies
@@ -2444,9 +2747,11 @@ This section reconstructs the detailed development history, transforming 1400+ r
 - Add ImageMagick identify fallback for WebP/GIF animation duration
 
 ### 📝 Documentation
+
 - clarify design decision to keep -all:all for maximum information preservation
 
 ### 🔨 Other Changes
+
 - 清理: 删除110+个临时测试脚本
 - 清理: 删除临时清理脚本
 - 🔒 元数据安全性修复：金标准重构 + 源头预防 Brotli 损坏
@@ -2456,82 +2761,100 @@ This section reconstructs the detailed development history, transforming 1400+ r
 - Update dependencies: tempfile 3.20, proptest 1.7
 
 ### 🚀 Performance & Refactoring
+
 - Remove temporary analysis logs and test artifacts after v8.0.0 release
 - Clarify JXL backup mechanism and add cleanup tool
 
 ## [7.9.11] - 2026-02-07
 
 ### 🔨 Other Changes
+
 - 🔥 v7.9.11: Use FfmpegProcess to prevent FFmpeg pipe deadlock
 
 ## [7.9.10] - 2026-02-07
 
 ### 🔨 Other Changes
+
 - 🔥 v7.9.10: 用心跳检测替代FFmpeg超时机制
 
 ## [7.9.9] - 2026-02-07
 
 ### 🐛 Bug Fixes
+
 - 🔥 v7.9.9: Fix HEIC SecurityLimitExceeded and FFmpeg hang issues
 
 ## [7.9.4] - 2026-02-05
 
 ### ✨ Features
+
 - improve logging for fallback copy on conversion failure (v7.9.4)
 - content-aware format detection and remediation tools for PNG/JPEG mismatch
 
 ### 🐛 Bug Fixes
+
 - 🛠️ 综合修复与性能优化 / Comprehensive Fixes & Enhancements
 
 ### 🔨 Other Changes
+
 - Update files
 
 ## [7.9.3] - 2026-02-01
 
 ### 🐛 Bug Fixes
+
 - replace unreliable extension checks with robust ffprobe content detection (v7.9.3)
 
 ## [7.9.2] - 2026-02-01
 
 ### 🐛 Bug Fixes
+
 - resolve temp file race conditions using tempfile crate (v7.9.2)
 - comprehensive temp file safety audit and refactor (v7.9.2)
 
 ## [7.8.2] - 2026-01-31
 
 ### 🐛 Bug Fixes
+
 - 🔧 Fix CJXL large image encoding failure (v7.8.2)
 - prevent uppercase media files from being copied as non-media
 - comprehensive fix for case-insensitive file extension handling across scripts and tools
 
 ### 📝 Documentation
+
 - Anglicize project: Translate UI, logs, errors and docs to English
 
 ### 🔨 Other Changes
+
 - Backup before Anglicization
 
 ## [7.8.1] - 2026-01-21
 
 ### 🐛 Bug Fixes
+
 - 🔧 v7.8.1: Fix 3 critical BUGs with safe testing
 
 ## [7.8.0] - 2026-01-21
 
 ### ✨ Features
+
 - v7.8 quality improvements - unified logging, modular architecture, zero warnings
 
 ### 🐛 Bug Fixes
+
 - 🔧 v7.8: 修复关键统计BUG - JXL转换应用1%容差机制
 
 ### 🔨 Other Changes
+
 - 🎯 v7.8: 优化容差为1%，符合精确控制理念
 
 ### 🚀 Performance & Refactoring
+
 - 🔧 v7.8: 完成容差机制和GIF修复验证
 
 ## [7.7.0] - 2026-01-20
 
 ### 🔨 Other Changes
+
 - 🔥 v7.7: Universal Heartbeat System - Phase 1-3 Complete
 - 🔥 v7.7: Universal Heartbeat - Phase 2 Complete (Tasks 7-9)
 - 🔥 v7.7: Universal Heartbeat - Phase 3 Complete (Tasks 10-12)
@@ -2540,73 +2863,88 @@ This section reconstructs the detailed development history, transforming 1400+ r
 ## [7.6.0] - 2026-01-20
 
 ### ✨ Features
+
 - MS-SSIM性能优化 - 10倍速度提升
 
 ## [7.5.1] - 2026-01-20
 
 ### 🐛 Bug Fixes
+
 - 🔴 CRITICAL FIX v7.5.1: MS-SSIM freeze for long videos
 - Add v7.5.1 freeze fix test scripts and manual test guide
 
 ### 📝 Documentation
+
 - Add v7.5.1 verification script and summary
 
 ## [7.5.0] - 2026-01-18
 
 ### 🔨 Other Changes
+
 - File Processing Optimization + Build System Enhancement
 
 ## [7.4.9] - 2026-01-18
 
 ### 🐛 Bug Fixes
+
 - FIXED - Output directory timestamp preservation
 - FINAL FIX - Directory timestamp preservation after rsync
 
 ### 🔨 Other Changes
+
 - Output directory timestamp preservation
 
 ## [7.4.8] - 2026-01-18
 
 ### 🐛 Bug Fixes
+
 - 🔧 v7.4.8: Fix smart_build.sh script - set -e + ((var++)) issue
 - ✅ v7.4.8: Complete metadata preservation audit & fixes
 
 ## [7.4.7] - 2026-01-18
 
 ### 🚀 Performance & Refactoring
+
 - 🔧 v7.4.7: 无遗漏设计 - 所有文件类型保留元数据
 
 ## [7.4.6] - 2026-01-18
 
 ### 🚀 Performance & Refactoring
+
 - 🔧 v7.4.6: 统一四个工具的目录元数据保留
 
 ## [7.4.5] - 2026-01-18
 
 ### 🐛 Bug Fixes
+
 - 🔧 v7.4.5: 彻底修复文件夹结构BUG - 所有复制点使用 smart_file_copier
 
 ## [7.4.4] - 2026-01-18
 
 ### 🚀 Performance & Refactoring
+
 - 🔧 v7.4.4: 修复进度条混乱 + smart_build.sh bash 3.x 兼容
 
 ## [7.4.3] - 2026-01-18
 
 ### 🔨 Other Changes
+
 - ✅ v7.4.3: All 4 locations use smart_copier
 
 ### 🚀 Performance & Refactoring
+
 - 🔧 v7.4.3: Apply smart_copier to vidquality_hevc
 
 ## [7.4.2] - 2026-01-18
 
 ### ✨ Features
+
 - 🚀 v7.4.2: Complete smart_file_copier integration
 
 ## [7.4.1] - 2026-01-18
 
 ### 🐛 Bug Fixes
+
 - 确认目录结构保留功能正常工作
 - 清理过时编译产物并修正双击脚本路径
 - 修复跳过文件复制时不保留目录结构和时间戳的严重BUG
@@ -2614,9 +2952,11 @@ This section reconstructs the detailed development history, transforming 1400+ r
 - 🚨 v7.4.1: CRITICAL FIX - Use smart_file_copier module
 
 ### 📝 Documentation
+
 - 添加元数据保留功能文档
 
 ### 🔨 Other Changes
+
 - 改进PNG→JXL管道 + 修复元数据保留
 - 重构: 修复 VMAF/MS-SSIM 常量和测试，模块化重复代码
 - 修复: 移除脚本中不存在的 --verbose 参数
@@ -2627,39 +2967,47 @@ This section reconstructs the detailed development history, transforming 1400+ r
 - 修复: 双击脚本正确传递 --recursive 参数
 
 ### 🚀 Performance & Refactoring
+
 - 🔧 Export preserve_directory_metadata
 
 ## [7.4.0] - 2026-01-18
 
 ### 🐛 Bug Fixes
+
 - 📝 v7.4 Complete - Directory structure fix
 
 ### 🔨 Other Changes
+
 - 修复日志分析发现的问题1/3/4/5
 
 ## [7.3.5] - 2026-01-18
 
 ### 🐛 Bug Fixes
+
 - 🐛 v7.3.5: Force rebuild + structure verification
 
 ## [7.3.3] - 2026-01-18
 
 ### 🚀 Performance & Refactoring
+
 - 🔧 v7.3.3: Smart build system + Binary verification
 
 ## [7.3.2] - 2026-01-18
 
 ### 🐛 Bug Fixes
+
 - ✨ v7.3.2: Modular file copier + Progress bar fix
 
 ## [7.3.1] - 2026-01-18
 
 ### 🐛 Bug Fixes
+
 - 🐛 v7.3.1: Fix directory structure in ALL fallback scenarios
 
 ## [7.3.0] - 2026-01-18
 
 ### 🔨 Other Changes
+
 - 最终验证多层fallback设计科学性
 - 解释Layer 4为何用SSIM Y而非PSNR
 - 日志分析报告 - 发现5个关键问题
@@ -2667,157 +3015,190 @@ This section reconstructs the detailed development history, transforming 1400+ r
 ## [7.2.0] - 2026-01-18
 
 ### 🐛 Bug Fixes
+
 - 🔥 v7.2: Quality Verification Fix - Standalone VMAF Integration
 - 🔧 Fix vmaf model parameter - remove unsupported version flag
 - ✅ Final vmaf fix - correct feature parameter format
 
 ### 📝 Documentation
+
 - 📝 Document: vmaf float_ms_ssim includes chroma information
 
 ### 🔨 Other Changes
+
 - 🔬 Critical Finding: vmaf float_ms_ssim is Y-channel only
 - 🔄 Switch to ffmpeg libvmaf priority (now installed)
 - 验证ffmpeg libvmaf多通道支持 - 确认MS-SSIM为亮度通道算法
 
 ### 🚀 Performance & Refactoring
+
 - 🔧 Add FFmpeg libvmaf installation scripts
 
 ## [7.1.3] - 2025-12-18
 
 ### ✨ Features
+
 - Add type-safe helpers to more modules
 
 ## [7.1.2] - 2025-12-18
 
 ### ✨ Features
+
 - Add type-safe helpers to gpu_accel.rs
 
 ## [7.1.1] - 2025-12-18
 
 ### 🔨 Other Changes
+
 - Gradual migration to type-safe wrappers
 
 ## [7.1.0] - 2025-12-18
 
 ### ✨ Features
+
 - Add type-safe wrappers for CRF, SSIM, FileSize, IterationGuard
 
 ## [7.0.0] - 2025-12-18
 
 ### 🐛 Bug Fixes
+
 - 🔥 v7.0: Fix test quality issues - eliminate self-proving assertions
 
 ## [6.9.17] - 2026-01-18
 
 ### 🐛 Bug Fixes
+
 - 🔥 v6.9.17: Critical CPU Encoding & GPU Fallback Fixes
 
 ## [6.9.16] - 2026-01-17
 
 ### 🐛 Bug Fixes
+
 - 添加转换差异分析和修复脚本
 
 ### 🔨 Other Changes
+
 - XMP合并优先策略
 
 ## [6.9.15] - 2026-01-16
 
 ### 🔨 Other Changes
+
 - 无遗漏设计 - 不支持文件的XMP处理
 
 ## [6.9.14] - 2026-01-16
 
 ### 🔨 Other Changes
+
 - 无遗漏设计 - 失败文件回退复制
 
 ## [6.9.13] - 2026-01-16
 
 ### 🔨 Other Changes
+
 - 无遗漏设计 - 处理全部文件
 - 无遗漏设计 - 核心实现移至Rust
 
 ## [6.9.12] - 2026-01-16
 
 ### 🔨 Other Changes
+
 - 格式支持增强 + 验证机制
 
 ## [6.9.9] - 2025-12-25
 
 ### 🐛 Bug Fixes
+
 - treat ExifTool [minor] warnings as success for JXL container wrapping
 - correct error message when video stream compression fails
 - merge XMP sidecars for skipped files
 
 ### 🔨 Other Changes
+
 - Use SSIM All for non-MS-SSIM verification
 
 ## [6.9.8] - 2025-12-20
 
 ### 🔨 Other Changes
+
 - Fusion quality score (0.6×MS-SSIM + 0.4×SSIM_All)
 
 ## [6.9.7] - 2025-12-20
 
 ### ✨ Features
+
 - Enhance fallback warnings and add MS-SSIM vs SSIM test
 
 ## [6.9.6] - 2025-12-20
 
 ### ✨ Features
+
 - MS-SSIM as primary quality judgment
 - Implement 3-channel MS-SSIM (Y+U+V) for accurate quality verification
 
 ### 🚀 Performance & Refactoring
+
 - Use SSIM All exclusively, remove MS-SSIM
 
 ## [6.9.5] - 2025-12-20
 
 ### 🐛 Bug Fixes
+
 - Use dynamic SSIM threshold from explore phase in Phase 3
 
 ## [6.9.4] - 2025-12-20
 
 ### ✨ Features
+
 - Use SSIM All as final quality threshold (includes chroma)
 
 ## [6.9.3] - 2025-12-20
 
 ### ✨ Features
+
 - Add SSIM All comparison and chroma loss detection
 
 ## [6.9.2] - 2025-12-20
 
 ### 🐛 Bug Fixes
+
 - Fix MS-SSIM JSON parsing - use pooled_metrics mean
 
 ## [6.9.1] - 2025-12-20
 
 ### 🐛 Bug Fixes
+
 - VP8/VP9压缩失败和GPU搜索范围问题
 - MS-SSIM功能修复
 - Clamp MS-SSIM to valid range [0, 1]
 
 ### 🔨 Other Changes
+
 - move smart_build.sh to scripts/, update drag_and_drop path
 - auto-sync changes
 
 ### 🚀 Performance & Refactoring
+
 - Smart audio transcoding + cleanup
 
 ## [6.9.0] - 2025-12-20
 
 ### ✨ Features
+
 - MS-SSIM as target threshold (not just verification)
 
 ### 🐛 Bug Fixes
+
 - suppress dead_code warnings for serde fields
 
 ### 🔨 Other Changes
+
 - Adaptive zero-gains + VP9 duration detection
 
 ## [6.8.0] - 2025-12-18
 
 ### 🐛 Bug Fixes
+
 - 🔧 v6.8: Fix FPS parsing - correct ffprobe field order
 - CRF超出范围导致编码失败 + dead_code警告
 - Fix evaluation consistency - use pure video stream comparison
@@ -2825,39 +3206,47 @@ This section reconstructs the detailed development history, transforming 1400+ r
 ## [6.7.0] - 2025-12-18
 
 ### 🐛 Bug Fixes
+
 - 🔥 v6.7: Container Overhead Fix - Pure Media Comparison
 
 ## [6.6.1] - 2025-12-17
 
 ### 🐛 Bug Fixes
+
 - 修复 CPU Fine-Tune 阶段长视频卡死问题
 
 ## [6.6.0] - 2025-12-16
 
 ### 🔨 Other Changes
+
 - Complete cache unification - All HashMap migrated to CrfCache
 
 ## [6.5.1] - 2025-12-17
 
 ### 🔨 Other Changes
+
 - 取消硬上限机制，改为保底机制
 
 ## [6.5.0] - 2025-12-16
 
 ### 🚀 Performance & Refactoring
+
 - Unified CrfCache refactor - Replace HashMap with CrfCache in gpu_accel.rs
 
 ## [6.4.9] - 2025-12-16
 
 ### ✨ Features
+
 - 代码质量与安全性修复
 
 ### 🐛 Bug Fixes
+
 - doctest ignore 标记修复
 
 ## [6.4.8] - 2025-12-16
 
 ### ✨ Features
+
 - 苹果兼容模式使用 MOV 容器格式
 - Revert "feat(v6.4.8): 苹果兼容模式使用 MOV 容器格式"
 - --apple-compat 模式使用 MOV 容器格式
@@ -2866,333 +3255,401 @@ This section reconstructs the detailed development history, transforming 1400+ r
 ## [6.4.7] - 2025-12-16
 
 ### ✨ Features
+
 - 代码质量修复 - CrfCache精度升级/GPU临时文件扩展名/FFmpeg进程管理
 
 ## [6.4.6] - 2025-12-16
 
 ### 🔨 Other Changes
+
 - spec: code-quality-v6.4.6 requirements and design
 
 ### 🚀 Performance & Refactoring
+
 - Technical debt cleanup
 
 ## [6.4.5] - 2025-12-16
 
 ### 🚀 Performance & Refactoring
+
 - Performance & error handling improvements
 
 ## [6.4.4] - 2025-12-16
 
 ### 🔨 Other Changes
+
 - Code quality improvements - Strategy helper methods (build_result, binary_search_compress, binary_search_quality, log_final_result) reduce ~40% duplicate code - Enhanced Rustdoc comments with examples for public APIs - SsimResult helpers: is_actual(), is_predicted() methods - Boundary tests for metadata margin edge cases - All 505 tests pass
 
 ## [6.3.0] - 2025-12-16
 
 ### ✨ Features
+
 - Strategy pattern for ExploreMode - SSIM/Progress unified
 - add property-based tests for Strategy pattern
 
 ### 🚀 Performance & Refactoring
+
 - backup: before Strategy pattern refactoring v6.3
 
 ## [6.1.0] - 2025-12-16
 
 ### 🔨 Other Changes
+
 - Boundary fine tuning - auto switch to 0.1 step when reaching min_crf boundary
 
 ## [6.0.0] - 2025-12-16
 
 ### 🔨 Other Changes
+
 - GPU curve model strategy - aggressive wall collision + fine backtrack in GPU phase
 
 ## [5.99.0] - 2025-12-16
 
 ### 🔨 Other Changes
+
 - Curve model + fine tuning phase - switch to 0.1 step when curve_step < 1.0
 
 ## [5.98.0] - 2025-12-16
 
 ### 🔨 Other Changes
+
 - Curve model aggressive stepping - exponential decay (step × 0.4^n), max 4 wall hits, 87.5% iteration reduction
 
 ## [5.97.0] - 2025-12-16
 
 ### 🔨 Other Changes
+
 - Ultra-aggressive CPU stepping strategy
 
 ## [5.95.0] - 2025-12-16
 
 ### 🔨 Other Changes
+
 - 激进撞墙算法 - 扩大CPU搜索范围(3→15 CRF)
 
 ## [5.94.0] - 2025-12-16
 
 ### 🐛 Bug Fixes
+
 - Fix VMAF quality grading thresholds + cleanup warnings
 
 ## [5.93.0] - 2025-12-16
 
 ### 🔨 Other Changes
+
 - 智能撞墙算法 - 质量墙检测
 
 ## [5.91.0] - 2025-12-16
 
 ### 🔨 Other Changes
+
 - 🔥 v5.91: 强制过头策略 - 必须找到真正边界
 
 ## [5.90.0] - 2025-12-16
 
 ### 🔨 Other Changes
+
 - 🔥 v5.90: CPU自适应动态步进 - 数学公式驱动（用户建议）
 
 ## [5.89.0] - 2025-12-16
 
 ### 🔨 Other Changes
+
 - 🔥 v5.89: CPU步进算法深入改进 - 递进式步长+过头回退
 
 ## [5.88.0] - 2025-12-16
 
 ### 🔨 Other Changes
+
 - 🔥 v5.88: 进度条统一 - DetailedCoarseProgressBar
 
 ## [5.87.0] - 2025-12-16
 
 ### 🔨 Other Changes
+
 - 🔥 v5.87: VMAF与SSIM协同改进 - 5分钟阈值
 
 ## [5.83.0] - 2025-12-16
 
 ### ✨ Features
+
 - CPU步进算法v5.87 - 自适应大步长+边际效益+GPU对比
 
 ### 🔨 Other Changes
+
 - High quality target - SSIM threshold 0.995
 
 ## [5.82.0] - 2025-12-16
 
 ### 🔨 Other Changes
+
 - Smart adaptive CPU search with target compression
 
 ## [5.81.0] - 2025-12-16
 
 ### 🔨 Other Changes
+
 - Adaptive multiplicative CPU search - 67% fewer iterations
 
 ## [5.80.0] - 2025-12-15
 
 ### ✨ Features
+
 - Implement GPU quality ceiling detection v5.80
 
 ### 🐛 Bug Fixes
+
 - Clarify compression boundary vs quality ceiling
 
 ## [5.76.0] - 2025-12-15
 
 ### ✨ Features
+
 - auto-merge XMP sidecar files during conversion
 - Add unified println() method for log output
 - Add VMAF verification for short videos (≤5min)
 
 ### 🐛 Bug Fixes
+
 - Unify cache key mechanism to prevent cache misses
 
 ## [5.75.0] - 2025-12-15
 
 ### 🔨 Other Changes
+
 - VMAF-SSIM synergy - 探索用SSIM，验证用VMAF
 
 ## [5.74.0] - 2025-12-15
 
 ### 🔨 Other Changes
+
 - 备份 - 开始透明度改进 spec
 - 透明度改进 - PSNR→SSIM映射 + Preset一致性 + Mock测试
 
 ## [5.72.0] - 2025-12-15
 
 ### ✨ Features
+
 - Add robustness improvements - LRU cache, unified error handling, three-phase search, detailed progress
 
 ### 🐛 Bug Fixes
+
 - Correct GPU+CPU dual refinement strategy
 
 ## [5.71.0] - 2025-12-15
 
 ### 🐛 Bug Fixes
+
 - v5.71 - Fix legacy codec handling and smart FPS detection
 
 ## [5.70.0] - 2025-12-15
 
 ### 🔨 Other Changes
+
 - 🔥 v5.70: Smart Build System - 智能编译系统
 
 ## [5.67.1] - 2025-12-15
 
 ### 🔨 Other Changes
+
 - 全面英语化输出日志
 
 ## [5.67.0] - 2025-12-15
 
 ### 🔨 Other Changes
+
 - 边际效益递减算法 + 颜色UI改进
 
 ## [5.66.0] - 2025-12-15
 
 ### 🔨 Other Changes
+
 - GPU 质量天花板概念 + 分层接力策略基础
 
 ## [5.65.0] - 2025-12-15
 
 ### 🔨 Other Changes
+
 - GPU 精细搜索后 CPU 窄范围验证
 
 ## [5.64.0] - 2025-12-15
 
 ### 🔨 Other Changes
+
 - GPU 多段采样策略
 
 ## [5.63.0] - 2025-12-15
 
 ### 🔨 Other Changes
+
 - 双向验证 + 压缩保证
 
 ## [5.62.0] - 2025-12-15
 
 ### 🔨 Other Changes
+
 - 双向验证+压缩保证 - 修复搜索方向，确保最高SSIM且能压缩
 
 ## [5.61.0] - 2025-12-15
 
 ### 🔨 Other Changes
+
 - 动态自校准GPU→CPU映射系统 - 通过实测建立精确映射
 
 ## [5.60.0] - 2025-12-15
 
 ### 🔨 Other Changes
+
 - 保守智能跳过策略 - 连续3个CRF大小变化<0.1%才跳过
 - CPU全片编码策略 - 100%准确度，移除采样误差
 
 ## [5.59.0] - 2025-12-15
 
 ### 🔨 Other Changes
+
 - 可压缩空间检测 + 动态精度选择
 
 ## [5.58.0] - 2025-12-15
 
 ### 🔨 Other Changes
+
 - 最终编码实时进度显示
 
 ## [5.57.0] - 2025-12-15
 
 ### 🔨 Other Changes
+
 - 添加置信度评分系统
 
 ## [5.56.0] - 2025-12-15
 
 ### 🔨 Other Changes
+
 - 添加预检查(BPP分析)和GPU→CPU自适应校准
 
 ## [5.55.0] - 2025-12-15
 
 ### 🔨 Other Changes
+
 - 🔥 v5.55: 恢复三阶段结构 + 智能提前终止
 - 🔥 v5.55: CPU 精度调整 0.1 → 0.25（速度提升 2-3 倍）
 
 ## [5.54.0] - 2025-12-14
 
 ### 🐛 Bug Fixes
+
 - 🔥 v5.54: 修复 CPU 采样导致最终输出不完整的严重 BUG
 
 ### 🔨 Other Changes
+
 - 📦 v5.54 稳定版本备份 - 准备开始柔和改进
 
 ## [5.53.0] - 2025-12-14
 
 ### 🔨 Other Changes
+
 - 🔥 v5.53: 修复 GPU 迭代限制 + CPU 采样编码
 
 ## [5.52.0] - 2025-12-14
 
 ### 🔨 Other Changes
+
 - 🔥 v5.52: 完整重构 GPU 搜索 - 智能采样 + SSIM+大小组合决策 + 收益递减
 
 ## [5.51.0] - 2025-12-14
 
 ### 🔨 Other Changes
+
 - 🔥 v5.51: 简化 GPU Stage 3 搜索逻辑 - 0.5 步长 + 最多 3 次尝试
 
 ## [5.50.0] - 2025-12-14
 
 ### 🔨 Other Changes
+
 - 🔥 v5.50: GPU 搜索目标改为 SSIM 上限 + 10分钟采样
 
 ## [5.49.0] - 2025-12-14
 
 ### 🔨 Other Changes
+
 - 🔥 v5.49: 增加 GPU 采样时长 - 提高映射精度
 
 ## [5.48.0] - 2025-12-14
 
 ### 🔨 Other Changes
+
 - 🔥 v5.48: 简化 CPU 搜索 - 仅在 GPU 边界附近微调
 
 ## [5.47.0] - 2025-12-14
 
 ### 🔨 Other Changes
+
 - 🔥 v5.47: 完全重写 GPU Stage 1 搜索 - 双向智能边界探测
 
 ## [5.46.0] - 2025-12-14
 
 ### 🔨 Other Changes
+
 - 🔥 v5.46: 修复 GPU 搜索方向 - 使用 initial_crf 作为起点
 
 ## [5.45.0] - 2025-12-14
 
 ### 🔨 Other Changes
+
 - 🔥 v5.45: 智能搜索算法 - 收益递减终止 + 压缩率修复
 
 ## [5.44.0] - 2025-12-14
 
 ### 🔨 Other Changes
+
 - 🔥 v5.44: 简化超时逻辑 - 仅保留 12 小时底线超时，响亮 Fallback
 
 ## [5.43.0] - 2025-12-14
 
 ### 🔨 Other Changes
+
 - 🔥 v5.43: GPU编码超时保护 + I/O优化 - 完全修复Phase 1挂起
 
 ## [5.42.0] - 2025-12-14
 
 ### 🔨 Other Changes
+
 - 🔥 v5.42: 完全修复键盘输入污染 - 实时进度更新
 
 ## [5.41.0] - 2025-12-14
 
 ### 🔨 Other Changes
+
 - 🔥 v5.41: 激进的键盘输入防护 - 多重防线完全禁用终端输入
 
 ## [5.40.0] - 2025-12-14
 
 ### 🔨 Other Changes
+
 - 🔥 v5.40: 修复编译警告 + 改进构建脚本
 
 ## [5.39.0] - 2025-12-14
 
 ### 🔨 Other Changes
+
 - 🔥 v5.39: 键盘输入保护 - 移除冻结 hidden() 模式，改用 100Hz 刷新 + 强化终端设置
 
 ## [5.38.0] - 2025-12-14
 
 ### 🔨 Other Changes
+
 - 🔥 v5.38: 完全修复键盘输入污染 - 实现 + 验证成功
 
 ## [5.36.0] - 2025-12-14
 
 ### 🔨 Other Changes
+
 - 🔥 v5.36: 多层键盘交互防护 - 彻底阻止终端输入干扰
 
 ## [5.35.0] - 2025-12-14
 
 ### 🔨 Other Changes
+
 - 🔥 v5.35: 修复进度条冻结 - 禁用GPU并行探测阻塞
 - 🔥 v5.35: 防止键盘干扰 - 禁用终端echo
 - 🔥 v5.35: 脚本强制重新编译 - 确保使用最新代码修复
@@ -3206,84 +3663,101 @@ This section reconstructs the detailed development history, transforming 1400+ r
 ## [5.34.0] - 2025-12-14
 
 ### ✨ Features
+
 - 🚀 v5.34: 进度条重构 - 基于迭代计数（GPU部分已修复）
 
 ### 🔨 Other Changes
+
 - 🔥 v5.34: 完全重构进度条系统 - 从CRF映射→迭代计数
 
 ## [5.33.0] - 2025-12-14
 
 ### ✨ Features
+
 - 🚀 v5.33: 设计效率优化 + 进度条稳定性改进
 
 ## [5.25.0] - 2025-12-14
 
 ### 🔨 Other Changes
+
 - Progress bar + exploration improvements
 
 ## [5.21.0] - 2025-12-14
 
 ### 🐛 Bug Fixes
+
 - 🔥 v5.21: Fix early termination threshold + real bar progress
 
 ## [5.20.0] - 2025-12-14
 
 ### ✨ Features
+
 - 🔥 v5.20: Add RealtimeExploreProgress with background thread
 
 ## [5.19.0] - 2025-12-14
 
 ### ✨ Features
+
 - 🎨 v5.19: Add modern UI/UX module
 
 ## [5.18.0] - 2025-12-14
 
 ### 🐛 Bug Fixes
+
 - 🔥 v5.18: Add cache warmup optimization + fix v5.17 performance protection integration
 - 🐛 Fix: --explore --compress now correctly reports error
 
 ## [5.7.0] - 2025-12-14
 
 ### 🔨 Other Changes
+
 - Extend GPU CRF range for higher quality search
 
 ## [5.6.1] - 2025-12-14
 
 ### 📝 Documentation
+
 - Extract GPU iteration limits to constants + README update
 
 ## [5.6.0] - 2025-12-14
 
 ### 🔨 Other Changes
+
 - GPU SSIM validation + dual fine-tuning
 
 ## [5.5.0] - 2025-12-14
 
 ### 🐛 Bug Fixes
+
 - Fix VideoToolbox q:v mapping (1=lowest, 100=highest)
 
 ## [5.4.0] - 2025-12-14
 
 ### 🔨 Other Changes
+
 - GPU three-stage fine-tuning + CPU upward search
 
 ## [5.3.0] - 2025-12-14
 
 ### 📝 Documentation
+
 - Smart short video handling + README update
 - Extract hardcoded values to constants + Simplify README
 
 ### 🔨 Other Changes
+
 - Improve GPU+CPU search accuracy
 
 ## [5.2-v5.0] - 2026-02-23
 
 ### ✨ Features
+
 - 添加完整会话日志记录功能
 - GIF 响亮报错+无遗漏设计(相邻目录)+校准stderr
 - Complete consistency sweep: add allow_size_tolerance and no_allow_size_tolerance to all AV1 tools for full parity with HEVC tools.
 
 ### 🐛 Bug Fixes
+
 - Replace remaining Chinese error messages with English
 - Deep audit — 12 bug fixes across extension handling, pipelines, and tooling
 - Systematic code quality sweep — clippy, safety, error visibility
@@ -3295,15 +3769,18 @@ This section reconstructs the detailed development history, transforming 1400+ r
 - audit fixes + modernization
 
 ### 📝 Documentation
+
 - strip all inline comments, keep only module-level //! docs
 
 ### 🔨 Other Changes
+
 - Merge remote merge/v5.2-v5.54-gentle
 - maintainability and deduplication (plan)
 - 🧹 Maintenance: Centralize build artifacts to root target directory
 - Complete AV1 tools alignment: Finalize img_av1 and vid_av1 with parity to HEVC counterparts, including apple_compat, ultimate flags, MS-SSIM enhancements, and improved metadata/stats tracking.
 
 ### 🚀 Performance & Refactoring
+
 - 🚀 Refactor: Simplification of project structure and dependencies
 - 📦 Refactor: Extract image and video analysis logic to shared_utils
 - remove unused simple_progress and realtime_progress modules
@@ -3311,6 +3788,7 @@ This section reconstructs the detailed development history, transforming 1400+ r
 ## [5.2.0] - 2025-12-14
 
 ### 🐛 Bug Fixes
+
 - 🔥 v5.2: Fix Stage naming + Add 0.1 fine-tuning when min_crf compresses
 - 🔥 v5.2: Fix GPU range design - GPU only narrows upper bound, not lower
 - 🔥 v5.2: Fix Stage B upward search - update best_boundary when finding lower CRF
@@ -3319,95 +3797,116 @@ This section reconstructs the detailed development history, transforming 1400+ r
 ## [5.1.4] - 2025-12-13
 
 ### 🔨 Other Changes
+
 - 修复 GPU 粗略搜索性能和日志重复问题
 
 ## [5.1.3] - 2025-12-13
 
 ### 🔨 Other Changes
+
 - 修复 - 实际调用新的 GPU+CPU 智能探索函数 - vidquality_hevc 和 imgquality_hevc 的 PreciseQualityWithCompress 模式现在使用 explore_hevc_with_gpu_coarse - 之前的代码仍然调用旧的 explore_precise_quality_match_with_compression_gpu
 
 ## [5.1.2] - 2025-12-13
 
 ### 🔨 Other Changes
+
 - 从双击 app 脚本中移除 --cpu flag - 移除 drag_and_drop_processor.sh 中的 --cpu flag - 撤回之前的忽略 --cpu flag 报告（没有意义） - 保留 Fallback 响亮报告
 
 ## [5.1.1] - 2025-12-13
 
 ### 🔨 Other Changes
+
 - 响亮报告 GPU 粗略搜索和 Fallback - GPU 粗略搜索阶段明确显示 --cpu flag 被忽略 - Fallback 情况都有醒目的框框提示
 
 ## [5.1.0] - 2025-12-13
 
 ### ✨ Features
+
 - Improve UX + Add v4.13 tests
 
 ### 🐛 Bug Fixes
+
 - Fix GIF conversion + Real animated media tests
 
 ### 🔨 Other Changes
+
 - Verified animated image → video conversion
 - 🔥 v5.1: GPU 粗略搜索 + CPU 精细搜索智能化处理
 
 ## [5.0.0] - 2025-12-13
 
 ### ✨ Features
+
 - enhance: add comprehensive transparency for fallback mechanisms
 
 ### 🐛 Bug Fixes
+
 - correct CLI argument from --output-dir to --output
 - add ImageMagick fallback for cjxl 'Getting pixel data failed' errors
 - 🐛 修复：min_crf 能压缩时跳过精细调整阶段的问题
 - 🐛 修复：Phase 3 必须用 CPU 重新编码最终结果
 
 ### 🔨 Other Changes
+
 - 修复视频处理中'Output exists'被错误计为失败的问题
 - 🔥 根源修复：Output exists 返回跳过状态而非错误
 - 🔥 v5.0: 智能 GPU 控制 + 自动 fallback
 
 ### 🚀 Performance & Refactoring
+
 - simplify drag_and_drop_processor v5.0
 
 ## [4.13.0] - 2025-12-13
 
 ### 🐛 Bug Fixes
+
 - Fix doc test + Update README (EN/CN)
 
 ### 🔨 Other Changes
+
 - Smart early termination with variance & change rate detection
 
 ## [4.12.0] - 2025-12-13
 
 ### ✨ Features
+
 - Add 0.1 fine-tune phase to explore_precise_quality_match_with_compression
 
 ### 🔨 Other Changes
+
 - Bidirectional 0.1 fine-tune search
 
 ## [4.8.0] - 2025-12-13
 
 ### 📝 Documentation
+
 - 🔥 v4.8: 性能优化 + CPU flag + README 更新
 
 ### 🔨 Other Changes
+
 - 🔥 v4.8: 性能优化 + 缓存机制
 
 ### 🚀 Performance & Refactoring
+
 - 🔧 v4.8: 代码统一 - 消除重复实现
 
 ## [4.7.0] - 2025-12-13
 
 ### 🐛 Bug Fixes
+
 - 🔥 v4.7: Bug 修复 + 术语澄清
 
 ## [4.6.0] - 2025-12-13
 
 ### 🔨 Other Changes
+
 - 🔥 v4.6: Flag 组合模块化 + 编译警告修复
 - 🔥 v4.6: 精度提升到 ±0.1 + 算法深度复盘文档
 
 ## [4.5.0] - 2025-12-13
 
 ### 🔨 Other Changes
+
 - 精确质量匹配 - 恢复正确语义 + 高效搜索
 - 新增 --compress flag - 精确质量匹配 + 压缩
 - 添加单元测试 + 实际测试验证
@@ -3415,55 +3914,67 @@ This section reconstructs the detailed development history, transforming 1400+ r
 ## [4.4.0] - 2025-12-13
 
 ### 🔨 Other Changes
+
 - 智能质量匹配 - 根本性设计改进
 - 修正术语 - 移除误导性的 AI 描述
 
 ## [4.3.0] - 2025-12-13
 
 ### ✨ Features
+
 - v4.3 随机采样 + 多样性覆盖
 - 新增 XMP Merger Rust 模块 - 可靠的元数据合并
 
 ### 🐛 Bug Fixes
+
 - 使用 Homebrew bash 5.x 支持 local -n 特性
 
 ### 🔨 Other Changes
+
 - 使用 Homebrew bash 5.x 替代系统 bash 3.x
 - 优化搜索策略 - 大幅减少无意义迭代
 
 ## [4.2.0] - 2025-12-13
 
 ### ✨ Features
+
 - 新增测试模式 v4.2
 - 🍎 Apple 兼容模式增强 - 现代动态图片智能转换
 
 ### 🐛 Bug Fixes
+
 - 测试模式修复 + 增强边缘案例采样
 - 修复测试模式采样问题
 
 ### 🔨 Other Changes
+
 - 实时日志输出 - 解决长时间编码终端冻结问题
 
 ### 🚀 Performance & Refactoring
+
 - rename vidquality_API → vidquality_av1, imgquality_API → imgquality_av1
 
 ## [4.1.0] - 2025-12-13
 
 ### 🔨 Other Changes
+
 - 三重交叉验证 + 完整透明度
 
 ## [4.0.0] - 2025-12-13
 
 ### 🔨 Other Changes
+
 - 激进精度追求 - 无限逼近 SSIM=1.0
 
 ## [3.9.0] - 2025-12-13
 
 ### ✨ Features
+
 - Add XMP metadata merge before format conversion v3.9
 - 断点续传 + 原子操作保护
 
 ### 🐛 Bug Fixes
+
 - resolve clippy warnings and type errors
 - resolve remaining clippy warnings in imgquality_API
 - introduce AutoConvertConfig struct to fix too_many_arguments warning
@@ -3472,55 +3983,67 @@ This section reconstructs the detailed development history, transforming 1400+ r
 - Fix --explore --match-quality to MATCH source quality, not minimize size
 
 ### 🔨 Other Changes
+
 - 🍎 苹果兼容模式裁判测试完善 + H.264 精度验证 + 编译警告修复
 
 ### 🚀 Performance & Refactoring
+
 - Remove accidentally committed test file
 - implement real functionality, remove TODO placeholders
 
 ## [3.8.0] - 2025-12-13
 
 ### 🐛 Bug Fixes
+
 - Code quality improvements and clippy fixes
 - Remove all clippy warnings
 
 ### 🔨 Other Changes
+
 - Intelligent threshold system - eliminate hardcoding
 
 ### 🚀 Performance & Refactoring
+
 - Code quality improvements + README update (v3.8)
 
 ## [3.7.0] - 2025-12-12
 
 ### ✨ Features
+
 - Complete drag & drop one-click processing system
 
 ### 🐛 Bug Fixes
+
 - vidquality-hevc --match-quality requires explicit value
 - 🛡️ Protect original files when quality validation fails (CRITICAL)
 
 ### 🔨 Other Changes
+
 - 🔥 v3.7: Enhanced PNG Quantization Detection with Referee System
 - Dynamic threshold adjustment for low-quality sources
 
 ### 🚀 Performance & Refactoring
+
 - 🔧 Code Quality Improvements
 
 ## [3.6.0] - 2025-12-12
 
 ### 🔨 Other Changes
+
 - Enhanced PNG lossy detection via IHDR chunk analysis
 - 🎯 v3.6: 三阶段高精度搜索算法 (±0.5 CRF)
 
 ## [3.5.0] - 2025-12-12
 
 ### 🔨 Other Changes
+
 - Enhanced quality matching with full field support
 - 🔬 v3.5: 增强裁判机制 (Referee Mechanism Enhancement)
 
 ## [3.4.1] - 2026-01-31
 
 ### 🐛 Bug Fixes
+
 - GIF Fix 🐛: proper block parsing; Performance ⚡: Smart thread manager (75% core usage); Rsync 📦: v3.4.1 support; Stability 🛡️: 512MB limit & empty check; Security ✅: 46 command injection patches & case-sensitivity verification
 - reorder cjxl arguments to place flags before files
 - remove unsupported '--' delimiter from ffmpeg, sips, dwebp calls
@@ -3530,16 +4053,19 @@ This section reconstructs the detailed development history, transforming 1400+ r
 - Fix clippy warnings: doc formatting and io error creation
 
 ### 🔨 Other Changes
+
 - Update all dependencies to latest versions
 
 ## [3.3.0] - 2025-12-11
 
 ### ✨ Features
+
 - add VMAF support for quality validation v3.3
 
 ## [3.0.0] - 2025-12-11
 
 ### ✨ Features
+
 - 🔬 Add strict precision tests and edge case validation
 - add video_quality_detector module with 56 precision tests
 - expand precision tests for ffprobe and conversion modules
@@ -3549,43 +4075,52 @@ This section reconstructs the detailed development history, transforming 1400+ r
 - enhance precision validation and SSIM/PSNR calculation
 
 ### 🐛 Bug Fixes
+
 - add scale filter for SSIM/PSNR calculation
 
 ### 📝 Documentation
+
 - add batch/report precision tests and README
 
 ### 🔨 Other Changes
+
 - 🔥 Quality Matcher v3.0 - Data-Driven Precision
 - 🔬 Image Quality Detector - Precision-Validated Auto Routing
 
 ## [2.0.0] - 2025-12-12
 
 ### ✨ Features
+
 - XMP Merger v2.0 - 增强可靠性
 - Expand XMP merger file type support and matching strategies
 - add checkpoint/resume support to XMP merger
 
 ### 🐛 Bug Fixes
+
 - Add .jpe, .jfif, .jif JPEG variants to supported extensions
 - always restore original media timestamp after XMP merge
 - improve lock file detection to avoid false positives
 - add WebP fallback for cjxl 'Getting pixel data failed' error
 
 ### 🚀 Performance & Refactoring
+
 - switch XMP merger from whitelist to blacklist approach
 - proactive input preprocessing for cjxl instead of fallback
 
 ## [v1.0.0-alpha] - 2025-12-11
 
 ### ✨ Features
+
 - add project files
 - video tools default to --match-quality enabled, image tools default to disabled
 - unified quality_matcher module for all tools
 - enhanced quality_matcher with cutting-edge codec support
 
 ### 🐛 Bug Fixes
+
 - match_quality only for lossy sources, lossless uses CRF 0
 - remove silent fallbacks in quality_matcher (Quality Standard)
 
 ### 🚀 Performance & Refactoring
+
 - modularize skip logic with VVC/AV2 support

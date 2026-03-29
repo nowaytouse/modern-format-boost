@@ -7,12 +7,14 @@ This project uses a dual-branch strategy to balance production stability with bl
 ## Branches
 
 ### Main Branch (Production)
+
 - **Purpose**: Stable, production-ready releases
 - **Dependencies**: All from crates.io registry (stable versions)
 - **Target Users**: Production deployments, stable releases
 - **Update Frequency**: Regular releases after thorough testing
 
 **Dependency Sources:**
+
 - `image`: crates.io (0.25.x)
 - `rusqlite`: crates.io (0.32.x)
 - `blake3`: crates.io (1.5.x)
@@ -21,12 +23,14 @@ This project uses a dual-branch strategy to balance production stability with bl
 - All other dependencies: crates.io
 
 ### Nightly Branch (Development)
+
 - **Purpose**: Bleeding-edge development and testing
 - **Dependencies**: GitHub sources for fastest upstream iterations
 - **Target Users**: Developers, testers, early adopters
 - **Update Frequency**: Continuous integration with upstream
 
 **Dependency Sources:**
+
 - `image`: GitHub (rust-lang/image)
 - `rusqlite`: GitHub (rusqlite/rusqlite)
 - `blake3`: GitHub (BLAKE3-team/BLAKE3)
@@ -39,12 +43,14 @@ This project uses a dual-branch strategy to balance production stability with bl
 ## When to Use Which Branch
 
 ### Use Main Branch If:
+
 - ✅ You need production-ready, stable code
 - ✅ You want predictable dependency versions
 - ✅ You're deploying to production environments
 - ✅ You prefer crates.io ecosystem compatibility
 
 ### Use Nightly Branch If:
+
 - ✅ You want the latest features and bug fixes
 - ✅ You're contributing to development
 - ✅ You want to test upcoming changes
@@ -53,6 +59,7 @@ This project uses a dual-branch strategy to balance production stability with bl
 ## Version Synchronization
 
 Both branches maintain the same version number (e.g., 0.10.102) but differ in:
+
 - Dependency sources (crates.io vs GitHub)
 - API compatibility (stable vs nightly)
 - Feature availability (stable vs experimental)
@@ -61,19 +68,21 @@ Both branches maintain the same version number (e.g., 0.10.102) but differ in:
 
 - **Main ← Nightly**: Only stable, tested features
 - **Nightly ← Main**: Bug fixes and critical patches
-- **Dependency Updates**: 
+- **Dependency Updates**:
   - Main: Manual updates to stable versions
   - Nightly: Automatic tracking of GitHub HEAD
 
 ## Building
 
 ### Main Branch
+
 ```bash
 git checkout main
 cargo build --release
 ```
 
 ### Nightly Branch
+
 ```bash
 git checkout nightly
 cargo build --release
@@ -87,13 +96,14 @@ Both branches pass the same test suite, ensuring feature parity while using diff
 
 - **Bug Fixes**: Submit to main branch
 - **New Features**: Develop in nightly branch
-- **Dependency Updates**: 
+- **Dependency Updates**:
   - Main: Update to latest stable crates.io versions
   - Nightly: Already tracks GitHub HEAD automatically
 
 ## Cache Version Binding
 
 Both branches use the same cache versioning strategy:
+
 - Cache version = Program version (e.g., 0.10.102 → 1102)
 - Automatic invalidation on version updates
 - Ensures consistency between code and cached data

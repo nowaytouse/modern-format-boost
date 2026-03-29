@@ -13,6 +13,7 @@
 </p>
 
 ---
+
 # 📖 Português (Portuguese)
 
 ## O que é o Modern Format Boost?
@@ -51,7 +52,9 @@ O **Modern Format Boost** é construído sobre uma arquitetura "Local-First", ga
 <summary><b>🛠️ Detalhes técnicos: Como funciona — O Pipeline</b></summary>
 
 ### Lógica do Pipeline de Imagem
+
 Cada arquivo passa por um pipeline de decisão em vários estágios:
+
 - **Estágio 1 — Detecção inteligente**: Analisa tabelas JPEG DQT (detecção de gainmap UltraHDR), pedaços WebP VP8L e caixas AVIF `av1C` em nível binário.
 - **Estágio 2 — Rota e Codificação**: JXL VarDCT para JPEG (bit-exact); modo Modular para fontes sem perdas (PNG, WebP/AVIF/HEIC/EXR/JP2 sem perdas).
 - **Estágio 3 — Detour**: Formatos como TIFF/WebP/BMP/HEIC são pré-processados em PNGs temporários de 16 bits ou **OpenEXR de 32 bits** para garantir compatibilidade com `cjxl` sem perda de qualidade.
@@ -59,28 +62,30 @@ Cada arquivo passa por um pipeline de decisão em vários estágios:
 </details>
 
 ### 🖥️ Runtime
+
 ![Runtime](assets/runtime.png)
 
 ### Os quatro binários
 
-| Binário | Propósito | Codec de Destino |
-|--------|---------|-------------|
+| Binário        | Propósito            | Codec de Destino                  |
+| -------------- | -------------------- | --------------------------------- |
 | **`img-hevc`** | Otimização de imagem | → JXL (estático) / HEVC (animado) |
-| **`img-av1`** | Otimização de imagem | → JXL (estático) / AV1 (animado) |
-| **`vid-hevc`** | Otimização de vídeo | → HEVC / H.265 |
-| **`vid-av1`** | Otimização de vídeo | → AV1 / SVT-AV1 |
+| **`img-av1`**  | Otimização de imagem | → JXL (estático) / AV1 (animado)  |
+| **`vid-hevc`** | Otimização de vídeo  | → HEVC / H.265                    |
+| **`vid-av1`**  | Otimização de vídeo  | → AV1 / SVT-AV1                   |
 
 ## 📉 Exemplos de compressão reais
 
-| Formato de entrada | Tamanho original | Formato de saída | Tamanho de saída | Economia | Método |
-|:---|:---|:---|:---|:---|:---|
-| Paisagem JPEG | 4.2 MB | **JXL** | 3.3 MB | **~21%** | Reconstrução sem perdas |
-| Screenshot PNG | 2.5 MB | **JXL** | 1.1 MB | **~56%** | Modular d=0.0 |
-| Action Cam H.264 | 1.2 GB | **HEVC** | 480 MB | **~60%** | Busca CRF GPU/CPU |
+| Formato de entrada | Tamanho original | Formato de saída | Tamanho de saída | Economia | Método                  |
+| :----------------- | :--------------- | :--------------- | :--------------- | :------- | :---------------------- |
+| Paisagem JPEG      | 4.2 MB           | **JXL**          | 3.3 MB           | **~21%** | Reconstrução sem perdas |
+| Screenshot PNG     | 2.5 MB           | **JXL**          | 1.1 MB           | **~56%** | Modular d=0.0           |
+| Action Cam H.264   | 1.2 GB           | **HEVC**         | 480 MB           | **~60%** | Busca CRF GPU/CPU       |
 
 ## ⬇️ Instalação
 
 ### Binários pré-compilados
+
 Para usuários que não desejam instalar o Rust, baixe os binários pré-compilados na página de **[Releases](https://github.com/nowaytouse/modern-format-boost/releases)**.
 
 ```bash
@@ -90,5 +95,7 @@ tar -xzf modern-format-boost-aarch64-apple-darwin.tar.gz
 ```
 
 ---
+
 # ⚖️ Licença
+
 Licenciado sob a **MIT License**.

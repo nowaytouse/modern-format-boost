@@ -9,22 +9,27 @@ import argparse
 # Locates and moves 'Modern Format Boost' optimized files with absolute precision.
 
 # ANSI Color codes
-GREEN = '\033[0;32m'
-BLUE = '\033[0;34m'
-YELLOW = '\033[1;33m'
-RED = '\033[0;31m'
-NC = '\033[0m'
+GREEN = "\033[0;32m"
+BLUE = "\033[0;34m"
+YELLOW = "\033[1;33m"
+RED = "\033[0;31m"
+NC = "\033[0m"
 
 MARKER = "[Optimized by Modern Format Boost]"
-EXTENSIONS = {'.jxl', '.mov', '.mp4', '.heic', '.avif', '.png'}
+EXTENSIONS = {".jxl", ".mov", ".mp4", ".heic", ".avif", ".png"}
 ATTR_NAME = "com.apple.metadata:kMDItemFinderComment"
+
 
 def get_finder_comment(path):
     """Robustly checks for the optimization marker via mdls and xattr fallback."""
     try:
         # Strategy 1: Standard mdls (Spotlight API)
-        result = subprocess.run(['mdls', '-name', 'kMDItemFinderComment', path], 
-                               capture_output=True, text=True, timeout=5)
+        result = subprocess.run(
+            ["mdls", "-name", "kMDItemFinderComment", path],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
         if result.returncode == 0 and MARKER in result.stdout:
             return True
     except Exception:
@@ -32,14 +37,16 @@ def get_finder_comment(path):
 
     try:
         # Strategy 2: Direct xattr read (Foolproof for local filesystems)
-        raw_xattr = subprocess.check_output(['xattr', '-p', ATTR_NAME, path], 
-                                            stderr=subprocess.DEVNULL, timeout=2)
-        if MARKER.encode('utf-8') in raw_xattr:
+        raw_xattr = subprocess.check_output(
+            ["xattr", "-p", ATTR_NAME, path], stderr=subprocess.DEVNULL, timeout=2
+        )
+        if MARKER.encode("utf-8") in raw_xattr:
             return True
     except Exception:
         pass
-    
+
     return False
+
 
 def run_collection(source, destination, dry_run=False):
     """Core logic to collect and move optimized files."""
@@ -48,7 +55,9 @@ def run_collection(source, destination, dry_run=False):
 
     # 1. Path Conflict Check
     if dest_root == src_root or dest_root.startswith(src_root + os.sep):
-        print(f"{RED}Error: Destination directory cannot be inside the source directory.{NC}")
+        print(
+            f"{RED}Error: Destination directory cannot be inside the source directory.{NC}"
+        )
         return False
 
     if not os.path.isdir(src_root):
@@ -58,7 +67,9 @@ def run_collection(source, destination, dry_run=False):
     # Inform user about destination root creation
     if not os.path.exists(dest_root):
         if not dry_run:
-            print(f"{BLUE}>>> Destination root does not exist. Creating: {dest_root}{NC}")
+            print(
+                f"{BLUE}>>> Destination root does not exist. Creating: {dest_root}{NC}"
+            )
             os.makedirs(dest_root, exist_ok=True)
         else:
             print(f"{YELLOW}[DRY-RUN] Would create destination root: {dest_root}{NC}")
@@ -77,15 +88,15 @@ def run_collection(source, destination, dry_run=False):
     print(f"{BLUE}>>> Scanning for optimized media in {src_root}...{NC}")
     to_move = []
     symlink_count = 0
-    
+
     for root, _, files in os.walk(src_root):
         for f in files:
             full_path = os.path.join(root, f)
-            
+
             if os.path.islink(full_path):
                 symlink_count += 1
                 continue
-                
+
             ext = os.path.splitext(f)[1].lower()
             if ext in EXTENSIONS:
                 if get_finder_comment(full_path):
@@ -94,15 +105,19 @@ def run_collection(source, destination, dry_run=False):
     # Refined exit logic for better UX
     if not to_move:
         if symlink_count > 0:
-            print(f"{YELLOW}No optimized files found ({symlink_count} symlinks ignored).{NC}")
+            print(
+                f"{YELLOW}No optimized files found ({symlink_count} symlinks ignored).{NC}"
+            )
         else:
             print(f"{YELLOW}No optimized files found.{NC}")
         return True
 
     print(f"{BLUE}>>> Identified {len(to_move)} candidate files.{NC}")
     if symlink_count > 0:
-        print(f"{YELLOW}>>> Note: {symlink_count} symlinks were ignored during the scan.{NC}")
-        
+        print(
+            f"{YELLOW}>>> Note: {symlink_count} symlinks were ignored during the scan.{NC}"
+        )
+
     if dry_run:
         print(f"{YELLOW}--- DRY RUN MODE: No files will be moved ---{NC}")
 
@@ -110,7 +125,7 @@ def run_collection(source, destination, dry_run=False):
     moved_count = 0
     skipped_count = 0
     failed_moves = []
-    
+
     for src_file in to_move:
         rel_path = os.path.relpath(src_file, src_root)
         dest_file = os.path.join(dest_root, rel_path)
@@ -126,7 +141,7 @@ def run_collection(source, destination, dry_run=False):
                 print(f"{YELLOW}   Skipping (Exists at Target): {rel_path}{NC}")
                 skipped_count += 1
                 continue
-                
+
             shutil.move(src_file, dest_file)
             print(f"{GREEN}   Moved: {rel_path}{NC}")
             moved_count += 1
@@ -142,19 +157,21 @@ def run_collection(source, destination, dry_run=False):
         for src_path in sorted_dirs:
             times = all_dir_metadata[src_path]
             rel_dir = os.path.relpath(src_path, src_root)
-            
+
             # Sync Target (Including dest_root because rel_dir == "." is no longer skipped)
             target_dir = os.path.normpath(os.path.join(dest_root, rel_dir))
             if os.path.isdir(target_dir):
                 try:
                     os.utime(target_dir, times)
-                except Exception: pass
-            
+                except Exception:
+                    pass
+
             # Sync Source (Fix mtime changes triggered by 'mv' operations)
             if os.path.isdir(src_path):
                 try:
                     os.utime(src_path, times)
-                except Exception: pass
+                except Exception:
+                    pass
 
     # 6. Comprehensive Final Report
     status_color = GREEN if not failed_moves else RED
@@ -163,28 +180,34 @@ def run_collection(source, destination, dry_run=False):
     print(f"Successfully Relocated: {moved_count}")
     print(f"Skipped (Target Exists): {skipped_count}")
     print(f"Skipped (Symlinks): {symlink_count}")
-    
+
     if failed_moves:
         print(f"{RED}Failed Relocations: {len(failed_moves)}{NC}")
         for path, err in failed_moves:
             print(f"  - {path}: {err}")
-    
+
     if dry_run:
         print(f"{YELLOW}Dry run complete. No changes were made.{NC}")
         return True
-    
+
     print(f"{BLUE}Operation finished with zero structure or metadata loss.{NC}")
     return not failed_moves
 
+
 def main():
-    parser = argparse.ArgumentParser(description="Collect optimized media files while preserving structure and metadata.")
+    parser = argparse.ArgumentParser(
+        description="Collect optimized media files while preserving structure and metadata."
+    )
     parser.add_argument("source", help="Source directory to scan")
     parser.add_argument("destination", help="Target directory to move files into")
-    parser.add_argument("--dry-run", action="store_true", help="Preview moves without executing them")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Preview moves without executing them"
+    )
     args = parser.parse_args()
 
     if not run_collection(args.source, args.destination, args.dry_run):
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

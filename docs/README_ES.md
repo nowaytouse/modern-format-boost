@@ -13,6 +13,7 @@
 </p>
 
 ---
+
 # 📖 Español (Spanish)
 
 ## ¿Qué es Modern Format Boost?
@@ -58,7 +59,9 @@ Piénselo como un "compresor inteligente" que **nunca degrada sus archivos**:
 <summary><b>🛠️ Técnico profundo: Cómo funciona — El flujo de trabajo</b></summary>
 
 ### Lógica del flujo de imágenes
+
 Cada archivo pasa por un flujo de decisión de múltiples etapas:
+
 - **Etapa 1 — Detección inteligente**: Analiza tablas DQT de JPEG (detección de gainmap UltraHDR), fragmentos VP8L de WebP y cajas `av1C` de AVIF a nivel binario. Ahora cuenta con una **arquitectura de deuda cero** con cumplimiento 100% de Clippy y análisis robusto de encabezados `OpenEXR`/`JPEG 2000`.
 - **Etapa 2 — Ruta y codificación**: JXL VarDCT para JPEG (exacto a nivel de bits); modo modular para fuentes sin pérdida (PNG, WebP/AVIF/HEIC/EXR/JP2 sin pérdida).
 - **Etapa 3 — Desvío**: Los formatos como TIFF/WebP/BMP/HEIC se preprocesan en PNG temporales de 16 bits o **OpenEXR de 32 bits** para asegurar la compatibilidad con `cjxl` sin pérdida de calidad.
@@ -66,81 +69,86 @@ Cada archivo pasa por un flujo de decisión de múltiples etapas:
 - **Etapa 5 — Meme Score v3**: Evalúa GIFs animados (Nitidez 40%, Resolución 18%, Duración 20%) para decidir entre la conversión a video o mantenerlo como GIF.
 
 ### Flujo de video: Búsqueda de saturación en tres fases
+
 1. **Fase 1: Búsqueda gruesa en GPU**: Búsqueda binaria en codificadores de hardware (VideoToolbox/NVENC) para encontrar el "punto de inflexión de calidad".
 2. **Fase 2: Ajuste fino en CPU**: Mapea el CRF de la GPU a la escala de `x265`. Usa **Sprint & Backtrack** (paso doble al tener éxito, reinicio a 0.1 al excederse).
 3. **Fase 3: Puerta de calidad 3D definitiva**: Requiere superar simultáneamente VMAF-Y ≥ 92.0, CAMBI ≤ 6.0 (banding) y PSNR-UV ≥ 34.0 dB.
    - **Puntuación de fusión**: Combina MS-SSIM + SSIM_All (peso 0.6/0.4) para un análisis estructural robusto.
    - **Protección de croma**: Detecta automáticamente resoluciones pequeñas que harían fallar el MS-SSIM de libvmaf y recurre a la puntuación solo en Y para asegurar la fiabilidad del procesamiento.
-   - *Nota: En modo `--ultimate`, la búsqueda solo termina después de que **50 muestras consecutivas** muestren una ganancia de calidad nula, asegurando la saturación absoluta.*
+   - _Nota: En modo `--ultimate`, la búsqueda solo termina después de que **50 muestras consecutivas** muestren una ganancia de calidad nula, asegurando la saturación absoluta._
 
 ### Preservación de metadatos y HDR
+
 - **HDR**: Preserva primarios bt2020, PQ/HLG TRC y metadatos de Mastering Display.
 - **Dolby Vision**: Extrae RPU a través de `dovi_tool` e inyecta en x265 (conversión de Perfil 7 → 8.1).
 - **macOS xattrs**: Preserva etiquetas de Finder, fecha de adición y marcas de tiempo de creación mediante `copyfile` y `setattrlist`.
 </details>
 
 ### 🖥️ Tiempo de ejecución
+
 ![Tiempo de ejecución](assets/runtime.png)
+
 <p align="center">Tiempo de ejecución</p>
 
 ### Los cuatro binarios
 
-| Binario | Propósito | Códec de destino |
-|--------|---------|-------------|
+| Binario        | Propósito                | Códec de destino                  |
+| -------------- | ------------------------ | --------------------------------- |
 | **`img-hevc`** | Optimización de imágenes | → JXL (estático) / HEVC (animado) |
-| **`img-av1`** | Optimización de imágenes | → JXL (estático) / AV1 (animado) |
-| **`vid-hevc`** | Optimización de video | → HEVC / H.265 |
-| **`vid-av1`** | Optimización de video | → AV1 / SVT-AV1 |
+| **`img-av1`**  | Optimización de imágenes | → JXL (estático) / AV1 (animado)  |
+| **`vid-hevc`** | Optimización de video    | → HEVC / H.265                    |
+| **`vid-av1`**  | Optimización de video    | → AV1 / SVT-AV1                   |
 
 Además de una **aplicación macOS de doble clic** (`Modern Format Boost.app`) para el procesamiento por lotes mediante arrastrar y soltar.
 
 ## 📉 Ejemplos de compresión del mundo real
 
-| Formato de entrada | Tamaño original | Formato de salida | Tamaño de salida | Ahorro | Método |
-|:---|:---|:---|:---|:---|:---|
-| Paisaje JPEG | 4.2 MB | **JXL** | 3.3 MB | **~21%** | Reconstrucción sin pérdida |
-| Captura PNG | 2.5 MB | **JXL** | 1.1 MB | **~56%** | Modular d=0.0 |
-| Action Cam H.264 | 1.2 GB | **HEVC** | 480 MB | **~60%** | Búsqueda CRF GPU/CPU |
-| WebP animado | 15 MB | **AV1 / HEVC** | 1.8 MB | **~88%** | Transcodificado a video |
+| Formato de entrada | Tamaño original | Formato de salida | Tamaño de salida | Ahorro   | Método                     |
+| :----------------- | :-------------- | :---------------- | :--------------- | :------- | :------------------------- |
+| Paisaje JPEG       | 4.2 MB          | **JXL**           | 3.3 MB           | **~21%** | Reconstrucción sin pérdida |
+| Captura PNG        | 2.5 MB          | **JXL**           | 1.1 MB           | **~56%** | Modular d=0.0              |
+| Action Cam H.264   | 1.2 GB          | **HEVC**          | 480 MB           | **~60%** | Búsqueda CRF GPU/CPU       |
+| WebP animado       | 15 MB           | **AV1 / HEVC**    | 1.8 MB           | **~88%** | Transcodificado a video    |
 
 ## 📊 Matriz de procesamiento
 
 ### Matriz de decisión de formato de imagen
 
-| Formato de entrada | ¿Sin pérdida? | ¿Animado? | Acción | Salida | Método |
-|:-------------|:---------:|:---------:|:-------|:-------|:-------|
-| JPEG | — | No | **Reconstrucción sin pérdida** | `.jxl` | `cjxl` VarDCT (bit-exact) |
-| PNG | ✅ | No | **Conversión sin pérdida** | `.jxl` | `cjxl` Modular `d=0.0` |
-| PNG (indexado) | ❌ | No | **Calidad igualada** | `.jxl` | d=0.001 |
-| WebP | ✅ | No | **Desvío → sin pérdida** | `.jxl` | dwebp → JXL d=0.0 |
-| WebP | ❌ | No | **Omitir** | (mantener) | Evitar pérdida generacional |
-| WebP | — | ✅ | **Meme Score** | `.mov`/`.gif` | HEVC/AV1 o mantener GIF |
-| AVIF | ✅ | No | **Conversión sin pérdida** | `.jxl` | d=0.0 |
-| AVIF | ❌ | No | **Omitir** | (mantener) | Evitar pérdida generacional |
-| HEIC/HEIF | ✅ | No | **Desvío → sin pérdida** | `.jxl` | `sips`/`magick` → PNG → d=0.0 |
-| HEIC/HEIF | ❌ | No | **Síntesis HDR** | `.jxl` | Si existe Gainmap -> 32-bit EXR -> JXL |
-| HEIC/HEIF | ❌ | No | **Omitir** | (mantener) | HEIC estándar: evitar pérdida generacional |
-| TIFF | ✅ | No | **Desvío → sin pérdida** | `.jxl` | `magick -depth 16` → PNG → d=0.0 |
-| TIFF | ❌ | No | **Calidad igualada** | `.jxl` | magick → JXL d=0.001 |
-| BMP | ✅ | No | **Desvío → sin pérdida** | `.jxl` | `magick` → PNG → d=0.0 |
-| GIF | — | ✅ | **Meme Score** | `.mov`/`.gif` | HEVC/AV1 o mantener GIF |
-| GIF | — | No | **Extracción de fotogramas** | `.jxl` | ffmpeg → JXL |
-| JXL | — | No | **Omitir** | (mantener) | Ya es óptimo |
+| Formato de entrada | ¿Sin pérdida? | ¿Animado? | Acción                         | Salida        | Método                                     |
+| :----------------- | :-----------: | :-------: | :----------------------------- | :------------ | :----------------------------------------- |
+| JPEG               |       —       |    No     | **Reconstrucción sin pérdida** | `.jxl`        | `cjxl` VarDCT (bit-exact)                  |
+| PNG                |      ✅       |    No     | **Conversión sin pérdida**     | `.jxl`        | `cjxl` Modular `d=0.0`                     |
+| PNG (indexado)     |      ❌       |    No     | **Calidad igualada**           | `.jxl`        | d=0.001                                    |
+| WebP               |      ✅       |    No     | **Desvío → sin pérdida**       | `.jxl`        | dwebp → JXL d=0.0                          |
+| WebP               |      ❌       |    No     | **Omitir**                     | (mantener)    | Evitar pérdida generacional                |
+| WebP               |       —       |    ✅     | **Meme Score**                 | `.mov`/`.gif` | HEVC/AV1 o mantener GIF                    |
+| AVIF               |      ✅       |    No     | **Conversión sin pérdida**     | `.jxl`        | d=0.0                                      |
+| AVIF               |      ❌       |    No     | **Omitir**                     | (mantener)    | Evitar pérdida generacional                |
+| HEIC/HEIF          |      ✅       |    No     | **Desvío → sin pérdida**       | `.jxl`        | `sips`/`magick` → PNG → d=0.0              |
+| HEIC/HEIF          |      ❌       |    No     | **Síntesis HDR**               | `.jxl`        | Si existe Gainmap -> 32-bit EXR -> JXL     |
+| HEIC/HEIF          |      ❌       |    No     | **Omitir**                     | (mantener)    | HEIC estándar: evitar pérdida generacional |
+| TIFF               |      ✅       |    No     | **Desvío → sin pérdida**       | `.jxl`        | `magick -depth 16` → PNG → d=0.0           |
+| TIFF               |      ❌       |    No     | **Calidad igualada**           | `.jxl`        | magick → JXL d=0.001                       |
+| BMP                |      ✅       |    No     | **Desvío → sin pérdida**       | `.jxl`        | `magick` → PNG → d=0.0                     |
+| GIF                |       —       |    ✅     | **Meme Score**                 | `.mov`/`.gif` | HEVC/AV1 o mantener GIF                    |
+| GIF                |       —       |    No     | **Extracción de fotogramas**   | `.jxl`        | ffmpeg → JXL                               |
+| JXL                |       —       |    No     | **Omitir**                     | (mantener)    | Ya es óptimo                               |
 
 ### Matriz de decisión de códec de video
 
-| Códec de entrada | Compresión | Acción | Salida | Codificador |
-|:-----------|:----------:|:-------|:-------|:--------|
-| H.264 (AVC) | Con pérdida | **Exploración CRF** | `.mp4` HEVC | GPU → x265/SVT-AV1 |
-| H.264 | Sin pérdida | **Codificación sin pérdida** | `.mkv` HEVC | x265/SVT-AV1 sin pérdida |
-| VP9 | Con pérdida | **Exploración CRF** | `.mp4` HEVC | GPU → x265/SVT-AV1 |
-| AV1 | Con pérdida | **Exploración CRF** | `.mp4` HEVC | GPU → x265/SVT-AV1 |
-| HEVC (H.265) | Cualquiera | **Omitir** | (mantener) | Ya es el códec de destino |
-| ProRes | Con/Sin pérdida | **Exploración CRF/sin pérdida** | `.mp4`/`.mkv` | x265 |
+| Códec de entrada |   Compresión    | Acción                          | Salida        | Codificador               |
+| :--------------- | :-------------: | :------------------------------ | :------------ | :------------------------ |
+| H.264 (AVC)      |   Con pérdida   | **Exploración CRF**             | `.mp4` HEVC   | GPU → x265/SVT-AV1        |
+| H.264            |   Sin pérdida   | **Codificación sin pérdida**    | `.mkv` HEVC   | x265/SVT-AV1 sin pérdida  |
+| VP9              |   Con pérdida   | **Exploración CRF**             | `.mp4` HEVC   | GPU → x265/SVT-AV1        |
+| AV1              |   Con pérdida   | **Exploración CRF**             | `.mp4` HEVC   | GPU → x265/SVT-AV1        |
+| HEVC (H.265)     |   Cualquiera    | **Omitir**                      | (mantener)    | Ya es el códec de destino |
+| ProRes           | Con/Sin pérdida | **Exploración CRF/sin pérdida** | `.mp4`/`.mkv` | x265                      |
 
 ## ⬇️ Instalación
 
 ### Binarios precompilados
+
 Para los usuarios que no deseen instalar las herramientas de Rust, pueden descargar los binarios precompilados desde la página de **[Releases](https://github.com/nowaytouse/modern-format-boost/releases)**.
 
 ```bash
@@ -151,21 +159,22 @@ tar -xzf modern-format-boost-aarch64-apple-darwin.tar.gz
 
 ### Requisitos previos
 
-| Herramienta | ¿Requerida? | Propósito | Comando de instalación |
-|------|:--------:|---------|---------|
-| **Rust** (1.75+) | ✅ | Compilación e instalación | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh` |
-| **FFmpeg** (5.0+) | ✅ | Procesamiento de video | `brew install ffmpeg` |
-| **libjxl** | ✅ | Núcleo de codificación JXL | `brew install jpeg-xl` |
-| **ExifTool** | ✅ | Preservación de metadatos | `brew install exiftool` |
-| **ImageMagick** | ✅ | Conversión de formatos | `brew install imagemagick` |
-| **libwebp** | ✅ | Decodificación WebP | `brew install webp` |
-| **dovi_tool** | ✅ | Extracción de Dolby Vision | `cargo install dovi_tool` |
-| **libheif** | ✅ | Decodificación HEIC/HEIF | `brew install libheif` |
-| **hdr10plus_tool**| ✅ | Extracción de HDR10+ | `cargo install hdr10plus_tool` |
+| Herramienta        | ¿Requerida? | Propósito                  | Comando de instalación                                     |
+| ------------------ | :---------: | -------------------------- | ---------------------------------------------------------- | --- |
+| **Rust** (1.75+)   |     ✅      | Compilación e instalación  | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh` |
+| **FFmpeg** (5.0+)  |     ✅      | Procesamiento de video     | `brew install ffmpeg`                                      |
+| **libjxl**         |     ✅      | Núcleo de codificación JXL | `brew install jpeg-xl`                                     |
+| **ExifTool**       |     ✅      | Preservación de metadatos  | `brew install exiftool`                                    |
+| **ImageMagick**    |     ✅      | Conversión de formatos     | `brew install imagemagick`                                 |
+| **libwebp**        |     ✅      | Decodificación WebP        | `brew install webp`                                        |
+| **dovi_tool**      |     ✅      | Extracción de Dolby Vision | `cargo install dovi_tool`                                  |
+| **libheif**        |     ✅      | Decodificación HEIC/HEIF   | `brew install libheif`                                     |
+| **hdr10plus_tool** |     ✅      | Extracción de HDR10+       | `cargo install hdr10plus_tool`                             |
 
 ## 🚀 Uso
 
 ### Inicio rápido
+
 ```bash
 # Conversión de ruta de imágenes
 img-hevc run /ruta/a/los/medios
@@ -174,5 +183,7 @@ vid-hevc run /ruta/a/los/medios
 ```
 
 ---
+
 # ⚖️ Licencia
+
 Licenciado bajo la **Licencia MIT**.
