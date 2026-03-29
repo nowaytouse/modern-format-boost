@@ -98,6 +98,15 @@ def hide_cursor():
     sys.stdout.flush()
 
 
+def resize_terminal(rows=35, cols=120):
+    """
+    Update terminal window size to wide format for better progress visibility.
+    """
+    if sys.stdout.isatty():
+        sys.stdout.write(f"\033[8;{rows};{cols}t")
+        sys.stdout.flush()
+
+
 def show_cursor():
     sys.stdout.write("\033[?25h")
     sys.stdout.flush()
@@ -1052,6 +1061,9 @@ def main():
 
     if non_flag_args:
         TARGET_DIR = non_flag_args[0]
+
+    # Set terminal window size to wide format (wide aspect ratio)
+    resize_terminal(35, 110)
 
     check_tools()
     get_target_directory()

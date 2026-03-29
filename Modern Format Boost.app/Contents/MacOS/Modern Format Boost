@@ -54,13 +54,10 @@ launch_in_terminal() {
 
     osascript <<EOF
 tell application "Terminal"
-    activate
     do script "$escaped_cmd"
-    delay 0.3 -- Short delay to ensure window is created
-    set window 1's bounds to {100, 100, 1300, 800}
+    activate
 end tell
 EOF
-}
 }
 
 # Check if processor script exists
