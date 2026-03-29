@@ -816,13 +816,7 @@ pub fn should_keep_as_gif_with_path(meta: &GifMeta, path: Option<&std::path::Pat
 
     let s = score_gif(meta);
 
-    let keep = if s.total >= CONF_KEEP {
-        true
-    } else if s.total <= CONF_CONVERT {
-        false
-    } else {
-        false
-    };
+    let keep = s.total >= CONF_KEEP;
 
     crate::progress_mode::emit_stderr(&format!(
         "🎞️  GIF [{}] → {} (score={:.3}) │ comp:{:.2} res:{:.2} dur:{:.2} alpha:{:.2} var:{:.2} timing:{:.2} name:{:.2} dir:{:.2} loop:{:.2} cadence:{:.2} palette:{:.2} tbpp:{:.3} sbpp:{:.1}",

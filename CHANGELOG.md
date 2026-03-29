@@ -8,7 +8,6 @@ All notable changes to this project will be documented in this file.
 
 #### 🎨 Color Fidelity & Content Intelligence (Meme Score v4)
 
-- **Fixed Hidden Color Accuracy Issues**: Implemented a proactive color metadata injection system. For sources without embedded color profiles (common in raw AVIF/WebP), the pipeline now explicitly assigns standard BT.709/sRGB (`nclx`) parameters to the FFmpeg filter chain, preventing players and renderers from misinterpreting the pixel data and causing yellowish/darkened shifts.
 - **Transparency-Linked Color Corrections (Alpha Pipeline Integration)**: Resolved a critical "dirty background" artifact where transparent areas of the source media would bleed underlying uninitialized color data (e.g., brownish-yellow hues) into the converted video or GIF.
   - Developed an `alphamerge` pre-conversion pipeline to accurately reconstruct RGBA from multi-stream AVIF.
   - Enforced a `premultiply=inplace=1` composite filter globally for all transparent sources to ensure clean blending against black backgrounds.

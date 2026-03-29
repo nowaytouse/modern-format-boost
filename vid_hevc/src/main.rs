@@ -278,9 +278,7 @@ fn main() -> anyhow::Result<()> {
             println!("📥 Ingesting GIF samples from: {}", input.display());
             match shared_utils::gif_value_db::batch_ingest_samples(&input) {
                 Ok(count) => {
-                    println!(
-                        "✅ Successfully ingested {count} samples into SQLite database"
-                    );
+                    println!("✅ Successfully ingested {count} samples into SQLite database");
                 }
                 Err(e) => {
                     shared_utils::log_eprintln!("❌ Failed to ingest samples: {e}");

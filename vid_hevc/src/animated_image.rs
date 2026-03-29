@@ -560,7 +560,6 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
     let color_info = shared_utils::ffprobe_json::extract_color_info(input);
     vf_args.extend(shared_utils::hdr_utils::color_info_to_ffmpeg_args(
         &color_info,
-        true,
     ));
 
     let max_threads = get_max_threads(options);
@@ -1027,7 +1026,6 @@ pub fn convert_to_hevc_mp4_matched(
     let color_info = shared_utils::ffprobe_json::extract_color_info(input);
     vf_args.extend(shared_utils::hdr_utils::color_info_to_ffmpeg_args(
         &color_info,
-        true,
     ));
 
     let flag_mode = options
