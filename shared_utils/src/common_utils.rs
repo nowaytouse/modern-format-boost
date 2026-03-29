@@ -410,6 +410,14 @@ fn find_box_data_recursive_impl(
 /// Recursively search for a box type in ISO BMFF data (e.g. "jbrd" inside "JXL " container).
 #[must_use]
 pub fn find_any_box_recursive(data: &[u8], box_type: [u8; 4]) -> bool {
+    find_any_box_recursive_impl(data, box_type, 0, 32)
+}
+
+fn find_any_box_recursive_impl(data: &[u8], box_type: [u8; 4], depth: u32, max_depth: u32) -> bool {
+    if depth >= max_depth {
+        return false;
+    }
+
     let mut pos = 0;
     while pos + 8 <= data.len() {
         let size =
@@ -443,7 +451,12 @@ pub fn find_any_box_recursive(data: &[u8], box_type: [u8; 4]) -> bool {
             (pos + 8, (pos + size).min(data.len()))
         };
         if next_pos > payload_start
-            && find_any_box_recursive(&data[payload_start..next_pos], box_type)
+            && find_any_box_recursive_impl(
+                &data[payload_start..next_pos],
+                box_type,
+                depth + 1,
+                max_depth,
+            )
         {
             return true;
         }
