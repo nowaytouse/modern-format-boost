@@ -556,8 +556,10 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
     let mut vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, has_alpha);
 
     let color_info = shared_utils::ffprobe_json::extract_color_info(input);
+    let targeted_info =
+        shared_utils::hdr_utils::infer_bt709_if_modern(color_info, width, height, &input_ext);
     vf_args.extend(shared_utils::hdr_utils::color_info_to_ffmpeg_args(
-        &color_info,
+        &targeted_info,
     ));
 
     let max_threads = get_max_threads(options);
@@ -1021,8 +1023,10 @@ pub fn convert_to_av1_mp4_matched(
     let mut vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, has_alpha);
 
     let color_info = shared_utils::ffprobe_json::extract_color_info(input);
+    let targeted_info =
+        shared_utils::hdr_utils::infer_bt709_if_modern(color_info, width, height, &input_ext);
     vf_args.extend(shared_utils::hdr_utils::color_info_to_ffmpeg_args(
-        &color_info,
+        &targeted_info,
     ));
 
     let flag_mode = options

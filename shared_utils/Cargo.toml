@@ -42,9 +42,6 @@ quick-xml = { workspace = true }
 exr = { workspace = true }
 proptest = { workspace = true }
 
-[dev-dependencies]
-proptest = { workspace = true }
-
 [features]
 default = ["v1_21"]
 v1_21 = ["libheif-rs/v1_21"]

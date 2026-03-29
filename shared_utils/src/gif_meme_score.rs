@@ -172,9 +172,7 @@ const DURATION_ULTRA_SHORT: f64 = 0.7;
 
 // ── Confidence thresholds ─────────────────────────────────────────────────────
 /// Score above this → high-confidence meme → keep
-const CONF_KEEP: f64 = 0.63;
-/// Score below this → high-confidence video → convert
-const CONF_CONVERT: f64 = 0.47;
+const CONF_KEEP: f64 = 0.52;
 
 // ── Known meme-platform app-extension prefixes ────────────────────────────────
 /// If any app-extension vendor string *starts with* one of these, the GIF

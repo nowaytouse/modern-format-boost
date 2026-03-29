@@ -8,6 +8,7 @@ All notable changes to this project will be documented in this file.
 
 #### 🎨 Color Fidelity & Content Intelligence (Meme Score v4)
 
+- **Targeted Color Fidelity & "Honesty-First" Management**: Refined the color metadata handling to distinguish between modern/HD and legacy/SD content. Instead of broad normalization, the pipeline now selectively infers BT.709/sRGB (`nclx`) parameters only for modern formats (AVIF, WebP, JXL, HEIC) or high-definition (≥720p) sources where it is the technically correct standard.
 - **Transparency-Linked Color Corrections (Alpha Pipeline Integration)**: Resolved a critical "dirty background" artifact where transparent areas of the source media would bleed underlying uninitialized color data (e.g., brownish-yellow hues) into the converted video or GIF.
   - Developed an `alphamerge` pre-conversion pipeline to accurately reconstruct RGBA from multi-stream AVIF.
   - Enforced a `premultiply=inplace=1` composite filter globally for all transparent sources to ensure clean blending against black backgrounds.
