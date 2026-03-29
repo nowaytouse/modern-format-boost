@@ -15,11 +15,10 @@ All notable changes to this project will be documented in this file.
   - **Recommendation**: Use `d=0.01` for maximum VarDCT quality (simplest value in equivalence range); use `d=0.1` for general purpose (54% smaller, PSNR 43 dB).
   - **Documentation**: `docs/CJXL_DISTANCE_PRECISION_STUDY_v4.md` contains full methodology, test results, and analysis.
 
-#### 🛡️ Animated Image Integrity & Frame Preservation
-- **Fixed CRF=0 Frame Drop Issue**: Resolved integrity check failures for GIF/WebP animated inputs where frame count and duration dropped significantly during encoding.
-  - **Root Cause**: FFmpeg's default CFR (Constant Frame Rate) behavior was forcing VFR (Variable Frame Rate) animated images into a fixed frame rate, causing frame drops.
-  - **Solution**: Added `-vsync vfr` flag to FFmpeg encoding commands for animated inputs, preserving the original timeline and all frames.
-  - **Affected Files**: `gpu_coarse_search.rs:1305`
+#### 🛡️ Media Integrity & Frame Preservation
+- **Hardened Global Video Pipeline for VFR (Variable Frame Rate)**: Enforced strict zero frame-dropping and timestamp preservation for **all video conversions** (not just animated images).
+  - **Root Cause**: The fallback pipeline previously routed frames through `Y4M (yuv4mpegpipe)` or allowed FFmpeg's default synchronization which forcefully conformed variable frame-rate sequences to CFR (Constant Frame Rate), leading to arbitrarily merged or dropped frames.
+  - **Solution**: Completely deprecated and removed the legacy `encode_with_x265_cli` pipeline from the `video_explorer` core. Mandated `-fps_mode passthrough` globally across all FFmpeg CPU and GPU invocations, guaranteeing that every single frame and its original precise timestamp is bit-preserved into the output container without any flattening.
 
 - **Fixed GIF Frame Loss in HEVC Conversion**: Resolved an issue where short-duration frames (e.g., 100ms) in GIFs were merged and lost during CPU HEVC conversion, leading to incorrect output duration and frame counts.
   - **Root Cause**: The fallback to `encode_with_x265_cli` routed frames through a Y4M pipe, forcing a constant frame rate, and `libx265` merged short B-frames.

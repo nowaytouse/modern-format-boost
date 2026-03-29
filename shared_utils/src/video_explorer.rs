@@ -2236,58 +2236,30 @@ impl VideoExplorer {
     }
 
     fn encode(&self, crf: f32) -> Result<u64> {
-        let ext = self.input_path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
-        let is_animated = matches!(ext.as_str(), "gif" | "webp" | "avif" | "heic" | "heif" | "apng");
-
-        if !self.use_gpu && self.encoder == VideoEncoder::Hevc && !is_animated {
-            return self.encode_with_x265_cli(crf);
-        }
-
         let result = self.encode_with_ffmpeg(crf);
 
-        if result.is_err() && self.use_gpu && self.encoder == VideoEncoder::Hevc && !is_animated {
-            crate::log_eprintln!("      ⚠️  GPU encoding failed, falling back to CPU (x265 CLI)");
-            return self.encode_with_x265_cli(crf);
+        if result.is_err() && self.use_gpu {
+            crate::log_eprintln!("      ⚠️  GPU encoding failed, falling back to CPU (FFmpeg Native)");
+            let cpu_fallback = Self {
+                config: self.config.clone(),
+                encoder: self.encoder,
+                input_path: self.input_path.clone(),
+                output_path: self.output_path.clone(),
+                input_size: self.input_size,
+                vf_args: self.vf_args.clone(),
+                use_gpu: false,
+                max_threads: self.max_threads,
+                preset: self.preset,
+                input_video_stream_size: self.input_video_stream_size,
+                hdr_x265_params: self.hdr_x265_params.clone(),
+            };
+            return cpu_fallback.encode_with_ffmpeg(crf);
         }
 
         result
     }
 
-    fn encode_with_x265_cli(&self, crf: f32) -> Result<u64> {
-        use crate::x265_encoder::{encode_with_x265, X265Config};
 
-        crate::log_eprintln!("      🖥️  CPU Encoding with x265 CLI (CRF {:.1})", crf);
-
-        // Probe HDR metadata so we can preserve bit depth, colour primaries, TRC,
-        // mastering display and CLL through the x265 encode.
-        let color_info = crate::ffprobe_json::extract_color_info(&self.input_path);
-
-        let pix_fmt = if color_info.bit_depth.unwrap_or(8) >= 10 {
-            "yuv420p10le".to_string()
-        } else {
-            "yuv420p".to_string()
-        };
-
-        let config = X265Config {
-            crf,
-            preset: self.preset.x26x_name().to_string(),
-            threads: self.max_threads,
-            container: "mp4".to_string(),
-            preserve_audio: true,
-            pix_fmt,
-            color_primaries: color_info.color_primaries,
-            color_trc: color_info.color_transfer,
-            colorspace: color_info.color_space,
-            mastering_display: color_info.mastering_display,
-            max_cll: color_info.max_cll,
-            audio_codec: None,
-            has_subtitles: false,
-            subtitle_codec: None,
-        };
-
-        encode_with_x265(&self.input_path, &self.output_path, &config, &self.vf_args)
-            .context("x265 CLI encoding failed")
-    }
 
     fn encode_with_ffmpeg(&self, crf: f32) -> Result<u64> {
         use std::io::{BufRead, BufReader, Write};
@@ -2387,9 +2359,13 @@ impl VideoExplorer {
 
         let ext = self.input_path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
         let is_animated = matches!(ext.as_str(), "gif" | "webp" | "avif" | "heic" | "heif" | "apng");
+        
+        // Globally enforce passthrough for ALL media (videos + animations)
+        // to prevent any CFR forcing, frame dropping, or frame duplication.
+        cmd.arg("-fps_mode").arg("passthrough");
+        
         if is_animated {
-            cmd.arg("-fps_mode").arg("passthrough")
-               .arg("-video_track_timescale").arg("1000");
+            cmd.arg("-video_track_timescale").arg("1000");
         }
 
         if !self.use_gpu {
