@@ -324,6 +324,32 @@ def get_target_directory():
         sys.exit(1)
 
 
+def check_directory_exclusion(dir_path: str):
+    """
+    Perform a pre-flight lock check using the Rust binary.
+    If the directory is already locked by another MFB instance, exit immediately.
+    """
+    try:
+        # Use img-hevc lock-check to perform a synchronized mutex check
+        result = subprocess.run(
+            [str(IMGQUALITY_HEVC), "lock-check", dir_path],
+            capture_output=True,
+            text=True
+        )
+        
+        # Exit code 3 is our defined 'Lock Conflict' code
+        if result.returncode == 3:
+            print(f"\n{RED}❌ ERROR: Directory Already In Use!{RESET}")
+            print(f"   Target: {DIM}{dir_path}{RESET}")
+            print(f"   {YELLOW}Another instance of Modern Format Boost is currently processing this folder.{RESET}")
+            print(f"   {DIM}Please wait for the other task to complete or close its window.{RESET}")
+            sys.exit(3)
+            
+    except Exception as e:
+        # If binary is missing or failed (first run), we skip the pre-check
+        # and let the later process execution handle it.
+        pass
+
 def safety_check():
     try:
         # Standardize path to avoid bypasses and ensure correct matching
@@ -1030,6 +1056,10 @@ def main():
             print()
 
     safety_check()
+    
+    # Pre-flight Lock Check: Stop immediately if directory is occupied
+    check_directory_exclusion(str(TARGET_DIR))
+    
     select_mode()
     count_files()
 

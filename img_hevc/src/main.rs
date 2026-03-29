@@ -103,6 +103,12 @@ enum Commands {
 
     /// Display cache statistics
     CacheStats,
+
+    /// Internal: Check if a directory is already locked by MFB
+    LockCheck {
+        #[arg(value_name = "INPUT")]
+        input: PathBuf,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -366,6 +372,19 @@ fn main() -> anyhow::Result<()> {
             } else {
                 shared_utils::log_eprintln!("❌ Cache is not initialized");
                 std::process::exit(1);
+            }
+        }
+
+        Commands::LockCheck { input } => {
+            let input_abs = std::fs::canonicalize(&input).unwrap_or_else(|_| input.clone());
+            if input_abs.is_dir() {
+                // Try to acquire lock. If it fails, acquire_dir_lock handles the error message and exits with code 3.
+                let _lock = shared_utils::acquire_dir_lock(&input_abs).map_err(|e| {
+                    shared_utils::log_eprintln!("❌ {}", e);
+                    std::process::exit(3);
+                })?;
+                // Success: lock exists but is available, or was just acquired
+                println!("✅ Directory is available for processing.");
             }
         }
     }
