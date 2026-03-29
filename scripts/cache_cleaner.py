@@ -7,6 +7,8 @@ import sys
 import subprocess
 import shutil
 import time
+import fcntl
+import os
 from pathlib import Path
 
 # ANSI Colors
@@ -70,6 +72,12 @@ def show_stats(cache_dir, db_file, log_dir, mfb_progress_dir):
     if mfb_progress_dir.is_dir():
         prog_size = get_dir_size(mfb_progress_dir)
         print(f"   🔄 Progress:  {DIM}{prog_size}{RESET}")
+    
+    lock_dir = Path.home() / ".modern_format_boost" / "locks"
+    if lock_dir.is_dir():
+        lock_count = len(list(lock_dir.glob("*.lock")))
+        if lock_count > 0:
+            print(f"   🔒 Session Locks: {BOLD}{YELLOW}{lock_count} active/stale{RESET}")
     print("")
 
 
@@ -78,6 +86,7 @@ def main():
     project_root = script_dir.parent
 
     cache_dir = Path.home() / ".modern_format_boost" / "cache"
+    lock_dir = Path.home() / ".modern_format_boost" / "locks"
     db_file = cache_dir / "image_analysis_v2_main.db"
     log_dir = project_root / "logs"
     mfb_progress_dir = Path.home() / ".mfb_progress"
@@ -90,6 +99,7 @@ def main():
     print("   - Image Analysis Database (Verification cache)")
     print("   - All Session Logs & Tool Debug Records")
     print("   - All Task Progress Trackers (Resume Capability)")
+    print("   - All STALE directory locks (Active locks will be skipped)")
     print("")
 
     confirm = input(f"   {BOLD}Type 'yes' to confirm cleanup (yes/N) [Default: N]: {RESET}").strip()
@@ -128,6 +138,29 @@ def main():
         print(f"{DIM}   Removing MFB progress directory...{RESET}")
         shutil.rmtree(mfb_progress_dir, ignore_errors=True)
         print(f"   {GREEN}✅ MFB progress purged{RESET}")
+    # Purge stale session locks
+    if lock_dir.is_dir():
+        print(f"{DIM}   Scanning for stale session locks...{RESET}")
+        deleted_locks = 0
+        active_locks = 0
+        for lock_file in lock_dir.glob("*.lock"):
+            try:
+                # Open or create the lock file
+                f = open(lock_file, "r+")
+                # Attempt to get an exclusive lock. If it fails, the file is in use.
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                # If we got here, we have the lock. It's safe to delete.
+                f.close()
+                lock_file.unlink()
+                deleted_locks += 1
+            except (IOError, OSError):
+                # Lock is held by another process
+                active_locks += 1
+        
+        if deleted_locks > 0:
+            print(f"   {GREEN}✅ {deleted_locks} stale locks purged{RESET}")
+        if active_locks > 0:
+            print(f"   {YELLOW}ℹ️  {active_locks} active sessions skipped (protected){RESET}")
 
     print(f"\n{GREEN}✅ Cleanup Complete{RESET}\n")
     print(f"{DIM}Press Enter to return to menu...{RESET}")
