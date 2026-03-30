@@ -37,6 +37,13 @@ All notable changes to this project will be documented in this file.
 - **Mid-Jump Pivot Optimization**: Accelerated search for compressible high-entropy media by jumping directly to a mid-range CRF (12.0) after a successful ceiling probe, skipping redundant low-CRF walk cycles.
 - **Warm Start Neighborhood Exploration**: Implemented a **-2.0 CRF safety margin** for cached `last_best_crf` hits. Instead of blindly adopting a prior successful CRF, the system now explores the local neighborhood to find the optimal boundary for the current session.
 - **Precision "Back-Walk" Logic**: Verified and hardened the transition from Phase 2 (coarse upward) to Phase 3/4 (downward refinement). Once a success point (e.g., CRF 1.0) is found, the system now performs a guaranteed 0.1 and 0.01 "walk back" to the lossless boundary.
+  
+#### 🐞 Bug Fixes & Stability Hardening
+
+- **FFmpeg Filter Syntax Fix**: Removed invalid `:flags=bicubic` from the `pad` filter in SSIM calculation chains (`shared_utils/src/video_explorer/stream_analysis.rs`).
+- **Precision Interpolation Fix**: Refactored `is_lossless_exploration_safe` to use `f64` for dynamic duration threshold calculations, preventing `f32` precision truncation during KNN-weighted interpolation (`shared_utils/src/gif_value_db.rs`).
+- **Dead-Code Removal**: Simplified upward search initialization in `gpu_coarse_search.rs` by removing redundant GIF-specific conditionals that assigned identical step values.
+- **AV1 Duration Safety Guard**: Integrated the `is_lossless_exploration_safe` check into the `vid-av1` animated image pipeline, synchronizing safety logic with the HEVC path to prevent excessive probes on large GIFs (`vid_av1/src/animated_image.rs`).
 
 ## [0.11.1] - 2026-03-30
 

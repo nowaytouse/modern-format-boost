@@ -149,7 +149,7 @@ pub fn calculate_ssim_enhanced(input: &Path, output: &Path) -> Option<f64> {
         // Optimized: match encoder's rgb24 -> yuv420p path exactly
         (
             "gif_palette",
-            "[0:v]format=rgb24,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0:flags=bicubic,format=yuv420p[ref];[1:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0:flags=bicubic,format=yuv420p[cmp];[ref][cmp]ssim",
+            "[0:v]format=rgb24,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[ref];[1:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[cmp];[ref][cmp]ssim",
         ),
         // Simplest fallback: just pad to even
         (
@@ -161,7 +161,7 @@ pub fn calculate_ssim_enhanced(input: &Path, output: &Path) -> Option<f64> {
     let generic_filters: &[(&str, &str)] = &[
         (
             "standard",
-            "[0:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0:flags=bicubic[ref];[ref][1:v]ssim",
+            "[0:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0[ref];[ref][1:v]ssim",
         ),
         (
             "format_convert",
@@ -258,7 +258,7 @@ pub fn calculate_ssim_all(input: &Path, output: &Path) -> Option<(f64, f64, f64,
     // GIF-specific chains: render palette → rgb24 → yuv420p before comparing.
     // Use padding (upward to even) to match encoder's padding logic, and use settb/setpts to sync pts.
     const GIF_SYNC: &str = "[0:v]format=rgb24,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,settb=1/1000,setpts=PTS-STARTPTS,format=yuv420p[ref];[1:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,settb=1/1000,setpts=PTS-STARTPTS,format=yuv420p[cmp];[ref][cmp]ssim";
-    const GIF_RGB24: &str = "[0:v]format=rgb24,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0:flags=bicubic,format=yuv420p[ref];[1:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0:flags=bicubic,format=yuv420p[cmp];[ref][cmp]ssim";
+    const GIF_RGB24: &str = "[0:v]format=rgb24,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[ref];[1:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[cmp];[ref][cmp]ssim";
     const GIF_NORM: &str = "[0:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[ref];[1:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[cmp];[ref][cmp]ssim";
 
     // Generic chains (pad to even)

@@ -188,8 +188,10 @@ pub fn is_lossless_exploration_safe(meta: &GifMeta) -> bool {
     } else {
         // Linear interpolation for middle ground [0.3, 0.7] -> [120, 30]
         let t = (keep_prob - 0.3) / 0.4;
-        let delta = MEME_LOSSLESS_DURATION_LIMIT - HIGH_VALUE_LOSSLESS_DURATION_LIMIT;
-        MEME_LOSSLESS_DURATION_LIMIT - (t as f32 * delta)
+        let limit_meme = f64::from(MEME_LOSSLESS_DURATION_LIMIT);
+        let limit_high = f64::from(HIGH_VALUE_LOSSLESS_DURATION_LIMIT);
+        let interpolated = limit_meme - (t * (limit_meme - limit_high));
+        interpolated as f32
     };
 
     let is_safe = meta.duration_secs < f64::from(threshold);

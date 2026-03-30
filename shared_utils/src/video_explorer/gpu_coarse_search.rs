@@ -2330,13 +2330,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         crate::log_eprintln!("Phase 2: [CPU] Search UPWARD for compression boundary");
         crate::log_eprintln!("   (Higher CRF = Smaller file, find first compressible)");
 
-        let mut current_step = if is_gif_magic && gpu_boundary_crf < 0.1 {
-            // For GIFs starting at 0.00, use a very small upward step (0.25 is default, but we'll stick to it)
-            // But ensure test_crf is properly set.
-            step_size_upward
-        } else {
-            step_size_upward
-        };
+        let mut current_step = step_size_upward;
         let mut stagnation_count = 0u32;
         let mut backtrack_count = 0u32;
         let mut last_size_pct = gpu_pct;

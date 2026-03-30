@@ -11,6 +11,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+use shared_utils::gif_value_db::is_lossless_exploration_safe;
 use shared_utils::conversion::{
     determine_output_path_with_base, is_already_processed, mark_as_processed,
 };
@@ -1043,7 +1044,41 @@ pub fn convert_to_av1_mp4_matched(
     let is_gif = shared_utils::is_gif_magic(&final_input);
     let mut actual_initial_crf = initial_crf;
 
-    if is_gif && flag_mode.is_ultimate() {
+    let is_safe_for_lossless = if is_gif && flag_mode.is_ultimate() {
+        if let Ok(p) = shared_utils::ffprobe::probe_video(&final_input) {
+            let meta = shared_utils::gif_meme_score::GifMeta {
+                duration_secs: p.duration,
+                width: p.width,
+                height: p.height,
+                fps: p.frame_rate,
+                frame_count: p.frame_count,
+                file_size_bytes: input_size,
+                file_name: input
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.to_string()),
+                palette_size: None,
+                app_extensions: None,
+                has_transparency: false,
+                frame_payload_variation: None,
+                frame_delay_variation: None,
+                source_extension: input
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.to_string()),
+                parent_directories: None,
+                has_embedded_icc: false,
+                has_complex_color_profile: false,
+            };
+            is_lossless_exploration_safe(&meta)
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    if is_safe_for_lossless {
         actual_initial_crf = 0.0;
     } else if let Some(hint) = shared_utils::crf_constants::get_global_last_hit_crf_av1() {
         if options.verbose {
