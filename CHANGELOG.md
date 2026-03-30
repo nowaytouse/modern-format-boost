@@ -55,6 +55,19 @@ All notable changes to this project will be documented in this file.
 - **Quality & Stability**: Achieved a 100% clean baseline (0 warnings, 0 errors) across the workspace using the `check_all.py` quality suite.
 - **Fixed Unit Tests**: Resolved broken regression tests in `shared_utils` following the constant cleanup and threshold simplification.
 
+#### 🛠️ Tooling & DevOps
+
+- **One-Click Dependency Installer**: Added `scripts/install_deps.sh` to automate the entire environment setup for both **macOS** (Homebrew) and **Linux** (apt).
+  - Handles system packages (FFmpeg, ImageMagick, ExifTool, libheif, etc.).
+  - Configures Rust toolchain, Cargo utilities (`nextest`, `taplo`, `dovi_tool`), Python utilities (`ruff`, `rich`), and Node tools (`prettier`, `markdownlint-cli2`).
+- **Standardized Workspace Organization**:
+  - Relocated messy root-level configuration files (`.markdownlint-cli2.jsonc`) to `scripts/config/`.
+  - Moved temporary debug scripts (`tmp_db_path.rs`) to the dedicated `debug/` directory.
+  - Updated `check_all.py` to use absolute configuration paths, ensuring audit consistency across different execution contexts.
+- **UI & UX Refinement**:
+  - Suppressed cluttered JSON-based content classification labels (`PHOTO`, `SCREENSHOT`, etc.) from the primary console output in `img_hevc` and `img_av1`.
+  - Maintained zero-warning compliance across the workspace following label suppression.
+
 #### 📚 Documentation & Research
 
 - **JPEG XL Distance Precision Study**: Published comprehensive research on cjxl `--distance` parameter precision limits and equivalence boundaries.
