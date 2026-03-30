@@ -2313,6 +2313,8 @@ fn gpu_coarse_search_with_log_impl(
                 gpu_max_wall_hits
             );
 
+            let mut stagnation_count = 0u32;
+            let mut last_size = best_size.unwrap_or(0);
             let mut current_step = initial_step;
             let mut wall_hits: u32 = 0;
             let mut test_crf = boundary_low + current_step;
@@ -2335,6 +2337,19 @@ fn gpu_coarse_search_with_log_impl(
                             }
                         }
 
+                        let size_delta_pct = if last_size > 0 {
+                            (size as f64 - last_size as f64).abs() / last_size as f64 * 100.0
+                        } else {
+                            100.0
+                        };
+                        last_size = size;
+
+                        if size_delta_pct < 0.5 {
+                            stagnation_count += 1;
+                        } else {
+                            stagnation_count = 0;
+                        }
+
                         if size < sample_input_size {
                             last_compressible_crf = test_crf;
                             last_compressible_size = size;
@@ -2347,6 +2362,15 @@ fn gpu_coarse_search_with_log_impl(
                                 (size as f64 / sample_input_size as f64 - 1.0) * 100.0,
                                 current_step
                             );
+
+                            if stagnation_count >= 3 {
+                                log_msg!(
+                                    "   ⚡ [GPU] Size plateau detected ({} stagnant iterations). Stopping Stage 1A.",
+                                    stagnation_count
+                                );
+                                break;
+                            }
+
                             test_crf += current_step;
                         } else {
                             wall_hits += 1;
@@ -2389,6 +2413,7 @@ fn gpu_coarse_search_with_log_impl(
                             current_step = new_step;
                             boundary_high = test_crf;
                             test_crf = last_compressible_crf + current_step;
+                            stagnation_count = 0; // Reset stagnation on wall hit
                         }
                     }
                     Err(_) => break,

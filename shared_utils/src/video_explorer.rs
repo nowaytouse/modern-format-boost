@@ -148,16 +148,16 @@ pub const ULTIMATE_MIN_WALL_HITS: u32 = 15;
 pub const ULTIMATE_MAX_WALL_HITS: u32 = 50;
 
 /// In ultimate mode, absolute saturation requires 50 consecutive samples to be statistically certain.
+use crate::constants::{
+    LONG_VIDEO_THRESHOLD_SECS, VERY_LONG_VIDEO_THRESHOLD_SECS, VMAF_SKIP_THRESHOLD_ULTIMATE_SECS,
+};
+
+/// In ultimate mode, absolute saturation requires 50 consecutive samples to be statistically certain.
 pub const ULTIMATE_REQUIRED_ZERO_GAINS: u32 = 50;
 
 pub const NORMAL_MAX_WALL_HITS: u32 = 4;
 
 pub const NORMAL_REQUIRED_ZERO_GAINS: u32 = 4;
-
-pub const LONG_VIDEO_THRESHOLD_SECS: f32 = 300.0;
-pub const HEAVY_VIDEO_THRESHOLD_SECS: f32 = 1200.0;
-
-pub const VERY_LONG_VIDEO_THRESHOLD_SECS: f32 = 600.0;
 
 /// Max iterations for 5–10 min videos. Longer videos use a *lower* cap (see below) because each
 /// encode/decode test is more expensive; this is an intentional cost vs. precision tradeoff.
@@ -168,9 +168,6 @@ pub const LONG_VIDEO_FALLBACK_ITERATIONS: u32 = 150;
 pub const VERY_LONG_VIDEO_FALLBACK_ITERATIONS: u32 = 130;
 
 pub const LONG_VIDEO_REQUIRED_ZERO_GAINS: u32 = 3;
-
-/// When to skip MS-SSIM in ultimate mode (longer than this → skip). Normal mode uses `LONG_VIDEO_THRESHOLD_SECS` (5 min).
-pub const MS_SSIM_SKIP_THRESHOLD_ULTIMATE_SECS: f64 = 1500.0; // 25 min
 
 #[must_use]
 pub fn calculate_max_iterations_for_duration(duration_secs: f32, ultimate_mode: bool) -> u32 {
@@ -2616,7 +2613,7 @@ impl VideoExplorer {
         let ms_ssim = if self.config.quality_thresholds.validate_ms_ssim {
             let duration = get_video_duration(&self.input_path);
             let ms_ssim_skip_threshold_secs = if self.config.ultimate_mode {
-                MS_SSIM_SKIP_THRESHOLD_ULTIMATE_SECS
+                VMAF_SKIP_THRESHOLD_ULTIMATE_SECS
             } else {
                 f64::from(LONG_VIDEO_THRESHOLD_SECS)
             };
@@ -3283,7 +3280,12 @@ pub fn calculate_smart_thresholds(initial_crf: f32, encoder: VideoEncoder) -> (f
     let normalized_crf = initial_crf / crf_scale;
     let quality_level = f64::from((normalized_crf * normalized_crf).clamp(0.0, 1.0));
 
-    let headroom = (quality_level as f32).mul_add(7.0, 8.0);
+    let headroom = if initial_crf < 1.0 {
+        // High headroom for lossless-first starts (e.g. GIFs) to ensure we reach 25-30+
+        28.0_f32
+    } else {
+        (quality_level as f32).mul_add(7.0, 8.0)
+    };
     let max_crf = (initial_crf + headroom).min(max_crf_cap);
 
     let min_ssim = if initial_crf < 20.0 {

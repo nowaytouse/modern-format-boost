@@ -163,6 +163,47 @@ fn lookup_similar_samples_inner(
     }))
 }
 
+/// Dynamic safety-guard for CRF 0.00 exploration.
+///
+/// Uses the SQL KNN dataset to partition media into "Meme" vs "High Value".
+/// High-value art is strictly limited to 30s of lossless-first probing to avoid bloat.
+/// Low-value memes (low entropy) are permitted up to 120s as CRF 0.00 is efficient on them.
+#[must_use]
+pub fn is_lossless_exploration_safe(meta: &GifMeta) -> bool {
+    use crate::constants::{HIGH_VALUE_LOSSLESS_DURATION_LIMIT, MEME_LOSSLESS_DURATION_LIMIT};
+
+    let sample_match = lookup_similar_samples(meta, None);
+    let keep_prob = sample_match
+        .as_ref()
+        .and_then(|m| m.keep_probability)
+        .unwrap_or(0.5);
+
+    // Dynamic threshold:
+    // keep_prob close to 0.0 (Meme) -> 120s limit
+    // keep_prob close to 1.0 (Art)  -> 30s limit
+    let threshold = if keep_prob >= 0.7 {
+        HIGH_VALUE_LOSSLESS_DURATION_LIMIT
+    } else if keep_prob <= 0.3 {
+        MEME_LOSSLESS_DURATION_LIMIT
+    } else {
+        // Linear interpolation for middle ground [0.3, 0.7] -> [120, 30]
+        let t = (keep_prob - 0.3) / 0.4;
+        let delta = MEME_LOSSLESS_DURATION_LIMIT - HIGH_VALUE_LOSSLESS_DURATION_LIMIT;
+        MEME_LOSSLESS_DURATION_LIMIT - (t as f32 * delta)
+    };
+
+    let is_safe = meta.duration_secs < f64::from(threshold);
+
+    if !is_safe {
+        crate::log_eprintln!(
+            "   ⚠️  Lossless-first (CRF 0.00) skip: duration {:.1}s exceeds dynamic limit {:.1}s (Value Prob: {:.2})",
+            meta.duration_secs, threshold, keep_prob
+        );
+    }
+
+    is_safe
+}
+
 fn sample_db_path() -> Result<PathBuf> {
     let mut path = crate::common_utils::get_user_project_cache_dir()?;
     path.push(DB_FILE_NAME);

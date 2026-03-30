@@ -246,6 +246,50 @@ def check_ai_smell(tracker: Tracker, repo_root: Path) -> bool:
     return False
 
 
+
+def check_changelog_sync(tracker: Tracker) -> bool:
+    tracker.announce_step("required", "CHANGELOG version synchronization")
+    root = get_repo_root()
+    cargo_path = root / "Cargo.toml"
+    changelog_path = root / "CHANGELOG.md"
+
+    if not changelog_path.exists():
+        tracker.failed += 1
+        cprint("  [red]❌ CHANGELOG.md missing[/red]")
+        return False
+
+    try:
+        cargo_content = cargo_path.read_text(encoding="utf-8")
+        # Match workspace-level version
+        m = re.search(
+            r'\[workspace\.package\]\s*version\s*=\s*"([^"]+)"', cargo_content
+        )
+        if not m:
+            cprint("  [yellow]Skipped: could not find workspace version in Cargo.toml[/yellow]")
+            return True
+
+        version = m.group(1)
+        changelog_content = changelog_path.read_text(encoding="utf-8")
+
+        # Looking for header style: ## [v0.11.1] or ## [0.11.1]
+        pattern = rf"##\s*\[v?{re.escape(version)}\]"
+        if not re.search(pattern, changelog_content):
+            tracker.failed += 1
+            cprint(
+                f"  [red]❌ Version '{version}' not found as a header in CHANGELOG.md[/red]"
+            )
+            return False
+
+        tracker.passed += 1
+        cprint(f"  [green]✅ Verified: {version} is documented[/green]")
+        return True
+
+    except Exception as e:
+        tracker.failed += 1
+        cprint(f"  [red]❌ Changelog check error: {e}[/red]")
+        return False
+
+
 # ---------------------------------------------------------------------------
 # macOS bundle metadata check
 # ---------------------------------------------------------------------------
@@ -521,6 +565,8 @@ def main() -> None:
         "cargo check --workspace --all-features",
         ["cargo", "check", "--workspace", "--all-targets", "--all-features"],
     )
+
+    check_changelog_sync(tracker)
 
     if py_files:
         run_step(

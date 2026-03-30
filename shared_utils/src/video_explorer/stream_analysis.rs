@@ -140,23 +140,32 @@ pub fn calculate_ssim_enhanced(input: &Path, output: &Path) -> Option<f64> {
     let is_gif = is_gif_magic(input);
 
     let gif_filters: &[(&str, &str)] = &[
-        // Best attempt: render GIF frames through the palette filter chain to yuv420p
+        // Best attempt: align timing with settb/setpts, ensure even dimensions via padding (to match encoder),
+        // and normalize to yuv420p. This is the most robust sync for irregular GIFs.
+        (
+            "gif_sync",
+            "[0:v]format=rgb24,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,settb=1/1000,setpts=PTS-STARTPTS,format=yuv420p[ref];[1:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,settb=1/1000,setpts=PTS-STARTPTS,format=yuv420p[cmp];[ref][cmp]ssim",
+        ),
+        // Optimized: match encoder's rgb24 -> yuv420p path exactly
         (
             "gif_palette",
-            "[0:v]format=rgb24,scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=bicubic,format=yuv420p[ref];[1:v]scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=bicubic,format=yuv420p[cmp];[ref][cmp]ssim",
+            "[0:v]format=rgb24,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0:flags=bicubic,format=yuv420p[ref];[1:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0:flags=bicubic,format=yuv420p[cmp];[ref][cmp]ssim",
         ),
-        // Simpler fallback: just normalise to yuv420p
+        // Simplest fallback: just pad to even
         (
-            "gif_yuv420p",
-            "[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[ref];[1:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[cmp];[ref][cmp]ssim",
+            "gif_pad_even",
+            "[0:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[ref];[1:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[cmp];[ref][cmp]ssim",
         ),
     ];
 
     let generic_filters: &[(&str, &str)] = &[
-        ("standard", "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];[ref][1:v]ssim"),
+        (
+            "standard",
+            "[0:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0:flags=bicubic[ref];[ref][1:v]ssim",
+        ),
         (
             "format_convert",
-            "[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[ref];[1:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[cmp];[ref][cmp]ssim",
+            "[0:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[ref];[1:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[cmp];[ref][cmp]ssim",
         ),
         ("simple", "ssim"),
     ];
@@ -247,22 +256,24 @@ fn run_ssim_all_filter(input: &Path, output: &Path, lavfi: &str) -> Option<(f64,
 #[must_use]
 pub fn calculate_ssim_all(input: &Path, output: &Path) -> Option<(f64, f64, f64, f64)> {
     // GIF-specific chains: render palette → rgb24 → yuv420p before comparing.
-    // Single-line strings — Rust has no line-continuation in string literals.
-    const GIF_RGB24: &str = "[0:v]format=rgb24,scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=bicubic,format=yuv420p[ref];[1:v]scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=bicubic,format=yuv420p[cmp];[ref][cmp]ssim";
-    const GIF_NORM: &str = "[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[ref];[1:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[cmp];[ref][cmp]ssim";
+    // Use padding (upward to even) to match encoder's padding logic, and use settb/setpts to sync pts.
+    const GIF_SYNC: &str = "[0:v]format=rgb24,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,settb=1/1000,setpts=PTS-STARTPTS,format=yuv420p[ref];[1:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,settb=1/1000,setpts=PTS-STARTPTS,format=yuv420p[cmp];[ref][cmp]ssim";
+    const GIF_RGB24: &str = "[0:v]format=rgb24,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0:flags=bicubic,format=yuv420p[ref];[1:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0:flags=bicubic,format=yuv420p[cmp];[ref][cmp]ssim";
+    const GIF_NORM: &str = "[0:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[ref];[1:v]pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0,format=yuv420p[cmp];[ref][cmp]ssim";
 
-    // Generic chains
+    // Generic chains (pad to even)
     const DIRECT: &str = "[0:v][1:v]ssim";
-    const FORMAT_NORM: &str = "[0:v]format=yuv420p,scale='iw-mod(iw,2)':'ih-mod(ih,2)'[ref];[1:v]format=yuv420p,scale='iw-mod(iw,2)':'ih-mod(ih,2)'[cmp];[ref][cmp]ssim";
+    const FORMAT_NORM: &str = "[0:v]format=yuv420p,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0[ref];[1:v]format=yuv420p,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0[cmp];[ref][cmp]ssim";
     // Alpha-composite on black without the deprecated premultiply=inplace=1 filter:
     // decode to rgb24 (which discards alpha by blending on black in ffmpeg's
     // swscale path) then convert to yuv420p for comparison.
-    const ALPHA_FLATTEN: &str = "[0:v]format=rgb24,format=yuv420p,scale='iw-mod(iw,2)':'ih-mod(ih,2)'[ref];[1:v]format=yuv420p,scale='iw-mod(iw,2)':'ih-mod(ih,2)'[cmp];[ref][cmp]ssim";
+    const ALPHA_FLATTEN: &str = "[0:v]format=rgb24,format=yuv420p,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0[ref];[1:v]format=yuv420p,pad='iw+mod(iw,2)':'ih+mod(ih,2)':0:0[cmp];[ref][cmp]ssim";
 
     let is_gif = is_gif_magic(input);
 
     if is_gif {
-        run_ssim_all_filter(input, output, GIF_RGB24)
+        run_ssim_all_filter(input, output, GIF_SYNC)
+            .or_else(|| run_ssim_all_filter(input, output, GIF_RGB24))
             .or_else(|| run_ssim_all_filter(input, output, GIF_NORM))
             .or_else(|| run_ssim_all_filter(input, output, FORMAT_NORM))
     } else {

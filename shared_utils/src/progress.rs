@@ -301,9 +301,9 @@ pub fn wrap_output_for_active_progress(line: &str) -> String {
         // 2. \x1b[2K: clear entire line
         // 3. line + \n: print the actual log message and go to next line
         // 4. \r + progress_line: print progress bar at the new start
-        format!("\r\x1b[2K{}\n\r{}", line, progress_line)
+        format!("\r\x1b[2K{line}\n\r{progress_line}")
     } else {
-        format!("{}\n", line)
+        format!("{line}\n")
     }
 }
 

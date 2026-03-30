@@ -11,8 +11,11 @@ use super::{
     bail, calculate_adaptive_max_walls, calculate_max_iterations_for_duration,
     calculate_ms_ssim_yuv, calculate_smart_thresholds, calculate_ssim_all, calculate_ssim_enhanced,
     calculate_zero_gains_for_duration_and_range, compression_target_size, ConfidenceBreakdown,
-    CrfCache, ExploreResult, VideoEncoder, ABSOLUTE_MIN_CRF, HEAVY_VIDEO_THRESHOLD_SECS,
-    LONG_VIDEO_THRESHOLD_SECS, NORMAL_MAX_WALL_HITS, VERY_LONG_VIDEO_THRESHOLD_SECS,
+    CrfCache, ExploreResult, VideoEncoder, ABSOLUTE_MIN_CRF, NORMAL_MAX_WALL_HITS,
+};
+use crate::constants::{
+    HEAVY_VIDEO_THRESHOLD_SECS, LONG_VIDEO_THRESHOLD_SECS, VERY_LONG_VIDEO_THRESHOLD_SECS,
+    VMAF_SKIP_THRESHOLD_SECS, VMAF_SKIP_THRESHOLD_ULTIMATE_SECS,
 };
 use crate::modern_ui::colors::{
     BRIGHT_CYAN, BRIGHT_GREEN, BRIGHT_MAGENTA, BRIGHT_RED, BRIGHT_YELLOW, CYAN, DIM, GREEN,
@@ -23,8 +26,6 @@ const VMAF_Y_MIN: f64 = 92.0;
 const PSNR_UV_MIN: f64 = 34.0;
 const MAX_CONSECUTIVE_COMPRESSIONS: u32 = 3;
 const MAX_CONSECUTIVE_FAILURES: u32 = 3;
-const VMAF_DURATION_THRESHOLD_SECS: f64 = 300.0;
-const VMAF_DURATION_THRESHOLD_ULTIMATE_SECS: f64 = 1500.0;
 const ZERO_GAIN_THRESHOLD: f64 = 0.00005;
 const DECAY_FACTOR: f32 = 0.4;
 const MIN_STEP: f32 = 0.1;
@@ -625,9 +626,9 @@ pub fn explore_with_gpu_coarse_search(
         );
 
         let ms_ssim_duration_threshold_secs = if ultimate_mode {
-            VMAF_DURATION_THRESHOLD_ULTIMATE_SECS
+            VMAF_SKIP_THRESHOLD_ULTIMATE_SECS
         } else {
-            VMAF_DURATION_THRESHOLD_SECS
+            VMAF_SKIP_THRESHOLD_SECS
         };
         let is_animated_image = is_animated_image_like_input(input, Some(probe_result));
 
@@ -1319,7 +1320,18 @@ fn cpu_fine_tune_from_gpu_boundary(
                 hdr_x265_params.clone()
             };
 
-        if input_is_animated_image_like && encoder == crate::video_explorer::VideoEncoder::Hevc {
+        // Defensive VFR check: Assume VFR if probing failed or specifically detected.
+        let vfr_or_unknown = probe_info.is_none_or(|p| p.is_variable_frame_rate);
+
+        // [Defensive Logic] Disable B-frames for:
+        // 1. GIF sources: Always disable (irregular durations, disposal method `restoreToPrevious`
+        //    conflicts with bi-directional reference assumptions).
+        // 2. Animated images: Disable if VFR (or unknown) to prevent PTS reordering vs duration drift.
+        // Constant frame rate WebP/AVIF can safely use B-frames for better compression.
+        let should_disable_bframes =
+            is_gif_magic || (input_is_animated_image_like && vfr_or_unknown);
+
+        if should_disable_bframes && encoder == crate::video_explorer::VideoEncoder::Hevc {
             let existing = adjusted_x265_params.as_deref().unwrap_or("");
             if existing.is_empty() {
                 adjusted_x265_params = Some("bframes=0".to_string());
@@ -1826,9 +1838,31 @@ fn cpu_fine_tune_from_gpu_boundary(
             );
         }
 
-        let mut current_step = initial_step;
+        let mut current_step = if is_gif_magic && gpu_boundary_crf < 0.1 {
+            // For GIFs starting at lossless (0.00), use a much smaller initial step
+            // to carefully probe the compression boundary instead of jumping to CRF 8-25.
+            1.0_f32
+        } else {
+            initial_step
+        };
         let mut wall_hits: u32 = 0;
-        let mut test_crf = gpu_boundary_crf - current_step;
+
+        // If it's a GIF starting at 0.0, ensure we test 0.0 itself as the first anchor.
+        // cpu_fine_tune_from_gpu_boundary Phase 1 actually already does this via gpu_size = encode_cached(gpu_boundary_crf, ...).
+        // But for the search loop below, we need to ensure test_crf is correctly placed.
+        let mut test_crf = if is_gpu_effectively_compressed {
+            let next = gpu_boundary_crf - current_step;
+            if next < search_floor && gpu_boundary_crf > search_floor {
+                // If the next step would pass the floor, land exactly on the floor
+                // to ensure we test the maximum quality (e.g., 0.00) before stopping.
+                search_floor
+            } else {
+                next
+            }
+        } else {
+            gpu_boundary_crf + current_step
+        };
+
         let mut last_good_crf = gpu_boundary_crf;
         let mut last_good_size = gpu_size;
         let mut last_good_ssim = gpu_ssim;
@@ -2296,7 +2330,13 @@ fn cpu_fine_tune_from_gpu_boundary(
         crate::log_eprintln!("Phase 2: [CPU] Search UPWARD for compression boundary");
         crate::log_eprintln!("   (Higher CRF = Smaller file, find first compressible)");
 
-        let mut current_step = step_size_upward;
+        let mut current_step = if is_gif_magic && gpu_boundary_crf < 0.1 {
+            // For GIFs starting at 0.00, use a very small upward step (0.25 is default, but we'll stick to it)
+            // But ensure test_crf is properly set.
+            step_size_upward
+        } else {
+            step_size_upward
+        };
         let mut stagnation_count = 0u32;
         let mut backtrack_count = 0u32;
         let mut last_size_pct = gpu_pct;
@@ -2329,62 +2369,100 @@ fn cpu_fine_tune_from_gpu_boundary(
                 0.0
             };
 
-            let size_delta = (total_size_pct - last_size_pct).abs();
+            // [Precision Boost] Bi-directional Anchor Probe (User's Reverse Exploration)
+            // If the floor (CRF 0) is way too large, check the ceiling (max_crf) immediately.
+            // This allows us to bracket the search space in exactly 2 iterations.
+            if iterations == 1 && total_size_pct > 5.0 && test_crf < 5.0 {
+                crate::log_eprintln!(
+                    "   {}🔄 Bi-directional Pivot: CRF {:.2} too large ({:.1}%), probing ceiling CRF {:.2}...{}",
+                    BRIGHT_YELLOW, test_crf, total_size_pct, max_crf, RESET
+                );
 
-            // [New] Direction Switch Logic for GIFs
-            // If we've been searching upward for a long time without finding compression,
-            // or if the size is barely changing (stagnation), switch to downward search.
-            if is_gif_magic {
-                if size_delta < 0.5 {
-                    feedback.size_stagnation_count += 1;
-                } else {
-                    feedback.size_stagnation_count = 0;
-                }
+                let ceiling_size = encode_cached(max_crf, &mut size_cache)?;
+                iterations += 1;
 
-                if feedback.size_stagnation_count >= UPWARD_SIZE_STAGNATION_THRESHOLD
-                    || feedback.upward_iteration_count >= UPWARD_DIRECTION_SWITCH_LIMIT
-                {
-                    let trigger_reason =
-                        if feedback.size_stagnation_count >= UPWARD_SIZE_STAGNATION_THRESHOLD {
-                            format!("size stagnation ({})", feedback.size_stagnation_count)
-                        } else {
-                            format!("iteration limit ({})", feedback.upward_iteration_count)
-                        };
-
+                if ceiling_size >= input_size {
                     crate::log_eprintln!(
-                        "   {}🔄 GIF Search Direction Switch: {} reached. Switching to downward search for efficiency.{}",
-                        BRIGHT_YELLOW,
-                        trigger_reason,
-                        RESET
+                        "   {}⏸️  Media is incompressible at max quality (CRF {:.2}). Bailing out.{}",
+                        BRIGHT_RED, max_crf, RESET
                     );
-
-                    found_compress_point = true;
-                    // Start Phase 3 from max_crf to find the boundary from the top
-                    best_crf = Some(max_crf);
+                    if best_crf.is_none() {
+                        best_crf = Some(max_crf);
+                        best_size = Some(ceiling_size);
+                    }
+                    early_insight_triggered = true;
                     break;
+                } else {
+                    crate::log_eprintln!(
+                        "   {}🎯 Ceiling hit! Bracketing effective search space [0.0, {:.2}]. Switching to downward fine-tune.{}",
+                        BRIGHT_GREEN, max_crf, RESET
+                    );
+                    best_crf = Some(max_crf);
+                    best_size = Some(ceiling_size);
+                    found_compress_point = true;
+                    break; // Swaps instantly to Phase 3 (Downward search)
                 }
             }
 
-            // Adaptive Search State Machine
+            let size_delta = (total_size_pct - last_size_pct).abs();
+
+            // [Unified] Direction Switch Logic for all media
+            // If we've been searching upward for a long time without finding compression,
+            // or if the size is barely changing (stagnation), switch to downward search.
+            if size_delta < 0.5 {
+                // Size stagnation should only be tracked once we are past the
+                // effective-lossless deadzone (0-12) to avoid premature flips.
+                if test_crf > 12.0 {
+                    feedback.size_stagnation_count += 1;
+                }
+            } else {
+                feedback.size_stagnation_count = 0;
+            }
+
+            // [Refined] Only flip direction if we've meaningfully explored the low-bitrate space.
+            if feedback.size_stagnation_count >= UPWARD_SIZE_STAGNATION_THRESHOLD
+                || (feedback.upward_iteration_count >= UPWARD_DIRECTION_SWITCH_LIMIT
+                    && test_crf > 20.0)
+            {
+                let trigger_reason =
+                    if feedback.size_stagnation_count >= UPWARD_SIZE_STAGNATION_THRESHOLD {
+                        format!("size stagnation ({})", feedback.size_stagnation_count)
+                    } else {
+                        format!("iteration limit ({})", feedback.upward_iteration_count)
+                    };
+
+                crate::log_eprintln!(
+                    "   {}🔄 Search Direction Switch: {} reached. Switching to downward search for efficiency.{}",
+                    BRIGHT_YELLOW,
+                    trigger_reason,
+                    RESET
+                );
+
+                found_compress_point = true;
+                // Start Phase 3 from max_crf to find the boundary from the top
+                best_crf = Some(max_crf);
+                break;
+            }
+
+            // Adaptive Search State Machine: Efficiency Boosters
             if search_cadence == UpwardSearchCadence::Adaptive {
-                if size_delta < 0.05 && total_size_pct > 100.0 {
+                if size_delta < 0.1 && total_size_pct > 100.0 {
                     stagnation_count += 1;
-                    // Plateau Bailout: Stop if format is clearly incompressible
-                    if stagnation_count >= 6 && total_size_pct > 110.0 {
+
+                    // Acceleration Burst: Jump through ineffective CRF deadzones (0-15)
+                    // Low CRFs often show zero size change; we leap forward to find the curve.
+                    if test_crf < 15.0 && size_delta < 0.02 && stagnation_count >= 2 {
+                        let jump_step = (20.0 - test_crf).max(8.0);
                         crate::log_eprintln!(
-                            "   {}⏸️  Quality/Size Plateau detected: bailing out early.{}",
-                            BRIGHT_RED,
+                            "   {}⚡ Deadzone Burst: jumping {:.1} units to escape the lossless plateau...{}",
+                            BRIGHT_YELLOW,
+                            jump_step,
                             RESET
                         );
-                        if best_crf.is_none() {
-                            best_crf = Some(best_tested_crf);
-                            best_size = Some(best_tested_size);
-                        }
-                        early_insight_triggered = true;
-                        break;
-                    }
-                    // Acceleration: Jump through ineffective CRF deadzones
-                    if stagnation_count >= 2 {
+                        current_step = jump_step;
+                        stagnation_count = 0; // Reset after jump
+                    } else if stagnation_count >= 2 {
+                        // Standard Lightning Acceleration for higher CRFs
                         let old_step = current_step;
                         current_step = (current_step * 2.0).min(5.0);
                         if current_step > old_step {
@@ -2396,6 +2474,21 @@ fn cpu_fine_tune_from_gpu_boundary(
                                 RESET
                             );
                         }
+                    }
+
+                    // Plateau Bailout: Stop ONLY if format is clearly incompressible AND high CRF
+                    if stagnation_count >= 6 && total_size_pct > 110.0 && test_crf > 30.0 {
+                        crate::log_eprintln!(
+                            "   {}⏸️  Quality/Size Plateau detected: bailing out early.{}",
+                            BRIGHT_RED,
+                            RESET
+                        );
+                        if best_crf.is_none() {
+                            best_crf = Some(best_tested_crf);
+                            best_size = Some(best_tested_size);
+                        }
+                        early_insight_triggered = true;
+                        break;
                     }
                 } else if size_delta > 2.5 && total_size_pct < 110.0 {
                     // Deceleration: Slope detected AND nearing compression boundary

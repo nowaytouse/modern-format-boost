@@ -6,7 +6,15 @@ All notable changes to this project will be documented in this file.
 
 ## [0.11.1] - 2026-03-30
 
-|
+#### 🛡️ Search Pipeline Hardening & Efficiency
+
+- **Unified Duration Tiers**: Centralized all duration thresholds into `shared_utils/src/constants.rs`. Established a consistent tiered system (Short < 30s, Medium, Long, Very Long, Heavy) used across all search and validation modules.
+- **Data-Driven CRF 0.00 Safety Guard**: Replaced the static 30s threshold for lossless-first probing with a dynamic, KNN-powered check.
+  - **Meme/Low-Value Leeway**: Permitted CRF 0.00 probing for long (up to 120s) low-entropy media, allowing perfect quality for memes while saving CPU on high-complexity art.
+  - **Entropy-Aware Risk Assessment**: Utilizes the SQL KNN dataset to estimate "Value Probability" before expensive probes.
+- **Bi-directional Anchor Probing (Pivot Search)**: Implemented a "Fail-Fast" mechanism. If the initial probe fails, the system instantly orbits to the "Ceiling" (max_crf). Two-iteration detection for incompressible long videos significantly reduces hardware cycles.
+- **SSIM/VMAF Unification**: Standardized quality scan skip thresholds (5m for normal, 25m for ultimate).
+- **GIF Validation Sync**: Improved GIF-to-video SSIM validation by injecting a precision `pad` and `settb/setpts` filter chain to resolve irregular timing drift.
 
 #### 🧠 GIF Complexity Intelligence & GPU Search Enhancement
 
@@ -14,6 +22,12 @@ All notable changes to this project will be documented in this file.
   - **Large Sparse Canvas Detection**: Added `is_large_sparse_canvas` heuristic in `gif_meme_score.rs` to identify 1080P+ GIFs with long duration (≥2s) and low frame rates (≤6fps or ≤18 frames), automatically marking them for video conversion.
   - **GPU Search Override**: Implemented `should_use_gpu_for_gif()` in `gpu_coarse_search.rs` to enable GPU coarse search for complex GIFs based on canvas size, density, and meme score metrics.
   - **Enhanced Logging**: Added detailed diagnostic output showing GIF complexity reasons, scores (total, spatial_bpp, temporal_bpp) during GPU search decisions.
+  - **SSIM Pipeline Hardening (Regression Fix)**: Resolved `EINVAL` filter errors on odd-sized GIFs (e.g., `540x301`) by replacing the legacy "truncation" strategy with a robust "upward padding" strategy (`pad='iw+mod(iw,2)'`) and fixing FFmpeg expression syntax (migrated `%` to `mod()`).
+  - **Timestamp Synchronization**: Injected a `gif_sync` filter chain (`settb=1/1000,setpts=PTS-STARTPTS`) to eliminate validation failures caused by drift in variable-frame-rate animated files.
+  - **Routing Stability**: Restored the missing `is_gif_magic` re-export in `shared_utils`, ensuring stable routing for specialized GIF-to-HEVC pathways.
+  - **Unified Reverse Exploration (Direction Switch)**: Generalized the search "reversal" logic to all media types. Now, any file type (MP4, MKV, GIF, etc.) that hits an upward search plateau will automatically switch to a downward sweep from MAX_CRF for significantly better efficiency on difficult-to-compress content.
+  - **GPU Search Plateau Detection**: Ported stagnation tracking into the Stage 1A GPU search loop. The system now terminates fruitless upward GPU probes early (3 stagnant iterations with <0.5% size delta) to save hardware cycles and trigger earlier CPU fine-tuning.
+  - **Improved Exploration Observability**: Standardized log output from `🔄 GIF Search Direction Switch` to a format-neutral `🔄 Search Direction Switch` for all media formats.
 
 - **Adaptive Upward Search State Machine**: Refined the CRF exploration algorithm with multi-state search cadence control.
   - **New `UpwardSearchCadence` Enum**: Four states (Adaptive, Jogging, Paused, Normal) for fine-grained control over search behavior.
@@ -23,7 +37,7 @@ All notable changes to this project will be documented in this file.
 
 #### 🏗️ Adaptive Search & Performance Hardening
 
-- **Adaptive Phase 2 (UPWARD) Search Hardening**: Finalized the CRF exploration pipeline in `gpu_coarse_search.rs` to prevent linear stalling on high-sloped but complex media (e.g., GIFs).
+- **Adaptive Phase 2 (UPWARD) Search Hardening**: Finalized the CRF exploration pipeline in `gpu_coarse_search.rs` to prevent linear stalling on high-sloped but complex media (e.g., highly noisy video or GIFs).
   - **Relaxed Sprint Threshold**: Raised the deceleration trigger from >1.0% to **>2.5%** delta for files far from the compression boundary (>110% size), enabling sustained acceleration during steady slopes.
   - **Dynamic Deceleration Logging**: Integrated real-time "Smart Deceleration" reporting (`💧 Search Decelerating`). The terminal now explicitly logs the detected slope Δ and the resulting step adjustment for improved observability.
   - **Zero-Warning Audit (NIGHTLY)**: Resolved the final 8 compiler warnings (`unused_variable`, `redundant_mutability`) across all search phases, achieving a 100% clean baseline in the `check_all.py` quality suite.
