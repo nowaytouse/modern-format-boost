@@ -436,11 +436,16 @@ impl ExploreContext {
     }
 
     pub fn log_final_result(&mut self, crf: f32, ssim: Option<f64>, size_change_pct: f64) {
+        let status = if size_change_pct < 0.1 { "✅" } else { "❌" };
         match ssim {
             Some(s) => self.log(format!(
-                "📊 RESULT: CRF {crf:.1}, SSIM {s:.4}, {size_change_pct:+.1}%"
+                "📊 RESULT: {status} CRF {crf:.1}, SSIM {s:.4}, {size_change_pct:+.1}%"
             )),
-            None => self.log(format!("📊 RESULT: CRF {crf:.1}, {size_change_pct:+.1}%")),
+            None => {
+                self.log(format!(
+                    "📊 RESULT: {status} CRF {crf:.1}, {size_change_pct:+.1}%"
+                ));
+            }
         }
     }
 

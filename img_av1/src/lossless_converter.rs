@@ -95,7 +95,8 @@ pub fn convert_heic_gainmap_to_jxl(
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
-    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+    let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
+        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
 
     // Use 32-bit OpenEXR for maximum HDR precision
     let intermediate_format = shared_utils::HdrIntermediateFormat::OpenExr32;
@@ -186,7 +187,8 @@ pub fn convert_to_jxl(
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
-    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+    let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
+        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
 
     let (actual_input, _temp_file_guard) = prepare_input_for_cjxl(input, options, hdr_info)?;
 
@@ -478,7 +480,8 @@ pub fn convert_jpeg_to_jxl(
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
-    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+    let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
+        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
 
     let result = run_cjxl_jpeg_transcode(input, &temp_output, options, None, hdr_info);
 
@@ -626,7 +629,8 @@ pub fn convert_to_avif(
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
-    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+    let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
+        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
     let q = quality.ok_or_else(|| {
         ImgQualityError::AnalysisError("Missing quality for AVIF conversion".to_string())
     })?;
@@ -726,7 +730,8 @@ pub fn convert_to_avif_lossless(
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
-    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+    let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
+        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
 
     let result = Command::new("avifenc")
         .arg("--lossless")
@@ -907,7 +912,8 @@ pub fn convert_to_jxl_matched(
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
-    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+    let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
+        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
 
     let distance = calculate_matched_distance_for_static(analysis, input_size)?;
     eprintln!("   🎯 Matched JXL distance: {distance:.2}");
@@ -1377,6 +1383,14 @@ fn get_output_path(
         shared_utils::conversion::determine_output_path(input, extension, &options.output_dir)
             .map_err(ImgQualityError::ConversionError)
     }
+}
+
+pub fn convert_to_gif_apple_compat(
+    input: &Path,
+    options: &ConvertOptions,
+) -> Result<shared_utils::ConversionResult> {
+    vid_av1::animated_image::convert_to_gif_apple_compat(input, options)
+        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))
 }
 
 #[cfg(test)]

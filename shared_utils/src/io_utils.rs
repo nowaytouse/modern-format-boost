@@ -46,3 +46,23 @@ pub fn safe_remove_dir_all<P: AsRef<Path>>(path: P) -> std::io::Result<()> {
         }
     }
 }
+
+/// Robust move that handles cross-filesystem boundaries (EXDEV).
+///
+/// If `fs::rename` fails because the source and destination are on different
+/// mount points (e.g. system SSD to external HDD), falls back to `copy` + `delete`.
+pub fn robust_move(src: &Path, dst: &Path) -> std::io::Result<()> {
+    if let Err(e) = std::fs::rename(src, dst) {
+        // EXDEV (OS Error 18) indicates "Cross-device link"
+        if e.kind() == std::io::ErrorKind::InvalidInput
+            || e.raw_os_error() == Some(18)
+            || e.to_string().to_lowercase().contains("crosses devices")
+        {
+            std::fs::copy(src, dst)?;
+            std::fs::remove_file(src)?;
+        } else {
+            return Err(e);
+        }
+    }
+    Ok(())
+}

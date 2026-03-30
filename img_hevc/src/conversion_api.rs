@@ -1,7 +1,6 @@
 //! Conversion API Module
 //!
-//! Pure conversion layer - transforms images based on detection results.
-//! Takes `DetectionResult` as input and performs smart conversions.
+//! Transforms images based on detection results.
 
 use crate::detection_api::{CompressionType, DetectedFormat, DetectionResult, ImageType};
 use crate::{ImgQualityError, Result};
@@ -71,10 +70,6 @@ fn cleanup_output_file(path: &Path, context: &str) {
     }
 }
 
-/// Determine the best conversion strategy based on image detection results.
-///
-/// # Errors
-/// Returns an error if the detection results are invalid or no strategy can be determined.
 pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrategy> {
     if detection.format.is_modern_format() {
         return Ok(ConversionStrategy {
@@ -235,7 +230,8 @@ pub fn execute_conversion(
         });
     }
 
-    let temp_path = shared_utils::conversion::temp_path_for_output(&output_path);
+    let temp_path = shared_utils::path_safety::isolated_temp_path_for_search(&output_path)
+        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
     let result = match strategy.target {
         TargetFormat::JXL => convert_to_jxl(input_path, &temp_path, &detection.format, config),
         TargetFormat::AVIF => {
@@ -326,7 +322,7 @@ pub fn execute_conversion(
         if let Err(e) = shared_utils::conversion::safe_delete_original(
             input_path,
             &output_path,
-            shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
+            shared_utils::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
         ) {
             eprintln!("   ⚠️  Safe delete failed: {e}");
         }

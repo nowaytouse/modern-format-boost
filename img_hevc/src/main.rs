@@ -5,6 +5,7 @@ use img_hevc::{
 };
 use shared_utils::analysis_cache::AnalysisCache;
 use shared_utils::modern_ui::{colors, symbols};
+use shared_utils::quality_matcher::SourceCodec;
 use shared_utils::{
     check_dangerous_directory, disk_full_pause_reason, print_summary_report, BatchPauseController,
     BatchResult,
@@ -483,9 +484,11 @@ fn verify_conversion(
 }
 
 fn load_image_safe(path: &std::path::Path) -> anyhow::Result<image::DynamicImage> {
-    let is_jxl = path
+    let ext = path
         .extension()
-        .is_some_and(|e| e.to_string_lossy().to_lowercase() == "jxl");
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let is_jxl = shared_utils::quality_matcher::parse_source_codec(&ext) == SourceCodec::JpegXl;
 
     if is_jxl {
         use std::process::Command;
@@ -651,7 +654,7 @@ fn auto_convert_single_file(
         }
     }
 
-    let pixel_analysis = if !analysis.is_animated && analysis.format != "JPEG" {
+    let _pixel_analysis = if !analysis.is_animated && analysis.format != "JPEG" {
         shared_utils::image_quality_detector::analyze_image_quality_with_cache(
             input,
             config.cache.as_deref(),
@@ -659,19 +662,11 @@ fn auto_convert_single_file(
     } else {
         None
     };
-    if let Some(ref q) = pixel_analysis {
+    if let Some(ref q) = _pixel_analysis {
         shared_utils::log_media_info_for_image_quality(q, input);
     }
 
-    let mut quality_label = analysis.quality_summary();
-    if let Some(ref pa) = pixel_analysis {
-        let ct_str = pa.content_type.name.to_uppercase();
-        quality_label = if quality_label.is_empty() {
-            ct_str
-        } else {
-            format!("{ct_str}: {quality_label}")
-        };
-    }
+    let quality_label = analysis.quality_summary();
 
     let options = ConvertOptions {
         force: config.force,
@@ -784,10 +779,12 @@ fn dispatch_animated_conversion(
 
     let format = analysis.format.as_str();
     let is_lossless = analysis.is_lossless;
-    let is_modern_animated = matches!(format, "WebP" | "AVIF" | "HEIC" | "HEIF" | "JXL");
-    let is_apple_native = matches!(format, "HEIC" | "HEIF");
+    let codec = shared_utils::quality_matcher::parse_source_codec(format);
+    let is_animated = codec.can_be_animated();
+    let is_apple_native = shared_utils::quality_matcher::is_apple_native_format(format);
+    let is_non_native_animated = is_animated && !is_apple_native;
 
-    let should_skip_modern = if is_modern_animated && !is_lossless {
+    let should_skip_modern = if codec.is_modern() && is_animated && !is_lossless {
         if config.apple_compat {
             is_apple_native
         } else {
@@ -874,7 +871,7 @@ fn dispatch_animated_conversion(
         }
     };
 
-    if config.apple_compat && is_modern_animated && !is_apple_native {
+    if config.apple_compat && is_non_native_animated {
         if meme_keep {
             shared_utils::progress_mode::emit_stderr(&format!(
                 "🍎 Animated {}→GIF (Apple Compat, meme-score: keep): {}",
@@ -899,7 +896,7 @@ fn dispatch_animated_conversion(
             return Ok(shared_utils::ConversionResult::skipped_custom(
                 input,
                 analysis.file_size,
-                "GIF meme-score: keep as GIF",
+                "GIF meme-score: keep as original",
                 "meme_score_keep",
             ));
         }
@@ -920,10 +917,8 @@ fn dispatch_static_disguised_animated(
 ) -> anyhow::Result<shared_utils::ConversionResult> {
     use img_hevc::lossless_converter::convert_to_jxl;
 
-    let is_modern = matches!(
-        analysis.format.as_str(),
-        "WebP" | "AVIF" | "JXL" | "HEIC" | "HEIF"
-    );
+    let is_modern =
+        shared_utils::quality_matcher::parse_source_codec(analysis.format.as_str()).is_modern();
     let use_lossless = analysis.is_lossless;
 
     if is_modern && !use_lossless {

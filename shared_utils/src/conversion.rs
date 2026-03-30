@@ -23,6 +23,7 @@
 
 #![cfg_attr(test, allow(clippy::field_reassign_with_default))]
 
+use crate::constants::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE;
 use crate::modern_ui::{colors, symbols};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -39,7 +40,7 @@ static PROCESSED_FILES: LazyLock<Mutex<HashSet<String>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
 static TEMP_OUTPUT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-fn next_temp_output_suffix() -> String {
+pub fn next_temp_output_suffix() -> String {
     const ALPHABET: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -92,10 +93,7 @@ pub fn clear_processed_list() {
     processed.clear();
 }
 
-pub use crate::checkpoint::{
-    safe_delete_original, verify_output_integrity, MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
-    MIN_OUTPUT_SIZE_BEFORE_DELETE_VIDEO,
-};
+pub use crate::checkpoint::{safe_delete_original, verify_output_integrity};
 
 #[cfg(unix)]
 fn flock_exclusive(file: &fs::File) -> std::io::Result<()> {
@@ -685,7 +683,10 @@ impl Drop for TempOutputGuard {
     }
 }
 
-/// Returns a path for temporary output in the same directory as `output`.
+/// **LEAKY**: Returns a path for temporary output in the same directory as `output`.
+///
+/// [WARNING] This function pollutes the user's folder with intermediate files.
+/// For Ghost Mode (Zero Pollution), use `shared_utils::path_safety::isolated_temp_path_for_search` instead.
 ///
 /// Ensures `fs::rename(temp, output)` is atomic on the same filesystem. Use with `commit_temp_to_output`.
 /// Uses stem + ".tmp." + extension (e.g. file.mov → file.tmp.mov) so `FFmpeg` and other
@@ -757,7 +758,7 @@ pub fn commit_temp_to_output_with_metadata(
         let _ = crate::io_utils::safe_remove_file(temp);
         return Ok(false);
     }
-    fs::rename(temp, output)?;
+    crate::io_utils::robust_move(temp, output)?;
 
     // Preserve complete metadata from original file if provided
     if let Some(src) = original {
@@ -885,13 +886,20 @@ pub fn check_size_tolerance(
     options: &ConvertOptions,
     format_label: &str,
 ) -> Option<ConversionResult> {
-    // Tolerance: allow size increase < 1_048_576 bytes (1MB)
-    const TOLERANCE_BYTES: u64 = 1_048_576; // 1MB absolute value
+    // Tolerance: allow size increase < DEFAULT_SIZE_TOLERANCE_BYTES bytes
+    let tolerance_bytes = crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES;
 
-    let max_allowed_size = if options.allow_size_tolerance {
-        input_size.saturating_add(TOLERANCE_BYTES - 1) // up to 1_048_576 - 1 bytes
-    } else {
+    let input_ext = input.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let is_guard_active =
+        crate::quality_matcher::is_size_guard_active(input_ext, options.apple_compat);
+
+    let max_allowed_size = if options.allow_size_tolerance && is_guard_active {
+        input_size.saturating_add(tolerance_bytes - 1) // up to tolerance_bytes - 1 bytes
+    } else if is_guard_active {
         input_size
+    } else {
+        // Size guard is NOT active (Apple compat mode for incompatible source)
+        u64::MAX
     };
 
     // Over tolerance: output larger than allowed (e.g. > input or increase ≥ 1MB)
@@ -994,8 +1002,8 @@ pub fn check_size_tolerance(
     if options.compress && output_size >= input_size {
         let size_increase_bytes = output_size.saturating_sub(input_size);
 
-        // If tolerance is enabled and increase is within tolerance (< 1_048_576 bytes), accept it
-        if options.allow_size_tolerance && size_increase_bytes < TOLERANCE_BYTES {
+        // If tolerance is enabled and increase is within tolerance (< DEFAULT_SIZE_TOLERANCE_BYTES bytes), accept it
+        if options.allow_size_tolerance && size_increase_bytes < tolerance_bytes {
             // Within tolerance, accept the output
             return None;
         }

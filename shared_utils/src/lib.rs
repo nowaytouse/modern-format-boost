@@ -38,6 +38,7 @@ pub mod analysis_cache;
 pub mod batch;
 pub mod checkpoint;
 pub mod codecs;
+pub mod constants;
 pub mod conversion;
 pub mod crf_constants;
 pub mod date_analysis;
@@ -154,6 +155,7 @@ pub use hdr_synthesis::{
 
 pub use batch::*;
 pub use codecs::*;
+pub use constants::*;
 pub use conversion::*;
 pub use date_analysis::{
     analyze_directory, print_analysis, DateAnalysisConfig, DateAnalysisResult, DateSource,
@@ -179,8 +181,8 @@ pub use quality_matcher::{
     calculate_av1_crf, calculate_av1_crf_with_options, calculate_hevc_crf,
     calculate_hevc_crf_with_options, calculate_jxl_distance, calculate_jxl_distance_with_options,
     from_image_analysis, from_video_detection, is_apple_incompatible_video_codec,
-    log_quality_analysis, parse_source_codec, should_keep_apple_fallback_hevc_output,
-    should_keep_best_effort_output_on_failure, should_skip_image_format, should_skip_video_codec,
+    is_apple_native_format, is_size_guard_active, log_quality_analysis, parse_source_codec,
+    should_keep_apple_fallback_hevc_output, should_skip_image_format, should_skip_video_codec,
     should_skip_video_codec_apple_compat, AnalysisDetails, ContentType, EncoderType, MatchMode,
     MatchedQuality, QualityAnalysis, QualityBias, SkipDecision, SourceCodec, VideoAnalysisBuilder,
 };

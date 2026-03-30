@@ -281,7 +281,7 @@ fn is_static_animated_image(path: &Path) -> bool {
         .and_then(|e| e.to_str())
         .map(str::to_lowercase)
         .unwrap_or_default();
-    if !matches!(ext.as_str(), "gif" | "webp" | "avif" | "heic" | "heif") {
+    if !shared_utils::quality_matcher::parse_source_codec(&ext).can_be_animated() {
         return false;
     }
     if let Ok(analysis) = shared_utils::image_analyzer::analyze_image(path) {
@@ -363,7 +363,8 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
         return Ok(skipped_output_exists(input, &output, input_size));
     }
 
-    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+    let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
+        .map_err(|e| VidQualityError::conversion_error(e.to_string()))?;
     let _temp_output_guard = shared_utils::conversion::TempOutputGuard::new(temp_output.clone());
 
     // Special handling for animated JXL: FFmpeg's jpegxl_anim decoder is incomplete
@@ -651,7 +652,7 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
                 if let Err(e) = shared_utils::conversion::safe_delete_original(
                     input,
                     &output,
-                    shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
+                    shared_utils::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
                 ) {
                     tracing::warn!(input = %input.display(), output = %output.display(), error = %e, "Failed to delete original after AV1 conversion");
                 }
@@ -777,7 +778,8 @@ pub fn convert_to_av1_mp4_matched(
         return Ok(skipped_output_exists(input, &output, input_size));
     }
 
-    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+    let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
+        .map_err(|e| VidQualityError::conversion_error(e.to_string()))?;
     let _temp_output_guard = shared_utils::conversion::TempOutputGuard::new(temp_output.clone());
 
     // Special handling for animated JXL/WebP: pre-convert to APNG
@@ -1243,7 +1245,7 @@ pub fn convert_to_av1_mp4_matched(
         if let Err(e) = shared_utils::conversion::safe_delete_original(
             input,
             &output,
-            shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
+            shared_utils::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
         ) {
             tracing::warn!(input = %input.display(), output = %output.display(), error = %e, "Failed to delete original after AV1 animated conversion");
         }
@@ -1310,7 +1312,8 @@ pub fn convert_to_av1_mkv_lossless(
         return Ok(skipped_output_exists(input, &output, input_size));
     }
 
-    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+    let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
+        .map_err(|e| VidQualityError::conversion_error(e.to_string()))?;
     let _temp_output_guard = shared_utils::conversion::TempOutputGuard::new(temp_output.clone());
 
     let (width, height) = get_input_dimensions(input)?;
@@ -1362,7 +1365,7 @@ pub fn convert_to_av1_mkv_lossless(
                 if let Err(e) = shared_utils::conversion::safe_delete_original(
                     input,
                     &output,
-                    shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
+                    shared_utils::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
                 ) {
                     tracing::warn!(input = %input.display(), output = %output.display(), error = %e, "Failed to delete original after lossless AV1 conversion");
                 }
@@ -1501,7 +1504,8 @@ pub fn convert_to_gif_apple_compat(
         });
     }
 
-    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+    let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
+        .map_err(|e| VidQualityError::conversion_error(e.to_string()))?;
     let _temp_output_guard = shared_utils::conversion::TempOutputGuard::new(temp_output.clone());
 
     // Special handling for animated JXL: FFmpeg's jpegxl_anim decoder is incomplete
@@ -1862,7 +1866,7 @@ pub fn convert_to_gif_apple_compat(
         if let Err(e) = shared_utils::conversion::safe_delete_original(
             input,
             &output,
-            shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
+            shared_utils::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
         ) {
             tracing::warn!(input = %input.display(), output = %output.display(), error = %e, "Failed to delete original after GIF apple-compat conversion");
         }

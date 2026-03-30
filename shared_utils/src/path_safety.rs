@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[inline]
 #[must_use]
@@ -22,6 +22,25 @@ pub fn safe_path_arg(path: &Path) -> Cow<'_, str> {
     } else {
         s
     }
+}
+
+/// Returns a unique temporary path for search iterations, fully isolated from user folders.
+///
+/// Ensures Ghost Mode (Zero Pollution) by using the central MFB tmp directory.
+pub fn isolated_temp_path_for_search(output_path: &Path) -> anyhow::Result<PathBuf> {
+    let tmp_dir = crate::process_lock::get_mfb_tmp_dir()?;
+    let stem = output_path.file_stem().map_or_else(
+        || std::borrow::Cow::Borrowed("output"),
+        |s| s.to_string_lossy(),
+    );
+    let ext = output_path.extension().map_or_else(
+        || std::borrow::Cow::Borrowed("tmp"),
+        |e| e.to_string_lossy(),
+    );
+
+    let random_id = crate::conversion::next_temp_output_suffix();
+
+    Ok(tmp_dir.join(format!("{stem}.search.{random_id}.{ext}")))
 }
 
 #[cfg(test)]

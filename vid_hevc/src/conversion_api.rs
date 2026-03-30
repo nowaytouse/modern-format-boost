@@ -1,14 +1,12 @@
 //! Video Conversion API Module - HEVC/H.265 Version
 //!
-//! Pure conversion layer - executes video conversions based on detection results.
-//! - Auto Mode: HEVC Lossless for lossless sources, HEVC CRF for lossy sources
-//! - Simple Mode: Always HEVC MP4
-//! - Size Exploration: Tries higher CRF if output is larger than input
+//! Executes video conversions based on detection results.
 
 use crate::detection_api::{CompressionType, VideoDetectionResult};
 use crate::{Result, VidQualityError};
 
 use shared_utils::analysis_cache::AnalysisCache;
+use shared_utils::constants::DEFAULT_SIZE_TOLERANCE_BYTES;
 use shared_utils::conversion_types::{
     ConversionConfig, ConversionOutput, ConversionStrategy, TargetVideoFormat,
 };
@@ -31,18 +29,8 @@ fn cleanup_output_file(path: &Path, context: &str) {
     }
 }
 
-/// Build the `FFmpeg` colour/HDR arguments that must be forwarded to every HEVC encode.
-///
-/// This preserves:
-/// - `color_primaries` (e.g. bt2020)
-/// - `color_trc` / `color_transfer` (e.g. smpte2084 for PQ, arib-std-b67 for HLG)
-/// - colorspace (e.g. bt2020nc)
-/// - `mastering_display` (HDR10 static mastering display metadata)
-/// - `max_cll` (HDR10 content light level MaxCLL/MaxFALL)
-///
-/// Dolby Vision and HDR10+ cannot be remuxed losslessly through libx265, so they are preserved
-/// as HDR10 (their static layer) by forwarding all static metadata — the dynamic layer is
-/// stripped, which is unavoidable without specialised DV tooling.
+/// Build FFmpeg HDR metadata arguments from detection results.
+/// Preserves primaries, transfer characteristics, matrix, and static HDR10 metadata.
 fn build_hdr_ffmpeg_args(detection: &VideoDetectionResult) -> Vec<String> {
     let mut args: Vec<String> = Vec::new();
 
@@ -104,10 +92,7 @@ fn build_hdr_ffmpeg_args(detection: &VideoDetectionResult) -> Vec<String> {
     args
 }
 
-/// Return the correct pixel format for encoding:
-/// - If source is 10-bit (yuv420p10le, yuv422p10le, etc.) use yuv420p10le so that
-///   the HDR signal range / precision is preserved in the output stream.
-/// - Otherwise default to yuv420p (8-bit SDR).
+/// Return the correct pixel format (10-bit for HDR, otherwise 8-bit).
 const fn hdr_pix_fmt(detection: &VideoDetectionResult) -> &'static str {
     if detection.bit_depth >= 10 {
         "yuv420p10le"
@@ -386,7 +371,8 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
     )
     .child_threads;
 
-    let temp_path = shared_utils::conversion::temp_path_for_output(&output_path);
+    let temp_path = shared_utils::path_safety::isolated_temp_path_for_search(&output_path)
+        .map_err(|e| VidQualityError::conversion_error(e.to_string()))?;
     let _temp_guard = shared_utils::conversion::TempOutputGuard::new(temp_path.clone());
     let output_size = execute_hevc_conversion(&detection, &temp_path, 18, max_threads)?;
 
@@ -604,7 +590,8 @@ pub fn auto_convert_with_cache(
         });
     }
 
-    let temp_path = shared_utils::conversion::temp_path_for_output(&output_path);
+    let temp_path = shared_utils::path_safety::isolated_temp_path_for_search(&output_path)
+        .map_err(|e| VidQualityError::conversion_error(e.to_string()))?;
     let _temp_guard = shared_utils::conversion::TempOutputGuard::new(temp_path.clone());
     info!(
         "🎬 Auto Mode: {} → {}",
@@ -776,7 +763,7 @@ pub fn auto_convert_with_cache(
                         || (config.allow_size_tolerance
                             && (explore_result.output_video_stream_size as i64
                                 - explore_result.input_video_stream_size as i64)
-                                < 1024 * 1024);
+                                < DEFAULT_SIZE_TOLERANCE_BYTES as i64);
                     let total_file_compressed = explore_result.output_size < detection.file_size;
                     let total_size_ratio = if detection.file_size > 0 {
                         explore_result.output_size as f64 / detection.file_size as f64
@@ -1166,8 +1153,11 @@ pub fn auto_convert_with_cache(
         1.0
     };
     let total_within_tolerance = if config.allow_size_tolerance {
-        // Allow up to 1MB increase for container overhead
-        actual_output_size <= detection.file_size.saturating_add(1_048_576)
+        // Allow up to standard tolerance increase for container overhead
+        actual_output_size
+            <= detection
+                .file_size
+                .saturating_add(shared_utils::DEFAULT_SIZE_TOLERANCE_BYTES)
     } else {
         total_file_compressed
     };
@@ -1302,7 +1292,7 @@ pub fn auto_convert_with_cache(
         if let Err(e) = shared_utils::conversion::safe_delete_original(
             input,
             &output_path,
-            shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_VIDEO,
+            shared_utils::MIN_OUTPUT_SIZE_BEFORE_DELETE_VIDEO,
         ) {
             warn!("   ⚠️  Safe delete failed: {}", e);
         } else {

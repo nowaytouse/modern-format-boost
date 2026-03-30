@@ -9,6 +9,7 @@ use crate::detection_api::{CompressionType, VideoDetectionResult};
 use crate::{Result, VidQualityError};
 
 use shared_utils::analysis_cache::AnalysisCache;
+use shared_utils::constants::DEFAULT_SIZE_TOLERANCE_BYTES;
 use shared_utils::conversion_types::{
     ConversionConfig, ConversionOutput, ConversionStrategy, TargetVideoFormat,
 };
@@ -226,7 +227,8 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
     let thread_config = shared_utils::thread_manager::get_balanced_thread_config(
         shared_utils::thread_manager::WorkloadType::Video,
     );
-    let temp_path = shared_utils::conversion::temp_path_for_output(&output_path);
+    let temp_path = shared_utils::path_safety::isolated_temp_path_for_search(&output_path)
+        .map_err(|e| VidQualityError::conversion_error(e.to_string()))?;
     let _temp_guard = shared_utils::conversion::TempOutputGuard::new(temp_path.clone());
     let output_size = execute_av1_lossless(&detection, &temp_path, thread_config.child_threads)?;
 
@@ -417,7 +419,8 @@ pub fn auto_convert_with_cache(
         });
     }
 
-    let temp_path = shared_utils::conversion::temp_path_for_output(&output_path);
+    let temp_path = shared_utils::path_safety::isolated_temp_path_for_search(&output_path)
+        .map_err(|e| VidQualityError::conversion_error(e.to_string()))?;
     let _temp_guard = shared_utils::conversion::TempOutputGuard::new(temp_path.clone());
     info!(
         "🎬 Auto Mode: {} → {}",
@@ -550,7 +553,7 @@ pub fn auto_convert_with_cache(
                         || (config.allow_size_tolerance
                             && (explore_result.output_video_stream_size as i64
                                 - explore_result.input_video_stream_size as i64)
-                                < 1024 * 1024);
+                                < DEFAULT_SIZE_TOLERANCE_BYTES as i64);
                     let total_file_compressed = explore_result.output_size < detection.file_size;
                     let _total_size_ratio = if detection.file_size > 0 {
                         explore_result.output_size as f64 / detection.file_size as f64
@@ -1059,7 +1062,7 @@ pub fn auto_convert_with_cache(
         if let Err(e) = shared_utils::conversion::safe_delete_original(
             input,
             &output_path,
-            shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_VIDEO,
+            shared_utils::MIN_OUTPUT_SIZE_BEFORE_DELETE_VIDEO,
         ) {
             warn!("   ⚠️  Safe delete failed: {}", e);
         } else {

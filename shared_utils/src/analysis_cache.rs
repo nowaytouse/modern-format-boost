@@ -466,7 +466,7 @@ impl Default for HeuristicConfig {
             jxl_lossless_distance_threshold: 0.1,
             hevc_crf_threshold: 18.0,
             entropy_threshold: 7.0,
-            size_tolerance_bytes: 1_048_576, // 1MB
+            size_tolerance_bytes: crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES,
             quality_match_precision: 0.95,
         }
     }

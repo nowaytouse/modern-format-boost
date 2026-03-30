@@ -4,8 +4,8 @@
 //! completely excluding the impact of container format and metadata.
 //!
 //! ## Core Logic
-//! - Main Criterion: `output_video_stream_size < input_video_stream_size + 1_048_576`
-//! - As long as the pure video stream shrinks or increases slightly (less than 1MB), it's considered a success, regardless of total file size.
+//! - Main Criterion: `output_video_stream_size < input_video_stream_size + DEFAULT_SIZE_TOLERANCE_BYTES`
+//! - As long as the pure video stream shrinks or increases slightly (less than the standard tolerance), it's considered a success, regardless of total file size.
 
 use crate::stream_size::StreamSizeInfo;
 
@@ -72,7 +72,7 @@ pub fn verify_pure_media_compression(
     let output_video = output_info.video_stream_size;
 
     let video_compressed = if allow_size_tolerance {
-        output_video < input_video.saturating_add(1_048_576)
+        output_video < input_video.saturating_add(crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES)
     } else {
         output_video < input_video
     };
@@ -112,7 +112,8 @@ pub const fn is_video_compressed(
     allow_size_tolerance: bool,
 ) -> bool {
     if allow_size_tolerance {
-        output_video_size < input_video_size.saturating_add(1_048_576)
+        output_video_size
+            < input_video_size.saturating_add(crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES)
     } else {
         output_video_size < input_video_size
     }
@@ -164,14 +165,18 @@ mod tests {
 
         let result = verify_pure_media_compression(&input, &output, true);
 
-        assert!(result.video_compressed); // Accepts because < 1_048_576 increase
+        assert!(result.video_compressed); // Accepts because < tolerance increase
         assert!(result.video_compression_ratio > 1.0);
     }
 
     #[test]
     fn test_video_not_compressed_exceeds_tolerance() {
         let input = make_stream_info(1000, 100, 50);
-        let output = make_stream_info(1_049_577, 100, 50); // > 1_048_576 bytes larger
+        let output = make_stream_info(
+            1000 + crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES + 1,
+            100,
+            50,
+        );
 
         let result = verify_pure_media_compression(&input, &output, true);
 
@@ -194,8 +199,12 @@ mod tests {
     #[test]
     fn test_is_video_compressed() {
         assert!(is_video_compressed(1000, 900, false));
-        assert!(is_video_compressed(10_000_000, 10_500_000, true)); // Within tolerance
-        assert!(!is_video_compressed(10_000, 1_058_577, true)); // Exceeds tolerance
+        assert!(is_video_compressed(10_000_000, 10_001_000, true)); // Within tolerance
+        assert!(!is_video_compressed(
+            10_000,
+            10_000 + crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES + 1,
+            true
+        )); // Exceeds tolerance
     }
 
     #[test]
@@ -239,7 +248,7 @@ mod prop_tests {
 
             let result = verify_pure_media_compression(&input, &output, true);
 
-            let expected_compressed = output_video < input_video.saturating_add(1_048_576);
+            let expected_compressed = output_video < input_video.saturating_add(crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES);
             prop_assert_eq!(result.video_compressed, expected_compressed,
                 "When output {} {} input {}, video_compressed should be {}",
                 output_video, if expected_compressed { "<" } else { ">=" },

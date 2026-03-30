@@ -13,15 +13,15 @@
 </p>
 
 <p align="center">
-  <a href="README.md">English</a> · 
-  <a href="docs/README_ZH.md">简体中文</a> · 
-  <a href="docs/README_ZH_TW.md">繁體中文</a> · 
-  <a href="docs/README_JA.md">日本語</a> · 
-  <a href="docs/README_KO.md">한국어</a> · 
-  <a href="docs/README_ES.md">Español</a> · 
-  <a href="docs/README_FR.md">Français</a> · 
-  <a href="docs/README_PT.md">Português</a> · 
-  <a href="docs/README_RU.md">Русский</a> · 
+  <a href="README.md">English</a> ·
+  <a href="docs/README_ZH.md">简体中文</a> ·
+  <a href="docs/README_ZH_TW.md">繁體中文</a> ·
+  <a href="docs/README_JA.md">日本語</a> ·
+  <a href="docs/README_KO.md">한국어</a> ·
+  <a href="docs/README_ES.md">Español</a> ·
+  <a href="docs/README_FR.md">Français</a> ·
+  <a href="docs/README_PT.md">Português</a> ·
+  <a href="docs/README_RU.md">Русский</a> ·
   <a href="docs/README_AR.md">العربية</a>
 </p>
 
@@ -95,6 +95,7 @@ Every file goes through a multi-stage decision pipeline:
 - **HDR**: Preserves bt2020 primaries, PQ/HLG TRC, and Mastering Display metadata.
 - **Dolby Vision**: Extracts RPU via `dovi_tool` and injects into x265 (Profile 7 → 8.1 conversion).
 - **macOS xattrs**: Preserves Finder Tags, Date Added, and creation timestamps via `copyfile` and `setattrlist`.
+
 </details>
 
 ### 🖥️ Runtime

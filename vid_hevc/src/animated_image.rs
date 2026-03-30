@@ -282,7 +282,7 @@ fn is_static_animated_image(path: &Path) -> bool {
         .and_then(|e| e.to_str())
         .map(str::to_lowercase)
         .unwrap_or_default();
-    if !matches!(ext.as_str(), "gif" | "webp" | "avif" | "heic" | "heif") {
+    if !shared_utils::quality_matcher::parse_source_codec(&ext).can_be_animated() {
         return false;
     }
     if let Ok(analysis) = shared_utils::image_analyzer::analyze_image(path) {
@@ -365,7 +365,8 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
         return Ok(skipped_output_exists(input, &output, input_size));
     }
 
-    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+    let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
+        .map_err(|e| VidQualityError::conversion_error(e.to_string()))?;
     let _temp_output_guard = shared_utils::conversion::TempOutputGuard::new(temp_output.clone());
 
     // Special handling for animated JXL: FFmpeg's jpegxl_anim decoder is incomplete
@@ -653,7 +654,7 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
                 if let Err(e) = shared_utils::conversion::safe_delete_original(
                     input,
                     &output,
-                    shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
+                    shared_utils::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
                 ) {
                     tracing::warn!(input = %input.display(), output = %output.display(), error = %e, "Failed to delete original after HEVC conversion");
                 }
@@ -780,7 +781,8 @@ pub fn convert_to_hevc_mp4_matched(
         return Ok(skipped_output_exists(input, &output, input_size));
     }
 
-    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+    let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
+        .map_err(|e| VidQualityError::conversion_error(e.to_string()))?;
     let _temp_output_guard = shared_utils::conversion::TempOutputGuard::new(temp_output.clone());
 
     // Special handling for animated JXL/WebP: pre-convert to APNG
@@ -1102,11 +1104,10 @@ pub fn convert_to_hevc_mp4_matched(
     let max_allowed_size = (input_size as f64 * tolerance_ratio) as u64;
 
     // apple_compat mode: compatibility takes priority over file size.
-    // The whole point is to make the output playable on Apple devices — keeping a
-    // non-playable original is worse than a slightly larger HEVC file.
-    let size_guard_active = !options.apple_compat;
+    // However, if the source is already apple-compatible (like GIF/APNG), size guard stays active.
+    let is_guard_active = shared_utils::is_size_guard_active(&input_ext, options.apple_compat);
 
-    if size_guard_active && explore_result.output_size > max_allowed_size {
+    if is_guard_active && explore_result.output_size > max_allowed_size {
         let size_increase_pct =
             ((explore_result.output_size as f64 / input_size as f64) - 1.0) * 100.0;
         if let Err(e) = fs::remove_file(&temp_output) {
@@ -1277,7 +1278,7 @@ pub fn convert_to_hevc_mp4_matched(
         if let Err(e) = shared_utils::conversion::safe_delete_original(
             input,
             &output,
-            shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
+            shared_utils::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
         ) {
             tracing::warn!(input = %input.display(), output = %output.display(), error = %e, "Failed to delete original after HEVC animated conversion");
         }
@@ -1344,7 +1345,8 @@ pub fn convert_to_hevc_mkv_lossless(
         return Ok(skipped_output_exists(input, &output, input_size));
     }
 
-    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+    let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
+        .map_err(|e| VidQualityError::conversion_error(e.to_string()))?;
     let _temp_output_guard = shared_utils::conversion::TempOutputGuard::new(temp_output.clone());
 
     let (width, height) = get_input_dimensions(input)?;
@@ -1396,7 +1398,7 @@ pub fn convert_to_hevc_mkv_lossless(
                 if let Err(e) = shared_utils::conversion::safe_delete_original(
                     input,
                     &output,
-                    shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
+                    shared_utils::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
                 ) {
                     tracing::warn!(input = %input.display(), output = %output.display(), error = %e, "Failed to delete original after lossless HEVC conversion");
                 }
@@ -1535,7 +1537,8 @@ pub fn convert_to_gif_apple_compat(
         });
     }
 
-    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+    let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
+        .map_err(|e| VidQualityError::conversion_error(e.to_string()))?;
     let _temp_output_guard = shared_utils::conversion::TempOutputGuard::new(temp_output.clone());
 
     // Special handling for animated JXL: FFmpeg's jpegxl_anim decoder is incomplete
@@ -1834,9 +1837,10 @@ pub fn convert_to_gif_apple_compat(
 
     // apple_compat: compatibility takes priority — a playable GIF is always
     // better than a non-playable original (e.g. animated AVIF).
-    let size_guard_active = !options.apple_compat;
+    // But if the source is already playable (like APNG or GIF), size guard stays active.
+    let is_guard_active = shared_utils::is_size_guard_active(&input_ext, options.apple_compat);
 
-    if size_guard_active && output_size > max_allowed_size {
+    if is_guard_active && output_size > max_allowed_size {
         let size_increase_pct = ((output_size as f64 / input_size as f64) - 1.0) * 100.0;
         if let Err(e) = fs::remove_file(&temp_output) {
             eprintln!("⚠️ [cleanup] Failed to remove oversized GIF output: {e}");
@@ -1896,7 +1900,7 @@ pub fn convert_to_gif_apple_compat(
         if let Err(e) = shared_utils::conversion::safe_delete_original(
             input,
             &output,
-            shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
+            shared_utils::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
         ) {
             tracing::warn!(input = %input.display(), output = %output.display(), error = %e, "Failed to delete original after GIF apple-compat HEVC conversion");
         }

@@ -4,18 +4,33 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
-## [0.11.2] - 2026-03-30
+## [0.11.1] - 2026-03-30
 
-#### 🛠️ Metadata & Branding
-- **Opt-in Branding Strategy**: Transitioned the "[Optimized by Modern Format Boost]" Finder comment to an opt-in model. The feature is now **disabled by default** to minimize metadata pollution.
-- **Activation**: Users can re-enable this functionality by setting the environment variable `MODERN_FORMAT_BOOST_ENABLE_BRANDING=1`.
+|
 
-#### 🧹 Script Infrastructure
-- **Refined Collection Logic**: Updated `collect_optimized.py` to use a content-aware precision model.
-  - **Inclusion Criteria**: Now strictly targets **HEVC-encoded .MOV** and **.JXL** files with **uppercase extensions** (e.g., `.MOV`, `.JXL`).
-  - **Exclusion Strategy**: Automatically skips non-HEVC media and legacy formats (non-JXL images), providing a reliable collection mechanism even when Finder markers are disabled.
+#### 🏗️ Adaptive Search & Performance Hardening
 
-## [0.11.1] - 2026-03-29
+- **Adaptive Phase 2 (UPWARD) Search Hardening**: Finalized the CRF exploration pipeline in `gpu_coarse_search.rs` to prevent linear stalling on high-sloped but complex media (e.g., GIFs).
+  - **Relaxed Sprint Threshold**: Raised the deceleration trigger from >1.0% to **>2.5%** delta for files far from the compression boundary (>110% size), enabling sustained acceleration during steady slopes.
+  - **Dynamic Deceleration Logging**: Integrated real-time "Smart Deceleration" reporting (`💧 Search Decelerating`). The terminal now explicitly logs the detected slope Δ and the resulting step adjustment for improved observability.
+  - **Zero-Warning Audit (NIGHTLY)**: Resolved the final 8 compiler warnings (`unused_variable`, `redundant_mutability`) across all search phases, achieving a 100% clean baseline in the `check_all.py` quality suite.
+  - **Anti-Oscillation Guard**: Rigorous state anchoring during backtracking combined with a 2-retry binary bisection safety valve to prevent "chattering" near the 100% boundary.
+  - **Plateau Bailout**: Implemented an early-exit strategy for incompressible media that remains >110% despite 6 accelerated steps, saving significant CPU/GPU compute time.
+- **Constant Centralization & Technical Debt Cleanup**:
+  - Purged fragmented `1_048_576` (1MB) and `1024 * 1024` literals across the workspace.
+  - Centralized all size thresholds and buffer offsets into `shared_utils::constants::DEFAULT_SIZE_TOLERANCE_BYTES`.
+  - Audited and removed AI-redundant comments and overly fragmented helpers to restore a professional, high-signal codebase.
+
+#### 🛡️ APNG & Animated Format Routing
+
+- **Hardened APNG Fallback Path**: Integrated APNG into the unified routing logic in `img_hevc` and `img_av1`.
+  - **Apple Compatibility Mode**: APNG now correctly respects `meme-score` thresholds, allowing fallback to GIF (high-compatibility memes) or HEVC/AV1 MP4 (high-quality animation).
+  - **Intelligent Size Guard**: Implemented `is_size_guard_active` helper to maintain strict size limits even in compatibility mode for already-compatible source formats (GIF, APNG).
+
+#### 🧹 Metadata & Branding
+
+- **Opt-in Branding Strategy**: Transitioned the "[Optimized by Modern Format Boost]" Finder comment to an opt-in model. The feature is now **disabled by default** (re-enable with `MODERN_FORMAT_BOOST_ENABLE_BRANDING=1`).
+- **Refined Collection Logic**: Updated `collect_optimized.py` to strictly target HEVC .MOV and .JXL files with uppercase extensions, skipping non-HEVC media and legacy formats.
 
 #### 🎨 Color Fidelity & Content Intelligence (Meme Score v4)
 
@@ -1538,13 +1553,13 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
   - **Impact**: True protection against accidental termination of long-running batch jobs
   - **Files modified**: `Cargo.toml`, `shared_utils/Cargo.toml`, `shared_utils/src/ctrlc_guard.rs` (new), `shared_utils/src/lib.rs`, `img_hevc/src/main.rs`, `img_av1/src/main.rs`
 
-- **Milestone status lines too verbose and not narrow-screen friendly**: The inline milestone format was too long with excessive spacing: `                       📊                          XMP merge: 80 OK   Images: 81 OK`
+- **Milestone status lines too verbose and not narrow-screen friendly**: The inline milestone format was too long with excessive spacing: `📊                          XMP merge: 80 OK   Images: 81 OK`
   - **Root cause**: Used column 120 positioning and included 25 spaces of padding from `STATS_PREFIX_PAD`
   - **Fix**: Redesigned milestone format to be compact and beautiful:
     - Use `│` separator instead of excessive spacing
     - Shortened text: "XMP: 80✓ Img: 81✓" instead of "XMP merge: 80 OK Images: 81 OK"
     - Use `\x1b[999C\x1b[60D` (move to end, then back 60 chars) to align 📊 with ✅
-    - Format: `  │ 📊 XMP: 80✓  Img: 81✓` (compact, narrow-screen friendly)
+    - Format: `│ 📊 XMP: 80✓  Img: 81✓` (compact, narrow-screen friendly)
   - **Files modified**: `shared_utils/src/progress_mode.rs`
 
 ### Removed
@@ -1621,7 +1636,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 
 ### Fixed
 
-- **Script syntax error on double-click (line 301)**: `bash -n` revealed a missing closing quote on line 218 in `draw_header()` — `echo -e "..." ` was missing the trailing `"`, causing bash to continue parsing the string literal across subsequent lines until it hit the `(` at line 301 and reported `syntax error near unexpected token '('`
+- **Script syntax error on double-click (line 301)**: `bash -n` revealed a missing closing quote on line 218 in `draw_header()` — `echo -e "..."` was missing the trailing `"`, causing bash to continue parsing the string literal across subsequent lines until it hit the `(` at line 301 and reported `syntax error near unexpected token '('`
   - **Root cause**: A single missing `"` at the end of an `echo -e` line in `draw_header()` caused bash to treat everything up to the next `"` (83 lines later) as a string continuation
   - **Fix**: Added the missing closing `"` on line 218
   - **Files modified**: `scripts/drag_and_drop_processor.sh`
@@ -1660,7 +1675,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 
 ### Fixed
 
-- **Terminal `Running: Xs` spinner text fusing into binary output lines**: The bash spinner writes `\r Running: Xs` to `/dev/tty` every 0.15s while binaries write progress to stderr on the same terminal, producing fused lines like `   | Running: 04s     [file] ✓ CRF 28.3:` and leftover spinner text after processing
+- **Terminal `Running: Xs` spinner text fusing into binary output lines**: The bash spinner writes `\r Running: Xs` to `/dev/tty` every 0.15s while binaries write progress to stderr on the same terminal, producing fused lines like `| Running: 04s     [file] ✓ CRF 28.3:` and leftover spinner text after processing
   - **Root cause**: Spinner and binary both write to the terminal content area concurrently. `\r` moves cursor to column 0 without erasing, so binary output appends directly after spinner text. Any subsequent newline permanently commits the fused line to scrollback — no amount of pause/resume/clear can prevent this
   - **Fix**: Moved spinner display from terminal content area (`\r` writes) to the **terminal title bar** (OSC escape `\033]0;...\007`). The title bar is completely isolated from the content area, making collision fundamentally impossible. Binary output (`tee /dev/stderr`) flows normally in the terminal content with zero interference
   - **Result**: Running time visible in terminal tab/title bar, binary progress visible in content area, no residue anywhere
@@ -1764,11 +1779,12 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
   - **Previous**: Compress always rejected output ≥ input (ignored tolerance completely)
   - **Current**: Compress + tolerance enabled = accept if increase < 1MB
   - **Behavior matrix**:
-    | compress | tolerance | increase | result |
-    |----------|-----------|----------|--------|
-    | true | true | < 1MB | ✅ accept |
-    | true | true | ≥ 1MB | ❌ reject |
-    | true | false | > 0 | ❌ reject |
+
+    | compress | tolerance | increase | result    |
+    | -------- | --------- | -------- | --------- |
+    | true     | true      | < 1MB    | ✅ accept |
+    | true     | true      | ≥ 1MB    | ❌ reject |
+    | true     | false     | > 0      | ❌ reject |
 
 ### Fixed
 
@@ -1785,12 +1801,14 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
     - Restructured retry flow for better 8-bit vs 16-bit handling
     - Added final fallback attempt with -strip for edge cases
   - **Example output**:
+
     ```
     🔄 Attempt 1: Default (16-bit, preserve metadata)
     ❌ Attempt 1 failed (magick: ✓, cjxl: ✗)
     🔄 Attempt 2: Grayscale ICC fix (-strip, 16-bit)
     ✅ Attempt 2 succeeded
     ```
+
   - **File modified**: `shared_utils/src/jxl_utils.rs`
 
 - **Fixed compress mode to respect tolerance setting**: Compress mode now honors `allow_size_tolerance` flag
@@ -1821,11 +1839,13 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
     - Show explicit "Original copied to: <path>" message when files are copied to output directory
     - Display size comparison for all skip scenarios
   - **Example output**:
+
     ```
     🗑️  JPEG (Sanitized) -> JXL output deleted: larger than input by 76.1% (tolerance: 1.0%)
     📊 Size comparison: 238543 → 419973 bytes (+76.1%)
     📋 Original copied to: /tmp/test_output/IMG_6171_副本.jpeg
     ```
+
   - **File modified**: `shared_utils/src/conversion.rs` (`check_size_tolerance` function)
 
 - **FFprobe image2 demuxer pattern matching issue**: Fixed critical bug where image files with `[` `]` in filenames failed to process
@@ -1889,6 +1909,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
   - Prevents `%` from being interpreted as format codes
   - All user file paths now use: `.arg("--").arg(safe_path_arg(path).as_ref())`
 - **Y4M validation**: Added guard after ffmpeg extraction:
+
   ```rust
   let y4m_size = fs::metadata(&temp_input).map(|m| m.len()).unwrap_or(0);
   if y4m_size == 0 {
@@ -1896,6 +1917,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
       continue;
   }
   ```
+
 - **Error messages**: Improved diagnostics for both issues - clear indication of root cause instead of misleading downstream errors
 
 ## [0.10.8] - 2026-03-09

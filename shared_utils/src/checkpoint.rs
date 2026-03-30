@@ -7,7 +7,8 @@
 //!
 //! # Usage
 //! ```no_run
-//! use shared_utils::checkpoint::{CheckpointManager, safe_delete_original, MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE};
+//! use shared_utils::checkpoint::{CheckpointManager, safe_delete_original};
+//! use shared_utils::constants::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE;
 //! use std::path::Path;
 //!
 //! fn main() -> anyhow::Result<()> {
@@ -28,19 +29,10 @@
 //!     }
 //!
 //!     // Safe delete with integrity check
-//!     safe_delete_original(&input, &output, MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE)?;
+//!     shared_utils::checkpoint::safe_delete_original(&input, &output, shared_utils::constants::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE)?;
 //!     Ok(())
 //! }
 //! ```
-
-/// Minimum output size (bytes) to allow deleting the original for **image** conversions.
-/// Outputs smaller than this are treated as invalid; original is protected.
-pub const MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE: u64 = 100;
-
-/// Minimum output size (bytes) to allow deleting the original for **video** conversions.
-///
-/// Video containers typically need at least ~1KB to be valid; use this to avoid deleting original on corrupt/tiny output.
-pub const MIN_OUTPUT_SIZE_BEFORE_DELETE_VIDEO: u64 = 1000;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

@@ -1393,6 +1393,13 @@ fn cpu_fine_tune_from_gpu_boundary(
             }
         }
 
+        // Ensure parent directory exists (Safety for CJK/Deep-Nested paths)
+        if let Some(parent) = output.parent() {
+            if !parent.exists() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+        }
+
         let mut child = cmd.spawn().context("Failed to spawn ffmpeg")?;
 
         if let Some(stdout) = child.stdout.take() {
@@ -1507,7 +1514,27 @@ fn cpu_fine_tune_from_gpu_boundary(
             }
         }
 
-        Ok(fs::metadata(output)?.len())
+        // Stability Fix: Metadata Retry Loop (Handles 'lazy' disk flush under 95%+ CPU load)
+        let mut metadata_retry = 0;
+        let mut final_size = 0u64;
+        while metadata_retry < 5 {
+            if let Ok(m) = fs::metadata(output) {
+                final_size = m.len();
+                if final_size > 0 {
+                    break;
+                }
+            }
+            metadata_retry += 1;
+            if metadata_retry < 5 {
+                std::thread::sleep(std::time::Duration::from_millis(150));
+            }
+        }
+
+        if final_size == 0 && !output.exists() {
+            anyhow::bail!("❌ FFmpeg reported success but output file is missing: {}. OS error 2 prevented metadata extraction.", output.display());
+        }
+
+        Ok(final_size)
     };
 
     crate::verbose_eprintln!(
@@ -2240,7 +2267,11 @@ fn cpu_fine_tune_from_gpu_boundary(
         crate::log_eprintln!("Phase 2: [CPU] Search UPWARD for compression boundary");
         crate::log_eprintln!("   (Higher CRF = Smaller file, find first compressible)");
 
-        let mut test_crf = gpu_boundary_crf + step_size_upward;
+        let mut current_step = step_size_upward;
+        let mut stagnation_count = 0u32;
+        let mut backtrack_count = 0u32;
+        let mut last_size_pct = gpu_pct;
+        let mut test_crf = gpu_boundary_crf + current_step;
         let mut found_compress_point = false;
         let mut failure_credibility = 0.0f64;
         let mut best_tested_crf = gpu_boundary_crf;
@@ -2261,6 +2292,54 @@ fn cpu_fine_tune_from_gpu_boundary(
                 0.0
             };
 
+            let size_delta = (total_size_pct - last_size_pct).abs();
+
+            // Adaptive Search State Machine
+            if size_delta < 0.05 && total_size_pct > 100.0 {
+                stagnation_count += 1;
+                // Plateau Bailout: Stop if format is clearly incompressible
+                if stagnation_count >= 6 && total_size_pct > 110.0 {
+                    crate::log_eprintln!(
+                        "   {}⏸️  Quality/Size Plateau detected: bailing out early.{}",
+                        BRIGHT_RED,
+                        RESET
+                    );
+                    if best_crf.is_none() {
+                        best_crf = Some(best_tested_crf);
+                        best_size = Some(best_tested_size);
+                    }
+                    early_insight_triggered = true;
+                    break;
+                }
+                // Acceleration: Jump through ineffective CRF deadzones
+                if stagnation_count >= 2 {
+                    let old_step = current_step;
+                    current_step = (current_step * 2.0).min(5.0);
+                    if current_step > old_step {
+                        crate::log_eprintln!(
+                            "   {}⚡ Search Accelerated (step: {:.2} → {:.2}){}",
+                            BRIGHT_YELLOW,
+                            old_step,
+                            current_step,
+                            RESET
+                        );
+                    }
+                }
+            } else if size_delta > 2.5 && total_size_pct < 110.0 {
+                // Deceleration: Slope detected AND nearing compression boundary
+                if current_step > step_size_upward {
+                    crate::log_eprintln!(
+                        "   {}💧 Search Decelerating (slope Δ{:.1} detected, step reset to {:.2}){}",
+                        CYAN,
+                        size_delta,
+                        step_size_upward,
+                        RESET
+                    );
+                    current_step = step_size_upward;
+                }
+                stagnation_count = 0;
+            }
+
             // Track best tested CRF (smallest size increase, even if not compressed)
             if size < best_tested_size {
                 best_tested_crf = test_crf;
@@ -2270,7 +2349,12 @@ fn cpu_fine_tune_from_gpu_boundary(
             let is_effectively_compressed = size < input_size;
 
             // Ultimate Mode: Insight-Based Credibility Check (Sticky)
-            if ultimate_mode && !is_effectively_compressed {
+            // Optimization: Only run expensive VMAF/PSNR if we are somewhat close to compression (< 120%)
+            // to avoid process exhaustion under high CPU load during early coarse jumps.
+            if ultimate_mode
+                && !is_effectively_compressed
+                && (total_size_pct < 120.0 || iterations < 2)
+            {
                 let vmaf = super::ssim_calculator::calculate_vmaf_y(input, output, 6);
                 let psnr_uv = super::ssim_calculator::calculate_psnr_uv(input, output, 6);
 
@@ -2330,6 +2414,27 @@ fn cpu_fine_tune_from_gpu_boundary(
             }
 
             if is_effectively_compressed {
+                // Backtrack-on-Overshoot: If we jumped from >105% to <95%, seek precision (Anti-Oscillation Guard)
+                if last_size_pct > 105.0
+                    && total_size_pct < 95.0
+                    && current_step > 0.5
+                    && backtrack_count < 2
+                {
+                    crate::log_eprintln!(
+                        "   {}⏪ Overshot boundary ({:.1}%): backtracking for precision... (retry {}/2){}",
+                        BRIGHT_YELLOW,
+                        total_size_pct,
+                        backtrack_count + 1,
+                        RESET
+                    );
+                    test_crf -= current_step / 2.0; // Binary bisect
+                    current_step = step_size_upward;
+                    backtrack_count += 1;
+                    // Stability Fix: Do NOT update last_size_pct here.
+                    // This ensures the next step's delta is calculated against the last "failed" size.
+                    continue;
+                }
+
                 if best_crf.is_none_or(|c| test_crf < c) {
                     best_crf = Some(test_crf);
                     best_size = Some(size);
@@ -2364,7 +2469,8 @@ fn cpu_fine_tune_from_gpu_boundary(
                     RESET
                 );
             }
-            test_crf += step_size_upward;
+            last_size_pct = total_size_pct;
+            test_crf += current_step;
         }
 
         if found_compress_point {
@@ -2378,12 +2484,17 @@ fn cpu_fine_tune_from_gpu_boundary(
 
             let compress_point = best_crf.unwrap_or(gpu_boundary_crf);
             let mut current_step = PHASE3_DOWNWARD_STEP;
+            let mut last_size_pct = if input_size > 0 {
+                (best_size.unwrap_or(input_size) as f64 / input_size as f64 - 1.0) * 100.0
+            } else {
+                0.0
+            };
+            let mut backtrack_count = 0u32;
             let mut failure_credibility = 0.0f64;
             let mut consecutive_failures = 0u32;
-            let mut consecutive_01_successes = 0u32;
+            let mut consecutive_successes = 0u32;
             let mut consecutive_compressions = 0u32;
             let mut prev_ssim_opt = calculate_ssim_quick();
-            let mut prev_size = best_size.unwrap_or(0);
             let search_floor = if ultimate_mode { 0.0 } else { min_crf };
             let mut test_crf = compress_point - current_step;
 
@@ -2406,7 +2517,6 @@ fn cpu_fine_tune_from_gpu_boundary(
                 // Ultimate metrics for insight mechanism
                 let mut vmaf_improved = false;
                 let mut psnr_improved = false;
-                let mut metrics_info = String::new();
                 let mut current_vmaf_val = None;
                 let mut current_psnr_val = None;
 
@@ -2424,7 +2534,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                         vmaf_improved = v.floor() > prev_best_vmaf.floor();
                         psnr_improved = chroma_avg.floor() > prev_best_psnr.floor();
 
-                        metrics_info = format!("VMAF:{v:.2} UV:{chroma_avg:.2}");
+                        // Diagnostics: VMAF:{v:.2} UV:{chroma_avg:.2}
 
                         current_vmaf_val = Some(v);
                         current_psnr_val = Some((u, v_score));
@@ -2433,14 +2543,11 @@ fn cpu_fine_tune_from_gpu_boundary(
 
                 let is_effectively_compressed = size < input_size;
 
+                let size_delta = (total_size_pct - last_size_pct).abs();
+
                 if is_effectively_compressed {
                     consecutive_failures = 0;
                     consecutive_compressions += 1;
-                    crate::log_eprintln!(
-                        "   [DEBUG] consecutive_compressions = {}/{}",
-                        consecutive_compressions,
-                        MAX_CONSECUTIVE_COMPRESSIONS
-                    );
 
                     best_crf = Some(test_crf);
                     best_size = Some(size);
@@ -2454,24 +2561,10 @@ fn cpu_fine_tune_from_gpu_boundary(
                         }
                     }
 
-                    let size_increase = size as i64 - prev_size as i64;
-                    let _size_increase_pct = if prev_size > 0 {
-                        (size_increase as f64 / prev_size as f64) * 100.0
-                    } else {
-                        0.0
-                    };
-
                     let improvement_indicator = if vmaf_improved || psnr_improved {
                         "↑"
                     } else {
                         "→"
-                    };
-                    let _insight_msg = if ultimate_mode {
-                        format!(
-                            "{metrics_info} (Index: {failure_credibility:.0}/3) {improvement_indicator}"
-                        )
-                    } else {
-                        String::new()
                     };
 
                     let ssim_gain = match (current_ssim_opt, prev_ssim_opt) {
@@ -2523,10 +2616,7 @@ fn cpu_fine_tune_from_gpu_boundary(
 
                     // Early termination logic: based on insight evaluation
                     if ultimate_mode {
-                        // Only trigger if quality already meets final settlement thresholds
-                        // VMAF and PSNR thresholds defined at module level
                         const PSNR_UV_MIN: f64 = 34.0;
-
                         let any_metric_fails =
                             if let (Some(v), Some(uv)) = (current_vmaf_val, current_psnr_val) {
                                 v < VMAF_Y_MIN || uv.0.min(uv.1) < PSNR_UV_MIN
@@ -2561,48 +2651,47 @@ fn cpu_fine_tune_from_gpu_boundary(
                     }
 
                     prev_ssim_opt = current_ssim_opt;
-                    prev_size = size;
 
-                    // Smart deceleration check: if approaching floor, deceleration takes priority.
-                    // Ultimate mode uses 1.0× multiplier (decelerate when within 1 step of floor)
-                    // so the step is guaranteed to shrink before we can overshoot 0.0.
-                    // Normal mode uses 2.0× (more aggressive early braking).
+                    // Unified Adaptive Logic: Deceleration & Sprint
                     let distance_to_floor = test_crf - search_floor;
                     let decelerate_multiplier = if ultimate_mode { 1.0 } else { 2.0 };
-                    let should_decelerate = distance_to_floor
-                        < current_step * decelerate_multiplier
-                        && current_step > PHASE3_DOWNWARD_STEP + 0.001;
+                    let boundary_nearing = distance_to_floor < current_step * decelerate_multiplier;
 
-                    if should_decelerate {
-                        // Deceleration mode: disable Sprint to avoid oscillation
+                    if size_delta > 1.0 && current_step > PHASE3_DOWNWARD_STEP {
+                        // Slope-Aware Deceleration (⚡ -> 💧)
+                        let old_step = current_step;
+                        current_step = PHASE3_DOWNWARD_STEP;
+                        consecutive_successes = 0;
+                        crate::log_eprintln!(
+                            "   {}💧 Search Decelerating (slope Δ{:.1} detected, step reset: {:.2} → {:.2}){}",
+                            CYAN, size_delta, old_step, current_step, RESET
+                        );
+                    } else if boundary_nearing && current_step > PHASE3_DOWNWARD_STEP + 0.001 {
+                        // Boundary-Aware Deceleration
                         let old_step = current_step;
                         current_step = (current_step / 2.0).max(PHASE3_DOWNWARD_STEP);
-                        consecutive_01_successes = 0; // Reset to prevent Sprint re-activation
+                        consecutive_successes = 0;
                         crate::log_eprintln!(
                             "   {}🎯 Smart deceleration: step {:.2} → {:.2} (approaching floor {:.2}){}",
-                            BRIGHT_YELLOW,
-                            old_step,
-                            current_step,
-                            search_floor,
-                            RESET
+                            BRIGHT_YELLOW, old_step, current_step, search_floor, RESET
                         );
                     } else {
-                        // Sprint: double the step for faster iteration (after 2 consecutive successes)
-                        consecutive_01_successes += 1;
-
-                        if consecutive_01_successes >= 2 && current_step < 1.6 {
+                        // Sprint: double the step for faster iteration
+                        consecutive_successes += 1;
+                        if consecutive_successes >= 2 && current_step < 1.6 {
                             let old_step = current_step;
                             current_step = (current_step * 2.0).min(1.6);
-                            crate::verbose_eprintln!(
-                                "   {}SPRINT:{} {:.2} → {:.2} (accelerated search)",
+                            crate::log_eprintln!(
+                                "   {}⚡ Sprint activated: step {:.2} → {:.2}{}",
                                 BRIGHT_CYAN,
-                                RESET,
                                 old_step,
-                                current_step
+                                current_step,
+                                RESET
                             );
                         }
                     }
 
+                    last_size_pct = total_size_pct;
                     test_crf -= current_step;
                 } else {
                     consecutive_failures += 1;
@@ -2640,19 +2729,22 @@ fn cpu_fine_tune_from_gpu_boundary(
                         MAX_CONSECUTIVE_FAILURES
                     );
 
-                    // Backtrack: halve step gradually (mirrors sprint), retry from last good size
-                    if current_step > PHASE3_DOWNWARD_STEP + 0.01 && consecutive_01_successes >= 2 {
+                    // Unified Anti-Oscillation Backtrack
+                    if current_step > PHASE3_DOWNWARD_STEP + 0.01 && backtrack_count < 2 {
                         let old_step = current_step;
                         current_step = (current_step / 2.0).max(PHASE3_DOWNWARD_STEP);
-                        consecutive_01_successes = 0;
+                        backtrack_count += 1;
+                        consecutive_successes = 0;
                         crate::log_eprintln!(
-                            "   {}↩️  BACKTRACK:{} {:.2} → {:.2} (overshoot correction)",
+                            "   {}⏪ Backtracking for precision (retry {}/2): {:.2} → {:.2}{}",
                             BRIGHT_YELLOW,
-                            RESET,
+                            backtrack_count,
                             old_step,
-                            current_step
+                            current_step,
+                            RESET
                         );
                         test_crf = best_crf.unwrap_or(test_crf + old_step) - current_step;
+                        // Stability Fix: Do NOT update last_size_pct here.
                         continue;
                     }
 
@@ -2667,15 +2759,12 @@ fn cpu_fine_tune_from_gpu_boundary(
                         break;
                     }
 
-                    // For ultimate mode, continue stepping down to see if quality metric overrides or recovers
+                    // For ultimate mode, continue stepping down to see if quality metric overrides
                     current_step = PHASE3_DOWNWARD_STEP;
                     test_crf -= current_step;
 
                     // Insight mechanism: only count as credible failure if quality actually degraded
                     if ultimate_mode {
-                        // Check if quality metrics are actually failing (not just size wall)
-                        // VMAF and PSNR thresholds defined at module level
-                        // VMAF and PSNR thresholds defined at module level
                         let quality_degraded = if let (Some(v), Some((u, v_score))) =
                             (current_vmaf_val, current_psnr_val)
                         {
@@ -2688,14 +2777,13 @@ fn cpu_fine_tune_from_gpu_boundary(
                             failure_credibility += 1.0;
                             if failure_credibility >= 3.0 {
                                 crate::log_eprintln!(
-                                    "   {}❌ FAILURE CREDIBILITY REACHED (3/3):{} Sustained failure/quality collapse. Stopping.",
+                                    "   {}❌ FAILURE CREDIBILITY REACHED (3/3):{} Sustained quality collapse. Stopping.",
                                     BRIGHT_RED, RESET
                                 );
                                 early_insight_triggered = true;
                                 break;
                             }
                         } else {
-                            // Size wall without quality collapse - don't count as credible failure
                             failure_credibility = 0.0;
                         }
                     }
@@ -2709,12 +2797,20 @@ fn cpu_fine_tune_from_gpu_boundary(
                         );
                         break;
                     }
+                    last_size_pct = total_size_pct;
                 }
             }
         } else {
-            crate::log_eprintln!("⚠️ Cannot compress even at max CRF {:.1}!", max_crf);
-            crate::log_eprintln!("   File may be already optimally compressed");
-            // Use best tested CRF instead of fallback to max_crf
+            crate::log_eprintln!(
+                "{}❌ FAILED: No compression point found below input size (up to max CRF {:.1}){}",
+                BRIGHT_RED,
+                max_crf,
+                RESET
+            );
+            crate::log_eprintln!(
+                "   File may be already optimally compressed. Aborting fine-tuning."
+            );
+            // Use best tested CRF (smallest inflation) instead of arbitrary max_crf fallback
             if best_crf.is_none() {
                 best_crf = Some(best_tested_crf);
                 best_size = Some(best_tested_size);
@@ -2724,7 +2820,9 @@ fn cpu_fine_tune_from_gpu_boundary(
 
     if ultimate_mode && !early_insight_triggered {
         if let Some(best) = best_crf {
-            if best < max_crf {
+            // Only refine if we actually have a compressed result (or within 1% tolerance)
+            let current_ratio = best_size.unwrap_or(u64::MAX) as f64 / input_size as f64;
+            if best < max_crf && current_ratio < 1.01 {
                 crate::log_eprintln!();
                 crate::log_eprintln!(
                     "{}Phase 4: [CPU] Extreme Mode 0.01-Granularity Fine-Tune (Sprint & Backtrack){}",
@@ -2748,6 +2846,12 @@ fn cpu_fine_tune_from_gpu_boundary(
                 let mut current_best_size = best_size.unwrap_or(0);
                 let mut test_crf = best - current_step;
                 let mut fine_failures = 0;
+                let mut last_size_pct = if input_size > 0 {
+                    (best_size.unwrap_or(input_size) as f64 / input_size as f64 - 1.0) * 100.0
+                } else {
+                    0.0
+                };
+                let mut backtrack_count = 0u32;
                 let search_floor = 0.0_f32;
                 let mut consecutive_successes = 0;
 
@@ -2777,6 +2881,8 @@ fn cpu_fine_tune_from_gpu_boundary(
                         0.0
                     };
 
+                    let size_delta = (total_size_pct - last_size_pct).abs();
+
                     if is_effectively_compressed {
                         current_best = test_crf;
                         current_best_size = size;
@@ -2801,6 +2907,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                                 metrics_info = format!(" │ VMAF:{v:.2} UV:{chroma_avg:.2}");
                             }
                         }
+                        let _ = metrics_info; // Fulfill clippy if not log-used elsewhere
 
                         crate::log_eprintln!(
                             "{}{}   {}✓{} [CPU] {}CRF {:<5.2}{} {}{:6.1}%{}{} │ {}",
@@ -2827,14 +2934,22 @@ fn cpu_fine_tune_from_gpu_boundary(
                             break;
                         }
 
-                        // Smart deceleration: in ultimate mode use 1.0× multiplier so we
-                        // always halve the step before we can overshoot the floor.
+                        // Unified Adaptive Logic: Deceleration & Sprint
                         let distance_to_floor = test_crf - search_floor;
                         let decel_multiplier = if ultimate_mode { 1.0 } else { 2.0 };
-                        let should_decelerate = distance_to_floor < current_step * decel_multiplier
-                            && current_step > base_step + 0.001;
+                        let boundary_nearing = distance_to_floor < current_step * decel_multiplier;
 
-                        if should_decelerate {
+                        if size_delta > 1.0 && current_step > base_step + 0.001 {
+                            // Slope-Aware Deceleration (⚡ -> 💧)
+                            let old_step = current_step;
+                            current_step = base_step;
+                            consecutive_successes = 0;
+                            crate::log_eprintln!(
+                                "   {}💧 Search Decelerating (slope Δ{:.1} detected, step reset: {:.3} → {:.3}){}",
+                                CYAN, size_delta, old_step, current_step, RESET
+                            );
+                        } else if boundary_nearing && current_step > base_step + 0.001 {
+                            // Boundary-Aware Deceleration
                             let old_step = current_step;
                             current_step = (current_step / 2.0).max(base_step);
                             consecutive_successes = 0;
@@ -2861,6 +2976,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                             }
                         }
 
+                        last_size_pct = total_size_pct;
                         test_crf -= current_step;
                     } else {
                         fine_failures += 1;
@@ -2872,26 +2988,23 @@ fn cpu_fine_tune_from_gpu_boundary(
                             BRIGHT_RED, total_size_pct, RESET, fine_failures, max_fine_failures
                         );
 
-                        // Backtrack: halve step, retry from last successful CRF
-                        if current_step > base_step + 0.001 {
+                        // Unified Anti-Oscillation Backtrack (Safety limit: 3 retries for Phase 4)
+                        if current_step > base_step + 0.001 && backtrack_count < 3 {
                             let old_step = current_step;
                             current_step = (current_step / 2.0).max(base_step);
+                            backtrack_count += 1;
                             consecutive_successes = 0;
                             test_crf = current_best - current_step;
                             crate::log_eprintln!(
-                                "   {}↩️  Backtrack: step {:.3} → {:.3}, retry from CRF {:.2}{}",
-                                BRIGHT_YELLOW,
-                                old_step,
-                                current_step,
-                                test_crf,
-                                RESET
+                                "   {}⏪ Backtracking for extreme precision (retry {}/3): {:.3} → {:.3}{}",
+                                BRIGHT_YELLOW, backtrack_count, old_step, current_step, RESET
                             );
+                            // Stability Fix: Do NOT update last_size_pct here.
                             continue;
                         }
 
                         if fine_failures >= max_fine_failures {
                             // In ultimate mode, if we were very close to CRF 0.0, force one last check at CRF 0.0
-                            // before giving up. This ensures we don't "miss the opportunity" due to step precision.
                             if ultimate_mode
                                 && current_best > 0.0
                                 && current_best <= 20.0
@@ -2915,6 +3028,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                         }
 
                         // Step still at base: just skip this CRF and advance
+                        last_size_pct = total_size_pct;
                         test_crf -= current_step;
                     }
                 }
@@ -2976,14 +3090,29 @@ fn cpu_fine_tune_from_gpu_boundary(
         }
     }
 
+    let size_tolerance = if allow_size_tolerance {
+        crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES
+    } else {
+        0
+    };
     let (final_crf, final_full_size) = match (best_crf, best_size) {
         (Some(crf), Some(size)) if crf < max_crf => {
-            crate::log_eprintln!(
-                "{}✅ Best CRF {:.2} already encoded (full video){}",
-                BRIGHT_GREEN,
-                crf,
-                RESET
-            );
+            if size <= input_size + size_tolerance {
+                crate::log_eprintln!(
+                    "{}✅ Best CRF {:.2} already encoded (full video){}",
+                    BRIGHT_GREEN,
+                    crf,
+                    RESET
+                );
+            } else {
+                crate::log_eprintln!(
+                    "{}❌ Best tested CRF {:.2} yielded larger file (+{:+.1}%){}",
+                    BRIGHT_RED,
+                    crf,
+                    (size as f64 / input_size as f64 - 1.0) * 100.0,
+                    RESET
+                );
+            }
             (crf, size)
         }
         _ => {
@@ -3065,7 +3194,6 @@ fn cpu_fine_tune_from_gpu_boundary(
     };
 
     // User-relevant success: total file smaller (with 1MB tolerance if allowed) and quality met
-    let size_tolerance = if allow_size_tolerance { 1_048_576 } else { 0 };
     let total_file_compressed = final_full_size <= input_size + size_tolerance;
     let _video_stream_compressed =
         crate::stream_size::can_compress_pure_video(output, input_video_stream_size, true);
@@ -3109,11 +3237,27 @@ fn cpu_fine_tune_from_gpu_boundary(
 
     crate::log_eprintln!();
     crate::log_eprintln!("═══════════════════════════════════════════════════════════");
+    let result_color = if quality_passed {
+        BRIGHT_GREEN
+    } else if total_file_compressed {
+        BRIGHT_YELLOW // Compressed but maybe quality failed
+    } else {
+        BRIGHT_RED
+    };
+    let result_prefix = if quality_passed {
+        "✅ SUCCESS"
+    } else {
+        "❌ FAILED"
+    };
+
     crate::log_eprintln!(
-        "[FINISH] RESULT: CRF {:.2} │ Size {:+.1}% │ Iterations: {}",
+        "{}[FINISH] {}: CRF {:.2} │ Size {:+.1}% │ Iterations: {}{}",
+        result_color,
+        result_prefix,
         final_crf,
         size_change_pct,
-        iterations
+        iterations,
+        RESET
     );
     crate::log_eprintln!(
         "   Total file smaller than input: {}",

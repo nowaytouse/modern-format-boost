@@ -275,7 +275,8 @@ pub fn can_compress_pure_video(
     let output_info = extract_stream_sizes(output_path);
 
     let result = if allow_size_tolerance {
-        output_info.video_stream_size < input_video_stream_size.saturating_add(1_048_576)
+        output_info.video_stream_size
+            < input_video_stream_size.saturating_add(crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES)
     } else {
         output_info.video_stream_size < input_video_stream_size
     };
@@ -563,18 +564,18 @@ mod prop_tests {
             output_video_size in 1u64..1_000_000_000u64,
             input_video_size in 1u64..1_000_000_000u64,
         ) {
-            let expected_can_compress = output_video_size < input_video_size.saturating_add(1_048_576);
+            let expected_can_compress = output_video_size < input_video_size.saturating_add(crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES);
 
             // Check tolerance=true manually (mirrors logic)
             prop_assert_eq!(
                 expected_can_compress,
-                if true { output_video_size < input_video_size.saturating_add(1_048_576) } else { output_video_size < input_video_size }
+                if true { output_video_size < input_video_size.saturating_add(crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES) } else { output_video_size < input_video_size }
             );
 
             // Check tolerance=false
             prop_assert_eq!(
                 output_video_size < input_video_size,
-                if false { output_video_size < input_video_size.saturating_add(1_048_576) } else { output_video_size < input_video_size }
+                if false { output_video_size < input_video_size.saturating_add(crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES) } else { output_video_size < input_video_size }
             );
 
         }
@@ -592,15 +593,15 @@ mod prop_tests {
             let output_larger = base_size + delta;
 
             if delta > 0 {
-                prop_assert!(output_smaller < input_video_size.saturating_add(1_048_576),
+                prop_assert!(output_smaller < input_video_size.saturating_add(crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES),
                     "When output {} < tolerance(input {}) it should compress", output_smaller, input_video_size);
             }
 
-            prop_assert!((output_equal < input_video_size.saturating_add(1_048_576)),
+            prop_assert!((output_equal < input_video_size.saturating_add(crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES)),
                 "When output {} == input {} it should compress (within tolerance)", output_equal, input_video_size);
 
-            if delta >= 1_048_576 {
-                prop_assert!(output_larger >= input_video_size.saturating_add(1_048_576),
+            if delta >= crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES {
+                prop_assert!(output_larger >= input_video_size.saturating_add(crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES),
                     "When output {} > input {} and exceeds tolerance it should not compress", output_larger, input_video_size);
             }
         }
