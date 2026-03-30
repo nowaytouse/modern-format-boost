@@ -492,6 +492,9 @@ fn score_timing_value(frame_delay_variation: Option<f64>, frame_count: u64) -> f
 /// Returns `KeepGif` / `ConvertVideo` for clear-cut cases; `Undecided` otherwise.
 fn apply_veto(meta: &GifMeta, temporal_bpp: f64, spatial_bpp: f64) -> VetoVerdict {
     let pixel_count = (u64::from(meta.width) * u64::from(meta.height)) as f64;
+    let is_large_sparse_canvas = pixel_count >= PIXELS_1080P
+        && meta.duration_secs >= 2.0
+        && (meta.fps <= 6.0 || meta.frame_count <= 18);
 
     if meta.has_complex_color_profile || meta.has_embedded_icc {
         return VetoVerdict::ConvertVideo;
@@ -510,6 +513,9 @@ fn apply_veto(meta: &GifMeta, temporal_bpp: f64, spatial_bpp: f64) -> VetoVerdic
 
     // ── Hard CONVERT vetos ────────────────────────────────────────────────
     if temporal_bpp > TEMPORAL_BPP_HIGH && pixel_count >= PIXELS_1080P {
+        return VetoVerdict::ConvertVideo;
+    }
+    if is_large_sparse_canvas {
         return VetoVerdict::ConvertVideo;
     }
     if meta.duration_secs > 15.0 && pixel_count >= PIXELS_1080P {

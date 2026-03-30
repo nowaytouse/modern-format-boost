@@ -8,6 +8,19 @@ All notable changes to this project will be documented in this file.
 
 |
 
+#### 🧠 GIF Complexity Intelligence & GPU Search Enhancement
+
+- **GIF-to-Video Routing Enhancement**: Improved detection of GIFs that should be converted to video formats.
+  - **Large Sparse Canvas Detection**: Added `is_large_sparse_canvas` heuristic in `gif_meme_score.rs` to identify 1080P+ GIFs with long duration (≥2s) and low frame rates (≤6fps or ≤18 frames), automatically marking them for video conversion.
+  - **GPU Search Override**: Implemented `should_use_gpu_for_gif()` in `gpu_coarse_search.rs` to enable GPU coarse search for complex GIFs based on canvas size, density, and meme score metrics.
+  - **Enhanced Logging**: Added detailed diagnostic output showing GIF complexity reasons, scores (total, spatial_bpp, temporal_bpp) during GPU search decisions.
+
+- **Adaptive Upward Search State Machine**: Refined the CRF exploration algorithm with multi-state search cadence control.
+  - **New `UpwardSearchCadence` Enum**: Four states (Adaptive, Jogging, Paused, Normal) for fine-grained control over search behavior.
+  - **Dynamic Deceleration Logic**: Slope detection (>2.5% delta) triggers step reduction and state transitions, entering "jogging" mode before pausing adaptive changes.
+  - **State Transition Logging**: Added comprehensive logging for each cadence state change, improving observability of search behavior.
+  - **Plateau Bailout Preservation**: Maintained early-exit strategy for incompressible media while improving state anchoring during backtracking.
+
 #### 🏗️ Adaptive Search & Performance Hardening
 
 - **Adaptive Phase 2 (UPWARD) Search Hardening**: Finalized the CRF exploration pipeline in `gpu_coarse_search.rs` to prevent linear stalling on high-sloped but complex media (e.g., GIFs).

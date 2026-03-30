@@ -32,6 +32,15 @@ const CAMBI_MAX: f64 = 6.0;
 const MS_SSIM_WEIGHT: f64 = 0.6;
 const SSIM_ALL_WEIGHT: f64 = 0.4;
 const PHASE3_DOWNWARD_STEP: f32 = 0.1;
+const UPWARD_JOG_MIN_STEP: f32 = 0.5;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UpwardSearchCadence {
+    Adaptive,
+    Jogging,
+    Paused,
+    Normal,
+}
 
 #[derive(Debug, Clone)]
 enum AudioTranscodeStrategy {
@@ -103,6 +112,40 @@ const fn pick_pix_fmt(probe: &crate::ffprobe::FFprobeResult) -> &'static str {
 fn stream_size_change_pct(output_size: u64, input_size: u64) -> f64 {
     let denom = input_size.max(1) as f64;
     (output_size as f64 / denom - 1.0) * 100.0
+}
+
+fn should_use_gpu_for_gif(
+    input: &Path,
+    input_size: u64,
+    probe: Option<&crate::ffprobe::FFprobeResult>,
+) -> Option<(&'static str, crate::gif_meme_score::MemeScore)> {
+    let probe = probe?;
+    let mut meta = crate::gif_meme_score::gif_meta_from_probe_with_path(probe, input_size, input)?;
+    if let Ok((palette_size, app_extensions, has_transparency, variation, delay_variation)) =
+        crate::gif_meme_score::scan_gif_headers(input)
+    {
+        meta.palette_size = palette_size;
+        meta.app_extensions = app_extensions;
+        meta.has_transparency = has_transparency;
+        meta.frame_payload_variation = variation;
+        meta.frame_delay_variation = delay_variation;
+    }
+
+    let score = crate::gif_meme_score::score_gif(&meta);
+    let pixel_count = u64::from(meta.width) * u64::from(meta.height);
+    let giant_canvas = pixel_count >= 1920_u64 * 1080_u64;
+    let sparse_slideshow = meta.duration_secs >= 2.5 && (meta.fps <= 6.0 || meta.frame_count <= 18);
+    let physically_dense = score.spatial_bpp >= 8.0 || score.temporal_bpp >= 0.18;
+
+    if giant_canvas && sparse_slideshow {
+        Some(("large sparse canvas GIF", score))
+    } else if giant_canvas && physically_dense {
+        Some(("large dense GIF", score))
+    } else if physically_dense && score.total <= 0.42 {
+        Some(("video-like GIF complexity", score))
+    } else {
+        None
+    }
 }
 
 /// Format the `QualityCheck` log line from result; used for logging and unit tests (regression: enhanced failure shows reason, not "total file not smaller").
@@ -214,8 +257,13 @@ pub fn explore_with_gpu_coarse_search(
     };
 
     let is_gif_magic = super::stream_analysis::is_gif_magic(input);
+    let gif_gpu_override = if is_gif_magic {
+        should_use_gpu_for_gif(input, input_size, probe_result.as_ref())
+    } else {
+        None
+    };
     let mut actual_initial_crf = initial_crf;
-    if is_gif_magic {
+    if is_gif_magic && gif_gpu_override.is_none() {
         crate::log_eprintln!(
             "   {}ℹ️  GIF magic bytes detected — bypassing GPU search for precise CPU exploration{}",
             BRIGHT_CYAN,
@@ -235,13 +283,23 @@ pub fn explore_with_gpu_coarse_search(
         }
     }
 
-    let is_high_complexity = bitrate_bps > 5_000_000.0 && !is_gif_magic; // > 5 Mbps
+    let is_high_complexity = bitrate_bps > 5_000_000.0 || gif_gpu_override.is_some(); // > 5 Mbps or complex GIF
 
     let mut gpu_executed = false;
     let (cpu_min_crf, cpu_max_crf, cpu_center_crf) = if gpu.is_available()
         && has_gpu_encoder
         && is_high_complexity
     {
+        if let Some((reason, score)) = &gif_gpu_override {
+            crate::log_eprintln!(
+                "   {}🧠 GIF complexity override: enabling GPU coarse search ({reason}, score {:.3}, sbpp {:.1}, tbpp {:.3}){}",
+                BRIGHT_CYAN,
+                score.total,
+                score.spatial_bpp,
+                score.temporal_bpp,
+                RESET
+            );
+        }
         gpu_executed = true;
         crate::verbose_eprintln!();
         crate::verbose_eprintln!("Phase 1: GPU Coarse Search");
@@ -482,9 +540,16 @@ pub fn explore_with_gpu_coarse_search(
         }
     } else {
         crate::log_eprintln!();
-        if !is_high_complexity {
+        if let Some((_reason, score)) = &gif_gpu_override {
             crate::log_eprintln!(
-                "⚠️  OPTIMIZATION: Low complexity video ({:.1} Mbps < 5.0 Mbps)",
+                "⚠️  FALLBACK: Complex GIF wanted GPU coarse search, but GPU path is unavailable (score {:.3}, sbpp {:.1}, tbpp {:.3})",
+                score.total,
+                score.spatial_bpp,
+                score.temporal_bpp
+            );
+        } else if !is_high_complexity {
+            crate::log_eprintln!(
+                "⚠️  OPTIMIZATION: Low complexity video ({:.1} Mbps <= 5.0 Mbps)",
                 bitrate_bps / 1_000_000.0
             );
             crate::log_eprintln!(
@@ -2272,6 +2337,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         let mut backtrack_count = 0u32;
         let mut last_size_pct = gpu_pct;
         let mut test_crf = gpu_boundary_crf + current_step;
+        let mut search_cadence = UpwardSearchCadence::Adaptive;
         let mut found_compress_point = false;
         let mut failure_credibility = 0.0f64;
         let mut best_tested_crf = gpu_boundary_crf;
@@ -2295,49 +2361,69 @@ fn cpu_fine_tune_from_gpu_boundary(
             let size_delta = (total_size_pct - last_size_pct).abs();
 
             // Adaptive Search State Machine
-            if size_delta < 0.05 && total_size_pct > 100.0 {
-                stagnation_count += 1;
-                // Plateau Bailout: Stop if format is clearly incompressible
-                if stagnation_count >= 6 && total_size_pct > 110.0 {
-                    crate::log_eprintln!(
-                        "   {}⏸️  Quality/Size Plateau detected: bailing out early.{}",
-                        BRIGHT_RED,
-                        RESET
-                    );
-                    if best_crf.is_none() {
-                        best_crf = Some(best_tested_crf);
-                        best_size = Some(best_tested_size);
-                    }
-                    early_insight_triggered = true;
-                    break;
-                }
-                // Acceleration: Jump through ineffective CRF deadzones
-                if stagnation_count >= 2 {
-                    let old_step = current_step;
-                    current_step = (current_step * 2.0).min(5.0);
-                    if current_step > old_step {
+            if search_cadence == UpwardSearchCadence::Adaptive {
+                if size_delta < 0.05 && total_size_pct > 100.0 {
+                    stagnation_count += 1;
+                    // Plateau Bailout: Stop if format is clearly incompressible
+                    if stagnation_count >= 6 && total_size_pct > 110.0 {
                         crate::log_eprintln!(
-                            "   {}⚡ Search Accelerated (step: {:.2} → {:.2}){}",
-                            BRIGHT_YELLOW,
-                            old_step,
-                            current_step,
+                            "   {}⏸️  Quality/Size Plateau detected: bailing out early.{}",
+                            BRIGHT_RED,
                             RESET
                         );
+                        if best_crf.is_none() {
+                            best_crf = Some(best_tested_crf);
+                            best_size = Some(best_tested_size);
+                        }
+                        early_insight_triggered = true;
+                        break;
                     }
+                    // Acceleration: Jump through ineffective CRF deadzones
+                    if stagnation_count >= 2 {
+                        let old_step = current_step;
+                        current_step = (current_step * 2.0).min(5.0);
+                        if current_step > old_step {
+                            crate::log_eprintln!(
+                                "   {}⚡ Search Accelerated (step: {:.2} → {:.2}){}",
+                                BRIGHT_YELLOW,
+                                old_step,
+                                current_step,
+                                RESET
+                            );
+                        }
+                    }
+                } else if size_delta > 2.5 && total_size_pct < 110.0 {
+                    // Deceleration: Slope detected AND nearing compression boundary
+                    if current_step > step_size_upward {
+                        let jog_step = UPWARD_JOG_MIN_STEP.max(step_size_upward);
+                        if current_step > jog_step + f32::EPSILON {
+                            crate::log_eprintln!(
+                                "   {}💧 Search Decelerating (slope Δ{:.1} detected, step: {:.2} → {:.2}, entering jog){}",
+                                CYAN,
+                                size_delta,
+                                current_step,
+                                jog_step,
+                                RESET
+                            );
+                            current_step = jog_step;
+                            search_cadence = UpwardSearchCadence::Jogging;
+                        } else {
+                            crate::log_eprintln!(
+                                "   {}💧 Search Decelerating (slope Δ{:.1} detected, step: {:.2} → {:.2}, entering pause){}",
+                                CYAN,
+                                size_delta,
+                                current_step,
+                                step_size_upward,
+                                RESET
+                            );
+                            current_step = step_size_upward;
+                            search_cadence = UpwardSearchCadence::Paused;
+                        }
+                    }
+                    stagnation_count = 0;
+                } else {
+                    stagnation_count = 0;
                 }
-            } else if size_delta > 2.5 && total_size_pct < 110.0 {
-                // Deceleration: Slope detected AND nearing compression boundary
-                if current_step > step_size_upward {
-                    crate::log_eprintln!(
-                        "   {}💧 Search Decelerating (slope Δ{:.1} detected, step reset to {:.2}){}",
-                        CYAN,
-                        size_delta,
-                        step_size_upward,
-                        RESET
-                    );
-                    current_step = step_size_upward;
-                }
-                stagnation_count = 0;
             }
 
             // Track best tested CRF (smallest size increase, even if not compressed)
@@ -2469,6 +2555,31 @@ fn cpu_fine_tune_from_gpu_boundary(
                     RESET
                 );
             }
+
+            match search_cadence {
+                UpwardSearchCadence::Jogging => {
+                    crate::log_eprintln!(
+                        "   {}🐢 Search Jogging complete (step: {:.2} → {:.2}); pausing adaptive changes{}",
+                        BRIGHT_CYAN,
+                        current_step,
+                        step_size_upward,
+                        RESET
+                    );
+                    current_step = step_size_upward;
+                    search_cadence = UpwardSearchCadence::Paused;
+                }
+                UpwardSearchCadence::Paused => {
+                    crate::log_eprintln!(
+                        "   {}⏸️  Search Paused at boundary pace ({:.2}); resuming normal iteration next step{}",
+                        BRIGHT_CYAN,
+                        current_step,
+                        RESET
+                    );
+                    search_cadence = UpwardSearchCadence::Normal;
+                }
+                UpwardSearchCadence::Adaptive | UpwardSearchCadence::Normal => {}
+            }
+
             last_size_pct = total_size_pct;
             test_crf += current_step;
         }
