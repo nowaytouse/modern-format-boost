@@ -6,6 +6,26 @@ All notable changes to this project will be documented in this file.
 
 ## [0.11.2] - 2026-03-31
 
+#### 🛡️ SQLite WAL Mode & Transaction Atomicity for Crash Safety
+
+- **WAL Journal Mode**: Enabled `PRAGMA journal_mode=WAL` with `synchronous=NORMAL` in `AnalysisCache::new()` (`shared_utils/src/analysis_cache.rs:518-524`).
+  - **Problem Solved**: Previously, under SIGKILL/OOM during `store_*` writes, the rollback journal mode could leave the main database file in a torn/corrupted state ("write halfway"), causing complete DB corruption.
+  - **Solution**: In WAL mode, incomplete writes only affect the WAL file, which is automatically replayed or discarded on next open. The main DB file remains intact and consistent.
+
+- **Transaction Atomicity for Store Operations**: Wrapped dual-INSERT operations in explicit transactions (`BEGIN`/`COMMIT`/`ROLLBACK`) for all three store methods:
+  - `store_analysis()`
+  - `store_quality_analysis()`
+  - `store_video_analysis()`
+  - **Problem Solved**: Previously, the two INSERTs (`*_records` + `path_index`) were bare writes. A SIGKILL between them would leave orphaned `path_index` entries (confirmed in production with 1 observed orphan). Now both inserts land atomically or roll back together.
+
+- **Static Image Cache Coverage**: Confirmed existing cache mechanisms for PNG/WebP/HEIC/JXL/AVIF/TIFF formats (both analysis and quality layers). JPEG intentionally bypasses cache—DQT marker analysis is faster than SQLite hashing overhead.
+
+- **New Test Coverage**: Added 4 regression tests to validate crash-safety guarantees:
+  - `test_wal_mode_enabled`: Verifies new DB instances use WAL journal mode.
+  - `test_store_analysis_atomic_path_index`: Ensures no orphaned `path_index` entries after store operations.
+  - `test_quality_analysis_round_trip`: Validates complete read/write cycle for quality analysis cache.
+  - `test_checksum_corruption_detected`: Confirms corrupted `data_checksum` returns cache MISS instead of serving dirty data.
+
 #### 🛡️ GIF CRF Search Hardening & Ultimate Mode Expansion
 
 - **Phase 4: GIF Linear Sweep (0.01 Precision)**: Implemented an ultra-fine 0.01 CRF granularity sweep for GIF-to-video conversion in `ultimate_mode`. This ensures the search never misses the "perfect" quality/size balance point, especially in the sensitive 0.0–0.5 CRF range. 

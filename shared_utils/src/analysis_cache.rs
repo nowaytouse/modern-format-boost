@@ -511,6 +511,15 @@ impl AnalysisCache {
         )
         .context("Failed to open SQLite cache")?;
 
+        // WAL mode: on SIGKILL/OOM the main DB file is never left in a torn state.
+        // Partial writes only affect the WAL file, which is replayed or discarded at
+        // the next open. synchronous=NORMAL is safe with WAL (fsync on checkpoint).
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             PRAGMA synchronous=NORMAL;",
+        )
+        .context("Failed to configure WAL journal mode")?;
+
         // Check and handle schema version
         Self::check_and_migrate_schema(&conn, cache_path)?;
 
@@ -999,18 +1008,30 @@ impl AnalysisCache {
             .lock()
             .map_err(|e| anyhow::anyhow!("Mutex lock failed: {e}"))?;
 
-        // Perform in transaction for atomicity
-        conn.execute(
-            "INSERT OR REPLACE INTO analysis_records (content_hash, file_size, analysis_data, created_at, algorithm_version, content_fingerprint_hash, data_checksum) 
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
-            params![content_hash.as_bytes(), sig.size, packed_data, now, cache_algorithm_version(), &content_fingerprint[..], i64::from(checksum)],
-        )?;
-
-        conn.execute(
-            "INSERT OR REPLACE INTO path_index (file_path, content_hash, mtime, file_size, atime, ctime, btime) 
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
-            params![path_str, content_hash.as_bytes(), sig.mtime, sig.size, sig.atime, sig.ctime, sig.btime],
-        )?;
+        // Atomic: both the record and its path_index entry must land together.
+        // Without a transaction, a SIGKILL between the two INSERTs leaves an orphan.
+        conn.execute_batch("BEGIN")?;
+        let result = (|| -> Result<()> {
+            conn.execute(
+                "INSERT OR REPLACE INTO analysis_records (content_hash, file_size, analysis_data, created_at, algorithm_version, content_fingerprint_hash, data_checksum)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                params![content_hash.as_bytes(), sig.size, packed_data, now, cache_algorithm_version(), &content_fingerprint[..], i64::from(checksum)],
+            )?;
+            conn.execute(
+                "INSERT OR REPLACE INTO path_index (file_path, content_hash, mtime, file_size, atime, ctime, btime)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                params![path_str, content_hash.as_bytes(), sig.mtime, sig.size, sig.atime, sig.ctime, sig.btime],
+            )?;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => conn.execute_batch("COMMIT")?,
+            Err(ref e) => {
+                warn!(error = %e, "⚠️  [Cache] Rolling back analysis store transaction");
+                let _ = conn.execute_batch("ROLLBACK");
+                result?;
+            }
+        }
 
         debug!(
             "💾 [Cache] Stored analysis for {} (checksum: {})",
@@ -1063,17 +1084,28 @@ impl AnalysisCache {
             .lock()
             .map_err(|e| anyhow::anyhow!("Mutex lock failed: {e}"))?;
 
-        conn.execute(
-            "INSERT OR REPLACE INTO quality_records (content_hash, file_size, analysis_data, created_at, algorithm_version, content_fingerprint_hash, data_checksum) 
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
-            params![content_hash.as_bytes(), sig.size, packed_data, now, cache_algorithm_version(), &content_fingerprint[..], i64::from(checksum)],
-        )?;
-
-        conn.execute(
-            "INSERT OR REPLACE INTO path_index (file_path, content_hash, mtime, file_size, atime, ctime, btime) 
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
-            params![path_str, content_hash.as_bytes(), sig.mtime, sig.size, sig.atime, sig.ctime, sig.btime],
-        )?;
+        conn.execute_batch("BEGIN")?;
+        let result = (|| -> Result<()> {
+            conn.execute(
+                "INSERT OR REPLACE INTO quality_records (content_hash, file_size, analysis_data, created_at, algorithm_version, content_fingerprint_hash, data_checksum)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                params![content_hash.as_bytes(), sig.size, packed_data, now, cache_algorithm_version(), &content_fingerprint[..], i64::from(checksum)],
+            )?;
+            conn.execute(
+                "INSERT OR REPLACE INTO path_index (file_path, content_hash, mtime, file_size, atime, ctime, btime)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                params![path_str, content_hash.as_bytes(), sig.mtime, sig.size, sig.atime, sig.ctime, sig.btime],
+            )?;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => conn.execute_batch("COMMIT")?,
+            Err(ref e) => {
+                warn!(error = %e, "⚠️  [Cache] Rolling back quality store transaction");
+                let _ = conn.execute_batch("ROLLBACK");
+                result?;
+            }
+        }
 
         debug!(
             "💾 [Cache] Stored quality analysis for {} (checksum: {})",
@@ -1237,17 +1269,28 @@ impl AnalysisCache {
             .lock()
             .map_err(|e| anyhow::anyhow!("Mutex lock failed: {e}"))?;
 
-        conn.execute(
-            "INSERT OR REPLACE INTO video_records (content_hash, file_size, analysis_data, created_at, algorithm_version, content_fingerprint_hash, data_checksum) 
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
-            params![content_hash.as_bytes(), sig.size, packed_data, now, cache_algorithm_version(), &content_fingerprint[..], i64::from(checksum)],
-        )?;
-
-        conn.execute(
-            "INSERT OR REPLACE INTO path_index (file_path, content_hash, mtime, file_size, atime, ctime, btime) 
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
-            params![path_str, content_hash.as_bytes(), sig.mtime, sig.size, sig.atime, sig.ctime, sig.btime],
-        )?;
+        conn.execute_batch("BEGIN")?;
+        let result = (|| -> Result<()> {
+            conn.execute(
+                "INSERT OR REPLACE INTO video_records (content_hash, file_size, analysis_data, created_at, algorithm_version, content_fingerprint_hash, data_checksum)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                params![content_hash.as_bytes(), sig.size, packed_data, now, cache_algorithm_version(), &content_fingerprint[..], i64::from(checksum)],
+            )?;
+            conn.execute(
+                "INSERT OR REPLACE INTO path_index (file_path, content_hash, mtime, file_size, atime, ctime, btime)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                params![path_str, content_hash.as_bytes(), sig.mtime, sig.size, sig.atime, sig.ctime, sig.btime],
+            )?;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => conn.execute_batch("COMMIT")?,
+            Err(ref e) => {
+                warn!(error = %e, "⚠️  [Cache] Rolling back video store transaction");
+                let _ = conn.execute_batch("ROLLBACK");
+                result?;
+            }
+        }
 
         debug!(
             "💾 [Cache] Stored video analysis for {} (checksum: {})",
@@ -1564,6 +1607,160 @@ mod tests {
         assert_eq!(sig1.ctime, sig2.ctime);
         assert_eq!(sig1.size, sig2.size);
 
+        Ok(())
+    }
+
+    /// WAL mode must be active after AnalysisCache::new() so that SIGKILL/OOM
+    /// can never leave the main database file in a torn state.
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn test_wal_mode_enabled() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let db_path = temp_dir.path().join("wal_test.db");
+        let _cache = AnalysisCache::new(&db_path)?;
+
+        // Open a second connection and query the journal mode directly.
+        let conn = rusqlite::Connection::open(&db_path)?;
+        let mode: String =
+            conn.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
+        assert_eq!(
+            mode.to_lowercase(),
+            "wal",
+            "journal_mode must be WAL for crash safety"
+        );
+        Ok(())
+    }
+
+    /// store_analysis must write both the record row AND the path_index row
+    /// inside a single transaction so they are always consistent, even if the
+    /// process is killed between the two writes.
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn test_store_analysis_atomic_path_index() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let db_path = temp_dir.path().join("atomic_test.db");
+        let cache = AnalysisCache::new(&db_path)?;
+
+        let mut temp_file = NamedTempFile::new()?;
+        writeln!(temp_file, "atomic consistency test")?;
+        let path = temp_file.path();
+
+        let analysis = ImageAnalysis {
+            file_path: path.display().to_string(),
+            format: "png".to_string(),
+            ..Default::default()
+        };
+        cache.store_analysis(path, &analysis)?;
+
+        // Both tables must have exactly one entry and they must agree on content_hash.
+        let conn = rusqlite::Connection::open(&db_path)?;
+        let record_count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM analysis_records", [], |r| r.get(0))?;
+        let index_count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM path_index", [], |r| r.get(0))?;
+        assert_eq!(record_count, 1, "analysis_records must have exactly one row");
+        assert_eq!(index_count, 1, "path_index must have exactly one row");
+
+        // The content_hash in path_index must match the one in analysis_records.
+        let orphaned: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM path_index p
+             LEFT JOIN analysis_records r ON p.content_hash = r.content_hash
+             WHERE r.content_hash IS NULL",
+            [],
+            |r| r.get(0),
+        )?;
+        assert_eq!(orphaned, 0, "No orphaned path_index entries allowed");
+        Ok(())
+    }
+
+    /// store_quality_analysis and get_quality_analysis must form a working
+    /// round-trip for non-JPEG formats.
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn test_quality_analysis_round_trip() -> Result<()> {
+        use crate::image_quality_detector::{ImageContentType, ImageQualityAnalysis};
+
+        let temp_dir = tempfile::tempdir()?;
+        let db_path = temp_dir.path().join("quality_rt.db");
+        let cache = AnalysisCache::new(&db_path)?;
+
+        let mut temp_file = NamedTempFile::new()?;
+        writeln!(temp_file, "quality round-trip test payload")?;
+        let path = temp_file.path();
+
+        let analysis = ImageQualityAnalysis {
+            width: 1920,
+            height: 1080,
+            file_size: 42_000,
+            format: "PNG".to_string(),
+            has_alpha: true,
+            is_animated: false,
+            frame_count: 1,
+            complexity: 0.75,
+            edge_density: 0.33,
+            color_diversity: 0.88,
+            texture_variance: 0.12,
+            noise_level: 0.05,
+            sharpness: 0.91,
+            contrast: 0.67,
+            content_type: ImageContentType { name: "photo".to_string() },
+            confidence: 0.95,
+            precision: Default::default(),
+            history: Default::default(),
+            perception: Default::default(),
+        };
+
+        // First call: MISS → store
+        cache.store_quality_analysis(path, &analysis)?;
+
+        // Second call: must be a HIT
+        let cached = cache.get_quality_analysis(path)?;
+        let cached = cached.expect("quality analysis should be cached");
+
+        assert_eq!(cached.width, 1920);
+        assert_eq!(cached.height, 1080);
+        assert_eq!(cached.format, "PNG");
+        assert!((cached.complexity - 0.75).abs() < 1e-9);
+        assert!(cached.has_alpha);
+        Ok(())
+    }
+
+    /// A corrupted data_checksum must cause get_analysis to return None (MISS),
+    /// not silently serve stale or garbage data.
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn test_checksum_corruption_detected() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let db_path = temp_dir.path().join("checksum_corrupt.db");
+        let cache = AnalysisCache::new(&db_path)?;
+
+        let mut temp_file = NamedTempFile::new()?;
+        writeln!(temp_file, "checksum corruption test")?;
+        let path = temp_file.path();
+
+        let analysis = ImageAnalysis {
+            file_path: path.display().to_string(),
+            format: "heic".to_string(),
+            is_lossless: true,
+            ..Default::default()
+        };
+        cache.store_analysis(path, &analysis)?;
+
+        // Corrupt the stored checksum directly via a second connection.
+        {
+            let conn = rusqlite::Connection::open(&db_path)?;
+            conn.execute(
+                "UPDATE analysis_records SET data_checksum = 0xDEADBEEF",
+                [],
+            )?;
+        }
+
+        // Cache must detect the mismatch and return None instead of bad data.
+        let result = cache.get_analysis(path)?;
+        assert!(
+            result.is_none(),
+            "Corrupted checksum must result in cache MISS, not a hit"
+        );
         Ok(())
     }
 }
