@@ -2393,6 +2393,10 @@ fn cpu_fine_tune_from_gpu_boundary(
                 // Instead of walking from 0.00 to 10.75 in 40+ iterations, we jump directly
                 // to a reasonable mid-floor (12.0 for HEVC/AV1) if the ceiling is successful.
                 // The loop below will then 'officially' explore this point first.
+                //
+                // [Hardened] Always record the ceiling as the best fallback before jumping.
+                best_crf = Some(max_crf);
+                best_size = Some(ceiling_size);
                 test_crf = 12.0f32;
             }
         }
@@ -2421,6 +2425,9 @@ fn cpu_fine_tune_from_gpu_boundary(
                 found_compress_point = true;
                 best_tested_crf = test_crf;
                 best_tested_size = size;
+                // [Hardened] Record the current point as the best fallback for Phase 3 exploration
+                best_crf = Some(test_crf);
+                best_size = Some(size);
                 break; // Boundary found!
             }
 

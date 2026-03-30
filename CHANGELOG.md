@@ -44,6 +44,7 @@ All notable changes to this project will be documented in this file.
 - **Precision Interpolation Fix**: Refactored `is_lossless_exploration_safe` to use `f64` for dynamic duration threshold calculations, preventing `f32` precision truncation during KNN-weighted interpolation (`shared_utils/src/gif_value_db.rs`).
 - **Dead-Code Removal**: Simplified upward search initialization in `gpu_coarse_search.rs` by removing redundant GIF-specific conditionals that assigned identical step values.
 - **AV1 Duration Safety Guard**: Integrated the `is_lossless_exploration_safe` check into the `vid-av1` animated image pipeline, synchronizing safety logic with the HEVC path to prevent excessive probes on large GIFs (`vid_av1/src/animated_image.rs`).
+- **CRF Search Propagation Fix**: Resolved a logic gap where compression points found during "Bi-directional Pivot" or "Mid-Jump" were not committed to the global state, causing Phase 3 to lose its starting point and fallback to CRF 28.0 unnecessarily (`shared_utils/src/video_explorer/gpu_coarse_search.rs`).
 
 ## [0.11.1] - 2026-03-30
 
