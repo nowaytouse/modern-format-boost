@@ -250,7 +250,7 @@ pub fn explore_with_gpu_coarse_search(
         }
     }
 
-    let is_high_complexity = bitrate_bps > 5_000_000.0; // > 5 Mbps only (GIF excluded)
+    let is_high_complexity = bitrate_bps > 5_000_000.0 && !is_gif_magic; // > 5 Mbps only (GIF explicitly excluded)
 
     let mut gpu_executed = false;
     let (cpu_min_crf, cpu_max_crf, cpu_center_crf) = if gpu.is_available()
