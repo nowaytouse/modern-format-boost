@@ -3703,9 +3703,13 @@ pub fn explore_hevc_with_gpu_coarse_full_warm_start(
     hdr_x265_params: Option<String>,
 ) -> Result<ExploreResult> {
     let (max_crf, _) = calculate_smart_thresholds(baseline_crf, VideoEncoder::Hevc);
-    let search_anchor_crf = warm_start_crf
-        .unwrap_or(baseline_crf)
-        .clamp(ABSOLUTE_MIN_CRF, max_crf);
+    let search_anchor_crf = if let Some(hint) = warm_start_crf {
+        // [Safety Margin] Don't just trust the cache blindly; explore a 2.0-unit neighborhood
+        // below the hint to see if better quality/compression is possible on this run.
+        (hint - 2.0).max(ABSOLUTE_MIN_CRF)
+    } else {
+        baseline_crf
+    }.clamp(ABSOLUTE_MIN_CRF, max_crf);
     explore_with_gpu_coarse_search(
         input,
         output,
@@ -3856,9 +3860,13 @@ pub fn explore_av1_with_gpu_coarse_full_warm_start(
     max_threads: usize,
 ) -> Result<ExploreResult> {
     let (max_crf, _) = calculate_smart_thresholds(baseline_crf, VideoEncoder::Av1);
-    let search_anchor_crf = warm_start_crf
-        .unwrap_or(baseline_crf)
-        .clamp(ABSOLUTE_MIN_CRF, max_crf);
+    let search_anchor_crf = if let Some(hint) = warm_start_crf {
+        // [Safety Margin] Don't just trust the cache blindly; explore a 2.0-unit neighborhood
+        // below the hint to see if better quality/compression is possible on this run.
+        (hint - 2.0).max(ABSOLUTE_MIN_CRF)
+    } else {
+        baseline_crf
+    }.clamp(ABSOLUTE_MIN_CRF, max_crf);
     explore_with_gpu_coarse_search(
         input,
         output,

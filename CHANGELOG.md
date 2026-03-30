@@ -13,6 +13,9 @@ All notable changes to this project will be documented in this file.
   - `GLOBAL_MAX_ITERATIONS` raised to **500** to accommodate deep micro-sweeps.
   - `ULTIMATE_MAX_WALL_HITS` and `ULTIMATE_REQUIRED_ZERO_GAINS` doubled to **100**, allowing the search to push further into the quality ceiling for complex media.
   - Phase 4 iteration cap raised to **500** with **20** allowed fine-tune failures, ensuring convergence on the absolute physical limit of the codec.
+- **Bi-directional Pivot Search Hardening**: Relocated the pivot search logic to the entry point of Phase 2. This resolves an iteration count mismatch and ensures the "fail-fast" ceiling probe triggers immediately for incompressible media (2 iterations total).
+- **Mid-Jump Pivot Optimization**: Accelerated search for compressible high-entropy media by jumping directly to a mid-range CRF (12.0) after a successful ceiling probe, skipping redundant low-CRF walk cycles.
+- **Warm Start Neighborhood Exploration**: Implemented a **-2.0 CRF safety margin** for cached `last_best_crf` hits. Instead of blindly adopting a prior successful CRF, the system now explores the local neighborhood to find the optimal boundary for the current session.
 - **Precision "Back-Walk" Logic**: Verified and hardened the transition from Phase 2 (coarse upward) to Phase 3/4 (downward refinement). Once a success point (e.g., CRF 1.0) is found, the system now performs a guaranteed 0.1 and 0.01 "walk back" to the lossless boundary.
 
 ## [0.11.1] - 2026-03-30
