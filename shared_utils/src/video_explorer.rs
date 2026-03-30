@@ -53,7 +53,7 @@ pub const STAGE_B_BIDIRECTIONAL_MAX: u32 = 18;
 pub const BINARY_SEARCH_MAX_ITERATIONS: u32 = 12;
 
 /// Hard global limit for any single file exploration to prevent infinite loops.
-pub const GLOBAL_MAX_ITERATIONS: u32 = 60;
+pub const GLOBAL_MAX_ITERATIONS: u32 = 500;
 
 /// Files below this size are considered "small" and may trigger more aggressive margins.
 pub const SMALL_FILE_THRESHOLD: u64 = 10 * 1024 * 1024;
@@ -145,15 +145,15 @@ pub use precision::*;
 
 pub const ULTIMATE_MIN_WALL_HITS: u32 = 15;
 
-pub const ULTIMATE_MAX_WALL_HITS: u32 = 50;
+pub const ULTIMATE_MAX_WALL_HITS: u32 = 100;
 
 /// In ultimate mode, absolute saturation requires 50 consecutive samples to be statistically certain.
 use crate::constants::{
     LONG_VIDEO_THRESHOLD_SECS, VERY_LONG_VIDEO_THRESHOLD_SECS, VMAF_SKIP_THRESHOLD_ULTIMATE_SECS,
 };
 
-/// In ultimate mode, absolute saturation requires 50 consecutive samples to be statistically certain.
-pub const ULTIMATE_REQUIRED_ZERO_GAINS: u32 = 50;
+/// In ultimate mode, absolute saturation requires 100 consecutive samples to be statistically certain.
+pub const ULTIMATE_REQUIRED_ZERO_GAINS: u32 = 100;
 
 pub const NORMAL_MAX_WALL_HITS: u32 = 4;
 
@@ -4579,21 +4579,21 @@ mod tests {
             ULTIMATE_REQUIRED_ZERO_GAINS
         );
 
-        // ultimate_mode: base 50, crf_range 15 -> factor 0.75, scaled = 50 * 0.75 = 37.5 -> round to 38
+        // ultimate_mode: base 100, crf_range 15 -> factor 0.75, scaled = 100 * 0.75 = 75
         assert_eq!(
             calculate_zero_gains_for_duration_and_range(60.0, 15.0, true),
-            38
+            75
         );
 
-        // crf_range 10 -> factor 0.5, scaled = 50 * 0.5 = 25
+        // crf_range 10 -> factor 0.5, scaled = 100 * 0.5 = 50
         assert_eq!(
             calculate_zero_gains_for_duration_and_range(60.0, 10.0, true),
-            25
+            50
         );
 
         assert_eq!(
             calculate_zero_gains_for_duration_and_range(60.0, 5.0, true),
-            25
+            50
         );
     }
 

@@ -271,7 +271,7 @@ def check_changelog_sync(tracker: Tracker) -> bool:
         version = m.group(1)
         changelog_content = changelog_path.read_text(encoding="utf-8")
 
-        # Looking for header style: ## [v0.11.1] or ## [0.11.1]
+        # Looking for header style: ## [v0.11.2] or ## [0.11.2]
         pattern = rf"##\s*\[v?{re.escape(version)}\]"
         if not re.search(pattern, changelog_content):
             tracker.failed += 1

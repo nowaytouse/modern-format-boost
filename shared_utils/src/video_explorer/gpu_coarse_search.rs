@@ -1792,7 +1792,7 @@ fn cpu_fine_tune_from_gpu_boundary(
             calculate_zero_gains_for_duration_and_range(duration, crf_range, ultimate_mode);
 
         let max_iterations_for_video = if ultimate_mode {
-            200
+            500
         } else {
             calculate_max_iterations_for_duration(duration, ultimate_mode)
         };
@@ -2352,13 +2352,61 @@ fn cpu_fine_tune_from_gpu_boundary(
             upward_iteration_count: 0,
         };
 
+        // [Bi-directional Pivot / Reverse Exploration]
+        // If the initial "floor" probe (usually CRF 0.00) failed by a wide margin,
+        // we orbit to the "ceiling" (max_crf) first to see if compression is even possible.
+        // This delivers a 2-iteration "fail-fast" for non-short incompressible media.
+        if gpu_boundary_crf < 5.0 && gpu_pct > 3.0 {
+            use crate::modern_ui::colors::BRIGHT_YELLOW;
+            crate::log_eprintln!(
+                "   {}🔄 Bi-directional Pivot: CRF {:.2} too large ({:.1}%), probing ceiling CRF {:.2}...{}",
+                BRIGHT_YELLOW,
+                gpu_boundary_crf,
+                gpu_pct,
+                max_crf,
+                RESET
+            );
+
+            let ceiling_size = encode_cached(max_crf, &mut size_cache)?;
+            iterations += 1;
+
+            let ceiling_pct = if input_size > 0 {
+                (ceiling_size as f64 / input_size as f64 - 1.0) * 100.0
+            } else {
+                0.0
+            };
+
+            if ceiling_pct >= 0.0 {
+                crate::log_eprintln!(
+                    "   {}⏸️  Media is incompressible even at max quality (CRF {:.1}). Bailing out.{}",
+                    BRIGHT_RED,
+                    max_crf,
+                    RESET
+                );
+                best_crf = Some(max_crf);
+                best_size = Some(ceiling_size);
+                early_insight_triggered = true;
+                // break handled by while loop condition? No, the loop hasn't started.
+                // We'll jump past the rest of Phase 2.
+            } else {
+                crate::log_eprintln!(
+                    "   {}🎯 Ceiling hit! Bracketing effective search space [0.0, {:.2}]. Searching for transition point.{}",
+                    BRIGHT_GREEN,
+                    max_crf,
+                    RESET
+                );
+                best_tested_crf = max_crf;
+                best_tested_size = ceiling_size;
+            }
+        }
+
         let max_iterations_for_video = if ultimate_mode {
-            150
+            500
         } else {
             calculate_max_iterations_for_duration(duration, ultimate_mode)
         };
 
-        while test_crf <= max_crf && iterations < max_iterations_for_video {
+        while test_crf <= max_crf && iterations < max_iterations_for_video && !early_insight_triggered {
             let size = encode_cached(test_crf, &mut size_cache)?;
             iterations += 1;
             feedback.upward_iteration_count += 1;
@@ -2369,39 +2417,11 @@ fn cpu_fine_tune_from_gpu_boundary(
                 0.0
             };
 
-            // [Precision Boost] Bi-directional Anchor Probe (User's Reverse Exploration)
-            // If the floor (CRF 0) is way too large, check the ceiling (max_crf) immediately.
-            // This allows us to bracket the search space in exactly 2 iterations.
-            if iterations == 1 && total_size_pct > 5.0 && test_crf < 5.0 {
-                crate::log_eprintln!(
-                    "   {}🔄 Bi-directional Pivot: CRF {:.2} too large ({:.1}%), probing ceiling CRF {:.2}...{}",
-                    BRIGHT_YELLOW, test_crf, total_size_pct, max_crf, RESET
-                );
-
-                let ceiling_size = encode_cached(max_crf, &mut size_cache)?;
-                iterations += 1;
-
-                if ceiling_size >= input_size {
-                    crate::log_eprintln!(
-                        "   {}⏸️  Media is incompressible at max quality (CRF {:.2}). Bailing out.{}",
-                        BRIGHT_RED, max_crf, RESET
-                    );
-                    if best_crf.is_none() {
-                        best_crf = Some(max_crf);
-                        best_size = Some(ceiling_size);
-                    }
-                    early_insight_triggered = true;
-                    break;
-                } else {
-                    crate::log_eprintln!(
-                        "   {}🎯 Ceiling hit! Bracketing effective search space [0.0, {:.2}]. Switching to downward fine-tune.{}",
-                        BRIGHT_GREEN, max_crf, RESET
-                    );
-                    best_crf = Some(max_crf);
-                    best_size = Some(ceiling_size);
-                    found_compress_point = true;
-                    break; // Swaps instantly to Phase 3 (Downward search)
-                }
+            if total_size_pct < 0.0 {
+                found_compress_point = true;
+                best_tested_crf = test_crf;
+                best_tested_size = size;
+                break; // Boundary found!
             }
 
             let size_delta = (total_size_pct - last_size_pct).abs();
@@ -3044,7 +3064,7 @@ fn cpu_fine_tune_from_gpu_boundary(
 
                 // In ultimate mode allow many more fine-tune failures before giving up:
                 // size-wall explosions are expected near CRF=0 for GIF/complex sources.
-                let max_fine_failures = if ultimate_mode { 8 } else { 3 };
+                let max_fine_failures = if ultimate_mode { 20 } else { 3 };
 
                 crate::log_eprintln!(
                     "   {}Starting from 0.1 optimum (CRF {:.2}) with adaptive step (0.01 → {:.2} sprint){}",
@@ -3064,7 +3084,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                 let search_floor = 0.0_f32;
                 let mut consecutive_successes = 0;
 
-                while test_crf >= search_floor && iterations < 200 {
+                while test_crf >= search_floor && iterations < 500 {
                     // Round to 0.01 precision to avoid float drift accumulating past 0.0
                     test_crf = (test_crf * 100.0).round() / 100.0;
                     // Clamp: never go negative due to floating-point underflow

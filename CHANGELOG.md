@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.11.2] - 2026-03-31
+
+#### 🛡️ GIF CRF Search Hardening & Ultimate Mode Expansion
+
+- **Phase 4: GIF Linear Sweep (0.01 Precision)**: Implemented an ultra-fine 0.01 CRF granularity sweep for GIF-to-video conversion in `ultimate_mode`. This ensures the search never misses the "perfect" quality/size balance point, especially in the sensitive 0.0–0.5 CRF range. 
+- **Extended Iteration Limits (Ultimate Mode)**: Significant increase in exploration depth for high-precision tasks.
+  - `GLOBAL_MAX_ITERATIONS` raised to **500** to accommodate deep micro-sweeps.
+  - `ULTIMATE_MAX_WALL_HITS` and `ULTIMATE_REQUIRED_ZERO_GAINS` doubled to **100**, allowing the search to push further into the quality ceiling for complex media.
+  - Phase 4 iteration cap raised to **500** with **20** allowed fine-tune failures, ensuring convergence on the absolute physical limit of the codec.
+- **Precision "Back-Walk" Logic**: Verified and hardened the transition from Phase 2 (coarse upward) to Phase 3/4 (downward refinement). Once a success point (e.g., CRF 1.0) is found, the system now performs a guaranteed 0.1 and 0.01 "walk back" to the lossless boundary.
+
 ## [0.11.1] - 2026-03-30
 
 #### 🛡️ Search Pipeline Hardening & Efficiency
