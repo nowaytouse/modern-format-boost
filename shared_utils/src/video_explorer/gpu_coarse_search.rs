@@ -2406,7 +2406,10 @@ fn cpu_fine_tune_from_gpu_boundary(
             calculate_max_iterations_for_duration(duration, ultimate_mode)
         };
 
-        while test_crf <= max_crf && iterations < max_iterations_for_video && !early_insight_triggered {
+        while test_crf <= max_crf
+            && iterations < max_iterations_for_video
+            && !early_insight_triggered
+        {
             let size = encode_cached(test_crf, &mut size_cache)?;
             iterations += 1;
             feedback.upward_iteration_count += 1;
