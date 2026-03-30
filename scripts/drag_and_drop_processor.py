@@ -66,6 +66,7 @@ TARGET_DIR = ""
 OUTPUT_DIR = ""
 ULTIMATE_MODE = True
 VERBOSE_MODE = False
+RESUME_MODE = False
 
 IMG_SUCCEEDED = 0
 IMG_SKIPPED = 0
@@ -843,11 +844,11 @@ def process_images():
             )
             sys.exit(1)
 
-        # Rust tools have built-in cache/resume, so we just continue
-        print(f"{DIM}   ✓ Rust cache will resume from last completed file.{RESET}\n")
-
     draw_separator(f"Processing Images ({IMG_COUNT})")
     cmd = [str(IMGQUALITY_HEVC), "run", "--recursive", "--allow-size-tolerance"]
+    if RESUME_MODE:
+        cmd.append("--resume")
+        print(f"{DIM}   ✓ Progress Resume: ENABLED (skipping already completed files){RESET}")
     if ULTIMATE_MODE:
         cmd.append("--ultimate")
     if VERBOSE_MODE:
@@ -886,11 +887,11 @@ def process_videos():
             )
             sys.exit(1)
 
-        # Rust tools have built-in cache/resume, so we just continue
-        print(f"{DIM}   ✓ Rust cache will resume from last completed file.{RESET}\n")
-
     draw_separator(f"Processing Videos ({VID_COUNT})")
     cmd = [str(VIDQUALITY_HEVC), "run", "--recursive", "--allow-size-tolerance"]
+    if RESUME_MODE:
+        cmd.append("--resume")
+        print(f"{DIM}   ✓ Progress Resume: ENABLED (skipping already completed files){RESET}")
     if ULTIMATE_MODE:
         cmd.append("--ultimate")
     if VERBOSE_MODE:
@@ -1044,7 +1045,7 @@ def merge_run_logs():
 def main():
     # Optimization: Tighten GIL switch interval for smoother high-load terminal relaying
     sys.setswitchinterval(0.0005)
-    global ULTIMATE_MODE, VERBOSE_MODE, WATCH_MODE, TARGET_DIR, OUTPUT_MODE, OUTPUT_DIR
+    global ULTIMATE_MODE, VERBOSE_MODE, WATCH_MODE, RESUME_MODE, TARGET_DIR, OUTPUT_MODE, OUTPUT_DIR
     os.environ["MFB_GUI_LAUNCH"] = "1"
     os.environ["FORCE_COLOR"] = "1"
     os.environ["CLICOLOR_FORCE"] = "1"
@@ -1060,11 +1061,14 @@ def main():
             VERBOSE_MODE = True
         elif arg == "--watch":
             WATCH_MODE = True
+        elif arg == "--resume":
+            RESUME_MODE = True
         elif arg in ("--help", "-h"):
             print("Usage: drag_and_drop_processor.py [options] [target_directory]")
             print("\nOptions:")
             print("  --ultimate    Enable ultimate optimization mode")
             print("  --verbose, -v Enable verbose output")
+            print("  --resume      Resume from last completed session")
             print("  --watch       Watch directory for new files")
             print("  --help, -h    Show this help message")
             sys.exit(0)

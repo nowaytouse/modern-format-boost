@@ -53,7 +53,7 @@ enum Commands {
         no_allow_size_tolerance: bool,
         #[arg(short, long)]
         verbose: bool,
-        #[arg(long, default_value_t = true)]
+        #[arg(long, default_value_t = false)]
         resume: bool,
         #[arg(long)]
         no_resume: bool,

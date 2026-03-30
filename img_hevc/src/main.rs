@@ -79,8 +79,8 @@ enum Commands {
         #[arg(long)]
         force_video: bool,
 
-        /// Resume from last run: skip files already in progress file (default).
-        #[arg(long, default_value_t = true)]
+        /// Resume from last run: skip files already in progress file.
+        #[arg(long, default_value_t = false)]
         resume: bool,
 
         /// Start fresh: ignore previous progress file, process all files.
