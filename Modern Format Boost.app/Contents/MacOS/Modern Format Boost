@@ -54,7 +54,9 @@ launch_in_terminal() {
 
     osascript <<EOF
 tell application "Terminal"
-    do script "$escaped_cmd"
+    set new_tab to do script "$escaped_cmd"
+    set number of columns of new_tab to 223
+    set number of rows of new_tab to 45
     activate
 end tell
 EOF

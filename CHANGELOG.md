@@ -64,6 +64,7 @@ All notable changes to this project will be documented in this file.
   - Relocated messy root-level configuration files (`.markdownlint-cli2.jsonc`) to `scripts/config/`.
   - Moved temporary debug scripts (`tmp_db_path.rs`) to the dedicated `debug/` directory.
   - Updated `check_all.py` to use absolute configuration paths, ensuring audit consistency across different execution contexts.
+- **Standardized Terminal Resolution**: Standardized the default terminal window size to **223x45** (Columns x Rows) across the macOS App wrapper and Python processor for improved log visibility.
 - **UI & UX Refinement**:
   - Suppressed cluttered JSON-based content classification labels (`PHOTO`, `SCREENSHOT`, etc.) from the primary console output in `img_hevc` and `img_av1`.
   - Maintained zero-warning compliance across the workspace following label suppression.

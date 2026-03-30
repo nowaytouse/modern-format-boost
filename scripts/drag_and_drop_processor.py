@@ -96,7 +96,7 @@ def hide_cursor():
     sys.stdout.flush()
 
 
-def resize_terminal(rows=35, cols=120):
+def resize_terminal(rows=45, cols=223):
     """
     Update terminal window size to wide format for better progress visibility.
     """
@@ -185,11 +185,12 @@ def init_log():
     global SESSION_START_TIME, LOG_FILE, VERBOSE_LOG_FILE
     # Resize terminal to 40x100 (Legacy behavior)
     if sys.stdout.isatty():
-        sys.stdout.write("\033[8;40;100t")
+        # Set terminal dimensions to wide format (45x223)
+        sys.stdout.write("\033[8;45;223t")
         sys.stdout.flush()
         # Lock terminal dimensions for subprocess progress bars (indicatif/console)
-        os.environ["COLUMNS"] = "100"
-        os.environ["LINES"] = "40"
+        os.environ["COLUMNS"] = "223"
+        os.environ["LINES"] = "45"
 
     SESSION_START_TIME = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     LOG_DIR.mkdir(parents=True, exist_ok=True)
