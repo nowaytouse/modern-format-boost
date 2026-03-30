@@ -603,7 +603,9 @@ def main() -> None:
         check_bundle_metadata(tracker)
 
         if md_files and has_command("markdownlint-cli2", verbose=args.verbose):
-            config_path = os.path.join(repo_root, "scripts/config/.markdownlint-cli2.jsonc")
+            config_path = os.path.join(
+                repo_root, "scripts/config/.markdownlint-cli2.jsonc"
+            )
             run_step(
                 tracker,
                 "optional",

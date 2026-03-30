@@ -33,6 +33,8 @@ const MS_SSIM_WEIGHT: f64 = 0.6;
 const SSIM_ALL_WEIGHT: f64 = 0.4;
 const PHASE3_DOWNWARD_STEP: f32 = 0.1;
 const UPWARD_JOG_MIN_STEP: f32 = 0.5;
+const UPWARD_SIZE_STAGNATION_THRESHOLD: u32 = 4;
+const UPWARD_DIRECTION_SWITCH_LIMIT: u32 = 15;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum UpwardSearchCadence {
@@ -40,6 +42,12 @@ enum UpwardSearchCadence {
     Jogging,
     Paused,
     Normal,
+}
+
+#[derive(Debug, Clone)]
+struct UpwardSearchFeedback {
+    size_stagnation_count: u32,
+    upward_iteration_count: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -112,40 +120,6 @@ const fn pick_pix_fmt(probe: &crate::ffprobe::FFprobeResult) -> &'static str {
 fn stream_size_change_pct(output_size: u64, input_size: u64) -> f64 {
     let denom = input_size.max(1) as f64;
     (output_size as f64 / denom - 1.0) * 100.0
-}
-
-fn should_use_gpu_for_gif(
-    input: &Path,
-    input_size: u64,
-    probe: Option<&crate::ffprobe::FFprobeResult>,
-) -> Option<(&'static str, crate::gif_meme_score::MemeScore)> {
-    let probe = probe?;
-    let mut meta = crate::gif_meme_score::gif_meta_from_probe_with_path(probe, input_size, input)?;
-    if let Ok((palette_size, app_extensions, has_transparency, variation, delay_variation)) =
-        crate::gif_meme_score::scan_gif_headers(input)
-    {
-        meta.palette_size = palette_size;
-        meta.app_extensions = app_extensions;
-        meta.has_transparency = has_transparency;
-        meta.frame_payload_variation = variation;
-        meta.frame_delay_variation = delay_variation;
-    }
-
-    let score = crate::gif_meme_score::score_gif(&meta);
-    let pixel_count = u64::from(meta.width) * u64::from(meta.height);
-    let giant_canvas = pixel_count >= 1920_u64 * 1080_u64;
-    let sparse_slideshow = meta.duration_secs >= 2.5 && (meta.fps <= 6.0 || meta.frame_count <= 18);
-    let physically_dense = score.spatial_bpp >= 8.0 || score.temporal_bpp >= 0.18;
-
-    if giant_canvas && sparse_slideshow {
-        Some(("large sparse canvas GIF", score))
-    } else if giant_canvas && physically_dense {
-        Some(("large dense GIF", score))
-    } else if physically_dense && score.total <= 0.42 {
-        Some(("video-like GIF complexity", score))
-    } else {
-        None
-    }
 }
 
 /// Format the `QualityCheck` log line from result; used for logging and unit tests (regression: enhanced failure shows reason, not "total file not smaller").
@@ -257,22 +231,15 @@ pub fn explore_with_gpu_coarse_search(
     };
 
     let is_gif_magic = super::stream_analysis::is_gif_magic(input);
-    let gif_gpu_override = if is_gif_magic {
-        should_use_gpu_for_gif(input, input_size, probe_result.as_ref())
-    } else {
-        None
-    };
     let mut actual_initial_crf = initial_crf;
-    if is_gif_magic && gif_gpu_override.is_none() {
+
+    if is_gif_magic {
         crate::log_eprintln!(
-            "   {}ℹ️  GIF magic bytes detected — bypassing GPU search for precise CPU exploration{}",
+            "   {}ℹ️  GIF magic bytes detected — using CPU-only exploration{}",
             BRIGHT_CYAN,
             RESET
         );
 
-        // [Optimization] GIF "Lossless-First" (Reverse Exploration)
-        // GIFs (8-bit palette) are extremely compressible. CRF 0.0 is often < original size.
-        // Starting at 0.0 allows 1-pass success for the vast majority of cases in ultimate mode.
         if ultimate_mode {
             crate::log_eprintln!(
                 "   {}🚀 GIF Lossless-First Path: Probing CRF 0.0 for maximum efficiency{}",
@@ -283,23 +250,13 @@ pub fn explore_with_gpu_coarse_search(
         }
     }
 
-    let is_high_complexity = bitrate_bps > 5_000_000.0 || gif_gpu_override.is_some(); // > 5 Mbps or complex GIF
+    let is_high_complexity = bitrate_bps > 5_000_000.0; // > 5 Mbps only (GIF excluded)
 
     let mut gpu_executed = false;
     let (cpu_min_crf, cpu_max_crf, cpu_center_crf) = if gpu.is_available()
         && has_gpu_encoder
         && is_high_complexity
     {
-        if let Some((reason, score)) = &gif_gpu_override {
-            crate::log_eprintln!(
-                "   {}🧠 GIF complexity override: enabling GPU coarse search ({reason}, score {:.3}, sbpp {:.1}, tbpp {:.3}){}",
-                BRIGHT_CYAN,
-                score.total,
-                score.spatial_bpp,
-                score.temporal_bpp,
-                RESET
-            );
-        }
         gpu_executed = true;
         crate::verbose_eprintln!();
         crate::verbose_eprintln!("Phase 1: GPU Coarse Search");
@@ -420,7 +377,7 @@ pub fn explore_with_gpu_coarse_search(
                     if let Some(ceiling_crf) = gpu_result.quality_ceiling_crf {
                         if ceiling_crf == gpu_crf {
                             crate::verbose_eprintln!(
-                                "GPU Boundary = Quality Ceiling: CRF {:.1}",
+                                "GPU Boundary = Quality Ceiling: CRF {:.2}",
                                 gpu_crf
                             );
                             crate::verbose_eprintln!(
@@ -428,13 +385,13 @@ pub fn explore_with_gpu_coarse_search(
                             );
                         } else {
                             crate::verbose_eprintln!(
-                                "GPU Boundary: CRF {:.1} (stopped before quality ceiling)",
+                                "GPU Boundary: CRF {:.2} (stopped before quality ceiling)",
                                 gpu_crf
                             );
                         }
                     } else {
                         crate::verbose_eprintln!(
-                            "GPU Boundary: CRF {:.1} (quality ceiling not detected)",
+                            "GPU Boundary: CRF {:.2} (quality ceiling not detected)",
                             gpu_crf
                         );
                     }
@@ -449,7 +406,7 @@ pub fn explore_with_gpu_coarse_search(
                     let cpu_start = dynamic_cpu_crf;
 
                     crate::verbose_eprintln!(
-                        "   ✅ GPU found boundary: CRF {:.1} (fine-tuned: {})",
+                        "   ✅ GPU found boundary: CRF {:.2} (fine-tuned: {})",
                         gpu_crf,
                         gpu_result.fine_tuned
                     );
@@ -462,7 +419,7 @@ pub fn explore_with_gpu_coarse_search(
                         gpu_result.quality_ceiling_ssim,
                     ) {
                         crate::verbose_eprintln!(
-                            "   GPU Quality Ceiling: CRF {:.1}, SSIM {:.4}",
+                            "   GPU Quality Ceiling: CRF {:.2}, SSIM {:.4}",
                             ceiling_crf,
                             ceiling_ssim
                         );
@@ -540,14 +497,7 @@ pub fn explore_with_gpu_coarse_search(
         }
     } else {
         crate::log_eprintln!();
-        if let Some((_reason, score)) = &gif_gpu_override {
-            crate::log_eprintln!(
-                "⚠️  FALLBACK: Complex GIF wanted GPU coarse search, but GPU path is unavailable (score {:.3}, sbpp {:.1}, tbpp {:.3})",
-                score.total,
-                score.spatial_bpp,
-                score.temporal_bpp
-            );
-        } else if !is_high_complexity {
+        if !is_high_complexity {
             crate::log_eprintln!(
                 "⚠️  OPTIMIZATION: Low complexity video ({:.1} Mbps <= 5.0 Mbps)",
                 bitrate_bps / 1_000_000.0
@@ -564,16 +514,23 @@ pub fn explore_with_gpu_coarse_search(
             );
         }
         // CPU-only search (Bypass GPU)
-        (ABSOLUTE_MIN_CRF, max_crf, actual_initial_crf)
+        if is_gif_magic && actual_initial_crf == 0.0 {
+            // [New] GIF CRF 0.00 Fast-Path
+            // If CRF 0.00 already provides compression, we adopt it immediately.
+            // This prevents redundant search iterations for already-compressible GIFs.
+            (0.0, max_crf, 0.0)
+        } else {
+            (ABSOLUTE_MIN_CRF, max_crf, actual_initial_crf)
+        }
     };
 
     crate::verbose_eprintln!("Phase 2: 🖥️  CPU Fine-Tune (0.5→0.1 step)");
-    crate::verbose_eprintln!("Starting from GPU boundary: CRF {:.1}", cpu_center_crf);
+    crate::verbose_eprintln!("Starting from GPU boundary: CRF {:.2}", cpu_center_crf);
 
     let clamped_cpu_center_crf = cpu_center_crf.clamp(cpu_min_crf, cpu_max_crf);
     if (clamped_cpu_center_crf - cpu_center_crf).abs() > 0.01 {
         crate::verbose_eprintln!(
-            "   ⚠️ CPU start CRF {:.1} clamped to {:.1} (within valid range [{:.1}, {:.1}])",
+            "   ⚠️ CPU start CRF {:.2} clamped to {:.1} (within valid range [{:.1}, {:.1}])",
             cpu_center_crf,
             clamped_cpu_center_crf,
             cpu_min_crf,
@@ -600,6 +557,7 @@ pub fn explore_with_gpu_coarse_search(
         &mut best_vmaf_tracked,
         &mut best_psnr_uv_tracked,
         gpu_executed,
+        is_gif_magic,
         hdr_x265_params,
     )?;
 
@@ -1147,10 +1105,15 @@ pub fn explore_with_gpu_coarse_search(
             VideoEncoder::Hevc | VideoEncoder::H264 => CrfMapping::hevc(gpu.gpu_type), // H.264 reuses HEVC mapping
         };
         let equivalent_gpu_crf = mapping.cpu_to_gpu(result.optimal_crf);
+        let crf_display = if result.optimal_crf < 0.01 {
+            format!("{:.2} (Lossless)", result.optimal_crf)
+        } else {
+            format!("{:.2}", result.optimal_crf)
+        };
         crate::verbose_eprintln!("   ═══════════════════════════════════════════════════");
         crate::verbose_eprintln!(
-            "   CRF Mapping: CPU {:.1} ≈ GPU {:.1}",
-            result.optimal_crf,
+            "   CRF Mapping: CPU {} ≈ GPU {:.1}",
+            crf_display,
             equivalent_gpu_crf
         );
     }
@@ -1215,6 +1178,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     best_vmaf_tracked: &mut Option<f64>,
     best_psnr_uv_tracked: &mut Option<(f64, f64)>,
     gpu_executed: bool,
+    is_gif_magic: bool,
     hdr_x265_params: Option<String>,
 ) -> Result<ExploreResult> {
     let log = Vec::new();
@@ -1479,7 +1443,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                     Ok(line) => line,
                     Err(err) => {
                         crate::verbose_eprintln!(
-                            "⚠️  Failed to read ffmpeg progress stream at CRF {:.1}: {}",
+                            "⚠️  Failed to read ffmpeg progress stream at CRF {:.2}: {}",
                             crf,
                             err
                         );
@@ -1645,7 +1609,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     let mut best_size: Option<u64> = None;
 
     crate::verbose_eprintln!(
-        "{}Step: {:.2} | GPU boundary: CRF {:.1}{}",
+        "{}Step: {:.2} | GPU boundary: CRF {:.2}{}",
         DIM,
         step_size_upward,
         gpu_boundary_crf,
@@ -1728,7 +1692,7 @@ fn cpu_fine_tune_from_gpu_boundary(
 
     let gpu_size = encode_cached(gpu_boundary_crf, &mut size_cache).map_err(|e| {
         crate::log_eprintln!(
-            "{}⚠️  Boundary verification failed at CRF {:.1}{}",
+            "{}⚠️  Boundary verification failed at CRF {:.2}{}",
             BRIGHT_YELLOW,
             gpu_boundary_crf,
             RESET
@@ -1772,7 +1736,7 @@ fn cpu_fine_tune_from_gpu_boundary(
 
         let source_label = if gpu_executed { "[GPU]" } else { "[Initial]" };
         crate::log_eprintln!(
-            "{}{}   {}✓{} {} {}CRF {:<4.1}{} {}{:6.1}%{}{} ✅",
+            "{}{}   {}✓{} {} {}CRF {:<5.2}{} {}{:6.1}%{}{} ✅",
             RESET,
             RESET,
             BRIGHT_GREEN,
@@ -1933,7 +1897,7 @@ fn cpu_fine_tune_from_gpu_boundary(
             if test_crf < search_floor {
                 if current_step > MIN_STEP + 0.01 {
                     crate::verbose_eprintln!(
-                        "   {}Reached search floor, fine tuning from CRF {:.1}{}",
+                        "   {}Reached search floor, fine tuning from CRF {:.2}{}",
                         BRIGHT_CYAN,
                         last_good_crf,
                         RESET
@@ -2126,7 +2090,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                     };
 
                     crate::log_eprintln!(
-                        "{}{}   {}✓{} [CPU] {}CRF {:<4.1}{} {}{:6.1}% {} {}{}",
+                        "{}{}   {}✓{} [CPU] {}CRF {:<5.2}{} {}{:6.1}% {} {}{}",
                         RESET,
                         RESET,
                         BRIGHT_GREEN,
@@ -2147,7 +2111,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                     quality_wall_triggered
                 } else {
                     crate::log_eprintln!(
-                        "{}{}   {}✓{} [CPU] {}CRF {:<4.1}{} {}{:6.1}% {} │ SSIM N/A",
+                        "{}{}   {}✓{} [CPU] {}CRF {:<5.2}{} {}{:6.1}% {} │ SSIM N/A",
                         RESET,
                         RESET,
                         BRIGHT_GREEN,
@@ -2184,7 +2148,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                             BRIGHT_YELLOW, RESET, consecutive_zero_gains);
                     }
                     crate::verbose_eprintln!(
-                        "   {}Final: CRF {:.1}, compression {:+.1}%, iterations {}{}",
+                        "   {}Final: CRF {:.2}, compression {:+.1}%, iterations {}{}",
                         BRIGHT_CYAN,
                         test_crf,
                         total_size_pct,
@@ -2217,7 +2181,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                 };
 
                 crate::log_eprintln!(
-                    "{}{}   {}✗{} [CPU] {}CRF {:<4.1}{} {}{:6.1}% {} │ ❌ WALL HIT #{} (Backtrack: {:.2} → {:.2} {})",
+                    "{}{}   {}✗{} [CPU] {}CRF {:<5.2}{} {}{:6.1}% {} │ ❌ WALL HIT #{} (Backtrack: {:.2} → {:.2} {})",
                     RESET, RESET, BRIGHT_RED, RESET, CYAN, test_crf, RESET,
                     DIM, total_size_pct, RESET, wall_hits, current_step, new_step, phase_info
                 );
@@ -2247,7 +2211,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                 if wall_hits >= max_wall_hits {
                     if ultimate_mode {
                         crate::log_eprintln!(
-                            "   {} [CPU] Adaptive wall limit ({}) reached.{} Stopping at best CRF {:.1}",
+                            "   {} [CPU] Adaptive wall limit ({}) reached.{} Stopping at best CRF {:.2}",
                             BRIGHT_YELLOW,
                             max_wall_hits,
                             RESET,
@@ -2255,7 +2219,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                         );
                     } else {
                         crate::log_eprintln!(
-                            "   {} [CPU] Max wall hits ({}) reached.{} Stopping at best CRF {:.1}",
+                            "   {} [CPU] Max wall hits ({}) reached.{} Stopping at best CRF {:.2}",
                             BRIGHT_YELLOW,
                             max_wall_hits,
                             RESET,
@@ -2284,7 +2248,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                 RESET
             );
             crate::verbose_eprintln!(
-                "   {}Final: CRF {:.1}, iterations {}{}",
+                "   {}Final: CRF {:.2}, iterations {}{}",
                 BRIGHT_CYAN,
                 last_good_crf,
                 iterations,
@@ -2299,7 +2263,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                 RESET
             );
             crate::verbose_eprintln!(
-                "   {}Final: CRF {:.1}, iterations {}{}",
+                "   {}Final: CRF {:.2}, iterations {}{}",
                 BRIGHT_CYAN,
                 last_good_crf,
                 iterations,
@@ -2316,7 +2280,7 @@ fn cpu_fine_tune_from_gpu_boundary(
             BRIGHT_CYAN, BRIGHT_GREEN, BRIGHT_RED, BRIGHT_YELLOW, CYAN, RESET,
         };
         crate::log_eprintln!(
-            "{}{}   {}✗{} [CPU] {}CRF {:<4.1}{} {}{:6.1}%{} ❌ (TOO LARGE)",
+            "{}{}   {}✗{} [CPU] {}CRF {:<5.2}{} {}{:6.1}%{} ❌ (TOO LARGE)",
             RESET,
             RESET,
             BRIGHT_RED,
@@ -2343,6 +2307,11 @@ fn cpu_fine_tune_from_gpu_boundary(
         let mut best_tested_crf = gpu_boundary_crf;
         let mut best_tested_size = gpu_size;
 
+        let mut feedback = UpwardSearchFeedback {
+            size_stagnation_count: 0,
+            upward_iteration_count: 0,
+        };
+
         let max_iterations_for_video = if ultimate_mode {
             150
         } else {
@@ -2352,6 +2321,8 @@ fn cpu_fine_tune_from_gpu_boundary(
         while test_crf <= max_crf && iterations < max_iterations_for_video {
             let size = encode_cached(test_crf, &mut size_cache)?;
             iterations += 1;
+            feedback.upward_iteration_count += 1;
+
             let total_size_pct = if input_size > 0 {
                 (size as f64 / input_size as f64 - 1.0) * 100.0
             } else {
@@ -2359,6 +2330,40 @@ fn cpu_fine_tune_from_gpu_boundary(
             };
 
             let size_delta = (total_size_pct - last_size_pct).abs();
+
+            // [New] Direction Switch Logic for GIFs
+            // If we've been searching upward for a long time without finding compression,
+            // or if the size is barely changing (stagnation), switch to downward search.
+            if is_gif_magic {
+                if size_delta < 0.5 {
+                    feedback.size_stagnation_count += 1;
+                } else {
+                    feedback.size_stagnation_count = 0;
+                }
+
+                if feedback.size_stagnation_count >= UPWARD_SIZE_STAGNATION_THRESHOLD
+                    || feedback.upward_iteration_count >= UPWARD_DIRECTION_SWITCH_LIMIT
+                {
+                    let trigger_reason =
+                        if feedback.size_stagnation_count >= UPWARD_SIZE_STAGNATION_THRESHOLD {
+                            format!("size stagnation ({})", feedback.size_stagnation_count)
+                        } else {
+                            format!("iteration limit ({})", feedback.upward_iteration_count)
+                        };
+
+                    crate::log_eprintln!(
+                        "   {}🔄 GIF Search Direction Switch: {} reached. Switching to downward search for efficiency.{}",
+                        BRIGHT_YELLOW,
+                        trigger_reason,
+                        RESET
+                    );
+
+                    found_compress_point = true;
+                    // Start Phase 3 from max_crf to find the boundary from the top
+                    best_crf = Some(max_crf);
+                    break;
+                }
+            }
 
             // Adaptive Search State Machine
             if search_cadence == UpwardSearchCadence::Adaptive {
@@ -2462,7 +2467,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                         "→"
                     };
                     crate::log_eprintln!(
-                        "{}{}   {}✗{} [CPU] {}CRF {:<4.1}{} {}{:6.1}% {} │ VMAF:{:.2} UV:{:.2} ({:.1}/3.0 {})",
+                        "{}{}   {}✗{} [CPU] {}CRF {:<5.2}{} {}{:6.1}% {} │ VMAF:{:.2} UV:{:.2} ({:.1}/3.0 {})",
                         RESET, RESET, BRIGHT_RED, RESET, CYAN, test_crf, RESET,
                         DIM, total_size_pct, RESET, v, chroma_avg, failure_credibility, improvement_indicator
                     );
@@ -2527,7 +2532,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                 }
                 found_compress_point = true;
                 crate::log_eprintln!(
-                    "{}{}   {}✓{} [CPU] {}CRF {:<4.1}{} {}{:6.1}%{} │ FOUND! ✅",
+                    "{}{}   {}✓{} [CPU] {}CRF {:<5.2}{} {}{:6.1}%{} │ FOUND! ✅",
                     RESET,
                     RESET,
                     BRIGHT_GREEN,
@@ -2542,7 +2547,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                 break; // Stop Phase 2 after finding first compression point
             } else if !ultimate_mode {
                 crate::log_eprintln!(
-                    "{}{}   {}✗{} [CPU] {}CRF {:<4.1}{} {}{:6.1}%{} ❌",
+                    "{}{}   {}✗{} [CPU] {}CRF {:<5.2}{} {}{:6.1}%{} ❌",
                     RESET,
                     RESET,
                     BRIGHT_RED,
@@ -2701,7 +2706,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                     };
 
                     crate::log_eprintln!(
-                        "{}{}   {}✓{} [CPU] {}CRF {:<4.1}{} {}{:6.1}%{}{} (step {:.2}) ✅",
+                        "{}{}   {}✓{} [CPU] {}CRF {:<5.2}{} {}{:6.1}%{}{} (step {:.2}) ✅",
                         RESET,
                         RESET,
                         BRIGHT_GREEN,
@@ -2823,7 +2828,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                     };
 
                     crate::log_eprintln!(
-                        "{}{}   {}✗{} [CPU] {}CRF {:<4.1}{} {}{:6.1}%{}{} {}❌ (fail #{}/{})",
+                        "{}{}   {}✗{} [CPU] {}CRF {:<5.2}{} {}{:6.1}%{}{} {}❌ (fail #{}/{})",
                         RESET,
                         RESET,
                         BRIGHT_RED,
@@ -2913,7 +2918,7 @@ fn cpu_fine_tune_from_gpu_boundary(
             }
         } else {
             crate::log_eprintln!(
-                "{}❌ FAILED: No compression point found below input size (up to max CRF {:.1}){}",
+                "{}❌ FAILED: No compression point found below input size (up to max CRF {:.2}){}",
                 BRIGHT_RED,
                 max_crf,
                 RESET

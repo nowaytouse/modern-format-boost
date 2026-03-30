@@ -1300,13 +1300,15 @@ pub fn convert_to_hevc_mp4_matched(
         .map(|s| format!(", SSIM: {s:.4}"))
         .unwrap_or_default();
 
+    let crf_display = if explore_result.optimal_crf < 0.01 {
+        format!("{:.2} (Lossless)", explore_result.optimal_crf)
+    } else {
+        format!("{:.2}", explore_result.optimal_crf)
+    };
+
     let message = format!(
-        "HEVC (CRF {:.1}{}, {} iter{}): -{:.1}%",
-        explore_result.optimal_crf,
-        explored_msg,
-        explore_result.iterations,
-        ssim_msg,
-        reduction_pct
+        "HEVC (CRF {}{}, {} iter{}): -{:.1}%",
+        crf_display, explored_msg, explore_result.iterations, ssim_msg, reduction_pct
     );
 
     Ok(ConversionResult {
