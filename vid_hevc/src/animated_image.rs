@@ -1043,8 +1043,12 @@ pub fn convert_to_hevc_mp4_matched(
         eprintln!("   🖥️  CPU Mode: Using libx265 for higher SSIM (≥0.98)");
     }
 
+    let is_gif = shared_utils::is_gif_magic(&final_input);
     let mut actual_initial_crf = initial_crf;
-    if let Some(hint) = shared_utils::crf_constants::get_global_last_hit_crf_hevc() {
+
+    if is_gif && flag_mode.is_ultimate() {
+        actual_initial_crf = 0.0;
+    } else if let Some(hint) = shared_utils::crf_constants::get_global_last_hit_crf_hevc() {
         if options.verbose {
             eprintln!("   💡 Using global last hit CRF: {hint:.1} (warm start)");
         }
