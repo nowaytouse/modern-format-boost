@@ -2390,13 +2390,16 @@ fn cpu_fine_tune_from_gpu_boundary(
                 // We'll jump past the rest of Phase 2.
             } else {
                 crate::log_eprintln!(
-                    "   {}🎯 Ceiling hit! Bracketing effective search space [0.0, {:.2}]. Searching for transition point.{}",
+                    "   {}🎯 Ceiling hit! Space [0.0, {:.2}] is compressible. Starting search from mid-point...{}",
                     BRIGHT_GREEN,
                     max_crf,
                     RESET
                 );
-                best_tested_crf = max_crf;
-                best_tested_size = ceiling_size;
+                // [Optimization] "Mid-Jump Pivot"
+                // Instead of walking from 0.00 to 10.75 in 40+ iterations, we jump directly
+                // to a reasonable mid-floor (12.0 for HEVC/AV1) if the ceiling is successful.
+                // The loop below will then 'officially' explore this point first.
+                test_crf = 12.0f32;
             }
         }
 
