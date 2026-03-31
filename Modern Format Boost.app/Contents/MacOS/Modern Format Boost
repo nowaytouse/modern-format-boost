@@ -15,6 +15,18 @@ contains_control_chars() {
     [[ "$1" == *$'\012'* || "$1" == *$'\015'* ]]
 }
 
+choose_processing_mode() {
+    osascript <<EOF
+    set theOptions to {"🖼️ Only Static Images", "🎬 Only Animated/Videos", "🔄 Process Everything"}
+    set choice to (choose from list theOptions with title "Modern Format Boost" with prompt "Select processing scope:" default items {"🔄 Process Everything"} without empty selection allowed)
+    if choice is false then
+        return "CANCEL"
+    else
+        return item 1 of choice
+    end if
+EOF
+}
+
 shell_quote() {
     # Safer quoting for Chinese paths: wrap in single quotes and escape any single quotes within the path
     echo "'${1//\'/\'\\\'\'}'"
@@ -31,11 +43,12 @@ escape_applescript_string() {
 
 launch_in_terminal() {
     local target_path="$1"
-    local keep_open="${2:-false}"
+    local mode_flag="$2"
+    local keep_open="${3:-false}"
     # Construct command with virtual environment support
     local cmd="cd $(shell_quote "$PROJECT_ROOT")"
     cmd+=" && if [[ -f .venv/bin/activate ]]; then source .venv/bin/activate; fi"
-    cmd+=" && export FROM_APP=1 && $(shell_quote "$PROCESSOR_SCRIPT")"
+    cmd+=" && export FROM_APP=1 && $(shell_quote "$PROCESSOR_SCRIPT") $mode_flag"
 
     if [[ -n "$target_path" ]]; then
         if contains_control_chars "$target_path"; then
@@ -68,10 +81,23 @@ if [[ ! -f "$PROCESSOR_SCRIPT" ]]; then
     exit 1
 fi
 
+# Get processing mode once
+MODE=$(choose_processing_mode)
+if [[ "$MODE" == "CANCEL" ]]; then
+    exit 0
+fi
+
+MODE_FLAG=""
+if [[ "$MODE" == *"Images"* ]]; then
+    MODE_FLAG="--images-only"
+elif [[ "$MODE" == *"Videos"* ]]; then
+    MODE_FLAG="--videos-only"
+fi
+
 # If arguments provided (drag mode), run processor in new Terminal window; this script exits to avoid empty window
 if [[ $# -gt 0 ]]; then
     (
-        launch_in_terminal "$1" "true"
+        launch_in_terminal "$1" "$MODE_FLAG" "true"
     ) &
     exit 0
 else
@@ -105,6 +131,6 @@ else
     fi
 
     # Directly launch terminal without redundant confirmation popups
-    launch_in_terminal "$SELECTED_DIR"
+    launch_in_terminal "$SELECTED_DIR" "$MODE_FLAG"
     exit 0
 fi

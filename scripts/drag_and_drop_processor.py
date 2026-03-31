@@ -67,6 +67,7 @@ OUTPUT_DIR = ""
 ULTIMATE_MODE = True
 VERBOSE_MODE = False
 RESUME_MODE = False
+PROCESSING_MODE = "both"  # Options: "both", "images_only", "videos_only"
 
 IMG_SUCCEEDED = 0
 IMG_SKIPPED = 0
@@ -683,6 +684,12 @@ def count_files():
 
     other = total - img - vid - xmp
 
+    # Apply filtering based on PROCESSING_MODE
+    if PROCESSING_MODE == "images_only":
+        vid = 0
+    elif PROCESSING_MODE == "videos_only":
+        img = 0
+
     # Lock ONLY for the final state update to avoid blocking file detection threads
     with stats_lock:
         IMG_COUNT, VID_COUNT, MEDIA_TOTAL_SIZE = img, vid, media_size
@@ -1056,7 +1063,8 @@ def main():
         RESUME_MODE, \
         TARGET_DIR, \
         OUTPUT_MODE, \
-        OUTPUT_DIR
+        OUTPUT_DIR, \
+        PROCESSING_MODE
     os.environ["MFB_GUI_LAUNCH"] = "1"
     os.environ["FORCE_COLOR"] = "1"
     os.environ["CLICOLOR_FORCE"] = "1"
@@ -1074,6 +1082,10 @@ def main():
             WATCH_MODE = True
         elif arg == "--resume":
             RESUME_MODE = True
+        elif arg == "--images-only":
+            PROCESSING_MODE = "images_only"
+        elif arg == "--videos-only":
+            PROCESSING_MODE = "videos_only"
         elif arg in ("--help", "-h"):
             print("Usage: drag_and_drop_processor.py [options] [target_directory]")
             print("\nOptions:")
@@ -1081,6 +1093,8 @@ def main():
             print("  --verbose, -v Enable verbose output")
             print("  --resume      Resume from last completed session")
             print("  --watch       Watch directory for new files")
+            print("  --images-only Only process static images")
+            print("  --videos-only Only process videos and animated GIFs")
             print("  --help, -h    Show this help message")
             sys.exit(0)
         else:
@@ -1105,6 +1119,13 @@ def main():
 
             table.add_row("📂 Target Path", str(TARGET_DIR))
             table.add_row("🚀 Mode", "Ultimate" if ULTIMATE_MODE else "Standard")
+            
+            target_type = "Everything"
+            if PROCESSING_MODE == "images_only":
+                target_type = "Images Only"
+            elif PROCESSING_MODE == "videos_only":
+                target_type = "Videos/GIFs Only"
+            table.add_row("🎯 Target Type", target_type)
 
             # System Snapshot
             if "psutil" in globals():
@@ -1230,8 +1251,10 @@ def main():
 
     start_elapsed_spinner()
 
-    process_images()
-    process_videos()
+    if PROCESSING_MODE in ("both", "images_only"):
+        process_images()
+    if PROCESSING_MODE in ("both", "videos_only"):
+        process_videos()
     if IMG_COUNT > 0 or VID_COUNT > 0:
         stop_elapsed_spinner()
 

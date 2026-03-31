@@ -4,51 +4,34 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
-## [Unreleased] - 2026-04-01
+## [0.11.1] - 2026-04-01
 
-#### 🆕 Features
+#### 🆕 UI & Task Workflow Improvements
 
-- **Batch Collision Prevention**: Added `reserve_output_path()` to prevent destructive filename collisions during batch processing. When different inputs resolve to the same target name, later files receive stable numeric suffixes (` (1)`, ` (2)`) instead of being skipped or risking overwrite.
-- **PNG Quantization Detection**: Strengthened detection for pngquant/TinyPNG-style lossy PNGs by adding a cheap sample-based palette estimator (grid subsample up to 10k pixels) and improving tEXt/zTXt tool-signature matching. This reduces false-negatives for palette-quantized PNGs and surfaces candidates for lossy-palette optimization.
+- **Media Processing Selection**: Added a native macOS selection dialog and command-line flags (`--images-only`, `--videos-only`) to the Python processor, allowing users to target specific media types (Images, Videos, or Both) at runtime.
+- **Enhanced UI Dashboard**: Updated the runtime configuration panel to display the active "Target Type" and real-time system metrics (CPU/RAM snapshots).
+- **Batch Collision Prevention**: Added `reserve_output_path()` to prevent destructive filename collisions during batch processing. Conflicting outputs now receive stable numeric suffixes (` (1)`, ` (2)`) instead of being skipped or overwritten.
+- **Output-Path Consistency**: Relaxed the output path safety policy to resolve canonical parent directories, fixing false rejections on macOS temp roots like `/tmp` and `/var/folders` while maintaining symlink protection at the final target.
 
-- **JXL HDR intensity handling (synthesis only)**: Hardened how `--intensity_target` is applied when encoding HDR intermediates to JXL.
-  - Added sanitization and clamping for intensity targets and an environment override `MFB_JXL_INTENSITY_TARGET` to force a numeric value (nits) when operators need to reproduce a specific target.
-  - Behavior: the flag is only injected for HDR synthesis paths (gainmap/UltraHDR synthesis). Invalid or missing derived values are ignored to avoid accidentally altering SDR encodes.
-  - This change prevents accidental application of wide-range dynamic parameters to non-HDR images and provides an operator-safe override for lab/ops workflows.
+#### 🛡️ Advanced Content Detection & HDR Hardening
 
-#### 🐞 Fixes
+- **PNG Quantization Detection**: Strengthened detection for pngquant/TinyPNG-style lossy PNGs using a grid-based palette estimator (10k pixels) and improved tool-signature matching (tEXt/zTXt), reducing false-negatives in the processing pipeline.
+- **JXL HDR Intensity Handling**: Hardened `--intensity_target` application for HDR intermediates (gainmap/UltraHDR synthesis).
+  - Added sanitization and clamping for intensity targets; added environment override `MFB_JXL_INTENSITY_TARGET` to force a specific nit value.
+  - Behavior: flags are only injected for HDR synthesis paths to avoid altering SDR encodes.
+- **GIF-like Video Recovery**: Enhanced recovery for short silent BT.709 videos; they now route back to GIF instead of being forced into video encoders unless actual HDR/Wide-Gamut signals (Dolby Vision, BT.2020, etc.) are detected.
 
-- Ensure `should_keep_as_gif_with_path` performs a lightweight `scan_gif_headers()` when a path is provided so veto rules see loop count, transparency, palette and frame-payload variation. This prevents very short looping GIFs from being incorrectly routed to video conversion.
- - Hardened `should_keep_as_gif_with_path` further:
-   - Always attempts a header-scan when a path is available and logs scan errors for easier debugging.
-   - Uses a path-aware short-loop guard (infinite-loop / low payload-variation + small size) to conservatively prefer keeping tiny cyclic GIFs.
-   - Ensures all internal decision logs and threshold checks use the updated `current_meta` (fixes inconsistent use of probe-only vs header-populated metadata).
-   - When a path-aware GIF candidate still ends up `UNDECIDED` and no trustworthy duration can be recovered, it now falls back to a fixed `4.25s` baseline cutoff: shorter assets stay GIF, longer ones convert to video.
-   - Behavioral change: `UNDECIDED` no longer silently behaves like `duration=0s`. Previously, missing timing could leak into veto logic and look like an ultra-short loop, biasing the result toward `KEEP GIF`. Now unresolved timing is normalized into an explicit baseline estimate before veto/scoring, and truly unresolved cases use the `4.25s` split instead of implicit zero-duration retention.
- - `gif_candidate_meta_from_path` now performs a best-effort header-scan (with error logging) to populate `palette_size`, `app_extensions`, `loop_count`, and variation signals even when extensions are missing — improving detection for GIFs lacking proper file extensions.
+#### 🛡️ GIF Engine & Rhythmic Asset Hardening (Deep Logic)
 
-- **PNG Quantization Detection**: strengthened detection for pngquant/TinyPNG-style lossy PNGs by adding a cheap sample-based palette estimator (grid subsample up to 10k pixels) and improving tEXt/zTXt tool-signature matching. This reduces false-negatives for palette-quantized PNGs and surfaces candidates for lossy-palette optimization.
-
-- 🛡️ Hardened GIF veto sizing logic:
-  - `apply_veto` now precomputes rhythmic/sticker intent before enforcing the strict file-size ceiling. Short, strongly looping/infinite GIFs (high loop affinity and duration under a dynamic rhythmic threshold) are conservatively allowed to bypass the raw size ceiling to avoid false-positive conversions of tiny cyclic stickers. Premium rhythmic loops remain protected.
-  - This change addresses cases where short, high-quality GIF loops were being converted to video solely due to raw byte-size thresholds.
-
-#### 🛡️ Additional GIF Hardening (2026-04-01)
-
-- Added absolute byte-size guards: files ≤ 100KiB are always kept; files ≥ 50MB are conservatively converted to avoid extreme GIF bloat (exceptions exist for intentional infinite-loop or premium rhythmic loops).
-- Populate conservative defaults for missing GIF header-derived fields when a filesystem `path` is available (e.g. `frame_payload_variation`, `frame_delay_variation`, `palette_size`). This reduces false-conversions when header-scans are incomplete.
-- Added synthetic unit-tests that exercise absolute-size guards and the conservative-defaults logic. Tests explicitly avoid using any personal/debug media samples.
- - Removed a heavy debug-only integration test that iterated the `debug/` media folder (privacy & performance). Replaced by lightweight synthetic tests and added operator env-var overrides for curated whitelist/blacklist behaviors (`MFB_GIF_FORCE_KEEP`, `MFB_GIF_FORCE_CONVERT`, `MFB_GIF_SKIP_CONVERT_CEILING`).
- - Added a duration-baseline fallback rule: when a path-aware GIF candidate remains undecided and reliable timing still cannot be recovered, the scorer reverts to a simple hardcoded duration cutoff (4.25s) to decide KEEP vs CONVERT.
- - Clarified the KNN-driven CRF 0.00 safety gate for GIFs: with default `keep_prob = 0.5`, the interpolated duration limit is `75.0s` (not `67.5s`). When a GIF exceeds that limit, the pipeline falls back to the quality-matched CRF anchor or a cached warm-start hint; it does not inject a special hardcoded `23.0` GIF CRF.
- - Hardened the KNN lossless-safety formula path so it no longer compares against a raw `0s` probe duration. The gate now resolves duration from probe timing (`frame_count / fps`) before applying the `30s..120s` keep-probability threshold, preventing long GIFs with missing probe duration from being mistakenly treated as safe for CRF `0.00`.
- - Restored AV1 matched-CRF precision: `vid_av1::calculate_matched_crf()` now returns the full fractional CRF from `quality_matcher` instead of rounding to an integer `u8`. This preserves half-step precision for the initial search anchor and keeps AV1 behavior aligned with the HEVC path.
- - Fixed GIF-like video recovery for short silent container videos: `GifMeta::from_video()` no longer treats every 10-bit source as a complex color profile. GIF recovery vetoes now only trip on actual HDR / wide-gamut indicators (Dolby Vision, HDR10+, mastering metadata, BT.2020, non-BT.709 transfer/primaries), so short silent BT.709 videos such as the local debug `.mov` sample route back to GIF instead of being forced into HEVC/AV1 video conversion.
- - Switched the video→GIF apple-compat pipeline from FFmpeg global-palette encoding to `gifski`. The conversion path now uses `gifski` for final GIF assembly, preserving per-frame palette optimization and materially improving gradients, skin tones, and dark detail compared with the previous single global palette workflow. Existing APNG/JXL/WebP pre-normalization and skip/copy safeguards remain in place.
- - Relaxed the output path safety policy to resolve canonical parent directories instead of rejecting any symlink component in the path chain. This fixes false rejections for normal macOS temp roots such as `/tmp` and `/var/.../T` while still refusing to overwrite a symlink at the final output path itself.
- - Hardened output-path allocation to avoid destructive filename collisions during batch processing. When different inputs resolve to the same target name within a run, the later file now receives a stable numeric suffix such as ` (1)` / ` (2)` instead of being skipped against another file's output path or risking overwrite/data loss. Same-input path allocation remains stable across repeated lookups in the same run.
-
-## [0.11.1] - 2026-03-31
+- **Enhanced GIF Header Scanning**: Mandatory header-scanning in `should_keep_as_gif_with_path` to resolve loop counts, transparency, and palette variation even for extension-less files (`GIF8` magic bytes).
+- **GIF Duration Baseline Rule**: When a path-aware GIF candidate remains `UNDECIDED` and reliable timing cannot be recovered, the scorer now falls back to a fixed `4.25s` baseline cutoff (shorter stay GIF, longer convert to video), replacing the previous zero-duration bias.
+- **Rhythmic Veto Logic**: `apply_veto` now precomputes rhythmic/sticker intent before enforcing size ceilings. Short looping GIFs bypass raw size limits to prevent false-positive conversions of micro-assets.
+- **Sticker Protection Guards**: Implemented strict byte-size guards (Files ≤ 100KiB always kept; ≥ 50MB conservatively converted) and added synthetic unit-tests to verify rhythmic-defaults and conservative timing.
+- **High-Precision GIF Search**: 
+  - Clarified the KNN-driven CRF 0.00 safety gate: with default `keep_prob = 0.5`, the interpolated duration limit is `75.0s`. 
+  - Restored AV1 matched-CRF precision in `vid_av1` to preserve full fractional CRF steps (aligned with HEVC path).
+- **Improved GIF Conversion Quality**: Switched the video→GIF fallback pipeline to `gifski` for per-frame palette optimization, significantly improving quality for gradients and dark detail compared to legacy global-palette methods.
+- **KNN Dataset Refresh (v4)**: Re-ingested 1840+ high-quality samples from Telegram/X/Bilibili and updated sigma-normalized Euclidean distance weights for the sticker detection engine.
 
 #### 🛡️ SQLite WAL Mode & Transaction Atomicity for Crash Safety
 
