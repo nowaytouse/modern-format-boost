@@ -578,7 +578,7 @@ pub fn auto_convert_with_cache(
 
                 let ultimate = flag_mode.is_ultimate();
 
-                let predicted_crf = f32::from(calculate_matched_crf(&detection)?);
+                let predicted_crf = calculate_matched_crf(&detection)?;
                 let warm_start_crf = if let Some(hint) = detection.precision.last_best_crf {
                     info!("   💡 Using cached CRF hint: {:.1} (warm start only)", hint);
                     Some(hint)
@@ -1225,7 +1225,7 @@ fn best_effort_status_for_cache(
 ///
 /// # Errors
 /// Returns an error if calculation fails.
-pub fn calculate_matched_crf(detection: &VideoDetectionResult) -> Result<u8> {
+pub fn calculate_matched_crf(detection: &VideoDetectionResult) -> Result<f32> {
     let analysis = shared_utils::from_video_detection(
         &detection.file_path,
         detection.codec.as_str(),
@@ -1242,7 +1242,7 @@ pub fn calculate_matched_crf(detection: &VideoDetectionResult) -> Result<u8> {
     match shared_utils::calculate_av1_crf(&analysis) {
         Ok(result) => {
             shared_utils::log_quality_analysis(&analysis, &result, shared_utils::EncoderType::Av1);
-            Ok(result.crf.round() as u8)
+            Ok(result.crf)
         }
         Err(e) => Err(crate::VidQualityError::AnalysisError(format!(
             "Quality analysis failed: {e}"
@@ -1446,5 +1446,29 @@ mod tests {
         let strategy = determine_strategy_with_apple_compat(&det, true);
         assert_eq!(strategy.target, TargetVideoFormat::Gif);
         assert!(strategy.reason.contains("GIF-like loop detected"));
+    }
+
+    #[test]
+    fn matched_av1_crf_preserves_fractional_precision() {
+        use crate::detection_api::{CompressionType, DetectedCodec};
+
+        let det = crate::detection_api::VideoDetectionResult {
+            file_path: "precision-test.mp4".into(),
+            codec: DetectedCodec::H264,
+            compression: CompressionType::Standard,
+            width: 1920,
+            height: 1080,
+            duration_secs: 60.0,
+            has_audio: true,
+            frame_count: 1800,
+            fps: 30.0,
+            bitrate: 6_000_000,
+            file_size: 45_000_000,
+            ..Default::default()
+        };
+
+        let crf = calculate_matched_crf(&det).unwrap();
+        let half_step = (crf * 2.0).round() / 2.0;
+        assert!((crf - half_step).abs() < 0.0001);
     }
 }

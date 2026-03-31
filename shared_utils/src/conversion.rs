@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     LazyLock, Mutex,
@@ -1180,7 +1180,7 @@ pub fn validate_output_path(output: &Path, _base_dir: Option<&Path>) -> Result<(
         ));
     }
 
-    ensure_no_symlink_components(output)?;
+    ensure_output_parent_resolves(output)?;
 
     // Check if output is a symbolic link
     if output.exists() && output.is_symlink() {
@@ -1193,46 +1193,53 @@ pub fn validate_output_path(output: &Path, _base_dir: Option<&Path>) -> Result<(
     Ok(())
 }
 
-fn ensure_no_symlink_components(path: &Path) -> Result<(), String> {
-    let mut current = if path.is_absolute() {
-        PathBuf::new()
+fn ensure_output_parent_resolves(path: &Path) -> Result<(), String> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
     } else {
-        std::env::current_dir().map_err(|e| {
-            format!(
-                "Failed to resolve current directory for {}: {}",
-                path.display(),
-                e
-            )
-        })?
+        std::env::current_dir()
+            .map_err(|e| {
+                format!(
+                    "Failed to resolve current directory for {}: {}",
+                    path.display(),
+                    e
+                )
+            })?
+            .join(path)
     };
 
-    for component in path.components() {
-        match component {
-            Component::CurDir => continue,
-            Component::ParentDir => {
-                current.push(component.as_os_str());
-            }
-            _ => current.push(component.as_os_str()),
-        }
+    let mut existing = if absolute.exists() {
+        absolute.parent().ok_or_else(|| {
+            format!(
+                "Failed to resolve parent directory for output path: {}",
+                path.display()
+            )
+        })?
+    } else {
+        absolute.as_path()
+    };
+    while !existing.exists() {
+        existing = existing.parent().ok_or_else(|| {
+            format!(
+                "Failed to resolve an existing parent directory for output path: {}",
+                path.display()
+            )
+        })?;
+    }
 
-        match fs::symlink_metadata(&current) {
-            Ok(metadata) => {
-                if metadata.file_type().is_symlink() {
-                    return Err(format!(
-                        "Output path traverses symbolic link component, refusing to write: {}",
-                        current.display()
-                    ));
-                }
-            }
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => break,
-            Err(err) => {
-                return Err(format!(
-                    "Failed to inspect output path component {}: {}",
-                    current.display(),
-                    err
-                ));
-            }
-        }
+    let resolved = existing.canonicalize().map_err(|e| {
+        format!(
+            "Failed to resolve output path parent {}: {}",
+            existing.display(),
+            e
+        )
+    })?;
+
+    if !resolved.is_dir() {
+        return Err(format!(
+            "Resolved output parent is not a directory: {}",
+            resolved.display()
+        ));
     }
 
     Ok(())
@@ -1417,7 +1424,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn test_validate_output_path_rejects_symlink_parent() {
+    fn test_validate_output_path_allows_symlink_parent_when_parent_resolves() {
         use std::os::unix::fs::symlink;
         let temp = tempfile::TempDir::new().expect("temp dir");
         let real_dir = temp.path().join("real");
@@ -1425,9 +1432,25 @@ mod tests {
         let link_dir = temp.path().join("link");
         symlink(&real_dir, &link_dir).expect("symlink");
 
-        let err = validate_output_path(&link_dir.join("out.jxl"), None)
-            .expect_err("symlinked parent directory should be rejected");
-        assert!(err.contains("symbolic link component"));
+        validate_output_path(&link_dir.join("out.jxl"), None)
+            .expect("symlinked parent directory should resolve safely");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_validate_output_path_rejects_symlink_leaf() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let real_dir = temp.path().join("real");
+        fs::create_dir_all(&real_dir).expect("real dir");
+        let output = temp.path().join("out.jxl");
+        let target = real_dir.join("target.jxl");
+        std::fs::write(&target, b"stub").expect("target");
+        symlink(&target, &output).expect("symlink leaf");
+
+        let err = validate_output_path(&output, None)
+            .expect_err("symlink output leaf should still be rejected");
+        assert!(err.contains("symbolic link"));
     }
 
     #[test]

@@ -1776,52 +1776,77 @@ pub fn convert_to_gif_apple_compat(
         false
     };
 
-    // Use FFmpeg high-quality single-pass palette method for all formats
-    // This ensures consistent quality across all animated formats (AVIF/WebP/JXL/HEIC/etc)
-    // Note: JXL is pre-converted to APNG above due to FFmpeg's incomplete jpegxl_anim decoder
-    let ffmpeg_ok = {
-        let color_space_filter = {
-            let info = shared_utils::ffprobe_json::extract_color_info(input);
-            let cs = info.color_space.as_deref().unwrap_or("bt709");
-            let trc = info.color_transfer.as_deref().unwrap_or("iec61966-2-1");
-            let primaries = info.color_primaries.as_deref().unwrap_or("bt709");
-            let range_in = match info.color_range.as_deref() {
-                Some("pc" | "jpeg") => "pc",
-                _ => "tv",
-            };
-            format!("colorspace=all=bt709:iall={cs}:itrc={trc}:iprimaries={primaries}:irange={range_in}:range=pc")
-        };
+    let gifski_ok = if which::which("gifski").is_err() {
+        false
+    } else {
+        let mut gifski_input = actual_input.clone();
+        let mut extracted_stream_apng = None;
 
-        let filter = if has_multiple_streams {
-            // Multi-stream: specify stream in filter
-            format!(
-                "[0:{effective_stream_idx}]{color_space_filter},format=rgba,scale={width}:{height}:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=256:stats_mode=full:reserve_transparent=1[p];[s1][p]paletteuse=dither=bayer:diff_mode=rectangle"
-            )
-        } else {
-            // Single-stream: simple filter
-            format!(
-                "{color_space_filter},format=rgba,scale={width}:{height}:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=256:stats_mode=full:reserve_transparent=1[p];[s1][p]paletteuse=dither=bayer:diff_mode=rectangle"
-            )
-        };
+        if has_multiple_streams && effective_stream_idx != 0 {
+            let temp_apng = tempfile::Builder::new().suffix(".apng").tempfile().ok();
+            if let Some(temp_apng) = temp_apng {
+                let temp_apng_path = temp_apng.path().to_path_buf();
+                let extract_res = Command::new("ffmpeg")
+                    .arg("-y")
+                    .arg("-i")
+                    .arg(shared_utils::safe_path_arg(&actual_input).as_ref())
+                    .arg("-map")
+                    .arg(format!("0:{effective_stream_idx}"))
+                    .arg("-plays")
+                    .arg("0")
+                    .arg("-c:v")
+                    .arg("apng")
+                    .arg(shared_utils::safe_path_arg(&temp_apng_path).as_ref())
+                    .output();
 
-        let res = Command::new("ffmpeg")
-            .arg("-y")
-            .arg("-i")
-            .arg(shared_utils::safe_path_arg(&actual_input).as_ref())
-            .arg("-filter_complex")
-            .arg(&filter)
+                if matches!(extract_res, Ok(o) if o.status.success() && temp_apng_path.exists()) {
+                    gifski_input = temp_apng_path;
+                    extracted_stream_apng = Some(temp_apng);
+                }
+            }
+        }
+
+        let fps = shared_utils::probe_video(&gifski_input)
+            .ok()
+            .map(|p| p.frame_rate)
+            .filter(|fps| fps.is_finite() && *fps >= 1.0)
+            .unwrap_or(20.0)
+            .clamp(1.0, 60.0);
+        let fps_str = format!("{fps:.3}");
+
+        let res = Command::new("gifski")
+            .arg("--quiet")
+            .arg("--output")
             .arg(shared_utils::safe_path_arg(&temp_output).as_ref())
+            .arg("--fps")
+            .arg(&fps_str)
+            .arg("--width")
+            .arg(width.to_string())
+            .arg("--height")
+            .arg(height.to_string())
+            .arg("--quality")
+            .arg("100")
+            .arg("--motion-quality")
+            .arg("100")
+            .arg("--lossy-quality")
+            .arg("100")
+            .arg("--repeat")
+            .arg("0")
+            .arg("--extra")
+            .arg(shared_utils::safe_path_arg(&gifski_input).as_ref())
             .output();
+
+        drop(extracted_stream_apng);
         matches!(res, Ok(o) if o.status.success() && temp_output.exists())
     };
 
     // Clean up temporary APNG file if it was created
     drop(temp_apng_file);
 
-    if !ffmpeg_ok {
-        // FFmpeg conversion failed — copy original so data is not lost
+    if !gifski_ok {
+        // gifski conversion failed — copy original so data is not lost
         cleanup_temp_output(&temp_output, input);
-        tracing::warn!(input = %input.display(), "GIF conversion failed (FFmpeg unavailable or failed); copying original");
+        tracing::warn!(input = %input.display(), "GIF conversion failed (gifski unavailable or failed); copying original");
         copy_original_on_skip(input, options);
         mark_as_processed(input);
         let input_size_fb = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
@@ -1832,7 +1857,7 @@ pub fn convert_to_gif_apple_compat(
             input_size: input_size_fb,
             output_size: None,
             size_reduction: None,
-            message: "GIF conversion failed (FFmpeg unavailable or failed); original copied"
+            message: "GIF conversion failed (gifski unavailable or failed); original copied"
                 .to_string(),
             skipped: true,
             skip_reason: Some("gif_encode_failed".to_string()),

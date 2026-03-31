@@ -113,6 +113,19 @@ impl GifMeta {
             .map(|s| s.to_string());
 
         let loop_count = detection.loop_count; // Respect actual metadata if present (rare for MP4)
+        let has_complex_color_profile = detection.is_dolby_vision
+            || detection.is_hdr10_plus
+            || detection.mastering_display.is_some()
+            || detection.max_cll.is_some()
+            || matches!(detection.color_space, crate::video_detection::ColorSpace::BT2020)
+            || detection
+                .color_transfer
+                .as_deref()
+                .is_some_and(|s| !matches!(s, "bt709" | "iec61966-2-1" | "srgb" | "unknown"))
+            || detection
+                .color_primaries
+                .as_deref()
+                .is_some_and(|s| !matches!(s, "bt709" | "smpte170m" | "unknown"));
 
         // Calculate coefficients of variation for variation fields
         let frame_payload_variation = if detection.pkt_sizes.is_empty() {
@@ -171,7 +184,7 @@ impl GifMeta {
                 .map(|s| s.to_lowercase()),
             parent_directories: None, // Caller can populate if needed
             has_embedded_icc: false,
-            has_complex_color_profile: detection.bit_depth >= 10,
+            has_complex_color_profile,
             loop_count,
             frame_types: detection.frame_types.clone(),
             pts_deltas: detection.pts_deltas.clone(),

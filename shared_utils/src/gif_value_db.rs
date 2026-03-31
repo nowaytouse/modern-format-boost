@@ -284,11 +284,23 @@ fn lossless_duration_limit_for_keep_prob(keep_prob: f64) -> f32 {
 }
 
 #[must_use]
+fn resolved_duration_secs(meta: &GifMeta) -> f64 {
+    if meta.duration_secs > 0.11 {
+        meta.duration_secs
+    } else if meta.frame_count > 1 && meta.fps > 0.1 {
+        meta.frame_count as f64 / meta.fps
+    } else {
+        meta.frame_count.max(1) as f64 / 12.0
+    }
+}
+
+#[must_use]
 pub fn is_lossless_exploration_safe(meta: &GifMeta, path: Option<&Path>) -> bool {
     let mut current_meta = meta.clone();
     if let Some(p) = path {
         let _ = crate::gif_meme_score::deep_refine_meta(&mut current_meta, p);
     }
+    current_meta.duration_secs = resolved_duration_secs(&current_meta);
 
     let sample_match = lookup_similar_samples(&current_meta, path);
     let keep_prob = sample_match
@@ -301,12 +313,12 @@ pub fn is_lossless_exploration_safe(meta: &GifMeta, path: Option<&Path>) -> bool
     // keep_prob close to 0.0 (Art / High Value)  -> 30s limit
     let threshold = lossless_duration_limit_for_keep_prob(keep_prob);
 
-    let is_safe = meta.duration_secs < f64::from(threshold);
+    let is_safe = current_meta.duration_secs < f64::from(threshold);
 
     if !is_safe {
         crate::log_eprintln!(
             "   ⚠️  Lossless-first (CRF 0.00) skip: duration {:.1}s exceeds dynamic limit {:.1}s (Value Prob: {:.2})",
-            meta.duration_secs, threshold, keep_prob
+            current_meta.duration_secs, threshold, keep_prob
         );
     }
 
@@ -1187,5 +1199,14 @@ mod tests {
     fn lossless_duration_limit_respects_policy_edges() {
         assert!((lossless_duration_limit_for_keep_prob(0.0) - 30.0).abs() < 0.01);
         assert!((lossless_duration_limit_for_keep_prob(1.0) - 120.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn resolved_duration_secs_recovers_from_zero_probe_duration() {
+        let mut meta = base_meta();
+        meta.duration_secs = 0.0;
+        meta.frame_count = 800;
+        meta.fps = 10.0;
+        assert!((resolved_duration_secs(&meta) - 80.0).abs() < 0.01);
     }
 }
