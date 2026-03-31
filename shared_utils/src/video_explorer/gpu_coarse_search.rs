@@ -3710,7 +3710,8 @@ pub fn explore_hevc_with_gpu_coarse_full_warm_start(
         (hint - 2.0).max(ABSOLUTE_MIN_CRF)
     } else {
         baseline_crf
-    }.clamp(ABSOLUTE_MIN_CRF, max_crf);
+    }
+    .clamp(ABSOLUTE_MIN_CRF, max_crf);
     explore_with_gpu_coarse_search(
         input,
         output,
@@ -3867,7 +3868,8 @@ pub fn explore_av1_with_gpu_coarse_full_warm_start(
         (hint - 2.0).max(ABSOLUTE_MIN_CRF)
     } else {
         baseline_crf
-    }.clamp(ABSOLUTE_MIN_CRF, max_crf);
+    }
+    .clamp(ABSOLUTE_MIN_CRF, max_crf);
     explore_with_gpu_coarse_search(
         input,
         output,

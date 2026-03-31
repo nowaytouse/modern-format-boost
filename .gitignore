@@ -47,3 +47,4 @@ logs/
 debug/
 __pycache__/
 __pycache__/
+.qwen/
