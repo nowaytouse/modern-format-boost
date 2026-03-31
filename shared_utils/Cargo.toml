@@ -44,6 +44,7 @@ proptest = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
+serial_test = "0.5"
 
 [features]
 default = ["v1_21"]

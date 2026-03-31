@@ -11,6 +11,11 @@ All notable changes to this project will be documented in this file.
 - **Batch Collision Prevention**: Added `reserve_output_path()` to prevent destructive filename collisions during batch processing. When different inputs resolve to the same target name, later files receive stable numeric suffixes (` (1)`, ` (2)`) instead of being skipped or risking overwrite.
 - **PNG Quantization Detection**: Strengthened detection for pngquant/TinyPNG-style lossy PNGs by adding a cheap sample-based palette estimator (grid subsample up to 10k pixels) and improving tEXt/zTXt tool-signature matching. This reduces false-negatives for palette-quantized PNGs and surfaces candidates for lossy-palette optimization.
 
+- **JXL HDR intensity handling (synthesis only)**: Hardened how `--intensity_target` is applied when encoding HDR intermediates to JXL.
+  - Added sanitization and clamping for intensity targets and an environment override `MFB_JXL_INTENSITY_TARGET` to force a numeric value (nits) when operators need to reproduce a specific target.
+  - Behavior: the flag is only injected for HDR synthesis paths (gainmap/UltraHDR synthesis). Invalid or missing derived values are ignored to avoid accidentally altering SDR encodes.
+  - This change prevents accidental application of wide-range dynamic parameters to non-HDR images and provides an operator-safe override for lab/ops workflows.
+
 #### 🐞 Fixes
 
 - Ensure `should_keep_as_gif_with_path` performs a lightweight `scan_gif_headers()` when a path is provided so veto rules see loop count, transparency, palette and frame-payload variation. This prevents very short looping GIFs from being incorrectly routed to video conversion.

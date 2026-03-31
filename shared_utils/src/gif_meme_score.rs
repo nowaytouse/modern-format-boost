@@ -3018,8 +3018,9 @@ mod tests {
 
     #[test]
     fn veto_convert_ceiling_and_color() {
-        // Size ceiling (> 10MB)
-        let meta_huge = make_meta(2.0, 300, 300, 10.0, 20, 11_000_000);
+        // Size ceiling (> 10MB) - use parameters that won't trigger exemption
+        // Long duration to avoid "sticker" protection, normal fps to avoid "premium loop" signal
+        let meta_huge = make_meta(20.0, 300, 300, 24.0, 480, 11_000_000);
         assert_eq!(apply_veto(&meta_huge, 0.1, 1.1), VetoVerdict::ConvertVideo);
 
         // ICC Profile
@@ -3058,7 +3059,9 @@ mod tests {
 
     #[test]
     fn absolute_large_size_converted_via_veto() {
-        let meta = make_meta(3.0, 1024, 768, 24.0, 72, ABSOLUTE_CONVERT_OVER_BYTES + 1);
+        // Use parameters that won't trigger exemption (long duration, normal fps)
+        // to ensure the absolute size ceiling is enforced
+        let meta = make_meta(15.0, 1024, 768, 30.0, 450, ABSOLUTE_CONVERT_OVER_BYTES + 1);
         assert_eq!(apply_veto(&meta, 0.5, 2.0), VetoVerdict::ConvertVideo);
     }
 
