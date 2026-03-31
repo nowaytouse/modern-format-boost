@@ -26,7 +26,7 @@
 use crate::constants::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE;
 use crate::modern_ui::{colors, symbols};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -38,6 +38,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static PROCESSED_FILES: LazyLock<Mutex<HashSet<String>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
+static RESERVED_OUTPUT_PATHS: LazyLock<Mutex<HashMap<String, String>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 static TEMP_OUTPUT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub fn next_temp_output_suffix() -> String {
@@ -91,6 +93,62 @@ pub fn clear_processed_list() {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     processed.clear();
+}
+
+fn stable_path_key(path: &Path) -> String {
+    path.canonicalize()
+        .unwrap_or_else(|_| path.to_path_buf())
+        .display()
+        .to_string()
+}
+
+fn path_with_collision_suffix(path: &Path, collision_index: usize) -> PathBuf {
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
+    let file_name = match path.extension().and_then(|e| e.to_str()) {
+        Some(ext) if !ext.is_empty() => format!("{stem} ({collision_index}).{ext}"),
+        _ => format!("{stem} ({collision_index})"),
+    };
+
+    path.parent()
+        .unwrap_or(Path::new(""))
+        .join(file_name)
+}
+
+fn reserve_unique_output_path(input: &Path, candidate: PathBuf) -> PathBuf {
+    let input_key = stable_path_key(input);
+    let mut reservations = RESERVED_OUTPUT_PATHS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    let mut resolved = candidate;
+    let mut collision_index = 1usize;
+
+    loop {
+        let output_key = stable_path_key(&resolved);
+        match reservations.get(&output_key) {
+            Some(owner) if owner != &input_key => {
+                resolved = path_with_collision_suffix(&resolved, collision_index);
+                collision_index += 1;
+            }
+            _ => {
+                reservations.insert(output_key, input_key.clone());
+                return resolved;
+            }
+        }
+    }
+}
+
+#[must_use]
+pub fn reserve_output_path(input: &Path, candidate: &Path) -> PathBuf {
+    reserve_unique_output_path(input, candidate.to_path_buf())
+}
+
+#[cfg(test)]
+fn clear_reserved_output_paths() {
+    let mut reservations = RESERVED_OUTPUT_PATHS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    reservations.clear();
 }
 
 pub use crate::checkpoint::{safe_delete_original, verify_output_integrity};
@@ -479,7 +537,7 @@ pub fn determine_output_path(
 
     validate_output_path(&output, None)?;
 
-    Ok(output)
+    Ok(reserve_unique_output_path(input, output))
 }
 
 /// Determine the output path with a base directory.
@@ -547,7 +605,7 @@ pub fn determine_output_path_with_base(
 
     validate_output_path(&output, Some(base_dir))?;
 
-    Ok(output)
+    Ok(reserve_unique_output_path(input, output))
 }
 
 #[must_use]
@@ -1475,6 +1533,7 @@ mod tests {
 
     #[test]
     fn test_determine_output_path() {
+        clear_reserved_output_paths();
         let temp = tempdir_in(std::env::current_dir().unwrap()).unwrap();
         let input = temp.path().join("nested/image.png");
         let output = determine_output_path(&input, "jxl", &None).unwrap();
@@ -1483,6 +1542,7 @@ mod tests {
 
     #[test]
     fn test_determine_output_path_with_dir() {
+        clear_reserved_output_paths();
         let temp = tempdir_in(std::env::current_dir().unwrap()).unwrap();
         let input = temp.path().join("nested/image.png");
         let output_dir = Some(temp.path().join("output"));
@@ -1492,6 +1552,7 @@ mod tests {
 
     #[test]
     fn test_determine_output_path_various_extensions() {
+        clear_reserved_output_paths();
         let temp = tempdir_in(std::env::current_dir().unwrap()).unwrap();
         let input = temp.path().join("nested/video.mp4");
 
@@ -1500,6 +1561,35 @@ mod tests {
 
         let mkv = determine_output_path(&input, "mkv", &None).unwrap();
         assert_eq!(mkv, temp.path().join("nested/video.MKV"));
+    }
+
+    #[test]
+    fn test_determine_output_path_disambiguates_batch_collisions() {
+        clear_reserved_output_paths();
+        let temp = tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let output_dir = Some(temp.path().join("output"));
+        let first = temp.path().join("set_a/clip.mp4");
+        let second = temp.path().join("set_b/clip.mp4");
+
+        let first_output = determine_output_path(&first, "gif", &output_dir).unwrap();
+        let second_output = determine_output_path(&second, "gif", &output_dir).unwrap();
+
+        assert_eq!(first_output, temp.path().join("output/clip.GIF"));
+        assert_eq!(second_output, temp.path().join("output/clip (1).GIF"));
+    }
+
+    #[test]
+    fn test_determine_output_path_keeps_same_reservation_for_same_input() {
+        clear_reserved_output_paths();
+        let temp = tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let output_dir = Some(temp.path().join("output"));
+        let input = temp.path().join("nested/clip.mp4");
+
+        let first_output = determine_output_path(&input, "gif", &output_dir).unwrap();
+        let second_output = determine_output_path(&input, "gif", &output_dir).unwrap();
+
+        assert_eq!(first_output, second_output);
+        assert_eq!(first_output, temp.path().join("output/clip.GIF"));
     }
 
     #[test]

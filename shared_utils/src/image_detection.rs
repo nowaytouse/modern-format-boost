@@ -66,7 +66,7 @@
 use crate::img_errors::{ImgQualityError, Result};
 use image::{DynamicImage, GenericImageView, ImageReader, Rgba};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
@@ -985,6 +985,25 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
                     }
                 }
 
+                // Cheap sampled estimate: if a small sampled palette appears (<=256 bins)
+                // on a large true-indexed image, treat as strong quantization signal.
+                let sampled_uniques = sample_unique_color_count(&img, 10_000);
+                if sampled_uniques > 0 && is_large_image {
+                    if sampled_uniques <= 256 {
+                        factors.color_count_anomaly = factors.color_count_anomaly.max(0.85);
+                        explanations.push(format!(
+                            "Sampled palette-like distribution (≈{} bins) — strong quantization indicator",
+                            sampled_uniques
+                        ));
+                    } else if sampled_uniques <= 512 {
+                        factors.color_count_anomaly = factors.color_count_anomaly.max(0.7);
+                        explanations.push(format!(
+                            "Sampled palette-like distribution (≈{} bins) — possible quantization",
+                            sampled_uniques
+                        ));
+                    }
+                }
+
                 let banding_score = detect_gradient_banding(&img);
                 factors.gradient_banding = banding_score;
                 if banding_score > 0.5 {
@@ -1153,6 +1172,28 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
 
                 // Signal 3: gradient banding
                 let banding_signal = detect_gradient_banding(&img);
+                // Sample-based quick check: detect palette-like distribution cheaply.
+                let sampled_uniques = sample_unique_color_count(&img, 10_000);
+                if sampled_uniques > 0 && pixel_count > 100_000 {
+                    if sampled_uniques <= 256 {
+                        return Ok(PngQuantizationAnalysis {
+                            is_quantized: true,
+                            confidence: 0.80,
+                            factor_scores: factors,
+                            detected_tool: None,
+                            explanation: format!(
+                                "Sampled palette-like distribution (≈{} bins) — likely pngquant-style quantization",
+                                sampled_uniques
+                            ),
+                        });
+                    } else if sampled_uniques <= 512 {
+                        factors.color_count_anomaly = factors.color_count_anomaly.max(0.7);
+                        explanations.push(format!(
+                            "Sampled palette-like distribution (≈{} bins) — possible quantization",
+                            sampled_uniques
+                        ));
+                    }
+                }
 
                 let strong_signals = [freq_signal, entropy_signal, banding_signal]
                     .iter()
@@ -1527,6 +1568,46 @@ fn color_difference(a: Rgba<u8>, b: Rgba<u8>) -> f64 {
     (wb * db)
         .mul_add(db, (wr * dr).mul_add(dr, wg * dg * dg))
         .sqrt()
+}
+
+/// Sample image pixels (grid-subsample) and count unique quantized colors.
+/// Uses a small quantization (5 bits per channel) to approximate palette variety
+/// without full quantization work. Returns number of unique colors observed.
+fn sample_unique_color_count(img: &DynamicImage, max_samples: usize) -> usize {
+    let rgba = img.to_rgba8();
+    let (width, height) = rgba.dimensions();
+
+    if width == 0 || height == 0 {
+        return 0;
+    }
+
+    let total = (width as u64) * (height as u64);
+    let step = ((total as f64) / (max_samples as f64)).sqrt().ceil() as u32;
+    let step = step.max(1);
+
+    let mut set = HashSet::new();
+
+    let mut sampled = 0usize;
+    for y in (0..height).step_by(step as usize) {
+        for x in (0..width).step_by(step as usize) {
+            let p = rgba.get_pixel(x, y);
+            // 5-bit per channel quantization (approximate palette bins)
+            let r5 = p[0] >> 3;
+            let g5 = p[1] >> 3;
+            let b5 = p[2] >> 3;
+            let key = ((r5 as u32) << 16) | ((g5 as u32) << 8) | (b5 as u32);
+            set.insert(key);
+            sampled += 1;
+            if sampled >= max_samples {
+                break;
+            }
+        }
+        if sampled >= max_samples {
+            break;
+        }
+    }
+
+    set.len()
 }
 
 /// Block-based random sampling — divides image into grid cells and randomly samples from each,

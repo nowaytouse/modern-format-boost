@@ -423,6 +423,7 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
     } else {
         output_dir.join(format!("{stem}.MP4"))
     };
+    let output_path = shared_utils::conversion::reserve_output_path(input, &output_path);
     shared_utils::conversion::validate_output_path(&output_path, None)
         .map_err(VidQualityError::ConversionError)?;
 
@@ -627,6 +628,7 @@ pub fn auto_convert_with_cache(
     } else {
         output_dir.join(format!("{stem}.{target_ext}"))
     };
+    let output_path = shared_utils::conversion::reserve_output_path(input, &output_path);
     shared_utils::conversion::validate_output_path(&output_path, config.base_dir.as_deref())
         .map_err(VidQualityError::ConversionError)?;
 

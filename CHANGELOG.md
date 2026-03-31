@@ -6,6 +6,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - 2026-04-01
 
+#### 🆕 Features
+
+- **Batch Collision Prevention**: Added `reserve_output_path()` to prevent destructive filename collisions during batch processing. When different inputs resolve to the same target name, later files receive stable numeric suffixes (` (1)`, ` (2)`) instead of being skipped or risking overwrite.
+- **PNG Quantization Detection**: Strengthened detection for pngquant/TinyPNG-style lossy PNGs by adding a cheap sample-based palette estimator (grid subsample up to 10k pixels) and improving tEXt/zTXt tool-signature matching. This reduces false-negatives for palette-quantized PNGs and surfaces candidates for lossy-palette optimization.
+
 #### 🐞 Fixes
 
 - Ensure `should_keep_as_gif_with_path` performs a lightweight `scan_gif_headers()` when a path is provided so veto rules see loop count, transparency, palette and frame-payload variation. This prevents very short looping GIFs from being incorrectly routed to video conversion.
@@ -16,6 +21,8 @@ All notable changes to this project will be documented in this file.
    - When a path-aware GIF candidate still ends up `UNDECIDED` and no trustworthy duration can be recovered, it now falls back to a fixed `4.25s` baseline cutoff: shorter assets stay GIF, longer ones convert to video.
    - Behavioral change: `UNDECIDED` no longer silently behaves like `duration=0s`. Previously, missing timing could leak into veto logic and look like an ultra-short loop, biasing the result toward `KEEP GIF`. Now unresolved timing is normalized into an explicit baseline estimate before veto/scoring, and truly unresolved cases use the `4.25s` split instead of implicit zero-duration retention.
  - `gif_candidate_meta_from_path` now performs a best-effort header-scan (with error logging) to populate `palette_size`, `app_extensions`, `loop_count`, and variation signals even when extensions are missing — improving detection for GIFs lacking proper file extensions.
+
+- **PNG Quantization Detection**: strengthened detection for pngquant/TinyPNG-style lossy PNGs by adding a cheap sample-based palette estimator (grid subsample up to 10k pixels) and improving tEXt/zTXt tool-signature matching. This reduces false-negatives for palette-quantized PNGs and surfaces candidates for lossy-palette optimization.
 
 - 🛡️ Hardened GIF veto sizing logic:
   - `apply_veto` now precomputes rhythmic/sticker intent before enforcing the strict file-size ceiling. Short, strongly looping/infinite GIFs (high loop affinity and duration under a dynamic rhythmic threshold) are conservatively allowed to bypass the raw size ceiling to avoid false-positive conversions of tiny cyclic stickers. Premium rhythmic loops remain protected.
@@ -34,6 +41,7 @@ All notable changes to this project will be documented in this file.
  - Fixed GIF-like video recovery for short silent container videos: `GifMeta::from_video()` no longer treats every 10-bit source as a complex color profile. GIF recovery vetoes now only trip on actual HDR / wide-gamut indicators (Dolby Vision, HDR10+, mastering metadata, BT.2020, non-BT.709 transfer/primaries), so short silent BT.709 videos such as the local debug `.mov` sample route back to GIF instead of being forced into HEVC/AV1 video conversion.
  - Switched the video→GIF apple-compat pipeline from FFmpeg global-palette encoding to `gifski`. The conversion path now uses `gifski` for final GIF assembly, preserving per-frame palette optimization and materially improving gradients, skin tones, and dark detail compared with the previous single global palette workflow. Existing APNG/JXL/WebP pre-normalization and skip/copy safeguards remain in place.
  - Relaxed the output path safety policy to resolve canonical parent directories instead of rejecting any symlink component in the path chain. This fixes false rejections for normal macOS temp roots such as `/tmp` and `/var/.../T` while still refusing to overwrite a symlink at the final output path itself.
+ - Hardened output-path allocation to avoid destructive filename collisions during batch processing. When different inputs resolve to the same target name within a run, the later file now receives a stable numeric suffix such as ` (1)` / ` (2)` instead of being skipped against another file's output path or risking overwrite/data loss. Same-input path allocation remains stable across repeated lookups in the same run.
 
 ## [0.11.1] - 2026-03-31
 
