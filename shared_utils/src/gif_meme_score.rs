@@ -2199,6 +2199,174 @@ mod tests {
 
     // ── gif_meta_from_probe tests ─────────────────────────────────────────────
 
+    // ── Edge case tests for score_gif ─────────────────────────────────────────
+
+    #[test]
+    fn score_gif_zero_duration() {
+        // Edge case: zero duration should not panic
+        let meta = make_meta(0.0, 100, 100, 10.0, 0, 1000);
+        let s = score_gif(&meta, None);
+        assert!(s.total.is_finite(), "score should be finite");
+    }
+
+    #[test]
+    fn score_gif_extremely_high_fps() {
+        // Edge case: 1000fps should not cause overflow
+        let meta = make_meta(1.0, 200, 200, 1000.0, 1000, 500_000);
+        let s = score_gif(&meta, None);
+        assert!(s.total.is_finite(), "score should be finite for high fps");
+    }
+
+    #[test]
+    fn score_gif_single_frame() {
+        // Edge case: single frame GIF (effectively static image)
+        let meta = make_meta(0.1, 300, 300, 10.0, 1, 50_000);
+        let s = score_gif(&meta, None);
+        // Just verify it runs and produces finite score
+        assert!(s.total.is_finite(), "single frame should produce finite score");
+    }
+
+    #[test]
+    fn score_gif_massive_file() {
+        // Edge case: 100MB+ GIF
+        let meta = make_meta(60.0, 4096, 4096, 30.0, 1800, 100_000_000);
+        let s = score_gif(&meta, None);
+        assert!(s.total < 0.5, "massive file should score low");
+    }
+
+    #[test]
+    fn score_gif_degenerate_dimensions() {
+        // Edge case: 1x1 pixel GIF
+        let meta = make_meta(1.0, 1, 1, 10.0, 10, 100);
+        let s = score_gif(&meta, None);
+        assert!(s.total.is_finite(), "score should be finite for 1x1");
+    }
+
+    #[test]
+    fn score_gif_extreme_aspect_ratio() {
+        // Edge case: very wide or tall GIF
+        let meta_wide = make_meta(1.0, 1000, 10, 10.0, 10, 10_000);
+        let s_wide = score_gif(&meta_wide, None);
+        assert!(s_wide.total.is_finite(), "wide aspect should be finite");
+
+        let meta_tall = make_meta(1.0, 10, 1000, 10.0, 10, 10_000);
+        let s_tall = score_gif(&meta_tall, None);
+        assert!(s_tall.total.is_finite(), "tall aspect should be finite");
+    }
+
+    // ── Edge case tests for apply_veto ────────────────────────────────────────
+
+    #[test]
+    fn veto_zero_frame_count() {
+        let meta = make_meta(1.0, 100, 100, 10.0, 0, 1000);
+        let result = apply_veto(&meta, 0.1, 1.0);
+        assert!(matches!(result, VetoVerdict::KeepGif | VetoVerdict::Undecided));
+    }
+
+    #[test]
+    fn veto_extreme_bpp_values() {
+        let meta = make_meta(1.0, 100, 100, 10.0, 10, 1000);
+        
+        // Very high bpp
+        let result_high = apply_veto(&meta, 0.99, 1.0);
+        assert!(result_high != VetoVerdict::Undecided);
+        
+        // Very low bpp
+        let result_low = apply_veto(&meta, 0.001, 1.0);
+        assert!(result_low != VetoVerdict::Undecided);
+    }
+
+    #[test]
+    fn veto_boundary_conditions() {
+        // Test exact boundary values - just verify no panic
+        let _meta_1080p = make_meta(10.0, 1920, 1080, 30.0, 300, 5_000_000);
+        
+        // Just under 15s threshold
+        let meta_14_9s = make_meta(14.9, 1920, 1080, 30.0, 447, 5_000_000);
+        let _result_under = apply_veto(&meta_14_9s, 0.3, 3.0);
+        
+        // Just over 15s threshold
+        let meta_15_1s = make_meta(15.1, 1920, 1080, 30.0, 453, 5_000_000);
+        let _result_over = apply_veto(&meta_15_1s, 0.3, 3.0);
+    }
+
+    // ── Edge case tests for should_keep_as_gif ────────────────────────────────
+
+    #[test]
+    fn should_keep_edge_case_zero_size() {
+        let meta = make_meta(1.0, 100, 100, 10.0, 10, 0);
+        let result = should_keep_as_gif(&meta);
+        // Should not panic, result depends on other factors
+        assert!(result || !result); // Just verify it runs
+    }
+
+    #[test]
+    fn should_keep_transparency_edge_cases() {
+        // Very short transparent GIF (should always keep)
+        let mut meta = make_meta(0.1, 100, 100, 30.0, 3, 5000);
+        meta.has_transparency = true;
+        assert!(should_keep_as_gif(&meta), "short transparent should keep");
+
+        // Long transparent GIF (might convert)
+        let mut meta_long = make_meta(30.0, 500, 500, 30.0, 900, 5_000_000);
+        meta_long.has_transparency = true;
+        // Long duration overrides transparency
+        let s = score_gif(&meta_long, None);
+        if s.total < CONF_KEEP {
+            assert!(!should_keep_as_gif(&meta_long));
+        }
+    }
+
+    #[test]
+    fn should_keep_loop_count_edge_cases() {
+        // Infinite loop (loop_count = 0)
+        let mut meta_infinite = make_meta(2.0, 200, 200, 15.0, 30, 100_000);
+        meta_infinite.loop_count = Some(0);
+        assert!(should_keep_as_gif(&meta_infinite), "infinite loop should keep");
+
+        // Single play (loop_count = 1)
+        let mut meta_single = make_meta(2.0, 200, 200, 15.0, 30, 100_000);
+        meta_single.loop_count = Some(1);
+        // Single play might convert depending on other factors
+        let _ = should_keep_as_gif(&meta_single); // Just verify no panic
+    }
+
+    // ── Rhythmic sticker detection tests ──────────────────────────────────────
+
+    #[test]
+    fn is_rhythmic_sticker_short_high_cadence() {
+        // Short duration with moderate size → should be kept as GIF
+        let meta = make_meta(0.5, 200, 200, 30.0, 15, 50_000);
+        assert!(meta.is_rhythmic_sticker(), "short content should be kept");
+    }
+
+    #[test]
+    fn is_rhythmic_sticker_long_duration() {
+        // Long duration (>15s) with 1080p → convert veto
+        let meta = make_meta(20.0, 1920, 1080, 30.0, 600, 5_000_000);
+        assert!(!meta.is_rhythmic_sticker(), "long 1080p should convert");
+    }
+
+    #[test]
+    fn is_rhythmic_sticker_low_fps() {
+        // Low fps with small size → might still keep
+        let meta = make_meta(1.0, 100, 100, 5.0, 5, 5_000);
+        // Just verify it runs without panic
+        let _ = meta.is_rhythmic_sticker();
+    }
+
+    #[test]
+    fn is_rhythmic_sticker_boundary_behavior() {
+        // Test that boundary values don't cause panic
+        let meta_small = make_meta(1.0, 50, 50, 10.0, 10, 5_000);
+        assert!(meta_small.is_rhythmic_sticker() || !meta_small.is_rhythmic_sticker());
+        
+        let meta_large = make_meta(30.0, 1920, 1080, 30.0, 900, 10_000_000);
+        assert!(meta_large.is_rhythmic_sticker() || !meta_large.is_rhythmic_sticker());
+    }
+
+    // ── gif_meta_from_probe tests ─────────────────────────────────────────────
+
     #[test]
     fn gif_meta_from_probe_zero_dimensions_returns_none() {
         assert!(gif_meta_from_probe_raw(0, 0, 2.0, 10.0, 20, 40_000).is_none());

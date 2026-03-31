@@ -900,4 +900,69 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_extract_frame_types() {
+        let json = serde_json::json!({
+            "frames": [
+                {"pict_type": "I"},
+                {"pict_type": "P"},
+                {"pict_type": "B"},
+                {"pict_type": "I"}
+            ]
+        });
+        let types = extract_frame_types(&json);
+        assert_eq!(types, vec!['I', 'P', 'B', 'I']);
+    }
+
+    #[test]
+    fn test_extract_pts_deltas() {
+        let json = serde_json::json!({
+            "frames": [
+                {"pkt_pts_time": "0.0"},
+                {"pkt_pts_time": "0.04"},
+                {"pkt_pts_time": "0.08"},
+                {"pkt_pts_time": "0.12"}
+            ]
+        });
+        let deltas = extract_pts_deltas(&json);
+        assert_eq!(deltas.len(), 3);
+        for delta in &deltas {
+            assert!((delta - 0.04).abs() < 0.001);
+        }
+    }
+
+    #[test]
+    fn test_extract_pkt_sizes() {
+        let json = serde_json::json!({
+            "frames": [
+                {"pkt_size": "1024"},
+                {"pkt_size": "2048"},
+                {"pkt_size": "512"}
+            ]
+        });
+        let sizes = extract_pkt_sizes(&json);
+        assert_eq!(sizes, vec![1024, 2048, 512]);
+    }
+
+    #[test]
+    fn test_extract_loop_count() {
+        let json_with_loop = serde_json::json!({
+            "format": {
+                "tags": {
+                    "loop_count": "5"
+                }
+            }
+        });
+        let loop_count = extract_loop_count(&json_with_loop["format"]);
+        assert_eq!(loop_count, Some(5));
+
+        let json_no_loop = serde_json::json!({
+            "format": {
+                "tags": {}
+            }
+        });
+        let loop_count = extract_loop_count(&json_no_loop["format"]);
+        assert_eq!(loop_count, None);
+    }
 }
