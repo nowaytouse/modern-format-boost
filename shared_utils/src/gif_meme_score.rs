@@ -356,6 +356,11 @@ const REFERENCE_AREA: f64 = 720.0 * 720.0;
 const PIXELS_1080P: f64 = (1920 * 1080) as f64;
 /// pixel count below this → very small canvas (≤200×200)
 const PIXELS_SMALL: f64 = (200 * 200) as f64;
+/// Absolute byte thresholds to hard-keep or hard-convert GIFs regardless of
+/// dynamic heuristics. These provide a safety net for tiny personal stickers
+/// and for extremely large GIFs that should never be stored as GIF due to bloat.
+const ABSOLUTE_KEEP_UNDER_BYTES: u64 = 102_400; // 100 KiB
+const ABSOLUTE_CONVERT_OVER_BYTES: u64 = 50_000_000; // 50 MB
 
 /// Returns the dynamic duration threshold T_max(N, fps).
 fn dynamic_duration_threshold(width: u32, height: u32, fps: f64) -> f64 {
@@ -1222,10 +1227,65 @@ fn apply_veto(meta: &GifMeta, temporal_bpp: f64, spatial_bpp: f64) -> VetoVerdic
     let dynamic_threshold = dynamic_duration_threshold(meta.width, meta.height, meta.fps).max(0.35);
     let duration_ratio = meta.duration_secs / dynamic_threshold;
     let loop_affinity = score_loop_affinity(meta);
+    
+    // Allow explicit operator overrides via environment variables. These are
+    // intentionally conservative and opt-in only (no default behavior change).
+    if let Some(ov) = check_meta_override(meta) {
+        crate::progress_mode::emit_stderr(&format!(
+            "🔒  GIF [{}] → {} (env override)",
+            meta.file_name.as_deref().unwrap_or("?"),
+            match ov { VetoVerdict::KeepGif => "KEEP GIF", VetoVerdict::ConvertVideo => "CONVERT→VIDEO", VetoVerdict::Undecided => "UNDECIDED" }
+        ));
+        return ov;
+    }
+    
 
     // CONDITION 2 & 4: HDR/Wide-gamut or Embedded ICC Profile (cannot be preserved in GIF)
     if meta.has_embedded_icc || meta.has_complex_color_profile {
         return VetoVerdict::ConvertVideo;
+    }
+
+    // Precompute rhythmic/infinite-loop intent & dynamic rhythmic threshold
+    // (used by the size-ceiling logic and absolute guards).
+    let is_infinite_loop = infer_looping_intent(meta);
+    let avg_frame_delay = if meta.fps > 0.1 { 1.0 / meta.fps } else { 0.12 };
+    let rhythmic_factor = (0.12 / avg_frame_delay).clamp(1.0, 4.0);
+    let dynamic_rhythmic_threshold = 3.5 * rhythmic_factor;
+
+    // ABSOLUTE GUARDS: small GIFs are always kept; extremely large GIFs
+    // are converted unless they are clearly intentional infinite-loop/premium.
+    if meta.file_size_bytes <= ABSOLUTE_KEEP_UNDER_BYTES {
+        crate::progress_mode::emit_stderr(&format!(
+            "🎯  GIF [{}] → KEEP GIF (absolute size <= {} bytes)",
+            meta.file_name.as_deref().unwrap_or("?"),
+            ABSOLUTE_KEEP_UNDER_BYTES
+        ));
+        return VetoVerdict::KeepGif;
+    }
+
+    if meta.file_size_bytes >= ABSOLUTE_CONVERT_OVER_BYTES {
+        // Allow opt-in skip of the absolute convert ceiling via environment
+        // variable for curated paths: `MFB_GIF_SKIP_CONVERT_CEILING`.
+        if meta_matches_skip_convert_ceiling(meta) {
+            crate::progress_mode::emit_stderr(&format!(
+                "🔓  GIF [{}] → SKIP absolute-convert ceiling (whitelist)",
+                meta.file_name.as_deref().unwrap_or("?"),
+            ));
+        } else if !(is_infinite_loop && meta.duration_secs < dynamic_rhythmic_threshold * 1.1)
+            && !(score_premium_all(meta) > 0.90)
+        {
+            crate::progress_mode::emit_stderr(&format!(
+                "🎯  GIF [{}] → CONVERT→VIDEO (absolute size >= {} bytes)",
+                meta.file_name.as_deref().unwrap_or("?"),
+                ABSOLUTE_CONVERT_OVER_BYTES
+            ));
+            return VetoVerdict::ConvertVideo;
+        } else {
+            crate::progress_mode::emit_stderr(&format!(
+                "🔔  GIF [{}] → EXEMPT from absolute-convert due to strong loop/premium",
+                meta.file_name.as_deref().unwrap_or("?")
+            ));
+        }
     }
 
     // High-density large-canvas clips retain too much photographic detail for GIF.
@@ -1251,18 +1311,23 @@ fn apply_veto(meta: &GifMeta, temporal_bpp: f64, spatial_bpp: f64) -> VetoVerdic
         return VetoVerdict::ConvertVideo;
     }
 
+    // Rhythmic/infinite-loop precomputation moved earlier (absolute guards).
+
     // CONDITION 3: File size ceiling
     if meta.file_size_bytes > convert_ceiling(meta.width, meta.height) {
-        return VetoVerdict::ConvertVideo;
+        // Allow exception for strong infinite-loop short assets (intentional stickers/loops)
+        // and premium rhythmic loops; otherwise convert to avoid storing huge GIFs.
+        if !(is_infinite_loop && meta.duration_secs < dynamic_rhythmic_threshold * 1.1)
+            && !(score_premium_all(meta) > 0.85)
+        {
+            return VetoVerdict::ConvertVideo;
+        }
     }
 
     // ── 1. RHYTHMIC STICKER PROTECTION (v5.3) ──
     // Formula: Rhythmic Threshold = 3.5s * (0.12s / avg_frame_delay)
     // The faster it looks (shorter delay), the more duration headroom it gets.
-    let is_infinite_loop = infer_looping_intent(meta);
-    let avg_frame_delay = if meta.fps > 0.1 { 1.0 / meta.fps } else { 0.12 };
-    let rhythmic_factor = (0.12 / avg_frame_delay).clamp(1.0, 4.0);
-    let dynamic_rhythmic_threshold = 3.5 * rhythmic_factor;
+    // (dynamic_rhythmic_threshold already computed above)
 
     if is_infinite_loop && meta.duration_secs < dynamic_rhythmic_threshold {
         return VetoVerdict::KeepGif;
@@ -1474,33 +1539,131 @@ pub fn should_keep_as_gif(meta: &GifMeta) -> bool {
     should_keep_as_gif_with_path(meta, None)
 }
 
+fn resolved_duration_with_confidence(meta: &GifMeta) -> (f64, bool) {
+    let duration_from_meta = meta.duration_secs;
+    let duration_from_timing = meta.frame_count > 1 && meta.fps > 0.1;
+
+    if duration_from_meta > 0.11 {
+        return (duration_from_meta, true);
+    }
+
+    if duration_from_timing {
+        return (meta.frame_count as f64 / meta.fps, true);
+    }
+
+    ((meta.frame_count.max(1) as f64) / 12.0, false)
+}
+
 #[must_use]
 pub fn should_keep_as_gif_with_path(meta: &GifMeta, path: Option<&std::path::Path>) -> bool {
-    // ── Phase 0: Veto rules (Zero-cost) ──────────────────────────────────
-    let pixels = (u64::from(meta.width) * u64::from(meta.height)).max(1);
-    let total_frames = meta.frame_count.max(1);
-    let spatial_bpp = meta.file_size_bytes as f64 / pixels as f64;
-    let temporal_bpp = meta.file_size_bytes as f64 / (pixels * total_frames) as f64;
+    // Clone early so we can populate header-derived fields when a path is available.
+    let mut current_meta = meta.clone();
 
-    match apply_veto(meta, temporal_bpp, spatial_bpp) {
+    // If a path is provided and it looks like a GIF, perform a lightweight
+    // header-scan so veto rules see loop_count / transparency / palette
+    // and frame-payload variation before making a decision.
+    if let Some(p) = path {
+        // Perform a best-effort header scan; log failures for easier debugging.
+        match scan_gif_headers(p) {
+            Ok((pal, exts, has_transparency, payload_var, delay_var, loop_count, total_dur)) => {
+                current_meta.palette_size = pal;
+                current_meta.app_extensions = exts;
+                current_meta.has_transparency = has_transparency;
+                current_meta.frame_payload_variation = payload_var;
+                current_meta.frame_delay_variation = delay_var;
+                current_meta.loop_count = loop_count;
+                // If the header scan can produce a total duration, prefer it as a
+                // higher-confidence signal than the probe fallback.
+                if let Some(d) = total_dur {
+                    current_meta.duration_secs = d;
+                }
+            }
+            Err(e) => {
+                crate::progress_mode::emit_stderr(&format!(
+                    "🔍 GIF header scan failed for {}: {}",
+                    p.display(), e
+                ));
+            }
+        }
+
+        // Populate conservative defaults for any GIF-specific fields that
+        // remained missing after a best-effort header-scan.
+        ensure_conservative_gif_defaults(&mut current_meta, Some(p));
+
+        // Extra short-loop safety guard: when header-scan indicates an infinite
+        // loop or extremely low frame-payload variation on a short asset,
+        // prefer keeping as GIF (path-aware conservative default).
+        let dyn_thr = dynamic_duration_threshold(current_meta.width, current_meta.height, current_meta.fps).max(0.35);
+        let shortish = current_meta.duration_secs <= dyn_thr * 1.6;
+        let low_variation = current_meta.frame_payload_variation.unwrap_or(1.0) < 0.18;
+        let small_size_guard = current_meta.file_size_bytes <= convert_ceiling(current_meta.width, current_meta.height) / 2;
+
+        if (current_meta.loop_count == Some(0) || low_variation) && shortish && small_size_guard {
+            crate::progress_mode::emit_stderr(&format!(
+                "🎯  GIF [{}] → KEEP GIF (short-loop header-scan guard)",
+                current_meta.file_name.as_deref().unwrap_or("?"),
+            ));
+            return true;
+        }
+    }
+
+    let is_path_aware_gif_candidate = path.is_some()
+        && (current_meta.source_extension.as_deref() == Some("gif")
+            || current_meta.palette_size.is_some()
+            || current_meta.app_extensions.is_some());
+    let (estimated_duration, duration_is_confident) = resolved_duration_with_confidence(&current_meta);
+
+    // Promote a simple duration estimate into the working meta before veto
+    // evaluation so missing/zero probe durations do not masquerade as ultra-
+    // short loops and bypass the intended keep-vs-convert logic.
+    if is_path_aware_gif_candidate && !duration_is_confident {
+        current_meta.duration_secs = estimated_duration;
+    }
+
+    // ── Phase 0: Veto rules (Zero-cost) ──────────────────────────────────
+    let pixels = (u64::from(current_meta.width) * u64::from(current_meta.height)).max(1);
+    let total_frames = current_meta.frame_count.max(1);
+    let spatial_bpp = current_meta.file_size_bytes as f64 / pixels as f64;
+    let temporal_bpp = current_meta.file_size_bytes as f64 / (pixels * total_frames) as f64;
+
+    match apply_veto(&current_meta, temporal_bpp, spatial_bpp) {
         VetoVerdict::KeepGif => {
             crate::progress_mode::emit_stderr(&format!(
                 "🎞️  GIF [{}] → KEEP GIF (veto early-exit verdict)",
-                meta.file_name.as_deref().unwrap_or("?"),
+                current_meta.file_name.as_deref().unwrap_or("?"),
             ));
             return true;
         }
         VetoVerdict::ConvertVideo => {
             crate::progress_mode::emit_stderr(&format!(
                 "🎞️  GIF [{}] → CONVERT→VIDEO (veto early-exit verdict)",
-                meta.file_name.as_deref().unwrap_or("?"),
+                current_meta.file_name.as_deref().unwrap_or("?"),
             ));
             return false;
         }
         VetoVerdict::Undecided => {}
     }
 
-    let mut current_meta = meta.clone();
+    // Baseline fallback: for path-aware GIF candidates that remain undecided
+    // and still lack trustworthy timing, revert to a fixed duration cutoff.
+    if is_path_aware_gif_candidate && !duration_is_confident {
+        const HARDCODE_FALLBACK_DUR: f64 = 4.25;
+        if estimated_duration <= HARDCODE_FALLBACK_DUR {
+            crate::progress_mode::emit_stderr(&format!(
+                "🔁  GIF [{}] → KEEP GIF (duration-fallback <= {:.2}s)",
+                current_meta.file_name.as_deref().unwrap_or("?"),
+                HARDCODE_FALLBACK_DUR
+            ));
+            return true;
+        } else {
+            crate::progress_mode::emit_stderr(&format!(
+                "🔁  GIF [{}] → CONVERT→VIDEO (duration-fallback > {:.2}s)",
+                current_meta.file_name.as_deref().unwrap_or("?"),
+                HARDCODE_FALLBACK_DUR
+            ));
+            return false;
+        }
+    }
 
     // ── Phase 1 & 2: Low/Medium Cost Cascade ─────────────────────────────
     let mut score = composite_gif_score(&current_meta);
@@ -1509,15 +1672,15 @@ pub fn should_keep_as_gif_with_path(meta: &GifMeta, path: Option<&std::path::Pat
     if score >= 0.92 {
         crate::progress_mode::emit_stderr(&format!(
             "🎞️  GIF [{}] → KEEP GIF (cascade early-exit score {:.2})",
-            meta.file_name.as_deref().unwrap_or("?"),
+            current_meta.file_name.as_deref().unwrap_or("?"),
             score
         ));
         return true;
     }
-    if score < 0.12 && meta.width > 720 {
+    if score < 0.12 && current_meta.width > 720 {
         crate::progress_mode::emit_stderr(&format!(
             "🎞️  GIF [{}] → CONVERT→VIDEO (cascade early-exit score {:.2})",
-            meta.file_name.as_deref().unwrap_or("?"),
+            current_meta.file_name.as_deref().unwrap_or("?"),
             score
         ));
         return false;
@@ -1529,7 +1692,7 @@ pub fn should_keep_as_gif_with_path(meta: &GifMeta, path: Option<&std::path::Pat
             score = composite_gif_score(&current_meta);
             crate::progress_mode::emit_stderr(&format!(
                 "🔭  GIF [{}] → Final score: {:.2} (Deep Signals Applied)",
-                meta.file_name.as_deref().unwrap_or("?"),
+                current_meta.file_name.as_deref().unwrap_or("?"),
                 score
             ));
         }
@@ -1538,7 +1701,7 @@ pub fn should_keep_as_gif_with_path(meta: &GifMeta, path: Option<&std::path::Pat
     let label = score >= 0.58;
     crate::progress_mode::emit_stderr(&format!(
         "🎞️  GIF [{}] → {} (weighted score {:.2})",
-        meta.file_name.as_deref().unwrap_or("?"),
+        current_meta.file_name.as_deref().unwrap_or("?"),
         if label { "KEEP GIF" } else { "CONVERT→VIDEO" },
         score
     ));
@@ -1621,18 +1784,32 @@ pub fn gif_candidate_meta_from_path(path: &std::path::Path) -> Option<GifMeta> {
     let probe = crate::probe_video(path).ok()?;
     let mut meta = gif_meta_from_probe_with_path(&probe, file_size, path)?;
 
-    if meta.source_extension.as_deref() == Some("gif") {
-        if let Ok((pal, exts, has_transparency, variation, delay_variation, loops)) =
-            scan_gif_headers(path)
-        {
+    // Try a lightweight header-scan regardless of extension detection. The
+    // scanner returns neutral values for non-GIF files; on I/O errors we log
+    // and continue with probe-only metadata.
+    match scan_gif_headers(path) {
+        Ok((pal, exts, has_transparency, variation, delay_variation, loops, total_dur)) => {
             meta.palette_size = pal;
             meta.app_extensions = exts;
             meta.has_transparency = has_transparency;
             meta.frame_payload_variation = variation;
             meta.frame_delay_variation = delay_variation;
             meta.loop_count = loops;
+            if let Some(d) = total_dur {
+                meta.duration_secs = d;
+            }
+        }
+        Err(e) => {
+            crate::progress_mode::emit_stderr(&format!(
+                "🔍 GIF header scan failed for {}: {}",
+                path.display(), e
+            ));
         }
     }
+
+    // Apply conservative defaults for any missing GIF-specific fields
+    // when a filesystem path is available.
+    ensure_conservative_gif_defaults(&mut meta, Some(path));
 
     Some(meta)
 }
@@ -1819,17 +1996,18 @@ pub fn scan_gif_headers(
     Option<f64>,
     Option<f64>,
     Option<u16>,
+    Option<f64>, // total duration in seconds (derived from frame delays if present)
 )> {
     let buf = std::fs::read(path)?;
     let n = buf.len();
 
     if n < 13 {
-        return Ok((None, None, false, None, None, None));
+        return Ok((None, None, false, None, None, None, None));
     }
 
     // GIF87a / GIF89a magic check
     if &buf[0..6] != b"GIF87a" && &buf[0..6] != b"GIF89a" {
-        return Ok((None, None, false, None, None, None));
+                return Ok((None, None, false, None, None, None, None));
     }
 
     // Logical Screen Descriptor: byte 10 = packed field
@@ -1982,6 +2160,13 @@ pub fn scan_gif_headers(
         None
     };
 
+    // total duration in seconds from frame delays (centiseconds -> seconds)
+    let total_duration_secs = if !frame_delays_cs.is_empty() {
+        Some(frame_delays_cs.iter().map(|&d| d as f64).sum::<f64>() / 100.0)
+    } else {
+        None
+    };
+
     Ok((
         palette_size,
         app_extensions,
@@ -1989,6 +2174,7 @@ pub fn scan_gif_headers(
         frame_payload_variation,
         frame_delay_variation,
         loop_count,
+        total_duration_secs,
     ))
 }
 
@@ -2006,6 +2192,103 @@ fn skip_sub_blocks(buf: &[u8], mut pos: usize) -> usize {
             return buf.len();
         }
     }
+}
+
+/// Populate conservative defaults for missing GIF-specific fields when a
+/// filesystem `path` is available. This intentionally only runs when a path
+/// was provided (so probe-only callers are unaffected) and when the asset
+/// looks GIF-like (either by extension or by header-derived hints).
+fn ensure_conservative_gif_defaults(meta: &mut GifMeta, path: Option<&std::path::Path>) {
+    let Some(_p) = path else { return; };
+
+    // Apply only to assets that either declare `gif` extension or where a
+    // header-scan populated GIF-specific signals.
+    let is_gif_candidate = meta.source_extension.as_deref() == Some("gif")
+        || meta.palette_size.is_some()
+        || meta.app_extensions.is_some();
+
+    if !is_gif_candidate {
+        return;
+    }
+
+    if meta.palette_size.is_none() {
+        meta.palette_size = Some(64);
+    }
+    if meta.frame_payload_variation.is_none() {
+        // Conservative low-variation default to avoid false-converting small
+        // cyclic GIFs when header scan lacked sub-block sampling.
+        meta.frame_payload_variation = Some(0.18);
+    }
+    if meta.frame_delay_variation.is_none() {
+        meta.frame_delay_variation = Some(0.12);
+    }
+    if meta.palette_depth.is_none() {
+        meta.palette_depth = Some(0.5);
+    }
+    if meta.motion_gini.is_none() {
+        meta.motion_gini = Some(0.5);
+    }
+}
+
+/// Helper: match comma-separated environment patterns against `file_name` or
+/// `parent_directories` present in `GifMeta`.
+fn meta_matches_env_list(meta: &GifMeta, varname: &str) -> bool {
+    let var = match std::env::var_os(varname) {
+        Some(v) => v.to_string_lossy().to_string(),
+        None => return false,
+    };
+    if var.trim().is_empty() {
+        return false;
+    }
+
+    let patterns: Vec<&str> = var
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if patterns.is_empty() {
+        return false;
+    }
+
+    if let Some(name) = &meta.file_name {
+        let name_l = name.to_lowercase();
+        for pat in &patterns {
+            if name_l.contains(&pat.to_lowercase()) {
+                return true;
+            }
+        }
+    }
+
+    if let Some(parents) = &meta.parent_directories {
+        for p in parents {
+            let p_l = p.to_lowercase();
+            for pat in &patterns {
+                if p_l.contains(&pat.to_lowercase()) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
+}
+
+/// Check for explicit env-driven overrides. Use `MFB_GIF_FORCE_KEEP` and
+/// `MFB_GIF_FORCE_CONVERT` to force decisions (comma-separated substrings).
+fn check_meta_override(meta: &GifMeta) -> Option<VetoVerdict> {
+    if meta_matches_env_list(meta, "MFB_GIF_FORCE_KEEP") {
+        return Some(VetoVerdict::KeepGif);
+    }
+    if meta_matches_env_list(meta, "MFB_GIF_FORCE_CONVERT") {
+        return Some(VetoVerdict::ConvertVideo);
+    }
+    None
+}
+
+/// If `MFB_GIF_SKIP_CONVERT_CEILING` matches the meta, skip the absolute
+/// convert-over size ceiling for that asset.
+fn meta_matches_skip_convert_ceiling(meta: &GifMeta) -> bool {
+    meta_matches_env_list(meta, "MFB_GIF_SKIP_CONVERT_CEILING")
 }
 
 #[cfg(test)]
@@ -2753,4 +3036,102 @@ mod tests {
         let meta_res = make_meta(2.1, 800, 600, 10.0, 21, 500_000);
         assert_eq!(apply_veto(&meta_res, 0.1, 1.1), VetoVerdict::KeepGif);
     }
+
+    #[test]
+    fn absolute_small_size_kept_via_veto() {
+        let meta = make_meta(2.0, 320, 240, 12.0, 24, ABSOLUTE_KEEP_UNDER_BYTES);
+        assert_eq!(apply_veto(&meta, 0.1, 1.0), VetoVerdict::KeepGif);
+    }
+
+    #[test]
+    fn absolute_large_size_converted_via_veto() {
+        let meta = make_meta(3.0, 1024, 768, 24.0, 72, ABSOLUTE_CONVERT_OVER_BYTES + 1);
+        assert_eq!(apply_veto(&meta, 0.5, 2.0), VetoVerdict::ConvertVideo);
+    }
+
+    #[test]
+    fn ensure_defaults_only_with_path() {
+        let mut meta = make_meta(1.0, 200, 200, 12.0, 20, 50_000);
+        meta.source_extension = Some("gif".to_string());
+
+        // No path -> defaults should NOT be populated
+        ensure_conservative_gif_defaults(&mut meta, None);
+        assert!(meta.frame_payload_variation.is_none());
+
+        // With a path present -> conservative defaults applied
+        ensure_conservative_gif_defaults(&mut meta, Some(std::path::Path::new("/tmp")));
+        assert!(meta.frame_payload_variation.is_some());
+    }
+
+    #[test]
+    fn duration_fallback_keeps_short_undecided_gif_candidates() {
+        let mut meta = make_meta(0.0, 900, 900, 0.0, 48, 2_000_000);
+        meta.source_extension = Some("gif".to_string());
+        meta.file_name = Some("short-undecided.gif".to_string());
+        meta.palette_size = Some(256);
+        meta.app_extensions = Some(Vec::new());
+        meta.frame_payload_variation = Some(0.8);
+        meta.frame_delay_variation = Some(0.5);
+        meta.loop_count = Some(2);
+
+        assert!(should_keep_as_gif_with_path(
+            &meta,
+            Some(std::path::Path::new("/tmp/short-undecided.gif"))
+        ));
+    }
+
+    #[test]
+    fn duration_fallback_converts_long_undecided_gif_candidates() {
+        let mut meta = make_meta(0.0, 900, 900, 0.0, 60, 2_000_000);
+        meta.source_extension = Some("gif".to_string());
+        meta.file_name = Some("long-undecided.gif".to_string());
+        meta.palette_size = Some(256);
+        meta.app_extensions = Some(Vec::new());
+        meta.frame_payload_variation = Some(0.8);
+        meta.frame_delay_variation = Some(0.5);
+        meta.loop_count = Some(2);
+
+        assert!(!should_keep_as_gif_with_path(
+            &meta,
+            Some(std::path::Path::new("/tmp/long-undecided.gif"))
+        ));
+    }
+
+        #[test]
+        fn env_override_force_keep_and_convert() {
+            // Preserve previous env state
+            let prev_keep = std::env::var_os("MFB_GIF_FORCE_KEEP");
+            let prev_convert = std::env::var_os("MFB_GIF_FORCE_CONVERT");
+
+            std::env::set_var("MFB_GIF_FORCE_KEEP", "force_keep_token");
+            std::env::set_var("MFB_GIF_FORCE_CONVERT", "force_convert_token");
+
+            let mut meta = make_meta(1.0, 100, 100, 10.0, 10, 1000);
+            meta.file_name = Some("force_keep_token_example.gif".to_string());
+            assert!(meta_matches_env_list(&meta, "MFB_GIF_FORCE_KEEP"));
+            assert_eq!(check_meta_override(&meta), Some(VetoVerdict::KeepGif));
+
+            // convert override should not shadow keep if patterns differ
+            let mut meta2 = make_meta(1.0, 100, 100, 10.0, 10, 1000);
+            meta2.file_name = Some("force_convert_token_example.gif".to_string());
+            assert!(meta_matches_env_list(&meta2, "MFB_GIF_FORCE_CONVERT"));
+            assert_eq!(check_meta_override(&meta2), Some(VetoVerdict::ConvertVideo));
+
+            // restore
+            if let Some(v) = prev_keep { std::env::set_var("MFB_GIF_FORCE_KEEP", v); } else { std::env::remove_var("MFB_GIF_FORCE_KEEP"); }
+            if let Some(v) = prev_convert { std::env::set_var("MFB_GIF_FORCE_CONVERT", v); } else { std::env::remove_var("MFB_GIF_FORCE_CONVERT"); }
+        }
+
+        #[test]
+        fn env_skip_convert_ceiling_whitelist() {
+            let prev = std::env::var_os("MFB_GIF_SKIP_CONVERT_CEILING");
+            std::env::set_var("MFB_GIF_SKIP_CONVERT_CEILING", "whitelist_token");
+
+            let mut meta = make_meta(3.0, 1024, 768, 24.0, 72, ABSOLUTE_CONVERT_OVER_BYTES + 1);
+            meta.file_name = Some("whitelist_token_large.gif".to_string());
+
+            assert!(meta_matches_skip_convert_ceiling(&meta));
+
+            if let Some(v) = prev { std::env::set_var("MFB_GIF_SKIP_CONVERT_CEILING", v); } else { std::env::remove_var("MFB_GIF_SKIP_CONVERT_CEILING"); }
+        }
 }

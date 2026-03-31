@@ -550,7 +550,7 @@ fn sample_from_path(path: &Path, labeled_by: &str) -> Option<SampleInsert> {
     let file_size = std::fs::metadata(path).ok()?.len();
     let probe = crate::probe_video(path).ok()?;
     let mut meta = gif_meta_from_probe_with_path(&probe, file_size, path)?;
-    if let Ok((pal, exts, has_transparency, variation, delay_variation, loop_count)) =
+    if let Ok((pal, exts, has_transparency, variation, delay_variation, loop_count, total_dur)) =
         scan_gif_headers(path)
     {
         meta.palette_size = pal;
@@ -559,6 +559,9 @@ fn sample_from_path(path: &Path, labeled_by: &str) -> Option<SampleInsert> {
         meta.frame_payload_variation = variation;
         meta.frame_delay_variation = delay_variation;
         meta.loop_count = loop_count;
+        if let Some(d) = total_dur {
+            meta.duration_secs = d;
+        }
     }
 
     // Call deep refinement to populate palette_depth, temporal_flatness, etc.

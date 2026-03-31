@@ -845,7 +845,7 @@ fn dispatch_animated_conversion(
             if let Some(mut meta) =
                 shared_utils::gif_meta_from_probe_with_path(p, analysis.file_size, input)
             {
-                if let Ok((pal, exts, has_transparency, variation, delay_variation, loops)) =
+                if let Ok((pal, exts, has_transparency, variation, delay_variation, loops, total_dur)) =
                     shared_utils::scan_gif_headers(input)
                 {
                     meta.palette_size = pal;
@@ -854,6 +854,9 @@ fn dispatch_animated_conversion(
                     meta.frame_payload_variation = variation;
                     meta.frame_delay_variation = delay_variation;
                     meta.loop_count = loops;
+                    if let Some(d) = total_dur {
+                        meta.duration_secs = d;
+                    }
                 }
                 shared_utils::should_keep_as_gif_with_path(&meta, Some(input))
             } else {

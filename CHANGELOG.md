@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [Unreleased] - 2026-04-01
+
+#### 🐞 Fixes
+
+- Ensure `should_keep_as_gif_with_path` performs a lightweight `scan_gif_headers()` when a path is provided so veto rules see loop count, transparency, palette and frame-payload variation. This prevents very short looping GIFs from being incorrectly routed to video conversion.
+ - Hardened `should_keep_as_gif_with_path` further:
+   - Always attempts a header-scan when a path is available and logs scan errors for easier debugging.
+   - Uses a path-aware short-loop guard (infinite-loop / low payload-variation + small size) to conservatively prefer keeping tiny cyclic GIFs.
+   - Ensures all internal decision logs and threshold checks use the updated `current_meta` (fixes inconsistent use of probe-only vs header-populated metadata).
+   - When a path-aware GIF candidate still ends up `UNDECIDED` and no trustworthy duration can be recovered, it now falls back to a fixed `4.25s` baseline cutoff: shorter assets stay GIF, longer ones convert to video.
+   - Behavioral change: `UNDECIDED` no longer silently behaves like `duration=0s`. Previously, missing timing could leak into veto logic and look like an ultra-short loop, biasing the result toward `KEEP GIF`. Now unresolved timing is normalized into an explicit baseline estimate before veto/scoring, and truly unresolved cases use the `4.25s` split instead of implicit zero-duration retention.
+ - `gif_candidate_meta_from_path` now performs a best-effort header-scan (with error logging) to populate `palette_size`, `app_extensions`, `loop_count`, and variation signals even when extensions are missing — improving detection for GIFs lacking proper file extensions.
+
+- 🛡️ Hardened GIF veto sizing logic:
+  - `apply_veto` now precomputes rhythmic/sticker intent before enforcing the strict file-size ceiling. Short, strongly looping/infinite GIFs (high loop affinity and duration under a dynamic rhythmic threshold) are conservatively allowed to bypass the raw size ceiling to avoid false-positive conversions of tiny cyclic stickers. Premium rhythmic loops remain protected.
+  - This change addresses cases where short, high-quality GIF loops were being converted to video solely due to raw byte-size thresholds.
+
+#### 🛡️ Additional GIF Hardening (2026-04-01)
+
+- Added absolute byte-size guards: files ≤ 100KiB are always kept; files ≥ 50MB are conservatively converted to avoid extreme GIF bloat (exceptions exist for intentional infinite-loop or premium rhythmic loops).
+- Populate conservative defaults for missing GIF header-derived fields when a filesystem `path` is available (e.g. `frame_payload_variation`, `frame_delay_variation`, `palette_size`). This reduces false-conversions when header-scans are incomplete.
+- Added synthetic unit-tests that exercise absolute-size guards and the conservative-defaults logic. Tests explicitly avoid using any personal/debug media samples.
+ - Removed a heavy debug-only integration test that iterated the `debug/` media folder (privacy & performance). Replaced by lightweight synthetic tests and added operator env-var overrides for curated whitelist/blacklist behaviors (`MFB_GIF_FORCE_KEEP`, `MFB_GIF_FORCE_CONVERT`, `MFB_GIF_SKIP_CONVERT_CEILING`).
+ - Added a duration-baseline fallback rule: when a path-aware GIF candidate remains undecided and reliable timing still cannot be recovered, the scorer reverts to a simple hardcoded duration cutoff (4.25s) to decide KEEP vs CONVERT.
+
 ## [0.11.1] - 2026-03-31
 
 #### 🛡️ SQLite WAL Mode & Transaction Atomicity for Crash Safety
