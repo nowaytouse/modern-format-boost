@@ -151,7 +151,7 @@ zero_prefixed_literal = "allow"
 zero_ptr = "allow"
 
 [workspace.package]
-version = "0.11.2"
+version = "0.11.1"
 edition = "2021"
 license = "MIT"
 authors = ["Modern Format Boost Contributors"]

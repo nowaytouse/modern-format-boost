@@ -11,10 +11,10 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-use shared_utils::gif_value_db::is_lossless_exploration_safe;
 use shared_utils::conversion::{
     determine_output_path_with_base, is_already_processed, mark_as_processed,
 };
+use shared_utils::gif_value_db::is_lossless_exploration_safe;
 
 fn cleanup_temp_output(temp_output: &Path, input: &Path) {
     if let Err(e) = fs::remove_file(temp_output) {
@@ -240,38 +240,10 @@ fn skipped_output_exists(input: &Path, output: &Path, input_size: u64) -> Conver
     }
 }
 
-/// For GIF inputs: return true when the multi-dimensional meme-score indicates this GIF should be
-/// kept as-is rather than converted to a video container.
-///
-/// Uses ffprobe to gather resolution / fps / frame-count / duration, then applies the weighted
-/// scoring from `shared_utils::gif_meme_score`.  A score ≥ 0.50 → keep as GIF.
-/// Returns false for all non-GIF paths so the caller proceeds with normal conversion.
+/// Return true when the input is either a native GIF or a GIF-like silent loop
+/// video that the scorer says should stay in the GIF domain.
 fn is_gif_meme(path: &Path) -> bool {
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(str::to_lowercase)
-        .unwrap_or_default();
-    if ext != "gif" {
-        return false;
-    }
-    let file_size = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-    if let Ok(probe) = shared_utils::probe_video(path) {
-        if let Some(mut meta) = shared_utils::gif_meta_from_probe_with_path(&probe, file_size, path)
-        {
-            if let Ok((pal, exts, has_transparency, variation, delay_variation)) =
-                shared_utils::scan_gif_headers(path)
-            {
-                meta.palette_size = pal;
-                meta.app_extensions = exts;
-                meta.has_transparency = has_transparency;
-                meta.frame_payload_variation = variation;
-                meta.frame_delay_variation = delay_variation;
-            }
-            return shared_utils::should_keep_as_gif_with_path(&meta, Some(path));
-        }
-    }
-    false
+    shared_utils::should_keep_as_gif_candidate_path(path).unwrap_or(false)
 }
 
 /// Returns true if the file is an animated image format but effectively static (0 or negligible duration).
@@ -331,7 +303,8 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
         return Ok(skipped_static_animated(input, input_size));
     }
 
-    // GIF multi-dimensional meme-score: if the GIF looks like a meme/sticker, keep it as-is.
+    // GIF / GIF-like video meme-score: if the asset behaves like a looping sticker, keep it
+    // in the GIF domain instead of re-encoding to a video container.
     if is_gif_meme(input) {
         let input_size = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
         copy_original_on_skip(input, options);
@@ -343,7 +316,8 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
             input_size,
             output_size: None,
             size_reduction: None,
-            message: "Skipped: GIF identified as meme/sticker (meme-score ≥ 0.50)".to_string(),
+            message: "Skipped: GIF-like asset identified as meme/sticker (meme-score / loop score)"
+                .to_string(),
             skipped: true,
             skip_reason: Some("gif_meme".to_string()),
         });
@@ -746,7 +720,8 @@ pub fn convert_to_av1_mp4_matched(
         return Ok(skipped_static_animated(input, input_size));
     }
 
-    // GIF multi-dimensional meme-score: if the GIF looks like a meme/sticker, keep it as-is.
+    // GIF / GIF-like video meme-score: if the asset behaves like a looping sticker, keep it
+    // in the GIF domain instead of re-encoding to a video container.
     if is_gif_meme(input) {
         let input_size = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
         copy_original_on_skip(input, options);
@@ -758,7 +733,8 @@ pub fn convert_to_av1_mp4_matched(
             input_size,
             output_size: None,
             size_reduction: None,
-            message: "Skipped: GIF identified as meme/sticker (meme-score ≥ 0.50)".to_string(),
+            message: "Skipped: GIF-like asset identified as meme/sticker (meme-score / loop score)"
+                .to_string(),
             skipped: true,
             skip_reason: Some("gif_meme".to_string()),
         });
@@ -1069,8 +1045,18 @@ pub fn convert_to_av1_mp4_matched(
                 parent_directories: None,
                 has_embedded_icc: false,
                 has_complex_color_profile: false,
+                loop_count: None,
+                has_audio: p.has_audio,
+                frame_types: p.frame_types.clone(),
+                pts_deltas: p.pts_deltas.clone(),
+                mv_magnitudes: p.mv_magnitudes.clone(),
+                palette_depth: None,
+                motion_gini: None,
+                block_skew: None,
+                temporal_flatness: None,
+                pkt_sizes: p.pkt_sizes.clone(),
             };
-            is_lossless_exploration_safe(&meta)
+            is_lossless_exploration_safe(&meta, Some(input))
         } else {
             false
         }

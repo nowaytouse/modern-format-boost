@@ -145,8 +145,9 @@ pub use depth_channel::{
     encode_jxl_depth_fallback, encode_jxl_with_depth, extract_depth_from_heic, DepthMap, DepthType,
 };
 pub use gif_meme_score::{
-    gif_meta_from_probe, gif_meta_from_probe_with_path, scan_gif_headers, should_keep_as_gif,
-    should_keep_as_gif_with_path, GifMeta, MemeScore,
+    gif_candidate_meta_from_path, gif_meta_from_probe, gif_meta_from_probe_with_path,
+    is_probably_gif_like_video, scan_gif_headers, score_loop_affinity, should_keep_as_gif,
+    should_keep_as_gif_candidate_path, should_keep_as_gif_with_path, GifMeta, MemeScore,
 };
 pub use hdr_synthesis::{
     convert_heic_with_gainmap_to_jxl_hdr, convert_ultrahdr_jpeg_to_jxl_hdr, GainMapParams,

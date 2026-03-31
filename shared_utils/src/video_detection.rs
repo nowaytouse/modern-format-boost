@@ -237,6 +237,16 @@ pub struct VideoDetectionResult {
     pub history: crate::types::ProcessHistory,
     /// 🔬 New Dimension: Visual perception data (Auxiliary analysis)
     pub perception: crate::types::VisualPerception,
+    /// Optional: Loop count from metadata (0 = infinite).
+    pub loop_count: Option<u16>,
+    /// 🎞️ Frame types (I, P, B) for the initial sample.
+    pub frame_types: Vec<char>,
+    /// 🎞️ PTS deltas (frame intervals) for the initial sample.
+    pub pts_deltas: Vec<f64>,
+    /// 🎞️ Motion vector magnitudes (if available).
+    pub mv_magnitudes: Vec<f64>,
+    /// 🎞️ Packet sizes (in bytes) for bitrate analysis.
+    pub pkt_sizes: Vec<u64>,
 }
 
 impl VideoDetectionResult {
@@ -480,6 +490,11 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
         tags: probe.tags,
         history: crate::common_utils::get_current_history(),
         perception: Default::default(),
+        loop_count: probe.loop_count,
+        frame_types: probe.frame_types,
+        pts_deltas: probe.pts_deltas,
+        mv_magnitudes: probe.mv_magnitudes,
+        pkt_sizes: probe.pkt_sizes,
     })
 }
 

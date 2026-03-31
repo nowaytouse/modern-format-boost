@@ -264,8 +264,8 @@ dependencies = [
 
 [[package]]
 name = "blake3"
-version = "1.8.3"
-source = "git+https://github.com/BLAKE3-team/BLAKE3#d4b005a9f51ac5290bc96a5706e1cf897f602567"
+version = "1.8.4"
+source = "git+https://github.com/BLAKE3-team/BLAKE3#2e3727d292dcffa9ecf8058b4d9f01a18df517bf"
 dependencies = [
  "arrayref",
  "arrayvec",
@@ -398,7 +398,7 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 [[package]]
 name = "chrono"
 version = "0.4.44"
-source = "git+https://github.com/chronotope/chrono#c14b4599d07ef36ffa1f8a531fb0bc7eb3b42464"
+source = "git+https://github.com/chronotope/chrono#120686c82c5da90377e815edb82c9a80b6b4f2be"
 dependencies = [
  "iana-time-zone",
  "js-sys",
@@ -468,7 +468,7 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 [[package]]
 name = "console"
 version = "0.16.3"
-source = "git+https://github.com/console-rs/console#70ea3d0a6ecf1ca2f3891827631ca6e9b8e2b10a"
+source = "git+https://github.com/console-rs/console#586efad4ff5fb523c68a4bee431bd658aee99c17"
 dependencies = [
  "encode_unicode",
  "libc 0.2.183",
@@ -499,9 +499,9 @@ dependencies = [
 
 [[package]]
 name = "cpufeatures"
-version = "0.2.17"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59ed5838eebb26a2bb2e58f6d5b5316989ae9d08bab10e0e6d103e656d1b0280"
+checksum = "8b2a41393f66f16b0823bb79094d54ac5fbd34ab292ddafb9a0456ac9f87d201"
 dependencies = [
  "libc 0.2.183",
 ]
@@ -981,7 +981,7 @@ dependencies = [
 
 [[package]]
 name = "img-av1"
-version = "0.11.2"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -997,7 +997,7 @@ dependencies = [
 
 [[package]]
 name = "img-hevc"
-version = "0.11.2"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1132,9 +1132,9 @@ dependencies = [
 
 [[package]]
 name = "js-sys"
-version = "0.3.92"
+version = "0.3.93"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc4c90f45aa2e6eacbe8645f77fdea542ac97a494bcd117a67df9ff4d611f995"
+checksum = "797146bb2677299a1eb6b7b50a890f4c361b29ef967addf5b2fa45dae1bb6d7d"
 dependencies = [
  "once_cell",
  "wasm-bindgen",
@@ -1906,7 +1906,7 @@ dependencies = [
 
 [[package]]
 name = "shared_utils"
-version = "0.11.2"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "blake3",
@@ -2147,7 +2147,7 @@ version = "1.1.0+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2334f11ee363607eb04df9b8fc8a13ca1715a72ba8662a26ac285c98aabb4011"
 dependencies = [
- "winnow 1.0.0",
+ "winnow 1.0.1",
 ]
 
 [[package]]
@@ -2318,7 +2318,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vid-av1"
-version = "0.11.2"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -2330,7 +2330,7 @@ dependencies = [
 
 [[package]]
 name = "vid-hevc"
-version = "0.11.2"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -2378,9 +2378,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen"
-version = "0.2.115"
+version = "0.2.116"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6523d69017b7633e396a89c5efab138161ed5aafcbc8d3e5c5a42ae38f50495a"
+checksum = "7dc0882f7b5bb01ae8c5215a1230832694481c1a4be062fd410e12ea3da5b631"
 dependencies = [
  "cfg-if",
  "once_cell",
@@ -2391,9 +2391,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-macro"
-version = "0.2.115"
+version = "0.2.116"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e3a6c758eb2f701ed3d052ff5737f5bfe6614326ea7f3bbac7156192dc32e67"
+checksum = "75973d3066e01d035dbedaad2864c398df42f8dd7b1ea057c35b8407c015b537"
 dependencies = [
  "quote",
  "wasm-bindgen-macro-support",
@@ -2401,9 +2401,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-macro-support"
-version = "0.2.115"
+version = "0.2.116"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "921de2737904886b52bcbb237301552d05969a6f9c40d261eb0533c8b055fedf"
+checksum = "91af5e4be765819e0bcfee7322c14374dc821e35e72fa663a830bbc7dc199eac"
 dependencies = [
  "bumpalo",
  "proc-macro2",
@@ -2414,9 +2414,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-shared"
-version = "0.2.115"
+version = "0.2.116"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a93e946af942b58934c604527337bad9ae33ba1d5c6900bbb41c2c07c2364a93"
+checksum = "c9bf0406a78f02f336bf1e451799cca198e8acde4ffa278f0fb20487b150a633"
 dependencies = [
  "unicode-ident",
 ]
@@ -2564,9 +2564,9 @@ checksum = "df79d97927682d2fd8adb29682d1140b343be4ac0f08fd68b7765d9c059d3945"
 
 [[package]]
 name = "winnow"
-version = "1.0.0"
+version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a90e88e4667264a994d34e6d1ab2d26d398dcdca8b7f52bec8668957517fc7d8"
+checksum = "09dac053f1cd375980747450bfc7250c264eaae0583872e845c0c7cd578872b5"
 
 [[package]]
 name = "wit-bindgen"

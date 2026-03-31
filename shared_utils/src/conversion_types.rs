@@ -5,6 +5,7 @@ use std::path::PathBuf;
 pub enum TargetVideoFormat {
     Ffv1Mkv,
     Av1Mp4,
+    Gif,
     HevcLosslessMkv,
     HevcMp4,
     Skip,
@@ -16,6 +17,7 @@ impl TargetVideoFormat {
         match self {
             Self::Ffv1Mkv | Self::HevcLosslessMkv => "MKV",
             Self::Av1Mp4 | Self::HevcMp4 => "MP4",
+            Self::Gif => "GIF",
             Self::Skip => "",
         }
     }
@@ -25,6 +27,7 @@ impl TargetVideoFormat {
         match self {
             Self::Ffv1Mkv => "FFV1 MKV (Archival)",
             Self::Av1Mp4 => "AV1 MP4 (High Quality)",
+            Self::Gif => "GIF (Loop Asset)",
             Self::HevcLosslessMkv => "HEVC Lossless MKV (Archival)",
             Self::HevcMp4 => "HEVC MP4 (High Quality)",
             Self::Skip => "Skip",

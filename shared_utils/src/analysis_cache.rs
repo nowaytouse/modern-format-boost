@@ -1621,8 +1621,7 @@ mod tests {
 
         // Open a second connection and query the journal mode directly.
         let conn = rusqlite::Connection::open(&db_path)?;
-        let mode: String =
-            conn.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
+        let mode: String = conn.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
         assert_eq!(
             mode.to_lowercase(),
             "wal",
@@ -1658,7 +1657,10 @@ mod tests {
             conn.query_row("SELECT COUNT(*) FROM analysis_records", [], |r| r.get(0))?;
         let index_count: i64 =
             conn.query_row("SELECT COUNT(*) FROM path_index", [], |r| r.get(0))?;
-        assert_eq!(record_count, 1, "analysis_records must have exactly one row");
+        assert_eq!(
+            record_count, 1,
+            "analysis_records must have exactly one row"
+        );
         assert_eq!(index_count, 1, "path_index must have exactly one row");
 
         // The content_hash in path_index must match the one in analysis_records.
@@ -1703,7 +1705,9 @@ mod tests {
             noise_level: 0.05,
             sharpness: 0.91,
             contrast: 0.67,
-            content_type: ImageContentType { name: "photo".to_string() },
+            content_type: ImageContentType {
+                name: "photo".to_string(),
+            },
             confidence: 0.95,
             precision: Default::default(),
             history: Default::default(),
@@ -1749,10 +1753,7 @@ mod tests {
         // Corrupt the stored checksum directly via a second connection.
         {
             let conn = rusqlite::Connection::open(&db_path)?;
-            conn.execute(
-                "UPDATE analysis_records SET data_checksum = 0xDEADBEEF",
-                [],
-            )?;
+            conn.execute("UPDATE analysis_records SET data_checksum = 0xDEADBEEF", [])?;
         }
 
         // Cache must detect the mismatch and return None instead of bad data.

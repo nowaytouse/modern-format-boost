@@ -246,7 +246,6 @@ def check_ai_smell(tracker: Tracker, repo_root: Path) -> bool:
     return False
 
 
-
 def check_changelog_sync(tracker: Tracker) -> bool:
     tracker.announce_step("required", "CHANGELOG version synchronization")
     root = get_repo_root()
@@ -265,7 +264,9 @@ def check_changelog_sync(tracker: Tracker) -> bool:
             r'\[workspace\.package\]\s*version\s*=\s*"([^"]+)"', cargo_content
         )
         if not m:
-            cprint("  [yellow]Skipped: could not find workspace version in Cargo.toml[/yellow]")
+            cprint(
+                "  [yellow]Skipped: could not find workspace version in Cargo.toml[/yellow]"
+            )
             return True
 
         version = m.group(1)

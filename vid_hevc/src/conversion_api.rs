@@ -10,11 +10,35 @@ use shared_utils::constants::DEFAULT_SIZE_TOLERANCE_BYTES;
 use shared_utils::conversion_types::{
     ConversionConfig, ConversionOutput, ConversionStrategy, TargetVideoFormat,
 };
+use shared_utils::gif_meme_score::GifMeta;
 use std::fmt::Write as _;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use tracing::{info, warn};
+
+fn convert_options_from_config(
+    config: &ConversionConfig,
+) -> shared_utils::conversion::ConvertOptions {
+    shared_utils::conversion::ConvertOptions {
+        force: config.force,
+        output_dir: config.output_dir.clone(),
+        base_dir: config.base_dir.clone(),
+        delete_original: config.delete_original,
+        in_place: config.in_place,
+        explore: config.explore_smaller,
+        match_quality: config.match_quality,
+        apple_compat: config.apple_compat,
+        compress: config.require_compression,
+        use_gpu: config.use_gpu,
+        ultimate: config.ultimate_mode,
+        allow_size_tolerance: config.allow_size_tolerance,
+        verbose: false,
+        child_threads: config.child_threads,
+        input_format: None,
+        quality_label: None,
+    }
+}
 
 fn cleanup_output_file(path: &Path, context: &str) {
     if let Err(e) = std::fs::remove_file(path) {
@@ -260,6 +284,44 @@ pub fn determine_strategy_with_apple_compat(
     } else {
         shared_utils::should_skip_video_codec(result.codec.as_str())
     };
+
+    // GIF-like video recovery: Telegram / social exports often store a looping
+    // GIF sticker as MP4. In Apple compatibility mode we convert such assets
+    // back into a real GIF instead of keeping the video container.
+    let sticker_meta = GifMeta::from_video(result);
+    let gif_like_video = shared_utils::is_probably_gif_like_video(&sticker_meta)
+        && shared_utils::should_keep_as_gif_with_path(
+            &sticker_meta,
+            Some(Path::new(&result.file_path)),
+        );
+
+    if gif_like_video && apple_compat && !force {
+        return ConversionStrategy {
+            target: TargetVideoFormat::Gif,
+            reason: format!(
+                "GIF-like loop detected ({:.2}s, silent, cyclic) - converting container video back to GIF",
+                result.duration_secs
+            ),
+            command: String::new(),
+            preserve_audio: false,
+            crf: 0.0,
+            lossless: false,
+        };
+    }
+
+    if sticker_meta.is_rhythmic_sticker() && !force {
+        return ConversionStrategy {
+            target: TargetVideoFormat::Skip,
+            reason: format!(
+                "Sticker identity detected ({:.2}s, rhythmic) - preserving original micro-asset",
+                result.duration_secs
+            ),
+            command: String::new(),
+            preserve_audio: false,
+            crf: 0.0,
+            lossless: false,
+        };
+    }
 
     if skip_decision.should_skip && !force {
         return ConversionStrategy {
@@ -605,6 +667,52 @@ pub fn auto_convert_with_cache(
             info!("   🚀 Using HEVC Lossless Mode");
             let size = execute_hevc_lossless(&detection, &temp_path, config.child_threads)?;
             (size, 0.0, 0, None)
+        }
+        TargetVideoFormat::Gif => {
+            let result = crate::animated_image::convert_to_gif_apple_compat(
+                input,
+                &convert_options_from_config(config),
+            )?;
+            let output_size = result.output_size.unwrap_or(0);
+            let output_path = result.output_path.unwrap_or_default();
+            let size_ratio = if detection.file_size > 0 {
+                output_size as f64 / detection.file_size as f64
+            } else {
+                1.0
+            };
+
+            info!(
+                "   ✅ GIF Recovery Complete: {} → {} ({:.1}% of original)",
+                shared_utils::format_bytes(detection.file_size),
+                shared_utils::format_bytes(output_size),
+                size_ratio * 100.0
+            );
+
+            // Update cache hint for successful GIF recovery
+            if result.success {
+                detection.precision.last_best_crf = Some(0.0);
+                detection.precision.last_best_effort_crf = None;
+                if let Some(cache) = cache {
+                    if let Err(e) = cache.store_video_analysis(input, &detection) {
+                        tracing::warn!("Failed to update video cache hint for GIF: {}", e);
+                    } else {
+                        tracing::debug!("Updated video cache with GIF recovery hint");
+                    }
+                }
+            }
+
+            return Ok(ConversionOutput {
+                input_path: input.display().to_string(),
+                output_path,
+                strategy,
+                input_size: detection.file_size,
+                output_size,
+                size_ratio,
+                success: result.success,
+                message: result.message,
+                final_crf: 0.0,
+                exploration_attempts: 0,
+            });
         }
         TargetVideoFormat::HevcMp4 => {
             if config.use_lossless {
@@ -1331,8 +1439,9 @@ fn success_status_for_cache(
     target: TargetVideoFormat,
     explore_result: &Option<shared_utils::ExploreResult>,
 ) -> bool {
-    matches!(target, TargetVideoFormat::HevcMp4)
-        && explore_result.as_ref().is_some_and(|r| r.quality_passed)
+    matches!(target, TargetVideoFormat::Gif)
+        || (matches!(target, TargetVideoFormat::HevcMp4)
+            && explore_result.as_ref().is_some_and(|r| r.quality_passed))
 }
 
 fn best_effort_status_for_cache(
@@ -2382,5 +2491,28 @@ mod tests {
         assert!(final_params.contains("dhdr10-info=/tmp/hdr10plus.json"));
 
         println!("✅ HDR10+ x265-params injection verified: {final_params}");
+    }
+
+    #[test]
+    fn test_gif_like_video_recovery() {
+        use crate::detection_api::{CompressionType, DetectedCodec};
+        let det = crate::detection_api::VideoDetectionResult {
+            file_path: "sticker.mp4".into(),
+            codec: DetectedCodec::H264,
+            compression: CompressionType::Standard,
+            width: 512,
+            height: 512,
+            duration_secs: 2.0,
+            has_audio: false,
+            frame_count: 50,
+            fps: 25.0,
+            file_size: 500_000,
+            ..Default::default()
+        };
+
+        // This should trigger the Gif strategy because it's silent, short, and the loop score will be high
+        let strategy = determine_strategy_with_apple_compat(&det, true, false);
+        assert_eq!(strategy.target, TargetVideoFormat::Gif);
+        assert!(strategy.reason.contains("GIF-like loop detected"));
     }
 }

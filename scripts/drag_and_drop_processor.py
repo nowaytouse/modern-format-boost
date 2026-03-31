@@ -848,7 +848,9 @@ def process_images():
     cmd = [str(IMGQUALITY_HEVC), "run", "--recursive", "--allow-size-tolerance"]
     if RESUME_MODE:
         cmd.append("--resume")
-        print(f"{DIM}   ✓ Progress Resume: ENABLED (skipping already completed files){RESET}")
+        print(
+            f"{DIM}   ✓ Progress Resume: ENABLED (skipping already completed files){RESET}"
+        )
     if ULTIMATE_MODE:
         cmd.append("--ultimate")
     if VERBOSE_MODE:
@@ -891,7 +893,9 @@ def process_videos():
     cmd = [str(VIDQUALITY_HEVC), "run", "--recursive", "--allow-size-tolerance"]
     if RESUME_MODE:
         cmd.append("--resume")
-        print(f"{DIM}   ✓ Progress Resume: ENABLED (skipping already completed files){RESET}")
+        print(
+            f"{DIM}   ✓ Progress Resume: ENABLED (skipping already completed files){RESET}"
+        )
     if ULTIMATE_MODE:
         cmd.append("--ultimate")
     if VERBOSE_MODE:
@@ -1045,7 +1049,14 @@ def merge_run_logs():
 def main():
     # Optimization: Tighten GIL switch interval for smoother high-load terminal relaying
     sys.setswitchinterval(0.0005)
-    global ULTIMATE_MODE, VERBOSE_MODE, WATCH_MODE, RESUME_MODE, TARGET_DIR, OUTPUT_MODE, OUTPUT_DIR
+    global \
+        ULTIMATE_MODE, \
+        VERBOSE_MODE, \
+        WATCH_MODE, \
+        RESUME_MODE, \
+        TARGET_DIR, \
+        OUTPUT_MODE, \
+        OUTPUT_DIR
     os.environ["MFB_GUI_LAUNCH"] = "1"
     os.environ["FORCE_COLOR"] = "1"
     os.environ["CLICOLOR_FORCE"] = "1"

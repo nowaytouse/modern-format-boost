@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
-## [0.11.2] - 2026-03-31
+## [0.11.1] - 2026-03-31
 
 #### 🛡️ SQLite WAL Mode & Transaction Atomicity for Crash Safety
 
@@ -28,7 +28,7 @@ All notable changes to this project will be documented in this file.
 
 #### 🛡️ GIF CRF Search Hardening & Ultimate Mode Expansion
 
-- **Phase 4: GIF Linear Sweep (0.01 Precision)**: Implemented an ultra-fine 0.01 CRF granularity sweep for GIF-to-video conversion in `ultimate_mode`. This ensures the search never misses the "perfect" quality/size balance point, especially in the sensitive 0.0–0.5 CRF range. 
+- **Phase 4: GIF Linear Sweep (0.01 Precision)**: Implemented an ultra-fine 0.01 CRF granularity sweep for GIF-to-video conversion in `ultimate_mode`. This ensures the search never misses the "perfect" quality/size balance point, especially in the sensitive 0.0–0.5 CRF range.
 - **Extended Iteration Limits (Ultimate Mode)**: Significant increase in exploration depth for high-precision tasks.
   - `GLOBAL_MAX_ITERATIONS` raised to **500** to accommodate deep micro-sweeps.
   - `ULTIMATE_MAX_WALL_HITS` and `ULTIMATE_REQUIRED_ZERO_GAINS` doubled to **100**, allowing the search to push further into the quality ceiling for complex media.
@@ -37,7 +37,37 @@ All notable changes to this project will be documented in this file.
 - **Mid-Jump Pivot Optimization**: Accelerated search for compressible high-entropy media by jumping directly to a mid-range CRF (12.0) after a successful ceiling probe, skipping redundant low-CRF walk cycles.
 - **Warm Start Neighborhood Exploration**: Implemented a **-2.0 CRF safety margin** for cached `last_best_crf` hits. Instead of blindly adopting a prior successful CRF, the system now explores the local neighborhood to find the optimal boundary for the current session.
 - **Precision "Back-Walk" Logic**: Verified and hardened the transition from Phase 2 (coarse upward) to Phase 3/4 (downward refinement). Once a success point (e.g., CRF 1.0) is found, the system now performs a guaranteed 0.1 and 0.01 "walk back" to the lossless boundary.
-  
+
+#### 🧠 Deep Signal Detection & Cross-Format Scoring
+
+- **FFprobe Signal Pipeline Extension**: Enhanced `FFprobeResult` and `VideoDetectionResult` to propagate deep signal data across crate boundaries:
+  - **Loop Count Extraction**: Parse `loop_count` / `loop` tags from format metadata (0 = infinite).
+  - **Frame Type Analysis**: Capture I/P/B frame types for initial sample (`frame_types: Vec<char>`).
+  - **PTS Deltas**: Extract frame interval timing data (`pts_deltas: Vec<f64>`) for rhythmic cadence verification.
+  - **Motion Vectors**: Capture motion vector magnitudes (`mv_magnitudes: Vec<f64>`) when available.
+  - **Packet Sizes**: Record `pkt_sizes: Vec<u64>` for bitrate inequality analysis.
+  - **Deep Sample Expansion**: Increased probe frame count from 5 to 300 frames for comprehensive signal analysis.
+- **GIF Meta Structure Enrichment**: Extended `GifMeta` in `gif_meme_score.rs` with cross-format scoring fields:
+  - **Audio Detection**: `has_audio` flag to identify silent videos (strong GIF-origin signal).
+  - **Signal Dimensions**: Added `palette_depth`, `motion_gini`, `block_skew`, `temporal_flatness` placeholders for advanced entropy metrics.
+  - **Video Factory Method**: Implemented `GifMeta::from_video()` to enable "Meme Scoring" for MP4/MOV/MKV inputs, decoupling rhythmic analysis from file extensions.
+- **Weight System Refactoring**: Rebalanced meme score weights based on signal hierarchy:
+  - **Duration**: Increased from 0.20 → 0.28 (short loop → meme-like, ≤1.5s ≈ 1.0, ≥15s ≈ 0.0).
+  - **Loop Frequency**: Increased from 0.04 → 0.15 (high loop rate → meme-like).
+  - **Filename**: Deprecated to 0.00 weight — filenames too noisy for HD content classification.
+  - **Content Intensity**: Added 0.10 weight for frame payload variation as visual complexity proxy.
+
+#### 🧠 Media Recovery & Sticker Protection
+
+- **GIF-like Video Recovery (Apple Compat)**: Implemented automatic "container recovery" for GIF-like video assets in Apple compatibility mode:
+  - **Silent Cyclic Detection**: Identify MP4/MOV assets that are short (<3.5s), silent, and cyclic (common in Telegram/Discord exports).
+  - **GIF Conversion**: Automatically route detected sticker videos back to native animated GIF format for reliable sticker playback.
+  - **Cache Consistency**: Successful recoveries update persistent analysis cache with `CRF 0.0` hint to prevent redundant heuristic checks.
+- **Rhythmic Sticker Identity Protection**: Implemented `is_rhythmic_sticker()` detection for micro-assets:
+  - **Sticker-ID**: Inputs under 3.5s with high rhythmic cadence are identified as "micro-assets" regardless of container.
+  - **Auto-Preservation**: Identified stickers are **Skip (Preserved)** by the video pipeline to avoid redundant processing.
+  - **Unified Policy**: Integrated sticker-ID check into both `vid_hevc` and `vid_av1` pipelines for 100% codec parity.
+
 #### 🐞 Bug Fixes & Stability Hardening
 
 - **FFmpeg Filter Syntax Fix**: Removed invalid `:flags=bicubic` from the `pad` filter in SSIM calculation chains (`shared_utils/src/video_explorer/stream_analysis.rs`).
@@ -45,8 +75,6 @@ All notable changes to this project will be documented in this file.
 - **Dead-Code Removal**: Simplified upward search initialization in `gpu_coarse_search.rs` by removing redundant GIF-specific conditionals that assigned identical step values.
 - **AV1 Duration Safety Guard**: Integrated the `is_lossless_exploration_safe` check into the `vid-av1` animated image pipeline, synchronizing safety logic with the HEVC path to prevent excessive probes on large GIFs (`vid_av1/src/animated_image.rs`).
 - **CRF Search Propagation Fix**: Resolved a logic gap where compression points found during "Bi-directional Pivot" or "Mid-Jump" were not committed to the global state, causing Phase 3 to lose its starting point and fallback to CRF 28.0 unnecessarily (`shared_utils/src/video_explorer/gpu_coarse_search.rs`).
-
-## [0.11.1] - 2026-03-30
 
 #### 🛡️ Search Pipeline Hardening & Efficiency
 
@@ -114,6 +142,9 @@ All notable changes to this project will be documented in this file.
 - **Active Learning Database Hardening (KNN)**: Solved the "echo chamber" problem where machine-labeled metadata merely repeated the rule engine's biases.
   - KNN predictions derived from `auto`-labeled samples now suffer a heavy distance penalty (0.8).
   - Human-labeled samples (`cli_ingest`) strictly override overlapping rules.
+  - **Dataset Iteration (v4)**: Re-ingested 1840+ high-quality human-labeled samples from the primary meme/sticker collection (Telegram, X, 小红书，哔哩哔哩).
+  - **Sigma-Normalized Euclidean Distance**: Updated global feature statistics (Mean/StdDev) in the seeded dataset to ensure distances are computed using the latest feature distributions.
+  - **Database Re-export for 0.11.1**: Regenerated `default_samples.sql` from production database (`gif_value_samples_v4.db`) with synchronized timestamps (2026-03-31).
 - **Enhanced Meme Scoring System (v4)**:
   - Shifted from keyword-based directory scoring to a multi-dimensional KNN-based **"Content Value"** inference engine.
   - Integrated `aspect_ratio` and `pixel_density` as primary decision weights to identify low-value screenshots and memes.
@@ -137,6 +168,9 @@ All notable changes to this project will be documented in this file.
 - **UI & UX Refinement**:
   - Suppressed cluttered JSON-based content classification labels (`PHOTO`, `SCREENSHOT`, etc.) from the primary console output in `img_hevc` and `img_av1`.
   - Maintained zero-warning compliance across the workspace following label suppression.
+- **Breakpoint Resume Default Change**: Disabled breakpoint resume (`--resume`) by default across all tools and scripts for safer, more predictable batch processing behavior.
+  - **Opt-in Resume**: Users must now explicitly pass `--resume` flag to enable progress resume functionality.
+  - **Rationale**: Prevents accidental skip of newly optimized files when re-running tools with stale cache state.
 
 #### 📚 Documentation & Research
 
