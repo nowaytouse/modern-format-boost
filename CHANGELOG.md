@@ -28,6 +28,7 @@ All notable changes to this project will be documented in this file.
 - Added synthetic unit-tests that exercise absolute-size guards and the conservative-defaults logic. Tests explicitly avoid using any personal/debug media samples.
  - Removed a heavy debug-only integration test that iterated the `debug/` media folder (privacy & performance). Replaced by lightweight synthetic tests and added operator env-var overrides for curated whitelist/blacklist behaviors (`MFB_GIF_FORCE_KEEP`, `MFB_GIF_FORCE_CONVERT`, `MFB_GIF_SKIP_CONVERT_CEILING`).
  - Added a duration-baseline fallback rule: when a path-aware GIF candidate remains undecided and reliable timing still cannot be recovered, the scorer reverts to a simple hardcoded duration cutoff (4.25s) to decide KEEP vs CONVERT.
+ - Clarified the KNN-driven CRF 0.00 safety gate for GIFs: with default `keep_prob = 0.5`, the interpolated duration limit is `75.0s` (not `67.5s`). When a GIF exceeds that limit, the pipeline falls back to the quality-matched CRF anchor or a cached warm-start hint; it does not inject a special hardcoded `23.0` GIF CRF.
 
 ## [0.11.1] - 2026-03-31
 

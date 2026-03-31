@@ -268,9 +268,23 @@ fn lookup_similar_samples_inner(
 /// High-value art is strictly limited to 30s of lossless-first probing to avoid bloat.
 /// Low-value memes (low entropy) are permitted up to 120s as CRF 0.00 is efficient on them.
 #[must_use]
-pub fn is_lossless_exploration_safe(meta: &GifMeta, path: Option<&Path>) -> bool {
+fn lossless_duration_limit_for_keep_prob(keep_prob: f64) -> f32 {
     use crate::constants::{HIGH_VALUE_LOSSLESS_DURATION_LIMIT, MEME_LOSSLESS_DURATION_LIMIT};
 
+    if keep_prob <= 0.3 {
+        HIGH_VALUE_LOSSLESS_DURATION_LIMIT
+    } else if keep_prob >= 0.7 {
+        MEME_LOSSLESS_DURATION_LIMIT
+    } else {
+        let t = (keep_prob - 0.3) / 0.4;
+        let limit_meme = f64::from(MEME_LOSSLESS_DURATION_LIMIT);
+        let limit_high = f64::from(HIGH_VALUE_LOSSLESS_DURATION_LIMIT);
+        (limit_high + (t * (limit_meme - limit_high))) as f32
+    }
+}
+
+#[must_use]
+pub fn is_lossless_exploration_safe(meta: &GifMeta, path: Option<&Path>) -> bool {
     let mut current_meta = meta.clone();
     if let Some(p) = path {
         let _ = crate::gif_meme_score::deep_refine_meta(&mut current_meta, p);
@@ -285,18 +299,7 @@ pub fn is_lossless_exploration_safe(meta: &GifMeta, path: Option<&Path>) -> bool
     // Dynamic threshold:
     // keep_prob close to 1.0 (Meme / High Tolerance) -> 120s limit
     // keep_prob close to 0.0 (Art / High Value)  -> 30s limit
-    let threshold = if keep_prob <= 0.3 {
-        HIGH_VALUE_LOSSLESS_DURATION_LIMIT
-    } else if keep_prob >= 0.7 {
-        MEME_LOSSLESS_DURATION_LIMIT
-    } else {
-        // Linear interpolation for middle ground [0.3, 0.7] -> [30, 120]
-        let t = (keep_prob - 0.3) / 0.4;
-        let limit_meme = f64::from(MEME_LOSSLESS_DURATION_LIMIT);
-        let limit_high = f64::from(HIGH_VALUE_LOSSLESS_DURATION_LIMIT);
-        let interpolated = limit_high + (t * (limit_meme - limit_high));
-        interpolated as f32
-    };
+    let threshold = lossless_duration_limit_for_keep_prob(keep_prob);
 
     let is_safe = meta.duration_secs < f64::from(threshold);
 
@@ -1173,5 +1176,16 @@ mod tests {
             sample_distance(&meta, &near, tbpp, sbpp, &stats)
                 < sample_distance(&meta, &far, tbpp, sbpp, &stats)
         );
+    }
+
+    #[test]
+    fn lossless_duration_limit_midpoint_is_75_seconds() {
+        assert!((lossless_duration_limit_for_keep_prob(0.5) - 75.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn lossless_duration_limit_respects_policy_edges() {
+        assert!((lossless_duration_limit_for_keep_prob(0.0) - 30.0).abs() < 0.01);
+        assert!((lossless_duration_limit_for_keep_prob(1.0) - 120.0).abs() < 0.01);
     }
 }
