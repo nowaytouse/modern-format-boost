@@ -46,5 +46,23 @@ logs/
 .github/prompts/
 debug/
 __pycache__/
-__pycache__/
 .qwen/
+
+# App-specific runtime/temp data
+.modern_format_boost/
+
+# Prevent accidental media check-ins
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.GIF
+*.mp4
+*.mov
+*.heic
+*.HEIC
+*.avif
+*.webp
+*.jxl
+# Except assets folder
+!assets/

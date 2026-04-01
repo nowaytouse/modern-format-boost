@@ -210,9 +210,10 @@ ctrlc = { git = "https://github.com/Detegr/rust-ctrlc" }
 rand = { git = "https://github.com/rust-random/rand" }
 
 # Database and Caching - NIGHTLY: Using GitHub sources for latest iterations
-rusqlite = { git = "https://github.com/rusqlite/rusqlite", features = ["bundled"] }
 blake3   = { git = "https://github.com/BLAKE3-team/BLAKE3" }
 rmp-serde = { git = "https://github.com/3Hren/msgpack-rust" }
+postgres = { version = "0.19", features = ["with-serde_json-1"] }
+pgvector = { version = "0.4", features = ["postgres"] }
 
 # File type detection - NIGHTLY: Using GitHub sources
 infer = { git = "https://github.com/bojand/infer" }
@@ -231,7 +232,6 @@ serde = { git = "https://github.com/serde-rs/serde" }
 serde_json = { git = "https://github.com/serde-rs/json" }
 image = { git = "https://github.com/image-rs/image" }
 mp4parse = { git = "https://github.com/mozilla/mp4parse-rust" }
-rusqlite = { git = "https://github.com/rusqlite/rusqlite" }
 blake3 = { git = "https://github.com/BLAKE3-team/BLAKE3" }
 rayon = { git = "https://github.com/rayon-rs/rayon" }
 clap = { git = "https://github.com/clap-rs/clap" }

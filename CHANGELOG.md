@@ -4,6 +4,34 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.11.2] - 2026-04-02
+
+#### 🧠 7-Layer Loop Intent System (Major Refactor)
+
+- **Hierarchical Decision Tree**: Re-engineered the "Meme Scoring" system into a robust **7-Layer Decision Tree** (`loop_intent.rs`) for physical and semantic loop identification.
+  - **Layers 1-2 (Hard Constraints)**: Implemented zero-cost deterministic exits for audio (Veto), transparency passthrough (detected from pixel format), and explicit `loop_count` tags.
+  - **Layer 3 (Structural Analysis)**: Introduced **Closure Ratio** calculation (first vs last frame visual distance) and rhythmic cadence metrics.
+  - **Layer 4 (Content Features)**: Added palette depth analysis and `pal8` format detection (automatic 256 colors).
+  - **Layer 5-D (Duration Interpolation)**: Implemented linear interpolation for penalty scores between 18s and 35s.
+  - **Layer 5-E (Color Profile Reward)**: Added a +0.00050 reward for sRGB or no-profile assets to favor GIF retention.
+  - **Symbolic Growth Bonus**: Introduced a subtle +0.0035 reward for assets under 18s.
+  - **Layer 6 (Hybrid KNN Fusion)**: Fuses `WeightedScore` with PostgreSQL KNN probabilities, mediated by a new **Confidence Guard**.
+  - **Layer 7 (Conservative Fallback)**: Automated safe-defaults for uncertain media (e.g., converting modern-animated formats to GIF).
+- **PostgreSQL KNN Migration**: Successfully migrated `gif_value_db.rs` from `useless/` back to the core project path.
+- **Unified Semantic Verdicts**: Standardized pipeline classification categories to `LoopStrong`, `LoopWeak`, and `Uncertain`.
+
+#### 🐘 Database Service & DevOps Hardening
+
+- **One-Click DB Manager (`scripts/manage_db.sh`)**: Added a comprehensive service management script to automate PostgreSQL/pgvector startup, database creation, and extension initialization on macOS and Linux.
+- **Improved PostgreSQL Detection**: Enabled dynamic service lookup on macOS, allowing the system to start any version of Postgres managed by Homebrew.
+- **Safe Installer (`scripts/install_deps.sh`)**: Refactored the dependency installer to use a safe "binary-check" pattern, **preventing collisions with third-party taps** (e.g., preserving custom `homebrew-ffmpeg` installations).
+- **Actionable Diagnostic Hints**: Integrated helpful error messages in `gif_value_db.rs` to guide users towards `manage_db.sh` on connection failure.
+
+#### 🛡️ Reliability & Testing
+
+- **Comprehensive Verification Suite**: Added 15 specialized unit tests in `loop_intent.rs` covering edge cases like multi-frame gap analysis, platform marker conflicts, and audio-veto priority.
+- **Workspace-Wide Compilation Check**: Verified zero warnings and zero errors across all targets (HEVC, AV1, Shared Utils, CLI Tools).
+
 ## [0.11.1] - 2026-04-01
 
 #### 🆕 New Features

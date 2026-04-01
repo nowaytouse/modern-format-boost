@@ -13,7 +13,6 @@ use shared_utils::constants::DEFAULT_SIZE_TOLERANCE_BYTES;
 use shared_utils::conversion_types::{
     ConversionConfig, ConversionOutput, ConversionStrategy, TargetVideoFormat,
 };
-use shared_utils::gif_meme_score::GifMeta;
 use std::path::Path;
 use std::process::Command;
 use tracing::{info, warn};
@@ -148,19 +147,17 @@ pub fn determine_strategy_with_apple_compat(
         shared_utils::should_skip_video_codec(result.codec.as_str())
     };
 
-    let sticker_meta = GifMeta::from_video(result);
-    let gif_like_video = shared_utils::is_probably_gif_like_video(&sticker_meta)
-        && shared_utils::should_keep_as_gif_with_path(
-            &sticker_meta,
-            Some(Path::new(&result.file_path)),
-        );
+    // 「循环意图判断系统」 (Loop Intent Identification System)
+    // Replace legacy weighted scoring with a prioritized decision tree.
+    let loop_verdict = shared_utils::assess_loop_intent(result);
+    let is_loop_intent = loop_verdict.is_keep_gif();
 
-    if gif_like_video && apple_compat {
+    if is_loop_intent && apple_compat {
         return ConversionStrategy {
             target: TargetVideoFormat::Gif,
             reason: format!(
-                "GIF-like loop detected ({:.2}s, silent, cyclic) - converting container video back to GIF",
-                result.duration_secs
+                "Loop intent confirmed ({}) - converting back to GIF for Apple compatibility",
+                loop_verdict.reason()
             ),
             command: String::new(),
             preserve_audio: false,
@@ -169,12 +166,12 @@ pub fn determine_strategy_with_apple_compat(
         };
     }
 
-    if sticker_meta.is_rhythmic_sticker() {
+    if is_loop_intent {
         return ConversionStrategy {
             target: TargetVideoFormat::Skip,
             reason: format!(
-                "Sticker identity detected ({:.2}s, rhythmic) - preserving original micro-asset",
-                result.duration_secs
+                "Loop intent confirmed ({}) - preserving original micro-asset",
+                loop_verdict.reason()
             ),
             command: String::new(),
             preserve_audio: false,

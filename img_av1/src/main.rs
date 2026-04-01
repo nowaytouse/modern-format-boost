@@ -31,6 +31,7 @@ struct AutoConvertConfig {
     base_dir: Option<PathBuf>,
     child_threads: usize,
     allow_size_tolerance: bool,
+    force_video: bool,
     cache: Option<Arc<AnalysisCache>>,
 }
 
@@ -286,6 +287,7 @@ fn main() -> anyhow::Result<()> {
                     thread_config.child_threads
                 },
                 allow_size_tolerance,
+                force_video,
                 cache: cache.clone(),
             };
 
@@ -740,42 +742,22 @@ fn dispatch_animated_conversion(
         }
     };
 
-    let force_video = std::env::var("MODERN_FORMAT_BOOST_FORCE_VIDEO").is_ok();
-    let meme_keep = if force_video {
+    let meme_keep = if config.force_video {
         false
     } else {
-        let probe = shared_utils::probe_video(input).ok();
-        if let Some(ref p) = probe {
-            if let Some(mut meta) =
-                shared_utils::gif_meta_from_probe_with_path(p, analysis.file_size, input)
-            {
-                if let Ok((pal, exts, has_transparency, variation, delay_variation, loops, total_dur)) =
-                    shared_utils::scan_gif_headers(input)
-                {
-                    meta.palette_size = pal;
-                    meta.app_extensions = exts;
-                    meta.has_transparency = has_transparency;
-                    meta.frame_payload_variation = variation;
-                    meta.frame_delay_variation = delay_variation;
-                    meta.loop_count = loops;
-                    if let Some(d) = total_dur {
-                        meta.duration_secs = d;
-                    }
-                }
-                shared_utils::should_keep_as_gif_with_path(&meta, Some(input))
-            } else {
+        match shared_utils::probe_video(input) {
+            Ok(probe) => {
+                let verdict = shared_utils::assess_loop_intent_from_probe(&probe, input);
+                verdict.is_keep_gif()
+            }
+            Err(e) => {
                 shared_utils::progress_mode::emit_stderr(&format!(
-                    "🎞️  GIF [{}] probe failed → KEEP GIF",
-                    input.file_name().unwrap_or_default().to_string_lossy()
+                    "🎞️  GIF [{}] probe failed ({}) → KEEP GIF",
+                    input.file_name().unwrap_or_default().to_string_lossy(),
+                    e
                 ));
                 true
             }
-        } else {
-            shared_utils::progress_mode::emit_stderr(&format!(
-                "🎞️  GIF [{}] probe failed → KEEP GIF",
-                input.file_name().unwrap_or_default().to_string_lossy()
-            ));
-            true
         }
     };
 

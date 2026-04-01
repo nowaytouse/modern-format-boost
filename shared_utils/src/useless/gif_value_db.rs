@@ -29,10 +29,6 @@ struct FeatureMap {
 pub struct SampleMatch {
     pub exact_label: Option<bool>,
     pub keep_probability: Option<f64>,
-    /// Confidence score in [0, 1]: how tightly clustered the KNN neighbors are.
-    /// confidence = 1.0 - (std_dev_distance / mean_distance), clamped to [0, 1].
-    /// High confidence (>0.75) means neighbors are homogeneous; safe to trust keep_probability.
-    pub confidence: f64,
     pub neighbor_count: usize,
     pub mean_distance: Option<f64>,
     pub std_dev_distance: Option<f64>,
@@ -96,7 +92,6 @@ fn lookup_similar_samples_inner(
         Ok(c) => c,
         Err(e) => {
             log::warn!("⚠️ PostgreSQL connection failed (graceful fallback): {e}");
-            log::warn!("💡 Suggestion: Run 'sh scripts/manage_db.sh setup' to initialize and start the local database service.");
             return Ok(None);
         }
     };
@@ -121,7 +116,6 @@ fn lookup_similar_samples_inner(
                 return Ok(Some(SampleMatch {
                     exact_label: Some(prob > 0.5),
                     keep_probability: Some(prob),
-                    confidence: 1.0, // exact match → full confidence
                     neighbor_count: 1,
                     mean_distance: Some(0.0),
                     std_dev_distance: Some(0.0),
@@ -260,15 +254,6 @@ fn lookup_similar_samples_inner(
         / distances.len() as f64;
     let std_dev_distance = variance.sqrt();
 
-    // Confidence: how tightly clustered the neighbors are.
-    // High std_dev relative to mean → low confidence (mixed signals).
-    let confidence = if mean_distance > 1e-6 {
-        (1.0 - (std_dev_distance / mean_distance)).clamp(0.0, 1.0)
-    } else {
-        // All neighbors at distance ≈0 → exact match level confidence
-        1.0
-    };
-
     // Sort for percentiles
     distances.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let n = distances.len();
@@ -279,7 +264,6 @@ fn lookup_similar_samples_inner(
     Ok(Some(SampleMatch {
         exact_label: None,
         keep_probability: Some(keep_probability),
-        confidence,
         neighbor_count: distances.len(),
         mean_distance: Some(mean_distance),
         std_dev_distance: Some(std_dev_distance),
@@ -441,7 +425,7 @@ fn seed_positive_dataset_if_needed(conn: &mut Client) -> Result<()> {
     let mut tx = conn.transaction()?;
 
     // Seed default dataset shipped with the binary (PostgreSQL-native SQL)
-    let default_sql = include_str!("useless/default_samples_pg.sql");
+    let default_sql = include_str!("default_samples_pg.sql");
     tx.batch_execute(default_sql).unwrap_or_else(|e| {
         log::warn!("⚠️ Failed to seed default GIF value dataset: {e}");
     });
@@ -1057,7 +1041,7 @@ fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
         .iter()
         .map(|row| {
             vec![
-                f64::from(row.get::<_, i32>(0)) * f64::from(row.get::<_, i32>(1)), // pixels
+                row.get::<_, i32>(0) as f64 * row.get::<_, i32>(1) as f64, // pixels
                 row.get::<_, f64>(2),                                       // duration
                 row.get::<_, i64>(3) as f64,                                // frame_count
                 row.get::<_, Option<f64>>(4).unwrap_or(0.0), // fps (frame density proxy)

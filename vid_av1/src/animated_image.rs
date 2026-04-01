@@ -11,10 +11,13 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+use shared_utils::constants::ANIMATION_CLIP_THRESHOLD_SECS;
 use shared_utils::conversion::{
     determine_output_path_with_base, is_already_processed, mark_as_processed,
 };
-use shared_utils::gif_value_db::is_lossless_exploration_safe;
+use shared_utils::loop_intent::{
+    assess_loop_intent_from_probe, LoopMeta, is_lossless_exploration_safe,
+};
 
 fn cleanup_temp_output(temp_output: &Path, input: &Path) {
     if let Err(e) = fs::remove_file(temp_output) {
@@ -243,7 +246,11 @@ fn skipped_output_exists(input: &Path, output: &Path, input_size: u64) -> Conver
 /// Return true when the input is either a native GIF or a GIF-like silent loop
 /// video that the scorer says should stay in the GIF domain.
 fn is_gif_meme(path: &Path) -> bool {
-    shared_utils::should_keep_as_gif_candidate_path(path).unwrap_or(false)
+    if let Ok(probe) = shared_utils::probe_video(path) {
+        assess_loop_intent_from_probe(&probe, path).is_keep_gif()
+    } else {
+        false
+    }
 }
 
 /// Returns true if the file is an animated image format but effectively static (0 or negligible duration).
@@ -1020,45 +1027,16 @@ pub fn convert_to_av1_mp4_matched(
     let is_gif = shared_utils::is_gif_magic(&final_input);
     let mut actual_initial_crf = initial_crf;
 
+    // Get duration and metadata for smart CRF initialization
+    let probe = shared_utils::ffprobe::probe_video(input).ok();
+    let duration = probe.as_ref().map_or(0.0, |p| p.duration as f32);
+
     let is_safe_for_lossless = if is_gif && flag_mode.is_ultimate() {
-        if let Ok(p) = shared_utils::ffprobe::probe_video(&final_input) {
-            let meta = shared_utils::gif_meme_score::GifMeta {
-                duration_secs: p.duration,
-                width: p.width,
-                height: p.height,
-                fps: p.frame_rate,
-                frame_count: p.frame_count,
-                file_size_bytes: input_size,
-                file_name: input
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .map(|s| s.to_string()),
-                palette_size: None,
-                app_extensions: None,
-                has_transparency: false,
-                frame_payload_variation: None,
-                frame_delay_variation: None,
-                source_extension: input
-                    .extension()
-                    .and_then(|s| s.to_str())
-                    .map(|s| s.to_string()),
-                parent_directories: None,
-                has_embedded_icc: false,
-                has_complex_color_profile: false,
-                loop_count: None,
-                has_audio: p.has_audio,
-                frame_types: p.frame_types.clone(),
-                pts_deltas: p.pts_deltas.clone(),
-                mv_magnitudes: p.mv_magnitudes.clone(),
-                palette_depth: None,
-                motion_gini: None,
-                block_skew: None,
-                temporal_flatness: None,
-                pkt_sizes: p.pkt_sizes.clone(),
-            };
+        if let Some(p) = probe.as_ref() {
+            let meta = LoopMeta::from_ffprobe_result(p, input);
             is_lossless_exploration_safe(&meta, Some(input))
         } else {
-            false
+            duration < ANIMATION_CLIP_THRESHOLD_SECS
         }
     } else {
         false

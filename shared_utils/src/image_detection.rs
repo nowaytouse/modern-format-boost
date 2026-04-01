@@ -992,14 +992,12 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
                     if sampled_uniques <= 256 {
                         factors.color_count_anomaly = factors.color_count_anomaly.max(0.85);
                         explanations.push(format!(
-                            "Sampled palette-like distribution (≈{} bins) — strong quantization indicator",
-                            sampled_uniques
+                            "Sampled palette-like distribution (≈{sampled_uniques} bins) — strong quantization indicator"
                         ));
                     } else if sampled_uniques <= 512 {
                         factors.color_count_anomaly = factors.color_count_anomaly.max(0.7);
                         explanations.push(format!(
-                            "Sampled palette-like distribution (≈{} bins) — possible quantization",
-                            sampled_uniques
+                            "Sampled palette-like distribution (≈{sampled_uniques} bins) — possible quantization"
                         ));
                     }
                 }
@@ -1182,15 +1180,13 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
                             factor_scores: factors,
                             detected_tool: None,
                             explanation: format!(
-                                "Sampled palette-like distribution (≈{} bins) — likely pngquant-style quantization",
-                                sampled_uniques
+                                "Sampled palette-like distribution (≈{sampled_uniques} bins) — likely pngquant-style quantization"
                             ),
                         });
                     } else if sampled_uniques <= 512 {
                         factors.color_count_anomaly = factors.color_count_anomaly.max(0.7);
                         explanations.push(format!(
-                            "Sampled palette-like distribution (≈{} bins) — possible quantization",
-                            sampled_uniques
+                            "Sampled palette-like distribution (≈{sampled_uniques} bins) — possible quantization"
                         ));
                     }
                 }
@@ -1581,7 +1577,7 @@ fn sample_unique_color_count(img: &DynamicImage, max_samples: usize) -> usize {
         return 0;
     }
 
-    let total = (width as u64) * (height as u64);
+    let total = u64::from(width) * u64::from(height);
     let step = ((total as f64) / (max_samples as f64)).sqrt().ceil() as u32;
     let step = step.max(1);
 
@@ -1595,7 +1591,7 @@ fn sample_unique_color_count(img: &DynamicImage, max_samples: usize) -> usize {
             let r5 = p[0] >> 3;
             let g5 = p[1] >> 3;
             let b5 = p[2] >> 3;
-            let key = ((r5 as u32) << 16) | ((g5 as u32) << 8) | (b5 as u32);
+            let key = (u32::from(r5) << 16) | (u32::from(g5) << 8) | u32::from(b5);
             set.insert(key);
             sampled += 1;
             if sampled >= max_samples {
