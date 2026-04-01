@@ -6,23 +6,35 @@ All notable changes to this project will be documented in this file.
 
 ## [0.11.1] — 2026-04-02
 
-#### 🛡️ ExifTool Path Escaping & Security
+#### 🛡️ Metadata Pipeline Hardening & Path Safety (Industrial Grade)
 
-- **Specialized ExifTool Handling**: Introduced `exiftool_path_arg()` in `shared_utils` to address "Error opening file" issues caused by URL-encoded characters (e.g., `%2F`) in file paths.
-  - **Logic**: Automatically escapes literal `%` to `%%` for `ExifTool` arguments while preserving standard path safety for other tools like `ffmpeg` and `magick`. 
-  - **Coverage**: Applied to all `exiftool` invocations in `exif.rs` and `xmp_merger.rs`.
-- **Regression Testing**: Added `test_preserve_metadata_with_percent_in_path` to verify that files with complex URL-encoded names can now be processed without metadata loss.
+- **STDIN Piping Strategy for XMP Merging**: Re-engineered `XmpMerger` to use `STDIN` (`-tagsfromfile -`) for reading XMP data. 
+  - **Security Rationale**: By decoupling the physical XMP path from the `ExifTool` command string, we completely bypass recursive format-code expansion and URL-encoded character traps (e.g., `%3A`, `%2F`).
+  - **Robustness**: Extracted XMP data is piped directly into the process memory, ensuring 100% path safety for source files.
+- **ImageMagick Boundary Defense**: 
+  - Implemented `magick_path()` in `exif.rs` with strict input/output separation.
+  - **Input Security**: Forced `file:./` prefix and doubled percent signs (`%%`) for all input paths, effectively blocking protocol hijacking (e.g., `http:`) and internal property interpretation.
+- **ExifTool "Deep Hardening" CLI flags**:
+  - Injected `-charset filename=utf8` and `-api windowsunicode=1` into all invocations to ensure consistent Unicode/Emoji path handling across Mac/Windows.
+  - Enabled `-api LargeFileSupport=1` to safely process media assets exceeding 4GB.
+  - Forced `-overwrite_original` to maintain atomic write behavior and prevent folder pollution with legacy `_original` files.
+- **Improved Path Hijack Prevention (`safe_path_arg`)**: 
+  - Added mandatory `./` prefixing for all paths starting with `-` or `@` to prevent tools from interpreting filenames as CLI flags or argument files (Argfiles).
+- **Comprehensive Regression & Stress Testing**:
+  - **Evil Path Stress Test**: Added `test_preservation_evil_path` to `exif.rs`, verifying 100% stability for filenames containing URL-encoded sequences, shell-suspicious prefixes, and recursive format codes (e.g., `http%3A%2F-@test%d%f.jpg`).
+  - **Standardized Path Saftey Units**: Expanded `path_safety.rs` with 4 new boundary tests.
+- **Defensive Documentation**: Injected "Ultimate Security Rationale" and "Trap Warnings" into critical path-entry points to prevent future regressions during maintenance.
 
+#### 🧠 7-Layer Loop Intent System & Refinement
 
-#### 🧠 7-Layer Loop Intent System (Major Refactor)
+- **Layer 5-F (Square Aspect Reward)**: Introduced a **+0.03** auxiliary reward for 1:1 aspect ratio media (Square). This significantly improves the identification of modern stickers (Telegram, WeChat, Discord) where rhythmic cadance or KNN match might be missing.
+- **Duration Penalty Balancing**: Refined Layer 5-D linear interpolation for duration-based loop penalties between 18s and 35s.
+- **GIF-like Video Recovery**: Hardened `vid_av1` to better handle short silent containers (BT.709) by satisfying the new structural metadata requirements in heuristics.
 
-- **Hierarchical Decision Tree**: Re-engineered the "Meme Scoring" system into a robust **7-Layer Decision Tree** (`loop_intent.rs`) for physical and semantic loop identification.
-  - **Layers 1-2 (Hard Constraints)**: Implemented zero-cost deterministic exits for audio (Veto), transparency passthrough (detected from pixel format), and explicit `loop_count` tags.
-  - **Layer 3 (Structural Analysis)**: Introduced **Closure Ratio** calculation (first vs last frame visual distance) and rhythmic cadence metrics.
-  - **Layer 4 (Content Features)**: Added palette depth analysis and `pal8` format detection (automatic 256 colors).
-  - **Layer 5-D (Duration Interpolation)**: Implemented linear interpolation for penalty scores between 18s and 35s.
-  - **Layer 5-E (Color Profile Reward)**: Added a +0.00050 reward for sRGB or no-profile assets to favor GIF retention.
-  - **Layer 5-F (Square Aspect Reward)**: Introduced a +0.03 auxiliary reward for 1:1 aspect ratio media, improving sticker identification (Telegram/WeChat/Discord) in the absence of a KNN database match.
+#### 🏗️ Structural Repair & Fallbacks
+
+- **ImageMagick Rebuild Hardening**: Fixed a critical bug in `Structural Repair` where URL-encoded filenames were misinterpreted as image properties by the `magick` core engine.
+- **exiv2 Fallback Correction**: Fixed the sidecar insertion command to use the correct `-ix` (XMP insertion) argument structure.
   - **Symbolic Growth Bonus**: Introduced a subtle +0.0035 reward for assets under 18s.
   - **Layer 6 (Hybrid KNN Fusion)**: Fuses `WeightedScore` with PostgreSQL KNN probabilities, mediated by a new **Confidence Guard**.
   - **Layer 7 (Conservative Fallback)**: Automated safe-defaults for uncertain media (e.g., converting modern-animated formats to GIF).

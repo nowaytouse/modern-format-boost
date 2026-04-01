@@ -66,3 +66,4 @@ __pycache__/
 *.jxl
 # Except assets folder
 !assets/
+debug_out/

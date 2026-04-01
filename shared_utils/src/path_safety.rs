@@ -14,7 +14,9 @@ pub fn safe_path_arg(path: &Path) -> Cow<'_, str> {
         );
     }
 
-    if s.starts_with('-') {
+    // Prepend ./ to filenames starting with - or @ to prevent them from being
+    // interpreted as command-line options or argument files (argfiles).
+    if s.starts_with('-') || s.starts_with('@') {
         let mut out = String::with_capacity(2 + s.len());
         out.push_str("./");
         out.push_str(&s);
@@ -24,19 +26,24 @@ pub fn safe_path_arg(path: &Path) -> Cow<'_, str> {
     }
 }
 
-/// Specialized path argument escaping for `ExifTool`.
-///
-/// `ExifTool` interprets `%` characters as format strings (e.g., `%d`, `%f`).
-/// To use a literal path containing `%`, it must be escaped to `%%`.
+/// Specialized path argument escaping for format-interpreted strings.
+/// (e.g. ExifTool's `-tagsfromfile`, ImageMagick's internal property interpretation).
 #[inline]
 #[must_use]
-pub fn exiftool_path_arg(path: &Path) -> Cow<'_, str> {
+pub fn property_safe_path(path: &Path) -> Cow<'_, str> {
     let s = safe_path_arg(path);
     if s.contains('%') {
         Cow::Owned(s.replace('%', "%%"))
     } else {
         s
     }
+}
+
+/// Fallback path helper for `ExifTool`.
+#[inline]
+#[must_use]
+pub fn exiftool_path_arg(path: &Path) -> Cow<'_, str> {
+    safe_path_arg(path)
 }
 
 /// Returns a unique temporary path for search iterations, fully isolated from user folders.
@@ -72,15 +79,35 @@ mod tests {
     }
 
     #[test]
+    fn test_safe_path_arg_prefixes() {
+        // Test '-' prefix
+        assert_eq!(safe_path_arg(Path::new("-test.jpg")), "./-test.jpg");
+        // Test '@' prefix
+        assert_eq!(safe_path_arg(Path::new("@test.jpg")), "./@test.jpg");
+        // Test normal path
+        assert_eq!(safe_path_arg(Path::new("normal.jpg")), "normal.jpg");
+    }
+
+    #[test]
+    fn test_property_safe_path_doubling() {
+        // Test single %
+        assert_eq!(property_safe_path(Path::new("test%1.jpg")), "test%%1.jpg");
+        // Test URL encoded %3A
+        assert_eq!(property_safe_path(Path::new("http%3A.jpg")), "http%%3A.jpg");
+    }
+
+    #[test]
     fn test_exiftool_path_arg() {
         assert_eq!(exiftool_path_arg(Path::new("normal.png")), "normal.png");
+        // ExifTool path arg for main file SHOULD NOT have doubling (now)
         assert_eq!(
             exiftool_path_arg(Path::new("file%2f.png")),
-            "file%%2f.png"
+            "file%2f.png"
         );
+        // But it should have prefixing
         assert_eq!(
             exiftool_path_arg(Path::new("-dash%f.png")),
-            "./-dash%%f.png"
+            "./-dash%f.png"
         );
     }
 }

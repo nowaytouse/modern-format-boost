@@ -595,7 +595,8 @@ fn try_merge_xmp_exiv2(xmp_path: &Path, dst: &Path) -> bool {
         return false;
     }
     let out = std::process::Command::new("exiv2")
-        .args(["-i", crate::safe_path_arg(dst).as_ref()])
+        .arg("-ix")
+        .arg(crate::safe_path_arg(dst).as_ref())
         .output();
     let ok = out.as_ref().map(|o| o.status.success()).unwrap_or(false);
     if let Ok(out) = &out {
