@@ -22,6 +22,7 @@ All notable changes to this project will be documented in this file.
   - **Layer 4 (Content Features)**: Added palette depth analysis and `pal8` format detection (automatic 256 colors).
   - **Layer 5-D (Duration Interpolation)**: Implemented linear interpolation for penalty scores between 18s and 35s.
   - **Layer 5-E (Color Profile Reward)**: Added a +0.00050 reward for sRGB or no-profile assets to favor GIF retention.
+  - **Layer 5-F (Square Aspect Reward)**: Introduced a +0.03 auxiliary reward for 1:1 aspect ratio media, improving sticker identification (Telegram/WeChat/Discord) in the absence of a KNN database match.
   - **Symbolic Growth Bonus**: Introduced a subtle +0.0035 reward for assets under 18s.
   - **Layer 6 (Hybrid KNN Fusion)**: Fuses `WeightedScore` with PostgreSQL KNN probabilities, mediated by a new **Confidence Guard**.
   - **Layer 7 (Conservative Fallback)**: Automated safe-defaults for uncertain media (e.g., converting modern-animated formats to GIF).

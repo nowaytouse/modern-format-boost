@@ -570,6 +570,12 @@ pub fn identify_loop_intent(meta: &LoopMeta) -> LoopIntentVerdict {
         score.add(0.00050);
     }
 
+    // 5-F: 1:1 Aspect Ratio (Square)
+    // Most modern stickers (Telegram, WeChat, Discord) are strictly 1:1.
+    if meta.width > 0 && meta.height > 0 && (meta.width == meta.height) {
+        score.add(0.03); // Minor auxiliary signal
+    }
+
     // No Layer 5 checkpoint (by design — Layer 5 is only auxiliary correction).
 
     // ══════════════════════════════════════════════════════════════

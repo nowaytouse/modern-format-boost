@@ -1996,6 +1996,7 @@ fn has_embedded_icc_profile(path: &std::path::Path) -> bool {
 
     // (1) Check presence of ICC block
     let output = std::process::Command::new("exiftool")
+        .arg("-m")  // Suppress non-critical warnings
         .arg("-b")
         .arg("-ICC_Profile")
         .arg(path)
@@ -2010,6 +2011,7 @@ fn has_embedded_icc_profile(path: &std::path::Path) -> bool {
     // when converting to GIF. Only "complex" (Wide-gamut/HDR) profiles
     // should trigger the hard veto.
     let desc_output = std::process::Command::new("exiftool")
+        .arg("-m")  // Suppress non-critical warnings
         .arg("-s3")
         .arg("-ICC_Profile:ProfileDescription")
         .arg(path)

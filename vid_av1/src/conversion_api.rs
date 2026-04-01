@@ -1434,17 +1434,22 @@ mod tests {
             width: 512,
             height: 512,
             duration_secs: 2.0,
-            has_audio: false,
             frame_count: 50,
             fps: 25.0,
-            file_size: 500_000,
+            file_size: 50_000,
+            bit_depth: 8,
+            pix_fmt: "yuv420p".into(),
+            // Provide representative loop signals (packet size uniformity and rhythmic timing)
+            // to help the detection system cross the 'Uncertain' gap even without a DB.
+            pkt_sizes: vec![10000, 9500, 9800, 9700, 9600, 10100],
+            pts_deltas: vec![0.04, 0.04, 0.0401, 0.0399, 0.04, 0.04],
             ..Default::default()
         };
 
         // This should trigger the Gif strategy because it's silent, short, and the loop score will be high
         let strategy = determine_strategy_with_apple_compat(&det, true);
         assert_eq!(strategy.target, TargetVideoFormat::Gif);
-        assert!(strategy.reason.contains("GIF-like loop detected"));
+        assert!(strategy.reason.contains("Loop intent confirmed"));
     }
 
     #[test]
