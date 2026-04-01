@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
-## [0.11.2] - 2026-04-02
+## [0.11.1] — 2026-04-02
 
 #### 🧠 7-Layer Loop Intent System (Major Refactor)
 
