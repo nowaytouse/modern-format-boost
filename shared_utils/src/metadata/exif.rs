@@ -484,7 +484,7 @@ mod tests {
             eprintln!("ExifTool not available, skipping test");
             return;
         }
-        let temp = TempDir::new().unwrap();
+        let _temp = TempDir::new().unwrap();
         // ... (rest of test implementation)
     }
 

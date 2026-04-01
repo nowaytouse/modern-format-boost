@@ -13,6 +13,7 @@
 use crate::video_detection::VideoDetectionResult;
 use crate::video_detection::ColorSpace;
 use crate::progress_mode::emit_stderr;
+use crate::file_copier::{SUPPORTED_IMAGE_EXTENSIONS, SUPPORTED_VIDEO_EXTENSIONS};
 use std::path::Path;
 use serde::{Deserialize, Serialize};
 
@@ -355,50 +356,54 @@ impl WeightedScore {
 pub fn identify_loop_intent(meta: &LoopMeta) -> LoopIntentVerdict {
     let mut score = WeightedScore::default();
 
+    let ext_lower = meta.source_extension.as_deref().unwrap_or("").to_lowercase();
+    let is_image = SUPPORTED_IMAGE_EXTENSIONS.contains(&ext_lower.as_str());
+    let is_video = !is_image && SUPPORTED_VIDEO_EXTENSIONS.contains(&ext_lower.as_str());
+
     // ══════════════════════════════════════════════════════════════
     // LAYER 1: 格式物理硬约束 — forced exits, WeightedScore 不参与
     // ══════════════════════════════════════════════════════════════
 
-    // 1-A: 有音轨？GIF 物理上不支持音频
-    if meta.has_audio {
-        return LoopIntentVerdict::LoopWeak("Layer 1-A: Hard Veto — Audio Track Present".to_string());
+    // 1-A: 有音轨？（仅对视频容器执行硬否决，绝不否决动态图片）
+    if meta.has_audio && is_video {
+        return LoopIntentVerdict::LoopWeak("Layer 1-A: Hard Veto — Audio Track Present in Video Device".to_string());
     }
 
     // 1-B: 有透明通道且无音轨？视频透明度处理成本极高
-    if meta.has_transparency {
+    if meta.has_transparency && !meta.has_audio {
         return LoopIntentVerdict::LoopStrong("Layer 1-B: Hard Pass — Transparency Channel Present".to_string());
     }
 
     // ══════════════════════════════════════════════════════════════
-    // LAYER 2: 显式自我声明 — forced exits, WeightedScore 不参与
+    // LAYER 2: 显式自我声明 — WeightedScore 累积，层末无检查点（降级为强信号）
     // ══════════════════════════════════════════════════════════════
 
-    // 2-A: 无限循环标记 (loop_count == 0)
+    // 2-A: 无限循环标记 (loop_count == 0) — 强循环偏向，但不再硬退出
     if meta.loop_count == Some(0) {
-        return LoopIntentVerdict::LoopStrong("Layer 2-A: Explicit Infinite Loop (loop_count=0)".to_string());
+        score.add(0.45);
     }
 
-    // 2-B: 明确不循环 (loop_count == 1 → play once and stop)
+    // 2-B: 明确不循环 (loop_count == 1 → play once and stop) — 强视频偏向
     if meta.loop_count == Some(1) {
-        return LoopIntentVerdict::LoopWeak("Layer 2-B: Explicit No-Loop (loop_count=1)".to_string());
+        score.add(-0.45);
     }
 
-    // 2-C: 平台来源标记
+    // 2-C: 平台来源标记 — 极致强偏向（如 Telegram/Discord Sticker）
     const PLATFORM_MARKERS: &[&str] = &["GIPHY", "TENOR", "STICKER", "TELEGRAM", "TIKTOK", "DISCORD"];
     if let Some(exts) = &meta.app_extensions {
         for ext in exts {
             let e = ext.trim().to_uppercase();
             if PLATFORM_MARKERS.iter().any(|&p| e.starts_with(p)) {
-                return LoopIntentVerdict::LoopStrong(format!("Layer 2-C: Platform Marker [{e}]"));
+                score.add(0.50);
             }
         }
     }
 
     // 2-D: WebM 无音轨 — Web 动图标准载体，格式本身即循环语义
     let is_webm = meta.container.as_deref().is_some_and(|c| c.eq_ignore_ascii_case("webm"))
-        || meta.source_extension.as_deref().is_some_and(|e| e.eq_ignore_ascii_case("webm"));
+        || ext_lower == "webm";
     if is_webm && !meta.has_audio {
-        return LoopIntentVerdict::LoopStrong("Layer 2-D: WebM container, no audio — Web animated format".to_string());
+        score.add(0.40);
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -738,6 +743,29 @@ fn extract_weighted_score_from_verdict(verdict: &LoopIntentVerdict, meta: &LoopM
 /// Used to reconstruct the score for Layer 6 KNN fusion.
 fn recompute_weighted_score(meta: &LoopMeta) -> f64 {
     let mut score = WeightedScore::default();
+
+    let ext_lower = meta.source_extension.as_deref().unwrap_or("").to_lowercase();
+    let is_webm = meta.container.as_deref().is_some_and(|c| c.eq_ignore_ascii_case("webm"))
+        || ext_lower == "webm";
+
+    // Re-apply Layer 2 signals (consistent with identify_loop_intent)
+    if meta.loop_count == Some(0) {
+        score.add(0.45);
+    }
+    if meta.loop_count == Some(1) {
+        score.add(-0.45);
+    }
+    const PLATFORM_MARKERS: &[&str] = &["GIPHY", "TENOR", "STICKER", "TELEGRAM", "TIKTOK", "DISCORD"];
+    if let Some(exts) = &meta.app_extensions {
+        for ext in exts {
+            if PLATFORM_MARKERS.iter().any(|&p| ext.trim().to_uppercase().starts_with(p)) {
+                score.add(0.50);
+            }
+        }
+    }
+    if is_webm && !meta.has_audio {
+        score.add(0.40);
+    }
 
     // 3-A
     if meta.pkt_sizes.len() >= 3 {
@@ -1122,12 +1150,24 @@ mod tests {
     // ── Layer 1 ──
 
     #[test]
-    fn test_layer1a_audio_veto() {
+    fn test_layer1a_video_audio_veto() {
         let mut m = base_meta();
+        m.source_extension = Some("mp4".to_string());
         m.has_audio = true;
         let v = identify_loop_intent(&m);
         assert!(matches!(v, LoopIntentVerdict::LoopWeak(_)));
         assert!(v.reason().contains("Layer 1-A"));
+    }
+
+    #[test]
+    fn test_audio_bypass_for_animated_images() {
+        let mut m = base_meta();
+        m.source_extension = Some("gif".to_string());
+        m.has_audio = true; // Even if it has audio, GIFs bypass the veto
+        let v = identify_loop_intent(&m);
+        // It should proceed to next layers, and since it's a neutral 2s GIF, it ends up Uncertain (Layer 6)
+        assert!(matches!(v, LoopIntentVerdict::Uncertain(_)));
+        assert!(!v.reason().contains("Layer 1-A"));
     }
 
     #[test]
@@ -1142,49 +1182,49 @@ mod tests {
     // ── Layer 2 ──
 
     #[test]
-    fn test_layer2a_infinite_loop() {
+    fn test_layer2a_infinite_loop_signal() {
         let mut m = base_meta();
         m.loop_count = Some(0);
+        // 2s GIF + loop_count=0 (+0.45) + short reward (+0.0035) + color reward (+0.0005) = ~0.454
+        // Still Uncertain (needs 0.55 for checkpoint)
         let v = identify_loop_intent(&m);
-        assert!(matches!(v, LoopIntentVerdict::LoopStrong(_)));
-        assert!(v.reason().contains("Layer 2-A"));
+        assert!(matches!(v, LoopIntentVerdict::Uncertain(_)));
+        assert!(v.reason().contains("Layer 6"));
     }
 
     #[test]
-    fn test_layer2b_no_loop() {
+    fn test_long_gif_conversion_escape() {
         let mut m = base_meta();
-        m.loop_count = Some(1);
+        m.source_extension = Some("gif".to_string());
+        m.loop_count = Some(0); // Standard loop tag (+0.45)
+        m.duration_secs = 40.0; // Long duration (-0.15)
+        // Score: 0.45 - 0.15 = 0.30. 
+        // This is < 0.55, so it reaches Layer 6 (KNN) instead of being locked as GIF.
         let v = identify_loop_intent(&m);
-        assert!(matches!(v, LoopIntentVerdict::LoopWeak(_)));
-        assert!(v.reason().contains("Layer 2-B"));
+        assert!(matches!(v, LoopIntentVerdict::Uncertain(_)));
+        assert!(v.reason().contains("Layer 6"));
     }
 
     #[test]
-    fn test_layer2c_platform_marker_giphy() {
+    fn test_layer2b_no_loop_signal() {
+        let mut m = base_meta();
+        m.loop_count = Some(1); // -0.45
+        m.width = 1920; 
+        let v = identify_loop_intent(&m);
+        // Base (-0.45) + compression efficiency (-0.10) = -0.55 -> LoopWeak
+        assert!(v.is_keep_video(), "Expected LoopWeak for loop_count=1, got {:?}", v);
+    }
+
+    #[test]
+    fn test_layer2c_platform_marker_signal() {
         let mut m = base_meta();
         m.app_extensions = Some(vec!["GIPHY".to_string()]);
+        // GIPHY (+0.50) + short reward -> ~0.50. Still Uncertain as it's below 0.55.
+        // If we added another signal (like uniform timing), it would pass.
+        m.frame_delay_variation = Some(0.05); // +0.20
         let v = identify_loop_intent(&m);
         assert!(matches!(v, LoopIntentVerdict::LoopStrong(_)));
-        assert!(v.reason().contains("Layer 2-C"));
-    }
-
-    #[test]
-    fn test_layer2c_platform_marker_tenor() {
-        let mut m = base_meta();
-        m.app_extensions = Some(vec!["TENOR2.0".to_string()]);
-        let v = identify_loop_intent(&m);
-        assert!(matches!(v, LoopIntentVerdict::LoopStrong(_)));
-        assert!(v.reason().contains("Layer 2-C"));
-    }
-
-    #[test]
-    fn test_layer2d_webm_no_audio() {
-        let mut m = base_meta();
-        m.source_extension = Some("webm".to_string());
-        m.has_audio = false;
-        let v = identify_loop_intent(&m);
-        assert!(matches!(v, LoopIntentVerdict::LoopStrong(_)));
-        assert!(v.reason().contains("Layer 2-D"));
+        assert!(v.reason().contains("Layer 3 Checkpoint") || v.reason().contains("Layer 4 Checkpoint"));
     }
 
     // ── Layer 3 ──
@@ -1235,11 +1275,12 @@ mod tests {
     #[test]
     fn test_layer2c_platform_marker_multiple() {
         let mut m = base_meta();
-        // Multiple extensions, one of which is a platform marker
+        // Multiple extensions, one of which is a platform marker (+0.50)
         m.app_extensions = Some(vec!["UNKNOWN".to_string(), "GIPHY".to_string()]);
+        // Add a small rhythm signal (+0.10) to push it over the 0.55 threshold
+        m.frame_delay_variation = Some(0.20); 
         let v = identify_loop_intent(&m);
-        assert!(matches!(v, LoopIntentVerdict::LoopStrong(_)));
-        assert!(v.reason().contains("GIPHY"));
+        assert!(v.is_keep_gif(), "Expected LoopStrong for platform marker + rhythm, got {:?}", v);
     }
 
     #[test]
