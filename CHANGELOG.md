@@ -30,9 +30,6 @@ All notable changes to this project will be documented in this file.
 #### 🛡️ Reliability & Testing
 
 - **Comprehensive Verification Suite**: Added 15 specialized unit tests in `loop_intent.rs` covering edge cases like multi-frame gap analysis, platform marker conflicts, and audio-veto priority.
-- **Workspace-Wide Compilation Check**: Verified zero warnings and zero errors across all targets (HEVC, AV1, Shared Utils, CLI Tools).
-
-## [0.11.1] - 2026-04-01
 
 #### 🆕 New Features
 
