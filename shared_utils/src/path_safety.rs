@@ -24,6 +24,21 @@ pub fn safe_path_arg(path: &Path) -> Cow<'_, str> {
     }
 }
 
+/// Specialized path argument escaping for `ExifTool`.
+///
+/// `ExifTool` interprets `%` characters as format strings (e.g., `%d`, `%f`).
+/// To use a literal path containing `%`, it must be escaped to `%%`.
+#[inline]
+#[must_use]
+pub fn exiftool_path_arg(path: &Path) -> Cow<'_, str> {
+    let s = safe_path_arg(path);
+    if s.contains('%') {
+        Cow::Owned(s.replace('%', "%%"))
+    } else {
+        s
+    }
+}
+
 /// Returns a unique temporary path for search iterations, fully isolated from user folders.
 ///
 /// Ensures Ghost Mode (Zero Pollution) by using the central MFB tmp directory.
@@ -54,5 +69,18 @@ mod tests {
         assert_eq!(safe_path_arg(Path::new("/abs/path.mp4")), "/abs/path.mp4");
         assert_eq!(safe_path_arg(Path::new("-dash.mp4")), "./-dash.mp4");
         assert_eq!(safe_path_arg(Path::new("-dir/file.mp4")), "./-dir/file.mp4");
+    }
+
+    #[test]
+    fn test_exiftool_path_arg() {
+        assert_eq!(exiftool_path_arg(Path::new("normal.png")), "normal.png");
+        assert_eq!(
+            exiftool_path_arg(Path::new("file%2f.png")),
+            "file%%2f.png"
+        );
+        assert_eq!(
+            exiftool_path_arg(Path::new("-dash%f.png")),
+            "./-dash%%f.png"
+        );
     }
 }

@@ -6,6 +6,14 @@ All notable changes to this project will be documented in this file.
 
 ## [0.11.1] — 2026-04-02
 
+#### 🛡️ ExifTool Path Escaping & Security
+
+- **Specialized ExifTool Handling**: Introduced `exiftool_path_arg()` in `shared_utils` to address "Error opening file" issues caused by URL-encoded characters (e.g., `%2F`) in file paths.
+  - **Logic**: Automatically escapes literal `%` to `%%` for `ExifTool` arguments while preserving standard path safety for other tools like `ffmpeg` and `magick`. 
+  - **Coverage**: Applied to all `exiftool` invocations in `exif.rs` and `xmp_merger.rs`.
+- **Regression Testing**: Added `test_preserve_metadata_with_percent_in_path` to verify that files with complex URL-encoded names can now be processed without metadata loss.
+
+
 #### 🧠 7-Layer Loop Intent System (Major Refactor)
 
 - **Hierarchical Decision Tree**: Re-engineered the "Meme Scoring" system into a robust **7-Layer Decision Tree** (`loop_intent.rs`) for physical and semantic loop identification.

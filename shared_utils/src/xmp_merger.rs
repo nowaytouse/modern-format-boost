@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use walkdir::WalkDir;
+use crate::path_safety::exiftool_path_arg;
 
 const EXCLUDED_EXTENSIONS: &[&str] = &[
     "xmp",
@@ -184,7 +185,7 @@ impl XmpMerger {
                 "-Source",
                 "-OriginalDocumentID",
             ])
-            .arg(crate::safe_path_arg(xmp_path).as_ref())
+            .arg(exiftool_path_arg(xmp_path).as_ref())
             .output()
             .context("Failed to run exiftool")?;
 
@@ -371,7 +372,7 @@ impl XmpMerger {
 
             let output = match Command::new("exiftool")
                 .args(["-s3", "-SidecarForExtension", "-XMPFileRef"])
-                .arg(crate::safe_path_arg(&path).as_ref())
+                .arg(exiftool_path_arg(&path).as_ref())
                 .output()
             {
                 Ok(output) if output.status.success() => output,
@@ -537,7 +538,7 @@ impl XmpMerger {
 
             let output = match Command::new("exiftool")
                 .args(["-s3", "-DocumentID"])
-                .arg(crate::safe_path_arg(&path).as_ref())
+                .arg(exiftool_path_arg(&path).as_ref())
                 .output()
             {
                 Ok(output) if output.status.success() => output,
@@ -702,11 +703,11 @@ impl XmpMerger {
         }
 
         args.push("-tagsfromfile".to_string());
-        args.push(crate::safe_path_arg(xmp_path).as_ref().to_string());
+        args.push(exiftool_path_arg(xmp_path).as_ref().to_string());
         args.push("-all:all".to_string());
 
         args.push("-FileModifyDate<FileModifyDate".to_string());
-        args.push(crate::safe_path_arg(media_path).as_ref().to_string());
+        args.push(exiftool_path_arg(media_path).as_ref().to_string());
 
         // ExifTool writes to <path>_exiftool_tmp then renames; remove leftover from prior run.
         if let Some(name) = media_path.file_name() {

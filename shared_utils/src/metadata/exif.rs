@@ -14,6 +14,7 @@ use std::io;
 use std::path::Path;
 use std::process::Command;
 use std::sync::OnceLock;
+use crate::path_safety::exiftool_path_arg;
 
 static EXIFTOOL_AVAILABLE: OnceLock<bool> = OnceLock::new();
 
@@ -36,7 +37,7 @@ fn get_best_date_from_source(src: &Path) -> Option<String> {
         .arg("-XMP-xmp:CreateDate")
         .arg("-EXIF:DateTimeOriginal")
         .arg("-EXIF:CreateDate")
-        .arg(crate::safe_path_arg(src).as_ref())
+        .arg(exiftool_path_arg(src).as_ref())
         .output()
         .ok()?;
 
@@ -240,7 +241,7 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
 
     let mut cmd = Command::new("exiftool");
     cmd.arg("-tagsfromfile")
-        .arg(crate::safe_path_arg(src).as_ref())
+        .arg(exiftool_path_arg(src).as_ref())
         .arg("-all:all")
         .arg("-unsafe");
     if !jxl_already_has_icc {
@@ -254,7 +255,7 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
         .arg("LargeFileSupport=1")
         .arg("-q")
         .arg("-m")
-        .arg(crate::safe_path_arg(dst).as_ref());
+        .arg(exiftool_path_arg(dst).as_ref());
     let mut output = cmd.output()?;
 
     // Log exiftool stderr to file (debug/warn level only — never reaches terminal).
@@ -271,12 +272,15 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
                 "exiftool metadata copy failed"
             );
         } else if !stderr_str.trim().is_empty() {
-            tracing::debug!(
-                src = %src.display(),
-                dst = %dst.display(),
-                stderr = %stderr_str.trim(),
-                "exiftool completed with warnings (suppressed by -m)"
-            );
+            let trimmed = stderr_str.trim();
+            if !trimmed.contains("No writable tags set") && !trimmed.contains("Wrapped JXL codestream") {
+                tracing::debug!(
+                    src = %src.display(),
+                    dst = %dst.display(),
+                    stderr = %trimmed,
+                    "exiftool completed with warnings (suppressed by -m)"
+                );
+            }
         }
     }
 
@@ -325,7 +329,7 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
                         .arg("-unsafe")
                         .arg("-icc_profile")
                         .arg("-tagsfromfile")
-                        .arg(crate::safe_path_arg(src).as_ref())
+                        .arg(exiftool_path_arg(src).as_ref())
                         .arg("-all:all")
                         .arg("-unsafe")
                         .arg("-icc_profile")
@@ -335,7 +339,7 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
                         .arg("LargeFileSupport=1")
                         .arg("-q")
                         .arg("-m")
-                        .arg(crate::safe_path_arg(dst).as_ref())
+                        .arg(exiftool_path_arg(dst).as_ref())
                         .output()?;
                 } else {
                     eprintln!(
@@ -405,7 +409,7 @@ fn fix_quicktime_dates(src: &Path, dst: &Path) -> io::Result<()> {
         .arg("-overwrite_original")
         .arg("-q")
         .arg("-m")
-        .arg(crate::safe_path_arg(dst).as_ref())
+        .arg(exiftool_path_arg(dst).as_ref())
         .output()?;
 
     if !output.status.success() {
@@ -459,6 +463,35 @@ mod tests {
         assert!(
             result.is_ok(),
             "Metadata preservation failed for mismatched extension with complex path"
+        );
+    }
+
+    #[test]
+    fn test_preserve_metadata_with_percent_in_path() {
+        if !is_exiftool_available() {
+            return;
+        }
+        let temp = TempDir::new().unwrap();
+        // Filename with % character that triggers interpolation if not escaped
+        let src_path = temp.path().join("http%3A%2F%2Fimg.png");
+        let png_data = [
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
+            0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08,
+            0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xDD, 0x8D,
+            0xB0, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        ];
+        fs::write(&src_path, png_data).unwrap();
+
+        let dst_path = temp.path().join("output.png");
+        fs::write(&dst_path, png_data).unwrap();
+
+        let result = preserve_internal_metadata(&src_path, &dst_path);
+
+        assert!(
+            result.is_ok(),
+            "Metadata preservation failed for filename with % character: {:?}",
+            result.err()
         );
     }
 }
