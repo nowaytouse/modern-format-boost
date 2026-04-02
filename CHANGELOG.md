@@ -79,6 +79,28 @@ All notable changes to this project will be documented in this file.
     - Palette size analysis (Layer 4-B) now receives accurate data.
     - GIFs default to LoopStrong preservation (respecting Layer 7 GIF default shift).
 
+- **Semantic Precision in Layer 7 Fallback**:
+  - Changed Layer 7 video fallback from `Uncertain` (don't know) to `LoopWeak` (actively determined no loop).
+  - **Rationale**: `Uncertain` implies insufficient signal; videos without loop intent are a known determination, not an unknown.
+  - **File**: `shared_utils/src/loop_intent.rs` layer7_fallback()
+  - **Impact**: Clearer intent semantics, unchanged behavior in practice.
+
+- **Heuristic-Apple Compat Separation**:
+  - **Problem Identified**: Sticker heuristic was gated on `apple_compat` flag, conflating two independent concerns:
+    1. **Apple codec compatibility** (codec support, HEVC conversion)
+    2. **Content optimization** (sticker detection, short silent small → GIF)
+  - **Fixed**: Separated the concerns:
+    - Sticker heuristic is now **global** (not dependent on apple_compat mode).
+    - Apple compat logic focuses purely on codec compatibility (codec skip rules).
+  - **Files Modified**: `vid_hevc/src/conversion_api.rs`, `vid_av1/src/conversion_api.rs`
+  - **Behavioral Changes**:
+    - H.264 short silent videos: now consistently converted to GIF (optimization) regardless of apple_compat.
+    - AV1 short silent videos in Apple-compat mode: converted to HEVC first (codec compat), then MAY GIF if needed.
+    - Short silent videos in non-Apple mode: still convert to GIF via heuristic (now enabled globally).
+  - **Outcome**: Decision priority is now correct: (1) Loop intent → (2) Sticker heuristic → (3) Apple codec compat.
+  - **Test Updated**: `test_gif_like_video_recovery` reason assertion changed from "GIF-like loop detected" to "Sticker-like content detected" to reflect the heuristic's true purpose.
+
+
 #### 🏗️ Structural Repair & Fallbacks
 
 - **ImageMagick Rebuild Hardening**: Fixed a critical bug in `Structural Repair` where URL-encoded filenames were misinterpreted as image properties by the `magick` core engine.

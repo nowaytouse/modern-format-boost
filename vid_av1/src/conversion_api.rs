@@ -171,6 +171,10 @@ pub fn determine_strategy_with_apple_compat(
 
     let is_loop_intent = loop_verdict.is_keep_gif();
 
+    // ══════════════════════════════════════════════════════════════════════════════
+    // DEFINITE LOOP INTENT: GIF conversions based on 7-layer decision
+    // ══════════════════════════════════════════════════════════════════════════════
+
     if is_loop_intent && apple_compat {
         return ConversionStrategy {
             target: TargetVideoFormat::Gif,
@@ -198,6 +202,37 @@ pub fn determine_strategy_with_apple_compat(
             lossless: false,
         };
     }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // HEURISTIC: Content-based GIF conversion (independent of Apple compat)
+    // ══════════════════════════════════════════════════════════════════════════════
+    // Short, silent, small videos are likely stickers/emojis → optimize as GIF
+    // This is a content optimization decision, NOT an Apple compatibility workaround.
+
+    if !is_loop_intent
+        && !result.has_audio && result.duration_secs <= 3.0
+        && result.width > 0 && result.height > 0
+        && result.width <= 512 && result.height <= 512
+        && (result.pkt_sizes.len() < 3 || result.pts_deltas.len() < 3)
+    {
+        return ConversionStrategy {
+            target: TargetVideoFormat::Gif,
+            reason: format!(
+                "Sticker-like content detected (no loop intent, short silent video {}s, {}x{}) - optimizing as GIF",
+                result.duration_secs, result.width, result.height
+            ),
+            command: String::new(),
+            preserve_audio: false,
+            crf: 0.0,
+            lossless: false,
+        };
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // APPLE COMPATIBILITY: Codec-based conversion
+    // ══════════════════════════════════════════════════════════════════════════════
+    // If Apple compat is enabled, convert unsupported codecs to HEVC.
+    // This runs AFTER loop intent and heuristic, so they take priority.
 
     if skip_decision.should_skip {
         return ConversionStrategy {
