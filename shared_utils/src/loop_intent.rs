@@ -20,7 +20,7 @@ use image::{ExtendedColorType, GenericImageView};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-const MODERN_ANIMATED_EXTENSIONS: &[&str] = &["webp", "avif", "apng", "heic", "heif", "jxl"];
+use crate::constants_modern::MODERN_ANIMATED_EXTENSIONS;
 const GIPHY_PLATFORM_MARKERS: &[&str] =
     &["GIPHY", "TENOR", "STICKER", "TELEGRAM", "TIKTOK", "DISCORD"];
 const WEBP_RATIO_SAMPLE_MAX_DIM: u32 = 256;
@@ -129,6 +129,7 @@ pub struct LoopMeta {
     // ── Auxiliary (used in KNN bridge) ──
     pub frame_types: Vec<char>,
     pub mv_magnitudes: Vec<f64>,
+    pub cached_frame_png: Option<Vec<u8>>,
 }
 
 impl LoopMeta {
@@ -199,6 +200,7 @@ impl LoopMeta {
             filename_meme_score: 0.5,
             frame_types: detection.frame_types.clone(),
             mv_magnitudes: detection.mv_magnitudes.clone(),
+            cached_frame_png: None,
         };
         meta.directory_meme_score = score_directory_context(parent_directories.as_deref());
         meta.filename_meme_score = analyze_filename(meta.file_name.as_deref());
@@ -268,6 +270,7 @@ impl LoopMeta {
             mv_magnitudes: probe.mv_magnitudes.clone(),
             has_embedded_icc: false,
             has_complex_color_profile: false,
+            cached_frame_png: None,
         };
         meta.directory_meme_score = score_directory_context(parent_directories.as_deref());
         meta.filename_meme_score = analyze_filename(meta.file_name.as_deref());
@@ -343,7 +346,22 @@ impl LoopMeta {
         }
 
         if should_sample_webp_compression_ratio(self.source_extension.as_deref()) {
-            self.webp_compression_ratio = sampled_webp_compression_ratio(path);
+            // Extract one frame, read into memory, compute the WebP ratio, and cache the
+            // frame bytes in-memory to avoid repeated ffmpeg invocations later.
+            if let Some(temp_frame) = extract_frame_to_temp(path) {
+                if let Ok(bytes) = std::fs::read(&temp_frame) {
+                    // Remove the temporary file immediately; keep bytes in-memory only.
+                    let _ = std::fs::remove_file(&temp_frame);
+
+                    // Cache the PNG bytes for potential reuse in Tier 3 visual heuristics.
+                    self.cached_frame_png = Some(bytes.clone());
+
+                    // Compute the WebP compression ratio from the in-memory image.
+                    if let Ok(img) = image::load_from_memory(&bytes) {
+                        self.webp_compression_ratio = sampled_webp_compression_ratio_from_image(&img);
+                    }
+                }
+            }
         }
     }
 
@@ -855,11 +873,31 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
                         );
                         let mut tier3_nudge = AuxiliaryNudge::default();
 
-                        if detect_heavy_letterboxing(p) {
-                            tier3_nudge.apply(0.05, "Letterboxing detected");
+                        // Try to reuse an in-memory cached frame (if populated earlier).
+                        let mut img_opt: Option<image::DynamicImage> = None;
+                        if let Some(bytes) = meta.cached_frame_png.as_ref() {
+                            if let Ok(img) = image::load_from_memory(bytes) {
+                                img_opt = Some(img);
+                            }
+                        } else {
+                            // Extract a single frame once and reuse it for both heuristics.
+                            if let Some(temp_frame) = extract_frame_to_temp(p) {
+                                if let Ok(bytes) = std::fs::read(&temp_frame) {
+                                    let _ = std::fs::remove_file(&temp_frame);
+                                    if let Ok(img) = image::load_from_memory(&bytes) {
+                                        img_opt = Some(img);
+                                    }
+                                }
+                            }
                         }
-                        if detect_high_text_density(p) {
-                            tier3_nudge.apply(0.08, "High text density");
+
+                        if let Some(ref img) = img_opt {
+                            if detect_heavy_letterboxing_from_image(img) {
+                                tier3_nudge.apply(0.05, "Letterboxing detected");
+                            }
+                            if detect_high_text_density_from_image(img) {
+                                tier3_nudge.apply(0.08, "High text density");
+                            }
                         }
 
                         if !tier3_nudge.trace.is_empty() {
@@ -1221,6 +1259,18 @@ fn detect_heavy_letterboxing(path: &Path) -> bool {
     result.unwrap_or(false)
 }
 
+fn detect_heavy_letterboxing_from_image(img: &image::DynamicImage) -> bool {
+    let (_w, h) = img.dimensions();
+    if h < 100 {
+        return false;
+    }
+    let top_band = (f64::from(h) * 0.15) as u32;
+    let bottom_start = h - top_band;
+    let top_var = calculate_band_variance(img, 0, top_band);
+    let bottom_var = calculate_band_variance(img, bottom_start, h);
+    top_var < 100.0 && bottom_var < 100.0
+}
+
 /// Calculate pixel variance in a horizontal band.
 fn calculate_band_variance(img: &image::DynamicImage, y_start: u32, y_end: u32) -> f64 {
     use image::GenericImageView;
@@ -1258,7 +1308,7 @@ fn detect_high_text_density(path: &Path) -> bool {
 
         // Count high-contrast edges (typical of text)
         let mut edge_count = 0;
-        let total_pixels = f64::from(w * h);
+        let total_pixels = (w as f64) * (h as f64);
 
         for y in 1..h - 1 {
             for x in 1..w - 1 {
@@ -1272,12 +1322,38 @@ fn detect_high_text_density(path: &Path) -> bool {
             }
         }
 
-        let edge_ratio = f64::from(edge_count) / total_pixels;
+        let edge_ratio = edge_count as f64 / total_pixels;
         Some(edge_ratio > 0.15) // >15% high-contrast edges suggests text
     })();
 
     let _ = std::fs::remove_file(temp_frame);
     result.unwrap_or(false)
+}
+
+fn detect_high_text_density_from_image(img: &image::DynamicImage) -> bool {
+    let gray = img.to_luma8();
+    let (w, h) = gray.dimensions();
+    if w < 3 || h < 3 {
+        return false;
+    }
+
+    let mut edge_count = 0usize;
+    let total_pixels = (w as f64) * (h as f64);
+
+    for y in 1..h - 1 {
+        for x in 1..w - 1 {
+            let center = i32::from(gray.get_pixel(x, y)[0]);
+            let right = i32::from(gray.get_pixel(x + 1, y)[0]);
+            let bottom = i32::from(gray.get_pixel(x, y + 1)[0]);
+
+            if (center - right).abs() > 80 || (center - bottom).abs() > 80 {
+                edge_count += 1;
+            }
+        }
+    }
+
+    let edge_ratio = edge_count as f64 / total_pixels;
+    edge_ratio > 0.15
 }
 
 // ── Unit Tests ────────────────────────────────────────────────────────────────
@@ -1587,66 +1663,68 @@ mod tests {
 // ── WebP Sampling Implementation ───────────────────────────────────────────
 
 fn should_sample_webp_compression_ratio(ext: Option<&str>) -> bool {
-    let Some(ext) = ext else { return true };
+    // Only sample when the input is a static/raster image format where a single-frame
+    // WebP proxy is representative. Unknown or video formats are not sampled.
+    let Some(ext) = ext else { return false };
     let lower = ext.to_lowercase();
-    // No point in sampling WebP if it's already WebP or doesn't benefit from compression proxy
-    !matches!(lower.as_str(), "webp" | "avif" | "heic" | "heif")
+    matches!(lower.as_str(), "gif" | "png" | "bmp" | "tiff" | "tif" | "tga" | "jpg" | "jpeg")
 }
 
 fn sampled_webp_compression_ratio(path: &Path) -> Option<f64> {
+    // Backwards-compatible wrapper: extract one frame, load into memory, compute ratio.
     let temp_frame = extract_frame_to_temp(path)?;
-    let result = (|| {
-        let img = image::open(&temp_frame).ok()?;
-        let (w, h) = img.dimensions();
-        if w == 0 || h == 0 {
-            return None;
-        }
+    let bytes = std::fs::read(&temp_frame).ok()?;
+    let _ = std::fs::remove_file(&temp_frame);
+    let img = image::load_from_memory(&bytes).ok()?;
+    sampled_webp_compression_ratio_from_image(&img)
+}
 
-        // Only sample if image isn't too large to avoid performance hit
-        let (target_w, target_h) = if w > WEBP_RATIO_SAMPLE_MAX_DIM || h > WEBP_RATIO_SAMPLE_MAX_DIM
-        {
-            let ratio = f64::from(w) / f64::from(h);
-            if ratio > 1.0 {
-                (
-                    WEBP_RATIO_SAMPLE_MAX_DIM,
-                    (f64::from(WEBP_RATIO_SAMPLE_MAX_DIM) / ratio) as u32,
-                )
-            } else {
-                (
-                    (f64::from(WEBP_RATIO_SAMPLE_MAX_DIM) * ratio) as u32,
-                    WEBP_RATIO_SAMPLE_MAX_DIM,
-                )
-            }
-        } else {
-            (w, h)
-        };
+fn sampled_webp_compression_ratio_from_image(img: &image::DynamicImage) -> Option<f64> {
+    let (w, h) = img.dimensions();
+    if w == 0 || h == 0 {
+        return None;
+    }
 
-        let resized = if target_w != w || target_h != h {
-            img.thumbnail(target_w, target_h)
-        } else {
-            img
-        };
-
-        let mut buffer = std::io::Cursor::new(Vec::new());
-        let encoder = WebPEncoder::new_lossless(&mut buffer);
-        encoder
-            .encode(
-                resized.as_bytes(),
-                resized.width(),
-                resized.height(),
-                ExtendedColorType::Rgba8,
+    // Only sample if image isn't too large to avoid performance hit
+    let (target_w, target_h) = if w > WEBP_RATIO_SAMPLE_MAX_DIM || h > WEBP_RATIO_SAMPLE_MAX_DIM {
+        let ratio = f64::from(w) / f64::from(h);
+        if ratio > 1.0 {
+            (
+                WEBP_RATIO_SAMPLE_MAX_DIM,
+                (f64::from(WEBP_RATIO_SAMPLE_MAX_DIM) / ratio) as u32,
             )
-            .ok()?;
-
-        let webp_size = buffer.get_ref().len() as f64;
-        let raw_size = (resized.width() * resized.height() * 4) as f64;
-
-        if webp_size <= 0.0 {
-            return None;
+        } else {
+            (
+                (f64::from(WEBP_RATIO_SAMPLE_MAX_DIM) * ratio) as u32,
+                WEBP_RATIO_SAMPLE_MAX_DIM,
+            )
         }
-        Some(raw_size / webp_size)
-    })();
+    } else {
+        (w, h)
+    };
 
-    let _ = std::fs::remove_file(temp_frame);
-    result
+    let resized = if target_w != w || target_h != h {
+        img.thumbnail(target_w, target_h)
+    } else {
+        img.clone()
+    };
+
+    let mut buffer = std::io::Cursor::new(Vec::new());
+    let encoder = WebPEncoder::new_lossless(&mut buffer);
+    encoder
+        .encode(
+            resized.as_bytes(),
+            resized.width(),
+            resized.height(),
+            ExtendedColorType::Rgba8,
+        )
+        .ok()?;
+
+    let webp_size = buffer.get_ref().len() as f64;
+    let raw_size = (resized.width() * resized.height() * 4) as f64;
+
+    if webp_size <= 0.0 {
+        return None;
+    }
+    Some(raw_size / webp_size)
 }

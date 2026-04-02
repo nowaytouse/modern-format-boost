@@ -39,6 +39,7 @@ pub mod batch;
 pub mod checkpoint;
 pub mod codecs;
 pub mod constants;
+pub mod constants_modern;
 pub mod conversion;
 pub mod crf_constants;
 pub mod date_analysis;
