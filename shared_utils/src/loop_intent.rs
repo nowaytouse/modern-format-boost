@@ -965,15 +965,15 @@ fn layer7_fallback(meta: &LoopMeta, upstream_reason: &str) -> LoopIntentVerdict 
     if is_modern_animated {
         // Modern animated formats → convert to GIF (minimum-loss preservation)
         LoopIntentVerdict::LoopStrong(format!("{reason} → convert to GIF (modern animated)"))
-    } else if is_gif || is_video {
-        // Already in target format → keep as-is
-        if is_gif {
-            LoopIntentVerdict::Uncertain(format!("{reason} → preserve GIF as-is (low confidence)"))
-        } else {
-            LoopIntentVerdict::Uncertain(format!(
-                "{reason} → preserve video as-is (low confidence)"
-            ))
-        }
+    } else if is_gif {
+        // GIF files default to LoopStrong unless explicitly LoopWeak was determined upstream
+        // (transparent, small, silent stickers are common → preserve as-is by default)
+        LoopIntentVerdict::LoopStrong(format!("{reason} → preserve GIF as-is (Layer 7 default)"))
+    } else if is_video {
+        // Video files: preserve as-is (low confidence)
+        LoopIntentVerdict::Uncertain(format!(
+            "{reason} → preserve video as-is (low confidence)"
+        ))
     } else {
         // Unknown format — default conservative: treat as video (safer for quality)
         LoopIntentVerdict::Uncertain(format!("{reason} → unknown format, skip conversion"))
@@ -1728,3 +1728,15 @@ fn sampled_webp_compression_ratio_from_image(img: &image::DynamicImage) -> Optio
     }
     Some(raw_size / webp_size)
 }
+
+/// Check if a file path should use the GIF fast-path (from_gif_path) instead of ffprobe.
+#[must_use]
+pub fn should_use_gif_fast_path(path: &std::path::Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.to_ascii_lowercase()),
+        Some(ext) if ext == "gif"
+    )
+}
+

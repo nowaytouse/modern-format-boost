@@ -149,7 +149,7 @@ pub use depth_channel::{
 pub use gif_value_db::{lookup_similar_samples, SampleMatch};
 pub use loop_intent::{
     assess_loop_intent, assess_loop_intent_from_meta, assess_loop_intent_from_probe,
-    identify_loop_intent, is_lossless_exploration_safe, LoopIntentVerdict, LoopMeta,
+    identify_loop_intent, is_lossless_exploration_safe, should_use_gif_fast_path, LoopIntentVerdict, LoopMeta,
 };
 
 pub use hdr_synthesis::{

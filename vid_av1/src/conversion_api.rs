@@ -147,18 +147,28 @@ pub fn determine_strategy_with_apple_compat(
         shared_utils::should_skip_video_codec(result.codec.as_str())
     };
 
-    // Ensure structural signals are available — if cached detection lacks pkt_sizes/pts_deltas,
-    // re-run detection (best-effort) to avoid silent Layer 3 degradation.
-    let mut detection = result.clone();
-    if detection.pkt_sizes.len() < 3 || detection.pts_deltas.len() < 3 {
-        if let Ok(fresh) = crate::detection_api::detect_video_with_cache(Path::new(&detection.file_path), None) {
-            detection = fresh;
-        }
-    }
-
     // 「循环意图判断系统」 (Loop Intent Identification System)
-    // Replace legacy weighted scoring with a prioritized decision tree.
-    let loop_verdict = shared_utils::assess_loop_intent(&detection);
+    // For GIF files, use fast-path (from_gif_path) to preserve GIF-specific signals.
+    // For videos, use ffprobe path with structural signal refresh.
+    let loop_verdict = if shared_utils::should_use_gif_fast_path(Path::new(&result.file_path)) {
+        // GIF file: use header-level detection
+        if let Some(meta) = shared_utils::LoopMeta::from_gif_path(Path::new(&result.file_path)) {
+            shared_utils::assess_loop_intent_from_meta(&meta, Some(Path::new(&result.file_path)))
+        } else {
+            // Fallback if from_gif_path fails
+            shared_utils::assess_loop_intent(result)
+        }
+    } else {
+        // Video file: ensure structural signals are available
+        let mut detection = result.clone();
+        if detection.pkt_sizes.len() < 3 || detection.pts_deltas.len() < 3 {
+            if let Ok(fresh) = crate::detection_api::detect_video_with_cache(Path::new(&detection.file_path), None) {
+                detection = fresh;
+            }
+        }
+        shared_utils::assess_loop_intent(&detection)
+    };
+
     let is_loop_intent = loop_verdict.is_keep_gif();
 
     if is_loop_intent && apple_compat {

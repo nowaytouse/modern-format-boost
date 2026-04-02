@@ -284,33 +284,43 @@ pub fn determine_strategy_with_apple_compat(
         shared_utils::should_skip_video_codec(result.codec.as_str())
     };
 
-    // Ensure structural signals are available — if cached detection lacks pkt_sizes/pts_deltas,
-    // re-run detection (best-effort) to avoid silent Layer 3 degradation.
-    let mut detection = result.clone();
-    if detection.pkt_sizes.len() < 3 || detection.pts_deltas.len() < 3 {
-        if let Ok(fresh) = crate::detection_api::detect_video_with_cache(Path::new(&detection.file_path), None) {
-            detection = fresh;
-        }
-    }
-
     // 「循环意图判断系统」 (Loop Intent Identification System)
-    // Replace legacy weighted scoring with a prioritized decision tree.
-    let loop_verdict = shared_utils::assess_loop_intent(&detection);
+    // For GIF files, use fast-path (from_gif_path) to preserve GIF-specific signals.
+    // For videos, use ffprobe path with structural signal refresh.
+    let loop_verdict = if shared_utils::should_use_gif_fast_path(Path::new(&result.file_path)) {
+        // GIF file: use header-level detection
+        if let Some(meta) = shared_utils::LoopMeta::from_gif_path(Path::new(&result.file_path)) {
+            shared_utils::assess_loop_intent_from_meta(&meta, Some(Path::new(&result.file_path)))
+        } else {
+            // Fallback if from_gif_path fails
+            shared_utils::assess_loop_intent(result)
+        }
+    } else {
+        // Video file: ensure structural signals are available
+        let mut detection = result.clone();
+        if detection.pkt_sizes.len() < 3 || detection.pts_deltas.len() < 3 {
+            if let Ok(fresh) = crate::detection_api::detect_video_with_cache(Path::new(&detection.file_path), None) {
+                detection = fresh;
+            }
+        }
+        shared_utils::assess_loop_intent(&detection)
+    };
+
     let is_loop_intent = loop_verdict.is_keep_gif();
 
     // Fallback: short/silent/small videos may be GIF-like stickers, but only use this
     // when the 7-layer system is INCONCLUSIVE (Uncertain) and structural signals are missing.
     if apple_compat && !force && loop_verdict.is_uncertain()
-        && !detection.has_audio && detection.duration_secs <= 3.0
-        && detection.width > 0 && detection.height > 0
-        && detection.width <= 512 && detection.height <= 512
-        && (detection.pkt_sizes.len() < 3 || detection.pts_deltas.len() < 3)
+        && !result.has_audio && result.duration_secs <= 3.0
+        && result.width > 0 && result.height > 0
+        && result.width <= 512 && result.height <= 512
+        && (result.pkt_sizes.len() < 3 || result.pts_deltas.len() < 3)
     {
         return ConversionStrategy {
             target: TargetVideoFormat::Gif,
             reason: format!(
                 "GIF-like loop detected (fallback: inconclusive signals, short silent video {}s, {}x{}) - Apple compatibility",
-                detection.duration_secs, detection.width, detection.height
+                result.duration_secs, result.width, result.height
             ),
             command: String::new(),
             preserve_audio: false,
@@ -358,7 +368,7 @@ pub fn determine_strategy_with_apple_compat(
         };
     }
 
-    if let crate::detection_api::DetectedCodec::Unknown(ref s) = detection.codec {
+    if let crate::detection_api::DetectedCodec::Unknown(ref s) = result.codec {
         let unknown_skip = if apple_compat {
             shared_utils::should_skip_video_codec_apple_compat(s)
         } else {
@@ -376,12 +386,12 @@ pub fn determine_strategy_with_apple_compat(
         }
     }
 
-    let (target, reason, crf, lossless) = match detection.compression {
+    let (target, reason, crf, lossless) = match result.compression {
         CompressionType::Lossless => (
             TargetVideoFormat::HevcLosslessMkv,
             format!(
                 "Source is {} (lossless) - converting to HEVC Lossless",
-                detection.codec.as_str()
+                result.codec.as_str()
             ),
             0.0_f32,
             true,
@@ -390,7 +400,7 @@ pub fn determine_strategy_with_apple_compat(
             TargetVideoFormat::HevcMp4,
             format!(
                 "Source is {} (visually lossless) - compressing with HEVC CRF 18",
-                detection.codec.as_str()
+                result.codec.as_str()
             ),
             18.0_f32,
             false,
@@ -399,8 +409,8 @@ pub fn determine_strategy_with_apple_compat(
             TargetVideoFormat::HevcMp4,
             format!(
                 "Source is {} ({}) - compressing with HEVC CRF 20",
-                detection.codec.as_str(),
-                detection.compression.as_str()
+                result.codec.as_str(),
+                result.compression.as_str()
             ),
             20.0_f32,
             false,
@@ -411,7 +421,7 @@ pub fn determine_strategy_with_apple_compat(
         target,
         reason,
         command: String::new(),
-        preserve_audio: detection.has_audio,
+        preserve_audio: result.has_audio,
         crf,
         lossless,
     }
