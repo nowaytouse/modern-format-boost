@@ -61,6 +61,24 @@ All notable changes to this project will be documented in this file.
   - **Includes**: `["webp", "avif", "apng", "heic", "heif", "jxl"]`
   - **Benefit**: Simplifies future maintenance and prevents duplicate definitions across the codebase.
 
+- **GIF Main-Flow Integration (Complete Implementation)**:
+  - **Problem**: GIF files were always routed through `detect_video_with_cache()` (ffprobe path), bypassing the dedicated `from_gif_path()` (GIF-native scanning). This caused loss of platform markers (GIPHY/TENOR via `app_extensions`), transparency metadata (Graphics Control Extension), and palette analysis.
+  - **Solution**: Implemented dual routing logic:
+    1. **File Extension Check**: New `should_use_gif_fast_path()` helper detects `.gif` files.
+    2. **GIF-Native Path**: Route GIFs to `LoopMeta::from_gif_path()` for header-level detection, preserving GIF-specific signals.
+    3. **Video Path**: Route non-GIF files to ffprobe with structural signal refresh as needed.
+  - **Files Modified**:
+    - `shared_utils/src/loop_intent.rs`: Added `should_use_gif_fast_path(path)` public helper
+    - `vid_hevc/src/conversion_api.rs`: Dual routing in `determine_strategy_with_apple_compat()`
+    - `vid_av1/src/conversion_api.rs`: Dual routing in `determine_strategy_with_apple_compat()`
+    - `shared_utils/src/lib.rs`: Export `should_use_gif_fast_path` for public API
+  - **Impact**:
+    - GIFs are no longer incorrectly converted to HEVC (previously Layer 7 returned Uncertain → is_keep_gif() false).
+    - Platform markers trigger Layer 2-A classification (e.g., GIPHY → LoopStrong).
+    - Transparency is correctly detected via Graphics Control Extension (Layer 1-B).
+    - Palette size analysis (Layer 4-B) now receives accurate data.
+    - GIFs default to LoopStrong preservation (respecting Layer 7 GIF default shift).
+
 #### 🏗️ Structural Repair & Fallbacks
 
 - **ImageMagick Rebuild Hardening**: Fixed a critical bug in `Structural Repair` where URL-encoded filenames were misinterpreted as image properties by the `magick` core engine.
