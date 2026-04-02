@@ -289,6 +289,25 @@ pub fn determine_strategy_with_apple_compat(
     let loop_verdict = shared_utils::assess_loop_intent(result);
     let is_loop_intent = loop_verdict.is_keep_gif();
 
+    // Short, silent, small videos are often GIF-like stickers; in Apple compatibility mode
+    // promote them to GIF to preserve user expectations even when structural signals
+    // (pkt_sizes/pts_deltas) are missing.
+    if apple_compat && !force && !result.has_audio && result.duration_secs <= 3.0
+        && result.width > 0 && result.height > 0 && result.width <= 512 && result.height <= 512
+    {
+        return ConversionStrategy {
+            target: TargetVideoFormat::Gif,
+            reason: format!(
+                "GIF-like short silent video heuristic ({}s, {}x{}) - Apple compatibility",
+                result.duration_secs, result.width, result.height
+            ),
+            command: String::new(),
+            preserve_audio: false,
+            crf: 0.0,
+            lossless: false,
+        };
+    }
+
     if is_loop_intent && apple_compat && !force {
         return ConversionStrategy {
             target: TargetVideoFormat::Gif,
