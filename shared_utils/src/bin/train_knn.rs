@@ -3,9 +3,11 @@ use shared_utils::gif_value_db::batch_ingest_samples;
 use std::path::Path;
 
 fn main() -> Result<()> {
-    let training_dir = Path::new("/Users/nyamiiko/Downloads/表情包");
-
-    if !training_dir.exists() {
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() < 2 {
+        anyhow::bail!("❌ Usage: cargo run --bin train_knn <training_directory_path>");
+    }
+    let training_dir = Path::new(&args[1]);
         anyhow::bail!(
             "❌ Training directory not found: {}",
             training_dir.display()
