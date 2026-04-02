@@ -31,6 +31,36 @@ All notable changes to this project will be documented in this file.
 - **Duration Penalty Balancing**: Refined Layer 5-D linear interpolation for duration-based loop penalties between 18s and 35s.
 - **GIF-like Video Recovery**: Hardened `vid_av1` to better handle short silent containers (BT.709) by satisfying the new structural metadata requirements in heuristics.
 
+#### 🎯 Loop Intent Decision System Fixes (Post-Refactor Hardening)
+
+- **High Tree-Only Score Promotion (Layer 6 KNN Fallback)**:
+  - When KNN returns no match but the tree's normalized weighted score is strongly in favor (≥ 0.75), promote `Uncertain` → `LoopStrong`.
+  - **File**: `shared_utils/src/loop_intent.rs`
+  - **Rationale**: Prevents conservative fallback from discarding high-confidence structural signals just due to missing KNN data.
+  - **Impact**: Ensures short silent loop-like videos are correctly classified as GIF-like assets even without database lookup.
+
+- **Heuristic-Verdict Respect (vid_hevc + vid_av1)**:
+  - Removed unconditional hardcoded heuristic that bypassed the 7-layer system.
+  - **Short/Silent/Small GIF Fallback**: Now only triggers when loop system is `Uncertain` AND structural signals (pkt_sizes/pts_deltas) are insufficient (< 3 frames).
+  - **Files**: `vid_hevc/src/conversion_api.rs`, `vid_av1/src/conversion_api.rs`
+  - **Before**: `LoopWeak` videos could be overridden to GIF by a hardcoded check, violating system integrity.
+  - **After**: Only applies as a true fallback when the tree is genuinely inconclusive.
+
+- **Cached Detection Signal Refresh**:
+  - When `detect_video_with_cache()` returns data with insufficient structural signals (pkt_sizes.len() < 3), perform best-effort re-probe via `detect_video()` to obtain complete Layer 3 signals.
+  - **Motivation**: Prevents silent Layer 3 degradation when cached results lack critical frame-rate/bitrate analysis.
+  - **Outcome**: Restores scene-cut detection, closure-ratio analysis, and frame-delay variation scoring.
+
+- **Verdict Reason Clarity**:
+  - Changed `LoopStrong` → `Skip` reason from generic "Loop intent confirmed" to specific trigger: `"Preserving original micro-asset (trigger: Layer 1-B transparency pass)"` etc.
+  - **Benefit**: Users can trace which layer or heuristic drove the decision, improving observability.
+
+- **Constant Centralization**:
+  - Moved `MODERN_ANIMATED_EXTENSIONS` from local definition in `loop_intent.rs` into `shared_utils::constants` for single source of truth.
+  - **File**: `shared_utils/src/constants.rs`
+  - **Includes**: `["webp", "avif", "apng", "heic", "heif", "jxl"]`
+  - **Benefit**: Simplifies future maintenance and prevents duplicate definitions across the codebase.
+
 #### 🏗️ Structural Repair & Fallbacks
 
 - **ImageMagick Rebuild Hardening**: Fixed a critical bug in `Structural Repair` where URL-encoded filenames were misinterpreted as image properties by the `magick` core engine.
