@@ -185,16 +185,15 @@ impl Default for LoopReferenceProfile {
         let pixels_min = f64::from(collection.width_min) * f64::from(collection.height_min);
         let pixels_avg = collection.width_avg * collection.height_avg;
         let pixels_max = f64::from(collection.width_max) * f64::from(collection.height_max);
-        let midpoint = |lhs: f64, rhs: f64| (lhs + rhs) / 2.0;
 
         Self {
             duration: DistributionStats {
                 mean: collection.duration_avg,
                 std_dev: ((collection.duration_max - collection.duration_min) / 4.0).max(0.5),
                 p10: Some(collection.duration_min),
-                p25: Some(midpoint(collection.duration_min, collection.duration_avg)),
+                p25: Some(f64::midpoint(collection.duration_min, collection.duration_avg)),
                 p50: Some(collection.duration_avg),
-                p75: Some(midpoint(collection.duration_avg, collection.duration_p90)),
+                p75: Some(f64::midpoint(collection.duration_avg, collection.duration_p90)),
                 p90: Some(collection.duration_p90),
             },
             fps: DistributionStats {
@@ -219,18 +218,18 @@ impl Default for LoopReferenceProfile {
                 mean: collection.size_avg,
                 std_dev: ((collection.size_max - collection.size_min) / 4.0).max(64_000.0),
                 p10: Some(collection.size_min),
-                p25: Some(midpoint(collection.size_min, collection.size_avg)),
+                p25: Some(f64::midpoint(collection.size_min, collection.size_avg)),
                 p50: Some(collection.size_avg),
-                p75: Some(midpoint(collection.size_avg, collection.size_max)),
+                p75: Some(f64::midpoint(collection.size_avg, collection.size_max)),
                 p90: Some(collection.size_max),
             },
             pixels: DistributionStats {
                 mean: pixels_avg,
                 std_dev: ((pixels_max - pixels_min) / 4.0).max(16_384.0),
                 p10: Some(pixels_min),
-                p25: Some(midpoint(pixels_min, pixels_avg)),
+                p25: Some(f64::midpoint(pixels_min, pixels_avg)),
                 p50: Some(pixels_avg),
-                p75: Some(midpoint(pixels_avg, pixels_max)),
+                p75: Some(f64::midpoint(pixels_avg, pixels_max)),
                 p90: Some(pixels_max),
             },
             temporal_bpp: DistributionStats {
@@ -452,8 +451,7 @@ fn distribution_from_feature(
     feature_map
         .stats
         .get(key)
-        .map(DistributionStats::from)
-        .unwrap_or(fallback)
+        .map_or(fallback, DistributionStats::from)
 }
 
 fn lookup_similar_samples_inner(
@@ -1833,8 +1831,10 @@ mod tests {
 
     #[test]
     fn loop_reference_profile_prefers_dynamic_stats_when_present() {
-        let mut feature_map = FeatureMap::default();
-        feature_map.top_keywords = vec!["meme".to_string()];
+        let mut feature_map = FeatureMap {
+            top_keywords: vec!["meme".to_string()],
+            ..FeatureMap::default()
+        };
         feature_map.stats.insert(
             "duration".to_string(),
             FeatureStats {

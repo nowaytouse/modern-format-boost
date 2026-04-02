@@ -1,6 +1,7 @@
 use crate::path_safety::{exiftool_path_arg, safe_path_arg};
 use anyhow::{bail, Context, Result};
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use walkdir::WalkDir;
@@ -749,7 +750,6 @@ impl XmpMerger {
             .take()
             .ok_or_else(|| anyhow::anyhow!("Failed to open stdin for exiftool"))?;
 
-        use std::io::Write;
         stdin
             .write_all(&xmp_data)
             .context("Failed to write XMP to exiftool stdin")?;

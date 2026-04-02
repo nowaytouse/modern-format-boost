@@ -25,7 +25,6 @@ All notable changes to this project will be documented in this file.
 - **DistributionStats Struct**: New public struct with z-score calculation method for standardized feature comparison.
   - **Methods**: `z_score(&self, value: f64) -> f64` for normalized distance computation.
   - **Conversion**: Implemented `From<&FeatureStats>` for seamless migration.
-  
 - **GlobalCollectionStats Struct**: Comprehensive collection-level statistics including duration, size, bitrate, dimensions, and aspect ratio bounds.
   - **Fields**: min/avg/max for duration, size, bitrate, width, height, aspect ratio, plus `duration_p90` and `top_keywords`.
 
@@ -39,7 +38,6 @@ All notable changes to this project will be documented in this file.
   - `gif_meme_score.rs` (3302 lines removed)
   - `gif_value_db.rs` (1246 lines removed)
   - `mod.rs`
-  
 - **Loop Intent System Migration**: Migrated from `crate::useless::gif_meme_score::GifMeta` to `crate::loop_intent::LoopMeta` for consistent metadata handling.
 
 #### 🛠️ Minor Fixes
@@ -59,17 +57,17 @@ All notable changes to this project will be documented in this file.
 
 #### 🛡️ Metadata Pipeline Hardening & Path Safety (Industrial Grade)
 
-- **STDIN Piping Strategy for XMP Merging**: Re-engineered `XmpMerger` to use `STDIN` (`-tagsfromfile -`) for reading XMP data. 
+- **STDIN Piping Strategy for XMP Merging**: Re-engineered `XmpMerger` to use `STDIN` (`-tagsfromfile -`) for reading XMP data.
   - **Security Rationale**: By decoupling the physical XMP path from the `ExifTool` command string, we completely bypass recursive format-code expansion and URL-encoded character traps (e.g., `%3A`, `%2F`).
   - **Robustness**: Extracted XMP data is piped directly into the process memory, ensuring 100% path safety for source files.
-- **ImageMagick Boundary Defense**: 
+- **ImageMagick Boundary Defense**:
   - Implemented `magick_path()` in `exif.rs` with strict input/output separation.
   - **Input Security**: Forced `file:./` prefix and doubled percent signs (`%%`) for all input paths, effectively blocking protocol hijacking (e.g., `http:`) and internal property interpretation.
 - **ExifTool "Deep Hardening" CLI flags**:
   - Injected `-charset filename=utf8` and `-api windowsunicode=1` into all invocations to ensure consistent Unicode/Emoji path handling across Mac/Windows.
   - Enabled `-api LargeFileSupport=1` to safely process media assets exceeding 4GB.
   - Forced `-overwrite_original` to maintain atomic write behavior and prevent folder pollution with legacy `_original` files.
-- **Improved Path Hijack Prevention (`safe_path_arg`)**: 
+- **Improved Path Hijack Prevention (`safe_path_arg`)**:
   - Added mandatory `./` prefixing for all paths starting with `-` or `@` to prevent tools from interpreting filenames as CLI flags or argument files (Argfiles).
 - **Comprehensive Regression & Stress Testing**:
   - **Evil Path Stress Test**: Added `test_preservation_evil_path` to `exif.rs`, verifying 100% stability for filenames containing URL-encoded sequences, shell-suspicious prefixes, and recursive format codes (e.g., `http%3A%2F-@test%d%f.jpg`).
@@ -151,7 +149,6 @@ All notable changes to this project will be documented in this file.
   - **Outcome**: Decision priority is now correct: (1) Loop intent → (2) Sticker heuristic → (3) Apple codec compat.
   - **Test Updated**: `test_gif_like_video_recovery` reason assertion changed from "GIF-like loop detected" to "Sticker-like content detected" to reflect the heuristic's true purpose.
 
-
 #### 🏗️ Structural Repair & Fallbacks
 
 - **ImageMagick Rebuild Hardening**: Fixed a critical bug in `Structural Repair` where URL-encoded filenames were misinterpreted as image properties by the `magick` core engine.
@@ -183,7 +180,7 @@ All notable changes to this project will be documented in this file.
 
 #### 🛡️ Technical Hardening & Fixes
 
-- **GIF Logic & Veto Hardening**: 
+- **GIF Logic & Veto Hardening**:
   - Mandatory header-scanning in `should_keep_as_gif_with_path` to resolve loop counts, transparency, and palette variation even for extension-less files.
   - Implemented a fixed `4.25s` duration-baseline fallback rule for `UNDECIDED` cases, replacing the previous zero-duration bias.
   - `apply_veto` now precomputes rhythmic/sticker intent, allowing micro-assets to bypass raw size ceilings.

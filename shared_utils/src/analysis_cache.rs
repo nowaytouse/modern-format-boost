@@ -597,6 +597,7 @@ impl AnalysisCache {
 fn calculate_blake3(path: &Path) -> Result<blake3::Hash> {
     let mut file = std::fs::File::open(path)?;
     let mut hasher = Hasher::new();
+    #[allow(clippy::large_stack_arrays)]
     let mut buffer = [0u8; 65536];
     loop {
         let bytes_read = file.read(&mut buffer)?;
@@ -611,6 +612,7 @@ fn calculate_blake3(path: &Path) -> Result<blake3::Hash> {
 fn calculate_content_fingerprint(path: &Path) -> Result<[u8; 32]> {
     let mut file = std::fs::File::open(path)?;
     let mut hasher = Hasher::new();
+    #[allow(clippy::large_stack_arrays)]
     let mut buffer = [0u8; 65536];
     let bytes_read = file.read(&mut buffer)?;
     hasher.update(&buffer[..bytes_read]);

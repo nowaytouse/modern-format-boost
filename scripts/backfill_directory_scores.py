@@ -3,6 +3,7 @@
 Backfill `directory_meme_score` by recomputing it from `source_path`.
 Stops writing the legacy boolean `directory_meme_hint` (keeps DB column for now).
 """
+
 from __future__ import annotations
 
 import os
@@ -31,7 +32,7 @@ MEME_KEYWORDS = [
 ]
 
 
-def compute_directory_score(source_path: Optional[str]) -> float:
+def compute_directory_score(source_path: str | None) -> float:
     if not source_path:
         return 0.5
     try:
@@ -79,5 +80,5 @@ def main() -> None:
     print("Backfill complete.")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

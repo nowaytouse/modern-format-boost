@@ -1119,7 +1119,7 @@ def main():
 
             table.add_row("📂 Target Path", str(TARGET_DIR))
             table.add_row("🚀 Mode", "Ultimate" if ULTIMATE_MODE else "Standard")
-            
+
             target_type = "Everything"
             if PROCESSING_MODE == "images_only":
                 target_type = "Images Only"

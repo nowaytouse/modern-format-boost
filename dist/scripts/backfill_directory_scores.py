@@ -31,7 +31,7 @@ MEME_KEYWORDS = [
 ]
 
 
-def compute_directory_score(source_path: Optional[str]) -> float:
+def compute_directory_score(source_path: str | None) -> float:
     if not source_path:
         return 0.5
     try:

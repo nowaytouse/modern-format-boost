@@ -35,7 +35,7 @@ fn magick_path(path: &Path, is_output: bool) -> String {
     };
 
     let path_with_prefix = if !path.is_absolute() && !escaped.starts_with("./") {
-        format!("./{}", escaped)
+        format!("./{escaped}")
     } else {
         escaped
     };
@@ -43,7 +43,7 @@ fn magick_path(path: &Path, is_output: bool) -> String {
     if !is_output && (path_with_prefix.contains(':') || path_with_prefix.contains('%')) {
         // Prepend 'file:' for input paths to force local file treatment and avoid
         // protocol delegates (like http:) or property expansion at the beginning of the path.
-        format!("file:{}", path_with_prefix)
+        format!("file:{path_with_prefix}")
     } else {
         path_with_prefix
     }
