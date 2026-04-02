@@ -147,9 +147,18 @@ pub fn determine_strategy_with_apple_compat(
         shared_utils::should_skip_video_codec(result.codec.as_str())
     };
 
+    // Ensure structural signals are available — if cached detection lacks pkt_sizes/pts_deltas,
+    // re-run detection (best-effort) to avoid silent Layer 3 degradation.
+    let mut detection = result.clone();
+    if detection.pkt_sizes.len() < 3 || detection.pts_deltas.len() < 3 {
+        if let Ok(fresh) = crate::detection_api::detect_video_with_cache(Path::new(&detection.file_path), None) {
+            detection = fresh;
+        }
+    }
+
     // 「循环意图判断系统」 (Loop Intent Identification System)
     // Replace legacy weighted scoring with a prioritized decision tree.
-    let loop_verdict = shared_utils::assess_loop_intent(result);
+    let loop_verdict = shared_utils::assess_loop_intent(&detection);
     let is_loop_intent = loop_verdict.is_keep_gif();
 
     if is_loop_intent && apple_compat {
@@ -170,7 +179,7 @@ pub fn determine_strategy_with_apple_compat(
         return ConversionStrategy {
             target: TargetVideoFormat::Skip,
             reason: format!(
-                "Loop intent confirmed ({}) - preserving original micro-asset",
+                "Preserving original micro-asset (trigger: {})",
                 loop_verdict.reason()
             ),
             command: String::new(),
