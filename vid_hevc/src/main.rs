@@ -277,7 +277,7 @@ fn main() -> anyhow::Result<()> {
                 std::process::exit(1);
             }
             println!("📥 Ingesting GIF samples from: {}", input.display());
-            match shared_utils::gif_value_db::batch_ingest_samples(&input) {
+            match shared_utils::gif_value_db::batch_ingest_samples(&input, None) {
                 Ok(count) => {
                     println!("✅ Successfully ingested {count} samples into PostgreSQL database");
                 }
