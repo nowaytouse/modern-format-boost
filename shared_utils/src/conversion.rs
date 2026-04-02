@@ -42,6 +42,9 @@ static RESERVED_OUTPUT_PATHS: LazyLock<Mutex<HashMap<String, String>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static TEMP_OUTPUT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(test)]
+static TEST_RESERVATION_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
 pub fn next_temp_output_suffix() -> String {
     const ALPHABET: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
     let timestamp = SystemTime::now()
@@ -1534,6 +1537,7 @@ mod tests {
 
     #[test]
     fn test_determine_output_path() {
+        let _lock = TEST_RESERVATION_LOCK.lock().unwrap();
         clear_reserved_output_paths();
         let temp = tempdir_in(std::env::current_dir().unwrap()).unwrap();
         let input = temp.path().join("nested/image.png");
@@ -1543,6 +1547,7 @@ mod tests {
 
     #[test]
     fn test_determine_output_path_with_dir() {
+        let _lock = TEST_RESERVATION_LOCK.lock().unwrap();
         clear_reserved_output_paths();
         let temp = tempdir_in(std::env::current_dir().unwrap()).unwrap();
         let input = temp.path().join("nested/image.png");
@@ -1553,6 +1558,7 @@ mod tests {
 
     #[test]
     fn test_determine_output_path_various_extensions() {
+        let _lock = TEST_RESERVATION_LOCK.lock().unwrap();
         clear_reserved_output_paths();
         let temp = tempdir_in(std::env::current_dir().unwrap()).unwrap();
         let input = temp.path().join("nested/video.mp4");
@@ -1566,6 +1572,7 @@ mod tests {
 
     #[test]
     fn test_determine_output_path_disambiguates_batch_collisions() {
+        let _lock = TEST_RESERVATION_LOCK.lock().unwrap();
         clear_reserved_output_paths();
         let temp = tempdir_in(std::env::current_dir().unwrap()).unwrap();
         let output_dir = Some(temp.path().join("output"));
@@ -1581,6 +1588,7 @@ mod tests {
 
     #[test]
     fn test_determine_output_path_keeps_same_reservation_for_same_input() {
+        let _lock = TEST_RESERVATION_LOCK.lock().unwrap();
         clear_reserved_output_paths();
         let temp = tempdir_in(std::env::current_dir().unwrap()).unwrap();
         let output_dir = Some(temp.path().join("output"));
