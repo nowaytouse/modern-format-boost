@@ -692,7 +692,8 @@ fn sample_distance(
     let target_loop_frequency =
         crate::useless::gif_meme_score::score_loop_frequency(meta.duration_secs, meta.frame_count);
     let target_loop_affinity = crate::useless::gif_meme_score::score_loop_affinity(meta);
-    let target_analysis = crate::useless::gif_meme_score::analyze_filename(meta.file_name.as_deref());
+    let target_analysis =
+        crate::useless::gif_meme_score::analyze_filename(meta.file_name.as_deref());
     let target_is_human_semantic_name =
         target_analysis.kind == crate::useless::gif_meme_score::FilenameKind::HumanSemantic;
     let target_cadence_score =
@@ -1058,11 +1059,11 @@ fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
         .map(|row| {
             vec![
                 f64::from(row.get::<_, i32>(0)) * f64::from(row.get::<_, i32>(1)), // pixels
-                row.get::<_, f64>(2),                                       // duration
-                row.get::<_, i64>(3) as f64,                                // frame_count
+                row.get::<_, f64>(2),                                              // duration
+                row.get::<_, i64>(3) as f64,                                       // frame_count
                 row.get::<_, Option<f64>>(4).unwrap_or(0.0), // fps (frame density proxy)
-                row.get::<_, f64>(5),  // tbpp
-                row.get::<_, f64>(6),  // sbpp
+                row.get::<_, f64>(5),                        // tbpp
+                row.get::<_, f64>(6),                        // sbpp
                 row.get::<_, Option<f64>>(10).unwrap_or(1.0), // aspect
                 row.get::<_, Option<f64>>(11).unwrap_or(0.5), // loop_freq
                 row.get::<_, Option<f64>>(12).unwrap_or(0.5), // cadence

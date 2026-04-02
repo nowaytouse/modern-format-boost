@@ -1,9 +1,9 @@
+use crate::path_safety::{exiftool_path_arg, safe_path_arg};
 use anyhow::{bail, Context, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use walkdir::WalkDir;
-use crate::path_safety::{exiftool_path_arg, safe_path_arg};
 
 const EXCLUDED_EXTENSIONS: &[&str] = &[
     "xmp",
@@ -718,12 +718,12 @@ impl XmpMerger {
         }
 
         // Use -tagsfromfile - to read XMP data from STDIN.
-        // 
+        //
         // 🔥 ULTIMATE SECURITY RATIONALE:
         // Passing filenames containing '%' to `ExifTool` via `-tagsfromfile [path]`
         // is notoriously fragile due to recursive format code expansion in some versions.
-        // 
-        // By using `STDIN` (`-`), we physically decouple the media file path 
+        //
+        // By using `STDIN` (`-`), we physically decouple the media file path
         // from the XMP source data. `ExifTool` never sees the 'evil' XMP path string;
         // it only sees raw binary data on the pipe.
         args.push("-tagsfromfile".to_string());
@@ -750,20 +750,24 @@ impl XmpMerger {
             .ok_or_else(|| anyhow::anyhow!("Failed to open stdin for exiftool"))?;
 
         use std::io::Write;
-        stdin.write_all(&xmp_data).context("Failed to write XMP to exiftool stdin")?;
+        stdin
+            .write_all(&xmp_data)
+            .context("Failed to write XMP to exiftool stdin")?;
         drop(stdin); // Close stdin to signal EOF
 
-        let output = child.wait_with_output().context("Failed to wait for exiftool merge")?;
+        let output = child
+            .wait_with_output()
+            .context("Failed to wait for exiftool merge")?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let is_minor_warning = stderr.contains("[minor]");
             // Harden error detection: check for both explicit "Error:" and implied file errors
-            let is_real_error = (stderr.contains("Error:") 
-                                || stderr.contains("Error opening") 
-                                || stderr.contains("File not found")
-                                || stderr.contains("not writing image"))
-                                && !is_minor_warning;
+            let is_real_error = (stderr.contains("Error:")
+                || stderr.contains("Error opening")
+                || stderr.contains("File not found")
+                || stderr.contains("not writing image"))
+                && !is_minor_warning;
 
             if is_real_error {
                 bail!("ExifTool merge failed: {stderr}");

@@ -18,9 +18,9 @@ use image::{DynamicImage, ImageBuffer};
 use libheif_rs::{ColorSpace, HeifContext, ImageHandle, ItemId, RgbChroma};
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
+use std::env;
 use std::path::Path;
 use std::process::Command;
-use std::env;
 use tracing::{info, warn};
 
 /// HDR intermediate format selection
@@ -711,13 +711,19 @@ fn resolve_intensity_target(derived: f32) -> Option<u32> {
     }
 
     if !derived.is_finite() || derived <= 0.0 {
-        warn!("Derived intensity_target invalid: {} — skipping --intensity_target", derived);
+        warn!(
+            "Derived intensity_target invalid: {} — skipping --intensity_target",
+            derived
+        );
         return None;
     }
 
     let clamped = derived.clamp(100.0_f32, 1_000_000.0_f32);
     if (clamped - derived).abs() > f32::EPSILON {
-        warn!("Derived intensity_target {} clamped to {}", derived, clamped);
+        warn!(
+            "Derived intensity_target {} clamped to {}",
+            derived, clamped
+        );
     }
     Some(clamped.round() as u32)
 }
@@ -779,8 +785,8 @@ fn parse_gainmap_params_from_jpeg_xmp(data: &[u8]) -> Option<GainMapParams> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::env;
     use serial_test::serial;
+    use std::env;
 
     #[test]
     fn test_srgb_to_linear() {

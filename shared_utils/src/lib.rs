@@ -129,9 +129,7 @@ pub mod video_detection;
 pub use media_passthrough::{audio_args_for_container, subtitle_args_for_container};
 
 pub mod depth_channel;
- pub mod gif_value_db;
-pub mod loop_intent;
-pub mod useless;
+pub mod gif_value_db;
 pub mod hdr_synthesis;
 pub mod image_analyzer;
 pub mod image_detection;
@@ -142,15 +140,17 @@ pub mod image_metrics;
 pub mod image_recommender;
 pub mod img_errors;
 pub mod live_photo;
+pub mod loop_intent;
+pub mod useless;
 
 pub use depth_channel::{
     encode_jxl_depth_fallback, encode_jxl_with_depth, extract_depth_from_heic, DepthMap, DepthType,
 };
+pub use gif_value_db::{lookup_similar_samples, SampleMatch};
 pub use loop_intent::{
-    assess_loop_intent, assess_loop_intent_from_probe, assess_loop_intent_from_meta,
+    assess_loop_intent, assess_loop_intent_from_meta, assess_loop_intent_from_probe,
     identify_loop_intent, is_lossless_exploration_safe, LoopIntentVerdict, LoopMeta,
 };
-pub use gif_value_db::{lookup_similar_samples, SampleMatch};
 
 pub use hdr_synthesis::{
     convert_heic_with_gainmap_to_jxl_hdr, convert_ultrahdr_jpeg_to_jxl_hdr, GainMapParams,

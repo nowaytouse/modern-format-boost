@@ -144,13 +144,17 @@ impl AnalysisCache {
 
     fn init_schema(client: &mut Client) -> Result<()> {
         let schema_sql = include_str!("analysis_cache_pg.sql");
-        client.batch_execute(schema_sql).context("Failed to initialize Postgres cache schema")?;
+        client
+            .batch_execute(schema_sql)
+            .context("Failed to initialize Postgres cache schema")?;
 
         // Initialize metadata if empty
-        let current_ver: Option<i32> = client.query_opt(
-            "SELECT value FROM cache_metadata WHERE key = 'schema_version'",
-            &[],
-        )?.map(|row| row.get(0));
+        let current_ver: Option<i32> = client
+            .query_opt(
+                "SELECT value FROM cache_metadata WHERE key = 'schema_version'",
+                &[],
+            )?
+            .map(|row| row.get(0));
 
         if current_ver.is_none() {
             client.execute(
@@ -169,10 +173,12 @@ impl AnalysisCache {
         let current_version = cache_algorithm_version();
 
         for table in &tables {
-            let count: i64 = client.execute(
-                &format!("DELETE FROM {table} WHERE algorithm_version < $1"),
-                &[&current_version],
-            ).map(|n| n as i64)?;
+            let count: i64 = client
+                .execute(
+                    &format!("DELETE FROM {table} WHERE algorithm_version < $1"),
+                    &[&current_version],
+                )
+                .map(|n| n as i64)?;
 
             total_invalidated += count;
         }
@@ -225,7 +231,10 @@ impl AnalysisCache {
                     let data: Vec<u8> = row.get(0);
                     if let Some(stored_checksum) = row.get::<_, Option<i64>>(2) {
                         if calculate_checksum(&data) != (stored_checksum as u32) {
-                            warn!("⚠️  [Cache] Checksum mismatch for {}. Invalidating.", path.display());
+                            warn!(
+                                "⚠️  [Cache] Checksum mismatch for {}. Invalidating.",
+                                path.display()
+                            );
                             return Ok(None);
                         }
                     }
@@ -252,7 +261,10 @@ impl AnalysisCache {
                 let data: Vec<u8> = row.get(0);
                 if let Some(stored_checksum) = row.get::<_, Option<i64>>(2) {
                     if calculate_checksum(&data) != (stored_checksum as u32) {
-                        warn!("⚠️  [Cache] Checksum mismatch for {}. Invalidating.", path.display());
+                        warn!(
+                            "⚠️  [Cache] Checksum mismatch for {}. Invalidating.",
+                            path.display()
+                        );
                         return Ok(None);
                     }
                 }
@@ -379,7 +391,11 @@ impl AnalysisCache {
         Ok(())
     }
 
-    pub fn store_quality_analysis(&self, path: &Path, analysis: &ImageQualityAnalysis) -> Result<()> {
+    pub fn store_quality_analysis(
+        &self,
+        path: &Path,
+        analysis: &ImageQualityAnalysis,
+    ) -> Result<()> {
         let mut client = open_pg_client()?;
         let sig = FileSignature::from_path(path)?;
         let path_str = path.to_string_lossy();
@@ -522,15 +538,28 @@ impl AnalysisCache {
 
     pub fn get_statistics(&self) -> Result<CacheStatistics> {
         let mut client = open_pg_client()?;
-        
-        let analysis_count: i64 = client.query_one("SELECT COUNT(*) FROM analysis_records", &[])?.get(0);
-        let quality_count: i64 = client.query_one("SELECT COUNT(*) FROM quality_records", &[])?.get(0);
-        let video_count: i64 = client.query_one("SELECT COUNT(*) FROM video_records", &[])?.get(0);
-        let path_index_count: i64 = client.query_one("SELECT COUNT(*) FROM path_index", &[])?.get(0);
+
+        let analysis_count: i64 = client
+            .query_one("SELECT COUNT(*) FROM analysis_records", &[])?
+            .get(0);
+        let quality_count: i64 = client
+            .query_one("SELECT COUNT(*) FROM quality_records", &[])?
+            .get(0);
+        let video_count: i64 = client
+            .query_one("SELECT COUNT(*) FROM video_records", &[])?
+            .get(0);
+        let path_index_count: i64 = client
+            .query_one("SELECT COUNT(*) FROM path_index", &[])?
+            .get(0);
 
         let mut version_dist = std::collections::HashMap::new();
         for table in &["analysis_records", "quality_records", "video_records"] {
-            let rows = client.query(&format!("SELECT algorithm_version, COUNT(*) FROM {table} GROUP BY algorithm_version"), &[])?;
+            let rows = client.query(
+                &format!(
+                    "SELECT algorithm_version, COUNT(*) FROM {table} GROUP BY algorithm_version"
+                ),
+                &[],
+            )?;
             for row in rows {
                 let v: i32 = row.get(0);
                 let c: i64 = row.get(1);
@@ -538,7 +567,12 @@ impl AnalysisCache {
             }
         }
 
-        let schema_version: i32 = client.query_one("SELECT value FROM cache_metadata WHERE key = 'schema_version'", &[])?.get(0);
+        let schema_version: i32 = client
+            .query_one(
+                "SELECT value FROM cache_metadata WHERE key = 'schema_version'",
+                &[],
+            )?
+            .get(0);
 
         Ok(CacheStatistics {
             db_size_bytes: 0, // In Postgres, tracking actual disk size is complex per-table
@@ -566,7 +600,9 @@ fn calculate_blake3(path: &Path) -> Result<blake3::Hash> {
     let mut buffer = [0u8; 65536];
     loop {
         let bytes_read = file.read(&mut buffer)?;
-        if bytes_read == 0 { break; }
+        if bytes_read == 0 {
+            break;
+        }
         hasher.update(&buffer[..bytes_read]);
     }
     Ok(hasher.finalize())

@@ -25,19 +25,23 @@ fn is_exiftool_available() -> bool {
 
 fn magick_path(path: &Path, is_output: bool) -> String {
     let s = crate::safe_path_arg(path).to_string();
-    
+
     // For ImageMagick, percent signs in filenames are interpreted as properties.
     // They MUST be doubled to be treated literally.
-    let escaped = if s.contains('%') { s.replace('%', "%%") } else { s };
-    
+    let escaped = if s.contains('%') {
+        s.replace('%', "%%")
+    } else {
+        s
+    };
+
     let path_with_prefix = if !path.is_absolute() && !escaped.starts_with("./") {
         format!("./{}", escaped)
     } else {
         escaped
     };
-    
+
     if !is_output && (path_with_prefix.contains(':') || path_with_prefix.contains('%')) {
-        // Prepend 'file:' for input paths to force local file treatment and avoid 
+        // Prepend 'file:' for input paths to force local file treatment and avoid
         // protocol delegates (like http:) or property expansion at the beginning of the path.
         format!("file:{}", path_with_prefix)
     } else {
@@ -300,7 +304,9 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
             );
         } else if !stderr_str.trim().is_empty() {
             let trimmed = stderr_str.trim();
-            if !trimmed.contains("No writable tags set") && !trimmed.contains("Wrapped JXL codestream") {
+            if !trimmed.contains("No writable tags set")
+                && !trimmed.contains("Wrapped JXL codestream")
+            {
                 tracing::debug!(
                     src = %src.display(),
                     dst = %dst.display(),
@@ -349,9 +355,12 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
                     eprintln!("✅  [Structural Repair] Complete：{}", dst.display());
 
                     output = Command::new("exiftool")
-                        .arg("-charset").arg("filename=utf8")
-                        .arg("-api").arg("windowsunicode=1")
-                        .arg("-api").arg("LargeFileSupport=1")
+                        .arg("-charset")
+                        .arg("filename=utf8")
+                        .arg("-api")
+                        .arg("windowsunicode=1")
+                        .arg("-api")
+                        .arg("LargeFileSupport=1")
                         .arg("-overwrite_original")
                         .arg("-all=")
                         // Use -tagsfromfile @ to copy tags from the file itself (internal repair).
@@ -472,11 +481,11 @@ mod tests {
     use tempfile::TempDir;
 
     /// Tests for path safety conversions that prevent hijacking of tool commands.
-    /// 
+    ///
     /// ! WARNING FOR FUTURE MAINTAINERS:
-    /// Do NOT "simplify" these tests. Filenames starting with '-' or '@' are 
-    /// intentionally prefixed with './' to block tools like `ExifTool` and 
-    /// `ImageMagick` from interpreting them as flags or argfiles. 
+    /// Do NOT "simplify" these tests. Filenames starting with '-' or '@' are
+    /// intentionally prefixed with './' to block tools like `ExifTool` and
+    /// `ImageMagick` from interpreting them as flags or argfiles.
     /// Breaking these tests WILL cause file-not-found errors for user files.
     #[test]
     fn test_safe_path_arg_prefixes() {
@@ -552,14 +561,14 @@ mod tests {
     }
 
     /// Stress test for 'evil' filenames that combine multiple edge cases.
-    /// 
+    ///
     /// RATIONALE:
-    /// This test explicitly uses a filename containing URL-encoded sequences (`%3A%2F`), 
+    /// This test explicitly uses a filename containing URL-encoded sequences (`%3A%2F`),
     /// ExifTool format codes (`%d%f%e`), and suspicious command-line prefixes (`-@`).
-    /// 
-    /// This ensures that our `STDIN` piping strategy and path prefixing work 
+    ///
+    /// This ensures that our `STDIN` piping strategy and path prefixing work
     /// correctly even under absolute "worst-case" filename conditions.
-    /// 
+    ///
     /// ! DO NOT ALTER the `evil_name` string without extreme caution.
     #[test]
     fn test_preservation_evil_path() {
@@ -570,15 +579,19 @@ mod tests {
         // Filename containing: URL encoded chars (%3A), Format strings (%d%f), and Shell-suspicious prefixes
         let evil_name = "http%3A%2F%2Ftest%d%f%e-@evil.jpg";
         let src_path = temp.path().join(evil_name);
-        
+
         // Create an actual image file with these characters
         fs::write(&src_path, [0xFF, 0xD8, 0xFF, 0xDB, 0x00, 0x00]).unwrap();
-        
+
         let dst_path = temp.path().join("output.jpg");
         fs::write(&dst_path, [0xFF, 0xD8, 0xFF, 0xDB, 0x00, 0x00]).unwrap();
-        
+
         let result = preserve_internal_metadata(&src_path, &dst_path);
-            
-        assert!(result.is_ok(), "Failed metadata preservation on evil path: {:?}", result.err());
+
+        assert!(
+            result.is_ok(),
+            "Failed metadata preservation on evil path: {:?}",
+            result.err()
+        );
     }
 }

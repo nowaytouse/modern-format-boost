@@ -142,7 +142,7 @@ pub fn analyze_directory(
     }
 
     let output = Command::new("exiftool")
-        .arg("-m")  // Suppress warnings for non-critical errors (e.g., corrupted EXIF in JPEG, PNG without metadata)
+        .arg("-m") // Suppress warnings for non-critical errors (e.g., corrupted EXIF in JPEG, PNG without metadata)
         .arg("-r")
         .arg("-j")
         .arg("-G1")

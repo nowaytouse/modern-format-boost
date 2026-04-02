@@ -4,21 +4,23 @@
 //! Implements the 7-layer hierarchical decision tree defined in docs/decision_tree.md.
 //!
 //! Architecture:
-//! - Layer 1 & 2: Hard constraint / explicit declaration → zero-cost forced exits
-//! - Layer 3 & 4: Self-referential signals → WeightedScore accumulation with checkpoints
-//! - Layer 5:     Context semantics → weak auxiliary corrections
-//! - Layer 6:     KNN + WeightedScore fusion → probabilistic judgment
-//! - Layer 7:     Conservative fallback → minimum-loss default
+//! - Layer 1: Hard constraints + veto-gated hard passes
+//! - Layer 2: Explicit declarations → direct exits
+//! - Layer 3 & 4: Structural/content signals → WeightedScore accumulation with checkpoints
+//! - Layer 5: Weak contextual corrections
+//! - Layer 6: KNN + WeightedScore fusion
+//! - Layer 7: Conservative fallback
 
-use crate::video_detection::VideoDetectionResult;
-use crate::video_detection::ColorSpace;
-use crate::progress_mode::emit_stderr;
 use crate::file_copier::{SUPPORTED_IMAGE_EXTENSIONS, SUPPORTED_VIDEO_EXTENSIONS};
-use std::path::Path;
+use crate::progress_mode::emit_stderr;
+use crate::video_detection::ColorSpace;
+use crate::video_detection::VideoDetectionResult;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 const MODERN_ANIMATED_EXTENSIONS: &[&str] = &["webp", "avif", "apng", "heic", "heif", "jxl"];
-const GIPHY_PLATFORM_MARKERS: &[&str] = &["GIPHY", "TENOR", "IMGUR", "STICKER", "TELEGRAM", "TIKTOK", "DISCORD"];
+const GIPHY_PLATFORM_MARKERS: &[&str] =
+    &["GIPHY", "TENOR", "STICKER", "TELEGRAM", "TIKTOK", "DISCORD"];
 
 // ── Output: 三态输出 ──────────────────────────────────────────────────────────
 
@@ -130,16 +132,27 @@ impl LoopMeta {
     /// Build LoopMeta from a full VideoDetectionResult.
     pub fn from_video_detection(detection: &VideoDetectionResult) -> Self {
         let file_path = Path::new(&detection.file_path);
-        let file_name = file_path.file_name().and_then(|s| s.to_str()).map(|s| s.to_string());
-        let source_extension = file_path.extension().and_then(|e| e.to_str()).map(|s| s.to_lowercase());
+        let file_name = file_path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_string());
+        let source_extension = file_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.to_lowercase());
         let parent_directories: Option<Vec<String>> = file_path.parent().map(|p| {
-            p.iter().rev().take(4).filter_map(|s| s.to_str()).map(|s| s.to_string()).collect()
+            p.iter()
+                .rev()
+                .take(4)
+                .filter_map(|s| s.to_str())
+                .map(|s| s.to_string())
+                .collect()
         });
 
         // Detect transparency from pixel format
-        let has_transparency = detection.pix_fmt.contains("a") ||
-                               detection.pix_fmt.contains("yuva") ||
-                               detection.pix_fmt.contains("gbrap");
+        let has_transparency = detection.pix_fmt.contains("a")
+            || detection.pix_fmt.contains("yuva")
+            || detection.pix_fmt.contains("gbrap");
 
         // Detect palette-based formats (limited color space)
         let palette_size = if detection.pix_fmt == "pal8" {
@@ -164,9 +177,11 @@ impl LoopMeta {
             app_extensions: Some(Vec::new()),
             container: None,
             has_embedded_icc: false, // Video containers rarely have ICC in this context
-            has_complex_color_profile: matches!(detection.color_space, ColorSpace::BT2020 | ColorSpace::AdobeRGB) || 
-                                       detection.is_dolby_vision || 
-                                       detection.is_hdr10_plus,
+            has_complex_color_profile: matches!(
+                detection.color_space,
+                ColorSpace::BT2020 | ColorSpace::AdobeRGB
+            ) || detection.is_dolby_vision
+                || detection.is_hdr10_plus,
             frame_payload_variation: Some(calculate_cv(&detection.pkt_sizes)),
             frame_delay_variation: Some(calculate_cv_f64(&detection.pts_deltas)),
             pkt_sizes: detection.pkt_sizes.clone(),
@@ -189,16 +204,27 @@ impl LoopMeta {
 
     /// Build LoopMeta from an FFprobeResult (used in pipelines without full detection).
     pub fn from_ffprobe_result(probe: &crate::ffprobe::FFprobeResult, path: &Path) -> Self {
-        let file_name = path.file_name().and_then(|s| s.to_str()).map(|s| s.to_string());
-        let source_extension = path.extension().and_then(|e| e.to_str()).map(|s| s.to_lowercase());
+        let file_name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_string());
+        let source_extension = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.to_lowercase());
         let parent_directories: Option<Vec<String>> = path.parent().map(|p| {
-            p.iter().rev().take(4).filter_map(|s| s.to_str()).map(|s| s.to_string()).collect()
+            p.iter()
+                .rev()
+                .take(4)
+                .filter_map(|s| s.to_str())
+                .map(|s| s.to_string())
+                .collect()
         });
 
         // Detect transparency from pixel format
-        let has_transparency = probe.pix_fmt.contains("a") ||
-                               probe.pix_fmt.contains("yuva") ||
-                               probe.pix_fmt.contains("gbrap");
+        let has_transparency = probe.pix_fmt.contains("a")
+            || probe.pix_fmt.contains("yuva")
+            || probe.pix_fmt.contains("gbrap");
 
         // Detect palette-based formats (limited color space)
         let palette_size = if probe.pix_fmt == "pal8" {
@@ -250,9 +276,17 @@ impl LoopMeta {
             crate::useless::gif_meme_score::scan_gif_headers(path).ok()?;
 
         let file_size = std::fs::metadata(path).ok()?.len();
-        let file_name = path.file_name().and_then(|s| s.to_str()).map(|s| s.to_string());
+        let file_name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_string());
         let parent_directories: Option<Vec<String>> = path.parent().map(|p| {
-            p.iter().rev().take(4).filter_map(|s| s.to_str()).map(|s| s.to_string()).collect()
+            p.iter()
+                .rev()
+                .take(4)
+                .filter_map(|s| s.to_str())
+                .map(|s| s.to_string())
+                .collect()
         });
 
         // Fast header read for GIF dimensions
@@ -275,7 +309,7 @@ impl LoopMeta {
             duration_secs: total_dur.unwrap_or(0.0),
             width,
             height,
-            fps: 12.0, // Conservative estimate for header-only path
+            fps: 12.0,      // Conservative estimate for header-only path
             frame_count: 1, // Placeholder; refined if deep scan is available
             file_size_bytes: file_size,
             file_name,
@@ -332,7 +366,7 @@ impl LoopMeta {
 
 // ── 7-Layer Decision Tree ─────────────────────────────────────────────────────
 
-/// The WeightedScore accumulator that flows through Layers 3–6.
+/// The WeightedScore accumulator that flows through Layers 3–5.
 /// Range: [-1.0, +1.0]. Positive = loop-strong bias, negative = video bias.
 #[derive(Debug, Default, Clone, Copy)]
 struct WeightedScore(f64);
@@ -352,6 +386,188 @@ impl WeightedScore {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy)]
+struct HardPassVetoFlags {
+    scene_cut: bool,
+    low_compressibility: bool,
+}
+
+impl HardPassVetoFlags {
+    fn from_meta(meta: &LoopMeta) -> Self {
+        Self {
+            scene_cut: detect_scene_cut(&meta.pkt_sizes),
+            low_compressibility: meta.webp_compression_ratio.is_some_and(|ratio| ratio < 5.0),
+        }
+    }
+
+    fn any(self) -> bool {
+        self.scene_cut || self.low_compressibility
+    }
+}
+
+fn has_platform_marker(app_extensions: Option<&[String]>) -> bool {
+    let Some(app_extensions) = app_extensions else {
+        return false;
+    };
+    app_extensions.iter().any(|app| {
+        let normalized = app.trim().to_ascii_uppercase();
+        GIPHY_PLATFORM_MARKERS
+            .iter()
+            .any(|marker| normalized.contains(marker))
+    })
+}
+
+fn zero_motion_ratio(mvs: &[f64]) -> f64 {
+    if mvs.is_empty() {
+        return 0.0;
+    }
+    let zero_count = mvs.iter().filter(|&&v| v.abs() < 0.1).count();
+    zero_count as f64 / mvs.len() as f64
+}
+
+fn is_near_16_by_9(width: u32, height: u32) -> bool {
+    if width == 0 || height == 0 {
+        return false;
+    }
+    ((f64::from(width) / f64::from(height)) - (16.0 / 9.0)).abs() < 0.05
+}
+
+fn loop_count_zero_weight(duration_secs: f64) -> f64 {
+    if duration_secs <= 18.0 {
+        0.25
+    } else if duration_secs <= 35.0 {
+        let ratio = (duration_secs - 18.0) / (35.0 - 18.0);
+        0.25 - (0.15 * ratio)
+    } else {
+        0.05
+    }
+}
+
+fn apply_layer3_signals(meta: &LoopMeta, score: &mut WeightedScore) {
+    let scene_cut = detect_scene_cut(&meta.pkt_sizes);
+
+    // 3-A: 首尾帧自参照闭合比
+    if !scene_cut && meta.pkt_sizes.len() >= 3 {
+        let n = meta.pkt_sizes.len();
+        let first = meta.pkt_sizes[0] as f64;
+        let last = meta.pkt_sizes[n - 1] as f64;
+        let avg = meta.pkt_sizes.iter().map(|&v| v as f64).sum::<f64>() / n as f64;
+        let inter_dist = meta.frame_payload_variation.unwrap_or(0.5);
+
+        // When inter-frame variation itself is extreme, closure ratio stops being trustworthy.
+        if avg > 1.0 && inter_dist > 0.01 && inter_dist <= 1.5 {
+            let closure_dist = (first - last).abs() / avg;
+            let closure_ratio = closure_dist / inter_dist.clamp(0.1, 2.0);
+
+            if closure_ratio <= 1.2 {
+                score.add(0.35);
+            } else if closure_ratio > 2.5 {
+                score.add(-0.35);
+            }
+        }
+    }
+
+    // 3-B: 节奏均匀性
+    if let Some(delay_cv) = meta.frame_delay_variation {
+        if delay_cv < 0.10 {
+            score.add(0.20);
+        } else if delay_cv < 0.25 {
+            score.add(0.10);
+        } else if delay_cv > 0.60 {
+            score.add(-0.15);
+        }
+    }
+
+    // 3-C: 场景切换检测
+    if scene_cut {
+        score.add(-0.30);
+    }
+
+    // 3-D: 运动向量分布
+    if let Some(motion_gini) = meta.motion_gini {
+        if motion_gini >= 0.70 {
+            score.add(0.15);
+        } else if motion_gini <= 0.35 {
+            score.add(-0.15);
+        }
+    }
+
+    if meta.mv_magnitudes.len() >= 10 && zero_motion_ratio(&meta.mv_magnitudes) > 0.70 {
+        score.add(0.10);
+    }
+
+    // 3-E: loop_count == 0 仅作衰减加权信号
+    if meta.loop_count == Some(0) {
+        score.add(loop_count_zero_weight(meta.duration_secs));
+    }
+}
+
+fn apply_layer4_signals(meta: &LoopMeta, score: &mut WeightedScore) {
+    // 4-A: 帧内容可压缩性 (WebP 压缩比)
+    if let Some(ratio) = meta.webp_compression_ratio {
+        if ratio > 15.0 {
+            score.add(0.20);
+        } else if ratio < 5.0 {
+            score.add(-0.25);
+        }
+    }
+
+    // 4-B: 调色板大小
+    if let Some(p_size) = meta.palette_size {
+        if p_size <= 64 {
+            score.add(0.20);
+        } else if p_size > 128 {
+            score.add(-0.15);
+        }
+    }
+
+    // 4-C: compression_efficiency_score
+    let ce = compression_efficiency_score(
+        meta.file_size_bytes,
+        meta.width,
+        meta.height,
+        meta.fps,
+        meta.duration_secs,
+    );
+    if ce > 0.7 {
+        score.add(0.10);
+    } else if ce < 0.3 {
+        score.add(-0.10);
+    }
+}
+
+fn apply_layer5_signals(meta: &LoopMeta, score: &mut WeightedScore) {
+    // 5-A: 目录 / 文件名语义
+    if meta.directory_meme_score > 0.8 && meta.filename_meme_score > 0.8 {
+        score.add(0.08);
+    } else if meta.directory_meme_score > 0.8 || meta.filename_meme_score > 0.8 {
+        score.add(0.04);
+    }
+
+    // 5-B: fps 异常
+    if fps_anomaly_score(meta.fps) > 0.6 {
+        score.add(0.04);
+    }
+
+    // 5-C: 总帧数
+    if meta.frame_count > 0 {
+        if meta.frame_count <= 8 {
+            score.add(0.04);
+        } else if meta.frame_count > 500 {
+            score.add(-0.08);
+        }
+    }
+
+    // 5-D: 宽高比
+    if meta.width > 0 && meta.height > 0 {
+        if meta.width == meta.height {
+            score.add(0.03);
+        } else if is_near_16_by_9(meta.width, meta.height) {
+            score.add(-0.04);
+        }
+    }
+}
+
 /// Run the 7-layer decision tree and return a LoopIntentVerdict.
 /// This function is pure: no I/O, no database calls.
 /// KNN fallback (Layer 6) is performed in `assess_loop_intent_from_meta`.
@@ -359,9 +575,14 @@ impl WeightedScore {
 pub fn identify_loop_intent(meta: &LoopMeta) -> LoopIntentVerdict {
     let mut score = WeightedScore::default();
 
-    let ext_lower = meta.source_extension.as_deref().unwrap_or("").to_lowercase();
+    let ext_lower = meta
+        .source_extension
+        .as_deref()
+        .unwrap_or("")
+        .to_lowercase();
     let is_image = SUPPORTED_IMAGE_EXTENSIONS.contains(&ext_lower.as_str());
     let is_video = !is_image && SUPPORTED_VIDEO_EXTENSIONS.contains(&ext_lower.as_str());
+    let hard_pass_vetoes = HardPassVetoFlags::from_meta(meta);
 
     // ══════════════════════════════════════════════════════════════
     // LAYER 1: 格式物理硬约束 — forced exits, WeightedScore 不参与
@@ -369,267 +590,109 @@ pub fn identify_loop_intent(meta: &LoopMeta) -> LoopIntentVerdict {
 
     // 1-A: 有音轨？（仅对视频容器执行硬否决，绝不否决动态图片）
     if meta.has_audio && is_video {
-        return LoopIntentVerdict::LoopWeak("Layer 1-A: Hard Veto — Audio Track Present in Video Device".to_string());
+        return LoopIntentVerdict::LoopWeak(
+            "Layer 1-A: Hard Veto — Audio Track Present in Video Device".to_string(),
+        );
     }
 
     // 1-B: 有透明通道且无音轨？视频透明度处理成本极高
     if meta.has_transparency && !meta.has_audio {
-        return LoopIntentVerdict::LoopStrong("Layer 1-B: Hard Pass — Transparency Channel Present".to_string());
+        return LoopIntentVerdict::LoopStrong(
+            "Layer 1-B: Hard Pass — Transparency Channel Present".to_string(),
+        );
     }
 
-    // 1-C: 组合硬通行 (Combined Hard Pass)
-    if is_image {
-        // 规则 1: 0-10秒无条件硬通行
-        if meta.duration_secs <= 10.0 {
-            return LoopIntentVerdict::LoopStrong("Layer 1-C: Unconditional Hard Pass (<=10s)".to_string());
-        }
-        // 规则 2: 10-18秒+无限循环标记硬通行
-        if meta.duration_secs <= 18.0 && meta.loop_count == Some(0) {
-            return LoopIntentVerdict::LoopStrong("Layer 1-C: Conditional Hard Pass (10-18s + loop_count=0)".to_string());
+    // 1-C: 极短内容硬通行（带否决条件）
+    if is_image && meta.duration_secs <= 10.0 {
+        if !hard_pass_vetoes.any() {
+            return LoopIntentVerdict::LoopStrong(
+                "Layer 1-C: Veto-Clean Hard Pass (image <=10s)".to_string(),
+            );
         }
     }
 
-    // 1-D: 小尺寸/小分辨率硬通行 (Small Resolution Hard Pass)
-    // 物理尺寸 <= 512x512 的素材通常被视为贴纸或图标，不具备转换为视频容器的价值
-    if is_image && (meta.width > 0 && meta.height > 0) && (meta.width <= 512 && meta.height <= 512) {
-        return LoopIntentVerdict::LoopStrong("Layer 1-D: Unconditional Hard Pass (Small Resolution <= 512x512)".to_string());
+    // 1-D: 小尺寸/小分辨率硬通行（带否决条件）
+    if is_image && (meta.width > 0 && meta.height > 0) && (meta.width <= 512 && meta.height <= 512)
+    {
+        if !hard_pass_vetoes.any() {
+            return LoopIntentVerdict::LoopStrong(
+                "Layer 1-D: Veto-Clean Hard Pass (<=512x512)".to_string(),
+            );
+        }
     }
 
     // ══════════════════════════════════════════════════════════════
-    // LAYER 2: 显式自我声明 — WeightedScore 累积，层末无检查点（降级为强信号）
+    // LAYER 2: 显式自我声明 — direct exits
     // ══════════════════════════════════════════════════════════════
 
-    // 2-A: 无限循环标记 (loop_count == 0) — 渐进式权重衰减
-    if meta.loop_count == Some(0) {
-        let weight = if meta.duration_secs <= 18.0 {
-            0.45
-        } else if meta.duration_secs <= 35.0 {
-            // 18-35s: 线性衰减自 0.45 至 0.20
-            let ratio = (meta.duration_secs - 18.0) / (35.0 - 18.0);
-            0.45 - (0.45 - 0.20) * ratio
-        } else {
-            0.15 // >35s: 极低可信度
-        };
-        score.add(weight);
+    // 2-A: 平台来源标记
+    if has_platform_marker(meta.app_extensions.as_deref()) {
+        return LoopIntentVerdict::LoopStrong(
+            "Layer 2-A: Explicit Platform Loop Marker".to_string(),
+        );
     }
 
-    // 2-B: 明确不循环 (loop_count == 1 → play once and stop) — 强视频偏向
-    if meta.loop_count == Some(1) {
-        score.add(-0.45);
-    }
-
-    // 2-C: 平台特定的应用扩展（GIPHY, TENOR 等）
-    if let Some(apps) = &meta.app_extensions {
-        for app in apps {
-            if GIPHY_PLATFORM_MARKERS.contains(&app.as_str()) {
-                score.add(0.50); // Significant signal for meme/loop intent
-            }
-        }
-    }
-
-    // 2-D: WebM 无音轨 — Web 动图标准载体，格式本身即循环语义
-    let is_webm = meta.container.as_deref().is_some_and(|c| c.eq_ignore_ascii_case("webm"))
+    // 2-B: WebM 无音轨
+    let is_webm = meta
+        .container
+        .as_deref()
+        .is_some_and(|c| c.eq_ignore_ascii_case("webm"))
         || ext_lower == "webm";
     if is_webm && !meta.has_audio {
-        score.add(0.40);
+        return LoopIntentVerdict::LoopStrong(
+            "Layer 2-B: Explicit WebM Loop Carrier (no audio)".to_string(),
+        );
     }
 
-    // 2-E: 时长级进分值 (Progressive Duration Scoring)
-    // 在此处添加分值，以便它们参与 Layer 3/4 的检查点判定
-    if meta.duration_secs > 10.0 {
-        if meta.duration_secs <= 18.0 {
-            score.add(0.35); // 10-18s 强权重
-        } else if meta.duration_secs <= 35.0 {
-            let ratio = (meta.duration_secs - 18.0) / (35.0 - 18.0);
-            score.add(-0.15 * ratio); // 18-35s 线性惩罚
-        } else {
-            score.add(-0.15); // >35s 重度惩罚
-        }
-    } else {
-        // 0-10s 针对非图片资产的额外加分（图片资产已在 Layer 1-C 退出）
-        score.add(0.40);
-    }
-
-    // 2-F: 现代格式加压转换 (Modern Format Conversion Bias)
-    // 现代格式（WebP/AVIF等）在结构上与视频编码高度一致。如果判定分数已显露出负向（视频特征），
-    // 则通过加压分值加速其流向视频转换逻辑（LoopWeak）。
-    let is_modern = MODERN_ANIMATED_EXTENSIONS.contains(&ext_lower.as_str());
-    if is_modern {
-        let val = score.value();
-        if val < 0.0 {
-            if val < -0.30 {
-                score.add(-0.35); // 快速锁定为 LoopWeak
-            } else {
-                score.add(-0.25); // 显著导向视频转换
-            }
-        }
+    // 2-C: 明确不循环声明
+    if meta.loop_count == Some(1) {
+        return LoopIntentVerdict::LoopWeak(
+            "Layer 2-C: Explicit Play-Once Declaration".to_string(),
+        );
     }
 
     // ══════════════════════════════════════════════════════════════
     // LAYER 3: 自参照结构信号 — WeightedScore 累积，层末有检查点
     // ══════════════════════════════════════════════════════════════
-
-    // 3-A: 首尾帧自参照闭合比
-    // closure_ratio = 首尾帧视觉距离 / 帧间平均视觉距离
-    // We proxy this via: first_pkt_size vs last_pkt_size vs avg, normalized by avg.
-    // When pkt_sizes has ≥3 frames and avg > 0, the signal is valid.
-    if meta.pkt_sizes.len() >= 3 {
-        let n = meta.pkt_sizes.len();
-        let first = meta.pkt_sizes[0] as f64;
-        let last = meta.pkt_sizes[n - 1] as f64;
-        let avg = meta.pkt_sizes.iter().map(|&v| v as f64).sum::<f64>() / n as f64;
-        if avg > 1.0 {
-            // Closure distance = |first - last| / avg  (how different first and last are)
-            let closure_dist = (first - last).abs() / avg;
-            // Frame-to-frame avg distance ≈ 1 unit (self-referential: normalized to avg)
-            let inter_dist = meta.frame_payload_variation.unwrap_or(0.5);
-
-            // closure_ratio ≈ 1.0 → similar jump between frames → strong loop
-            // closure_ratio >> 1.0 → first/last differ much more than avg frames → not a loop
-            let closure_ratio = if inter_dist > 0.01 {
-                closure_dist / inter_dist.clamp(0.1, 2.0)
-            } else {
-                // Skip: inter-frame distance itself is near-zero (static content or edge case)
-                -1.0 // sentinel: skip
-            };
-
-            if closure_ratio >= 0.0 {
-                if closure_ratio <= 1.2 {
-                    // Closure ≈ normal inter-frame jump → loop
-                    score.add(0.35);
-                } else if closure_ratio > 2.5 {
-                    // Closure far larger than normal inter-frame → not a clean loop
-                    score.add(-0.35);
-                }
-                // 1.2 < ratio ≤ 2.5: neutral, don't modify score
-            }
-            // closure_ratio < 0 (sentinel): skip
-        }
-        // else: avg ≈ 0 (edge case) → skip
-    }
-
-    // 3-B: 节奏均匀性 — interval_consistency_score via frame_delay_variation CV
-    // Low CV of PTS deltas = uniform timing = regular rhythm = loop-like
-    if let Some(delay_cv) = meta.frame_delay_variation {
-        if delay_cv < 0.10 {
-            // Highly uniform timing
-            score.add(0.20);
-        } else if delay_cv < 0.25 {
-            // Somewhat uniform
-            score.add(0.10);
-        } else if delay_cv > 0.60 {
-            // Chaotic timing
-            score.add(-0.15);
-        }
-        // 0.25..=0.60: neutral
-    }
+    apply_layer3_signals(meta, &mut score);
 
     // Layer 3 checkpoint
     if score.value() >= 0.55 {
-        return LoopIntentVerdict::LoopStrong(
-            format!("Layer 3 Checkpoint: WeightedScore={:.2} ≥ 0.55 (self-referential structure)", score.value())
-        );
+        return LoopIntentVerdict::LoopStrong(format!(
+            "Layer 3 Checkpoint: WeightedScore={:.2} ≥ 0.55 (self-referential structure)",
+            score.value()
+        ));
     }
     if score.value() <= -0.55 {
-        return LoopIntentVerdict::LoopWeak(
-            format!("Layer 3 Checkpoint: WeightedScore={:.2} ≤ -0.55 (structure mismatch)", score.value())
-        );
+        return LoopIntentVerdict::LoopWeak(format!(
+            "Layer 3 Checkpoint: WeightedScore={:.2} ≤ -0.55 (structure mismatch)",
+            score.value()
+        ));
     }
 
     // ══════════════════════════════════════════════════════════════
     // LAYER 4: 内容特征信号 — 成本较高，继续累积
     // ══════════════════════════════════════════════════════════════
-
-    // 4-A: 调色板大小
-    if let Some(p_size) = meta.palette_size {
-        if p_size <= 64 {
-            score.add(0.25); // typical synthetic/sticker content
-        } else if p_size > 128 {
-            score.add(-0.15); // closer to natural photographic color space
-        }
-        // 65–128: neutral
-    }
-
-    // 4-B: 帧内容可压缩性 (WebP压缩比代理)
-    // Caller sets webp_compression_ratio if available. Skip if None.
-    if let Some(ratio) = meta.webp_compression_ratio {
-        if ratio > 15.0 {
-            score.add(0.20); // flat/synthetic → heavy compressible → loop-like
-        } else if ratio < 5.0 {
-            score.add(-0.25); // noisy/photographic → naturally low compressibility
-        }
-        // 5.0..=15.0: neutral
-    }
-
-    // 4-C: compression_efficiency_score (existing implementation)
-    let ce = compression_efficiency_score(meta.file_size_bytes, meta.width, meta.height, meta.fps, meta.duration_secs);
-    if ce > 0.7 {
-        score.add(0.15);
-    } else if ce < 0.3 {
-        score.add(-0.10);
-    }
+    apply_layer4_signals(meta, &mut score);
 
     // Layer 4 checkpoint
     if score.value() >= 0.55 {
-        return LoopIntentVerdict::LoopStrong(
-            format!("Layer 4 Checkpoint: WeightedScore={:.2} ≥ 0.55 (content features)", score.value())
-        );
+        return LoopIntentVerdict::LoopStrong(format!(
+            "Layer 4 Checkpoint: WeightedScore={:.2} ≥ 0.55 (content features)",
+            score.value()
+        ));
     }
     if score.value() <= -0.55 {
-        return LoopIntentVerdict::LoopWeak(
-            format!("Layer 4 Checkpoint: WeightedScore={:.2} ≤ -0.55 (content features)", score.value())
-        );
+        return LoopIntentVerdict::LoopWeak(format!(
+            "Layer 4 Checkpoint: WeightedScore={:.2} ≤ -0.55 (content features)",
+            score.value()
+        ));
     }
 
     // ══════════════════════════════════════════════════════════════
     // LAYER 5: 上下文语义信号 — 权重刻意压低，仅作辅助修正
     // ══════════════════════════════════════════════════════════════
-
-    // 5-A: 目录 / 文件名语义
-    let dir_score = meta.directory_meme_score;
-    let file_score = meta.filename_meme_score;
-    if dir_score > 0.8 && file_score > 0.8 {
-        score.add(0.10);
-    } else if dir_score > 0.8 || file_score > 0.8 {
-        score.add(0.05);
-    }
-
-    // 5-B: fps 异常（非标准帧率 → 典型动图特征）
-    let fps_anom = fps_anomaly_score(meta.fps);
-    if fps_anom > 0.6 {
-        score.add(0.05);
-    }
-
-    // 5-C: 总帧数（以自参照形式表达时长，不硬编码秒数）
-    // frame_count is our proxy; very few frames = short = loop candidate
-    // Very many frames = long video = not likely a loop
-    if meta.frame_count > 0 && meta.duration_secs > 0.01 {
-        let frame_gap = meta.duration_secs / meta.frame_count as f64; // secs per frame
-        if frame_gap > 0.5 && meta.frame_count <= 8 {
-            // Very few frames, very sparse — typical of a short GIF loop
-            score.add(0.05);
-        } else if meta.frame_count > 500 {
-            // Many frames → extended video content
-            score.add(-0.10);
-        }
-    }
-
-    // 5-D: (已移至 Layer 2-E 以提前参与检查点判定)
-    // 此处保留注释以维持层级文档完整性
-
-    // 5-E: 颜色配置文件奖励 (Standard Color Profile Reward)
-    // sRGB 或无配置文件通常是 GIF 和 MEME 的特征；复杂配置文件 (HDR/DCI-P3) 则是高质量视频的特征
-    if !meta.has_complex_color_profile {
-        score.add(0.00050);
-    }
-
-    // 5-F: 1:1 Aspect Ratio (Square)
-    // Most modern stickers (Telegram, WeChat, Discord) are strictly 1:1.
-    if meta.width > 0 && meta.height > 0 && (meta.width == meta.height) {
-        score.add(0.03); // Minor auxiliary signal
-    }
-
-    // 5-G: (已移至 Layer 2-F 以提前参与检查点判定)
+    apply_layer5_signals(meta, &mut score);
 
     // No Layer 5 checkpoint (by design — Layer 5 is only auxiliary correction).
 
@@ -639,9 +702,10 @@ pub fn identify_loop_intent(meta: &LoopMeta) -> LoopIntentVerdict {
     // This layer is handled in assess_loop_intent_from_meta() below,
     // since it requires a database call.
     // identify_loop_intent() returns Uncertain to signal "proceed to Layer 6".
-    LoopIntentVerdict::Uncertain(
-        format!("Layer 6: Incomplete tree signal (WeightedScore={:.2}), proceeding to KNN fusion", score.value())
-    )
+    LoopIntentVerdict::Uncertain(format!(
+        "Layer 6: Incomplete tree signal (WeightedScore={:.2}), proceeding to KNN fusion",
+        score.value()
+    ))
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -653,13 +717,16 @@ pub fn assess_loop_intent(detection: &VideoDetectionResult) -> LoopIntentVerdict
 }
 
 /// Execute the loop intent identification for a given probe result.
-pub fn assess_loop_intent_from_probe(probe: &crate::ffprobe::FFprobeResult, path: &Path) -> LoopIntentVerdict {
+pub fn assess_loop_intent_from_probe(
+    probe: &crate::ffprobe::FFprobeResult,
+    path: &Path,
+) -> LoopIntentVerdict {
     let meta = LoopMeta::from_ffprobe_result(probe, path);
     assess_loop_intent_from_meta(&meta, Some(path))
 }
 
 /// Core entry point: runs the full tree including KNN Layer 6 and Layer 7 fallback.
-/// 
+///
 /// - Runs `identify_loop_intent()` (pure, Layers 1–5 + early Layer 6 check).
 /// - If result is `Uncertain`, invokes KNN via `gif_value_db::lookup_similar_samples`.
 /// - If KNN is unavailable or confidence is low, falls back to Layer 7 conservatively.
@@ -692,18 +759,25 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
                 let nudges = calculate_micro_nudges(meta);
 
                 // Initial fusion: final_score = KNN * 0.6 + WeightedScore_norm * 0.4 + nudges
-                let mut final_score = keep_prob * 0.6 + weighted_score_normalized * 0.4 + nudges.score;
+                let mut final_score =
+                    keep_prob * 0.6 + weighted_score_normalized * 0.4 + nudges.score;
 
                 // Log nudge trace if any nudges were applied
                 if !nudges.trace.is_empty() {
-                    emit_stderr(&format!("   ⚖️  Micro-Nudges ({:+.2}): {}", nudges.score, nudges.trace.join(" | ")));
+                    emit_stderr(&format!(
+                        "   ⚖️  Micro-Nudges ({:+.2}): {}",
+                        nudges.score,
+                        nudges.trace.join(" | ")
+                    ));
                 }
 
                 // Tier 3: High-cost visual checks (gated execution)
                 // Only trigger if still uncertain (0.4-0.6) after Tier 1+2 nudges
                 if final_score > 0.40 && final_score < 0.60 && confidence < 0.75 {
                     if let Some(p) = path {
-                        emit_stderr("   🔍 Triggering high-cost visual heuristics (extreme uncertainty)...");
+                        emit_stderr(
+                            "   🔍 Triggering high-cost visual heuristics (extreme uncertainty)...",
+                        );
                         let mut tier3_nudge = AuxiliaryNudge::default();
 
                         if detect_heavy_letterboxing(p) {
@@ -714,7 +788,11 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
                         }
 
                         if !tier3_nudge.trace.is_empty() {
-                            emit_stderr(&format!("   📊 Tier 3 Visual ({:+.2}): {}", tier3_nudge.score, tier3_nudge.trace.join(" | ")));
+                            emit_stderr(&format!(
+                                "   📊 Tier 3 Visual ({:+.2}): {}",
+                                tier3_nudge.score,
+                                tier3_nudge.trace.join(" | ")
+                            ));
                             final_score += tier3_nudge.score.clamp(-0.15, 0.15);
                         }
                     }
@@ -748,10 +826,14 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
 
 /// Layer 7: Conservative fallback with minimum-loss default.
 fn layer7_fallback(meta: &LoopMeta, upstream_reason: &str) -> LoopIntentVerdict {
-    let ext = meta.source_extension.as_deref().unwrap_or("");
-    let is_gif = ext.eq_ignore_ascii_case("gif");
-    let is_video = matches!(ext, "mp4" | "mov" | "mkv" | "avi" | "flv");
-    let is_modern_animated = matches!(ext, "webp" | "apng" | "avif");
+    let ext = meta
+        .source_extension
+        .as_deref()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let is_gif = ext == "gif";
+    let is_video = matches!(ext.as_str(), "mp4" | "mov" | "mkv" | "avi" | "flv");
+    let is_modern_animated = MODERN_ANIMATED_EXTENSIONS.contains(&ext.as_str());
 
     let reason = format!("Layer 7: Fallback [{upstream_reason}]");
 
@@ -763,7 +845,9 @@ fn layer7_fallback(meta: &LoopMeta, upstream_reason: &str) -> LoopIntentVerdict 
         if is_gif {
             LoopIntentVerdict::Uncertain(format!("{reason} → preserve GIF as-is (low confidence)"))
         } else {
-            LoopIntentVerdict::Uncertain(format!("{reason} → preserve video as-is (low confidence)"))
+            LoopIntentVerdict::Uncertain(format!(
+                "{reason} → preserve video as-is (low confidence)"
+            ))
         }
     } else {
         // Unknown format — default conservative: treat as video (safer for quality)
@@ -793,109 +877,9 @@ fn extract_weighted_score_from_verdict(verdict: &LoopIntentVerdict, meta: &LoopM
 /// Used to reconstruct the score for Layer 6 KNN fusion.
 fn recompute_weighted_score(meta: &LoopMeta) -> f64 {
     let mut score = WeightedScore::default();
-
-    let ext_lower = meta.source_extension.as_deref().unwrap_or("").to_lowercase();
-    let is_webm = meta.container.as_deref().is_some_and(|c| c.eq_ignore_ascii_case("webm"))
-        || ext_lower == "webm";
-
-    // Duration Scoring (Consistent with Layer 5-D)
-    if meta.duration_secs <= 10.0 {
-        score.add(0.40);
-    } else if meta.duration_secs <= 18.0 {
-        score.add(0.35);
-    } else if meta.duration_secs <= 35.0 {
-        let ratio = (meta.duration_secs - 18.0) / (35.0 - 18.0);
-        score.add(-0.15 * ratio);
-    } else if meta.duration_secs > 35.0 {
-        score.add(-0.15);
-    }
-
-    // Re-apply Layer 2 signals (consistent with identify_loop_intent)
-    if meta.loop_count == Some(0) {
-        let weight = if meta.duration_secs <= 18.0 {
-            0.45
-        } else if meta.duration_secs <= 35.0 {
-            let ratio = (meta.duration_secs - 18.0) / (35.0 - 18.0);
-            0.45 - (0.45 - 0.20) * ratio
-        } else {
-            0.15
-        };
-        score.add(weight);
-    }
-    if meta.loop_count == Some(1) {
-        score.add(-0.45);
-    }
-    const PLATFORM_MARKERS: &[&str] = &["GIPHY", "TENOR", "STICKER", "TELEGRAM", "TIKTOK", "DISCORD"];
-    if let Some(exts) = &meta.app_extensions {
-        for ext in exts {
-            if PLATFORM_MARKERS.iter().any(|&p| ext.trim().to_uppercase().starts_with(p)) {
-                score.add(0.50);
-            }
-        }
-    }
-    if is_webm && !meta.has_audio {
-        score.add(0.40);
-    }
-
-    // 3-A
-    if meta.pkt_sizes.len() >= 3 {
-        let n = meta.pkt_sizes.len();
-        let first = meta.pkt_sizes[0] as f64;
-        let last = meta.pkt_sizes[n - 1] as f64;
-        let avg = meta.pkt_sizes.iter().map(|&v| v as f64).sum::<f64>() / n as f64;
-        if avg > 1.0 {
-            let closure_dist = (first - last).abs() / avg;
-            let inter_dist = meta.frame_payload_variation.unwrap_or(0.5);
-            if inter_dist > 0.01 {
-                let closure_ratio = closure_dist / inter_dist.clamp(0.1, 2.0);
-                if closure_ratio <= 1.2 {
-                    score.add(0.35);
-                } else if closure_ratio > 2.5 {
-                    score.add(-0.35);
-                }
-            }
-        }
-    }
-    // 3-B
-    if let Some(delay_cv) = meta.frame_delay_variation {
-        if delay_cv < 0.10 { score.add(0.20); }
-        else if delay_cv < 0.25 { score.add(0.10); }
-        else if delay_cv > 0.60 { score.add(-0.15); }
-    }
-    // 4-A
-    if let Some(p_size) = meta.palette_size {
-        if p_size <= 64 { score.add(0.25); }
-        else if p_size > 128 { score.add(-0.15); }
-    }
-    // 4-B
-    if let Some(ratio) = meta.webp_compression_ratio {
-        if ratio > 15.0 { score.add(0.20); }
-        else if ratio < 5.0 { score.add(-0.25); }
-    }
-    // 4-C
-    let ce = compression_efficiency_score(meta.file_size_bytes, meta.width, meta.height, meta.fps, meta.duration_secs);
-    if ce > 0.7 { score.add(0.15); }
-    else if ce < 0.3 { score.add(-0.10); }
-    // 5-A
-    if meta.directory_meme_score > 0.8 && meta.filename_meme_score > 0.8 { score.add(0.10); }
-    else if meta.directory_meme_score > 0.8 || meta.filename_meme_score > 0.8 { score.add(0.05); }
-    // 5-B
-    if fps_anomaly_score(meta.fps) > 0.6 { score.add(0.05); }
-    // 5-C
-    if meta.frame_count > 0 && meta.duration_secs > 0.01 {
-        let frame_gap = meta.duration_secs / meta.frame_count as f64;
-        if frame_gap > 0.5 && meta.frame_count <= 8 { score.add(0.05); }
-        else if meta.frame_count > 500 { score.add(-0.10); }
-    }
-    // 5-D
-    if meta.duration_secs > 18.0 {
-        if meta.duration_secs <= 35.0 {
-            let ratio = (meta.duration_secs - 18.0) / (35.0 - 18.0);
-            score.add(-0.15 * ratio);
-        } else {
-            score.add(-0.15);
-        }
-    }
+    apply_layer3_signals(meta, &mut score);
+    apply_layer4_signals(meta, &mut score);
+    apply_layer5_signals(meta, &mut score);
 
     score.normalized()
 }
@@ -946,50 +930,77 @@ fn lossless_duration_limit_for_keep_prob(keep_prob: f64) -> f32 {
 // ── Signal Scorers ────────────────────────────────────────────────────────────
 
 fn calculate_cv(values: &[u64]) -> f64 {
-    if values.is_empty() { return 0.5; }
+    if values.is_empty() {
+        return 0.5;
+    }
     let n = values.len() as f64;
     let mean = values.iter().map(|&v| v as f64).sum::<f64>() / n;
-    if mean <= 0.0 { return 0.0; }
-    let var = values.iter().map(|&v| (v as f64 - mean).powi(2)).sum::<f64>() / n;
+    if mean <= 0.0 {
+        return 0.0;
+    }
+    let var = values
+        .iter()
+        .map(|&v| (v as f64 - mean).powi(2))
+        .sum::<f64>()
+        / n;
     var.sqrt() / mean
 }
 
 fn calculate_cv_f64(values: &[f64]) -> f64 {
-    if values.is_empty() { return 0.5; }
+    if values.is_empty() {
+        return 0.5;
+    }
     let n = values.len() as f64;
     let mean = values.iter().sum::<f64>() / n;
-    if mean <= 0.0 { return 0.0; }
+    if mean <= 0.0 {
+        return 0.0;
+    }
     let var = values.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / n;
     var.sqrt() / mean
 }
 
 fn calculate_gini_f64(values: &[f64]) -> f64 {
-    if values.is_empty() { return 0.0; }
+    if values.is_empty() {
+        return 0.0;
+    }
     let mut sorted = values.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let n = sorted.len() as f64;
     let sum: f64 = sorted.iter().sum();
-    if sum.abs() < 1e-9 { return 0.0; }
-    let weighted_sum: f64 = sorted.iter().enumerate().map(|(i, &v)| (2 * (i + 1)) as f64 * v).sum();
+    if sum.abs() < 1e-9 {
+        return 0.0;
+    }
+    let weighted_sum: f64 = sorted
+        .iter()
+        .enumerate()
+        .map(|(i, &v)| (2 * (i + 1)) as f64 * v)
+        .sum();
     (weighted_sum / (n * sum)) - (n + 1.0) / n
 }
 
 fn compression_efficiency_score(bytes: u64, w: u32, h: u32, fps: f64, dur: f64) -> f64 {
     let theoretical_bits = f64::from(w) * f64::from(h) * fps * dur * 24.0;
     let actual_bits = bytes as f64 * 8.0;
-    if theoretical_bits <= 0.0 { return 0.5; }
+    if theoretical_bits <= 0.0 {
+        return 0.5;
+    }
     1.0 - (actual_bits / theoretical_bits * 150.0).min(1.0)
 }
 
 fn fps_anomaly_score(fps: f64) -> f64 {
     // Returns high score when fps is far from standard rates → atypical → possible loop artifact
     let std_rates = [24.0, 25.0, 30.0, 60.0, 120.0];
-    let min_delta = std_rates.iter().map(|&s| (fps - s).abs()).fold(f64::MAX, f64::min);
+    let min_delta = std_rates
+        .iter()
+        .map(|&s| (fps - s).abs())
+        .fold(f64::MAX, f64::min);
     (min_delta / 2.5).min(1.0)
 }
 
 fn score_directory_context(parts: Option<&[String]>) -> f64 {
-    const MEME_KEYWORDS: &[&str] = &["meme", "sticker", "emoji", "表情", "贴纸", "梗", "斗图", "reaction", "gif"];
+    const MEME_KEYWORDS: &[&str] = &[
+        "meme", "sticker", "emoji", "表情", "贴纸", "梗", "斗图", "reaction", "gif",
+    ];
     let Some(parts) = parts else { return 0.5 };
     for part in parts {
         let l = part.to_lowercase();
@@ -1002,7 +1013,10 @@ fn score_directory_context(parts: Option<&[String]>) -> f64 {
 
 fn analyze_filename(name: Option<&str>) -> f64 {
     let Some(name) = name else { return 0.5 };
-    let stem = name.rsplit_once('.').map_or(name, |(s, _)| s).to_lowercase();
+    let stem = name
+        .rsplit_once('.')
+        .map_or(name, |(s, _)| s)
+        .to_lowercase();
 
     // Platform cache naming patterns → almost certainly meme/sticker
     if stem.starts_with("mmexport") || stem.starts_with("wx_camera") || stem.len() == 32 {
@@ -1010,7 +1024,9 @@ fn analyze_filename(name: Option<&str>) -> f64 {
     }
 
     // Meme keywords in filename
-    const MEME_KEYWORDS: &[&str] = &["meme", "sticker", "emoji", "reaction", "lol", "funny", "gif", "表情", "贴纸"];
+    const MEME_KEYWORDS: &[&str] = &[
+        "meme", "sticker", "emoji", "reaction", "lol", "funny", "gif", "表情", "贴纸",
+    ];
     let lower = stem.to_lowercase();
     if MEME_KEYWORDS.iter().any(|&k| lower.contains(k)) {
         return 0.85;
@@ -1073,21 +1089,28 @@ fn calculate_micro_nudges(meta: &LoopMeta) -> AuxiliaryNudge {
 }
 
 /// Detect hard scene cuts in packet size stream.
-/// If any inner frame is 5x larger than average, it's likely an I-frame scene cut.
+/// If any inner frame is 5x larger than the median inner packet size,
+/// it's likely an I-frame scene cut.
 fn detect_scene_cut(pkt_sizes: &[u64]) -> bool {
-    if pkt_sizes.len() < 5 { return false; }
+    if pkt_sizes.len() < 5 {
+        return false;
+    }
     let inner = &pkt_sizes[1..pkt_sizes.len() - 1];
-    let avg = inner.iter().sum::<u64>() as f64 / inner.len() as f64;
-    inner.iter().any(|&size| (size as f64) > avg * 5.0)
+    let mut baseline = inner.to_vec();
+    baseline.sort_unstable();
+    let median = baseline[baseline.len() / 2] as f64;
+
+    if median <= 0.0 {
+        return false;
+    }
+
+    inner.iter().any(|&size| (size as f64) > median * 5.0)
 }
 
 /// Detect localized motion (high concentration of motion in small area).
 /// Returns true if motion vectors suggest synthetic/sticker content.
 fn detect_localized_motion(mvs: &[f64]) -> bool {
-    if mvs.len() < 10 { return false; }
-    let zero_count = mvs.iter().filter(|&&v| v.abs() < 0.1).count();
-    let zero_ratio = zero_count as f64 / mvs.len() as f64;
-    zero_ratio > 0.7 // >70% of blocks have near-zero motion
+    mvs.len() >= 10 && zero_motion_ratio(mvs) > 0.7
 }
 
 /// Extract first frame from video to temporary PNG for analysis.
@@ -1121,7 +1144,9 @@ fn detect_heavy_letterboxing(path: &Path) -> bool {
         use image::GenericImageView;
         let img = image::open(&temp_frame).ok()?;
         let (_w, h) = img.dimensions();
-        if h < 100 { return Some(false); }
+        if h < 100 {
+            return Some(false);
+        }
 
         let top_band = (f64::from(h) * 0.15) as u32;
         let bottom_start = h - top_band;
@@ -1147,12 +1172,16 @@ fn calculate_band_variance(img: &image::DynamicImage, y_start: u32, y_end: u32) 
     for y in y_start..y_end.min(img.height()) {
         for x in 0..w.min(img.width()) {
             let pixel = img.get_pixel(x, y);
-            let gray = f64::from(pixel[0]) * 0.299 + f64::from(pixel[1]) * 0.587 + f64::from(pixel[2]) * 0.114;
+            let gray = f64::from(pixel[0]) * 0.299
+                + f64::from(pixel[1]) * 0.587
+                + f64::from(pixel[2]) * 0.114;
             values.push(gray);
         }
     }
 
-    if values.is_empty() { return 0.0; }
+    if values.is_empty() {
+        return 0.0;
+    }
     let mean = values.iter().sum::<f64>() / values.len() as f64;
     values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / values.len() as f64
 }
@@ -1173,11 +1202,11 @@ fn detect_high_text_density(path: &Path) -> bool {
         let mut edge_count = 0;
         let total_pixels = f64::from(w * h);
 
-        for y in 1..h-1 {
-            for x in 1..w-1 {
+        for y in 1..h - 1 {
+            for x in 1..w - 1 {
                 let center = i32::from(gray.get_pixel(x, y)[0]);
-                let right = i32::from(gray.get_pixel(x+1, y)[0]);
-                let bottom = i32::from(gray.get_pixel(x, y+1)[0]);
+                let right = i32::from(gray.get_pixel(x + 1, y)[0]);
+                let bottom = i32::from(gray.get_pixel(x, y + 1)[0]);
 
                 if (center - right).abs() > 80 || (center - bottom).abs() > 80 {
                     edge_count += 1;
@@ -1202,11 +1231,11 @@ mod tests {
     fn base_meta() -> LoopMeta {
         LoopMeta {
             duration_secs: 15.0, // Default to 15s to bypass Layer 1-C/1-D for tree testing
-            width: 1280, // > 512 to avoid Layer 1-D
+            width: 1280,         // > 512 to avoid Layer 1-D
             height: 720,
             fps: 12.0,
             frame_count: 24,
-            file_size_bytes: 5_000_000, 
+            file_size_bytes: 5_000_000,
             source_extension: Some("gif".to_string()),
             // Neutral signals for most tests
             frame_payload_variation: Some(0.5),
@@ -1225,7 +1254,11 @@ mod tests {
         m.source_extension = Some("mp4".to_string());
         m.has_audio = true;
         let v = identify_loop_intent(&m);
-        assert!(matches!(v, LoopIntentVerdict::LoopWeak(_)), "Expected LoopWeak for MP4 with audio, got {:?}", v);
+        assert!(
+            matches!(v, LoopIntentVerdict::LoopWeak(_)),
+            "Expected LoopWeak for MP4 with audio, got {:?}",
+            v
+        );
         assert!(v.reason().contains("Layer 1-A"));
     }
 
@@ -1236,7 +1269,11 @@ mod tests {
         m.has_audio = true; // Even if it has audio, GIFs bypass the veto
         let v = identify_loop_intent(&m);
         // It should proceed to next layers, and since it's a neutral 2s GIF, it ends up Uncertain (Layer 6)
-        assert!(matches!(v, LoopIntentVerdict::Uncertain(_)), "Expected Uncertain for GIF with audio (bypass veto), got {:?}", v);
+        assert!(
+            matches!(v, LoopIntentVerdict::Uncertain(_)),
+            "Expected Uncertain for GIF with audio (bypass veto), got {:?}",
+            v
+        );
         assert!(!v.reason().contains("Layer 1-A"));
     }
 
@@ -1247,18 +1284,24 @@ mod tests {
         m.duration_secs = 5.0; // <= 10s
         let v = identify_loop_intent(&m);
         assert!(matches!(v, LoopIntentVerdict::LoopStrong(_)));
-        assert!(v.reason().contains("Unconditional Hard Pass"));
+        assert!(v.reason().contains("Layer 1-C"));
     }
 
     #[test]
-    fn test_conditional_hard_pass() {
+    fn test_short_hard_pass_vetoed_by_natural_signals() {
         let mut m = base_meta();
         m.source_extension = Some("gif".to_string());
-        m.duration_secs = 15.0; // 10-18s
-        m.loop_count = Some(0); // infinite marker
+        m.duration_secs = 5.0;
+        m.fps = 24.0;
+        m.webp_compression_ratio = Some(4.0);
+        m.pkt_sizes = vec![120, 150, 1800, 140, 130, 125];
         let v = identify_loop_intent(&m);
-        assert!(matches!(v, LoopIntentVerdict::LoopStrong(_)));
-        assert!(v.reason().contains("Conditional Hard Pass"));
+        assert!(
+            matches!(v, LoopIntentVerdict::LoopWeak(_)),
+            "Expected LoopWeak when short hard pass is vetoed, got {:?}",
+            v
+        );
+        assert!(!v.reason().contains("Layer 1-C"));
     }
 
     #[test]
@@ -1276,16 +1319,15 @@ mod tests {
         let mut m = base_meta();
         m.source_extension = Some("gif".to_string());
         m.duration_secs = 5.0; // <= 10s
-        // (Handled by test_unconditional_hard_pass)
+                               // (Handled by test_unconditional_hard_pass)
     }
 
     #[test]
     fn test_duration_layer5d_10_18s_weight() {
         let mut m = base_meta();
         m.source_extension = Some("gif".to_string());
-        m.duration_secs = 15.0; // 10s < d <= 18s -> +0.35
+        m.duration_secs = 15.0;
         let v = identify_loop_intent(&m);
-        // Base (0.35) + color (0.0005) + 1:1 (0.03) = 0.3805. Still Uncertain (< 0.55)
         assert!(v.is_uncertain());
     }
 
@@ -1303,22 +1345,22 @@ mod tests {
     #[test]
     fn test_layer2a_infinite_loop_signal() {
         let mut m = base_meta();
-        m.duration_secs = 19.0; // Use > 18s to bypass Layer 1-C Combined Hard Pass
-        m.loop_count = Some(0); 
-        m.frame_delay_variation = Some(0.05); // Add rhythm signal (+0.20) to push over checkpoint
+        m.duration_secs = 19.0;
+        m.loop_count = Some(0);
+        m.frame_delay_variation = Some(0.05);
+        m.frame_payload_variation = Some(0.05);
+        m.pkt_sizes = vec![1000, 980, 975, 990, 985, 1005];
         let v = identify_loop_intent(&m);
-        // Score: ~0.43 (loop) + 0.20 (rhythm) + rewards... > 0.55
         assert!(matches!(v, LoopIntentVerdict::LoopStrong(_)));
-        assert!(v.reason().contains("Layer 3 Checkpoint") || v.reason().contains("Layer 4 Checkpoint"));
+        assert!(v.reason().contains("Layer 3 Checkpoint"));
     }
 
     #[test]
     fn test_long_gif_conversion_escape() {
         let mut m = base_meta();
         m.source_extension = Some("gif".to_string());
-        m.loop_count = Some(0); // Decayed to +0.15
-        m.duration_secs = 40.0; // Penalty -0.15
-        // Total base score: 0.15 - 0.15 = 0.0. 
+        m.loop_count = Some(0);
+        m.duration_secs = 40.0;
         let v = identify_loop_intent(&m);
         assert!(v.is_uncertain());
     }
@@ -1326,39 +1368,54 @@ mod tests {
     #[test]
     fn test_layer2b_no_loop_signal() {
         let mut m = base_meta();
-        m.width = 640; // > 512 but still 1:1 for Layer 5-F testing
+        m.width = 640;
         m.height = 640;
-        m.loop_count = Some(1); // -0.45
+        m.loop_count = Some(1);
         let v = identify_loop_intent(&m);
-        // Base (15s: 0.35) + no-loop (-0.45) + 1:1 (0.03) = -0.07. Still Uncertain.
-        assert!(v.is_uncertain(), "Expected Uncertain for 10-18s range + no-loop marker, got {:?}", v);
+        assert!(
+            matches!(v, LoopIntentVerdict::LoopWeak(_)),
+            "Expected direct LoopWeak for play-once declaration, got {:?}",
+            v
+        );
+        assert!(v.reason().contains("Layer 2-C"));
     }
 
     #[test]
-    fn test_modern_format_bias_acceleration() {
+    fn test_long_gif_scene_cut_becomes_loopweak() {
         let mut m = base_meta();
-        m.source_extension = Some("webp".to_string());
-        m.duration_secs = 19.0;
-        m.loop_count = Some(1); // -0.45
+        m.source_extension = Some("gif".to_string());
+        m.duration_secs = 40.0;
+        m.fps = 24.0;
+        m.file_size_bytes = 20_000_000;
+        m.loop_count = Some(0);
+        m.motion_gini = Some(0.20);
+        m.webp_compression_ratio = Some(4.0);
+        m.pkt_sizes = vec![100, 110, 1300, 115, 120, 118];
         let v = identify_loop_intent(&m);
-        // Base(19s: -0.15) + loop(-0.45) = -0.60.
-        // Modern Bias adds -0.35 -> Total score will be highly negative (e.g. -0.80+)
-        assert!(matches!(v, LoopIntentVerdict::LoopWeak(_)), "Expected LoopWeak for WebP with loop_count=1, got {:?}", v);
-        // Ensure the bias pushed it well below the -0.55 threshold early
-        assert!(v.reason().contains("-0.8"), "Expected score acceleration below -0.8, got {}", v.reason());
+        assert!(
+            matches!(v, LoopIntentVerdict::LoopWeak(_)),
+            "Expected LoopWeak for long natural-capture GIF, got {:?}",
+            v
+        );
     }
 
     #[test]
-    fn test_legacy_gif_vs_modern_webp() {
-        // GIF case
-        let mut m1 = base_meta();
-        m1.source_extension = Some("gif".to_string());
-        m1.duration_secs = 19.0;
-        m1.loop_count = Some(1); // -0.45
-        let _v1 = identify_loop_intent(&m1);
-        // Score: -0.15 + (-0.45) = -0.60. 
-        // Layer 4 Checkpoint is at -0.55. Wait, -0.60 IS below -0.55.
-        // So GIF also hits it. 
+    fn test_small_resolution_hard_pass_is_vetoed_by_natural_signals() {
+        let mut m = base_meta();
+        m.source_extension = Some("gif".to_string());
+        m.width = 400;
+        m.height = 300;
+        m.duration_secs = 60.0;
+        m.fps = 24.0;
+        m.webp_compression_ratio = Some(4.0);
+        m.pkt_sizes = vec![90, 100, 1500, 95, 100, 98];
+        let v = identify_loop_intent(&m);
+        assert!(
+            matches!(v, LoopIntentVerdict::LoopWeak(_)),
+            "Expected LoopWeak when small-resolution hard pass is vetoed, got {:?}",
+            v
+        );
+        assert!(!v.reason().contains("Layer 1-D"));
     }
 
     // ── Layer 3 ──
@@ -1374,7 +1431,11 @@ mod tests {
         let v = identify_loop_intent(&m);
         // Should exit at Layer 3 checkpoint (score ≥ 0.55)
         assert!(matches!(v, LoopIntentVerdict::LoopStrong(_)));
-        assert!(v.reason().contains("Layer 3") || v.reason().contains("Layer 2") || v.reason().contains("Layer 1"));
+        assert!(
+            v.reason().contains("Layer 3")
+                || v.reason().contains("Layer 2")
+                || v.reason().contains("Layer 1")
+        );
     }
 
     // ── Layer 4 ──
@@ -1382,16 +1443,17 @@ mod tests {
     #[test]
     fn test_layer4a_small_palette_and_webp() {
         let mut m = base_meta();
-        // Layer 3-B: uniform timing → +0.20
         m.frame_delay_variation = Some(0.05);
-        // Layer 4-A: small palette → +0.25
         m.palette_size = Some(32);
-        // Layer 4-B: high WebP compression ratio → +0.20
         m.webp_compression_ratio = Some(20.0);
-        // Total before CE: 0.20 + 0.25 + 0.20 = 0.65 ≥ 0.55 → Layer 4 checkpoint
+        m.file_size_bytes = 900_000;
         let v = identify_loop_intent(&m);
-        assert!(matches!(v, LoopIntentVerdict::LoopStrong(_)), "Expected LoopStrong, got: {:?}", v.reason());
-        assert!(v.reason().contains("Layer 3") || v.reason().contains("Layer 4"));
+        assert!(
+            matches!(v, LoopIntentVerdict::LoopStrong(_)),
+            "Expected LoopStrong, got: {:?}",
+            v.reason()
+        );
+        assert!(v.reason().contains("Layer 4"));
     }
 
     // ── Layer 6/7 fallback (Uncertain) ──
@@ -1409,12 +1471,14 @@ mod tests {
     #[test]
     fn test_layer2c_platform_marker_multiple() {
         let mut m = base_meta();
-        // Multiple extensions, one of which is a platform marker (+0.50)
         m.app_extensions = Some(vec!["UNKNOWN".to_string(), "GIPHY".to_string()]);
-        // Add a small rhythm signal (+0.10) to push it over the 0.55 threshold
-        m.frame_delay_variation = Some(0.20); 
         let v = identify_loop_intent(&m);
-        assert!(v.is_keep_gif(), "Expected LoopStrong for platform marker + rhythm, got {:?}", v);
+        assert!(
+            v.is_keep_gif(),
+            "Expected LoopStrong for platform marker + rhythm, got {:?}",
+            v
+        );
+        assert!(v.reason().contains("Layer 2-A"));
     }
 
     #[test]
@@ -1449,11 +1513,15 @@ mod tests {
     fn test_small_resolution_hard_pass() {
         let mut m = base_meta();
         m.source_extension = Some("webp".to_string());
-        m.width = 400;  // <= 512
+        m.width = 400; // <= 512
         m.height = 400; // <= 512
         m.duration_secs = 60.0; // Very long, usually triggers video conversion
         let v = identify_loop_intent(&m);
-        assert!(matches!(v, LoopIntentVerdict::LoopStrong(_)), "Expected LoopStrong for small resolution, got {:?}", v);
+        assert!(
+            matches!(v, LoopIntentVerdict::LoopStrong(_)),
+            "Expected LoopStrong for small resolution, got {:?}",
+            v
+        );
         assert!(v.reason().contains("Layer 1-D"));
     }
 }

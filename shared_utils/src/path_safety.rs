@@ -100,14 +100,8 @@ mod tests {
     fn test_exiftool_path_arg() {
         assert_eq!(exiftool_path_arg(Path::new("normal.png")), "normal.png");
         // ExifTool path arg for main file SHOULD NOT have doubling (now)
-        assert_eq!(
-            exiftool_path_arg(Path::new("file%2f.png")),
-            "file%2f.png"
-        );
+        assert_eq!(exiftool_path_arg(Path::new("file%2f.png")), "file%2f.png");
         // But it should have prefixing
-        assert_eq!(
-            exiftool_path_arg(Path::new("-dash%f.png")),
-            "./-dash%f.png"
-        );
+        assert_eq!(exiftool_path_arg(Path::new("-dash%f.png")), "./-dash%f.png");
     }
 }

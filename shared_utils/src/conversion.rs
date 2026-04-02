@@ -103,15 +103,16 @@ fn stable_path_key(path: &Path) -> String {
 }
 
 fn path_with_collision_suffix(path: &Path, collision_index: usize) -> PathBuf {
-    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("output");
     let file_name = match path.extension().and_then(|e| e.to_str()) {
         Some(ext) if !ext.is_empty() => format!("{stem} ({collision_index}).{ext}"),
         _ => format!("{stem} ({collision_index})"),
     };
 
-    path.parent()
-        .unwrap_or(Path::new(""))
-        .join(file_name)
+    path.parent().unwrap_or(Path::new("")).join(file_name)
 }
 
 fn reserve_unique_output_path(input: &Path, candidate: PathBuf) -> PathBuf {
