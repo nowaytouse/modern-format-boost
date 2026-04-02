@@ -1,5 +1,6 @@
 use crate::loop_intent::LoopMeta;
 use crate::media_meta_utils::scan_gif_headers;
+use crate::progress_mode::emit_stderr;
 use anyhow::{Context, Result};
 use blake3::Hasher;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -721,6 +722,7 @@ pub fn is_lossless_exploration_safe(meta: &LoopMeta, path: Option<&Path>) -> boo
     is_safe
 }
 
+pub fn init_schema(conn: &mut Client) -> Result<()> {
     emit_stderr("🐘 Initializing Database Schema (PostgreSQL + pgvector)...");
     // Enable pgvector extension
     if let Err(e) = conn.execute("CREATE EXTENSION IF NOT EXISTS vector", &[]) {

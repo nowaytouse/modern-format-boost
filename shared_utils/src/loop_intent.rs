@@ -990,16 +990,16 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
     let tree_probability = tree.tree_probability;
     let thresholds = LoopThresholds::from_profile(reference_profile.as_ref());
 
-    match tree.verdict {
-        v @ (LoopIntentVerdict::LoopStrong(ref reason) | LoopIntentVerdict::LoopWeak(ref reason)) => {
-            if v.is_keep_gif() {
+    match &tree.verdict {
+        LoopIntentVerdict::LoopStrong(reason) | LoopIntentVerdict::LoopWeak(reason) => {
+            if tree.verdict.is_keep_gif() {
                 emit_stderr(&format!("✅ Tree Decisive: {reason}"));
             } else {
                 emit_stderr(&format!("ℹ️  Tree Decisive: {reason}"));
             }
-            v
+            return tree.verdict.clone();
         }
-        LoopIntentVerdict::Uncertain(ref reason) => {
+        LoopIntentVerdict::Uncertain(reason) => {
             emit_stderr(&format!(
                 "🔭 Tree uncertain ({reason}) [prob={tree_probability:.2}] — falling back to Layer 6 KNN..."
             ));
