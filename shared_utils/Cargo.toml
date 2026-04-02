@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 thiserror = { workspace = true }
+clap = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-appender = { workspace = true }
@@ -42,6 +43,18 @@ infer = { workspace = true }
 quick-xml = { workspace = true }
 exr = { workspace = true }
 proptest = { workspace = true }
+
+[[bin]]
+name = "train_knn"
+path = "src/bin/train_knn.rs"
+
+[[bin]]
+name = "recompute_stats"
+path = "src/bin/recompute_stats.rs"
+
+[[bin]]
+name = "train_quality"
+path = "src/bin/train_quality.rs"
 
 [dev-dependencies]
 proptest = { workspace = true }

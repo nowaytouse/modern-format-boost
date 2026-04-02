@@ -36,6 +36,14 @@ All notable changes to this project will be documented in this file.
   - **✅ [Success] / ℹ️ [Info] / ⚠️ [Warning] / 🔭 [KNN Probe] / ⚖️ [Nudges] / 🔍 [Analytics]**.
 - **Decision Transparency**: Every decision layer (Tree Direct, KNN Fusion, Layer 7 Fallback) now explicitly logs its reasoning and confidence scores to `stderr`.
 
+#### 🧠 Refined Dual-Database Image Assessment (KNN Hardening)
+- **4-Category Semantic Model (Dynamic)**: Standardized classification into `loop`, `non-loop`, and `video-loop` (e.g. Telegram Video Stickers), ensuring intent takes precedence over containers.
+  - **Logic**: Maps `video-loop` (MP4) and `loop` (GIF) to `high` intent, correctly routing short video loops into the dynamic ecosystem.
+- **Static Quality Assessment (Experimental)**: Introduced specialized labeling for static assets (`png-high`, `png-low`, `modern-high`, `modern-low`).
+- **Optimization**: Implemented an automated JPEG bypass in the static path, significantly reducing analysis overhead for legacy formats.
+- **[Temporary Change]**: Suspended active Static Quality lookups in `img-hevc` while the manual training dataset is being populated.
+- **Files**: `shared_utils/src/gif_value_db.rs`, `shared_utils/src/image_quality_db.rs`, `img_hevc/src/main.rs`, `shared_utils/src/bin/train_knn.rs`
+
 #### 🐘 Database Lifecycle & Runtime Intelligence
 
 - **Startup Connectivity Report**: Added a proactive database status check at application launch (`vid-hevc` / `img-hevc`).

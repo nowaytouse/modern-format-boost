@@ -726,6 +726,26 @@ fn dispatch_static_conversion(
     let format = analysis.format.as_str();
     let is_lossless = analysis.is_lossless;
 
+    // 🔬 New Dimension: KNN Static Quality Score
+    // JPEG bypass: cjxl transcode is fast enough to skip analysis
+    // [TEMPORARY DISABLE] Static quality DB is currently disabled per user request
+    let quality: Option<shared_utils::image_quality_db::QualityScore> = None;
+    /*
+    let quality = if format == "JPEG" || format == "jpg" {
+        None
+    } else {
+        shared_utils::image_quality_db::lookup_image_quality(analysis)
+    };
+    */
+
+    if let Some(ref q) = quality {
+        if config.verbose {
+            println!("   🔭 KNN Quality Score: {:.2} (Conf: {:.2})", q.score, q.confidence);
+        }
+    }
+    
+    // In progress: Use 'quality' score to adjust thresholds...
+
     Ok(match (format, is_lossless) {
         ("WebP" | "AVIF" | "TIFF" | "HEIC" | "HEIF", true) => {
             if format == "HEIC" || format == "HEIF" {

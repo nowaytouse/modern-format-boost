@@ -514,7 +514,7 @@ fn lookup_similar_samples_inner(
             palette_depth, motion_gini, block_skew, temporal_flatness, directory_meme_score,
             webp_compression_ratio
          FROM samples
-         WHERE loss_tolerance IS NOT NULL AND is_native_gif = TRUE
+         WHERE loss_tolerance IS NOT NULL AND frame_count > 1
          LIMIT 1021",
         &[],
     )?;
@@ -590,9 +590,9 @@ fn lookup_similar_samples_inner(
         let relative_distance = (*distance - min_distance).max(0.0);
         let weight = 1.0 / (1.0 + relative_distance * relative_distance * 3.0);
         let prob = match sample.loss_tolerance.as_deref() {
-            Some("high") => 1.0,
-            Some("low") => 0.0,
-            _ => 0.5,
+            Some("high") => 1.0,  // Loop intent (Meme/Sticker/Video sticker)
+            Some("video") => 0.0, // Non-loop intent (Clip/Record/Long Video)
+            _ => 0.5,             // Uncertain/Fallback
         };
 
         if prob >= 0.5 {
@@ -845,7 +845,7 @@ fn seed_positive_dataset_if_needed(conn: &mut Client) -> Result<()> {
     Ok(())
 }
 
-struct SampleInsert {
+pub struct SampleInsert {
     file_hash: String,
     source_path: String,
     file_name: Option<String>,
@@ -962,7 +962,8 @@ fn determine_loss_tolerance(
 
     "medium".to_string()
 }
-fn sample_from_path(path: &Path, labeled_by: &str) -> Option<SampleInsert> {
+
+pub fn sample_from_path(path: &Path, labeled_by: &str, label_override: Option<&str>) -> Option<SampleInsert> {
     let probe = crate::probe_video(path).ok()?;
     let mut meta = LoopMeta::from_ffprobe_result(&probe, path);
     if let Ok((pal, exts, has_transparency, variation, delay_variation, loop_count, total_dur)) =
@@ -987,14 +988,23 @@ fn sample_from_path(path: &Path, labeled_by: &str) -> Option<SampleInsert> {
         meta.file_size_bytes as f64 / (pixel_count.max(1.0) * meta.frame_count.max(1) as f64);
     let spatial_bpp = meta.file_size_bytes as f64 / pixel_count.max(1.0);
 
-    let loss_tolerance = determine_loss_tolerance(
-        temporal_bpp,
-        meta.has_embedded_icc,
-        meta.has_complex_color_profile,
-        meta.app_extensions.as_deref(),
-        path,
-        meta.file_name.as_deref(),
-    );
+    let loss_tolerance = if let Some(label) = label_override {
+        label.to_string()
+    } else {
+        determine_loss_tolerance(
+            temporal_bpp,
+            meta.has_embedded_icc,
+            meta.has_complex_color_profile,
+            meta.app_extensions.as_deref(),
+            path,
+            meta.file_name.as_deref(),
+        )
+    };
+
+    // If manual label is "video", ensure we treat it as a video-like source
+    if loss_tolerance == "video" {
+        meta.is_native_gif = false;
+    }
 
     let aspect_ratio = if meta.height > 0 {
         Some(f64::from(meta.width) / f64::from(meta.height))
@@ -1324,7 +1334,7 @@ fn build_feature_stats(values: &[f64]) -> FeatureStats {
     }
 }
 
-pub fn batch_ingest_samples(dataset_path: &Path) -> Result<usize> {
+pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -> Result<usize> {
     let mut conn = open_pg_client()?;
 
     init_schema(&mut conn)?;
@@ -1347,7 +1357,7 @@ pub fn batch_ingest_samples(dataset_path: &Path) -> Result<usize> {
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .to_lowercase();
-        if ["gif", "webp", "apng", "avif"].contains(&ext.as_str()) {
+        if ["gif", "webp", "apng", "avif", "mp4", "mov"].contains(&ext.as_str()) {
             candidate_paths.push(path);
         }
     }
@@ -1372,7 +1382,7 @@ pub fn batch_ingest_samples(dataset_path: &Path) -> Result<usize> {
     let samples: Vec<_> = candidate_paths
         .par_iter()
         .filter_map(|path| {
-            let res = sample_from_path(path, "cli_ingest");
+            let res = sample_from_path(path, "cli_ingest", label_override);
             pb.inc(1);
             if let Some(s) = &res {
                 // 排除静态图片：只有多帧内容才具备循环意图训练价值
@@ -1514,7 +1524,7 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
             temporal_bpp, spatial_bpp, frame_payload_variation, frame_delay_variation,
             aspect_ratio, loop_frequency, cadence_score, palette_depth, motion_gini,
             block_skew, temporal_flatness, webp_compression_ratio
-         FROM samples WHERE loss_tolerance IS NOT NULL",
+         FROM samples WHERE loss_tolerance IS NOT NULL AND frame_count > 1",
         &[],
     )?;
 

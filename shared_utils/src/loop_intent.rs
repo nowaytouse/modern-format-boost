@@ -117,6 +117,8 @@ pub struct LoopMeta {
     // ── Layer 1 signals (hard constraints) ──
     pub has_audio: bool,
     pub has_transparency: bool,
+    /// Whether the source is natively a GIF container.
+    pub is_native_gif: bool,
 
     // ── Layer 2 signals (explicit declarations) ──
     /// 0 = infinite loop, 1 = play once, None = unknown
@@ -206,10 +208,11 @@ impl LoopMeta {
             parent_directories: parent_directories.clone(),
             has_audio: detection.has_audio,
             has_transparency,
+            is_native_gif: detection.format == "gif",
             loop_count: detection.loop_count,
             app_extensions: Some(Vec::new()),
-            container: None,
-            has_embedded_icc: false, // Video containers rarely have ICC in this context
+            container: Some(detection.format.clone()),
+            has_embedded_icc: false, 
             has_complex_color_profile: matches!(
                 detection.color_space,
                 ColorSpace::BT2020 | ColorSpace::AdobeRGB
@@ -288,9 +291,10 @@ impl LoopMeta {
             parent_directories: parent_directories.clone(),
             has_audio: probe.has_audio,
             has_transparency,
+            is_native_gif: probe.format_name == "gif",
             loop_count: probe.loop_count,
             app_extensions: Some(Vec::new()),
-            container: None,
+            container: Some(probe.format_name.clone()),
             frame_payload_variation: Some(calculate_cv(&probe.pkt_sizes)),
             frame_delay_variation: Some(calculate_cv_f64(&probe.pts_deltas)),
             pkt_sizes: probe.pkt_sizes.clone(),
@@ -395,6 +399,7 @@ impl LoopMeta {
             loop_count: loops,
             app_extensions: exts.clone(),
             container: Some("gif".to_string()),
+            is_native_gif: true,
             frame_payload_variation: variation,
             frame_delay_variation: delay_variation,
             palette_size: pal,
