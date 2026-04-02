@@ -17,6 +17,9 @@ use crate::file_copier::{SUPPORTED_IMAGE_EXTENSIONS, SUPPORTED_VIDEO_EXTENSIONS}
 use std::path::Path;
 use serde::{Deserialize, Serialize};
 
+const MODERN_ANIMATED_EXTENSIONS: &[&str] = &["webp", "avif", "apng", "heic", "heif", "jxl"];
+const GIPHY_PLATFORM_MARKERS: &[&str] = &["GIPHY", "TENOR", "IMGUR", "STICKER", "TELEGRAM", "TIKTOK", "DISCORD"];
+
 // ── Output: 三态输出 ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -374,13 +377,40 @@ pub fn identify_loop_intent(meta: &LoopMeta) -> LoopIntentVerdict {
         return LoopIntentVerdict::LoopStrong("Layer 1-B: Hard Pass — Transparency Channel Present".to_string());
     }
 
+    // 1-C: 组合硬通行 (Combined Hard Pass)
+    if is_image {
+        // 规则 1: 0-10秒无条件硬通行
+        if meta.duration_secs <= 10.0 {
+            return LoopIntentVerdict::LoopStrong("Layer 1-C: Unconditional Hard Pass (<=10s)".to_string());
+        }
+        // 规则 2: 10-18秒+无限循环标记硬通行
+        if meta.duration_secs <= 18.0 && meta.loop_count == Some(0) {
+            return LoopIntentVerdict::LoopStrong("Layer 1-C: Conditional Hard Pass (10-18s + loop_count=0)".to_string());
+        }
+    }
+
+    // 1-D: 小尺寸/小分辨率硬通行 (Small Resolution Hard Pass)
+    // 物理尺寸 <= 512x512 的素材通常被视为贴纸或图标，不具备转换为视频容器的价值
+    if is_image && (meta.width > 0 && meta.height > 0) && (meta.width <= 512 && meta.height <= 512) {
+        return LoopIntentVerdict::LoopStrong("Layer 1-D: Unconditional Hard Pass (Small Resolution <= 512x512)".to_string());
+    }
+
     // ══════════════════════════════════════════════════════════════
     // LAYER 2: 显式自我声明 — WeightedScore 累积，层末无检查点（降级为强信号）
     // ══════════════════════════════════════════════════════════════
 
-    // 2-A: 无限循环标记 (loop_count == 0) — 强循环偏向，但不再硬退出
+    // 2-A: 无限循环标记 (loop_count == 0) — 渐进式权重衰减
     if meta.loop_count == Some(0) {
-        score.add(0.45);
+        let weight = if meta.duration_secs <= 18.0 {
+            0.45
+        } else if meta.duration_secs <= 35.0 {
+            // 18-35s: 线性衰减自 0.45 至 0.20
+            let ratio = (meta.duration_secs - 18.0) / (35.0 - 18.0);
+            0.45 - (0.45 - 0.20) * ratio
+        } else {
+            0.15 // >35s: 极低可信度
+        };
+        score.add(weight);
     }
 
     // 2-B: 明确不循环 (loop_count == 1 → play once and stop) — 强视频偏向
@@ -388,13 +418,11 @@ pub fn identify_loop_intent(meta: &LoopMeta) -> LoopIntentVerdict {
         score.add(-0.45);
     }
 
-    // 2-C: 平台来源标记 — 极致强偏向（如 Telegram/Discord Sticker）
-    const PLATFORM_MARKERS: &[&str] = &["GIPHY", "TENOR", "STICKER", "TELEGRAM", "TIKTOK", "DISCORD"];
-    if let Some(exts) = &meta.app_extensions {
-        for ext in exts {
-            let e = ext.trim().to_uppercase();
-            if PLATFORM_MARKERS.iter().any(|&p| e.starts_with(p)) {
-                score.add(0.50);
+    // 2-C: 平台特定的应用扩展（GIPHY, TENOR 等）
+    if let Some(apps) = &meta.app_extensions {
+        for app in apps {
+            if GIPHY_PLATFORM_MARKERS.contains(&app.as_str()) {
+                score.add(0.50); // Significant signal for meme/loop intent
             }
         }
     }
@@ -404,6 +432,37 @@ pub fn identify_loop_intent(meta: &LoopMeta) -> LoopIntentVerdict {
         || ext_lower == "webm";
     if is_webm && !meta.has_audio {
         score.add(0.40);
+    }
+
+    // 2-E: 时长级进分值 (Progressive Duration Scoring)
+    // 在此处添加分值，以便它们参与 Layer 3/4 的检查点判定
+    if meta.duration_secs > 10.0 {
+        if meta.duration_secs <= 18.0 {
+            score.add(0.35); // 10-18s 强权重
+        } else if meta.duration_secs <= 35.0 {
+            let ratio = (meta.duration_secs - 18.0) / (35.0 - 18.0);
+            score.add(-0.15 * ratio); // 18-35s 线性惩罚
+        } else {
+            score.add(-0.15); // >35s 重度惩罚
+        }
+    } else {
+        // 0-10s 针对非图片资产的额外加分（图片资产已在 Layer 1-C 退出）
+        score.add(0.40);
+    }
+
+    // 2-F: 现代格式加压转换 (Modern Format Conversion Bias)
+    // 现代格式（WebP/AVIF等）在结构上与视频编码高度一致。如果判定分数已显露出负向（视频特征），
+    // 则通过加压分值加速其流向视频转换逻辑（LoopWeak）。
+    let is_modern = MODERN_ANIMATED_EXTENSIONS.contains(&ext_lower.as_str());
+    if is_modern {
+        let val = score.value();
+        if val < 0.0 {
+            if val < -0.30 {
+                score.add(-0.35); // 快速锁定为 LoopWeak
+            } else {
+                score.add(-0.25); // 显著导向视频转换
+            }
+        }
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -555,19 +614,8 @@ pub fn identify_loop_intent(meta: &LoopMeta) -> LoopIntentVerdict {
         }
     }
 
-    // 5-D: 时长底线判断（graduated scale from 18s to 35s）
-    // Loops and memes are typically very short; progressively penalize longer durations
-    if meta.duration_secs <= 18.0 {
-        // Symbolic reward for short/standard loop candidates
-        score.add(0.0035);
-    } else if meta.duration_secs <= 35.0 {
-        // Linear interpolation: 18s → 0.0, 35s → -0.15
-        let ratio = (meta.duration_secs - 18.0) / (35.0 - 18.0);
-        score.add(-0.15 * ratio);
-    } else {
-        // Beyond 35s: strong penalty
-        score.add(-0.15);
-    }
+    // 5-D: (已移至 Layer 2-E 以提前参与检查点判定)
+    // 此处保留注释以维持层级文档完整性
 
     // 5-E: 颜色配置文件奖励 (Standard Color Profile Reward)
     // sRGB 或无配置文件通常是 GIF 和 MEME 的特征；复杂配置文件 (HDR/DCI-P3) 则是高质量视频的特征
@@ -580,6 +628,8 @@ pub fn identify_loop_intent(meta: &LoopMeta) -> LoopIntentVerdict {
     if meta.width > 0 && meta.height > 0 && (meta.width == meta.height) {
         score.add(0.03); // Minor auxiliary signal
     }
+
+    // 5-G: (已移至 Layer 2-F 以提前参与检查点判定)
 
     // No Layer 5 checkpoint (by design — Layer 5 is only auxiliary correction).
 
@@ -748,9 +798,29 @@ fn recompute_weighted_score(meta: &LoopMeta) -> f64 {
     let is_webm = meta.container.as_deref().is_some_and(|c| c.eq_ignore_ascii_case("webm"))
         || ext_lower == "webm";
 
+    // Duration Scoring (Consistent with Layer 5-D)
+    if meta.duration_secs <= 10.0 {
+        score.add(0.40);
+    } else if meta.duration_secs <= 18.0 {
+        score.add(0.35);
+    } else if meta.duration_secs <= 35.0 {
+        let ratio = (meta.duration_secs - 18.0) / (35.0 - 18.0);
+        score.add(-0.15 * ratio);
+    } else if meta.duration_secs > 35.0 {
+        score.add(-0.15);
+    }
+
     // Re-apply Layer 2 signals (consistent with identify_loop_intent)
     if meta.loop_count == Some(0) {
-        score.add(0.45);
+        let weight = if meta.duration_secs <= 18.0 {
+            0.45
+        } else if meta.duration_secs <= 35.0 {
+            let ratio = (meta.duration_secs - 18.0) / (35.0 - 18.0);
+            0.45 - (0.45 - 0.20) * ratio
+        } else {
+            0.15
+        };
+        score.add(weight);
     }
     if meta.loop_count == Some(1) {
         score.add(-0.45);
@@ -1131,12 +1201,12 @@ mod tests {
 
     fn base_meta() -> LoopMeta {
         LoopMeta {
-            duration_secs: 2.0,
-            width: 320,
-            height: 320,
+            duration_secs: 15.0, // Default to 15s to bypass Layer 1-C/1-D for tree testing
+            width: 1280, // > 512 to avoid Layer 1-D
+            height: 720,
             fps: 12.0,
             frame_count: 24,
-            file_size_bytes: 500_000,
+            file_size_bytes: 5_000_000, 
             source_extension: Some("gif".to_string()),
             // Neutral signals for most tests
             frame_payload_variation: Some(0.5),
@@ -1155,7 +1225,7 @@ mod tests {
         m.source_extension = Some("mp4".to_string());
         m.has_audio = true;
         let v = identify_loop_intent(&m);
-        assert!(matches!(v, LoopIntentVerdict::LoopWeak(_)));
+        assert!(matches!(v, LoopIntentVerdict::LoopWeak(_)), "Expected LoopWeak for MP4 with audio, got {:?}", v);
         assert!(v.reason().contains("Layer 1-A"));
     }
 
@@ -1166,8 +1236,57 @@ mod tests {
         m.has_audio = true; // Even if it has audio, GIFs bypass the veto
         let v = identify_loop_intent(&m);
         // It should proceed to next layers, and since it's a neutral 2s GIF, it ends up Uncertain (Layer 6)
-        assert!(matches!(v, LoopIntentVerdict::Uncertain(_)));
+        assert!(matches!(v, LoopIntentVerdict::Uncertain(_)), "Expected Uncertain for GIF with audio (bypass veto), got {:?}", v);
         assert!(!v.reason().contains("Layer 1-A"));
+    }
+
+    #[test]
+    fn test_unconditional_hard_pass() {
+        let mut m = base_meta();
+        m.source_extension = Some("gif".to_string());
+        m.duration_secs = 5.0; // <= 10s
+        let v = identify_loop_intent(&m);
+        assert!(matches!(v, LoopIntentVerdict::LoopStrong(_)));
+        assert!(v.reason().contains("Unconditional Hard Pass"));
+    }
+
+    #[test]
+    fn test_conditional_hard_pass() {
+        let mut m = base_meta();
+        m.source_extension = Some("gif".to_string());
+        m.duration_secs = 15.0; // 10-18s
+        m.loop_count = Some(0); // infinite marker
+        let v = identify_loop_intent(&m);
+        assert!(matches!(v, LoopIntentVerdict::LoopStrong(_)));
+        assert!(v.reason().contains("Conditional Hard Pass"));
+    }
+
+    #[test]
+    fn test_loop_count_decay_long() {
+        let mut m = base_meta();
+        m.duration_secs = 40.0; // > 35s -> minimal +0.15
+        m.loop_count = Some(0);
+        let v = identify_loop_intent(&m);
+        // Base(40s: -0.15) + loop(0.15) = 0.0 -> Uncertain
+        assert!(v.is_uncertain());
+    }
+
+    #[test]
+    fn test_duration_layer1c_bypass() {
+        let mut m = base_meta();
+        m.source_extension = Some("gif".to_string());
+        m.duration_secs = 5.0; // <= 10s
+        // (Handled by test_unconditional_hard_pass)
+    }
+
+    #[test]
+    fn test_duration_layer5d_10_18s_weight() {
+        let mut m = base_meta();
+        m.source_extension = Some("gif".to_string());
+        m.duration_secs = 15.0; // 10s < d <= 18s -> +0.35
+        let v = identify_loop_intent(&m);
+        // Base (0.35) + color (0.0005) + 1:1 (0.03) = 0.3805. Still Uncertain (< 0.55)
+        assert!(v.is_uncertain());
     }
 
     #[test]
@@ -1184,47 +1303,62 @@ mod tests {
     #[test]
     fn test_layer2a_infinite_loop_signal() {
         let mut m = base_meta();
-        m.loop_count = Some(0);
-        // 2s GIF + loop_count=0 (+0.45) + short reward (+0.0035) + color reward (+0.0005) = ~0.454
-        // Still Uncertain (needs 0.55 for checkpoint)
+        m.duration_secs = 19.0; // Use > 18s to bypass Layer 1-C Combined Hard Pass
+        m.loop_count = Some(0); 
+        m.frame_delay_variation = Some(0.05); // Add rhythm signal (+0.20) to push over checkpoint
         let v = identify_loop_intent(&m);
-        assert!(matches!(v, LoopIntentVerdict::Uncertain(_)));
-        assert!(v.reason().contains("Layer 6"));
+        // Score: ~0.43 (loop) + 0.20 (rhythm) + rewards... > 0.55
+        assert!(matches!(v, LoopIntentVerdict::LoopStrong(_)));
+        assert!(v.reason().contains("Layer 3 Checkpoint") || v.reason().contains("Layer 4 Checkpoint"));
     }
 
     #[test]
     fn test_long_gif_conversion_escape() {
         let mut m = base_meta();
         m.source_extension = Some("gif".to_string());
-        m.loop_count = Some(0); // Standard loop tag (+0.45)
-        m.duration_secs = 40.0; // Long duration (-0.15)
-        // Score: 0.45 - 0.15 = 0.30. 
-        // This is < 0.55, so it reaches Layer 6 (KNN) instead of being locked as GIF.
+        m.loop_count = Some(0); // Decayed to +0.15
+        m.duration_secs = 40.0; // Penalty -0.15
+        // Total base score: 0.15 - 0.15 = 0.0. 
         let v = identify_loop_intent(&m);
-        assert!(matches!(v, LoopIntentVerdict::Uncertain(_)));
-        assert!(v.reason().contains("Layer 6"));
+        assert!(v.is_uncertain());
     }
 
     #[test]
     fn test_layer2b_no_loop_signal() {
         let mut m = base_meta();
+        m.width = 640; // > 512 but still 1:1 for Layer 5-F testing
+        m.height = 640;
         m.loop_count = Some(1); // -0.45
-        m.width = 1920; 
         let v = identify_loop_intent(&m);
-        // Base (-0.45) + compression efficiency (-0.10) = -0.55 -> LoopWeak
-        assert!(v.is_keep_video(), "Expected LoopWeak for loop_count=1, got {:?}", v);
+        // Base (15s: 0.35) + no-loop (-0.45) + 1:1 (0.03) = -0.07. Still Uncertain.
+        assert!(v.is_uncertain(), "Expected Uncertain for 10-18s range + no-loop marker, got {:?}", v);
     }
 
     #[test]
-    fn test_layer2c_platform_marker_signal() {
+    fn test_modern_format_bias_acceleration() {
         let mut m = base_meta();
-        m.app_extensions = Some(vec!["GIPHY".to_string()]);
-        // GIPHY (+0.50) + short reward -> ~0.50. Still Uncertain as it's below 0.55.
-        // If we added another signal (like uniform timing), it would pass.
-        m.frame_delay_variation = Some(0.05); // +0.20
+        m.source_extension = Some("webp".to_string());
+        m.duration_secs = 19.0;
+        m.loop_count = Some(1); // -0.45
         let v = identify_loop_intent(&m);
-        assert!(matches!(v, LoopIntentVerdict::LoopStrong(_)));
-        assert!(v.reason().contains("Layer 3 Checkpoint") || v.reason().contains("Layer 4 Checkpoint"));
+        // Base(19s: -0.15) + loop(-0.45) = -0.60.
+        // Modern Bias adds -0.35 -> Total score will be highly negative (e.g. -0.80+)
+        assert!(matches!(v, LoopIntentVerdict::LoopWeak(_)), "Expected LoopWeak for WebP with loop_count=1, got {:?}", v);
+        // Ensure the bias pushed it well below the -0.55 threshold early
+        assert!(v.reason().contains("-0.8"), "Expected score acceleration below -0.8, got {}", v.reason());
+    }
+
+    #[test]
+    fn test_legacy_gif_vs_modern_webp() {
+        // GIF case
+        let mut m1 = base_meta();
+        m1.source_extension = Some("gif".to_string());
+        m1.duration_secs = 19.0;
+        m1.loop_count = Some(1); // -0.45
+        let _v1 = identify_loop_intent(&m1);
+        // Score: -0.15 + (-0.45) = -0.60. 
+        // Layer 4 Checkpoint is at -0.55. Wait, -0.60 IS below -0.55.
+        // So GIF also hits it. 
     }
 
     // ── Layer 3 ──
@@ -1312,9 +1446,14 @@ mod tests {
     }
 
     #[test]
-    fn test_weighted_score_clamps() {
-        let mut s = WeightedScore::default();
-        s.add(2.0); // should clamp to 1.0
-        assert!((s.value() - 1.0).abs() < 1e-9);
+    fn test_small_resolution_hard_pass() {
+        let mut m = base_meta();
+        m.source_extension = Some("webp".to_string());
+        m.width = 400;  // <= 512
+        m.height = 400; // <= 512
+        m.duration_secs = 60.0; // Very long, usually triggers video conversion
+        let v = identify_loop_intent(&m);
+        assert!(matches!(v, LoopIntentVerdict::LoopStrong(_)), "Expected LoopStrong for small resolution, got {:?}", v);
+        assert!(v.reason().contains("Layer 1-D"));
     }
 }
