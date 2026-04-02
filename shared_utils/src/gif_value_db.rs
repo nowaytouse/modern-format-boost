@@ -1,9 +1,11 @@
-use crate::useless::gif_meme_score::{gif_meta_from_probe_with_path, scan_gif_headers, GifMeta};
+use crate::loop_intent::LoopMeta;
+use crate::media_meta_utils::scan_gif_headers;
 use anyhow::{Context, Result};
 use blake3::Hasher;
 use indicatif::{ProgressBar, ProgressStyle};
 use postgres::{Client, NoTls};
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 use std::io::Read;
 use std::path::Path;
 use walkdir::WalkDir;
@@ -12,17 +14,67 @@ const PG_DEFAULT_CONNSTR: &str = "host=localhost dbname=modern_format_boost";
 const IMPORT_KEY: &str = "dataset_seeds_import_v4";
 const STATS_KEY: &str = "feature_stats_v1";
 
-use serde::{Deserialize, Serialize};
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct FeatureStats {
     mean: f64,
     std_dev: f64,
+    #[serde(default)]
+    p10: Option<f64>,
+    #[serde(default)]
+    p25: Option<f64>,
+    #[serde(default)]
+    p50: Option<f64>,
+    #[serde(default)]
+    p75: Option<f64>,
+    #[serde(default)]
+    p90: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct FeatureMap {
     stats: std::collections::HashMap<String, FeatureStats>,
+    top_keywords: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DistributionStats {
+    pub mean: f64,
+    pub std_dev: f64,
+    #[serde(default)]
+    pub p10: Option<f64>,
+    #[serde(default)]
+    pub p25: Option<f64>,
+    #[serde(default)]
+    pub p50: Option<f64>,
+    #[serde(default)]
+    pub p75: Option<f64>,
+    #[serde(default)]
+    pub p90: Option<f64>,
+}
+
+impl DistributionStats {
+    #[must_use]
+    pub fn z_score(&self, value: f64) -> f64 {
+        if self.std_dev > 1e-6 {
+            (value - self.mean) / self.std_dev
+        } else {
+            0.0
+        }
+    }
+}
+
+impl From<&FeatureStats> for DistributionStats {
+    fn from(value: &FeatureStats) -> Self {
+        Self {
+            mean: value.mean,
+            std_dev: value.std_dev,
+            p10: value.p10,
+            p25: value.p25,
+            p50: value.p50,
+            p75: value.p75,
+            p90: value.p90,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -39,6 +91,233 @@ pub struct SampleMatch {
     pub min_distance: Option<f64>,
     pub p25_distance: Option<f64>,
     pub p75_distance: Option<f64>,
+    /// Dynamic baseline: P90 duration of neighbors with high loss tolerance.
+    pub p90_duration: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GlobalCollectionStats {
+    pub duration_min: f64,
+    pub duration_avg: f64,
+    pub duration_max: f64,
+    pub duration_p90: f64,
+
+    pub size_min: f64,
+    pub size_avg: f64,
+    pub size_max: f64,
+
+    pub bitrate_min: f64,
+    pub bitrate_avg: f64,
+    pub bitrate_max: f64,
+
+    pub width_min: u32,
+    pub width_avg: f64,
+    pub width_max: u32,
+
+    pub height_min: u32,
+    pub height_avg: f64,
+    pub height_max: u32,
+
+    pub aspect_min: f64,
+    pub aspect_avg: f64,
+    pub aspect_max: f64,
+    pub top_keywords: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoopReferenceProfile {
+    pub collection: GlobalCollectionStats,
+    pub duration: DistributionStats,
+    pub fps: DistributionStats,
+    pub frame_density: DistributionStats,
+    pub file_size_bytes: DistributionStats,
+    pub pixels: DistributionStats,
+    pub temporal_bpp: DistributionStats,
+    pub spatial_bpp: DistributionStats,
+    pub payload_variation: DistributionStats,
+    pub delay_variation: DistributionStats,
+    pub palette_depth: DistributionStats,
+    pub motion_gini: DistributionStats,
+    pub temporal_flatness: DistributionStats,
+    pub webp_ratio: DistributionStats,
+    pub cadence: DistributionStats,
+    pub top_keywords: Vec<String>,
+}
+
+impl Default for GlobalCollectionStats {
+    fn default() -> Self {
+        use crate::constants::{
+            DEFAULT_LOOP_BASELINE_DURATION_SECS, MODERN_FORMAT_VIDEO_BIAS_THRESHOLD_SECS,
+        };
+        Self {
+            duration_min: 0.1,
+            duration_avg: DEFAULT_LOOP_BASELINE_DURATION_SECS,
+            duration_max: 30.0,
+            duration_p90: MODERN_FORMAT_VIDEO_BIAS_THRESHOLD_SECS,
+
+            size_min: 1000.0,
+            size_avg: 1_000_000.0,
+            size_max: 5_000_000.0,
+
+            bitrate_min: 10000.0,
+            bitrate_avg: 500000.0,
+            bitrate_max: 2000000.0,
+
+            width_min: 32,
+            width_avg: 512.0,
+            width_max: 1280,
+
+            height_min: 32,
+            height_avg: 512.0,
+            height_max: 1280,
+
+            aspect_min: 0.5,
+            aspect_avg: 1.0,
+            aspect_max: 2.0,
+            top_keywords: Vec::new(),
+        }
+    }
+}
+
+impl Default for LoopReferenceProfile {
+    fn default() -> Self {
+        let collection = GlobalCollectionStats::default();
+        let pixels_min = f64::from(collection.width_min) * f64::from(collection.height_min);
+        let pixels_avg = collection.width_avg * collection.height_avg;
+        let pixels_max = f64::from(collection.width_max) * f64::from(collection.height_max);
+        let midpoint = |lhs: f64, rhs: f64| (lhs + rhs) / 2.0;
+
+        Self {
+            duration: DistributionStats {
+                mean: collection.duration_avg,
+                std_dev: ((collection.duration_max - collection.duration_min) / 4.0).max(0.5),
+                p10: Some(collection.duration_min),
+                p25: Some(midpoint(collection.duration_min, collection.duration_avg)),
+                p50: Some(collection.duration_avg),
+                p75: Some(midpoint(collection.duration_avg, collection.duration_p90)),
+                p90: Some(collection.duration_p90),
+            },
+            fps: DistributionStats {
+                mean: 12.0,
+                std_dev: 8.0,
+                p10: Some(4.0),
+                p25: Some(8.0),
+                p50: Some(12.0),
+                p75: Some(18.0),
+                p90: Some(24.0),
+            },
+            frame_density: DistributionStats {
+                mean: 12.0,
+                std_dev: 8.0,
+                p10: Some(4.0),
+                p25: Some(8.0),
+                p50: Some(12.0),
+                p75: Some(18.0),
+                p90: Some(24.0),
+            },
+            file_size_bytes: DistributionStats {
+                mean: collection.size_avg,
+                std_dev: ((collection.size_max - collection.size_min) / 4.0).max(64_000.0),
+                p10: Some(collection.size_min),
+                p25: Some(midpoint(collection.size_min, collection.size_avg)),
+                p50: Some(collection.size_avg),
+                p75: Some(midpoint(collection.size_avg, collection.size_max)),
+                p90: Some(collection.size_max),
+            },
+            pixels: DistributionStats {
+                mean: pixels_avg,
+                std_dev: ((pixels_max - pixels_min) / 4.0).max(16_384.0),
+                p10: Some(pixels_min),
+                p25: Some(midpoint(pixels_min, pixels_avg)),
+                p50: Some(pixels_avg),
+                p75: Some(midpoint(pixels_avg, pixels_max)),
+                p90: Some(pixels_max),
+            },
+            temporal_bpp: DistributionStats {
+                mean: 0.05,
+                std_dev: 0.05,
+                p10: Some(0.01),
+                p25: Some(0.02),
+                p50: Some(0.05),
+                p75: Some(0.08),
+                p90: Some(0.12),
+            },
+            spatial_bpp: DistributionStats {
+                mean: 4.0,
+                std_dev: 3.0,
+                p10: Some(1.0),
+                p25: Some(2.0),
+                p50: Some(4.0),
+                p75: Some(6.0),
+                p90: Some(10.0),
+            },
+            payload_variation: DistributionStats {
+                mean: 0.5,
+                std_dev: 0.2,
+                p10: Some(0.2),
+                p25: Some(0.35),
+                p50: Some(0.5),
+                p75: Some(0.65),
+                p90: Some(0.8),
+            },
+            delay_variation: DistributionStats {
+                mean: 0.25,
+                std_dev: 0.15,
+                p10: Some(0.05),
+                p25: Some(0.12),
+                p50: Some(0.25),
+                p75: Some(0.35),
+                p90: Some(0.55),
+            },
+            palette_depth: DistributionStats {
+                mean: 0.55,
+                std_dev: 0.18,
+                p10: Some(0.25),
+                p25: Some(0.4),
+                p50: Some(0.55),
+                p75: Some(0.7),
+                p90: Some(0.85),
+            },
+            motion_gini: DistributionStats {
+                mean: 0.55,
+                std_dev: 0.18,
+                p10: Some(0.2),
+                p25: Some(0.4),
+                p50: Some(0.55),
+                p75: Some(0.7),
+                p90: Some(0.85),
+            },
+            temporal_flatness: DistributionStats {
+                mean: 0.55,
+                std_dev: 0.18,
+                p10: Some(0.2),
+                p25: Some(0.4),
+                p50: Some(0.55),
+                p75: Some(0.7),
+                p90: Some(0.85),
+            },
+            webp_ratio: DistributionStats {
+                mean: 10.0,
+                std_dev: 4.0,
+                p10: Some(4.0),
+                p25: Some(7.0),
+                p50: Some(10.0),
+                p75: Some(13.0),
+                p90: Some(16.0),
+            },
+            cadence: DistributionStats {
+                mean: 0.5,
+                std_dev: 0.2,
+                p10: Some(0.2),
+                p25: Some(0.35),
+                p50: Some(0.5),
+                p75: Some(0.65),
+                p90: Some(0.8),
+            },
+            top_keywords: collection.top_keywords.clone(),
+            collection,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -48,6 +327,7 @@ struct SampleRow {
     height: u32,
     duration_secs: f64,
     frame_count: u64,
+    file_size_bytes: u64,
     fps: f64,
     temporal_bpp: f64,
     spatial_bpp: f64,
@@ -71,6 +351,7 @@ struct SampleRow {
     motion_gini: Option<f64>,
     block_skew: Option<f64>,
     temporal_flatness: Option<f64>,
+    webp_compression_ratio: Option<f64>,
     labeled_by: Option<String>,
 }
 
@@ -78,19 +359,106 @@ fn pg_connstr() -> String {
     std::env::var("MFB_PG_CONNSTR").unwrap_or_else(|_| PG_DEFAULT_CONNSTR.to_string())
 }
 
-fn open_pg_client() -> Result<Client> {
+pub fn open_pg_client() -> Result<Client> {
     let connstr = pg_connstr();
     Client::connect(&connstr, NoTls)
         .with_context(|| format!("Failed to connect to PostgreSQL: {connstr}"))
 }
 
-pub fn lookup_similar_samples(meta: &GifMeta, path: Option<&Path>) -> Option<SampleMatch> {
+pub fn lookup_similar_samples(meta: &LoopMeta, path: Option<&Path>) -> Option<SampleMatch> {
     lookup_similar_samples_inner(meta, path).ok().flatten()
 }
 
+pub fn fetch_global_collection_stats(conn: &mut Client) -> Result<GlobalCollectionStats> {
+    let row = conn.query_opt(
+        "SELECT value FROM sample_metadata WHERE key = 'collection_stats_v1'",
+        &[],
+    )?;
+
+    if let Some(row) = row {
+        let json: String = row.get(0);
+        Ok(serde_json::from_str(&json).unwrap_or_default())
+    } else {
+        Ok(GlobalCollectionStats::default())
+    }
+}
+
+pub fn fetch_loop_reference_profile(conn: &mut Client) -> Result<LoopReferenceProfile> {
+    let collection = fetch_global_collection_stats(conn).unwrap_or_default();
+    let feature_map = fetch_feature_map(conn)?;
+    Ok(build_loop_reference_profile(collection, &feature_map))
+}
+
+fn fetch_feature_map(conn: &mut Client) -> Result<FeatureMap> {
+    Ok(conn
+        .query_opt(
+            "SELECT value FROM sample_metadata WHERE key = $1",
+            &[&STATS_KEY],
+        )?
+        .map(|row| {
+            let value: String = row.get(0);
+            serde_json::from_str(&value).unwrap_or_default()
+        })
+        .unwrap_or_default())
+}
+
+fn build_loop_reference_profile(
+    collection: GlobalCollectionStats,
+    feature_map: &FeatureMap,
+) -> LoopReferenceProfile {
+    let mut profile = LoopReferenceProfile {
+        collection,
+        top_keywords: feature_map.top_keywords.clone(),
+        ..LoopReferenceProfile::default()
+    };
+    profile.duration = distribution_from_feature(feature_map, "duration", profile.duration.clone());
+    profile.fps = distribution_from_feature(feature_map, "fps", profile.fps.clone());
+    profile.frame_density =
+        distribution_from_feature(feature_map, "density", profile.frame_density.clone());
+    profile.file_size_bytes = distribution_from_feature(
+        feature_map,
+        "file_size_bytes",
+        profile.file_size_bytes.clone(),
+    );
+    profile.pixels = distribution_from_feature(feature_map, "pixels", profile.pixels.clone());
+    profile.temporal_bpp =
+        distribution_from_feature(feature_map, "temporal_bpp", profile.temporal_bpp.clone());
+    profile.spatial_bpp =
+        distribution_from_feature(feature_map, "spatial_bpp", profile.spatial_bpp.clone());
+    profile.payload_variation = distribution_from_feature(
+        feature_map,
+        "payload_var",
+        profile.payload_variation.clone(),
+    );
+    profile.delay_variation =
+        distribution_from_feature(feature_map, "delay_var", profile.delay_variation.clone());
+    profile.palette_depth =
+        distribution_from_feature(feature_map, "p_depth", profile.palette_depth.clone());
+    profile.motion_gini =
+        distribution_from_feature(feature_map, "m_gini", profile.motion_gini.clone());
+    profile.temporal_flatness =
+        distribution_from_feature(feature_map, "t_flat", profile.temporal_flatness.clone());
+    profile.webp_ratio =
+        distribution_from_feature(feature_map, "webp_ratio", profile.webp_ratio.clone());
+    profile.cadence = distribution_from_feature(feature_map, "cadence", profile.cadence.clone());
+    profile
+}
+
+fn distribution_from_feature(
+    feature_map: &FeatureMap,
+    key: &str,
+    fallback: DistributionStats,
+) -> DistributionStats {
+    feature_map
+        .stats
+        .get(key)
+        .map(DistributionStats::from)
+        .unwrap_or(fallback)
+}
+
 fn lookup_similar_samples_inner(
-    meta: &GifMeta,
-    path: Option<&Path>,
+    meta: &LoopMeta,
+    _path: Option<&Path>,
 ) -> Result<Option<SampleMatch>> {
     let mut conn = match open_pg_client() {
         Ok(c) => c,
@@ -104,64 +472,32 @@ fn lookup_similar_samples_inner(
     init_schema(&mut conn)?;
     seed_positive_dataset_if_needed(&mut conn)?;
 
-    if let Some(path) = path {
-        let file_hash = calculate_blake3_hex(path)?;
-        let row = conn.query_opt(
-            "SELECT loss_tolerance FROM samples WHERE file_hash = $1 LIMIT 1",
-            &[&file_hash],
-        )?;
-        if let Some(row) = row {
-            let tol: Option<String> = row.get(0);
-            if let Some(tol) = tol {
-                let prob = match tol.as_str() {
-                    "high" => 1.0,
-                    "low" => 0.0,
-                    _ => 0.5,
-                };
-                return Ok(Some(SampleMatch {
-                    exact_label: Some(prob > 0.5),
-                    keep_probability: Some(prob),
-                    confidence: 1.0, // exact match → full confidence
-                    neighbor_count: 1,
-                    mean_distance: Some(0.0),
-                    std_dev_distance: Some(0.0),
-                    min_distance: Some(0.0),
-                    p25_distance: Some(0.0),
-                    p75_distance: Some(0.0),
-                }));
-            }
-        }
-    }
+    // (Abandon Exact Match per User Request)
+    // We no longer exit early on file_hash / blake3 matches.
+    // Instead, we proceed to fuzzy matching to find semantically similar samples.
 
     let target_pixels = f64::from(meta.width) * f64::from(meta.height);
     let target_temporal_bpp =
         meta.file_size_bytes as f64 / ((target_pixels.max(1.0)) * meta.frame_count.max(1) as f64);
     let target_spatial_bpp = meta.file_size_bytes as f64 / target_pixels.max(1.0);
 
-    let feature_stats: FeatureMap = conn
-        .query_opt(
-            "SELECT value FROM sample_metadata WHERE key = $1",
-            &[&STATS_KEY],
-        )?
-        .map(|row| {
-            let s: String = row.get(0);
-            serde_json::from_str(&s).unwrap_or_default()
-        })
-        .unwrap_or_default();
+    let feature_stats = fetch_feature_map(&mut conn)?;
 
+    // Corrected Query: Only native GIFs for KNN reference, no exact match bypass.
     let rows = conn.query(
         "SELECT
-            loss_tolerance, width, height, duration_secs, frame_count,
+            loss_tolerance, width, height, duration_secs, frame_count, file_size_bytes,
             fps, temporal_bpp, spatial_bpp,
             has_transparency, has_embedded_icc, has_complex_color_profile,
             palette_size, frame_payload_variation, frame_delay_variation,
             aspect_ratio, labeled_by,
             total_pixels, loop_frequency, is_meme_platform, is_human_semantic_name,
             cadence_score, is_high_value_source, is_native_gif,
-            palette_depth, motion_gini, block_skew, temporal_flatness, directory_meme_score
+            palette_depth, motion_gini, block_skew, temporal_flatness, directory_meme_score,
+            webp_compression_ratio
          FROM samples
-         WHERE loss_tolerance IS NOT NULL
-         LIMIT 1024",
+         WHERE loss_tolerance IS NOT NULL AND is_native_gif = TRUE
+         LIMIT 1021",
         &[],
     )?;
 
@@ -174,29 +510,31 @@ fn lookup_similar_samples_inner(
             height: row.get::<_, i32>(2) as u32,
             duration_secs: row.get(3),
             frame_count: row.get::<_, i64>(4) as u64,
-            fps: row.get::<_, Option<f64>>(5).unwrap_or(0.0),
-            temporal_bpp: row.get(6),
-            spatial_bpp: row.get(7),
-            has_transparency: row.get(8),
-            has_embedded_icc: row.get(9),
-            has_complex_color_profile: row.get(10),
-            palette_size: row.get::<_, Option<i32>>(11).map(|v| v as u32),
-            frame_payload_variation: row.get(12),
-            frame_delay_variation: row.get(13),
-            aspect_ratio: row.get(14),
-            total_pixels: row.get::<_, Option<i64>>(16).map(|v| v as u64),
-            loop_frequency: row.get(17),
-            is_meme_platform: row.get(18),
-            is_human_semantic_name: row.get(19),
-            cadence_score: row.get(20),
-            is_high_value_source: row.get(21),
-            is_native_gif: row.get(22),
-            palette_depth: row.get(23),
-            motion_gini: row.get(24),
-            block_skew: row.get(25),
-            temporal_flatness: row.get(26),
-            directory_meme_score: row.get::<_, Option<f64>>(27),
-            labeled_by: row.get(15),
+            file_size_bytes: row.get::<_, i64>(5) as u64,
+            fps: row.get::<_, Option<f64>>(6).unwrap_or(0.0),
+            temporal_bpp: row.get(7),
+            spatial_bpp: row.get(8),
+            has_transparency: row.get(9),
+            has_embedded_icc: row.get(10),
+            has_complex_color_profile: row.get(11),
+            palette_size: row.get::<_, Option<i32>>(12).map(|v| v as u32),
+            frame_payload_variation: row.get(13),
+            frame_delay_variation: row.get(14),
+            aspect_ratio: row.get(15),
+            labeled_by: row.get(16),
+            total_pixels: row.get::<_, Option<i64>>(17).map(|v| v as u64),
+            loop_frequency: row.get(18),
+            is_meme_platform: row.get(19),
+            is_human_semantic_name: row.get(20),
+            cadence_score: row.get(21),
+            is_high_value_source: row.get(22),
+            is_native_gif: row.get(23),
+            palette_depth: row.get(24),
+            motion_gini: row.get(25),
+            block_skew: row.get(26),
+            temporal_flatness: row.get(27),
+            directory_meme_score: row.get::<_, Option<f64>>(28),
+            webp_compression_ratio: row.get::<_, Option<f64>>(29),
         };
 
         let distance = sample_distance(
@@ -224,6 +562,7 @@ fn lookup_similar_samples_inner(
     let mut weighted_keep = 0.0;
     let mut total_weight = 0.0;
     let mut distances = Vec::new();
+    let mut loop_durations = Vec::new();
 
     for (sample, distance) in neighbors {
         if *distance > radius {
@@ -237,6 +576,10 @@ fn lookup_similar_samples_inner(
             Some("low") => 0.0,
             _ => 0.5,
         };
+
+        if prob >= 0.5 {
+            loop_durations.push(sample.duration_secs);
+        }
 
         weighted_keep += prob * weight;
         total_weight += weight;
@@ -276,6 +619,14 @@ fn lookup_similar_samples_inner(
     let p25_distance = distances.get(n / 4).copied();
     let p75_distance = distances.get(3 * n / 4).copied();
 
+    let p90_duration = if !loop_durations.is_empty() {
+        loop_durations.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let idx = (loop_durations.len() as f64 * 0.90).floor() as usize;
+        Some(loop_durations[idx.min(loop_durations.len() - 1)])
+    } else {
+        None
+    };
+
     Ok(Some(SampleMatch {
         exact_label: None,
         keep_probability: Some(keep_probability),
@@ -286,6 +637,7 @@ fn lookup_similar_samples_inner(
         min_distance,
         p25_distance,
         p75_distance,
+        p90_duration,
     }))
 }
 
@@ -311,7 +663,7 @@ fn lossless_duration_limit_for_keep_prob(keep_prob: f64) -> f32 {
 }
 
 #[must_use]
-fn resolved_duration_secs(meta: &GifMeta) -> f64 {
+fn resolved_duration_secs(meta: &LoopMeta) -> f64 {
     if meta.duration_secs > 0.11 {
         meta.duration_secs
     } else if meta.frame_count > 1 && meta.fps > 0.1 {
@@ -322,10 +674,10 @@ fn resolved_duration_secs(meta: &GifMeta) -> f64 {
 }
 
 #[must_use]
-pub fn is_lossless_exploration_safe(meta: &GifMeta, path: Option<&Path>) -> bool {
+pub fn is_lossless_exploration_safe(meta: &LoopMeta, path: Option<&Path>) -> bool {
     let mut current_meta = meta.clone();
     if let Some(p) = path {
-        let _ = crate::useless::gif_meme_score::deep_refine_meta(&mut current_meta, p);
+        let _ = crate::loop_intent::deep_refine_meta(&mut current_meta, p);
     }
     current_meta.duration_secs = resolved_duration_secs(&current_meta);
 
@@ -352,7 +704,7 @@ pub fn is_lossless_exploration_safe(meta: &GifMeta, path: Option<&Path>) -> bool
     is_safe
 }
 
-fn init_schema(conn: &mut Client) -> Result<()> {
+pub fn init_schema(conn: &mut Client) -> Result<()> {
     // Enable pgvector extension
     conn.execute("CREATE EXTENSION IF NOT EXISTS vector", &[])?;
 
@@ -391,6 +743,7 @@ fn init_schema(conn: &mut Client) -> Result<()> {
             block_skew DOUBLE PRECISION,
             temporal_flatness DOUBLE PRECISION,
             loss_tolerance TEXT,
+            loop_verdict TEXT,
             labeled_by TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             features vector(18)
@@ -412,9 +765,18 @@ fn init_schema(conn: &mut Client) -> Result<()> {
         &[],
     )?;
 
-    // Migration: ensure numeric directory score exists for older DBs
     let _ = conn.execute(
         "ALTER TABLE samples ADD COLUMN IF NOT EXISTS directory_meme_score DOUBLE PRECISION DEFAULT 0.5",
+        &[],
+    );
+
+    let _ = conn.execute(
+        "ALTER TABLE samples ADD COLUMN IF NOT EXISTS webp_compression_ratio DOUBLE PRECISION",
+        &[],
+    );
+
+    let _ = conn.execute(
+        "ALTER TABLE samples ADD COLUMN IF NOT EXISTS loop_verdict TEXT",
         &[],
     );
 
@@ -441,7 +803,7 @@ fn seed_positive_dataset_if_needed(conn: &mut Client) -> Result<()> {
     let mut tx = conn.transaction()?;
 
     // Seed default dataset shipped with the binary (PostgreSQL-native SQL)
-    let default_sql = include_str!("useless/default_samples_pg.sql");
+    let default_sql = include_str!("./sql/default_samples.sql");
     tx.batch_execute(default_sql).unwrap_or_else(|e| {
         log::warn!("⚠️ Failed to seed default GIF value dataset: {e}");
     });
@@ -492,6 +854,8 @@ struct SampleInsert {
     motion_gini: Option<f64>,
     block_skew: Option<f64>,
     temporal_flatness: Option<f64>,
+    webp_compression_ratio: Option<f64>,
+    loop_verdict: String,
 }
 
 fn determine_loss_tolerance(
@@ -516,12 +880,12 @@ fn determine_loss_tolerance(
         "gallery",
         "archive",
         "portfolio",
-        "作品",
-        "作者",
-        "画师",
-        "插画",
-        "收藏",
-        "原作",
+        "\u{4f5c}\u{54c1}",
+        "\u{4f5c}\u{8005}",
+        "\u{753b}\u{5e08}",
+        "\u{63d2}\u{753b}",
+        "\u{6536}\u{85cf}",
+        "\u{539f}\u{4f5c}",
     ]
     .iter()
     .any(|kw| source_str.contains(kw));
@@ -544,7 +908,14 @@ fn determine_loss_tolerance(
     }
 
     let is_meme_dir = [
-        "meme", "sticker", "emoji", "reaction", "表情", "贴纸", "斗图", "梗",
+        "meme",
+        "sticker",
+        "emoji",
+        "reaction",
+        "\u{8868}\u{60c5}",
+        "\u{8d34}\u{7eb8}",
+        "\u{6597}\u{56fe}",
+        "\u{6897}",
     ]
     .iter()
     .any(|kw| source_str.contains(kw));
@@ -567,9 +938,8 @@ fn determine_loss_tolerance(
     "medium".to_string()
 }
 fn sample_from_path(path: &Path, labeled_by: &str) -> Option<SampleInsert> {
-    let file_size = std::fs::metadata(path).ok()?.len();
     let probe = crate::probe_video(path).ok()?;
-    let mut meta = gif_meta_from_probe_with_path(&probe, file_size, path)?;
+    let mut meta = LoopMeta::from_ffprobe_result(&probe, path);
     if let Ok((pal, exts, has_transparency, variation, delay_variation, loop_count, total_dur)) =
         scan_gif_headers(path)
     {
@@ -585,7 +955,7 @@ fn sample_from_path(path: &Path, labeled_by: &str) -> Option<SampleInsert> {
     }
 
     // Call deep refinement to populate palette_depth, temporal_flatness, etc.
-    let _ = crate::useless::gif_meme_score::deep_refine_meta(&mut meta, path);
+    let _ = crate::loop_intent::deep_refine_meta(&mut meta, path);
 
     let pixel_count = f64::from(meta.width) * f64::from(meta.height);
     let temporal_bpp =
@@ -609,25 +979,18 @@ fn sample_from_path(path: &Path, labeled_by: &str) -> Option<SampleInsert> {
 
     let total_pixels = u64::from(meta.width) * u64::from(meta.height);
     let loop_frequency =
-        crate::useless::gif_meme_score::score_loop_frequency(meta.duration_secs, meta.frame_count);
-    let analysis = crate::useless::gif_meme_score::analyze_filename(meta.file_name.as_deref());
-    let is_human_semantic_name =
-        analysis.kind == crate::useless::gif_meme_score::FilenameKind::HumanSemantic;
-    let cadence_score =
-        crate::useless::gif_meme_score::score_sparse_cadence(meta.duration_secs, meta.frame_count);
-    // Compute a continuous directory-context score (no boolean fallback).
-    let directory_meme_score =
-        crate::useless::gif_meme_score::score_directory_context(meta.parent_directories.as_deref());
+        crate::loop_intent::score_loop_frequency(meta.duration_secs, meta.frame_count);
+    let (is_human_semantic_name, directory_meme_score, cadence_score) = {
+        let analysis = crate::loop_intent::analyze_filename(meta.file_name.as_deref(), &[]);
+        (
+            analysis.kind == crate::loop_intent::FilenameKind::HumanSemantic,
+            crate::loop_intent::score_directory_context(meta.parent_directories.as_deref(), &[]),
+            crate::loop_intent::score_sparse_cadence(meta.duration_secs, meta.frame_count),
+        )
+    };
+    let is_meme_platform = meta.is_meme_platform;
     let is_native_gif = meta.source_extension.as_deref() == Some("gif");
     let is_high_value_source = loss_tolerance == "low";
-
-    let is_meme_platform = meta.app_extensions.as_ref().is_some_and(|exts| {
-        exts.iter().any(|e| {
-            crate::useless::gif_meme_score::MEME_PLATFORM_PREFIXES
-                .iter()
-                .any(|p| e.starts_with(p))
-        })
-    });
 
     Some(SampleInsert {
         file_hash: calculate_blake3_hex(path).ok()?,
@@ -648,7 +1011,7 @@ fn sample_from_path(path: &Path, labeled_by: &str) -> Option<SampleInsert> {
         frame_delay_variation: meta.frame_delay_variation,
         temporal_bpp,
         spatial_bpp,
-        loss_tolerance,
+        loss_tolerance: loss_tolerance.clone(),
         labeled_by: labeled_by.to_string(),
         aspect_ratio,
         total_pixels,
@@ -663,6 +1026,12 @@ fn sample_from_path(path: &Path, labeled_by: &str) -> Option<SampleInsert> {
         motion_gini: meta.motion_gini,
         block_skew: meta.block_skew,
         temporal_flatness: meta.temporal_flatness,
+        webp_compression_ratio: meta.webp_compression_ratio,
+        loop_verdict: match loss_tolerance.as_str() {
+            "high" => "LoopStrong".to_string(),
+            "low" => "LoopWeak".to_string(),
+            _ => "Uncertain".to_string(),
+        },
     })
 }
 
@@ -681,7 +1050,7 @@ fn calculate_blake3_hex(path: &Path) -> Result<String> {
 }
 
 fn sample_distance(
-    meta: &GifMeta,
+    meta: &LoopMeta,
     sample: &SampleRow,
     target_temporal_bpp: f64,
     target_spatial_bpp: f64,
@@ -690,25 +1059,33 @@ fn sample_distance(
     let target_pixels = (f64::from(meta.width) * f64::from(meta.height)).max(1.0);
     let sample_pixels = (f64::from(sample.width) * f64::from(sample.height)).max(1.0);
     let target_loop_frequency =
-        crate::useless::gif_meme_score::score_loop_frequency(meta.duration_secs, meta.frame_count);
-    let target_loop_affinity = crate::useless::gif_meme_score::score_loop_affinity(meta);
-    let target_analysis =
-        crate::useless::gif_meme_score::analyze_filename(meta.file_name.as_deref());
+        crate::loop_intent::score_loop_frequency(meta.duration_secs, meta.frame_count);
+    let target_analysis = crate::loop_intent::analyze_filename(meta.file_name.as_deref(), &[]);
     let target_is_human_semantic_name =
-        target_analysis.kind == crate::useless::gif_meme_score::FilenameKind::HumanSemantic;
+        target_analysis.kind == crate::loop_intent::FilenameKind::HumanSemantic;
     let target_cadence_score =
-        crate::useless::gif_meme_score::score_sparse_cadence(meta.duration_secs, meta.frame_count);
+        crate::loop_intent::score_sparse_cadence(meta.duration_secs, meta.frame_count);
     // Use a continuous directory-context score for target -> sample distance
     let target_directory_meme_score =
-        crate::useless::gif_meme_score::score_directory_context(meta.parent_directories.as_deref());
+        crate::loop_intent::score_directory_context(meta.parent_directories.as_deref(), &[]);
     let target_is_native_gif = meta.source_extension.as_deref() == Some("gif");
+
+    // GIPHY_PLATFORM_MARKERS check moved to loop_intent helpers or inline
+    const PLATFORM_MARKERS: &[&str] =
+        &["GIPHY", "TENOR", "STICKER", "TELEGRAM", "TIKTOK", "DISCORD"];
     let target_is_meme_platform = meta.app_extensions.as_ref().is_some_and(|exts| {
         exts.iter().any(|e| {
-            crate::useless::gif_meme_score::MEME_PLATFORM_PREFIXES
-                .iter()
-                .any(|p| e.starts_with(p))
+            let up = e.to_uppercase();
+            PLATFORM_MARKERS.iter().any(|&m| up.contains(m))
         })
     });
+
+    // Affinity is now a derived calculation
+    let target_loop_affinity = (target_loop_frequency * 0.45
+        + target_cadence_score * 0.25
+        + (if target_is_native_gif { 1.0 } else { 0.55 }) * 0.20
+        + 0.5 * 0.10) // default fps score for target
+        .clamp(0.0, 1.0);
 
     let target_is_high_value_source =
         meta.has_embedded_icc || meta.has_complex_color_profile || meta.has_audio;
@@ -731,10 +1108,16 @@ fn sample_distance(
     let d_pix = (target_pixels - sample_pixels) / get_std("pixels");
     let d_dur = (meta.duration_secs - sample.duration_secs) / get_std("duration");
     let d_frm = (meta.frame_count as f64 - sample.frame_count as f64) / get_std("frame_count");
+    let d_fsize =
+        (meta.file_size_bytes as f64 - sample.file_size_bytes as f64) / get_std("file_size_bytes");
     let d_dens = (target_frame_density - sample_frame_density) / get_std("density");
     let d_gap = (target_frame_gap - sample_frame_gap) / get_std("gap");
     let d_tbpp = (target_temporal_bpp - sample.temporal_bpp) / get_std("temporal_bpp");
     let d_sbpp = (target_spatial_bpp - sample.spatial_bpp) / get_std("spatial_bpp");
+
+    let target_webp_ratio = meta.webp_compression_ratio.unwrap_or(0.0);
+    let sample_webp_ratio = sample.webp_compression_ratio.unwrap_or(0.0);
+    let d_wratio = (target_webp_ratio - sample_webp_ratio) / get_std("webp_ratio");
 
     let d_lfreq =
         (target_loop_frequency - sample.loop_frequency.unwrap_or(0.5)) / get_std("loop_freq");
@@ -806,6 +1189,7 @@ fn sample_distance(
     let sos = d_pix.powi(2) * 0.4
         + d_dur.powi(2) * 1.5
         + d_frm.powi(2) * 0.3
+        + d_fsize.powi(2) * 0.9
         + d_dens.powi(2) * 0.8
         + d_gap.powi(2) * 0.8
         + d_tbpp.powi(2) * 1.2
@@ -820,7 +1204,8 @@ fn sample_distance(
         + d_pdepth.powi(2) * 1.4
         + d_mgini.powi(2) * 1.2
         + d_bskew.powi(2) * 1.0
-        + d_tflat.powi(2) * 1.3;
+        + d_tflat.powi(2) * 1.3
+        + d_wratio.powi(2) * 1.0;
 
     sos.sqrt()
         + meme_platform_dist
@@ -869,6 +1254,51 @@ fn relative_distance(a: f64, b: f64) -> f64 {
     (a - b).abs() / a.abs().max(b.abs()).max(1.0)
 }
 
+fn percentile_value(sorted_values: &[f64], quantile: f64) -> Option<f64> {
+    if sorted_values.is_empty() {
+        return None;
+    }
+
+    let clamped = quantile.clamp(0.0, 1.0);
+    let scaled_index = clamped * (sorted_values.len().saturating_sub(1)) as f64;
+    let lower_index = scaled_index.floor() as usize;
+    let upper_index = scaled_index.ceil() as usize;
+
+    if lower_index == upper_index {
+        return sorted_values.get(lower_index).copied();
+    }
+
+    let lower = sorted_values.get(lower_index).copied()?;
+    let upper = sorted_values.get(upper_index).copied()?;
+    Some(lower + (upper - lower) * (scaled_index - lower_index as f64))
+}
+
+fn build_feature_stats(values: &[f64]) -> FeatureStats {
+    if values.is_empty() {
+        return FeatureStats::default();
+    }
+
+    let mean = values.iter().sum::<f64>() / values.len() as f64;
+    let variance = values
+        .iter()
+        .map(|value| (value - mean).powi(2))
+        .sum::<f64>()
+        / values.len() as f64;
+
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|lhs, rhs| lhs.partial_cmp(rhs).unwrap_or(std::cmp::Ordering::Equal));
+
+    FeatureStats {
+        mean,
+        std_dev: variance.sqrt(),
+        p10: percentile_value(&sorted, 0.10),
+        p25: percentile_value(&sorted, 0.25),
+        p50: percentile_value(&sorted, 0.50),
+        p75: percentile_value(&sorted, 0.75),
+        p90: percentile_value(&sorted, 0.90),
+    }
+}
+
 pub fn batch_ingest_samples(dataset_path: &Path) -> Result<usize> {
     let mut conn = open_pg_client()?;
 
@@ -892,7 +1322,7 @@ pub fn batch_ingest_samples(dataset_path: &Path) -> Result<usize> {
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .to_lowercase();
-        if ["gif", "webp", "mp4", "mov"].contains(&ext.as_str()) {
+        if ["gif", "webp", "apng", "avif"].contains(&ext.as_str()) {
             candidate_paths.push(path);
         }
     }
@@ -920,6 +1350,10 @@ pub fn batch_ingest_samples(dataset_path: &Path) -> Result<usize> {
             let res = sample_from_path(path, "cli_ingest");
             pb.inc(1);
             if let Some(s) = &res {
+                // 排除静态图片：只有多帧内容才具备循环意图训练价值
+                if s.frame_count <= 1 {
+                    return None;
+                }
                 pb.set_message(format!("Learn: {}", s.file_name.as_deref().unwrap_or("?")));
             }
             res
@@ -940,8 +1374,9 @@ pub fn batch_ingest_samples(dataset_path: &Path) -> Result<usize> {
             palette_size, frame_payload_variation, frame_delay_variation,
             temporal_bpp, spatial_bpp, loss_tolerance, labeled_by, aspect_ratio,
             total_pixels, loop_frequency, is_meme_platform, is_human_semantic_name,
-                cadence_score, directory_meme_score, is_high_value_source, is_native_gif,
-            palette_depth, motion_gini, block_skew, temporal_flatness
+            cadence_score, directory_meme_score, is_high_value_source, is_native_gif,
+            palette_depth, motion_gini, block_skew, temporal_flatness, webp_compression_ratio,
+            loop_verdict
          ) VALUES (
             $1, $2, $3, $4,
             $5, $6, $7, $8, $9, $10,
@@ -949,7 +1384,7 @@ pub fn batch_ingest_samples(dataset_path: &Path) -> Result<usize> {
             $14, $15, $16,
             $17, $18, $19, $20, $21,
             $22, $23, $24, $25, $26, $27, $28, $29,
-            $30, $31, $32, $33
+            $30, $31, $32, $33, $34, $35
          )
          ON CONFLICT (file_hash) DO UPDATE SET
             source_path = EXCLUDED.source_path,
@@ -983,7 +1418,9 @@ pub fn batch_ingest_samples(dataset_path: &Path) -> Result<usize> {
             palette_depth = EXCLUDED.palette_depth,
             motion_gini = EXCLUDED.motion_gini,
             block_skew = EXCLUDED.block_skew,
-            temporal_flatness = EXCLUDED.temporal_flatness",
+            temporal_flatness = EXCLUDED.temporal_flatness,
+            webp_compression_ratio = EXCLUDED.webp_compression_ratio,
+            loop_verdict = EXCLUDED.loop_verdict",
     )?;
 
     for sample in samples {
@@ -1030,6 +1467,8 @@ pub fn batch_ingest_samples(dataset_path: &Path) -> Result<usize> {
                 &sample.motion_gini,
                 &sample.block_skew,
                 &sample.temporal_flatness,
+                &sample.webp_compression_ratio,
+                &sample.loop_verdict,
             ],
         );
         if res.is_ok() {
@@ -1042,14 +1481,13 @@ pub fn batch_ingest_samples(dataset_path: &Path) -> Result<usize> {
     Ok(count)
 }
 
-fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
+pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
     let rows = conn.query(
         "SELECT
-            width, height, duration_secs, frame_count, fps,
-            temporal_bpp, spatial_bpp, palette_size,
-            frame_payload_variation, frame_delay_variation,
-            aspect_ratio, loop_frequency, cadence_score,
-            palette_depth, motion_gini, block_skew, temporal_flatness
+            width, height, duration_secs, frame_count, file_size_bytes, fps,
+            temporal_bpp, spatial_bpp, frame_payload_variation, frame_delay_variation,
+            aspect_ratio, loop_frequency, cadence_score, palette_depth, motion_gini,
+            block_skew, temporal_flatness, webp_compression_ratio
          FROM samples WHERE loss_tolerance IS NOT NULL",
         &[],
     )?;
@@ -1057,22 +1495,40 @@ fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
     let all_data: Vec<Vec<f64>> = rows
         .iter()
         .map(|row| {
+            let duration = row.get::<_, f64>(2);
+            let frame_count = row.get::<_, i64>(3) as f64;
+            let fps = row.get::<_, Option<f64>>(5).unwrap_or(0.0);
+            let density = if duration > 0.05 {
+                frame_count / duration
+            } else {
+                fps
+            };
+            let gap = if frame_count > 0.0 {
+                duration / frame_count
+            } else {
+                duration
+            };
+
             vec![
                 f64::from(row.get::<_, i32>(0)) * f64::from(row.get::<_, i32>(1)), // pixels
-                row.get::<_, f64>(2),                                              // duration
-                row.get::<_, i64>(3) as f64,                                       // frame_count
-                row.get::<_, Option<f64>>(4).unwrap_or(0.0), // fps (frame density proxy)
-                row.get::<_, f64>(5),                        // tbpp
-                row.get::<_, f64>(6),                        // sbpp
+                duration,
+                frame_count,
+                row.get::<_, i64>(4) as f64, // file_size_bytes
+                fps,
+                density,
+                gap,
+                row.get::<_, f64>(6),                         // temporal_bpp
+                row.get::<_, f64>(7),                         // spatial_bpp
                 row.get::<_, Option<f64>>(10).unwrap_or(1.0), // aspect
                 row.get::<_, Option<f64>>(11).unwrap_or(0.5), // loop_freq
                 row.get::<_, Option<f64>>(12).unwrap_or(0.5), // cadence
-                row.get::<_, Option<f64>>(8).unwrap_or(0.5), // payload_var
-                row.get::<_, Option<f64>>(9).unwrap_or(0.5), // delay_var
+                row.get::<_, Option<f64>>(8).unwrap_or(0.5),  // payload_var
+                row.get::<_, Option<f64>>(9).unwrap_or(0.5),  // delay_var
                 row.get::<_, Option<f64>>(13).unwrap_or(0.5), // p_depth
                 row.get::<_, Option<f64>>(14).unwrap_or(0.5), // m_gini
                 row.get::<_, Option<f64>>(15).unwrap_or(0.5), // b_skew
                 row.get::<_, Option<f64>>(16).unwrap_or(0.5), // t_flat
+                row.get::<_, Option<f64>>(17).unwrap_or(1.0), // webp_ratio
             ]
         })
         .collect();
@@ -1085,7 +1541,10 @@ fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
         "pixels",
         "duration",
         "frame_count",
+        "file_size_bytes",
+        "fps",
         "density",
+        "gap",
         "temporal_bpp",
         "spatial_bpp",
         "aspect",
@@ -1097,25 +1556,36 @@ fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
         "m_gini",
         "b_skew",
         "t_flat",
+        "webp_ratio",
     ];
 
+    // 1. Extract dynamic keywords from SampleStrong filenames
+    let keyword_rows = conn.query(
+        "WITH words AS (
+             SELECT unnest(regexp_split_to_array(lower(file_name), '[^a-z0-9一-龥]+')) as word 
+             FROM samples 
+             WHERE loop_verdict = 'LoopStrong' AND file_name IS NOT NULL
+         )
+         SELECT word FROM words 
+         WHERE length(word) > 2 AND word !~ '^[0-9]+$'
+         GROUP BY word 
+         ORDER BY COUNT(*) DESC 
+         LIMIT 50",
+        &[],
+    )?;
+    let top_keywords: Vec<String> = keyword_rows.iter().map(|r| r.get(0)).collect();
+
     let mut feature_map = FeatureMap::default();
-    let n = all_data.len() as f64;
+    feature_map.top_keywords = top_keywords.clone();
 
     for (idx, name) in names.iter().enumerate() {
         let values: Vec<f64> = all_data
             .iter()
             .map(|v| v.get(idx).copied().unwrap_or(0.0))
             .collect();
-        let mean = values.iter().sum::<f64>() / n;
-        let variance = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n;
-        feature_map.stats.insert(
-            name.to_string(),
-            FeatureStats {
-                mean,
-                std_dev: variance.sqrt(),
-            },
-        );
+        feature_map
+            .stats
+            .insert(name.to_string(), build_feature_stats(&values));
     }
 
     let json = serde_json::to_string(&feature_map)?;
@@ -1125,6 +1595,88 @@ fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
         &[&STATS_KEY, &json],
     )?;
 
+    // Calculate Global Collection Stats
+    let stats_row = conn.query_one(
+        "SELECT 
+            MIN(duration_secs), AVG(duration_secs), MAX(duration_secs),
+            MIN(file_size_bytes), AVG(file_size_bytes)::DOUBLE PRECISION, MAX(file_size_bytes),
+            MIN(width), AVG(width)::DOUBLE PRECISION, MAX(width),
+            MIN(height), AVG(height)::DOUBLE PRECISION, MAX(height),
+            MIN(aspect_ratio), AVG(aspect_ratio), MAX(aspect_ratio)
+         FROM samples WHERE is_native_gif = TRUE",
+        &[],
+    )?;
+
+    let dur_min: f64 = stats_row.get(0);
+    let dur_avg: f64 = stats_row.get(1);
+    let dur_max: f64 = stats_row.get(2);
+
+    let size_min_i64: i64 = stats_row.get(3);
+    let size_avg: f64 = stats_row.get(4);
+    let size_max_i64: i64 = stats_row.get(5);
+
+    let w_min_i32: i32 = stats_row.get(6);
+    let w_avg: f64 = stats_row.get(7);
+    let w_max_i32: i32 = stats_row.get(8);
+
+    let h_min_i32: i32 = stats_row.get(9);
+    let h_avg: f64 = stats_row.get(10);
+    let h_max_i32: i32 = stats_row.get(11);
+
+    let aspect_min: f64 = stats_row.get(12);
+    let aspect_avg: f64 = stats_row.get(13);
+    let aspect_max: f64 = stats_row.get(14);
+
+    // Estimate bitrate stats (size / duration)
+    let bitrate_row = conn.query_one(
+        "SELECT
+            MIN(file_size_bytes::DOUBLE PRECISION * 8.0 / NULLIF(duration_secs, 0.0)),
+            AVG(file_size_bytes::DOUBLE PRECISION * 8.0 / NULLIF(duration_secs, 0.0))::DOUBLE PRECISION,
+            MAX(file_size_bytes::DOUBLE PRECISION * 8.0 / NULLIF(duration_secs, 0.0))
+         FROM samples WHERE is_native_gif = TRUE AND duration_secs > 0",
+        &[],
+    )?;
+
+    let collection_stats = GlobalCollectionStats {
+        duration_min: dur_min,
+        duration_avg: dur_avg,
+        duration_max: dur_max,
+        duration_p90: feature_map
+            .stats
+            .get("duration")
+            .and_then(|stats| stats.p90)
+            .unwrap_or(dur_avg),
+
+        size_min: size_min_i64 as f64,
+        size_avg,
+        size_max: size_max_i64 as f64,
+
+        bitrate_min: bitrate_row.get(0),
+        bitrate_avg: bitrate_row.get(1),
+        bitrate_max: bitrate_row.get(2),
+
+        width_min: w_min_i32 as u32,
+        width_avg: w_avg,
+        width_max: w_max_i32 as u32,
+
+        height_min: h_min_i32 as u32,
+        height_avg: h_avg,
+        height_max: h_max_i32 as u32,
+
+        aspect_min,
+        aspect_avg,
+        aspect_max,
+        top_keywords,
+    };
+
+    let col_json = serde_json::to_string(&collection_stats)?;
+
+    conn.execute(
+        "INSERT INTO sample_metadata (key, value) VALUES ('collection_stats_v1', $1)
+         ON CONFLICT (key) DO UPDATE SET value = $1",
+        &[&col_json],
+    )?;
+
     Ok(())
 }
 
@@ -1132,11 +1684,11 @@ fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
 mod tests {
     use super::*;
 
-    fn base_meta() -> GifMeta {
+    fn base_meta() -> LoopMeta {
         let frames = 24;
         let duration = 2.0;
         let size = 120_000;
-        GifMeta {
+        LoopMeta {
             duration_secs: duration,
             width: 320,
             height: 320,
@@ -1150,7 +1702,10 @@ mod tests {
             frame_payload_variation: Some(0.4),
             frame_delay_variation: Some(0.6),
             source_extension: Some("gif".to_string()),
+            container: Some("gif".to_string()),
             parent_directories: None,
+            directory_meme_score: 0.5,
+            filename_meme_score: 0.5,
             has_embedded_icc: false,
             has_complex_color_profile: false,
             loop_count: None,
@@ -1158,11 +1713,14 @@ mod tests {
             frame_types: vec!['P'; frames as usize],
             pts_deltas: vec![duration / frames as f64; frames as usize],
             mv_magnitudes: Vec::new(),
-            palette_depth: None,
-            motion_gini: None,
-            block_skew: None,
-            temporal_flatness: None,
-            pkt_sizes: vec![size / frames; frames as usize],
+            cached_frame_png: None,
+            is_meme_platform: false,
+            palette_depth: Some(0.8),
+            motion_gini: Some(0.7),
+            block_skew: Some(0.6),
+            temporal_flatness: Some(0.9),
+            pkt_sizes: Vec::new(),
+            webp_compression_ratio: None,
         }
     }
 
@@ -1175,6 +1733,7 @@ mod tests {
             height: 300,
             duration_secs: 2.2,
             frame_count: 24,
+            file_size_bytes: 125_000,
             fps: 12.0,
             temporal_bpp: 0.05,
             spatial_bpp: 1.2,
@@ -1197,6 +1756,7 @@ mod tests {
             motion_gini: Some(0.7),
             block_skew: Some(0.6),
             temporal_flatness: Some(0.9),
+            webp_compression_ratio: Some(0.9),
             labeled_by: Some("cli_ingest".to_string()),
         };
         let far = SampleRow {
@@ -1205,6 +1765,7 @@ mod tests {
             height: 1080,
             duration_secs: 20.0,
             frame_count: 600,
+            file_size_bytes: 20_000_000,
             fps: 30.0,
             temporal_bpp: 0.4,
             spatial_bpp: 35.0,
@@ -1227,6 +1788,7 @@ mod tests {
             motion_gini: Some(0.2),
             block_skew: Some(0.1),
             temporal_flatness: Some(0.1),
+            webp_compression_ratio: Some(0.1),
             labeled_by: Some("cli_ingest".to_string()),
         };
         let pixel_count = f64::from(meta.width) * f64::from(meta.height);
@@ -1259,5 +1821,48 @@ mod tests {
         meta.frame_count = 800;
         meta.fps = 10.0;
         assert!((resolved_duration_secs(&meta) - 80.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn feature_stats_capture_percentiles() {
+        let stats = build_feature_stats(&[1.0, 2.0, 3.0, 4.0, 5.0]);
+        assert_eq!(stats.p10, Some(1.4));
+        assert_eq!(stats.p50, Some(3.0));
+        assert_eq!(stats.p90, Some(4.6));
+    }
+
+    #[test]
+    fn loop_reference_profile_prefers_dynamic_stats_when_present() {
+        let mut feature_map = FeatureMap::default();
+        feature_map.top_keywords = vec!["meme".to_string()];
+        feature_map.stats.insert(
+            "duration".to_string(),
+            FeatureStats {
+                mean: 6.0,
+                std_dev: 2.0,
+                p10: Some(1.0),
+                p25: Some(2.0),
+                p50: Some(5.0),
+                p75: Some(8.0),
+                p90: Some(10.0),
+            },
+        );
+        feature_map.stats.insert(
+            "fps".to_string(),
+            FeatureStats {
+                mean: 14.0,
+                std_dev: 3.0,
+                p10: Some(8.0),
+                p25: Some(10.0),
+                p50: Some(14.0),
+                p75: Some(18.0),
+                p90: Some(22.0),
+            },
+        );
+
+        let profile = build_loop_reference_profile(GlobalCollectionStats::default(), &feature_map);
+        assert_eq!(profile.duration.p25, Some(2.0));
+        assert_eq!(profile.fps.mean, 14.0);
+        assert_eq!(profile.top_keywords, vec!["meme".to_string()]);
     }
 }

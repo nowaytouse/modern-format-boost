@@ -626,9 +626,9 @@ pub fn explore_with_gpu_coarse_search(
         );
 
         let ms_ssim_duration_threshold_secs = if ultimate_mode {
-            VMAF_SKIP_THRESHOLD_ULTIMATE_SECS
+            VMAF_SKIP_THRESHOLD_ULTIMATE_SECS.into()
         } else {
-            VMAF_SKIP_THRESHOLD_SECS
+            VMAF_SKIP_THRESHOLD_SECS.into()
         };
         let is_animated_image = is_animated_image_like_input(input, Some(probe_result));
 
@@ -851,7 +851,7 @@ pub fn explore_with_gpu_coarse_search(
                 crate::log_eprintln!("   Enabling fusion quality verification (MS-SSIM + SSIM)...");
 
                 let max_duration_min = ms_ssim_duration_threshold_secs / 60.0;
-                let ms_ssim_yuv_result = calculate_ms_ssim_yuv(input, output, max_duration_min);
+                let ms_ssim_yuv_result = calculate_ms_ssim_yuv(input, output, max_duration_min.into());
                 let ssim_all_result = calculate_ssim_all(input, output);
 
                 crate::log_eprintln!("   ═══════════════════════════════════════════════════");

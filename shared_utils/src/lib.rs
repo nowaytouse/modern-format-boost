@@ -141,7 +141,7 @@ pub mod image_recommender;
 pub mod img_errors;
 pub mod live_photo;
 pub mod loop_intent;
-pub mod useless;
+pub mod media_meta_utils;
 
 pub use depth_channel::{
     encode_jxl_depth_fallback, encode_jxl_with_depth, extract_depth_from_heic, DepthMap, DepthType,

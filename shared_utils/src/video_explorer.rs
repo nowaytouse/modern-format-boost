@@ -2613,7 +2613,7 @@ impl VideoExplorer {
         let ms_ssim = if self.config.quality_thresholds.validate_ms_ssim {
             let duration = get_video_duration(&self.input_path);
             let ms_ssim_skip_threshold_secs = if self.config.ultimate_mode {
-                VMAF_SKIP_THRESHOLD_ULTIMATE_SECS
+                f64::from(VMAF_SKIP_THRESHOLD_ULTIMATE_SECS)
             } else {
                 f64::from(LONG_VIDEO_THRESHOLD_SECS)
             };

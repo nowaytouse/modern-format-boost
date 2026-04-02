@@ -4,6 +4,57 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.11.1] — 2026-04-03
+
+#### 🧠 Feature Stats v1 Refresh & Database Type Fix
+
+- **PostgreSQL NUMERIC Type Conversion Fix**: Resolved a critical type mismatch in `refresh_feature_stats()` where `AVG(BIGINT)` returns `NUMERIC` instead of `DOUBLE PRECISION`.
+  - **SQL Fix**: Added explicit `::DOUBLE PRECISION` casts for all `AVG()` aggregations on `file_size_bytes`, `width`, `height`, and `bitrate` calculations.
+  - **Impact**: Prevents panic errors when refreshing feature statistics after database ingestion.
+  - **File**: `shared_utils/src/gif_value_db.rs`
+
+#### 📊 Enhanced Feature Statistics with Percentiles
+
+- **FeatureStats Struct Expansion**: Added percentile fields (P10, P25, P50, P75, P90) to `FeatureStats` for richer distribution modeling.
+  - **New Fields**: `p10`, `p25`, `p50`, `p75`, `p90` (all `Option<f64>` with `#[serde(default)]`).
+  - **Purpose**: Enables more accurate KNN distance calculations and z-score normalization using full distribution profiles.
+  - **File**: `shared_utils/src/gif_value_db.rs`
+
+#### 🗂️ New Data Structures for Distribution Stats
+
+- **DistributionStats Struct**: New public struct with z-score calculation method for standardized feature comparison.
+  - **Methods**: `z_score(&self, value: f64) -> f64` for normalized distance computation.
+  - **Conversion**: Implemented `From<&FeatureStats>` for seamless migration.
+  
+- **GlobalCollectionStats Struct**: Comprehensive collection-level statistics including duration, size, bitrate, dimensions, and aspect ratio bounds.
+  - **Fields**: min/avg/max for duration, size, bitrate, width, height, aspect ratio, plus `duration_p90` and `top_keywords`.
+
+- **LoopReferenceProfile Struct**: Unified profile combining collection stats with per-feature distributions.
+  - **Features**: duration, fps, frame_density, file_size_bytes, pixels, temporal_bpp, spatial_bpp, payload_variation, delay_variation, palette_depth, motion_gini, temporal_flatness, webp_ratio, cadence.
+
+#### 🧹 Code Cleanup & Refactoring
+
+- **Removed Unused Modules**: Deleted `shared_utils/src/useless/` directory containing deprecated code:
+  - `default_samples_pg.sql` (1841 lines removed)
+  - `gif_meme_score.rs` (3302 lines removed)
+  - `gif_value_db.rs` (1246 lines removed)
+  - `mod.rs`
+  
+- **Loop Intent System Migration**: Migrated from `crate::useless::gif_meme_score::GifMeta` to `crate::loop_intent::LoopMeta` for consistent metadata handling.
+
+#### 🛠️ Minor Fixes
+
+- **Type Conversion Fixes**: Added `.into()` conversions for `VMAF_SKIP_THRESHOLD_ULTIMATE_SECS` and `VMAF_SKIP_THRESHOLD_SECS` constants in GPU coarse search.
+- **Lib.rs Update**: Updated module references to reflect new structure.
+
+#### 📈 Database Refresh Workflow
+
+- **New Binary**: Added `refresh_stats` tool for on-demand feature statistics recalculation.
+  - **Usage**: `cargo run --release --bin refresh_stats`
+  - **Purpose**: Manually trigger `refresh_feature_stats()` after dataset modifications.
+
+---
+
 ## [0.11.1] — 2026-04-02
 
 #### 🛡️ Metadata Pipeline Hardening & Path Safety (Industrial Grade)
