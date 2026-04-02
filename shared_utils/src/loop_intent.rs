@@ -313,12 +313,36 @@ impl LoopMeta {
             (0, 0)
         };
 
+        // Estimate frame_count from duration and frame_delay_variation.
+        // For GIFs without delay info, use 1 frame as conservative default.
+        // For animated GIFs with estimated duration, infer count from typical delay (~100ms).
+        let frame_count: u32 = if let Some(dur) = total_dur {
+            if dur > 0.01 {
+                // If we have a realistic duration, estimate frames from delay variation.
+                // delay_variation being Some indicates frames were scanned.
+                if delay_variation.is_some() {
+                    // Conservative: assume average 100ms delay per frame
+                    ((dur * 10.0).ceil() as u32).min(10000)
+                } else {
+                    1
+                }
+            } else {
+                1
+            }
+        } else {
+            1
+        };
+
         let mut meta = Self {
             duration_secs: total_dur.unwrap_or(0.0),
             width,
             height,
-            fps: 12.0,      // Conservative estimate for header-only path
-            frame_count: 1, // Placeholder; refined if deep scan is available
+            fps: if frame_count > 1 && total_dur.is_some() && total_dur.unwrap() > 0.0 {
+                frame_count as f64 / total_dur.unwrap()
+            } else {
+                12.0  // Conservative estimate for header-only path
+            },
+            frame_count: frame_count as u64,
             file_size_bytes: file_size,
             file_name,
             source_extension: Some("gif".to_string()),
@@ -1212,8 +1236,21 @@ fn detect_localized_motion(mvs: &[f64]) -> bool {
 /// Extract first frame from video to temporary PNG for analysis.
 fn extract_frame_to_temp(path: &Path) -> Option<std::path::PathBuf> {
     use std::process::Command;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    
+    // Generate unique filename: timestamp + random seed
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    let rand_seed = std::process::id() ^ (timestamp as u32);
+    
     let temp_dir = std::env::temp_dir();
-    let temp_path = temp_dir.join(format!("mfb_frame_{}.png", std::process::id()));
+    let temp_path = temp_dir.join(format!(
+        "mfb_frame_{:x}_{:x}.png",
+        timestamp, 
+        rand_seed
+    ));
 
     let output = Command::new("ffmpeg")
         .args(["-i", path.to_str()?, "-vframes", "1", "-f", "image2", "-y"])
@@ -1229,35 +1266,6 @@ fn extract_frame_to_temp(path: &Path) -> Option<std::path::PathBuf> {
     }
 }
 
-/// Detect heavy letterboxing/pillarboxing (solid color bars on top/bottom or sides).
-fn detect_heavy_letterboxing(path: &Path) -> bool {
-    let temp_frame = match extract_frame_to_temp(path) {
-        Some(p) => p,
-        None => return false,
-    };
-
-    let result = (|| {
-        use image::GenericImageView;
-        let img = image::open(&temp_frame).ok()?;
-        let (_w, h) = img.dimensions();
-        if h < 100 {
-            return Some(false);
-        }
-
-        let top_band = (f64::from(h) * 0.15) as u32;
-        let bottom_start = h - top_band;
-
-        // Calculate variance in top and bottom bands
-        let top_var = calculate_band_variance(&img, 0, top_band);
-        let bottom_var = calculate_band_variance(&img, bottom_start, h);
-
-        // Low variance = solid color = letterboxing
-        Some(top_var < 100.0 && bottom_var < 100.0)
-    })();
-
-    let _ = std::fs::remove_file(temp_frame);
-    result.unwrap_or(false)
-}
 
 fn detect_heavy_letterboxing_from_image(img: &image::DynamicImage) -> bool {
     let (_w, h) = img.dimensions();
@@ -1294,41 +1302,6 @@ fn calculate_band_variance(img: &image::DynamicImage, y_start: u32, y_end: u32) 
     values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / values.len() as f64
 }
 
-/// Detect high text density via edge detection heuristic.
-fn detect_high_text_density(path: &Path) -> bool {
-    let temp_frame = match extract_frame_to_temp(path) {
-        Some(p) => p,
-        None => return false,
-    };
-
-    let result = (|| {
-        let img = image::open(&temp_frame).ok()?;
-        let gray = img.to_luma8();
-        let (w, h) = gray.dimensions();
-
-        // Count high-contrast edges (typical of text)
-        let mut edge_count = 0;
-        let total_pixels = (w as f64) * (h as f64);
-
-        for y in 1..h - 1 {
-            for x in 1..w - 1 {
-                let center = i32::from(gray.get_pixel(x, y)[0]);
-                let right = i32::from(gray.get_pixel(x + 1, y)[0]);
-                let bottom = i32::from(gray.get_pixel(x, y + 1)[0]);
-
-                if (center - right).abs() > 80 || (center - bottom).abs() > 80 {
-                    edge_count += 1;
-                }
-            }
-        }
-
-        let edge_ratio = edge_count as f64 / total_pixels;
-        Some(edge_ratio > 0.15) // >15% high-contrast edges suggests text
-    })();
-
-    let _ = std::fs::remove_file(temp_frame);
-    result.unwrap_or(false)
-}
 
 fn detect_high_text_density_from_image(img: &image::DynamicImage) -> bool {
     let gray = img.to_luma8();
