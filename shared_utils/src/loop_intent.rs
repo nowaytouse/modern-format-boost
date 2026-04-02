@@ -15,12 +15,15 @@ use crate::file_copier::{SUPPORTED_IMAGE_EXTENSIONS, SUPPORTED_VIDEO_EXTENSIONS}
 use crate::progress_mode::emit_stderr;
 use crate::video_detection::ColorSpace;
 use crate::video_detection::VideoDetectionResult;
+use image::codecs::webp::WebPEncoder;
+use image::{ExtendedColorType, GenericImageView};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 const MODERN_ANIMATED_EXTENSIONS: &[&str] = &["webp", "avif", "apng", "heic", "heif", "jxl"];
 const GIPHY_PLATFORM_MARKERS: &[&str] =
     &["GIPHY", "TENOR", "STICKER", "TELEGRAM", "TIKTOK", "DISCORD"];
+const WEBP_RATIO_SAMPLE_MAX_DIM: u32 = 256;
 
 // ── Output: 三态输出 ──────────────────────────────────────────────────────────
 
@@ -108,7 +111,7 @@ pub struct LoopMeta {
     // ── Layer 4 signals (content features) ──
     pub palette_size: Option<u32>,
     /// WebP compression ratio proxy: raw_size / webp_size for a sampled frame.
-    /// Caller populates this via LoopMeta::set_webp_compression_ratio() or leaves None.
+    /// Constructors populate this on a best-effort basis for image-like sources.
     pub webp_compression_ratio: Option<f64>,
     pub palette_depth: Option<f64>,
     pub motion_gini: Option<f64>,
@@ -199,6 +202,7 @@ impl LoopMeta {
         };
         meta.directory_meme_score = score_directory_context(parent_directories.as_deref());
         meta.filename_meme_score = analyze_filename(meta.file_name.as_deref());
+        meta.populate_webp_compression_ratio_from_path(file_path);
         meta
     }
 
@@ -267,6 +271,7 @@ impl LoopMeta {
         };
         meta.directory_meme_score = score_directory_context(parent_directories.as_deref());
         meta.filename_meme_score = analyze_filename(meta.file_name.as_deref());
+        meta.populate_webp_compression_ratio_from_path(path);
         meta
     }
 
@@ -328,7 +333,18 @@ impl LoopMeta {
 
         meta.directory_meme_score = score_directory_context(meta.parent_directories.as_deref());
         meta.filename_meme_score = analyze_filename(meta.file_name.as_deref());
+        meta.populate_webp_compression_ratio_from_path(path);
         Some(meta)
+    }
+
+    fn populate_webp_compression_ratio_from_path(&mut self, path: &Path) {
+        if self.webp_compression_ratio.is_some() {
+            return;
+        }
+
+        if should_sample_webp_compression_ratio(self.source_extension.as_deref()) {
+            self.webp_compression_ratio = sampled_webp_compression_ratio(path);
+        }
     }
 
     /// Bridge: convert LoopMeta to the legacy GifMeta struct for KNN lookup.
@@ -387,15 +403,30 @@ impl WeightedScore {
 }
 
 #[derive(Debug, Default, Clone, Copy)]
+struct DerivedLoopSignals {
+    scene_cut: bool,
+    localized_motion: bool,
+}
+
+impl DerivedLoopSignals {
+    fn from_meta(meta: &LoopMeta) -> Self {
+        Self {
+            scene_cut: detect_scene_cut(&meta.pkt_sizes),
+            localized_motion: detect_localized_motion(&meta.mv_magnitudes),
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
 struct HardPassVetoFlags {
     scene_cut: bool,
     low_compressibility: bool,
 }
 
 impl HardPassVetoFlags {
-    fn from_meta(meta: &LoopMeta) -> Self {
+    fn from_meta(meta: &LoopMeta, derived: &DerivedLoopSignals) -> Self {
         Self {
-            scene_cut: detect_scene_cut(&meta.pkt_sizes),
+            scene_cut: derived.scene_cut,
             low_compressibility: meta.webp_compression_ratio.is_some_and(|ratio| ratio < 5.0),
         }
     }
@@ -403,6 +434,13 @@ impl HardPassVetoFlags {
     fn any(self) -> bool {
         self.scene_cut || self.low_compressibility
     }
+}
+
+#[derive(Debug, Clone)]
+struct TreeEvaluation {
+    verdict: LoopIntentVerdict,
+    weighted_score_normalized: f64,
+    derived_signals: DerivedLoopSignals,
 }
 
 fn has_platform_marker(app_extensions: Option<&[String]>) -> bool {
@@ -443,11 +481,9 @@ fn loop_count_zero_weight(duration_secs: f64) -> f64 {
     }
 }
 
-fn apply_layer3_signals(meta: &LoopMeta, score: &mut WeightedScore) {
-    let scene_cut = detect_scene_cut(&meta.pkt_sizes);
-
+fn apply_layer3_signals(meta: &LoopMeta, derived: &DerivedLoopSignals, score: &mut WeightedScore) {
     // 3-A: 首尾帧自参照闭合比
-    if !scene_cut && meta.pkt_sizes.len() >= 3 {
+    if !derived.scene_cut && meta.pkt_sizes.len() >= 3 {
         let n = meta.pkt_sizes.len();
         let first = meta.pkt_sizes[0] as f64;
         let last = meta.pkt_sizes[n - 1] as f64;
@@ -479,7 +515,7 @@ fn apply_layer3_signals(meta: &LoopMeta, score: &mut WeightedScore) {
     }
 
     // 3-C: 场景切换检测
-    if scene_cut {
+    if derived.scene_cut {
         score.add(-0.30);
     }
 
@@ -573,6 +609,11 @@ fn apply_layer5_signals(meta: &LoopMeta, score: &mut WeightedScore) {
 /// KNN fallback (Layer 6) is performed in `assess_loop_intent_from_meta`.
 #[must_use]
 pub fn identify_loop_intent(meta: &LoopMeta) -> LoopIntentVerdict {
+    evaluate_loop_tree(meta).verdict
+}
+
+fn evaluate_loop_tree(meta: &LoopMeta) -> TreeEvaluation {
+    let derived_signals = DerivedLoopSignals::from_meta(meta);
     let mut score = WeightedScore::default();
 
     let ext_lower = meta
@@ -582,7 +623,17 @@ pub fn identify_loop_intent(meta: &LoopMeta) -> LoopIntentVerdict {
         .to_lowercase();
     let is_image = SUPPORTED_IMAGE_EXTENSIONS.contains(&ext_lower.as_str());
     let is_video = !is_image && SUPPORTED_VIDEO_EXTENSIONS.contains(&ext_lower.as_str());
-    let hard_pass_vetoes = HardPassVetoFlags::from_meta(meta);
+    let hard_pass_vetoes = HardPassVetoFlags::from_meta(meta, &derived_signals);
+
+    let finalize = |verdict: LoopIntentVerdict, score: WeightedScore| TreeEvaluation {
+        weighted_score_normalized: match verdict {
+            LoopIntentVerdict::LoopStrong(_) => 1.0,
+            LoopIntentVerdict::LoopWeak(_) => 0.0,
+            LoopIntentVerdict::Uncertain(_) => score.normalized(),
+        },
+        verdict,
+        derived_signals,
+    };
 
     // ══════════════════════════════════════════════════════════════
     // LAYER 1: 格式物理硬约束 — forced exits, WeightedScore 不参与
@@ -590,23 +641,32 @@ pub fn identify_loop_intent(meta: &LoopMeta) -> LoopIntentVerdict {
 
     // 1-A: 有音轨？（仅对视频容器执行硬否决，绝不否决动态图片）
     if meta.has_audio && is_video {
-        return LoopIntentVerdict::LoopWeak(
-            "Layer 1-A: Hard Veto — Audio Track Present in Video Device".to_string(),
+        return finalize(
+            LoopIntentVerdict::LoopWeak(
+                "Layer 1-A: Hard Veto — Audio Track Present in Video Device".to_string(),
+            ),
+            score,
         );
     }
 
     // 1-B: 有透明通道且无音轨？视频透明度处理成本极高
     if meta.has_transparency && !meta.has_audio {
-        return LoopIntentVerdict::LoopStrong(
-            "Layer 1-B: Hard Pass — Transparency Channel Present".to_string(),
+        return finalize(
+            LoopIntentVerdict::LoopStrong(
+                "Layer 1-B: Hard Pass — Transparency Channel Present".to_string(),
+            ),
+            score,
         );
     }
 
     // 1-C: 极短内容硬通行（带否决条件）
     if is_image && meta.duration_secs <= 10.0 {
         if !hard_pass_vetoes.any() {
-            return LoopIntentVerdict::LoopStrong(
-                "Layer 1-C: Veto-Clean Hard Pass (image <=10s)".to_string(),
+            return finalize(
+                LoopIntentVerdict::LoopStrong(
+                    "Layer 1-C: Veto-Clean Hard Pass (image <=10s)".to_string(),
+                ),
+                score,
             );
         }
     }
@@ -615,8 +675,11 @@ pub fn identify_loop_intent(meta: &LoopMeta) -> LoopIntentVerdict {
     if is_image && (meta.width > 0 && meta.height > 0) && (meta.width <= 512 && meta.height <= 512)
     {
         if !hard_pass_vetoes.any() {
-            return LoopIntentVerdict::LoopStrong(
-                "Layer 1-D: Veto-Clean Hard Pass (<=512x512)".to_string(),
+            return finalize(
+                LoopIntentVerdict::LoopStrong(
+                    "Layer 1-D: Veto-Clean Hard Pass (<=512x512)".to_string(),
+                ),
+                score,
             );
         }
     }
@@ -627,8 +690,9 @@ pub fn identify_loop_intent(meta: &LoopMeta) -> LoopIntentVerdict {
 
     // 2-A: 平台来源标记
     if has_platform_marker(meta.app_extensions.as_deref()) {
-        return LoopIntentVerdict::LoopStrong(
-            "Layer 2-A: Explicit Platform Loop Marker".to_string(),
+        return finalize(
+            LoopIntentVerdict::LoopStrong("Layer 2-A: Explicit Platform Loop Marker".to_string()),
+            score,
         );
     }
 
@@ -639,35 +703,45 @@ pub fn identify_loop_intent(meta: &LoopMeta) -> LoopIntentVerdict {
         .is_some_and(|c| c.eq_ignore_ascii_case("webm"))
         || ext_lower == "webm";
     if is_webm && !meta.has_audio {
-        return LoopIntentVerdict::LoopStrong(
-            "Layer 2-B: Explicit WebM Loop Carrier (no audio)".to_string(),
+        return finalize(
+            LoopIntentVerdict::LoopStrong(
+                "Layer 2-B: Explicit WebM Loop Carrier (no audio)".to_string(),
+            ),
+            score,
         );
     }
 
     // 2-C: 明确不循环声明
     if meta.loop_count == Some(1) {
-        return LoopIntentVerdict::LoopWeak(
-            "Layer 2-C: Explicit Play-Once Declaration".to_string(),
+        return finalize(
+            LoopIntentVerdict::LoopWeak("Layer 2-C: Explicit Play-Once Declaration".to_string()),
+            score,
         );
     }
 
     // ══════════════════════════════════════════════════════════════
     // LAYER 3: 自参照结构信号 — WeightedScore 累积，层末有检查点
     // ══════════════════════════════════════════════════════════════
-    apply_layer3_signals(meta, &mut score);
+    apply_layer3_signals(meta, &derived_signals, &mut score);
 
     // Layer 3 checkpoint
     if score.value() >= 0.55 {
-        return LoopIntentVerdict::LoopStrong(format!(
-            "Layer 3 Checkpoint: WeightedScore={:.2} ≥ 0.55 (self-referential structure)",
-            score.value()
-        ));
+        return finalize(
+            LoopIntentVerdict::LoopStrong(format!(
+                "Layer 3 Checkpoint: WeightedScore={:.2} ≥ 0.55 (self-referential structure)",
+                score.value()
+            )),
+            score,
+        );
     }
     if score.value() <= -0.55 {
-        return LoopIntentVerdict::LoopWeak(format!(
-            "Layer 3 Checkpoint: WeightedScore={:.2} ≤ -0.55 (structure mismatch)",
-            score.value()
-        ));
+        return finalize(
+            LoopIntentVerdict::LoopWeak(format!(
+                "Layer 3 Checkpoint: WeightedScore={:.2} ≤ -0.55 (structure mismatch)",
+                score.value()
+            )),
+            score,
+        );
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -677,16 +751,22 @@ pub fn identify_loop_intent(meta: &LoopMeta) -> LoopIntentVerdict {
 
     // Layer 4 checkpoint
     if score.value() >= 0.55 {
-        return LoopIntentVerdict::LoopStrong(format!(
-            "Layer 4 Checkpoint: WeightedScore={:.2} ≥ 0.55 (content features)",
-            score.value()
-        ));
+        return finalize(
+            LoopIntentVerdict::LoopStrong(format!(
+                "Layer 4 Checkpoint: WeightedScore={:.2} ≥ 0.55 (content features)",
+                score.value()
+            )),
+            score,
+        );
     }
     if score.value() <= -0.55 {
-        return LoopIntentVerdict::LoopWeak(format!(
-            "Layer 4 Checkpoint: WeightedScore={:.2} ≤ -0.55 (content features)",
-            score.value()
-        ));
+        return finalize(
+            LoopIntentVerdict::LoopWeak(format!(
+                "Layer 4 Checkpoint: WeightedScore={:.2} ≤ -0.55 (content features)",
+                score.value()
+            )),
+            score,
+        );
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -699,13 +779,13 @@ pub fn identify_loop_intent(meta: &LoopMeta) -> LoopIntentVerdict {
     // ══════════════════════════════════════════════════════════════
     // LAYER 6: KNN + WeightedScore 综合融合判断
     // ══════════════════════════════════════════════════════════════
-    // This layer is handled in assess_loop_intent_from_meta() below,
-    // since it requires a database call.
-    // identify_loop_intent() returns Uncertain to signal "proceed to Layer 6".
-    LoopIntentVerdict::Uncertain(format!(
-        "Layer 6: Incomplete tree signal (WeightedScore={:.2}), proceeding to KNN fusion",
-        score.value()
-    ))
+    finalize(
+        LoopIntentVerdict::Uncertain(format!(
+            "Layer 6: Incomplete tree signal (WeightedScore={:.2}), proceeding to KNN fusion",
+            score.value()
+        )),
+        score,
+    )
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -731,15 +811,10 @@ pub fn assess_loop_intent_from_probe(
 /// - If result is `Uncertain`, invokes KNN via `gif_value_db::lookup_similar_samples`.
 /// - If KNN is unavailable or confidence is low, falls back to Layer 7 conservatively.
 pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> LoopIntentVerdict {
-    // First pass: deterministic tree (Layers 1–5)
-    let tree_verdict = identify_loop_intent(meta);
+    let tree = evaluate_loop_tree(meta);
+    let weighted_score_normalized = tree.weighted_score_normalized;
 
-    // WeightedScore is embedded in the Uncertain reason string — re-extract for fusion.
-    // We re-run score computation cheaply by calling identify_loop_intent again.
-    // (It's a pure function, so this is safe and cheap.)
-    let weighted_score_normalized = extract_weighted_score_from_verdict(&tree_verdict, meta);
-
-    match tree_verdict {
+    match tree.verdict {
         v @ (LoopIntentVerdict::LoopStrong(_) | LoopIntentVerdict::LoopWeak(_)) => {
             // Layers 1–5 gave a definitive answer — trust it.
             v
@@ -815,6 +890,18 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
                     "   ⚠️ KNN confidence={confidence:.2} final_score={final_score:.2} — insufficient for decision, using Layer 7 fallback"
                 ));
             } else {
+                // No KNN match available. If the tree's normalized weighted score is already strongly in favor
+                // of loop intent, promote to LoopStrong rather than blindly falling back to Layer 7.
+                if weighted_score_normalized > 0.75 {
+                    emit_stderr(&format!(
+                        "   ⚖️ Tree strong ({weighted_score_normalized:.2}) but no KNN match — promoting to LoopStrong"
+                    ));
+                    return LoopIntentVerdict::LoopStrong(format!(
+                        "Layer 6: Tree-only promotion (score={:.2}) - no KNN match",
+                        weighted_score_normalized
+                    ));
+                }
+
                 emit_stderr("   ⚠️ KNN returned no match — using Layer 7 fallback");
             }
 
@@ -853,35 +940,6 @@ fn layer7_fallback(meta: &LoopMeta, upstream_reason: &str) -> LoopIntentVerdict 
         // Unknown format — default conservative: treat as video (safer for quality)
         LoopIntentVerdict::Uncertain(format!("{reason} → unknown format, skip conversion"))
     }
-}
-
-/// Re-extract the normalized WeightedScore from a verdict.
-/// Since identify_loop_intent() is pure, we can re-run the score computation
-/// by tracing through only the WeightedScore parts (not the early-exit paths).
-fn extract_weighted_score_from_verdict(verdict: &LoopIntentVerdict, meta: &LoopMeta) -> f64 {
-    // If the tree gave a definitive answer in Layers 1–2, score is irrelevant.
-    // If it exited in Layer 3/4 via checkpoint, we use 0.275 (midpoint of [0.55/2.0, 0.45])
-    // as a safe approximation: the tree leaned one way but not maximally.
-    // If Uncertain (reached Layer 6), we parse the score from the reason string.
-    match verdict {
-        LoopIntentVerdict::LoopStrong(_) => 1.0,
-        LoopIntentVerdict::LoopWeak(_) => 0.0,
-        LoopIntentVerdict::Uncertain(_) => {
-            // Re-run the score accumulation (cheap, pure function)
-            recompute_weighted_score(meta)
-        }
-    }
-}
-
-/// Re-run only the WeightedScore accumulation (Layers 3–5), bypassing early exits.
-/// Used to reconstruct the score for Layer 6 KNN fusion.
-fn recompute_weighted_score(meta: &LoopMeta) -> f64 {
-    let mut score = WeightedScore::default();
-    apply_layer3_signals(meta, &mut score);
-    apply_layer4_signals(meta, &mut score);
-    apply_layer5_signals(meta, &mut score);
-
-    score.normalized()
 }
 
 // ── Safety & Exploration Helpers ──────────────────────────────────────────────
@@ -1524,4 +1582,71 @@ mod tests {
         );
         assert!(v.reason().contains("Layer 1-D"));
     }
+}
+
+// ── WebP Sampling Implementation ───────────────────────────────────────────
+
+fn should_sample_webp_compression_ratio(ext: Option<&str>) -> bool {
+    let Some(ext) = ext else { return true };
+    let lower = ext.to_lowercase();
+    // No point in sampling WebP if it's already WebP or doesn't benefit from compression proxy
+    !matches!(lower.as_str(), "webp" | "avif" | "heic" | "heif")
+}
+
+fn sampled_webp_compression_ratio(path: &Path) -> Option<f64> {
+    let temp_frame = extract_frame_to_temp(path)?;
+    let result = (|| {
+        let img = image::open(&temp_frame).ok()?;
+        let (w, h) = img.dimensions();
+        if w == 0 || h == 0 {
+            return None;
+        }
+
+        // Only sample if image isn't too large to avoid performance hit
+        let (target_w, target_h) = if w > WEBP_RATIO_SAMPLE_MAX_DIM || h > WEBP_RATIO_SAMPLE_MAX_DIM
+        {
+            let ratio = f64::from(w) / f64::from(h);
+            if ratio > 1.0 {
+                (
+                    WEBP_RATIO_SAMPLE_MAX_DIM,
+                    (f64::from(WEBP_RATIO_SAMPLE_MAX_DIM) / ratio) as u32,
+                )
+            } else {
+                (
+                    (f64::from(WEBP_RATIO_SAMPLE_MAX_DIM) * ratio) as u32,
+                    WEBP_RATIO_SAMPLE_MAX_DIM,
+                )
+            }
+        } else {
+            (w, h)
+        };
+
+        let resized = if target_w != w || target_h != h {
+            img.thumbnail(target_w, target_h)
+        } else {
+            img
+        };
+
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        let encoder = WebPEncoder::new_lossless(&mut buffer);
+        encoder
+            .encode(
+                resized.as_bytes(),
+                resized.width(),
+                resized.height(),
+                ExtendedColorType::Rgba8,
+            )
+            .ok()?;
+
+        let webp_size = buffer.get_ref().len() as f64;
+        let raw_size = (resized.width() * resized.height() * 4) as f64;
+
+        if webp_size <= 0.0 {
+            return None;
+        }
+        Some(raw_size / webp_size)
+    })();
+
+    let _ = std::fs::remove_file(temp_frame);
+    result
 }
