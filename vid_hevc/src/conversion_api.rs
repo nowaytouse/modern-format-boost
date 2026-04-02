@@ -309,7 +309,7 @@ pub fn determine_strategy_with_apple_compat(
         return ConversionStrategy {
             target: TargetVideoFormat::Gif,
             reason: format!(
-                "GIF-like loop fallback (inconclusive signals, short silent video {}s, {}x{}) - Apple compatibility",
+                "GIF-like loop detected (fallback: inconclusive signals, short silent video {}s, {}x{}) - Apple compatibility",
                 detection.duration_secs, detection.width, detection.height
             ),
             command: String::new(),
