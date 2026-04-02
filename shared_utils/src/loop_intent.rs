@@ -447,14 +447,13 @@ impl WeightedScore {
 #[derive(Debug, Default, Clone, Copy)]
 struct DerivedLoopSignals {
     scene_cut: bool,
-    localized_motion: bool,
 }
 
 impl DerivedLoopSignals {
     fn from_meta(meta: &LoopMeta) -> Self {
         Self {
             scene_cut: detect_scene_cut(&meta.pkt_sizes),
-            localized_motion: detect_localized_motion(&meta.mv_magnitudes),
+            // localized_motion signal is extracted inline where needed (Layer 1-E)
         }
     }
 }
@@ -482,7 +481,6 @@ impl HardPassVetoFlags {
 struct TreeEvaluation {
     verdict: LoopIntentVerdict,
     weighted_score_normalized: f64,
-    derived_signals: DerivedLoopSignals,
 }
 
 fn has_platform_marker(app_extensions: Option<&[String]>) -> bool {
@@ -674,7 +672,6 @@ fn evaluate_loop_tree(meta: &LoopMeta) -> TreeEvaluation {
             LoopIntentVerdict::Uncertain(_) => score.normalized(),
         },
         verdict,
-        derived_signals,
     };
 
     // ══════════════════════════════════════════════════════════════
@@ -1641,15 +1638,6 @@ fn should_sample_webp_compression_ratio(ext: Option<&str>) -> bool {
     let Some(ext) = ext else { return false };
     let lower = ext.to_lowercase();
     matches!(lower.as_str(), "gif" | "png" | "bmp" | "tiff" | "tif" | "tga" | "jpg" | "jpeg")
-}
-
-fn sampled_webp_compression_ratio(path: &Path) -> Option<f64> {
-    // Backwards-compatible wrapper: extract one frame, load into memory, compute ratio.
-    let temp_frame = extract_frame_to_temp(path)?;
-    let bytes = std::fs::read(&temp_frame).ok()?;
-    let _ = std::fs::remove_file(&temp_frame);
-    let img = image::load_from_memory(&bytes).ok()?;
-    sampled_webp_compression_ratio_from_image(&img)
 }
 
 fn sampled_webp_compression_ratio_from_image(img: &image::DynamicImage) -> Option<f64> {
