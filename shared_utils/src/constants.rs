@@ -45,3 +45,13 @@ pub const VMAF_SKIP_THRESHOLD_SECS: f64 = 300.0;
 
 /// When to skip expensive VMAF calculation in ultimate mode (25 min).
 pub const VMAF_SKIP_THRESHOLD_ULTIMATE_SECS: f64 = 1500.0;
+
+/// Modern animated image/container extensions considered 'animated-like' for loop intent checks.
+pub const MODERN_ANIMATED_EXTENSIONS: &[&str] = &[
+    "webp",
+    "avif",
+    "apng",
+    "heic",
+    "heif",
+    "jxl",
+];

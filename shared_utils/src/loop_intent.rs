@@ -20,7 +20,7 @@ use image::{ExtendedColorType, GenericImageView};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-use crate::constants_modern::MODERN_ANIMATED_EXTENSIONS;
+use crate::constants::MODERN_ANIMATED_EXTENSIONS;
 const GIPHY_PLATFORM_MARKERS: &[&str] =
     &["GIPHY", "TENOR", "STICKER", "TELEGRAM", "TIKTOK", "DISCORD"];
 const WEBP_RATIO_SAMPLE_MAX_DIM: u32 = 256;
