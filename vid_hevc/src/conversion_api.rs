@@ -309,8 +309,9 @@ pub fn determine_strategy_with_apple_compat(
     let is_loop_intent = loop_verdict.is_keep_gif();
 
     // Fallback: short/silent/small videos may be GIF-like stickers, but only use this
-    // when the 7-layer system is INCONCLUSIVE (Uncertain) and structural signals are missing.
-    if apple_compat && !force && loop_verdict.is_uncertain()
+    // when the 7-layer system has NO DEFINITE LOOP INTENT and structural signals are missing.
+    // This includes both Uncertain (truly unknown) and LoopWeak (no loop detected) for videos.
+    if apple_compat && !force && !is_loop_intent
         && !result.has_audio && result.duration_secs <= 3.0
         && result.width > 0 && result.height > 0
         && result.width <= 512 && result.height <= 512
@@ -319,7 +320,7 @@ pub fn determine_strategy_with_apple_compat(
         return ConversionStrategy {
             target: TargetVideoFormat::Gif,
             reason: format!(
-                "GIF-like loop detected (fallback: inconclusive signals, short silent video {}s, {}x{}) - Apple compatibility",
+                "GIF-like loop detected (fallback: no definite loop intent, short silent video {}s, {}x{}) - Apple compatibility",
                 result.duration_secs, result.width, result.height
             ),
             command: String::new(),

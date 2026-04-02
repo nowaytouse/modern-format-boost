@@ -991,13 +991,14 @@ fn layer7_fallback(meta: &LoopMeta, upstream_reason: &str) -> LoopIntentVerdict 
         // (transparent, small, silent stickers are common → preserve as-is by default)
         LoopIntentVerdict::LoopStrong(format!("{reason} → preserve GIF as-is (Layer 7 default)"))
     } else if is_video {
-        // Video files: preserve as-is (low confidence)
-        LoopIntentVerdict::Uncertain(format!(
-            "{reason} → preserve video as-is (low confidence)"
+        // Video files: no loop intent detected (or insufficient signal)
+        // Treat as standard video for conversion processing (not a loop-intent asset)
+        LoopIntentVerdict::LoopWeak(format!(
+            "{reason} → standard video processing (no loop intent)"
         ))
     } else {
         // Unknown format — default conservative: treat as video (safer for quality)
-        LoopIntentVerdict::Uncertain(format!("{reason} → unknown format, skip conversion"))
+        LoopIntentVerdict::LoopWeak(format!("{reason} → unknown format, standard processing"))
     }
 }
 
