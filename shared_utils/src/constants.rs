@@ -74,6 +74,8 @@ pub const MODERN_FORMAT_VIDEO_BIAS_THRESHOLD_SECS: f64 = 15.0;
 pub const ENV_MODERN_FORMAT_CONVERT_BIAS: &str = "MODERN_FORMAT_CONVERT_BIAS";
 /// Debug/Dev toggle for mandatory short GIF preservation (Set to '0' to DISABLE, enabled by default).
 pub const ENV_FORCE_SHORT_GIFS: &str = "MODERN_FORMAT_FORCE_SHORT_GIFS";
+/// Debug/Dev toggle for mandatory video pathway for long silent assets (Set to '0' to DISABLE, enabled by default).
+pub const ENV_INTERCEPT_LONG_SILENT: &str = "MODERN_FORMAT_INTERCEPT_LONG_SILENT";
 /// Override for the sticker duration safe-limit (seconds).
 pub const ENV_STICKER_LIMIT_SECS: &str = "MODERN_FORMAT_STICKER_LIMIT_SECS";
 

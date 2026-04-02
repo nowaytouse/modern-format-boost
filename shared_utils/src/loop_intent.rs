@@ -879,6 +879,22 @@ fn evaluate_loop_tree(
         );
     }
 
+    let intercept_long_silent = std::env::var(crate::constants::ENV_INTERCEPT_LONG_SILENT)
+        .map(|v| v != "0")
+        .unwrap_or(true); // Developer option: enabled by default, can be disabled with =0
+    if intercept_long_silent
+        && !meta.has_audio
+        && meta.duration_secs > crate::constants::HARD_PASS_SHORT_GIF_THRESHOLD_SECS
+    {
+        return finalize(
+            LoopIntentVerdict::LoopWeak(format!(
+                "Layer 1-D (Dev): intercepting long silent asset (> {:.2}s) to video pathway",
+                crate::constants::HARD_PASS_SHORT_GIF_THRESHOLD_SECS
+            )),
+            log_odds,
+        );
+    }
+
     evaluate_kinetics_and_physics(meta, &derived, &thresholds, &mut log_odds);
     apply_weak_heuristics(
         meta,

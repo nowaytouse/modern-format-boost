@@ -17,8 +17,18 @@ All notable changes to this project will be documented in this file.
 
 - **Layer 1-C: Mandatory Short-Asset Pass**: Implemented a new "Hard Pass" threshold for assets under 10 seconds to stabilize decision tree fallbacks.
   - **Logic**: Forces `LoopStrong` (GIF preservation) for silent assets ≤ 10s, bypassing complex heuristics for obviously short content.
+  - **Layer 1-D: Long Silent Interceptor (Dev)**: Added a mandatory video pathway for silent assets exceeding 10s.
+    - **Logic**: Forcibly routes silent media > 10s to `LoopWeak` (Video), preventing long GIFs/silent-videos from triggering expensive heuristics.
+    - **Developer Toggle**: Controlled by `MODERN_FORMAT_INTERCEPT_LONG_SILENT` (default enabled).
+  - **Fail-through**: Assets exceeding 10s (if 1-D disabled) or containing audio proceed to full heuristic (Layers 2-5) and KNN (Layer 6) analysis.
   - **Developer Toggle**: Added `MODERN_FORMAT_FORCE_SHORT_GIFS` environment variable (default enabled). Set to `0` to disable for fine-grained tuning. Marked with `(Dev)` in logs.
   - **Files**: `shared_utils/src/constants.rs`, `shared_utils/src/loop_intent.rs`
+
+#### 📦 Dependency Modernization (April 2026 Refresh)
+
+- **Workspace-wide Update**: Synchronized all core dependencies to the latest stable and nightly-compatible iterations (via `cargo update`).
+  - **Key Updates**: `dav1d`, `libheif-rs`, `image-rs`, `postgres`, `pgvector`, and `jpegxl-rs` (v0.14+).
+  - **Integrity**: Verified zero-warning compilation across the entire workspace (`shared_utils`, `vid-hevc`, `img-hevc`, `vid-av1`, `img-av1`).
 
 #### 📊 Enhanced Decision Observability (Standardized Logging)
 
