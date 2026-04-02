@@ -63,13 +63,17 @@ pub const MODERN_FORMAT_LOW_BITRATE_RATIO: f64 = 15.0;
 /// Low compression ratio (5.0) indicating extremely high quality / noise.
 pub const MODERN_FORMAT_ULTRA_HIGH_BITRATE_RATIO: f64 = 5.0;
 
-// 4. Fallback Constants (when KNN is missing)
+// 4. Fallback & Force Rules
+/// Default duration threshold (seconds) for forcing short assets to GIFs.
+pub const HARD_PASS_SHORT_GIF_THRESHOLD_SECS: f64 = 10.0;
 /// Default duration threshold (seconds) for biasing modern formats towards video.
 pub const MODERN_FORMAT_VIDEO_BIAS_THRESHOLD_SECS: f64 = 15.0;
 
 // 5. Environment Variable Names
 /// Toggle for modern format conversion bias ("1" = on, "0" = off).
 pub const ENV_MODERN_FORMAT_CONVERT_BIAS: &str = "MODERN_FORMAT_CONVERT_BIAS";
+/// Debug/Dev toggle for mandatory short GIF preservation (Set to '0' to DISABLE, enabled by default).
+pub const ENV_FORCE_SHORT_GIFS: &str = "MODERN_FORMAT_FORCE_SHORT_GIFS";
 /// Override for the sticker duration safe-limit (seconds).
 pub const ENV_STICKER_LIMIT_SECS: &str = "MODERN_FORMAT_STICKER_LIMIT_SECS";
 

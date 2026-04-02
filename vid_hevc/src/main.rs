@@ -225,6 +225,7 @@ fn main() -> anyhow::Result<()> {
             if cache.is_some() {
                 info!("   💽 Persistent Cache: ENABLED");
             }
+            shared_utils::gif_value_db::report_db_status();
 
             info!("");
 

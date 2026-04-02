@@ -14,6 +14,8 @@ const PG_DEFAULT_CONNSTR: &str = "host=localhost dbname=modern_format_boost";
 const IMPORT_KEY: &str = "dataset_seeds_import_v4";
 const STATS_KEY: &str = "feature_stats_v1";
 
+static DB_WARN_ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct FeatureStats {
     mean: f64,
@@ -360,8 +362,25 @@ fn pg_connstr() -> String {
 
 pub fn open_pg_client() -> Result<Client> {
     let connstr = pg_connstr();
-    Client::connect(&connstr, NoTls)
-        .with_context(|| format!("Failed to connect to PostgreSQL: {connstr}"))
+    match Client::connect(&connstr, NoTls) {
+        Ok(client) => Ok(client),
+        Err(e) => {
+            if !DB_WARN_ONCE.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                let msg = format!("⚠️  Database Unavailable: {e}");
+                crate::progress_mode::emit_stderr(&msg);
+                crate::progress_mode::emit_stderr("💡 System running in [LEGACY LIMITED MODE] (Heuristic Tree only, no KNN/Learning).");
+                crate::progress_mode::emit_stderr("💡 To enable full intelligence, run: 'sh scripts/manage_db.sh setup'");
+            }
+            Err(e).with_context(|| format!("Failed to connect to PostgreSQL: {connstr}"))
+        }
+    }
+}
+
+/// One-time status report for the database.
+pub fn report_db_status() {
+    if let Ok(_conn) = open_pg_client() {
+        crate::progress_mode::emit_stderr("🐘 Database [PostgreSQL]: CONNECTED (Full Learning Mode Active)");
+    }
 }
 
 pub fn lookup_similar_samples(meta: &LoopMeta, path: Option<&Path>) -> Option<SampleMatch> {
@@ -702,9 +721,11 @@ pub fn is_lossless_exploration_safe(meta: &LoopMeta, path: Option<&Path>) -> boo
     is_safe
 }
 
-pub fn init_schema(conn: &mut Client) -> Result<()> {
+    emit_stderr("🐘 Initializing Database Schema (PostgreSQL + pgvector)...");
     // Enable pgvector extension
-    conn.execute("CREATE EXTENSION IF NOT EXISTS vector", &[])?;
+    if let Err(e) = conn.execute("CREATE EXTENSION IF NOT EXISTS vector", &[]) {
+        emit_stderr(&format!("⚠️  pgvector extension failed to load: {e}"));
+    }
 
     conn.execute(
         "CREATE TABLE IF NOT EXISTS samples (
@@ -778,6 +799,7 @@ pub fn init_schema(conn: &mut Client) -> Result<()> {
         &[],
     );
 
+    emit_stderr("✅ Database Schema Ready.");
     Ok(())
 }
 
@@ -798,12 +820,13 @@ fn seed_positive_dataset_if_needed(conn: &mut Client) -> Result<()> {
         return Ok(());
     }
 
+    emit_stderr("📥 Importing Default High-Value GIF Training Dataset...");
     let mut tx = conn.transaction()?;
 
     // Seed default dataset shipped with the binary (PostgreSQL-native SQL)
     let default_sql = include_str!("./sql/default_samples.sql");
     tx.batch_execute(default_sql).unwrap_or_else(|e| {
-        log::warn!("⚠️ Failed to seed default GIF value dataset: {e}");
+        emit_stderr(&format!("⚠️  Failed to seed default GIF value dataset: {e}"));
     });
 
     tx.execute(
@@ -812,6 +835,8 @@ fn seed_positive_dataset_if_needed(conn: &mut Client) -> Result<()> {
         &[&IMPORT_KEY],
     )?;
     tx.commit()?;
+
+    emit_stderr("✅ Training Dataset successfully imported.");
 
     // Recalculate stats based on the newly seeded data
     let _ = refresh_feature_stats(conn);
@@ -1480,6 +1505,7 @@ pub fn batch_ingest_samples(dataset_path: &Path) -> Result<usize> {
 }
 
 pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
+    emit_stderr("🏋️  Recomputing Global KNN Feature Statistics (Training Model)...");
     let rows = conn.query(
         "SELECT
             width, height, duration_secs, frame_count, file_size_bytes, fps,
@@ -1489,6 +1515,13 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
          FROM samples WHERE loss_tolerance IS NOT NULL",
         &[],
     )?;
+
+    if rows.is_empty() {
+        emit_stderr("⚠️  Retraining aborted: No labeled training samples found in database.");
+        return Ok(());
+    }
+
+    emit_stderr(&format!("   📊 Analyzing {} training samples...", rows.len()));
 
     let all_data: Vec<Vec<f64>> = rows
         .iter()
@@ -1572,6 +1605,9 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
         &[],
     )?;
     let top_keywords: Vec<String> = keyword_rows.iter().map(|r| r.get(0)).collect();
+    if !top_keywords.is_empty() {
+        emit_stderr(&format!("   🔍 Extracted {} dynamic loop triggers from filenames.", top_keywords.len()));
+    }
 
     let mut feature_map = FeatureMap::default();
     feature_map.top_keywords = top_keywords.clone();
@@ -1675,6 +1711,7 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
         &[&col_json],
     )?;
 
+    emit_stderr("✅ KNN Model Training Complete: Internal statistics synchronized.");
     Ok(())
 }
 

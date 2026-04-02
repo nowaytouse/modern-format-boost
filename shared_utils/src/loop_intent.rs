@@ -862,6 +862,23 @@ fn evaluate_loop_tree(
         );
     }
 
+    let force_short_gifs = std::env::var(crate::constants::ENV_FORCE_SHORT_GIFS)
+        .map(|v| v != "0")
+        .unwrap_or(true); // Developer option: enabled by default, can be disabled with =0
+    if force_short_gifs
+        && !meta.has_audio
+        && meta.duration_secs > 0.0
+        && meta.duration_secs <= crate::constants::HARD_PASS_SHORT_GIF_THRESHOLD_SECS
+    {
+        return finalize(
+            LoopIntentVerdict::LoopStrong(format!(
+                "Layer 1-C (Dev): forceful short asset pass ({:.2}s <= {:.2}s manual threshold)",
+                meta.duration_secs, crate::constants::HARD_PASS_SHORT_GIF_THRESHOLD_SECS
+            )),
+            log_odds,
+        );
+    }
+
     evaluate_kinetics_and_physics(meta, &derived, &thresholds, &mut log_odds);
     apply_weak_heuristics(
         meta,
@@ -974,10 +991,17 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
     let thresholds = LoopThresholds::from_profile(reference_profile.as_ref());
 
     match tree.verdict {
-        v @ (LoopIntentVerdict::LoopStrong(_) | LoopIntentVerdict::LoopWeak(_)) => v,
+        v @ (LoopIntentVerdict::LoopStrong(ref reason) | LoopIntentVerdict::LoopWeak(ref reason)) => {
+            if v.is_keep_gif() {
+                emit_stderr(&format!("✅ Tree Decisive: {reason}"));
+            } else {
+                emit_stderr(&format!("ℹ️  Tree Decisive: {reason}"));
+            }
+            v
+        }
         LoopIntentVerdict::Uncertain(ref reason) => {
             emit_stderr(&format!(
-                "🔭 Tree uncertain [{tree_probability:.2}] — falling back to Layer 6 KNN..."
+                "🔭 Tree uncertain ({reason}) [prob={tree_probability:.2}] — falling back to Layer 6 KNN..."
             ));
 
             if let Some(m) = sample_match {
@@ -1046,19 +1070,23 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
                     final_score,
                     confidence,
                 ) {
-                    return LoopIntentVerdict::LoopStrong(format!(
+                    let v = LoopIntentVerdict::LoopStrong(format!(
                         "Layer 6: KNN+Nudges score={:.2} (knn={:.2}, tree={:.2}, nudge={:+.2}, conf={:.2})",
                         final_score, keep_prob, tree_probability, nudges.score, confidence
                     ));
+                    emit_stderr(&format!("✅ KNN Fusion Success: {}", v.reason()));
+                    return v;
                 }
                 if confidence >= 0.75 && final_score <= 0.4 {
-                    return LoopIntentVerdict::LoopWeak(format!(
+                    let v = LoopIntentVerdict::LoopWeak(format!(
                         "Layer 6: KNN+Nudges score={:.2} (knn={:.2}, tree={:.2}, nudge={:+.2}, conf={:.2})",
                         final_score, keep_prob, tree_probability, nudges.score, confidence
                     ));
+                    emit_stderr(&format!("ℹ️  KNN Fusion Exit: {}", v.reason()));
+                    return v;
                 }
                 emit_stderr(&format!(
-                    "   ⚠️ KNN confidence={confidence:.2} final_score={final_score:.2} — insufficient for decision, using Layer 7 fallback"
+                    "   ⚠️  KNN data inconclusive (conf={confidence:.2}, score={final_score:.2}) — deferring to Layer 7"
                 ));
             } else {
                 if tree_probability > 0.78 {
@@ -1074,7 +1102,13 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
                 emit_stderr("   ⚠️ KNN returned no match — using Layer 7 fallback");
             }
 
-            layer7_fallback(meta, reason)
+            let final_v = layer7_fallback(meta, reason);
+            if final_v.is_keep_gif() {
+                emit_stderr(&format!("✅ Fallback Result: {}", final_v.reason()));
+            } else {
+                emit_stderr(&format!("ℹ️  Fallback Result: {}", final_v.reason()));
+            }
+            final_v
         }
     }
 }

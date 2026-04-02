@@ -13,6 +13,27 @@ All notable changes to this project will be documented in this file.
   - **Impact**: Prevents panic errors when refreshing feature statistics after database ingestion.
   - **File**: `shared_utils/src/gif_value_db.rs`
 
+#### 🧠 Loop Intent Hardening & Developer-Debug Layer
+
+- **Layer 1-C: Mandatory Short-Asset Pass**: Implemented a new "Hard Pass" threshold for assets under 10 seconds to stabilize decision tree fallbacks.
+  - **Logic**: Forces `LoopStrong` (GIF preservation) for silent assets ≤ 10s, bypassing complex heuristics for obviously short content.
+  - **Developer Toggle**: Added `MODERN_FORMAT_FORCE_SHORT_GIFS` environment variable (default enabled). Set to `0` to disable for fine-grained tuning. Marked with `(Dev)` in logs.
+  - **Files**: `shared_utils/src/constants.rs`, `shared_utils/src/loop_intent.rs`
+
+#### 📊 Enhanced Decision Observability (Standardized Logging)
+
+- **UI Standardized Emojis & Prefixes**: Overhauled the loop intent and database logging system with a consistent emoji-based status language for better scannability.
+  - **✅ [Success] / ℹ️ [Info] / ⚠️ [Warning] / 🔭 [KNN Probe] / ⚖️ [Nudges] / 🔍 [Analytics]**.
+- **Decision Transparency**: Every decision layer (Tree Direct, KNN Fusion, Layer 7 Fallback) now explicitly logs its reasoning and confidence scores to `stderr`.
+
+#### 🐘 Database Lifecycle & Runtime Intelligence
+
+- **Startup Connectivity Report**: Added a proactive database status check at application launch (`vid-hevc` / `img-hevc`).
+  - **Feedback**: Displays `🐘 Database: CONNECTED (Full Learning Mode)` or a `Limited Mode` warning with `manage_db.sh` setup instructions.
+- **Improved Training Visibility**: Added detailed progress logs for `recompute_stats` and `batch_ingest`, including sample counts and dynamic keyword extraction summaries.
+- **Logspam Protection**: Implemented a `DB_WARN_ONCE` mechanism to prevent duplicate connection warnings across thousands of files.
+- **File**: `shared_utils/src/gif_value_db.rs`, `vid_hevc/src/main.rs`, `img_hevc/src/main.rs`
+
 #### 📊 Enhanced Feature Statistics with Percentiles
 
 - **FeatureStats Struct Expansion**: Added percentile fields (P10, P25, P50, P75, P90) to `FeatureStats` for richer distribution modeling.
