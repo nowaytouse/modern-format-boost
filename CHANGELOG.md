@@ -8,33 +8,34 @@ All notable changes to this project will be documented in this file.
 
 #### 🧠 Loop Intent Soft Scoring Finalization (Layer 5 Refinement)
 
-- **Extended Short-Asset Prior (5-15s silent)**: Added positive scoring bonus for silent assets in the 5-15s range.
+- **Extended Short-Asset Prior (up to 10s+)**: Added positive scoring bonus for silent assets between `short_clip_secs` and `short_asset_window_secs`.
+  - **`short_asset_window_secs`**: Clamped to `HARD_PASS_SHORT_GIF_THRESHOLD_SECS` (10.0s) minimum, ensuring the bonus window always extends to at least 10s.
   - **Bonus Factors**: Compact size (+0.05), square aspect ratio (+0.04), image format (+0.05), duration proximity to short end (+0.10-0.20).
-  - **Impact**: Short silent memes/stickers are more likely to be classified as `LoopStrong` (kept as GIF).
-- **Short-Asset Window Lower Bound (≤10s)**: `short_asset_window_secs` is clamped to `HARD_PASS_SHORT_GIF_THRESHOLD_SECS` (10.0s) minimum.
-  - **Logic**: Ensures assets up to 10s always fall within the short-asset bonus window, even when `short_clip_secs` is lower.
-  - **Duration Stratification**:
-    - **≤10s**: Always eligible for extended short-asset bonus (upper bound guaranteed ≥10s).
-    - **10-15s**: Bonus eligibility depends on `short_clip_secs` (typically ~5-8s), with decreasing headroom.
-    - **>15s**: Subject to long-silent penalty (see below).
-- **Long-Silent Video Penalty (>15s)**: Added negative scoring for silent videos exceeding 15s threshold.
+  - **Impact**: Short silent memes/stickers (typically 5-10s) are more likely to be classified as `LoopStrong` (kept as GIF).
+- **Duration Stratification (Default Behavior)**:
+  - **≤ `duration_override_secs` (≈0.35-4.5s)**: Hard pass via Layer 1-B → `LoopStrong` (GIF).
+  - **4.5s ~ `short_clip_secs` (≈5-8s)**: Full heuristic scoring, eligible for `is_short_clip` high bonus.
+  - **`short_clip_secs` ~ `short_asset_window_secs` (≥10s)**: Full heuristic scoring, eligible for `is_extended_short_asset` moderate bonus.
+  - **10s ~ `modern_bias_duration_secs` (≥15s)**: Full heuristic scoring, no short-asset bonus, no long-silent penalty (neutral zone).
+  - **> `modern_bias_duration_secs` (≥15s)**: Subject to long-silent penalty (see below).
+- **Long-Silent Video Penalty (>15s)**: Added negative scoring for silent videos exceeding `modern_bias_duration_secs` threshold.
   - **Penalty Factors**: Base penalty (0.22), overflow scaling (+0.00-0.18), video container (+0.18), image container (+0.08).
   - **Transparency Relief**: Assets with transparency get -0.06 penalty reduction.
   - **Impact**: Long silent videos are more likely to be classified as `LoopWeak` (converted to modern video format).
 - **New Thresholds**: Introduced `short_asset_window_secs` and `modern_bias_duration_secs` for finer duration-based分层 scoring.
-  - `short_asset_window_secs`: Upper bound for extended short-asset bonus, clamped to `HARD_PASS_SHORT_GIF_THRESHOLD_SECS` (10.0s) minimum.
-  - `modern_bias_duration_secs`: Lower bound for long-silent penalty, clamped to `MODERN_FORMAT_VIDEO_BIAS_THRESHOLD_SECS` (15.0s) minimum.
+  - `short_asset_window_secs`: Upper bound for extended short-asset bonus, clamped to 10.0s minimum.
+  - `modern_bias_duration_secs`: Lower bound for long-silent penalty, clamped to 15.0s minimum.
 - **Layer 6 Relaxation**: Extended `short_clip_like` check to use `short_asset_window_secs` instead of `short_clip_secs`, broadening acceptance range for silent assets up to 10s+.
   - **Files**: `shared_utils/src/loop_intent.rs`
 
 #### 🔒 Developer Override Defaults Changed (Breaking Change)
 
 - **Hidden Layer 1 Toggles Now Opt-In**: `ENV_FORCE_SHORT_GIFS` and `ENV_INTERCEPT_LONG_SILENT` now default to **DISABLED**.
-  - **Before**: Short silent assets (≤10s) forcibly routed to `LoopStrong` (GIF).
-  - **After**: Assets go through full 7-layer decision tree, may be classified as `LoopWeak` (video) based on holistic scoring.
+  - **Layer 1-C (≤10s hard pass)**: Previously forced `LoopStrong` for silent assets ≤10s; now disabled by default.
+  - **Layer 1-D (>10s intercept)**: Previously forced `LoopWeak` for silent assets >10s; now disabled by default.
   - **Migration**: Set `MODERN_FORMAT_FORCE_SHORT_GIFS=1` or `MODERN_FORMAT_INTERCEPT_LONG_SILENT=1` to restore legacy behavior.
 - **New Helper Function**: `developer_layer1_override_enabled()` for cleaner environment variable parsing (accepts `1`, `true`, `yes`, `on`).
-- **Constants Documentation Updated**: Clarified `HARD_PASS_SHORT_GIF_THRESHOLD_SECS` as Layer 1-C dev hard-pass, `MODERN_FORMAT_VIDEO_BIAS_THRESHOLD_SECS` as long-silent bias threshold.
+- **Constants Documentation Updated**: Clarified `HARD_PASS_SHORT_GIF_THRESHOLD_SECS` (10.0s) as Layer 1-C dev hard-pass boundary, `MODERN_FORMAT_VIDEO_BIAS_THRESHOLD_SECS` (15.0s) as long-silent bias threshold.
   - **Files**: `shared_utils/src/constants.rs`, `shared_utils/src/loop_intent.rs`
 
 #### 🧪 Test Suite Enhancements
