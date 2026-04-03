@@ -1391,22 +1391,6 @@ fn try_imagemagick_fallback(
     )
 }
 
-fn convert_to_temp_png(
-    input: &Path,
-    tool: &str,
-    args_before_input: &[&str],
-    args_after_input: &[&str],
-    label: &str,
-) -> Result<(std::path::PathBuf, Option<tempfile::NamedTempFile>)> {
-    shared_utils::jxl_utils::convert_to_temp_png(
-        input,
-        tool,
-        args_before_input,
-        args_after_input,
-        label,
-    )
-    .map_err(ImgQualityError::IoError)
-}
 
 fn prepare_input_for_cjxl(
     input: &Path,
@@ -1603,13 +1587,39 @@ fn prepare_input_for_cjxl(
             }
         }
 
-        "webp" => convert_to_temp_png(
-            input,
-            "dwebp",
-            &[],
-            &["-o", "__OUTPUT__"],
-            "WebP detected, using dwebp for ICC profile compatibility",
-        ),
+        "webp" => {
+            use console::style;
+            eprintln!(
+                "   {} {}",
+                style("🔧 PRE-PROCESSING:").cyan().bold(),
+                style("WebP detected, using dwebp for ICC profile compatibility").dim()
+            );
+
+            let temp_png_file = tempfile::Builder::new().suffix(".png").tempfile()?;
+            let temp_png = temp_png_file.path().to_path_buf();
+
+            let mut builder = shared_utils::image_builders::DwebpBuilder::new();
+            builder.input(input).output(&temp_png);
+            
+            let result = builder.build().output();
+
+            match result {
+                Ok(output) if output.status.success() && temp_png.exists() => {
+                    shared_utils::progress_mode::preprocessing_success();
+                    Ok((temp_png, Some(temp_png_file)))
+                }
+                _ => {
+                    let line = format!(
+                        "   {} {} {}",
+                        style("🔧 PRE-PROCESSING:").cyan().bold(),
+                        style("WebP").dim(),
+                        style("→ ⚠️ failed, trying direct cjxl").yellow()
+                    );
+                    shared_utils::progress_mode::emit_stderr(&line);
+                    Ok((input.to_path_buf(), None))
+                }
+            }
+        }
 
         "tiff" | "tif" => {
             let label = if is_float {
@@ -1745,13 +1755,43 @@ fn prepare_input_for_cjxl(
             }
         }
 
-        "gif" => convert_to_temp_png(
-            input,
-            "ffmpeg",
-            &["-y", "-i"],
-            &["-frames:v", "1", "__OUTPUT__"],
-            "GIF detected, using FFmpeg for static frame extraction",
-        ),
+        "gif" => {
+            use console::style;
+            eprintln!(
+                "   {} {}",
+                style("🔧 PRE-PROCESSING:").cyan().bold(),
+                style("GIF detected, using FFmpeg for static frame extraction").dim()
+            );
+
+            let temp_png_file = tempfile::Builder::new().suffix(".png").tempfile()?;
+            let temp_png = temp_png_file.path().to_path_buf();
+
+            let mut builder = shared_utils::FfmpegBuilder::new();
+            builder
+                .overwrite()
+                .input(input)
+                .frames_v(1)
+                .output(&temp_png);
+            
+            let result = builder.spawn()?.wait_with_output();
+
+            match result {
+                Ok((status, _)) if status.success() && temp_png.exists() => {
+                    shared_utils::progress_mode::preprocessing_success();
+                    Ok((temp_png, Some(temp_png_file)))
+                }
+                _ => {
+                    let line = format!(
+                        "   {} {} {}",
+                        style("🔧 PRE-PROCESSING:").cyan().bold(),
+                        style("GIF").dim(),
+                        style("→ ⚠️ failed, trying direct cjxl").yellow()
+                    );
+                    shared_utils::progress_mode::emit_stderr(&line);
+                    Ok((input.to_path_buf(), None))
+                }
+            }
+        }
 
         _ => {
             if let Some(actual_ext) = input.extension().and_then(|e| e.to_str()) {

@@ -139,11 +139,35 @@ impl FromStr for PixFmt {
     }
 }
 
+/// Types of media streams for selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamType {
+    Video,
+    Audio,
+    Subtitle,
+    Data,
+    Attachments,
+}
+
+impl StreamType {
+    #[must_use]
+    pub const fn ffmpeg_name(&self) -> &'static str {
+        match self {
+            Self::Video => "v",
+            Self::Audio => "a",
+            Self::Subtitle => "s",
+            Self::Data => "d",
+            Self::Attachments => "t",
+        }
+    }
+}
+
 /// Builder for constructing `ffmpeg` commands.
 #[derive(Debug, Default, Clone)]
 pub struct FfmpegBuilder {
-    input: Option<PathBuf>,
+    inputs: Vec<PathBuf>,
     output: Option<PathBuf>,
+    output_is_null: bool,
     vcodec: Option<VideoCodec>,
     format: Option<String>,
     frames_v: Option<u32>,
@@ -153,7 +177,10 @@ pub struct FfmpegBuilder {
     pix_fmt: Option<PixFmt>,
     threads: Option<usize>,
     overwrite: bool,
+    hide_banner: bool,
+    loglevel: Option<String>,
     map: Vec<String>,
+    filter_complex: Option<String>,
     extra_args: Vec<String>,
     is_gpu: bool,
     params: FfmpegParams,
@@ -166,17 +193,44 @@ impl FfmpegBuilder {
     }
 
     pub fn input<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        self.input = Some(path.as_ref().to_path_buf());
+        self.inputs.push(path.as_ref().to_path_buf());
         self
     }
 
     pub fn output<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
         self.output = Some(path.as_ref().to_path_buf());
+        self.output_is_null = false;
+        self
+    }
+
+    pub fn output_null(&mut self) -> &mut Self {
+        self.output = None;
+        self.output_is_null = true;
         self
     }
 
     pub fn vcodec(&mut self, codec: VideoCodec) -> &mut Self {
         self.vcodec = Some(codec);
+        self
+    }
+
+    pub fn vcodec_str<S: AsRef<str>>(&mut self, codec: S) -> &mut Self {
+        if let Ok(c) = VideoCodec::from_str(codec.as_ref()) {
+            self.vcodec = Some(c);
+        } else {
+            self.extra_args.push("-c:v".to_string());
+            self.extra_args.push(codec.as_ref().to_string());
+        }
+        self
+    }
+
+    pub fn codec_video<S: AsRef<str>>(&mut self, codec: S) -> &mut Self {
+        self.vcodec_str(codec)
+    }
+
+    pub fn codec_audio<S: AsRef<str>>(&mut self, codec: S) -> &mut Self {
+        self.extra_args.push("-c:a".to_string());
+        self.extra_args.push(codec.as_ref().to_string());
         self
     }
 
@@ -210,12 +264,23 @@ impl FfmpegBuilder {
         self
     }
 
+    pub fn pix_fmt_str<S: AsRef<str>>(&mut self, fmt: S) -> &mut Self {
+        self.extra_args.push("-pix_fmt".to_string());
+        self.extra_args.push(fmt.as_ref().to_string());
+        self
+    }
+
     pub fn threads(&mut self, threads: usize) -> &mut Self {
         self.threads = Some(threads);
         self
     }
 
-    pub fn overwrite(&mut self, overwrite: bool) -> &mut Self {
+    pub fn overwrite(&mut self) -> &mut Self {
+        self.overwrite = true;
+        self
+    }
+
+    pub fn overwrite_bool(&mut self, overwrite: bool) -> &mut Self {
         self.overwrite = overwrite;
         self
     }
@@ -225,8 +290,33 @@ impl FfmpegBuilder {
         self
     }
 
+    pub fn map_stream(&mut self, stream_type: StreamType) -> &mut Self {
+        self.map.push(stream_type.ffmpeg_name().to_string());
+        self
+    }
+
+    pub fn map_stream_index(&mut self, stream_type: StreamType, index: usize) -> &mut Self {
+        self.map.push(format!("{}:{}", stream_type.ffmpeg_name(), index));
+        self
+    }
+
     pub fn use_gpu(&mut self, use_gpu: bool) -> &mut Self {
         self.is_gpu = use_gpu;
+        self
+    }
+
+    pub fn filter_complex<S: AsRef<str>>(&mut self, filter: S) -> &mut Self {
+        self.filter_complex = Some(filter.as_ref().to_string());
+        self
+    }
+
+    pub fn hide_banner(&mut self) -> &mut Self {
+        self.hide_banner = true;
+        self
+    }
+
+    pub fn loglevel<S: AsRef<str>>(&mut self, level: S) -> &mut Self {
+        self.loglevel = Some(level.as_ref().to_string());
         self
     }
 
@@ -265,59 +355,80 @@ impl FfmpegBuilder {
             cmd.arg(constants::FFMPEG_ARG_OVERWRITE);
         }
 
-        if let Some(threads) = self.threads {
-            cmd.arg(constants::FFMPEG_ARG_THREADS).arg(threads.to_string());
+        if self.hide_banner {
+            cmd.arg("-hide_banner");
         }
 
-        for map in &self.map {
-            cmd.arg(constants::FFMPEG_ARG_MAP).arg(map);
+        if let Some(level) = &self.loglevel {
+            cmd.arg("-v").arg(level);
         }
 
-        if let Some(input) = &self.input {
-            cmd.arg(constants::FFMPEG_ARG_INPUT).arg(crate::safe_path_arg(input).as_ref());
+        for input in &self.inputs {
+            cmd.arg("-i");
+            cmd.arg(crate::safe_path_arg(input).as_ref());
         }
 
-        if let Some(format) = &self.format {
-            cmd.arg(constants::FFMPEG_ARG_FORMAT).arg(format);
+        if let Some(filter) = &self.filter_complex {
+            cmd.arg("-lavfi").arg(filter);
         }
 
         if let Some(vcodec) = self.vcodec {
-            cmd.arg(constants::FFMPEG_ARG_CODEC_VIDEO).arg(vcodec.ffmpeg_name(self.is_gpu));
-        }
-
-        if let Some(frames) = self.frames_v {
-            cmd.arg(constants::FFMPEG_ARG_FRAMES_VIDEO).arg(frames.to_string());
-        }
-
-        if let Some(pix_fmt) = self.pix_fmt {
-            cmd.arg(constants::FFMPEG_ARG_PIX_FMT).arg(pix_fmt.ffmpeg_name());
-        }
-
-        if let Some(preset) = self.preset {
-            cmd.arg(constants::FFMPEG_ARG_PRESET).arg(preset.ffmpeg_name());
-        }
-
-        if let Some(profile) = self.profile {
-            cmd.arg(constants::FFMPEG_ARG_PROFILE_VIDEO).arg(profile.ffmpeg_name());
-        }
-
-        if let Some(tag) = &self.params.tag_video {
-            cmd.arg(constants::FFMPEG_ARG_TAG_VIDEO).arg(tag);
-        }
-
-        if let Some(x265) = &self.params.x265 {
-            cmd.arg(constants::FFMPEG_ARG_X265_PARAMS).arg(x265);
+            cmd.arg(constants::FFMPEG_ARG_CODEC_VIDEO);
+            cmd.arg(vcodec.ffmpeg_name(self.is_gpu));
         }
 
         if let Some(crf) = self.crf {
-            cmd.arg(constants::FFMPEG_ARG_CRF).arg(crf.to_string());
+            cmd.arg(constants::FFMPEG_ARG_CRF);
+            cmd.arg(crf.to_string());
+        }
+
+        if let Some(preset) = self.preset {
+            cmd.arg(constants::FFMPEG_ARG_PRESET);
+            cmd.arg(preset.x26x_name());
+        }
+
+        if let Some(profile) = self.profile {
+            cmd.arg("-profile:v");
+            cmd.arg(profile.ffmpeg_name());
+        }
+
+        if let Some(pix_fmt) = self.pix_fmt {
+            cmd.arg(constants::FFMPEG_ARG_PIX_FMT);
+            cmd.arg(pix_fmt.ffmpeg_name());
+        }
+
+        if let Some(threads) = self.threads {
+            cmd.arg(constants::FFMPEG_ARG_THREADS);
+            cmd.arg(threads.to_string());
+        }
+
+        if let Some(fmt) = &self.format {
+            cmd.arg("-f").arg(fmt);
+        }
+
+        if let Some(frames) = self.frames_v {
+            cmd.arg("-frames:v").arg(frames.to_string());
+        }
+
+        for m in &self.map {
+            cmd.arg("-map").arg(m);
+        }
+
+        if let Some(p) = &self.params.x265 {
+            cmd.arg(constants::FFMPEG_ARG_X265_PARAMS).arg(p);
+        }
+
+        if let Some(t) = &self.params.tag_video {
+            cmd.arg(constants::FFMPEG_ARG_TAG_VIDEO).arg(t);
         }
 
         for arg in &self.extra_args {
             cmd.arg(arg);
         }
 
-        if let Some(output) = &self.output {
+        if self.output_is_null {
+            cmd.arg("-");
+        } else if let Some(output) = &self.output {
             cmd.arg(crate::safe_path_arg(output).as_ref());
         }
 
@@ -337,9 +448,14 @@ pub struct FfprobeBuilder {
     input: Option<PathBuf>,
     show_streams: bool,
     show_format: bool,
+    show_frames: bool,
     show_entries: Option<String>,
     select_streams: Option<String>,
     print_format: Option<String>,
+    read_intervals: Option<String>,
+    count_frames: bool,
+    loglevel: Option<String>,
+    pattern_type: Option<String>,
     extra_args: Vec<String>,
 }
 
@@ -369,13 +485,48 @@ impl FfprobeBuilder {
         self
     }
 
-    pub fn select_streams<S: AsRef<str>>(&mut self, select: S) -> &mut Self {
+    pub fn select_streams(&mut self, stream_type: StreamType) -> &mut Self {
+        self.select_streams = Some(stream_type.ffmpeg_name().to_string());
+        self
+    }
+
+    pub fn select_stream(&mut self, stream_type: StreamType, index: usize) -> &mut Self {
+        self.select_streams = Some(format!("{}:{}", stream_type.ffmpeg_name(), index));
+        self
+    }
+
+    pub fn select_streams_custom<S: AsRef<str>>(&mut self, select: S) -> &mut Self {
         self.select_streams = Some(select.as_ref().to_string());
         self
     }
 
     pub fn print_format<S: AsRef<str>>(&mut self, format: S) -> &mut Self {
         self.print_format = Some(format.as_ref().to_string());
+        self
+    }
+
+    pub fn read_intervals<S: AsRef<str>>(&mut self, intervals: S) -> &mut Self {
+        self.read_intervals = Some(intervals.as_ref().to_string());
+        self
+    }
+
+    pub fn show_frames(&mut self) -> &mut Self {
+        self.show_frames = true;
+        self
+    }
+
+    pub fn count_frames(&mut self) -> &mut Self {
+        self.count_frames = true;
+        self
+    }
+
+    pub fn loglevel<S: AsRef<str>>(&mut self, level: S) -> &mut Self {
+        self.loglevel = Some(level.as_ref().to_string());
+        self
+    }
+
+    pub fn pattern_type<S: AsRef<str>>(&mut self, pt: S) -> &mut Self {
+        self.pattern_type = Some(pt.as_ref().to_string());
         self
     }
 
@@ -397,6 +548,14 @@ impl FfprobeBuilder {
             cmd.arg("-show_format");
         }
 
+        if self.show_frames {
+            cmd.arg("-show_frames");
+        }
+
+        if self.count_frames {
+            cmd.arg("-count_frames");
+        }
+
         if let Some(entries) = &self.show_entries {
             cmd.arg("-show_entries").arg(entries);
         }
@@ -405,8 +564,20 @@ impl FfprobeBuilder {
             cmd.arg("-select_streams").arg(select);
         }
 
-        if let Some(format) = &self.print_format {
-            cmd.arg("-print_format").arg(format);
+        if let Some(fmt) = &self.print_format {
+            cmd.arg("-print_format").arg(fmt);
+        }
+
+        if let Some(intervals) = &self.read_intervals {
+            cmd.arg("-read_intervals").arg(intervals);
+        }
+
+        if let Some(level) = &self.loglevel {
+            cmd.arg("-v").arg(level);
+        }
+
+        if let Some(pt) = &self.pattern_type {
+            cmd.arg("-pattern_type").arg(pt);
         }
 
         for arg in &self.extra_args {
@@ -418,5 +589,20 @@ impl FfprobeBuilder {
         }
 
         cmd
+    }
+
+    #[must_use]
+    pub fn check_available() -> bool {
+        Command::new(constants::TOOL_FFPROBE).arg("-version").output().map(|o| o.status.success()).unwrap_or(false)
+    }
+}
+
+impl FfmpegBuilder {
+    pub fn list_encoders() -> anyhow::Result<String> {
+        let output = Command::new(constants::TOOL_FFMPEG)
+            .arg("-hide_banner")
+            .arg("-encoders")
+            .output()?;
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
 }

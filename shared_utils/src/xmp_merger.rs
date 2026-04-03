@@ -101,13 +101,8 @@ impl XmpMerger {
     /// # Errors
     /// Returns an error if exiftool is not found.
     pub fn check_exiftool() -> Result<()> {
-        let output = Command::new("exiftool")
-            .arg("-ver")
-            .output()
-            .context("ExifTool not found. Install with: brew install exiftool")?;
-
-        if !output.status.success() {
-            bail!("ExifTool check failed");
+        if !crate::tool_builders::ExiftoolBuilder::check_available() {
+            bail!("ExifTool not found. Install with: brew install exiftool");
         }
         Ok(())
     }
@@ -178,21 +173,20 @@ impl XmpMerger {
     }
 
     fn extract_xmp_metadata(&self, xmp_path: &Path) -> Result<XmpFile> {
-        let output = Command::new("exiftool")
-            .args([
-                "-charset",
-                "filename=utf8",
-                "-api",
-                "windowsunicode=1",
-                "-api",
-                "LargeFileSupport=1",
-                "-s3",
-                "-DocumentID",
-                "-DerivedFrom",
-                "-Source",
-                "-OriginalDocumentID",
-            ])
+        let output = crate::tool_builders::ExiftoolBuilder::new()
+            .arg("-charset")
+            .arg("filename=utf8")
+            .arg("-api")
+            .arg("windowsunicode=1")
+            .arg("-api")
+            .arg("LargeFileSupport=1")
+            .arg("-s3")
+            .arg("-DocumentID")
+            .arg("-DerivedFrom")
+            .arg("-Source")
+            .arg("-OriginalDocumentID")
             .arg(exiftool_path_arg(xmp_path).as_ref())
+            .build()
             .output()
             .context("Failed to run exiftool")?;
 
@@ -377,9 +371,12 @@ impl XmpMerger {
                 continue;
             }
 
-            let output = match Command::new("exiftool")
-                .args(["-s3", "-SidecarForExtension", "-XMPFileRef"])
+            let output = match crate::tool_builders::ExiftoolBuilder::new()
+                .arg("-s3")
+                .arg("-SidecarForExtension")
+                .arg("-XMPFileRef")
                 .arg(exiftool_path_arg(&path).as_ref())
+                .build()
                 .output()
             {
                 Ok(output) if output.status.success() => output,
@@ -543,9 +540,11 @@ impl XmpMerger {
                 continue;
             }
 
-            let output = match Command::new("exiftool")
-                .args(["-s3", "-DocumentID"])
+            let output = match crate::tool_builders::ExiftoolBuilder::new()
+                .arg("-s3")
+                .arg("-DocumentID")
                 .arg(exiftool_path_arg(&path).as_ref())
+                .build()
                 .output()
             {
                 Ok(output) if output.status.success() => output,
@@ -688,19 +687,27 @@ impl XmpMerger {
         let original_timestamps = self.get_file_timestamps(media_path);
         let xmp_timestamps = self.get_file_timestamps(xmp_path);
 
-        let mut args = vec![
-            "-P".to_string(),
-            "-charset".to_string(),
-            "filename=utf8".to_string(),
-            "-api".to_string(),
-            "windowsunicode=1".to_string(),
-            "-api".to_string(),
-            "LargeFileSupport=1".to_string(),
-            "-overwrite_original".to_string(),
-        ];
+        let xmp_data = std::fs::read(xmp_path)
+            .with_context(|| format!("Failed to read XMP file: {}", xmp_path.display()))?;
+
+        let mut builder = crate::tool_builders::ExiftoolBuilder::new();
+        builder
+            .arg("-P")
+            .arg("-charset")
+            .arg("filename=utf8")
+            .arg("-api")
+            .arg("windowsunicode=1")
+            .arg("-api")
+            .arg("LargeFileSupport=1")
+            .arg("-tagsfromfile")
+            .arg("-")
+            .arg("-all:all")
+            .arg("-unsafe")
+            .arg("-FileModifyDate<FileModifyDate")
+            .arg(safe_path_arg(media_path).as_ref());
 
         if self.config.overwrite_original {
-            args.push("-overwrite_original".to_string());
+            builder.overwrite_original();
         }
 
         let is_jxl = media_path
@@ -709,39 +716,16 @@ impl XmpMerger {
         let apple_compat = std::env::var("MODERN_FORMAT_BOOST_APPLE_COMPAT").is_ok();
 
         if is_jxl && apple_compat {
-            args.push("-all=".to_string());
-
-            args.push("-tagsfromfile".to_string());
-            args.push("@".to_string());
-            args.push("-all:all".to_string());
-            args.push("-unsafe".to_string());
-            args.push("-icc_profile".to_string());
+            builder.arg("-all=");
+            builder.arg("-tagsfromfile");
+            builder.arg("@");
+            builder.arg("-all:all");
+            builder.arg("-unsafe");
+            builder.arg("-icc_profile");
         }
 
-        // Use -tagsfromfile - to read XMP data from STDIN.
-        //
-        // 🔥 ULTIMATE SECURITY RATIONALE:
-        // Passing filenames containing '%' to `ExifTool` via `-tagsfromfile [path]`
-        // is notoriously fragile due to recursive format code expansion in some versions.
-        //
-        // By using `STDIN` (`-`), we physically decouple the media file path
-        // from the XMP source data. `ExifTool` never sees the 'evil' XMP path string;
-        // it only sees raw binary data on the pipe.
-        args.push("-tagsfromfile".to_string());
-        args.push("-".to_string());
-        args.push("-all:all".to_string());
-        args.push("-unsafe".to_string());
-        args.push("-FileModifyDate<FileModifyDate".to_string());
-        args.push(safe_path_arg(media_path).as_ref().to_string());
-
-        let xmp_data = std::fs::read(xmp_path)
-            .with_context(|| format!("Failed to read XMP file: {}", xmp_path.display()))?;
-
-        let mut child = Command::new("exiftool")
-            .args(&args)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
+        let mut child = builder
+            .build()
             .spawn()
             .context("Failed to spawn exiftool merge process")?;
 
@@ -1225,7 +1209,7 @@ mod tests {
 
     #[test]
     fn test_merge_xmp_mismatch_fallback() {
-        if Command::new("exiftool").arg("-ver").output().is_err() {
+        if !crate::image_builders::ExiftoolBuilder::check_available() {
             eprintln!("ExifTool not found, skipping test");
             return;
         }
@@ -1313,7 +1297,7 @@ mod tests {
 
     #[test]
     fn test_extract_xmp_metadata_reports_exiftool_failure() {
-        if Command::new("exiftool").arg("-ver").output().is_err() {
+        if !crate::image_builders::ExiftoolBuilder::check_available() {
             eprintln!("ExifTool not found, skipping test");
             return;
         }

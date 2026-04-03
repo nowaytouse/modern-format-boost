@@ -12,10 +12,9 @@ pub fn preserve_windows_attributes(src: &Path, dst: &Path) -> io::Result<()> {
             src.to_string_lossy().replace('\'', "''"),
             dst.to_string_lossy().replace('\'', "''")
         );
-        match Command::new("powershell")
-            .arg("-NoProfile")
-            .arg("-Command")
-            .arg(ps_script)
+        match crate::tool_builders::PowershellBuilder::new()
+            .command(&ps_script)
+            .build()
             .output()
         {
             Ok(output) if !output.status.success() => {
@@ -43,7 +42,7 @@ pub fn preserve_windows_attributes(src: &Path, dst: &Path) -> io::Result<()> {
             let file_attrs = meta.file_attributes();
             let is_hidden = (file_attrs & 0x2) != 0;
             let is_system = (file_attrs & 0x4) != 0;
-            let mut cmd = Command::new("attrib");
+            let mut cmd = crate::tool_builders::AttribBuilder::new();
             if is_hidden {
                 cmd.arg("+h");
             }
@@ -51,7 +50,7 @@ pub fn preserve_windows_attributes(src: &Path, dst: &Path) -> io::Result<()> {
                 cmd.arg("+s");
             }
             cmd.arg(dst);
-            match cmd.output() {
+            match cmd.build().output() {
                 Ok(output) if !output.status.success() => {
                     eprintln!(
                         "⚠️ [metadata] attrib returned non-zero status for {}: {}",
@@ -87,10 +86,9 @@ fn preserve_alternate_data_streams(src: &Path, dst: &Path) {
         "Get-Item -LiteralPath '{}' -Stream * | Where-Object {{ $_.Stream -ne ':$DATA' }} | Select-Object -ExpandProperty Stream",
         src.to_string_lossy().replace('\'', "''")
     );
-    let out = Command::new("powershell")
-        .arg("-NoProfile")
-        .arg("-Command")
-        .arg(&list_script)
+    let out = crate::tool_builders::PowershellBuilder::new()
+        .command(&list_script)
+        .build()
         .output();
     let Ok(out) = out else {
         eprintln!(
@@ -118,10 +116,9 @@ fn preserve_alternate_data_streams(src: &Path, dst: &Path) {
             dst.to_string_lossy().replace('\'', "''"),
             stream_name.replace('\'', "''"),
         );
-        let result = Command::new("powershell")
-            .arg("-NoProfile")
-            .arg("-Command")
-            .arg(&copy_script)
+        let result = crate::tool_builders::PowershellBuilder::new()
+            .command(&copy_script)
+            .build()
             .output();
         if let Ok(r) = result {
             if !r.status.success() {

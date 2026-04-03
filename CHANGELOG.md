@@ -34,11 +34,11 @@ Refined the multi-language documentation suite and unified the project's version
 
 Completed the transition of the entire media processing pipeline to a type-safe, fluent builder architecture and stabilized the loop intent classification system.
 
-- **Fluent Builder Architecture**: Replaced all remaining legacy `Command` manual invocations with specialized builders (`FfmpegBuilder`, `FfprobeBuilder`, `ExiftoolBuilder`, `MagickBuilder`, `CjxlBuilder`, `DjxlBuilder`).
-- **Loop Intent Logic Patch**: Refactored `shared_utils/src/loop_intent.rs` to default `ENV_FORCE_SHORT_GIFS` and `ENV_INTERCEPT_LONG_SILENT` heuristics to **ENABLED**, significantly reducing conservative Layer 7 fallbacks and improving classification accuracy for stickers and short clips.
-- **Type-Safe FFmpeg Integration**: Expanded `FfmpegBuilder` with support for encoder-specific parameters (`x265-params`, `tag:v hvc1`) and unified `EncoderPreset` mapping for consistent FFmpeg flag generation.
-- **Improved Robustness**: Resolved subtle `cicp` metadata move errors and type mismatches in the JXL conversion path. Cleaned up all syntax errors and unused imports across the `img` and `vid` crates.
-- **Files**: `shared_utils/src/ffmpeg_builder.rs`, `shared_utils/src/loop_intent.rs`, `img/src/lossless_converter.rs`, `img/src/main.rs`, `vid/src/animated_image.rs`.
+- **100% Architectural Coverage**: Achieved full migration of the entire media processing pipeline to the type-safe `Builder` pattern. Eliminated all remaining legacy `Command` manual invocations in primary processing modules, including `x265` and `dwebp`.
+- **Dwebp & X265 Builders**: Introduced a dedicated `DwebpBuilder` and expanded `X265Builder` to support advanced encoding parameters, centralizing tool execution logic and eliminating magic strings.
+- **Helper Deprecation**: Deprecated and removed the legacy `convert_to_temp_png` generic runners in `jxl_utils.rs` and `lossless_converter.rs`, replacing them with direct, type-safe Builder pipelines for WebP and GIF pre-processing.
+- **Tool Constant Centralization**: Unified all tool binary names (including `x265` and `dwebp`) into the global `shared_utils/src/constants.rs` registry.
+- **Files**: `shared_utils/src/ffmpeg_builder.rs`, `shared_utils/src/image_builders.rs`, `shared_utils/src/tool_builders.rs`, `shared_utils/src/constants.rs`, `shared_utils/src/x265_encoder.rs`, `shared_utils/src/jxl_utils.rs`, `img/src/lossless_converter.rs`.
 
 #### 🚀 HEVC Pipeline Optimization — Quality & Compatibility
 

@@ -1651,10 +1651,13 @@ fn extract_frame_to_temp(path: &Path) -> Option<std::path::PathBuf> {
     let temp_dir = std::env::temp_dir();
     let temp_path = temp_dir.join(format!("mfb_frame_{:x}_{:x}.png", timestamp, rand_seed));
 
-    let output = Command::new("ffmpeg")
-        .args(["-i", path.to_str()?, "-vframes", "1", "-f", "image2", "-y"])
-        .arg(&temp_path)
-        .stderr(std::process::Stdio::null())
+    let output = crate::ffmpeg_builder::FfmpegBuilder::new()
+        .input(path)
+        .frames_v(1)
+        .format("image2")
+        .overwrite()
+        .output(&temp_path)
+        .build()
         .output()
         .ok()?;
 
@@ -2157,16 +2160,13 @@ pub fn should_use_gif_fast_path(path: &std::path::Path) -> bool {
 /// Performs deep signal extraction (Palette, YDIF, Block Skew) using ffmpeg benchmarks.
 pub fn deep_refine_meta(meta: &mut LoopMeta, path: &std::path::Path) -> anyhow::Result<()> {
     // 1. Extract Temporal Flatness (YDIF)
-    let output = std::process::Command::new("ffmpeg")
-        .args([
-            "-i",
-            crate::path_safety::safe_path_arg(path).as_ref(),
-            "-vf",
-            "signalstats,metadata=print",
-            "-f",
-            "null",
-            "-",
-        ])
+    let output = crate::ffmpeg_builder::FfmpegBuilder::new()
+        .input(path)
+        .arg("-vf")
+        .arg("signalstats,metadata=print")
+        .format("null")
+        .output_null()
+        .build()
         .output()?;
 
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -2188,20 +2188,15 @@ pub fn deep_refine_meta(meta: &mut LoopMeta, path: &std::path::Path) -> anyhow::
     }
 
     // 2. Extract Palette Depth
-    let thumb_output = std::process::Command::new("ffmpeg")
-        .args([
-            "-i",
-            crate::path_safety::safe_path_arg(path).as_ref(),
-            "-frames:v",
-            "1",
-            "-vf",
-            "scale=64:64",
-            "-f",
-            "rawvideo",
-            "-pix_fmt",
-            "rgb24",
-            "-",
-        ])
+    let thumb_output = crate::ffmpeg_builder::FfmpegBuilder::new()
+        .input(path)
+        .frames_v(1)
+        .arg("-vf")
+        .arg("scale=64:64")
+        .format("rawvideo")
+        .pix_fmt(crate::ffmpeg_builder::PixFmt::Rgb24)
+        .output_null()
+        .build()
         .output()?;
 
     if thumb_output.status.success() && thumb_output.stdout.len() >= 64 * 64 * 3 {

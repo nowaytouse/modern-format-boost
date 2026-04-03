@@ -89,6 +89,8 @@ pub mod smart_file_copier;
 pub mod stream_size;
 pub mod system_memory;
 pub mod types;
+pub mod tool_builders;
+pub use tool_builders::{X265Builder};
 
 pub mod progress_mode;
 
@@ -291,9 +293,9 @@ pub use explore_strategy::{
 };
 
 pub use ffmpeg_builder::{
-    FfmpegBuilder, FfprobeBuilder, PixFmt, VideoCodec, VideoProfile,
+    FfmpegBuilder, FfprobeBuilder, PixFmt, StreamType, VideoCodec, VideoProfile,
 };
-pub use image_builders::{AvifencBuilder, ExiftoolBuilder, GifskiBuilder, MagickBuilder, SipsBuilder, WebpmuxBuilder};
+pub use image_builders::{AvifencBuilder, DwebpBuilder, ExiftoolBuilder, GifskiBuilder, MagickBuilder, SipsBuilder, WebpmuxBuilder};
 pub use jxl_builder::{CjxlBuilder, DjxlBuilder};
 pub use ffmpeg_process::{
     format_ffmpeg_error, is_recoverable_error, FfmpegProcess, FfmpegProgressParser,

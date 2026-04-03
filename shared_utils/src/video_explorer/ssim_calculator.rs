@@ -231,16 +231,15 @@ fn calculate_ms_ssim_channel_sampled(
         "[0:v]{sample_filter}scale={target_width}:{target_height}:flags=bicubic,format=yuv420p,extractplanes={channel}[c0];[1:v]{sample_filter}scale={target_width}:{target_height}:flags=bicubic,format=yuv420p,extractplanes={channel}[c1];[c0][c1]libvmaf=feature='name=float_ms_ssim':log_fmt=json:log_path=/dev/stdout",
     );
 
-    let result = Command::new("ffmpeg")
-        .arg("-i")
-        .arg(crate::safe_path_arg(input).as_ref())
-        .arg("-i")
-        .arg(crate::safe_path_arg(output).as_ref())
+    let result = crate::ffmpeg_builder::FfmpegBuilder::new()
+        .input(input)
+        .input(output)
         .arg("-filter_complex")
         .arg(&filter)
         .arg("-f")
         .arg("null")
-        .arg("-")
+        .output("-")
+        .build()
         .output();
 
     match result {
@@ -316,18 +315,17 @@ pub fn calculate_ms_ssim(input: &Path, output: &Path) -> Option<f64> {
 
     // Always use 8-bit yuv420p for libvmaf compatibility
     // libvmaf's MS-SSIM feature works best with 8-bit input
-    let result = Command::new("ffmpeg")
-        .arg("-i")
-        .arg(crate::safe_path_arg(input).as_ref())
-        .arg("-i")
-        .arg(crate::safe_path_arg(output).as_ref())
+    let result = crate::ffmpeg_builder::FfmpegBuilder::new()
+        .input(input)
+        .input(output)
         .arg("-filter_complex")
         .arg(format!(
             "[0:v]scale={target_width}:{target_height}:flags=bicubic,format=yuv420p[ref];[1:v]scale={target_width}:{target_height}:flags=bicubic,format=yuv420p[dis];[ref][dis]libvmaf=log_path=/dev/stdout:log_fmt=json:feature='name=float_ms_ssim'",
         ))
         .arg("-f")
         .arg("null")
-        .arg("-")
+        .output("-")
+        .build()
         .output();
 
     match result {
@@ -450,16 +448,15 @@ pub fn calculate_vmaf_y(input: &Path, output: &Path, sample_rate: usize) -> Opti
         "[0:v]{sample_filter}scale={target_width}:{target_height}:flags=bicubic,format=yuv420p[dis];[1:v]{sample_filter}scale={target_width}:{target_height}:flags=bicubic,format=yuv420p[ref];[dis][ref]libvmaf=shortest=true:ts_sync_mode=nearest:n_threads={n_threads}:log_fmt=json:log_path=/dev/stdout",
     );
 
-    let result = Command::new("ffmpeg")
-        .arg("-i")
-        .arg(crate::safe_path_arg(output).as_ref())
-        .arg("-i")
-        .arg(crate::safe_path_arg(input).as_ref())
+    let result = crate::ffmpeg_builder::FfmpegBuilder::new()
+        .input(output)
+        .input(input)
         .arg("-filter_complex")
         .arg(&filter)
         .arg("-f")
         .arg("null")
-        .arg("-")
+        .output("-")
+        .build()
         .output();
 
     match result {
@@ -524,16 +521,15 @@ pub fn calculate_cambi(output: &Path, sample_rate: usize) -> Option<f64> {
         lp = log_path.display(),
     );
 
-    let result = Command::new("ffmpeg")
-        .arg("-i")
-        .arg(crate::safe_path_arg(output).as_ref())
-        .arg("-i")
-        .arg(crate::safe_path_arg(output).as_ref())
+    let result = crate::ffmpeg_builder::FfmpegBuilder::new()
+        .input(output)
+        .input(output)
         .arg("-filter_complex")
         .arg(&filter_complex)
         .arg("-f")
         .arg("null")
-        .arg("-")
+        .output("-")
+        .build()
         .output();
 
     match result {
@@ -640,16 +636,15 @@ fn psnr_single_channel(
         "[0:v]{sample_filter}scale={target_width}:{target_height}:flags=bicubic,format=yuv420p,extractplanes={channel}[ref];[1:v]{sample_filter}scale={target_width}:{target_height}:flags=bicubic,format=yuv420p,extractplanes={channel}[dis];[ref][dis]psnr=stats_file=-",
     );
 
-    let result = Command::new("ffmpeg")
-        .arg("-i")
-        .arg(crate::safe_path_arg(input).as_ref())
-        .arg("-i")
-        .arg(crate::safe_path_arg(output).as_ref())
+    let result = crate::ffmpeg_builder::FfmpegBuilder::new()
+        .input(input)
+        .input(output)
         .arg("-filter_complex")
         .arg(&filter)
         .arg("-f")
         .arg("null")
-        .arg("-")
+        .output("-")
+        .build()
         .output();
 
     match result {

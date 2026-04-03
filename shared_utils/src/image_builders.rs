@@ -131,6 +131,11 @@ impl MagickBuilder {
 
         cmd
     }
+
+    #[must_use]
+    pub fn check_available() -> bool {
+        Command::new(constants::TOOL_MAGICK).arg("-version").output().map(|o| o.status.success()).unwrap_or(false)
+    }
 }
 
 /// Builder for constructing `webpmux` commands.
@@ -233,6 +238,11 @@ impl WebpmuxBuilder {
         }
 
         cmd
+    }
+
+    #[must_use]
+    pub fn check_available() -> bool {
+        Command::new(constants::TOOL_WEBPMUX).arg("-version").output().map(|o| o.status.success()).unwrap_or(false)
     }
 }
 
@@ -345,6 +355,11 @@ impl GifskiBuilder {
         }
 
         cmd
+    }
+
+    #[must_use]
+    pub fn check_available() -> bool {
+        Command::new(constants::TOOL_GIFSKI).arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
     }
 }
 
@@ -461,6 +476,11 @@ impl AvifencBuilder {
 
         cmd
     }
+
+    #[must_use]
+    pub fn check_available() -> bool {
+        Command::new("avifenc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
+    }
 }
 
 /// Builder for constructing `sips` commands (macOS only).
@@ -520,6 +540,18 @@ impl SipsBuilder {
 
         cmd
     }
+
+    #[must_use]
+    pub fn check_available() -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            Command::new(constants::TOOL_SIPS).arg("-v").output().map(|o| o.status.success()).unwrap_or(false)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            false
+        }
+    }
 }
 
 /// Builder for constructing `exiftool` commands.
@@ -568,6 +600,11 @@ impl ExiftoolBuilder {
         self
     }
 
+    pub fn extract_icc_profile(&mut self) -> &mut Self {
+        self.arg("-icc_profile").arg("-b");
+        self
+    }
+
     #[must_use]
     pub fn build(&self) -> Command {
         let mut cmd = Command::new("exiftool");
@@ -585,5 +622,64 @@ impl ExiftoolBuilder {
         }
 
         cmd
+    }
+
+    #[must_use]
+    pub fn check_available() -> bool {
+        Command::new("exiftool").arg("-ver").output().map(|o| o.status.success()).unwrap_or(false)
+    }
+}
+
+/// Builder for constructing `dwebp` commands.
+#[derive(Debug, Default)]
+pub struct DwebpBuilder {
+    input: Option<PathBuf>,
+    output: Option<PathBuf>,
+    extra_args: Vec<String>,
+}
+
+impl DwebpBuilder {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn input<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
+        self.input = Some(path.as_ref().to_path_buf());
+        self
+    }
+
+    pub fn output<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
+        self.output = Some(path.as_ref().to_path_buf());
+        self
+    }
+
+    pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
+        self.extra_args.push(arg.as_ref().to_string());
+        self
+    }
+
+    #[must_use]
+    pub fn build(&self) -> Command {
+        let mut cmd = Command::new(crate::constants::TOOL_DWEBP);
+
+        if let Some(input) = &self.input {
+            cmd.arg(crate::safe_path_arg(input).as_ref());
+        }
+
+        for arg in &self.extra_args {
+            cmd.arg(arg);
+        }
+
+        if let Some(output) = &self.output {
+            cmd.arg("-o").arg(crate::safe_path_arg(output).as_ref());
+        }
+
+        cmd
+    }
+
+    #[must_use]
+    pub fn check_available() -> bool {
+        Command::new(crate::constants::TOOL_DWEBP).arg("-version").output().map(|o| o.status.success()).unwrap_or(false)
     }
 }

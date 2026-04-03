@@ -7,9 +7,9 @@ use std::process::Command;
 pub fn preserve_linux_attributes(src: &Path, dst: &Path) -> io::Result<()> {
     // ACL preservation via getfacl/setfacl --restore (more complete than -m per-entry)
     if which::which("getfacl").is_ok() && which::which("setfacl").is_ok() {
-        let output = Command::new("getfacl")
-            .arg("--absolute-names")
-            .arg(src)
+        let output = crate::tool_builders::AclBuilder::getfacl()
+            .input(src)
+            .build()
             .output();
         if let Ok(out) = output {
             if out.status.success() {
@@ -29,17 +29,6 @@ pub fn preserve_linux_attributes(src: &Path, dst: &Path) -> io::Result<()> {
 
                 // Feed rewritten ACL to setfacl --restore via stdin
                 use std::io::Write;
-                let mut child = Command::new("setfacl")
-                    .arg("--restore=-")
-                    .stdin(std::process::Stdio::piped())
-                    .spawn();
-                if let Ok(ref mut child) = child {
-                    if let Some(stdin) = child.stdin.take() {
-                        let mut stdin = stdin;
-                        if let Err(e) = stdin.write_all(rewritten.as_bytes()) {
-                            eprintln!(
-                                "⚠️ [metadata] Failed to pipe ACL restore data to setfacl for {}: {}",
-                                dst.display(),
                                 e
                             );
                         }

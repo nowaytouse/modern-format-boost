@@ -71,7 +71,12 @@ pub fn is_low_memory_env() -> bool {
 }
 
 fn get_memory_macos() -> (u64, u64) {
-    let total = match Command::new("sysctl").arg("-n").arg("hw.memsize").output() {
+    let total = match crate::tool_builders::SysctlBuilder::new()
+        .arg("-n")
+        .arg("hw.memsize")
+        .build()
+        .output()
+    {
         Ok(output) if output.status.success() => match String::from_utf8(output.stdout) {
             Ok(stdout) => match stdout.trim().parse::<u64>() {
                 Ok(bytes) => bytes / (1024 * 1024),
@@ -96,7 +101,10 @@ fn get_memory_macos() -> (u64, u64) {
         }
     };
 
-    let available = match Command::new("vm_stat").output() {
+    let available = match crate::tool_builders::VmstatBuilder::new()
+        .build()
+        .output()
+    {
         Ok(output) if output.status.success() => match String::from_utf8(output.stdout) {
             Ok(stdout) => {
                 if let Some(available) = parse_vm_stat_available(&stdout) {

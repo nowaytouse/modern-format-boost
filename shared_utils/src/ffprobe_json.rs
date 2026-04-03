@@ -210,21 +210,15 @@ fn parse_side_data_list(
 pub fn extract_color_info(input: &Path) -> ColorInfo {
     let input_str = input.to_string_lossy();
 
-    let output = match Command::new(crate::constants::TOOL_FFPROBE)
-        .args([
-            "-v",
-            "error", // Use "error" instead of "quiet" to capture stderr for fallback detection
-            "-print_format",
-            "json",
-            "-show_streams",
-            "-show_frames",
-            "-read_intervals",
-            "%+#5",
-            "-select_streams",
-            "v:0",
-            "--",
-        ])
-        .arg(crate::safe_path_arg(input).as_ref())
+    let output = match crate::ffmpeg_builder::FfprobeBuilder::new()
+        .input(input)
+        .loglevel("error")
+        .print_format("json")
+        .show_streams()
+        .show_frames()
+        .read_intervals("%+#5")
+        .select_stream(crate::ffmpeg_builder::StreamType::Video, 0)
+        .build()
         .output()
     {
         Ok(o) if o.status.success() => o,
@@ -236,23 +230,16 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
             {
                 crate::log_rare_error!("FFprobe", "Image2 demuxer pattern matching failed for file: {} - Retrying with -pattern_type none", input_str);
                 // Retry with -pattern_type none to disable sequence pattern matching
-                match Command::new(crate::constants::TOOL_FFPROBE)
-                    .args([
-                        "-v",
-                        "error",
-                        "-pattern_type",
-                        "none",
-                        "-print_format",
-                        "json",
-                        "-show_streams",
-                        "-show_frames",
-                        "-read_intervals",
-                        "%+#5",
-                        "-select_streams",
-                        "v:0",
-                        "--",
-                    ])
-                    .arg(crate::safe_path_arg(input).as_ref())
+                match crate::ffmpeg_builder::FfprobeBuilder::new()
+                    .input(input)
+                    .loglevel("error")
+                    .pattern_type("none")
+                    .print_format("json")
+                    .show_streams()
+                    .show_frames()
+                    .read_intervals("%+#5")
+                    .select_stream(crate::ffmpeg_builder::StreamType::Video, 0)
+                    .build()
                     .output()
                 {
                     Ok(retry_o) if retry_o.status.success() => retry_o,
@@ -495,21 +482,14 @@ pub enum PtsIntegrity {
 }
 
 pub fn check_pts_integrity(input: &Path) -> PtsIntegrity {
-    let output = match Command::new(crate::constants::TOOL_FFPROBE)
-        .args([
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "packet=pts_time",
-            "-of",
-            "csv=p=0",
-            "-read_intervals",
-            "%+#100", // Check first 100 packets
-            "--",
-        ])
-        .arg(crate::safe_path_arg(input).as_ref())
+    let output = match crate::ffmpeg_builder::FfprobeBuilder::new()
+        .input(input)
+        .loglevel("error")
+        .select_stream(crate::ffmpeg_builder::StreamType::Video, 0)
+        .show_entries("packet=pts_time")
+        .print_format("csv=p=0")
+        .read_intervals("%+#100")
+        .build()
         .output()
     {
         Ok(o) if o.status.success() => o,

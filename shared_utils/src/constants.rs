@@ -274,6 +274,8 @@ pub const TOOL_GIFSKI: &str = "gifski";
 pub const TOOL_MAGICK: &str = "magick";
 pub const TOOL_SIPS: &str = "sips";
 pub const TOOL_EXIFTOOL: &str = "exiftool";
+pub const TOOL_DWEBP: &str = "dwebp";
+pub const TOOL_X265: &str = "x265";
 
 // --- SVT-AV1 Defaults ---
 

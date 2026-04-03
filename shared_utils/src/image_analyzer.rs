@@ -1184,9 +1184,10 @@ fn try_jxl_via_apng(path: &Path) -> Option<f32> {
     let temp_apng_path = temp_apng.path();
 
     // Convert JXL to APNG using djxl
-    let djxl_result = Command::new("djxl")
-        .arg(crate::safe_path_arg(path).as_ref())
-        .arg(crate::safe_path_arg(temp_apng_path).as_ref())
+    let djxl_result = crate::jxl_builder::DjxlBuilder::new()
+        .input(path)
+        .output(temp_apng_path)
+        .build()
         .output()
         .map_err(|e| {
             log_eprintln!("⚠️  Failed to launch djxl for {}: {}", path.display(), e);
@@ -1203,20 +1204,14 @@ fn try_jxl_via_apng(path: &Path) -> Option<f32> {
 
     // APNG doesn't have duration in format metadata, we need to calculate from frames and fps
     // Use ffprobe with -count_frames to get nb_read_frames
-    let probe_output = Command::new(crate::constants::TOOL_FFPROBE)
-        .args([
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-count_frames",
-            "-show_entries",
-            "stream=nb_read_frames,r_frame_rate",
-            "-of",
-            "json",
-            "--",
-        ])
-        .arg(crate::safe_path_arg(temp_apng_path).as_ref())
+    let probe_output = crate::ffmpeg_builder::FfprobeBuilder::new()
+        .input(temp_apng_path)
+        .loglevel("error")
+        .select_stream(crate::ffmpeg_builder::StreamType::Video, 0)
+        .count_frames()
+        .show_entries("stream=nb_read_frames,r_frame_rate")
+        .print_format("json")
+        .build()
         .output()
         .map_err(|e| {
             log_eprintln!(
@@ -1279,9 +1274,12 @@ fn try_jxl_via_apng(path: &Path) -> Option<f32> {
 fn try_ffprobe_json(path: &Path) -> Option<f32> {
     use std::process::Command;
 
-    let output = Command::new(crate::constants::TOOL_FFPROBE)
-        .args(["-v", "error", "-print_format", "json", "-show_format", "--"])
-        .arg(crate::safe_path_arg(path).as_ref())
+    let output = crate::ffmpeg_builder::FfprobeBuilder::new()
+        .input(path)
+        .loglevel("error")
+        .print_format("json")
+        .show_format()
+        .build()
         .output()
         .map_err(|e| {
             log_eprintln!(
@@ -1332,17 +1330,12 @@ fn try_ffprobe_json(path: &Path) -> Option<f32> {
 fn try_ffprobe_default(path: &Path) -> Option<f32> {
     use std::process::Command;
 
-    let output = Command::new(crate::constants::TOOL_FFPROBE)
-        .args([
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "default=noprint_wrappers=1:nokey=1",
-            "--",
-        ])
-        .arg(crate::safe_path_arg(path).as_ref())
+    let output = crate::ffmpeg_builder::FfprobeBuilder::new()
+        .input(path)
+        .loglevel("error")
+        .show_entries("format=duration")
+        .print_format("default=noprint_wrappers=1:nokey=1")
+        .build()
         .output()
         .map_err(|e| {
             log_eprintln!(
@@ -1391,17 +1384,13 @@ pub fn get_animation_duration_and_frames_imagemagick(path: &Path) -> Option<(f64
         path.display()
     );
 
-    let safe_path = crate::safe_path_arg(path);
-    let output = Command::new("magick")
-        .args(["identify", "-format", "%T\n"])
-        .arg(safe_path.as_ref())
+    let output = crate::image_builders::MagickBuilder::new()
+        .arg("identify")
+        .arg("-format")
+        .arg("%T\n")
+        .input(path)
+        .build()
         .output()
-        .or_else(|_| {
-            Command::new("identify")
-                .args(["-format", "%T\n"])
-                .arg(safe_path.as_ref())
-                .output()
-        })
         .ok();
 
     let Some(output) = output else {
@@ -1464,22 +1453,14 @@ fn try_imagemagick_identify(path: &Path) -> Option<f32> {
 }
 
 fn try_get_frame_count(path: &Path) -> Option<u32> {
-    use std::process::Command;
-
-    let output = Command::new(crate::constants::TOOL_FFPROBE)
-        .args([
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-count_packets",
-            "-show_entries",
-            "stream=nb_read_packets",
-            "-of",
-            "csv=p=0",
-            "--",
-        ])
-        .arg(crate::safe_path_arg(path).as_ref())
+    let output = crate::ffmpeg_builder::FfprobeBuilder::new()
+        .input(path)
+        .loglevel("error")
+        .select_stream(crate::ffmpeg_builder::StreamType::Video, 0)
+        .count_frames()
+        .show_entries("stream=nb_read_packets")
+        .print_format("csv=p=0")
+        .build()
         .output()
         .map_err(|e| {
             log_eprintln!(
@@ -1605,9 +1586,10 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
     use crate::image_detection::{detect_animation, DetectedFormat};
     use std::process::Command;
 
-    let (width, height, has_alpha, color_depth) = if which::which("jxlinfo").is_ok() {
-        let output = Command::new("jxlinfo")
-            .arg(crate::safe_path_arg(path).as_ref())
+    let (width, height, has_alpha, color_depth) = if crate::tool_builders::JxlinfoBuilder::check_available() {
+        let output = crate::tool_builders::JxlinfoBuilder::new()
+            .input(path)
+            .build()
             .output();
 
         if let Ok(out) = output {

@@ -19,6 +19,7 @@ pub struct CjxlBuilder {
     apple_compat: bool,
     extra_args: Vec<String>,
     use_stdin: bool,
+    intensity_target: Option<f32>,
 }
 
 impl CjxlBuilder {
@@ -85,6 +86,11 @@ impl CjxlBuilder {
         self
     }
 
+    pub fn intensity_target(&mut self, target: f32) -> &mut Self {
+        self.intensity_target = Some(target);
+        self
+    }
+
     pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
         self.extra_args.push(arg.as_ref().to_string());
         self
@@ -127,6 +133,10 @@ impl CjxlBuilder {
             cmd.arg(constants::JXL_ARG_COMPRESS_BOXES);
         }
 
+        if let Some(it) = self.intensity_target {
+            cmd.arg("--intensity_target").arg(format!("{it:.2}"));
+        }
+
         for arg in &self.extra_args {
             cmd.arg(arg);
         }
@@ -148,6 +158,11 @@ impl CjxlBuilder {
         }
 
         cmd
+    }
+
+    #[must_use]
+    pub fn check_available() -> bool {
+        Command::new(constants::TOOL_CJXL).arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
     }
 }
 
@@ -198,5 +213,10 @@ impl DjxlBuilder {
         }
 
         cmd
+    }
+
+    #[must_use]
+    pub fn check_available() -> bool {
+        Command::new(constants::TOOL_DJXL).arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
     }
 }

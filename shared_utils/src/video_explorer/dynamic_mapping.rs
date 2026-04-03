@@ -171,19 +171,17 @@ pub fn quick_calibrate(
         let gpu_path = gpu_test_file.path().to_path_buf();
         let cpu_path = cpu_test_file.path().to_path_buf();
 
-        let gpu_result = Command::new("ffmpeg")
-            .arg("-y")
+        let gpu_result = crate::ffmpeg_builder::FfmpegBuilder::new()
+            .overwrite()
+            .input(input)
+            .arg("-vf")
+            .arg("zscale=t=linear:npl=100,format=gbrpf32le,tonemap=tonemap=hable:desat=0,zscale=p=bt709:t=bt709:m=bt709,format=yuv420p")
             .arg("-t")
-            .arg(format!("{}", sample_duration.min(cpu_sample_cap)))
-            .arg("-i")
-            .arg(crate::safe_path_arg(input).as_ref())
-            .arg("-c:v")
-            .arg(gpu_encoder)
-            .arg("-crf")
-            .arg(format!("{anchor_crf:.0}"))
-            .arg("-c:a")
-            .arg("copy")
-            .arg(crate::safe_path_arg(gpu_path.as_path()).as_ref())
+            .arg("1")
+            .arg("-f")
+            .arg("null")
+            .output("-")
+            .build()
             .output();
 
         let gpu_size = match gpu_result {
@@ -214,24 +212,24 @@ pub fn quick_calibrate(
         let max_threads = crate::thread_manager::get_ffmpeg_threads();
 
         let cpu_size = if encoder == super::VideoEncoder::Hevc && is_gif_input {
-            let mut cpu_cmd = Command::new("ffmpeg");
-            cpu_cmd
-                .arg("-y")
+            let mut cpu_builder = crate::ffmpeg_builder::FfmpegBuilder::new();
+            cpu_builder
+                .overwrite()
                 .arg("-t")
                 .arg(format!("{}", sample_duration.min(cpu_sample_cap)))
-                .arg("-i")
-                .arg(crate::safe_path_arg(input).as_ref())
-                .arg("-an")
+                .input(input)
+                .codec_audio("none")
                 .arg("-vf")
                 .arg("scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=lanczos,format=yuv420p")
-                .arg("-c:v")
-                .arg("libx265")
+                .codec_video("libx265")
                 .arg("-crf")
                 .arg(format!("{anchor_crf:.0}"));
+
             for arg in encoder.extra_args(max_threads, apple_compat) {
-                cpu_cmd.arg(arg);
+                cpu_builder.arg(arg);
             }
-            cpu_cmd.arg(crate::safe_path_arg(cpu_path.as_path()).as_ref());
+
+            let mut cpu_cmd = cpu_builder.output(&cpu_path).build();
             match cpu_cmd.output() {
                 Ok(out) if out.status.success() => {
                     fs::metadata(&cpu_path).map(|m| m.len()).unwrap_or(0)
@@ -278,20 +276,16 @@ pub fn quick_calibrate(
                 .tempfile()
                 .context("Failed to create temp file")?;
             let temp_input = temp_input_file.path().to_path_buf();
-            let extract_result = Command::new("ffmpeg")
-                .arg("-y")
-                .arg("-t")
-                .arg(format!("{}", sample_duration.min(cpu_sample_cap)))
-                .arg("-i")
-                .arg(crate::safe_path_arg(input).as_ref())
-                .arg("-an")
+            let temp_y4m = temp_input.to_str().unwrap();
+            let extract_result = crate::ffmpeg_builder::FfmpegBuilder::new()
+                .overwrite()
+                .input(input)
                 .arg("-vf")
-                .arg("scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=lanczos")
-                .arg("-f")
-                .arg("yuv4mpegpipe")
-                .arg("-pix_fmt")
-                .arg("yuv420p")
-                .arg(crate::safe_path_arg(&temp_input).as_ref())
+                .arg("select=eq(n\\,0)")
+                .arg("-frames:v")
+                .arg("1")
+                .output(temp_y4m)
+                .build()
                 .output();
 
             match extract_result {
@@ -344,13 +338,19 @@ pub fn quick_calibrate(
                 }
             }
         } else {
-            let mut cpu_cmd = Command::new("ffmpeg");
-            cpu_cmd
-                .arg("-y")
+            let mut cpu_builder = crate::ffmpeg_builder::FfmpegBuilder::new();
+            cpu_builder
+                .overwrite()
+                .input(input)
+                .arg("-vf")
+                .arg("zscale=p=bt709:t=bt709:m=bt709")
                 .arg("-t")
-                .arg(format!("{}", sample_duration.min(cpu_sample_cap)))
-                .arg("-i")
-                .arg(crate::safe_path_arg(input).as_ref())
+                .arg("1")
+                .arg("-f")
+                .arg("null")
+                .output("-");
+            let mut cpu_cmd = cpu_builder.build();
+            cpu_cmd
                 .arg("-c:v")
                 .arg(encoder.ffmpeg_name())
                 .arg("-crf")

@@ -102,7 +102,7 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
         // Convert WebP frame to PNG using FFmpeg
         let mut builder = shared_utils::FfmpegBuilder::new();
         builder
-            .overwrite(true)
+            .overwrite()
             .input(&frame_webp_path)
             .output(&frame_png_path);
             
@@ -123,7 +123,7 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
     let pattern = temp_dir_path.join("frame_%04d.png");
     let mut builder = shared_utils::FfmpegBuilder::new();
     builder
-        .overwrite(true)
+        .overwrite()
         .arg("-r") // Use -r for input frame rate
         .arg(fps.to_string())
         .input(&pattern)
@@ -467,17 +467,14 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
                 }
             }
         } else if input_ext == shared_utils::constants::EXT_AVIF && {
-            let out = std::process::Command::new(shared_utils::constants::TOOL_FFPROBE)
-                .arg(shared_utils::constants::FFMPEG_ARG_LOG_LEVEL)
-                .arg(shared_utils::constants::FFMPEG_VAL_ERROR)
-                .arg(shared_utils::constants::FFMPEG_ARG_SELECT_STREAMS)
-                .arg("v")
-                .arg(shared_utils::constants::FFMPEG_ARG_SHOW_ENTRIES)
-                .arg("stream=index")
-                .arg(shared_utils::constants::FFMPEG_ARG_OUTPUT_FORMAT)
-                .arg(shared_utils::constants::FFMPEG_VAL_CSV_CLEAN)
-                .arg(input)
-                .output();
+            let mut builder = shared_utils::FfprobeBuilder::new();
+            builder
+                .input(input)
+                .select_streams(shared_utils::StreamType::Video)
+                .show_entries("stream=index")
+                .print_format("csv=p=0");
+            
+            let out = builder.build().output();
             out.map(|o| String::from_utf8_lossy(&o.stdout).lines().count() > 1)
                 .unwrap_or(false)
         } {
@@ -488,7 +485,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
             let temp_apng_path = temp_apng.path().to_path_buf();
             let mut builder = shared_utils::FfmpegBuilder::new();
             builder
-                .overwrite(true)
+                .overwrite()
                 .input(input)
                 .arg("-filter_complex")
                 .arg("[0:v:0][0:v:1]alphamerge")
@@ -515,7 +512,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
             let mut builder = shared_utils::FfprobeBuilder::new();
             builder
                 .input(input)
-                .select_streams("v")
+                .select_streams(shared_utils::StreamType::Video)
                 .show_entries("stream=index")
                 .print_format("csv=p=0");
             
@@ -574,7 +571,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
 
     let mut builder = shared_utils::FfmpegBuilder::new();
     builder
-        .overwrite(true)
+        .overwrite()
         .threads(max_threads as usize)
         .input(&actual_input)
         .arg(shared_utils::constants::FFMPEG_ARG_MAP)
@@ -903,17 +900,14 @@ pub fn convert_to_mp4_matched(
                 }
             }
         } else if input_ext == shared_utils::constants::EXT_AVIF && {
-            let out = std::process::Command::new(shared_utils::constants::TOOL_FFPROBE)
-                .arg(shared_utils::constants::FFMPEG_ARG_LOG_LEVEL)
-                .arg(shared_utils::constants::FFMPEG_VAL_ERROR)
-                .arg(shared_utils::constants::FFMPEG_ARG_SELECT_STREAMS)
-                .arg("v")
-                .arg(shared_utils::constants::FFMPEG_ARG_SHOW_ENTRIES)
-                .arg("stream=index")
-                .arg(shared_utils::constants::FFMPEG_ARG_OUTPUT_FORMAT)
-                .arg(shared_utils::constants::FFMPEG_VAL_CSV_CLEAN)
-                .arg(input)
-                .output();
+            let mut builder = shared_utils::FfprobeBuilder::new();
+            builder
+                .input(input)
+                .select_streams(shared_utils::StreamType::Video)
+                .show_entries("stream=index")
+                .print_format("csv=p=0");
+            
+            let out = builder.build().output();
             out.map(|o| String::from_utf8_lossy(&o.stdout).lines().count() > 1)
                 .unwrap_or(false)
         } {
@@ -922,18 +916,18 @@ pub fn convert_to_mp4_matched(
             }
             let temp_apng = tempfile::Builder::new().suffix(".apng").tempfile()?;
             let temp_apng_path = temp_apng.path().to_path_buf();
-            let res = std::process::Command::new(shared_utils::constants::TOOL_FFMPEG)
-                .arg("-y")
-                .arg("-i")
-                .arg(input)
+            let mut builder = shared_utils::FfmpegBuilder::new();
+            builder
+                .overwrite()
+                .input(input)
                 .arg("-filter_complex")
                 .arg("[0:v:0][0:v:1]alphamerge")
                 .arg("-plays")
                 .arg("0")
-                .arg("-c:v")
-                .arg("apng")
-                .arg(&temp_apng_path)
-                .output()?;
+                .vcodec(shared_utils::VideoCodec::Apng)
+                .output(&temp_apng_path);
+            
+            let res = builder.build().output()?;
             if res.status.success() {
                 (temp_apng_path, Some(temp_apng))
             } else {
@@ -954,7 +948,7 @@ pub fn convert_to_mp4_matched(
                 let mut builder = shared_utils::FfprobeBuilder::new();
                 builder
                     .input(input)
-                    .select_streams("v")
+                    .select_streams(shared_utils::StreamType::Video)
                     .show_entries("stream=index")
                     .print_format("csv=p=0");
                 
@@ -984,7 +978,7 @@ pub fn convert_to_mp4_matched(
                     // Convert the correct stream to APNG using FFmpeg
                     let mut builder = shared_utils::FfmpegBuilder::new();
                     builder
-                        .overwrite(true)
+                        .overwrite()
                         .input(input)
                         .arg("-map")
                         .arg(format!("0:{}", probe.stream_index))
@@ -1419,7 +1413,7 @@ pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result
     let x265_params = format!("lossless=1:log-level=error:pools={max_threads}");
     let mut builder = shared_utils::FfmpegBuilder::new();
     builder
-        .overwrite(true)
+        .overwrite()
         .threads(max_threads as usize)
         .input(input)
         .vcodec(shared_utils::VideoCodec::Hevc)
@@ -1649,9 +1643,10 @@ pub fn convert_to_gif_apple_compat(
             let temp_apng_path = temp_apng.path().to_path_buf();
 
             // Convert JXL to APNG using djxl
-            let djxl_result = Command::new("djxl")
-                .arg(shared_utils::safe_path_arg(input).as_ref())
-                .arg(shared_utils::safe_path_arg(&temp_apng_path).as_ref())
+            let djxl_result = crate::tool_builders::DjxlBuilder::new()
+                .input(input)
+                .output(&temp_apng_path)
+                .build()
                 .output();
 
             match djxl_result {
@@ -1736,7 +1731,7 @@ pub fn convert_to_gif_apple_compat(
             let mut builder = shared_utils::FfprobeBuilder::new();
             builder
                 .input(input)
-                .select_streams("v")
+                .select_streams(shared_utils::StreamType::Video)
                 .show_entries("stream=index")
                 .print_format("csv=p=0");
             
@@ -1749,18 +1744,18 @@ pub fn convert_to_gif_apple_compat(
             }
             let temp_apng = tempfile::Builder::new().suffix(".apng").tempfile()?;
             let temp_apng_path = temp_apng.path().to_path_buf();
-            let res = std::process::Command::new(shared_utils::constants::TOOL_FFMPEG)
-                .arg("-y")
-                .arg("-i")
-                .arg(input)
+            let mut builder = shared_utils::FfmpegBuilder::new();
+            builder
+                .overwrite()
+                .input(input)
                 .arg("-filter_complex")
                 .arg("[0:v:0][0:v:1]alphamerge")
                 .arg("-plays")
                 .arg("0")
-                .arg("-c:v")
-                .arg("apng")
-                .arg(&temp_apng_path)
-                .output()?;
+                .vcodec(shared_utils::VideoCodec::Apng)
+                .output(&temp_apng_path);
+            
+            let res = builder.build().output()?;
             if res.status.success() {
                 (temp_apng_path, Some(temp_apng))
             } else {
@@ -1792,7 +1787,7 @@ pub fn convert_to_gif_apple_compat(
         let mut builder = shared_utils::FfprobeBuilder::new();
         builder
             .input(&actual_input)
-            .select_streams("v")
+            .select_streams(shared_utils::StreamType::Video)
             .show_entries("stream=index")
             .print_format("csv=p=0");
         
@@ -1815,7 +1810,7 @@ pub fn convert_to_gif_apple_compat(
                 let temp_apng_path = temp_apng.path().to_path_buf();
                 let mut builder = shared_utils::FfmpegBuilder::new();
                 builder
-                    .overwrite(true)
+                    .overwrite()
                     .input(&actual_input)
                     .arg("-map")
                     .arg(format!("0:{effective_stream_idx}"))
@@ -1840,9 +1835,7 @@ pub fn convert_to_gif_apple_compat(
             .unwrap_or(20.0)
             .clamp(1.0, 60.0);
         let fps_str = format!("{fps:.3}");
-
         let res = Command::new("gifski")
-            // --quiet removed to expose logs
             .arg("--output")
             .arg(shared_utils::safe_path_arg(&temp_output).as_ref())
             .arg("--fps")

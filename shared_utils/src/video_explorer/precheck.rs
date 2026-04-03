@@ -126,22 +126,19 @@ const FPS_THRESHOLD_INVALID: f64 = 10000.0;
 
 /// Single ffprobe run for precheck: stream (codec, size, duration, fps, `bit_rate`, color) + format.duration.
 fn run_precheck_ffprobe(input: &Path) -> Result<serde_json::Value> {
-    let output = Command::new("ffprobe")
-        .args([
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-count_frames",  // Add -count_frames to get nb_read_frames for formats like APNG
-            "-show_entries",
-            "stream=codec_name,width,height,r_frame_rate,avg_frame_rate,duration,nb_frames,nb_read_frames,bit_rate,color_space,color_transfer,pix_fmt,bits_per_raw_sample",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "json",
-            "--",
-        ])
-        .arg(crate::safe_path_arg(input).as_ref())
+    let output = crate::tool_builders::FfprobeBuilder::new()
+        .input(input)
+        .arg("-v")
+        .arg("error")
+        .select_stream(crate::ffmpeg_builder::StreamType::Video, 0)
+        .arg("-count_frames")
+        .arg("-show_entries")
+        .arg("stream=codec_name,width,height,r_frame_rate,avg_frame_rate,duration,nb_frames,nb_read_frames,bit_rate,color_space,color_transfer,pix_fmt,bits_per_raw_sample")
+        .arg("-show_entries")
+        .arg("format=duration")
+        .arg("-of")
+        .arg("json")
+        .build()
         .output()
         .context("ffprobe failed")?;
 
@@ -313,21 +310,19 @@ fn bpp_from_precheck_json(json: &serde_json::Value, file_size: u64, input: &Path
 /// # Errors
 /// Returns an error if duration detection fails.
 pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'static str)> {
-    let output = Command::new("ffprobe")
-        .args([
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "stream=r_frame_rate,avg_frame_rate,duration,nb_frames",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "json",
-            "--",
-        ])
-        .arg(crate::safe_path_arg(input).as_ref())
+    let output = crate::tool_builders::FfprobeBuilder::new()
+        .input(input)
+        .arg("-v")
+        .arg("error")
+        .arg("-select_streams")
+        .arg("v:0")
+        .arg("-show_entries")
+        .arg("stream=r_frame_rate,avg_frame_rate,duration,nb_frames")
+        .arg("-show_entries")
+        .arg("format=duration")
+        .arg("-of")
+        .arg("json")
+        .build()
         .output()
         .context("ffprobe failed")?;
 

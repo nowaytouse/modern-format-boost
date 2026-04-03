@@ -104,7 +104,7 @@ pub struct FFprobeResult {
 
 #[must_use]
 pub fn is_ffprobe_available() -> bool {
-    Command::new("ffprobe").arg("-version").output().is_ok()
+    crate::ffmpeg_builder::FfprobeBuilder::check_available()
 }
 
 /// Enhanced VFR detection with slow-motion video handling
@@ -165,23 +165,16 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         )));
     }
 
-    let path_arg = crate::safe_path_arg(path);
-    let output = Command::new(crate::constants::TOOL_FFPROBE)
-        .args([
-            "-v",
-            "error",
-            "-print_format",
-            "json",
-            "-show_format",
-            "-show_streams",
-            "-show_frames",
-            "-show_entries",
-            "frame=pict_type,pkt_pts_time,pkt_size",
-            "-read_intervals",
-            "%+#300", // Read up to 300 frames for deep signal analysis
-            "--",
-        ])
-        .arg(path_arg.as_ref())
+    let output = crate::ffmpeg_builder::FfprobeBuilder::new()
+        .input(path)
+        .loglevel("error")
+        .print_format("json")
+        .show_format()
+        .show_streams()
+        .show_frames()
+        .show_entries("frame=pict_type,pkt_pts_time,pkt_size")
+        .read_intervals("%+#300")
+        .build()
         .output()?;
 
     if !output.status.success() {
@@ -682,17 +675,12 @@ fn build_max_cll_string(sd: &serde_json::Value) -> Option<String> {
 }
 
 pub fn get_duration(path: &Path) -> Option<f64> {
-    let output = match Command::new(crate::constants::TOOL_FFPROBE)
-        .args([
-            "-v",
-            "quiet",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "default=noprint_wrappers=1:nokey=1",
-            "--",
-        ])
-        .arg(crate::safe_path_arg(path).as_ref())
+    let output = match crate::ffmpeg_builder::FfprobeBuilder::new()
+        .input(path)
+        .loglevel("quiet")
+        .show_entries("format=duration")
+        .print_format("default=noprint_wrappers=1:nokey=1")
+        .build()
         .output()
     {
         Ok(output) => output,
@@ -732,20 +720,14 @@ pub fn get_duration(path: &Path) -> Option<f64> {
 }
 
 pub fn get_frame_count(path: &Path) -> Option<u64> {
-    let output = match Command::new(crate::constants::TOOL_FFPROBE)
-        .args([
-            "-v",
-            "quiet",
-            "-count_frames",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "stream=nb_read_frames",
-            "-of",
-            "default=noprint_wrappers=1:nokey=1",
-            "--",
-        ])
-        .arg(crate::safe_path_arg(path).as_ref())
+    let output = match crate::ffmpeg_builder::FfprobeBuilder::new()
+        .input(path)
+        .loglevel("quiet")
+        .count_frames()
+        .select_stream(crate::ffmpeg_builder::StreamType::Video, 0)
+        .show_entries("stream=nb_read_frames")
+        .print_format("default=noprint_wrappers=1:nokey=1")
+        .build()
         .output()
     {
         Ok(output) => output,

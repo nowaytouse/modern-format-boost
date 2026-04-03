@@ -207,7 +207,10 @@ pub fn append_mfb_branding(path: &Path) -> io::Result<()> {
         branding = branding
     );
 
-    let output = Command::new("osascript").arg("-e").arg(&script).output()?;
+    let output = crate::tool_builders::OsascriptBuilder::new()
+        .script(&script)
+        .build()
+        .output()?;
 
     if !output.status.success() {
         let err = String::from_utf8_lossy(&output.stderr);

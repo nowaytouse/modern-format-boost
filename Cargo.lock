@@ -1130,7 +1130,7 @@ checksum = "e7c5cedc30da3a610cac6b4ba17597bdf7152cf974e8aab3afb3d54455e371c8"
 [[package]]
 name = "indexmap"
 version = "2.14.0"
-source = "git+https://github.com/indexmap-rs/indexmap#fb6dafda4ee443864c88b61a4dfc8982012d3d39"
+source = "git+https://github.com/indexmap-rs/indexmap#4b62776c3f7dec98a5b89f907c3add5c603343b0"
 dependencies = [
  "equivalent",
  "hashbrown 0.16.1",

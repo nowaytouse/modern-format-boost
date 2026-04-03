@@ -1757,7 +1757,7 @@ fn execute_conversion(
     let vf_args = shared_utils::get_ffmpeg_dimension_args(detection.width, detection.height, false);
     let mut builder = shared_utils::FfmpegBuilder::new();
     builder
-        .overwrite(true)
+        .overwrite()
         .threads(max_threads)
         .input(Path::new(&detection.file_path))
         .vcodec(match codec {
@@ -1956,7 +1956,10 @@ fn execute_lossless(
 
     args.push(output_arg);
 
-    let result = Command::new("ffmpeg").args(&args).output()?;
+    let result = crate::tool_builders::FfmpegBuilder::new()
+        .args(args)
+        .build()
+        .output()?;
 
     if !result.status.success() {
         return Err(VidQualityError::FFmpegError {

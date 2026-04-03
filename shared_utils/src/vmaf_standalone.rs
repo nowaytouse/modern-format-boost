@@ -8,11 +8,7 @@ use std::process::Command;
 
 #[must_use]
 pub fn is_vmaf_available() -> bool {
-    Command::new("vmaf")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    crate::tool_builders::VmafBuilder::check_available()
 }
 
 /// Calculate MS-SSIM using the standalone `vmaf` tool.
@@ -46,16 +42,13 @@ pub fn calculate_ms_ssim_standalone(reference: &Path, distorted: &Path) -> Resul
     convert_to_y4m(reference, ref_y4m_file.path())?;
     convert_to_y4m(distorted, dist_y4m_file.path())?;
 
-    let status = Command::new("vmaf")
-        .arg("--reference")
-        .arg(ref_y4m_file.path())
-        .arg("--distorted")
-        .arg(dist_y4m_file.path())
-        .arg("--feature")
-        .arg("float_ms_ssim")
-        .arg("--output")
-        .arg(json_file.path())
-        .arg("--json")
+    let status = crate::tool_builders::VmafBuilder::new()
+        .reference(ref_y4m_file.path())
+        .distorted(dist_y4m_file.path())
+        .feature("float_ms_ssim")
+        .output(json_file.path())
+        .json(true)
+        .build()
         .status()
         .context("Failed to run vmaf")?;
 
@@ -69,16 +62,13 @@ pub fn calculate_ms_ssim_standalone(reference: &Path, distorted: &Path) -> Resul
 }
 
 fn convert_to_y4m(input: &Path, output_path: &Path) -> Result<()> {
-    let status = Command::new("ffmpeg")
-        .arg("-i")
-        .arg(crate::safe_path_arg(input).as_ref())
-        .arg("-pix_fmt")
-        .arg("yuv420p")
-        .arg("-f")
-        .arg("yuv4mpegpipe")
-        .arg("-y")
-        .arg(crate::safe_path_arg(output_path).as_ref())
-        .stderr(std::process::Stdio::null())
+    let status = crate::ffmpeg_builder::FfmpegBuilder::new()
+        .input(input)
+        .pix_fmt_str("yuv420p")
+        .format("yuv4mpegpipe")
+        .output(output_path)
+        .overwrite()
+        .build()
         .status()
         .context("Failed to convert to Y4M")?;
 

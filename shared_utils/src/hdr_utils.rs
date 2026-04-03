@@ -200,24 +200,14 @@ pub fn get_hdr_pix_fmt(info: &ColorInfo) -> &'static str {
     }
 }
 
-/// Check if `dovi_tool` binary is available on PATH.
 #[must_use]
 pub fn is_dovi_tool_available() -> bool {
-    Command::new("dovi_tool")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    crate::tool_builders::DoviBuilder::check_available()
 }
 
-/// Check if `hdr10plus_tool` binary is available on PATH.
 #[must_use]
 pub fn is_hdr10plus_tool_available() -> bool {
-    Command::new("hdr10plus_tool")
-        .arg("--help")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    crate::tool_builders::Hdr10PlusBuilder::check_available()
 }
 
 /// Extract raw HEVC Annex-B bitstream from a container using ffmpeg.
@@ -227,11 +217,17 @@ pub fn is_hdr10plus_tool_available() -> bool {
 /// Returns an error if `ffmpeg` fails or the bitstream extraction fails.
 pub fn extract_hevc_bitstream(input: &Path, temp_dir: &Path) -> Result<PathBuf, String> {
     let raw_hevc = temp_dir.join("raw.hevc");
-    let status = Command::new("ffmpeg")
-        .args(["-y", "-i"])
-        .arg(input)
-        .args(["-c:v", "copy", "-bsf:v", "hevc_mp4toannexb", "-an", "-sn"])
-        .arg(&raw_hevc)
+    let status = crate::tool_builders::FfmpegBuilder::new()
+        .overwrite()
+        .input(input)
+        .arg("-c:v")
+        .arg("copy")
+        .arg("-bsf:v")
+        .arg("hevc_mp4toannexb")
+        .arg("-an")
+        .arg("-sn")
+        .output(&raw_hevc)
+        .build()
         .output()
         .map_err(|e| format!("failed to run ffmpeg for bitstream extraction: {e}"))?;
 
@@ -255,14 +251,11 @@ pub fn extract_dv_rpu(
 ) -> Result<PathBuf, String> {
     let rpu_path = temp_dir.join("rpu.bin");
 
-    let mut cmd = Command::new("dovi_tool");
-    cmd.arg("extract-rpu")
-        .arg("-i")
-        .arg(raw_hevc)
-        .arg("-o")
-        .arg(&rpu_path);
-
-    let output = cmd
+    let output = crate::tool_builders::DoviBuilder::new()
+        .mode("extract-rpu")
+        .input(raw_hevc)
+        .output(&rpu_path)
+        .build()
         .output()
         .map_err(|e| format!("failed to run dovi_tool extract-rpu: {e}"))?;
 
@@ -274,13 +267,12 @@ pub fn extract_dv_rpu(
     // Profile 7 → convert to 8.1 for x265 cross-compatibility
     if dv_profile == Some(7) {
         let converted_rpu = temp_dir.join("rpu_p81.bin");
-        let conv_output = Command::new("dovi_tool")
-            .arg("convert")
+        let conv_output = crate::tool_builders::DoviBuilder::new()
+            .mode("convert")
             .arg("--discard")
-            .arg("-i")
-            .arg(&rpu_path)
-            .arg("-o")
-            .arg(&converted_rpu)
+            .input(&rpu_path)
+            .output(&converted_rpu)
+            .build()
             .output()
             .map_err(|e| format!("failed to run dovi_tool convert: {e}"))?;
 
@@ -304,14 +296,11 @@ pub fn extract_dv_rpu(
 pub fn extract_hdr10plus_metadata(raw_hevc: &Path, temp_dir: &Path) -> Result<PathBuf, String> {
     let json_path = temp_dir.join("hdr10plus.json");
 
-    let mut cmd = Command::new("hdr10plus_tool");
-    cmd.arg("extract")
-        .arg("-i")
-        .arg(raw_hevc)
-        .arg("-o")
-        .arg(&json_path);
-
-    let output = cmd
+    let output = crate::tool_builders::Hdr10PlusBuilder::new()
+        .mode("extract")
+        .input(raw_hevc)
+        .output(&json_path)
+        .build()
         .output()
         .map_err(|e| format!("failed to run hdr10plus_tool extract: {e}"))?;
 
@@ -322,16 +311,12 @@ pub fn extract_hdr10plus_metadata(raw_hevc: &Path, temp_dir: &Path) -> Result<Pa
         if stderr_lower.contains("error:") && stderr_lower.contains("invalid") {
             crate::log_eprintln!("⚠️  WRN  hdr10plus_tool exact extract validation failed, trying fallback with --skip-validation");
 
-            let mut fb_cmd = Command::new("hdr10plus_tool");
-            fb_cmd
-                .arg("extract")
-                .arg("--skip-validation")
-                .arg("-i")
-                .arg(raw_hevc)
-                .arg("-o")
-                .arg(&json_path);
-
-            let fb_output = fb_cmd
+            let fb_output = crate::tool_builders::Hdr10PlusBuilder::new()
+                .mode("extract")
+                .skip_validation(true)
+                .input(raw_hevc)
+                .output(&json_path)
+                .build()
                 .output()
                 .map_err(|e| format!("failed to run hdr10plus_tool extract (fallback): {e}"))?;
             if !fb_output.status.success() {

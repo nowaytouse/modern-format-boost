@@ -20,7 +20,6 @@ use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 use std::env;
 use std::path::Path;
-use std::process::Command;
 use tracing::{info, warn};
 
 /// HDR intermediate format selection
@@ -158,24 +157,24 @@ pub fn convert_heic_with_gainmap_to_jxl_hdr(
     };
 
     // 7. Invoke cjxl
-    let mut cmd = Command::new("cjxl");
-    cmd.arg(&tmp_file).arg(output).arg("-d").arg("1.0");
+    // 7. Invoke cjxl
+    let mut builder = crate::tool_builders::CjxlBuilder::new();
+    builder
+        .input(&tmp_file)
+        .output(output)
+        .distance(1.0)
+        .arg("-x")
+        .arg("color_space=sRGB");
 
-    // Apply sanitized intensity target only when valid (HDR-only behavior)
     if let Some(it) = resolve_intensity_target(intensity_target) {
-        cmd.arg("--intensity_target").arg(it.to_string());
+        builder.intensity_target(it as f32);
         info!("Applying intensity_target {} for HDR synthesis", it);
     } else {
         warn!("No valid intensity_target — proceeding without --intensity_target");
     }
 
-    // After matrix conversion in synthesis, the primaries are Rec.709 (sRGB)
-    cmd.arg("-x").arg("color_space=sRGB");
-
-    // For PNG16, we currently rely on intensity_target and color_space=sRGB
-    // (cjxl will handle the high dynamic range via intensity_target)
-
-    let status = cmd
+    let status = builder
+        .build()
         .status()
         .context("Failed to execute cjxl for HDR synthesis")?;
 
@@ -286,22 +285,23 @@ pub fn convert_ultrahdr_jpeg_to_jxl_hdr(
     };
 
     // 7. Invoke cjxl
-    let mut cmd = Command::new("cjxl");
-    cmd.arg(&tmp_file).arg(output).arg("-d").arg("1.0");
+    let mut builder = crate::tool_builders::CjxlBuilder::new();
+    builder
+        .input(&tmp_file)
+        .output(output)
+        .distance(1.0)
+        .arg("-x")
+        .arg("color_space=sRGB");
 
-    // Apply sanitized intensity target only when valid (HDR-only behavior)
     if let Some(it) = resolve_intensity_target(intensity_target) {
-        cmd.arg("--intensity_target").arg(it.to_string());
+        builder.intensity_target(it as f32);
         info!("Applying intensity_target {} for UltraHDR synthesis", it);
     } else {
         warn!("No valid intensity_target — proceeding without --intensity_target");
     }
 
-    cmd.arg("-x").arg("color_space=sRGB");
-
-    // For PNG16, we rely on intensity_target and color_space=sRGB
-
-    let status = cmd
+    let status = builder
+        .build()
         .status()
         .context("Failed to execute cjxl for HDR synthesis")?;
 

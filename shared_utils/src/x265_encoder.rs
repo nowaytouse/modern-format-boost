@@ -16,7 +16,8 @@
 //! - Strict CPU encoding path (no GPU fallback)
 
 use anyhow::{bail, Context, Result};
-use std::fmt::Write;
+use std::fmt::Write as FmtWrite;
+use std::io::BufReader;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use tracing::{debug, error, warn};
@@ -48,6 +49,8 @@ pub struct X265Config {
     pub subtitle_codec: Option<String>,
     /// Whether to apply Apple-specific compatibility fixes (e.g. hvc1 tag)
     pub apple_compat: bool,
+    /// Additional raw x265 parameters (e.g., "aq-mode=3:aq-strength=1.0")
+    pub x265_params: Option<String>,
 }
 
 impl Default for X265Config {
@@ -68,6 +71,7 @@ impl Default for X265Config {
             has_subtitles: false,
             subtitle_codec: None,
             apple_compat: false,
+            x265_params: None,
         }
     }
 }
@@ -135,26 +139,16 @@ fn encode_y4m_direct(
         config.crf, config.preset
     );
 
-    let mut cmd = Command::new("x265");
-    cmd.arg("--y4m")
-        .arg("--input")
-        .arg(crate::safe_path_arg(input).as_ref())
-        .arg("--output")
-        .arg(crate::safe_path_arg(hevc_output).as_ref())
-        .arg("--crf")
-        .arg(format!("{:.1}", config.crf));
-
-    if config.crf == 0.0 {
-        cmd.arg("--lossless");
-    }
-
-    let output = cmd
-        .arg("--preset")
-        .arg(&config.preset)
-        .arg("--pools")
-        .arg(config.threads.to_string())
-        .arg("--log-level")
-        .arg("error")
+    let output = crate::tool_builders::X265Builder::new()
+        .y4m(true)
+        .input(input)
+        .output(hevc_output)
+        .crf(config.crf)
+        .lossless(config.crf == 0.0)
+        .preset(&config.preset)
+        .pools(config.threads.to_string())
+        .log_level("error")
+        .build()
         .output()
         .context("Failed to run x265")?;
 
@@ -202,46 +196,40 @@ fn encode_to_hevc(
         return encode_y4m_direct(input, hevc_output, config, start_time);
     }
 
-    let mut ffmpeg_cmd = Command::new("ffmpeg");
-    ffmpeg_cmd
-        .arg("-y")
-        .arg("-i")
-        .arg(crate::safe_path_arg(input).as_ref())
-        .arg("-f")
-        .arg("yuv4mpegpipe");
+    let mut ffmpeg_builder = crate::ffmpeg_builder::FfmpegBuilder::new();
+    ffmpeg_builder
+        .overwrite()
+        .input(input)
+        .format("yuv4mpegpipe")
+        .pix_fmt_str(&config.pix_fmt);
 
     for arg in vf_args {
-        ffmpeg_cmd.arg(arg);
+        ffmpeg_builder.arg(arg);
     }
+    
+    let mut ffmpeg_cmd = ffmpeg_builder.build();
+    ffmpeg_cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
-    ffmpeg_cmd
-        .arg("-pix_fmt")
-        .arg(&config.pix_fmt)
-        .arg("-")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    let mut x265_cmd = Command::new("x265");
-    x265_cmd
-        .arg("--y4m")
-        .arg("--input")
-        .arg("-")
-        .arg("--output")
-        .arg(crate::safe_path_arg(hevc_output).as_ref())
-        .arg("--crf")
-        .arg(format!("{:.1}", config.crf));
+    let mut x265_builder = crate::tool_builders::X265Builder::new();
+    x265_builder
+        .y4m(true)
+        .input("-")
+        .output(hevc_output)
+        .crf(config.crf)
+        .preset(&config.preset)
+        .pools(config.threads.to_string())
+        .log_level("error")
+        .arg("--repeat-headers");
 
     if config.crf == 0.0 {
-        x265_cmd.arg("--lossless");
+        x265_builder.lossless(true);
     }
 
-    x265_cmd
-        .arg("--preset")
-        .arg(&config.preset)
-        .arg("--pools")
-        .arg(config.threads.to_string())
-        .arg("--log-level")
-        .arg("error");
+    if let Some(params) = &config.x265_params {
+        for p in params.split(':') {
+            x265_builder.arg(format!("--{p}"));
+        }
+    }
 
     // HDR-specific x265 options: enabled when the source is 10-bit or has explicit HDR metadata.
     let is_hdr_content = config.pix_fmt.contains("10")
@@ -252,24 +240,26 @@ fn encode_to_hevc(
             Some("smpte2084" | "arib-std-b67")
         );
     if is_hdr_content {
-        x265_cmd.arg("--hdr10-opt").arg("--repeat-headers");
+        x265_builder.hdr10_opt(true).repeat_headers(true);
 
         if let Some(ref cp) = config.color_primaries {
-            x265_cmd.arg("--colorprim").arg(cp);
+            x265_builder.colorprim(cp);
         }
         if let Some(ref trc) = config.color_trc {
-            x265_cmd.arg("--transfer").arg(trc);
+            x265_builder.transfer(trc);
         }
         if let Some(ref cs) = config.colorspace {
-            x265_cmd.arg("--colormatrix").arg(cs);
+            x265_builder.colormatrix(cs);
         }
         if let Some(ref md) = config.mastering_display {
-            x265_cmd.arg("--master-display").arg(md);
+            x265_builder.master_display(md);
         }
         if let Some(ref cll) = config.max_cll {
-            x265_cmd.arg("--max-cll").arg(cll);
+            x265_builder.max_cll(cll);
         }
     }
+
+    let mut x265_cmd = x265_builder.build();
 
     x265_cmd
         .stdin(Stdio::piped())
@@ -286,13 +276,13 @@ fn encode_to_hevc(
 
     let ffmpeg_stderr_thread = ffmpeg_child.stderr.take().map(|stderr| {
         std::thread::spawn(move || {
-            use std::io::{BufRead, BufReader, Read};
-            let reader = BufReader::with_capacity(8192, stderr.take(10 * 1024 * 1024));
+            use std::io::{BufRead, BufReader, Read as _Read};
+            let reader = BufReader::with_capacity(8192, stderr.take((10 * 1024 * 1024) as u64));
             let mut output = String::with_capacity(64 * 1024);
             for line in reader.lines().take(100_000) {
                 match line {
                     Ok(line) => {
-                        if output.len() + line.len() + 1 > 1024 * 1024 {
+                        if output.len() + line.len() + 1 > 1_048_576_usize {
                             break;
                         }
                         output.push_str(&line);
@@ -311,13 +301,13 @@ fn encode_to_hevc(
 
     let x265_stderr_thread = x265_child.stderr.take().map(|stderr| {
         std::thread::spawn(move || {
-            use std::io::{BufRead, BufReader, Read};
-            let reader = BufReader::with_capacity(8192, stderr.take(10 * 1024 * 1024));
+            use std::io::{BufRead, BufReader, Read as _Read};
+            let reader = BufReader::with_capacity(8192, stderr.take((10 * 1024 * 1024) as u64));
             let mut output = String::with_capacity(64 * 1024);
             for line in reader.lines().take(100_000) {
                 match line {
                     Ok(line) => {
-                        if output.len() + line.len() + 1 > 1024 * 1024 {
+                        if output.len() + line.len() + 1 > 1_048_576_usize {
                             break;
                         }
                         output.push_str(&line);
@@ -354,10 +344,10 @@ fn encode_to_hevc(
         let duration = start_time.elapsed();
 
         let ffmpeg_stderr = ffmpeg_stderr_thread
-            .and_then(|h| h.join().ok())
+            .and_then(|h: std::thread::JoinHandle<String>| h.join().ok())
             .unwrap_or_default();
         let x265_stderr = x265_stderr_thread
-            .and_then(|h| h.join().ok())
+            .and_then(|h: std::thread::JoinHandle<String>| h.join().ok())
             .unwrap_or_default();
 
         if !ffmpeg_status.success() {
@@ -449,19 +439,15 @@ fn mux_hevc_to_container(
     // Image containers (AVIF, HEIC, GIF, WebP, …) cannot carry audio streams.
     // Attempting to demux audio from them causes "Not yet implemented in FFmpeg".
     let input_is_image = is_image_container(original_input);
-
-    let mut cmd = Command::new("ffmpeg");
-    cmd.arg("-y")
-        .arg("-i")
-        .arg(crate::safe_path_arg(hevc_file).as_ref());
+    let mut mux_builder = crate::ffmpeg_builder::FfmpegBuilder::new();
+    mux_builder.overwrite().input(hevc_file);
 
     if config.preserve_audio && !input_is_image {
-        cmd.arg("-i")
-            .arg(crate::safe_path_arg(original_input).as_ref());
+        mux_builder.input(original_input);
         // Map: video from HEVC bitstream (input 0), all audio + subtitle from original (input 1)
-        cmd.arg("-map").arg("0:v:0");
-        cmd.arg("-map").arg("1:a?");
-        cmd.arg("-c:v").arg("copy");
+        mux_builder.arg("-map").arg("0:v:0");
+        mux_builder.arg("-map").arg("1:a?");
+        mux_builder.codec_video("copy");
 
         // Audio: copy when compatible, transcode only for incompatible codecs
         let audio_args =
@@ -469,37 +455,35 @@ fn mux_hevc_to_container(
         for arg in &audio_args {
             // Skip -an since we already have -map 1:a?
             if arg != "-an" {
-                cmd.arg(arg);
+                mux_builder.arg(arg);
             }
         }
 
         // Subtitles: map and copy/transcode as appropriate for container
         if config.has_subtitles {
-            cmd.arg("-map").arg("1:s?");
+            mux_builder.arg("-map").arg("1:s?");
             let sub_args = crate::subtitle_args_for_container(
                 true,
                 config.subtitle_codec.as_deref(),
                 &config.container,
             );
             for arg in sub_args {
-                cmd.arg(arg);
+                mux_builder.arg(arg);
             }
         }
     } else {
         // No audio: either disabled or source is an image format with no audio streams.
-        cmd.arg("-c:v").arg("copy").arg("-an");
+        mux_builder.codec_video("copy").arg("-an");
     }
 
     if (config.container == "mp4" || config.container == "mov") && config.apple_compat {
-        cmd.arg("-tag:v").arg("hvc1");
-        cmd.arg("-movflags").arg("+faststart");
+        mux_builder.tag_video("hvc1").arg("-movflags").arg("+faststart");
     } else if config.container == "mp4" || config.container == "mov" {
-        cmd.arg("-movflags").arg("+faststart");
+        mux_builder.arg("-movflags").arg("+faststart");
     }
 
-    cmd.arg(crate::safe_path_arg(output).as_ref())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped());
+    let mut cmd = mux_builder.output(output).build();
+    cmd.stdout(Stdio::null()).stderr(Stdio::piped());
 
     debug!("Starting FFmpeg muxing to {} container", config.container);
 
@@ -528,13 +512,7 @@ fn mux_hevc_to_container(
 }
 
 pub fn is_x265_available() -> bool {
-    let result = Command::new("x265")
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
+    let result = crate::tool_builders::X265Builder::check_available();
 
     if result {
         debug!("x265 tool is available");

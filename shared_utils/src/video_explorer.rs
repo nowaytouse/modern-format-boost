@@ -668,14 +668,9 @@ impl VideoEncoder {
         };
 
         *cache.get_or_init(|| {
-            Command::new(crate::constants::TOOL_FFMPEG)
-                .args(["-hide_banner", "-encoders"])
-                .output()
-                .ok()
-                .is_some_and(|output| {
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    stdout.contains(encoder)
-                })
+            crate::ffmpeg_builder::FfmpegBuilder::list_encoders()
+                .map(|s| s.contains(encoder))
+                .unwrap_or(false)
         })
     }
 
@@ -2262,7 +2257,7 @@ impl VideoExplorer {
 
         let mut builder = crate::ffmpeg_builder::FfmpegBuilder::new();
         builder
-            .overwrite(true)
+            .overwrite()
             .threads(self.max_threads)
             .input(&self.input_path)
             .vcodec(self.encoder.into())
@@ -2517,15 +2512,12 @@ impl VideoExplorer {
     }
 
     fn get_input_duration(&self) -> Option<f64> {
-        let output = Command::new(crate::constants::TOOL_FFPROBE)
-            .arg("-v")
-            .arg("error")
-            .arg("-show_entries")
-            .arg("format=duration")
-            .arg("-of")
-            .arg("default=noprint_wrappers=1:nokey=1")
-            .arg("--")
-            .arg(crate::safe_path_arg(&self.input_path).as_ref())
+        let output = crate::ffmpeg_builder::FfprobeBuilder::new()
+            .input(&self.input_path)
+            .loglevel("error")
+            .show_entries("format=duration")
+            .print_format("default=noprint_wrappers=1:nokey=1")
+            .build()
             .output()
             .ok()?;
 
@@ -2621,16 +2613,13 @@ impl VideoExplorer {
         let filter = "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];\
                       [ref][1:v]ssim;[ref][1:v]psnr";
 
-        let output = Command::new(crate::constants::TOOL_FFMPEG)
-            .arg(crate::constants::FFMPEG_ARG_INPUT)
-            .arg(crate::safe_path_arg(self.input_path.as_path()).as_ref())
-            .arg(crate::constants::FFMPEG_ARG_INPUT)
-            .arg(crate::safe_path_arg(self.output_path.as_path()).as_ref())
-            .arg("-lavfi")
-            .arg(filter)
-            .arg("-f")
-            .arg("null")
-            .arg("-")
+        let output = crate::ffmpeg_builder::FfmpegBuilder::new()
+            .input(&self.input_path)
+            .input(&self.output_path)
+            .filter_complex(filter)
+            .format("null")
+            .output_null()
+            .build()
             .output();
 
         match output {
@@ -2743,16 +2732,13 @@ impl VideoExplorer {
     }
 
     fn try_ssim_with_filter(&self, filter: &str) -> Result<Option<f64>> {
-        let output = Command::new(crate::constants::TOOL_FFMPEG)
-            .arg(crate::constants::FFMPEG_ARG_INPUT)
-            .arg(crate::safe_path_arg(self.input_path.as_path()).as_ref())
-            .arg(crate::constants::FFMPEG_ARG_INPUT)
-            .arg(crate::safe_path_arg(self.output_path.as_path()).as_ref())
-            .arg("-lavfi")
-            .arg(filter)
-            .arg("-f")
-            .arg("null")
-            .arg("-")
+        let output = crate::ffmpeg_builder::FfmpegBuilder::new()
+            .input(&self.input_path)
+            .input(&self.output_path)
+            .filter_complex(filter)
+            .format("null")
+            .output_null()
+            .build()
             .output()
             .context("Failed to run ffmpeg for SSIM")?;
 
@@ -2786,16 +2772,13 @@ impl VideoExplorer {
 
         let filter = "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];[ref][1:v]psnr=stats_file=-";
 
-        let output = Command::new(crate::constants::TOOL_FFMPEG)
-            .arg(crate::constants::FFMPEG_ARG_INPUT)
-            .arg(crate::safe_path_arg(self.input_path.as_path()).as_ref())
-            .arg(crate::constants::FFMPEG_ARG_INPUT)
-            .arg(crate::safe_path_arg(self.output_path.as_path()).as_ref())
-            .arg("-lavfi")
-            .arg(filter)
-            .arg("-f")
-            .arg("null")
-            .arg("-")
+        let output = crate::ffmpeg_builder::FfmpegBuilder::new()
+            .input(&self.input_path)
+            .input(&self.output_path)
+            .filter_complex(filter)
+            .format("null")
+            .output_null()
+            .build()
             .output();
 
         match output {
@@ -2866,16 +2849,13 @@ impl VideoExplorer {
 
         let use_sampling = duration.is_some_and(|d| d > 60.0);
 
-        let output = Command::new(crate::constants::TOOL_FFMPEG)
-            .arg(crate::constants::FFMPEG_ARG_INPUT)
-            .arg(crate::safe_path_arg(self.input_path.as_path()).as_ref())
-            .arg(crate::constants::FFMPEG_ARG_INPUT)
-            .arg(crate::safe_path_arg(self.output_path.as_path()).as_ref())
-            .arg("-lavfi")
-            .arg(&filter)
-            .arg("-f")
-            .arg("null")
-            .arg("-")
+        let output = crate::ffmpeg_builder::FfmpegBuilder::new()
+            .input(&self.input_path)
+            .input(&self.output_path)
+            .filter_complex(&filter)
+            .format("null")
+            .output_null()
+            .build()
             .output();
 
         match output {

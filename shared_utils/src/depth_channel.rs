@@ -300,15 +300,14 @@ pub fn encode_jxl_depth_fallback(
         .context("Failed to save temp depth PNG")?;
 
     // Use cjxl to encode main image
-    let mut cmd = Command::new("cjxl");
-    cmd.arg(temp_main.path())
-        .arg(output)
-        .arg("-d")
-        .arg(format!("{distance:.1}"))
-        .arg("-e")
-        .arg(effort.to_string());
-
-    let status = cmd.status().context("Failed to execute cjxl")?;
+    let status = crate::tool_builders::CjxlBuilder::new()
+        .input(temp_main.path())
+        .output(output)
+        .distance(0.0)
+        .effort(effort)
+        .build()
+        .status()
+        .map_err(|e| anyhow!("Failed to run cjxl: {e}"))?;
 
     if !status.success() {
         return Err(anyhow!("cjxl failed to encode main image"));

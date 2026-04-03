@@ -8,7 +8,6 @@ use crate::ffprobe_json::ColorInfo;
 use crate::hdr_utils::{get_hdr_pix_fmt, should_use_hdr_decode};
 use crate::img_errors::{ImgQualityError, Result};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// Decode an HDR image to a high bit-depth PNG using `FFmpeg`.
 /// Returns the path to the temporary 16-bit PNG file.
@@ -63,17 +62,13 @@ pub fn decode_hdr_image_to_png16(
 
     // FFmpeg command: decode to 16-bit RGB PNG
     // -i input.heic -pix_fmt rgb48le -frames:v 1 output.png
-    let mut cmd = Command::new("ffmpeg");
-    cmd.arg("-i")
-        .arg(crate::safe_path_arg(input).as_ref())
-        .arg("-pix_fmt")
-        .arg(pix_fmt)
-        .arg("-frames:v")
-        .arg("1")
-        .arg("-y") // Overwrite output
-        .arg(crate::safe_path_arg(&temp_path).as_ref());
-
-    let output = cmd
+    let output = crate::tool_builders::FfmpegBuilder::new()
+        .overwrite()
+        .input(input)
+        .pix_fmt_str(pix_fmt)
+        .frames_v(1)
+        .output(&temp_path)
+        .build()
         .output()
         .map_err(|e| ImgQualityError::ConversionError(format!("FFmpeg spawn failed: {e}")))?;
 

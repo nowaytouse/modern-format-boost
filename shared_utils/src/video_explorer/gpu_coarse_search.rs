@@ -2,7 +2,10 @@
 
 use anyhow::{Context, Result};
 use std::fs;
-use std::path::Path;
+use std::io::{BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use tracing::{debug, error, warn};
 
 use super::calibration;
 use super::dynamic_mapping;
@@ -1294,30 +1297,26 @@ fn cpu_fine_tune_from_gpu_boundary(
         }
     };
 
-    let encode_full = |crf: f32| -> Result<u64> {
-        use std::io::{BufRead, BufReader, Write};
-        use std::process::Stdio;
+    let encode_full = move |crf: f32| -> Result<u64> {
+        let mut builder = crate::ffmpeg_builder::FfmpegBuilder::new();
+        builder
+            .overwrite()
+            .arg("-progress")
+            .arg("pipe:1")
+            .input(input);
 
-        let mut cmd = std::process::Command::new("ffmpeg");
-        cmd.arg("-y");
-        cmd.arg("-progress").arg("pipe:1");
-
-        cmd.arg("-i").arg(crate::safe_path_arg(input).as_ref());
-
-        // Map streams: for image containers (AVIF/HEIC/GIF/WebP), only map video
-        // to avoid FFmpeg libx265 "Not yet implemented" error when handling
-        // non-existent audio streams.
         if input_is_image {
-            cmd.arg("-map").arg("0:v");
+            builder.arg("-map").arg("0:v");
         } else {
-            cmd.arg("-map").arg("0");
+            builder.arg("-map").arg("0");
         }
 
-        cmd.arg("-c:v")
-            .arg(encoder.ffmpeg_name())
+        builder
+            .codec_video(encoder.ffmpeg_name())
             .arg("-crf")
             .arg(format!("{crf:.2}"));
 
+        // CRF=0 HEVC → inject lossless=1 into x265-params
         let mut adjusted_x265_params =
             if crf == 0.0 && encoder == crate::video_explorer::VideoEncoder::Hevc {
                 let existing = hdr_x265_params.as_deref().unwrap_or("");
@@ -1330,24 +1329,22 @@ fn cpu_fine_tune_from_gpu_boundary(
                 hdr_x265_params.clone()
             };
 
-        // Defensive VFR check: Assume VFR if probing failed or specifically detected.
+        // Defensive VFR check: assume VFR if probing failed or explicitly detected
         let vfr_or_unknown = probe_info.is_none_or(|p| p.is_variable_frame_rate);
 
-        // [Defensive Logic] Disable B-frames for:
-        // 1. GIF sources: Always disable (irregular durations, disposal method `restoreToPrevious`
-        //    conflicts with bi-directional reference assumptions).
-        // 2. Animated images: Disable if VFR (or unknown) to prevent PTS reordering vs duration drift.
-        // Constant frame rate WebP/AVIF can safely use B-frames for better compression.
+        // Disable B-frames for:
+        // 1. GIF sources (irregular durations / disposal=restoreToPrevious)
+        // 2. Animated images with VFR/unknown frame rate (prevents PTS reordering)
         let should_disable_bframes =
             is_gif_magic || (input_is_animated_image_like && vfr_or_unknown);
 
         if should_disable_bframes && encoder == crate::video_explorer::VideoEncoder::Hevc {
             let existing = adjusted_x265_params.as_deref().unwrap_or("");
-            if existing.is_empty() {
-                adjusted_x265_params = Some("bframes=0".to_string());
+            adjusted_x265_params = Some(if existing.is_empty() {
+                "bframes=0".to_string()
             } else {
-                adjusted_x265_params = Some(format!("{existing}:bframes=0"));
-            }
+                format!("{existing}:bframes=0")
+            });
         }
 
         for arg in encoder.extra_args_with_preset(
@@ -1356,57 +1353,56 @@ fn cpu_fine_tune_from_gpu_boundary(
             adjusted_x265_params,
             apple_compat,
         ) {
-            cmd.arg(arg);
+            builder.arg(arg);
         }
 
-        // Preserve pixel format (critical for 10-bit HDR content)
         if let Some(probe) = probe_info {
             let pix_fmt = pick_pix_fmt(probe);
-            cmd.arg("-pix_fmt").arg(pix_fmt);
+            builder.pix_fmt_str(pix_fmt);
 
             // Forward all HDR colour metadata (primaries, TRC, colorspace, mastering display, CLL)
             for arg in build_color_args_from_probe(probe) {
-                cmd.arg(arg);
+                builder.arg(arg);
             }
         }
 
         for arg in &vf_args {
             if !arg.is_empty() {
-                cmd.arg(arg);
+                builder.arg(arg);
             }
         }
 
         if pts_integrity == crate::ffprobe_json::PtsIntegrity::Broken {
-            // Safety fallback: if PTS is backward/broken, use VFR to let FFmpeg rebuild the timeline
-            cmd.arg("-fps_mode").arg("vfr");
+            // Safety fallback: if PTS is broken, use VFR to let FFmpeg rebuild the timeline
+            builder.arg("-fps_mode").arg("vfr");
         } else {
-            cmd.arg("-fps_mode").arg("passthrough");
+            builder.arg("-fps_mode").arg("passthrough");
         }
 
         if input_is_animated_image_like {
-            cmd.arg("-video_track_timescale").arg("1000");
+            builder.arg("-video_track_timescale").arg("1000");
         }
 
         if input_is_image {
-            cmd.arg("-an");
+            builder.codec_audio("none");
         } else {
             match &audio_strategy {
                 AudioTranscodeStrategy::Copy => {
-                    cmd.arg("-c:a").arg("copy");
+                    builder.codec_audio("copy");
                 }
                 AudioTranscodeStrategy::Alac => {
-                    cmd.arg("-c:a").arg("alac");
+                    builder.codec_audio("alac");
                 }
                 AudioTranscodeStrategy::AacHigh => {
-                    cmd.arg("-c:a").arg("aac").arg("-b:a").arg("256k");
+                    builder.codec_audio("aac").arg("-b:a").arg("256k");
                 }
                 AudioTranscodeStrategy::AacMedium => {
-                    cmd.arg("-c:a").arg("aac").arg("-b:a").arg("192k");
+                    builder.codec_audio("aac").arg("-b:a").arg("192k");
                 }
             }
         }
 
-        // Subtitle passthrough
+        // Subtitle passthrough (copy subtitles when the output container supports it)
         if let Some(probe) = probe_info {
             if probe.has_subtitles {
                 let out_ext = output
@@ -1421,13 +1417,12 @@ fn cpu_fine_tune_from_gpu_boundary(
                     container,
                 );
                 for arg in sub_args {
-                    cmd.arg(arg);
+                    builder.arg(arg);
                 }
             }
         }
 
-        cmd.arg(crate::safe_path_arg(output).as_ref());
-
+        let mut cmd = builder.output(output).build();
         cmd.stdout(Stdio::piped());
         let stderr_temp_val = tempfile::Builder::new()
             .suffix(".log")
@@ -1655,22 +1650,21 @@ fn cpu_fine_tune_from_gpu_boundary(
         }
 
         let filters = [
-            "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];[ref][1:v]ssim",
+            "[0:v]scale=\"iw-mod(iw,2)\":\"ih-mod(ih,2)\":flags=bicubic[ref];[ref][1:v]ssim",
             "[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[ref];[1:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[cmp];[ref][cmp]ssim",
             "ssim",
         ];
 
         for filter in &filters {
-            let ssim_output = std::process::Command::new("ffmpeg")
-                .arg("-i")
-                .arg(crate::safe_path_arg(input).as_ref())
-                .arg("-i")
-                .arg(crate::safe_path_arg(output).as_ref())
+            let ssim_output = crate::ffmpeg_builder::FfmpegBuilder::new()
+                .input(input)
+                .input(output)
                 .arg("-lavfi")
                 .arg(filter)
                 .arg("-f")
                 .arg("null")
-                .arg("-")
+                .output("-")
+                .build()
                 .output();
 
             if let Ok(out) = ssim_output {

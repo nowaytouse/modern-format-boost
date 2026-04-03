@@ -9,7 +9,6 @@
 //! - Lossless integrity checks (CRF=0 fast-path: frame count + file size only)
 
 use std::path::Path;
-use std::process::Command;
 use tracing::{info, warn};
 
 pub const LONG_VIDEO_THRESHOLD: f32 = 300.0;
@@ -40,12 +39,15 @@ impl Default for QualityThresholds {
 }
 
 pub fn get_video_duration(input: &Path) -> Option<f64> {
-    let output = Command::new("ffprobe")
-        .args(["-v", "error"])
-        .args(["-show_entries", "format=duration"])
-        .args(["-of", "default=noprint_wrappers=1:nokey=1"])
-        .arg("--")
-        .arg(crate::safe_path_arg(input).as_ref())
+    let output = crate::tool_builders::FfprobeBuilder::new()
+        .input(input)
+        .arg("-v")
+        .arg("error")
+        .arg("-show_entries")
+        .arg("format=duration")
+        .arg("-of")
+        .arg("default=noprint_wrappers=1:nokey=1")
+        .build()
         .output()
         .ok()?;
 
@@ -95,13 +97,14 @@ fn count_video_frames(path: &Path) -> Option<u64> {
     }
 
     let try_ffprobe_count = |mode: &str, entry: &str| -> Option<u64> {
-        let out = Command::new("ffprobe")
-            .args(["-v", "error"])
-            .args([mode, "-select_streams", "v:0"])
-            .args(["-show_entries", entry])
-            .args(["-of", "default=noprint_wrappers=1:nokey=1"])
-            .arg("--")
-            .arg(crate::safe_path_arg(path).as_ref())
+        let out = crate::tool_builders::FfprobeBuilder::new()
+            .input(path)
+            .loglevel("error")
+            .select_stream(crate::tool_builders::StreamType::Video, 0)
+            .show_entries(entry)
+            .print_format("default=noprint_wrappers=1:nokey=1")
+            .arg(mode)
+            .build()
             .output()
             .ok()?;
 
@@ -173,16 +176,13 @@ pub fn calculate_ssim_enhanced(input: &Path, output: &Path) -> Option<f64> {
     let filters = if is_gif { gif_filters } else { generic_filters };
 
     for (name, filter) in filters {
-        let result = Command::new("ffmpeg")
-            .arg("-i")
-            .arg(crate::safe_path_arg(input).as_ref())
-            .arg("-i")
-            .arg(crate::safe_path_arg(output).as_ref())
-            .arg("-lavfi")
-            .arg(*filter)
-            .arg("-f")
-            .arg("null")
-            .arg("-")
+        let result = crate::tool_builders::FfmpegBuilder::new()
+            .input(input)
+            .input(output)
+            .filter_complex(*filter)
+            .format("null")
+            .output_null()
+            .build()
             .output();
 
         match result {
@@ -208,23 +208,20 @@ pub fn calculate_ssim_enhanced(input: &Path, output: &Path) -> Option<f64> {
 
 /// Run ffmpeg with the given lavfi filter and parse SSIM Y/U/V/All from stderr.
 fn run_ssim_all_filter(input: &Path, output: &Path, lavfi: &str) -> Option<(f64, f64, f64, f64)> {
-    let out = Command::new("ffmpeg")
-        .arg("-i")
-        .arg(crate::safe_path_arg(input).as_ref())
-        .arg("-i")
-        .arg(crate::safe_path_arg(output).as_ref())
-        .arg("-lavfi")
-        .arg(lavfi)
-        .arg("-f")
-        .arg("null")
-        .arg("-")
+    let ffmpeg_output = crate::tool_builders::FfmpegBuilder::new()
+        .input(input)
+        .input(output)
+        .filter_complex(lavfi)
+        .format("null")
+        .output_null()
+        .build()
         .output()
         .ok()?;
 
     // Some filters (ssim) might return non-zero exit code if the streams
     // end at slightly different points for GIFs, even if the result is valid.
     // We parse stderr regardless of out.status.
-    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stderr = String::from_utf8_lossy(&ffmpeg_output.stderr);
     for line in stderr.lines() {
         if line.contains("SSIM Y:") && line.contains("All:") {
             let y = extract_ssim_value(line, "Y:");

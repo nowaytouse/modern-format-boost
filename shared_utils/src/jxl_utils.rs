@@ -12,15 +12,15 @@ use std::process::Command;
 /// Extract ICC Profile from source image and return temp file path
 #[must_use]
 pub fn extract_icc_profile(src: &Path) -> Option<tempfile::NamedTempFile> {
-    if which::which("exiftool").is_err() {
+    if !crate::image_builders::ExiftoolBuilder::check_available() {
         return None;
     }
 
     let temp_icc = tempfile::Builder::new().suffix(".icc").tempfile().ok()?;
-    let output = Command::new("exiftool")
-        .arg("-icc_profile")
-        .arg("-b")
-        .arg(crate::safe_path_arg(src).as_ref())
+    let output = crate::image_builders::ExiftoolBuilder::new()
+        .input(src)
+        .extract_icc_profile()
+        .build()
         .output()
         .ok()?;
 
@@ -50,15 +50,15 @@ pub fn is_icc_rounding_error(stderr: &str) -> bool {
 /// Patches bytes [68..80] to the canonical D50 values per ICC spec.
 #[must_use]
 pub fn extract_icc_with_d50_patch(src: &Path) -> Option<tempfile::NamedTempFile> {
-    if which::which("exiftool").is_err() {
+    if !crate::image_builders::ExiftoolBuilder::check_available() {
         return None;
     }
 
     let temp_icc = tempfile::Builder::new().suffix(".icc").tempfile().ok()?;
-    let output = Command::new("exiftool")
-        .arg("-icc_profile")
-        .arg("-b")
-        .arg(crate::safe_path_arg(src).as_ref())
+    let output = crate::image_builders::ExiftoolBuilder::new()
+        .input(src)
+        .extract_icc_profile()
+        .build()
         .output()
         .ok()?;
 
@@ -102,9 +102,10 @@ pub fn verify_jxl_health(path: &Path) -> Result<(), String> {
         return Err("Invalid JXL file signature".to_string());
     }
 
-    if which::which("jxlinfo").is_ok() {
-        let result = Command::new("jxlinfo")
-            .arg(crate::safe_path_arg(path).as_ref())
+    if crate::tool_builders::JxlinfoBuilder::check_available() {
+        let result = crate::tool_builders::JxlinfoBuilder::new()
+            .input(path)
+            .build()
             .output();
 
         if let Ok(output) = result {
@@ -128,13 +129,13 @@ pub fn verify_jxl_health(path: &Path) -> Result<(), String> {
 /// decide whether to inject ICC via `ExifTool` as a fallback.
 #[must_use]
 pub fn verify_jxl_has_icc(path: &Path) -> bool {
-    if which::which("exiftool").is_err() {
+    if !crate::image_builders::ExiftoolBuilder::check_available() {
         return false; // Cannot verify; assume absent to trigger fallback
     }
-    let result = Command::new("exiftool")
-        .arg("-icc_profile")
-        .arg("-b")
-        .arg(crate::safe_path_arg(path).as_ref())
+    let result = crate::image_builders::ExiftoolBuilder::new()
+        .input(path)
+        .extract_icc_profile()
+        .build()
         .output();
     match result {
         Ok(out) => out.status.success() && !out.stdout.is_empty(),
@@ -149,48 +150,6 @@ pub fn verify_jxl_has_icc(path: &Path) -> bool {
 ///
 /// # Errors
 /// Returns an I/O error if decoding fails.
-pub fn convert_to_temp_png(
-    input: &Path,
-    tool: &str,
-    args_before_input: &[&str],
-    args_after_input: &[&str],
-    label: &str,
-) -> std::io::Result<(std::path::PathBuf, Option<tempfile::NamedTempFile>)> {
-    use console::style;
-
-    let temp_png_file = tempfile::Builder::new().suffix(".png").tempfile()?;
-    let temp_png = temp_png_file.path().to_path_buf();
-
-    let mut cmd = Command::new(tool);
-    for arg in args_before_input {
-        cmd.arg(arg);
-    }
-    cmd.arg(crate::safe_path_arg(input).as_ref());
-    for arg in args_after_input {
-        if *arg == "__OUTPUT__" {
-            cmd.arg(crate::safe_path_arg(&temp_png).as_ref());
-        } else {
-            cmd.arg(arg);
-        }
-    }
-
-    match cmd.output() {
-        Ok(output) if output.status.success() && temp_png.exists() => {
-            crate::progress_mode::preprocessing_success();
-            Ok((temp_png, Some(temp_png_file)))
-        }
-        _ => {
-            let line = format!(
-                "   {} {} {}",
-                style("🔧 PRE-PROCESSING:").cyan().bold(),
-                style(label).dim(),
-                style("→ ⚠️ failed, trying direct cjxl").yellow()
-            );
-            crate::progress_mode::emit_stderr(&line);
-            Ok((input.to_path_buf(), None))
-        }
-    }
-}
 
 /// True when cjxl failed due to grayscale PNG + ICC profile (libpng: "RGB color space not permitted on grayscale").
 ///
