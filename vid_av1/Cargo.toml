@@ -14,3 +14,6 @@ tracing = { workspace = true }
 which = { workspace = true }
 shared_utils = { workspace = true }
 tempfile = { workspace = true }
+
+[lints]
+workspace = true

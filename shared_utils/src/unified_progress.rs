@@ -35,7 +35,8 @@ impl UnifiedProgressBar {
                     .tick_chars(templates::SPINNER_CHARS),
             );
             bar.set_prefix(message.to_string());
-            bar.set_draw_target(ProgressDrawTarget::stderr_with_hz(20));
+            bar.enable_steady_tick(std::time::Duration::from_millis(8));
+            bar.set_draw_target(ProgressDrawTarget::stderr_with_hz(120));
         }
         Arc::new(Self {
             bar,
@@ -59,7 +60,8 @@ impl UnifiedProgressBar {
                     .tick_chars(templates::SPINNER_CHARS),
             );
             bar.set_prefix(message.to_string());
-            bar.set_draw_target(ProgressDrawTarget::stderr_with_hz(100));
+            bar.enable_steady_tick(std::time::Duration::from_millis(8));
+            bar.set_draw_target(ProgressDrawTarget::stderr_with_hz(120));
         }
         Arc::new(Self {
             bar,

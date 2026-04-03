@@ -89,7 +89,7 @@ pub fn ensure_parent_dir_exists(file_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Returns the user's global project cache directory (~/.modern_format_boost/cache/).
+/// Returns the user's global project cache directory (~/.`modern_format_boost/cache`/).
 /// Creates the directory if it doesn't exist.
 ///
 /// # Errors
@@ -223,6 +223,27 @@ pub fn detect_real_extension(path: &Path) -> Option<&'static str> {
     }
 
     None
+}
+
+/// Calculate the BLAKE3 hash of a file.
+///
+/// # Errors
+/// Returns an error if the file cannot be read.
+pub fn calculate_blake3_hash(path: &Path) -> Result<String> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = blake3::Hasher::new();
+    let mut buffer = [0u8; 65536]; // 64KB buffer
+
+    loop {
+        let bytes_read = file.read(&mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..bytes_read]);
+    }
+
+    Ok(hasher.finalize().to_hex().to_string())
 }
 
 #[must_use]
@@ -410,6 +431,14 @@ fn find_box_data_recursive_impl(
 /// Recursively search for a box type in ISO BMFF data (e.g. "jbrd" inside "JXL " container).
 #[must_use]
 pub fn find_any_box_recursive(data: &[u8], box_type: [u8; 4]) -> bool {
+    find_any_box_recursive_impl(data, box_type, 0, 32)
+}
+
+fn find_any_box_recursive_impl(data: &[u8], box_type: [u8; 4], depth: u32, max_depth: u32) -> bool {
+    if depth >= max_depth {
+        return false;
+    }
+
     let mut pos = 0;
     while pos + 8 <= data.len() {
         let size =
@@ -443,7 +472,12 @@ pub fn find_any_box_recursive(data: &[u8], box_type: [u8; 4]) -> bool {
             (pos + 8, (pos + size).min(data.len()))
         };
         if next_pos > payload_start
-            && find_any_box_recursive(&data[payload_start..next_pos], box_type)
+            && find_any_box_recursive_impl(
+                &data[payload_start..next_pos],
+                box_type,
+                depth + 1,
+                max_depth,
+            )
         {
             return true;
         }

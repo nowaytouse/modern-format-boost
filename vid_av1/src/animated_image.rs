@@ -11,8 +11,12 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+use shared_utils::constants::ANIMATION_CLIP_THRESHOLD_SECS;
 use shared_utils::conversion::{
     determine_output_path_with_base, is_already_processed, mark_as_processed,
+};
+use shared_utils::loop_intent::{
+    assess_loop_intent_from_probe, LoopMeta, is_lossless_exploration_safe,
 };
 
 fn cleanup_temp_output(temp_output: &Path, input: &Path) {
@@ -239,28 +243,14 @@ fn skipped_output_exists(input: &Path, output: &Path, input_size: u64) -> Conver
     }
 }
 
-/// For GIF inputs: return true when the multi-dimensional meme-score indicates this GIF should be
-/// kept as-is rather than converted to a video container.
-///
-/// Uses ffprobe to gather resolution / fps / frame-count / duration, then applies the weighted
-/// scoring from `shared_utils::gif_meme_score`.  A score ≥ 0.50 → keep as GIF.
-/// Returns false for all non-GIF paths so the caller proceeds with normal conversion.
+/// Return true when the input is either a native GIF or a GIF-like silent loop
+/// video that the scorer says should stay in the GIF domain.
 fn is_gif_meme(path: &Path) -> bool {
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(str::to_lowercase)
-        .unwrap_or_default();
-    if ext != "gif" {
-        return false;
-    }
-    let file_size = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     if let Ok(probe) = shared_utils::probe_video(path) {
-        if let Some(meta) = shared_utils::gif_meta_from_probe_with_path(&probe, file_size, path) {
-            return shared_utils::should_keep_as_gif(&meta);
-        }
+        assess_loop_intent_from_probe(&probe, path).is_keep_gif()
+    } else {
+        false
     }
-    false
 }
 
 /// Returns true if the file is an animated image format but effectively static (0 or negligible duration).
@@ -271,7 +261,7 @@ fn is_static_animated_image(path: &Path) -> bool {
         .and_then(|e| e.to_str())
         .map(str::to_lowercase)
         .unwrap_or_default();
-    if !matches!(ext.as_str(), "gif" | "webp" | "avif" | "heic" | "heif") {
+    if !shared_utils::quality_matcher::parse_source_codec(&ext).can_be_animated() {
         return false;
     }
     if let Ok(analysis) = shared_utils::image_analyzer::analyze_image(path) {
@@ -320,7 +310,8 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
         return Ok(skipped_static_animated(input, input_size));
     }
 
-    // GIF multi-dimensional meme-score: if the GIF looks like a meme/sticker, keep it as-is.
+    // GIF / GIF-like video meme-score: if the asset behaves like a looping sticker, keep it
+    // in the GIF domain instead of re-encoding to a video container.
     if is_gif_meme(input) {
         let input_size = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
         copy_original_on_skip(input, options);
@@ -332,7 +323,8 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
             input_size,
             output_size: None,
             size_reduction: None,
-            message: "Skipped: GIF identified as meme/sticker (meme-score ≥ 0.50)".to_string(),
+            message: "Skipped: GIF-like asset identified as meme/sticker (meme-score / loop score)"
+                .to_string(),
             skipped: true,
             skip_reason: Some("gif_meme".to_string()),
         });
@@ -353,7 +345,8 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
         return Ok(skipped_output_exists(input, &output, input_size));
     }
 
-    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+    let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
+        .map_err(|e| VidQualityError::conversion_error(e.to_string()))?;
     let _temp_output_guard = shared_utils::conversion::TempOutputGuard::new(temp_output.clone());
 
     // Special handling for animated JXL: FFmpeg's jpegxl_anim decoder is incomplete
@@ -477,12 +470,80 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
                     });
                 }
             }
+        } else if input_ext == "avif" && {
+            let out = std::process::Command::new("ffprobe")
+                .args([
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "v",
+                    "-show_entries",
+                    "stream=index",
+                    "-of",
+                    "csv=p=0",
+                ])
+                .arg(input)
+                .output();
+            out.map(|o| String::from_utf8_lossy(&o.stdout).lines().count() > 1)
+                .unwrap_or(false)
+        } {
+            if options.verbose {
+                eprintln!("   🔧 Detected transparent AVIF format, pre-converting to APNG to retain alpha explicitly");
+            }
+            let temp_apng = tempfile::Builder::new().suffix(".apng").tempfile()?;
+            let temp_apng_path = temp_apng.path().to_path_buf();
+            let res = std::process::Command::new("ffmpeg")
+                .arg("-y")
+                .arg("-i")
+                .arg(input)
+                .arg("-filter_complex")
+                .arg("[0:v:0][0:v:1]alphamerge")
+                .arg("-plays")
+                .arg("0")
+                .arg("-c:v")
+                .arg("apng")
+                .arg(&temp_apng_path)
+                .output()?;
+            if res.status.success() {
+                (temp_apng_path, Some(temp_apng))
+            } else {
+                (input.to_path_buf(), None)
+            }
         } else {
             (input.to_path_buf(), None)
         };
 
     let (width, height) = get_input_dimensions(&actual_input)?;
-    let vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, false);
+    let has_alpha = input_ext == "webp"
+        || input_ext == "gif"
+        || input_ext == "jxl"
+        || (input_ext == "avif" && {
+            let out = std::process::Command::new("ffprobe")
+                .args([
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "v",
+                    "-show_entries",
+                    "stream=index",
+                    "-of",
+                    "csv=p=0",
+                ])
+                .arg(input)
+                .output();
+            out.map(|o| String::from_utf8_lossy(&o.stdout).lines().count() > 1)
+                .unwrap_or(false)
+        })
+        || input_ext == "apng"
+        || input_ext == "png";
+    let mut vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, has_alpha);
+
+    let color_info = shared_utils::ffprobe_json::extract_color_info(input);
+    let targeted_info =
+        shared_utils::hdr_utils::infer_bt709_if_modern(color_info, width, height, &input_ext);
+    vf_args.extend(shared_utils::hdr_utils::color_info_to_ffmpeg_args(
+        &targeted_info,
+    ));
 
     let max_threads = get_max_threads(options);
     let svtav1_params = format!("tune=0:film-grain=0:lp={max_threads}");
@@ -573,7 +634,7 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
                 if let Err(e) = shared_utils::conversion::safe_delete_original(
                     input,
                     &output,
-                    shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
+                    shared_utils::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
                 ) {
                     tracing::warn!(input = %input.display(), output = %output.display(), error = %e, "Failed to delete original after AV1 conversion");
                 }
@@ -666,7 +727,8 @@ pub fn convert_to_av1_mp4_matched(
         return Ok(skipped_static_animated(input, input_size));
     }
 
-    // GIF multi-dimensional meme-score: if the GIF looks like a meme/sticker, keep it as-is.
+    // GIF / GIF-like video meme-score: if the asset behaves like a looping sticker, keep it
+    // in the GIF domain instead of re-encoding to a video container.
     if is_gif_meme(input) {
         let input_size = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
         copy_original_on_skip(input, options);
@@ -678,7 +740,8 @@ pub fn convert_to_av1_mp4_matched(
             input_size,
             output_size: None,
             size_reduction: None,
-            message: "Skipped: GIF identified as meme/sticker (meme-score ≥ 0.50)".to_string(),
+            message: "Skipped: GIF-like asset identified as meme/sticker (meme-score / loop score)"
+                .to_string(),
             skipped: true,
             skip_reason: Some("gif_meme".to_string()),
         });
@@ -699,7 +762,8 @@ pub fn convert_to_av1_mp4_matched(
         return Ok(skipped_output_exists(input, &output, input_size));
     }
 
-    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+    let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
+        .map_err(|e| VidQualityError::conversion_error(e.to_string()))?;
     let _temp_output_guard = shared_utils::conversion::TempOutputGuard::new(temp_output.clone());
 
     // Special handling for animated JXL/WebP: pre-convert to APNG
@@ -813,6 +877,45 @@ pub fn convert_to_av1_mp4_matched(
                     });
                 }
             }
+        } else if input_ext == "avif" && {
+            let out = std::process::Command::new("ffprobe")
+                .args([
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "v",
+                    "-show_entries",
+                    "stream=index",
+                    "-of",
+                    "csv=p=0",
+                ])
+                .arg(input)
+                .output();
+            out.map(|o| String::from_utf8_lossy(&o.stdout).lines().count() > 1)
+                .unwrap_or(false)
+        } {
+            if options.verbose {
+                eprintln!("   🔧 Detected transparent AVIF format, pre-converting to APNG to retain alpha explicitly");
+            }
+            let temp_apng = tempfile::Builder::new().suffix(".apng").tempfile()?;
+            let temp_apng_path = temp_apng.path().to_path_buf();
+            let res = std::process::Command::new("ffmpeg")
+                .arg("-y")
+                .arg("-i")
+                .arg(input)
+                .arg("-filter_complex")
+                .arg("[0:v:0][0:v:1]alphamerge")
+                .arg("-plays")
+                .arg("0")
+                .arg("-c:v")
+                .arg("apng")
+                .arg(&temp_apng_path)
+                .output()?;
+            if res.status.success() {
+                (temp_apng_path, Some(temp_apng))
+            } else {
+                (input.to_path_buf(), None)
+            }
         } else {
             (input.to_path_buf(), None)
         };
@@ -903,7 +1006,14 @@ pub fn convert_to_av1_mp4_matched(
         };
 
     let (width, height) = get_input_dimensions(&final_input)?;
-    let vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, has_alpha);
+    let mut vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, has_alpha);
+
+    let color_info = shared_utils::ffprobe_json::extract_color_info(input);
+    let targeted_info =
+        shared_utils::hdr_utils::infer_bt709_if_modern(color_info, width, height, &input_ext);
+    vf_args.extend(shared_utils::hdr_utils::color_info_to_ffmpeg_args(
+        &targeted_info,
+    ));
 
     let flag_mode = options
         .flag_mode()
@@ -914,8 +1024,27 @@ pub fn convert_to_av1_mp4_matched(
         eprintln!("   🖥️  CPU Mode: Using libx265 for higher SSIM (≥0.98)");
     }
 
+    let is_gif = shared_utils::is_gif_magic(&final_input);
     let mut actual_initial_crf = initial_crf;
-    if let Some(hint) = shared_utils::crf_constants::get_global_last_hit_crf_av1() {
+
+    // Get duration and metadata for smart CRF initialization
+    let probe = shared_utils::ffprobe::probe_video(input).ok();
+    let duration = probe.as_ref().map_or(0.0, |p| p.duration as f32);
+
+    let is_safe_for_lossless = if is_gif && flag_mode.is_ultimate() {
+        if let Some(p) = probe.as_ref() {
+            let meta = LoopMeta::from_ffprobe_result(p, input);
+            is_lossless_exploration_safe(&meta, Some(input))
+        } else {
+            duration < ANIMATION_CLIP_THRESHOLD_SECS
+        }
+    } else {
+        false
+    };
+
+    if is_safe_for_lossless {
+        actual_initial_crf = 0.0;
+    } else if let Some(hint) = shared_utils::crf_constants::get_global_last_hit_crf_av1() {
         if options.verbose {
             eprintln!("   💡 Using global last hit CRF: {hint:.1} (warm start)");
         }
@@ -1119,7 +1248,7 @@ pub fn convert_to_av1_mp4_matched(
         if let Err(e) = shared_utils::conversion::safe_delete_original(
             input,
             &output,
-            shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
+            shared_utils::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
         ) {
             tracing::warn!(input = %input.display(), output = %output.display(), error = %e, "Failed to delete original after AV1 animated conversion");
         }
@@ -1141,13 +1270,15 @@ pub fn convert_to_av1_mp4_matched(
         .map(|s| format!(", SSIM: {s:.4}"))
         .unwrap_or_default();
 
+    let crf_display = if explore_result.optimal_crf < 0.01 {
+        format!("{:.2} (Lossless)", explore_result.optimal_crf)
+    } else {
+        format!("{:.2}", explore_result.optimal_crf)
+    };
+
     let message = format!(
-        "AV1 (CRF {:.1}{}, {} iter{}): -{:.1}%",
-        explore_result.optimal_crf,
-        explored_msg,
-        explore_result.iterations,
-        ssim_msg,
-        reduction_pct
+        "AV1 (CRF {}{}, {} iter{}): -{:.1}%",
+        crf_display, explored_msg, explore_result.iterations, ssim_msg, reduction_pct
     );
 
     Ok(ConversionResult {
@@ -1186,7 +1317,8 @@ pub fn convert_to_av1_mkv_lossless(
         return Ok(skipped_output_exists(input, &output, input_size));
     }
 
-    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+    let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
+        .map_err(|e| VidQualityError::conversion_error(e.to_string()))?;
     let _temp_output_guard = shared_utils::conversion::TempOutputGuard::new(temp_output.clone());
 
     let (width, height) = get_input_dimensions(input)?;
@@ -1238,7 +1370,7 @@ pub fn convert_to_av1_mkv_lossless(
                 if let Err(e) = shared_utils::conversion::safe_delete_original(
                     input,
                     &output,
-                    shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
+                    shared_utils::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
                 ) {
                     tracing::warn!(input = %input.display(), output = %output.display(), error = %e, "Failed to delete original after lossless AV1 conversion");
                 }
@@ -1377,7 +1509,8 @@ pub fn convert_to_gif_apple_compat(
         });
     }
 
-    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+    let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
+        .map_err(|e| VidQualityError::conversion_error(e.to_string()))?;
     let _temp_output_guard = shared_utils::conversion::TempOutputGuard::new(temp_output.clone());
 
     // Special handling for animated JXL: FFmpeg's jpegxl_anim decoder is incomplete
@@ -1501,6 +1634,45 @@ pub fn convert_to_gif_apple_compat(
                     });
                 }
             }
+        } else if input_ext == "avif" && {
+            let out = std::process::Command::new("ffprobe")
+                .args([
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "v",
+                    "-show_entries",
+                    "stream=index",
+                    "-of",
+                    "csv=p=0",
+                ])
+                .arg(input)
+                .output();
+            out.map(|o| String::from_utf8_lossy(&o.stdout).lines().count() > 1)
+                .unwrap_or(false)
+        } {
+            if options.verbose {
+                eprintln!("   🔧 Detected transparent AVIF format, pre-converting to APNG to retain alpha explicitly");
+            }
+            let temp_apng = tempfile::Builder::new().suffix(".apng").tempfile()?;
+            let temp_apng_path = temp_apng.path().to_path_buf();
+            let res = std::process::Command::new("ffmpeg")
+                .arg("-y")
+                .arg("-i")
+                .arg(input)
+                .arg("-filter_complex")
+                .arg("[0:v:0][0:v:1]alphamerge")
+                .arg("-plays")
+                .arg("0")
+                .arg("-c:v")
+                .arg("apng")
+                .arg(&temp_apng_path)
+                .output()?;
+            if res.status.success() {
+                (temp_apng_path, Some(temp_apng))
+            } else {
+                (input.to_path_buf(), None)
+            }
         } else {
             (input.to_path_buf(), None)
         };
@@ -1543,40 +1715,93 @@ pub fn convert_to_gif_apple_compat(
         false
     };
 
-    // Use FFmpeg high-quality single-pass palette method for all formats
-    // This ensures consistent quality across all animated formats (AVIF/WebP/JXL/HEIC/etc)
-    // Note: JXL is pre-converted to APNG above due to FFmpeg's incomplete jpegxl_anim decoder
-    let ffmpeg_ok = {
-        let filter = if has_multiple_streams {
-            // Multi-stream: specify stream in filter
-            format!(
-                "[0:{effective_stream_idx}]scale={width}:{height}:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=256[p];[s1][p]paletteuse=dither=bayer"
-            )
-        } else {
-            // Single-stream: simple filter
-            format!(
-                "scale={width}:{height}:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=256[p];[s1][p]paletteuse=dither=bayer"
-            )
-        };
+    let gifski_ok = if which::which("gifski").is_err() {
+        false
+    } else {
+        let mut gifski_input = actual_input.clone();
+        let mut extracted_stream_apng = None;
 
-        let res = Command::new("ffmpeg")
-            .arg("-y")
-            .arg("-i")
-            .arg(shared_utils::safe_path_arg(&actual_input).as_ref())
-            .arg("-filter_complex")
-            .arg(&filter)
+        if has_multiple_streams && effective_stream_idx != 0 {
+            let temp_apng = tempfile::Builder::new().suffix(".apng").tempfile().ok();
+            if let Some(temp_apng) = temp_apng {
+                let temp_apng_path = temp_apng.path().to_path_buf();
+                let extract_res = Command::new("ffmpeg")
+                    .arg("-y")
+                    .arg("-i")
+                    .arg(shared_utils::safe_path_arg(&actual_input).as_ref())
+                    .arg("-map")
+                    .arg(format!("0:{effective_stream_idx}"))
+                    .arg("-plays")
+                    .arg("0")
+                    .arg("-c:v")
+                    .arg("apng")
+                    .arg(shared_utils::safe_path_arg(&temp_apng_path).as_ref())
+                    .output();
+
+                if matches!(extract_res, Ok(o) if o.status.success() && temp_apng_path.exists()) {
+                    gifski_input = temp_apng_path;
+                    extracted_stream_apng = Some(temp_apng);
+                }
+            }
+        }
+
+        let fps = shared_utils::probe_video(&gifski_input)
+            .ok()
+            .map(|p| p.frame_rate)
+            .filter(|fps| fps.is_finite() && *fps >= 1.0)
+            .unwrap_or(20.0)
+            .clamp(1.0, 60.0);
+        let fps_str = format!("{fps:.3}");
+
+        let res = Command::new("gifski")
+            // --quiet removed to expose logs
+            .arg("--output")
             .arg(shared_utils::safe_path_arg(&temp_output).as_ref())
+            .arg("--fps")
+            .arg(&fps_str)
+            .arg("--width")
+            .arg(width.to_string())
+            .arg("--height")
+            .arg(height.to_string())
+            .arg("--quality")
+            .arg("100")
+            .arg("--motion-quality")
+            .arg("100")
+            .arg("--lossy-quality")
+            .arg("100")
+            .arg("--repeat")
+            .arg("0")
+            .arg("--extra")
+            .arg(shared_utils::safe_path_arg(&gifski_input).as_ref())
             .output();
-        matches!(res, Ok(o) if o.status.success() && temp_output.exists())
+
+        drop(extracted_stream_apng);
+        match res {
+            Ok(o) if o.status.success() && temp_output.exists() => true,
+            Ok(o) => {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                tracing::error!(
+                    input = %input.display(),
+                    stderr = %stderr.trim(),
+                    "gifski conversion failed with status: {:?}", 
+                    o.status.code()
+                );
+                false
+            }
+            Err(e) => {
+                tracing::error!(input = %input.display(), error = %e, "gifski command failed to start");
+                false
+            }
+        }
     };
 
     // Clean up temporary APNG file if it was created
     drop(temp_apng_file);
 
-    if !ffmpeg_ok {
-        // FFmpeg conversion failed — copy original so data is not lost
+    if !gifski_ok {
+        // gifski conversion failed — copy original so data is not lost
         cleanup_temp_output(&temp_output, input);
-        tracing::warn!(input = %input.display(), "GIF conversion failed (FFmpeg unavailable or failed); copying original");
+        tracing::warn!(input = %input.display(), "GIF conversion failed (gifski unavailable or failed); copying original");
         copy_original_on_skip(input, options);
         mark_as_processed(input);
         let input_size_fb = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
@@ -1587,7 +1812,7 @@ pub fn convert_to_gif_apple_compat(
             input_size: input_size_fb,
             output_size: None,
             size_reduction: None,
-            message: "GIF conversion failed (FFmpeg unavailable or failed); original copied"
+            message: "GIF conversion failed (gifski unavailable or failed); original copied"
                 .to_string(),
             skipped: true,
             skip_reason: Some("gif_encode_failed".to_string()),
@@ -1687,7 +1912,7 @@ pub fn convert_to_gif_apple_compat(
         if let Err(e) = shared_utils::conversion::safe_delete_original(
             input,
             &output,
-            shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
+            shared_utils::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
         ) {
             tracing::warn!(input = %input.display(), output = %output.display(), error = %e, "Failed to delete original after GIF apple-compat conversion");
         }

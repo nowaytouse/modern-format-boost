@@ -18,6 +18,7 @@ use image::{DynamicImage, ImageBuffer};
 use libheif_rs::{ColorSpace, HeifContext, ImageHandle, ItemId, RgbChroma};
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
+use std::env;
 use std::path::Path;
 use std::process::Command;
 use tracing::{info, warn};
@@ -158,12 +159,15 @@ pub fn convert_heic_with_gainmap_to_jxl_hdr(
 
     // 7. Invoke cjxl
     let mut cmd = Command::new("cjxl");
-    cmd.arg(&tmp_file)
-        .arg(output)
-        .arg("-d")
-        .arg("1.0")
-        .arg("--intensity_target")
-        .arg(format!("{intensity_target:.0}"));
+    cmd.arg(&tmp_file).arg(output).arg("-d").arg("1.0");
+
+    // Apply sanitized intensity target only when valid (HDR-only behavior)
+    if let Some(it) = resolve_intensity_target(intensity_target) {
+        cmd.arg("--intensity_target").arg(it.to_string());
+        info!("Applying intensity_target {} for HDR synthesis", it);
+    } else {
+        warn!("No valid intensity_target — proceeding without --intensity_target");
+    }
 
     // After matrix conversion in synthesis, the primaries are Rec.709 (sRGB)
     cmd.arg("-x").arg("color_space=sRGB");
@@ -283,14 +287,17 @@ pub fn convert_ultrahdr_jpeg_to_jxl_hdr(
 
     // 7. Invoke cjxl
     let mut cmd = Command::new("cjxl");
-    cmd.arg(&tmp_file)
-        .arg(output)
-        .arg("-d")
-        .arg("1.0")
-        .arg("--intensity_target")
-        .arg(format!("{intensity_target:.0}"))
-        .arg("-x")
-        .arg("color_space=sRGB");
+    cmd.arg(&tmp_file).arg(output).arg("-d").arg("1.0");
+
+    // Apply sanitized intensity target only when valid (HDR-only behavior)
+    if let Some(it) = resolve_intensity_target(intensity_target) {
+        cmd.arg("--intensity_target").arg(it.to_string());
+        info!("Applying intensity_target {} for UltraHDR synthesis", it);
+    } else {
+        warn!("No valid intensity_target — proceeding without --intensity_target");
+    }
+
+    cmd.arg("-x").arg("color_space=sRGB");
 
     // For PNG16, we rely on intensity_target and color_space=sRGB
 
@@ -679,6 +686,46 @@ fn synthesize_hdr(
     Ok(hdr_pixels)
 }
 
+/// Resolve and sanitize an intensity target for `cjxl`.
+///
+/// - Honor `MFB_JXL_INTENSITY_TARGET` if set (numeric, nits).
+/// - Clamp derived values into a safe range [100, 1_000_000].
+/// - Return `None` when the derived value is invalid.
+fn resolve_intensity_target(derived: f32) -> Option<u32> {
+    // Env override takes precedence
+    if let Ok(ov) = env::var("MFB_JXL_INTENSITY_TARGET") {
+        match ov.parse::<f32>() {
+            Ok(v) if v.is_finite() && v > 0.0 => {
+                let clamped = v.clamp(100.0_f32, 1_000_000.0_f32);
+                if (clamped - v).abs() > f32::EPSILON {
+                    warn!("MFB_JXL_INTENSITY_TARGET value {v} clamped to {clamped}");
+                }
+                return Some(clamped.round() as u32);
+            }
+            _ => {
+                warn!("Invalid MFB_JXL_INTENSITY_TARGET='{}' — ignoring", ov);
+            }
+        }
+    }
+
+    if !derived.is_finite() || derived <= 0.0 {
+        warn!(
+            "Derived intensity_target invalid: {} — skipping --intensity_target",
+            derived
+        );
+        return None;
+    }
+
+    let clamped = derived.clamp(100.0_f32, 1_000_000.0_f32);
+    if (clamped - derived).abs() > f32::EPSILON {
+        warn!(
+            "Derived intensity_target {} clamped to {}",
+            derived, clamped
+        );
+    }
+    Some(clamped.round() as u32)
+}
+
 fn srgb_to_linear(v: f32) -> f32 {
     if v <= 0.04045 {
         v / 12.92
@@ -736,6 +783,8 @@ fn parse_gainmap_params_from_jpeg_xmp(data: &[u8]) -> Option<GainMapParams> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
+    use std::env;
 
     #[test]
     fn test_srgb_to_linear() {
@@ -787,5 +836,47 @@ mod tests {
         assert_eq!(params.gamma, 2.2);
         assert_eq!(params.offset_sdr, 0.05);
         assert_eq!(params.offset_hdr, 0.08);
+    }
+
+    #[test]
+    #[serial]
+    fn test_resolve_intensity_target_env_override() {
+        let prev = env::var("MFB_JXL_INTENSITY_TARGET").ok();
+        env::set_var("MFB_JXL_INTENSITY_TARGET", "5000");
+        let got = resolve_intensity_target(100.0);
+        assert_eq!(got, Some(5000));
+        if let Some(v) = prev {
+            env::set_var("MFB_JXL_INTENSITY_TARGET", v);
+        } else {
+            env::remove_var("MFB_JXL_INTENSITY_TARGET");
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn test_resolve_intensity_target_env_clamp() {
+        let prev = env::var("MFB_JXL_INTENSITY_TARGET").ok();
+        env::set_var("MFB_JXL_INTENSITY_TARGET", "2000000");
+        let got = resolve_intensity_target(100.0);
+        assert_eq!(got, Some(1_000_000));
+        if let Some(v) = prev {
+            env::set_var("MFB_JXL_INTENSITY_TARGET", v);
+        } else {
+            env::remove_var("MFB_JXL_INTENSITY_TARGET");
+        }
+    }
+
+    #[test]
+    fn test_resolve_intensity_target_derived_invalid() {
+        // Negative derived value should be rejected
+        let got = resolve_intensity_target(-1.0);
+        assert_eq!(got, None);
+    }
+
+    #[test]
+    fn test_resolve_intensity_target_derived_clamp() {
+        // Very large derived value gets clamped
+        let got = resolve_intensity_target(2_000_000.0);
+        assert_eq!(got, Some(1_000_000));
     }
 }

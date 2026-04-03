@@ -98,6 +98,7 @@ pub enum UnifiedError {
     Io(std::io::Error),
     NotImplemented(String),
     SkipFile(String),
+    ResultAnomaly(String),
     Other(anyhow::Error),
 }
 
@@ -112,18 +113,19 @@ impl UnifiedError {
     #[must_use]
     pub const fn category(&self) -> ErrorCategory {
         match self {
+            // Priority 1: Fatal (stops or blocks critical flow)
             Self::FileNotFound { .. }
             | Self::DirectoryNotFound { .. }
-            | Self::FileReadError { .. }
             | Self::FileWriteError { .. }
             | Self::Io(_)
-            | Self::FFprobeError { .. }
-            | Self::FFmpegError { .. }
-            | Self::ToolNotFound { .. }
-            | Self::Other(_) => ErrorCategory::Fatal,
+            | Self::ToolNotFound { .. } => ErrorCategory::Fatal,
 
-            Self::OutputExists { .. } => ErrorCategory::Optional,
+            // Priority 2: Optional (User-level skips)
+            Self::OutputExists { .. } | Self::SkipFile(_) | Self::CompressionFailed { .. } => {
+                ErrorCategory::Optional
+            }
 
+            // Priority 3: Recoverable (Upstream or Result anomalies - counted as failures but loop continues)
             _ => ErrorCategory::Recoverable,
         }
     }
@@ -284,6 +286,9 @@ impl UnifiedError {
             Self::SkipFile(msg) => {
                 format!("⏭️  Skip file: {msg}")
             }
+            Self::ResultAnomaly(msg) => {
+                format!("❌ Result anomaly: {msg}")
+            }
             Self::Other(e) => {
                 format!("❌ Error: {e}")
             }
@@ -293,7 +298,10 @@ impl UnifiedError {
     /// Check if this error should skip the file
     #[must_use]
     pub const fn is_skip(&self) -> bool {
-        matches!(self, Self::OutputExists { .. } | Self::SkipFile(_))
+        matches!(
+            self,
+            Self::OutputExists { .. } | Self::SkipFile(_) | Self::CompressionFailed { .. }
+        )
     }
 
     /// Add file path to error
@@ -351,6 +359,9 @@ impl UnifiedError {
                 file_path: Some(path),
             },
             Self::OutputExists { operation, .. } => Self::OutputExists { path, operation },
+            Self::ResultAnomaly(msg) => {
+                Self::ResultAnomaly(format!("{msg} (at {})", path.display()))
+            }
             other => other,
         }
     }
@@ -377,6 +388,10 @@ impl UnifiedError {
                 operation,
             },
             Self::OutputExists { path, .. } => Self::OutputExists { path, operation },
+            Self::ResultAnomaly(msg) => {
+                let op_str = operation.as_deref().unwrap_or("unknown operation");
+                Self::ResultAnomaly(format!("{msg} [during {op_str}]"))
+            }
             other => other,
         }
     }
@@ -532,6 +547,7 @@ impl fmt::Display for UnifiedError {
             Self::Io(e) => write!(f, "IO error: {e}"),
             Self::NotImplemented(msg) => write!(f, "Not implemented: {msg}"),
             Self::SkipFile(msg) => write!(f, "Skip file: {msg}"),
+            Self::ResultAnomaly(msg) => write!(f, "Result anomaly: {msg}"),
             Self::Other(e) => write!(f, "{e}"),
         }
     }
@@ -674,7 +690,7 @@ mod tests {
             output_size: 1100,
             file_path: None,
         };
-        assert_eq!(err.category(), ErrorCategory::Recoverable);
+        assert_eq!(err.category(), ErrorCategory::Optional);
 
         let err = UnifiedError::OutputExists {
             path: PathBuf::from("/test"),

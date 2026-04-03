@@ -90,6 +90,16 @@ pub struct FFprobeResult {
     pub stream_index: usize,
     /// Format tags (e.g. encoder, `creation_time`) from the format section
     pub tags: std::collections::HashMap<String, String>,
+    /// Optional: Loop count from metadata (0 = infinite)
+    pub loop_count: Option<u16>,
+    /// 🎞️ Frame types (I, P, B) for the initial sample.
+    pub frame_types: Vec<char>,
+    /// 🎞️ PTS deltas (frame intervals) for the initial sample.
+    pub pts_deltas: Vec<f64>,
+    /// 🎞️ Motion vector magnitudes (if available).
+    pub mv_magnitudes: Vec<f64>,
+    /// 🎞️ Captured packet sizes for bitrate inequality analysis.
+    pub pkt_sizes: Vec<u64>,
 }
 
 #[must_use]
@@ -165,8 +175,10 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
             "-show_format",
             "-show_streams",
             "-show_frames",
+            "-show_entries",
+            "frame=pict_type,pkt_pts_time,pkt_size",
             "-read_intervals",
-            "%+#5",
+            "%+#300", // Read up to 300 frames for deep signal analysis
             "--",
         ])
         .arg(path_arg.as_ref())
@@ -429,7 +441,70 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         is_variable_frame_rate,
         stream_index,
         tags,
+        loop_count: extract_loop_count(format),
+        frame_types: extract_frame_types(&json),
+        pts_deltas: extract_pts_deltas(&json),
+        pkt_sizes: extract_pkt_sizes(&json),
+        mv_magnitudes: Vec::new(),
     })
+}
+
+/// Attempt to extract loop count from format tags (e.g. NETSCAPE2.0 or LoopCount)
+fn extract_loop_count(format: &serde_json::Value) -> Option<u16> {
+    if let Some(tags) = format["tags"].as_object() {
+        if let Some(val) = tags.get("loop_count").or_else(|| tags.get("loop")) {
+            if let Some(s) = val.as_str() {
+                return s.parse::<u16>().ok();
+            }
+        }
+    }
+    None
+}
+
+fn extract_frame_types(json: &serde_json::Value) -> Vec<char> {
+    let mut types = Vec::new();
+    if let Some(frames) = json["frames"].as_array() {
+        for frame in frames {
+            if let Some(pict_type) = frame["pict_type"].as_str() {
+                if let Some(first_char) = pict_type.chars().next() {
+                    types.push(first_char);
+                }
+            }
+        }
+    }
+    types
+}
+
+fn extract_pts_deltas(json: &serde_json::Value) -> Vec<f64> {
+    let mut deltas = Vec::new();
+    let mut last_pts: Option<f64> = None;
+    if let Some(frames) = json["frames"].as_array() {
+        for frame in frames {
+            if let Some(pts_str) = frame["pkt_pts_time"].as_str() {
+                if let Ok(pts) = pts_str.parse::<f64>() {
+                    if let Some(last) = last_pts {
+                        deltas.push((pts - last).abs());
+                    }
+                    last_pts = Some(pts);
+                }
+            }
+        }
+    }
+    deltas
+}
+
+fn extract_pkt_sizes(json: &serde_json::Value) -> Vec<u64> {
+    let mut sizes = Vec::new();
+    if let Some(frames) = json["frames"].as_array() {
+        for frame in frames {
+            if let Some(size_str) = frame["pkt_size"].as_str() {
+                if let Ok(size) = size_str.parse::<u64>() {
+                    sizes.push(size);
+                }
+            }
+        }
+    }
+    sizes
 }
 
 /// Recursively scan all `side_data` arrays in a ffprobe JSON value to detect:
@@ -824,5 +899,70 @@ mod tests {
                 "detect_bit_depth({input:?})"
             );
         }
+    }
+
+    #[test]
+    fn test_extract_frame_types() {
+        let json = serde_json::json!({
+            "frames": [
+                {"pict_type": "I"},
+                {"pict_type": "P"},
+                {"pict_type": "B"},
+                {"pict_type": "I"}
+            ]
+        });
+        let types = extract_frame_types(&json);
+        assert_eq!(types, vec!['I', 'P', 'B', 'I']);
+    }
+
+    #[test]
+    fn test_extract_pts_deltas() {
+        let json = serde_json::json!({
+            "frames": [
+                {"pkt_pts_time": "0.0"},
+                {"pkt_pts_time": "0.04"},
+                {"pkt_pts_time": "0.08"},
+                {"pkt_pts_time": "0.12"}
+            ]
+        });
+        let deltas = extract_pts_deltas(&json);
+        assert_eq!(deltas.len(), 3);
+        for delta in &deltas {
+            assert!((delta - 0.04).abs() < 0.001);
+        }
+    }
+
+    #[test]
+    fn test_extract_pkt_sizes() {
+        let json = serde_json::json!({
+            "frames": [
+                {"pkt_size": "1024"},
+                {"pkt_size": "2048"},
+                {"pkt_size": "512"}
+            ]
+        });
+        let sizes = extract_pkt_sizes(&json);
+        assert_eq!(sizes, vec![1024, 2048, 512]);
+    }
+
+    #[test]
+    fn test_extract_loop_count() {
+        let json_with_loop = serde_json::json!({
+            "format": {
+                "tags": {
+                    "loop_count": "5"
+                }
+            }
+        });
+        let loop_count = extract_loop_count(&json_with_loop["format"]);
+        assert_eq!(loop_count, Some(5));
+
+        let json_no_loop = serde_json::json!({
+            "format": {
+                "tags": {}
+            }
+        });
+        let loop_count = extract_loop_count(&json_no_loop["format"]);
+        assert_eq!(loop_count, None);
     }
 }

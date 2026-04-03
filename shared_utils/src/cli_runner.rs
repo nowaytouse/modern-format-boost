@@ -321,10 +321,18 @@ where
             }
             Err(e) => {
                 let error_msg = e.to_string();
-                if error_msg.contains("Output exists:") {
+                let maybe_ue = e.downcast_ref::<crate::unified_error::UnifiedError>();
+                let is_skip = maybe_ue.is_some_and(super::unified_error::UnifiedError::is_skip);
+                let category = maybe_ue
+                    .map_or(crate::unified_error::ErrorCategory::Recoverable, |ue| {
+                        ue.category()
+                    });
+
+                if is_skip {
                     info!(
-                        "⏭️ {} → SKIP (output exists)",
-                        fixed.file_name().unwrap_or_default().to_string_lossy()
+                        "⏭️ {} → SKIP ({})",
+                        fixed.file_name().unwrap_or_default().to_string_lossy(),
+                        error_msg
                     );
                     batch_result.skip();
                 } else if let Some(reason) = disk_full_pause_reason(&error_msg) {
@@ -338,8 +346,12 @@ where
                     );
                     break;
                 } else {
-                    info!("❌ {} failed: {}", fixed.display(), e);
-                    batch_result.fail(fixed.clone(), e.to_string());
+                    error!(
+                        "❌ {} failed: {}",
+                        fixed.file_name().unwrap_or_default().to_string_lossy(),
+                        e
+                    );
+                    batch_result.fail(fixed.clone(), error_msg);
 
                     if let Err(copy_err) = crate::smart_file_copier::copy_on_skip_or_fail(
                         &fixed,
@@ -354,6 +366,12 @@ where
                             fixed.display()
                         );
                     }
+
+                    if category == crate::unified_error::ErrorCategory::Fatal {
+                        error!("🛑 Fatal error encountered, stopping batch processing.");
+                        break;
+                    }
+
                     crate::progress_mode::video_processed_failure();
                 }
             }

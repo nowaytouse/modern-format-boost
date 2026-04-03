@@ -23,12 +23,13 @@
 
 #![cfg_attr(test, allow(clippy::field_reassign_with_default))]
 
+use crate::constants::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE;
 use crate::modern_ui::{colors, symbols};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     LazyLock, Mutex,
@@ -37,9 +38,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static PROCESSED_FILES: LazyLock<Mutex<HashSet<String>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
+static RESERVED_OUTPUT_PATHS: LazyLock<Mutex<HashMap<String, String>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 static TEMP_OUTPUT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-fn next_temp_output_suffix() -> String {
+#[cfg(test)]
+static TEST_RESERVATION_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+pub fn next_temp_output_suffix() -> String {
     const ALPHABET: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -92,10 +98,64 @@ pub fn clear_processed_list() {
     processed.clear();
 }
 
-pub use crate::checkpoint::{
-    safe_delete_original, verify_output_integrity, MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
-    MIN_OUTPUT_SIZE_BEFORE_DELETE_VIDEO,
-};
+fn stable_path_key(path: &Path) -> String {
+    path.canonicalize()
+        .unwrap_or_else(|_| path.to_path_buf())
+        .display()
+        .to_string()
+}
+
+fn path_with_collision_suffix(path: &Path, collision_index: usize) -> PathBuf {
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("output");
+    let file_name = match path.extension().and_then(|e| e.to_str()) {
+        Some(ext) if !ext.is_empty() => format!("{stem} ({collision_index}).{ext}"),
+        _ => format!("{stem} ({collision_index})"),
+    };
+
+    path.parent().unwrap_or(Path::new("")).join(file_name)
+}
+
+fn reserve_unique_output_path(input: &Path, candidate: PathBuf) -> PathBuf {
+    let input_key = stable_path_key(input);
+    let mut reservations = RESERVED_OUTPUT_PATHS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    let mut resolved = candidate;
+    let mut collision_index = 1usize;
+
+    loop {
+        let output_key = stable_path_key(&resolved);
+        match reservations.get(&output_key) {
+            Some(owner) if owner != &input_key => {
+                resolved = path_with_collision_suffix(&resolved, collision_index);
+                collision_index += 1;
+            }
+            _ => {
+                reservations.insert(output_key, input_key.clone());
+                return resolved;
+            }
+        }
+    }
+}
+
+#[must_use]
+pub fn reserve_output_path(input: &Path, candidate: &Path) -> PathBuf {
+    reserve_unique_output_path(input, candidate.to_path_buf())
+}
+
+#[cfg(test)]
+fn clear_reserved_output_paths() {
+    let mut reservations = RESERVED_OUTPUT_PATHS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    reservations.clear();
+}
+
+pub use crate::checkpoint::{safe_delete_original, verify_output_integrity};
 
 #[cfg(unix)]
 fn flock_exclusive(file: &fs::File) -> std::io::Result<()> {
@@ -481,7 +541,7 @@ pub fn determine_output_path(
 
     validate_output_path(&output, None)?;
 
-    Ok(output)
+    Ok(reserve_unique_output_path(input, output))
 }
 
 /// Determine the output path with a base directory.
@@ -549,7 +609,7 @@ pub fn determine_output_path_with_base(
 
     validate_output_path(&output, Some(base_dir))?;
 
-    Ok(output)
+    Ok(reserve_unique_output_path(input, output))
 }
 
 #[must_use]
@@ -685,7 +745,10 @@ impl Drop for TempOutputGuard {
     }
 }
 
-/// Returns a path for temporary output in the same directory as `output`.
+/// **LEAKY**: Returns a path for temporary output in the same directory as `output`.
+///
+/// [WARNING] This function pollutes the user's folder with intermediate files.
+/// For Ghost Mode (Zero Pollution), use `shared_utils::path_safety::isolated_temp_path_for_search` instead.
 ///
 /// Ensures `fs::rename(temp, output)` is atomic on the same filesystem. Use with `commit_temp_to_output`.
 /// Uses stem + ".tmp." + extension (e.g. file.mov → file.tmp.mov) so `FFmpeg` and other
@@ -757,7 +820,7 @@ pub fn commit_temp_to_output_with_metadata(
         let _ = crate::io_utils::safe_remove_file(temp);
         return Ok(false);
     }
-    fs::rename(temp, output)?;
+    crate::io_utils::robust_move(temp, output)?;
 
     // Preserve complete metadata from original file if provided
     if let Some(src) = original {
@@ -885,13 +948,20 @@ pub fn check_size_tolerance(
     options: &ConvertOptions,
     format_label: &str,
 ) -> Option<ConversionResult> {
-    // Tolerance: allow size increase < 1_048_576 bytes (1MB)
-    const TOLERANCE_BYTES: u64 = 1_048_576; // 1MB absolute value
+    // Tolerance: allow size increase < DEFAULT_SIZE_TOLERANCE_BYTES bytes
+    let tolerance_bytes = crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES;
 
-    let max_allowed_size = if options.allow_size_tolerance {
-        input_size.saturating_add(TOLERANCE_BYTES - 1) // up to 1_048_576 - 1 bytes
-    } else {
+    let input_ext = input.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let is_guard_active =
+        crate::quality_matcher::is_size_guard_active(input_ext, options.apple_compat);
+
+    let max_allowed_size = if options.allow_size_tolerance && is_guard_active {
+        input_size.saturating_add(tolerance_bytes - 1) // up to tolerance_bytes - 1 bytes
+    } else if is_guard_active {
         input_size
+    } else {
+        // Size guard is NOT active (Apple compat mode for incompatible source)
+        u64::MAX
     };
 
     // Over tolerance: output larger than allowed (e.g. > input or increase ≥ 1MB)
@@ -994,8 +1064,8 @@ pub fn check_size_tolerance(
     if options.compress && output_size >= input_size {
         let size_increase_bytes = output_size.saturating_sub(input_size);
 
-        // If tolerance is enabled and increase is within tolerance (< 1_048_576 bytes), accept it
-        if options.allow_size_tolerance && size_increase_bytes < TOLERANCE_BYTES {
+        // If tolerance is enabled and increase is within tolerance (< DEFAULT_SIZE_TOLERANCE_BYTES bytes), accept it
+        if options.allow_size_tolerance && size_increase_bytes < tolerance_bytes {
             // Within tolerance, accept the output
             return None;
         }
@@ -1172,7 +1242,7 @@ pub fn validate_output_path(output: &Path, _base_dir: Option<&Path>) -> Result<(
         ));
     }
 
-    ensure_no_symlink_components(output)?;
+    ensure_output_parent_resolves(output)?;
 
     // Check if output is a symbolic link
     if output.exists() && output.is_symlink() {
@@ -1185,46 +1255,53 @@ pub fn validate_output_path(output: &Path, _base_dir: Option<&Path>) -> Result<(
     Ok(())
 }
 
-fn ensure_no_symlink_components(path: &Path) -> Result<(), String> {
-    let mut current = if path.is_absolute() {
-        PathBuf::new()
+fn ensure_output_parent_resolves(path: &Path) -> Result<(), String> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
     } else {
-        std::env::current_dir().map_err(|e| {
-            format!(
-                "Failed to resolve current directory for {}: {}",
-                path.display(),
-                e
-            )
-        })?
+        std::env::current_dir()
+            .map_err(|e| {
+                format!(
+                    "Failed to resolve current directory for {}: {}",
+                    path.display(),
+                    e
+                )
+            })?
+            .join(path)
     };
 
-    for component in path.components() {
-        match component {
-            Component::CurDir => continue,
-            Component::ParentDir => {
-                current.push(component.as_os_str());
-            }
-            _ => current.push(component.as_os_str()),
-        }
+    let mut existing = if absolute.exists() {
+        absolute.parent().ok_or_else(|| {
+            format!(
+                "Failed to resolve parent directory for output path: {}",
+                path.display()
+            )
+        })?
+    } else {
+        absolute.as_path()
+    };
+    while !existing.exists() {
+        existing = existing.parent().ok_or_else(|| {
+            format!(
+                "Failed to resolve an existing parent directory for output path: {}",
+                path.display()
+            )
+        })?;
+    }
 
-        match fs::symlink_metadata(&current) {
-            Ok(metadata) => {
-                if metadata.file_type().is_symlink() {
-                    return Err(format!(
-                        "Output path traverses symbolic link component, refusing to write: {}",
-                        current.display()
-                    ));
-                }
-            }
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => break,
-            Err(err) => {
-                return Err(format!(
-                    "Failed to inspect output path component {}: {}",
-                    current.display(),
-                    err
-                ));
-            }
-        }
+    let resolved = existing.canonicalize().map_err(|e| {
+        format!(
+            "Failed to resolve output path parent {}: {}",
+            existing.display(),
+            e
+        )
+    })?;
+
+    if !resolved.is_dir() {
+        return Err(format!(
+            "Resolved output parent is not a directory: {}",
+            resolved.display()
+        ));
     }
 
     Ok(())
@@ -1409,7 +1486,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn test_validate_output_path_rejects_symlink_parent() {
+    fn test_validate_output_path_allows_symlink_parent_when_parent_resolves() {
         use std::os::unix::fs::symlink;
         let temp = tempfile::TempDir::new().expect("temp dir");
         let real_dir = temp.path().join("real");
@@ -1417,9 +1494,25 @@ mod tests {
         let link_dir = temp.path().join("link");
         symlink(&real_dir, &link_dir).expect("symlink");
 
-        let err = validate_output_path(&link_dir.join("out.jxl"), None)
-            .expect_err("symlinked parent directory should be rejected");
-        assert!(err.contains("symbolic link component"));
+        validate_output_path(&link_dir.join("out.jxl"), None)
+            .expect("symlinked parent directory should resolve safely");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_validate_output_path_rejects_symlink_leaf() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let real_dir = temp.path().join("real");
+        fs::create_dir_all(&real_dir).expect("real dir");
+        let output = temp.path().join("out.jxl");
+        let target = real_dir.join("target.jxl");
+        std::fs::write(&target, b"stub").expect("target");
+        symlink(&target, &output).expect("symlink leaf");
+
+        let err = validate_output_path(&output, None)
+            .expect_err("symlink output leaf should still be rejected");
+        assert!(err.contains("symbolic link"));
     }
 
     #[test]
@@ -1444,6 +1537,8 @@ mod tests {
 
     #[test]
     fn test_determine_output_path() {
+        let _lock = TEST_RESERVATION_LOCK.lock().unwrap();
+        clear_reserved_output_paths();
         let temp = tempdir_in(std::env::current_dir().unwrap()).unwrap();
         let input = temp.path().join("nested/image.png");
         let output = determine_output_path(&input, "jxl", &None).unwrap();
@@ -1452,6 +1547,8 @@ mod tests {
 
     #[test]
     fn test_determine_output_path_with_dir() {
+        let _lock = TEST_RESERVATION_LOCK.lock().unwrap();
+        clear_reserved_output_paths();
         let temp = tempdir_in(std::env::current_dir().unwrap()).unwrap();
         let input = temp.path().join("nested/image.png");
         let output_dir = Some(temp.path().join("output"));
@@ -1461,6 +1558,8 @@ mod tests {
 
     #[test]
     fn test_determine_output_path_various_extensions() {
+        let _lock = TEST_RESERVATION_LOCK.lock().unwrap();
+        clear_reserved_output_paths();
         let temp = tempdir_in(std::env::current_dir().unwrap()).unwrap();
         let input = temp.path().join("nested/video.mp4");
 
@@ -1469,6 +1568,37 @@ mod tests {
 
         let mkv = determine_output_path(&input, "mkv", &None).unwrap();
         assert_eq!(mkv, temp.path().join("nested/video.MKV"));
+    }
+
+    #[test]
+    fn test_determine_output_path_disambiguates_batch_collisions() {
+        let _lock = TEST_RESERVATION_LOCK.lock().unwrap();
+        clear_reserved_output_paths();
+        let temp = tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let output_dir = Some(temp.path().join("output"));
+        let first = temp.path().join("set_a/clip.mp4");
+        let second = temp.path().join("set_b/clip.mp4");
+
+        let first_output = determine_output_path(&first, "gif", &output_dir).unwrap();
+        let second_output = determine_output_path(&second, "gif", &output_dir).unwrap();
+
+        assert_eq!(first_output, temp.path().join("output/clip.GIF"));
+        assert_eq!(second_output, temp.path().join("output/clip (1).GIF"));
+    }
+
+    #[test]
+    fn test_determine_output_path_keeps_same_reservation_for_same_input() {
+        let _lock = TEST_RESERVATION_LOCK.lock().unwrap();
+        clear_reserved_output_paths();
+        let temp = tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let output_dir = Some(temp.path().join("output"));
+        let input = temp.path().join("nested/clip.mp4");
+
+        let first_output = determine_output_path(&input, "gif", &output_dir).unwrap();
+        let second_output = determine_output_path(&input, "gif", &output_dir).unwrap();
+
+        assert_eq!(first_output, second_output);
+        assert_eq!(first_output, temp.path().join("output/clip.GIF"));
     }
 
     #[test]

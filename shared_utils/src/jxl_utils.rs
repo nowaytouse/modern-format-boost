@@ -125,7 +125,7 @@ pub fn verify_jxl_health(path: &Path) -> Result<(), String> {
 ///
 /// Uses `exiftool -icc_profile -b` — returns `true` if the profile blob is non-empty.
 /// Falls back to `false` on any error (tool missing, I/O failure) so the caller can safely
-/// decide whether to inject ICC via ExifTool as a fallback.
+/// decide whether to inject ICC via `ExifTool` as a fallback.
 #[must_use]
 pub fn verify_jxl_has_icc(path: &Path) -> bool {
     if which::which("exiftool").is_err() {
@@ -778,22 +778,31 @@ pub fn strip_jpeg_tail_to_temp(
     path: &Path,
 ) -> std::io::Result<Option<(std::path::PathBuf, tempfile::NamedTempFile)>> {
     let data = std::fs::read(path)?;
-    if data.len() < 2 {
+    if data.len() < 4 {
         return Ok(None);
     }
+
+    // Must start with SOI
+    if data[0] != 0xFF || data[1] != 0xD8 {
+        return Ok(None);
+    }
+
     let last_eoi = data
         .windows(2)
         .enumerate()
         .filter(|(_, w)| w[0] == 0xFF && w[1] == 0xD9)
-        .map(|(i, _)| i + 1)
+        .map(|(i, _)| i + 2) // i is FF, i+1 is D9, i+2 is the end of the marker (inclusive-slice-friendly index)
         .next_back();
+
     let end = match last_eoi {
         Some(e) if e < data.len() => e,
         _ => return Ok(None),
     };
+
     if end == data.len() {
         return Ok(None);
     }
+
     let temp = tempfile::Builder::new().suffix(".jpg").tempfile()?;
     std::fs::write(temp.path(), &data[..end])?;
     let temp_path = temp.path().to_path_buf();

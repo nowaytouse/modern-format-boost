@@ -34,6 +34,8 @@ pub struct FfprobeStream {
     #[serde(default)]
     pub color_primaries: Option<String>,
     #[serde(default)]
+    pub color_range: Option<String>,
+    #[serde(default)]
     pub pix_fmt: Option<String>,
     #[serde(default)]
     pub bits_per_raw_sample: Option<String>,
@@ -60,6 +62,7 @@ pub struct ColorInfo {
     pub color_space: Option<String>,
     pub color_transfer: Option<String>,
     pub color_primaries: Option<String>,
+    pub color_range: Option<String>,
     pub pix_fmt: Option<String>,
     pub bit_depth: Option<u8>,
     /// HDR10 mastering display string (ffmpeg format)
@@ -338,6 +341,10 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
         .color_primaries
         .clone()
         .filter(|s| !s.is_empty() && s != "unknown");
+    let color_range = stream
+        .color_range
+        .clone()
+        .filter(|s| !s.is_empty() && s != "unknown");
 
     let mut is_dolby_vision = false;
     let mut is_hdr10_plus = false;
@@ -383,6 +390,7 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
         color_space,
         color_transfer,
         color_primaries,
+        color_range,
         pix_fmt: stream.pix_fmt.clone(),
         bit_depth,
         mastering_display,
@@ -476,5 +484,63 @@ mod prop_tests {
         fn prop_invalid_json_no_panic(s in ".*") {
             let _ = serde_json::from_str::<FfprobeOutput>(&s);
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PtsIntegrity {
+    Healthy,
+    Duplicate,
+    Broken,
+}
+
+pub fn check_pts_integrity(input: &Path) -> PtsIntegrity {
+    let output = match Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "packet=pts_time",
+            "-of",
+            "csv=p=0",
+            "-read_intervals",
+            "%+#100", // Check first 100 packets
+            "--",
+        ])
+        .arg(crate::safe_path_arg(input).as_ref())
+        .output()
+    {
+        Ok(o) if o.status.success() => o,
+        _ => return PtsIntegrity::Healthy, // Fallback to healthy if probe fails
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut last_pts: Option<f64> = None;
+    let mut has_duplicates = false;
+    let mut has_backwards = false;
+
+    for line in stdout.lines() {
+        if let Ok(pts) = line.trim().parse::<f64>() {
+            if let Some(last) = last_pts {
+                // Large epsilon for floating point comparison issues
+                if pts < last - 1e-4 {
+                    has_backwards = true;
+                    break;
+                } else if (pts - last).abs() < 1e-4 {
+                    has_duplicates = true;
+                }
+            }
+            last_pts = Some(pts);
+        }
+    }
+
+    if has_backwards {
+        PtsIntegrity::Broken
+    } else if has_duplicates {
+        PtsIntegrity::Duplicate
+    } else {
+        PtsIntegrity::Healthy
     }
 }

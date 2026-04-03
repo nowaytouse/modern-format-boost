@@ -39,11 +39,11 @@
   - **自我净化机制**：无论是任务成功收尾，还是在任务中断后重启，系统都会先通过识别码“打扫战场”，彻底清除所有残留的临时数据。这确保了处理过程永远在净空状态下开始，硬盘空间不再被无主碎片占用。
 - **智能断点重置**：自动检测用户手动删除输出目录以“重新开始”的意图，即便是恢复模式也会触发状态重置，确保源文件与输出同步。
 
-
 <details>
 <summary><b>🛠️ 技术深探：工作原理与核心算法</b></summary>
 
 ### 图片处理管线细节
+
 - **第一阶段 — 智能检测**：在二进制层面分析 JPEG DQT 量化表（识别 UltraHDR 增益图）、WebP VP8L 数据块及 AVIF `av1C` box。采用 **零技术债架构 (Zero-Debt)**，全面支持 `OpenEXR` 和 `JPEG 2000` 损耗判定。
 - **第二阶段 — 路由决策**：JPEG 使用 JXL VarDCT 模式（位一致重建）；无损源使用 Modular 模式（PNG, lossless WebP/AVIF/HEIC/EXR/JP2）。
 - **第三阶段 — "绕路"兼容性**：TIFF/WebP/BMP/HEIC 会根据位深自动转为 **16-bit PNG** 或 **32-bit OpenEXR**，确保护航 `cjxl` 的同时不发生精度降级。EXR 和 JP2 已原生接入编码管线。
@@ -51,126 +51,132 @@
 - **第五阶段 — Meme Score v3**：多维度评估动图（清晰度 40%、分辨率 18%、时长 20%），聪明地决定是转为视频还是保留 GIF。
 
 ### 视频处理：三阶段饱和搜索
+
 1. **第一阶段：GPU 粗搜索**：利用硬件编码器进行快速二分搜索，定位“画质拐点”。
 2. **第二阶段：CPU 精调**：将结果映射至 `x265` 刻度。使用 **Sprint & Backtrack（冲刺与回退）算法**：连续成功时步长翻倍，过冲时立即降至 0.1 步长。
 3. **第三阶段：极致 3D 质量门控**：必须同时通过 VMAF-Y ≥ 92.0（感知画质）、CAMBI ≤ 6.0（色带检测）及 PSNR-UV ≥ 34.0 dB。
    - **融合得分系统**：结合 MS-SSIM + SSIM_All (0.6/0.4 权重)，提供超高精度的结构分析。
    - **色度通道保护**：自动识别会导致 libvmaf MS-SSIM 崩溃的极小分辨率，并无缝回退至单通道 Y-only 评分，确保流程稳健。
-   - *注：在 `--ultimate` 极致模式下，搜索算法要求连续 **50 次采样** 均达到零画质增益方可停机，确保绝对画质饱和。*
+   - _注：在 `--ultimate` 极致模式下，搜索算法要求连续 **50 次采样** 均达到零画质增益方可停机，确保绝对画质饱和。_
 
 ### 元数据与 HDR 保留
+
 - **HDR 守护**：强制透传 bt2020 原色、PQ/HLG 传输特性及母带显示数据。
 - **杜比视界**：通过 `dovi_tool` 提取 RPU 并注入编码器；Profile 7 自动转 8.1 增强兼容性。
 - **macOS 特性**：利用 `copyfile` 和 `setattrlist` 完美保留 Finder 标签、添加日期及原始创建时间。
 </details>
 
 ### 🖥️ 运行演示 (Runtime)
+
 ![Runtime](assets/runtime.png)
+
 <p align="center">Runtime</p>
-
-
 
 ### 四个二进制工具
 
-| 工具 | 用途 | 目标编码 |
-|------|------|---------|
+| 工具           | 用途     | 目标编码                   |
+| -------------- | -------- | -------------------------- |
 | **`img-hevc`** | 图片优化 | → JXL (静态) / HEVC (动图) |
-| **`img-av1`** | 图片优化 | → JXL (静态) / AV1 (动图) |
-| **`vid-hevc`** | 视频优化 | → HEVC / H.265 |
-| **`vid-av1`** | 视频优化 | → AV1 / SVT-AV1 |
+| **`img-av1`**  | 图片优化 | → JXL (静态) / AV1 (动图)  |
+| **`vid-hevc`** | 视频优化 | → HEVC / H.265             |
+| **`vid-av1`**  | 视频优化 | → AV1 / SVT-AV1            |
 
 还有一个 **macOS 双击应用** (`Modern Format Boost.app`)，支持拖放批量处理。
 
 ## 📉 实际压缩效果示例
 
-| 原图格式 | 原始大小 | 输出格式 | 输出大小 | 空间节省 | 压缩手段 |
-|:---|:---|:---|:---|:---|:---|
-| 风景 JPEG | 4.2 MB | **JXL** | 3.3 MB | **~21%** | 无损二进制成分重建 (Bit-exact) |
-| 截图 PNG | 2.5 MB | **JXL** | 1.1 MB | **~56%** | Modular 模式 d=0.0 无损 |
-| H.264 视频 | 1.2 GB | **HEVC** | 480 MB | **~60%** | 三阶段 GPU+CPU 深度视觉搜索 |
-| 动图 WebP | 15 MB | **AV1 / HEVC** | 1.8 MB | **~88%** | 重制为高压缩比视频格式 |
+| 原图格式   | 原始大小 | 输出格式       | 输出大小 | 空间节省 | 压缩手段                       |
+| :--------- | :------- | :------------- | :------- | :------- | :----------------------------- |
+| 风景 JPEG  | 4.2 MB   | **JXL**        | 3.3 MB   | **~21%** | 无损二进制成分重建 (Bit-exact) |
+| 截图 PNG   | 2.5 MB   | **JXL**        | 1.1 MB   | **~56%** | Modular 模式 d=0.0 无损        |
+| H.264 视频 | 1.2 GB   | **HEVC**       | 480 MB   | **~60%** | 三阶段 GPU+CPU 深度视觉搜索    |
+| 动图 WebP  | 15 MB    | **AV1 / HEVC** | 1.8 MB   | **~88%** | 重制为高压缩比视频格式         |
 
 ## 📊 处理矩阵
 
 ### 图片格式决策矩阵
 
-| 输入格式 | 无损? | 动图? | 处理 | 输出 | 算法与方式 |
-|:-------------|:---------:|:---------:|:-------|:-------|:-------|
-| JPEG | — | 否 | **无损成分重建** | `.jxl` | VarDCT (位一致) |
-| PNG | ✅ | 否 | **无损转换** | `.jxl` | Modular d=0.0 |
-| PNG (索引色) | ❌ | 否 | **画质匹配** | `.jxl` | d=0.1 |
-| WebP | ✅ | 否 | **无损(绕路)** | `.jxl` | dwebp → JXL d=0.0 |
-| WebP | ❌ | 否 | **跳过** | (保留) | 避免代际损伤 |
-| WebP | — | 是 | **Meme Score 判定** | `.mov`/`.gif` | 转视频或保留 GIF |
-| AVIF | ✅ | 否 | **无损转换** | `.jxl` | d=0.0 |
-| AVIF | ❌ | 否 | **跳过** | (保留) | 避免代际损伤 |
-| HEIC/HEIF | ✅ | 否 | **无损(绕路)** | `.jxl` | `sips`/`magick` → PNG → d=0.0 |
-| HEIC/HEIF | ❌ | 否 | **跳过** | (保留) | 避免代际损伤 |
-| TIFF | ✅ | 否 | **无损(绕路)** | `.jxl` | `magick -depth 16` → PNG → d=0.0 |
-| TIFF | ❌ | 否 | **画质匹配** | `.jxl` | magick → JXL d=0.1 |
-| BMP | ✅ | 否 | **无损(绕路)** | `.jxl` | `magick` → PNG → d=0.0 |
-| GIF | — | 是 | **Meme Score 判定** | `.mov`/`.gif` | 转视频或保留 GIF |
-| GIF | — | 否 | **单帧提取** | `.jxl` | ffmpeg → JXL |
-| JXL | — | 否 | **跳过** | (保留) | 最优格式 |
+| 输入格式     | 无损? | 动图? | 处理                | 输出          | 算法与方式                       |
+| :----------- | :---: | :---: | :------------------ | :------------ | :------------------------------- |
+| JPEG         |   —   |  否   | **无损成分重建**    | `.jxl`        | VarDCT (位一致)                  |
+| PNG          |  ✅   |  否   | **无损转换**        | `.jxl`        | Modular d=0.0                    |
+| PNG (索引色) |  ❌   |  否   | **画质匹配**        | `.jxl`        | d=0.001                          |
+| WebP         |  ✅   |  否   | **无损(绕路)**      | `.jxl`        | dwebp → JXL d=0.0                |
+| WebP         |  ❌   |  否   | **跳过**            | (保留)        | 避免代际损伤                     |
+| WebP         |   —   |  是   | **Meme Score 判定** | `.mov`/`.gif` | 转视频或保留 GIF                 |
+| AVIF         |  ✅   |  否   | **无损转换**        | `.jxl`        | d=0.0                            |
+| AVIF         |  ❌   |  否   | **跳过**            | (保留)        | 避免代际损伤                     |
+| HEIC/HEIF    |  ✅   |  否   | **无损(绕路)**      | `.jxl`        | `sips`/`magick` → PNG → d=0.0    |
+| HEIC/HEIF    |  ❌   |  否   | **跳过**            | (保留)        | 避免代际损伤                     |
+| TIFF         |  ✅   |  否   | **无损(绕路)**      | `.jxl`        | `magick -depth 16` → PNG → d=0.0 |
+| TIFF         |  ❌   |  否   | **画质匹配**        | `.jxl`        | magick → JXL d=0.001             |
+| BMP          |  ✅   |  否   | **无损(绕路)**      | `.jxl`        | `magick` → PNG → d=0.0           |
+| GIF          |   —   |  是   | **Meme Score 判定** | `.mov`/`.gif` | 转视频或保留 GIF                 |
+| GIF          |   —   |  否   | **单帧提取**        | `.jxl`        | ffmpeg → JXL                     |
+| JXL          |   —   |  否   | **跳过**            | (保留)        | 最优格式                         |
 
 ### 视频编码决策矩阵
 
-| 输入编码 | 压缩方式 | 处理动作 | 输出格式 | 编码内核 |
-|:-----------|:----------:|:-------|:-------|:--------|
-| H.264 (AVC) | 有损 | **CRF 视觉搜索** | `.mp4` HEVC/AV1 | GPU → CPU x265/SVT-AV1 |
-| H.264 | 无损 | **无损再编码** | `.mkv` HEVC/AV1 | x265/SVT-AV1 无损模式 |
-| VP9 | 有损 | **CRF 视觉搜索** | `.mp4` HEVC/AV1 | GPU → CPU x265/SVT-AV1 |
-| AV1 | 有损 | **CRF 视觉搜索** | `.mp4` HEVC | GPU → CPU x265/SVT-AV1 |
-| HEVC (H.265) | 任何 | **跳过** | (保留) | 已经是目标编码格式 |
-| ProRes | 有损/无损 | **CRF 搜索/无损** | `.mp4`/`.mkv` | x265 |
+| 输入编码     | 压缩方式  | 处理动作          | 输出格式        | 编码内核               |
+| :----------- | :-------: | :---------------- | :-------------- | :--------------------- |
+| H.264 (AVC)  |   有损    | **CRF 视觉搜索**  | `.mp4` HEVC/AV1 | GPU → CPU x265/SVT-AV1 |
+| H.264        |   无损    | **无损再编码**    | `.mkv` HEVC/AV1 | x265/SVT-AV1 无损模式  |
+| VP9          |   有损    | **CRF 视觉搜索**  | `.mp4` HEVC/AV1 | GPU → CPU x265/SVT-AV1 |
+| AV1          |   有损    | **CRF 视觉搜索**  | `.mp4` HEVC     | GPU → CPU x265/SVT-AV1 |
+| HEVC (H.265) |   任何    | **跳过**          | (保留)          | 已经是目标编码格式     |
+| ProRes       | 有损/无损 | **CRF 搜索/无损** | `.mp4`/`.mkv`   | x265                   |
 
 ### HDR 格式处理策略
 
-| HDR 类型 | 检测依据 | 核心保留策略 |
-|:---------|:----------|:---------------------|
-| **HDR10** | 元数据 side_data 捕获 | 通过 FFmpeg 参数完整保留静态元数据并注入 |
-| **HLG** | 传输特性 TRC 识别 | 原色 (Primaries) 及 TRC 完整保留 |
-| **Dolby Vision** | DOVI RPU 数据流 | 经 `dovi_tool` 提取 RPU 并注入编码器；Profile 7 自动转 8.1 |
-| **HDR10+** | ST2094-40 动态元数据 | 已通过 `hdr10plus_tool` 侧信道提取与 x265 注入实现完整支持 (完美保留 Profile A/B 元数据) |
-| **SDR** | 无 HDR 标记 | 自动进入标准处理流 (yuv420p) |
+| HDR 类型         | 检测依据              | 核心保留策略                                                                             |
+| :--------------- | :-------------------- | :--------------------------------------------------------------------------------------- |
+| **HDR10**        | 元数据 side_data 捕获 | 通过 FFmpeg 参数完整保留静态元数据并注入                                                 |
+| **HLG**          | 传输特性 TRC 识别     | 原色 (Primaries) 及 TRC 完整保留                                                         |
+| **Dolby Vision** | DOVI RPU 数据流       | 经 `dovi_tool` 提取 RPU 并注入编码器；Profile 7 自动转 8.1                               |
+| **HDR10+**       | ST2094-40 动态元数据  | 已通过 `hdr10plus_tool` 侧信道提取与 x265 注入实现完整支持 (完美保留 Profile A/B 元数据) |
+| **SDR**          | 无 HDR 标记           | 自动进入标准处理流 (yuv420p)                                                             |
 
 ## ⬇️ Installation / 安装说明
 
 ### 前置要求
 
-| 工具 | 必须? | 用途 | 安装命令 |
-|------|:--------:|---------|---------|
-| **Rust** (1.75+) | ✅ | 编译安装 | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh` |
-| **FFmpeg** (5.0+) | ✅ | 视频处理与质量检测 | `brew install ffmpeg` |
-| **libjxl** | ✅ | JXL 编码核心 | `brew install jpeg-xl` |
-| **ExifTool** | ✅ | 元数据保留 | `brew install exiftool` |
-| **ImageMagick** | ✅ | 图片格式中转 | `brew install imagemagick` |
-| **libwebp** | ✅ | WebP 原生解码 | `brew install webp` |
-| **dovi_tool** | ✅ | 杜比视界 RPU 提取 | `cargo install dovi_tool` |
-| **libheif** | ✅ | HEIC/HEIF 解码 | `brew install libheif` |
-| **hdr10plus_tool**| ✅ | HDR10+ 元数据提取 | `cargo install hdr10plus_tool` |
+| 工具               | 必须? | 用途               | 安装命令                                                   |
+| ------------------ | :---: | ------------------ | ---------------------------------------------------------- | --- |
+| **Rust** (1.75+)   |  ✅   | 编译安装           | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh` |
+| **FFmpeg** (5.0+)  |  ✅   | 视频处理与质量检测 | `brew install ffmpeg`                                      |
+| **libjxl**         |  ✅   | JXL 编码核心       | `brew install jpeg-xl`                                     |
+| **ExifTool**       |  ✅   | 元数据保留         | `brew install exiftool`                                    |
+| **ImageMagick**    |  ✅   | 图片格式中转       | `brew install imagemagick`                                 |
+| **libwebp**        |  ✅   | WebP 原生解码      | `brew install webp`                                        |
+| **dovi_tool**      |  ✅   | 杜比视界 RPU 提取  | `cargo install dovi_tool`                                  |
+| **libheif**        |  ✅   | HEIC/HEIF 解码     | `brew install libheif`                                     |
+| **hdr10plus_tool** |  ✅   | HDR10+ 元数据提取  | `cargo install hdr10plus_tool`                             |
 
 ### macOS (Homebrew)
+
 ```bash
 brew install ffmpeg jpeg-xl exiftool imagemagick webp libheif
 cargo install dovi_tool
 ```
 
-
 #### Linux (Ubuntu/Debian)
+
 ```bash
 sudo apt update && sudo apt install ffmpeg libimage-exiftool-perl imagemagick webp libheif-dev
 # JPEG XL (libjxl) 可能需要通过 PPA 或源码构建
 ```
 
 #### Windows
+
 推荐使用 **winget** 一键安装所有依赖：
+
 ```powershell
 winget install ffmpeg.ffmpeg ImageMagick.ImageMagick OliverBetz.ExifTool
 # Note: dovi_tool must be installed via cargo or manual binary download
 ```
 
 ### 从源码构建
+
 ```bash
 git clone https://github.com/nowaytouse/modern-format-boost.git
 cd modern-format-boost
@@ -180,6 +186,7 @@ cargo build --release
 ## 🚀 使用方法
 
 ### 快速开始
+
 ```bash
 # 图片优化
 img-hevc run /图片/路径
@@ -188,6 +195,7 @@ vid-hevc run /视频/路径
 ```
 
 ### 详细参数
+
 - `--ultimate`: 档案级 **0.01 精度**搜索（高质量，高耗时）。
 - `--apple-compat`: 开启苹果生态兼容 (Live Photos/AAE)。（默认：开启）
 - `--in-place`: 原地替换原始文件。**警告：不可逆。**
@@ -197,12 +205,15 @@ vid-hevc run /视频/路径
 - `--force-video`: 强制将动图视为视频处理（忽略 Meme Score）。
 
 ### 进阶子命令
+
 - `cache-stats`: 查看 SQLite 开源缓存统计。
 - `strategy <path>`: 预览特定文件的处理管线策略。
 - `restore-timestamps`: 根据文件名模式批量修复创建日期（元数据恢复）。
 
 ### 💡 多开须知
+
 **Modern Format Boost** 原生支持多开运行。
+
 - **多开并发说明**：允许开启多个窗口独立处理不同路径。
 - **注意**：请根据硬件 I/O 性能量力而行，过度并发可能引发文件系统竞态冲突。
 
@@ -225,6 +236,7 @@ vid-hevc run /视频/路径
 因为这三种格式已经是现代有损编码。二次编码会导致画质代际损伤。
 
 ---
+
 <p align="center">
   <sub>Built with ❤️ in Rust · <a href="https://github.com/nowaytouse/modern-format-boost">GitHub</a></sub>
 </p>

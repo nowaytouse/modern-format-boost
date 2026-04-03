@@ -5,6 +5,7 @@ use img_hevc::{
 };
 use shared_utils::analysis_cache::AnalysisCache;
 use shared_utils::modern_ui::{colors, symbols};
+use shared_utils::quality_matcher::SourceCodec;
 use shared_utils::{
     check_dangerous_directory, disk_full_pause_reason, print_summary_report, BatchPauseController,
     BatchResult,
@@ -78,8 +79,8 @@ enum Commands {
         #[arg(long)]
         force_video: bool,
 
-        /// Resume from last run: skip files already in progress file (default).
-        #[arg(long, default_value_t = true)]
+        /// Resume from last run: skip files already in progress file.
+        #[arg(long, default_value_t = false)]
         resume: bool,
 
         /// Start fresh: ignore previous progress file, process all files.
@@ -103,9 +104,25 @@ enum Commands {
 
     /// Display cache statistics
     CacheStats,
+
+    /// Internal: Check if a directory is already locked by MFB
+    LockCheck {
+        #[arg(value_name = "INPUT")]
+        input: PathBuf,
+    },
+
+    /// Internal: Get the lock hash for a directory
+    PathHash {
+        #[arg(value_name = "INPUT")]
+        input: PathBuf,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
+    if let Err(e) = shared_utils::init_ghost_mode() {
+        eprintln!("⚠️ Failed to initialize Ghost Mode isolation: {e}");
+    }
+
     if let Err(e) =
         shared_utils::logging::init_logging("img_hevc", shared_utils::logging::LogConfig::default())
     {
@@ -127,6 +144,39 @@ fn main() -> anyhow::Result<()> {
     }
 
     let cli = Cli::parse();
+
+    // --- Unified Directory Locking (Ghost Mode & Mutex) ---
+    // Extract input path from relevant commands to lock the directory ONLY if it involves destructive or interactive shared state.
+    let input_to_lock = match &cli.command {
+        Commands::Run {
+            input, in_place, ..
+        } if *in_place => Some(input),
+        Commands::Verify {
+            original: input, ..
+        }
+        | Commands::RestoreTimestamps { source: input, .. }
+        | Commands::LockCheck { input } => Some(input),
+        _ => None,
+    };
+
+    let _lock_guard = if let Some(input) = input_to_lock {
+        let input_abs = std::fs::canonicalize(input).unwrap_or_else(|_| input.clone());
+        if input_abs.is_dir() {
+            match shared_utils::acquire_dir_lock(&input_abs) {
+                Ok(guard) => Some(guard),
+                Err(e) => {
+                    shared_utils::log_eprintln!("❌ {e}");
+                    std::process::exit(3);
+                }
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    // ------------------------------------------------------
+
     match cli.command {
         Commands::Run {
             input,
@@ -226,6 +276,8 @@ fn main() -> anyhow::Result<()> {
                     colors::RESET
                 ));
             }
+            shared_utils::gif_value_db::report_db_status();
+
             let config = AutoConvertConfig {
                 output_dir: output,
                 base_dir,
@@ -241,6 +293,7 @@ fn main() -> anyhow::Result<()> {
                 allow_size_tolerance,
                 verbose,
                 child_threads: 0,
+                force_video,
                 cache: cache.clone(),
             };
 
@@ -351,6 +404,27 @@ fn main() -> anyhow::Result<()> {
                 std::process::exit(1);
             }
         }
+
+        Commands::LockCheck { input } => {
+            let input_abs = std::fs::canonicalize(&input).unwrap_or_else(|_| input.clone());
+            if input_abs.is_dir() {
+                // Try to acquire lock. If it fails, report and exit immediately with code 3.
+                match shared_utils::acquire_dir_lock(&input_abs) {
+                    Ok(_lock) => {
+                        println!("✅ Directory is available for processing.");
+                    }
+                    Err(e) => {
+                        shared_utils::log_eprintln!("❌ {e}");
+                        std::process::exit(3);
+                    }
+                }
+            }
+        }
+
+        Commands::PathHash { input } => {
+            let hash = shared_utils::hash_path_to_hex(&input).unwrap_or_else(|_| "err".to_string());
+            println!("{hash}");
+        }
     }
 
     Ok(())
@@ -412,17 +486,19 @@ fn verify_conversion(
 }
 
 fn load_image_safe(path: &std::path::Path) -> anyhow::Result<image::DynamicImage> {
-    let is_jxl = path
+    let ext = path
         .extension()
-        .is_some_and(|e| e.to_string_lossy().to_lowercase() == "jxl");
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let is_jxl = shared_utils::quality_matcher::parse_source_codec(&ext) == SourceCodec::JpegXl;
 
     if is_jxl {
         use std::process::Command;
 
         let temp_png_file = tempfile::Builder::new()
             .suffix(".png")
-            .tempfile()
-            .map_err(|e| anyhow::anyhow!("Failed to create temp file: {e}"))?;
+            .tempfile_in(shared_utils::get_mfb_tmp_dir()?)
+            .map_err(|e| anyhow::anyhow!("Failed to create temp file in MFB tmp: {e}"))?;
 
         let temp_path = temp_png_file.path();
 
@@ -464,6 +540,7 @@ struct AutoConvertConfig {
     allow_size_tolerance: bool,
     verbose: bool,
     child_threads: usize,
+    force_video: bool,
     cache: Option<Arc<AnalysisCache>>,
 }
 
@@ -580,7 +657,7 @@ fn auto_convert_single_file(
         }
     }
 
-    let pixel_analysis = if !analysis.is_animated && analysis.format != "JPEG" {
+    let _pixel_analysis = if !analysis.is_animated && analysis.format != "JPEG" {
         shared_utils::image_quality_detector::analyze_image_quality_with_cache(
             input,
             config.cache.as_deref(),
@@ -588,19 +665,11 @@ fn auto_convert_single_file(
     } else {
         None
     };
-    if let Some(ref q) = pixel_analysis {
+    if let Some(ref q) = _pixel_analysis {
         shared_utils::log_media_info_for_image_quality(q, input);
     }
 
-    let mut quality_label = analysis.quality_summary();
-    if let Some(ref pa) = pixel_analysis {
-        let ct_str = pa.content_type.name.to_uppercase();
-        quality_label = if quality_label.is_empty() {
-            ct_str
-        } else {
-            format!("{ct_str}: {quality_label}")
-        };
-    }
+    let quality_label = analysis.quality_summary();
 
     let options = ConvertOptions {
         force: config.force,
@@ -656,6 +725,25 @@ fn dispatch_static_conversion(
 
     let format = analysis.format.as_str();
     let is_lossless = analysis.is_lossless;
+
+    // 🔬 Level 4 Feedback: KNN Static Quality Score
+    // JPEG bypass: cjxl transcode is fast enough to skip DB lookup.
+    // Returns a BPP heuristic (confidence=0.0) when DB is unavailable.
+    let quality = if format == "JPEG" || format == "jpg" {
+        None
+    } else {
+        shared_utils::lookup_image_quality(analysis)
+    };
+
+    if let Some(ref q) = quality {
+        if config.verbose {
+            let conf_label = if q.confidence > 0.0 { "KNN" } else { "BPP heuristic" };
+            println!(
+                "   🔭 Quality Score: {:.2} ({conf_label}, conf={:.2})",
+                q.score, q.confidence
+            );
+        }
+    }
 
     Ok(match (format, is_lossless) {
         ("WebP" | "AVIF" | "TIFF" | "HEIC" | "HEIF", true) => {
@@ -713,10 +801,12 @@ fn dispatch_animated_conversion(
 
     let format = analysis.format.as_str();
     let is_lossless = analysis.is_lossless;
-    let is_modern_animated = matches!(format, "WebP" | "AVIF" | "HEIC" | "HEIF" | "JXL");
-    let is_apple_native = matches!(format, "HEIC" | "HEIF");
+    let codec = shared_utils::quality_matcher::parse_source_codec(format);
+    let is_animated = codec.can_be_animated();
+    let is_apple_native = shared_utils::quality_matcher::is_apple_native_format(format);
+    let is_non_native_animated = is_animated && !is_apple_native;
 
-    let should_skip_modern = if is_modern_animated && !is_lossless {
+    let should_skip_modern = if codec.is_modern() && is_animated && !is_lossless {
         if config.apple_compat {
             is_apple_native
         } else {
@@ -768,37 +858,26 @@ fn dispatch_animated_conversion(
         }
     };
 
-    let force_video = std::env::var("MODERN_FORMAT_BOOST_FORCE_VIDEO").is_ok();
-    let meme_keep = if force_video {
+    let meme_keep = if config.force_video {
         false
     } else {
-        let probe = shared_utils::probe_video(input).ok();
-        if let Some(ref p) = probe {
-            if let Some(mut meta) =
-                shared_utils::gif_meta_from_probe_with_path(p, analysis.file_size, input)
-            {
-                if let Ok((pal, exts)) = shared_utils::scan_gif_headers(input) {
-                    meta.palette_size = pal;
-                    meta.app_extensions = exts;
-                }
-                shared_utils::should_keep_as_gif(&meta)
-            } else {
+        match shared_utils::probe_video(input) {
+            Ok(probe) => {
+                let verdict = shared_utils::assess_loop_intent_from_probe(&probe, input);
+                verdict.is_keep_gif()
+            }
+            Err(e) => {
                 shared_utils::progress_mode::emit_stderr(&format!(
-                    "🎞️  GIF [{}] probe failed → KEEP GIF",
-                    input.file_name().unwrap_or_default().to_string_lossy()
+                    "🎞️  GIF [{}] probe failed ({}) → KEEP GIF",
+                    input.file_name().unwrap_or_default().to_string_lossy(),
+                    e
                 ));
                 true
             }
-        } else {
-            shared_utils::progress_mode::emit_stderr(&format!(
-                "🎞️  GIF [{}] probe failed → KEEP GIF",
-                input.file_name().unwrap_or_default().to_string_lossy()
-            ));
-            true
         }
     };
 
-    if config.apple_compat && is_modern_animated && !is_apple_native {
+    if config.apple_compat && is_non_native_animated {
         if meme_keep {
             shared_utils::progress_mode::emit_stderr(&format!(
                 "🍎 Animated {}→GIF (Apple Compat, meme-score: keep): {}",
@@ -823,7 +902,7 @@ fn dispatch_animated_conversion(
             return Ok(shared_utils::ConversionResult::skipped_custom(
                 input,
                 analysis.file_size,
-                "GIF meme-score: keep as GIF",
+                "GIF meme-score: keep as original",
                 "meme_score_keep",
             ));
         }
@@ -844,10 +923,8 @@ fn dispatch_static_disguised_animated(
 ) -> anyhow::Result<shared_utils::ConversionResult> {
     use img_hevc::lossless_converter::convert_to_jxl;
 
-    let is_modern = matches!(
-        analysis.format.as_str(),
-        "WebP" | "AVIF" | "JXL" | "HEIC" | "HEIF"
-    );
+    let is_modern =
+        shared_utils::quality_matcher::parse_source_codec(analysis.format.as_str()).is_modern();
     let use_lossless = analysis.is_lossless;
 
     if is_modern && !use_lossless {
@@ -866,7 +943,7 @@ fn dispatch_static_disguised_animated(
         ));
     }
 
-    let distance = if use_lossless { 0.0_f32 } else { 0.1_f32 };
+    let distance = if use_lossless { 0.0_f32 } else { 0.001_f32 };
     if config.verbose {
         println!(
             "🔄 Static GIF/Modern→JXL ({}): {}",
@@ -1177,7 +1254,7 @@ fn auto_convert_directory(
                                 } else {
                                     shared_utils::log_auto_error!(
                                         "Image conversion",
-                                        "Failed {}: {}",
+                                        "Failed {}: {}. Preserved original (Skipped conversion).",
                                         path.display(),
                                         e
                                     );

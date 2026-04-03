@@ -2,36 +2,6 @@
 //!
 //! Unified quality matching algorithm for all `modern_format_boost` tools.
 //! Calculates optimal encoding parameters (CRF/distance) based on input quality analysis.
-//!
-//! ## Supported Encoders
-//! - **AV1 (SVT-AV1)**: CRF range 0-63, default 23
-//! - **HEVC (x265)**: CRF range 0-51, default 23
-//! - **JXL (cjxl)**: Distance range 0.0-15.0, 0.0 = lossless
-//!
-//! ## Quality Matching Philosophy
-//!
-//! The goal is to match the **perceived quality** of the input, not the bitrate.
-//! Different codecs have different efficiency, so we normalize using:
-//!
-//! 1. **Bits per pixel (bpp)** - Primary quality indicator
-//! 2. **Codec efficiency factor** - H.264 baseline (1.0), HEVC ~0.65, AV1 ~0.50 (empirical
-//!    relative efficiency; see `SourceCodec::efficiency_factor()` and literature on
-//!    codec bitrate comparisons, e.g. Netflix VMAF/codec studies).
-//! 3. **Content complexity** - Resolution, B-frames, color depth
-//!
-//! ## Extreme BPP (defensive design)
-//! For extreme inputs (very low or very high effective BPP):
-//! - Reject `effective_bpp <= 0` or non-finite (NaN/Inf) with an error.
-//! - Clamp `effective_bpp` to `[SAFE_BPP_MIN, SAFE_BPP_MAX]` (1e-6..50) before the CRF formula
-//!   so `log2(effective_bpp * 100)` is always finite and in a reasonable range.
-//! - Final CRF is always clamped to encoder range (AV1 [15, 40], HEVC [0, 35]) as the last line
-//!   of defense against content-type adjustment and bias pushing out of range.
-//!
-//! ## 🔥 Quality Manifesto
-//!
-//! - **No silent fallback**: If quality analysis fails, report error loudly
-//! - **No hardcoded defaults**: All parameters derived from actual content analysis
-//! - **Conservative on uncertainty**: When in doubt, prefer higher quality (lower CRF)
 
 use serde::{Deserialize, Serialize};
 
@@ -155,12 +125,105 @@ impl SourceCodec {
                 | Self::JpegXl
                 | Self::Avif
                 | Self::Heic
+                | Self::WebpStatic
+                | Self::WebpAnimated
         )
     }
 
     #[must_use]
     pub const fn is_cutting_edge(&self) -> bool {
         matches!(self, Self::Vvc | Self::Av2)
+    }
+
+    #[must_use]
+    pub const fn is_animated(&self) -> bool {
+        matches!(self, Self::Gif | Self::Apng | Self::WebpAnimated)
+    }
+
+    /// Returns true if the format is known to support animation (GIF, APNG, WebP, AVIF, HEIC, JXL).
+    #[must_use]
+    pub const fn can_be_animated(&self) -> bool {
+        matches!(
+            self,
+            Self::Gif
+                | Self::Apng
+                | Self::WebpAnimated
+                | Self::WebpStatic
+                | Self::Avif
+                | Self::Heic
+                | Self::JpegXl
+        )
+    }
+
+    #[must_use]
+    pub const fn supports_alpha(&self) -> bool {
+        matches!(
+            self,
+            Self::Png
+                | Self::Apng
+                | Self::WebpStatic
+                | Self::WebpAnimated
+                | Self::Avif
+                | Self::Heic
+                | Self::JpegXl
+                | Self::Gif
+                | Self::ProRes
+                | Self::UtVideo
+                | Self::HuffYuv
+                | Self::Ffv1
+                | Self::RawVideo
+                | Self::MagicYuv
+        )
+    }
+
+    #[must_use]
+    pub const fn is_image(&self) -> bool {
+        matches!(
+            self,
+            Self::Jpeg
+                | Self::JpegXl
+                | Self::Png
+                | Self::WebpStatic
+                | Self::Avif
+                | Self::Heic
+                | Self::Bmp
+                | Self::Tiff
+                | Self::Gif
+                | Self::Apng
+                | Self::WebpAnimated
+        )
+    }
+
+    #[must_use]
+    pub const fn is_video(&self) -> bool {
+        !self.is_image() && !matches!(self, Self::Unknown)
+    }
+
+    /// Complete list of all supported image extensions.
+    #[must_use]
+    pub const fn supported_image_extensions() -> &'static [&'static str] {
+        &[
+            "png", "jpg", "jpeg", "jpe", "jfif", "webp", "gif", "tiff", "tif", "heic", "heif",
+            "avif", "bmp", "ico", "svg", "jp2", "j2k", "jxl",
+        ]
+    }
+
+    /// Image extensions that should be collected for conversion (excludes JXL/AVIF/HEIC depending on tool).
+    #[must_use]
+    pub const fn image_extensions_for_convert() -> &'static [&'static str] {
+        &[
+            "png", "jpg", "jpeg", "jpe", "jfif", "webp", "gif", "tiff", "tif", "heic", "heif",
+            "avif", "bmp", "ico", "svg", "jp2", "j2k",
+        ]
+    }
+
+    /// Video extensions supported by the pipeline.
+    #[must_use]
+    pub const fn supported_video_extensions() -> &'static [&'static str] {
+        &[
+            "mp4", "mov", "avi", "mkv", "webm", "m4v", "wmv", "flv", "mpg", "mpeg", "ts", "mts",
+            "m2ts", "m2v", "3gp", "3g2", "ogv", "f4v", "asf",
+        ]
     }
 }
 
@@ -1102,10 +1165,16 @@ pub fn parse_source_codec(codec_str: &str) -> SourceCodec {
     if codec_lower.contains("apng") {
         return SourceCodec::Apng;
     }
-
+    if codec_lower.contains("webp") {
+        if codec_lower.contains("anim") {
+            return SourceCodec::WebpAnimated;
+        }
+        return SourceCodec::WebpStatic;
+    }
     if codec_lower.contains("jxl")
         || codec_lower.contains("jpeg xl")
         || codec_lower.contains("jpegxl")
+        || codec_lower.contains("jpeg-xl")
     {
         return SourceCodec::JpegXl;
     }
@@ -1115,13 +1184,6 @@ pub fn parse_source_codec(codec_str: &str) -> SourceCodec {
     if codec_lower.contains("heic") || codec_lower.contains("heif") {
         return SourceCodec::Heic;
     }
-    if codec_lower.contains("webp") {
-        if codec_lower.contains("anim") {
-            return SourceCodec::WebpAnimated;
-        }
-        return SourceCodec::WebpStatic;
-    }
-
     if codec_lower.contains("jpeg") || codec_lower.contains("jpg") {
         return SourceCodec::Jpeg;
     }
@@ -1463,30 +1525,18 @@ pub fn should_skip_video_codec_apple_compat(codec_str: &str) -> SkipDecision {
     }
 }
 
-/// True when the source codec is one that Apple devices do not support (or support poorly).
-#[must_use]
-pub fn is_apple_incompatible_video_codec(codec_str: &str) -> bool {
-    should_keep_best_effort_output_on_failure(codec_str)
-}
-
 /// True only when we may keep best-effort HEVC/AV1 output on compression/quality failure.
 /// - Apple-incompatible (AV1, VP9, VVC, AV2): user still gets an importable file.
-/// - ProRes/DNxHD are NOT included: they must pass strict size-shrink + SSIM; failure must not
-///   keep output when size got bigger — decision is strictly by SSIM and size balance, never allow larger output.
+/// - ProRes/DNxHD are NOT included: decision is strictly by SSIM and size balance.
 #[must_use]
-pub fn should_keep_best_effort_output_on_failure(codec_str: &str) -> bool {
-    let codec = parse_source_codec(codec_str);
+pub fn is_apple_incompatible_video_codec(codec_str: &str) -> bool {
     matches!(
-        codec,
+        parse_source_codec(codec_str),
         SourceCodec::Av1 | SourceCodec::Vp9 | SourceCodec::Vvc | SourceCodec::Av2
     )
 }
 
-/// Single predicate for keeping Apple-compat fallback HEVC output (explore failure or `require_compression` path).
-///
-/// **User-facing behavior is based on total file size only** (video stream remains an internal metric).
-/// Returns true only when: Apple compat is on, source is not GIF, source codec is Apple-incompatible (AV1/VP9/VVC/AV2),
-/// and either total file got smaller or (`allow_size_tolerance` && `total_size_ratio` < 1.01).
+/// Predicate for keeping Apple-compat fallback HEVC output.
 #[must_use]
 pub fn should_keep_apple_fallback_hevc_output(
     codec_str: &str,
@@ -1496,10 +1546,35 @@ pub fn should_keep_apple_fallback_hevc_output(
     apple_compat: bool,
     source_is_gif: bool,
 ) -> bool {
-    if !apple_compat || source_is_gif || !is_apple_incompatible_video_codec(codec_str) {
+    // If the source is already Apple-native (like GIF), we never allow fallback to a larger file.
+    if source_is_gif || is_apple_native_format(codec_str) {
+        return false;
+    }
+    if !apple_compat || !is_apple_incompatible_video_codec(codec_str) {
         return false;
     }
     total_file_compressed || (allow_size_tolerance && total_size_ratio < 1.01)
+}
+
+#[must_use]
+pub fn is_apple_native_format(codec_str: &str) -> bool {
+    let codec = parse_source_codec(codec_str);
+    matches!(
+        codec,
+        SourceCodec::H264
+            | SourceCodec::H265
+            | SourceCodec::ProRes
+            | SourceCodec::Mjpeg
+            | SourceCodec::Gif
+            | SourceCodec::Jpeg
+            | SourceCodec::Png
+            | SourceCodec::Heic
+    )
+}
+
+#[must_use]
+pub fn is_size_guard_active(codec_str: &str, apple_compat: bool) -> bool {
+    !apple_compat || is_apple_native_format(codec_str)
 }
 
 #[must_use]
@@ -2889,18 +2964,6 @@ fn test_is_apple_incompatible_video_codec() {
     assert!(!is_apple_incompatible_video_codec("prores"));
     assert!(!is_apple_incompatible_video_codec("dnxhd"));
     assert!(!is_apple_incompatible_video_codec("ffv1"));
-}
-
-#[test]
-fn test_should_keep_best_effort_output_on_failure() {
-    assert!(should_keep_best_effort_output_on_failure("av1"));
-    assert!(should_keep_best_effort_output_on_failure("vp9"));
-    assert!(should_keep_best_effort_output_on_failure("vvc"));
-    assert!(should_keep_best_effort_output_on_failure("av2"));
-    assert!(!should_keep_best_effort_output_on_failure("prores"));
-    assert!(!should_keep_best_effort_output_on_failure("dnxhd"));
-    assert!(!should_keep_best_effort_output_on_failure("h264"));
-    assert!(!should_keep_best_effort_output_on_failure("hevc"));
 }
 
 #[test]

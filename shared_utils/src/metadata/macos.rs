@@ -177,6 +177,12 @@ fn set_time_attr(path: &Path, time: std::time::SystemTime, attr: u32) -> io::Res
 pub fn append_mfb_branding(path: &Path) -> io::Result<()> {
     use std::process::Command;
 
+    // Branding is disabled by default to minimize metadata pollution.
+    // To enable, set the environment variable: MODERN_FORMAT_BOOST_ENABLE_BRANDING=1
+    if std::env::var("MODERN_FORMAT_BOOST_ENABLE_BRANDING").as_deref() != Ok("1") {
+        return Ok(());
+    }
+
     let path_str = path.to_string_lossy();
     let branding = "[Optimized by Modern Format Boost]";
 

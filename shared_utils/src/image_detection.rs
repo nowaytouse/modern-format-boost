@@ -66,7 +66,7 @@
 use crate::img_errors::{ImgQualityError, Result};
 use image::{DynamicImage, GenericImageView, ImageReader, Rgba};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
@@ -985,6 +985,23 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
                     }
                 }
 
+                // Cheap sampled estimate: if a small sampled palette appears (<=256 bins)
+                // on a large true-indexed image, treat as strong quantization signal.
+                let sampled_uniques = sample_unique_color_count(&img, 10_000);
+                if sampled_uniques > 0 && is_large_image {
+                    if sampled_uniques <= 256 {
+                        factors.color_count_anomaly = factors.color_count_anomaly.max(0.85);
+                        explanations.push(format!(
+                            "Sampled palette-like distribution (≈{sampled_uniques} bins) — strong quantization indicator"
+                        ));
+                    } else if sampled_uniques <= 512 {
+                        factors.color_count_anomaly = factors.color_count_anomaly.max(0.7);
+                        explanations.push(format!(
+                            "Sampled palette-like distribution (≈{sampled_uniques} bins) — possible quantization"
+                        ));
+                    }
+                }
+
                 let banding_score = detect_gradient_banding(&img);
                 factors.gradient_banding = banding_score;
                 if banding_score > 0.5 {
@@ -1001,17 +1018,19 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
                     ));
                 }
 
-                let (entropy, max_entropy, entropy_ratio) =
-                    if let Some(p_size) = png_info.palette_size {
-                        let pe = calculate_palette_index_entropy(&img, p_size);
-                        (pe.0, pe.1, pe.2)
-                    } else {
+                let (entropy, max_entropy, entropy_ratio) = png_info.palette_size.map_or_else(
+                    || {
                         let e = calculate_rgb_entropy(&img);
                         let ps = 256.0f64;
                         let me = ps.log2();
                         let ratio = if me > 0.0 { e / me } else { 0.0 };
                         (e, me, ratio)
-                    };
+                    },
+                    |p_size| {
+                        let pe = calculate_palette_index_entropy(&img, p_size);
+                        (pe.0, pe.1, pe.2)
+                    },
+                );
                 let palette_size = png_info.palette_size.unwrap_or(256) as f64;
                 if palette_size >= 64.0 && entropy_ratio < 0.6 && pixel_count > 10_000 {
                     factors.entropy_anomaly = (0.6 - entropy_ratio).mul_add(0.5, 0.5);
@@ -1151,6 +1170,26 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
 
                 // Signal 3: gradient banding
                 let banding_signal = detect_gradient_banding(&img);
+                // Sample-based quick check: detect palette-like distribution cheaply.
+                let sampled_uniques = sample_unique_color_count(&img, 10_000);
+                if sampled_uniques > 0 && pixel_count > 100_000 {
+                    if sampled_uniques <= 256 {
+                        return Ok(PngQuantizationAnalysis {
+                            is_quantized: true,
+                            confidence: 0.80,
+                            factor_scores: factors,
+                            detected_tool: None,
+                            explanation: format!(
+                                "Sampled palette-like distribution (≈{sampled_uniques} bins) — likely pngquant-style quantization"
+                            ),
+                        });
+                    } else if sampled_uniques <= 512 {
+                        factors.color_count_anomaly = factors.color_count_anomaly.max(0.7);
+                        explanations.push(format!(
+                            "Sampled palette-like distribution (≈{sampled_uniques} bins) — possible quantization"
+                        ));
+                    }
+                }
 
                 let strong_signals = [freq_signal, entropy_signal, banding_signal]
                     .iter()
@@ -1525,6 +1564,46 @@ fn color_difference(a: Rgba<u8>, b: Rgba<u8>) -> f64 {
     (wb * db)
         .mul_add(db, (wr * dr).mul_add(dr, wg * dg * dg))
         .sqrt()
+}
+
+/// Sample image pixels (grid-subsample) and count unique quantized colors.
+/// Uses a small quantization (5 bits per channel) to approximate palette variety
+/// without full quantization work. Returns number of unique colors observed.
+fn sample_unique_color_count(img: &DynamicImage, max_samples: usize) -> usize {
+    let rgba = img.to_rgba8();
+    let (width, height) = rgba.dimensions();
+
+    if width == 0 || height == 0 {
+        return 0;
+    }
+
+    let total = u64::from(width) * u64::from(height);
+    let step = ((total as f64) / (max_samples as f64)).sqrt().ceil() as u32;
+    let step = step.max(1);
+
+    let mut set = HashSet::new();
+
+    let mut sampled = 0usize;
+    for y in (0..height).step_by(step as usize) {
+        for x in (0..width).step_by(step as usize) {
+            let p = rgba.get_pixel(x, y);
+            // 5-bit per channel quantization (approximate palette bins)
+            let r5 = p[0] >> 3;
+            let g5 = p[1] >> 3;
+            let b5 = p[2] >> 3;
+            let key = (u32::from(r5) << 16) | (u32::from(g5) << 8) | u32::from(b5);
+            set.insert(key);
+            sampled += 1;
+            if sampled >= max_samples {
+                break;
+            }
+        }
+        if sampled >= max_samples {
+            break;
+        }
+    }
+
+    set.len()
 }
 
 /// Block-based random sampling — divides image into grid cells and randomly samples from each,
@@ -2156,7 +2235,7 @@ pub(crate) fn parse_apng_frames(data: &[u8]) -> (bool, u32) {
                 // Read num_frames (first 4 bytes of acTL data)
                 let num_frames =
                     u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
-                return (true, num_frames.max(1));
+                return (num_frames > 1, num_frames.max(1));
             }
             return (true, 2); // Fallback if we can't read frame count
         }
@@ -2404,13 +2483,8 @@ fn detect_exr_compression(path: &Path) -> Result<CompressionType> {
         }
     }
 
-    // All parts scanned
-    if found_any_compression {
-        Ok(CompressionType::Lossless)
-    } else {
-        // No compression attribute found — default lossless (NONE is the default in EXR spec)
-        Ok(CompressionType::Lossless)
-    }
+    let _ = found_any_compression; // silence found_any_compression if unused
+    Ok(CompressionType::Lossless)
 }
 
 /// Detect JPEG 2000 lossless vs lossy by parsing COD and COC markers.

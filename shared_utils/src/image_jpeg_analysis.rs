@@ -22,6 +22,7 @@ pub struct JpegQualityAnalysis {
     pub chrominance_quality: Option<u8>,
     pub quality_description: String,
     pub is_high_quality_original: bool,
+    pub is_complete: bool,
     pub encoder_hint: Option<String>,
 }
 
@@ -372,6 +373,28 @@ const ZIGZAG_ORDER: [usize; 64] = [
     52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
 ];
 
+/// Returns true if the JPEG data is complete (starts with SOI and contains EOI).
+///
+/// This implementation is robust against trailing metadata (common in mobile captures like Vivo/Samsung)
+/// by searching for the EOI marker (FF D9) in the data.
+#[must_use]
+pub fn is_jpeg_complete(data: &[u8]) -> bool {
+    if data.len() < 4 {
+        return false;
+    }
+
+    // 1) Verify Start of Image (SOI): FF D8
+    if data[0] != 0xFF || data[1] != 0xD8 {
+        return false;
+    }
+
+    // 2) Verify End of Image (EOI): FF D9
+    // We search from the end because it's more likely to be near the end,
+    // even if there's a few hundred bytes of trailing metadata.
+    // In a valid JPEG bitstream, FF D9 should not appear in the scan data (due to byte stuffing).
+    data.windows(2).rev().any(|w| w[0] == 0xFF && w[1] == 0xD9)
+}
+
 /// Analyze JPEG quality by inspecting DQT (Define Quantization Table) markers.
 ///
 /// # Errors
@@ -393,20 +416,20 @@ pub fn analyze_jpeg_quality(data: &[u8]) -> Result<JpegQualityAnalysis, String> 
 
     let confidence = calculate_confidence(&luma_estimate, chroma_estimate.as_ref());
 
-    let final_quality = if let Some(ref chroma) = chroma_estimate {
-        if luma_estimate.is_exact_match && chroma.is_exact_match {
-            luma_estimate.quality
-        } else if (i16::from(luma_estimate.quality) - i16::from(chroma.quality)).abs() <= 2 {
-            let weighted = luma_estimate
-                .interpolated_quality
-                .mul_add(0.7, chroma.interpolated_quality * 0.3);
-            weighted.round() as u8
-        } else {
-            luma_estimate.quality
-        }
-    } else {
-        luma_estimate.quality
-    };
+    let final_quality = chroma_estimate
+        .as_ref()
+        .map_or(luma_estimate.quality, |chroma| {
+            if luma_estimate.is_exact_match && chroma.is_exact_match {
+                luma_estimate.quality
+            } else if (i16::from(luma_estimate.quality) - i16::from(chroma.quality)).abs() <= 2 {
+                let weighted = luma_estimate
+                    .interpolated_quality
+                    .mul_add(0.7, chroma.interpolated_quality * 0.3);
+                weighted.round() as u8
+            } else {
+                luma_estimate.quality
+            }
+        });
 
     let is_standard_table =
         luma_estimate.is_exact_match && chroma_estimate.as_ref().is_none_or(|c| c.is_exact_match);
@@ -429,6 +452,7 @@ pub fn analyze_jpeg_quality(data: &[u8]) -> Result<JpegQualityAnalysis, String> 
     };
 
     let is_high_quality_original = final_quality >= 90 && is_standard_table && confidence >= 0.95;
+    let is_complete = is_jpeg_complete(data);
 
     Ok(JpegQualityAnalysis {
         estimated_quality: final_quality,
@@ -440,6 +464,7 @@ pub fn analyze_jpeg_quality(data: &[u8]) -> Result<JpegQualityAnalysis, String> 
         chrominance_quality: chroma_estimate.as_ref().map(|c| c.quality),
         quality_description,
         is_high_quality_original,
+        is_complete,
         encoder_hint,
     })
 }
@@ -916,13 +941,13 @@ fn extract_gainmap_from_mpf(jpeg_data: &[u8], mpf_data: &[u8]) -> Result<Vec<u8>
         ));
     }
 
-    let _attributes = read_u32(&mpf_data[gainmap_entry_offset..], is_big_endian)?;
+    let attributes = read_u32(&mpf_data[gainmap_entry_offset..], is_big_endian)?;
     let gainmap_length = read_u32(&mpf_data[gainmap_entry_offset + 4..], is_big_endian)?;
     let gainmap_offset = read_u32(&mpf_data[gainmap_entry_offset + 8..], is_big_endian)?;
 
     info!(
         "Gainmap entry: attributes=0x{:08X}, length={}, offset={}",
-        _attributes, gainmap_length, gainmap_offset
+        attributes, gainmap_length, gainmap_offset
     );
 
     // Validate gainmap length

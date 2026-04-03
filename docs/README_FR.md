@@ -9,10 +9,10 @@
 
 <p align="center">
   <strong>Moteur d'optimisation multimédia de nouvelle génération — zéro perte de qualité, compression maximale.</strong><br>
-  <em>下一代媒体优化引擎 — 画质零损失，体积最大压缩。</em>
 </p>
 
 ---
+
 # 📖 Français (French)
 
 ## Qu'est-ce que Modern Format Boost ?
@@ -58,7 +58,9 @@ Considérez-le comme un "compresseur intelligent" qui **ne dégrade jamais vos m
 <summary><b>🛠️ Détails techniques : Comment ça marche — Le Pipeline</b></summary>
 
 ### Logique du pipeline d'images
+
 Chaque fichier passe par un pipeline de décision en plusieurs étapes :
+
 - **Étape 1 — Détection intelligente** : Analyse les tables JPEG DQT (détection de gainmap UltraHDR), les morceaux WebP VP8L et les boîtes AVIF `av1C` au niveau binaire.
 - **Étape 2 — Routage et encodage** : JXL VarDCT pour le JPEG (bit-exact) ; mode modulaire pour les sources sans perte (PNG, WebP/AVIF/HEIC/EXR/JP2 sans perte).
 - **Étape 3 — Chemin détourné** : Les formats comme TIFF/WebP/BMP/HEIC sont prétraités en PNG temporaires 16 bits ou en **OpenEXR 32 bits** pour garantir la compatibilité avec `cjxl` sans perte de qualité.
@@ -66,42 +68,47 @@ Chaque fichier passe par un pipeline de décision en plusieurs étapes :
 - **Étape 5 — Meme Score v3** : Évalue les GIF animés pour décider entre la conversion vidéo ou le maintien en GIF.
 
 ### Pipeline vidéo : Recherche de saturation en trois phases
+
 1. **Phase 1 : Recherche grossière GPU** : Recherche binaire sur les encodeurs matériels (VideoToolbox/NVENC) pour trouver le "point d'inflexion de la qualité".
 2. **Phase 2 : Ajustement fin CPU** : Mappe le CRF GPU à l'échelle `x265`. Utilise **Sprint & Backtrack** (double pas sur succès, retour à 0.1 sur dépassement).
 3. **Phase 3 : Porte de qualité 3D ultime** : Nécessite un passage simultané de VMAF-Y ≥ 92.0, CAMBI ≤ 6.0 et PSNR-UV ≥ 34.0 dB.
    - **Fusion Scoring** : Combine MS-SSIM + SSIM_All pour une analyse structurelle robuste.
-   - *Note : En mode `--ultimate`, la recherche ne s'arrête qu'après **50 échantillons consécutifs** sans gain de qualité.*
+   - _Note : En mode `--ultimate`, la recherche ne s'arrête qu'après **50 échantillons consécutifs** sans gain de qualité._
 
 ### Préservation HDR et Métadonnées
+
 - **HDR** : Préserve les primaires bt2020, PQ/HLG TRC et les métadonnées Mastering Display.
 - **Dolby Vision** : Extrait le RPU via `dovi_tool` et l'injecte dans x265 (conversion Profile 7 → 8.1).
 - **macOS xattrs** : Préserve les tags Finder et les dates de création via `copyfile`.
 </details>
 
 ### 🖥️ Interface
+
 ![Interface](assets/runtime.png)
+
 <p align="center">Interface</p>
 
 ### Les quatre binaires
 
-| Binaire | Objectif | Codec cible |
-|--------|---------|-------------|
+| Binaire        | Objectif             | Codec cible                     |
+| -------------- | -------------------- | ------------------------------- |
 | **`img-hevc`** | Optimisation d'image | → JXL (statique) / HEVC (animé) |
-| **`img-av1`** | Optimización d'image | → JXL (statique) / AV1 (animé) |
-| **`vid-hevc`** | Optimisation vidéo | → HEVC / H.265 |
-| **`vid-av1`** | Optimisation vidéo | → AV1 / SVT-AV1 |
+| **`img-av1`**  | Optimización d'image | → JXL (statique) / AV1 (animé)  |
+| **`vid-hevc`** | Optimisation vidéo   | → HEVC / H.265                  |
+| **`vid-av1`**  | Optimisation vidéo   | → AV1 / SVT-AV1                 |
 
 ### 📉 Exemples de compression réelle
 
-| Format d'entrée | Taille originale | Format de sortie | Taille de sortie | Économie | Méthode |
-|:---|:---|:---|:---|:---|:---|
-| Paysage JPEG | 4.2 MB | **JXL** | 3.3 MB | **~21%** | Reconstruction sans perte |
-| Capture PNG | 2.5 MB | **JXL** | 1.1 MB | **~56%** | Modular d=0.0 |
-| Action Cam H.264 | 1.2 GB | **HEVC** | 480 MB | **~60%** | Recherche CRF GPU/CPU |
+| Format d'entrée  | Taille originale | Format de sortie | Taille de sortie | Économie | Méthode                   |
+| :--------------- | :--------------- | :--------------- | :--------------- | :------- | :------------------------ |
+| Paysage JPEG     | 4.2 MB           | **JXL**          | 3.3 MB           | **~21%** | Reconstruction sans perte |
+| Capture PNG      | 2.5 MB           | **JXL**          | 1.1 MB           | **~56%** | Modular d=0.0             |
+| Action Cam H.264 | 1.2 GB           | **HEVC**         | 480 MB           | **~60%** | Recherche CRF GPU/CPU     |
 
 ## ⬇️ Installation
 
 ### Binaires pré-compilés
+
 Vous pouvez télécharger les binaires pré-compilés depuis la page **[Releases](https://github.com/nowaytouse/modern-format-boost/releases)**.
 
 ```bash
@@ -111,5 +118,7 @@ tar -xzf modern-format-boost-aarch64-apple-darwin.tar.gz
 ```
 
 ---
+
 # ⚖️ Licence
+
 Sous **Licence MIT**.

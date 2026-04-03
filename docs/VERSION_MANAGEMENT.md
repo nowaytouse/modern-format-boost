@@ -7,6 +7,7 @@ This project uses a **unified version management system** where all version numb
 ## Version Number Binding
 
 ### Primary Version Source
+
 - **Location**: `Cargo.toml` → `[workspace.package]` → `version`
 - **Format**: `MAJOR.MINOR.PATCH` (e.g., `0.10.102`)
 - **Scope**: Applies to ALL workspace crates
@@ -60,6 +61,7 @@ The following version numbers are **automatically derived** from `CARGO_PKG_VERS
 ## Branch Strategy
 
 ### Main Branch
+
 - **Dependencies**: Stable crates.io versions
 - **Purpose**: Production-ready releases
 - **Stability**: High - uses tested, published crates
@@ -72,6 +74,7 @@ The following version numbers are **automatically derived** from `CARGO_PKG_VERS
   ```
 
 ### Nightly Branch
+
 - **Dependencies**: GitHub HEAD sources
 - **Purpose**: Latest upstream iterations and fast bug fixes
 - **Stability**: Medium - uses bleeding-edge code
@@ -89,6 +92,7 @@ The following version numbers are **automatically derived** from `CARGO_PKG_VERS
 ### For Regular Updates (Bug Fixes, Features)
 
 1. **Update ONLY ONE place**: `Cargo.toml` → `[workspace.package]` → `version`
+
    ```toml
    [workspace.package]
    version = "0.10.102"  # ← Change this ONLY
@@ -101,12 +105,13 @@ The following version numbers are **automatically derived** from `CARGO_PKG_VERS
 3. **Update CHANGELOG.md** with changes
 
 4. **Commit and push to BOTH branches**:
+
    ```bash
    git checkout nightly
    git add Cargo.toml CHANGELOG.md
    git commit -m "chore: bump version to 0.10.102"
    git push origin nightly
-   
+
    git checkout main
    git cherry-pick <commit-hash>  # Or merge if appropriate
    git push origin main
@@ -115,11 +120,13 @@ The following version numbers are **automatically derived** from `CARGO_PKG_VERS
 ### For Schema Changes (Database Structure)
 
 1. **Update `CACHE_SCHEMA_VERSION`** in `shared_utils/src/version.rs`:
+
    ```rust
    const CACHE_SCHEMA_VERSION: i32 = 4;  // ← Increment this
    ```
 
 2. **Add migration logic** in `check_and_migrate_schema()`:
+
    ```rust
    if v == 3 {
        info!("🔄 [Cache] Migrating schema from v3 to v4");
@@ -140,6 +147,7 @@ The following version numbers are **automatically derived** from `CARGO_PKG_VERS
 ## Verification
 
 ### Check Current Versions
+
 ```bash
 # Program version
 grep '^version' Cargo.toml
@@ -155,6 +163,7 @@ sqlite3 .cache/image_analysis_v2.db "SELECT value FROM cache_metadata WHERE key 
 ```
 
 ### Verify Auto-Binding
+
 ```bash
 # Build and check logs
 RUST_LOG=info cargo build --release 2>&1 | grep "version initialized"
@@ -166,16 +175,20 @@ cargo run --bin img-av1 -- --help | head -1
 ## Troubleshooting
 
 ### Cache Version Mismatch
+
 **Symptom**: Old analysis results persist after update
 **Solution**: Cache auto-invalidates on startup. If not, delete `.cache/` directory.
 
 ### Version Parsing Failure
+
 **Symptom**: Panic at startup with "FATAL: Invalid CARGO_PKG_VERSION format"
 **Solution**: Ensure `Cargo.toml` version follows `MAJOR.MINOR.PATCH` format exactly.
 
 ### Branch Dependency Conflicts
+
 **Symptom**: Compilation fails after switching branches
-**Solution**: 
+**Solution**:
+
 ```bash
 cargo clean
 cargo update
@@ -185,6 +198,7 @@ cargo build --release
 ## Future Enhancements
 
 The following cache key components are **defined but not yet integrated**:
+
 - `EncodingParams`: CRF, quality, preset, effort, feature flags
 - `DependencyVersions`: FFmpeg, libjxl, libavif versions
 - `EncoderBackend`: CPU, GPU, VideoToolbox, QuickSync, NVENC, AMF

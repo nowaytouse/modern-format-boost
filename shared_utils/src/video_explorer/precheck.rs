@@ -1,6 +1,7 @@
 //! Video precheck and processing recommendation
 
 use crate::quality_matcher::parse_source_codec;
+use crate::unified_error::UnifiedError;
 use anyhow::{bail, Context, Result};
 use std::path::Path;
 use std::process::Command;
@@ -255,7 +256,10 @@ fn parse_duration_from_precheck_json(
     }
 
     error!(file = %input.display(), "DURATION DETECTION FAILED - Cannot determine video duration");
-    bail!("Failed to detect video duration - all methods failed")
+    Err(UnifiedError::ResultAnomaly(
+        "Failed to detect video duration - all methods failed".to_string(),
+    )
+    .into())
 }
 
 /// P3: Compute only BPP from precheck JSON (one ffprobe, no full `VideoInfo`).
@@ -389,7 +393,10 @@ pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'s
     }
 
     error!(file = %input.display(), "DURATION DETECTION FAILED - Cannot determine video duration");
-    bail!("Failed to detect video duration - all methods failed")
+    Err(UnifiedError::ResultAnomaly(
+        "Failed to detect video duration - all methods failed".to_string(),
+    )
+    .into())
 }
 
 /// Get comprehensive video information for a file.
@@ -412,7 +419,7 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
         .to_string()
         .to_lowercase();
     if codec.is_empty() {
-        bail!("Could not detect video codec");
+        return Err(UnifiedError::ResultAnomaly("Could not detect video codec".to_string()).into());
     }
 
     let width: u32 = stream["width"]

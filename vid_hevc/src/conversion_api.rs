@@ -1,14 +1,12 @@
 //! Video Conversion API Module - HEVC/H.265 Version
 //!
-//! Pure conversion layer - executes video conversions based on detection results.
-//! - Auto Mode: HEVC Lossless for lossless sources, HEVC CRF for lossy sources
-//! - Simple Mode: Always HEVC MP4
-//! - Size Exploration: Tries higher CRF if output is larger than input
+//! Executes video conversions based on detection results.
 
 use crate::detection_api::{CompressionType, VideoDetectionResult};
 use crate::{Result, VidQualityError};
 
 use shared_utils::analysis_cache::AnalysisCache;
+use shared_utils::constants::DEFAULT_SIZE_TOLERANCE_BYTES;
 use shared_utils::conversion_types::{
     ConversionConfig, ConversionOutput, ConversionStrategy, TargetVideoFormat,
 };
@@ -17,6 +15,29 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use tracing::{info, warn};
+
+fn convert_options_from_config(
+    config: &ConversionConfig,
+) -> shared_utils::conversion::ConvertOptions {
+    shared_utils::conversion::ConvertOptions {
+        force: config.force,
+        output_dir: config.output_dir.clone(),
+        base_dir: config.base_dir.clone(),
+        delete_original: config.delete_original,
+        in_place: config.in_place,
+        explore: config.explore_smaller,
+        match_quality: config.match_quality,
+        apple_compat: config.apple_compat,
+        compress: config.require_compression,
+        use_gpu: config.use_gpu,
+        ultimate: config.ultimate_mode,
+        allow_size_tolerance: config.allow_size_tolerance,
+        verbose: false,
+        child_threads: config.child_threads,
+        input_format: None,
+        quality_label: None,
+    }
+}
 
 fn cleanup_output_file(path: &Path, context: &str) {
     if let Err(e) = std::fs::remove_file(path) {
@@ -31,18 +52,8 @@ fn cleanup_output_file(path: &Path, context: &str) {
     }
 }
 
-/// Build the `FFmpeg` colour/HDR arguments that must be forwarded to every HEVC encode.
-///
-/// This preserves:
-/// - `color_primaries` (e.g. bt2020)
-/// - `color_trc` / `color_transfer` (e.g. smpte2084 for PQ, arib-std-b67 for HLG)
-/// - colorspace (e.g. bt2020nc)
-/// - `mastering_display` (HDR10 static mastering display metadata)
-/// - `max_cll` (HDR10 content light level MaxCLL/MaxFALL)
-///
-/// Dolby Vision and HDR10+ cannot be remuxed losslessly through libx265, so they are preserved
-/// as HDR10 (their static layer) by forwarding all static metadata — the dynamic layer is
-/// stripped, which is unavoidable without specialised DV tooling.
+/// Build FFmpeg HDR metadata arguments from detection results.
+/// Preserves primaries, transfer characteristics, matrix, and static HDR10 metadata.
 fn build_hdr_ffmpeg_args(detection: &VideoDetectionResult) -> Vec<String> {
     let mut args: Vec<String> = Vec::new();
 
@@ -104,10 +115,7 @@ fn build_hdr_ffmpeg_args(detection: &VideoDetectionResult) -> Vec<String> {
     args
 }
 
-/// Return the correct pixel format for encoding:
-/// - If source is 10-bit (yuv420p10le, yuv422p10le, etc.) use yuv420p10le so that
-///   the HDR signal range / precision is preserved in the output stream.
-/// - Otherwise default to yuv420p (8-bit SDR).
+/// Return the correct pixel format (10-bit for HDR, otherwise 8-bit).
 const fn hdr_pix_fmt(detection: &VideoDetectionResult) -> &'static str {
     if detection.bit_depth >= 10 {
         "yuv420p10le"
@@ -276,6 +284,93 @@ pub fn determine_strategy_with_apple_compat(
         shared_utils::should_skip_video_codec(result.codec.as_str())
     };
 
+    // Loop Intent Identification System
+    // For GIF files, use fast-path (from_gif_path) to preserve GIF-specific signals.
+    // For videos, use ffprobe path with structural signal refresh.
+    let loop_verdict = if shared_utils::should_use_gif_fast_path(Path::new(&result.file_path)) {
+        // GIF file: use header-level detection
+        if let Some(meta) = shared_utils::LoopMeta::from_gif_path(Path::new(&result.file_path)) {
+            shared_utils::assess_loop_intent_from_meta(&meta, Some(Path::new(&result.file_path)))
+        } else {
+            // Fallback if from_gif_path fails
+            shared_utils::assess_loop_intent(result)
+        }
+    } else {
+        // Video file: ensure structural signals are available
+        let mut detection = result.clone();
+        if detection.pkt_sizes.len() < 3 || detection.pts_deltas.len() < 3 {
+            if let Ok(fresh) = crate::detection_api::detect_video_with_cache(Path::new(&detection.file_path), None) {
+                detection = fresh;
+            }
+        }
+        shared_utils::assess_loop_intent(&detection)
+    };
+
+    let is_loop_intent = loop_verdict.is_keep_gif();
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // DEFINITE LOOP INTENT: GIF conversions based on 7-layer decision
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    if is_loop_intent && apple_compat && !force {
+        return ConversionStrategy {
+            target: TargetVideoFormat::Gif,
+            reason: format!(
+                "Loop intent confirmed ({}) - converting back to GIF for Apple compatibility",
+                loop_verdict.reason()
+            ),
+            command: String::new(),
+            preserve_audio: false,
+            crf: 0.0,
+            lossless: false,
+        };
+    }
+
+    if is_loop_intent && !force {
+        return ConversionStrategy {
+            target: TargetVideoFormat::Skip,
+            reason: format!(
+                "Preserving original micro-asset (trigger: {})",
+                loop_verdict.reason()
+            ),
+            command: String::new(),
+            preserve_audio: false,
+            crf: 0.0,
+            lossless: false,
+        };
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // HEURISTIC: Content-based GIF conversion (independent of Apple compat)
+    // ══════════════════════════════════════════════════════════════════════════════
+    // Short, silent, small videos are likely stickers/emojis → optimize as GIF
+    // This is a content optimization decision, NOT an Apple compatibility workaround.
+
+    if !force && !is_loop_intent
+        && !result.has_audio && result.duration_secs <= 3.0
+        && result.width > 0 && result.height > 0
+        && result.width <= 512 && result.height <= 512
+        && (result.pkt_sizes.len() < 3 || result.pts_deltas.len() < 3)
+    {
+        return ConversionStrategy {
+            target: TargetVideoFormat::Gif,
+            reason: format!(
+                "Sticker-like content detected (no loop intent, short silent video {}s, {}x{}) - optimizing as GIF",
+                result.duration_secs, result.width, result.height
+            ),
+            command: String::new(),
+            preserve_audio: false,
+            crf: 0.0,
+            lossless: false,
+        };
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // APPLE COMPATIBILITY: Codec-based conversion
+    // ══════════════════════════════════════════════════════════════════════════════
+    // If Apple compat is enabled, convert unsupported codecs to HEVC.
+    // This runs AFTER loop intent and heuristic, so they take priority.
+
     if skip_decision.should_skip && !force {
         return ConversionStrategy {
             target: TargetVideoFormat::Skip,
@@ -376,6 +471,7 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
     } else {
         output_dir.join(format!("{stem}.MP4"))
     };
+    let output_path = shared_utils::conversion::reserve_output_path(input, &output_path);
     shared_utils::conversion::validate_output_path(&output_path, None)
         .map_err(VidQualityError::ConversionError)?;
 
@@ -386,7 +482,8 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
     )
     .child_threads;
 
-    let temp_path = shared_utils::conversion::temp_path_for_output(&output_path);
+    let temp_path = shared_utils::path_safety::isolated_temp_path_for_search(&output_path)
+        .map_err(|e| VidQualityError::conversion_error(e.to_string()))?;
     let _temp_guard = shared_utils::conversion::TempOutputGuard::new(temp_path.clone());
     let output_size = execute_hevc_conversion(&detection, &temp_path, 18, max_threads)?;
 
@@ -579,6 +676,7 @@ pub fn auto_convert_with_cache(
     } else {
         output_dir.join(format!("{stem}.{target_ext}"))
     };
+    let output_path = shared_utils::conversion::reserve_output_path(input, &output_path);
     shared_utils::conversion::validate_output_path(&output_path, config.base_dir.as_deref())
         .map_err(VidQualityError::ConversionError)?;
 
@@ -604,7 +702,8 @@ pub fn auto_convert_with_cache(
         });
     }
 
-    let temp_path = shared_utils::conversion::temp_path_for_output(&output_path);
+    let temp_path = shared_utils::path_safety::isolated_temp_path_for_search(&output_path)
+        .map_err(|e| VidQualityError::conversion_error(e.to_string()))?;
     let _temp_guard = shared_utils::conversion::TempOutputGuard::new(temp_path.clone());
     info!(
         "🎬 Auto Mode: {} → {}",
@@ -618,6 +717,52 @@ pub fn auto_convert_with_cache(
             info!("   🚀 Using HEVC Lossless Mode");
             let size = execute_hevc_lossless(&detection, &temp_path, config.child_threads)?;
             (size, 0.0, 0, None)
+        }
+        TargetVideoFormat::Gif => {
+            let result = crate::animated_image::convert_to_gif_apple_compat(
+                input,
+                &convert_options_from_config(config),
+            )?;
+            let output_size = result.output_size.unwrap_or(0);
+            let output_path = result.output_path.unwrap_or_default();
+            let size_ratio = if detection.file_size > 0 {
+                output_size as f64 / detection.file_size as f64
+            } else {
+                1.0
+            };
+
+            info!(
+                "   ✅ GIF Recovery Complete: {} → {} ({:.1}% of original)",
+                shared_utils::format_bytes(detection.file_size),
+                shared_utils::format_bytes(output_size),
+                size_ratio * 100.0
+            );
+
+            // Update cache hint for successful GIF recovery
+            if result.success {
+                detection.precision.last_best_crf = Some(0.0);
+                detection.precision.last_best_effort_crf = None;
+                if let Some(cache) = cache {
+                    if let Err(e) = cache.store_video_analysis(input, &detection) {
+                        tracing::warn!("Failed to update video cache hint for GIF: {}", e);
+                    } else {
+                        tracing::debug!("Updated video cache with GIF recovery hint");
+                    }
+                }
+            }
+
+            return Ok(ConversionOutput {
+                input_path: input.display().to_string(),
+                output_path,
+                strategy,
+                input_size: detection.file_size,
+                output_size,
+                size_ratio,
+                success: result.success,
+                message: result.message,
+                final_crf: 0.0,
+                exploration_attempts: 0,
+            });
         }
         TargetVideoFormat::HevcMp4 => {
             if config.use_lossless {
@@ -688,17 +833,18 @@ pub fn auto_convert_with_cache(
                 // Inject DV RPU path and profile into x265 params when available
                 let dv_rpu = prepare_dv_rpu(&detection);
                 if let Some(ref dv) = dv_rpu {
-                    hdr_x265_params.push_str(&format!(
+                    let _ = write!(
+                        hdr_x265_params,
                         ":dolby-vision-rpu={}:dolby-vision-profile={}",
                         dv.rpu_path.display(),
                         dv.profile_str
-                    ));
+                    );
                 }
 
                 // Inject HDR10+ metadata into x265 params
                 let hdr10plus = prepare_hdr10plus_metadata(&detection);
                 if let Some(ref hdr) = hdr10plus {
-                    hdr_x265_params.push_str(&format!(":dhdr10-info={}", hdr.json_path.display()));
+                    let _ = write!(hdr_x265_params, ":dhdr10-info={}", hdr.json_path.display());
                 }
 
                 let is_hdr_content = detection.bit_depth >= 10
@@ -775,7 +921,7 @@ pub fn auto_convert_with_cache(
                         || (config.allow_size_tolerance
                             && (explore_result.output_video_stream_size as i64
                                 - explore_result.input_video_stream_size as i64)
-                                < 1024 * 1024);
+                                < DEFAULT_SIZE_TOLERANCE_BYTES as i64);
                     let total_file_compressed = explore_result.output_size < detection.file_size;
                     let total_size_ratio = if detection.file_size > 0 {
                         explore_result.output_size as f64 / detection.file_size as f64
@@ -1165,8 +1311,11 @@ pub fn auto_convert_with_cache(
         1.0
     };
     let total_within_tolerance = if config.allow_size_tolerance {
-        // Allow up to 1MB increase for container overhead
-        actual_output_size <= detection.file_size.saturating_add(1_048_576)
+        // Allow up to standard tolerance increase for container overhead
+        actual_output_size
+            <= detection
+                .file_size
+                .saturating_add(shared_utils::DEFAULT_SIZE_TOLERANCE_BYTES)
     } else {
         total_file_compressed
     };
@@ -1301,7 +1450,7 @@ pub fn auto_convert_with_cache(
         if let Err(e) = shared_utils::conversion::safe_delete_original(
             input,
             &output_path,
-            shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_VIDEO,
+            shared_utils::MIN_OUTPUT_SIZE_BEFORE_DELETE_VIDEO,
         ) {
             warn!("   ⚠️  Safe delete failed: {}", e);
         } else {
@@ -1340,8 +1489,9 @@ fn success_status_for_cache(
     target: TargetVideoFormat,
     explore_result: &Option<shared_utils::ExploreResult>,
 ) -> bool {
-    matches!(target, TargetVideoFormat::HevcMp4)
-        && explore_result.as_ref().is_some_and(|r| r.quality_passed)
+    matches!(target, TargetVideoFormat::Gif)
+        || (matches!(target, TargetVideoFormat::HevcMp4)
+            && explore_result.as_ref().is_some_and(|r| r.quality_passed))
 }
 
 fn best_effort_status_for_cache(
@@ -2391,5 +2541,33 @@ mod tests {
         assert!(final_params.contains("dhdr10-info=/tmp/hdr10plus.json"));
 
         println!("✅ HDR10+ x265-params injection verified: {final_params}");
+    }
+
+    #[test]
+    fn test_gif_like_video_recovery() {
+        use crate::detection_api::{CompressionType, DetectedCodec};
+        let det = crate::detection_api::VideoDetectionResult {
+            file_path: "sticker.mp4".into(),
+            codec: DetectedCodec::H264,
+            compression: CompressionType::Standard,
+            width: 512,
+            height: 512,
+            duration_secs: 2.0,
+            has_audio: false,
+            frame_count: 50,
+            fps: 25.0,
+            file_size: 500_000,
+            ..Default::default()
+        };
+
+        // This should trigger the Gif strategy because it's silent, short, and fits sticker heuristic
+        let strategy = determine_strategy_with_apple_compat(&det, true, false);
+        assert_eq!(strategy.target, TargetVideoFormat::Gif);
+        // Accept either loop-intent KNN path or sticker heuristic path — both produce GIF
+        assert!(
+            strategy.reason.contains("Loop intent confirmed") || strategy.reason.contains("Sticker-like content"),
+            "unexpected reason: {}",
+            strategy.reason
+        );
     }
 }

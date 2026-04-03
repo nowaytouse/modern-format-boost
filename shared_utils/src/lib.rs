@@ -38,6 +38,7 @@ pub mod analysis_cache;
 pub mod batch;
 pub mod checkpoint;
 pub mod codecs;
+pub mod constants;
 pub mod conversion;
 pub mod crf_constants;
 pub mod date_analysis;
@@ -72,6 +73,7 @@ pub mod video_quality_detector;
 pub mod xmp_merger;
 
 pub mod path_safety;
+pub mod process_lock;
 pub use path_safety::safe_path_arg;
 pub mod app_error;
 pub mod ffprobe_json;
@@ -127,7 +129,7 @@ pub mod video_detection;
 pub use media_passthrough::{audio_args_for_container, subtitle_args_for_container};
 
 pub mod depth_channel;
-pub mod gif_meme_score;
+pub mod gif_value_db;
 pub mod hdr_synthesis;
 pub mod image_analyzer;
 pub mod image_detection;
@@ -135,16 +137,24 @@ pub mod image_formats;
 pub mod image_heic_analysis;
 pub mod image_jpeg_analysis;
 pub mod image_metrics;
+pub mod image_quality_db;
 pub mod image_recommender;
 pub mod img_errors;
 pub mod live_photo;
+pub mod loop_intent;
+pub mod media_meta_utils;
+
 pub use depth_channel::{
     encode_jxl_depth_fallback, encode_jxl_with_depth, extract_depth_from_heic, DepthMap, DepthType,
 };
-pub use gif_meme_score::{
-    gif_meta_from_probe, gif_meta_from_probe_with_path, scan_gif_headers, should_keep_as_gif,
-    GifMeta, MemeScore,
+pub use gif_value_db::{lookup_similar_samples, SampleMatch};
+pub use image_quality_db::{lookup_image_quality, QualityScore};
+pub use loop_intent::{
+    assess_loop_intent, assess_loop_intent_from_meta, assess_loop_intent_from_probe,
+    identify_loop_intent, is_lossless_exploration_safe, should_use_gif_fast_path,
+    LoopIntentVerdict, LoopMeta,
 };
+
 pub use hdr_synthesis::{
     convert_heic_with_gainmap_to_jxl_hdr, convert_ultrahdr_jpeg_to_jxl_hdr, GainMapParams,
     HdrIntermediateFormat,
@@ -152,6 +162,7 @@ pub use hdr_synthesis::{
 
 pub use batch::*;
 pub use codecs::*;
+pub use constants::*;
 pub use conversion::*;
 pub use date_analysis::{
     analyze_directory, print_analysis, DateAnalysisConfig, DateAnalysisResult, DateSource,
@@ -177,8 +188,8 @@ pub use quality_matcher::{
     calculate_av1_crf, calculate_av1_crf_with_options, calculate_hevc_crf,
     calculate_hevc_crf_with_options, calculate_jxl_distance, calculate_jxl_distance_with_options,
     from_image_analysis, from_video_detection, is_apple_incompatible_video_codec,
-    log_quality_analysis, parse_source_codec, should_keep_apple_fallback_hevc_output,
-    should_keep_best_effort_output_on_failure, should_skip_image_format, should_skip_video_codec,
+    is_apple_native_format, is_size_guard_active, log_quality_analysis, parse_source_codec,
+    should_keep_apple_fallback_hevc_output, should_skip_image_format, should_skip_video_codec,
     should_skip_video_codec_apple_compat, AnalysisDetails, ContentType, EncoderType, MatchMode,
     MatchedQuality, QualityAnalysis, QualityBias, SkipDecision, SourceCodec, VideoAnalysisBuilder,
 };
@@ -247,7 +258,7 @@ pub use video_explorer::{
     explore_av1_with_gpu_coarse_ultimate_warm_start, explore_hevc_with_gpu_coarse,
     explore_hevc_with_gpu_coarse_full, explore_hevc_with_gpu_coarse_full_warm_start,
     explore_hevc_with_gpu_coarse_ultimate, explore_hevc_with_gpu_coarse_ultimate_warm_start,
-    explore_with_gpu_coarse_search,
+    explore_with_gpu_coarse_search, is_gif_magic,
 };
 
 pub use modern_ui::{
@@ -332,6 +343,7 @@ pub use smart_file_copier::{
 };
 
 pub use live_photo::is_live_photo;
+pub use process_lock::{acquire_dir_lock, get_mfb_tmp_dir, hash_path_to_hex, init_ghost_mode};
 
 pub use file_sorter::{
     sort_by_name, sort_by_size_ascending, sort_by_size_descending, FileInfo, FileSorter,

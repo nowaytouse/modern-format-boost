@@ -297,7 +297,11 @@ pub fn active_progress_line() -> Option<String> {
 #[must_use]
 pub fn wrap_output_for_active_progress(line: &str) -> String {
     if let Some(progress_line) = active_progress_line() {
-        format!("\r\x1b[K{line}\n\r\x1b[K{progress_line}")
+        // 1. \r: move to start
+        // 2. \x1b[2K: clear entire line
+        // 3. line + \n: print the actual log message and go to next line
+        // 4. \r + progress_line: print progress bar at the new start
+        format!("\r\x1b[2K{line}\n\r{progress_line}")
     } else {
         format!("{line}\n")
     }

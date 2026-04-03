@@ -74,7 +74,7 @@ pub fn color_info_to_cicp(info: &ColorInfo) -> Option<String> {
 }
 
 /// Convert `ColorInfo` to `FFmpeg` color parameters for video encoding.
-/// Returns a vector of `FFmpeg` arguments: ["-colorspace", "bt2020nc", "-`color_trc`", "smpte2084", ...]
+/// Returns a vector of `FFmpeg` arguments: ["-colorspace", "bt2020nc", "-color_trc", "smpte2084", ...]
 #[must_use]
 pub fn color_info_to_ffmpeg_args(info: &ColorInfo) -> Vec<String> {
     let mut args = Vec::new();
@@ -94,7 +94,37 @@ pub fn color_info_to_ffmpeg_args(info: &ColorInfo) -> Vec<String> {
         args.push(primaries.clone());
     }
 
+    if let Some(ref range) = info.color_range {
+        args.push("-color_range".to_string());
+        args.push(range.clone());
+    }
+
     args
+}
+
+/// Infers missing color information for modern or high-definition content.
+/// BT.709 is the correct standard for HD/modern content, while legacy SD content may expect BT.601.
+#[must_use]
+pub fn infer_bt709_if_modern(mut info: ColorInfo, width: u32, height: u32, ext: &str) -> ColorInfo {
+    let is_hd = width >= 1280 || height >= 720;
+    let is_modern_format = matches!(
+        ext.to_lowercase().as_str(),
+        "avif" | "webp" | "jxl" | "heic" | "heif" | "apng"
+    );
+
+    if is_hd || is_modern_format {
+        if info.color_space.is_none() {
+            info.color_space = Some("bt709".to_string());
+        }
+        if info.color_transfer.is_none() {
+            info.color_transfer = Some("iec61966-2-1".to_string()); // sRGB
+        }
+        if info.color_primaries.is_none() {
+            info.color_primaries = Some("bt709".to_string());
+        }
+    }
+
+    info
 }
 
 /// Generate x265 HDR parameters for video encoding.

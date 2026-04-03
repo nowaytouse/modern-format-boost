@@ -142,12 +142,7 @@ pub mod png {
 
     #[must_use]
     pub fn is_optimally_compressed(path: &Path) -> bool {
-        if let Ok(bytes) = fs::read(path) {
-            let idat_count = bytes.windows(4).filter(|w| *w == b"IDAT").count();
-            idat_count <= 2
-        } else {
-            false
-        }
+        fs::read(path).is_ok_and(|bytes| bytes.windows(4).filter(|w| *w == b"IDAT").count() <= 2)
     }
 
     #[must_use]

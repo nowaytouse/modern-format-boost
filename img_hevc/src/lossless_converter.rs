@@ -10,6 +10,7 @@
 //! `convert_to_avif`, `convert_to_avif_lossless`, `convert_to_jxl_matched`.
 
 use crate::{ImgQualityError, Result};
+use shared_utils::image_jpeg_analysis::is_jpeg_complete;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -128,7 +129,8 @@ pub fn convert_heic_gainmap_to_jxl(
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
-    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+    let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
+        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
 
     // Use 32-bit OpenEXR for maximum HDR precision
     let intermediate_format = shared_utils::HdrIntermediateFormat::OpenExr32;
@@ -254,7 +256,8 @@ pub fn convert_to_jxl(
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
-    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+    let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
+        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
 
     let (actual_input, _temp_file_guard) = prepare_input_for_cjxl(input, options, hdr_info)?;
 
@@ -893,6 +896,13 @@ pub fn convert_jpeg_to_jxl(
         return Ok(ConversionResult::skipped_duplicate(input));
     }
 
+    // Check for corruption early
+    if !is_jpeg_complete(&std::fs::read(input).unwrap_or_default()) {
+        return Err(ImgQualityError::ConversionError(
+            "JPEG is truncated or missing EOI".to_string(),
+        ));
+    }
+
     // Check for UltraHDR JPEG and skip conversion
     if shared_utils::image_jpeg_analysis::is_ultra_hdr_jpeg_file(input) {
         shared_utils::progress_mode::emit_stderr(&format!(
@@ -924,7 +934,8 @@ pub fn convert_jpeg_to_jxl(
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
-    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+    let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
+        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
     let max_threads = shared_utils::thread_manager::get_optimal_threads();
 
     let result = run_cjxl_jpeg_transcode(input, &temp_output, options, max_threads, None, hdr_info);
@@ -1024,6 +1035,17 @@ pub fn convert_jpeg_to_jxl(
         || stderr.contains("Corrupt JPEG")
         || stderr.contains("Premature end")
     {
+        // For truncated JPEGs, the ImageMagick fallback often "repairs" them but results in
+        // large JXL files that we eventually discard. We skip fallback if it's incomplete.
+        if !is_jpeg_complete(&std::fs::read(input).unwrap_or_default()) {
+            shared_utils::progress_mode::emit_stderr(
+                "   ⚠️  [Corruption] JPEG file is truncated or missing EOI, skipping expensive fallback.",
+            );
+            return Err(ImgQualityError::ConversionError(format!(
+                "JPEG is truncated or missing EOI, and cjxl bitstream reconstruction failed: {stderr}"
+            )));
+        }
+
         match shared_utils::jxl_utils::try_imagemagick_fallback(
             input,
             &temp_output,
@@ -1110,7 +1132,8 @@ pub fn convert_to_avif(
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
-    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+    let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
+        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
     let q = quality.unwrap_or(85);
 
     let result = Command::new("avifenc")
@@ -1198,7 +1221,8 @@ pub fn convert_to_avif_lossless(
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
-    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+    let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
+        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
 
     let result = Command::new("avifenc")
         .arg("--lossless")
@@ -1369,7 +1393,8 @@ pub fn convert_to_jxl_matched(
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
-    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+    let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
+        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
 
     let distance = calculate_matched_distance_for_static(analysis, input_size)?;
     eprintln!("   🎯 Matched JXL distance: {distance:.2}");

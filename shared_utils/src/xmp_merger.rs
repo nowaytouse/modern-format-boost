@@ -1,5 +1,7 @@
+use crate::path_safety::{exiftool_path_arg, safe_path_arg};
 use anyhow::{bail, Context, Result};
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use walkdir::WalkDir;
@@ -178,13 +180,19 @@ impl XmpMerger {
     fn extract_xmp_metadata(&self, xmp_path: &Path) -> Result<XmpFile> {
         let output = Command::new("exiftool")
             .args([
+                "-charset",
+                "filename=utf8",
+                "-api",
+                "windowsunicode=1",
+                "-api",
+                "LargeFileSupport=1",
                 "-s3",
                 "-DocumentID",
                 "-DerivedFrom",
                 "-Source",
                 "-OriginalDocumentID",
             ])
-            .arg(crate::safe_path_arg(xmp_path).as_ref())
+            .arg(exiftool_path_arg(xmp_path).as_ref())
             .output()
             .context("Failed to run exiftool")?;
 
@@ -371,7 +379,7 @@ impl XmpMerger {
 
             let output = match Command::new("exiftool")
                 .args(["-s3", "-SidecarForExtension", "-XMPFileRef"])
-                .arg(crate::safe_path_arg(&path).as_ref())
+                .arg(exiftool_path_arg(&path).as_ref())
                 .output()
             {
                 Ok(output) if output.status.success() => output,
@@ -537,7 +545,7 @@ impl XmpMerger {
 
             let output = match Command::new("exiftool")
                 .args(["-s3", "-DocumentID"])
-                .arg(crate::safe_path_arg(&path).as_ref())
+                .arg(exiftool_path_arg(&path).as_ref())
                 .output()
             {
                 Ok(output) if output.status.success() => output,
@@ -680,7 +688,16 @@ impl XmpMerger {
         let original_timestamps = self.get_file_timestamps(media_path);
         let xmp_timestamps = self.get_file_timestamps(xmp_path);
 
-        let mut args = vec!["-P".to_string()];
+        let mut args = vec![
+            "-P".to_string(),
+            "-charset".to_string(),
+            "filename=utf8".to_string(),
+            "-api".to_string(),
+            "windowsunicode=1".to_string(),
+            "-api".to_string(),
+            "LargeFileSupport=1".to_string(),
+            "-overwrite_original".to_string(),
+        ];
 
         if self.config.overwrite_original {
             args.push("-overwrite_original".to_string());
@@ -701,37 +718,56 @@ impl XmpMerger {
             args.push("-icc_profile".to_string());
         }
 
+        // Use -tagsfromfile - to read XMP data from STDIN.
+        //
+        // 🔥 ULTIMATE SECURITY RATIONALE:
+        // Passing filenames containing '%' to `ExifTool` via `-tagsfromfile [path]`
+        // is notoriously fragile due to recursive format code expansion in some versions.
+        //
+        // By using `STDIN` (`-`), we physically decouple the media file path
+        // from the XMP source data. `ExifTool` never sees the 'evil' XMP path string;
+        // it only sees raw binary data on the pipe.
         args.push("-tagsfromfile".to_string());
-        args.push(crate::safe_path_arg(xmp_path).as_ref().to_string());
+        args.push("-".to_string());
         args.push("-all:all".to_string());
-
+        args.push("-unsafe".to_string());
         args.push("-FileModifyDate<FileModifyDate".to_string());
-        args.push(crate::safe_path_arg(media_path).as_ref().to_string());
+        args.push(safe_path_arg(media_path).as_ref().to_string());
 
-        // ExifTool writes to <path>_exiftool_tmp then renames; remove leftover from prior run.
-        if let Some(name) = media_path.file_name() {
-            let tmp_path =
-                media_path.with_file_name(format!("{}_exiftool_tmp", name.to_string_lossy()));
-            if let Err(err) = std::fs::remove_file(&tmp_path) {
-                if err.kind() != std::io::ErrorKind::NotFound {
-                    crate::progress_mode::emit_stderr(&format!(
-                        "⚠️ Failed to remove stale ExifTool temp file {}: {}",
-                        tmp_path.display(),
-                        err
-                    ));
-                }
-            }
-        }
+        let xmp_data = std::fs::read(xmp_path)
+            .with_context(|| format!("Failed to read XMP file: {}", xmp_path.display()))?;
 
-        let output = Command::new("exiftool")
+        let mut child = Command::new("exiftool")
             .args(&args)
-            .output()
-            .context("Failed to run exiftool merge")?;
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .context("Failed to spawn exiftool merge process")?;
+
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("Failed to open stdin for exiftool"))?;
+
+        stdin
+            .write_all(&xmp_data)
+            .context("Failed to write XMP to exiftool stdin")?;
+        drop(stdin); // Close stdin to signal EOF
+
+        let output = child
+            .wait_with_output()
+            .context("Failed to wait for exiftool merge")?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let is_minor_warning = stderr.contains("[minor]");
-            let is_real_error = stderr.contains("Error:") && !is_minor_warning;
+            // Harden error detection: check for both explicit "Error:" and implied file errors
+            let is_real_error = (stderr.contains("Error:")
+                || stderr.contains("Error opening")
+                || stderr.contains("File not found")
+                || stderr.contains("not writing image"))
+                && !is_minor_warning;
 
             if is_real_error {
                 bail!("ExifTool merge failed: {stderr}");

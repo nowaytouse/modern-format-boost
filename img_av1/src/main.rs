@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use img_av1::{calculate_psnr, calculate_ssim, psnr_quality_description, ssim_quality_description};
 use shared_utils::analysis_cache::AnalysisCache;
 use shared_utils::modern_ui::{colors, symbols};
+use shared_utils::quality_matcher::SourceCodec;
 use shared_utils::{
     check_dangerous_directory, disk_full_pause_reason, print_summary_report, BatchPauseController,
     BatchResult,
@@ -30,6 +31,7 @@ struct AutoConvertConfig {
     base_dir: Option<PathBuf>,
     child_threads: usize,
     allow_size_tolerance: bool,
+    force_video: bool,
     cache: Option<Arc<AnalysisCache>>,
 }
 
@@ -285,6 +287,7 @@ fn main() -> anyhow::Result<()> {
                     thread_config.child_threads
                 },
                 allow_size_tolerance,
+                force_video,
                 cache: cache.clone(),
             };
 
@@ -448,9 +451,11 @@ fn verify_conversion(
 }
 
 fn load_image_safe(path: &Path) -> anyhow::Result<image::DynamicImage> {
-    let is_jxl = path
+    let ext = path
         .extension()
-        .is_some_and(|e| e.to_string_lossy().to_lowercase() == "jxl");
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let is_jxl = shared_utils::quality_matcher::parse_source_codec(&ext) == SourceCodec::JpegXl;
 
     if is_jxl {
         use std::process::Command;
@@ -605,17 +610,9 @@ fn make_skipped_output(
 fn build_convert_options(
     config: &AutoConvertConfig,
     analysis: &shared_utils::image_analyzer::ImageAnalysis,
-    pixel_analysis: Option<&shared_utils::image_quality_detector::ImageQualityAnalysis>,
+    _pixel_analysis: Option<&shared_utils::image_quality_detector::ImageQualityAnalysis>,
 ) -> img_av1::lossless_converter::ConvertOptions {
-    let mut quality_label = analysis.quality_summary();
-    if let Some(pa) = pixel_analysis {
-        let ct_str = pa.content_type.name.to_uppercase();
-        quality_label = if quality_label.is_empty() {
-            ct_str
-        } else {
-            format!("{ct_str}: {quality_label}")
-        };
-    }
+    let quality_label = analysis.quality_summary();
 
     img_av1::lossless_converter::ConvertOptions {
         force: config.force,
@@ -652,6 +649,25 @@ fn dispatch_static_conversion(
     };
 
     let format = analysis.format.as_str();
+
+    // 🔬 Level 4 Feedback: KNN Static Quality Score
+    // JPEG bypass: cjxl transcode is fast enough to skip DB lookup.
+    // Returns a BPP heuristic (confidence=0.0) when DB is unavailable.
+    let quality = if format == "JPEG" || format == "jpg" {
+        None
+    } else {
+        shared_utils::lookup_image_quality(analysis)
+    };
+    if let Some(ref q) = quality {
+        if config.verbose {
+            let conf_label = if q.confidence > 0.0 { "KNN" } else { "BPP heuristic" };
+            println!(
+                "   🔭 Quality Score: {:.2} ({conf_label}, conf={:.2})",
+                q.score, q.confidence
+            );
+        }
+    }
+
     Ok(match (format, analysis.is_lossless) {
         ("WebP" | "AVIF" | "TIFF" | "HEIC" | "HEIF", true) => {
             if format == "HEIC" || format == "HEIF" {
@@ -698,7 +714,7 @@ fn dispatch_static_conversion(
                 if config.verbose {
                     println!("🔄 Legacy Lossy→JXL (Quality 100): {}", input.display());
                 }
-                convert_to_jxl(input, options, 0.1_f32, analysis.hdr_info.as_ref())?
+                convert_to_jxl(input, options, 0.001_f32, analysis.hdr_info.as_ref())?
             }
         }
     })
@@ -710,69 +726,92 @@ fn dispatch_animated_conversion(
     options: &img_av1::lossless_converter::ConvertOptions,
     config: &AutoConvertConfig,
 ) -> anyhow::Result<shared_utils::ConversionResult> {
-    use img_av1::lossless_converter::{convert_to_av1_mp4, convert_to_av1_mp4_matched};
+    use img_av1::lossless_converter::convert_to_av1_mp4_matched;
 
     let format = analysis.format.as_str();
-    let is_lossless = analysis.is_lossless;
-    let is_modern_animated = matches!(format, "WebP" | "AVIF" | "HEIC" | "HEIF" | "JXL");
-    let is_apple_native = matches!(format, "HEIC" | "HEIF");
+    let _is_lossless = analysis.is_lossless;
+    let codec = shared_utils::quality_matcher::parse_source_codec(format);
+    let is_animated = codec.can_be_animated();
+    let is_apple_native = shared_utils::quality_matcher::is_apple_native_format(format);
+    let is_non_native_animated = is_animated && !is_apple_native;
 
-    if is_modern_animated && !is_lossless {
-        let skip = if config.apple_compat {
-            is_apple_native
+    let duration = match analysis.duration_secs {
+        Some(d) if d > 0.0 => d,
+        Some(0.0) => {
+            return dispatch_static_disguised_animated(input, analysis, options, config);
+        }
+        _ => {
+            let retry = shared_utils::image_analyzer::get_animation_duration_for_path(input);
+            if let Some(d) = retry {
+                d
+            } else {
+                shared_utils::log_eprintln!(
+                    "⚠️  {}: {}",
+                    "\x1b[33mCannot get animation duration, skipping conversion\x1b[0m",
+                    input.display()
+                );
+                copy_original_if_adjacent_mode(input, config)?;
+                return Ok(shared_utils::ConversionResult::skipped_custom(
+                    input,
+                    analysis.file_size,
+                    "Cannot get animation duration",
+                    "no_duration",
+                ));
+            }
+        }
+    };
+
+    let meme_keep = if config.force_video {
+        false
+    } else {
+        match shared_utils::probe_video(input) {
+            Ok(probe) => {
+                let verdict = shared_utils::assess_loop_intent_from_probe(&probe, input);
+                verdict.is_keep_gif()
+            }
+            Err(e) => {
+                shared_utils::progress_mode::emit_stderr(&format!(
+                    "🎞️  GIF [{}] probe failed ({}) → KEEP GIF",
+                    input.file_name().unwrap_or_default().to_string_lossy(),
+                    e
+                ));
+                true
+            }
+        }
+    };
+
+    if config.apple_compat && is_non_native_animated {
+        if meme_keep {
+            shared_utils::progress_mode::emit_stderr(&format!(
+                "🍎 Animated {}→GIF (Apple Compat, meme-score: keep): {}",
+                format,
+                input.display()
+            ));
+            Ok(img_av1::lossless_converter::convert_to_gif_apple_compat(
+                input, options,
+            )?)
         } else {
-            true
-        };
-        if skip {
+            shared_utils::progress_mode::emit_stderr(&format!(
+                "🍎 Animated {}→AV1 MP4 (Apple Compat, {:.1}s): {}",
+                format,
+                duration,
+                input.display()
+            ));
+            Ok(convert_to_av1_mp4_matched(input, options, analysis)?)
+        }
+    } else {
+        if meme_keep {
             copy_original_if_adjacent_mode(input, config)?;
             return Ok(shared_utils::ConversionResult::skipped_custom(
                 input,
                 analysis.file_size,
-                "Skipping modern lossy animated format",
-                "modern_lossy_animated",
+                "GIF meme-score: keep as original",
+                "meme_score_keep",
             ));
         }
-    }
-
-    let duration = analysis.duration_secs.unwrap_or(0.0);
-    if duration == 0.0 {
-        return dispatch_static_disguised_animated(input, analysis, options, config);
-    }
-
-    let force_video = std::env::var("MODERN_FORMAT_BOOST_FORCE_VIDEO").is_ok();
-    let meme_keep = if force_video {
-        false
-    } else {
-        shared_utils::probe_video(input).map_or(true, |p| {
-            shared_utils::gif_meta_from_probe_with_path(&p, analysis.file_size, input).is_none_or(
-                |mut meta| {
-                    if let Ok((pal, exts)) = shared_utils::scan_gif_headers(input) {
-                        meta.palette_size = pal;
-                        meta.app_extensions = exts;
-                    }
-                    shared_utils::should_keep_as_gif(&meta)
-                },
-            )
-        })
-    };
-
-    if meme_keep {
-        copy_original_if_adjacent_mode(input, config)?;
-        Ok(shared_utils::ConversionResult::skipped_custom(
-            input,
-            analysis.file_size,
-            "GIF meme-score: keep as GIF",
-            "meme_score_keep",
-        ))
-    } else if is_lossless {
         shared_utils::progress_mode::emit_stderr(&format!(
-            "🔄 Animated {format}→AV1 MP4 (Lossless, {duration:.1}s): {}",
-            input.display()
-        ));
-        Ok(convert_to_av1_mp4(input, options)?)
-    } else {
-        shared_utils::progress_mode::emit_stderr(&format!(
-            "🔄 Animated {format}→AV1 MP4 (SMART QUALITY, {duration:.1}s): {}",
+            "🔄 Animated→AV1 MP4 (SMART QUALITY, {:.1}s): {}",
+            duration,
             input.display()
         ));
         Ok(convert_to_av1_mp4_matched(input, options, analysis)?)
@@ -787,10 +826,8 @@ fn dispatch_static_disguised_animated(
 ) -> anyhow::Result<shared_utils::ConversionResult> {
     use img_av1::lossless_converter::{convert_to_jxl, convert_to_jxl_matched};
 
-    let is_modern = matches!(
-        analysis.format.as_str(),
-        "WebP" | "AVIF" | "JXL" | "HEIC" | "HEIF"
-    );
+    let is_modern =
+        shared_utils::quality_matcher::parse_source_codec(analysis.format.as_str()).is_modern();
     if is_modern && !analysis.is_lossless {
         copy_original_if_adjacent_mode(input, config)?;
         return Ok(shared_utils::ConversionResult::skipped_custom(
@@ -806,7 +843,7 @@ fn dispatch_static_disguised_animated(
     } else if config.match_quality {
         convert_to_jxl_matched(input, options, analysis)?
     } else {
-        convert_to_jxl(input, options, 0.1_f32, analysis.hdr_info.as_ref())?
+        convert_to_jxl(input, options, 0.001_f32, analysis.hdr_info.as_ref())?
     })
 }
 
@@ -1099,7 +1136,7 @@ fn auto_convert_directory(
                                 } else {
                                     shared_utils::log_auto_error!(
                                         "Image conversion",
-                                        "Failed {}: {}",
+                                        "Failed {}: {}. Preserved original (Skipped conversion).",
                                         path.display(),
                                         e
                                     );

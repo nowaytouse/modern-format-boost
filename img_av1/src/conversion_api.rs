@@ -236,7 +236,8 @@ pub fn execute_conversion(
         });
     }
 
-    let temp_path = shared_utils::conversion::temp_path_for_output(&output_path);
+    let temp_path = shared_utils::path_safety::isolated_temp_path_for_search(&output_path)
+        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
     let result = match strategy.target {
         TargetFormat::JXL => convert_to_jxl(input_path, &temp_path, &detection.format, config),
         TargetFormat::AVIF => {
@@ -336,7 +337,7 @@ pub fn execute_conversion(
         if let Err(e) = shared_utils::conversion::safe_delete_original(
             input_path,
             &output_path,
-            shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
+            shared_utils::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
         ) {
             eprintln!("   ⚠️  Safe delete failed: {e}");
         }

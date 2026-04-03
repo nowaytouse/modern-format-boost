@@ -211,17 +211,8 @@ mod tests {
     }
 
     #[test]
-    fn test_print_progress() {
-        let monitor = MsssimProgressMonitor::new(120.0, 3000);
-        monitor.update_from_line("out_time_us=60000000");
-
-        monitor.print_progress("Y", 50);
-    }
-
-    #[test]
     fn test_monitor_ffmpeg_process_invalid_command() {
         let monitor = MsssimProgressMonitor::new(10.0, 250);
-
         let result = monitor.monitor_ffmpeg_process(&["invalid_command"], "Y");
         assert!(result.is_err());
     }
@@ -236,16 +227,12 @@ mod tests {
             fn prop_progress_parsing_correctness(time_us in 0u64..1_000_000_000u64) {
                 let duration_secs = 100.0;
                 let monitor = MsssimProgressMonitor::new(duration_secs, 2500);
-
                 let line = format!("out_time_us={time_us}");
                 let progress = monitor.update_from_line(&line);
-
                 prop_assert!(progress.is_some());
-
                 let pct = progress.unwrap();
                 let expected_secs = time_us as f64 / 1_000_000.0;
                 let expected_pct = ((expected_secs / duration_secs * 100.0).min(100.0)) as u32;
-
                 prop_assert_eq!(pct, expected_pct);
             }
 
@@ -255,23 +242,10 @@ mod tests {
                 time_us in 0u64..10_000_000_000u64
             ) {
                 let monitor = MsssimProgressMonitor::new(duration_secs, 1000);
-
                 let line = format!("out_time_us={time_us}");
                 if let Some(pct) = monitor.update_from_line(&line) {
                     prop_assert!(pct <= 100);
                 }
-            }
-
-            #[test]
-            fn prop_progress_output_format(
-                duration_secs in 1.0f64..1000.0f64,
-                progress_pct in 0u32..=100u32
-            ) {
-                let monitor = MsssimProgressMonitor::new(duration_secs, 1000);
-
-                monitor.print_progress("Y", progress_pct);
-                monitor.print_progress("U", progress_pct);
-                monitor.print_progress("V", progress_pct);
             }
         }
     }

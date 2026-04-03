@@ -684,7 +684,17 @@ fn analyze_jpeg_fast_path(path: &Path, file_size: u64) -> Result<ImageAnalysis> 
         }
     };
 
-    let metadata = extract_metadata(path).unwrap_or_default();
+    let mut metadata = extract_metadata(path).unwrap_or_default();
+
+    if let Some(ref jpeg) = jpeg_analysis {
+        if !jpeg.is_complete {
+            metadata.insert("is_truncated".to_string(), "true".to_string());
+            log_eprintln!(
+                "⚠️  [Integrity] JPEG file appears truncated or incomplete (missing EOI): {}",
+                path.display()
+            );
+        }
+    }
     let jxl_indicator = generate_jxl_indicator(ImageFormat::Jpeg, false, &jpeg_analysis, path);
 
     let (psnr, ssim) = if let Some(ref jpeg) = jpeg_analysis {
@@ -968,14 +978,6 @@ fn check_png_animation(path: &Path) -> Result<bool> {
         if deep_research_png_animation(&bytes) {
             log_eprintln!("🎞️  [Deep Research: APNG] Structural walk failed but internal byte-research confirmed fcTL markers: {}", path.display());
             return Ok(true);
-        }
-
-        // Final tie-breaker for ambiguous cases
-        if let Some(duration) = get_animation_duration(path) {
-            if duration > 0.0 {
-                log_eprintln!("🎞️  [Joint Audit: APNG] Structural walk failed but bitstream hints and duration confirm animation: {}", path.display());
-                return Ok(true);
-            }
         }
     }
 

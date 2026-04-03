@@ -53,7 +53,7 @@ enum Commands {
         no_allow_size_tolerance: bool,
         #[arg(short, long)]
         verbose: bool,
-        #[arg(long, default_value_t = true)]
+        #[arg(long, default_value_t = false)]
         resume: bool,
         #[arg(long)]
         no_resume: bool,
@@ -63,9 +63,22 @@ enum Commands {
         #[arg(value_name = "INPUT")]
         input: PathBuf,
     },
+
+    #[command(
+        name = "ingest-samples",
+        about = "Batch ingest unannotated GIF samples into SQLite database for Active Learning"
+    )]
+    IngestSamples {
+        #[arg(value_name = "INPUT_DIR")]
+        input: PathBuf,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
+    if let Err(e) = shared_utils::init_ghost_mode() {
+        eprintln!("⚠️ Failed to initialize Ghost Mode isolation: {e}");
+    }
+
     if let Err(e) =
         shared_utils::logging::init_logging("vid_hevc", shared_utils::logging::LogConfig::default())
     {
@@ -75,6 +88,33 @@ fn main() -> anyhow::Result<()> {
     shared_utils::ctrlc_guard::init();
 
     let cli = Cli::parse();
+
+    // --- Unified Directory Locking (Ghost Mode & Mutex) ---
+    // Extract input path from relevant commands to lock the directory ONLY if it involves destructive or interactive shared state.
+    let input_to_lock = match &cli.command {
+        Commands::Run {
+            input, in_place, ..
+        } if *in_place => Some(input),
+        _ => None,
+    };
+
+    let _lock_guard = if let Some(input) = input_to_lock {
+        let input_abs = std::fs::canonicalize(input).unwrap_or_else(|_| input.clone());
+        if input_abs.is_dir() {
+            match shared_utils::acquire_dir_lock(&input_abs) {
+                Ok(guard) => Some(guard),
+                Err(e) => {
+                    shared_utils::log_eprintln!("❌ {e}");
+                    std::process::exit(3);
+                }
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    // ------------------------------------------------------
 
     match cli.command {
         Commands::Run {
@@ -108,7 +148,7 @@ fn main() -> anyhow::Result<()> {
                 compress,
                 ultimate,
             ) {
-                eprintln!("{e}");
+                shared_utils::log_eprintln!("{e}");
                 std::process::exit(1);
             }
 
@@ -185,6 +225,7 @@ fn main() -> anyhow::Result<()> {
             if cache.is_some() {
                 info!("   💽 Persistent Cache: ENABLED");
             }
+            shared_utils::gif_value_db::report_db_status();
 
             info!("");
 
@@ -228,6 +269,23 @@ fn main() -> anyhow::Result<()> {
             println!("💡 Target: {}", strategy.target.as_str());
             println!("📝 Reason: {}", strategy.reason);
             println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        }
+
+        Commands::IngestSamples { input } => {
+            if !input.is_dir() {
+                shared_utils::log_eprintln!("❌ Input path must be a directory");
+                std::process::exit(1);
+            }
+            println!("📥 Ingesting GIF samples from: {}", input.display());
+            match shared_utils::gif_value_db::batch_ingest_samples(&input, None) {
+                Ok(count) => {
+                    println!("✅ Successfully ingested {count} samples into PostgreSQL database");
+                }
+                Err(e) => {
+                    shared_utils::log_eprintln!("❌ Failed to ingest samples: {e}");
+                    std::process::exit(1);
+                }
+            }
         }
     }
 

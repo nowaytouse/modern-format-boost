@@ -3,7 +3,7 @@ name: Release Build
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 permissions:
   contents: write
@@ -204,7 +204,7 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           VERSION="${TAG#v}"
-          
+
           # Try to use RELEASE_NOTES file first
           if [ -f "RELEASE_NOTES_${TAG}.md" ]; then
             echo "Using RELEASE_NOTES_${TAG}.md"

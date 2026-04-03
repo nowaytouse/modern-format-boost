@@ -1,44 +1,16 @@
 //! File Copier Module
 //!
-//! 🔥 v6.9.13: No-Omissions Design - Copying unsupported files
-//! 🔥 v7.8: Enhanced Error Handling - Adding file path context and batch operation resilience
-//!
-//! Ensures the output directory contains all files:
-//! - Supported formats: Converted by the main program
-//! - Unsupported formats: Copied directly
-//! - XMP sidecars: Merged, not copied separately
-//!
-//! ## Error Handling Strategy
-//! - All IO errors include file path context
-//! - Batch operations continue processing upon partial failure (resilient design)
-//! - All failures are recorded in logs and error lists
-//! - Report errors loudly; do not fail silently
+//! Ensures the output directory contains all files by copying unsupported formats
+//! while skipping converted files and merged XMP sidecars.
 
+use crate::quality_matcher::SourceCodec;
 use std::path::{Path, PathBuf};
 use tracing::{debug, error, info, warn};
 use walkdir::WalkDir;
 
-pub const SUPPORTED_IMAGE_EXTENSIONS: &[&str] = &[
-    "png", "jpg", "jpeg", "jpe", "jfif", "webp", "gif", "tiff", "tif", "heic", "heif", "avif",
-    "bmp", "ico", "svg", "jp2", "j2k", "jxl",
-];
-
-/// Image extensions to consider when collecting files for conversion (e.g. img-hevc → JXL).
-/// Excludes formats that are already the target: .jxl (no point converting JXL→JXL).
-pub const IMAGE_EXTENSIONS_FOR_CONVERT: &[&str] = &[
-    "png", "jpg", "jpeg", "jpe", "jfif", "webp", "gif", "tiff", "tif", "heic", "heif", "avif",
-    "bmp", "ico", "svg", "jp2", "j2k",
-];
-
-/// Video extensions for conversion input.
-///
-/// **Do not exclude mov/mp4** by extension:
-/// .mov can contain `ProRes` (must convert) or HEVC (skip by codec); .mp4 can contain H.264 or HEVC.
-/// Skip vs convert is decided by **codec detection** (e.g. `should_skip_video_codec`), not by extension.
-pub const SUPPORTED_VIDEO_EXTENSIONS: &[&str] = &[
-    "mp4", "mov", "avi", "mkv", "webm", "m4v", "wmv", "flv", "mpg", "mpeg", "ts", "mts", "m2ts",
-    "m2v", "3gp", "3g2", "ogv", "f4v", "asf",
-];
+pub const SUPPORTED_IMAGE_EXTENSIONS: &[&str] = SourceCodec::supported_image_extensions();
+pub const IMAGE_EXTENSIONS_FOR_CONVERT: &[&str] = SourceCodec::image_extensions_for_convert();
+pub const SUPPORTED_VIDEO_EXTENSIONS: &[&str] = SourceCodec::supported_video_extensions();
 
 pub const IMAGE_EXTENSIONS_ANALYZE: &[&str] = &[
     "png", "jpg", "jpeg", "jpe", "jfif", "webp", "gif", "tiff", "tif",
@@ -75,33 +47,20 @@ impl Default for CopyResult {
 }
 
 fn should_copy_file(path: &Path) -> bool {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if name.starts_with('.') {
+        return false;
+    }
+
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
         .map(str::to_lowercase)
         .unwrap_or_default();
 
-    if path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .is_some_and(|n| n.starts_with('.'))
-    {
-        return false;
-    }
-
-    if SUPPORTED_IMAGE_EXTENSIONS.contains(&ext.as_str()) {
-        return false;
-    }
-
-    if SUPPORTED_VIDEO_EXTENSIONS.contains(&ext.as_str()) {
-        return false;
-    }
-
-    if SIDECAR_EXTENSIONS.contains(&ext.as_str()) {
-        return false;
-    }
-
-    true
+    !SUPPORTED_IMAGE_EXTENSIONS.contains(&ext.as_str())
+        && !SUPPORTED_VIDEO_EXTENSIONS.contains(&ext.as_str())
+        && !SIDECAR_EXTENSIONS.contains(&ext.as_str())
 }
 
 pub fn copy_unsupported_files(input_dir: &Path, output_dir: &Path, recursive: bool) -> CopyResult {

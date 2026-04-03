@@ -1,4 +1,4 @@
-//! 🔥 v7.3.2: Smart File Copier - Unified File Copy Module
+//! 🔥 v0.11.1: Smart File Copier - Unified File Copy Module
 //!
 //! Features:
 //! - ✅ Preserves full directory structure
