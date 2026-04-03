@@ -31,6 +31,15 @@ Refined the multi-language documentation suite and unified the project's version
 - **Global Version Unification**: Synchronized version `0.11.2` across the Rust workspace (`Cargo.toml`), Python scripts, Shell utilities, and the macOS App wrapper (`Info.plist`).
 - **Files**: `docs/README_*.md`, `Cargo.toml`, `shared_utils/src/version.rs`, `README.md`, `Modern Format Boost.app/Contents/Info.plist`.
 
+#### 🚀 HEVC Pipeline Optimization — Quality & Compatibility
+
+Refactored the HEVC encoding pipeline to improve cross-platform standards compliance and maximize quality for archival tasks.
+
+- **Selective `hvc1` Tagging**: Implemented conditional muxing logic to inject the `hvc1` tag **only** when `--apple-compat` is explicitly enabled. This ensures broader compatibility with non-Apple devices (which prefer the standard `hev1` tag) while maintaining full support for QuickTime and Photos when requested.
+- **Ultimate Mode Preset Tuning**: Upgraded the HEVC encoder preset from `medium` to `slow` in `ultimate` (极限) mode. This change applies to both the searchable conversion iterations and the final lossless archival path, significantly improving the quality-to-size ratio for high-priority tasks.
+- **Dynamic Parameter Propagation**: Refactored the internal conversion and exploration APIs to propagate compatibility and quality flags throughout the entire encoding pipeline, including animated image-to-video processing.
+- **Files**: `shared_utils/src/x265_encoder.rs`, `shared_utils/src/video_explorer.rs`, `shared_utils/src/video_explorer/gpu_coarse_search.rs`, `vid/src/conversion_api.rs`, `vid/src/animated_image.rs`.
+
 ## [0.11.1] — 2026-04-04
 
 #### 🏗️ Workspace Unification — Unified Media Architecture

@@ -713,8 +713,8 @@ impl VideoEncoder {
     }
 
     #[must_use]
-    pub fn extra_args(&self, max_threads: usize) -> Vec<String> {
-        self.extra_args_with_preset(max_threads, EncoderPreset::default(), None)
+    pub fn extra_args(&self, max_threads: usize, apple_compat: bool) -> Vec<String> {
+        self.extra_args_with_preset(max_threads, EncoderPreset::default(), None, apple_compat)
     }
 
     #[must_use]
@@ -723,6 +723,7 @@ impl VideoEncoder {
         max_threads: usize,
         preset: EncoderPreset,
         hdr_x265_params: Option<String>,
+        apple_compat: bool,
     ) -> Vec<String> {
         match self {
             Self::Hevc => {
@@ -731,14 +732,15 @@ impl VideoEncoder {
                     x265_params.push(':');
                     x265_params.push_str(&params);
                 }
-                vec![
+                let mut args = vec![
                     "-preset".to_string(),
                     preset.x26x_name().to_string(),
-                    "-tag:v".to_string(),
-                    "hvc1".to_string(),
-                    "-x265-params".to_string(),
-                    x265_params,
-                ]
+                ];
+                if apple_compat {
+                    args.extend(["-tag:v".to_string(), "hvc1".to_string()]);
+                }
+                args.extend(["-x265-params".to_string(), x265_params]);
+                args
             }
             Self::Av1 => vec![
                 "-svtav1-params".to_string(),

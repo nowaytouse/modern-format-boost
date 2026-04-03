@@ -510,7 +510,7 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
     let temp_path = shared_utils::path_safety::isolated_temp_path_for_search(&output_path)
         .map_err(|e| VidQualityError::conversion_error(e.to_string()))?;
     let _temp_guard = shared_utils::conversion::TempOutputGuard::new(temp_path.clone());
-    let output_size = execute_conversion(&detection, &temp_path, 18, max_threads, SelectedCodec::Hevc)?;
+    let output_size = execute_conversion(&detection, &temp_path, 18, max_threads, SelectedCodec::Hevc, true, false)?;
 
     if !shared_utils::conversion::commit_temp_to_output_with_metadata(
         &temp_path,
@@ -799,7 +799,7 @@ pub fn auto_convert_with_cache(
         TargetVideoFormat::HevcMp4 | TargetVideoFormat::Av1Mp4 => {
             if config.use_lossless {
                 info!("   🚀 Using {} Lossless Mode (forced)", config.codec.as_str().to_uppercase());
-                let size = execute_lossless(&detection, &temp_path, config.child_threads, config.codec.clone())?;
+                let size = execute_lossless(&detection, &temp_path, config.child_threads, config.codec.clone(), config.apple_compat, config.ultimate_mode)?;
                 (size, 0.0, 0, None)
             } else {
                 let vf_args = shared_utils::get_ffmpeg_dimension_args(
@@ -917,6 +917,7 @@ pub fn auto_convert_with_cache(
                                 config.allow_size_tolerance,
                                 config.child_threads,
                                 hdr_x265_params_opt,
+                                config.apple_compat,
                             )
                         } else {
                             shared_utils::explore_hevc_with_gpu_coarse_full_warm_start(
@@ -931,6 +932,7 @@ pub fn auto_convert_with_cache(
                                 config.min_ssim,
                                 config.child_threads,
                                 hdr_x265_params_opt,
+                                config.apple_compat,
                             )
                         }
                     }
@@ -945,6 +947,7 @@ pub fn auto_convert_with_cache(
                                 ultimate,
                                 config.allow_size_tolerance,
                                 config.child_threads,
+                                config.apple_compat,
                             )
                         } else {
                             shared_utils::explore_av1_with_gpu_coarse_full_warm_start(
@@ -958,6 +961,7 @@ pub fn auto_convert_with_cache(
                                 config.allow_size_tolerance,
                                 config.min_ssim,
                                 config.child_threads,
+                                config.apple_compat,
                             )
                         }
                     }
@@ -1645,6 +1649,8 @@ fn execute_conversion(
     crf: u8,
     max_threads: usize,
     codec: SelectedCodec,
+    apple_compat: bool,
+    ultimate: bool,
 ) -> Result<u64> {
     // Attempt to extract DV RPU for injection (None = not DV or graceful fallback)
     let dv_rpu = prepare_dv_rpu(detection);
@@ -1708,18 +1714,22 @@ fn execute_conversion(
         "-crf".to_string(),
         crf.to_string(),
         "-preset".to_string(),
-        "medium".to_string(),
+        if codec == SelectedCodec::Hevc && ultimate {
+            "slow".to_string()
+        } else if codec == SelectedCodec::Av1 {
+            "6".to_string() // SVT-AV1 preset
+        } else {
+            "medium".to_string()
+        },
         "-pix_fmt".to_string(),
         pix_fmt.to_string(),
     ];
 
     if codec == SelectedCodec::Hevc {
-        args.extend([
-            "-tag:v".to_string(),
-            "hvc1".to_string(),
-            "-x265-params".to_string(),
-            x265_params,
-        ]);
+        if apple_compat {
+            args.extend(["-tag:v".to_string(), "hvc1".to_string()]);
+        }
+        args.extend(["-x265-params".to_string(), x265_params]);
     }
 
     // Preserve variable frame rate (VFR) for iPhone slow-motion videos
@@ -1773,6 +1783,8 @@ fn execute_lossless(
     output: &Path,
     max_threads: usize,
     codec: SelectedCodec,
+    apple_compat: bool,
+    ultimate: bool,
 ) -> Result<u64> {
     let codec_name = codec.as_str().to_uppercase();
     warn!("⚠️  {} Lossless encoding - this will be slow and produce large files!", codec_name);
@@ -1843,10 +1855,11 @@ fn execute_lossless(
             "-x265-params".to_string(),
             x265_params,
             "-preset".to_string(),
-            "medium".to_string(),
-            "-tag:v".to_string(),
-            "hvc1".to_string(),
+            if ultimate { "slow".to_string() } else { "medium".to_string() },
         ]);
+        if apple_compat {
+            args.extend(["-tag:v".to_string(), "hvc1".to_string()]);
+        }
     } else {
         // SVT-AV1 lossless
         args.extend([

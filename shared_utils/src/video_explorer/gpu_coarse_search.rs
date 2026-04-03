@@ -168,6 +168,7 @@ pub fn explore_with_gpu_coarse_search(
     allow_size_tolerance: bool,
     max_threads: usize,
     hdr_x265_params: Option<String>,
+    apple_compat: bool,
 ) -> Result<ExploreResult> {
     use crate::gpu_accel::{CrfMapping, GpuAccel, GpuCoarseConfig};
     let precheck_info = precheck::run_precheck(input)?;
@@ -560,6 +561,7 @@ pub fn explore_with_gpu_coarse_search(
         gpu_executed,
         is_gif_magic,
         hdr_x265_params,
+        apple_compat,
     )?;
 
     result.log.clear();
@@ -1182,6 +1184,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     gpu_executed: bool,
     is_gif_magic: bool,
     hdr_x265_params: Option<String>,
+    apple_compat: bool,
 ) -> Result<ExploreResult> {
     let log = Vec::new();
     let mut early_insight_triggered = false;
@@ -1343,8 +1346,13 @@ fn cpu_fine_tune_from_gpu_boundary(
 
         for arg in encoder.extra_args_with_preset(
             max_threads,
-            crate::video_explorer::EncoderPreset::default(),
+            if ultimate_mode && encoder == crate::video_explorer::VideoEncoder::Hevc {
+                crate::video_explorer::EncoderPreset::Slow
+            } else {
+                crate::video_explorer::EncoderPreset::default()
+            },
             adjusted_x265_params,
+            apple_compat,
         ) {
             cmd.arg(arg);
         }
@@ -3609,6 +3617,7 @@ pub fn explore_hevc_with_gpu_coarse(
     allow_size_tolerance: bool,
     max_threads: usize,
     hdr_x265_params: Option<String>,
+    apple_compat: bool,
 ) -> Result<ExploreResult> {
     let (_, min_ssim) = calculate_smart_thresholds(initial_crf, VideoEncoder::Hevc);
     explore_hevc_with_gpu_coarse_full(
@@ -3622,6 +3631,7 @@ pub fn explore_hevc_with_gpu_coarse(
         min_ssim,
         max_threads,
         hdr_x265_params,
+        apple_compat,
     )
 }
 
@@ -3639,6 +3649,7 @@ pub fn explore_hevc_with_gpu_coarse_ultimate_warm_start(
     allow_size_tolerance: bool,
     max_threads: usize,
     hdr_x265_params: Option<String>,
+    apple_compat: bool,
 ) -> Result<ExploreResult> {
     let (_, min_ssim) = calculate_smart_thresholds(baseline_crf, VideoEncoder::Hevc);
     explore_hevc_with_gpu_coarse_full_warm_start(
@@ -3653,6 +3664,7 @@ pub fn explore_hevc_with_gpu_coarse_ultimate_warm_start(
         min_ssim,
         max_threads,
         hdr_x265_params,
+        apple_compat,
     )
 }
 
@@ -3669,6 +3681,7 @@ pub fn explore_hevc_with_gpu_coarse_ultimate(
     allow_size_tolerance: bool,
     max_threads: usize,
     hdr_x265_params: Option<String>,
+    apple_compat: bool,
 ) -> Result<ExploreResult> {
     let (_, min_ssim) = calculate_smart_thresholds(initial_crf, VideoEncoder::Hevc);
     explore_hevc_with_gpu_coarse_full_warm_start(
@@ -3683,6 +3696,7 @@ pub fn explore_hevc_with_gpu_coarse_ultimate(
         min_ssim,
         max_threads,
         hdr_x265_params,
+        apple_compat,
     )
 }
 
@@ -3703,6 +3717,7 @@ pub fn explore_hevc_with_gpu_coarse_full_warm_start(
     min_ssim: f64,
     max_threads: usize,
     hdr_x265_params: Option<String>,
+    apple_compat: bool,
 ) -> Result<ExploreResult> {
     let (max_crf, _) = calculate_smart_thresholds(baseline_crf, VideoEncoder::Hevc);
     let search_anchor_crf = if let Some(hint) = warm_start_crf {
@@ -3726,6 +3741,7 @@ pub fn explore_hevc_with_gpu_coarse_full_warm_start(
         allow_size_tolerance,
         max_threads,
         hdr_x265_params,
+        apple_compat,
     )
 }
 
@@ -3744,6 +3760,7 @@ pub fn explore_hevc_with_gpu_coarse_full(
     min_ssim: f64,
     max_threads: usize,
     hdr_x265_params: Option<String>,
+    apple_compat: bool,
 ) -> Result<ExploreResult> {
     explore_hevc_with_gpu_coarse_full_warm_start(
         input,
@@ -3757,6 +3774,7 @@ pub fn explore_hevc_with_gpu_coarse_full(
         min_ssim,
         max_threads,
         hdr_x265_params,
+        apple_compat,
     )
 }
 
@@ -3773,6 +3791,7 @@ pub fn explore_av1_with_gpu_coarse_ultimate_warm_start(
     ultimate_mode: bool,
     allow_size_tolerance: bool,
     max_threads: usize,
+    apple_compat: bool,
 ) -> Result<ExploreResult> {
     let (_, min_ssim) = calculate_smart_thresholds(baseline_crf, VideoEncoder::Av1);
     explore_av1_with_gpu_coarse_full_warm_start(
@@ -3786,6 +3805,7 @@ pub fn explore_av1_with_gpu_coarse_ultimate_warm_start(
         allow_size_tolerance,
         min_ssim,
         max_threads,
+        apple_compat,
     )
 }
 
@@ -3800,6 +3820,7 @@ pub fn explore_av1_with_gpu_coarse(
     initial_crf: f32,
     allow_size_tolerance: bool,
     max_threads: usize,
+    apple_compat: bool,
 ) -> Result<ExploreResult> {
     let (max_crf, min_ssim) = calculate_smart_thresholds(initial_crf, VideoEncoder::Av1);
     explore_with_gpu_coarse_search(
@@ -3815,6 +3836,7 @@ pub fn explore_av1_with_gpu_coarse(
         allow_size_tolerance,
         max_threads,
         None,
+        apple_compat,
     )
 }
 
@@ -3830,6 +3852,7 @@ pub fn explore_av1_with_gpu_coarse_ultimate(
     ultimate_mode: bool,
     allow_size_tolerance: bool,
     max_threads: usize,
+    apple_compat: bool,
 ) -> Result<ExploreResult> {
     let (_, min_ssim) = calculate_smart_thresholds(initial_crf, VideoEncoder::Av1);
     explore_av1_with_gpu_coarse_full_warm_start(
@@ -3843,6 +3866,7 @@ pub fn explore_av1_with_gpu_coarse_ultimate(
         allow_size_tolerance,
         min_ssim,
         max_threads,
+        apple_compat,
     )
 }
 
@@ -3861,6 +3885,7 @@ pub fn explore_av1_with_gpu_coarse_full_warm_start(
     allow_size_tolerance: bool,
     min_ssim: f64,
     max_threads: usize,
+    apple_compat: bool,
 ) -> Result<ExploreResult> {
     let (max_crf, _) = calculate_smart_thresholds(baseline_crf, VideoEncoder::Av1);
     let search_anchor_crf = if let Some(hint) = warm_start_crf {
@@ -3884,6 +3909,7 @@ pub fn explore_av1_with_gpu_coarse_full_warm_start(
         allow_size_tolerance,
         max_threads,
         None,
+        apple_compat,
     )
 }
 
@@ -3901,6 +3927,7 @@ pub fn explore_av1_with_gpu_coarse_full(
     allow_size_tolerance: bool,
     min_ssim: f64,
     max_threads: usize,
+    apple_compat: bool,
 ) -> Result<ExploreResult> {
     explore_av1_with_gpu_coarse_full_warm_start(
         input,
@@ -3913,5 +3940,6 @@ pub fn explore_av1_with_gpu_coarse_full(
         allow_size_tolerance,
         min_ssim,
         max_threads,
+        apple_compat,
     )
 }

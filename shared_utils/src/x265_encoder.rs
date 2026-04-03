@@ -46,6 +46,8 @@ pub struct X265Config {
     pub has_subtitles: bool,
     /// Codec name of the first subtitle stream
     pub subtitle_codec: Option<String>,
+    /// Whether to apply Apple-specific compatibility fixes (e.g. hvc1 tag)
+    pub apple_compat: bool,
 }
 
 impl Default for X265Config {
@@ -65,6 +67,7 @@ impl Default for X265Config {
             audio_codec: None,
             has_subtitles: false,
             subtitle_codec: None,
+            apple_compat: false,
         }
     }
 }
@@ -487,8 +490,10 @@ fn mux_hevc_to_container(
         cmd.arg("-c:v").arg("copy").arg("-an");
     }
 
-    if config.container == "mp4" || config.container == "mov" {
+    if (config.container == "mp4" || config.container == "mov") && config.apple_compat {
         cmd.arg("-tag:v").arg("hvc1");
+        cmd.arg("-movflags").arg("+faststart");
+    } else if config.container == "mp4" || config.container == "mov" {
         cmd.arg("-movflags").arg("+faststart");
     }
 

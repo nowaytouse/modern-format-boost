@@ -547,7 +547,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
     let (v_codec, v_tag, codec_params_flag, codec_params) = match options.codec {
         SelectedCodec::Hevc => (
             "libx265",
-            "hvc1",
+            if options.apple_compat { "hvc1" } else { "hev1" },
             "-x265-params",
             format!("log-level=error:pools={max_threads}"),
         ),
@@ -590,7 +590,13 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
         .arg("0")
         .arg("-preset")
         .arg(match options.codec {
-            SelectedCodec::Hevc => "medium",
+            SelectedCodec::Hevc => {
+                if options.ultimate {
+                    "slow"
+                } else {
+                    "medium"
+                }
+            }
             SelectedCodec::Av1 => "6",
         })
         .arg("-tag:v")
@@ -1419,9 +1425,10 @@ pub fn convert_to_mkv_lossless(
         .arg("-x265-params")
         .arg(&x265_params)
         .arg("-preset")
-        .arg("medium")
-        .arg("-tag:v")
-        .arg("hvc1");
+        .arg(if options.ultimate { "slow" } else { "medium" });
+    if options.apple_compat {
+        cmd.arg("-tag:v").arg("hvc1");
+    }
 
     for arg in &vf_args {
         cmd.arg(arg);
