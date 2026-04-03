@@ -385,9 +385,9 @@ checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 
 [[package]]
 name = "cc"
-version = "1.2.58"
+version = "1.2.59"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1e928d4b69e3077709075a938a05ffbedfa53a84c8f766efbf8220bb1ff60e1"
+checksum = "b7a4d3ec6524d28a329fc53654bbadc9bdd7b0431f5d65f1a56ffb28a1ee5283"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -630,9 +630,9 @@ dependencies = [
 
 [[package]]
 name = "ctutils"
-version = "0.4.1"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "66270f854fb5b25a21ffc0ee8c214c309ef1ce60988e448f6433a0b4736d2609"
+checksum = "7d5515a3834141de9eafb9717ad39eea8247b5674e6066c404e8c4b365d2a29e"
 dependencies = [
  "cmov",
 ]
@@ -1000,7 +1000,7 @@ dependencies = [
 [[package]]
 name = "hashbrown"
 version = "0.16.1"
-source = "git+https://github.com/rust-lang/hashbrown#3bca52e3368231dc9663c00606af30bc6c7b530e"
+source = "git+https://github.com/rust-lang/hashbrown#e16b65ce5a57c62cca8ae3cbd008cdb4e2bd62fc"
 
 [[package]]
 name = "heck"
@@ -1123,8 +1123,8 @@ checksum = "e7c5cedc30da3a610cac6b4ba17597bdf7152cf974e8aab3afb3d54455e371c8"
 
 [[package]]
 name = "indexmap"
-version = "2.13.0"
-source = "git+https://github.com/indexmap-rs/indexmap#a4aba99f09636ad727d934d367f701c965367cc3"
+version = "2.14.0"
+source = "git+https://github.com/indexmap-rs/indexmap#fb6dafda4ee443864c88b61a4dfc8982012d3d39"
 dependencies = [
  "equivalent",
  "hashbrown 0.16.1",
@@ -2492,9 +2492,9 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokio"
-version = "1.50.0"
+version = "1.51.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "27ad5e34374e03cfffefc301becb44e9dc3c17584f414349ebe29ed26661822d"
+checksum = "2bd1c4c0fc4a7ab90fc15ef6daaa3ec3b893f004f915f2392557ed23237820cd"
 dependencies = [
  "bytes",
  "libc 0.2.184",

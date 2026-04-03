@@ -75,7 +75,7 @@ enum Commands {
         #[arg(short, long)]
         verbose: bool,
 
-        /// Force video conversion: skip meme-score check, always convert animated images to video (MOV/MP4)
+        /// Callers should skip video conversion and treat as static image (e.g. route to JXL in `img`).
         #[arg(long)]
         force_video: bool,
 
@@ -1281,7 +1281,7 @@ fn auto_convert_directory(
                                 if let Some(cp) = checkpoint.as_ref() {
                                     if let Err(e) = cp.mark_completed(path) {
                                         shared_utils::log_eprintln!(
-                                            "⚠️ [checkpoint] Failed to mark completed {}: {}",
+                                            "⚠️ [img] Failed to mark completed {}: {}",
                                             path.display(),
                                             e
                                         );

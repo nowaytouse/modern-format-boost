@@ -55,10 +55,8 @@ jobs:
       - name: Package binaries
         run: |
           mkdir -p dist
-          cp target/${{ matrix.target }}/release/img-hevc dist/
-          cp target/${{ matrix.target }}/release/img-av1 dist/
-          cp target/${{ matrix.target }}/release/vid-hevc dist/
-          cp target/${{ matrix.target }}/release/vid-av1 dist/
+          cp target/${{ matrix.target }}/release/img dist/
+          cp target/${{ matrix.target }}/release/vid dist/
           cp -r scripts dist/
           cp LICENSE README.md CHANGELOG.md dist/
           cd dist
@@ -118,10 +116,8 @@ jobs:
       - name: Package binaries
         run: |
           mkdir -p dist
-          cp target/release/img-hevc dist/
-          cp target/release/img-av1 dist/
-          cp target/release/vid-hevc dist/
-          cp target/release/vid-av1 dist/
+          cp target/release/img dist/
+          cp target/release/vid dist/
           cp -r scripts dist/
           cp LICENSE README.md CHANGELOG.md dist/
           cd dist
@@ -184,10 +180,8 @@ jobs:
 
             ### 📋 What's Included
 
-            - `img-hevc` — Image optimization (→ JXL / HEVC)
-            - `img-av1` — Image optimization (→ JXL / AV1)
-            - `vid-hevc` — Video optimization (→ HEVC / H.265)
-            - `vid-av1` — Video optimization (→ AV1 / SVT-AV1)
+            - `img` — Image optimization (→ JXL / HEVC / AV1)
+            - `vid` — Video optimization (→ HEVC / AV1)
             - `scripts/` — Full Python automation suite
 
             ---

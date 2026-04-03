@@ -147,7 +147,7 @@ jobs:
         shell: bash
         run: |
           cargo build --release --target ${{ matrix.target }} \
-            -p vid-hevc -p vid-av1 -p img-hevc -p img-av1
+            -p vid -p img
 
       # ── Package ────────────────────────────────────────────────────────────
       - name: Package artifacts
@@ -159,7 +159,7 @@ jobs:
           EXT=""
           [[ "${{ matrix.os }}" == windows-* ]] && EXT=".exe"
 
-          for bin in vid-hevc vid-av1 img-hevc img-av1; do
+          for bin in vid img; do
             cp "target/${{ matrix.target }}/release/${bin}${EXT}" dist/
           done
           cp -r scripts dist/

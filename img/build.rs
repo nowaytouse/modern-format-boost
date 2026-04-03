@@ -1,4 +1,4 @@
-// Build script for img-hevc
+// Build script for img
 // Dynamically detect system library paths for dav1d and libheif
 
 fn main() {

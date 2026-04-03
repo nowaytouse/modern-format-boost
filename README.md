@@ -48,7 +48,7 @@ Think of it as a "smart compressor" that **never degrades your media**:
 1. **Data Safety First**: To avoid any potential data loss, it is highly recommended to output processed files to a separate directory (e.g., using `-o /path/to/output`) rather than using in-place conversion (`--in-place`), especially for irreplaceable media.
 2. **Beta Software**: While this program has been extensively tested, debugged, and optimized to prevent quality or data loss (as seen in the changelog), it is not guaranteed to be 100% bug-free. Please report any issues you encounter on GitHub.
 3. **Computation Insight**: While optimized for efficiency (especially on Apple Silicon M-series), processing massive batches in `--ultimate` mode can still be time-consuming. It will occupy system resources for an extended period; please plan your task accordingly.
-4. **Tool Maturity**: The HEVC-based tools (`img-hevc`, `vid-hevc`) are currently more mature and stable than the AV1-based tools (`img-av1`, `vid-av1`). For high-reliability production tasks, HEVC tools are recommended.
+4. **Tool Maturity**: The unified tools (`img`, `vid`) defaults to HEVC, which is more mature and stable than the AV1 strategy. For high-reliability production tasks, HEVC (the default) is recommended.
 
 ## 🔒 Privacy & Data Integrity
 
@@ -107,10 +107,8 @@ Every file goes through a multi-stage decision pipeline:
 
 | Binary         | Purpose            | Target Codec                     |
 | -------------- | ------------------ | -------------------------------- |
-| **`img-hevc`** | Image optimization | → JXL (static) / HEVC (animated) |
-| **`img-av1`**  | Image optimization | → JXL (static) / AV1 (animated)  |
-| **`vid-hevc`** | Video optimization | → HEVC / H.265                   |
-| **`vid-av1`**  | Video optimization | → AV1 / SVT-AV1                  |
+| **`img`** | Image optimization | → JXL (static) / HEVC / AV1 (animated) |
+| **`vid`** | Video optimization | → HEVC / AV1                           |
 
 Plus a **double-click macOS app** (`Modern Format Boost.app`) for drag-and-drop batch processing.
 
@@ -233,9 +231,12 @@ cargo build --release
 
 ```bash
 # Image path conversion
-img-hevc run /path/to/media
+img run /path/to/media
 # Video path conversion
-vid-hevc run /path/to/media
+vid run /path/to/media
+
+# To use AV1 strategy:
+vid run --codec av1 /path/to/media
 ```
 
 ### Detailed Options
@@ -263,8 +264,8 @@ vid-hevc run /path/to/media
 
 ## 🏗️ Architecture
 
-- `img_hevc/`: Image → JXL/HEVC tool
-- `vid_hevc/`: Video → HEVC tool
+- `img/`: Image → JXL/HEVC/AV1 tool
+- `vid/`: Video → HEVC/AV1 tool
 - `shared_utils/`: Core brain (GPU/CPU hybrid engine, HDR mapping, metadata)
 - `Modern Format Boost.app/`: macOS drag-and-drop UI
 

@@ -249,7 +249,7 @@ fn is_gif_meme(path: &Path) -> bool {
 }
 
 /// Returns true if the file is an animated image format but effectively static (0 or negligible duration).
-/// Callers should skip video conversion and treat as static image (e.g. route to JXL in `img_hevc`).
+/// Callers should skip video conversion and treat as static image (e.g. route to JXL in `img`).
 fn is_static_animated_image(path: &Path) -> bool {
     let ext = path
         .extension()

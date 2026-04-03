@@ -45,14 +45,12 @@ fi
 # ═══════════════════════════════════════════════════════════════
 # Format: "project_dir:binary_name"
 ALL_PROJECTS=(
-    "img_hevc:img-hevc"
-    "vid_hevc:vid-hevc"
-    "img_av1:img-av1"
-    "vid_av1:vid-av1"
+    "img:img"
+    "vid:vid"
 )
 
 # Default projects to build (HEVC tools)
-DEFAULT_PROJECTS=("img_hevc" "vid_hevc")
+DEFAULT_PROJECTS=("img" "vid")
 
 # Helper function: Get binary name from project directory
 get_binary_name() {
@@ -350,20 +348,17 @@ parse_args() {
             BUILD_ALL=true
             shift
             ;;
-        --hevc)
-            SELECTED_PROJECTS+=("img_hevc" "vid_hevc")
-            shift
-            ;;
-        --av1)
-            SELECTED_PROJECTS+=("img_av1" "vid_av1")
+        --hevc | --av1)
+            # Unified crates now support both codecs via runtime flags
+            SELECTED_PROJECTS+=("img" "vid")
             shift
             ;;
         --img)
-            SELECTED_PROJECTS+=("img_hevc" "img_av1")
+            SELECTED_PROJECTS+=("img")
             shift
             ;;
         --vid)
-            SELECTED_PROJECTS+=("vid_hevc" "vid_av1")
+            SELECTED_PROJECTS+=("vid")
             shift
             ;;
         --no-verify-timestamps)
@@ -379,8 +374,6 @@ parse_args() {
             echo "  --verbose, -v     Show detailed output"
             echo "  --no-clean-old    Don't clean old binary files"
             echo "  --all, -a         Build all projects"
-            echo "  --hevc            Build HEVC tools (default)"
-            echo "  --av1             Build AV1 tools"
             echo "  --img             Build image tools"
             echo "  --vid             Build video tools"
             echo "  --kondo           Perform deep project cleanup using kondo"
@@ -388,10 +381,8 @@ parse_args() {
             echo "  --help, -h        Show this help"
             echo ""
             echo "Examples:"
-            echo "  $0                # Build HEVC tools (default)"
-            echo "  $0 --all          # Build all projects"
-            echo "  $0 --hevc --force # Force rebuild HEVC tools"
-            echo "  $0 --img --av1    # Build AV1 image tools"
+            echo "  $0                # Build all tools (default)"
+            echo "  $0 --img          # Build image tools only"
             exit 0
             ;;
         *)

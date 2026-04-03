@@ -1,4 +1,4 @@
-//! vid-hevc - Video Quality Analysis and HEVC/H.265 Conversion API
+//! vid - Video Quality Analysis and HEVC/H.265/AV1 Conversion API
 //!
 //! Provides precise video analysis with intelligent format conversion:
 //! - HEVC Lossless MKV for archival (lossless sources)
@@ -6,7 +6,7 @@
 //!
 //! ## Simple Mode
 //! ```rust,ignore
-//! use vid_hevc::simple_convert;
+//! use vid::simple_convert;
 //! use std::path::Path;
 //!
 //! let input = Path::new("video.mp4");

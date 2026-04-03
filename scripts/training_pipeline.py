@@ -482,7 +482,7 @@ def main() -> None:
     if args.command == "ingest":
         print(
             "ℹ️  Ingestion is handled by the Rust binary: "
-            "`vid-hevc --ingest-samples /path/to/dataset`"
+            "`vid --ingest-samples /path/to/dataset`"
         )
         print(f"   Requested path: {args.path}")
         sys.exit(0)

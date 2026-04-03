@@ -1,4 +1,4 @@
-//! Constants for `img_hevc` conversion tool
+//! Constants for `img` conversion tool
 
 /// Small PNG file threshold (500KB)
 /// PNG files smaller than this will be skipped to avoid overhead
