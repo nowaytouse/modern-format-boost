@@ -85,7 +85,7 @@
 
 ### 🖥️ وقت التشغيل
 
-![وقت التشغيل](assets/runtime.png)
+![وقت التشغيل](../assets/runtime.png)
 
 <p align="center">وقت التشغيل</p>
 

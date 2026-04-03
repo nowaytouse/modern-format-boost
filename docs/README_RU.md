@@ -63,7 +63,7 @@
 
 ### 🖥️ Интерфейс
 
-![Runtime](assets/runtime.png)
+![Runtime](../assets/runtime.png)
 
 ### Четыре основных инструмента
 

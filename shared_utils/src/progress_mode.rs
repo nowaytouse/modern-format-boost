@@ -1,4 +1,4 @@
-//! v0.11.1: Progress Mode - controls progress bar display
+//! v0.11.2: Progress Mode - controls progress bar display
 //!
 //! Avoids progress output clutter when processing in parallel.
 //! Stderr output is routed through tracing when a subscriber is set (`init_logging`).

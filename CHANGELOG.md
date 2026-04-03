@@ -4,6 +4,33 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.11.2] — 2026-04-04
+
+#### 🧹 Granular Cache Maintenance — Targeted Cleanup
+
+Enhanced the cache management utility to support fine-grained control over processing metadata and analysis results.
+
+- **Targeted Pruning**: `cache_cleaner.py` now accepts an optional path argument to clean metadata for a specific file or directory only.
+- **Progress Rewriting**: Implemented intelligent pruning of `~/.mfb_progress/{hash}.txt` files; when a single file is targeted, the script removes ONLY that file's entry from the directory-level tracker, allowing for precise re-processing.
+- **Database record removal**: Automated `DELETE` operations across all SQLite/PostgreSQL analysis databases for specific paths, preventing stale quality/feature data from affecting retries.
+- **Files**: `scripts/cache_cleaner.py`.
+
+#### 🔧 selective Build Optimization — Intelligent Dependency Sync
+
+Optimized the build synchronization between the high-level Python processor and the low-level Shell build system.
+
+- **On-Demand Compilation**: `drag_and_drop_processor.py` now passes selective build flags (`--img` or `--vid`) to `smart_build.sh` based on the active `PROCESSING_MODE`.
+- **Reduced Overhead**: The system now completely skips the dependency check and compilation phase for tools not required for the current session (e.g., skips video tool build when optimizing static images).
+- **Files**: `scripts/drag_and_drop_processor.py`, `scripts/smart_build.sh`.
+
+#### 📚 Documentation & Standardization
+
+Refined the multi-language documentation suite and unified the project's versioning.
+
+- **Asset Path Fix**: Corrected relative image links in all localized documentation (`docs/README_*.md`); changed erroneous `(assets/...)` paths to `(../assets/...)` for proper rendering from subdirectories.
+- **Global Version Unification**: Synchronized version `0.11.2` across the Rust workspace (`Cargo.toml`), Python scripts, Shell utilities, and the macOS App wrapper (`Info.plist`).
+- **Files**: `docs/README_*.md`, `Cargo.toml`, `shared_utils/src/version.rs`, `README.md`, `Modern Format Boost.app/Contents/Info.plist`.
+
 ## [0.11.1] — 2026-04-04
 
 #### 🏗️ Workspace Unification — Unified Media Architecture

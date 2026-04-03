@@ -285,7 +285,13 @@ def check_tools():
         print(f"{DIM}   Please ensure you are running from the repository root.{RESET}")
         sys.exit(1)
 
-    res = subprocess.run([str(build_script)])
+    cmd = [str(build_script)]
+    if PROCESSING_MODE == "images_only":
+        cmd.append("--img")
+    elif PROCESSING_MODE == "videos_only":
+        cmd.append("--vid")
+
+    res = subprocess.run(cmd)
     if res.returncode != 0:
         print(f"{RED}❌ Build failed. Please check the logs.{RESET}")
         input("Press Enter to exit...")
@@ -300,7 +306,13 @@ def rebuild_tools():
         return False
 
     print(f"\n{YELLOW}🔧 Attempting automatic rebuild...{RESET}")
-    res = subprocess.run([str(build_script)])
+    cmd = [str(build_script)]
+    if PROCESSING_MODE == "images_only":
+        cmd.append("--img")
+    elif PROCESSING_MODE == "videos_only":
+        cmd.append("--vid")
+
+    res = subprocess.run(cmd)
     if res.returncode != 0:
         print(f"{RED}❌ Automatic rebuild failed. Please check the logs.{RESET}")
         return False

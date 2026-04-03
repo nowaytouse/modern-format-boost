@@ -85,7 +85,7 @@ Cada archivo pasa por un flujo de decisión de múltiples etapas:
 
 ### 🖥️ Tiempo de ejecución
 
-![Tiempo de ejecución](assets/runtime.png)
+![Tiempo de ejecución](../assets/runtime.png)
 
 <p align="center">Tiempo de ejecución</p>
 

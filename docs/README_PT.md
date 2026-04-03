@@ -62,7 +62,7 @@ Cada arquivo passa por um pipeline de decisão em vários estágios:
 
 ### 🖥️ Runtime
 
-![Runtime](assets/runtime.png)
+![Runtime](../assets/runtime.png)
 
 ### Os quatro binários
 

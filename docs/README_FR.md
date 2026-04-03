@@ -84,7 +84,7 @@ Chaque fichier passe par un pipeline de décision en plusieurs étapes :
 
 ### 🖥️ Interface
 
-![Interface](assets/runtime.png)
+![Interface](../assets/runtime.png)
 
 <p align="center">Interface</p>
 

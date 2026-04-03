@@ -69,7 +69,7 @@
 
 ### 🖥️ 実行画面
 
-![Runtime](assets/runtime.png)
+![Runtime](../assets/runtime.png)
 
 ### 4つのバイナリ
 

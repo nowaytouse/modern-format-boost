@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Smart Build System v0.11.1 - Intelligent Selective Build
+# Smart Build System v0.11.2 - Intelligent Selective Build
 #
-# 🔥 v0.11.1 New Features:
+# 🔥 v0.11.2 New Features:
 # - ✅ Post-build timestamp verification (Ensures binary was truly updated)
 # - ✅ Automatic force rebuild on multiple verification failures
 # - ✅ Loud error reporting (Compilation errors MUST notify user)
@@ -75,7 +75,7 @@ CLEAN_OLD_BINARIES=true
 BUILD_ALL=false
 SELECTED_PROJECTS=()
 
-# 🔥 v0.11.1: Timestamp Verification Config
+# 🔥 v0.11.2: Timestamp Verification Config
 VERIFY_TIMESTAMPS=true
 MAX_STALE_RETRIES=2 # Allow up to 2 timestamp verification failures, force rebuild on the 3rd
 
@@ -84,7 +84,7 @@ MAX_STALE_RETRIES=2 # Allow up to 2 timestamp verification failures, force rebui
 # ═══════════════════════════════════════════════════════════════
 print_header() {
     echo ""
-    echo -e "${CYAN}${BOLD}🔧 Smart Build System v0.11.1${NC}"
+    echo -e "${CYAN}${BOLD}🔧 Smart Build System v0.11.2${NC}"
     echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 }
 
@@ -113,7 +113,7 @@ print_error() {
 }
 
 # ═══════════════════════════════════════════════════════════════
-# 🔥 v0.11.1: Intelligent obsolete binary cleanup
+# 🔥 v0.11.2: Intelligent obsolete binary cleanup
 # ═══════════════════════════════════════════════════════════════
 clean_old_binaries() {
     echo -e "${YELLOW}🧹 Cleaning old binaries...${NC}"
@@ -209,7 +209,7 @@ decide_build_action() {
     local project_dir="$1"
     local binary_name="$2"
 
-    # 🔥 v0.11.1: Use get_binary_path to locate the correct executable
+    # 🔥 v0.11.2: Use get_binary_path to locate the correct executable
     local binary_path
     binary_path=$(get_binary_path "$project_dir" "$binary_name")
 
@@ -226,7 +226,7 @@ decide_build_action() {
 }
 
 # ═══════════════════════════════════════════════════════════════
-# 🔥 v0.11.1: Timestamp Verification Functions
+# 🔥 v0.11.2: Timestamp Verification Functions
 # ═══════════════════════════════════════════════════════════════
 get_binary_path() {
     local project_dir="$1"
@@ -283,7 +283,7 @@ build_project() {
         return 1
     fi
 
-    # 🔥 v0.11.1: Post-build timestamp verification
+    # 🔥 v0.11.2: Post-build timestamp verification
     if [[ "$VERIFY_TIMESTAMPS" == "true" ]]; then
         local binary_path
         binary_path=$(get_binary_path "$project_dir" "$binary_name")

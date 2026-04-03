@@ -68,7 +68,7 @@
 
 ### 🖥️ 运行演示 (Runtime)
 
-![Runtime](assets/runtime.png)
+![Runtime](../assets/runtime.png)
 
 <p align="center">Runtime</p>
 

@@ -73,7 +73,7 @@
 
 ### 🖥️ 運行截圖
 
-![Runtime](assets/runtime.png)
+![Runtime](../assets/runtime.png)
 
 ### 四個執行檔
 

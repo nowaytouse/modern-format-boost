@@ -8,7 +8,7 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m' # No Color
 
-echo -e "${BLUE}🚀 Modern Format Boost - Dependency Installer v0.11.1${NC}"
+echo -e "${BLUE}🚀 Modern Format Boost - Dependency Installer v0.11.2${NC}"
 echo "--------------------------------------------------------"
 
 # --- OS Detection ---
