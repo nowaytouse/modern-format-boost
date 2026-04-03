@@ -11,14 +11,20 @@ All notable changes to this project will be documented in this file.
 - **Extended Short-Asset Prior (5-15s silent)**: Added positive scoring bonus for silent assets in the 5-15s range.
   - **Bonus Factors**: Compact size (+0.05), square aspect ratio (+0.04), image format (+0.05), duration proximity to short end (+0.10-0.20).
   - **Impact**: Short silent memes/stickers are more likely to be classified as `LoopStrong` (kept as GIF).
+- **Short-Asset Window Lower Bound (≤10s)**: `short_asset_window_secs` is clamped to `HARD_PASS_SHORT_GIF_THRESHOLD_SECS` (10.0s) minimum.
+  - **Logic**: Ensures assets up to 10s always fall within the short-asset bonus window, even when `short_clip_secs` is lower.
+  - **Duration Stratification**:
+    - **≤10s**: Always eligible for extended short-asset bonus (upper bound guaranteed ≥10s).
+    - **10-15s**: Bonus eligibility depends on `short_clip_secs` (typically ~5-8s), with decreasing headroom.
+    - **>15s**: Subject to long-silent penalty (see below).
 - **Long-Silent Video Penalty (>15s)**: Added negative scoring for silent videos exceeding 15s threshold.
   - **Penalty Factors**: Base penalty (0.22), overflow scaling (+0.00-0.18), video container (+0.18), image container (+0.08).
   - **Transparency Relief**: Assets with transparency get -0.06 penalty reduction.
   - **Impact**: Long silent videos are more likely to be classified as `LoopWeak` (converted to modern video format).
 - **New Thresholds**: Introduced `short_asset_window_secs` and `modern_bias_duration_secs` for finer duration-based分层 scoring.
-  - `short_asset_window_secs`: Upper bound for extended short-asset bonus, clamped to `HARD_PASS_SHORT_GIF_THRESHOLD_SECS` minimum.
-  - `modern_bias_duration_secs`: Lower bound for long-silent penalty, clamped to `MODERN_FORMAT_VIDEO_BIAS_THRESHOLD_SECS` minimum.
-- **Layer 6 Relaxation**: Extended `short_clip_like` check to use `short_asset_window_secs` instead of `short_clip_secs`, broadening acceptance range for silent assets.
+  - `short_asset_window_secs`: Upper bound for extended short-asset bonus, clamped to `HARD_PASS_SHORT_GIF_THRESHOLD_SECS` (10.0s) minimum.
+  - `modern_bias_duration_secs`: Lower bound for long-silent penalty, clamped to `MODERN_FORMAT_VIDEO_BIAS_THRESHOLD_SECS` (15.0s) minimum.
+- **Layer 6 Relaxation**: Extended `short_clip_like` check to use `short_asset_window_secs` instead of `short_clip_secs`, broadening acceptance range for silent assets up to 10s+.
   - **Files**: `shared_utils/src/loop_intent.rs`
 
 #### 🔒 Developer Override Defaults Changed (Breaking Change)
