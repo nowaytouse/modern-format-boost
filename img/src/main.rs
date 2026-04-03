@@ -1,8 +1,6 @@
 use clap::{Parser, Subcommand};
 
-use img::{
-    calculate_psnr, calculate_ssim, psnr_quality_description, ssim_quality_description,
-};
+use img::{calculate_psnr, calculate_ssim, psnr_quality_description, ssim_quality_description};
 use shared_utils::analysis_cache::AnalysisCache;
 use shared_utils::modern_ui::{colors, symbols};
 use shared_utils::quality_matcher::SourceCodec;
@@ -511,7 +509,6 @@ fn load_image_safe(path: &std::path::Path) -> anyhow::Result<image::DynamicImage
     let is_jxl = shared_utils::quality_matcher::parse_source_codec(&ext) == SourceCodec::JpegXl;
 
     if is_jxl {
-        use std::process::Command;
 
         let temp_png_file = tempfile::Builder::new()
             .suffix(".png")
@@ -520,9 +517,10 @@ fn load_image_safe(path: &std::path::Path) -> anyhow::Result<image::DynamicImage
 
         let temp_path = temp_png_file.path();
 
-        let status = Command::new("djxl")
-            .arg(shared_utils::safe_path_arg(path).as_ref())
-            .arg(temp_path)
+        let mut builder = shared_utils::jxl_builder::DjxlBuilder::new();
+        builder.input(path).output(temp_path);
+        
+        let status = builder.build()
             .status()
             .map_err(|e| anyhow::anyhow!("Failed to execute djxl: {e}"))?;
 
@@ -757,7 +755,11 @@ fn dispatch_static_conversion(
 
     if let Some(ref q) = quality {
         if config.verbose {
-            let conf_label = if q.confidence > 0.0 { "KNN" } else { "BPP heuristic" };
+            let conf_label = if q.confidence > 0.0 {
+                "KNN"
+            } else {
+                "BPP heuristic"
+            };
             println!(
                 "   🔭 Quality Score: {:.2} ({conf_label}, conf={:.2})",
                 q.score, q.confidence
@@ -940,7 +942,8 @@ fn dispatch_animated_conversion(
         }
     };
 
-    let initial_crf = calculate_matched_crf_for_animation(analysis, analysis.file_size, &config.codec)?;
+    let initial_crf =
+        calculate_matched_crf_for_animation(analysis, analysis.file_size, &config.codec)?;
 
     if config.apple_compat && is_non_native_animated {
         if meme_keep {
@@ -949,9 +952,10 @@ fn dispatch_animated_conversion(
                 format,
                 input.display()
             ));
-            Ok(vid::animated_image::convert_to_gif_apple_compat(
-                input, options,
-            ).map_err(|e| anyhow::anyhow!(e))?)
+            Ok(
+                vid::animated_image::convert_to_gif_apple_compat(input, options)
+                    .map_err(|e| anyhow::anyhow!(e))?,
+            )
         } else {
             shared_utils::progress_mode::emit_stderr(&format!(
                 "🍎 Animated {}→HEVC MP4 (Apple Compat, {:.1}s): {}",
@@ -959,7 +963,13 @@ fn dispatch_animated_conversion(
                 duration,
                 input.display()
             ));
-            Ok(vid::animated_image::convert_to_mp4_matched(input, options, initial_crf, analysis.has_alpha).map_err(|e| anyhow::anyhow!(e))?)
+            Ok(vid::animated_image::convert_to_mp4_matched(
+                input,
+                options,
+                initial_crf,
+                analysis.has_alpha,
+            )
+            .map_err(|e| anyhow::anyhow!(e))?)
         }
     } else {
         if meme_keep {
@@ -978,7 +988,13 @@ fn dispatch_animated_conversion(
             duration,
             input.display()
         ));
-        Ok(vid::animated_image::convert_to_mp4_matched(input, options, initial_crf, analysis.has_alpha).map_err(|e| anyhow::anyhow!(e))?)
+        Ok(vid::animated_image::convert_to_mp4_matched(
+            input,
+            options,
+            initial_crf,
+            analysis.has_alpha,
+        )
+        .map_err(|e| anyhow::anyhow!(e))?)
     }
 }
 

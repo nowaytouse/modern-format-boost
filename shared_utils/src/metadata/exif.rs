@@ -12,10 +12,8 @@
 
 use std::io;
 use std::path::Path;
-use std::process::Command;
 use std::sync::OnceLock;
 
-use crate::path_safety::{exiftool_path_arg, property_safe_path, safe_path_arg};
 
 static EXIFTOOL_AVAILABLE: OnceLock<bool> = OnceLock::new();
 
@@ -56,7 +54,8 @@ fn is_video_file(path: &Path) -> bool {
 }
 
 fn get_best_date_from_source(src: &Path) -> Option<String> {
-    let output = Command::new("exiftool")
+    let mut builder = crate::ExiftoolBuilder::new();
+    builder
         .arg("-s3")
         .arg("-d")
         .arg("%Y:%m:%d %H:%M:%S")
@@ -64,9 +63,9 @@ fn get_best_date_from_source(src: &Path) -> Option<String> {
         .arg("-XMP-xmp:CreateDate")
         .arg("-EXIF:DateTimeOriginal")
         .arg("-EXIF:CreateDate")
-        .arg(exiftool_path_arg(src).as_ref())
-        .output()
-        .ok()?;
+        .input(src);
+    
+    let output = builder.build().output().ok()?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -266,28 +265,32 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
         );
     }
 
-    let mut cmd = Command::new("exiftool");
-    cmd.arg("-charset").arg("filename=utf8");
-    cmd.arg("-api").arg("windowsunicode=1");
-    cmd.arg("-api").arg("LargeFileSupport=1");
-    cmd.arg("-overwrite_original");
-    cmd.arg("-tagsfromfile")
-        .arg(property_safe_path(src).as_ref())
+    let mut builder = crate::ExiftoolBuilder::new();
+    builder
+        .arg("-charset").arg("filename=utf8")
+        .arg("-api").arg("windowsunicode=1")
+        .arg("-api").arg("LargeFileSupport=1")
+        .overwrite_original()
+        .tags_from_file(src)
         .arg("-all:all")
         .arg("-unsafe");
+    
     if !jxl_already_has_icc {
         // Non-JXL OR JXL without embedded ICC: inject via ExifTool as fallback
-        cmd.arg("-ICC_Profile<ICC_Profile");
+        builder.arg("-ICC_Profile<ICC_Profile");
     }
+    
     // JXL with already-embedded ICC: skip to preserve cjxl's authoritative profile
-    cmd.arg("-use")
+    builder
+        .arg("-use")
         .arg("MWG")
         .arg("-api")
         .arg("LargeFileSupport=1")
         .arg("-q")
         .arg("-m")
-        .arg(exiftool_path_arg(dst).as_ref());
-    let mut output = cmd.output()?;
+        .input(dst);
+    
+    let mut output = builder.build().output()?;
 
     // Log exiftool stderr to file (debug/warn level only — never reaches terminal).
     // This surfaces warnings like "[minor] Will wrap JXL codestream" and any exiftool
@@ -343,36 +346,35 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
     if needs_repair {
         eprintln!("🔧  [Structural Repair] executing ImageMagick rebuild...");
 
-        let magick_result = Command::new("magick")
-            .arg("--")
+        let mut magick_builder = crate::MagickBuilder::new();
+        // ImageMagick repair requires custom path logic (magick_path)
+        magick_builder
             .arg(magick_path(dst, false))
-            .arg(magick_path(dst, true))
-            .output();
+            .arg(magick_path(dst, true));
+
+        let magick_result = magick_builder.build().output();
 
         match magick_result {
             Ok(out) => {
                 if out.status.success() {
                     eprintln!("✅  [Structural Repair] Complete：{}", dst.display());
 
-                    output = Command::new("exiftool")
+                    let mut repair_builder = crate::ExiftoolBuilder::new();
+                    repair_builder
                         .arg("-charset")
                         .arg("filename=utf8")
                         .arg("-api")
                         .arg("windowsunicode=1")
                         .arg("-api")
                         .arg("LargeFileSupport=1")
-                        .arg("-overwrite_original")
+                        .overwrite_original()
                         .arg("-all=")
-                        // Use -tagsfromfile @ to copy tags from the file itself (internal repair).
-                        // Use property_safe_path for the external source file (src) to avoid
-                        // recursive format code expansion for paths containing '%'.
                         .arg("-tagsfromfile")
                         .arg("@")
                         .arg("-all:all")
                         .arg("-unsafe")
                         .arg("-icc_profile")
-                        .arg("-tagsfromfile")
-                        .arg(property_safe_path(src).as_ref())
+                        .tags_from_file(src)
                         .arg("-all:all")
                         .arg("-unsafe")
                         .arg("-icc_profile")
@@ -380,8 +382,9 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
                         .arg("MWG")
                         .arg("-q")
                         .arg("-m")
-                        .arg(safe_path_arg(dst).as_ref())
-                        .output()?;
+                        .input(dst);
+                    
+                    output = repair_builder.build().output()?;
                 } else {
                     eprintln!(
                         "⚠️  [Structural Repair] magick failed：{}",
@@ -435,14 +438,15 @@ fn fix_quicktime_dates(src: &Path, dst: &Path) -> io::Result<()> {
         return Ok(());
     };
 
-    let output = Command::new("exiftool")
+    let mut builder = crate::ExiftoolBuilder::new();
+    builder
         .arg("-charset")
         .arg("filename=utf8")
         .arg("-api")
         .arg("windowsunicode=1")
         .arg("-api")
         .arg("LargeFileSupport=1")
-        .arg("-overwrite_original")
+        .overwrite_original()
         .arg(format!("-QuickTime:CreateDate={best_date}"))
         .arg(format!("-QuickTime:ModifyDate={best_date}"))
         .arg(format!("-QuickTime:TrackCreateDate={best_date}"))
@@ -454,11 +458,11 @@ fn fix_quicktime_dates(src: &Path, dst: &Path) -> io::Result<()> {
         .arg(format!("-EXIF:CreateDate={best_date}"))
         .arg(format!("-XMP:DateCreated={best_date}"))
         .arg(format!("-XMP:CreateDate={best_date}"))
-        .arg("-overwrite_original")
         .arg("-q")
         .arg("-m")
-        .arg(exiftool_path_arg(dst).as_ref())
-        .output()?;
+        .input(dst);
+    
+    let output = builder.build().output()?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

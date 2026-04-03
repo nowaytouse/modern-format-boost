@@ -166,7 +166,7 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
     }
 
     let path_arg = crate::safe_path_arg(path);
-    let output = Command::new("ffprobe")
+    let output = Command::new(crate::constants::TOOL_FFPROBE)
         .args([
             "-v",
             "error",
@@ -682,7 +682,7 @@ fn build_max_cll_string(sd: &serde_json::Value) -> Option<String> {
 }
 
 pub fn get_duration(path: &Path) -> Option<f64> {
-    let output = match Command::new("ffprobe")
+    let output = match Command::new(crate::constants::TOOL_FFPROBE)
         .args([
             "-v",
             "quiet",
@@ -732,7 +732,7 @@ pub fn get_duration(path: &Path) -> Option<f64> {
 }
 
 pub fn get_frame_count(path: &Path) -> Option<u64> {
-    let output = match Command::new("ffprobe")
+    let output = match Command::new(crate::constants::TOOL_FFPROBE)
         .args([
             "-v",
             "quiet",

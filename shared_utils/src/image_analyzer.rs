@@ -1203,7 +1203,7 @@ fn try_jxl_via_apng(path: &Path) -> Option<f32> {
 
     // APNG doesn't have duration in format metadata, we need to calculate from frames and fps
     // Use ffprobe with -count_frames to get nb_read_frames
-    let probe_output = Command::new("ffprobe")
+    let probe_output = Command::new(crate::constants::TOOL_FFPROBE)
         .args([
             "-v",
             "error",
@@ -1279,7 +1279,7 @@ fn try_jxl_via_apng(path: &Path) -> Option<f32> {
 fn try_ffprobe_json(path: &Path) -> Option<f32> {
     use std::process::Command;
 
-    let output = Command::new("ffprobe")
+    let output = Command::new(crate::constants::TOOL_FFPROBE)
         .args(["-v", "error", "-print_format", "json", "-show_format", "--"])
         .arg(crate::safe_path_arg(path).as_ref())
         .output()
@@ -1332,7 +1332,7 @@ fn try_ffprobe_json(path: &Path) -> Option<f32> {
 fn try_ffprobe_default(path: &Path) -> Option<f32> {
     use std::process::Command;
 
-    let output = Command::new("ffprobe")
+    let output = Command::new(crate::constants::TOOL_FFPROBE)
         .args([
             "-v",
             "error",
@@ -1466,7 +1466,7 @@ fn try_imagemagick_identify(path: &Path) -> Option<f32> {
 fn try_get_frame_count(path: &Path) -> Option<u32> {
     use std::process::Command;
 
-    let output = Command::new("ffprobe")
+    let output = Command::new(crate::constants::TOOL_FFPROBE)
         .args([
             "-v",
             "error",

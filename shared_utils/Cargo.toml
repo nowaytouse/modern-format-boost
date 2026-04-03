@@ -43,6 +43,7 @@ infer = { workspace = true }
 quick-xml = { workspace = true }
 exr = { workspace = true }
 proptest = { workspace = true }
+serial_test = "3.1.1"
 
 [[bin]]
 name = "train_knn"
@@ -55,10 +56,6 @@ path = "src/bin/recompute_stats.rs"
 [[bin]]
 name = "train_quality"
 path = "src/bin/train_quality.rs"
-
-[dev-dependencies]
-proptest = { workspace = true }
-serial_test = "0.5"
 
 [features]
 default = ["v1_21"]

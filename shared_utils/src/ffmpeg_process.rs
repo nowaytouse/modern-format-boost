@@ -400,10 +400,10 @@ pub fn get_error_suggestion(stderr: &str) -> Option<String> {
 /// # Errors
 /// Returns error if command fails, also prints error details to stderr.
 pub fn run_ffmpeg_with_error_report(args: &[&str]) -> Result<std::process::Output> {
-    let mut cmd = std::process::Command::new("ffmpeg");
+    let mut cmd = std::process::Command::new(crate::constants::TOOL_FFMPEG);
     cmd.args(args);
 
-    let command_str = format!("ffmpeg {}", args.join(" "));
+    let command_str = format!("{} {}", crate::constants::TOOL_FFMPEG, args.join(" "));
 
     info!(
         command = %command_str,

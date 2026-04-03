@@ -14,9 +14,7 @@ pub use analyzer::{analyze_image, ImageAnalysis};
 pub use constants::*;
 pub use heic_analysis::HeicAnalysis;
 pub use jpeg_analysis::JpegQualityAnalysis;
-pub use lossless_converter::{
-    ConversionResult, ConvertOptions,
-};
+pub use lossless_converter::{ConversionResult, ConvertOptions};
 pub use metrics::{
     calculate_ms_ssim, calculate_psnr, calculate_ssim, psnr_quality_description,
     ssim_quality_description,

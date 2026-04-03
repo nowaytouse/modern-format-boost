@@ -24,8 +24,9 @@
 use anyhow::Result;
 use std::path::PathBuf;
 
+use crate::types::EncoderPreset;
 use crate::video_explorer::{
-    EncoderPreset, ExploreConfig, ExploreMode, ExploreResult, SsimSource, VideoEncoder,
+    ExploreConfig, ExploreMode, ExploreResult, SsimSource, VideoEncoder,
 };
 
 pub trait ExploreStrategy: Send + Sync {
@@ -202,6 +203,7 @@ pub struct ExploreContext {
     pub preset: EncoderPreset,
     pub config: ExploreConfig,
     pub hdr_x265_params: Option<String>,
+    pub apple_compat: bool,
 
     size_cache: CrfCache<u64>,
     ssim_cache: CrfCache<SsimResult>,
@@ -225,6 +227,7 @@ impl ExploreContext {
         preset: EncoderPreset,
         config: ExploreConfig,
         hdr_x265_params: Option<String>,
+        apple_compat: bool,
     ) -> Self {
         Self {
             input_path,
@@ -237,6 +240,7 @@ impl ExploreContext {
             preset,
             config,
             hdr_x265_params,
+            apple_compat,
             size_cache: CrfCache::new(),
             ssim_cache: CrfCache::new(),
             progress: None,
@@ -466,23 +470,24 @@ impl ExploreContext {
         use std::fs;
         use std::process::Command;
 
-        let mut cmd = Command::new("ffmpeg");
-        cmd.arg("-y")
-            .arg("-threads")
+        let mut cmd = Command::new(crate::constants::TOOL_FFMPEG);
+        cmd.arg(crate::constants::FFMPEG_ARG_OVERWRITE)
+            .arg(crate::constants::FFMPEG_ARG_THREADS)
             .arg(self.max_threads.to_string())
-            .arg("-i")
+            .arg(crate::constants::FFMPEG_ARG_INPUT)
             .arg(crate::safe_path_arg(&self.input_path).as_ref())
-            .arg("-c:v")
+            .arg(crate::constants::FFMPEG_ARG_CODEC_VIDEO)
             .arg(self.encoder.ffmpeg_name())
-            .arg("-crf")
+            .arg(crate::constants::FFMPEG_ARG_CRF)
             .arg(format!("{crf:.1}"))
-            .arg("-preset")
+            .arg(crate::constants::FFMPEG_ARG_PRESET)
             .arg(self.preset.x26x_name());
 
         for arg in self.encoder.extra_args_with_preset(
             self.max_threads,
             self.preset,
             self.hdr_x265_params.clone(),
+            self.apple_compat,
         ) {
             cmd.arg(arg);
         }
@@ -539,14 +544,14 @@ impl ExploreContext {
 
         let filter = "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];[ref][1:v]ssim";
 
-        let output = Command::new("ffmpeg")
-            .arg("-i")
+        let output = Command::new(crate::constants::TOOL_FFMPEG)
+            .arg(crate::constants::FFMPEG_ARG_INPUT)
             .arg(crate::safe_path_arg(&self.input_path).as_ref())
-            .arg("-i")
+            .arg(crate::constants::FFMPEG_ARG_INPUT)
             .arg(crate::safe_path_arg(&self.output_path).as_ref())
-            .arg("-lavfi")
+            .arg(crate::constants::FFMPEG_ARG_FILTER_LAVFI)
             .arg(filter)
-            .arg("-f")
+            .arg(crate::constants::FFMPEG_ARG_OUTPUT_FORMAT)
             .arg("null")
             .arg("-")
             .output();
@@ -602,14 +607,14 @@ impl ExploreContext {
 
         let filter = "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];[ref][1:v]psnr";
 
-        let output = Command::new("ffmpeg")
-            .arg("-i")
+        let output = Command::new(crate::constants::TOOL_FFMPEG)
+            .arg(crate::constants::FFMPEG_ARG_INPUT)
             .arg(crate::safe_path_arg(&self.input_path).as_ref())
-            .arg("-i")
+            .arg(crate::constants::FFMPEG_ARG_INPUT)
             .arg(crate::safe_path_arg(&self.output_path).as_ref())
-            .arg("-lavfi")
+            .arg(crate::constants::FFMPEG_ARG_FILTER_LAVFI)
             .arg(filter)
-            .arg("-f")
+            .arg(crate::constants::FFMPEG_ARG_OUTPUT_FORMAT)
             .arg("null")
             .arg("-")
             .output();

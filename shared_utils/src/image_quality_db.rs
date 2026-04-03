@@ -127,7 +127,11 @@ fn get_quality_features(analysis: &ImageAnalysis) -> pgvector::Vector {
         spatial_bpp as f32,
         (total_pixels.log10() as f32).max(0.0),
         aspect_ratio as f32,
-        if analysis.is_lossless { 1.0_f32 } else { 0.0_f32 },
+        if analysis.is_lossless {
+            1.0_f32
+        } else {
+            0.0_f32
+        },
     ])
 }
 
@@ -147,7 +151,10 @@ fn bpp_heuristic_quality(analysis: &ImageAnalysis) -> QualityScore {
     let lossless_bonus = if analysis.is_lossless { 0.1 } else { 0.0 };
 
     let score = (entropy_score * 0.5 + bpp_score * 0.5 + lossless_bonus).clamp(0.0, 1.0);
-    QualityScore { score, confidence: 0.0 }
+    QualityScore {
+        score,
+        confidence: 0.0,
+    }
 }
 
 // ── DB Maturity ───────────────────────────────────────────────────────────────
@@ -263,7 +270,11 @@ pub fn lookup_image_quality(analysis: &ImageAnalysis) -> Option<QualityScore> {
         knn_confidence,
         knn_neighbor_count: total_count,
         bpp_fallback_score: Some(bpp.score),
-        final_verdict: if knn_score >= 0.5 { "high".to_string() } else { "low".to_string() },
+        final_verdict: if knn_score >= 0.5 {
+            "high".to_string()
+        } else {
+            "low".to_string()
+        },
     };
 
     // Fire-and-forget inference log — never blocks the pipeline.
@@ -293,9 +304,8 @@ pub fn log_quality_inference_record(
         1.0
     };
 
-    let file_hash: Option<String> = path.and_then(|p| {
-        crate::common_utils::calculate_blake3_hash(p).ok()
-    });
+    let file_hash: Option<String> =
+        path.and_then(|p| crate::common_utils::calculate_blake3_hash(p).ok());
     let source_path: Option<String> = path.map(|p| p.display().to_string());
     let neighbor_count_i32 = record.knn_neighbor_count as i32;
 

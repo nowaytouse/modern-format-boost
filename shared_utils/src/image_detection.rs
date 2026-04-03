@@ -82,7 +82,7 @@ use std::path::Path;
 pub fn open_image_with_limits(path: &Path) -> std::result::Result<DynamicImage, image::ImageError> {
     use image::Limits;
     let mut limits = Limits::default();
-    limits.max_alloc = Some(2 * 1024 * 1024 * 1024); // 2GB (reasonable for 100MP images)
+    limits.max_alloc = Some(crate::constants::MAX_IMAGE_DECODE_ALLOC_BYTES);
 
     // Use magic bytes detection instead of relying on file extension
     // This handles cases like .jpe, missing extensions, or incorrect extensions
@@ -451,15 +451,21 @@ pub fn detect_animation(path: &Path, format: &DetectedFormat) -> Result<(bool, u
     // We can rely on our native parsers for these to save the ffprobe overhead.
     match format {
         DetectedFormat::GIF => {
-            crate::common_utils::validate_file_size_limit(path, 512 * 1024 * 1024)
-                .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
+            crate::common_utils::validate_file_size_limit(
+                path,
+                crate::constants::MAX_IMAGE_ANALYSIS_FILE_SIZE,
+            )
+            .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
             let data = std::fs::read(path)?;
             let frame_count = crate::image_formats::gif::count_frames_from_bytes(&data);
             return Ok((frame_count > 1, frame_count, None));
         }
         DetectedFormat::WebP => {
-            crate::common_utils::validate_file_size_limit(path, 512 * 1024 * 1024)
-                .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
+            crate::common_utils::validate_file_size_limit(
+                path,
+                crate::constants::MAX_IMAGE_ANALYSIS_FILE_SIZE,
+            )
+            .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
             let data = std::fs::read(path)?;
             let is_animated = crate::image_formats::webp::is_animated_from_bytes(&data);
             let frame_count = if is_animated {
@@ -470,8 +476,11 @@ pub fn detect_animation(path: &Path, format: &DetectedFormat) -> Result<(bool, u
             return Ok((is_animated, frame_count, None));
         }
         DetectedFormat::PNG => {
-            crate::common_utils::validate_file_size_limit(path, 512 * 1024 * 1024)
-                .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
+            crate::common_utils::validate_file_size_limit(
+                path,
+                crate::constants::MAX_IMAGE_ANALYSIS_FILE_SIZE,
+            )
+            .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
             let data = std::fs::read(path)?;
             let (is_animated, frame_count) = parse_apng_frames(&data);
             return Ok((is_animated, frame_count, None));
@@ -688,9 +697,9 @@ fn is_jxl_animated_via_ffprobe(path: &Path) -> bool {
     // We need to convert to APNG first, then check frame count.
 
     // Check if djxl is available
-    if which::which("djxl").is_err() {
+    if which::which(crate::constants::TOOL_DJXL).is_err() {
         // Fallback: try jxlinfo
-        if let Ok(output) = Command::new("jxlinfo")
+        if let Ok(output) = Command::new(crate::constants::TOOL_JXLINFO)
             .arg(crate::safe_path_arg(path).as_ref())
             .output()
         {
@@ -709,7 +718,7 @@ fn is_jxl_animated_via_ffprobe(path: &Path) -> bool {
     let temp_apng_path = temp_apng.path();
 
     // Convert JXL to APNG using djxl
-    let djxl_result = Command::new("djxl")
+    let djxl_result = Command::new(crate::constants::TOOL_DJXL)
         .arg(crate::safe_path_arg(path).as_ref())
         .arg(crate::safe_path_arg(temp_apng_path).as_ref())
         .output();
@@ -719,17 +728,17 @@ fn is_jxl_animated_via_ffprobe(path: &Path) -> bool {
     }
 
     // Check frame count using ffprobe with -count_frames
-    if let Ok(output) = Command::new("ffprobe")
+    if let Ok(output) = Command::new(crate::constants::TOOL_FFPROBE)
         .args([
-            "-v",
-            "error",
-            "-select_streams",
+            crate::constants::FFMPEG_ARG_LOG_LEVEL,
+            crate::constants::FFMPEG_VAL_ERROR,
+            crate::constants::FFMPEG_ARG_SELECT_STREAMS,
             "v:0",
-            "-count_frames",
-            "-show_entries",
+            crate::constants::FFMPEG_ARG_COUNT_FRAMES,
+            crate::constants::FFMPEG_ARG_SHOW_ENTRIES,
             "stream=nb_read_frames",
-            "-of",
-            "json",
+            crate::constants::FFMPEG_ARG_OUTPUT_FORMAT,
+            crate::constants::FFMPEG_VAL_JSON,
             "--",
         ])
         .arg(crate::safe_path_arg(temp_apng_path).as_ref())
@@ -773,8 +782,11 @@ pub fn detect_compression(format: &DetectedFormat, path: &Path) -> Result<Compre
         DetectedFormat::TIFF => detect_tiff_compression(path),
 
         DetectedFormat::WebP => {
-            crate::common_utils::validate_file_size_limit(path, 512 * 1024 * 1024)
-                .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
+            crate::common_utils::validate_file_size_limit(
+                path,
+                crate::constants::MAX_IMAGE_ANALYSIS_FILE_SIZE,
+            )
+            .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
             let data = std::fs::read(path)?;
 
             if crate::image_formats::webp::is_animated_from_bytes(&data) {
@@ -853,8 +865,8 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
     mut reader: R,
     path: Option<&Path>,
 ) -> Result<PngQuantizationAnalysis> {
-    const LOSSY_THRESHOLD: f64 = 0.58;
-    const GRAY_ZONE_LOW: f64 = 0.40;
+    const LOSSY_THRESHOLD: f64 = crate::constants::PNG_QUANT_THRESHOLD_HIGH;
+    const GRAY_ZONE_LOW: f64 = crate::constants::PNG_QUANT_THRESHOLD_LOW;
 
     let png_info = parse_png_structure(&mut reader)?;
 
@@ -1244,15 +1256,14 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
             explanation: explanations.join("; "),
         });
     }
-
     // Conservative strategy: only mark as lossy when confidence is high.
-    // Gray zone [0.40, 0.58] without tool signature → treat as lossless to avoid
+    // Gray zone without tool signature → treat as lossless to avoid
     // false positives (e.g. natural palette art misclassified as quantized).
     let (is_quantized, confidence) = if final_score >= 0.70 {
         (true, (final_score - 0.70).mul_add(0.33, 0.9))
     } else if final_score >= LOSSY_THRESHOLD {
         (true, (final_score - LOSSY_THRESHOLD).mul_add(1.0, 0.7))
-    } else if final_score >= GRAY_ZONE_LOW {
+    } else if final_score >= crate::constants::PNG_QUANT_THRESHOLD_LOW {
         // Gray zone: no tool signature → lossless (conservative)
         (false, (LOSSY_THRESHOLD - final_score).mul_add(1.0, 0.5))
     } else if final_score >= 0.30 {

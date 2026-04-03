@@ -105,8 +105,8 @@ Every file goes through a multi-stage decision pipeline:
 
 ### The Four Binaries
 
-| Binary         | Purpose            | Target Codec                     |
-| -------------- | ------------------ | -------------------------------- |
+| Binary    | Purpose            | Target Codec                           |
+| --------- | ------------------ | -------------------------------------- |
 | **`img`** | Image optimization | → JXL (static) / HEVC / AV1 (animated) |
 | **`vid`** | Video optimization | → HEVC / AV1                           |
 

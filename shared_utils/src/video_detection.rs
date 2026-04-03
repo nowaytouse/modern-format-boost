@@ -302,11 +302,11 @@ pub fn determine_compression_type(
 
     // Use original CRF if available
     if let Some(crf) = precision.original_crf {
-        if crf <= 15.0 {
+        if crf <= crate::constants::CRF_THRESHOLD_VISUALLY_LOSSLESS {
             return CompressionType::VisuallyLossless;
-        } else if crf <= 23.0 {
+        } else if crf <= crate::constants::CRF_THRESHOLD_HIGH_QUALITY {
             return CompressionType::HighQuality;
-        } else if crf <= 30.0 {
+        } else if crf <= crate::constants::CRF_THRESHOLD_STANDARD {
             return CompressionType::Standard;
         }
         return CompressionType::LowQuality;
@@ -320,11 +320,11 @@ pub fn determine_compression_type(
     let pixels_per_second = f64::from(width) * f64::from(height) * fps;
     if pixels_per_second > 0.0 {
         let bits_per_pixel = (bitrate as f64 * 8.0) / pixels_per_second;
-        if bits_per_pixel > 2.0 {
+        if bits_per_pixel > crate::constants::BPP_THRESHOLD_VISUALLY_LOSSLESS {
             return CompressionType::VisuallyLossless;
-        } else if bits_per_pixel > 0.5 {
+        } else if bits_per_pixel > crate::constants::BPP_THRESHOLD_HIGH_QUALITY {
             return CompressionType::HighQuality;
-        } else if bits_per_pixel > 0.1 {
+        } else if bits_per_pixel > crate::constants::BPP_THRESHOLD_STANDARD {
             return CompressionType::Standard;
         }
     }
@@ -347,11 +347,12 @@ pub fn calculate_quality_score(
         CompressionType::LowQuality => 40,
     };
     let depth_bonus = if bit_depth >= 10 { 5 } else { 0 };
-    let res_bonus = if width >= 3840 || height >= 2160 {
-        3
-    } else {
-        0
-    };
+    let res_bonus =
+        if width >= crate::constants::WIDTH_UHD_4K || height >= crate::constants::HEIGHT_UHD_4K {
+            3
+        } else {
+            0
+        };
     (base_score + depth_bonus + res_bonus).min(100)
 }
 

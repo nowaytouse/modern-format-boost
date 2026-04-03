@@ -210,7 +210,7 @@ fn parse_side_data_list(
 pub fn extract_color_info(input: &Path) -> ColorInfo {
     let input_str = input.to_string_lossy();
 
-    let output = match Command::new("ffprobe")
+    let output = match Command::new(crate::constants::TOOL_FFPROBE)
         .args([
             "-v",
             "error", // Use "error" instead of "quiet" to capture stderr for fallback detection
@@ -236,7 +236,7 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
             {
                 crate::log_rare_error!("FFprobe", "Image2 demuxer pattern matching failed for file: {} - Retrying with -pattern_type none", input_str);
                 // Retry with -pattern_type none to disable sequence pattern matching
-                match Command::new("ffprobe")
+                match Command::new(crate::constants::TOOL_FFPROBE)
                     .args([
                         "-v",
                         "error",
@@ -495,7 +495,7 @@ pub enum PtsIntegrity {
 }
 
 pub fn check_pts_integrity(input: &Path) -> PtsIntegrity {
-    let output = match Command::new("ffprobe")
+    let output = match Command::new(crate::constants::TOOL_FFPROBE)
         .args([
             "-v",
             "error",

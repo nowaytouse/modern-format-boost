@@ -12,9 +12,11 @@ pub mod crf;
 pub mod file_size;
 pub mod iteration;
 pub mod perception;
+pub mod preset;
 pub mod ssim;
 
 pub use crf::{Av1Encoder, Crf, CrfError, EncoderBounds, HevcEncoder, Vp9Encoder, X264Encoder};
+pub use preset::EncoderPreset;
 pub use file_size::FileSize;
 pub use iteration::{IterationError, IterationGuard};
 pub use perception::{ProcessHistory, VisualPerception};

@@ -494,7 +494,12 @@ impl GpuAccel {
                     supports_crf: true,
                     crf_param: "q:v",
                     crf_range: (0, 100),
-                    extra_args: vec!["-profile:v", "main", "-tag:v", "hvc1"],
+                    extra_args: vec![
+                        crate::constants::FFMPEG_ARG_PROFILE_VIDEO,
+                        crate::constants::VAL_MAIN,
+                        crate::constants::FFMPEG_ARG_TAG_VIDEO,
+                        crate::constants::FFMPEG_TAG_HVC1,
+                    ],
                 })
             } else {
                 None
@@ -508,7 +513,10 @@ impl GpuAccel {
                     supports_crf: true,
                     crf_param: "q:v",
                     crf_range: (0, 100),
-                    extra_args: vec!["-profile:v", "high"],
+                    extra_args: vec![
+                        crate::constants::FFMPEG_ARG_PROFILE_VIDEO,
+                        crate::constants::VAL_HIGH,
+                    ],
                 })
             } else {
                 None
@@ -542,14 +550,14 @@ impl GpuAccel {
                     crf_param: "cq",
                     crf_range: (0, 51),
                     extra_args: vec![
-                        "-preset",
-                        "p4",
-                        "-tune",
-                        "hq",
-                        "-rc",
-                        "vbr",
-                        "-profile:v",
-                        "main",
+                        crate::constants::FFMPEG_ARG_PRESET,
+                        crate::constants::VAL_P4,
+                        crate::constants::FFMPEG_ARG_TUNE,
+                        crate::constants::VAL_HQ,
+                        crate::constants::FFMPEG_ARG_RC,
+                        crate::constants::VAL_VBR,
+                        crate::constants::FFMPEG_ARG_PROFILE_VIDEO,
+                        crate::constants::VAL_MAIN,
                     ],
                 })
             } else {
@@ -563,7 +571,14 @@ impl GpuAccel {
                     supports_crf: true,
                     crf_param: "cq",
                     crf_range: (0, 63),
-                    extra_args: vec!["-preset", "p4", "-tune", "hq", "-rc", "vbr"],
+                                        extra_args: vec![
+                        crate::constants::FFMPEG_ARG_PRESET,
+                        crate::constants::VAL_P4,
+                        crate::constants::FFMPEG_ARG_TUNE,
+                        crate::constants::VAL_HQ,
+                        crate::constants::FFMPEG_ARG_RC,
+                        crate::constants::VAL_VBR,
+                    ],
                 })
             } else {
                 None
@@ -577,14 +592,14 @@ impl GpuAccel {
                     crf_param: "cq",
                     crf_range: (0, 51),
                     extra_args: vec![
-                        "-preset",
-                        "p4",
-                        "-tune",
-                        "hq",
-                        "-rc",
-                        "vbr",
-                        "-profile:v",
-                        "high",
+                        crate::constants::FFMPEG_ARG_PRESET,
+                        crate::constants::VAL_P4,
+                        crate::constants::FFMPEG_ARG_TUNE,
+                        crate::constants::VAL_HQ,
+                        crate::constants::FFMPEG_ARG_RC,
+                        crate::constants::VAL_VBR,
+                        crate::constants::FFMPEG_ARG_PROFILE_VIDEO,
+                        crate::constants::VAL_HIGH,
                     ],
                 })
             } else {
@@ -618,7 +633,7 @@ impl GpuAccel {
                     supports_crf: true,
                     crf_param: "global_quality",
                     crf_range: (1, 51),
-                    extra_args: vec!["-preset", "medium", "-profile:v", "main"],
+                    extra_args: vec![crate::constants::FFMPEG_ARG_PRESET, crate::constants::VAL_MEDIUM, crate::constants::FFMPEG_ARG_PROFILE_VIDEO, crate::constants::VAL_MAIN],
                 })
             } else {
                 None
@@ -631,7 +646,7 @@ impl GpuAccel {
                     supports_crf: true,
                     crf_param: "global_quality",
                     crf_range: (1, 63),
-                    extra_args: vec!["-preset", "medium"],
+                    extra_args: vec![crate::constants::FFMPEG_ARG_PRESET, crate::constants::VAL_MEDIUM],
                 })
             } else {
                 None
@@ -644,7 +659,7 @@ impl GpuAccel {
                     supports_crf: true,
                     crf_param: "global_quality",
                     crf_range: (1, 51),
-                    extra_args: vec!["-preset", "medium", "-profile:v", "high"],
+                    extra_args: vec![crate::constants::FFMPEG_ARG_PRESET, crate::constants::VAL_MEDIUM, crate::constants::FFMPEG_ARG_PROFILE_VIDEO, crate::constants::VAL_HIGH],
                 })
             } else {
                 None
@@ -814,7 +829,7 @@ impl GpuAccel {
 }
 
 fn get_available_encoders() -> Vec<String> {
-    let output = Command::new("ffmpeg")
+    let output = Command::new(crate::constants::TOOL_FFMPEG)
         .arg("-hide_banner")
         .arg("-encoders")
         .output();
@@ -833,7 +848,7 @@ fn get_available_encoders() -> Vec<String> {
 }
 
 fn test_encoder(encoder: &str) -> bool {
-    let output = Command::new("ffmpeg")
+    let output = Command::new(crate::constants::TOOL_FFMPEG)
         .arg("-hide_banner")
         .arg("-f")
         .arg("lavfi")
@@ -921,7 +936,7 @@ pub fn calculate_smart_sample(
         )
     };
 
-    let test_output = Command::new("ffmpeg")
+    let test_output = Command::new(crate::constants::TOOL_FFMPEG)
         .arg("-hide_banner")
         .arg("-t")
         .arg("10")
@@ -1230,6 +1245,7 @@ pub struct GpuCoarseConfig {
     pub max_iterations: u32,
     /// When true (ultimate mode), use longer sample/segment durations for SSIM.
     pub ultimate_mode: bool,
+    pub preset: crate::types::EncoderPreset,
 }
 
 impl Default for GpuCoarseConfig {
@@ -1239,14 +1255,15 @@ impl Default for GpuCoarseConfig {
             min_crf: 0.0,
             max_crf: 51.0,
             step: GPU_COARSE_STEP,
-            max_iterations: GPU_MAX_ITERATIONS,
+            max_iterations: 10,
             ultimate_mode: false,
+            preset: crate::types::EncoderPreset::Medium,
         }
     }
 }
 
 fn calculate_psnr_fast(input: &str, output: &str) -> Result<f64, String> {
-    let psnr_output = Command::new("ffmpeg")
+    let psnr_output = Command::new(crate::constants::TOOL_FFMPEG)
         .arg("-i")
         .arg(crate::safe_path_arg(std::path::Path::new(input)).as_ref())
         .arg("-i")
@@ -1622,7 +1639,7 @@ fn gpu_coarse_search_with_log_impl(
     let skip_gpu_duration_threshold: f32 = if config.ultimate_mode { 1.0 } else { 3.0 };
 
     let quick_duration: f32 = {
-        let duration_output = Command::new("ffprobe")
+        let duration_output = Command::new(crate::constants::TOOL_FFPROBE)
             .args([
                 "-v",
                 "error",
@@ -2727,7 +2744,7 @@ fn gpu_coarse_search_with_log_impl(
         );
         match encode_gpu(last_tested_crf) {
             Ok(_) => {
-                let ssim_output = Command::new("ffmpeg")
+                let ssim_output = Command::new(crate::constants::TOOL_FFMPEG)
                     .arg("-i")
                     .arg(crate::safe_path_arg(input).as_ref())
                     .arg("-i")

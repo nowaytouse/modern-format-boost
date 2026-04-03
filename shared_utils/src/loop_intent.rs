@@ -11,6 +11,12 @@
 //! - Layer 6: KNN + WeightedScore fusion
 //! - Layer 7: Conservative fallback
 
+use crate::constants::{
+    DIRECTORY_CONTEXT_POSITIVE_LOG_ODDS, FILENAME_CONTEXT_POSITIVE_LOG_ODDS,
+    LAYER6_HIGH_SCORE_THRESHOLD, LAYER6_RELAXED_CONFIDENCE_THRESHOLD,
+    LOCALIZED_MOTION_POSITIVE_LOG_ODDS, LONG_SILENT_PRIOR_NEGATIVE_LOG_ODDS,
+    MEME_DIRECTORY_KEYWORDS, MODERN_MASTER_NEGATIVE_LOG_ODDS, PLAY_ONCE_NEGATIVE_LOG_ODDS,
+};
 use crate::file_copier::{SUPPORTED_IMAGE_EXTENSIONS, SUPPORTED_VIDEO_EXTENSIONS};
 use crate::gif_value_db::LoopReferenceProfile;
 use crate::progress_mode::emit_stderr;
@@ -21,24 +27,6 @@ use image::{ExtendedColorType, GenericImageView};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-const GIPHY_PLATFORM_MARKERS: &[&str] =
-    &["GIPHY", "TENOR", "STICKER", "TELEGRAM", "TIKTOK", "DISCORD"];
-const MEME_DIRECTORY_KEYWORDS: &[&str] = &[
-    "meme",
-    "memes",
-    "sticker",
-    "stickers",
-    "emoji",
-    "emojis",
-    "reaction",
-    "reactions",
-    "sticker_pack",
-    "sticker_pkg",
-    "sticker_collection",
-    "meme_collection",
-    "funny",
-    "humor",
-];
 const WEBP_RATIO_SAMPLE_MAX_DIM: u32 = 256;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -237,11 +225,11 @@ impl LoopMeta {
             mv_magnitudes: detection.mv_magnitudes.clone(),
             cached_frame_png: None,
             is_meme_platform: {
-                const PLATFORM_MARKERS: &[&str] =
-                    &["GIPHY", "TENOR", "STICKER", "TELEGRAM", "TIKTOK", "DISCORD"];
                 detection.tags.values().any(|v| {
                     let up = v.to_uppercase();
-                    PLATFORM_MARKERS.iter().any(|&m| up.contains(m))
+                    crate::constants::LOOP_PLATFORM_MARKERS
+                        .iter()
+                        .any(|&m| up.contains(m))
                 })
             },
         };
@@ -324,11 +312,11 @@ impl LoopMeta {
             .app_extensions
             .as_ref()
             .is_some_and(|e_list: &Vec<String>| {
-                const PLATFORM_MARKERS: &[&str] =
-                    &["GIPHY", "TENOR", "STICKER", "TELEGRAM", "TIKTOK", "DISCORD"];
                 e_list.iter().any(|e: &String| {
                     let up = e.to_uppercase();
-                    PLATFORM_MARKERS.iter().any(|&m| up.contains(m))
+                    crate::constants::LOOP_PLATFORM_MARKERS
+                        .iter()
+                        .any(|&m| up.contains(m))
                 })
             });
         meta.directory_meme_score = score_directory_context(parent_directories.as_deref(), &[]);
@@ -410,11 +398,11 @@ impl LoopMeta {
             frame_delay_variation: delay_variation,
             palette_size: pal,
             is_meme_platform: exts.as_ref().is_some_and(|e_list: &Vec<String>| {
-                const PLATFORM_MARKERS: &[&str] =
-                    &["GIPHY", "TENOR", "STICKER", "TELEGRAM", "TIKTOK", "DISCORD"];
                 e_list.iter().any(|e: &String| {
                     let up = e.to_uppercase();
-                    PLATFORM_MARKERS.iter().any(|&m| up.contains(m))
+                    crate::constants::LOOP_PLATFORM_MARKERS
+                        .iter()
+                        .any(|&m| up.contains(m))
                 })
             }),
             ..Default::default()
@@ -465,26 +453,6 @@ impl LoopMeta {
 }
 
 // ── DB-Driven Loop Intent Forest ─────────────────────────────────────────────
-
-const TREE_DECISION_LOG_ODDS_THRESHOLD: f64 = 0.95;
-const TREE_Z_SCORE_CAP: f64 = 2.5;
-const SHORT_FAST_POSITIVE_LOG_ODDS: f64 = 0.72;
-const LONG_SLOW_NEGATIVE_LOG_ODDS: f64 = 0.82;
-const SCENE_CUT_NEGATIVE_LOG_ODDS: f64 = 1.35;
-const COMPACT_SILENT_POSITIVE_LOG_ODDS: f64 = 0.62;
-const LARGE_MEDIA_NEGATIVE_LOG_ODDS: f64 = 0.55;
-const PLATFORM_MARKER_POSITIVE_LOG_ODDS: f64 = 0.52;
-const PLAY_ONCE_NEGATIVE_LOG_ODDS: f64 = 0.92;
-const TRANSPARENCY_POSITIVE_LOG_ODDS: f64 = 0.34;
-const LOCALIZED_MOTION_POSITIVE_LOG_ODDS: f64 = 0.16;
-const DIRECTORY_CONTEXT_POSITIVE_LOG_ODDS: f64 = 0.12;
-const FILENAME_CONTEXT_POSITIVE_LOG_ODDS: f64 = 0.10;
-const MODERN_MASTER_NEGATIVE_LOG_ODDS: f64 = 0.35;
-const SHORT_CLIP_PRIOR_LOG_ODDS: f64 = 0.42;
-const EXTENDED_SHORT_ASSET_PRIOR_LOG_ODDS: f64 = 0.20;
-const LONG_SILENT_PRIOR_NEGATIVE_LOG_ODDS: f64 = 0.26;
-const LAYER6_HIGH_SCORE_THRESHOLD: f64 = 0.70;
-const LAYER6_RELAXED_CONFIDENCE_THRESHOLD: f64 = 0.68;
 
 #[derive(Debug, Default, Clone, Copy)]
 struct LogOdds(f64);
@@ -580,7 +548,7 @@ impl LoopThresholds {
             short_clip_secs,
             short_asset_window_secs,
             modern_bias_duration_secs,
-            decision_threshold: TREE_DECISION_LOG_ODDS_THRESHOLD,
+            decision_threshold: crate::constants::TREE_DECISION_LOG_ODDS_THRESHOLD,
         }
     }
 
@@ -603,7 +571,10 @@ impl LoopThresholds {
     }
 
     fn clamp_z(value: f64) -> f64 {
-        value.clamp(-TREE_Z_SCORE_CAP, TREE_Z_SCORE_CAP)
+        value.clamp(
+            -crate::constants::TREE_Z_SCORE_CAP,
+            crate::constants::TREE_Z_SCORE_CAP,
+        )
     }
 
     fn duration_z(&self, duration_secs: f64) -> f64 {
@@ -655,7 +626,7 @@ fn has_platform_marker(app_extensions: Option<&[String]>) -> bool {
     };
     app_extensions.iter().any(|app| {
         let normalized = app.trim().to_ascii_uppercase();
-        GIPHY_PLATFORM_MARKERS
+        crate::constants::LOOP_PLATFORM_MARKERS
             .iter()
             .any(|marker| normalized.contains(marker))
     })
@@ -704,22 +675,25 @@ fn evaluate_kinetics_and_physics(
 
     if duration_positive > 0.0 {
         let short_fast = duration_positive * (1.0 + fps_positive * 0.5);
-        log_odds.add(short_fast.min(2.0) * SHORT_FAST_POSITIVE_LOG_ODDS);
+        log_odds.add(short_fast.min(2.0) * crate::constants::SHORT_FAST_POSITIVE_LOG_ODDS);
     }
 
     if duration_negative > 0.0 {
         let long_slow = duration_negative * (1.0 + fps_negative * 0.5);
-        log_odds.add(-long_slow.min(2.0) * LONG_SLOW_NEGATIVE_LOG_ODDS);
+        log_odds.add(-long_slow.min(2.0) * crate::constants::LONG_SLOW_NEGATIVE_LOG_ODDS);
     }
 
     if derived.scene_cut {
-        log_odds.add(-SCENE_CUT_NEGATIVE_LOG_ODDS);
+        log_odds.add(-crate::constants::SCENE_CUT_NEGATIVE_LOG_ODDS);
     }
 
     let compactness_signal = (-thresholds.file_size_z(meta.file_size_bytes as f64)).max(0.0) * 0.70
         + (-thresholds.pixels_z(total_pixels)).max(0.0) * 0.45;
     if !meta.has_audio && compactness_signal > 0.0 {
-        log_odds.add((compactness_signal + 0.20).min(1.6) * COMPACT_SILENT_POSITIVE_LOG_ODDS);
+        log_odds.add(
+            (compactness_signal + 0.20).min(1.6)
+                * crate::constants::COMPACT_SILENT_POSITIVE_LOG_ODDS,
+        );
     }
 
     let large_media_signal = thresholds.file_size_z(meta.file_size_bytes as f64).max(0.0) * 0.75
@@ -729,7 +703,7 @@ fn evaluate_kinetics_and_physics(
         log_odds.add(
             -large_media_signal.min(1.8)
                 * audio_multiplier
-                * LARGE_MEDIA_NEGATIVE_LOG_ODDS
+                * crate::constants::LARGE_MEDIA_NEGATIVE_LOG_ODDS
                 * thresholds.get_feature_weight("file_size_bytes").sqrt(),
         );
     }
@@ -761,13 +735,13 @@ fn apply_weak_heuristics(
         && meta.duration_secs <= thresholds.short_asset_window_secs;
 
     if has_platform_marker(meta.app_extensions.as_deref()) || meta.is_meme_platform {
-        log_odds.add(PLATFORM_MARKER_POSITIVE_LOG_ODDS);
+        log_odds.add(crate::constants::PLATFORM_MARKER_POSITIVE_LOG_ODDS);
     }
     if is_webm && !meta.has_audio {
         log_odds.add(0.18);
     }
     if meta.has_transparency {
-        log_odds.add(TRANSPARENCY_POSITIVE_LOG_ODDS);
+        log_odds.add(crate::constants::TRANSPARENCY_POSITIVE_LOG_ODDS);
     }
     if is_short_clip {
         let range = (thresholds.short_clip_secs - thresholds.duration_override_secs).max(0.5);
@@ -776,7 +750,8 @@ fn apply_weak_heuristics(
         let format_bonus = if is_image { 0.10 } else { 0.04 };
         let cadence_bonus = if meta.frame_count > 1 { 0.06 } else { 0.0 };
         log_odds.add(
-            (0.18 + headroom * 0.26 + format_bonus + cadence_bonus) * SHORT_CLIP_PRIOR_LOG_ODDS,
+            (0.18 + headroom * 0.26 + format_bonus + cadence_bonus)
+                * crate::constants::SHORT_CLIP_PRIOR_LOG_ODDS,
         );
     }
     if is_extended_short_asset {
@@ -796,7 +771,7 @@ fn apply_weak_heuristics(
         };
         log_odds.add(
             (0.10 + tail_headroom * 0.10 + square_bonus + image_bonus + compact_bonus)
-                * EXTENDED_SHORT_ASSET_PRIOR_LOG_ODDS,
+                * crate::constants::EXTENDED_SHORT_ASSET_PRIOR_LOG_ODDS,
         );
     }
     if meta.loop_count == Some(1) {
@@ -806,19 +781,37 @@ fn apply_weak_heuristics(
     }
 
     if let Some(delay_variation) = meta.frame_delay_variation {
-        log_odds.add(-thresholds.delay_variation_z(delay_variation) * 0.18 * thresholds.get_feature_weight("delay_var"));
+        log_odds.add(
+            -thresholds.delay_variation_z(delay_variation)
+                * 0.18
+                * thresholds.get_feature_weight("delay_var"),
+        );
     }
     if let Some(webp_ratio) = meta.webp_compression_ratio {
-        log_odds.add(thresholds.webp_ratio_z(webp_ratio) * 0.16 * thresholds.get_feature_weight("webp_ratio"));
+        log_odds.add(
+            thresholds.webp_ratio_z(webp_ratio)
+                * 0.16
+                * thresholds.get_feature_weight("webp_ratio"),
+        );
     }
     if let Some(motion_gini) = meta.motion_gini {
-        log_odds.add(thresholds.motion_gini_z(motion_gini) * 0.14 * thresholds.get_feature_weight("m_gini"));
+        log_odds.add(
+            thresholds.motion_gini_z(motion_gini) * 0.14 * thresholds.get_feature_weight("m_gini"),
+        );
     }
     if let Some(palette_depth) = meta.palette_depth {
-        log_odds.add(thresholds.palette_depth_z(palette_depth) * 0.12 * thresholds.get_feature_weight("p_depth"));
+        log_odds.add(
+            thresholds.palette_depth_z(palette_depth)
+                * 0.12
+                * thresholds.get_feature_weight("p_depth"),
+        );
     }
     if let Some(temporal_flatness) = meta.temporal_flatness {
-        log_odds.add(thresholds.temporal_flatness_z(temporal_flatness) * 0.10 * thresholds.get_feature_weight("t_flat"));
+        log_odds.add(
+            thresholds.temporal_flatness_z(temporal_flatness)
+                * 0.10
+                * thresholds.get_feature_weight("t_flat"),
+        );
     }
 
     if derived.localized_motion || derived.zero_motion_ratio > 0.80 {
@@ -896,14 +889,17 @@ pub fn identify_loop_intent(meta: &LoopMeta) -> LoopIntentVerdict {
 }
 
 fn developer_layer1_override_enabled(name: &str) -> bool {
-    std::env::var(name)
-        .map(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-        .unwrap_or(false)
+    let val = std::env::var(name).ok();
+    if let Some(value) = val {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    } else {
+        // PATCH: Enable these two critical heuristics by default to avoid Layer 7 fallbacks
+        name == crate::constants::ENV_FORCE_SHORT_GIFS || 
+        name == crate::constants::ENV_INTERCEPT_LONG_SILENT
+    }
 }
 
 fn evaluate_loop_tree(
@@ -1081,7 +1077,11 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
     };
 
     let disable_db = developer_layer1_override_enabled(crate::constants::ENV_DISABLE_DB_FEEDBACK);
-    let mut conn = if disable_db { None } else { open_pg_client().ok() };
+    let mut conn = if disable_db {
+        None
+    } else {
+        open_pg_client().ok()
+    };
     let is_legacy_mode = conn.is_none();
 
     let reference_profile = conn

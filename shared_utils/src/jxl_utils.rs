@@ -266,28 +266,23 @@ fn run_imagemagick_cjxl_pipeline(
 ) -> std::result::Result<(), (bool, bool, String)> {
     use std::process::Stdio;
 
-    let depth_arg = if depth == 8 { "8" } else { "16" };
-    let mut magick = Command::new("magick");
-    magick.arg("--").arg(crate::safe_path_arg(input).as_ref());
-    if strip {
-        magick.arg("-strip");
-    }
-    if normalize_icc {
-        magick
-            .arg("-define")
-            .arg("png:preserve-colormap=false")
-            .arg("-set")
-            .arg("colorspace")
-            .arg("sRGB");
-    }
-    magick
-        .arg("-depth")
-        .arg(depth_arg)
-        .arg("png:-")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    let mut magick_builder = crate::image_builders::MagickBuilder::new();
+    magick_builder
+        .input(input)
+        .strip(strip)
+        .use_stdout(true);
 
-    let mut magick_proc = magick.spawn().map_err(|e| {
+    if let Some(d) = Some(depth) {
+        magick_builder.depth(d);
+    }
+
+    if normalize_icc {
+        magick_builder
+            .define("png:preserve-colormap", "false")
+            .set("colorspace", "sRGB");
+    }
+
+    let mut magick_proc = magick_builder.build().spawn().map_err(|e| {
         let line = format!("   ❌ ImageMagick not available or failed to start: {e}");
         crate::progress_mode::emit_stderr(&line);
         (false, false, String::new())
@@ -315,20 +310,17 @@ fn run_imagemagick_cjxl_pipeline(
         })
     });
 
-    let mut cjxl_cmd = Command::new("cjxl");
-    cjxl_cmd
-        .arg("-")
-        .arg(output)
-        .arg("-d")
-        .arg(format!("{distance:.1}"))
-        .arg("-e")
-        .arg(effort.to_string())
-        .arg("-j")
-        .arg(max_threads.to_string());
-    if apple_compat {
-        cjxl_cmd.arg("--compress_boxes=0");
-    }
-    let mut cjxl_proc = cjxl_cmd
+    let mut cjxl_builder = crate::jxl_builder::CjxlBuilder::new();
+    cjxl_builder
+        .use_stdin(true)
+        .output(output)
+        .distance(distance)
+        .effort(effort)
+        .threads(max_threads)
+        .apple_compat(apple_compat);
+
+    let mut cjxl_proc = cjxl_builder
+        .build()
         .stdin(magick_stdout)
         .stderr(Stdio::piped())
         .spawn()

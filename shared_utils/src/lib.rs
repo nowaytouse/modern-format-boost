@@ -44,7 +44,10 @@ pub mod crf_constants;
 pub mod date_analysis;
 pub mod error_handler;
 pub mod explore_strategy;
+pub mod ffmpeg_builder;
 pub mod ffmpeg_process;
+pub mod image_builders;
+pub mod jxl_builder;
 pub mod ffprobe;
 pub mod flag_validator;
 pub mod float_compare;
@@ -218,11 +221,13 @@ pub use video_explorer::{
     explore_precise_quality_match, explore_precise_quality_match_with_compression,
     explore_quality_match, explore_size_only, precision, precision::SearchPhase,
     precision::ThreePhaseSearch, pure_video_size, verify_compression_precise,
-    verify_compression_simple, CompressionVerifyStrategy, EncoderPreset, ExploreConfig,
+    verify_compression_simple, CompressionVerifyStrategy, ExploreConfig,
     ExploreMode, ExploreResult, IterationMetrics, QualityThresholds, SsimSource,
     TransparencyReport, VideoEncoder, VideoExplorer, METADATA_MARGIN_MAX, METADATA_MARGIN_MIN,
     METADATA_MARGIN_PERCENT, SMALL_FILE_THRESHOLD,
 };
+
+pub use types::EncoderPreset;
 
 pub use video_explorer::{
     explore_compress_only_gpu, explore_compress_with_quality_gpu,
@@ -285,6 +290,11 @@ pub use explore_strategy::{
     ProgressConfig, QualityMatchStrategy, SizeOnlyStrategy, SsimResult,
 };
 
+pub use ffmpeg_builder::{
+    FfmpegBuilder, FfprobeBuilder, PixFmt, VideoCodec, VideoProfile,
+};
+pub use image_builders::{AvifencBuilder, ExiftoolBuilder, GifskiBuilder, MagickBuilder, SipsBuilder, WebpmuxBuilder};
+pub use jxl_builder::{CjxlBuilder, DjxlBuilder};
 pub use ffmpeg_process::{
     format_ffmpeg_error, is_recoverable_error, FfmpegProcess, FfmpegProgressParser,
 };

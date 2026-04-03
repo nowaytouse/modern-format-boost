@@ -131,6 +131,7 @@ pub fn quick_calibrate(
     gpu_encoder: &str,
     sample_duration: f32,
     ultimate_mode: bool,
+    apple_compat: bool,
 ) -> Result<DynamicCrfMapper> {
     use std::fs;
     use std::process::Command;
@@ -227,7 +228,7 @@ pub fn quick_calibrate(
                 .arg("libx265")
                 .arg("-crf")
                 .arg(format!("{anchor_crf:.0}"));
-            for arg in encoder.extra_args(max_threads) {
+            for arg in encoder.extra_args(max_threads, apple_compat) {
                 cpu_cmd.arg(arg);
             }
             cpu_cmd.arg(crate::safe_path_arg(cpu_path.as_path()).as_ref());
@@ -355,7 +356,7 @@ pub fn quick_calibrate(
                 .arg("-crf")
                 .arg(format!("{anchor_crf:.0}"));
 
-            for arg in encoder.extra_args(max_threads) {
+            for arg in encoder.extra_args(max_threads, apple_compat) {
                 cpu_cmd.arg(arg);
             }
 

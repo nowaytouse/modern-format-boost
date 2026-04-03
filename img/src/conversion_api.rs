@@ -6,7 +6,6 @@ use crate::detection_api::{CompressionType, DetectedFormat, DetectionResult, Ima
 use crate::{ImgQualityError, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TargetFormat {
@@ -358,22 +357,20 @@ fn convert_to_jxl(
     )
     .child_threads;
 
-    let mut cmd = Command::new("cjxl");
+    let mut builder = shared_utils::CjxlBuilder::new();
+    builder.input(&input_abs).output(&output_abs).threads(max_threads as usize);
+
     if *format == DetectedFormat::JPEG {
-        cmd.args(["--lossless_jpeg=1", "-j"]);
-        cmd.arg(max_threads.to_string());
+        builder.lossless_jpeg(true);
     } else {
-        cmd.args(["-d", "0.0", "-e", "7", "-j"]);
-        cmd.arg(max_threads.to_string());
+        builder.distance(0.0).effort(7);
     }
+
     if config.apple_compat {
-        cmd.arg("--compress_boxes=0");
+        builder.apple_compat(true);
     }
-    cmd.arg("--");
-    let status = cmd
-        .arg(shared_utils::safe_path_arg(&input_abs).as_ref())
-        .arg(shared_utils::safe_path_arg(&output_abs).as_ref())
-        .output()?;
+
+    let status = builder.build().output()?;
 
     if !status.status.success() {
         return Err(ImgQualityError::ConversionError(
@@ -441,11 +438,16 @@ fn convert_to_avif(
     let input_abs = canonicalize_input(input);
     let output_abs = resolve_output_absolute(output);
 
-    let status = Command::new("avifenc")
-        .arg(shared_utils::safe_path_arg(&input_abs).as_ref())
-        .arg(shared_utils::safe_path_arg(&output_abs).as_ref())
-        .args(["-q", &q])
-        .output()?;
+    let mut builder = shared_utils::AvifencBuilder::new();
+    builder
+        .input(&input_abs)
+        .output(&output_abs);
+    
+    if let Ok(q) = q.parse::<u8>() {
+        builder.quality(q, q);
+    }
+
+    let status = builder.build().output()?;
 
     if !status.status.success() {
         return Err(ImgQualityError::ConversionError(

@@ -864,7 +864,14 @@ def process_images():
             sys.exit(1)
 
     draw_separator(f"Processing Images ({IMG_COUNT})")
-    cmd = [str(IMGQUALITY_HEVC), "run", "--codec", "hevc", "--recursive", "--allow-size-tolerance"]
+    cmd = [
+        str(IMGQUALITY_HEVC),
+        "run",
+        "--codec",
+        "hevc",
+        "--recursive",
+        "--allow-size-tolerance",
+    ]
     if RESUME_MODE:
         cmd.append("--resume")
         print(
@@ -909,7 +916,14 @@ def process_videos():
             sys.exit(1)
 
     draw_separator(f"Processing Videos ({VID_COUNT})")
-    cmd = [str(VIDQUALITY_HEVC), "run", "--codec", "hevc", "--recursive", "--allow-size-tolerance"]
+    cmd = [
+        str(VIDQUALITY_HEVC),
+        "run",
+        "--codec",
+        "hevc",
+        "--recursive",
+        "--allow-size-tolerance",
+    ]
     if RESUME_MODE:
         cmd.append("--resume")
         print(

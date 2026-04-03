@@ -11,7 +11,6 @@
 
 use serde::Deserialize;
 use std::path::Path;
-use std::process::Command;
 use tracing::warn;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,19 +136,16 @@ pub fn extract_stream_sizes(path: &Path) -> StreamSizeInfo {
 }
 
 fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<StreamSizeInfo> {
-    let output = match Command::new("ffprobe")
-        .args([
-            "-v",
-            "error",
-            "-print_format",
-            "json",
-            "-show_streams",
-            "-show_format",
-            "--",
-        ])
-        .arg(crate::safe_path_arg(path).as_ref())
-        .output()
-    {
+    let mut builder = crate::ffmpeg_builder::FfprobeBuilder::new();
+    builder
+        .show_streams()
+        .show_format()
+        .print_format("json")
+        .arg("-v")
+        .arg("error")
+        .input(path);
+    
+    let output = match builder.build().output() {
         Ok(output) => output,
         Err(err) => {
             warn!(

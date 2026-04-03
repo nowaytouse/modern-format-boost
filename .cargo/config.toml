@@ -146,8 +146,6 @@ c = "check"
 r = "run"
 # 测试
 t = "test"
-# 格式化
-fmt = "fmt"
 # 清理
 clean = "clean"
 

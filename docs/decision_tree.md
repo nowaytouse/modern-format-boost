@@ -222,12 +222,12 @@ Judgment Tree Output
 
 ## Design Principles Comparison by Layer
 
-| Layer                     | Trigger Mechanism        | WeightedScore           | Reliability          | Computation Cost |
-| ------------------------- | ------------------------ | ----------------------- | -------------------- | ---------------- |
-| Layer 1: Physical Constraints | Forced Exit              | Not Involved            | 100%                 | Extremely Low    |
-| Layer 2: Explicit Declaration | Forced Exit              | Not Involved            | ~99%                 | Extremely Low    |
-| Layer 3: Self-Referential structure | End-of-Layer Check / Accumulation | Weight 0.35 / 0.20      | High, known edge cases | Low              |
-| Layer 4: Content Features     | End-of-Layer Check / Accumulation | Weight 0.25 / 0.20 / 0.15 | Medium               | Medium (sampling) |
-| Layer 5: Contextual Semantics | Accumulation Only        | Weight ≤ 0.10           | Weak                 | Low              |
-| Layer 6: KNN + Score Fusion   | Probabilistic Exit       | As feature + Correction | Depends on Training set | High             |
-| Layer 7: Conservative Fallback | Conservative Default      | Not Involved            | Minimal loss         | Zero             |
+| Layer                               | Trigger Mechanism                 | WeightedScore             | Reliability             | Computation Cost  |
+| ----------------------------------- | --------------------------------- | ------------------------- | ----------------------- | ----------------- |
+| Layer 1: Physical Constraints       | Forced Exit                       | Not Involved              | 100%                    | Extremely Low     |
+| Layer 2: Explicit Declaration       | Forced Exit                       | Not Involved              | ~99%                    | Extremely Low     |
+| Layer 3: Self-Referential structure | End-of-Layer Check / Accumulation | Weight 0.35 / 0.20        | High, known edge cases  | Low               |
+| Layer 4: Content Features           | End-of-Layer Check / Accumulation | Weight 0.25 / 0.20 / 0.15 | Medium                  | Medium (sampling) |
+| Layer 5: Contextual Semantics       | Accumulation Only                 | Weight ≤ 0.10             | Weak                    | Low               |
+| Layer 6: KNN + Score Fusion         | Probabilistic Exit                | As feature + Correction   | Depends on Training set | High              |
+| Layer 7: Conservative Fallback      | Conservative Default              | Not Involved              | Minimal loss            | Zero              |

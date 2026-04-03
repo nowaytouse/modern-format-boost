@@ -3,10 +3,10 @@ use std::path::PathBuf;
 use tracing::info;
 
 use shared_utils::analysis_cache::AnalysisCache;
+use shared_utils::conversion_types::SelectedCodec;
 use vid::{
     auto_convert_with_cache, detect_video, determine_strategy, ConversionConfig, VidQualityError,
 };
-use shared_utils::conversion_types::SelectedCodec;
 
 #[derive(Parser)]
 #[command(name = "vid")]
@@ -203,7 +203,10 @@ fn main() -> anyhow::Result<()> {
                     e
                 );
             }
-            info!("🎬 Run Mode Conversion ({})", selected_codec.as_str().to_uppercase());
+            info!(
+                "🎬 Run Mode Conversion ({})",
+                selected_codec.as_str().to_uppercase()
+            );
             if selected_codec == SelectedCodec::Hevc {
                 info!("   Lossless sources → HEVC Lossless MKV");
                 if match_quality {

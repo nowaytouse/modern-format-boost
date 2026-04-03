@@ -583,8 +583,11 @@ fn lookup_similar_samples_inner(
     seed_positive_dataset_if_needed(&mut conn)?;
 
     if !check_gif_db_maturity(&mut conn) {
-        log::info!("🔬 GIF Database is immature (needs >={} total, >={} per class). Bypassing KNN.", 
-            crate::constants::MIN_GIF_SAMPLES_TOTAL, crate::constants::MIN_GIF_SAMPLES_PER_CLASS);
+        log::info!(
+            "🔬 GIF Database is immature (needs >={} total, >={} per class). Bypassing KNN.",
+            crate::constants::MIN_GIF_SAMPLES_TOTAL,
+            crate::constants::MIN_GIF_SAMPLES_PER_CLASS
+        );
         return Ok(None);
     }
 
@@ -1638,14 +1641,17 @@ pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -
 
 pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
     emit_stderr("🏋️  Recomputing Global KNN Feature Statistics (Training Model)...");
-    
+
     // Feature Integrity Check: Re-probe samples that were previously broken (e.g. motion_gini = 0.0)
     let broken_rows = conn.query(
-        "SELECT file_hash, source_path FROM samples WHERE motion_gini = 0.0 AND frame_count > 1", 
-        &[]
+        "SELECT file_hash, source_path FROM samples WHERE motion_gini = 0.0 AND frame_count > 1",
+        &[],
     )?;
     if !broken_rows.is_empty() {
-        emit_stderr(&format!("   🛠️  Found {} samples with outdated feature metrics. Refreshing integrity...", broken_rows.len()));
+        emit_stderr(&format!(
+            "   🛠️  Found {} samples with outdated feature metrics. Refreshing integrity...",
+            broken_rows.len()
+        ));
         let mut fixed_count = 0;
         for row in broken_rows {
             let file_hash: String = row.get(0);
@@ -1662,12 +1668,12 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
                                 palette_depth = $4
                              WHERE file_hash = $5",
                             &[
-                                &sample.motion_gini, 
+                                &sample.motion_gini,
                                 &sample.directory_meme_score,
                                 &sample.temporal_flatness,
                                 &sample.palette_depth,
-                                &file_hash
-                            ]
+                                &file_hash,
+                            ],
                         );
                         fixed_count += 1;
                     }
@@ -1675,7 +1681,10 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
             }
         }
         if fixed_count > 0 {
-            emit_stderr(&format!("   ✅ Refreshed feature integrity for {} labeled samples.", fixed_count));
+            emit_stderr(&format!(
+                "   ✅ Refreshed feature integrity for {} labeled samples.",
+                fixed_count
+            ));
         }
     }
 

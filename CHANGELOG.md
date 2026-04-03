@@ -30,6 +30,16 @@ Refined the multi-language documentation suite and unified the project's version
 - **Asset Path Fix**: Corrected relative image links in all localized documentation (`docs/README_*.md`); changed erroneous `(assets/...)` paths to `(../assets/...)` for proper rendering from subdirectories.
 - **Global Version Unification**: Synchronized version `0.11.2` across the Rust workspace (`Cargo.toml`), Python scripts, Shell utilities, and the macOS App wrapper (`Info.plist`).
 - **Files**: `docs/README_*.md`, `Cargo.toml`, `shared_utils/src/version.rs`, `README.md`, `Modern Format Boost.app/Contents/Info.plist`.
+33: 
+#### 🏗️ Media Pipeline Hardening — Type-Safe Builder Migration
+
+Completed the transition of the entire media processing pipeline to a type-safe, fluent builder architecture and stabilized the loop intent classification system.
+
+- **Fluent Builder Architecture**: Replaced all remaining legacy `Command` manual invocations with specialized builders (`FfmpegBuilder`, `FfprobeBuilder`, `ExiftoolBuilder`, `MagickBuilder`, `CjxlBuilder`, `DjxlBuilder`).
+- **Loop Intent Logic Patch**: Refactored `shared_utils/src/loop_intent.rs` to default `ENV_FORCE_SHORT_GIFS` and `ENV_INTERCEPT_LONG_SILENT` heuristics to **ENABLED**, significantly reducing conservative Layer 7 fallbacks and improving classification accuracy for stickers and short clips.
+- **Type-Safe FFmpeg Integration**: Expanded `FfmpegBuilder` with support for encoder-specific parameters (`x265-params`, `tag:v hvc1`) and unified `EncoderPreset` mapping for consistent FFmpeg flag generation.
+- **Improved Robustness**: Resolved subtle `cicp` metadata move errors and type mismatches in the JXL conversion path. Cleaned up all syntax errors and unused imports across the `img` and `vid` crates.
+- **Files**: `shared_utils/src/ffmpeg_builder.rs`, `shared_utils/src/loop_intent.rs`, `img/src/lossless_converter.rs`, `img/src/main.rs`, `vid/src/animated_image.rs`.
 
 #### 🚀 HEVC Pipeline Optimization — Quality & Compatibility
 
@@ -92,7 +102,6 @@ Completed the multi-phase migration to enforce strict responsibility separation 
 ---
 
 ## [0.11.1] — 2026-04-03
-
 
 #### 🧠 pgvector HNSW Integration & KNN Search Overhaul
 
@@ -285,6 +294,7 @@ Completed the multi-phase migration to enforce strict responsibility separation 
 - **Decision Transparency**: Every decision layer (Tree Direct, KNN Fusion, Layer 7 Fallback) now explicitly logs its reasoning and confidence scores to `stderr`.
 
 #### 🧠 Refined Dual-Database Image Assessment (KNN Hardening)
+
 - **4-Category Semantic Model (Dynamic)**: Standardized classification into `loop`, `non-loop`, and `video-loop` (e.g. Telegram Video Stickers), ensuring intent takes precedence over containers.
   - **Logic**: Maps `video-loop` (MP4) and `loop` (GIF) to `high` intent, correctly routing short video loops into the dynamic ecosystem.
 - **Static Quality Assessment (Experimental)**: Introduced specialized labeling for static assets (`png-high`, `png-low`, `modern-high`, `modern-low`).

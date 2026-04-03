@@ -24,8 +24,8 @@
 #![cfg_attr(test, allow(clippy::field_reassign_with_default))]
 
 use crate::constants::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE;
-use crate::modern_ui::{colors, symbols};
 use crate::conversion_types::SelectedCodec;
+use crate::modern_ui::{colors, symbols};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;

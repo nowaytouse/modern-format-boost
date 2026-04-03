@@ -34,11 +34,17 @@ def clear_screen():
 def draw_header(targeted=False):
     line = "─" * 60
     print(f"{BLUE}╭{line}╮{RESET}")
-    mode_text = f"{BOLD}{RED}🧹 TARGETED CACHE CLEANUP{RESET}" if targeted else f"{BOLD}{RED}🧹 CACHE & LOG CLEANUP UTILITY v1.1{RESET}"
+    mode_text = (
+        f"{BOLD}{RED}🧹 TARGETED CACHE CLEANUP{RESET}"
+        if targeted
+        else f"{BOLD}{RED}🧹 CACHE & LOG CLEANUP UTILITY v1.1{RESET}"
+    )
     print(f"{BLUE}│{RESET}  {mode_text:<62} {BLUE}│{RESET}")
     print(f"{BLUE}╰{line}╯{RESET}")
     if not targeted:
-        print(f"   {RED}⚠️  WARNING: Critical processing data will be permanently deleted.{RESET}\n")
+        print(
+            f"   {RED}⚠️  WARNING: Critical processing data will be permanently deleted.{RESET}\n"
+        )
 
 
 def get_dir_size(path):
@@ -86,7 +92,7 @@ def show_stats(cache_dir, db_file, log_dir, mfb_progress_dir):
 
 def clean_mfb_progress(target_path: Path):
     """
-    Cleans entry from .mfb_progress. 
+    Cleans entry from .mfb_progress.
     If target is directory, removes the entire .txt/.lock.
     If target is file, removes just that line from the parent's .txt.
     """
@@ -96,58 +102,67 @@ def clean_mfb_progress(target_path: Path):
 
     target_abs = str(target_path.absolute())
     is_dir = target_path.is_dir()
-    
+
     deleted_count = 0
     modified_count = 0
 
     for pfile in progress_dir.glob("*.txt"):
         try:
-            with open(pfile, "r") as f:
+            with open(pfile) as f:
                 lines = f.readlines()
-            
+
             if not lines:
                 continue
 
             header_line = lines[0].strip()
-            if not header_line.startswith('{'):
+            if not header_line.startswith("{"):
                 continue
-            
+
             header = json.loads(header_line)
             if header.get("kind") != "header":
                 continue
-            
+
             target_dir = header.get("target_dir", "")
-            
+
             # Case 1: Target directory matches or is a parent of the tracker's target
-            if is_dir and (target_abs == target_dir or target_dir.startswith(target_abs + "/")):
+            if is_dir and (
+                target_abs == target_dir or target_dir.startswith(target_abs + "/")
+            ):
                 pfile.unlink()
                 lock_file = pfile.with_suffix(".lock")
                 if lock_file.exists():
                     lock_file.unlink()
                 deleted_count += 1
-                print(f"   {GREEN}✅ Removed progress tracker: {DIM}{target_dir}{RESET}")
+                print(
+                    f"   {GREEN}✅ Removed progress tracker: {DIM}{target_dir}{RESET}"
+                )
                 continue
 
             # Case 2: Target is a file inside this tracker
             if not is_dir and target_abs.startswith(target_dir):
-                new_lines = [lines[0]] # Keep header
+                new_lines = [lines[0]]  # Keep header
                 found = False
                 for line in lines[1:]:
-                    if target_abs in line: # Simple match for now
+                    if target_abs in line:  # Simple match for now
                         try:
                             record = json.loads(line.strip())
-                            if record.get("kind") == "entry" and record.get("path") == target_abs:
+                            if (
+                                record.get("kind") == "entry"
+                                and record.get("path") == target_abs
+                            ):
                                 found = True
                                 continue
                         except:
                             pass
                     new_lines.append(line)
-                
+
                 if found:
                     with open(pfile, "w") as f:
                         f.writelines(new_lines)
                     modified_count += 1
-                    print(f"   {GREEN}✅ Pruned file from tracker: {DIM}{target_path.name}{RESET}")
+                    print(
+                        f"   {GREEN}✅ Pruned file from tracker: {DIM}{target_path.name}{RESET}"
+                    )
 
         except Exception as e:
             print(f"   {RED}⚠️ Error processing {pfile.name}: {e}{RESET}")
@@ -166,9 +181,9 @@ def clean_path_tree(target_path: Path):
 
     for cfile in cache_dir.glob("*.json"):
         try:
-            with open(cfile, "r") as f:
+            with open(cfile) as f:
                 data = json.load(f)
-            
+
             root = data.get("root", "")
             if root == target_abs or root.startswith(target_abs + "/"):
                 cfile.unlink()
@@ -184,48 +199,58 @@ def clean_sqlite_dbs(target_path: Path):
     cache_dir = Path.home() / ".modern_format_boost" / "cache"
     db_files = [
         cache_dir / "image_analysis_v2_main.db",
-        Path.home() / ".modern_format_boost" / "gif_value_samples_v2.db"
+        Path.home() / ".modern_format_boost" / "gif_value_samples_v2.db",
     ]
-    
+
     target_abs = str(target_path.absolute())
     total_deleted = 0
 
     for db_file in db_files:
         if not db_file.is_file():
             continue
-        
+
         try:
             conn = sqlite3.connect(db_file)
             cursor = conn.cursor()
-            
+
             # Try to find tables with 'path' or 'file_path' columns
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
             tables = [r[0] for r in cursor.fetchall()]
-            
+
             for table in tables:
                 cursor.execute(f"PRAGMA table_info({table})")
                 cols = [c[1] for c in cursor.fetchall()]
-                
+
                 path_col = None
-                if "file_path" in cols: path_col = "file_path"
-                elif "path" in cols: path_col = "path"
-                elif "source_path" in cols: path_col = "source_path"
-                
+                if "file_path" in cols:
+                    path_col = "file_path"
+                elif "path" in cols:
+                    path_col = "path"
+                elif "source_path" in cols:
+                    path_col = "source_path"
+
                 if path_col:
                     if target_path.is_dir():
-                        cursor.execute(f"DELETE FROM {table} WHERE {path_col} LIKE ?", (target_abs + "%",))
+                        cursor.execute(
+                            f"DELETE FROM {table} WHERE {path_col} LIKE ?",
+                            (target_abs + "%",),
+                        )
                     else:
-                        cursor.execute(f"DELETE FROM {table} WHERE {path_col} = ?", (target_abs,))
-                    
+                        cursor.execute(
+                            f"DELETE FROM {table} WHERE {path_col} = ?", (target_abs,)
+                        )
+
                     total_deleted += cursor.rowcount
-            
+
             conn.commit()
             conn.close()
         except Exception as e:
             print(f"   {RED}⚠️ Database error ({db_file.name}): {e}{RESET}")
-            
+
     if total_deleted > 0:
-        print(f"   {GREEN}✅ Removed {total_deleted} records from analysis databases{RESET}")
+        print(
+            f"   {GREEN}✅ Removed {total_deleted} records from analysis databases{RESET}"
+        )
     return total_deleted
 
 
@@ -316,7 +341,9 @@ def perform_full_cleanup():
         if deleted_locks > 0:
             print(f"   {GREEN}✅ {deleted_locks} stale locks purged{RESET}")
         if active_locks > 0:
-            print(f"   {YELLOW}ℹ️  {active_locks} active sessions skipped (protected){RESET}")
+            print(
+                f"   {YELLOW}ℹ️  {active_locks} active sessions skipped (protected){RESET}"
+            )
 
     print(f"\n{GREEN}✅ Full Cleanup Complete{RESET}\n")
 
@@ -332,10 +359,10 @@ def perform_targeted_cleanup(target_path: Path):
 
     # 1. Progress Tracker
     clean_mfb_progress(target_path)
-    
+
     # 2. Path Tree Cache
     clean_path_tree(target_path)
-    
+
     # 3. Databases
     clean_sqlite_dbs(target_path)
 
@@ -344,7 +371,9 @@ def perform_targeted_cleanup(target_path: Path):
 
 def main():
     parser = argparse.ArgumentParser(description="Modern Format Boost Cache Cleaner")
-    parser.add_argument("path", nargs="?", help="Target file or directory for fine-grained cleanup")
+    parser.add_argument(
+        "path", nargs="?", help="Target file or directory for fine-grained cleanup"
+    )
     args = parser.parse_args()
 
     if args.path:

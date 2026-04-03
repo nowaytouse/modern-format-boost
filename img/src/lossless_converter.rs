@@ -13,7 +13,6 @@ use crate::{ImgQualityError, Result};
 use shared_utils::image_jpeg_analysis::is_jpeg_complete;
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
 pub use shared_utils::conversion::{
     check_size_tolerance, clear_processed_list, determine_output_path_with_base,
@@ -272,33 +271,28 @@ pub fn convert_to_jxl(
         shared_utils::thread_manager::get_optimal_threads()
     };
 
-    let mut cmd = Command::new("cjxl");
-    cmd.arg("-d")
-        .arg(format!("{distance:.2}"))
-        .arg("-e")
-        .arg("7")
-        .arg("-j")
-        .arg(max_threads.to_string());
+    let mut builder = shared_utils::CjxlBuilder::new();
+    builder
+        .input(&actual_input)
+        .output(&temp_output)
+        .distance(distance)
+        .effort(7)
+        .threads(max_threads)
+        .apple_compat(options.apple_compat);
 
     // Add HDR metadata via CICP if available
     if let Some(hdr) = hdr_info {
         if let Some(cicp) = shared_utils::color_info_to_cicp(hdr) {
-            cmd.arg(format!("--cicp={cicp}"));
+            builder.cicp(&cicp);
             if options.verbose {
                 eprintln!("   🌈 HDR detected: applying CICP {cicp}");
             }
         }
     }
 
-    if options.apple_compat {
-        cmd.arg("--compress_boxes=0");
+    if let Some(icc) = icc_path {
+        builder.icc_profile(icc);
     }
-
-    shared_utils::jxl_utils::add_icc_to_cjxl(&mut cmd, icc_path);
-
-    cmd.arg("--")
-        .arg(shared_utils::safe_path_arg(&actual_input).as_ref())
-        .arg(shared_utils::safe_path_arg(&temp_output).as_ref());
 
     if options.verbose {
         eprintln!(
@@ -310,7 +304,7 @@ pub fn convert_to_jxl(
         );
     }
 
-    let result = cmd.output();
+    let result = builder.build().output();
 
     let result = match &result {
         Ok(output_cmd) if !output_cmd.status.success() => {
@@ -326,28 +320,25 @@ pub fn convert_to_jxl(
                 ));
                 let _patched_icc = shared_utils::jxl_utils::extract_icc_with_d50_patch(input);
                 let patched_icc_path = _patched_icc.as_ref().map(tempfile::NamedTempFile::path);
-                let mut retry_cmd = Command::new("cjxl");
-                retry_cmd
-                    .arg("-d")
-                    .arg(format!("{distance:.2}"))
-                    .arg("-e")
-                    .arg("7")
-                    .arg("-j")
-                    .arg(max_threads.to_string());
+                let mut builder = shared_utils::CjxlBuilder::new();
+                builder
+                    .input(&actual_input)
+                    .output(&temp_output)
+                    .distance(distance)
+                    .effort(7)
+                    .threads(max_threads)
+                    .apple_compat(options.apple_compat);
+
                 if let Some(hdr) = hdr_info {
                     if let Some(cicp) = shared_utils::color_info_to_cicp(hdr) {
-                        retry_cmd.arg(format!("--cicp={cicp}"));
+                        builder.cicp(cicp);
                     }
                 }
-                if options.apple_compat {
-                    retry_cmd.arg("--compress_boxes=0");
+                if let Some(icc) = patched_icc_path {
+                    builder.icc_profile(icc);
                 }
-                shared_utils::jxl_utils::add_icc_to_cjxl(&mut retry_cmd, patched_icc_path);
-                retry_cmd
-                    .arg("--")
-                    .arg(shared_utils::safe_path_arg(&actual_input).as_ref())
-                    .arg(shared_utils::safe_path_arg(&temp_output).as_ref());
-                let retry_out = retry_cmd.output();
+                
+                let retry_out = builder.build().output();
                 if let Ok(ref o) = retry_out {
                     if o.status.success() {
                         shared_utils::progress_mode::emit_stderr("   ✅ ICC patch retry succeeded");
@@ -427,25 +418,22 @@ pub fn convert_to_jxl(
                 let is_high_bit_depth = hdr_info
                     .is_some_and(|info| info.bit_depth.is_some_and(|d| d > 8) || info.is_hdr());
                 let pix_fmt = if is_high_bit_depth {
-                    "rgb48le"
+                    shared_utils::PixFmt::Rgb48le
                 } else {
-                    "rgb24"
+                    shared_utils::PixFmt::Rgb24
                 };
 
-                let ffmpeg_result = Command::new("ffmpeg")
-                    .arg("-threads")
-                    .arg(max_threads.to_string())
-                    .arg("-i")
-                    .arg(shared_utils::safe_path_arg(input).as_ref())
-                    .arg("-frames:v")
-                    .arg("1")
-                    .arg("-pix_fmt")
-                    .arg(pix_fmt)
-                    .arg("-vcodec")
-                    .arg("png")
-                    .arg("-f")
-                    .arg("image2pipe")
-                    .arg("-")
+                let mut ffmpeg_builder = shared_utils::FfmpegBuilder::new();
+                ffmpeg_builder
+                    .threads(max_threads)
+                    .input(input)
+                    .frames_v(1)
+                    .pix_fmt(pix_fmt)
+                    .vcodec(shared_utils::VideoCodec::Png)
+                    .format("image2pipe")
+                    .arg("-"); // output to pipe
+
+                let ffmpeg_result = ffmpeg_builder.build()
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
                     .spawn();
@@ -453,22 +441,19 @@ pub fn convert_to_jxl(
                 match ffmpeg_result {
                     Ok(mut ffmpeg_proc) => {
                         if let Some(ffmpeg_stdout) = ffmpeg_proc.stdout.take() {
-                            let mut cmd = Command::new("cjxl");
-                            cmd.arg("-")
-                                .arg(shared_utils::safe_path_arg(&temp_output).as_ref())
-                                .arg("-d")
-                                .arg(format!("{distance:.2}"))
-                                .arg("-e")
-                                .arg("7")
-                                .arg("-j")
-                                .arg(max_threads.to_string());
+                            let mut cjxl_builder = shared_utils::CjxlBuilder::new();
+                            cjxl_builder
+                                .use_stdin(true)
+                                .output(&temp_output)
+                                .distance(distance)
+                                .effort(7)
+                                .threads(max_threads)
+                                .apple_compat(options.apple_compat);
 
-                            if options.apple_compat {
-                                cmd.arg("--compress_boxes=0");
-                            }
-
-                            let cjxl_result =
-                                cmd.stdin(ffmpeg_stdout).stderr(Stdio::piped()).spawn();
+                            let cjxl_result = cjxl_builder.build()
+                                .stdin(ffmpeg_stdout)
+                                .stderr(Stdio::piped())
+                                .spawn();
 
                             match cjxl_result {
                                 Ok(mut cjxl_proc) => {
@@ -804,31 +789,30 @@ fn run_cjxl_jpeg_transcode(
     let _icc_temp = shared_utils::jxl_utils::extract_icc_profile(input);
     let icc_path = _icc_temp.as_ref().map(tempfile::NamedTempFile::path);
 
-    let mut cmd = Command::new("cjxl");
-    cmd.arg("--lossless_jpeg=1")
-        .arg("-j")
-        .arg(max_threads.to_string());
+    let mut builder = shared_utils::CjxlBuilder::new();
+    builder
+        .input(input)
+        .output(temp_output)
+        .lossless_jpeg(true)
+        .threads(max_threads)
+        .apple_compat(options.apple_compat);
+
     if let Some(v) = allow_jpeg_reconstruction {
-        cmd.arg("--allow_jpeg_reconstruction").arg(v.to_string());
+        builder.allow_jpeg_reconstruction(v != 0);
     }
 
     // Add HDR metadata via CICP if available (for wide-gamut JPEG)
     if let Some(hdr) = hdr_info {
         if let Some(cicp) = shared_utils::color_info_to_cicp(hdr) {
-            cmd.arg(format!("--cicp={cicp}"));
+            builder.cicp(cicp);
         }
     }
 
-    if options.apple_compat {
-        cmd.arg("--compress_boxes=0");
+    if let Some(icc) = icc_path {
+        builder.icc_profile(icc);
     }
 
-    shared_utils::jxl_utils::add_icc_to_cjxl(&mut cmd, icc_path);
-
-    cmd.arg("--")
-        .arg(shared_utils::safe_path_arg(input).as_ref())
-        .arg(shared_utils::safe_path_arg(temp_output).as_ref());
-    cmd.output()
+    builder.build().output()
 }
 
 fn commit_jpeg_to_jxl_success(
@@ -1136,17 +1120,15 @@ pub fn convert_to_avif(
         .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
     let q = quality.unwrap_or(85);
 
-    let result = Command::new("avifenc")
-        .arg("-s")
-        .arg("4")
-        .arg("-j")
-        .arg("all")
-        .arg("-q")
-        .arg(q.to_string())
-        .arg("--")
-        .arg(shared_utils::safe_path_arg(input).as_ref())
-        .arg(shared_utils::safe_path_arg(&temp_output).as_ref())
-        .output();
+    let mut builder = shared_utils::AvifencBuilder::new();
+    builder
+        .speed(4)
+        .jobs("all")
+        .quality(q, q)
+        .input(input)
+        .output(&temp_output);
+    
+    let result = builder.build().output();
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
@@ -1215,16 +1197,15 @@ pub fn convert_to_avif_lossless(
     let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
         .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
 
-    let result = Command::new("avifenc")
-        .arg("--lossless")
-        .arg("-s")
-        .arg("4")
-        .arg("-j")
-        .arg("all")
-        .arg("--")
-        .arg(shared_utils::safe_path_arg(input).as_ref())
-        .arg(shared_utils::safe_path_arg(&temp_output).as_ref())
-        .output();
+    let mut builder = shared_utils::AvifencBuilder::new();
+    builder
+        .lossless(true)
+        .speed(4)
+        .jobs("all")
+        .input(input)
+        .output(&temp_output);
+    
+    let result = builder.build().output();
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
@@ -1339,35 +1320,26 @@ pub fn convert_to_jxl_matched(
     } else {
         shared_utils::thread_manager::get_optimal_threads()
     };
-    let mut cmd = Command::new("cjxl");
-    cmd.arg("-d")
-        .arg(format!("{distance:.2}"))
-        .arg("-e")
-        .arg("7")
-        .arg("-j")
-        .arg(max_threads.to_string());
+    let mut builder = shared_utils::CjxlBuilder::new();
+    builder
+        .input(input)
+        .output(&temp_output)
+        .distance(distance)
+        .effort(7)
+        .threads(max_threads)
+        .apple_compat(options.apple_compat);
 
-    if options.apple_compat {
-        cmd.arg("--compress_boxes=0");
-    }
-
-    // Only disable lossless JPEG mode when input is actually JPEG and we want lossy encoding.
-    // For non-JPEG inputs this flag is a no-op, but omitting it keeps the command clean.
     if distance > 0.0 {
         let is_jpeg = options
             .input_format
             .as_deref()
             .is_some_and(|f| f.eq_ignore_ascii_case("jpeg") || f.eq_ignore_ascii_case("jpg"));
         if is_jpeg {
-            cmd.arg("--lossless_jpeg=0");
+            builder.lossless_jpeg(false);
         }
     }
 
-    cmd.arg("--")
-        .arg(shared_utils::safe_path_arg(input).as_ref())
-        .arg(shared_utils::safe_path_arg(&temp_output).as_ref());
-
-    let result = cmd.output();
+    let result = builder.build().output();
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
@@ -1402,8 +1374,6 @@ pub fn convert_to_jxl_matched(
         ))),
     }
 }
-
-
 
 fn try_imagemagick_fallback(
     input: &Path,
@@ -1593,19 +1563,18 @@ fn prepare_input_for_cjxl(
                     .tempfile()?;
                 let temp_path = temp_file.path().to_path_buf();
 
-                let mut cmd = Command::new("magick");
-                cmd.arg("--")
-                    .arg(shared_utils::safe_path_arg(input).as_ref());
-
+                let mut builder = shared_utils::MagickBuilder::new();
+                builder.input(input).output(&temp_path);
+                
                 if is_float {
-                    cmd.arg("-format").arg("exr");
+                    builder.format("exr");
                 }
-
-                cmd.arg("-depth")
-                    .arg(depth_str)
-                    .arg(shared_utils::safe_path_arg(&temp_path).as_ref());
-
-                let result = cmd.output();
+                
+                if let Ok(depth) = depth_str.parse::<u8>() {
+                    builder.depth(depth);
+                }
+                
+                let result = builder.build().output();
 
                 match result {
                     Ok(output) if output.status.success() && temp_path.exists() => {
@@ -1655,19 +1624,15 @@ fn prepare_input_for_cjxl(
                 .map_err(ImgQualityError::IoError)?;
             let temp_path = temp_file.path().to_path_buf();
 
-            let mut cmd = Command::new("magick");
-            cmd.arg("--")
-                .arg(shared_utils::safe_path_arg(input).as_ref());
-
+            let mut builder = shared_utils::MagickBuilder::new();
+            builder.input(input).output(&temp_path);
             if is_float {
-                cmd.arg("-format").arg("exr");
+                builder.format("exr");
             }
-
-            cmd.arg("-depth")
-                .arg(depth_str)
-                .arg(shared_utils::safe_path_arg(&temp_path).as_ref());
-
-            let out = cmd.output().map_err(ImgQualityError::IoError)?;
+            if let Ok(depth) = depth_str.parse::<u8>() {
+                builder.depth(depth);
+            }
+            let out = builder.build().output().map_err(ImgQualityError::IoError)?;
             if out.status.success() && temp_path.exists() {
                 if options.verbose {
                     eprintln!("   ✅ TIFF detected, using ImageMagick to emit {label}");
@@ -1694,19 +1659,15 @@ fn prepare_input_for_cjxl(
                 .map_err(ImgQualityError::IoError)?;
             let temp_path = temp_file.path().to_path_buf();
 
-            let mut cmd = Command::new("magick");
-            cmd.arg("--")
-                .arg(shared_utils::safe_path_arg(input).as_ref());
-
+            let mut builder = shared_utils::MagickBuilder::new();
+            builder.input(input).output(&temp_path);
             if is_float {
-                cmd.arg("-format").arg("exr");
+                builder.format("exr");
             }
-
-            cmd.arg("-depth")
-                .arg(depth_str)
-                .arg(shared_utils::safe_path_arg(&temp_path).as_ref());
-
-            let out = cmd.output().map_err(ImgQualityError::IoError)?;
+            if let Ok(depth) = depth_str.parse::<u8>() {
+                builder.depth(depth);
+            }
+            let out = builder.build().output().map_err(ImgQualityError::IoError)?;
             if out.status.success() && temp_path.exists() {
                 if options.verbose {
                     eprintln!("   ✅ BMP detected, using ImageMagick to emit {label}");
@@ -1732,14 +1693,14 @@ fn prepare_input_for_cjxl(
             let temp_png = temp_png_file.path().to_path_buf();
 
             eprintln!("   🍎 Trying macOS sips first...");
-            let result = Command::new("sips")
-                .arg("-s")
-                .arg("format")
-                .arg("png")
-                .arg(shared_utils::safe_path_arg(input).as_ref())
-                .arg("--out")
-                .arg(shared_utils::safe_path_arg(&temp_png).as_ref())
-                .output();
+            let mut builder = shared_utils::SipsBuilder::new();
+            builder
+                .format("png")
+                .input(input)
+                .output(&temp_png);
+            
+            let result = builder.build().output();
+
 
             match result {
                 Ok(output) if output.status.success() && temp_png.exists() => {
@@ -1756,19 +1717,19 @@ fn prepare_input_for_cjxl(
                         .tempfile()?;
                     let temp_path = temp_file.path().to_path_buf();
 
-                    let mut cmd = Command::new("magick");
-                    cmd.arg("--")
-                        .arg(shared_utils::safe_path_arg(input).as_ref());
-
+                    let mut builder = shared_utils::MagickBuilder::new();
+                    builder.input(input).output(&temp_path);
+                    
                     if is_float {
-                        cmd.arg("-format").arg("exr");
+                        builder.format("exr");
                     }
+                    
+                    if let Ok(depth) = depth_str.parse::<u8>() {
+                        builder.depth(depth);
+                    }
+                    
+                    match builder.build().output() {
 
-                    cmd.arg("-depth")
-                        .arg(depth_str)
-                        .arg(shared_utils::safe_path_arg(&temp_path).as_ref());
-
-                    match cmd.output() {
                         Ok(output) if output.status.success() && temp_path.exists() => {
                             eprintln!("   ✅ ImageMagick HEIC pre-processing successful");
                             Ok((temp_path, Some(temp_file)))
@@ -1843,8 +1804,6 @@ fn get_output_path(
 
     Ok(output)
 }
-
-
 
 fn verify_jxl_health(path: &Path) -> Result<()> {
     shared_utils::jxl_utils::verify_jxl_health(path).map_err(ImgQualityError::ConversionError)

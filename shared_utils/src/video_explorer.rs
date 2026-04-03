@@ -25,7 +25,7 @@ use crate::explore_strategy::CrfCache;
 
 use crate::crf_constants::EMERGENCY_MAX_ITERATIONS;
 use crate::float_compare::SSIM_EPSILON;
-use crate::types::{FileSize, Ssim};
+use crate::types::{EncoderPreset, FileSize, Ssim};
 
 pub mod error_handling;
 pub mod ssim_calculator;
@@ -35,37 +35,37 @@ pub use ssim_calculator::*;
 pub use stream_analysis::*;
 
 /// Minimum measurable CRF value (bit-exact).
-pub const ABSOLUTE_MIN_CRF: f32 = 0.0;
+pub const ABSOLUTE_MIN_CRF: f32 = crate::constants::ABSOLUTE_MIN_CRF;
 
 /// Maximum measurable CRF value (codec limit).
-pub const ABSOLUTE_MAX_CRF: f32 = 51.0;
+pub const ABSOLUTE_MAX_CRF: f32 = crate::constants::ABSOLUTE_MAX_CRF;
 
 /// Maximum iterations for Stage B1 (Coarse Search).
-pub const STAGE_B1_MAX_ITERATIONS: u32 = 20;
+pub const STAGE_B1_MAX_ITERATIONS: u32 = crate::constants::STAGE_B1_MAX_ITERATIONS;
 
 /// Maximum iterations for Stage B2 (Fine Search).
-pub const STAGE_B2_MAX_ITERATIONS: u32 = 25;
+pub const STAGE_B2_MAX_ITERATIONS: u32 = crate::constants::STAGE_B2_MAX_ITERATIONS;
 
 /// Maximum iterations for Bidirectional Phase B.
-pub const STAGE_B_BIDIRECTIONAL_MAX: u32 = 18;
+pub const STAGE_B_BIDIRECTIONAL_MAX: u32 = crate::constants::STAGE_B_BIDIRECTIONAL_MAX_ITERATIONS;
 
 /// Maximum iterations for Binary Search phase.
-pub const BINARY_SEARCH_MAX_ITERATIONS: u32 = 12;
+pub const BINARY_SEARCH_MAX_ITERATIONS: u32 = crate::constants::BINARY_SEARCH_MAX_ITERATIONS;
 
 /// Hard global limit for any single file exploration to prevent infinite loops.
-pub const GLOBAL_MAX_ITERATIONS: u32 = 500;
+pub const GLOBAL_MAX_ITERATIONS: u32 = crate::constants::GLOBAL_MAX_ITERATIONS;
 
 /// Files below this size are considered "small" and may trigger more aggressive margins.
-pub const SMALL_FILE_THRESHOLD: u64 = 10 * 1024 * 1024;
+pub const SMALL_FILE_THRESHOLD: u64 = crate::constants::SMALL_FILE_THRESHOLD_BYTES;
 
 /// Minimum absolute metadata margin in bytes.
-pub const METADATA_MARGIN_MIN: u64 = 2048;
+pub const METADATA_MARGIN_MIN: u64 = crate::constants::METADATA_MARGIN_MIN_BYTES;
 
 /// Maximum absolute metadata margin in bytes.
-pub const METADATA_MARGIN_MAX: u64 = 102_400;
+pub const METADATA_MARGIN_MAX: u64 = crate::constants::METADATA_MARGIN_MAX_BYTES;
 
 /// Target metadata overhead percentage (0.5%).
-pub const METADATA_MARGIN_PERCENT: f64 = 0.005;
+pub const METADATA_MARGIN_PERCENT: f64 = crate::constants::METADATA_MARGIN_RATIO;
 
 /// Calculates the target metadata margin for a given input size.
 #[inline]
@@ -153,11 +153,11 @@ use crate::constants::{
 };
 
 /// In ultimate mode, absolute saturation requires 100 consecutive samples to be statistically certain.
-pub const ULTIMATE_REQUIRED_ZERO_GAINS: u32 = 100;
+pub const ULTIMATE_REQUIRED_ZERO_GAINS: u32 = crate::constants::ULTIMATE_REQUIRED_ZERO_GAINS;
 
-pub const NORMAL_MAX_WALL_HITS: u32 = 4;
+pub const NORMAL_MAX_WALL_HITS: u32 = crate::constants::NORMAL_REQUIRED_ZERO_GAINS; // Using zero gains as proxy for consistency
 
-pub const NORMAL_REQUIRED_ZERO_GAINS: u32 = 4;
+pub const NORMAL_REQUIRED_ZERO_GAINS: u32 = crate::constants::NORMAL_REQUIRED_ZERO_GAINS;
 
 /// Max iterations for 5–10 min videos. Longer videos use a *lower* cap (see below) because each
 /// encode/decode test is more expensive; this is an intentional cost vs. precision tradeoff.
@@ -167,7 +167,7 @@ pub const LONG_VIDEO_FALLBACK_ITERATIONS: u32 = 150;
 /// cost more per iteration, so we cap iterations to keep total runtime reasonable.
 pub const VERY_LONG_VIDEO_FALLBACK_ITERATIONS: u32 = 130;
 
-pub const LONG_VIDEO_REQUIRED_ZERO_GAINS: u32 = 3;
+pub const LONG_VIDEO_REQUIRED_ZERO_GAINS: u32 = crate::constants::LONG_VIDEO_REQUIRED_ZERO_GAINS;
 
 #[must_use]
 pub fn calculate_max_iterations_for_duration(duration_secs: f32, ultimate_mode: bool) -> u32 {
@@ -616,50 +616,24 @@ pub enum VideoEncoder {
     H264,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum EncoderPreset {
-    Ultrafast,
-    Fast,
-    #[default]
-    Medium,
-    Slow,
-    Slower,
-    Veryslow,
-}
-
-impl EncoderPreset {
-    #[must_use]
-    pub const fn x26x_name(&self) -> &'static str {
-        match self {
-            Self::Ultrafast => "ultrafast",
-            Self::Fast => "fast",
-            Self::Medium => "medium",
-            Self::Slow => "slow",
-            Self::Slower => "slower",
-            Self::Veryslow => "veryslow",
-        }
-    }
-
-    #[must_use]
-    pub const fn svtav1_preset(&self) -> u8 {
-        match self {
-            Self::Ultrafast => 12,
-            Self::Fast => 8,
-            Self::Medium => 6,
-            Self::Slow => 4,
-            Self::Slower => 2,
-            Self::Veryslow => 0,
+impl From<VideoEncoder> for crate::ffmpeg_builder::VideoCodec {
+    fn from(encoder: VideoEncoder) -> Self {
+        match encoder {
+            VideoEncoder::Hevc => Self::Hevc,
+            VideoEncoder::Av1 => Self::Av1,
+            VideoEncoder::H264 => Self::H264,
         }
     }
 }
+
 
 impl VideoEncoder {
     #[must_use]
     pub fn ffmpeg_name(&self) -> &'static str {
         match self {
             Self::Hevc => {
-                if Self::is_encoder_available("libx265") {
-                    "libx265"
+                if Self::is_encoder_available(crate::constants::FFMPEG_ENCODER_X265) {
+                    crate::constants::FFMPEG_ENCODER_X265
                 } else {
                     crate::log_eprintln!(
                         "⚠️  libx265 not available, falling back to hevc_videotoolbox"
@@ -667,7 +641,7 @@ impl VideoEncoder {
                     "hevc_videotoolbox"
                 }
             }
-            Self::Av1 => "libsvtav1",
+            Self::Av1 => crate::constants::FFMPEG_ENCODER_SVTAV1,
             Self::H264 => {
                 if Self::is_encoder_available("libx264") {
                     "libx264"
@@ -694,7 +668,7 @@ impl VideoEncoder {
         };
 
         *cache.get_or_init(|| {
-            Command::new("ffmpeg")
+            Command::new(crate::constants::TOOL_FFMPEG)
                 .args(["-hide_banner", "-encoders"])
                 .output()
                 .ok()
@@ -733,13 +707,19 @@ impl VideoEncoder {
                     x265_params.push_str(&params);
                 }
                 let mut args = vec![
-                    "-preset".to_string(),
+                    crate::constants::FFMPEG_ARG_PRESET.to_string(),
                     preset.x26x_name().to_string(),
                 ];
                 if apple_compat {
-                    args.extend(["-tag:v".to_string(), "hvc1".to_string()]);
+                    args.extend([
+                        crate::constants::FFMPEG_ARG_TAG_VIDEO.to_string(),
+                        crate::constants::FFMPEG_TAG_HVC1.to_string(),
+                    ]);
                 }
-                args.extend(["-x265-params".to_string(), x265_params]);
+                args.extend([
+                    crate::constants::FFMPEG_ARG_X265_PARAMS.to_string(),
+                    x265_params,
+                ]);
                 args
             }
             Self::Av1 => vec![
@@ -751,7 +731,7 @@ impl VideoEncoder {
                 ),
             ],
             Self::H264 => vec![
-                "-preset".to_string(),
+                crate::constants::FFMPEG_ARG_PRESET.to_string(),
                 preset.x26x_name().to_string(),
                 "-profile:v".to_string(),
                 "high".to_string(),
@@ -885,6 +865,7 @@ pub struct VideoExplorer {
     preset: EncoderPreset,
     input_video_stream_size: u64,
     hdr_x265_params: Option<String>,
+    apple_compat: bool,
 }
 
 impl VideoExplorer {
@@ -898,6 +879,7 @@ impl VideoExplorer {
         preset: EncoderPreset,
         max_threads: usize,
         hdr_x265_params: Option<String>,
+        apple_compat: bool,
     ) -> Result<Self> {
         crate::path_validator::validate_path(input).map_err(|e| anyhow::anyhow!("{e}"))?;
         crate::path_validator::validate_path(output).map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -937,6 +919,7 @@ impl VideoExplorer {
             preset,
             input_video_stream_size,
             hdr_x265_params,
+            apple_compat,
         })
     }
 
@@ -952,6 +935,7 @@ impl VideoExplorer {
         config: ExploreConfig,
         max_threads: usize,
         hdr_x265_params: Option<String>,
+        apple_compat: bool,
     ) -> Result<Self> {
         Self::build(
             input,
@@ -963,6 +947,7 @@ impl VideoExplorer {
             EncoderPreset::default(),
             max_threads,
             hdr_x265_params,
+            apple_compat,
         )
     }
 
@@ -979,6 +964,7 @@ impl VideoExplorer {
         use_gpu: bool,
         max_threads: usize,
         hdr_x265_params: Option<String>,
+        apple_compat: bool,
     ) -> Result<Self> {
         Self::build(
             input,
@@ -990,6 +976,7 @@ impl VideoExplorer {
             EncoderPreset::default(),
             max_threads,
             hdr_x265_params,
+            apple_compat,
         )
     }
 
@@ -1006,6 +993,7 @@ impl VideoExplorer {
         preset: EncoderPreset,
         max_threads: usize,
         hdr_x265_params: Option<String>,
+        apple_compat: bool,
     ) -> Result<Self> {
         Self::build(
             input,
@@ -1017,6 +1005,7 @@ impl VideoExplorer {
             preset,
             max_threads,
             hdr_x265_params,
+            apple_compat,
         )
     }
 
@@ -1055,6 +1044,7 @@ impl VideoExplorer {
             self.preset,
             self.config.clone(),
             self.hdr_x265_params.clone(),
+            self.apple_compat,
         );
 
         let strategy = create_strategy(self.config.mode);
@@ -2253,6 +2243,7 @@ impl VideoExplorer {
                 preset: self.preset,
                 input_video_stream_size: self.input_video_stream_size,
                 hdr_x265_params: self.hdr_x265_params.clone(),
+                apple_compat: self.apple_compat,
             };
             return cpu_fallback.encode_with_ffmpeg(crf);
         }
@@ -2269,92 +2260,60 @@ impl VideoExplorer {
             HeartbeatConfig::medium("Video Encoding").with_info(format!("CRF {crf:.1}")),
         );
 
-        let mut cmd = Command::new("ffmpeg");
-        cmd.arg("-y");
+        let mut builder = crate::ffmpeg_builder::FfmpegBuilder::new();
+        builder
+            .overwrite(true)
+            .threads(self.max_threads)
+            .input(&self.input_path)
+            .vcodec(self.encoder.into())
+            .use_gpu(self.use_gpu)
+            .crf(crf)
+            .preset(self.preset);
 
-        let gpu = crate::gpu_accel::GpuAccel::detect();
-        let (encoder_name, crf_args, extra_args, accel_type) = if self.use_gpu {
-            match self.encoder {
-                VideoEncoder::Hevc => {
-                    if let Some(enc) = gpu.get_hevc_encoder() {
-                        (
-                            enc.name,
-                            enc.get_crf_args(crf),
-                            enc.extra_args(),
-                            format!("🚀 GPU ({})", gpu.gpu_type),
-                        )
-                    } else {
-                        (
-                            self.encoder.ffmpeg_name(),
-                            vec!["-crf".to_string(), format!("{:.1}", crf)],
-                            &[] as &[&str],
-                            "CPU".to_string(),
-                        )
-                    }
-                }
-                VideoEncoder::Av1 => {
-                    if let Some(enc) = gpu.get_av1_encoder() {
-                        (
-                            enc.name,
-                            enc.get_crf_args(crf),
-                            enc.extra_args(),
-                            format!("🚀 GPU ({})", gpu.gpu_type),
-                        )
-                    } else {
-                        (
-                            self.encoder.ffmpeg_name(),
-                            vec!["-crf".to_string(), format!("{:.1}", crf)],
-                            &[] as &[&str],
-                            "CPU".to_string(),
-                        )
-                    }
-                }
-                VideoEncoder::H264 => {
-                    if let Some(enc) = gpu.get_h264_encoder() {
-                        (
-                            enc.name,
-                            enc.get_crf_args(crf),
-                            enc.extra_args(),
-                            format!("🚀 GPU ({})", gpu.gpu_type),
-                        )
-                    } else {
-                        (
-                            self.encoder.ffmpeg_name(),
-                            vec!["-crf".to_string(), format!("{:.1}", crf)],
-                            &[] as &[&str],
-                            "CPU".to_string(),
-                        )
-                    }
-                }
-            }
+        let accel_type = if self.use_gpu {
+            let gpu = crate::gpu_accel::GpuAccel::detect();
+            format!("🚀 GPU ({})", gpu.gpu_type)
         } else {
-            (
-                self.encoder.ffmpeg_name(),
-                vec!["-crf".to_string(), format!("{:.1}", crf)],
-                &[] as &[&str],
-                "CPU".to_string(),
-            )
+            "CPU".to_string()
         };
 
-        cmd.arg("-threads")
-            .arg(self.max_threads.to_string())
-            .arg("-i")
-            .arg(crate::safe_path_arg(&self.input_path).as_ref())
-            .arg("-c:v")
-            .arg(encoder_name);
-
-        for arg in &crf_args {
-            cmd.arg(arg);
+        if let Some(profile) = match self.encoder {
+            VideoEncoder::Hevc if self.apple_compat => Some(crate::ffmpeg_builder::VideoProfile::Main),
+            VideoEncoder::H264 => Some(crate::ffmpeg_builder::VideoProfile::High),
+            _ => None,
+        } {
+            builder.profile(profile);
         }
 
-        for arg in extra_args {
-            cmd.arg(arg);
+        if self.encoder == VideoEncoder::Hevc && self.apple_compat {
+            builder.arg(crate::constants::FFMPEG_ARG_TAG_VIDEO).arg(crate::constants::FFMPEG_TAG_HVC1);
         }
 
-        cmd.arg("-progress")
-            .arg("pipe:1")
-            .arg("-stats_period")
-            .arg("0.5");
+        // Add extra encoder-specific args
+        if self.encoder == VideoEncoder::Hevc {
+            let mut x265_params = format!("log-level=error:pools={}", self.max_threads);
+            if let Some(params) = &self.hdr_x265_params {
+                x265_params.push(':');
+                x265_params.push_str(params);
+            }
+            builder.arg(crate::constants::FFMPEG_ARG_X265_PARAMS).arg(x265_params);
+        } else if self.encoder == VideoEncoder::Av1 {
+            builder.arg("-svtav1-params").arg(format!(
+                "tune=0:film-grain=0:preset={}:lp={}",
+                self.preset.svtav1_preset(),
+                self.max_threads
+            ));
+        }
+
+        // Apply VF args if present
+        for arg in &self.vf_args {
+            builder.arg(arg);
+        }
+
+        // Status/Progress reporting
+        builder.arg("-progress").arg("pipe:1").arg("-stats_period").arg("0.5");
+
+        let mut cmd = builder.output(&self.output_path).build();
 
         let pts_integrity = crate::ffprobe_json::check_pts_integrity(&self.input_path);
         if pts_integrity != crate::ffprobe_json::PtsIntegrity::Healthy {
@@ -2397,6 +2356,7 @@ impl VideoExplorer {
                 self.max_threads,
                 self.preset,
                 self.hdr_x265_params.clone(),
+                self.apple_compat,
             );
 
             if self.encoder == VideoEncoder::Hevc && is_animated {
@@ -2557,7 +2517,7 @@ impl VideoExplorer {
     }
 
     fn get_input_duration(&self) -> Option<f64> {
-        let output = Command::new("ffprobe")
+        let output = Command::new(crate::constants::TOOL_FFPROBE)
             .arg("-v")
             .arg("error")
             .arg("-show_entries")
@@ -2661,10 +2621,10 @@ impl VideoExplorer {
         let filter = "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];\
                       [ref][1:v]ssim;[ref][1:v]psnr";
 
-        let output = Command::new("ffmpeg")
-            .arg("-i")
+        let output = Command::new(crate::constants::TOOL_FFMPEG)
+            .arg(crate::constants::FFMPEG_ARG_INPUT)
             .arg(crate::safe_path_arg(self.input_path.as_path()).as_ref())
-            .arg("-i")
+            .arg(crate::constants::FFMPEG_ARG_INPUT)
             .arg(crate::safe_path_arg(self.output_path.as_path()).as_ref())
             .arg("-lavfi")
             .arg(filter)
@@ -2783,10 +2743,10 @@ impl VideoExplorer {
     }
 
     fn try_ssim_with_filter(&self, filter: &str) -> Result<Option<f64>> {
-        let output = Command::new("ffmpeg")
-            .arg("-i")
+        let output = Command::new(crate::constants::TOOL_FFMPEG)
+            .arg(crate::constants::FFMPEG_ARG_INPUT)
             .arg(crate::safe_path_arg(self.input_path.as_path()).as_ref())
-            .arg("-i")
+            .arg(crate::constants::FFMPEG_ARG_INPUT)
             .arg(crate::safe_path_arg(self.output_path.as_path()).as_ref())
             .arg("-lavfi")
             .arg(filter)
@@ -2826,10 +2786,10 @@ impl VideoExplorer {
 
         let filter = "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];[ref][1:v]psnr=stats_file=-";
 
-        let output = Command::new("ffmpeg")
-            .arg("-i")
+        let output = Command::new(crate::constants::TOOL_FFMPEG)
+            .arg(crate::constants::FFMPEG_ARG_INPUT)
             .arg(crate::safe_path_arg(self.input_path.as_path()).as_ref())
-            .arg("-i")
+            .arg(crate::constants::FFMPEG_ARG_INPUT)
             .arg(crate::safe_path_arg(self.output_path.as_path()).as_ref())
             .arg("-lavfi")
             .arg(filter)
@@ -2906,10 +2866,10 @@ impl VideoExplorer {
 
         let use_sampling = duration.is_some_and(|d| d > 60.0);
 
-        let output = Command::new("ffmpeg")
-            .arg("-i")
+        let output = Command::new(crate::constants::TOOL_FFMPEG)
+            .arg(crate::constants::FFMPEG_ARG_INPUT)
             .arg(crate::safe_path_arg(self.input_path.as_path()).as_ref())
-            .arg("-i")
+            .arg(crate::constants::FFMPEG_ARG_INPUT)
             .arg(crate::safe_path_arg(self.output_path.as_path()).as_ref())
             .arg("-lavfi")
             .arg(&filter)
@@ -3009,9 +2969,10 @@ pub fn explore_size_only(
     initial_crf: f32,
     max_crf: f32,
     max_threads: usize,
+    apple_compat: bool,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::size_only(initial_crf, max_crf);
-    VideoExplorer::new(input, output, encoder, vf_args, config, max_threads, None)?.explore()
+    VideoExplorer::new(input, output, encoder, vf_args, config, max_threads, None, apple_compat)?.explore()
 }
 
 /// Explore quality match.
@@ -3025,9 +2986,10 @@ pub fn explore_quality_match(
     vf_args: Vec<String>,
     predicted_crf: f32,
     max_threads: usize,
+    apple_compat: bool,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::quality_match(predicted_crf);
-    VideoExplorer::new(input, output, encoder, vf_args, config, max_threads, None)?.explore()
+    VideoExplorer::new(input, output, encoder, vf_args, config, max_threads, None, apple_compat)?.explore()
 }
 
 /// Explore precise quality match.
@@ -3043,9 +3005,10 @@ pub fn explore_precise_quality_match(
     max_crf: f32,
     min_ssim: f64,
     max_threads: usize,
+    apple_compat: bool,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::precise_quality_match(initial_crf, max_crf, min_ssim);
-    VideoExplorer::new(input, output, encoder, vf_args, config, max_threads, None)?.explore()
+    VideoExplorer::new(input, output, encoder, vf_args, config, max_threads, None, apple_compat)?.explore()
 }
 
 /// Explore precise quality match with compression.
@@ -3061,10 +3024,11 @@ pub fn explore_precise_quality_match_with_compression(
     max_crf: f32,
     min_ssim: f64,
     max_threads: usize,
+    apple_compat: bool,
 ) -> Result<ExploreResult> {
     let config =
         ExploreConfig::precise_quality_match_with_compression(initial_crf, max_crf, min_ssim);
-    VideoExplorer::new(input, output, encoder, vf_args, config, max_threads, None)?.explore()
+    VideoExplorer::new(input, output, encoder, vf_args, config, max_threads, None, apple_compat)?.explore()
 }
 
 /// Explore compression only.
@@ -3079,9 +3043,10 @@ pub fn explore_compress_only(
     initial_crf: f32,
     max_crf: f32,
     max_threads: usize,
+    apple_compat: bool,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::compress_only(initial_crf, max_crf);
-    VideoExplorer::new(input, output, encoder, vf_args, config, max_threads, None)?.explore()
+    VideoExplorer::new(input, output, encoder, vf_args, config, max_threads, None, apple_compat)?.explore()
 }
 
 /// Explore compression with quality.
@@ -3096,9 +3061,10 @@ pub fn explore_compress_with_quality(
     initial_crf: f32,
     max_crf: f32,
     max_threads: usize,
+    apple_compat: bool,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::compress_with_quality(initial_crf, max_crf);
-    VideoExplorer::new(input, output, encoder, vf_args, config, max_threads, None)?.explore()
+    VideoExplorer::new(input, output, encoder, vf_args, config, max_threads, None, apple_compat)?.explore()
 }
 
 /// Explore precise quality match with compression (GPU).
@@ -3115,6 +3081,7 @@ pub fn explore_precise_quality_match_with_compression_gpu(
     min_ssim: f64,
     use_gpu: bool,
     max_threads: usize,
+    apple_compat: bool,
 ) -> Result<ExploreResult> {
     let config =
         ExploreConfig::precise_quality_match_with_compression(initial_crf, max_crf, min_ssim);
@@ -3127,6 +3094,7 @@ pub fn explore_precise_quality_match_with_compression_gpu(
         use_gpu,
         max_threads,
         None,
+        apple_compat,
     )?
     .explore()
 }
@@ -3145,6 +3113,7 @@ pub fn explore_precise_quality_match_gpu(
     min_ssim: f64,
     use_gpu: bool,
     max_threads: usize,
+    apple_compat: bool,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::precise_quality_match(initial_crf, max_crf, min_ssim);
     VideoExplorer::new_with_gpu(
@@ -3156,6 +3125,7 @@ pub fn explore_precise_quality_match_gpu(
         use_gpu,
         max_threads,
         None,
+        apple_compat,
     )?
     .explore()
 }
@@ -3173,6 +3143,7 @@ pub fn explore_compress_only_gpu(
     max_crf: f32,
     use_gpu: bool,
     max_threads: usize,
+    apple_compat: bool,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::compress_only(initial_crf, max_crf);
     VideoExplorer::new_with_gpu(
@@ -3184,6 +3155,7 @@ pub fn explore_compress_only_gpu(
         use_gpu,
         max_threads,
         None,
+        apple_compat,
     )?
     .explore()
 }
@@ -3201,6 +3173,7 @@ pub fn explore_compress_with_quality_gpu(
     max_crf: f32,
     use_gpu: bool,
     max_threads: usize,
+    apple_compat: bool,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::compress_with_quality(initial_crf, max_crf);
     VideoExplorer::new_with_gpu(
@@ -3212,6 +3185,7 @@ pub fn explore_compress_with_quality_gpu(
         use_gpu,
         max_threads,
         None,
+        apple_compat,
     )?
     .explore()
 }
@@ -3229,6 +3203,7 @@ pub fn explore_size_only_gpu(
     max_crf: f32,
     use_gpu: bool,
     max_threads: usize,
+    apple_compat: bool,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::size_only(initial_crf, max_crf);
     VideoExplorer::new_with_gpu(
@@ -3240,6 +3215,7 @@ pub fn explore_size_only_gpu(
         use_gpu,
         max_threads,
         None,
+        apple_compat,
     )?
     .explore()
 }
@@ -3256,6 +3232,7 @@ pub fn explore_quality_match_gpu(
     predicted_crf: f32,
     use_gpu: bool,
     max_threads: usize,
+    apple_compat: bool,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::quality_match(predicted_crf);
     VideoExplorer::new_with_gpu(
@@ -3267,6 +3244,7 @@ pub fn explore_quality_match_gpu(
         use_gpu,
         max_threads,
         None,
+        apple_compat,
     )?
     .explore()
 }
@@ -3313,6 +3291,7 @@ pub fn explore_hevc(
     vf_args: Vec<String>,
     initial_crf: f32,
     max_threads: usize,
+    apple_compat: bool,
 ) -> Result<ExploreResult> {
     let (max_crf, min_ssim) = calculate_smart_thresholds(initial_crf, VideoEncoder::Hevc);
     explore_precise_quality_match(
@@ -3324,6 +3303,7 @@ pub fn explore_hevc(
         max_crf,
         min_ssim,
         max_threads,
+        apple_compat,
     )
 }
 
@@ -3337,6 +3317,7 @@ pub fn explore_hevc_size_only(
     vf_args: Vec<String>,
     initial_crf: f32,
     max_threads: usize,
+    apple_compat: bool,
 ) -> Result<ExploreResult> {
     let (max_crf, _) = calculate_smart_thresholds(initial_crf, VideoEncoder::Hevc);
     explore_size_only(
@@ -3347,6 +3328,7 @@ pub fn explore_hevc_size_only(
         initial_crf,
         max_crf,
         max_threads,
+        apple_compat,
     )
 }
 
@@ -3360,6 +3342,7 @@ pub fn explore_hevc_quality_match(
     vf_args: Vec<String>,
     predicted_crf: f32,
     max_threads: usize,
+    apple_compat: bool,
 ) -> Result<ExploreResult> {
     explore_quality_match(
         input,
@@ -3368,6 +3351,7 @@ pub fn explore_hevc_quality_match(
         vf_args,
         predicted_crf,
         max_threads,
+        apple_compat,
     )
 }
 
@@ -3381,6 +3365,7 @@ pub fn explore_hevc_compress_only(
     vf_args: Vec<String>,
     initial_crf: f32,
     max_threads: usize,
+    apple_compat: bool,
 ) -> Result<ExploreResult> {
     let (max_crf, _) = calculate_smart_thresholds(initial_crf, VideoEncoder::Hevc);
     explore_compress_only(
@@ -3391,6 +3376,7 @@ pub fn explore_hevc_compress_only(
         initial_crf,
         max_crf,
         max_threads,
+        apple_compat,
     )
 }
 
@@ -3404,6 +3390,7 @@ pub fn explore_hevc_compress_with_quality(
     vf_args: Vec<String>,
     initial_crf: f32,
     max_threads: usize,
+    apple_compat: bool,
 ) -> Result<ExploreResult> {
     let (max_crf, _) = calculate_smart_thresholds(initial_crf, VideoEncoder::Hevc);
     explore_compress_with_quality(
@@ -3414,6 +3401,7 @@ pub fn explore_hevc_compress_with_quality(
         initial_crf,
         max_crf,
         max_threads,
+        apple_compat,
     )
 }
 
@@ -3427,6 +3415,7 @@ pub fn explore_av1(
     vf_args: Vec<String>,
     initial_crf: f32,
     max_threads: usize,
+    apple_compat: bool,
 ) -> Result<ExploreResult> {
     let (max_crf, min_ssim) = calculate_smart_thresholds(initial_crf, VideoEncoder::Av1);
     explore_precise_quality_match(
@@ -3438,6 +3427,7 @@ pub fn explore_av1(
         max_crf,
         min_ssim,
         max_threads,
+        apple_compat,
     )
 }
 
@@ -3451,6 +3441,7 @@ pub fn explore_av1_size_only(
     vf_args: Vec<String>,
     initial_crf: f32,
     max_threads: usize,
+    apple_compat: bool,
 ) -> Result<ExploreResult> {
     let (max_crf, _) = calculate_smart_thresholds(initial_crf, VideoEncoder::Av1);
     explore_size_only(
@@ -3461,6 +3452,7 @@ pub fn explore_av1_size_only(
         initial_crf,
         max_crf,
         max_threads,
+        apple_compat,
     )
 }
 
@@ -3474,6 +3466,7 @@ pub fn explore_av1_quality_match(
     vf_args: Vec<String>,
     predicted_crf: f32,
     max_threads: usize,
+    apple_compat: bool,
 ) -> Result<ExploreResult> {
     explore_quality_match(
         input,
@@ -3482,6 +3475,7 @@ pub fn explore_av1_quality_match(
         vf_args,
         predicted_crf,
         max_threads,
+        apple_compat,
     )
 }
 
@@ -3495,6 +3489,7 @@ pub fn explore_av1_compress_only(
     vf_args: Vec<String>,
     initial_crf: f32,
     max_threads: usize,
+    apple_compat: bool,
 ) -> Result<ExploreResult> {
     let (max_crf, _) = calculate_smart_thresholds(initial_crf, VideoEncoder::Av1);
     explore_compress_only(
@@ -3505,6 +3500,7 @@ pub fn explore_av1_compress_only(
         initial_crf,
         max_crf,
         max_threads,
+        apple_compat,
     )
 }
 
@@ -3518,6 +3514,7 @@ pub fn explore_av1_compress_with_quality(
     vf_args: Vec<String>,
     initial_crf: f32,
     max_threads: usize,
+    apple_compat: bool,
 ) -> Result<ExploreResult> {
     let (max_crf, _) = calculate_smart_thresholds(initial_crf, VideoEncoder::Av1);
     explore_compress_with_quality(
@@ -3528,6 +3525,7 @@ pub fn explore_av1_compress_with_quality(
         initial_crf,
         max_crf,
         max_threads,
+        apple_compat,
     )
 }
 
