@@ -6,6 +6,47 @@ All notable changes to this project will be documented in this file.
 
 ## [0.11.1] — 2026-04-03
 
+#### 🧠 Loop Intent Soft Scoring Finalization (Layer 5 Refinement)
+
+- **Extended Short-Asset Prior (5-15s silent)**: Added positive scoring bonus for silent assets in the 5-15s range.
+  - **Bonus Factors**: Compact size (+0.05), square aspect ratio (+0.04), image format (+0.05), duration proximity to short end (+0.10-0.20).
+  - **Impact**: Short silent memes/stickers are more likely to be classified as `LoopStrong` (kept as GIF).
+- **Long-Silent Video Penalty (>15s)**: Added negative scoring for silent videos exceeding 15s threshold.
+  - **Penalty Factors**: Base penalty (0.22), overflow scaling (+0.00-0.18), video container (+0.18), image container (+0.08).
+  - **Transparency Relief**: Assets with transparency get -0.06 penalty reduction.
+  - **Impact**: Long silent videos are more likely to be classified as `LoopWeak` (converted to modern video format).
+- **New Thresholds**: Introduced `short_asset_window_secs` and `modern_bias_duration_secs` for finer duration-based分层 scoring.
+  - `short_asset_window_secs`: Upper bound for extended short-asset bonus, clamped to `HARD_PASS_SHORT_GIF_THRESHOLD_SECS` minimum.
+  - `modern_bias_duration_secs`: Lower bound for long-silent penalty, clamped to `MODERN_FORMAT_VIDEO_BIAS_THRESHOLD_SECS` minimum.
+- **Layer 6 Relaxation**: Extended `short_clip_like` check to use `short_asset_window_secs` instead of `short_clip_secs`, broadening acceptance range for silent assets.
+  - **Files**: `shared_utils/src/loop_intent.rs`
+
+#### 🔒 Developer Override Defaults Changed (Breaking Change)
+
+- **Hidden Layer 1 Toggles Now Opt-In**: `ENV_FORCE_SHORT_GIFS` and `ENV_INTERCEPT_LONG_SILENT` now default to **DISABLED**.
+  - **Before**: Short silent assets (≤10s) forcibly routed to `LoopStrong` (GIF).
+  - **After**: Assets go through full 7-layer decision tree, may be classified as `LoopWeak` (video) based on holistic scoring.
+  - **Migration**: Set `MODERN_FORMAT_FORCE_SHORT_GIFS=1` or `MODERN_FORMAT_INTERCEPT_LONG_SILENT=1` to restore legacy behavior.
+- **New Helper Function**: `developer_layer1_override_enabled()` for cleaner environment variable parsing (accepts `1`, `true`, `yes`, `on`).
+- **Constants Documentation Updated**: Clarified `HARD_PASS_SHORT_GIF_THRESHOLD_SECS` as Layer 1-C dev hard-pass, `MODERN_FORMAT_VIDEO_BIAS_THRESHOLD_SECS` as long-silent bias threshold.
+  - **Files**: `shared_utils/src/constants.rs`, `shared_utils/src/loop_intent.rs`
+
+#### 🧪 Test Suite Enhancements
+
+- **New Test Cases**:
+  - `layer6_relaxes_for_silent_clips_up_to_core_short_asset_window`: Validates Layer 6 relaxation for 9.5s silent MP4.
+  - `hidden_layer1_overrides_are_opt_in`: Confirms developer toggles are disabled by default and activate only when explicitly set.
+- **Test Cleanup**: Removed redundant `std::env::set_var(..., "0")` calls in tests since defaults are now opt-in.
+- **Updated Assertions**: Added threshold validation for `short_asset_window_secs` and `modern_bias_duration_secs` in existing tests.
+  - **Files**: `shared_utils/src/loop_intent.rs`, `vid_hevc/src/conversion_api.rs`
+
+#### 🍎 Apple Live Photo Script
+
+- **New Script**: `scripts/create_live_photo.py` for converting videos to Apple Live Photo format (JPG/HEIC + MOV).
+  - **Features**: HQ encoding mode, HEIC format support, Live Photo metadata injection, 3s duration limit.
+  - **Dependencies**: Requires `ffmpeg`, `ffprobe`, optionally `heif-enc` (for HEIC) and `makelive` (for metadata).
+  - **Usage**: `python3 scripts/create_live_photo.py input.mp4 --format heic --hq --inject-metadata`
+
 #### 🧪 Test Suite Repair
 
 - **Loop Intent Test Fixes**: Fixed 4 failing tests caused by developer bypass rules (Layer 1-C/1-D) intercepting test inputs before reaching Layer 4 logic.
