@@ -7,6 +7,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use postgres::{Client, NoTls};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::io::Read;
 use std::path::Path;
 use walkdir::WalkDir;
@@ -21,6 +22,8 @@ static DB_WARN_ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBo
 struct FeatureStats {
     mean: f64,
     std_dev: f64,
+    #[serde(default)]
+    weight: Option<f64>,
     #[serde(default)]
     p10: Option<f64>,
     #[serde(default)]
@@ -96,6 +99,39 @@ pub struct SampleMatch {
     pub p75_distance: Option<f64>,
     /// Dynamic baseline: P90 duration of neighbors with high loss tolerance.
     pub p90_duration: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoopInferenceRecord {
+    pub tree_probability: f64,
+    pub knn_keep_probability: Option<f64>,
+    pub knn_confidence: Option<f64>,
+    pub knn_neighbor_count: Option<usize>,
+    pub final_probability: f64,
+    pub final_verdict: String,
+    pub decision_reason: String,
+    pub layer_exit: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoopFeatureDiscriminativePower {
+    pub feature_name: String,
+    pub mean_loop_strong: Option<f64>,
+    pub mean_loop_weak: Option<f64>,
+    pub discriminative_power: f64,
+    pub sample_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InferenceBlindSpot {
+    pub duration_bucket: f64,
+    pub webp_bucket: f64,
+    pub avg_knn_confidence: f64,
+    pub avg_tree_probability: Option<f64>,
+    pub avg_final_probability: Option<f64>,
+    pub avg_neighbor_count: Option<f64>,
+    pub sample_count: i64,
+    pub example_layer_exit: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -194,9 +230,15 @@ impl Default for LoopReferenceProfile {
                 mean: collection.duration_avg,
                 std_dev: ((collection.duration_max - collection.duration_min) / 4.0).max(0.5),
                 p10: Some(collection.duration_min),
-                p25: Some(f64::midpoint(collection.duration_min, collection.duration_avg)),
+                p25: Some(f64::midpoint(
+                    collection.duration_min,
+                    collection.duration_avg,
+                )),
                 p50: Some(collection.duration_avg),
-                p75: Some(f64::midpoint(collection.duration_avg, collection.duration_p90)),
+                p75: Some(f64::midpoint(
+                    collection.duration_avg,
+                    collection.duration_p90,
+                )),
                 p90: Some(collection.duration_p90),
             },
             fps: DistributionStats {
@@ -324,6 +366,7 @@ impl Default for LoopReferenceProfile {
 
 #[derive(Debug, Clone)]
 struct SampleRow {
+    #[allow(dead_code)]
     loss_tolerance: Option<String>,
     width: u32,
     height: u32,
@@ -354,6 +397,7 @@ struct SampleRow {
     block_skew: Option<f64>,
     temporal_flatness: Option<f64>,
     webp_compression_ratio: Option<f64>,
+    #[allow(dead_code)]
     labeled_by: Option<String>,
 }
 
@@ -370,7 +414,9 @@ pub fn open_pg_client() -> Result<Client> {
                 let msg = format!("⚠️  Database Unavailable: {e}");
                 crate::progress_mode::emit_stderr(&msg);
                 crate::progress_mode::emit_stderr("💡 System running in [LEGACY LIMITED MODE] (Heuristic Tree only, no KNN/Learning).");
-                crate::progress_mode::emit_stderr("💡 To enable full intelligence, run: 'sh scripts/manage_db.sh setup'");
+                crate::progress_mode::emit_stderr(
+                    "💡 To enable full intelligence, run: 'sh scripts/manage_db.sh setup'",
+                );
             }
             Err(e).with_context(|| format!("Failed to connect to PostgreSQL: {connstr}"))
         }
@@ -380,7 +426,9 @@ pub fn open_pg_client() -> Result<Client> {
 /// One-time status report for the database.
 pub fn report_db_status() {
     if let Ok(_conn) = open_pg_client() {
-        crate::progress_mode::emit_stderr("🐘 Database [PostgreSQL]: CONNECTED (Full Learning Mode Active)");
+        crate::progress_mode::emit_stderr(
+            "🐘 Database [PostgreSQL]: CONNECTED (Full Learning Mode Active)",
+        );
     }
 }
 
@@ -490,91 +538,50 @@ fn lookup_similar_samples_inner(
     init_schema(&mut conn)?;
     seed_positive_dataset_if_needed(&mut conn)?;
 
-    // (Abandon Exact Match per User Request)
-    // We no longer exit early on file_hash / blake3 matches.
-    // Instead, we proceed to fuzzy matching to find semantically similar samples.
+    // Map the incoming LoopMeta into a SampleRow to compute its HNSW search vector
+    let target_temporal_bpp = meta.file_size_bytes as f64
+        / (((f64::from(meta.width) * f64::from(meta.height)).max(1.0))
+            * meta.frame_count.max(1) as f64);
+    let target_spatial_bpp =
+        meta.file_size_bytes as f64 / (f64::from(meta.width) * f64::from(meta.height)).max(1.0);
 
-    let target_pixels = f64::from(meta.width) * f64::from(meta.height);
-    let target_temporal_bpp =
-        meta.file_size_bytes as f64 / ((target_pixels.max(1.0)) * meta.frame_count.max(1) as f64);
-    let target_spatial_bpp = meta.file_size_bytes as f64 / target_pixels.max(1.0);
+    let target_sample = sample_row_from_meta(meta, target_temporal_bpp, target_spatial_bpp);
 
     let feature_stats = fetch_feature_map(&mut conn)?;
+    let target_vector = compute_sample_vector(&target_sample, &feature_stats);
+    let target_pg_vector = pgvector::Vector::from(target_vector);
 
-    // Corrected Query: Only native GIFs for KNN reference, no exact match bypass.
+    // Deep pgvector Integration: We let PostgreSQL use the HNSW index to rapidly return the closest labels
     let rows = conn.query(
         "SELECT
-            loss_tolerance, width, height, duration_secs, frame_count, file_size_bytes,
-            fps, temporal_bpp, spatial_bpp,
-            has_transparency, has_embedded_icc, has_complex_color_profile,
-            palette_size, frame_payload_variation, frame_delay_variation,
-            aspect_ratio, labeled_by,
-            total_pixels, loop_frequency, is_meme_platform, is_human_semantic_name,
-            cadence_score, is_high_value_source, is_native_gif,
-            palette_depth, motion_gini, block_skew, temporal_flatness, directory_meme_score,
-            webp_compression_ratio
+            loss_tolerance, duration_secs, 
+            features <-> $1::vector AS dist
          FROM samples
-         WHERE loss_tolerance IS NOT NULL AND frame_count > 1
-         LIMIT 1021",
-        &[],
+         WHERE loss_tolerance IS NOT NULL AND features IS NOT NULL AND frame_count > 1
+         ORDER BY features <-> $1::vector
+         LIMIT 24",
+        &[&target_pg_vector],
     )?;
 
-    let mut candidates = Vec::new();
-
-    for row in &rows {
-        let sample = SampleRow {
-            loss_tolerance: row.get::<_, Option<String>>(0),
-            width: row.get::<_, i32>(1) as u32,
-            height: row.get::<_, i32>(2) as u32,
-            duration_secs: row.get(3),
-            frame_count: row.get::<_, i64>(4) as u64,
-            file_size_bytes: row.get::<_, i64>(5) as u64,
-            fps: row.get::<_, Option<f64>>(6).unwrap_or(0.0),
-            temporal_bpp: row.get(7),
-            spatial_bpp: row.get(8),
-            has_transparency: row.get(9),
-            has_embedded_icc: row.get(10),
-            has_complex_color_profile: row.get(11),
-            palette_size: row.get::<_, Option<i32>>(12).map(|v| v as u32),
-            frame_payload_variation: row.get(13),
-            frame_delay_variation: row.get(14),
-            aspect_ratio: row.get(15),
-            labeled_by: row.get(16),
-            total_pixels: row.get::<_, Option<i64>>(17).map(|v| v as u64),
-            loop_frequency: row.get(18),
-            is_meme_platform: row.get(19),
-            is_human_semantic_name: row.get(20),
-            cadence_score: row.get(21),
-            is_high_value_source: row.get(22),
-            is_native_gif: row.get(23),
-            palette_depth: row.get(24),
-            motion_gini: row.get(25),
-            block_skew: row.get(26),
-            temporal_flatness: row.get(27),
-            directory_meme_score: row.get::<_, Option<f64>>(28),
-            webp_compression_ratio: row.get::<_, Option<f64>>(29),
-        };
-
-        let distance = sample_distance(
-            meta,
-            &sample,
-            target_temporal_bpp,
-            target_spatial_bpp,
-            &feature_stats,
-        );
-        candidates.push((sample, distance));
-    }
-
-    if candidates.is_empty() {
+    if rows.is_empty() {
         return Ok(None);
     }
 
-    candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    let candidates: Vec<(String, f64, f64)> = rows
+        .iter()
+        .map(|row| {
+            (
+                row.get::<_, Option<String>>(0).unwrap_or_default(), // loss_tolerance
+                row.get::<_, f64>(1),                                // duration_secs
+                row.get::<_, f64>(2),                                // dist
+            )
+        })
+        .collect();
 
     let neighbor_count = adaptive_neighbor_count(candidates.len());
     let neighbors = &candidates[..neighbor_count];
 
-    let min_distance = neighbors.first().map_or(0.0, |(_, d)| *d);
+    let min_distance = neighbors.first().map_or(0.0, |(_, _, d)| *d);
     let radius = dynamic_neighbor_radius(neighbors);
 
     let mut weighted_keep = 0.0;
@@ -582,21 +589,21 @@ fn lookup_similar_samples_inner(
     let mut distances = Vec::new();
     let mut loop_durations = Vec::new();
 
-    for (sample, distance) in neighbors {
+    for (loss_tolerance, duration_secs, distance) in neighbors {
         if *distance > radius {
             continue;
         }
 
         let relative_distance = (*distance - min_distance).max(0.0);
         let weight = 1.0 / (1.0 + relative_distance * relative_distance * 3.0);
-        let prob = match sample.loss_tolerance.as_deref() {
-            Some("high") => 1.0,  // Loop intent (Meme/Sticker/Video sticker)
-            Some("video") => 0.0, // Non-loop intent (Clip/Record/Long Video)
-            _ => 0.5,             // Uncertain/Fallback
+        let prob = match loss_tolerance.as_str() {
+            "high" => 1.0,  // Loop intent (Meme/Sticker/Video sticker)
+            "video" => 0.0, // Non-loop intent (Clip/Record/Long Video)
+            _ => 0.5,       // Uncertain/Fallback
         };
 
         if prob >= 0.5 {
-            loop_durations.push(sample.duration_secs);
+            loop_durations.push(*duration_secs);
         }
 
         weighted_keep += prob * weight;
@@ -767,8 +774,22 @@ pub fn init_schema(conn: &mut Client) -> Result<()> {
             loop_verdict TEXT,
             labeled_by TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            features vector(18)
+            features vector(28)
         )",
+        &[],
+    )?;
+
+    // Ensure older databases upgrade their schema
+    let _ = conn.execute(
+        "ALTER TABLE samples DROP COLUMN IF EXISTS features CASCADE",
+        &[],
+    );
+    let _ = conn.execute("ALTER TABLE samples ADD COLUMN features vector(28)", &[]);
+
+    // The HNSW index for high-performance vector retrieval
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_samples_features_hnsw 
+         ON samples USING hnsw (features vector_l2_ops)",
         &[],
     )?;
 
@@ -781,8 +802,35 @@ pub fn init_schema(conn: &mut Client) -> Result<()> {
     )?;
 
     conn.execute(
+        "CREATE TABLE IF NOT EXISTS inference_log (
+            id BIGSERIAL PRIMARY KEY,
+            file_hash TEXT,
+            source_path TEXT,
+            duration_secs DOUBLE PRECISION NOT NULL,
+            webp_compression_ratio DOUBLE PRECISION,
+            tree_probability DOUBLE PRECISION NOT NULL,
+            knn_keep_probability DOUBLE PRECISION,
+            knn_confidence DOUBLE PRECISION,
+            knn_neighbor_count INTEGER,
+            final_probability DOUBLE PRECISION NOT NULL,
+            final_verdict TEXT NOT NULL,
+            decision_reason TEXT NOT NULL,
+            layer_exit TEXT NOT NULL,
+            signal_snapshot JSONB NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )",
+        &[],
+    )?;
+
+    conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_samples_lookup
          ON samples(loss_tolerance, width, height, duration_secs, has_transparency)",
+        &[],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_inference_log_blindspots
+         ON inference_log(knn_confidence, duration_secs, webp_compression_ratio)",
         &[],
     )?;
 
@@ -828,7 +876,9 @@ fn seed_positive_dataset_if_needed(conn: &mut Client) -> Result<()> {
     // Seed default dataset shipped with the binary (PostgreSQL-native SQL)
     let default_sql = include_str!("./sql/default_samples.sql");
     tx.batch_execute(default_sql).unwrap_or_else(|e| {
-        emit_stderr(&format!("⚠️  Failed to seed default GIF value dataset: {e}"));
+        emit_stderr(&format!(
+            "⚠️  Failed to seed default GIF value dataset: {e}"
+        ));
     });
 
     tx.execute(
@@ -963,7 +1013,11 @@ fn determine_loss_tolerance(
     "medium".to_string()
 }
 
-pub fn sample_from_path(path: &Path, labeled_by: &str, label_override: Option<&str>) -> Option<SampleInsert> {
+pub fn sample_from_path(
+    path: &Path,
+    labeled_by: &str,
+    label_override: Option<&str>,
+) -> Option<SampleInsert> {
     let probe = crate::probe_video(path).ok()?;
     let mut meta = LoopMeta::from_ffprobe_result(&probe, path);
     if let Ok((pal, exts, has_transparency, variation, delay_variation, loop_count, total_dur)) =
@@ -1084,53 +1138,21 @@ fn calculate_blake3_hex(path: &Path) -> Result<String> {
     Ok(hasher.finalize().to_hex().to_string())
 }
 
-fn sample_distance(
-    meta: &LoopMeta,
-    sample: &SampleRow,
-    target_temporal_bpp: f64,
-    target_spatial_bpp: f64,
-    stats_map: &FeatureMap,
-) -> f64 {
-    let target_pixels = (f64::from(meta.width) * f64::from(meta.height)).max(1.0);
+/// Compute a 28-dimensional pgvector encoding for a sample using pre-calculated std deviations.
+/// This precisely bakes the weights and normalization terms from the old dynamically computed KNN
+/// into an L2-compatible vector, allowing PostgreSQL's HNSW index to do the heavy lifting!
+fn compute_sample_vector(sample: &SampleRow, stats_map: &FeatureMap) -> Vec<f32> {
     let sample_pixels = (f64::from(sample.width) * f64::from(sample.height)).max(1.0);
-    let target_loop_frequency =
-        crate::loop_intent::score_loop_frequency(meta.duration_secs, meta.frame_count);
-    let target_analysis = crate::loop_intent::analyze_filename(meta.file_name.as_deref(), &[]);
-    let target_is_human_semantic_name =
-        target_analysis.kind == crate::loop_intent::FilenameKind::HumanSemantic;
-    let target_cadence_score =
-        crate::loop_intent::score_sparse_cadence(meta.duration_secs, meta.frame_count);
-    // Use a continuous directory-context score for target -> sample distance
-    let target_directory_meme_score =
-        crate::loop_intent::score_directory_context(meta.parent_directories.as_deref(), &[]);
-    let target_is_native_gif = meta.source_extension.as_deref() == Some("gif");
 
-    // GIPHY_PLATFORM_MARKERS check moved to loop_intent helpers or inline
-    const PLATFORM_MARKERS: &[&str] =
-        &["GIPHY", "TENOR", "STICKER", "TELEGRAM", "TIKTOK", "DISCORD"];
-    let target_is_meme_platform = meta.app_extensions.as_ref().is_some_and(|exts| {
-        exts.iter().any(|e| {
-            let up = e.to_uppercase();
-            PLATFORM_MARKERS.iter().any(|&m| up.contains(m))
-        })
-    });
-
-    // Affinity is now a derived calculation
-    let target_loop_affinity = (target_loop_frequency * 0.45
-        + target_cadence_score * 0.25
-        + (if target_is_native_gif { 1.0 } else { 0.55 }) * 0.20
-        + 0.5 * 0.10) // default fps score for target
-        .clamp(0.0, 1.0);
-
-    let target_is_high_value_source =
-        meta.has_embedded_icc || meta.has_complex_color_profile || meta.has_audio;
-    let target_frame_density = meta.frame_count as f64 / meta.duration_secs.max(0.05);
     let sample_frame_density = sample.frame_count as f64 / sample.duration_secs.max(0.05);
-    let target_frame_gap = meta.duration_secs / meta.frame_count.max(1) as f64;
     let sample_frame_gap = sample.duration_secs / sample.frame_count.max(1) as f64;
+
     let sample_audio_score = if sample.is_native_gif { 1.0 } else { 0.55 };
-    let sample_fps_score =
-        (1.0 - normalize_log_ratio(sample.fps.max(1e-3), meta.fps.max(1e-3), 1.2)).clamp(0.0, 1.0);
+    // We normalize fps against a baseline 30fps for the database encoded vector. Target queries will normalize identically.
+    let baseline_fps = 30.0;
+    let sample_fps_score = (1.0
+        - crate::gif_value_db::normalize_log_ratio(sample.fps.max(1e-3), baseline_fps, 1.2))
+    .clamp(0.0, 1.0);
     let sample_loop_affinity = (sample.loop_frequency.unwrap_or(0.5) * 0.45
         + sample.cadence_score.unwrap_or(0.5) * 0.25
         + sample_audio_score * 0.20
@@ -1138,128 +1160,175 @@ fn sample_distance(
         .clamp(0.0, 1.0);
 
     let get_std = |f: &str| stats_map.stats.get(f).map_or(1.0, |s| s.std_dev).max(1e-6);
+    let get_w = |f: &str| {
+        stats_map
+            .stats
+            .get(f)
+            .and_then(|s| s.weight)
+            .unwrap_or(1.0)
+            .max(0.01)
+    };
 
-    // Standardized Euclidean: d = sqrt(sum((x - y)/sigma)^2)
-    let d_pix = (target_pixels - sample_pixels) / get_std("pixels");
-    let d_dur = (meta.duration_secs - sample.duration_secs) / get_std("duration");
-    let d_frm = (meta.frame_count as f64 - sample.frame_count as f64) / get_std("frame_count");
-    let d_fsize =
-        (meta.file_size_bytes as f64 - sample.file_size_bytes as f64) / get_std("file_size_bytes");
-    let d_dens = (target_frame_density - sample_frame_density) / get_std("density");
-    let d_gap = (target_frame_gap - sample_frame_gap) / get_std("gap");
-    let d_tbpp = (target_temporal_bpp - sample.temporal_bpp) / get_std("temporal_bpp");
-    let d_sbpp = (target_spatial_bpp - sample.spatial_bpp) / get_std("spatial_bpp");
+    // Continuous standardizations (Scaled by sqrt(weight) since target_query <-> sample squares it)
+    let v_pix = sample_pixels / get_std("pixels") * get_w("pixels").sqrt();
+    let v_dur = sample.duration_secs / get_std("duration") * get_w("duration").sqrt();
+    let v_frm = sample.frame_count as f64 / get_std("frame_count") * get_w("frame_count").sqrt();
+    let v_fsize = sample.file_size_bytes as f64 / get_std("file_size_bytes")
+        * get_w("file_size_bytes").sqrt();
+    let v_dens = sample_frame_density / get_std("density") * get_w("density").sqrt();
+    let v_gap = sample_frame_gap / get_std("gap") * get_w("gap").sqrt();
+    let v_tbpp = sample.temporal_bpp / get_std("temporal_bpp") * get_w("temporal_bpp").sqrt();
+    let v_sbpp = sample.spatial_bpp / get_std("spatial_bpp") * get_w("spatial_bpp").sqrt();
 
-    let target_webp_ratio = meta.webp_compression_ratio.unwrap_or(0.0);
     let sample_webp_ratio = sample.webp_compression_ratio.unwrap_or(0.0);
-    let d_wratio = (target_webp_ratio - sample_webp_ratio) / get_std("webp_ratio");
+    let v_wratio = sample_webp_ratio / get_std("webp_ratio") * get_w("webp_ratio").sqrt();
 
-    let d_lfreq =
-        (target_loop_frequency - sample.loop_frequency.unwrap_or(0.5)) / get_std("loop_freq");
-    let d_laffin = (target_loop_affinity - sample_loop_affinity) / get_std("loop_affin");
-    let d_cadence =
-        (target_cadence_score - sample.cadence_score.unwrap_or(0.5)) / get_std("cadence");
+    let v_lfreq =
+        sample.loop_frequency.unwrap_or(0.5) / get_std("loop_freq") * get_w("loop_freq").sqrt();
+    let v_laffin = sample_loop_affinity / get_std("loop_affin") * get_w("loop_affin").sqrt();
+    let v_cadence =
+        sample.cadence_score.unwrap_or(0.5) / get_std("cadence") * get_w("cadence").sqrt();
 
-    // Boolean features (categorical) still use fixed penalties in [0, 1] scale
-    let bool_dist = |a: bool, b: bool, w: f64| if a == b { 0.0 } else { w };
-    let meme_platform_dist = bool_dist(target_is_meme_platform, sample.is_meme_platform, 1.2);
-    let name_dist = bool_dist(
-        target_is_human_semantic_name,
-        sample.is_human_semantic_name,
-        0.8,
-    );
-    // Directory-context distance: compare continuous scores (missing -> neutral 0.5)
-    let sample_directory_meme_score = sample.directory_meme_score.unwrap_or(0.5);
-    let dir_hint_dist = (target_directory_meme_score - sample_directory_meme_score).abs();
-    let native_gif_dist = bool_dist(target_is_native_gif, sample.is_native_gif, 0.6);
-    let high_value_dist = bool_dist(
-        target_is_high_value_source,
-        sample.is_high_value_source,
-        1.5,
-    );
-    let trans_dist = bool_dist(meta.has_transparency, sample.has_transparency, 1.5);
+    let v_payload = sample.frame_payload_variation.unwrap_or(0.5) / get_std("payload_var")
+        * get_w("payload_var").sqrt();
+    let v_delay = sample.frame_delay_variation.unwrap_or(0.5) / get_std("delay_var")
+        * get_w("delay_var").sqrt();
 
-    let color_distance = if meta.has_embedded_icc == sample.has_embedded_icc
-        && meta.has_complex_color_profile == sample.has_complex_color_profile
-    {
-        0.0
-    } else {
-        1.2
-    };
+    let v_aspect = sample.aspect_ratio.unwrap_or(1.0) / get_std("aspect") * get_w("aspect").sqrt();
+    let v_pal = (sample.palette_size.map_or(256.0, f64::from) / 256.0) * get_w("p_depth").sqrt();
 
-    let d_payload = (meta.frame_payload_variation.unwrap_or(0.5)
-        - sample.frame_payload_variation.unwrap_or(0.5))
-        / get_std("payload_var");
-    let d_delay = (meta.frame_delay_variation.unwrap_or(0.5)
-        - sample.frame_delay_variation.unwrap_or(0.5))
-        / get_std("delay_var");
+    let v_pdepth =
+        sample.palette_depth.unwrap_or(0.5) / get_std("p_depth") * get_w("p_depth").sqrt();
+    let v_mgini = sample.motion_gini.unwrap_or(0.5) / get_std("m_gini") * get_w("m_gini").sqrt();
+    let v_bskew = sample.block_skew.unwrap_or(0.5) / get_std("b_skew") * get_w("b_skew").sqrt();
+    let v_tflat =
+        sample.temporal_flatness.unwrap_or(0.5) / get_std("t_flat") * get_w("t_flat").sqrt();
 
-    let target_aspect = if meta.height > 0 {
-        Some(f64::from(meta.width) / f64::from(meta.height))
-    } else {
-        None
-    };
-    let d_aspect =
-        (target_aspect.unwrap_or(1.0) - sample.aspect_ratio.unwrap_or(1.0)) / get_std("aspect");
-    let d_pal = (meta.palette_size.map_or(256.0, f64::from)
-        - sample.palette_size.map_or(256.0, f64::from))
-        / 256.0;
+    // Directory context
+    let v_dir = sample.directory_meme_score.unwrap_or(0.5) * get_w("dir_meme").sqrt();
 
-    let d_pdepth = (meta.palette_depth.unwrap_or(0.5) - sample.palette_depth.unwrap_or(0.5))
-        / get_std("p_depth");
-    let d_mgini =
-        (meta.motion_gini.unwrap_or(0.5) - sample.motion_gini.unwrap_or(0.5)) / get_std("m_gini");
-    let d_bskew =
-        (meta.block_skew.unwrap_or(0.5) - sample.block_skew.unwrap_or(0.5)) / get_std("b_skew");
-    let d_tflat = (meta.temporal_flatness.unwrap_or(0.5) - sample.temporal_flatness.unwrap_or(0.5))
-        / get_std("t_flat");
+    // Categorical variables (weight mapped so diff^2 = penalty weight)
+    // If w = penalty weight, v = sqrt(w)/2. If diff is `sqrt(w)`, squared diff is `w`.
+    // Wait: If true is w/2 and false is -w/2, diff is w. Squared diff is w^2!
+    // To get a penalty of W added to the SUM OF SQUARES, we need diff^2 = W. Thus diff = sqrt(W).
+    // So true mapped to sqrt(W)/2, false to -sqrt(W)/2.
+    let cat = |val: bool, w: f64| if val { w.sqrt() / 2.0 } else { -w.sqrt() / 2.0 };
 
-    let label_penalty = if sample.labeled_by.as_deref() == Some("auto") {
-        0.8
-    } else {
-        0.0
-    };
+    let v_meme = cat(sample.is_meme_platform, 1.2);
+    let v_name = cat(sample.is_human_semantic_name, 0.8);
+    let v_native = cat(sample.is_native_gif, 0.6);
+    let v_hv = cat(sample.is_high_value_source, 1.5);
+    let v_trans = cat(sample.has_transparency, 1.5);
+    let v_icc = cat(sample.has_embedded_icc, 1.2 / 2.0);
+    let v_complex = cat(sample.has_complex_color_profile, 1.2 / 2.0);
 
-    // Sum of Squares
-    let sos = d_pix.powi(2) * 0.4
-        + d_dur.powi(2) * 1.5
-        + d_frm.powi(2) * 0.3
-        + d_fsize.powi(2) * 0.9
-        + d_dens.powi(2) * 0.8
-        + d_gap.powi(2) * 0.8
-        + d_tbpp.powi(2) * 1.2
-        + d_sbpp.powi(2) * 0.6
-        + d_lfreq.powi(2) * 1.0
-        + d_laffin.powi(2) * 1.5
-        + d_cadence.powi(2) * 1.0
-        + d_payload.powi(2) * 1.1
-        + d_delay.powi(2) * 0.9
-        + d_aspect.powi(2) * 0.7
-        + d_pal.powi(2) * 0.1
-        + d_pdepth.powi(2) * 1.4
-        + d_mgini.powi(2) * 1.2
-        + d_bskew.powi(2) * 1.0
-        + d_tflat.powi(2) * 1.3
-        + d_wratio.powi(2) * 1.0;
-
-    sos.sqrt()
-        + meme_platform_dist
-        + name_dist
-        + dir_hint_dist
-        + native_gif_dist
-        + trans_dist
-        + color_distance
-        + high_value_dist
-        + label_penalty
+    vec![
+        v_pix as f32,
+        v_dur as f32,
+        v_frm as f32,
+        v_fsize as f32,
+        v_dens as f32,
+        v_gap as f32,
+        v_tbpp as f32,
+        v_sbpp as f32,
+        v_wratio as f32,
+        v_lfreq as f32,
+        v_laffin as f32,
+        v_cadence as f32,
+        v_payload as f32,
+        v_delay as f32,
+        v_aspect as f32,
+        v_pal as f32,
+        v_pdepth as f32,
+        v_mgini as f32,
+        v_bskew as f32,
+        v_tflat as f32,
+        v_dir as f32,
+        v_meme as f32,
+        v_name as f32,
+        v_native as f32,
+        v_hv as f32,
+        v_trans as f32,
+        v_icc as f32,
+        v_complex as f32,
+    ]
 }
 
-#[allow(dead_code)]
-fn variation_distance(a: Option<f64>, b: Option<f64>, missing_penalty: f64) -> f64 {
-    match (a, b) {
-        (Some(lhs), Some(rhs)) => (lhs - rhs).abs(),
-        (None, None) => 0.0,
-        _ => missing_penalty,
+fn sample_row_from_meta(meta: &LoopMeta, temporal_bpp: f64, spatial_bpp: f64) -> SampleRow {
+    SampleRow {
+        loss_tolerance: None,
+        width: meta.width,
+        height: meta.height,
+        duration_secs: meta.duration_secs,
+        frame_count: meta.frame_count,
+        file_size_bytes: meta.file_size_bytes,
+        fps: meta.fps,
+        temporal_bpp,
+        spatial_bpp,
+        has_transparency: meta.has_transparency,
+        has_embedded_icc: meta.has_embedded_icc,
+        has_complex_color_profile: meta.has_complex_color_profile,
+        palette_size: meta.palette_size,
+        frame_payload_variation: meta.frame_payload_variation,
+        frame_delay_variation: meta.frame_delay_variation,
+        aspect_ratio: (meta.height > 0).then(|| f64::from(meta.width) / f64::from(meta.height)),
+        total_pixels: Some(u64::from(meta.width) * u64::from(meta.height)),
+        loop_frequency: Some(crate::loop_intent::score_loop_frequency(
+            meta.duration_secs,
+            meta.frame_count,
+        )),
+        is_meme_platform: meta.is_meme_platform,
+        is_human_semantic_name: crate::loop_intent::analyze_filename(
+            meta.file_name.as_deref(),
+            &[],
+        )
+        .kind
+            == crate::loop_intent::FilenameKind::HumanSemantic,
+        cadence_score: Some(crate::loop_intent::score_sparse_cadence(
+            meta.duration_secs,
+            meta.frame_count,
+        )),
+        directory_meme_score: Some(crate::loop_intent::score_directory_context(
+            meta.parent_directories.as_deref(),
+            &[],
+        )),
+        is_high_value_source: meta.has_embedded_icc
+            || meta.has_complex_color_profile
+            || meta.has_audio,
+        is_native_gif: meta.source_extension.as_deref() == Some("gif"),
+        palette_depth: meta.palette_depth,
+        motion_gini: meta.motion_gini,
+        block_skew: meta.block_skew,
+        temporal_flatness: meta.temporal_flatness,
+        webp_compression_ratio: meta.webp_compression_ratio,
+        labeled_by: None,
     }
+}
+
+#[cfg(test)]
+fn vector_l2_distance(lhs: &[f32], rhs: &[f32]) -> f64 {
+    lhs.iter()
+        .zip(rhs.iter())
+        .map(|(a, b)| {
+            let delta = f64::from(*a) - f64::from(*b);
+            delta * delta
+        })
+        .sum::<f64>()
+        .sqrt()
+}
+
+#[cfg(test)]
+fn sample_distance(
+    meta: &LoopMeta,
+    sample: &SampleRow,
+    target_temporal_bpp: f64,
+    target_spatial_bpp: f64,
+    stats_map: &FeatureMap,
+) -> f64 {
+    let target = sample_row_from_meta(meta, target_temporal_bpp, target_spatial_bpp);
+    let target_vector = compute_sample_vector(&target, stats_map);
+    let sample_vector = compute_sample_vector(sample, stats_map);
+    vector_l2_distance(&target_vector, &sample_vector)
 }
 
 fn adaptive_neighbor_count(total: usize) -> usize {
@@ -1268,8 +1337,8 @@ fn adaptive_neighbor_count(total: usize) -> usize {
         .min(total)
 }
 
-fn dynamic_neighbor_radius(neighbors: &[(SampleRow, f64)]) -> f64 {
-    let mut distances: Vec<f64> = neighbors.iter().map(|(_, d)| *d).collect();
+fn dynamic_neighbor_radius(neighbors: &[(String, f64, f64)]) -> f64 {
+    let mut distances: Vec<f64> = neighbors.iter().map(|(_, _, d)| *d).collect();
     distances.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let q1 = distances[distances.len() / 4];
     let q3 = distances[(distances.len() * 3) / 4];
@@ -1326,6 +1395,7 @@ fn build_feature_stats(values: &[f64]) -> FeatureStats {
     FeatureStats {
         mean,
         std_dev: variance.sqrt(),
+        weight: None,
         p10: percentile_value(&sorted, 0.10),
         p25: percentile_value(&sorted, 0.25),
         p50: percentile_value(&sorted, 0.50),
@@ -1533,7 +1603,10 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
         return Ok(());
     }
 
-    emit_stderr(&format!("   📊 Analyzing {} training samples...", rows.len()));
+    emit_stderr(&format!(
+        "   📊 Analyzing {} training samples...",
+        rows.len()
+    ));
 
     let all_data: Vec<Vec<f64>> = rows
         .iter()
@@ -1618,7 +1691,10 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
     )?;
     let top_keywords: Vec<String> = keyword_rows.iter().map(|r| r.get(0)).collect();
     if !top_keywords.is_empty() {
-        emit_stderr(&format!("   🔍 Extracted {} dynamic loop triggers from filenames.", top_keywords.len()));
+        emit_stderr(&format!(
+            "   🔍 Extracted {} dynamic loop triggers from filenames.",
+            top_keywords.len()
+        ));
     }
 
     let mut feature_map = FeatureMap::default();
@@ -1632,6 +1708,34 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
         feature_map
             .stats
             .insert(name.to_string(), build_feature_stats(&values));
+    }
+
+    // Assign learned dynamic weights based on data-driven discriminative power
+    if let Ok(powers) = query_feature_discriminative_power(conn) {
+        for power in powers {
+            // Map DB column names back to feature_map string keys
+            let mapped_name = match power.feature_name.as_str() {
+                "duration_secs" => "duration",
+                "fps" => "fps",
+                "file_size_bytes" => "file_size_bytes",
+                "temporal_bpp" => "temporal_bpp",
+                "spatial_bpp" => "spatial_bpp",
+                "frame_payload_variation" => "payload_var",
+                "frame_delay_variation" => "delay_var",
+                "palette_depth" => "p_depth",
+                "motion_gini" => "m_gini",
+                "temporal_flatness" => "t_flat",
+                "webp_compression_ratio" => "webp_ratio",
+                "cadence_score" => "cadence",
+                "loop_frequency" => "loop_freq",
+                _ => continue,
+            };
+            if let Some(stat) = feature_map.stats.get_mut(mapped_name) {
+                // Ensure weights are positive and scale gently for the euclidean distance.
+                // Clamped to avoid massive dominant features ruining the search radius.
+                stat.weight = Some(power.discriminative_power.abs().clamp(0.01, 10.0));
+            }
+        }
     }
 
     let json = serde_json::to_string(&feature_map)?;
@@ -1723,8 +1827,322 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
         &[&col_json],
     )?;
 
+    // ── pgvector HNSW Migration: Backfill Vectors ──
+    emit_stderr("   ⚙️  Backfilling pgvector encodings for all labeled samples...");
+
+    let sample_rows = conn.query(
+        "SELECT
+            file_hash, loss_tolerance, width, height, duration_secs, frame_count, file_size_bytes,
+            fps, temporal_bpp, spatial_bpp,
+            has_transparency, has_embedded_icc, has_complex_color_profile,
+            palette_size, frame_payload_variation, frame_delay_variation,
+            aspect_ratio, labeled_by,
+            total_pixels, loop_frequency, is_meme_platform, is_human_semantic_name,
+            cadence_score, directory_meme_score, is_high_value_source, is_native_gif,
+            palette_depth, motion_gini, block_skew, temporal_flatness, webp_compression_ratio
+         FROM samples WHERE loss_tolerance IS NOT NULL AND frame_count > 1",
+        &[],
+    )?;
+
+    let mut tx = conn.transaction()?;
+    let stmt = tx.prepare("UPDATE samples SET features = $1::vector WHERE file_hash = $2")?;
+
+    let mut updated_count = 0;
+    for row in &sample_rows {
+        let file_hash: String = row.get(0);
+        let sample = SampleRow {
+            loss_tolerance: row.get(1),
+            width: row.get::<_, i32>(2) as u32,
+            height: row.get::<_, i32>(3) as u32,
+            duration_secs: row.get(4),
+            frame_count: row.get::<_, i64>(5) as u64,
+            file_size_bytes: row.get::<_, i64>(6) as u64,
+            fps: row.get::<_, Option<f64>>(7).unwrap_or(0.0),
+            temporal_bpp: row.get(8),
+            spatial_bpp: row.get(9),
+            has_transparency: row.get(10),
+            has_embedded_icc: row.get(11),
+            has_complex_color_profile: row.get(12),
+            palette_size: row.get::<_, Option<i32>>(13).map(|v| v as u32),
+            frame_payload_variation: row.get(14),
+            frame_delay_variation: row.get(15),
+            aspect_ratio: row.get(16),
+            labeled_by: row.get(17),
+            total_pixels: row.get::<_, Option<i64>>(18).map(|v| v as u64),
+            loop_frequency: row.get(19),
+            is_meme_platform: row.get(20),
+            is_human_semantic_name: row.get(21),
+            cadence_score: row.get(22),
+            directory_meme_score: row.get::<_, Option<f64>>(23),
+            is_high_value_source: row.get(24),
+            is_native_gif: row.get(25),
+            palette_depth: row.get(26),
+            motion_gini: row.get(27),
+            block_skew: row.get(28),
+            temporal_flatness: row.get(29),
+            webp_compression_ratio: row.get::<_, Option<f64>>(30),
+        };
+
+        let vec_data = compute_sample_vector(&sample, &feature_map);
+        let pg_vector = pgvector::Vector::from(vec_data);
+        tx.execute(&stmt, &[&pg_vector, &file_hash])?;
+        updated_count += 1;
+    }
+    tx.commit()?;
+    emit_stderr(&format!(
+        "   ✅ pgvector backfill complete ({} samples encoded).",
+        updated_count
+    ));
+
     emit_stderr("✅ KNN Model Training Complete: Internal statistics synchronized.");
     Ok(())
+}
+
+// ── Level 4: Inference Logging ───────────────────────────────────────────────
+
+/// Build a JSON snapshot of key LoopMeta fields for the inference log.
+fn build_signal_snapshot(meta: &LoopMeta) -> Value {
+    json!({
+        "duration_secs": meta.duration_secs,
+        "width": meta.width,
+        "height": meta.height,
+        "fps": meta.fps,
+        "frame_count": meta.frame_count,
+        "file_size_bytes": meta.file_size_bytes,
+        "has_audio": meta.has_audio,
+        "has_transparency": meta.has_transparency,
+        "is_native_gif": meta.is_native_gif,
+        "has_embedded_icc": meta.has_embedded_icc,
+        "has_complex_color_profile": meta.has_complex_color_profile,
+        "is_meme_platform": meta.is_meme_platform,
+        "loop_count": meta.loop_count,
+        "webp_compression_ratio": meta.webp_compression_ratio,
+        "palette_depth": meta.palette_depth,
+        "motion_gini": meta.motion_gini,
+        "temporal_flatness": meta.temporal_flatness,
+        "block_skew": meta.block_skew,
+        "frame_payload_variation": meta.frame_payload_variation,
+        "frame_delay_variation": meta.frame_delay_variation,
+        "directory_meme_score": meta.directory_meme_score,
+        "filename_meme_score": meta.filename_meme_score,
+        "source_extension": meta.source_extension,
+        "container": meta.container,
+    })
+}
+
+/// Log one inference record to the database. Fails silently — never blocks the pipeline.
+///
+/// Called by `assess_loop_intent_from_meta` after every verdict to build the feedback loop.
+pub fn log_inference_record(
+    conn: &mut Client,
+    meta: &LoopMeta,
+    record: &LoopInferenceRecord,
+    path: Option<&Path>,
+) {
+    let file_hash: Option<String> = path.and_then(|p| calculate_blake3_hex(p).ok());
+    let source_path: Option<String> = path.map(|p| p.display().to_string());
+    let snapshot = build_signal_snapshot(meta);
+    let snapshot_str = serde_json::to_string(&snapshot).unwrap_or_else(|_| "{}".to_string());
+
+    let knn_neighbor_count_i32 = record.knn_neighbor_count.map(|n| n as i32);
+
+    let result = conn.execute(
+        "INSERT INTO inference_log (
+            file_hash, source_path, duration_secs, webp_compression_ratio,
+            tree_probability, knn_keep_probability, knn_confidence, knn_neighbor_count,
+            final_probability, final_verdict, decision_reason, layer_exit,
+            signal_snapshot
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb)",
+        &[
+            &file_hash,
+            &source_path,
+            &meta.duration_secs,
+            &meta.webp_compression_ratio,
+            &record.tree_probability,
+            &record.knn_keep_probability,
+            &record.knn_confidence,
+            &knn_neighbor_count_i32,
+            &record.final_probability,
+            &record.final_verdict,
+            &record.decision_reason,
+            &record.layer_exit,
+            &snapshot_str,
+        ],
+    );
+
+    if let Err(e) = result {
+        log::warn!("⚠️ Failed to write inference log (non-fatal): {e}");
+    }
+}
+
+// ── Level 1: Feature Discriminative Power Analysis ───────────────────────────
+
+/// Query which features have real discriminative power between loop_strong and loop_weak.
+///
+/// Returns features sorted by absolute discriminative power descending.
+/// `discriminative_power = (mean_loop_strong - mean_loop_weak) / stddev`
+pub fn query_feature_discriminative_power(
+    conn: &mut Client,
+) -> Result<Vec<LoopFeatureDiscriminativePower>> {
+    // We pivot the numeric columns into (feature_name, value) rows, then compute
+    // per-feature statistics grouped by the loss_tolerance label.
+    let rows = conn.query(
+        "WITH feature_pivoted AS (
+            SELECT loss_tolerance, 'duration_secs' AS feature_name, duration_secs AS value FROM samples WHERE loss_tolerance IN ('high', 'video')
+            UNION ALL SELECT loss_tolerance, 'fps', fps FROM samples WHERE loss_tolerance IN ('high', 'video') AND fps IS NOT NULL
+            UNION ALL SELECT loss_tolerance, 'file_size_bytes', file_size_bytes::DOUBLE PRECISION FROM samples WHERE loss_tolerance IN ('high', 'video')
+            UNION ALL SELECT loss_tolerance, 'temporal_bpp', temporal_bpp FROM samples WHERE loss_tolerance IN ('high', 'video')
+            UNION ALL SELECT loss_tolerance, 'spatial_bpp', spatial_bpp FROM samples WHERE loss_tolerance IN ('high', 'video')
+            UNION ALL SELECT loss_tolerance, 'frame_payload_variation', frame_payload_variation FROM samples WHERE loss_tolerance IN ('high', 'video') AND frame_payload_variation IS NOT NULL
+            UNION ALL SELECT loss_tolerance, 'frame_delay_variation', frame_delay_variation FROM samples WHERE loss_tolerance IN ('high', 'video') AND frame_delay_variation IS NOT NULL
+            UNION ALL SELECT loss_tolerance, 'palette_depth', palette_depth FROM samples WHERE loss_tolerance IN ('high', 'video') AND palette_depth IS NOT NULL
+            UNION ALL SELECT loss_tolerance, 'motion_gini', motion_gini FROM samples WHERE loss_tolerance IN ('high', 'video') AND motion_gini IS NOT NULL
+            UNION ALL SELECT loss_tolerance, 'temporal_flatness', temporal_flatness FROM samples WHERE loss_tolerance IN ('high', 'video') AND temporal_flatness IS NOT NULL
+            UNION ALL SELECT loss_tolerance, 'webp_compression_ratio', webp_compression_ratio FROM samples WHERE loss_tolerance IN ('high', 'video') AND webp_compression_ratio IS NOT NULL
+            UNION ALL SELECT loss_tolerance, 'directory_meme_score', directory_meme_score FROM samples WHERE loss_tolerance IN ('high', 'video') AND directory_meme_score IS NOT NULL
+            UNION ALL SELECT loss_tolerance, 'cadence_score', cadence_score FROM samples WHERE loss_tolerance IN ('high', 'video') AND cadence_score IS NOT NULL
+            UNION ALL SELECT loss_tolerance, 'loop_frequency', loop_frequency FROM samples WHERE loss_tolerance IN ('high', 'video') AND loop_frequency IS NOT NULL
+        )
+        SELECT
+            feature_name,
+            AVG(value) FILTER (WHERE loss_tolerance = 'high') AS mean_loop_strong,
+            AVG(value) FILTER (WHERE loss_tolerance = 'video') AS mean_loop_weak,
+            CASE WHEN NULLIF(STDDEV(value), 0) IS NOT NULL THEN
+                (COALESCE(AVG(value) FILTER (WHERE loss_tolerance = 'high'), 0) -
+                 COALESCE(AVG(value) FILTER (WHERE loss_tolerance = 'video'), 0))
+                / STDDEV(value)
+            ELSE 0 END AS discriminative_power,
+            COUNT(*) AS sample_count
+        FROM feature_pivoted
+        GROUP BY feature_name
+        ORDER BY ABS(
+            CASE WHEN NULLIF(STDDEV(value), 0) IS NOT NULL THEN
+                (COALESCE(AVG(value) FILTER (WHERE loss_tolerance = 'high'), 0) -
+                 COALESCE(AVG(value) FILTER (WHERE loss_tolerance = 'video'), 0))
+                / STDDEV(value)
+            ELSE 0 END
+        ) DESC",
+        &[],
+    )?;
+
+    Ok(rows
+        .iter()
+        .map(|row| LoopFeatureDiscriminativePower {
+            feature_name: row.get(0),
+            mean_loop_strong: row.get(1),
+            mean_loop_weak: row.get(2),
+            discriminative_power: row.get::<_, Option<f64>>(3).unwrap_or(0.0),
+            sample_count: row.get(4),
+        })
+        .collect())
+}
+
+// ── Level 3: Blind Spot Discovery ────────────────────────────────────────────
+
+/// Discover feature-space regions where the system is most uncertain.
+///
+/// Buckets inference logs by duration (5s) and WebP ratio (3 units) and finds
+/// regions with average KNN confidence below the threshold.
+pub fn query_inference_blind_spots(
+    conn: &mut Client,
+    confidence_threshold: f64,
+) -> Result<Vec<InferenceBlindSpot>> {
+    let rows = conn.query(
+        "SELECT
+            ROUND(duration_secs / 5) * 5          AS duration_bucket,
+            ROUND(COALESCE(webp_compression_ratio, 0) / 3) * 3 AS webp_bucket,
+            AVG(COALESCE(knn_confidence, 0))       AS avg_knn_confidence,
+            AVG(tree_probability)                   AS avg_tree_probability,
+            AVG(final_probability)                  AS avg_final_probability,
+            AVG(knn_neighbor_count)::DOUBLE PRECISION AS avg_neighbor_count,
+            COUNT(*)                                AS sample_count,
+            MODE() WITHIN GROUP (ORDER BY layer_exit) AS example_layer_exit
+         FROM inference_log
+         GROUP BY duration_bucket, webp_bucket
+         HAVING AVG(COALESCE(knn_confidence, 0)) < $1
+         ORDER BY COUNT(*) DESC",
+        &[&confidence_threshold],
+    )?;
+
+    Ok(rows
+        .iter()
+        .map(|row| InferenceBlindSpot {
+            duration_bucket: row.get(0),
+            webp_bucket: row.get(1),
+            avg_knn_confidence: row.get(2),
+            avg_tree_probability: row.get(3),
+            avg_final_probability: row.get(4),
+            avg_neighbor_count: row.get(5),
+            sample_count: row.get(6),
+            example_layer_exit: row.get(7),
+        })
+        .collect())
+}
+
+// ── Inference Log Summary ────────────────────────────────────────────────────
+
+/// Summary statistics for the inference log, used by diagnostics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InferenceLogSummary {
+    pub total_records: i64,
+    pub verdict_counts: Vec<(String, i64)>,
+    pub layer_exit_counts: Vec<(String, i64)>,
+    pub avg_tree_probability: Option<f64>,
+    pub avg_knn_confidence: Option<f64>,
+    pub avg_final_probability: Option<f64>,
+    pub layer7_fallback_count: i64,
+}
+
+/// Get a summary of all inference log records.
+pub fn query_inference_log_summary(conn: &mut Client) -> Result<InferenceLogSummary> {
+    let count_row = conn.query_one("SELECT COUNT(*) FROM inference_log", &[])?;
+    let total_records: i64 = count_row.get(0);
+
+    if total_records == 0 {
+        return Ok(InferenceLogSummary {
+            total_records: 0,
+            verdict_counts: Vec::new(),
+            layer_exit_counts: Vec::new(),
+            avg_tree_probability: None,
+            avg_knn_confidence: None,
+            avg_final_probability: None,
+            layer7_fallback_count: 0,
+        });
+    }
+
+    let verdict_rows = conn.query(
+        "SELECT final_verdict, COUNT(*) FROM inference_log GROUP BY final_verdict ORDER BY COUNT(*) DESC",
+        &[],
+    )?;
+    let verdict_counts: Vec<(String, i64)> =
+        verdict_rows.iter().map(|r| (r.get(0), r.get(1))).collect();
+
+    let layer_rows = conn.query(
+        "SELECT layer_exit, COUNT(*) FROM inference_log GROUP BY layer_exit ORDER BY COUNT(*) DESC",
+        &[],
+    )?;
+    let layer_exit_counts: Vec<(String, i64)> =
+        layer_rows.iter().map(|r| (r.get(0), r.get(1))).collect();
+
+    let agg_row = conn.query_one(
+        "SELECT
+            AVG(tree_probability),
+            AVG(knn_confidence),
+            AVG(final_probability),
+            COUNT(*) FILTER (WHERE layer_exit LIKE 'Layer 7%')
+         FROM inference_log",
+        &[],
+    )?;
+
+    Ok(InferenceLogSummary {
+        total_records,
+        verdict_counts,
+        layer_exit_counts,
+        avg_tree_probability: agg_row.get(0),
+        avg_knn_confidence: agg_row.get(1),
+        avg_final_probability: agg_row.get(2),
+        layer7_fallback_count: agg_row.get(3),
+    })
 }
 
 #[cfg(test)]
@@ -1890,6 +2308,7 @@ mod tests {
             FeatureStats {
                 mean: 6.0,
                 std_dev: 2.0,
+                weight: None,
                 p10: Some(1.0),
                 p25: Some(2.0),
                 p50: Some(5.0),
@@ -1902,6 +2321,7 @@ mod tests {
             FeatureStats {
                 mean: 14.0,
                 std_dev: 3.0,
+                weight: None,
                 p10: Some(8.0),
                 p25: Some(10.0),
                 p50: Some(14.0),

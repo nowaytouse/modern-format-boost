@@ -6,6 +6,80 @@ All notable changes to this project will be documented in this file.
 
 ## [0.11.1] — 2026-04-03
 
+#### 🧠 pgvector HNSW Integration & KNN Search Overhaul
+
+- **Deep pgvector Integration**: Migrated KNN similarity search from in-memory Euclidean distance to PostgreSQL's HNSW (Hierarchical Navigable Small World) vector index.
+  - **Vector Encoding**: Replaced `sample_distance()` with `compute_sample_vector()` — a 28-dimensional feature encoding compatible with L2 distance in HNSW.
+  - **Schema Upgrade**: `features vector(28)` column added to `samples` table with automatic backfill for all existing labeled samples.
+  - **HNSW Index**: Created `idx_samples_features_hnsw` using `vector_l2_ops` for high-performance approximate nearest neighbor retrieval.
+  - **Query Simplification**: KNN lookup now uses `ORDER BY features <-> $1::vector LIMIT 24` — PostgreSQL handles all vector math and ranking.
+  - **Performance Impact**: Eliminates O(N) in-memory distance computation; leverages database index for O(log N) retrieval.
+  - **Files**: `shared_utils/src/gif_value_db.rs`
+
+#### 📊 Data-Driven Feature Weighting
+
+- **Discriminative Power Analysis**: Added `query_feature_discriminative_power()` to compute per-feature separation between `LoopStrong` and `LoopWeak` classes.
+  - **Formula**: `discriminative_power = (mean_loop_strong - mean_loop_weak) / stddev`
+  - **Features Analyzed**: duration_secs, fps, file_size_bytes, temporal_bpp, spatial_bpp, frame_payload_variation, frame_delay_variation, palette_depth, motion_gini, temporal_flatness, webp_compression_ratio, cadence_score, loop_frequency, directory_meme_score.
+  - **Dynamic Weight Assignment**: `refresh_feature_stats()` now populates `weight` field in `FeatureStats` based on learned discriminative power (clamped to [0.01, 10.0]).
+  - **Vector Encoding Integration**: Feature weights are baked into the HNSW vector via `sqrt(weight)` scaling, ensuring more discriminative features dominate the L2 distance.
+  - **Files**: `shared_utils/src/gif_value_db.rs`
+
+#### 🔁 Level 4 Feedback Loop: Inference Logging
+
+- **Inference Log Table**: New `inference_log` table captures every loop intent decision for offline analysis and model improvement.
+  - **Fields**: file_hash, source_path, duration_secs, webp_compression_ratio, tree_probability, knn_keep_probability, knn_confidence, knn_neighbor_count, final_probability, final_verdict, decision_reason, layer_exit, signal_snapshot (JSONB).
+  - **Signal Snapshot**: Full JSONB snapshot of LoopMeta fields including dimensions, fps, frame count, transparency, ICC profiles, meme platform markers, palette depth, motion gini, cadence scores, and directory/filename meme scores.
+  - **Fire-and-Forget**: Logging is non-blocking — failures produce a `log::warn!` but never halt the pipeline.
+  - **Index**: `idx_inference_log_blindspots` on `(knn_confidence, duration_secs, webp_compression_ratio)` for efficient blind-spot queries.
+  - **Files**: `shared_utils/src/gif_value_db.rs`, `shared_utils/src/loop_intent.rs`
+
+#### 🔍 Inference Diagnostics & Blind Spot Discovery
+
+- **New Data Structures**:
+  - `LoopInferenceRecord`: Captures tree probability, KNN results, final verdict, and exit layer for each decision.
+  - `LoopFeatureDiscriminativePower`: Feature-level analysis results showing mean separation and discriminative power.
+  - `InferenceBlindSpot`: Duration/WebP-ratio buckets with low average KNN confidence for targeted retraining.
+  - `InferenceLogSummary`: Aggregate stats including verdict counts, layer exit distributions, and fallback rates.
+- **New Query Functions**:
+  - `log_inference_record()`: Writes one inference record to the database.
+  - `query_feature_discriminative_power()`: Returns features sorted by class separation strength.
+  - `query_inference_blind_spots(confidence_threshold)`: Finds duration/WebP-ratio regions where KNN confidence is below threshold.
+  - `query_inference_log_summary()`: Returns total records, verdict/layer distributions, and Layer 7 fallback count.
+  - **Files**: `shared_utils/src/gif_value_db.rs`
+
+#### 🔧 assess_loop_intent_from_meta Refactoring
+
+- **Non-Early-Return Pattern**: Refactored main decision flow to use `match` binding instead of early `return` statements, enabling post-decision inference logging.
+- **KNN Data Capture**: All KNN results (keep_probability, confidence, neighbor_count) are now captured as tracking variables for logging.
+- **Layer Exit Tagging**: New `extract_layer_tag()` helper parses verdict reason strings to extract the exit layer (e.g., "Layer 1-A", "Layer 6", "Layer 7").
+- **Final Probability Mapping**: `LoopStrong` → 1.0, `LoopWeak` → 0.0, `Uncertain` → tree_probability.
+  - **Files**: `shared_utils/src/loop_intent.rs`
+
+#### 🏋️ motion_gini Computation Fix
+
+- **Packet Size-Based Motion Metric**: Changed `motion_gini` calculation from `mv_magnitudes` (motion vectors, often unavailable) to `pkt_sizes` (packet sizes, always available from ffprobe).
+  - **Impact**: More reliable motion gini scores across diverse video formats, improving temporal motion analysis in Layers 4-5.
+  - **Files**: `shared_utils/src/loop_intent.rs` (`LoopMeta::from_ffprobe_result`, `LoopMeta::from_video_probe`)
+
+#### 🛠️ Training Binary Enhancements
+
+- **recompute_stats**: Now calls `init_schema()` before `refresh_feature_stats()` to ensure HNSW index and vector columns exist before statistics refresh.
+  - **File**: `shared_utils/src/bin/recompute_stats.rs`
+- **train_knn**: Import reorganization, formatting cleanup (clap arg formatting, println line breaks).
+  - **File**: `shared_utils/src/bin/train_knn.rs`
+- **train_quality**: Import reorganization, formatting cleanup (function call line breaks, Client::connect formatting).
+  - **File**: `shared_utils/src/bin/train_quality.rs`
+
+#### 🧹 Code Quality & Formatting
+
+- **constants.rs**: Removed trailing whitespace, collapsed `MODERN_ANIMATED_EXTENSIONS` to single-line array.
+- **image_quality_db.rs**: Import reorganization, function signature formatting cleanup.
+- **lib.rs**: Reordered module declarations (`image_quality_db` moved to alphabetical position), line-break formatting for `loop_intent` re-exports.
+- **gif_value_db.rs**: `serde_json::{json, Value}` import added, `#[allow(dead_code)]` annotations for unused `SampleRow` fields, line-break formatting throughout.
+
+## [0.11.1] — 2026-04-03
+
 #### 🧠 Loop Intent Soft Scoring Finalization (Layer 5 Refinement)
 
 - **Extended Short-Asset Prior (up to 10s+)**: Added positive scoring bonus for silent assets between `short_clip_secs` and `short_asset_window_secs`.

@@ -1,6 +1,6 @@
 //! Global Constants for `modern_format_boost`
-//! 
-//! This module centralizes core magic numbers, business rules, and 
+//!
+//! This module centralizes core magic numbers, business rules, and
 //! environment variable toggles to ensure consistency across the workspace.
 
 // --- Size & Storage Defaults ---
@@ -84,6 +84,4 @@ pub const ENV_STICKER_LIMIT_SECS: &str = "MODERN_FORMAT_STICKER_LIMIT_SECS";
 // --- Formats & Extensions ---
 
 /// Modern animated image/container extensions.
-pub const MODERN_ANIMATED_EXTENSIONS: &[&str] = &[
-    "webp", "avif", "apng", "heic", "heif", "jxl",
-];
+pub const MODERN_ANIMATED_EXTENSIONS: &[&str] = &["webp", "avif", "apng", "heic", "heif", "jxl"];

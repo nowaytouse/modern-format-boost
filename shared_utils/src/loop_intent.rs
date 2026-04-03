@@ -212,7 +212,7 @@ impl LoopMeta {
             loop_count: detection.loop_count,
             app_extensions: Some(Vec::new()),
             container: Some(detection.format.clone()),
-            has_embedded_icc: false, 
+            has_embedded_icc: false,
             has_complex_color_profile: matches!(
                 detection.color_space,
                 ColorSpace::BT2020 | ColorSpace::AdobeRGB
@@ -225,7 +225,10 @@ impl LoopMeta {
             palette_size,
             webp_compression_ratio: None,
             palette_depth: None,
-            motion_gini: Some(calculate_gini_f64(&detection.mv_magnitudes)),
+            motion_gini: {
+                let sizes: Vec<f64> = detection.pkt_sizes.iter().map(|&s| s as f64).collect();
+                Some(calculate_gini_f64(&sizes))
+            },
             temporal_flatness: None,
             block_skew: None,
             directory_meme_score: 0.5,
@@ -300,10 +303,13 @@ impl LoopMeta {
             pkt_sizes: probe.pkt_sizes.clone(),
             pts_deltas: probe.pts_deltas.clone(),
             palette_size,
-            webp_compression_ratio: None,
             palette_depth: None,
-            motion_gini: Some(calculate_gini_f64(&probe.mv_magnitudes)),
             temporal_flatness: None,
+            webp_compression_ratio: None,
+            motion_gini: {
+                let sizes: Vec<f64> = probe.pkt_sizes.iter().map(|&s| s as f64).collect();
+                Some(calculate_gini_f64(&sizes))
+            },
             block_skew: None,
             directory_meme_score: 0.5,
             filename_meme_score: 0.5,
@@ -1043,9 +1049,13 @@ pub fn assess_loop_intent_from_probe(
 }
 
 /// Core entry point: runs the full tree including KNN Layer 6 and Layer 7 fallback.
+///
+/// Every invocation logs an inference record to the database (if connected) to
+/// build the feedback loop described in Level 4 of the database utilization plan.
 pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> LoopIntentVerdict {
     use crate::gif_value_db::{
-        fetch_loop_reference_profile, lookup_similar_samples, open_pg_client,
+        fetch_loop_reference_profile, log_inference_record, lookup_similar_samples, open_pg_client,
+        LoopInferenceRecord,
     };
 
     let mut conn = open_pg_client().ok();
@@ -1067,14 +1077,19 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
     let tree_probability = tree.tree_probability;
     let thresholds = LoopThresholds::from_profile(reference_profile.as_ref());
 
-    match &tree.verdict {
+    // ── Tracking variables for inference logging ──
+    let mut knn_keep_probability: Option<f64> = None;
+    let mut knn_confidence: Option<f64> = None;
+    let mut knn_neighbor_count: Option<usize> = None;
+
+    let verdict = match &tree.verdict {
         LoopIntentVerdict::LoopStrong(reason) | LoopIntentVerdict::LoopWeak(reason) => {
             if tree.verdict.is_keep_gif() {
                 emit_stderr(&format!("✅ Tree Decisive: {reason}"));
             } else {
                 emit_stderr(&format!("ℹ️  Tree Decisive: {reason}"));
             }
-            return tree.verdict.clone();
+            tree.verdict.clone()
         }
         LoopIntentVerdict::Uncertain(reason) => {
             emit_stderr(&format!(
@@ -1084,6 +1099,11 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
             if let Some(m) = sample_match {
                 let keep_prob = m.keep_probability.unwrap_or(0.5);
                 let confidence = m.confidence;
+
+                // Capture KNN data for inference log
+                knn_keep_probability = m.keep_probability;
+                knn_confidence = Some(confidence);
+                knn_neighbor_count = Some(m.neighbor_count);
 
                 let nudges = calculate_micro_nudges(meta);
 
@@ -1152,42 +1172,79 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
                         final_score, keep_prob, tree_probability, nudges.score, confidence
                     ));
                     emit_stderr(&format!("✅ KNN Fusion Success: {}", v.reason()));
-                    return v;
-                }
-                if confidence >= 0.75 && final_score <= 0.4 {
+                    v
+                } else if confidence >= 0.75 && final_score <= 0.4 {
                     let v = LoopIntentVerdict::LoopWeak(format!(
                         "Layer 6: KNN+Nudges score={:.2} (knn={:.2}, tree={:.2}, nudge={:+.2}, conf={:.2})",
                         final_score, keep_prob, tree_probability, nudges.score, confidence
                     ));
                     emit_stderr(&format!("ℹ️  KNN Fusion Exit: {}", v.reason()));
-                    return v;
+                    v
+                } else {
+                    emit_stderr(&format!(
+                        "   ⚠️  KNN data inconclusive (conf={confidence:.2}, score={final_score:.2}) — deferring to Layer 7"
+                    ));
+                    let final_v = layer7_fallback(meta, reason);
+                    if final_v.is_keep_gif() {
+                        emit_stderr(&format!("✅ Fallback Result: {}", final_v.reason()));
+                    } else {
+                        emit_stderr(&format!("ℹ️  Fallback Result: {}", final_v.reason()));
+                    }
+                    final_v
                 }
-                emit_stderr(&format!(
-                    "   ⚠️  KNN data inconclusive (conf={confidence:.2}, score={final_score:.2}) — deferring to Layer 7"
-                ));
             } else {
                 if tree_probability > 0.78 {
                     emit_stderr(&format!(
                         "   ⚖️ Tree strong ({tree_probability:.2}) but no KNN match — promoting to LoopStrong"
                     ));
-                    return LoopIntentVerdict::LoopStrong(format!(
+                    LoopIntentVerdict::LoopStrong(format!(
                         "Layer 6: Tree-only promotion (score={:.2}) - no KNN match",
                         tree_probability
-                    ));
+                    ))
+                } else {
+                    emit_stderr("   ⚠️ KNN returned no match — using Layer 7 fallback");
+                    let final_v = layer7_fallback(meta, reason);
+                    if final_v.is_keep_gif() {
+                        emit_stderr(&format!("✅ Fallback Result: {}", final_v.reason()));
+                    } else {
+                        emit_stderr(&format!("ℹ️  Fallback Result: {}", final_v.reason()));
+                    }
+                    final_v
                 }
-
-                emit_stderr("   ⚠️ KNN returned no match — using Layer 7 fallback");
             }
-
-            let final_v = layer7_fallback(meta, reason);
-            if final_v.is_keep_gif() {
-                emit_stderr(&format!("✅ Fallback Result: {}", final_v.reason()));
-            } else {
-                emit_stderr(&format!("ℹ️  Fallback Result: {}", final_v.reason()));
-            }
-            final_v
         }
+    };
+
+    // ── Inference Logging (Level 4 Feedback Loop) ──
+    // Fire-and-forget: log the record if we have a DB connection, never block.
+    if let Some(ref mut client) = conn {
+        let (final_verdict_str, layer_exit) = match &verdict {
+            LoopIntentVerdict::LoopStrong(r) => ("LoopStrong".to_string(), extract_layer_tag(r)),
+            LoopIntentVerdict::LoopWeak(r) => ("LoopWeak".to_string(), extract_layer_tag(r)),
+            LoopIntentVerdict::Uncertain(r) => ("Uncertain".to_string(), extract_layer_tag(r)),
+        };
+
+        let final_probability = match &verdict {
+            LoopIntentVerdict::LoopStrong(_) => 1.0,
+            LoopIntentVerdict::LoopWeak(_) => 0.0,
+            LoopIntentVerdict::Uncertain(_) => tree_probability,
+        };
+
+        let record = LoopInferenceRecord {
+            tree_probability,
+            knn_keep_probability,
+            knn_confidence,
+            knn_neighbor_count,
+            final_probability,
+            final_verdict: final_verdict_str,
+            decision_reason: verdict.reason().to_string(),
+            layer_exit,
+        };
+
+        log_inference_record(client, meta, &record, path);
     }
+
+    verdict
 }
 
 /// Layer 7: Conservative fallback with minimum-loss default.
@@ -1230,6 +1287,22 @@ fn layer7_fallback(meta: &LoopMeta, upstream_reason: &str) -> LoopIntentVerdict 
         }
     } else {
         LoopIntentVerdict::LoopWeak(format!("{reason} → unknown format, standard processing"))
+    }
+}
+
+/// Extract the layer tag (e.g. "Layer 1-A", "Layer 6", "Layer 7") from a verdict reason string.
+fn extract_layer_tag(reason: &str) -> String {
+    // Reason strings start with "Layer X..." — extract the prefix up to the first ':'
+    if let Some(colon_pos) = reason.find(':') {
+        reason[..colon_pos].trim().to_string()
+    } else if reason.starts_with("Layer") {
+        // Some reasons don't have a colon (e.g. Layer 7 fallback sub-reasons)
+        reason.split_once('→').map_or_else(
+            || reason.to_string(),
+            |(prefix, _)| prefix.trim().to_string(),
+        )
+    } else {
+        "Unknown".to_string()
     }
 }
 

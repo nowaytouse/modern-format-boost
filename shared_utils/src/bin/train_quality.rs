@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
-use shared_utils::image_quality_db::{init_quality_schema, ingest_quality_sample};
-use std::path::PathBuf;
 use clap::{Parser, ValueEnum};
 use postgres::{Client, NoTls};
+use shared_utils::image_quality_db::{ingest_quality_sample, init_quality_schema};
+use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
 #[command(name = "train_quality")]
@@ -10,14 +10,18 @@ use postgres::{Client, NoTls};
 struct Cli {
     /// Directory containing sample images
     input: PathBuf,
-    
+
     /// Semantic label for these samples
     #[arg(short, long)]
     #[arg(value_enum)]
     label: QualityLabel,
 
     /// PostgreSQL connection string
-    #[arg(short, long, default_value = "host=localhost dbname=modern_format_boost")]
+    #[arg(
+        short,
+        long,
+        default_value = "host=localhost dbname=modern_format_boost"
+    )]
     conn: String,
 }
 
@@ -46,9 +50,9 @@ impl QualityLabel {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    
-    let mut client = Client::connect(&cli.conn, NoTls)
-        .context("Failed to connect to PostgreSQL")?;
+
+    let mut client =
+        Client::connect(&cli.conn, NoTls).context("Failed to connect to PostgreSQL")?;
 
     init_quality_schema(&mut client)?;
 
@@ -58,7 +62,12 @@ fn main() -> Result<()> {
     let mut count = 0;
     for entry in walkdir::WalkDir::new(&cli.input).into_iter().flatten() {
         if entry.file_type().is_file() {
-            if let Err(e) = ingest_quality_sample(&mut client, entry.path(), cli.label.as_str(), "manual_training") {
+            if let Err(e) = ingest_quality_sample(
+                &mut client,
+                entry.path(),
+                cli.label.as_str(),
+                "manual_training",
+            ) {
                 eprintln!("⚠️ Failed to ingest {}: {}", entry.path().display(), e);
             } else {
                 count += 1;

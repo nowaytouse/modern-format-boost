@@ -1,9 +1,9 @@
+use crate::image_analyzer::{analyze_image, ImageAnalysis};
+use crate::progress_mode::emit_stderr;
 use anyhow::{Context, Result};
 use postgres::{Client, NoTls};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use crate::image_analyzer::{ImageAnalysis, analyze_image};
-use crate::progress_mode::emit_stderr;
 
 const PG_DEFAULT_CONNSTR: &str = "host=localhost dbname=modern_format_boost";
 const QUALITY_IMPORT_KEY: &str = "quality_dataset_seeds_v1";
@@ -67,9 +67,14 @@ fn get_quality_features(analysis: &ImageAnalysis) -> Vec<f32> {
     ]
 }
 
-pub fn ingest_quality_sample(conn: &mut Client, path: &Path, label: &str, labeled_by: &str) -> Result<()> {
+pub fn ingest_quality_sample(
+    conn: &mut Client,
+    path: &Path,
+    label: &str,
+    labeled_by: &str,
+) -> Result<()> {
     let analysis = analyze_image(path).context("Failed to analyze image for quality DB")?;
-    
+
     // Ignore animated images in the Static Quality DB
     if analysis.is_animated {
         return Ok(());
@@ -78,7 +83,7 @@ pub fn ingest_quality_sample(conn: &mut Client, path: &Path, label: &str, labele
     let file_hash = crate::common_utils::calculate_blake3_hash(path)?;
     let total_pixels = i64::from(analysis.width) * i64::from(analysis.height);
     let spatial_bpp = analysis.file_size as f64 / (total_pixels as f64).max(1.0);
-    
+
     let features = get_quality_features(&analysis);
 
     conn.execute(
@@ -119,13 +124,15 @@ pub fn lookup_image_quality(analysis: &ImageAnalysis) -> Option<QualityScore> {
     let mut conn = Client::connect(PG_DEFAULT_CONNSTR, NoTls).ok()?;
     let features = get_quality_features(analysis);
 
-    let rows = conn.query(
-        "SELECT labeled_quality, features <=> $1 as distance
+    let rows = conn
+        .query(
+            "SELECT labeled_quality, features <=> $1 as distance
          FROM quality_samples
          ORDER BY distance ASC
          LIMIT 11",
-        &[&features],
-    ).ok()?;
+            &[&features],
+        )
+        .ok()?;
 
     if rows.is_empty() {
         return None;

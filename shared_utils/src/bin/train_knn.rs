@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
+use clap::{Parser, ValueEnum};
 use shared_utils::gif_value_db::batch_ingest_samples;
 use std::path::PathBuf;
-use clap::{Parser, ValueEnum};
 
 #[derive(Parser, Debug)]
 #[command(name = "train_knn")]
@@ -16,7 +16,11 @@ struct Cli {
     label: Option<IntentLabel>,
 
     /// PostgreSQL connection string
-    #[arg(short, long, default_value = "host=localhost dbname=modern_format_boost")]
+    #[arg(
+        short,
+        long,
+        default_value = "host=localhost dbname=modern_format_boost"
+    )]
     conn: String,
 }
 
@@ -41,7 +45,7 @@ impl IntentLabel {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    
+
     if !cli.input.exists() {
         anyhow::bail!("❌ Training directory not found: {}", cli.input.display());
     }
@@ -49,7 +53,11 @@ fn main() -> Result<()> {
     println!("🧠 Starting Dynamic Content KNN Training...");
     println!("📂 Source: {}", cli.input.display());
     if let Some(l) = cli.label {
-        println!("🏷️  Manual Override Label: {:?} (mapped to '{}')", l, l.to_db_label());
+        println!(
+            "🏷️  Manual Override Label: {:?} (mapped to '{}')",
+            l,
+            l.to_db_label()
+        );
     } else {
         println!("🔍 Mode: Automatic Heuristic Labeling");
     }
