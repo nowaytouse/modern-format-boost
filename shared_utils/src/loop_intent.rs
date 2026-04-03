@@ -475,6 +475,8 @@ const DIRECTORY_CONTEXT_POSITIVE_LOG_ODDS: f64 = 0.12;
 const FILENAME_CONTEXT_POSITIVE_LOG_ODDS: f64 = 0.10;
 const MODERN_MASTER_NEGATIVE_LOG_ODDS: f64 = 0.35;
 const SHORT_CLIP_PRIOR_LOG_ODDS: f64 = 0.42;
+const EXTENDED_SHORT_ASSET_PRIOR_LOG_ODDS: f64 = 0.20;
+const LONG_SILENT_PRIOR_NEGATIVE_LOG_ODDS: f64 = 0.26;
 const LAYER6_HIGH_SCORE_THRESHOLD: f64 = 0.70;
 const LAYER6_RELAXED_CONFIDENCE_THRESHOLD: f64 = 0.68;
 
@@ -518,6 +520,7 @@ struct LoopThresholds {
     reference: LoopReferenceProfile,
     duration_override_secs: f64,
     short_clip_secs: f64,
+    short_asset_window_secs: f64,
     modern_bias_duration_secs: f64,
     decision_threshold: f64,
 }
@@ -556,16 +559,20 @@ impl LoopThresholds {
                     .clamp(duration_override_secs + 1.0, 8.0),
             )
             .max(duration_override_secs + 0.5);
+        let short_asset_window_secs =
+            short_clip_secs.max(crate::constants::HARD_PASS_SHORT_GIF_THRESHOLD_SECS);
         let modern_bias_duration_secs = reference
             .duration
             .p75
             .unwrap_or(reference.collection.duration_p90)
-            .max(reference.collection.duration_p90);
+            .max(reference.collection.duration_p90)
+            .max(crate::constants::MODERN_FORMAT_VIDEO_BIAS_THRESHOLD_SECS);
 
         Self {
             reference,
             duration_override_secs,
             short_clip_secs,
+            short_asset_window_secs,
             modern_bias_duration_secs,
             decision_threshold: TREE_DECISION_LOG_ODDS_THRESHOLD,
         }
@@ -721,6 +728,9 @@ fn apply_weak_heuristics(
     let is_short_clip = !meta.has_audio
         && meta.duration_secs > thresholds.duration_override_secs
         && meta.duration_secs <= thresholds.short_clip_secs;
+    let is_extended_short_asset = !meta.has_audio
+        && meta.duration_secs > thresholds.short_clip_secs
+        && meta.duration_secs <= thresholds.short_asset_window_secs;
 
     if has_platform_marker(meta.app_extensions.as_deref()) || meta.is_meme_platform {
         log_odds.add(PLATFORM_MARKER_POSITIVE_LOG_ODDS);
@@ -739,6 +749,26 @@ fn apply_weak_heuristics(
         let cadence_bonus = if meta.frame_count > 1 { 0.06 } else { 0.0 };
         log_odds.add(
             (0.18 + headroom * 0.26 + format_bonus + cadence_bonus) * SHORT_CLIP_PRIOR_LOG_ODDS,
+        );
+    }
+    if is_extended_short_asset {
+        let range = (thresholds.short_asset_window_secs - thresholds.short_clip_secs).max(0.5);
+        let tail_headroom =
+            1.0 - ((meta.duration_secs - thresholds.short_clip_secs) / range).clamp(0.0, 1.0);
+        let square_bonus = if meta.width > 0 && meta.width == meta.height {
+            0.04
+        } else {
+            0.0
+        };
+        let image_bonus = if is_image { 0.05 } else { 0.0 };
+        let compact_bonus = if meta.file_size_bytes <= crate::constants::STICKER_MAX_SIZE_BYTES {
+            0.05
+        } else {
+            0.0
+        };
+        log_odds.add(
+            (0.10 + tail_headroom * 0.10 + square_bonus + image_bonus + compact_bonus)
+                * EXTENDED_SHORT_ASSET_PRIOR_LOG_ODDS,
         );
     }
     if meta.loop_count == Some(1) {
@@ -794,6 +824,22 @@ fn apply_weak_heuristics(
         log_odds.add(0.04);
     }
 
+    if !meta.has_audio && meta.duration_secs > thresholds.modern_bias_duration_secs {
+        let overflow = ((meta.duration_secs - thresholds.modern_bias_duration_secs)
+            / thresholds.modern_bias_duration_secs.max(1.0))
+        .clamp(0.0, 1.0);
+        let container_penalty = if is_video {
+            0.18
+        } else if is_image {
+            0.08
+        } else {
+            0.0
+        };
+        let transparency_relief = if meta.has_transparency { 0.06 } else { 0.0 };
+        let penalty = (0.22 + overflow * 0.18 + container_penalty - transparency_relief).max(0.08);
+        log_odds.add(-penalty * LONG_SILENT_PRIOR_NEGATIVE_LOG_ODDS);
+    }
+
     if is_image {
         log_odds.add(0.04);
     } else if is_video {
@@ -819,6 +865,17 @@ fn apply_weak_heuristics(
 #[must_use]
 pub fn identify_loop_intent(meta: &LoopMeta) -> LoopIntentVerdict {
     evaluate_loop_tree(meta, None).verdict
+}
+
+fn developer_layer1_override_enabled(name: &str) -> bool {
+    std::env::var(name)
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
 }
 
 fn evaluate_loop_tree(
@@ -867,9 +924,8 @@ fn evaluate_loop_tree(
         );
     }
 
-    let force_short_gifs = std::env::var(crate::constants::ENV_FORCE_SHORT_GIFS)
-        .map(|v| v != "0")
-        .unwrap_or(true); // Developer option: enabled by default, can be disabled with =0
+    let force_short_gifs =
+        developer_layer1_override_enabled(crate::constants::ENV_FORCE_SHORT_GIFS);
     if force_short_gifs
         && !meta.has_audio
         && meta.duration_secs > 0.0
@@ -878,15 +934,15 @@ fn evaluate_loop_tree(
         return finalize(
             LoopIntentVerdict::LoopStrong(format!(
                 "Layer 1-C (Dev): forceful short asset pass ({:.2}s <= {:.2}s manual threshold)",
-                meta.duration_secs, crate::constants::HARD_PASS_SHORT_GIF_THRESHOLD_SECS
+                meta.duration_secs,
+                crate::constants::HARD_PASS_SHORT_GIF_THRESHOLD_SECS
             )),
             log_odds,
         );
     }
 
-    let intercept_long_silent = std::env::var(crate::constants::ENV_INTERCEPT_LONG_SILENT)
-        .map(|v| v != "0")
-        .unwrap_or(true); // Developer option: enabled by default, can be disabled with =0
+    let intercept_long_silent =
+        developer_layer1_override_enabled(crate::constants::ENV_INTERCEPT_LONG_SILENT);
     if intercept_long_silent
         && !meta.has_audio
         && meta.duration_secs > crate::constants::HARD_PASS_SHORT_GIF_THRESHOLD_SECS
@@ -963,7 +1019,7 @@ fn should_accept_layer6_loopstrong(
         ext == "gif" || crate::constants::MODERN_ANIMATED_EXTENSIONS.contains(&ext.as_str());
     let short_clip_like = !meta.has_audio
         && meta.duration_secs > 0.0
-        && meta.duration_secs <= thresholds.short_clip_secs;
+        && meta.duration_secs <= thresholds.short_asset_window_secs;
 
     final_score >= LAYER6_HIGH_SCORE_THRESHOLD
         && keep_prob >= 0.70
@@ -1637,13 +1693,10 @@ mod tests {
     }
 
     fn verdict_with_profile(meta: &LoopMeta, profile: &LoopReferenceProfile) -> LoopIntentVerdict {
-        // Disable developer bypass rules so we can test the pure Layer 4 logic
-        std::env::set_var(crate::constants::ENV_FORCE_SHORT_GIFS, "0");
-        std::env::set_var(crate::constants::ENV_INTERCEPT_LONG_SILENT, "0");
-        let result = evaluate_loop_tree(meta, Some(profile)).verdict;
-        // Restore defaults
+        // Hidden Layer 1 overrides are opt-in; keep them disabled for pure tree tests.
         std::env::remove_var(crate::constants::ENV_FORCE_SHORT_GIFS);
         std::env::remove_var(crate::constants::ENV_INTERCEPT_LONG_SILENT);
+        let result = evaluate_loop_tree(meta, Some(profile)).verdict;
         result
     }
 
@@ -1806,6 +1859,14 @@ mod tests {
         let thresholds = LoopThresholds::from_profile(Some(&profile));
         assert!(thresholds.duration_override_secs > 2.0);
         assert!(thresholds.short_clip_secs > thresholds.duration_override_secs);
+        assert!(
+            thresholds.short_asset_window_secs
+                >= crate::constants::HARD_PASS_SHORT_GIF_THRESHOLD_SECS
+        );
+        assert!(
+            thresholds.modern_bias_duration_secs
+                >= crate::constants::MODERN_FORMAT_VIDEO_BIAS_THRESHOLD_SECS
+        );
     }
 
     #[test]
@@ -1816,6 +1877,25 @@ mod tests {
         meta.source_extension = Some("gif".to_string());
         meta.container = Some("gif".to_string());
         meta.duration_secs = 5.0;
+        meta.has_audio = false;
+
+        assert!(should_accept_layer6_loopstrong(
+            &meta,
+            &thresholds,
+            0.82,
+            0.72,
+            0.71,
+        ));
+    }
+
+    #[test]
+    fn layer6_relaxes_for_silent_clips_up_to_core_short_asset_window() {
+        let profile = base_profile();
+        let thresholds = LoopThresholds::from_profile(Some(&profile));
+        let mut meta = base_meta();
+        meta.source_extension = Some("mp4".to_string());
+        meta.container = Some("mp4".to_string());
+        meta.duration_secs = 9.5;
         meta.has_audio = false;
 
         assert!(should_accept_layer6_loopstrong(
@@ -1843,6 +1923,45 @@ mod tests {
             0.72,
             0.71,
         ));
+    }
+
+    #[test]
+    fn hidden_layer1_overrides_are_opt_in() {
+        let profile = base_profile();
+        let mut meta = base_meta();
+        meta.duration_secs = 5.0;
+
+        std::env::remove_var(crate::constants::ENV_FORCE_SHORT_GIFS);
+        std::env::remove_var(crate::constants::ENV_INTERCEPT_LONG_SILENT);
+        let default_verdict = evaluate_loop_tree(&meta, Some(&profile)).verdict;
+        assert!(
+            !default_verdict.reason().contains("Layer 1-C"),
+            "default verdict should not use hidden Layer 1-C: {default_verdict:?}"
+        );
+
+        std::env::set_var(crate::constants::ENV_FORCE_SHORT_GIFS, "1");
+        let dev_short_verdict = evaluate_loop_tree(&meta, Some(&profile)).verdict;
+        std::env::remove_var(crate::constants::ENV_FORCE_SHORT_GIFS);
+        assert!(
+            dev_short_verdict.reason().contains("Layer 1-C"),
+            "developer override should enable hidden Layer 1-C: {dev_short_verdict:?}"
+        );
+
+        meta.duration_secs = 18.0;
+        std::env::remove_var(crate::constants::ENV_INTERCEPT_LONG_SILENT);
+        let default_long_verdict = evaluate_loop_tree(&meta, Some(&profile)).verdict;
+        assert!(
+            !default_long_verdict.reason().contains("Layer 1-D"),
+            "default verdict should not use hidden Layer 1-D: {default_long_verdict:?}"
+        );
+
+        std::env::set_var(crate::constants::ENV_INTERCEPT_LONG_SILENT, "1");
+        let dev_long_verdict = evaluate_loop_tree(&meta, Some(&profile)).verdict;
+        std::env::remove_var(crate::constants::ENV_INTERCEPT_LONG_SILENT);
+        assert!(
+            dev_long_verdict.reason().contains("Layer 1-D"),
+            "developer override should enable hidden Layer 1-D: {dev_long_verdict:?}"
+        );
     }
 }
 

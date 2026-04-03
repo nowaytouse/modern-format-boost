@@ -64,17 +64,19 @@ pub const MODERN_FORMAT_LOW_BITRATE_RATIO: f64 = 15.0;
 pub const MODERN_FORMAT_ULTRA_HIGH_BITRATE_RATIO: f64 = 5.0;
 
 // 4. Fallback & Force Rules
-/// Default duration threshold (seconds) for forcing short assets to GIFs.
+/// Hidden Layer 1-C developer hard-pass threshold (seconds).
+/// The core tree also uses this as the upper bound for its short-asset soft prior.
 pub const HARD_PASS_SHORT_GIF_THRESHOLD_SECS: f64 = 10.0;
-/// Default duration threshold (seconds) for biasing modern formats towards video.
+/// Hidden long-silent/video-bias threshold (seconds).
+/// The core tree also uses this as the lower bound for its long-silent soft penalty.
 pub const MODERN_FORMAT_VIDEO_BIAS_THRESHOLD_SECS: f64 = 15.0;
 
 // 5. Environment Variable Names
 /// Toggle for modern format conversion bias ("1" = on, "0" = off).
 pub const ENV_MODERN_FORMAT_CONVERT_BIAS: &str = "MODERN_FORMAT_CONVERT_BIAS";
-/// Debug/Dev toggle for mandatory short GIF preservation (Set to '0' to DISABLE, enabled by default).
+/// Hidden developer toggle for Layer 1-C short-asset hard-pass ("1" = enable, default off).
 pub const ENV_FORCE_SHORT_GIFS: &str = "MODERN_FORMAT_FORCE_SHORT_GIFS";
-/// Debug/Dev toggle for mandatory video pathway for long silent assets (Set to '0' to DISABLE, enabled by default).
+/// Hidden developer toggle for Layer 1-D long-silent interceptor ("1" = enable, default off).
 pub const ENV_INTERCEPT_LONG_SILENT: &str = "MODERN_FORMAT_INTERCEPT_LONG_SILENT";
 /// Override for the sticker duration safe-limit (seconds).
 pub const ENV_STICKER_LIMIT_SECS: &str = "MODERN_FORMAT_STICKER_LIMIT_SECS";
