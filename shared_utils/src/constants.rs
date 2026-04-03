@@ -80,6 +80,8 @@ pub const ENV_FORCE_SHORT_GIFS: &str = "MODERN_FORMAT_FORCE_SHORT_GIFS";
 pub const ENV_INTERCEPT_LONG_SILENT: &str = "MODERN_FORMAT_INTERCEPT_LONG_SILENT";
 /// Override for the sticker duration safe-limit (seconds).
 pub const ENV_STICKER_LIMIT_SECS: &str = "MODERN_FORMAT_STICKER_LIMIT_SECS";
+/// Bypass for the entire database-driven feedback loop (Dynamic weights, KNN, Logging).
+pub const ENV_DISABLE_DB_FEEDBACK: &str = "MODERN_FORMAT_DISABLE_DB_FEEDBACK";
 
 // --- Formats & Extensions ---
 

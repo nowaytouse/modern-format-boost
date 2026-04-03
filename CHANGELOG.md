@@ -15,6 +15,20 @@ All notable changes to this project will be documented in this file.
   - **Query Simplification**: KNN lookup now uses `ORDER BY features <-> $1::vector LIMIT 24` — PostgreSQL handles all vector math and ranking.
   - **Performance Impact**: Eliminates O(N) in-memory distance computation; leverages database index for O(log N) retrieval.
   - **Files**: `shared_utils/src/gif_value_db.rs`
+- **📂 Layer 0 Legacy Fallback**: Implemented a "black and white" recovery path for environments with missing or incomplete databases.
+  - **Logic**: Assets < 10.0s are preserved as `LoopStrong`; assets ≥ 10.0s are categorized as `LoopWeak`.
+  - **Bypass Rule**: Added `MODERN_FORMAT_DISABLE_DB_FEEDBACK` developer toggle to force this legacy behavior even when the DB is present.
+  - **Files**: `shared_utils/src/loop_intent.rs`
+
+#### 📊 Dynamic Feedback Loop & Data Calibration (Phase 3)
+
+- **Dynamic Weight Integration (Level 1)**: Decision tree `LogOdds` constants now dynamically scale by the **Discriminative Power** learned from labeled database samples.
+  - **Mechanisms**: Higher separation power → higher contribution to final probability.
+  - **Benefit**: The tree evolves automatically as the training set grows.
+- **Feature Integrity Refresh**: Updated the retraining pipeline to proactively identify and fix "dead" features.
+  - **Refresh Logic**: Re-probes existing samples where `motion_gini = 0.0` (indicating historical calculation failure) using the latest motion analysis.
+  - **Impact**: `directory_meme_score` and `motion_gini` now provide significant predictive signals in diagnostics.
+- **Files**: `shared_utils/src/gif_value_db.rs`, `shared_utils/src/loop_intent.rs`
 
 #### 📊 Data-Driven Feature Weighting
 

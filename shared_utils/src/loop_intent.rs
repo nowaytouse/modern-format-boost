@@ -584,6 +584,24 @@ impl LoopThresholds {
         }
     }
 
+    fn get_feature_weight(&self, key: &str) -> f64 {
+        match key {
+            "duration" => self.reference.duration.weight,
+            "fps" => self.reference.fps.weight,
+            "file_size_bytes" => self.reference.file_size_bytes.weight,
+            "temporal_bpp" => self.reference.temporal_bpp.weight,
+            "spatial_bpp" => self.reference.spatial_bpp.weight,
+            "payload_var" => self.reference.payload_variation.weight,
+            "delay_var" => self.reference.delay_variation.weight,
+            "p_depth" => self.reference.palette_depth.weight,
+            "m_gini" => self.reference.motion_gini.weight,
+            "t_flat" => self.reference.temporal_flatness.weight,
+            _ => None,
+        }
+        .unwrap_or(1.0)
+        .max(0.01) // Ensure it never fully zeros out a signal unless intentionally zero
+    }
+
     fn clamp_z(value: f64) -> f64 {
         value.clamp(-TREE_Z_SCORE_CAP, TREE_Z_SCORE_CAP)
     }
@@ -708,8 +726,12 @@ fn evaluate_kinetics_and_physics(
         + thresholds.pixels_z(total_pixels).max(0.0) * 0.35;
     if large_media_signal > 0.0 {
         let audio_multiplier = if meta.has_audio { 1.0 } else { 0.65 };
-        log_odds
-            .add(-large_media_signal.min(1.8) * audio_multiplier * LARGE_MEDIA_NEGATIVE_LOG_ODDS);
+        log_odds.add(
+            -large_media_signal.min(1.8)
+                * audio_multiplier
+                * LARGE_MEDIA_NEGATIVE_LOG_ODDS
+                * thresholds.get_feature_weight("file_size_bytes").sqrt(),
+        );
     }
 }
 
@@ -784,19 +806,19 @@ fn apply_weak_heuristics(
     }
 
     if let Some(delay_variation) = meta.frame_delay_variation {
-        log_odds.add(-thresholds.delay_variation_z(delay_variation) * 0.18);
+        log_odds.add(-thresholds.delay_variation_z(delay_variation) * 0.18 * thresholds.get_feature_weight("delay_var"));
     }
     if let Some(webp_ratio) = meta.webp_compression_ratio {
-        log_odds.add(thresholds.webp_ratio_z(webp_ratio) * 0.16);
+        log_odds.add(thresholds.webp_ratio_z(webp_ratio) * 0.16 * thresholds.get_feature_weight("webp_ratio"));
     }
     if let Some(motion_gini) = meta.motion_gini {
-        log_odds.add(thresholds.motion_gini_z(motion_gini) * 0.14);
+        log_odds.add(thresholds.motion_gini_z(motion_gini) * 0.14 * thresholds.get_feature_weight("m_gini"));
     }
     if let Some(palette_depth) = meta.palette_depth {
-        log_odds.add(thresholds.palette_depth_z(palette_depth) * 0.12);
+        log_odds.add(thresholds.palette_depth_z(palette_depth) * 0.12 * thresholds.get_feature_weight("p_depth"));
     }
     if let Some(temporal_flatness) = meta.temporal_flatness {
-        log_odds.add(thresholds.temporal_flatness_z(temporal_flatness) * 0.10);
+        log_odds.add(thresholds.temporal_flatness_z(temporal_flatness) * 0.10 * thresholds.get_feature_weight("t_flat"));
     }
 
     if derived.localized_motion || derived.zero_motion_ratio > 0.80 {
@@ -1058,10 +1080,32 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
         LoopInferenceRecord,
     };
 
-    let mut conn = open_pg_client().ok();
+    let disable_db = developer_layer1_override_enabled(crate::constants::ENV_DISABLE_DB_FEEDBACK);
+    let mut conn = if disable_db { None } else { open_pg_client().ok() };
+    let is_legacy_mode = conn.is_none();
+
     let reference_profile = conn
         .as_mut()
         .and_then(|client| fetch_loop_reference_profile(client).ok());
+
+    let thresholds = LoopThresholds::from_profile(reference_profile.as_ref());
+
+    // ── Layer 0: Legacy Fallback ──
+    if is_legacy_mode {
+        let legacy_verdict = if meta.duration_secs < 10.0 {
+            LoopIntentVerdict::LoopStrong(format!(
+                "Legacy Limited Mode: Short duration ({:.1}s < 10s)",
+                meta.duration_secs
+            ))
+        } else {
+            LoopIntentVerdict::LoopWeak(format!(
+                "Legacy Limited Mode: Long duration ({:.1}s >= 10s)",
+                meta.duration_secs
+            ))
+        };
+        emit_stderr(&format!("💡 Result: {}", legacy_verdict.reason()));
+        return legacy_verdict;
+    }
 
     let sample_match = lookup_similar_samples(meta, path);
 
@@ -1075,7 +1119,6 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
 
     let tree = evaluate_loop_tree(&mutable_meta, reference_profile.as_ref());
     let tree_probability = tree.tree_probability;
-    let thresholds = LoopThresholds::from_profile(reference_profile.as_ref());
 
     // ── Tracking variables for inference logging ──
     let mut knn_keep_probability: Option<f64> = None;

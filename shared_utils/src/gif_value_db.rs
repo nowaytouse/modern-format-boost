@@ -47,6 +47,8 @@ pub struct DistributionStats {
     pub mean: f64,
     pub std_dev: f64,
     #[serde(default)]
+    pub weight: Option<f64>,
+    #[serde(default)]
     pub p10: Option<f64>,
     #[serde(default)]
     pub p25: Option<f64>,
@@ -74,6 +76,7 @@ impl From<&FeatureStats> for DistributionStats {
         Self {
             mean: value.mean,
             std_dev: value.std_dev,
+            weight: value.weight,
             p10: value.p10,
             p25: value.p25,
             p50: value.p50,
@@ -240,6 +243,7 @@ impl Default for LoopReferenceProfile {
                     collection.duration_p90,
                 )),
                 p90: Some(collection.duration_p90),
+                weight: None,
             },
             fps: DistributionStats {
                 mean: 12.0,
@@ -249,6 +253,7 @@ impl Default for LoopReferenceProfile {
                 p50: Some(12.0),
                 p75: Some(18.0),
                 p90: Some(24.0),
+                weight: None,
             },
             frame_density: DistributionStats {
                 mean: 12.0,
@@ -258,6 +263,7 @@ impl Default for LoopReferenceProfile {
                 p50: Some(12.0),
                 p75: Some(18.0),
                 p90: Some(24.0),
+                weight: None,
             },
             file_size_bytes: DistributionStats {
                 mean: collection.size_avg,
@@ -267,6 +273,7 @@ impl Default for LoopReferenceProfile {
                 p50: Some(collection.size_avg),
                 p75: Some(f64::midpoint(collection.size_avg, collection.size_max)),
                 p90: Some(collection.size_max),
+                weight: None,
             },
             pixels: DistributionStats {
                 mean: pixels_avg,
@@ -276,6 +283,7 @@ impl Default for LoopReferenceProfile {
                 p50: Some(pixels_avg),
                 p75: Some(f64::midpoint(pixels_avg, pixels_max)),
                 p90: Some(pixels_max),
+                weight: None,
             },
             temporal_bpp: DistributionStats {
                 mean: 0.05,
@@ -285,6 +293,7 @@ impl Default for LoopReferenceProfile {
                 p50: Some(0.05),
                 p75: Some(0.08),
                 p90: Some(0.12),
+                weight: None,
             },
             spatial_bpp: DistributionStats {
                 mean: 4.0,
@@ -294,6 +303,7 @@ impl Default for LoopReferenceProfile {
                 p50: Some(4.0),
                 p75: Some(6.0),
                 p90: Some(10.0),
+                weight: None,
             },
             payload_variation: DistributionStats {
                 mean: 0.5,
@@ -303,6 +313,7 @@ impl Default for LoopReferenceProfile {
                 p50: Some(0.5),
                 p75: Some(0.65),
                 p90: Some(0.8),
+                weight: None,
             },
             delay_variation: DistributionStats {
                 mean: 0.25,
@@ -312,6 +323,7 @@ impl Default for LoopReferenceProfile {
                 p50: Some(0.25),
                 p75: Some(0.35),
                 p90: Some(0.55),
+                weight: None,
             },
             palette_depth: DistributionStats {
                 mean: 0.55,
@@ -321,6 +333,7 @@ impl Default for LoopReferenceProfile {
                 p50: Some(0.55),
                 p75: Some(0.7),
                 p90: Some(0.85),
+                weight: None,
             },
             motion_gini: DistributionStats {
                 mean: 0.55,
@@ -330,6 +343,7 @@ impl Default for LoopReferenceProfile {
                 p50: Some(0.55),
                 p75: Some(0.7),
                 p90: Some(0.85),
+                weight: None,
             },
             temporal_flatness: DistributionStats {
                 mean: 0.55,
@@ -339,6 +353,7 @@ impl Default for LoopReferenceProfile {
                 p50: Some(0.55),
                 p75: Some(0.7),
                 p90: Some(0.85),
+                weight: None,
             },
             webp_ratio: DistributionStats {
                 mean: 10.0,
@@ -348,6 +363,7 @@ impl Default for LoopReferenceProfile {
                 p50: Some(10.0),
                 p75: Some(13.0),
                 p90: Some(16.0),
+                weight: None,
             },
             cadence: DistributionStats {
                 mean: 0.5,
@@ -357,6 +373,7 @@ impl Default for LoopReferenceProfile {
                 p50: Some(0.5),
                 p75: Some(0.65),
                 p90: Some(0.8),
+                weight: None,
             },
             top_keywords: collection.top_keywords.clone(),
             collection,
@@ -1588,6 +1605,47 @@ pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -
 
 pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
     emit_stderr("🏋️  Recomputing Global KNN Feature Statistics (Training Model)...");
+    
+    // Feature Integrity Check: Re-probe samples that were previously broken (e.g. motion_gini = 0.0)
+    let broken_rows = conn.query(
+        "SELECT file_hash, source_path FROM samples WHERE motion_gini = 0.0 AND frame_count > 1", 
+        &[]
+    )?;
+    if !broken_rows.is_empty() {
+        emit_stderr(&format!("   🛠️  Found {} samples with outdated feature metrics. Refreshing integrity...", broken_rows.len()));
+        let mut fixed_count = 0;
+        for row in broken_rows {
+            let file_hash: String = row.get(0);
+            let source_path: Option<String> = row.get(1);
+            if let Some(path_str) = source_path {
+                let path = Path::new(&path_str);
+                if path.exists() {
+                    if let Some(sample) = sample_from_path(path, "integrity_refresh", None) {
+                        let _ = conn.execute(
+                            "UPDATE samples SET 
+                                motion_gini = $1, 
+                                directory_meme_score = $2,
+                                temporal_flatness = $3,
+                                palette_depth = $4
+                             WHERE file_hash = $5",
+                            &[
+                                &sample.motion_gini, 
+                                &sample.directory_meme_score,
+                                &sample.temporal_flatness,
+                                &sample.palette_depth,
+                                &file_hash
+                            ]
+                        );
+                        fixed_count += 1;
+                    }
+                }
+            }
+        }
+        if fixed_count > 0 {
+            emit_stderr(&format!("   ✅ Refreshed feature integrity for {} labeled samples.", fixed_count));
+        }
+    }
+
     let rows = conn.query(
         "SELECT
             width, height, duration_secs, frame_count, file_size_bytes, fps,
@@ -2327,6 +2385,7 @@ mod tests {
                 p50: Some(14.0),
                 p75: Some(18.0),
                 p90: Some(22.0),
+                weight: None,
             },
         );
 
