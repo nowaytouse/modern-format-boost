@@ -6,6 +6,20 @@ All notable changes to this project will be documented in this file.
 
 ## [0.11.1] — 2026-04-04
 
+#### 🏗️ Workspace Unification — Unified Media Architecture
+
+Consolidated the previous HEVC-only and AV1-only crates into a single, unified codebase that supports both encoding strategies via dynamic dispatch.
+
+- **Crate Consolidation**: Merged `img_hevc`/`img_av1` into `img` and `vid_hevc`/`vid_av1` into `vid`. The project now maintains only three core crates: `img`, `vid`, and `shared_utils`.
+- **Unified CLI Strategy**: Both `img` and `vid` now support the `--codec <hevc|av1>` flag.
+  - Default: `hevc` (ensuring backward compatibility).
+  - New Strategy: `av1` strategy added for modern, high-efficiency AV1 encoding.
+- **Strict Apple Compatibility**: Enforced a strict boundary where the `av1` strategy explicitly rejects the `--apple-compat` flag, as Apple ecosystems do not yet offer native AV1 hardware decode support for these target containers.
+- **Dynamic Exploration Refactoring**: Refactored `vid/src/animated_image.rs` and `vid/src/conversion_api.rs` to support dynamic encoder selection (`libx265` vs `libsvtav1`) based on the runtime `--codec` strategy.
+- **Improved Workspace Maintenance**: Reduced total crate count from 5 to 3, significantly simplifying dependency management and binary distribution.
+- **Code Refactor & Cleanup**: Fixed several long-standing syntax errors in the AV1 exploration path and unified the animated-media quality analysis logic for better cross-codec consistency.
+- **Files**: `img/src/main.rs`, `vid/src/main.rs`, `vid/src/conversion_api.rs`, `vid/src/animated_image.rs`, `shared_utils/src/conversion.rs`, and updated `Cargo.toml`.
+
 #### 🐘 Static Image Quality DB — Full Architecture Alignment
 
 Overhauled `image_quality_db.rs` to match the maturity of the animated-media pipeline.

@@ -1,9 +1,4 @@
-//! Animated Image → Video Conversion Module
-//!
-//! Handles conversion of animated images (GIF, WebP, AVIF, etc.) to video formats.
-//! Migrated from `img_hevc` to `vid_hevc` for clearer separation of concerns:
-//! - `img_hevc`: image analysis, format detection, quality estimation
-//! - `vid_hevc`: all video encoding (including animated image → video)
+//! - `vid`: all video encoding (including animated image → video)
 
 use crate::{Result, VidQualityError};
 use shared_utils::conversion::{ConversionResult, ConvertOptions};
@@ -288,11 +283,12 @@ fn skipped_static_animated(input: &Path, input_size: u64) -> ConversionResult {
     }
 }
 
-/// Convert video to HEVC MP4.
+/// Convert animated image to MP4 (HEVC or AV1).
 ///
 /// # Errors
 /// Returns an error if encoding fails.
-pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<ConversionResult> {
+pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<ConversionResult> {
+    use shared_utils::conversion_types::SelectedCodec;
     if !options.force && is_already_processed(input) {
         return Ok(skipped_already_processed(input));
     }
@@ -546,7 +542,22 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
     ));
 
     let max_threads = get_max_threads(options);
-    let x265_params = format!("log-level=error:pools={max_threads}");
+
+    // Set encoder and parameters based on codec
+    let (v_codec, v_tag, codec_params_flag, codec_params) = match options.codec {
+        SelectedCodec::Hevc => (
+            "libx265",
+            "hvc1",
+            "-x265-params",
+            format!("log-level=error:pools={max_threads}"),
+        ),
+        SelectedCodec::Av1 => (
+            "libsvtav1",
+            "av01",
+            "-svtav1-params",
+            format!("tune=0:film-grain=0:lp={max_threads}"),
+        ),
+    };
 
     // Probe ORIGINAL input to get stream index for multi-stream files (animated AVIF/HEIC)
     // For JXL/WebP, actual_input is APNG (single stream), so we probe the original input
@@ -574,15 +585,18 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
         .arg(format!("0:{effective_stream_idx}")) // Select the correct stream
         // NO -r parameter: preserve original frame rate
         .arg("-c:v")
-        .arg("libx265")
+        .arg(v_codec)
         .arg("-crf")
         .arg("0")
         .arg("-preset")
-        .arg("medium")
+        .arg(match options.codec {
+            SelectedCodec::Hevc => "medium",
+            SelectedCodec::Av1 => "6",
+        })
         .arg("-tag:v")
-        .arg("hvc1")
-        .arg("-x265-params")
-        .arg(&x265_params);
+        .arg(v_tag)
+        .arg(codec_params_flag)
+        .arg(&codec_params);
 
     for arg in &vf_args {
         cmd.arg(arg);
@@ -599,7 +613,8 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
             let output_size = fs::metadata(&temp_output).map(|m| m.len()).unwrap_or(0);
             if output_size == 0 || get_input_dimensions(&temp_output).is_err() {
                 cleanup_temp_output(&temp_output, input);
-                tracing::warn!(input = %input.display(), "HEVC output invalid (empty or unreadable); copying original");
+                let codec_name = options.codec.as_str().to_uppercase();
+                tracing::warn!(input = %input.display(), "{} output invalid (empty or unreadable); copying original", codec_name);
                 copy_original_on_skip(input, options);
                 mark_as_processed(input);
                 let sz = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
@@ -610,9 +625,9 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
                     input_size: sz,
                     output_size: None,
                     size_reduction: None,
-                    message: "HEVC output invalid; original copied".to_string(),
+                    message: format!("{} output invalid; original copied", codec_name),
                     skipped: true,
-                    skip_reason: Some("hevc_invalid_output".to_string()),
+                    skip_reason: Some(format!("{}_invalid_output", options.codec.as_str())),
                 });
             }
 
@@ -641,14 +656,15 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
             }
 
             let reduction_pct = reduction * 100.0;
+            let codec_name = options.codec.as_str().to_uppercase();
             let message = if reduction >= 0.0 {
                 format!(
-                    "HEVC conversion successful: size reduced \x1b[1;32m{reduction_pct:.1}%\x1b[0m"
+                    "{} conversion successful: size reduced \x1b[1;32m{reduction_pct:.1}%\x1b[0m", codec_name
                 )
             } else {
                 let diff_bytes = output_size as i64 - input_size as i64;
                 let size_diff = shared_utils::modern_ui::format_size_diff(diff_bytes);
-                format!("HEVC conversion successful: size increased \x1b[1;33m{size_diff}\x1b[0m")
+                format!("{} conversion successful: size increased \x1b[1;33m{size_diff}\x1b[0m", codec_name)
             };
 
             Ok(ConversionResult {
@@ -666,7 +682,8 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
         Ok(output_cmd) => {
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
             cleanup_temp_output(&temp_output, input);
-            tracing::warn!(input = %input.display(), stderr = %stderr, "ffmpeg HEVC encode failed; copying original");
+            let codec_name = options.codec.as_str().to_uppercase();
+            tracing::warn!(input = %input.display(), stderr = %stderr, "ffmpeg {} encode failed; copying original", codec_name);
             copy_original_on_skip(input, options);
             mark_as_processed(input);
             let sz = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
@@ -678,11 +695,12 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
                 output_size: None,
                 size_reduction: None,
                 message: format!(
-                    "HEVC encode failed; original copied (ffmpeg: {})",
+                    "{} encode failed; original copied (ffmpeg: {})",
+                    codec_name,
                     stderr.lines().last().unwrap_or("")
                 ),
                 skipped: true,
-                skip_reason: Some("hevc_encode_failed".to_string()),
+                skip_reason: Some(format!("{}_encode_failed", options.codec.as_str())),
             })
         }
         Err(e) => {
@@ -706,16 +724,17 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
     }
 }
 
-/// Convert video to HEVC MP4 with matched quality.
+/// Convert video to MP4 (HEVC or AV1) with matched quality.
 ///
 /// # Errors
 /// Returns an error if matching or encoding fails.
-pub fn convert_to_hevc_mp4_matched(
+pub fn convert_to_mp4_matched(
     input: &Path,
     options: &ConvertOptions,
     initial_crf: f32,
     has_alpha: bool,
 ) -> Result<ConversionResult> {
+    use shared_utils::conversion_types::SelectedCodec;
     if !options.force && is_already_processed(input) {
         return Ok(skipped_already_processed(input));
     }
@@ -1062,32 +1081,56 @@ pub fn convert_to_hevc_mp4_matched(
         );
     }
 
-    let (_max_crf, _min_ssim) = shared_utils::video_explorer::calculate_smart_thresholds(
+    let (max_crf, min_ssim) = shared_utils::video_explorer::calculate_smart_thresholds(
         actual_initial_crf,
-        shared_utils::VideoEncoder::Hevc,
+        match options.codec {
+            SelectedCodec::Hevc => shared_utils::VideoEncoder::Hevc,
+            SelectedCodec::Av1 => shared_utils::VideoEncoder::Av1,
+        },
     );
 
     let explore_result = if flag_mode.is_ultimate() {
-        shared_utils::explore_hevc_with_gpu_coarse_ultimate(
-            &final_input,
-            &temp_output,
-            vf_args,
-            actual_initial_crf,
-            true,
-            options.allow_size_tolerance,
-            options.child_threads,
-            None,
-        )
+        match options.codec {
+            SelectedCodec::Hevc => shared_utils::explore_hevc_with_gpu_coarse_ultimate(
+                &final_input,
+                &temp_output,
+                vf_args,
+                actual_initial_crf,
+                true,
+                options.allow_size_tolerance,
+                options.child_threads,
+                None,
+            ),
+            SelectedCodec::Av1 => shared_utils::explore_av1_with_gpu_coarse_ultimate(
+                &final_input,
+                &temp_output,
+                vf_args,
+                actual_initial_crf,
+                true,
+                options.allow_size_tolerance,
+                options.child_threads,
+            ),
+        }
     } else {
-        shared_utils::explore_hevc_with_gpu_coarse(
-            &final_input,
-            &temp_output,
-            vf_args,
-            actual_initial_crf,
-            options.allow_size_tolerance,
-            options.child_threads,
-            None,
-        )
+        match options.codec {
+            SelectedCodec::Hevc => shared_utils::explore_hevc_with_gpu_coarse(
+                &final_input,
+                &temp_output,
+                vf_args,
+                actual_initial_crf,
+                options.allow_size_tolerance,
+                options.child_threads,
+                None,
+            ),
+            SelectedCodec::Av1 => shared_utils::explore_av1_with_gpu_coarse(
+                &final_input,
+                &temp_output,
+                vf_args,
+                actual_initial_crf,
+                options.allow_size_tolerance,
+                options.child_threads,
+            ),
+        }
     }
     .map_err(|e| VidQualityError::ConversionError(e.to_string()))?;
 
@@ -1113,16 +1156,17 @@ pub fn convert_to_hevc_mp4_matched(
     if is_guard_active && explore_result.output_size > max_allowed_size {
         let size_increase_pct =
             ((explore_result.output_size as f64 / input_size as f64) - 1.0) * 100.0;
+        let codec_name = options.codec.as_str().to_uppercase();
         if let Err(e) = fs::remove_file(&temp_output) {
-            eprintln!("⚠️ [cleanup] Failed to remove oversized HEVC output: {e}");
+            eprintln!("⚠️ [cleanup] Failed to remove oversized {} output: {e}", codec_name);
         }
         if options.allow_size_tolerance {
             eprintln!(
-                "   ⏭️  Skipping: HEVC output larger than input by {size_increase_pct:.1}% (tolerance: 1.0%)"
+                "   ⏭️  Skipping: {} output larger than input by {size_increase_pct:.1}% (tolerance: 1.0%)", codec_name
             );
         } else {
             eprintln!(
-                "   ⏭️  Skipping: HEVC output larger than input by {size_increase_pct:.1}% (strict mode: no tolerance)"
+                "   ⏭️  Skipping: {} output larger than input by {size_increase_pct:.1}% (strict mode: no tolerance)", codec_name
             );
         }
         eprintln!(
@@ -1138,7 +1182,7 @@ pub fn convert_to_hevc_mp4_matched(
             output_size: None,
             size_reduction: None,
             message: format!(
-                "Skipped: HEVC output larger than input by {size_increase_pct:.1}% ({width}x{height}, tolerance exceeded)"
+                "Skipped: {} output larger than input by {size_increase_pct:.1}% ({width}x{height}, tolerance exceeded)", codec_name
             ),
             skipped: true,
             skip_reason: Some("size_increase_beyond_tolerance".to_string()),
@@ -1162,7 +1206,7 @@ pub fn convert_to_hevc_mp4_matched(
                 options.base_dir.as_deref(),
                 false,
             ) {
-                tracing::warn!(input = %input.display(), error = %e, "Failed to copy original after HEVC SSIM failure");
+                tracing::warn!(input = %input.display(), error = %e, "Failed to copy original after {} SSIM failure", options.codec.as_str().to_uppercase());
             }
             mark_as_processed(input);
             return Ok(ConversionResult {
@@ -1248,7 +1292,7 @@ pub fn convert_to_hevc_mp4_matched(
             options.base_dir.as_deref(),
             false,
         ) {
-            tracing::warn!(input = %input.display(), error = %e, "Failed to copy original after HEVC quality skip");
+            tracing::warn!(input = %input.display(), error = %e, "Failed to copy original after {} quality skip", options.codec.as_str().to_uppercase());
         }
         mark_as_processed(input);
 
@@ -1283,7 +1327,8 @@ pub fn convert_to_hevc_mp4_matched(
             &output,
             shared_utils::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
         ) {
-            tracing::warn!(input = %input.display(), output = %output.display(), error = %e, "Failed to delete original after HEVC animated conversion");
+            let codec_name = options.codec.as_str().to_uppercase();
+            tracing::warn!(input = %input.display(), output = %output.display(), error = %e, "Failed to delete original after {} animated conversion", codec_name);
         }
     }
 
@@ -1295,7 +1340,10 @@ pub fn convert_to_hevc_mp4_matched(
     };
 
     if explore_result.quality_passed && explore_result.optimal_crf > 0.0 {
-        shared_utils::crf_constants::update_global_last_hit_crf_hevc(explore_result.optimal_crf);
+        match options.codec {
+            SelectedCodec::Hevc => shared_utils::crf_constants::update_global_last_hit_crf_hevc(explore_result.optimal_crf),
+            SelectedCodec::Av1 => shared_utils::crf_constants::update_global_last_hit_crf_av1(explore_result.optimal_crf),
+        }
     }
 
     let ssim_msg = explore_result
@@ -1309,9 +1357,10 @@ pub fn convert_to_hevc_mp4_matched(
         format!("{:.2}", explore_result.optimal_crf)
     };
 
+    let codec_name = options.codec.as_str().to_uppercase();
     let message = format!(
-        "HEVC (CRF {}{}, {} iter{}): -{:.1}%",
-        crf_display, explored_msg, explore_result.iterations, ssim_msg, reduction_pct
+        "{} (CRF {}{}, {} iter{}): -{:.1}%",
+        codec_name, crf_display, explored_msg, explore_result.iterations, ssim_msg, reduction_pct
     );
 
     Ok(ConversionResult {
@@ -1327,16 +1376,16 @@ pub fn convert_to_hevc_mp4_matched(
     })
 }
 
-/// Convert to HEVC MKV losslessly.
+/// Convert to MKV losslessly (HEVC-only for now).
 ///
 /// # Errors
 /// Returns an error if encoding fails.
-pub fn convert_to_hevc_mkv_lossless(
+pub fn convert_to_mkv_lossless(
     input: &Path,
     options: &ConvertOptions,
 ) -> Result<ConversionResult> {
     eprintln!(
-        "⚠️  Mathematical lossless HEVC encoding - this will be SLOW and produce large files!"
+        "⚠️  Mathematical lossless encoding (HEVC) - this will be SLOW and produce large files!"
     );
 
     if !options.force && is_already_processed(input) {
@@ -1411,11 +1460,11 @@ pub fn convert_to_hevc_mkv_lossless(
 
             let reduction_pct = reduction * 100.0;
             let message = if reduction >= 0.0 {
-                format!("Lossless HEVC: size reduced \x1b[1;32m{reduction_pct:.1}%\x1b[0m")
+                format!("Lossless: size reduced \x1b[1;32m{reduction_pct:.1}%\x1b[0m")
             } else {
                 let diff_bytes = output_size as i64 - input_size as i64;
                 let size_diff = shared_utils::modern_ui::format_size_diff(diff_bytes);
-                format!("Lossless HEVC: size increased \x1b[1;33m{size_diff}\x1b[0m")
+                format!("Lossless: size increased \x1b[1;33m{size_diff}\x1b[0m")
             };
 
             Ok(ConversionResult {
@@ -1433,7 +1482,7 @@ pub fn convert_to_hevc_mkv_lossless(
         Ok(output_cmd) => {
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
             cleanup_temp_output(&temp_output, input);
-            tracing::warn!(input = %input.display(), stderr = %stderr, "ffmpeg lossless HEVC failed; copying original");
+            tracing::warn!(input = %input.display(), stderr = %stderr, "ffmpeg lossless failed; copying original");
             copy_original_on_skip(input, options);
             mark_as_processed(input);
             let sz = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
@@ -1445,16 +1494,16 @@ pub fn convert_to_hevc_mkv_lossless(
                 output_size: None,
                 size_reduction: None,
                 message: format!(
-                    "Lossless HEVC failed; original copied ({})",
+                    "Lossless failed; original copied ({})",
                     stderr.lines().last().unwrap_or("")
                 ),
                 skipped: true,
-                skip_reason: Some("hevc_lossless_failed".to_string()),
+                skip_reason: Some("lossless_failed".to_string()),
             })
         }
         Err(e) => {
             cleanup_temp_output(&temp_output, input);
-            tracing::warn!(input = %input.display(), err = %e, "ffmpeg not found for lossless HEVC; copying original");
+            tracing::warn!(input = %input.display(), err = %e, "ffmpeg not found for lossless; copying original");
             copy_original_on_skip(input, options);
             mark_as_processed(input);
             let sz = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
@@ -1465,9 +1514,9 @@ pub fn convert_to_hevc_mkv_lossless(
                 input_size: sz,
                 output_size: None,
                 size_reduction: None,
-                message: format!("Lossless HEVC failed (ffmpeg not found: {e}); original copied"),
+                message: format!("Lossless failed (ffmpeg not found: {e}); original copied"),
                 skipped: true,
-                skip_reason: Some("hevc_lossless_failed".to_string()),
+                skip_reason: Some("lossless_failed".to_string()),
             })
         }
     }

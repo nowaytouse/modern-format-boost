@@ -1750,6 +1750,7 @@ mod tests {
             p50: Some(p50),
             p75: Some(p75),
             p90: Some(p90),
+            weight: None,
         }
     }
 
@@ -1969,6 +1970,7 @@ mod tests {
             p50: None,
             p75: None,
             p90: None,
+            weight: None,
         };
         profile.collection.duration_p90 = 15.0;
 

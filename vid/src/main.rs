@@ -3,13 +3,14 @@ use std::path::PathBuf;
 use tracing::info;
 
 use shared_utils::analysis_cache::AnalysisCache;
-use vid_hevc::{
+use vid::{
     auto_convert_with_cache, detect_video, determine_strategy, ConversionConfig, VidQualityError,
 };
+use shared_utils::conversion_types::SelectedCodec;
 
 #[derive(Parser)]
-#[command(name = "vid-hevc")]
-#[command(version, about = "Video quality analyzer and HEVC/H.265 converter", long_about = None)]
+#[command(name = "vid")]
+#[command(version, about = "High-performance video and animated media converter", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -57,11 +58,15 @@ enum Commands {
         resume: bool,
         #[arg(long)]
         no_resume: bool,
+        #[arg(long, value_parser = ["hevc", "av1"], default_value = "hevc")]
+        codec: String,
     },
 
     Strategy {
         #[arg(value_name = "INPUT")]
         input: PathBuf,
+        #[arg(long, value_parser = ["hevc", "av1"], default_value = "hevc")]
+        codec: String,
     },
 
     #[command(
@@ -80,7 +85,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     if let Err(e) =
-        shared_utils::logging::init_logging("vid_hevc", shared_utils::logging::LogConfig::default())
+        shared_utils::logging::init_logging("vid", shared_utils::logging::LogConfig::default())
     {
         eprintln!("⚠️ Failed to initialize logging: {e}");
     }
@@ -137,10 +142,21 @@ fn main() -> anyhow::Result<()> {
             verbose,
             resume,
             no_resume,
+            codec,
         } => {
             let apple_compat = apple_compat && !no_apple_compat;
             let allow_size_tolerance = allow_size_tolerance && !no_allow_size_tolerance;
             let resume = resume && !no_resume;
+            let selected_codec = if codec.to_lowercase() == "av1" {
+                SelectedCodec::Av1
+            } else {
+                SelectedCodec::Hevc
+            };
+
+            if selected_codec == SelectedCodec::Av1 && apple_compat {
+                shared_utils::log_eprintln!("❌ Apple compatibility mode (--apple-compat) is ONLY supported for HEVC. AV1 strategy does not support Apple devices natively.");
+                std::process::exit(1);
+            }
 
             if let Err(e) = shared_utils::validate_flags_result_with_ultimate(
                 explore,
@@ -175,23 +191,33 @@ fn main() -> anyhow::Result<()> {
                 )
                 .child_threads,
                 allow_size_tolerance,
+                codec: selected_codec,
             };
 
             shared_utils::progress_mode::set_verbose_mode(verbose);
-            // Automatically created and written to ./logs/vid_hevc_run_<timestamp>.log during run, no flags needed.
-            if let Err(e) = shared_utils::progress_mode::set_default_run_log_file("vid_hevc") {
+            // Automatically created and written to ./logs/vid_run_<timestamp>.log during run, no flags needed.
+            if let Err(e) = shared_utils::progress_mode::set_default_run_log_file("vid") {
                 shared_utils::log_eprintln!(
                     "⚠️  {}: {}",
                     "\x1b[33mCould not open run log file\x1b[0m",
                     e
                 );
             }
-            info!("🎬 Run Mode Conversion (HEVC/H.265)");
-            info!("   Lossless sources → HEVC Lossless MKV");
-            if match_quality {
-                info!("   Lossy sources → HEVC MP4 (CRF auto-matched to input quality)");
+            info!("🎬 Run Mode Conversion ({})", selected_codec.as_str().to_uppercase());
+            if selected_codec == SelectedCodec::Hevc {
+                info!("   Lossless sources → HEVC Lossless MKV");
+                if match_quality {
+                    info!("   Lossy sources → HEVC MP4 (CRF auto-matched to input quality)");
+                } else {
+                    info!("   Lossy sources → HEVC MP4 (CRF 18-20)");
+                }
             } else {
-                info!("   Lossy sources → HEVC MP4 (CRF 18-20)");
+                info!("   Lossless sources → AV1 Lossless MKV");
+                if match_quality {
+                    info!("   Lossy sources → AV1 MP4 (CRF auto-matched to input quality)");
+                } else {
+                    info!("   Lossy sources → AV1 MP4 (CRF 30-32)");
+                }
             }
             if explore {
                 info!("   📊 Size exploration: ENABLED");
@@ -253,11 +279,16 @@ fn main() -> anyhow::Result<()> {
             shared_utils::progress_mode::flush_log_file();
         }
 
-        Commands::Strategy { input } => {
+        Commands::Strategy { input, codec } => {
             let detection = detect_video(&input)?;
-            let strategy = determine_strategy(&detection);
+            let selected_codec = if codec.to_lowercase() == "av1" {
+                SelectedCodec::Av1
+            } else {
+                SelectedCodec::Hevc
+            };
+            let strategy = determine_strategy(&detection, selected_codec);
 
-            println!("\n🎯 Recommended Strategy (HEVC Auto Mode)");
+            println!("\n🎯 Recommended Strategy (Auto Mode)");
             println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             println!("📁 File: {}", input.display());
             println!(

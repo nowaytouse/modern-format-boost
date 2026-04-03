@@ -200,13 +200,13 @@ pub fn convert_heic_gainmap_to_jxl(
 ///
 /// # Example
 /// ```no_run
-/// use img_hevc::lossless_converter::{convert_to_jxl, ConvertOptions};
+/// use img::lossless_converter::{convert_to_jxl, ConvertOptions};
 /// use std::path::Path;
 ///
 /// let input = Path::new("input.png");
 /// let options = ConvertOptions::default();
 /// let result = convert_to_jxl(input, &options, 0.1, None)?;
-/// # Ok::<(), img_hevc::ImgQualityError>(())
+/// # Ok::<(), img::ImgQualityError>(())
 /// ```
 /// Convert to JXL using specific distance.
 ///
@@ -1854,6 +1854,7 @@ fn verify_jxl_health(path: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+    use vid::animated_image::is_high_quality_animated;
 
     #[test]
     fn test_get_output_path() {

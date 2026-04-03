@@ -1,10 +1,10 @@
 [package]
-name = "img-hevc"
+name = "img"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "High-performance image quality analyzer - HEVC version for animated images"
+description = "High-performance image format converter and analyzer"
 
 [dependencies]
 clap = { workspace = true }
@@ -13,7 +13,7 @@ serde = { workspace = true }
 rayon = { workspace = true }
 anyhow = { workspace = true }
 shared_utils = { workspace = true }
-vid-hevc = { path = "../vid_hevc" }
+vid = { path = "../vid" }
 tempfile = { workspace = true }
 console = { workspace = true }
 tracing = { workspace = true }

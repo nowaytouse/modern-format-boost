@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 
-use img_hevc::{
+use img::{
     calculate_psnr, calculate_ssim, psnr_quality_description, ssim_quality_description,
 };
 use shared_utils::analysis_cache::AnalysisCache;
@@ -86,6 +86,9 @@ enum Commands {
         /// Start fresh: ignore previous progress file, process all files.
         #[arg(long)]
         no_resume: bool,
+
+        #[arg(long, value_parser = ["hevc", "av1"], default_value = "hevc")]
+        codec: String,
     },
 
     Verify {
@@ -124,7 +127,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     if let Err(e) =
-        shared_utils::logging::init_logging("img_hevc", shared_utils::logging::LogConfig::default())
+        shared_utils::logging::init_logging("img", shared_utils::logging::LogConfig::default())
     {
         eprintln!("⚠️ Failed to initialize logging: {e}");
     }
@@ -198,11 +201,24 @@ fn main() -> anyhow::Result<()> {
             base_dir,
             resume: resume_flag,
             no_resume,
+            codec,
         } => {
+            use shared_utils::conversion_types::SelectedCodec;
             let resume = resume_flag && !no_resume;
             let apple_compat = apple_compat && !no_apple_compat;
             let allow_size_tolerance = allow_size_tolerance && !no_allow_size_tolerance;
             let should_delete = delete_original || in_place;
+
+            let selected_codec = if codec.to_lowercase() == "av1" {
+                SelectedCodec::Av1
+            } else {
+                SelectedCodec::Hevc
+            };
+
+            if selected_codec == SelectedCodec::Av1 && apple_compat {
+                shared_utils::log_eprintln!("❌ Apple compatibility mode (--apple-compat) is ONLY supported for HEVC. AV1 strategy does not support Apple devices natively.");
+                std::process::exit(1);
+            }
 
             let flag_mode = match shared_utils::validate_flags_result_with_ultimate(
                 explore,
@@ -219,7 +235,7 @@ fn main() -> anyhow::Result<()> {
 
             shared_utils::progress_mode::set_verbose_mode(verbose);
             // Create run log first; all subsequent output is captured here
-            if let Err(e) = shared_utils::progress_mode::set_default_run_log_file("img_hevc") {
+            if let Err(e) = shared_utils::progress_mode::set_default_run_log_file("img") {
                 shared_utils::log_eprintln!(
                     "⚠️  {}: {}",
                     "\x1b[33mCould not open run log file\x1b[0m",
@@ -228,9 +244,10 @@ fn main() -> anyhow::Result<()> {
             }
             if verbose {
                 shared_utils::progress_mode::emit_stderr(&format!(
-                    "{} {} (for animated→video)",
+                    "{} {} ({} for animated→video)",
                     symbols::VIDEO,
-                    flag_mode.description_en()
+                    flag_mode.description_en(),
+                    selected_codec.as_str().to_uppercase()
                 ));
                 shared_utils::progress_mode::emit_stderr(&format!("{} Static: JPEG→JXL (reconstruct) │ Modern Lossless→JXL (d=0.0) │ PNG/Legacy→JXL (d=0.0/0.1)", symbols::IMAGE));
             }
@@ -295,6 +312,7 @@ fn main() -> anyhow::Result<()> {
                 child_threads: 0,
                 force_video,
                 cache: cache.clone(),
+                codec: selected_codec,
             };
 
             let workload = if input.is_dir() {
@@ -542,6 +560,7 @@ struct AutoConvertConfig {
     child_threads: usize,
     force_video: bool,
     cache: Option<Arc<AnalysisCache>>,
+    codec: shared_utils::conversion_types::SelectedCodec,
 }
 
 fn copy_original_if_adjacent_mode(input: &Path, config: &AutoConvertConfig) -> anyhow::Result<()> {
@@ -554,7 +573,7 @@ fn copy_original_if_adjacent_mode(input: &Path, config: &AutoConvertConfig) -> a
     Ok(())
 }
 
-use img_hevc::conversion_api::ConversionOutput;
+use img::conversion_api::ConversionOutput;
 
 fn convert_result_to_output(result: shared_utils::ConversionResult) -> ConversionOutput {
     let input_path = result.input_path.clone();
@@ -574,7 +593,7 @@ fn auto_convert_single_file(
     input: &Path,
     config: &AutoConvertConfig,
 ) -> anyhow::Result<ConversionOutput> {
-    use img_hevc::lossless_converter::ConvertOptions;
+    use img::lossless_converter::ConvertOptions;
 
     // Pause if the user is being prompted to exit via Ctrl+C
     shared_utils::ctrlc_guard::wait_if_prompt_active();
@@ -692,6 +711,7 @@ fn auto_convert_single_file(
         },
         input_format: Some(analysis.format.clone()),
         quality_label: Some(quality_label),
+        codec: config.codec.clone(),
     };
 
     let result = if analysis.is_animated {
@@ -718,10 +738,10 @@ fn auto_convert_single_file(
 fn dispatch_static_conversion(
     input: &Path,
     analysis: &shared_utils::image_analyzer::ImageAnalysis,
-    options: &img_hevc::lossless_converter::ConvertOptions,
+    options: &img::lossless_converter::ConvertOptions,
     config: &AutoConvertConfig,
 ) -> anyhow::Result<shared_utils::ConversionResult> {
-    use img_hevc::lossless_converter::{convert_jpeg_to_jxl, convert_to_jxl};
+    use img::lossless_converter::{convert_jpeg_to_jxl, convert_to_jxl};
 
     let format = analysis.format.as_str();
     let is_lossless = analysis.is_lossless;
@@ -751,7 +771,7 @@ fn dispatch_static_conversion(
                 if let Some(h) = &analysis.heic_analysis {
                     if h.has_gainmap {
                         println!("🌈 HDR Synthesis: {} (Gainmap detected)", input.display());
-                        return Ok(img_hevc::lossless_converter::convert_heic_gainmap_to_jxl(
+                        return Ok(img::lossless_converter::convert_heic_gainmap_to_jxl(
                             input, options,
                         )?);
                     }
@@ -794,6 +814,7 @@ fn dispatch_static_conversion(
 fn calculate_matched_crf_for_animation(
     analysis: &shared_utils::image_analyzer::ImageAnalysis,
     file_size: u64,
+    codec: &shared_utils::conversion_types::SelectedCodec,
 ) -> anyhow::Result<f32> {
     let estimated_quality = analysis.jpeg_analysis.as_ref().map(|j| j.estimated_quality);
 
@@ -809,13 +830,26 @@ fn calculate_matched_crf_for_animation(
         estimated_quality,
     );
 
-    match shared_utils::calculate_hevc_crf(&quality_analysis) {
+    let result = match codec {
+        shared_utils::conversion_types::SelectedCodec::Hevc => {
+            shared_utils::calculate_hevc_crf(&quality_analysis)
+        }
+        shared_utils::conversion_types::SelectedCodec::Av1 => {
+            shared_utils::calculate_av1_crf(&quality_analysis)
+        }
+    };
+
+    match result {
         Ok(result) => {
-            shared_utils::log_quality_analysis(
-                &quality_analysis,
-                &result,
-                shared_utils::EncoderType::Hevc,
-            );
+            let encoder = match codec {
+                shared_utils::conversion_types::SelectedCodec::Hevc => {
+                    shared_utils::EncoderType::Hevc
+                }
+                shared_utils::conversion_types::SelectedCodec::Av1 => {
+                    shared_utils::EncoderType::Av1
+                }
+            };
+            shared_utils::log_quality_analysis(&quality_analysis, &result, encoder);
             Ok(result.crf)
         }
         Err(e) => Err(anyhow::anyhow!("Quality analysis failed: {e}")),
@@ -825,7 +859,7 @@ fn calculate_matched_crf_for_animation(
 fn dispatch_animated_conversion(
     input: &Path,
     analysis: &shared_utils::image_analyzer::ImageAnalysis,
-    options: &img_hevc::lossless_converter::ConvertOptions,
+    options: &img::lossless_converter::ConvertOptions,
     config: &AutoConvertConfig,
 ) -> anyhow::Result<shared_utils::ConversionResult> {
     let format = analysis.format.as_str();
@@ -906,7 +940,7 @@ fn dispatch_animated_conversion(
         }
     };
 
-    let initial_crf = calculate_matched_crf_for_animation(analysis, analysis.file_size)?;
+    let initial_crf = calculate_matched_crf_for_animation(analysis, analysis.file_size, &config.codec)?;
 
     if config.apple_compat && is_non_native_animated {
         if meme_keep {
@@ -915,7 +949,7 @@ fn dispatch_animated_conversion(
                 format,
                 input.display()
             ));
-            Ok(vid_hevc::animated_image::convert_to_gif_apple_compat(
+            Ok(vid::animated_image::convert_to_gif_apple_compat(
                 input, options,
             ).map_err(|e| anyhow::anyhow!(e))?)
         } else {
@@ -925,7 +959,7 @@ fn dispatch_animated_conversion(
                 duration,
                 input.display()
             ));
-            Ok(vid_hevc::animated_image::convert_to_hevc_mp4_matched(input, options, initial_crf, analysis.has_alpha).map_err(|e| anyhow::anyhow!(e))?)
+            Ok(vid::animated_image::convert_to_mp4_matched(input, options, initial_crf, analysis.has_alpha).map_err(|e| anyhow::anyhow!(e))?)
         }
     } else {
         if meme_keep {
@@ -937,22 +971,24 @@ fn dispatch_animated_conversion(
                 "meme_score_keep",
             ));
         }
+        let codec_name = config.codec.as_str().to_uppercase();
         shared_utils::progress_mode::emit_stderr(&format!(
-            "🔄 Animated→HEVC MP4 (SMART QUALITY, {:.1}s): {}",
+            "🔄 Animated→{} MP4 (SMART QUALITY, {:.1}s): {}",
+            codec_name,
             duration,
             input.display()
         ));
-        Ok(vid_hevc::animated_image::convert_to_hevc_mp4_matched(input, options, initial_crf, analysis.has_alpha).map_err(|e| anyhow::anyhow!(e))?)
+        Ok(vid::animated_image::convert_to_mp4_matched(input, options, initial_crf, analysis.has_alpha).map_err(|e| anyhow::anyhow!(e))?)
     }
 }
 
 fn dispatch_static_disguised_animated(
     input: &Path,
     analysis: &shared_utils::image_analyzer::ImageAnalysis,
-    options: &img_hevc::lossless_converter::ConvertOptions,
+    options: &img::lossless_converter::ConvertOptions,
     config: &AutoConvertConfig,
 ) -> anyhow::Result<shared_utils::ConversionResult> {
-    use img_hevc::lossless_converter::convert_to_jxl;
+    use img::lossless_converter::convert_to_jxl;
 
     let is_modern =
         shared_utils::quality_matcher::parse_source_codec(analysis.format.as_str()).is_modern();

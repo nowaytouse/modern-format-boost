@@ -2412,7 +2412,6 @@ mod tests {
             FeatureStats {
                 mean: 14.0,
                 std_dev: 3.0,
-                weight: None,
                 p10: Some(8.0),
                 p25: Some(10.0),
                 p50: Some(14.0),

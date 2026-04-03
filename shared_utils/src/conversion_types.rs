@@ -11,6 +11,23 @@ pub enum TargetVideoFormat {
     Skip,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum SelectedCodec {
+    #[default]
+    Hevc,
+    Av1,
+}
+
+impl SelectedCodec {
+    #[must_use]
+    pub const fn as_str(&self) -> &str {
+        match self {
+            Self::Hevc => "hevc",
+            Self::Av1 => "av1",
+        }
+    }
+}
+
 impl TargetVideoFormat {
     #[must_use]
     pub const fn extension(&self) -> &str {
@@ -68,6 +85,7 @@ pub struct ConversionConfig {
     /// `video_compression_ratio < 1.01` as acceptable for `require_compression` / Apple fallback.
     /// Does not relax compress goal: compress still requires output < input.
     pub allow_size_tolerance: bool,
+    pub codec: SelectedCodec,
 }
 
 impl Default for ConversionConfig {
@@ -89,6 +107,7 @@ impl Default for ConversionConfig {
             ultimate_mode: false,
             child_threads: 0,
             allow_size_tolerance: true,
+            codec: SelectedCodec::Hevc,
         }
     }
 }

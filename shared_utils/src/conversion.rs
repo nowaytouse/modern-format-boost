@@ -25,6 +25,7 @@
 
 use crate::constants::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE;
 use crate::modern_ui::{colors, symbols};
+use crate::conversion_types::SelectedCodec;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -438,6 +439,7 @@ pub struct ConvertOptions {
     pub child_threads: usize,
     pub input_format: Option<String>,
     pub quality_label: Option<String>,
+    pub codec: SelectedCodec,
 }
 
 impl Default for ConvertOptions {
@@ -459,6 +461,7 @@ impl Default for ConvertOptions {
             child_threads: 0,
             input_format: None,
             quality_label: None,
+            codec: SelectedCodec::Hevc,
         }
     }
 }

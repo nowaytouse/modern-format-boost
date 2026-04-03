@@ -1,9 +1,7 @@
 [workspace]
 members = [
-    "vid_av1",
-    "vid_hevc",
-    "img_hevc",
-    "img_av1",
+    "vid",
+    "img",
     "shared_utils"
 ]
 resolver = "2"

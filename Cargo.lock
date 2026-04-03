@@ -1100,7 +1100,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "img-av1"
+name = "img"
 version = "0.11.1"
 dependencies = [
  "anyhow",
@@ -1112,23 +1112,7 @@ dependencies = [
  "shared_utils",
  "tempfile",
  "tracing",
- "vid-av1",
-]
-
-[[package]]
-name = "img-hevc"
-version = "0.11.1"
-dependencies = [
- "anyhow",
- "clap",
- "console",
- "image",
- "rayon",
- "serde",
- "shared_utils",
- "tempfile",
- "tracing",
- "vid-hevc",
+ "vid",
 ]
 
 [[package]]
@@ -2786,23 +2770,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
-name = "vid-av1"
+name = "vid"
 version = "0.11.1"
 dependencies = [
  "anyhow",
  "clap",
- "shared_utils",
- "tempfile",
- "tracing",
- "which",
-]
-
-[[package]]
-name = "vid-hevc"
-version = "0.11.1"
-dependencies = [
- "anyhow",
- "clap",
+ "rayon",
+ "serde",
  "shared_utils",
  "tempfile",
  "tracing",
