@@ -147,7 +147,7 @@ pub fn determine_strategy_with_apple_compat(
         shared_utils::should_skip_video_codec(result.codec.as_str())
     };
 
-    // 「循环意图判断系统」 (Loop Intent Identification System)
+    // Loop Intent Identification System
     // For GIF files, use fast-path (from_gif_path) to preserve GIF-specific signals.
     // For videos, use ffprobe path with structural signal refresh.
     let loop_verdict = if shared_utils::should_use_gif_fast_path(Path::new(&result.file_path)) {

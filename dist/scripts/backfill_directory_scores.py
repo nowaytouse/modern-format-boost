@@ -22,12 +22,12 @@ MEME_KEYWORDS = [
     "emojis",
     "reaction",
     "reactions",
-    "表情包",
-    "表情",
-    "贴纸",
-    "斗图",
-    "梗图",
-    "梗",
+    "sticker_pack",
+    "sticker_pkg",
+    "sticker_collection",
+    "meme_collection",
+    "funny",
+    "humor",
 ]
 
 

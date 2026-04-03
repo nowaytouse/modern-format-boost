@@ -1754,7 +1754,7 @@ pub fn convert_to_gif_apple_compat(
         let fps_str = format!("{fps:.3}");
 
         let res = Command::new("gifski")
-            .arg("--quiet")
+            // --quiet removed to expose logs
             .arg("--output")
             .arg(shared_utils::safe_path_arg(&temp_output).as_ref())
             .arg("--fps")
@@ -1776,7 +1776,23 @@ pub fn convert_to_gif_apple_compat(
             .output();
 
         drop(extracted_stream_apng);
-        matches!(res, Ok(o) if o.status.success() && temp_output.exists())
+        match res {
+            Ok(o) if o.status.success() && temp_output.exists() => true,
+            Ok(o) => {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                tracing::error!(
+                    input = %input.display(),
+                    stderr = %stderr.trim(),
+                    "gifski conversion failed with status: {:?}", 
+                    o.status.code()
+                );
+                false
+            }
+            Err(e) => {
+                tracing::error!(input = %input.display(), error = %e, "gifski command failed to start");
+                false
+            }
+        }
     };
 
     // Clean up temporary APNG file if it was created

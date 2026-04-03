@@ -1,233 +1,233 @@
-# 循环意图判断树
+# Loop Intent Decision Tree
 
-**适用范围**：GIF、视频、Telegram 动图贴图的统一入口。  
-**输出**：`LOOP_STRONG` / `LOOP_WEAK` / `UNCERTAIN`，后接动作路由。  
-**原则**：越靠前的节点越便宜、越确定；越靠后越贵、越模糊。不引入硬编码魔法数字。
+**Scope**: Unified entry point for GIFs, videos, and Telegram animated stickers.
+**Output**: `LOOP_STRONG` / `LOOP_WEAK` / `UNCERTAIN`, followed by action routing.
+**Principles**: Earlier nodes are cheaper and more certain; later nodes are more expensive and fuzzy. Avoid hard-coded magic numbers.
 
 ---
 
-## 前置：格式预路由（提取信号集，不做判断）
+## Pre-routing: Format Signal Extraction (Extraction only, no judgment)
 
 ```
-输入文件
-├── Telegram TGS / WebM-sticker → 注入 loop_count=0, platform=TELEGRAM
-├── APNG                        → 注入 format_loop_semantic=true
-├── 普通 GIF                    → 读取 loop_count, app_extensions, palette_size...
-└── 普通视频 (MP4/MOV/WebM...)  → 读取 has_audio, container, duration...
+Input File
+├── Telegram TGS / WebM-sticker → Inject loop_count=0, platform=TELEGRAM
+├── APNG                        → Inject format_loop_semantic=true
+├── Standard GIF                → Read loop_count, app_extensions, palette_size...
+└── Standard Video (MP4/MOV...) → Read has_audio, container, duration...
 ```
 
-预路由不做任何判断，只负责把信号统一填入 `SignalBundle`，供下面的树消费。  
-同时初始化 `WeightedScore`（初始值 0.0，范围 [-1.0, +1.0]），贯穿第三至第五层持续累积。
+Pre-routing does not make any decisions. it is only responsible for populating the `SignalBundle` for consumption by the tree below.
+At the same time, `WeightedScore` is initialized (initial value 0.0, range [-1.0, +1.0]), which accumulates through layers 3 to 5.
 
 ---
 
-## 第一层：格式物理硬约束（100% 确定，零歧义）
+## Layer 1: Physical Format Constraints (100% certainty, zero ambiguity)
 
-> 命中即强制出口，`WeightedScore` 不参与，不需要继续。
+> If a hit occurs, exit immediately; `WeightedScore` is not involved.
 
-### 节点 1-A：有音轨？
+### Node 1-A: Has Audio?
 
-- 信号：`has_audio == true`
-- 是 → **直接出口：LOOP_WEAK**（GIF 物理上不支持音频，强制）
-- 否 → 下一节点
+- Signal: `has_audio == true`
+- Yes → **Direct Exit: LOOP_WEAK** (GIF does not physically support audio, forced)
+- No → Next node
 
-### 节点 1-B：有透明通道且无音轨？
+### Node 1-B: Has Transparency and No Audio?
 
-- 信号：`has_alpha == true`
-- 是 → **直接出口：LOOP_STRONG**（视频透明通道处理成本极高，强烈偏向 GIF）
-- 否 → 进入第二层
-
----
-
-## 第二层：显式自我声明（创作者 / 平台直接声明意图）
-
-> 命中即强制出口，`WeightedScore` 不参与，不需要继续。
-
-### 节点 2-A：无限循环标记？
-
-- 信号：`loop_count == 0`
-- 是 → **直接出口：LOOP_STRONG**（文件自己声明"我要无限循环"）
-- 否 → 下一节点
-
-### 节点 2-B：明确不循环标记？
-
-- 信号：`loop_count == 1`（播完停止）
-- 是 → **直接出口：LOOP_WEAK**（文件自己声明"我只播一次"）
-- 否 → 下一节点
-
-### 节点 2-C：平台来源标记？
-
-- 信号：`app_extensions` 含 `GIPHY` / `TENOR` / `STICKER` / `TELEGRAM`
-- 是 → **直接出口：LOOP_STRONG**（平台语义声明内容性质）
-- 否 → 下一节点
-
-### 节点 2-D：容器格式语义？
-
-- 信号：`container == WebM AND has_audio == false`
-- 是 → **直接出口：LOOP_STRONG**（WebM 无音轨是 Web 动图的标准载体，格式本身即循环语义）
-- 否 → 进入第三层
+- Signal: `has_alpha == true`
+- Yes → **Direct Exit: LOOP_STRONG** (Processing video transparency is extremely costly; strongly prefer GIF)
+- No → Proceed to Layer 2
 
 ---
 
-## 第三层：自参照结构信号（内容与自身比较，无外部阈值）
+## Layer 2: Explicit Self-Declaration (Creator / Platform declared intent)
 
-> 本层开始进入 `WeightedScore` 累积区间。每个节点计算完毕后继续，  
-> 不单独触发出口（除非分数已在本层达到饱和，见层末说明）。
+> If a hit occurs, exit immediately; `WeightedScore` is not involved.
 
-### 节点 3-A：首尾帧自参照闭合比
+### Node 2-A: Infinite Loop Marker?
 
-- 信号：
+- Signal: `loop_count == 0`
+- Yes → **Direct Exit: LOOP_STRONG** (File explicitly declares "I want to loop infinitely")
+- No → Next node
+
+### Node 2-B: Explicit Non-Loop Marker?
+
+- Signal: `loop_count == 1` (Stop after playing once)
+- Yes → **Direct Exit: LOOP_WEAK** (File explicitly declares "I only play once")
+- No → Next node
+
+### Node 2-C: Platform Source Marker?
+
+- Signal: `app_extensions` contains `GIPHY` / `TENOR` / `STICKER` / `TELEGRAM`
+- Yes → **Direct Exit: LOOP_STRONG** (Platform semantic declaration of content nature)
+- No → Next node
+
+### Node 2-D: Container Format Semantics?
+
+- Signal: `container == WebM AND has_audio == false`
+- Yes → **Direct Exit: LOOP_STRONG** (WebM without audio is a standard carrier for web animations; format itself implies loop semantics)
+- No → Proceed to Layer 3
+
+---
+
+## Layer 3: Self-Referential Structural Signals (Content compared with itself, no external thresholds)
+
+> From this layer onwards, the `WeightedScore` accumulation zone is entered. Each node continues after calculation.
+> No individual exit is triggered (unless the score has reached saturation at the end of the layer).
+
+### Node 3-A: First-Last Frame Closure Ratio
+
+- Signal:
   ```
-  closure_ratio = 首尾帧视觉距离 / 帧间平均视觉距离
+  closure_ratio = Visual distance between first and last frames / Average inter-frame visual distance
   ```
-- `closure_ratio ≈ 1.0`（首尾跳变与普通帧间跳变相当）
-  → `WeightedScore += 0.35`（权重最高，自参照无外部常数）
-- `closure_ratio >> 1.0`（首尾有突变）
+- `closure_ratio ≈ 1.0` (First-last jump is comparable to normal inter-frame jumps)
+  → `WeightedScore += 0.35` (Highest weight, self-referential without external constants)
+- `closure_ratio >> 1.0` (Sudden jump between first and last frames)
   → `WeightedScore -= 0.35`
-- 信号缺失 / 内容整体变化过大导致分母虚高（已知 edge case）
-  → 跳过，`WeightedScore` 不变
+- Signal missing / Content too overall variable leading to inflated denominator (known edge case)
+  → Skip, `WeightedScore` unchanged
 
-> Edge case 处理原则：跳过而非误判。当帧间平均距离本身就很大时，
-> closure_ratio 的参照基准失效，强制跳过优于产生错误信号。
+> Edge case handling principle: Skip rather than misjudge. When the average inter-frame distance itself is very large,
+> the reference baseline for `closure_ratio` is invalid; forcing a skip is better than generating a false signal.
 
-### 节点 3-B：节奏均匀性
+### Node 3-B: Rhythmic Uniformity
 
-- 信号：`interval_consistency_score`（帧间隔变异系数，自参照）
-- 分数高（帧间隔高度均匀）→ `WeightedScore += 0.20`
-- 分数低（帧间隔杂乱） → `WeightedScore -= 0.15`
-- 中间区域 → `WeightedScore` 不变
+- Signal: `interval_consistency_score` (Coefficient of variation of frame intervals, self-referential)
+- High Score (Highly uniform intervals) → `WeightedScore += 0.20`
+- Low Score (Messy intervals) → `WeightedScore -= 0.15`
+- Middle Area → `WeightedScore` unchanged
 
-**层末检查**：若 `WeightedScore ≥ 0.55` → **直接出口：LOOP_STRONG**  
-　　　　　　若 `WeightedScore ≤ -0.55` → **直接出口：LOOP_WEAK**  
-　　　　　　否则 → 进入第四层（携带当前分数继续累积）
+**End-of-Layer Check**: If `WeightedScore ≥ 0.55` → **Direct Exit: LOOP_STRONG**
+　　　　　　If `WeightedScore ≤ -0.55` → **Direct Exit: LOOP_WEAK**
+　　　　　　Otherwise → Proceed to Layer 4 (Continue accumulating with current score)
 
 ---
 
-## 第四层：内容特征信号（需要采样计算，成本较高）
+## Layer 4: Content Feature Signals (Requires sampling and calculation, higher cost)
 
-### 节点 4-A：调色板大小
+### Node 4-A: Palette Size
 
-- 信号：`palette_size`
-- `≤ 64`（典型合成内容，像素风、贴纸）→ `WeightedScore += 0.25`
-- `65–128`（中性） → `WeightedScore` 不变
-- `> 128`（接近自然内容色彩空间） → `WeightedScore -= 0.15`
+- Signal: `palette_size`
+- `≤ 64` (Typical synthetic content, pixel art, stickers) → `WeightedScore += 0.25`
+- `65–128` (Neutral) → `WeightedScore` unchanged
+- `> 128` (Approaching natural content color space) → `WeightedScore -= 0.15`
 
-### 节点 4-B：帧内容可压缩性（WebP 压缩比）
+### Node 4-B: Frame Content Compressibility (WebP Compression Ratio)
 
-- 信号：对采样帧做 WebP 有损压缩，测量 `raw_size / webp_size`
+- Signal: Perform lossy WebP compression on sampled frames, measure `raw_size / webp_size`
   ```
-  比值 > 15x → 合成内容（色块平坦、信息熵低）→ WeightedScore += 0.20
-  比值 < 5x  → 自然内容（噪点丰富、信息熵高）→ WeightedScore -= 0.25
-  中间区域   → WeightedScore 不变
+  Ratio > 15x → Synthetic content (Flat color areas, low entropy) → WeightedScore += 0.20
+  Ratio < 5x  → Natural content (Noisy, high entropy) → WeightedScore -= 0.25
+  Middle Area → WeightedScore unchanged
   ```
 
-> 这是判断"合成 vs 自然"的最直接代理——直接测量 GIF 的 LZW 压缩会带来多大收益。
+> This is the most direct proxy for judging "Synthetic vs Natural"—directly measuring how much benefit LZW compression of the GIF provides.
 
-### 节点 4-C：compression_efficiency_score
+### Node 4-C: compression_efficiency_score
 
-- 信号：`compression_efficiency_score`（现有实现）
+- Signal: `compression_efficiency_score` (Existing implementation)
 - `> 0.7` → `WeightedScore += 0.15`
 - `< 0.3` → `WeightedScore -= 0.10`
-- 中间区域 → `WeightedScore` 不变
+- Middle Area → `WeightedScore` unchanged
 
-**层末检查**：若 `WeightedScore ≥ 0.55` → **直接出口：LOOP_STRONG**  
-　　　　　　若 `WeightedScore ≤ -0.55` → **直接出口：LOOP_WEAK**  
-　　　　　　否则 → 进入第五层
-
----
-
-## 第五层：上下文语义信号（最弱，仅辅助）
-
-> 本层所有节点权重刻意压低，绝不会单独扭转方向，只作为细微修正。  
-> 本层末不设检查点，所有未出口的情况统一进入第六层。
-
-### 节点 5-A：目录 / 文件名语义
-
-- 信号：`directory_meme_score`、`filename_score`
-- 两者均 `> 0.8` → `WeightedScore += 0.10`
-- 任意一项 `> 0.8` → `WeightedScore += 0.05`
-- 否则 → `WeightedScore` 不变
-
-### 节点 5-B：fps 异常
-
-- 信号：`fps_anomaly_score`
-- 异常值偏高（非标准帧率，典型动图特征）→ `WeightedScore += 0.05`
-- 否则 → `WeightedScore` 不变
-
-### 节点 5-C：时长（仅作为弱修正，不硬编码绝对值）
-
-- 信号：`duration_secs / avg_frame_duration`（即总帧数的自参照表达）
-- 总帧数极少（内容极短）→ `WeightedScore += 0.05`
-- 总帧数极多（内容极长）→ `WeightedScore -= 0.10`
-- 中间区域 → `WeightedScore` 不变
-
-> 时长以自参照的总帧数形式进入，而非硬编码秒数；
-> 同时作为 KNN 特征维度的一部分，让训练集自己学习分布。
+**End-of-Layer Check**: If `WeightedScore ≥ 0.55` → **Direct Exit: LOOP_STRONG**
+　　　　　　If `WeightedScore ≤ -0.55` → **Direct Exit: LOOP_WEAK**
+　　　　　　Otherwise → Proceed to Layer 5
 
 ---
 
-## 第六层：KNN + WeightedScore 综合判断
+## Layer 5: Contextual Semantic Signals (Weakest, auxiliary only)
 
-到达本层时，`SignalBundle` 已包含：
+> All node weights in this layer are intentionally low; they will never reverse the direction on their own, serving only as fine corrections.
+> No check points are set at the end of this layer; all non-exited cases proceed to Layer 6.
 
-- 第三至五层计算的所有原始信号（供 KNN 特征空间使用，不重算）
-- 时长（帧数形式）
-- 当前累积的 `WeightedScore`（作为 KNN 的一个额外特征维度传入）
+### Node 5-A: Directory / Filename Semantics
+
+- Signal: `directory_meme_score`, `filename_score`
+- Both `> 0.8` → `WeightedScore += 0.10`
+- Either `> 0.8` → `WeightedScore += 0.05`
+- Otherwise → `WeightedScore` unchanged
+
+### Node 5-B: FPS Anomaly
+
+- Signal: `fps_anomaly_score`
+- High Anomaly Value (Non-standard frame rates, typical animation feature) → `WeightedScore += 0.05`
+- Otherwise → `WeightedScore` unchanged
+
+### Node 5-C: Duration (Weak correction only, no hard-coded absolute values)
+
+- Signal: `duration_secs / avg_frame_duration` (i.e., self-referential expression of total frame count)
+- Very few total frames (Very short content) → `WeightedScore += 0.05`
+- Very many total frames (Very long content) → `WeightedScore -= 0.10`
+- Middle Area → `WeightedScore` unchanged
+
+> Duration enters in the form of self-referential frame counts rather than hard-coded seconds;
+> Also serves as part of the KNN feature dimension, letting the training set learn its own distribution.
+
+---
+
+## Layer 6: Integrated KNN + WeightedScore Judgment
+
+When reaching this layer, the `SignalBundle` already contains:
+
+- All raw signals calculated in Layers 3 to 5 (used for KNN feature space, not re-calculated)
+- Duration (in frame count form)
+- Current accumulated `WeightedScore` (passed as an additional KNN feature dimension)
 
 ```
-KNN 输出：keep_probability, confidence
-综合判断逻辑：
+KNN Output: keep_probability, confidence
+Integrated Judgment Logic:
 
 final_score = keep_probability * 0.6 + normalize(WeightedScore) * 0.4
 
 confidence > 0.75 AND final_score > 0.6  → LOOP_STRONG
 confidence > 0.75 AND final_score ≤ 0.4  → LOOP_WEAK
-其余所有情况                              → UNCERTAIN，进兜底
+All other cases                           → UNCERTAIN, proceed to fallback
 ```
 
-> `WeightedScore` 在此不是独立判断者，而是 KNN 的加权修正项。
-> 两者融合的权重比（0.6 / 0.4）可根据 KNN 训练集质量调整：
-> 训练集越大越可信，KNN 权重应越高；训练集稀薄时，WeightedScore 权重应上调。
+> `WeightedScore` is not an independent judge here, but a weighted correction term for KNN.
+> The fusion weight ratio (0.6 / 0.4) can be adjusted based on the KNN training set quality:
+> Larger training sets are more credible, so KNN weight should be higher; when the set is thin, `WeightedScore` weight should be increased.
 
 ---
 
-## 第七层：保守兜底
+## Layer 7: Conservative Fallback
 
 ```
-输入是现代动图格式（TGS / APNG / WebP 动图）→ 转 GIF（最小损失）
-输入已经是 GIF                               → 保留原样，跳过
-输入已经是视频                               → 保留原样，跳过
+Input is a modern animated format (TGS / APNG / WebP anim) → Convert to GIF (Minimal loss)
+Input is already GIF                              → Keep as is, skip
+Input is already video                            → Keep as is, skip
 
-所有兜底情况 → 写入 low_confidence 标记到数据库
+All fallback cases → Write low_confidence flag to the database
 ```
 
-低置信度标记的价值：这些文件日后可经人工复核后作为新的 KNN 训练样本，  
-盲区随时间推移自然收窄，不需要一次性解决。
+Value of low confidence markers: These files can be manually reviewed later as new KNN training samples,
+allowing the blind spot to narrow naturally over time without needing a one-time solution.
 
 ---
 
-## 后置：动作路由
+## Post-processing: Action Routing
 
 ```
-判断树输出
+Judgment Tree Output
 ├── LOOP_STRONG
-│   ├── 输入是视频 → 转 GIF
-│   └── 输入是 GIF → 保留
+│   ├── Input is Video → Convert to GIF
+│   └── Input is GIF   → Keep
 └── LOOP_WEAK
-    ├── 输入是 GIF → 转视频
-    └── 输入是视频 → 保留
+    ├── Input is GIF   → Convert to Video
+    └── Input is Video → Keep
 ```
 
 ---
 
-## 各层设计原则对照
+## Design Principles Comparison by Layer
 
-| 层级                     | 触发方式          | WeightedScore              | 可靠性               | 计算成本     |
-| ------------------------ | ----------------- | -------------------------- | -------------------- | ------------ |
-| 第一层：物理硬约束       | 强制出口          | 不参与                     | 100%                 | 极低         |
-| 第二层：显式声明         | 强制出口          | 不参与                     | ~99%                 | 极低         |
-| 第三层：自参照结构       | 层末检查点 / 累积 | 权重 0.35 / 0.20           | 高，有已知 edge case | 低           |
-| 第四层：内容特征         | 层末检查点 / 累积 | 权重 0.25 / 0.20 / 0.15    | 中                   | 中（需采样） |
-| 第五层：上下文语义       | 仅累积            | 权重 ≤ 0.10                | 弱                   | 低           |
-| 第六层：KNN + Score 融合 | 概率出口          | 作为 KNN 特征维度 + 修正项 | 取决于训练集         | 高           |
-| 第七层：保守兜底         | 保守默认          | 不参与                     | 最小损失             | 零           |
+| Layer                     | Trigger Mechanism        | WeightedScore           | Reliability          | Computation Cost |
+| ------------------------- | ------------------------ | ----------------------- | -------------------- | ---------------- |
+| Layer 1: Physical Constraints | Forced Exit              | Not Involved            | 100%                 | Extremely Low    |
+| Layer 2: Explicit Declaration | Forced Exit              | Not Involved            | ~99%                 | Extremely Low    |
+| Layer 3: Self-Referential structure | End-of-Layer Check / Accumulation | Weight 0.35 / 0.20      | High, known edge cases | Low              |
+| Layer 4: Content Features     | End-of-Layer Check / Accumulation | Weight 0.25 / 0.20 / 0.15 | Medium               | Medium (sampling) |
+| Layer 5: Contextual Semantics | Accumulation Only        | Weight ≤ 0.10           | Weak                 | Low              |
+| Layer 6: KNN + Score Fusion   | Probabilistic Exit       | As feature + Correction | Depends on Training set | High             |
+| Layer 7: Conservative Fallback | Conservative Default      | Not Involved            | Minimal loss         | Zero             |

@@ -1027,7 +1027,7 @@ pub fn convert_to_hevc_mp4_matched(
     let is_gif = shared_utils::is_gif_magic(&final_input);
     let mut actual_initial_crf = initial_crf;
 
-    // 获取时长和元数据用于智能 CRF 初始化
+    // Get duration and metadata for smart CRF initialization
     let probe = shared_utils::ffprobe::probe_video(input).ok();
     let duration = probe.as_ref().map_or(0.0, |p| p.duration as f32);
 
@@ -1044,8 +1044,8 @@ pub fn convert_to_hevc_mp4_matched(
 
     if is_safe_for_lossless {
         // [Data-Driven Optimization]
-        // 允许长且低密度的表情包进行 CRF 0.00 探测。
-        // 高价值艺术品依然维持 30s 阈值防止溢出。
+        // Allow long, low-entropy memes to undergo CRF 0.00 probing.
+        // High-value artwork still maintains a 30s threshold to prevent overflow.
         actual_initial_crf = 0.0;
     } else if let Some(hint) = shared_utils::crf_constants::get_global_last_hit_crf_hevc() {
         if options.verbose {
@@ -1787,7 +1787,7 @@ pub fn convert_to_gif_apple_compat(
         let fps_str = format!("{fps:.3}");
 
         let res = Command::new("gifski")
-            .arg("--quiet")
+            // --quiet removed to expose logs
             .arg("--output")
             .arg(shared_utils::safe_path_arg(&temp_output).as_ref())
             .arg("--fps")
@@ -1809,7 +1809,23 @@ pub fn convert_to_gif_apple_compat(
             .output();
 
         drop(extracted_stream_apng);
-        matches!(res, Ok(o) if o.status.success() && temp_output.exists())
+        match res {
+            Ok(o) if o.status.success() && temp_output.exists() => true,
+            Ok(o) => {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                tracing::error!(
+                    input = %input.display(),
+                    stderr = %stderr.trim(),
+                    "gifski conversion failed with status: {:?}", 
+                    o.status.code()
+                );
+                false
+            }
+            Err(e) => {
+                tracing::error!(input = %input.display(), error = %e, "gifski command failed to start");
+                false
+            }
+        }
     };
 
     // Clean up temporary APNG file if it was created

@@ -9,7 +9,6 @@
 
 <p align="center">
   <strong>Next-gen media optimization engine — zero quality loss, maximum compression.</strong><br>
-  <em>下一代媒体优化引擎 — 画质零损失，体积最大压缩。</em>
 </p>
 
 <p align="center">

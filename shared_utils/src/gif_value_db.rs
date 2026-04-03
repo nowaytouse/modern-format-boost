@@ -1385,7 +1385,7 @@ pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -
             let res = sample_from_path(path, "cli_ingest", label_override);
             pb.inc(1);
             if let Some(s) = &res {
-                // 排除静态图片：只有多帧内容才具备循环意图训练价值
+                // Exclude static images: only multi-frame content is valuable for loop intent training
                 if s.frame_count <= 1 {
                     return None;
                 }
@@ -1605,7 +1605,7 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
     // 1. Extract dynamic keywords from SampleStrong filenames
     let keyword_rows = conn.query(
         "WITH words AS (
-             SELECT unnest(regexp_split_to_array(lower(file_name), '[^a-z0-9一-龥]+')) as word 
+             SELECT unnest(regexp_split_to_array(lower(file_name), '[^a-z0-9]+')) as word 
              FROM samples 
              WHERE loop_verdict = 'LoopStrong' AND file_name IS NOT NULL
          )
@@ -1746,6 +1746,7 @@ mod tests {
             palette_size: Some(64),
             app_extensions: None,
             has_transparency: true,
+            is_native_gif: true,
             frame_payload_variation: Some(0.4),
             frame_delay_variation: Some(0.6),
             source_extension: Some("gif".to_string()),

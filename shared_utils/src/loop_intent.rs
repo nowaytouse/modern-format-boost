@@ -1,4 +1,4 @@
-//! 「循环意图判断系统」 (Loop Intent Identification System)
+//! Loop Intent Identification System
 //!
 //! A modern, explainable judgment tree for identifying media looping intent (memes, stickers, loops).
 //! Implements the 7-layer hierarchical decision tree defined in docs/decision_tree.md.
@@ -32,12 +32,12 @@ const MEME_DIRECTORY_KEYWORDS: &[&str] = &[
     "emojis",
     "reaction",
     "reactions",
-    "表情包",
-    "表情",
-    "贴纸",
-    "斗图",
-    "梗图",
-    "梗",
+    "sticker_pack",
+    "sticker_pkg",
+    "sticker_collection",
+    "meme_collection",
+    "funny",
+    "humor",
 ];
 const WEBP_RATIO_SAMPLE_MAX_DIM: u32 = 256;
 
@@ -53,7 +53,7 @@ pub struct FilenameAnalysis {
     pub kind: FilenameKind,
 }
 
-// ── Output: 三态输出 ──────────────────────────────────────────────────────────
+// ── Output: Tri-state Output ──────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LoopIntentVerdict {
@@ -1637,7 +1637,14 @@ mod tests {
     }
 
     fn verdict_with_profile(meta: &LoopMeta, profile: &LoopReferenceProfile) -> LoopIntentVerdict {
-        evaluate_loop_tree(meta, Some(profile)).verdict
+        // Disable developer bypass rules so we can test the pure Layer 4 logic
+        std::env::set_var(crate::constants::ENV_FORCE_SHORT_GIFS, "0");
+        std::env::set_var(crate::constants::ENV_INTERCEPT_LONG_SILENT, "0");
+        let result = evaluate_loop_tree(meta, Some(profile)).verdict;
+        // Restore defaults
+        std::env::remove_var(crate::constants::ENV_FORCE_SHORT_GIFS);
+        std::env::remove_var(crate::constants::ENV_INTERCEPT_LONG_SILENT);
+        result
     }
 
     #[test]

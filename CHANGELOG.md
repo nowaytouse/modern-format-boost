@@ -6,6 +6,30 @@ All notable changes to this project will be documented in this file.
 
 ## [0.11.1] — 2026-04-03
 
+#### 🧪 Test Suite Repair
+
+- **Loop Intent Test Fixes**: Fixed 4 failing tests caused by developer bypass rules (Layer 1-C/1-D) intercepting test inputs before reaching Layer 4 logic.
+  - **Root Cause**: `ENV_FORCE_SHORT_GIFS` and `ENV_INTERCEPT_LONG_SILENT` default to enabled, causing short-duration test fixtures to hit Layer 1-C (forceful short asset pass) instead of the intended Layer 4 content analysis path.
+  - **Fix**: `verdict_with_profile()` now temporarily disables both env vars during test execution, restoring them afterward.
+  - **Files**: `shared_utils/src/loop_intent.rs`, `vid_hevc/src/conversion_api.rs`
+- **Missing Test Field**: Added `is_native_gif: true` to `gif_value_db.rs` test `base_meta()` fixture to match the updated `LoopMeta` struct.
+  - **File**: `shared_utils/src/gif_value_db.rs`
+
+#### 🔊 gifski Error Visibility
+
+- **Removed `--quiet` Flag**: gifski conversion now exposes stderr output for debugging.
+- **Structured Error Logging**: Added `tracing::error!` with input path, stderr content, and exit code on failure.
+  - **Before**: Silent failure — only knew gifski failed, not why.
+  - **After**: Clear error messages in logs for troubleshooting.
+  - **Files**: `vid_hevc/src/animated_image.rs`, `vid_av1/src/animated_image.rs`
+
+#### 🌐 Code Comment & Keyword Localization
+
+- **Chinese → English**: Translated inline code comments and log messages across the workspace for consistency.
+  - **Files**: `shared_utils/src/loop_intent.rs`, `shared_utils/src/gif_value_db.rs`, `vid_hevc/src/animated_image.rs`, `vid_hevc/src/conversion_api.rs`, `vid_av1/src/conversion_api.rs`
+- **Meme Directory Keywords**: Replaced Chinese keywords (表情包, 表情, 贴纸, 斗图, 梗图, 梗) with English equivalents (sticker_pack, sticker_pkg, sticker_collection, meme_collection, funny, humor) in `loop_intent.rs` and `backfill_directory_scores.py`.
+  - **Rationale**: Directory names in the collection are English-based; Chinese keywords had zero match rate.
+
 #### 🧠 Feature Stats v1 Refresh & Database Type Fix
 
 - **PostgreSQL NUMERIC Type Conversion Fix**: Resolved a critical type mismatch in `refresh_feature_stats()` where `AVG(BIGINT)` returns `NUMERIC` instead of `DOUBLE PRECISION`.
@@ -367,7 +391,7 @@ All notable changes to this project will be documented in this file.
 - **Active Learning Database Hardening (KNN)**: Solved the "echo chamber" problem where machine-labeled metadata merely repeated the rule engine's biases.
   - KNN predictions derived from `auto`-labeled samples now suffer a heavy distance penalty (0.8).
   - Human-labeled samples (`cli_ingest`) strictly override overlapping rules.
-  - **Dataset Iteration (v4)**: Re-ingested 1840+ high-quality human-labeled samples from the primary meme/sticker collection (Telegram, X, 小红书，哔哩哔哩).
+  - **Dataset Iteration (v4)**: Re-ingested 1840+ high-quality human-labeled samples from the primary meme/sticker collection (Telegram, X, Xiaohongshu, Bilibili).
   - **Sigma-Normalized Euclidean Distance**: Updated global feature statistics (Mean/StdDev) in the seeded dataset to ensure distances are computed using the latest feature distributions.
   - **Database Re-export for 0.11.1**: Regenerated `default_samples.sql` from production database (`gif_value_samples_v4.db`) with synchronized timestamps (2026-03-31).
 - **Enhanced Meme Scoring System (v4)**:
@@ -1426,7 +1450,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
 #### High-Fidelity Algorithm & Quality Logic
 
 - **Extreme Mode Saturation Search**: Implemented **0.01-precision** CRF fine-tuning to ensure video quality reaches the "Physical Red Line" (Saturation).
-- **3D 3rd-Generation Quality Gate**: Integrated **VMAF-Y** (Perceptual), **PSNR-UV** (Chroma保真度), and **CAMBI** (Banding detection) for exhaustive verification.
+- **3D 3rd-Generation Quality Gate**: Integrated **VMAF-Y** (Perceptual), **PSNR-UV** (Chroma Fidelity), and **CAMBI** (Banding detection) for exhaustive verification.
 - **Sprint & Backtrack Optimization**: Search performance leap using double-step sprints (up to 1.6x) and precise 0.1-step rollbacks on overshoot.
 - **Unified 1MB Size Tolerance**: Standardized size increase checks (1,048,576 bytes) workspace-wide to ensure high-quality leaps remain balanced with file size.
 
@@ -2185,7 +2209,7 @@ Major refactoring of the automation layer, migrating core scripts from Bash to P
     ```
     🗑️  JPEG (Sanitized) -> JXL output deleted: larger than input by 76.1% (tolerance: 1.0%)
     📊 Size comparison: 238543 → 419973 bytes (+76.1%)
-    📋 Original copied to: /tmp/test_output/IMG_6171_副本.jpeg
+    📋 Original copied to: /tmp/test_output/IMG_6171_Copy.jpeg
     ```
 
   - **File modified**: `shared_utils/src/conversion.rs` (`check_size_tolerance` function)
@@ -2895,7 +2919,7 @@ All changes below are since 8.7.0.
 
 #### GIF Quality Verification (Root Out False Success)
 
-- **Removed Unsafe Fallback**: GIF files no longer use SSIM-only or explore-SSIM as a兜底 (fallback) when MS-SSIM fails. Previously, this could mark verification as "passed" when it was incomplete.
+- **Removed Unsafe Fallback**: GIF files no longer use SSIM-only or explore-SSIM as a fallback when MS-SSIM fails. Previously, this could mark verification as "passed" when it was incomplete.
 - **Explicit Error Reporting**: Now loudly reports error to stderr and `result.log` when GIF quality verification cannot be completed. `ms_ssim_passed = Some(false)` is set explicitly.
 - **Impact**: Prevents potential quality loss from false-positive verification results.
 
@@ -2970,29 +2994,29 @@ All changes below are since 8.7.0.
 
 ## [8.6.0] - 2026-02-24
 
-### 🎬 MS-SSIM 极限模式时长参数
+### 🎬 MS-SSIM Ultimate Mode Duration Parameters
 
-- **极限模式（--ultimate）**：MS-SSIM 跳过阈值由 5 分钟改为 **25 分钟**；仅当视频 >25 分钟时才跳过 MS-SSIM、仅用 SSIM 验证。
-- **实现**：`gpu_coarse_search`、`video_explorer.validate_quality` 在 ultimate 下使用 25 min 阈值；`ssim_calculator.calculate_ms_ssim_yuv` 新增参数 `max_duration_min`（5.0 或 25.0），日志中显示对应阈值（如「≤25min」/「>25min」）。
-- **文档**：CODE_AUDIT.md 新增 34 节「极限模式下 MS-SSIM 跳过阈值延长（25 分钟）」。
+- **Ultimate Mode (--ultimate)**: MS-SSIM skip threshold changed from 5 minutes to **25 minutes**; skip MS-SSIM and use SSIM only if video >25 minutes.
+- **Implementation**: `gpu_coarse_search`, `video_explorer.validate_quality` use 25 min threshold in ultimate mode; `ssim_calculator.calculate_ms_ssim_yuv` added `max_duration_min` parameter (5.0 or 25.0), logs show total threshold (e.g., "≤25min" / ">25min").
+- **Documentation**: New Section 34 in CODE_AUDIT.md: "Extension of MS-SSIM Skip Threshold in Ultimate Mode (25 Minutes)".
 
 ## [8.5.1] - 2026-02-23
 
-### 📋 Audit follow-up (文档与可见性)
+### 📋 Audit follow-up (Documentation & Visibility)
 
-#### 算法与设计文档
+#### Algorithm & Design Documentation
 
-- **Phase 2 搜索**（`video_explorer.rs`）：补充注释——CRF–SSIM 单调性假设；为何采用单点黄金比例而非完整黄金分割搜索（实现简单、每轮同样 1 次编码，仅可能多 1～2 次编码）。
-- **迭代上限**（`video_explorer.rs`）：为长视频/超长视频的迭代上限常量添加文档，说明「更长视频 → 更低迭代上限」为有意为之的成本/精度权衡。
-- **效率因子**（`quality_matcher.rs`）：模块与 `efficiency_factor()` 的文档中注明 H.264/HEVC/AV1 等为经验相对效率，可参考编解码比较研究，无单一权威引用。
+- **Phase 2 Search** (`video_explorer.rs`): Add comments - CRF-SSIM monotonicity assumption; why a single-point golden ratio search is used instead of a full golden section search (simpler implementation, same 1 encode per round, potentially only 1-2 more encodes).
+- **Iteration Limit** (`video_explorer.rs`): Add docs for iteration limit constants for long/ultra-long videos, explaining "longer video -> lower iteration limit" as an intentional cost/precision trade-off.
+- **Efficiency Factor** (`quality_matcher.rs`): Note in docs for module and `efficiency_factor()` that H.264/HEVC/AV1 efficiencies are empirical and based on codec comparison research, with no single authoritative reference.
 
-#### 质量验证可见性
+#### Quality Verification Visibility
 
-- **长视频跳过 MS-SSIM**：在 `ssim_calculator.rs`、`gpu_coarse_search.rs`、`video_explorer.rs`、`msssim_sampling.rs` 四处，将「跳过 MS-SSIM」的日志统一为带 ⚠️ 的警告级表述（"Quality verification: … MS-SSIM skipped"），便于用户知晓质量验证降级为仅 SSIM。
+- **Long video skip MS-SSIM**: Standardize "Quality verification: ... MS-SSIM skipped" logs to ⚠️ warning level across `ssim_calculator.rs`, `gpu_coarse_search.rs`, `video_explorer.rs`, and `msssim_sampling.rs`.
 
-#### 审计文档
+#### Audit Documentation
 
-- **CODE_AUDIT.md**：新增「为何不用完整黄金分割搜索」说明；与代码注释一致。
+- **CODE_AUDIT.md**: New explanation for "Why full Golden Section Search is not used"; consistent with code comments.
 
 ## [8.5.0] - 2026-02-23
 
@@ -3161,10 +3185,10 @@ This section reconstructs the detailed development history, transforming 1400+ r
 
 ### 🔨 Other Changes
 
-- 清理: 删除110+个临时测试脚本
-- 清理: 删除临时清理脚本
-- 🔒 元数据安全性修复：金标准重构 + 源头预防 Brotli 损坏
-- 🍎 Apple 兼容模式条件化修复：Brotli 元数据损坏问题 100% 解决
+- Cleanup: Delete 110+ temporary test scripts
+- Cleanup: Delete temporary cleanup scripts
+- 🔒 Metadata security fix: Gold standard refactor + source prevention of Brotli corruption
+- 🍎 Apple compatibility mode conditional fix: Brotli metadata corruption 100% resolved
 - Enhance HEIC detection and smart correction handling
 - Update dependencies to latest versions
 - Update dependencies: tempfile 3.20, proptest 1.7
@@ -3184,7 +3208,7 @@ This section reconstructs the detailed development history, transforming 1400+ r
 
 ### 🔨 Other Changes
 
-- 🔥 v7.9.10: 用心跳检测替代FFmpeg超时机制
+- 🔥 v7.9.10: Use heartbeat detection instead of FFmpeg timeout mechanism
 
 ## [7.9.9] - 2026-02-07
 
@@ -3201,7 +3225,7 @@ This section reconstructs the detailed development history, transforming 1400+ r
 
 ### 🐛 Bug Fixes
 
-- 🛠️ 综合修复与性能优化 / Comprehensive Fixes & Enhancements
+- 🛠️ Comprehensive Fixes & Enhancements
 
 ### 🔨 Other Changes
 
@@ -3250,15 +3274,15 @@ This section reconstructs the detailed development history, transforming 1400+ r
 
 ### 🐛 Bug Fixes
 
-- 🔧 v7.8: 修复关键统计BUG - JXL转换应用1%容差机制
+- 🔧 v7.8: Fix critical stats BUG - JXL conversion applying 1% tolerance mechanism
 
 ### 🔨 Other Changes
 
-- 🎯 v7.8: 优化容差为1%，符合精确控制理念
+- 🎯 v7.8: Optimize tolerance to 1%, aligning with precise control philosophy
 
 ### 🚀 Performance & Refactoring
 
-- 🔧 v7.8: 完成容差机制和GIF修复验证
+- 🔧 v7.8: Complete tolerance mechanism and GIF fix verification
 
 ## [7.7.0] - 2026-01-20
 
@@ -3273,7 +3297,7 @@ This section reconstructs the detailed development history, transforming 1400+ r
 
 ### ✨ Features
 
-- MS-SSIM性能优化 - 10倍速度提升
+- MS-SSIM performance optimization - 10x speed boost
 
 ## [7.5.1] - 2026-01-20
 
@@ -3314,25 +3338,25 @@ This section reconstructs the detailed development history, transforming 1400+ r
 
 ### 🚀 Performance & Refactoring
 
-- 🔧 v7.4.7: 无遗漏设计 - 所有文件类型保留元数据
+- 🔧 v7.4.7: No-omission design - Preserving metadata for all file types
 
 ## [7.4.6] - 2026-01-18
 
 ### 🚀 Performance & Refactoring
 
-- 🔧 v7.4.6: 统一四个工具的目录元数据保留
+- 🔧 v7.4.6: Unify directory metadata preservation across four tools
 
 ## [7.4.5] - 2026-01-18
 
 ### 🐛 Bug Fixes
 
-- 🔧 v7.4.5: 彻底修复文件夹结构BUG - 所有复制点使用 smart_file_copier
+- 🔧 v7.4.5: Completely fix folder structure BUG - all copy points use smart_file_copier
 
 ## [7.4.4] - 2026-01-18
 
 ### 🚀 Performance & Refactoring
 
-- 🔧 v7.4.4: 修复进度条混乱 + smart_build.sh bash 3.x 兼容
+- 🔧 v7.4.4: Fix progress bar clutter + smart_build.sh bash 3.x compatibility
 
 ## [7.4.3] - 2026-01-18
 
@@ -3354,26 +3378,26 @@ This section reconstructs the detailed development history, transforming 1400+ r
 
 ### 🐛 Bug Fixes
 
-- 确认目录结构保留功能正常工作
-- 清理过时编译产物并修正双击脚本路径
-- 修复跳过文件复制时不保留目录结构和时间戳的严重BUG
-- 确保复制文件时保留元数据和合并 XMP
+- Verify directory structure preservation works correctly
+- Cleanup obsolete build artifacts and correct double-click script paths
+- Fix: Critical BUG where skipping file copy didn't preserve directory structure and timestamps
+- Ensure metadata preservation and XMP merging during file copy
 - 🚨 v7.4.1: CRITICAL FIX - Use smart_file_copier module
 
 ### 📝 Documentation
 
-- 添加元数据保留功能文档
+- Add metadata preservation feature documentation
 
 ### 🔨 Other Changes
 
-- 改进PNG→JXL管道 + 修复元数据保留
-- 重构: 修复 VMAF/MS-SSIM 常量和测试，模块化重复代码
-- 修复: 移除脚本中不存在的 --verbose 参数
-- 功能: 添加 verbose 模式支持
-- 功能: 保留目录结构 (WIP - imgquality-hevc)
-- 修复: 完成所有工具的 base_dir 支持
-- 文档: 目录结构保留功能实现状态
-- 修复: 双击脚本正确传递 --recursive 参数
+- Enhance PNG→JXL pipeline + fix metadata preservation
+- Refactor: fix VMAF/MS-SSIM constants and tests, modularize repetitive code
+- Fix: remove non-existent --verbose argument from scripts
+- Feature: add verbose mode support
+- Feature: preserve directory structure (WIP - imgquality-hevc)
+- Fix: complete base_dir support for all tools
+- Documentation: implementation status of directory structure preservation
+- Fix: correctly pass --recursive argument in double-click scripts
 
 ### 🚀 Performance & Refactoring
 
@@ -3387,7 +3411,7 @@ This section reconstructs the detailed development history, transforming 1400+ r
 
 ### 🔨 Other Changes
 
-- 修复日志分析发现的问题1/3/4/5
+- Fix: Resolving issues found in log analysis (IDs 1, 3, 4, 5)
 
 ## [7.3.5] - 2026-01-18
 
@@ -3417,9 +3441,9 @@ This section reconstructs the detailed development history, transforming 1400+ r
 
 ### 🔨 Other Changes
 
-- 最终验证多层fallback设计科学性
-- 解释Layer 4为何用SSIM Y而非PSNR
-- 日志分析报告 - 发现5个关键问题
+- Final validation of the multi-layer fallback design logic
+- Explain: Why Layer 4 uses SSIM Y instead of PSNR
+- Log Analysis Report: 5 critical issues identified
 
 ## [7.2.0] - 2026-01-18
 
@@ -3437,7 +3461,7 @@ This section reconstructs the detailed development history, transforming 1400+ r
 
 - 🔬 Critical Finding: vmaf float_ms_ssim is Y-channel only
 - 🔄 Switch to ffmpeg libvmaf priority (now installed)
-- 验证ffmpeg libvmaf多通道支持 - 确认MS-SSIM为亮度通道算法
+- Verify FFmpeg libvmaf multi-channel support: confirm MS-SSIM is a luminance channel algorithm
 
 ### 🚀 Performance & Refactoring
 
@@ -3483,36 +3507,36 @@ This section reconstructs the detailed development history, transforming 1400+ r
 
 ### 🐛 Bug Fixes
 
-- 添加转换差异分析和修复脚本
+- Add conversion discrepancy analysis and repair scripts
 
 ### 🔨 Other Changes
 
-- XMP合并优先策略
+- XMP Merging Priority Strategy
 
 ## [6.9.15] - 2026-01-16
 
 ### 🔨 Other Changes
 
-- 无遗漏设计 - 不支持文件的XMP处理
+- No-omission design: Handling XMP for unsupported files
 
 ## [6.9.14] - 2026-01-16
 
 ### 🔨 Other Changes
 
-- 无遗漏设计 - 失败文件回退复制
+- No-omission design: Fallback copy for failed files
 
 ## [6.9.13] - 2026-01-16
 
 ### 🔨 Other Changes
 
-- 无遗漏设计 - 处理全部文件
-- 无遗漏设计 - 核心实现移至Rust
+- No-omission design: Processing all files
+- No-omission design: Core implementation moved to Rust
 
 ## [6.9.12] - 2026-01-16
 
 ### 🔨 Other Changes
 
-- 格式支持增强 + 验证机制
+- Format support enhancement + verification mechanism
 
 ## [6.9.9] - 2025-12-25
 
@@ -3577,8 +3601,8 @@ This section reconstructs the detailed development history, transforming 1400+ r
 
 ### 🐛 Bug Fixes
 
-- VP8/VP9压缩失败和GPU搜索范围问题
-- MS-SSIM功能修复
+- Resolving VP8/VP9 compression failure and GPU search range issues
+- MS-SSIM functionality fix
 - Clamp MS-SSIM to valid range [0, 1]
 
 ### 🔨 Other Changes
@@ -3609,7 +3633,7 @@ This section reconstructs the detailed development history, transforming 1400+ r
 ### 🐛 Bug Fixes
 
 - 🔧 v6.8: Fix FPS parsing - correct ffprobe field order
-- CRF超出范围导致编码失败 + dead_code警告
+- Resolving CRF out-of-range encoding failure + dead_code warnings
 - Fix evaluation consistency - use pure video stream comparison
 
 ## [6.7.0] - 2025-12-18
@@ -3622,7 +3646,7 @@ This section reconstructs the detailed development history, transforming 1400+ r
 
 ### 🐛 Bug Fixes
 
-- 修复 CPU Fine-Tune 阶段长视频卡死问题
+- Fix: resolve long video hang during CPU Fine-Tune phase
 
 ## [6.6.0] - 2025-12-16
 
@@ -3634,7 +3658,7 @@ This section reconstructs the detailed development history, transforming 1400+ r
 
 ### 🔨 Other Changes
 
-- 取消硬上限机制，改为保底机制
+- Remove hard-cap mechanism and implement a floor-based guarantee mechanism
 
 ## [6.5.0] - 2025-12-16
 
@@ -3646,26 +3670,26 @@ This section reconstructs the detailed development history, transforming 1400+ r
 
 ### ✨ Features
 
-- 代码质量与安全性修复
+- Code quality and security fixes
 
 ### 🐛 Bug Fixes
 
-- doctest ignore 标记修复
+- Fix: doctest ignore marker adjustments
 
 ## [6.4.8] - 2025-12-16
 
 ### ✨ Features
 
-- 苹果兼容模式使用 MOV 容器格式
-- Revert "feat(v6.4.8): 苹果兼容模式使用 MOV 容器格式"
-- --apple-compat 模式使用 MOV 容器格式
-- vidquality_hevc 也支持 --apple-compat MOV 输出
+- Apple compatibility mode: use MOV container format
+- Revert "feat(v6.4.8): use MOV container format for Apple compatibility mode"
+- --apple-compat mode using MOV container format
+- vidquality_hevc now supports --apple-compat MOV output
 
 ## [6.4.7] - 2025-12-16
 
 ### ✨ Features
 
-- 代码质量修复 - CrfCache精度升级/GPU临时文件扩展名/FFmpeg进程管理
+- Code Quality Fixes: CrfCache precision upgrade / GPU temp file extensions / FFmpeg process management
 
 ## [6.4.6] - 2025-12-16
 
@@ -3734,7 +3758,7 @@ This section reconstructs the detailed development history, transforming 1400+ r
 
 ### 🔨 Other Changes
 
-- 激进撞墙算法 - 扩大CPU搜索范围(3→15 CRF)
+- Aggressive Search Algorithm: Expand CPU search range (3→15 CRF)
 
 ## [5.94.0] - 2025-12-16
 
@@ -3746,43 +3770,43 @@ This section reconstructs the detailed development history, transforming 1400+ r
 
 ### 🔨 Other Changes
 
-- 智能撞墙算法 - 质量墙检测
+- Intelligent Search Algorithm: Quality Wall detection
 
 ## [5.91.0] - 2025-12-16
 
 ### 🔨 Other Changes
 
-- 🔥 v5.91: 强制过头策略 - 必须找到真正边界
+- 🔥 v5.91: Forced Overshoot strategy - must find true boundary
 
 ## [5.90.0] - 2025-12-16
 
 ### 🔨 Other Changes
 
-- 🔥 v5.90: CPU自适应动态步进 - 数学公式驱动（用户建议）
+- 🔥 v5.90: CPU adaptive dynamic stepping - mathematically driven (user suggestion)
 
 ## [5.89.0] - 2025-12-16
 
 ### 🔨 Other Changes
 
-- 🔥 v5.89: CPU步进算法深入改进 - 递进式步长+过头回退
+- 🔥 v5.89: Deep improvements to CPU stepping algorithm - progressive step size + overshoot backtrack
 
 ## [5.88.0] - 2025-12-16
 
 ### 🔨 Other Changes
 
-- 🔥 v5.88: 进度条统一 - DetailedCoarseProgressBar
+- 🔥 v5.88: Unified progress bars – DetailedCoarseProgressBar
 
 ## [5.87.0] - 2025-12-16
 
 ### 🔨 Other Changes
 
-- 🔥 v5.87: VMAF与SSIM协同改进 - 5分钟阈值
+- 🔥 v5.87: VMAF-SSIM synergy improvements - 5-minute threshold
 
 ## [5.83.0] - 2025-12-16
 
 ### ✨ Features
 
-- CPU步进算法v5.87 - 自适应大步长+边际效益+GPU对比
+- CPU Stepping Algorithm v5.87: Adaptive large steps + marginal benefits + GPU comparison
 
 ### 🔨 Other Changes
 
@@ -3826,14 +3850,14 @@ This section reconstructs the detailed development history, transforming 1400+ r
 
 ### 🔨 Other Changes
 
-- VMAF-SSIM synergy - 探索用SSIM，验证用VMAF
+- VMAF-SSIM synergy: SSIM for exploration, VMAF for verification
 
 ## [5.74.0] - 2025-12-15
 
 ### 🔨 Other Changes
 
-- 备份 - 开始透明度改进 spec
-- 透明度改进 - PSNR→SSIM映射 + Preset一致性 + Mock测试
+- Backup: Beginning Transparency Improvement Specification
+- Transparency Improvement: PSNR→SSIM mapping + Preset consistency + Mock testing
 
 ## [5.72.0] - 2025-12-15
 
@@ -3855,235 +3879,235 @@ This section reconstructs the detailed development history, transforming 1400+ r
 
 ### 🔨 Other Changes
 
-- 🔥 v5.70: Smart Build System - 智能编译系统
+- 🔥 v5.70: Smart Build System
 
 ## [5.67.1] - 2025-12-15
 
 ### 🔨 Other Changes
 
-- 全面英语化输出日志
+- Comprehensive English localization of output logs
 
 ## [5.67.0] - 2025-12-15
 
 ### 🔨 Other Changes
 
-- 边际效益递减算法 + 颜色UI改进
+- Diminishing returns algorithm + color UI improvements
 
 ## [5.66.0] - 2025-12-15
 
 ### 🔨 Other Changes
 
-- GPU 质量天花板概念 + 分层接力策略基础
+- GPU Quality Ceiling concept + foundation of layered hand-off strategy
 
 ## [5.65.0] - 2025-12-15
 
 ### 🔨 Other Changes
 
-- GPU 精细搜索后 CPU 窄范围验证
+- GPU refined search followed by narrow-range CPU verification
 
 ## [5.64.0] - 2025-12-15
 
 ### 🔨 Other Changes
 
-- GPU 多段采样策略
+- GPU multi-stage sampling strategy
 
 ## [5.63.0] - 2025-12-15
 
 ### 🔨 Other Changes
 
-- 双向验证 + 压缩保证
+- Bidirectional verification + compression guarantee
 
 ## [5.62.0] - 2025-12-15
 
 ### 🔨 Other Changes
 
-- 双向验证+压缩保证 - 修复搜索方向，确保最高SSIM且能压缩
+- Bidirectional verification + compression guarantee: fix search direction, ensure highest SSIM and compressibility
 
 ## [5.61.0] - 2025-12-15
 
 ### 🔨 Other Changes
 
-- 动态自校准GPU→CPU映射系统 - 通过实测建立精确映射
+- Dynamic self-calibrating GPU→CPU mapping system – establish precision mapping via testing
 
 ## [5.60.0] - 2025-12-15
 
 ### 🔨 Other Changes
 
-- 保守智能跳过策略 - 连续3个CRF大小变化<0.1%才跳过
-- CPU全片编码策略 - 100%准确度，移除采样误差
+- Conservative smart skip strategy - skip only after 3 consecutive CRF size changes <0.1%
+- CPU full-slice encoding strategy - 100% accuracy, remove sampling bias
 
 ## [5.59.0] - 2025-12-15
 
 ### 🔨 Other Changes
 
-- 可压缩空间检测 + 动态精度选择
+- Compressible space detection + dynamic precision selection
 
 ## [5.58.0] - 2025-12-15
 
 ### 🔨 Other Changes
 
-- 最终编码实时进度显示
+- Real-time progress display for final encoding
 
 ## [5.57.0] - 2025-12-15
 
 ### 🔨 Other Changes
 
-- 添加置信度评分系统
+- Add Confidence Scoring system
 
 ## [5.56.0] - 2025-12-15
 
 ### 🔨 Other Changes
 
-- 添加预检查(BPP分析)和GPU→CPU自适应校准
+- Add Pre-check (BPP analysis) and GPU-to-CPU adaptive calibration
 
 ## [5.55.0] - 2025-12-15
 
 ### 🔨 Other Changes
 
-- 🔥 v5.55: 恢复三阶段结构 + 智能提前终止
-- 🔥 v5.55: CPU 精度调整 0.1 → 0.25（速度提升 2-3 倍）
+- 🔥 v5.55: Restore three-stage structure + smart early termination
+- 🔥 v5.55: CPU precision adjusted 0.1 → 0.25 (2-3x speedup)
 
 ## [5.54.0] - 2025-12-14
 
 ### 🐛 Bug Fixes
 
-- 🔥 v5.54: 修复 CPU 采样导致最终输出不完整的严重 BUG
+- 🔥 v5.54: Fix critical BUG where CPU sampling resulted in incomplete final output
 
 ### 🔨 Other Changes
 
-- 📦 v5.54 稳定版本备份 - 准备开始柔和改进
+- 📦 v5.54 Stable Backup – preparing for soft enhancements
 
 ## [5.53.0] - 2025-12-14
 
 ### 🔨 Other Changes
 
-- 🔥 v5.53: 修复 GPU 迭代限制 + CPU 采样编码
+- 🔥 v5.53: Fix GPU iteration limits + CPU sampling encoding
 
 ## [5.52.0] - 2025-12-14
 
 ### 🔨 Other Changes
 
-- 🔥 v5.52: 完整重构 GPU 搜索 - 智能采样 + SSIM+大小组合决策 + 收益递减
+- 🔥 v5.52: Fully refactor GPU search – smart sampling + SSIM & size combo decision + diminishing returns
 
 ## [5.51.0] - 2025-12-14
 
 ### 🔨 Other Changes
 
-- 🔥 v5.51: 简化 GPU Stage 3 搜索逻辑 - 0.5 步长 + 最多 3 次尝试
+- 🔥 v5.51: Simplify GPU Stage 3 search logic - 0.5 step + max 3 attempts
 
 ## [5.50.0] - 2025-12-14
 
 ### 🔨 Other Changes
 
-- 🔥 v5.50: GPU 搜索目标改为 SSIM 上限 + 10分钟采样
+- 🔥 v5.50: GPU search target changed to SSIM upper bound + 10-min sampling
 
 ## [5.49.0] - 2025-12-14
 
 ### 🔨 Other Changes
 
-- 🔥 v5.49: 增加 GPU 采样时长 - 提高映射精度
+- 🔥 v5.49: Increase GPU sampling duration - improve mapping precision
 
 ## [5.48.0] - 2025-12-14
 
 ### 🔨 Other Changes
 
-- 🔥 v5.48: 简化 CPU 搜索 - 仅在 GPU 边界附近微调
+- 🔥 v5.48: Simplify CPU search - fine-tune only near GPU boundaries
 
 ## [5.47.0] - 2025-12-14
 
 ### 🔨 Other Changes
 
-- 🔥 v5.47: 完全重写 GPU Stage 1 搜索 - 双向智能边界探测
+- 🔥 v5.47: Rewrite GPU Stage 1 search - bidirectional smart boundary detection
 
 ## [5.46.0] - 2025-12-14
 
 ### 🔨 Other Changes
 
-- 🔥 v5.46: 修复 GPU 搜索方向 - 使用 initial_crf 作为起点
+- 🔥 v5.46: Fix GPU search direction - use initial_crf as starting point
 
 ## [5.45.0] - 2025-12-14
 
 ### 🔨 Other Changes
 
-- 🔥 v5.45: 智能搜索算法 - 收益递减终止 + 压缩率修复
+- 🔥 v5.45: Smart search algorithm - diminishing returns termination + compression ratio fix
 
 ## [5.44.0] - 2025-12-14
 
 ### 🔨 Other Changes
 
-- 🔥 v5.44: 简化超时逻辑 - 仅保留 12 小时底线超时，响亮 Fallback
+- 🔥 v5.44: Simplify timeout logic - only 12h baseline timeout, explicit Fallback
 
 ## [5.43.0] - 2025-12-14
 
 ### 🔨 Other Changes
 
-- 🔥 v5.43: GPU编码超时保护 + I/O优化 - 完全修复Phase 1挂起
+- 🔥 v5.43: GPU encoding timeout protection + I/O optimization - fully fix Phase 1 hang
 
 ## [5.42.0] - 2025-12-14
 
 ### 🔨 Other Changes
 
-- 🔥 v5.42: 完全修复键盘输入污染 - 实时进度更新
+- 🔥 v5.42: Fully fix keyboard input pollution - real-time progress updates
 
 ## [5.41.0] - 2025-12-14
 
 ### 🔨 Other Changes
 
-- 🔥 v5.41: 激进的键盘输入防护 - 多重防线完全禁用终端输入
+- 🔥 v5.41: Aggressive keyboard input protection - multi-layer defense to disable terminal input
 
 ## [5.40.0] - 2025-12-14
 
 ### 🔨 Other Changes
 
-- 🔥 v5.40: 修复编译警告 + 改进构建脚本
+- 🔥 v5.40: Fix compilation warnings + improve build scripts
 
 ## [5.39.0] - 2025-12-14
 
 ### 🔨 Other Changes
 
-- 🔥 v5.39: 键盘输入保护 - 移除冻结 hidden() 模式，改用 100Hz 刷新 + 强化终端设置
+- 🔥 v5.39: Keyboard protection - remove frozen hidden() mode, use 100Hz refresh + hardened terminal settings
 
 ## [5.38.0] - 2025-12-14
 
 ### 🔨 Other Changes
 
-- 🔥 v5.38: 完全修复键盘输入污染 - 实现 + 验证成功
+- 🔥 v5.38: Fully fix keyboard input pollution - implementation + validation successful
 
 ## [5.36.0] - 2025-12-14
 
 ### 🔨 Other Changes
 
-- 🔥 v5.36: 多层键盘交互防护 - 彻底阻止终端输入干扰
+- 🔥 v5.36: Multi-layer keyboard protection - completely prevent terminal input interference
 
 ## [5.35.0] - 2025-12-14
 
 ### 🔨 Other Changes
 
-- 🔥 v5.35: 修复进度条冻结 - 禁用GPU并行探测阻塞
-- 🔥 v5.35: 防止键盘干扰 - 禁用终端echo
-- 🔥 v5.35: 脚本强制重新编译 - 确保使用最新代码修复
-- 🔥 v5.35: 改进终端控制 - 禁用icanon和输入缓冲
-- 🔥 v5.35: 三重修复 - 解决进度条冻结+终端崩溃+慢速编码
-- 🔥 v5.35: 最终方案 - 在shell层面禁止键盘输入
-- 🔥 v5.35: 防止刷屏 - 静默模式禁用GPU搜索详细日志
-- 🔥 v5.35: 彻底简化进度显示 - 移除旧进度条混乱
-- 🔥 v5.35: 最终方案 - 关闭stdin文件描述符
+- 🔥 v5.35: Fix progress bar freeze - disable GPU parallel probe blocking
+- 🔥 v5.35: Prevent keyboard interference - disable terminal echo
+- 🔥 v5.35: Script-forced recompilation - ensure fixes use latest code
+- 🔥 v5.35: Improve terminal control - disable icanon and input buffering
+- 🔥 v5.35: Triple fix - solve progress bar freeze + terminal crash + slow encoding
+- 🔥 v5.35: Final solution - disable keyboard input at the shell level
+- 🔥 v5.35: Prevent screen flooding - quiet mode disables detailed GPU search logs
+- 🔥 v5.35: Completely simplify progress display - remove legacy progress bar clutter
+- 🔥 v5.35: Final solution - close stdin file descriptor
 
 ## [5.34.0] - 2025-12-14
 
 ### ✨ Features
 
-- 🚀 v5.34: 进度条重构 - 基于迭代计数（GPU部分已修复）
+- 🚀 v5.34: Progress bar refactor - based on iteration count (GPU part fixed)
 
 ### 🔨 Other Changes
 
-- 🔥 v5.34: 完全重构进度条系统 - 从CRF映射→迭代计数
+- 🔥 v5.34: Fully refactor progress bar system - from CRF mapping → iteration count
 
 ## [5.33.0] - 2025-12-14
 
 ### ✨ Features
 
-- 🚀 v5.33: 设计效率优化 + 进度条稳定性改进
+- 🚀 v5.33: Design efficiency optimization + progress bar stability improvements
 
 ## [5.25.0] - 2025-12-14
 
@@ -4161,8 +4185,8 @@ This section reconstructs the detailed development history, transforming 1400+ r
 
 ### ✨ Features
 
-- 添加完整会话日志记录功能
-- GIF 响亮报错+无遗漏设计(相邻目录)+校准stderr
+- Add comprehensive session logging feature
+- GIF loud errors + no-omission design (adjacent directories) + calibrated stderr
 - Complete consistency sweep: add allow_size_tolerance and no_allow_size_tolerance to all AV1 tools for full parity with HEVC tools.
 
 ### 🐛 Bug Fixes
@@ -4170,7 +4194,7 @@ This section reconstructs the detailed development history, transforming 1400+ r
 - Replace remaining Chinese error messages with English
 - Deep audit — 12 bug fixes across extension handling, pipelines, and tooling
 - Systematic code quality sweep — clippy, safety, error visibility
-- GIF 使用 FFmpeg 单步 libx265 校准，避免 Y4M→x265 管道失败
+- GIF uses single-step FFmpeg libx265 calibration, avoiding Y4M→x265 pipeline failure
 - 🎨 Audit: Unified code style and syntax fixes
 - Fix recursive directory processing consistency across all tools, restore JXL extension support in file copier, and add directory analysis support to video tools.
 - Replace standalone JXL fixer with unified Apple Photos repair script in drag_and_drop_processor.sh.
@@ -4207,25 +4231,25 @@ This section reconstructs the detailed development history, transforming 1400+ r
 
 ### 🔨 Other Changes
 
-- 修复 GPU 粗略搜索性能和日志重复问题
+- Fix GPU coarse search performance and log duplication issues
 
 ## [5.1.3] - 2025-12-13
 
 ### 🔨 Other Changes
 
-- 修复 - 实际调用新的 GPU+CPU 智能探索函数 - vidquality_hevc 和 imgquality_hevc 的 PreciseQualityWithCompress 模式现在使用 explore_hevc_with_gpu_coarse - 之前的代码仍然调用旧的 explore_precise_quality_match_with_compression_gpu
+- Fix - actually call new GPU+CPU smart exploration function - vidquality_hevc and imgquality_hevc PreciseQualityWithCompress modes now use explore_hevc_with_gpu_coarse
 
 ## [5.1.2] - 2025-12-13
 
 ### 🔨 Other Changes
 
-- 从双击 app 脚本中移除 --cpu flag - 移除 drag_and_drop_processor.sh 中的 --cpu flag - 撤回之前的忽略 --cpu flag 报告（没有意义） - 保留 Fallback 响亮报告
+- Remove --cpu flag from double-click app scripts - remove drag_and_drop_processor.sh --cpu flag - withdrawn report about ignoring --cpu flag (pointless) - preserved explicit Fallback reports
 
 ## [5.1.1] - 2025-12-13
 
 ### 🔨 Other Changes
 
-- 响亮报告 GPU 粗略搜索和 Fallback - GPU 粗略搜索阶段明确显示 --cpu flag 被忽略 - Fallback 情况都有醒目的框框提示
+- Explicitly report GPU coarse search and Fallback - GPU coarse search stage clearly indicates ignored --cpu flag - Fallback cases have eye-catching notification frames
 
 ## [5.1.0] - 2025-12-13
 
@@ -4240,7 +4264,7 @@ This section reconstructs the detailed development history, transforming 1400+ r
 ### 🔨 Other Changes
 
 - Verified animated image → video conversion
-- 🔥 v5.1: GPU 粗略搜索 + CPU 精细搜索智能化处理
+- 🔥 v5.1: Intelligent processing for GPU coarse search + CPU fine search
 
 ## [5.0.0] - 2025-12-13
 
@@ -4252,14 +4276,14 @@ This section reconstructs the detailed development history, transforming 1400+ r
 
 - correct CLI argument from --output-dir to --output
 - add ImageMagick fallback for cjxl 'Getting pixel data failed' errors
-- 🐛 修复：min_crf 能压缩时跳过精细调整阶段的问题
-- 🐛 修复：Phase 3 必须用 CPU 重新编码最终结果
+- 🐛 Fix: issue where fine-tuning adjustment was skipped when min_crf could compress
+- 🐛 Fix: Phase 3 must use CPU to re-encode the final result
 
 ### 🔨 Other Changes
 
-- 修复视频处理中'Output exists'被错误计为失败的问题
-- 🔥 根源修复：Output exists 返回跳过状态而非错误
-- 🔥 v5.0: 智能 GPU 控制 + 自动 fallback
+- Fix: 'Output exists' incorrectly counted as failure in video processing
+- 🔥 Root Fix: 'Output exists' returns skip status instead of error
+- 🔥 v5.0: Intelligent GPU control + automatic fallback
 
 ### 🚀 Performance & Refactoring
 
@@ -4289,75 +4313,75 @@ This section reconstructs the detailed development history, transforming 1400+ r
 
 ### 📝 Documentation
 
-- 🔥 v4.8: 性能优化 + CPU flag + README 更新
+- 🔥 v4.8: Performance optimization + CPU flag + README update
 
 ### 🔨 Other Changes
 
-- 🔥 v4.8: 性能优化 + 缓存机制
+- 🔥 v4.8: Performance optimization + caching mechanism
 
 ### 🚀 Performance & Refactoring
 
-- 🔧 v4.8: 代码统一 - 消除重复实现
+- 🔧 v4.8: Code unification - eliminating duplicate implementations
 
 ## [4.7.0] - 2025-12-13
 
 ### 🐛 Bug Fixes
 
-- 🔥 v4.7: Bug 修复 + 术语澄清
+- 🔥 v4.7: Bug Fix + Terminology clarification
 
 ## [4.6.0] - 2025-12-13
 
 ### 🔨 Other Changes
 
-- 🔥 v4.6: Flag 组合模块化 + 编译警告修复
-- 🔥 v4.6: 精度提升到 ±0.1 + 算法深度复盘文档
+- 🔥 v4.6: Modularized flag combinations + compilation warning fixes
+- 🔥 v4.6: Precision improved to ±0.1 + algorithm deep-dive documentation
 
 ## [4.5.0] - 2025-12-13
 
 ### 🔨 Other Changes
 
-- 精确质量匹配 - 恢复正确语义 + 高效搜索
-- 新增 --compress flag - 精确质量匹配 + 压缩
-- 添加单元测试 + 实际测试验证
+- Precise Quality Match - restored correct semantics + efficient search
+- Added --compress flag - Precise Quality Match + Compression
+- Added unit tests + real-world test verification
 
 ## [4.4.0] - 2025-12-13
 
 ### 🔨 Other Changes
 
-- 智能质量匹配 - 根本性设计改进
-- 修正术语 - 移除误导性的 AI 描述
+- Intelligent Quality Match - foundational design improvement
+- Corrected terminology - removed misleading AI descriptions
 
 ## [4.3.0] - 2025-12-13
 
 ### ✨ Features
 
-- v4.3 随机采样 + 多样性覆盖
-- 新增 XMP Merger Rust 模块 - 可靠的元数据合并
+- v4.3 Random sampling + diversity coverage
+- New XMP Merger Rust module - reliable metadata merging
 
 ### 🐛 Bug Fixes
 
-- 使用 Homebrew bash 5.x 支持 local -n 特性
+- Use Homebrew bash 5.x to support local -n feature
 
 ### 🔨 Other Changes
 
-- 使用 Homebrew bash 5.x 替代系统 bash 3.x
-- 优化搜索策略 - 大幅减少无意义迭代
+- Use Homebrew bash 5.x instead of system bash 3.x
+- Optimize search strategy - drastically reduce meaningless iterations
 
 ## [4.2.0] - 2025-12-13
 
 ### ✨ Features
 
-- 新增测试模式 v4.2
-- 🍎 Apple 兼容模式增强 - 现代动态图片智能转换
+- New test mode v4.2
+- 🍎 Apple compatibility mode enhanced - smart conversion for modern animated images
 
 ### 🐛 Bug Fixes
 
-- 测试模式修复 + 增强边缘案例采样
-- 修复测试模式采样问题
+- Test mode fix + enhanced edge-case sampling
+- Fix test mode sampling issues
 
 ### 🔨 Other Changes
 
-- 实时日志输出 - 解决长时间编码终端冻结问题
+- Real-time log output - solving terminal freeze during long encodings
 
 ### 🚀 Performance & Refactoring
 
@@ -4367,33 +4391,33 @@ This section reconstructs the detailed development history, transforming 1400+ r
 
 ### 🔨 Other Changes
 
-- 三重交叉验证 + 完整透明度
+- Triple cross-validation + full transparency
 
 ## [4.0.0] - 2025-12-13
 
 ### 🔨 Other Changes
 
-- 激进精度追求 - 无限逼近 SSIM=1.0
+- Aggressive precision pursuit - infinitely approaching SSIM=1.0
 
 ## [3.9.0] - 2025-12-13
 
 ### ✨ Features
 
 - Add XMP metadata merge before format conversion v3.9
-- 断点续传 + 原子操作保护
+- Breakpoint resumption + atomic operation protection
 
 ### 🐛 Bug Fixes
 
 - resolve clippy warnings and type errors
 - resolve remaining clippy warnings in imgquality_API
 - introduce AutoConvertConfig struct to fix too_many_arguments warning
-- XMP 合并时保留媒体文件的原始时间戳
-- 修复 metadata/timestamps 保留顺序问题
+- Preserving original media timestamps during XMP merge
+- Fix: metadata/timestamps preservation order issues
 - Fix --explore --match-quality to MATCH source quality, not minimize size
 
 ### 🔨 Other Changes
 
-- 🍎 苹果兼容模式裁判测试完善 + H.264 精度验证 + 编译警告修复
+- 🍎 Apple compatibility mode referee test refinement + H.264 precision verification + compile warning fix
 
 ### 🚀 Performance & Refactoring
 
@@ -4440,14 +4464,14 @@ This section reconstructs the detailed development history, transforming 1400+ r
 ### 🔨 Other Changes
 
 - Enhanced PNG lossy detection via IHDR chunk analysis
-- 🎯 v3.6: 三阶段高精度搜索算法 (±0.5 CRF)
+- 🎯 v3.6: Three-stage high-precision search algorithm (±0.5 CRF)
 
 ## [3.5.0] - 2025-12-12
 
 ### 🔨 Other Changes
 
 - Enhanced quality matching with full field support
-- 🔬 v3.5: 增强裁判机制 (Referee Mechanism Enhancement)
+- 🔬 v3.5: Referee Mechanism Enhancement
 
 ## [3.4.1] - 2026-01-31
 
@@ -4479,7 +4503,7 @@ This section reconstructs the detailed development history, transforming 1400+ r
 - add video_quality_detector module with 56 precision tests
 - expand precision tests for ffprobe and conversion modules
 - add comprehensive codec detection tests
-- 模块化探索功能 + 精确度规范
+- Modular exploration features + precision specifications
 - add --explore flag for animated→video conversion
 - enhance precision validation and SSIM/PSNR calculation
 
@@ -4500,7 +4524,7 @@ This section reconstructs the detailed development history, transforming 1400+ r
 
 ### ✨ Features
 
-- XMP Merger v2.0 - 增强可靠性
+- XMP Merger v2.0 - enhanced reliability
 - Expand XMP merger file type support and matching strategies
 - add checkpoint/resume support to XMP merger
 

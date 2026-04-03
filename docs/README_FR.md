@@ -9,7 +9,6 @@
 
 <p align="center">
   <strong>Moteur d'optimisation multimédia de nouvelle génération — zéro perte de qualité, compression maximale.</strong><br>
-  <em>下一代媒体优化引擎 — 画质零损失，体积最大压缩。</em>
 </p>
 
 ---
