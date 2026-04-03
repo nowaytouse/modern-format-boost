@@ -678,15 +678,6 @@ pub fn convert_to_avif(
     }
 }
 
-/// Convert to AV1 MP4 (lossy).
-///
-/// # Errors
-/// Returns an error if encoding fails.
-pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<ConversionResult> {
-    vid_av1::animated_image::convert_to_av1_mp4(input, options)
-        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))
-}
-
 /// Convert to AVIF losslessly.
 ///
 /// # Errors
@@ -771,64 +762,6 @@ pub fn convert_to_avif_lossless(
         }
         Err(e) => Err(ImgQualityError::ToolNotFound(format!(
             "avifenc not found: {e}"
-        ))),
-    }
-}
-
-/// Convert to AV1 MP4 with matched quality based on local analysis.
-///
-/// # Errors
-/// Returns an error if matching or encoding fails.
-pub fn convert_to_av1_mp4_matched(
-    input: &Path,
-    options: &ConvertOptions,
-    analysis: &crate::ImageAnalysis,
-) -> Result<ConversionResult> {
-    // Validate input file
-    if let Err(e) = shared_utils::conversion::validate_input_file(input) {
-        return Err(ImgQualityError::ConversionError(e));
-    }
-
-    let input_size = fs::metadata(input)
-        .map(|m| m.len())
-        .map_err(ImgQualityError::IoError)?;
-    let initial_crf = calculate_matched_crf_for_animation(analysis, input_size)?;
-    vid_av1::animated_image::convert_to_av1_mp4_matched(
-        input,
-        options,
-        initial_crf,
-        analysis.has_alpha,
-    )
-    .map_err(|e| ImgQualityError::ConversionError(e.to_string()))
-}
-
-fn calculate_matched_crf_for_animation(
-    analysis: &crate::ImageAnalysis,
-    file_size: u64,
-) -> Result<f32> {
-    let quality_analysis = shared_utils::from_image_analysis(
-        &analysis.format,
-        analysis.width,
-        analysis.height,
-        analysis.color_depth,
-        analysis.has_alpha,
-        file_size,
-        analysis.duration_secs.map(f64::from),
-        None,
-        None,
-    );
-
-    match shared_utils::calculate_av1_crf(&quality_analysis) {
-        Ok(result) => {
-            shared_utils::log_quality_analysis(
-                &quality_analysis,
-                &result,
-                shared_utils::EncoderType::Av1,
-            );
-            Ok(result.crf)
-        }
-        Err(e) => Err(ImgQualityError::AnalysisError(format!(
-            "Quality analysis failed for animation: {e}"
         ))),
     }
 }
@@ -987,18 +920,6 @@ pub fn convert_to_jxl_matched(
             "cjxl not found: {e}"
         ))),
     }
-}
-
-/// Convert to AV1 MP4 losslessly.
-///
-/// # Errors
-/// Returns an error if encoding fails.
-pub fn convert_to_av1_mp4_lossless(
-    input: &Path,
-    options: &ConvertOptions,
-) -> Result<ConversionResult> {
-    vid_av1::animated_image::convert_to_av1_mkv_lossless(input, options)
-        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))
 }
 
 fn verify_jxl_health(path: &Path) -> Result<()> {
@@ -1383,14 +1304,6 @@ fn get_output_path(
         shared_utils::conversion::determine_output_path(input, extension, &options.output_dir)
             .map_err(ImgQualityError::ConversionError)
     }
-}
-
-pub fn convert_to_gif_apple_compat(
-    input: &Path,
-    options: &ConvertOptions,
-) -> Result<shared_utils::ConversionResult> {
-    vid_av1::animated_image::convert_to_gif_apple_compat(input, options)
-        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))
 }
 
 #[cfg(test)]

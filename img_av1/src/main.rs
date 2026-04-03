@@ -720,14 +720,43 @@ fn dispatch_static_conversion(
     })
 }
 
+fn calculate_matched_crf_for_animation(
+    analysis: &shared_utils::image_analyzer::ImageAnalysis,
+    file_size: u64,
+) -> anyhow::Result<f32> {
+    let estimated_quality = analysis.jpeg_analysis.as_ref().map(|j| j.estimated_quality);
+
+    let quality_analysis = shared_utils::from_image_analysis(
+        &analysis.format,
+        analysis.width,
+        analysis.height,
+        analysis.color_depth,
+        analysis.has_alpha,
+        file_size,
+        analysis.duration_secs.map(f64::from),
+        None,
+        estimated_quality,
+    );
+
+    match shared_utils::calculate_av1_crf(&quality_analysis) {
+        Ok(result) => {
+            shared_utils::log_quality_analysis(
+                &quality_analysis,
+                &result,
+                shared_utils::EncoderType::Av1,
+            );
+            Ok(result.crf)
+        }
+        Err(e) => Err(anyhow::anyhow!("Quality analysis failed: {e}")),
+    }
+}
+
 fn dispatch_animated_conversion(
     input: &Path,
     analysis: &shared_utils::image_analyzer::ImageAnalysis,
     options: &img_av1::lossless_converter::ConvertOptions,
     config: &AutoConvertConfig,
 ) -> anyhow::Result<shared_utils::ConversionResult> {
-    use img_av1::lossless_converter::convert_to_av1_mp4_matched;
-
     let format = analysis.format.as_str();
     let _is_lossless = analysis.is_lossless;
     let codec = shared_utils::quality_matcher::parse_source_codec(format);
@@ -780,6 +809,8 @@ fn dispatch_animated_conversion(
         }
     };
 
+    let initial_crf = calculate_matched_crf_for_animation(analysis, analysis.file_size)?;
+
     if config.apple_compat && is_non_native_animated {
         if meme_keep {
             shared_utils::progress_mode::emit_stderr(&format!(
@@ -787,9 +818,9 @@ fn dispatch_animated_conversion(
                 format,
                 input.display()
             ));
-            Ok(img_av1::lossless_converter::convert_to_gif_apple_compat(
+            Ok(vid_av1::animated_image::convert_to_gif_apple_compat(
                 input, options,
-            )?)
+            ).map_err(|e| anyhow::anyhow!(e))?)
         } else {
             shared_utils::progress_mode::emit_stderr(&format!(
                 "🍎 Animated {}→AV1 MP4 (Apple Compat, {:.1}s): {}",
@@ -797,7 +828,7 @@ fn dispatch_animated_conversion(
                 duration,
                 input.display()
             ));
-            Ok(convert_to_av1_mp4_matched(input, options, analysis)?)
+            Ok(vid_av1::animated_image::convert_to_av1_mp4_matched(input, options, initial_crf, analysis.has_alpha).map_err(|e| anyhow::anyhow!(e))?)
         }
     } else {
         if meme_keep {
@@ -814,7 +845,7 @@ fn dispatch_animated_conversion(
             duration,
             input.display()
         ));
-        Ok(convert_to_av1_mp4_matched(input, options, analysis)?)
+        Ok(vid_av1::animated_image::convert_to_av1_mp4_matched(input, options, initial_crf, analysis.has_alpha).map_err(|e| anyhow::anyhow!(e))?)
     }
 }
 

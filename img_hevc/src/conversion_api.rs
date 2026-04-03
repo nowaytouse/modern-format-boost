@@ -12,7 +12,6 @@ use std::process::Command;
 pub enum TargetFormat {
     JXL,
     AVIF,
-    HEVCMP4,
     NoConversion,
 }
 
@@ -118,32 +117,9 @@ pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrat
             })
         }
 
-        (ImageType::Animated, CompressionType::Lossless, _) => {
-            let input_path = &detection.file_path;
-            let output_path = Path::new(input_path).with_extension("MP4");
-            let fps = detection.fps.ok_or_else(|| {
-                ImgQualityError::AnalysisError(format!(
-                    "Cannot determine FPS for animated image: {input_path}"
-                ))
-            })?;
-            Ok(ConversionStrategy {
-                target: TargetFormat::HEVCMP4,
-                reason:
-                    "Animated lossless image, recommend HEVC MP4 with CRF 0 (visually lossless)"
-                        .to_string(),
-                command: format!(
-                    "ffmpeg -i '{}' -c:v libx265 -crf 0 -preset medium -tag:v hvc1 -r {} '{}'",
-                    input_path,
-                    fps,
-                    output_path.display()
-                ),
-                expected_reduction: 30.0,
-            })
-        }
-
-        (ImageType::Animated, CompressionType::Lossy, _) => Ok(ConversionStrategy {
+        (ImageType::Animated, _, _) => Ok(ConversionStrategy {
             target: TargetFormat::NoConversion,
-            reason: "Animated lossy image, skipping to avoid further quality loss".to_string(),
+            reason: "Animated image: use vid for video conversion".to_string(),
             command: String::new(),
             expected_reduction: 0.0,
         }),
@@ -206,7 +182,6 @@ pub fn execute_conversion(
     let extension = match strategy.target {
         TargetFormat::JXL => "JXL",
         TargetFormat::AVIF => "AVIF",
-        TargetFormat::HEVCMP4 => "MP4",
         TargetFormat::NoConversion => {
             return Err(ImgQualityError::ConversionError(
                 "No conversion".to_string(),
@@ -237,14 +212,6 @@ pub fn execute_conversion(
         TargetFormat::AVIF => {
             convert_to_avif(input_path, &temp_path, detection.estimated_quality, config)
         }
-        TargetFormat::HEVCMP4 => convert_to_hevc_mp4(
-            input_path,
-            &temp_path,
-            detection.fps,
-            detection.width,
-            detection.height,
-            config,
-        ),
         TargetFormat::NoConversion => {
             return Err(ImgQualityError::ConversionError(
                 "NoConversion should have been handled earlier".to_string(),
@@ -517,96 +484,6 @@ fn convert_to_avif(
     Ok(())
 }
 
-fn convert_to_hevc_mp4(
-    input: &Path,
-    output: &Path,
-    fps: Option<f32>,
-    width: u32,
-    height: u32,
-    config: &ConversionConfig,
-) -> Result<()> {
-    use shared_utils::ffmpeg_process::FfmpegProcess;
-
-    let fps_val = fps.ok_or_else(|| {
-        ImgQualityError::AnalysisError("Missing FPS for HEVC MP4 conversion".to_string())
-    })?;
-    let fps_str = fps_val.to_string();
-
-    let vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, false);
-
-    let max_threads = shared_utils::thread_manager::get_ffmpeg_threads();
-    let x265_params = format!("log-level=error:pools={max_threads}");
-
-    let input_abs = canonicalize_input(input);
-    let output_abs = resolve_output_absolute(output);
-
-    let mut cmd = Command::new("ffmpeg");
-    cmd.arg("-y")
-        .arg("-threads")
-        .arg(max_threads.to_string())
-        .arg("-i")
-        .arg(shared_utils::safe_path_arg(&input_abs).as_ref())
-        .arg("-c:v")
-        .arg("libx265")
-        .arg("-crf")
-        .arg("0")
-        .arg("-preset")
-        .arg("medium")
-        .arg("-tag:v")
-        .arg("hvc1")
-        .arg("-x265-params")
-        .arg(&x265_params)
-        .arg("-r")
-        .arg(&fps_str);
-
-    for arg in &vf_args {
-        cmd.arg(arg);
-    }
-    cmd.arg("-pix_fmt").arg("yuv420p");
-    cmd.arg(shared_utils::safe_path_arg(&output_abs).as_ref());
-
-    let process = FfmpegProcess::spawn(&mut cmd)
-        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
-    let (status, stderr) = process
-        .wait_with_output()
-        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
-
-    if !status.success() {
-        cleanup_output_file(output, "failed HEVC output");
-        return Err(ImgQualityError::ConversionError(stderr));
-    }
-
-    // Verify output file
-    let output_size = std::fs::metadata(output)?.len();
-    if output_size == 0 {
-        cleanup_output_file(output, "empty HEVC output");
-        return Err(ImgQualityError::ConversionError(
-            "HEVC output file is empty (encoding may have failed)".to_string(),
-        ));
-    }
-
-    // Check if output is readable
-    if shared_utils::conversion::get_input_dimensions(output).is_err() {
-        cleanup_output_file(output, "invalid HEVC output");
-        return Err(ImgQualityError::ConversionError(
-            "HEVC output file is not readable (invalid or corrupted)".to_string(),
-        ));
-    }
-
-    // Check compress mode: skip if output is not smaller than input
-    if config.compress {
-        let input_size = std::fs::metadata(input)?.len();
-        if output_size >= input_size {
-            cleanup_output_file(output, "non-compressing HEVC output");
-            return Err(ImgQualityError::ConversionError(format!(
-                "Compress mode: output ({output_size} bytes) not smaller than input ({input_size} bytes)"
-            )));
-        }
-    }
-
-    Ok(())
-}
-
 fn preserve_timestamps(source: &Path, dest: &Path) {
     shared_utils::copy_metadata(source, dest);
 }
@@ -681,7 +558,7 @@ mod tests {
     }
 
     #[test]
-    fn test_gif_animated_strategy() -> Result<()> {
+    fn test_animated_image_deferred_to_vid() -> Result<()> {
         let detection = DetectionResult {
             file_path: "/test/animation.gif".to_string(),
             format: DetectedFormat::GIF,
@@ -701,7 +578,7 @@ mod tests {
         };
 
         let strategy = determine_strategy(&detection)?;
-        assert_eq!(strategy.target, TargetFormat::HEVCMP4);
+        assert_eq!(strategy.target, TargetFormat::NoConversion);
         Ok(())
     }
 }

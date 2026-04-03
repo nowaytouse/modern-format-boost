@@ -15,7 +15,7 @@ pub use constants::*;
 pub use heic_analysis::HeicAnalysis;
 pub use jpeg_analysis::JpegQualityAnalysis;
 pub use lossless_converter::{
-    convert_to_gif_apple_compat, is_high_quality_animated, ConversionResult, ConvertOptions,
+    ConversionResult, ConvertOptions,
 };
 pub use metrics::{
     calculate_ms_ssim, calculate_psnr, calculate_ssim, psnr_quality_description,

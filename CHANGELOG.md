@@ -21,6 +21,17 @@ Overhauled `image_quality_db.rs` to match the maturity of the animated-media pip
 - **New constants**: `MIN_GIF_SAMPLES_TOTAL`, `MIN_GIF_SAMPLES_PER_CLASS`, `MIN_QUALITY_SAMPLES_TOTAL`, `MIN_QUALITY_SAMPLES_PER_CLASS` added to `shared_utils/src/constants.rs`. `ENV_DISABLE_IMAGE_QUALITY_DB = "MODERN_FORMAT_DISABLE_IMAGE_QUALITY_DB"` added to `shared_utils/src/constants.rs`.
 - **Files**: `shared_utils/src/image_quality_db.rs`, `shared_utils/src/constants.rs`, `shared_utils/src/gif_value_db.rs`, `img_hevc/src/main.rs`, `img_av1/src/main.rs`
 
+#### 🔄 Animated Media Pipeline — Architectural Separation
+
+Completed the multi-phase migration to enforce strict responsibility separation between static image and animated media pipelines.
+
+- **Strict Responsibility Separation**: Fully migrated all animated media (GIF/Video) handling logic out of the `img` crates (`img_av1`, `img_hevc`) and into the `vid` crates (`vid_av1`, `vid_hevc`). `img` crates are now strictly for static image optimization.
+- **Library Decoupling**: Removed redundant conversion wrappers and PASS-THROUGH functions from the `img` library modules. The `img` libraries no longer contain any video-specific encoding logic or FFmpeg parameter matching.
+- **Binary Dispatch Restoration**: Re-implemented `dispatch_animated_conversion` at the CLI entry point (`main.rs`) of `img` crates. It now calculates optimal CRF locally and routes requests directly to the `vid` crates, bypassing the `img` library entirely.
+- **API Cleanup**: Removed `AV1MP4` and `HEVCMP4` variants from `TargetFormat` in the `img` crates to eliminate architectural confusion and keep the static image API focused.
+- **Restored CLI Flags**: Preserved `--force-video` flag support in `img` binaries for backward compatibility, ensuring users can still force video conversion for animated assets via the image CLI.
+- **Files**: `img_av1/src/main.rs`, `img_hevc/src/main.rs`, `img_av1/src/conversion_api.rs`, `img_hevc/src/conversion_api.rs`, `img_av1/src/lossless_converter.rs`, `img_hevc/src/lossless_converter.rs`, `img_hevc/src/lib.rs`
+
 ---
 
 ## [0.11.1] — 2026-04-03

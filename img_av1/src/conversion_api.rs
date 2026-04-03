@@ -6,7 +6,6 @@
 use crate::detection_api::{CompressionType, DetectedFormat, DetectionResult, ImageType};
 use crate::{ImgQualityError, Result};
 use serde::{Deserialize, Serialize};
-use shared_utils::image_analyzer::get_animation_duration_for_path;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -14,7 +13,6 @@ use std::process::Command;
 pub enum TargetFormat {
     JXL,
     AVIF,
-    AV1MP4,
     NoConversion,
 }
 
@@ -111,43 +109,9 @@ pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrat
             })
         }
 
-        (ImageType::Animated, CompressionType::Lossless, _) => {
-            let input_path = &detection.file_path;
-            let output_path = Path::new(input_path).with_extension("MP4");
-            let fps = detection
-                .fps
-                .or_else(|| {
-                    get_animation_duration_for_path(Path::new(input_path)).and_then(|d: f32| {
-                        if d > 0.0 && detection.frame_count > 0 {
-                            Some(detection.frame_count as f32 / d)
-                        } else {
-                            None
-                        }
-                    })
-                })
-                .ok_or_else(|| -> ImgQualityError {
-                    ImgQualityError::AnalysisError(format!(
-                        "Cannot determine FPS for animated image: {input_path}"
-                    ))
-                })?;
-
-            Ok(ConversionStrategy {
-                target: TargetFormat::AV1MP4,
-                reason: "Animated lossless image, recommend AV1 MP4 with CRF 0 (visually lossless)"
-                    .to_string(),
-                command: Some(format!(
-                    "ffmpeg -y -i '{}' -c:v libsvtav1 -crf 0 -preset 6 -r {:.3} -pix_fmt yuv420p '{}'",
-                    input_path,
-                    fps,
-                    output_path.display()
-                )),
-                expected_reduction: 30.0,
-            })
-        }
-
-        (ImageType::Animated, CompressionType::Lossy, _) => Ok(ConversionStrategy {
+        (ImageType::Animated, _, _) => Ok(ConversionStrategy {
             target: TargetFormat::NoConversion,
-            reason: "Animated lossy image, skipping to avoid further quality loss".to_string(),
+            reason: "Animated image: use vid for video conversion".to_string(),
             command: None,
             expected_reduction: 0.0,
         }),
@@ -216,7 +180,6 @@ pub fn execute_conversion(
     let extension = match strategy.target {
         TargetFormat::JXL => "JXL",
         TargetFormat::AVIF => "AVIF",
-        TargetFormat::AV1MP4 => "MP4",
         TargetFormat::NoConversion => unreachable!("NoConversion handled by early return above"),
     };
 
@@ -242,18 +205,6 @@ pub fn execute_conversion(
         TargetFormat::JXL => convert_to_jxl(input_path, &temp_path, &detection.format, config),
         TargetFormat::AVIF => {
             convert_to_avif(input_path, &temp_path, detection.estimated_quality, config)
-        }
-        TargetFormat::AV1MP4 => {
-            let fps = detection.fps.or_else(|| {
-                get_animation_duration_for_path(input_path).and_then(|d: f32| {
-                    if d > 0.0 && detection.frame_count > 0 {
-                        Some(detection.frame_count as f32 / d)
-                    } else {
-                        None
-                    }
-                })
-            });
-            convert_to_av1_mp4(input_path, &temp_path, fps, config)
         }
         TargetFormat::NoConversion => unreachable!("handled above"),
     };
@@ -513,82 +464,6 @@ fn convert_to_avif(
     Ok(())
 }
 
-fn convert_to_av1_mp4(
-    input: &Path,
-    output: &Path,
-    fps: Option<f32>,
-    config: &ConversionConfig,
-) -> Result<()> {
-    let fps_val = fps.ok_or_else(|| {
-        ImgQualityError::AnalysisError("Missing FPS for AV1 MP4 conversion".to_string())
-    })?;
-    let fps_str = fps_val.to_string();
-    let max_threads = shared_utils::thread_manager::get_ffmpeg_threads();
-    let svt_params = format!("tune=0:film-grain=0:lp={max_threads}");
-    let input_abs = canonicalize_input(input);
-    let output_abs = resolve_output_absolute(output);
-
-    let status = Command::new("ffmpeg")
-        .arg("-y")
-        .arg("-threads")
-        .arg(max_threads.to_string())
-        .arg("-i")
-        .arg(shared_utils::safe_path_arg(&input_abs).as_ref())
-        .args([
-            "-c:v",
-            "libsvtav1",
-            "-crf",
-            "0",
-            "-preset",
-            "6",
-            "-svtav1-params",
-            &svt_params,
-            "-r",
-            &fps_str,
-            "-pix_fmt",
-            "yuv420p",
-        ])
-        .arg(shared_utils::safe_path_arg(&output_abs).as_ref())
-        .output()?;
-
-    if !status.status.success() {
-        cleanup_output_file(output, "failed AV1 output");
-        return Err(ImgQualityError::ConversionError(
-            String::from_utf8_lossy(&status.stderr).to_string(),
-        ));
-    }
-
-    let output_size = std::fs::metadata(output)
-        .map_err(|e| ImgQualityError::ConversionError(format!("Failed to read AV1 output: {e}")))?
-        .len();
-    if output_size == 0 {
-        cleanup_output_file(output, "empty AV1 output");
-        return Err(ImgQualityError::ConversionError(
-            "AV1 output file is empty (encoding may have failed)".to_string(),
-        ));
-    }
-
-    if shared_utils::conversion::get_input_dimensions(output).is_err() {
-        cleanup_output_file(output, "invalid AV1 output");
-        return Err(ImgQualityError::ConversionError(
-            "AV1 output file is not readable (invalid or corrupted)".to_string(),
-        ));
-    }
-
-    if config.compress {
-        let input_size = std::fs::metadata(input)
-            .map_err(|e| ImgQualityError::ConversionError(format!("Failed to read input: {e}")))?
-            .len();
-        if output_size >= input_size {
-            cleanup_output_file(output, "non-compressing AV1 output");
-            return Err(ImgQualityError::ConversionError(format!(
-                "Compress mode: output ({output_size} bytes) not smaller than input ({input_size} bytes)"
-            )));
-        }
-    }
-
-    Ok(())
-}
 
 /// Deep-analysis based conversion with intelligent parameter matching.
 ///
@@ -659,7 +534,7 @@ mod tests {
     }
 
     #[test]
-    fn test_gif_animated_strategy() {
+    fn test_animated_image_deferred_to_vid() {
         let detection = DetectionResult {
             file_path: "/test/animation.gif".to_string(),
             format: DetectedFormat::GIF,
@@ -678,29 +553,6 @@ mod tests {
             precision: shared_utils::image_detection::PrecisionMetadata::default(),
         };
 
-        let strategy = determine_strategy(&detection).unwrap();
-        assert_eq!(strategy.target, TargetFormat::AV1MP4);
-    }
-
-    #[test]
-    fn test_no_conversion_has_no_command() {
-        let detection = DetectionResult {
-            file_path: "/test/anim.webp".to_string(),
-            format: DetectedFormat::WebP,
-            image_type: ImageType::Animated,
-            compression: CompressionType::Lossy,
-            width: 100,
-            height: 100,
-            bit_depth: 8,
-            has_alpha: false,
-            file_size: 5000,
-            frame_count: 10,
-            fps: Some(10.0),
-            duration: Some(1.0),
-            estimated_quality: Some(80),
-            entropy: 5.0,
-            precision: shared_utils::image_detection::PrecisionMetadata::default(),
-        };
         let strategy = determine_strategy(&detection).unwrap();
         assert_eq!(strategy.target, TargetFormat::NoConversion);
         assert!(strategy.command.is_none());

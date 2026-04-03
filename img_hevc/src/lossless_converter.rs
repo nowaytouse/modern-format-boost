@@ -1184,15 +1184,6 @@ pub fn convert_to_avif(
     }
 }
 
-/// Convert to HEVC MP4 (lossy).
-///
-/// # Errors
-/// Returns an error if encoding fails.
-pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<ConversionResult> {
-    vid_hevc::animated_image::convert_to_hevc_mp4(input, options)
-        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))
-}
-
 /// Convert to AVIF losslessly.
 ///
 /// # Errors
@@ -1268,62 +1259,6 @@ pub fn convert_to_avif_lossless(
                 "avifenc not found: {e}"
             )))
         }
-    }
-}
-
-/// Convert to HEVC MP4 with matched quality.
-///
-/// # Errors
-/// Returns an error if matching or encoding fails.
-pub fn convert_to_hevc_mp4_matched(
-    input: &Path,
-    options: &ConvertOptions,
-    analysis: &crate::ImageAnalysis,
-) -> Result<ConversionResult> {
-    // Validate input file
-    if let Err(e) = shared_utils::conversion::validate_input_file(input) {
-        return Err(ImgQualityError::ConversionError(e));
-    }
-
-    let input_size = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
-    let initial_crf = calculate_matched_crf_for_animation_hevc(analysis, input_size)?;
-    vid_hevc::animated_image::convert_to_hevc_mp4_matched(
-        input,
-        options,
-        initial_crf,
-        analysis.has_alpha,
-    )
-    .map_err(|e| ImgQualityError::ConversionError(e.to_string()))
-}
-
-fn calculate_matched_crf_for_animation_hevc(
-    analysis: &crate::ImageAnalysis,
-    file_size: u64,
-) -> Result<f32> {
-    let quality_analysis = shared_utils::from_image_analysis(
-        &analysis.format,
-        analysis.width,
-        analysis.height,
-        analysis.color_depth,
-        analysis.has_alpha,
-        file_size,
-        analysis.duration_secs.map(f64::from),
-        None,
-        None,
-    );
-
-    match shared_utils::calculate_hevc_crf(&quality_analysis) {
-        Ok(result) => {
-            shared_utils::log_quality_analysis(
-                &quality_analysis,
-                &result,
-                shared_utils::EncoderType::Hevc,
-            );
-            Ok(result.crf)
-        }
-        Err(e) => Err(ImgQualityError::AnalysisError(format!(
-            "Quality analysis failed: {e}"
-        ))),
     }
 }
 
@@ -1468,17 +1403,7 @@ pub fn convert_to_jxl_matched(
     }
 }
 
-/// Convert to HEVC MKV losslessly.
-///
-/// # Errors
-/// Returns an error if encoding fails.
-pub fn convert_to_hevc_mkv_lossless(
-    input: &Path,
-    options: &ConvertOptions,
-) -> Result<ConversionResult> {
-    vid_hevc::animated_image::convert_to_hevc_mkv_lossless(input, options)
-        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))
-}
+
 
 fn try_imagemagick_fallback(
     input: &Path,
@@ -1919,22 +1844,7 @@ fn get_output_path(
     Ok(output)
 }
 
-/// Convert to GIF with Apple compatibility (using ffmpeg palettegen).
-///
-/// # Errors
-/// Returns an error if encoding fails.
-pub fn convert_to_gif_apple_compat(
-    input: &Path,
-    options: &ConvertOptions,
-) -> Result<ConversionResult> {
-    vid_hevc::animated_image::convert_to_gif_apple_compat(input, options)
-        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))
-}
 
-#[must_use]
-pub fn is_high_quality_animated(width: u32, height: u32) -> bool {
-    vid_hevc::animated_image::is_high_quality_animated(width, height)
-}
 
 fn verify_jxl_health(path: &Path) -> Result<()> {
     shared_utils::jxl_utils::verify_jxl_health(path).map_err(ImgQualityError::ConversionError)
