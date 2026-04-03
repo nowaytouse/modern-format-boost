@@ -539,6 +539,33 @@ fn distribution_from_feature(
         .map_or(fallback, DistributionStats::from)
 }
 
+/// Validates whether the GIF database has enough diverse samples to merit KNN lookup.
+fn check_gif_db_maturity(conn: &mut Client) -> bool {
+    let Ok(rows) = conn.query(
+        "SELECT loss_tolerance, count(*) FROM samples WHERE loss_tolerance IN ('high', 'video') GROUP BY loss_tolerance",
+        &[],
+    ) else {
+        return false;
+    };
+
+    let mut high_count: i64 = 0;
+    let mut video_count: i64 = 0;
+    for row in rows {
+        let class: String = row.get(0);
+        let count: i64 = row.get(1);
+        if class == "high" {
+            high_count = count;
+        } else if class == "video" {
+            video_count = count;
+        }
+    }
+
+    let total = high_count + video_count;
+    total >= crate::constants::MIN_GIF_SAMPLES_TOTAL
+        && high_count >= crate::constants::MIN_GIF_SAMPLES_PER_CLASS
+        && video_count >= crate::constants::MIN_GIF_SAMPLES_PER_CLASS
+}
+
 fn lookup_similar_samples_inner(
     meta: &LoopMeta,
     _path: Option<&Path>,
@@ -554,6 +581,12 @@ fn lookup_similar_samples_inner(
 
     init_schema(&mut conn)?;
     seed_positive_dataset_if_needed(&mut conn)?;
+
+    if !check_gif_db_maturity(&mut conn) {
+        log::info!("🔬 GIF Database is immature (needs >={} total, >={} per class). Bypassing KNN.", 
+            crate::constants::MIN_GIF_SAMPLES_TOTAL, crate::constants::MIN_GIF_SAMPLES_PER_CLASS);
+        return Ok(None);
+    }
 
     // Map the incoming LoopMeta into a SampleRow to compute its HNSW search vector
     let target_temporal_bpp = meta.file_size_bytes as f64

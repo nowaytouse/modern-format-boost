@@ -649,6 +649,25 @@ fn dispatch_static_conversion(
     };
 
     let format = analysis.format.as_str();
+
+    // 🔬 Level 4 Feedback: KNN Static Quality Score
+    // JPEG bypass: cjxl transcode is fast enough to skip DB lookup.
+    // Returns a BPP heuristic (confidence=0.0) when DB is unavailable.
+    let quality = if format == "JPEG" || format == "jpg" {
+        None
+    } else {
+        shared_utils::lookup_image_quality(analysis)
+    };
+    if let Some(ref q) = quality {
+        if config.verbose {
+            let conf_label = if q.confidence > 0.0 { "KNN" } else { "BPP heuristic" };
+            println!(
+                "   🔭 Quality Score: {:.2} ({conf_label}, conf={:.2})",
+                q.score, q.confidence
+            );
+        }
+    }
+
     Ok(match (format, analysis.is_lossless) {
         ("WebP" | "AVIF" | "TIFF" | "HEIC" | "HEIF", true) => {
             if format == "HEIC" || format == "HEIF" {

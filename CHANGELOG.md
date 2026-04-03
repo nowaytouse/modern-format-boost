@@ -4,7 +4,27 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.11.1] — 2026-04-04
+
+#### 🐘 Static Image Quality DB — Full Architecture Alignment
+
+Overhauled `image_quality_db.rs` to match the maturity of the animated-media pipeline.
+
+- **KNN Algorithm Fix (L2 + HNSW)**: Replaced the broken `ivfflat` + cosine (`<=>`) index with a proper `HNSW` + L2 (`<->`) index. The old index was declared with `l2_distance` ops but the query used the cosine operator — a silent mismatch corrected for all future lookups.
+- **Layer 0 BPP Heuristic Fallback**: When the database is unavailable or empty, `lookup_image_quality` now returns a computed score based on spatial BPP and entropy (`confidence = 0.0`) instead of silently returning `None`. This mirrors the animated pipeline's Legacy Limited Mode.
+- **Level 4 Inference Logging**: New `quality_inference_log` table captures every `lookup_image_quality` call with signal snapshot, KNN score, BPP fallback score, and confidence. Fire-and-forget — never blocks the pipeline. Schema mirrors the animated `inference_log` table structure.
+- **Shared DB Connectivity**: Replaced bare `Client::connect()` with `crate::gif_value_db::open_pg_client()` so the "DB unavailable" warning respects the shared `DB_WARN_ONCE` flag — no duplicate spamming during directory-batch processing.
+- **Independent Kill-Switch**: New `MODERN_FORMAT_DISABLE_IMAGE_QUALITY_DB` environment variable can independently disable the static image quality DB without affecting the GIF/video KNN pipeline.
+- **Re-enabled Active Lookup in Pipelines**: Removed the `[TEMPORARY DISABLE]` commented-out block in `img_hevc` and wired the equivalent lookup into `img_av1`'s `dispatch_static_conversion`. Both pipelines now call `shared_utils::lookup_image_quality()` and log the result in verbose mode, labelling the source as either `KNN` (DB-backed) or `BPP heuristic` (fallback). No routing changes — informational only until the training set matures.
+- **Database Maturity Check (GIF/Video)**: New `check_gif_db_maturity()` in `gif_value_db.rs` validates sample counts before engaging KNN. Requires `MIN_GIF_SAMPLES_TOTAL >= 150` and `MIN_GIF_SAMPLES_PER_CLASS >= 30`. Below thresholds → bypass KNN and log info message. Prevents unreliable decisions from sparse training data.
+- **Database Maturity Check (Static Image)**: New `check_quality_db_maturity()` in `image_quality_db.rs` applies the same principle to static image quality DB. Requires `MIN_QUALITY_SAMPLES_TOTAL >= 50` and `MIN_QUALITY_SAMPLES_PER_CLASS >= 10`. When immature, still logs inference records with `final_verdict = "immature_bypass"` for blind-spot discovery.
+- **New constants**: `MIN_GIF_SAMPLES_TOTAL`, `MIN_GIF_SAMPLES_PER_CLASS`, `MIN_QUALITY_SAMPLES_TOTAL`, `MIN_QUALITY_SAMPLES_PER_CLASS` added to `shared_utils/src/constants.rs`. `ENV_DISABLE_IMAGE_QUALITY_DB = "MODERN_FORMAT_DISABLE_IMAGE_QUALITY_DB"` added to `shared_utils/src/constants.rs`.
+- **Files**: `shared_utils/src/image_quality_db.rs`, `shared_utils/src/constants.rs`, `shared_utils/src/gif_value_db.rs`, `img_hevc/src/main.rs`, `img_av1/src/main.rs`
+
+---
+
 ## [0.11.1] — 2026-04-03
+
 
 #### 🧠 pgvector HNSW Integration & KNN Search Overhaul
 

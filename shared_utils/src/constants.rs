@@ -82,6 +82,24 @@ pub const ENV_INTERCEPT_LONG_SILENT: &str = "MODERN_FORMAT_INTERCEPT_LONG_SILENT
 pub const ENV_STICKER_LIMIT_SECS: &str = "MODERN_FORMAT_STICKER_LIMIT_SECS";
 /// Bypass for the entire database-driven feedback loop (Dynamic weights, KNN, Logging).
 pub const ENV_DISABLE_DB_FEEDBACK: &str = "MODERN_FORMAT_DISABLE_DB_FEEDBACK";
+/// Independent kill-switch for the static image quality DB (does not affect GIF/Video KNN).
+pub const ENV_DISABLE_IMAGE_QUALITY_DB: &str = "MODERN_FORMAT_DISABLE_IMAGE_QUALITY_DB";
+
+// --- Database Maturity Thresholds ---
+// KNN results are unreliable when training data is too sparse or non-diverse.
+// These thresholds gate both the GIF/Video KNN and the static image quality KNN.
+
+/// Minimum total labeled samples required for GIF/Video KNN to engage.
+/// Below this count, data is too sparse to be representative.
+pub const MIN_GIF_SAMPLES_TOTAL: i64 = 150;
+/// Minimum samples per class (high/video) for GIF/Video KNN.
+/// Without both sides of the decision boundary, KNN will be biased toward one class.
+pub const MIN_GIF_SAMPLES_PER_CLASS: i64 = 30;
+
+/// Minimum total labeled samples required for static image KNN to engage.
+pub const MIN_QUALITY_SAMPLES_TOTAL: i64 = 50;
+/// Minimum samples per class (high/low) for static image KNN.
+pub const MIN_QUALITY_SAMPLES_PER_CLASS: i64 = 10;
 
 // --- Formats & Extensions ---
 
