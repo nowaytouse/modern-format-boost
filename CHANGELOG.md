@@ -29,8 +29,7 @@ Refined the multi-language documentation suite and unified the project's version
 
 - **Asset Path Fix**: Corrected relative image links in all localized documentation (`docs/README_*.md`); changed erroneous `(assets/...)` paths to `(../assets/...)` for proper rendering from subdirectories.
 - **Global Version Unification**: Synchronized version `0.11.2` across the Rust workspace (`Cargo.toml`), Python scripts, Shell utilities, and the macOS App wrapper (`Info.plist`).
-- **Files**: `docs/README_*.md`, `Cargo.toml`, `shared_utils/src/version.rs`, `README.md`, `Modern Format Boost.app/Contents/Info.plist`.
-33: 
+
 #### 🏗️ Media Pipeline Hardening — Type-Safe Builder Migration
 
 Completed the transition of the entire media processing pipeline to a type-safe, fluent builder architecture and stabilized the loop intent classification system.
