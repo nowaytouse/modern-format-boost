@@ -36,7 +36,7 @@ Refined the multi-language documentation suite and unified the project's version
 Refactored the HEVC encoding pipeline to improve cross-platform standards compliance and maximize quality for archival tasks.
 
 - **Selective `hvc1` Tagging**: Implemented conditional muxing logic to inject the `hvc1` tag **only** when `--apple-compat` is explicitly enabled. This ensures broader compatibility with non-Apple devices (which prefer the standard `hev1` tag) while maintaining full support for QuickTime and Photos when requested.
-- **Ultimate Mode Preset Tuning**: Upgraded the HEVC encoder preset from `medium` to `slow` in `ultimate` (极限) mode. This change applies to both the searchable conversion iterations and the final lossless archival path, significantly improving the quality-to-size ratio for high-priority tasks.
+- **Ultimate Mode Preset Tuning**: Upgraded the HEVC encoder preset from `medium` to `slower` in `ultimate` (极限) mode. This change applies to both the searchable conversion iterations and the final lossless archival path, significantly improving the quality-to-size ratio for high-priority tasks.
 - **Dynamic Parameter Propagation**: Refactored the internal conversion and exploration APIs to propagate compatibility and quality flags throughout the entire encoding pipeline, including animated image-to-video processing.
 - **Files**: `shared_utils/src/x265_encoder.rs`, `shared_utils/src/video_explorer.rs`, `shared_utils/src/video_explorer/gpu_coarse_search.rs`, `vid/src/conversion_api.rs`, `vid/src/animated_image.rs`.
 

@@ -1347,7 +1347,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         for arg in encoder.extra_args_with_preset(
             max_threads,
             if ultimate_mode && encoder == crate::video_explorer::VideoEncoder::Hevc {
-                crate::video_explorer::EncoderPreset::Slow
+                crate::video_explorer::EncoderPreset::Slower
             } else {
                 crate::video_explorer::EncoderPreset::default()
             },

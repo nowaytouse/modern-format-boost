@@ -592,7 +592,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
         .arg(match options.codec {
             SelectedCodec::Hevc => {
                 if options.ultimate {
-                    "slow"
+                    "slower"
                 } else {
                     "medium"
                 }
@@ -1425,7 +1425,7 @@ pub fn convert_to_mkv_lossless(
         .arg("-x265-params")
         .arg(&x265_params)
         .arg("-preset")
-        .arg(if options.ultimate { "slow" } else { "medium" });
+        .arg(if options.ultimate { "slower" } else { "medium" });
     if options.apple_compat {
         cmd.arg("-tag:v").arg("hvc1");
     }

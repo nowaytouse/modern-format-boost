@@ -918,6 +918,7 @@ pub fn auto_convert_with_cache(
                                 config.child_threads,
                                 hdr_x265_params_opt,
                                 config.apple_compat,
+                                crate::video_explorer::EncoderPreset::Slower,
                             )
                         } else {
                             shared_utils::explore_hevc_with_gpu_coarse_full_warm_start(
@@ -1715,7 +1716,7 @@ fn execute_conversion(
         crf.to_string(),
         "-preset".to_string(),
         if codec == SelectedCodec::Hevc && ultimate {
-            "slow".to_string()
+            "slower".to_string()
         } else if codec == SelectedCodec::Av1 {
             "6".to_string() // SVT-AV1 preset
         } else {
@@ -1855,7 +1856,7 @@ fn execute_lossless(
             "-x265-params".to_string(),
             x265_params,
             "-preset".to_string(),
-            if ultimate { "slow".to_string() } else { "medium".to_string() },
+            if ultimate { "slower".to_string() } else { "medium".to_string() },
         ]);
         if apple_compat {
             args.extend(["-tag:v".to_string(), "hvc1".to_string()]);
