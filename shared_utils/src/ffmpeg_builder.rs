@@ -375,7 +375,7 @@ impl FfmpegBuilder {
         }
 
         if let Some(level) = &self.loglevel {
-            cmd.arg(constants::FFMPEG_ARG_LOGLEVEL).arg(level);
+            cmd.arg(constants::FFMPEG_ARG_LOG_LEVEL).arg(level);
         }
 
         if let Some(threads) = self.threads {

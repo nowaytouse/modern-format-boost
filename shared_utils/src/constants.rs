@@ -289,6 +289,7 @@ pub const FFMPEG_SVTAV1_DEFAULT_PRESET: &str = "6";
 // --- FFmpeg Command Flags & Arguments ---
 
 pub const FFMPEG_ARG_OVERWRITE: &str = "-y";
+pub const FFMPEG_ARG_HIDE_BANNER: &str = "-hide_banner";
 pub const FFMPEG_ARG_THREADS: &str = "-threads";
 pub const FFMPEG_ARG_INPUT: &str = "-i";
 pub const FFMPEG_ARG_MAP: &str = "-map";
