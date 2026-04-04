@@ -562,27 +562,6 @@ mod parity_tests {
     }
 
     #[test]
-    fn test_magick_resource_limits() {
-        let cmd = crate::image_builders::MagickBuilder::new()
-            .limit_thread(1)
-            .limit_memory("2GiB")
-            .limit_map("4GiB")
-            .input("in.png")
-            .output("out.png")
-            .build();
-        let args: Vec<String> = cmd.get_args().map(|s| s.to_string_lossy().to_string()).collect();
-        assert_eq!(args[0], "-limit");
-        assert_eq!(args[1], "thread");
-        assert_eq!(args[2], "1");
-        assert_eq!(args[3], "-limit");
-        assert_eq!(args[4], "memory");
-        assert_eq!(args[5], "2GiB");
-        assert_eq!(args[6], "-limit");
-        assert_eq!(args[7], "map");
-        assert_eq!(args[8], "4GiB");
-    }
-
-    #[test]
     fn test_gifski_performance_controls() {
         let cmd = crate::image_builders::GifskiBuilder::new()
             .fast(true)

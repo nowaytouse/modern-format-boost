@@ -16,6 +16,8 @@ Implemented 7 additional safety measures identified from the 4,801-line historic
 - **Rsync Path Armor**: Enabled `--protect-args` by default in `RsyncBuilder` to safely handle filenames with whitespaces or shell-sensitive meta-characters.
 - **Identify Probing**: Enhanced `IdentifyBuilder` with `-verbose` support for exhaustive image metadata extraction.
 - **Metadata Parity**: Hardened `Exiv2Builder` with specialized `print_all()` (-pa) and `print_summary()` (-ps) methods for standardized workflow integration.
+
+- **Performance Tuning**: Added `--fast` performance mode to `GifskiBuilder` and refined `--min/--max` quality mapping for Core AVIF encoding.
 - **Parity Verification**: Expanded the regression test suite (`parity_tests.rs`) to 42 automated cases, confirming 100% flag-order parity with the project’s Golden Standard.
 
 
