@@ -6,6 +6,19 @@ All notable changes to this project will be documented in this file.
 
 ## [0.11.2] — 2026-04-04
 
+#### 🛡️ Media Pipeline builders — Detail Hardening & Platform Safety
+
+Implemented 7 additional safety measures identified from the 4,801-line historical audit to eliminate edge-case regressions and platform-specific crashes.
+
+- **macOS Sips Protection**: Forced quality clamping (1-100) and strict flag ordering (`-s format` -> `--out`) in `SipsBuilder` to prevent "Invalid Parameter" errors on legacy macOS versions.
+- **VMAF Parallelism**: Added native `--thread` and `--model` argument support to `VmafBuilder`, enabling high-performance VMAF analysis in multi-instance environments.
+- **Odd-Dimension Correction (Business Layer)**: Injected `.with_odd_dim_correction()` across all animated image encoding paths in the `vid` module (WebP, JXL, AVIF) to prevent filter-graph runtime failures.
+- **Rsync Path Armor**: Enabled `--protect-args` by default in `RsyncBuilder` to safely handle filenames with whitespaces or shell-sensitive meta-characters.
+- **Identify Probing**: Enhanced `IdentifyBuilder` with `-verbose` support for exhaustive image metadata extraction.
+- **Metadata Parity**: Hardened `Exiv2Builder` with specialized `print_all()` (-pa) and `print_summary()` (-ps) methods for standardized workflow integration.
+- **Parity Verification**: Expanded the regression test suite (`parity_tests.rs`) to 42 automated cases, confirming 100% flag-order parity with the project’s Golden Standard.
+
+
 #### 🧹 Granular Cache Maintenance — Targeted Cleanup
 
 Enhanced the cache management utility to support fine-grained control over processing metadata and analysis results.

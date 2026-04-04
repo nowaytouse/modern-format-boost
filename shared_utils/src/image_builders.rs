@@ -146,6 +146,7 @@ pub struct IdentifyBuilder {
     format: Option<String>,
     extra_args: Vec<String>,
     use_magick: bool, // toggle between 'magick identify' and 'identify'
+    verbose: bool,
 }
 
 impl IdentifyBuilder {
@@ -169,6 +170,12 @@ impl IdentifyBuilder {
         self
     }
 
+    /// Enables verbose output.
+    pub fn verbose(&mut self, enabled: bool) -> &mut Self {
+        self.verbose = enabled;
+        self
+    }
+
     pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
         self.extra_args.push(arg.as_ref().to_string());
         self
@@ -187,7 +194,11 @@ impl IdentifyBuilder {
         if let Some(fmt) = &self.format {
             cmd.arg("-format").arg(fmt);
         }
- 
+
+        if self.verbose {
+            cmd.arg("-verbose");
+        }
+
         for arg in &self.extra_args {
             cmd.arg(arg);
         }
@@ -564,6 +575,7 @@ pub struct SipsBuilder {
     input: Option<PathBuf>,
     output: Option<PathBuf>,
     format: Option<String>,
+    quality: Option<u32>,
     extra_args: Vec<String>,
 }
 
@@ -587,6 +599,12 @@ impl SipsBuilder {
         self.format = Some(format.as_ref().to_string());
         self
     }
+    /// Sets the output image quality (1-100).
+    /// Values outside this range will be clamped to prevent sips errors.
+    pub fn quality(&mut self, q: u32) -> &mut Self {
+        self.quality = Some(q.clamp(1, 100));
+        self
+    }
 
     pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
         self.extra_args.push(arg.as_ref().to_string());
@@ -599,6 +617,10 @@ impl SipsBuilder {
 
         if let Some(fmt) = &self.format {
             cmd.arg("-s").arg("format").arg(fmt);
+        }
+
+        if let Some(q) = self.quality {
+            cmd.arg("-s").arg("formatOptions").arg(q.to_string());
         }
 
         for arg in &self.extra_args {

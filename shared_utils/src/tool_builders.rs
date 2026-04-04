@@ -21,6 +21,8 @@ pub struct VmafBuilder {
     output: Option<PathBuf>,
     features: Vec<String>,
     json: bool,
+    threads: Option<usize>,
+    model: Option<String>,
     extra_args: Vec<String>,
 }
 
@@ -55,6 +57,18 @@ impl VmafBuilder {
         self
     }
 
+    /// Sets the number of threads for VMAF calculation.
+    pub fn threads(&mut self, count: usize) -> &mut Self {
+        self.threads = Some(count);
+        self
+    }
+
+    /// Sets the VMAF model file path.
+    pub fn model<S: AsRef<str>>(&mut self, path: S) -> &mut Self {
+        self.model = Some(path.as_ref().to_string());
+        self
+    }
+
     pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
         self.extra_args.push(arg.as_ref().to_string());
         self
@@ -78,6 +92,14 @@ impl VmafBuilder {
 
         if self.json {
             cmd.arg("--json");
+        }
+
+        if let Some(threads) = self.threads {
+            cmd.args(["--thread", &threads.to_string()]);
+        }
+
+        if let Some(model) = &self.model {
+            cmd.arg("--model").arg(model);
         }
 
         if let Some(output) = &self.output {
@@ -117,6 +139,18 @@ impl Exiv2Builder {
 
     pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
         self.args.push(arg.as_ref().to_string());
+        self
+    }
+
+    /// Adds -pa (print all metadata).
+    pub fn print_all(&mut self) -> &mut Self {
+        self.args.push("-pa".to_string());
+        self
+    }
+
+    /// Adds -ps (print metadata summary).
+    pub fn print_summary(&mut self) -> &mut Self {
+        self.args.push("-ps".to_string());
         self
     }
 
@@ -762,6 +796,10 @@ impl RsyncBuilder {
     pub fn build(&self) -> Command {
         let exe = self.executable.as_deref().unwrap_or("rsync");
         let mut cmd = Command::new(exe);
+        
+        // Protect args against shell/remote interpretation (requires rsync 3.0.0+)
+        cmd.arg("--protect-args");
+
         for arg in &self.args {
             cmd.arg(arg);
         }

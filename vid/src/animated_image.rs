@@ -102,6 +102,7 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
         let mut builder = shared_utils::FfmpegBuilder::new();
         builder
             .overwrite()
+            .with_odd_dim_correction()
             .input(&frame_webp_path)
             .output(&frame_png_path);
             
@@ -123,6 +124,7 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
     let mut builder = shared_utils::FfmpegBuilder::new();
     builder
         .overwrite()
+        .with_odd_dim_correction()
         .input_arg("-r") // Use -r for input frame rate
         .input_arg(fps.to_string())
         .input(&pattern)
@@ -486,6 +488,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
             builder
                 .overwrite()
                 .input(input)
+                .with_odd_dim_correction()
                 .arg("-filter_complex")
                 .arg("[0:v:0][0:v:1]alphamerge")
                 .arg("-plays")
@@ -571,6 +574,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
     let mut builder = shared_utils::FfmpegBuilder::new();
     builder
         .overwrite()
+        .with_odd_dim_correction()
         .threads(max_threads as usize)
         .input(&actual_input)
         .arg(shared_utils::constants::FFMPEG_ARG_MAP)
@@ -919,6 +923,7 @@ pub fn convert_to_mp4_matched(
             builder
                 .overwrite()
                 .input(input)
+                .with_odd_dim_correction()
                 .arg("-filter_complex")
                 .arg("[0:v:0][0:v:1]alphamerge")
                 .arg("-plays")
@@ -1747,6 +1752,7 @@ pub fn convert_to_gif_apple_compat(
             builder
                 .overwrite()
                 .input(input)
+                .with_odd_dim_correction()
                 .arg("-filter_complex")
                 .arg("[0:v:0][0:v:1]alphamerge")
                 .arg("-plays")

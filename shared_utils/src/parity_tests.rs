@@ -511,4 +511,64 @@ mod parity_tests {
         assert!(y_idx < i_idx);
         assert!(hb_idx < i_idx);
     }
+
+    #[test]
+    fn test_sips_quality_clamping_hardening() {
+        let cmd = crate::image_builders::SipsBuilder::new()
+            .quality(150) // Should clamp to 100
+            .format("jpeg")
+            .input(Path::new("in.png"))
+            .output(Path::new("out.jpg"))
+            .build();
+        let args: Vec<String> = cmd.get_args().map(|s| s.to_string_lossy().to_string()).collect();
+        
+        // Match: -s format jpeg -s formatOptions 100 in.png --out out.jpg
+        assert_eq!(args[0], "-s");
+        assert_eq!(args[1], "format");
+        assert_eq!(args[2], "jpeg");
+        assert_eq!(args[3], "-s");
+        assert_eq!(args[4], "formatOptions");
+        assert_eq!(args[5], "100");
+    }
+
+    #[test]
+    fn test_vmaf_comprehensive_hardening() {
+        let cmd = crate::tool_builders::VmafBuilder::new()
+            .threads(8)
+            .model("vmaf_v0.6.1.json")
+            .reference(Path::new("ref.mp4"))
+            .build();
+        let args: Vec<String> = cmd.get_args().map(|s| s.to_string_lossy().to_string()).collect();
+        
+        assert!(args.contains(&"--thread".to_string()));
+        assert!(args.contains(&"8".to_string()));
+        assert!(args.contains(&"--model".to_string()));
+        assert!(args.contains(&"vmaf_v0.6.1.json".to_string()));
+    }
+
+    #[test]
+    fn test_identify_verbose_hardening() {
+        let cmd = crate::image_builders::IdentifyBuilder::new()
+            .verbose(true)
+            .format("%w %h")
+            .input(Path::new("in.jpg"))
+            .build();
+        let args: Vec<String> = cmd.get_args().map(|s| s.to_string_lossy().to_string()).collect();
+        
+        assert!(args.contains(&"-verbose".to_string()));
+        assert!(args.contains(&"-format".to_string()));
+        assert!(args.contains(&"%w %h".to_string()));
+    }
+
+    #[test]
+    fn test_exiv2_print_hardening() {
+        let cmd = crate::tool_builders::Exiv2Builder::new()
+            .print_all()
+            .input(Path::new("in.jpg"))
+            .build();
+        let args: Vec<String> = cmd.get_args().map(|s| s.to_string_lossy().to_string()).collect();
+        
+        assert_eq!(args[0], "-pa");
+        assert!(args[1].contains("in.jpg"));
+    }
 }
