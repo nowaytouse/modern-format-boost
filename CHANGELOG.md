@@ -72,7 +72,7 @@ Achieved 100% transition to the type-safe `Builder` pattern across the entire 28
     - **Global Emoji Purge**: Performed a project-wide sweep to remove decorative emojis (🚀, 🔥, 🛡️) from module documentation, internal comments, and terminal UI symbols.
     - **Narrative Sanitization**: Replaced over-descriptive, AI-generated module headers and "marketing-style" narratives with standard technical documentation.
     - **UI Uniformity**: Standardized terminal status labels to plain-text (e.g., `OK`, `ERROR`), removing all emoji-based UI markers for an industrial-grade developer experience.
-- **Files**: `shared_utils/src/ffmpeg_builder.rs`, `shared_utils/src/image_builders.rs`, `shared_utils/src/jxl_builder.rs`, `shared_utils/src/tool_builders.rs`, `shared_utils/src/parity_tests.rs`, `shared_utils/src/modern_ui.rs`.
+- **Files**: `crates/shared_utils/src/ffmpeg_builder.rs`, `crates/shared_utils/src/image_builders.rs`, `crates/shared_utils/src/jxl_builder.rs`, `crates/shared_utils/src/tool_builders.rs`, `crates/shared_utils/src/parity_tests.rs`, `crates/shared_utils/src/modern_ui.rs`.
 
 #### 🚀 HEVC Pipeline Optimization — Quality & Compatibility
 
@@ -81,7 +81,7 @@ Refactored the HEVC encoding pipeline to improve cross-platform standards compli
 - **Selective `hvc1` Tagging**: Implemented conditional muxing logic to inject the `hvc1` tag **only** when `--apple-compat` is explicitly enabled. This ensures broader compatibility with non-Apple devices (which prefer the standard `hev1` tag) while maintaining full support for QuickTime and Photos when requested.
 - **Ultimate Mode Preset Tuning**: Upgraded the HEVC encoder preset from `medium` to `slower` in `ultimate` (极限) mode. This change applies to both the searchable conversion iterations and the final lossless archival path, significantly improving the quality-to-size ratio for high-priority tasks.
 - **Dynamic Parameter Propagation**: Refactored the internal conversion and exploration APIs to propagate compatibility and quality flags throughout the entire encoding pipeline, including animated image-to-video processing.
-- **Files**: `shared_utils/src/x265_encoder.rs`, `shared_utils/src/video_explorer.rs`, `shared_utils/src/video_explorer/gpu_coarse_search.rs`, `vid/src/conversion_api.rs`, `vid/src/animated_image.rs`.
+- **Files**: `crates/shared_utils/src/x265_encoder.rs`, `crates/shared_utils/src/video_explorer.rs`, `crates/shared_utils/src/video_explorer/gpu_coarse_search.rs`, `crates/vid/src/conversion_api.rs`, `crates/vid/src/animated_image.rs`.
 
 ## [0.11.1] — 2026-04-04
 
@@ -101,10 +101,10 @@ Consolidated the previous HEVC-only and AV1-only crates into a single, unified c
   - `smart_build.sh` simplified to target `img` and `vid` binaries.
   - GitHub Workflows updated to compile and release the new unified binaries.
   - Updated project documentation across multiple languages to reflect the new architecture.
-- **Dynamic Exploration Refactoring**: Refactored `vid/src/animated_image.rs` and `vid/src/conversion_api.rs` to support dynamic encoder selection (`libx265` vs `libsvtav1`) based on the runtime `--codec` strategy.
+- **Dynamic Exploration Refactoring**: Refactored `crates/vid/src/animated_image.rs` and `crates/vid/src/conversion_api.rs` to support dynamic encoder selection (`libx265` vs `libsvtav1`) based on the runtime `--codec` strategy.
 - **Improved Workspace Maintenance**: Reduced total crate count from 5 to 3, significantly simplifying dependency management and binary distribution.
 - **Code Refactor & Cleanup**: Fixed several long-standing syntax errors in the AV1 exploration path and unified the animated-media quality analysis logic for better cross-codec consistency.
-- **Files**: `img/src/main.rs`, `vid/src/main.rs`, `vid/src/conversion_api.rs`, `vid/src/animated_image.rs`, `shared_utils/src/conversion.rs`, and updated `Cargo.toml`.
+- **Files**: `crates/img/src/main.rs`, `crates/vid/src/main.rs`, `crates/vid/src/conversion_api.rs`, `crates/vid/src/animated_image.rs`, `crates/shared_utils/src/conversion.rs`, and updated `Cargo.toml`.
 
 #### 🐘 Static Image Quality DB — Full Architecture Alignment
 
@@ -118,8 +118,8 @@ Overhauled `image_quality_db.rs` to match the maturity of the animated-media pip
 - **Re-enabled Active Lookup in Pipelines**: Removed the `[TEMPORARY DISABLE]` commented-out block in `img_hevc` and wired the equivalent lookup into `img_av1`'s `dispatch_static_conversion`. Both pipelines now call `shared_utils::lookup_image_quality()` and log the result in verbose mode, labelling the source as either `KNN` (DB-backed) or `BPP heuristic` (fallback). No routing changes — informational only until the training set matures.
 - **Database Maturity Check (GIF/Video)**: New `check_gif_db_maturity()` in `gif_value_db.rs` validates sample counts before engaging KNN. Requires `MIN_GIF_SAMPLES_TOTAL >= 150` and `MIN_GIF_SAMPLES_PER_CLASS >= 30`. Below thresholds → bypass KNN and log info message. Prevents unreliable decisions from sparse training data.
 - **Database Maturity Check (Static Image)**: New `check_quality_db_maturity()` in `image_quality_db.rs` applies the same principle to static image quality DB. Requires `MIN_QUALITY_SAMPLES_TOTAL >= 50` and `MIN_QUALITY_SAMPLES_PER_CLASS >= 10`. When immature, still logs inference records with `final_verdict = "immature_bypass"` for blind-spot discovery.
-- **New constants**: `MIN_GIF_SAMPLES_TOTAL`, `MIN_GIF_SAMPLES_PER_CLASS`, `MIN_QUALITY_SAMPLES_TOTAL`, `MIN_QUALITY_SAMPLES_PER_CLASS` added to `shared_utils/src/constants.rs`. `ENV_DISABLE_IMAGE_QUALITY_DB = "MODERN_FORMAT_DISABLE_IMAGE_QUALITY_DB"` added to `shared_utils/src/constants.rs`.
-- **Files**: `shared_utils/src/image_quality_db.rs`, `shared_utils/src/constants.rs`, `shared_utils/src/gif_value_db.rs`, `img_hevc/src/main.rs`, `img_av1/src/main.rs`
+- **New constants**: `MIN_GIF_SAMPLES_TOTAL`, `MIN_GIF_SAMPLES_PER_CLASS`, `MIN_QUALITY_SAMPLES_TOTAL`, `MIN_QUALITY_SAMPLES_PER_CLASS` added to `crates/shared_utils/src/constants.rs`. `ENV_DISABLE_IMAGE_QUALITY_DB = "MODERN_FORMAT_DISABLE_IMAGE_QUALITY_DB"` added to `crates/shared_utils/src/constants.rs`.
+- **Files**: `crates/shared_utils/src/image_quality_db.rs`, `crates/shared_utils/src/constants.rs`, `crates/shared_utils/src/gif_value_db.rs`, `img_hevc/src/main.rs`, `img_av1/src/main.rs`
 
 #### 🔄 Animated Media Pipeline — Architectural Separation
 
@@ -144,11 +144,11 @@ Completed the multi-phase migration to enforce strict responsibility separation 
   - **HNSW Index**: Created `idx_samples_features_hnsw` using `vector_l2_ops` for high-performance approximate nearest neighbor retrieval.
   - **Query Simplification**: KNN lookup now uses `ORDER BY features <-> $1::vector LIMIT 24` — PostgreSQL handles all vector math and ranking.
   - **Performance Impact**: Eliminates O(N) in-memory distance computation; leverages database index for O(log N) retrieval.
-  - **Files**: `shared_utils/src/gif_value_db.rs`
+  - **Files**: `crates/shared_utils/src/gif_value_db.rs`
 - **📂 Layer 0 Legacy Fallback**: Implemented a "black and white" recovery path for environments with missing or incomplete databases.
   - **Logic**: Assets < 10.0s are preserved as `LoopStrong`; assets ≥ 10.0s are categorized as `LoopWeak`.
   - **Bypass Rule**: Added `MODERN_FORMAT_DISABLE_DB_FEEDBACK` developer toggle to force this legacy behavior even when the DB is present.
-  - **Files**: `shared_utils/src/loop_intent.rs`
+  - **Files**: `crates/shared_utils/src/loop_intent.rs`
 
 #### 📊 Dynamic Feedback Loop & Data Calibration (Phase 3)
 
@@ -158,7 +158,7 @@ Completed the multi-phase migration to enforce strict responsibility separation 
 - **Feature Integrity Refresh**: Updated the retraining pipeline to proactively identify and fix "dead" features.
   - **Refresh Logic**: Re-probes existing samples where `motion_gini = 0.0` (indicating historical calculation failure) using the latest motion analysis.
   - **Impact**: `directory_meme_score` and `motion_gini` now provide significant predictive signals in diagnostics.
-- **Files**: `shared_utils/src/gif_value_db.rs`, `shared_utils/src/loop_intent.rs`
+- **Files**: `crates/shared_utils/src/gif_value_db.rs`, `crates/shared_utils/src/loop_intent.rs`
 
 #### 📊 Data-Driven Feature Weighting
 
@@ -167,7 +167,7 @@ Completed the multi-phase migration to enforce strict responsibility separation 
   - **Features Analyzed**: duration_secs, fps, file_size_bytes, temporal_bpp, spatial_bpp, frame_payload_variation, frame_delay_variation, palette_depth, motion_gini, temporal_flatness, webp_compression_ratio, cadence_score, loop_frequency, directory_meme_score.
   - **Dynamic Weight Assignment**: `refresh_feature_stats()` now populates `weight` field in `FeatureStats` based on learned discriminative power (clamped to [0.01, 10.0]).
   - **Vector Encoding Integration**: Feature weights are baked into the HNSW vector via `sqrt(weight)` scaling, ensuring more discriminative features dominate the L2 distance.
-  - **Files**: `shared_utils/src/gif_value_db.rs`
+  - **Files**: `crates/shared_utils/src/gif_value_db.rs`
 
 #### 🔁 Level 4 Feedback Loop: Inference Logging
 
@@ -176,7 +176,7 @@ Completed the multi-phase migration to enforce strict responsibility separation 
   - **Signal Snapshot**: Full JSONB snapshot of LoopMeta fields including dimensions, fps, frame count, transparency, ICC profiles, meme platform markers, palette depth, motion gini, cadence scores, and directory/filename meme scores.
   - **Fire-and-Forget**: Logging is non-blocking — failures produce a `log::warn!` but never halt the pipeline.
   - **Index**: `idx_inference_log_blindspots` on `(knn_confidence, duration_secs, webp_compression_ratio)` for efficient blind-spot queries.
-  - **Files**: `shared_utils/src/gif_value_db.rs`, `shared_utils/src/loop_intent.rs`
+  - **Files**: `crates/shared_utils/src/gif_value_db.rs`, `crates/shared_utils/src/loop_intent.rs`
 
 #### 🔍 Inference Diagnostics & Blind Spot Discovery
 
@@ -190,7 +190,7 @@ Completed the multi-phase migration to enforce strict responsibility separation 
   - `query_feature_discriminative_power()`: Returns features sorted by class separation strength.
   - `query_inference_blind_spots(confidence_threshold)`: Finds duration/WebP-ratio regions where KNN confidence is below threshold.
   - `query_inference_log_summary()`: Returns total records, verdict/layer distributions, and Layer 7 fallback count.
-  - **Files**: `shared_utils/src/gif_value_db.rs`
+  - **Files**: `crates/shared_utils/src/gif_value_db.rs`
 
 #### 🔧 assess_loop_intent_from_meta Refactoring
 
@@ -198,22 +198,22 @@ Completed the multi-phase migration to enforce strict responsibility separation 
 - **KNN Data Capture**: All KNN results (keep_probability, confidence, neighbor_count) are now captured as tracking variables for logging.
 - **Layer Exit Tagging**: New `extract_layer_tag()` helper parses verdict reason strings to extract the exit layer (e.g., "Layer 1-A", "Layer 6", "Layer 7").
 - **Final Probability Mapping**: `LoopStrong` → 1.0, `LoopWeak` → 0.0, `Uncertain` → tree_probability.
-  - **Files**: `shared_utils/src/loop_intent.rs`
+  - **Files**: `crates/shared_utils/src/loop_intent.rs`
 
 #### 🏋️ motion_gini Computation Fix
 
 - **Packet Size-Based Motion Metric**: Changed `motion_gini` calculation from `mv_magnitudes` (motion vectors, often unavailable) to `pkt_sizes` (packet sizes, always available from ffprobe).
   - **Impact**: More reliable motion gini scores across diverse video formats, improving temporal motion analysis in Layers 4-5.
-  - **Files**: `shared_utils/src/loop_intent.rs` (`LoopMeta::from_ffprobe_result`, `LoopMeta::from_video_probe`)
+  - **Files**: `crates/shared_utils/src/loop_intent.rs` (`LoopMeta::from_ffprobe_result`, `LoopMeta::from_video_probe`)
 
 #### 🛠️ Training Binary Enhancements
 
 - **recompute_stats**: Now calls `init_schema()` before `refresh_feature_stats()` to ensure HNSW index and vector columns exist before statistics refresh.
-  - **File**: `shared_utils/src/bin/recompute_stats.rs`
+  - **File**: `crates/shared_utils/src/bin/recompute_stats.rs`
 - **train_knn**: Import reorganization, formatting cleanup (clap arg formatting, println line breaks).
-  - **File**: `shared_utils/src/bin/train_knn.rs`
+  - **File**: `crates/shared_utils/src/bin/train_knn.rs`
 - **train_quality**: Import reorganization, formatting cleanup (function call line breaks, Client::connect formatting).
-  - **File**: `shared_utils/src/bin/train_quality.rs`
+  - **File**: `crates/shared_utils/src/bin/train_quality.rs`
 
 #### 🧹 Code Quality & Formatting
 
@@ -244,7 +244,7 @@ Completed the multi-phase migration to enforce strict responsibility separation 
   - `short_asset_window_secs`: Upper bound for extended short-asset bonus, clamped to 10.0s minimum.
   - `modern_bias_duration_secs`: Lower bound for long-silent penalty, clamped to 15.0s minimum.
 - **Layer 6 Relaxation**: Extended `short_clip_like` check to use `short_asset_window_secs` instead of `short_clip_secs`, broadening acceptance range for silent assets up to 10s+.
-  - **Files**: `shared_utils/src/loop_intent.rs`
+  - **Files**: `crates/shared_utils/src/loop_intent.rs`
 
 #### 🔒 Developer Override Defaults Changed (Breaking Change)
 
@@ -254,7 +254,7 @@ Completed the multi-phase migration to enforce strict responsibility separation 
   - **Migration**: Set `MODERN_FORMAT_FORCE_SHORT_GIFS=1` or `MODERN_FORMAT_INTERCEPT_LONG_SILENT=1` to restore legacy behavior.
 - **New Helper Function**: `developer_layer1_override_enabled()` for cleaner environment variable parsing (accepts `1`, `true`, `yes`, `on`).
 - **Constants Documentation Updated**: Clarified `HARD_PASS_SHORT_GIF_THRESHOLD_SECS` (10.0s) as Layer 1-C dev hard-pass boundary, `MODERN_FORMAT_VIDEO_BIAS_THRESHOLD_SECS` (15.0s) as long-silent bias threshold.
-  - **Files**: `shared_utils/src/constants.rs`, `shared_utils/src/loop_intent.rs`
+  - **Files**: `crates/shared_utils/src/constants.rs`, `crates/shared_utils/src/loop_intent.rs`
 
 #### 🧪 Test Suite Enhancements
 
@@ -263,7 +263,7 @@ Completed the multi-phase migration to enforce strict responsibility separation 
   - `hidden_layer1_overrides_are_opt_in`: Confirms developer toggles are disabled by default and activate only when explicitly set.
 - **Test Cleanup**: Removed redundant `std::env::set_var(..., "0")` calls in tests since defaults are now opt-in.
 - **Updated Assertions**: Added threshold validation for `short_asset_window_secs` and `modern_bias_duration_secs` in existing tests.
-  - **Files**: `shared_utils/src/loop_intent.rs`, `vid_hevc/src/conversion_api.rs`
+  - **Files**: `crates/shared_utils/src/loop_intent.rs`, `vid_hevc/src/conversion_api.rs`
 
 #### 🍎 Apple Live Photo Script
 
@@ -277,9 +277,9 @@ Completed the multi-phase migration to enforce strict responsibility separation 
 - **Loop Intent Test Fixes**: Fixed 4 failing tests caused by developer bypass rules (Layer 1-C/1-D) intercepting test inputs before reaching Layer 4 logic.
   - **Root Cause**: `ENV_FORCE_SHORT_GIFS` and `ENV_INTERCEPT_LONG_SILENT` default to enabled, causing short-duration test fixtures to hit Layer 1-C (forceful short asset pass) instead of the intended Layer 4 content analysis path.
   - **Fix**: `verdict_with_profile()` now temporarily disables both env vars during test execution, restoring them afterward.
-  - **Files**: `shared_utils/src/loop_intent.rs`, `vid_hevc/src/conversion_api.rs`
+  - **Files**: `crates/shared_utils/src/loop_intent.rs`, `vid_hevc/src/conversion_api.rs`
 - **Missing Test Field**: Added `is_native_gif: true` to `gif_value_db.rs` test `base_meta()` fixture to match the updated `LoopMeta` struct.
-  - **File**: `shared_utils/src/gif_value_db.rs`
+  - **File**: `crates/shared_utils/src/gif_value_db.rs`
 
 #### 🔊 gifski Error Visibility
 
@@ -292,7 +292,7 @@ Completed the multi-phase migration to enforce strict responsibility separation 
 #### 🌐 Code Comment & Keyword Localization
 
 - **Chinese → English**: Translated inline code comments and log messages across the workspace for consistency.
-  - **Files**: `shared_utils/src/loop_intent.rs`, `shared_utils/src/gif_value_db.rs`, `vid_hevc/src/animated_image.rs`, `vid_hevc/src/conversion_api.rs`, `vid_av1/src/conversion_api.rs`
+  - **Files**: `crates/shared_utils/src/loop_intent.rs`, `crates/shared_utils/src/gif_value_db.rs`, `vid_hevc/src/animated_image.rs`, `vid_hevc/src/conversion_api.rs`, `vid_av1/src/conversion_api.rs`
 - **Meme Directory Keywords**: Replaced Chinese keywords (表情包, 表情, 贴纸, 斗图, 梗图, 梗) with English equivalents (sticker_pack, sticker_pkg, sticker_collection, meme_collection, funny, humor) in `loop_intent.rs` and `backfill_directory_scores.py`.
   - **Rationale**: Directory names in the collection are English-based; Chinese keywords had zero match rate.
 

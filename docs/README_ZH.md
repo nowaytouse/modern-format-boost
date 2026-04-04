@@ -219,9 +219,9 @@ vid run --codec av1 /视频/路径
 
 ## 🏗️ 系统架构
 
-- `img/`: 图片 → JXL/HEVC/AV1 工具
-- `vid/`: 视频 → HEVC/AV1 工具
-- `shared_utils/`: 处理大脑 (GPU 混合引擎, HDR 映射, 元数据)
+- `crates/img/`: 图片 → JXL/HEVC/AV1 工具
+- `crates/vid/`: 视频 → HEVC/AV1 工具
+- `crates/shared_utils/`: 处理大脑 (GPU 混合引擎, HDR 映射, 元数据)
 - `Modern Format Boost.app/`: macOS 拖拽图形界面
 
 ## ❓ FAQ

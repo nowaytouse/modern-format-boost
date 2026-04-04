@@ -264,9 +264,9 @@ vid run --codec av1 /path/to/media
 
 ## 🏗️ Architecture
 
-- `img/`: Image → JXL/HEVC/AV1 tool
-- `vid/`: Video → HEVC/AV1 tool
-- `shared_utils/`: Core brain (GPU/CPU hybrid engine, HDR mapping, metadata)
+- `crates/img/`: Image → JXL/HEVC/AV1 tool
+- `crates/vid/`: Video → HEVC/AV1 tool
+- `crates/shared_utils/`: Core brain (GPU/CPU hybrid engine, HDR mapping, metadata)
 - `Modern Format Boost.app/`: macOS drag-and-drop UI
 
 ## ❓ FAQ
