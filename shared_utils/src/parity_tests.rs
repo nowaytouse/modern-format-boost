@@ -384,9 +384,10 @@ mod parity_tests {
             .build();
         let args: Vec<String> = cmd.get_args().map(|s| s.to_string_lossy().to_string()).collect();
         // Snapshotted: [flags] [src] [dest]
-        assert_eq!(args[0], "-av");
-        assert!(args[1].contains("src"));
-        assert!(args[2].contains("dest"));
+        assert_eq!(args[0], "--protect-args");
+        assert_eq!(args[1], "-av");
+        assert!(args[2].contains("src"));
+        assert!(args[3].contains("dest"));
     }
 
     #[test]
@@ -561,14 +562,50 @@ mod parity_tests {
     }
 
     #[test]
-    fn test_exiv2_print_hardening() {
-        let cmd = crate::tool_builders::Exiv2Builder::new()
-            .print_all()
-            .input(Path::new("in.jpg"))
+    fn test_magick_resource_limits() {
+        let cmd = crate::image_builders::MagickBuilder::new()
+            .limit_thread(1)
+            .limit_memory("2GiB")
+            .limit_map("4GiB")
+            .input("in.png")
+            .output("out.png")
             .build();
         let args: Vec<String> = cmd.get_args().map(|s| s.to_string_lossy().to_string()).collect();
-        
-        assert_eq!(args[0], "-pa");
-        assert!(args[1].contains("in.jpg"));
+        assert_eq!(args[0], "-limit");
+        assert_eq!(args[1], "thread");
+        assert_eq!(args[2], "1");
+        assert_eq!(args[3], "-limit");
+        assert_eq!(args[4], "memory");
+        assert_eq!(args[5], "2GiB");
+        assert_eq!(args[6], "-limit");
+        assert_eq!(args[7], "map");
+        assert_eq!(args[8], "4GiB");
+    }
+
+    #[test]
+    fn test_gifski_performance_controls() {
+        let cmd = crate::image_builders::GifskiBuilder::new()
+            .fast(true)
+            .quality(85)
+            .build();
+        let args: Vec<String> = cmd.get_args().map(|s| s.to_string_lossy().to_string()).collect();
+        assert!(args.contains(&"--fast".to_string()));
+        assert!(args.contains(&"--quality".to_string()));
+        assert!(args.contains(&"85".to_string()));
+    }
+
+    #[test]
+    fn test_avifenc_quality_refinement() {
+        let cmd = crate::image_builders::AvifencBuilder::new()
+            .quality(15, 35)
+            .speed(8)
+            .build();
+        let args: Vec<String> = cmd.get_args().map(|s| s.to_string_lossy().to_string()).collect();
+        assert!(args.contains(&"--min".to_string()));
+        assert!(args.contains(&"15".to_string()));
+        assert!(args.contains(&"--max".to_string()));
+        assert!(args.contains(&"35".to_string()));
+        assert!(args.contains(&"--speed".to_string()));
+        assert!(args.contains(&"8".to_string()));
     }
 }

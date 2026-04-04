@@ -17,6 +17,9 @@ pub struct MagickBuilder {
     extra_args: Vec<String>,
     use_stdout: bool,
     format: Option<String>,
+    limit_thread: Option<u32>,
+    limit_memory: Option<String>,
+    limit_map: Option<String>,
 }
 
 impl MagickBuilder {
@@ -77,6 +80,20 @@ impl MagickBuilder {
         self.format = Some(format.as_ref().to_string());
         self
     }
+    pub fn limit_thread(&mut self, n: u32) -> &mut Self {
+        self.limit_thread = Some(n);
+        self
+    }
+
+    pub fn limit_memory<S: AsRef<str>>(&mut self, size: S) -> &mut Self {
+        self.limit_memory = Some(size.as_ref().to_string());
+        self
+    }
+
+    pub fn limit_map<S: AsRef<str>>(&mut self, size: S) -> &mut Self {
+        self.limit_map = Some(size.as_ref().to_string());
+        self
+    }
 
     pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
         self.extra_args.push(arg.as_ref().to_string());
@@ -87,6 +104,16 @@ impl MagickBuilder {
     #[must_use]
     pub fn build(&self) -> Command {
         let mut cmd = Command::new(constants::TOOL_MAGICK);
+
+        if let Some(n) = self.limit_thread {
+            cmd.arg("-limit").arg("thread").arg(n.to_string());
+        }
+        if let Some(m) = &self.limit_memory {
+            cmd.arg("-limit").arg("memory").arg(m);
+        }
+        if let Some(m) = &self.limit_map {
+            cmd.arg("-limit").arg("map").arg(m);
+        }
 
         if let Some(input) = &self.input {
             cmd.arg("--").arg(crate::path_safety::magick_safe_path(input).as_ref());
@@ -339,6 +366,7 @@ pub struct GifskiBuilder {
     width: Option<u32>,
     height: Option<u32>,
     repeat: Option<u32>,
+    fast: bool,
     extra_args: Vec<String>,
 }
 
@@ -394,6 +422,11 @@ impl GifskiBuilder {
         self
     }
 
+    pub fn fast(&mut self, enabled: bool) -> &mut Self {
+        self.fast = enabled;
+        self
+    }
+
     pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
         self.extra_args.push(arg.as_ref().to_string());
         self
@@ -426,6 +459,10 @@ impl GifskiBuilder {
 
         if let Some(r) = self.repeat {
             cmd.arg("--repeat").arg(r.to_string());
+        }
+
+        if self.fast {
+            cmd.arg("--fast");
         }
 
         for arg in &self.extra_args {
@@ -537,7 +574,11 @@ impl AvifencBuilder {
         }
 
         if let Some(q) = self.max_quality {
-            cmd.arg("-q").arg(q.to_string());
+            cmd.arg("--max").arg(q.to_string());
+        }
+
+        if let Some(q) = self.min_quality {
+            cmd.arg("--min").arg(q.to_string());
         }
 
         if let Some(d) = self.depth {
