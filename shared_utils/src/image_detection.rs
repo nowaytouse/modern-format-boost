@@ -3,7 +3,7 @@
 //! Pure analysis layer - detects image properties without trusting file extensions.
 //! Uses magic bytes and actual file content for accurate format detection.
 //!
-//! 🔥 v3.7: Enhanced PNG Quantization Detection with Referee System
+//! Enhanced PNG Quantization Detection
 //!
 //! PNG quantization detection is challenging because PNG format doesn't record
 //! whether it was quantized. We use a multi-factor referee system:

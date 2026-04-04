@@ -1,6 +1,6 @@
 //! Universal Heartbeat System
 //!
-//! 🔥 v7.7: Extended heartbeat detection to all time-consuming operations, completely replacing timeout mechanisms
+//! Universal Heartbeat Detection
 //!
 //! ## Core Features
 //! - Smart Silence: Automatically silent when a progress bar is present, shows when no progress is shown

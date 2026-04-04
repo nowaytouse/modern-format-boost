@@ -1,4 +1,4 @@
-//! 🔥 v6.7: Pure Video Stream Size Extraction Module
+//! Video Stream Size Extraction Module
 //!
 //! Accurately extract video and audio stream sizes using ffprobe,
 //! used for pure media comparison during exploration and final verification stages.

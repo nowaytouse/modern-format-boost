@@ -1,4 +1,4 @@
-//! 🔥 v6.4.7: `FFmpeg` Process Management Module - Deadlock Prevention
+//! FFmpeg Process Management Module - Deadlock Prevention
 //!
 //! ## Problem Background
 //!

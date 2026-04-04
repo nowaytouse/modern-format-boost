@@ -3,7 +3,7 @@
 //! Provides utilities for batch file processing with proper error handling
 //! Reference: media/CONTRIBUTING.md - Batch Processing Capability requirement
 //!
-//! 🔥 v0.11.2: Added file sorting capability to prioritize smaller files
+//! Batch Processing Module with File Sorting
 
 use crate::file_sorter::{sort_by_size_ascending, SortStrategy};
 use serde::{Deserialize, Serialize};

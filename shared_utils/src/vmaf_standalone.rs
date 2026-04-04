@@ -1,4 +1,4 @@
-//! 🔥 Standalone VMAF Tool Integration
+//! VMAF Standalone Integration
 //! Uses standalone vmaf command-line tool, bypassing ffmpeg libvmaf dependency
 
 use anyhow::{Context, Result};

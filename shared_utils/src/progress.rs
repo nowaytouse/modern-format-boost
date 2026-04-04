@@ -1,6 +1,6 @@
-//! Progress Bar Module v5.30
+//! Progress Bar Module
 //!
-//! 🔥 Unified Progress Bar System:
+//! Unified Progress Bar System:
 //! - Project-wide unified style: ████████▓▓░░░░░░
 //! - Thicker and more prominent progress bars
 //! - Fixed display at the bottom of the terminal

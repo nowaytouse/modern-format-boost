@@ -1,4 +1,4 @@
-//! 🔥 v8.0: Unified Progress Bar System
+//! Unified Progress Bar System
 //!
 //! Provides a consistent experience for both batch processing and video exploration.
 

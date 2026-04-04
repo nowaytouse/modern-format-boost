@@ -1,6 +1,6 @@
 //! Common Utilities Module
 //!
-//! 🔥 v7.8: Collection of common utility functions
+//! Collection of common utility functions
 //!
 //! This module extracts common patterns recurring in the project, including:
 //! - File operation helper functions

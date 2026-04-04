@@ -1,4 +1,4 @@
-//! 🔥 v5.19: Modern UI/UX Module
+//! Modern UI/UX Module
 //!
 //! Provides modern terminal interactions and visual effects:
 //! - Dynamic Spinner animations
@@ -83,7 +83,7 @@ pub mod symbols {
     pub const STAR: &str = "★";
     pub const SPARKLE: &str = "✨";
     pub const FIRE: &str = "🔥";
-    pub const ROCKET: &str = "🚀";
+    pub const ROCKET: &str = "";
     pub const SEARCH: &str = "🔍";
     pub const CHART: &str = "📊";
     pub const FOLDER: &str = "📁";
@@ -101,7 +101,7 @@ pub mod symbols {
     pub const INFO: &str = "ℹ️";
     pub const DIAMOND: &str = "💠";
     pub const MEDAL: &str = "🥇";
-    pub const SHIELD: &str = "🛡️";
+    pub const SHIELD: &str = "";
     pub const LINK: &str = "🔗";
     pub const BUG: &str = "☢️";
     pub const STOP: &str = "⛔️";

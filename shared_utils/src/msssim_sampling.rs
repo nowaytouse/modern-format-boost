@@ -1,6 +1,6 @@
 //! MS-SSIM Smart Sampling Strategy Module
 //!
-//! 🔥 v7.6: Automatically selects sampling rate based on video duration, optimizing MS-SSIM calculation performance for long videos
+//! Automatically selects sampling rate based on video duration
 //!
 //! ## Core Strategy
 //! - ≤60s: Full calculation (1/1 sampling)
