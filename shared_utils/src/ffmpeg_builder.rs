@@ -608,7 +608,7 @@ impl FfprobeBuilder {
         }
 
         if let Some(input) = &self.input {
-            cmd.arg(crate::safe_path_arg(input).as_ref());
+            cmd.arg("--").arg(crate::safe_path_arg(input).as_ref());
         }
 
         cmd

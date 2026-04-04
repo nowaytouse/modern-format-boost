@@ -114,7 +114,7 @@ impl CjxlBuilder {
         }
 
         if let Some(d) = self.distance {
-            cmd.arg(constants::JXL_ARG_DISTANCE).arg(format!("{d:.2}"));
+            cmd.arg(constants::JXL_ARG_DISTANCE).arg(format!("{d}"));
         }
 
         if let Some(e) = self.effort {

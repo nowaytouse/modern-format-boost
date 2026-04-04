@@ -187,7 +187,7 @@ impl IdentifyBuilder {
         if let Some(fmt) = &self.format {
             cmd.arg("-format").arg(fmt);
         }
-
+ 
         for arg in &self.extra_args {
             cmd.arg(arg);
         }
@@ -279,6 +279,10 @@ impl WebpmuxBuilder {
             cmd.arg("-get").arg("frame").arg(i.to_string());
         }
 
+        for arg in &self.extra_args {
+            cmd.arg(arg);
+        }
+
         if let Some(input) = &self.input {
             cmd.arg(crate::safe_path_arg(input).as_ref());
         }
@@ -296,10 +300,6 @@ impl WebpmuxBuilder {
 
         if let Some(bg) = &self.bgcolor {
             cmd.arg("-bgcolor").arg(bg);
-        }
-
-        for arg in &self.extra_args {
-            cmd.arg(arg);
         }
 
         if let Some(output) = &self.output {
@@ -393,10 +393,6 @@ impl GifskiBuilder {
     pub fn build(&self) -> Command {
         let mut cmd = Command::new(constants::TOOL_GIFSKI);
 
-        if let Some(output) = &self.output {
-            cmd.arg("-o").arg(crate::safe_path_arg(output).as_ref());
-        }
-
         if let Some(fps) = self.fps {
             cmd.arg("--fps").arg(format!("{fps:.3}"));
         }
@@ -423,6 +419,10 @@ impl GifskiBuilder {
 
         for arg in &self.extra_args {
             cmd.arg(arg);
+        }
+
+        if let Some(output) = &self.output {
+            cmd.arg("-o").arg(crate::safe_path_arg(output).as_ref());
         }
 
         if let Some(pattern) = &self.input_pattern {
@@ -543,10 +543,6 @@ impl AvifencBuilder {
 
         for arg in &self.extra_args {
             cmd.arg(arg);
-        }
-
-        if self.input.is_some() || self.output.is_some() {
-            cmd.arg("--");
         }
 
         if let Some(input) = &self.input {
