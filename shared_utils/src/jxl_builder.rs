@@ -138,7 +138,7 @@ impl CjxlBuilder {
         }
 
         if let Some(icc) = &self.icc_profile {
-            cmd.arg("-x").arg(format!("icc_pathname={}", icc.display()));
+            cmd.arg("-x").arg(format!("{}={}", constants::JXL_ARG_ICC_PATHNAME, icc.display()));
         }
 
         if self.apple_compat {

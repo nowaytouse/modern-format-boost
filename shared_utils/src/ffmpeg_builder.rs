@@ -393,7 +393,7 @@ impl FfmpegBuilder {
         }
 
         if let Some(filter) = &self.filter_complex {
-            cmd.arg("-lavfi").arg(filter);
+            cmd.arg(constants::FFMPEG_ARG_FILTER_COMPLEX).arg(filter);
         }
 
         if let Some(vcodec) = self.vcodec {

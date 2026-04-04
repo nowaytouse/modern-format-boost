@@ -35,13 +35,18 @@ Refined the multi-language documentation suite and unified the project's version
 Achieved 100% transition to the type-safe `Builder` pattern across the entire 28-tool media pipeline, while strictly maintaining character-perfect flag parity with established "best choice" command sequences.
 
 - **Deep Flag-Order Alignment (Commit 73edfa6)**: Performed a comprehensive audit of all builder-generated command lines to ensure 100% parity with legacy manual invocations.
-    - **MagickBuilder**: Re-aligned to the canonical ImageMagick 7 sequence: `magick -- [input] [options] [output]`.
-    - **CjxlBuilder**: Re-aligned to the historical "best-choice" order: `cjxl [input] [output] [options]`, specifically optimized for stdin-piping workflows in commit `73edfa6`.
+    - **CjxlBuilder**: Restored absolute parity for ICC profile embedding using the verified `-x icc_pathname=...` syntax (libjxl v0.11.2 compliance).
+    - **AvifencBuilder**: Modernized quality controls by switching to the standard `-q` flag, deprecating the obsolete `--min/--max` quantizer parameters.
+    - **MagickBuilder**: Re-aligned to the canonical ImageMagick 7 sequence: `magick -- [input] [options] [output]`, with fixed stdout piping defaults.
+    - **FFmpeg/FFprobe**: Standardized global filtergraph flags using `-filter_complex` and guaranteed preservation of `-y`, `-v error` at the very front of all argument lists.
     - **X265Builder**: Refactored to follow the standard CLI flag-first pattern: `x265 [options] --input [in] --output [out]`.
-    - **FFmpeg/FFprobe**: Guaranteed preservation of global flags (`-y`, `-v error`) at the very front of all argument lists.
 - **100% Architectural Coverage**: Completed migration for all remaining OS-level and specialized media tools, including `rsync`, `ps`, `kill`, `hostname`, `taskkill`, `cjxl`, and `dwebp`.
 - **Regressive Parity Tests**: Introduced a dedicated `parity_tests` suite in `shared_utils` to protect the project's "best choice" flag ordering against any future architectural changes.
-- **Files**: `shared_utils/src/ffmpeg_builder.rs`, `shared_utils/src/image_builders.rs`, `shared_utils/src/jxl_builder.rs`, `shared_utils/src/tool_builders.rs`, `shared_utils/src/parity_tests.rs`.
+- **Codebase Sanitization & "AI-Smell" Removal**:
+    - **Global Emoji Purge**: Performed a project-wide sweep to remove decorative emojis (🚀, 🔥, 🛡️) from module documentation, internal comments, and terminal UI symbols.
+    - **Narrative Sanitization**: Replaced over-descriptive, AI-generated module headers and "marketing-style" narratives with standard technical documentation.
+    - **UI Uniformity**: Standardized terminal status labels to plain-text (e.g., `OK`, `ERROR`), removing all emoji-based UI markers for an industrial-grade developer experience.
+- **Files**: `shared_utils/src/ffmpeg_builder.rs`, `shared_utils/src/image_builders.rs`, `shared_utils/src/jxl_builder.rs`, `shared_utils/src/tool_builders.rs`, `shared_utils/src/parity_tests.rs`, `shared_utils/src/modern_ui.rs`.
 
 #### 🚀 HEVC Pipeline Optimization — Quality & Compatibility
 

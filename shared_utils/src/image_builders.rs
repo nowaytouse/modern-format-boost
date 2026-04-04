@@ -511,7 +511,7 @@ impl AvifencBuilder {
 
     #[must_use]
     pub fn build(&self) -> Command {
-        let mut cmd = Command::new("avifenc");
+        let mut cmd = Command::new(constants::TOOL_AVIFENC);
 
         if self.lossless {
             cmd.arg("--lossless");
@@ -525,12 +525,8 @@ impl AvifencBuilder {
             cmd.arg("-j").arg(j);
         }
 
-        if let Some(q) = self.min_quality {
-            cmd.arg("--min").arg(q.to_string());
-        }
-
         if let Some(q) = self.max_quality {
-            cmd.arg("--max").arg(q.to_string());
+            cmd.arg("-q").arg(q.to_string());
         }
 
         if let Some(d) = self.depth {
@@ -692,7 +688,7 @@ impl ExiftoolBuilder {
 
     #[must_use]
     pub fn build(&self) -> Command {
-        let mut cmd = Command::new("exiftool");
+        let mut cmd = Command::new(constants::TOOL_EXIFTOOL);
 
         if self.overwrite_original {
             cmd.arg("-overwrite_original");

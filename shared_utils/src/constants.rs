@@ -277,6 +277,9 @@ pub const TOOL_SIPS: &str = "sips";
 pub const TOOL_EXIFTOOL: &str = "exiftool";
 pub const TOOL_DWEBP: &str = "dwebp";
 pub const TOOL_X265: &str = "x265";
+pub const TOOL_AVIFENC: &str = "avifenc";
+pub const TOOL_DOVI: &str = "dovi_tool";
+pub const TOOL_HDR10PLUS: &str = "hdr10plus_tool";
 
 // --- SVT-AV1 Defaults ---
 
@@ -320,6 +323,7 @@ pub const JXL_ARG_LOSSLESS_JPEG: &str = "--lossless_jpeg=1";
 pub const JXL_ARG_CICP: &str = "--cicp";
 pub const JXL_ARG_COMPRESS_BOXES: &str = "--compress_boxes=0";
 pub const JXL_ARG_ALLOW_JPEG_RECON: &str = "--allow_jpeg_reconstruction";
+pub const JXL_ARG_ICC_PATHNAME: &str = "icc_pathname";
  
 // --- ImageMagick Argument Constants ---
 pub const MAGICK_ARG_STRIP: &str = "-strip";
