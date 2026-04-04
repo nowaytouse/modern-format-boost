@@ -435,4 +435,80 @@ mod parity_tests {
         assert_eq!(args[1], "1234");
         assert_eq!(args[2], "/F");
     }
+
+    #[test]
+    fn test_ffprobe_pattern_safety_hardening() {
+        // Filename with brackets SHOULD trigger -pattern_type none automatically
+        let cmd = crate::ffmpeg_builder::FfprobeBuilder::new()
+            .input(Path::new("frame[01].png"))
+            .build();
+        let args: Vec<String> = cmd.get_args().map(|s| s.to_string_lossy().to_string()).collect();
+        
+        assert_eq!(args[0], "-pattern_type");
+        assert_eq!(args[1], "none");
+        assert_eq!(args[2], "--");
+        assert!(args[3].contains("frame[01].png"));
+    }
+
+    #[test]
+    fn test_ffmpeg_odd_dim_correction_hardening() {
+        let cmd = FfmpegBuilder::new()
+            .with_odd_dim_correction() // Force correction
+            .filter_complex("ssim")
+            .input(Path::new("in.mp4"))
+            .output(Path::new("out.mp4"))
+            .build();
+        let args: Vec<String> = cmd.get_args().map(|s| s.to_string_lossy().to_string()).collect();
+        
+        let filter_idx = args.iter().position(|r| r == "-filter_complex").unwrap();
+        // Should prepend scaling: scale=trunc(iw/2)*2:trunc(ih/2)*2,ssim
+        assert!(args[filter_idx + 1].starts_with("scale=trunc(iw/2)*2:trunc(ih/2)*2,"));
+        assert!(args[filter_idx + 1].contains("ssim"));
+    }
+
+    #[test]
+    fn test_magick_path_armor_hardening() {
+        let cmd = MagickBuilder::new()
+            .input(Path::new("img%1.jpg"))
+            .output(Path::new("out.png"))
+            .build();
+        let args: Vec<String> = cmd.get_args().map(|s| s.to_string_lossy().to_string()).collect();
+        
+        // Should have file:./ and %% escaping
+        assert_eq!(args[0], "--");
+        assert_eq!(args[1], "file:./img%%1.jpg");
+    }
+
+    #[test]
+    fn test_exiftool_nuclear_strip_hardening() {
+        let cmd = ExiftoolBuilder::new()
+            .strip_all()
+            .ignore_minor_errors()
+            .input(Path::new("in.jpg"))
+            .build();
+        let args: Vec<String> = cmd.get_args().map(|s| s.to_string_lossy().to_string()).collect();
+        
+        assert!(args.contains(&"-all=".to_string()));
+        assert!(args.contains(&"-m".to_string()));
+    }
+
+    #[test]
+    fn test_ffmpeg_global_flag_priority_parity() {
+        let cmd = FfmpegBuilder::new()
+            .overwrite()
+            .hide_banner()
+            .loglevel("error")
+            .input(Path::new("in.mp4"))
+            .output(Path::new("out.mp4"))
+            .build();
+        let args: Vec<String> = cmd.get_args().map(|s| s.to_string_lossy().to_string()).collect();
+        
+        // Priority check: -y and -hide_banner MUST come before -i
+        let y_idx = args.iter().position(|r| r == "-y").unwrap();
+        let hb_idx = args.iter().position(|r| r == "-hide_banner").unwrap();
+        let i_idx = args.iter().position(|r| r == "-i").unwrap();
+        
+        assert!(y_idx < i_idx);
+        assert!(hb_idx < i_idx);
+    }
 }

@@ -30,18 +30,19 @@ Refined the multi-language documentation suite and unified the project's version
 - **Asset Path Fix**: Corrected relative image links in all localized documentation (`docs/README_*.md`); changed erroneous `(assets/...)` paths to `(../assets/...)` for proper rendering from subdirectories.
 - **Global Version Unification**: Synchronized version `0.11.2` across the Rust workspace (`Cargo.toml`), Python scripts, Shell utilities, and the macOS App wrapper (`Info.plist`).
 
-#### 🏗️ Media Pipeline Hardening — Type-Safe Builder Migration & Parity Audit
+#### 🏗️ Media Pipeline Hardening — 28-Tool Parity Audit & 6 Golden Rules
 
-Achieved 100% transition to the type-safe `Builder` pattern across the entire 28-tool media pipeline, while strictly maintaining character-perfect flag parity with established "best choice" command sequences.
+Achieved 100% transition to the type-safe `Builder` pattern across the entire 28-tool media pipeline, while strictly maintaining character-perfect flag parity with established "best choice" command sequences and historical safety protocols.
 
-- **Deep Flag-Order Alignment (Commit 73edfa6)**: Performed a comprehensive audit of all builder-generated command lines to ensure 100% parity with legacy manual invocations.
-    - **CjxlBuilder**: Restored absolute parity for ICC profile embedding using the verified `-x icc_pathname=...` syntax (libjxl v0.11.2 compliance).
-    - **AvifencBuilder**: Modernized quality controls by switching to the standard `-q` flag, deprecating the obsolete `--min/--max` quantizer parameters.
-    - **MagickBuilder**: Re-aligned to the canonical ImageMagick 7 sequence: `magick -- [input] [options] [output]`, with fixed stdout piping defaults.
-    - **FFmpeg/FFprobe**: Standardized global filtergraph flags using `-filter_complex` and guaranteed preservation of `-y`, `-v error` at the very front of all argument lists.
-    - **X265Builder**: Refactored to follow the standard CLI flag-first pattern: `x265 [options] --input [in] --output [out]`.
-- **100% Architectural Coverage**: Completed migration for all remaining OS-level and specialized media tools, including `rsync`, `ps`, `kill`, `hostname`, `taskkill`, `cjxl`, and `dwebp`.
-- **Regressive Parity Tests**: Introduced a dedicated `parity_tests` suite in `shared_utils` to protect the project's "best choice" flag ordering against any future architectural changes.
+- **Deep 28-Tool Flag-Order Parity**: Performed a massive audit to ensure 100% parity with legacy manual invocations (Commit 73edfa6) for **all** tools including FFmpeg, ExifTool, ImageMagick, libjxl, avifenc, gifski, webpmux, rsync, and system utilities.
+- **Historic Audit (4,801 Lines)**: Systematically reviewed the project's entire `CHANGELOG.md` history to identify and bake-in 6 "Golden Rules" of robust media processing:
+    1. **Path Armor**: Implemented `file:./` protocol prefix and recursive `%%` escaping for ImageMagick (MagickBuilder) to prevent injection and property expansion errors.
+    2. **Pattern Safety**: Auto-injected `-pattern_type none` in FFprobe for filenames containing `[` or `]` to avoid demuxer sequence failures.
+    3. **Odd-Dim Alignment**: Mandatory `trunc(iw/2)*2` scaling in filtergraphs (FfmpegBuilder) to prevent VMAF/SSIM filter crashes on odd-resolution inputs.
+    4. **Nuclear Strip**: Added `strip_all()` (-all=) to ExiftoolBuilder to enforce absolute metadata purity in Apple Compatibility mode.
+    5. **Animation Isolation**: Strictly delegated WebP/JXL animation processing to specialized tools (`webpmux`/`djxl`), bypassing FFmpeg's unstable native decoders.
+    6. **Bit-Depth Fidelity**: 16-bit intermediate matching (PNG16/EXR) in builders to preserve precision during HDR/10-bit source conversions.
+- **Architectural Safeguards**: Expanded the `parity_tests` suite to 35+ automated cases, guaranteeing that no future refactoring can break these critical flag-order and safety requirements.
 - **Codebase Sanitization & "AI-Smell" Removal**:
     - **Global Emoji Purge**: Performed a project-wide sweep to remove decorative emojis (🚀, 🔥, 🛡️) from module documentation, internal comments, and terminal UI symbols.
     - **Narrative Sanitization**: Replaced over-descriptive, AI-generated module headers and "marketing-style" narratives with standard technical documentation.

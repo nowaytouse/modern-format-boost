@@ -27,7 +27,7 @@ pub fn safe_path_arg(path: &Path) -> Cow<'_, str> {
 }
 
 /// Specialized path argument escaping for format-interpreted strings.
-/// (e.g. ExifTool's `-tagsfromfile`, ImageMagick's internal property interpretation).
+/// (e.g. ImageMagick's internal property interpretation).
 #[inline]
 #[must_use]
 pub fn property_safe_path(path: &Path) -> Cow<'_, str> {
@@ -36,6 +36,25 @@ pub fn property_safe_path(path: &Path) -> Cow<'_, str> {
         Cow::Owned(s.replace('%', "%%"))
     } else {
         s
+    }
+}
+
+/// ImageMagick specific path armor.
+/// Prepends 'file:./' and doubles '%' to prevent protocol injection and property expansion.
+#[inline]
+#[must_use]
+pub fn magick_safe_path(path: &Path) -> Cow<'_, str> {
+    let s = property_safe_path(path);
+    if s.starts_with("file:") {
+        s
+    } else {
+        let mut out = String::with_capacity(7 + s.len());
+        out.push_str("file:");
+        if !s.starts_with('/') && !s.starts_with("./") {
+            out.push_str("./");
+        }
+        out.push_str(&s);
+        Cow::Owned(out)
     }
 }
 
@@ -94,6 +113,18 @@ mod tests {
         assert_eq!(property_safe_path(Path::new("test%1.jpg")), "test%%1.jpg");
         // Test URL encoded %3A
         assert_eq!(property_safe_path(Path::new("http%3A.jpg")), "http%%3A.jpg");
+    }
+
+    #[test]
+    fn test_magick_safe_path() {
+        // Test relative
+        assert_eq!(magick_safe_path(Path::new("img.jpg")), "file:./img.jpg");
+        // Test with %
+        assert_eq!(magick_safe_path(Path::new("img%1.jpg")), "file:./img%%1.jpg");
+        // Test absolute
+        assert_eq!(magick_safe_path(Path::new("/abs/img.jpg")), "file:/abs/img.jpg");
+        // Test already prepended (idempotency)
+        assert_eq!(magick_safe_path(Path::new("file:./img.jpg")), "file:./img.jpg");
     }
 
     #[test]

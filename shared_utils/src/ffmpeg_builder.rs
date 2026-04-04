@@ -185,6 +185,7 @@ pub struct FfmpegBuilder {
     extra_args: Vec<String>,
     is_gpu: bool,
     params: FfmpegParams,
+    odd_dim_correction: bool,
 }
 
 impl FfmpegBuilder {
@@ -350,6 +351,13 @@ impl FfmpegBuilder {
         self
     }
 
+    /// Automatically corrects odd dimensions by scaling to floor(w/2)*2.
+    /// Prevents filtergraph crashes with SSIM/VMAF on odd-sized inputs.
+    pub fn with_odd_dim_correction(&mut self) -> &mut Self {
+        self.odd_dim_correction = true;
+        self
+    }
+
     pub fn args<I, S>(&mut self, args: I) -> &mut Self 
     where 
         I: IntoIterator<Item = S>,
@@ -392,8 +400,14 @@ impl FfmpegBuilder {
             cmd.arg(crate::safe_path_arg(input).as_ref());
         }
 
-        if let Some(filter) = &self.filter_complex {
+        if let Some(mut filter) = self.filter_complex.clone() {
+            if self.odd_dim_correction {
+                // Prepend scaling to align dimensions - standard fix for filter compatibility
+                filter = format!("scale=trunc(iw/2)*2:trunc(ih/2)*2,{}", filter);
+            }
             cmd.arg(constants::FFMPEG_ARG_FILTER_COMPLEX).arg(filter);
+        } else if self.odd_dim_correction {
+            cmd.arg(constants::FFMPEG_ARG_FILTER_COMPLEX).arg("scale=trunc(iw/2)*2:trunc(ih/2)*2");
         }
 
         if let Some(vcodec) = self.vcodec {
@@ -601,6 +615,13 @@ impl FfprobeBuilder {
 
         if let Some(pt) = &self.pattern_type {
             cmd.arg("-pattern_type").arg(pt);
+        } else if let Some(input) = &self.input {
+            // Auto-fallback: if filename contains [ or ], we MUST use -pattern_type none
+            // to avoid demuxer sequence errors.
+            let s = input.to_string_lossy();
+            if s.contains('[') || s.contains(']') {
+                cmd.arg("-pattern_type").arg("none");
+            }
         }
 
         for arg in &self.extra_args {

@@ -89,7 +89,7 @@ impl MagickBuilder {
         let mut cmd = Command::new(constants::TOOL_MAGICK);
 
         if let Some(input) = &self.input {
-            cmd.arg("--").arg(crate::safe_path_arg(input).as_ref());
+            cmd.arg("--").arg(crate::path_safety::magick_safe_path(input).as_ref());
         }
 
         for arg in &self.extra_args {
@@ -683,6 +683,20 @@ impl ExiftoolBuilder {
 
     pub fn use_stdin(&mut self) -> &mut Self {
         self.use_stdin = true;
+        self
+    }
+
+    /// Strips all metadata tags from the file.
+    /// Equivalent to `exiftool -all=`.
+    pub fn strip_all(&mut self) -> &mut Self {
+        self.arg("-all=");
+        self
+    }
+
+    /// Ignores minor errors and warnings.
+    /// Equivalent to `exiftool -m`.
+    pub fn ignore_minor_errors(&mut self) -> &mut Self {
+        self.arg("-m");
         self
     }
 
