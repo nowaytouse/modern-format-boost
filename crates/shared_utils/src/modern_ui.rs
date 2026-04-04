@@ -42,15 +42,15 @@ pub mod colors {
     pub const BG_CYAN: &str = "\x1b[46m";
     pub const BG_WHITE: &str = "\x1b[47m";
 
-    // 24-bit True Colors (RGB) - Premium Palette
-    pub const MFB_BLUE: &str = "\x1b[38;2;67;160;255m"; // Electric Blue
-    pub const MFB_PURPLE: &str = "\x1b[38;2;187;134;252m"; // Soft Lilac (Premium)
-    pub const MFB_PINK: &str = "\x1b[38;2;255;121;198m"; // Hot Pink
-    pub const MFB_GREEN: &str = "\x1b[38;2;80;250;123m"; // Spring Green
-    pub const MFB_YELLOW: &str = "\x1b[38;2;241;250;140m"; // Pale Gold
-    pub const MFB_CYAN: &str = "\x1b[38;2;139;233;253m"; // Sky Cyan
-    pub const MFB_ORANGE: &str = "\x1b[38;2;255;184;108m"; // Burnt Orange
-    pub const MFB_RED: &str = "\x1b[38;2;255;85;85m"; // Vivid Red
+    // UI palette
+    pub const MFB_BLUE: &str = "\x1b[38;2;67;160;255m";
+    pub const MFB_PURPLE: &str = "\x1b[38;2;187;134;252m";
+    pub const MFB_PINK: &str = "\x1b[38;2;255;121;198m";
+    pub const MFB_GREEN: &str = "\x1b[38;2;80;250;123m";
+    pub const MFB_YELLOW: &str = "\x1b[38;2;241;250;140m";
+    pub const MFB_CYAN: &str = "\x1b[38;2;139;233;253m";
+    pub const MFB_ORANGE: &str = "\x1b[38;2;255;184;108m";
+    pub const MFB_RED: &str = "\x1b[38;2;255;85;85m";
 
     // UI Interaction Colors
     pub const ACCENT: &str = "\x1b[38;2;0;198;255m";
@@ -75,61 +75,61 @@ pub mod gradients {
 }
 
 pub mod symbols {
-    pub const CHECK: &str = "✓";
-    pub const CROSS: &str = "✗";
-    pub const ARROW_RIGHT: &str = "→";
-    pub const ARROW_DOWN: &str = "↓";
-    pub const BULLET: &str = "•";
-    pub const STAR: &str = "★";
-    pub const SPARKLE: &str = "✨";
-    pub const FIRE: &str = "🔥";
+    pub const CHECK: &str = "v";
+    pub const CROSS: &str = "x";
+    pub const ARROW_RIGHT: &str = "->";
+    pub const ARROW_DOWN: &str = "v";
+    pub const BULLET: &str = "*";
+    pub const STAR: &str = "*";
+    pub const SPARKLE: &str = "";
+    pub const FIRE: &str = "";
     pub const ROCKET: &str = "";
-    pub const SEARCH: &str = "🔍";
-    pub const CHART: &str = "📊";
-    pub const FOLDER: &str = "📁";
-    pub const VIDEO: &str = "🎬";
-    pub const IMAGE: &str = "🖼️";
-    pub const COMPRESS: &str = "📦";
-    pub const QUALITY: &str = "🎯";
-    pub const GPU: &str = "⚡";
-    pub const CPU: &str = "🖥️";
-    pub const CLOCK: &str = "⏱️";
-    pub const SAVE: &str = "💾";
-    pub const WARNING: &str = "⚠️";
-    pub const ERROR: &str = "❌";
-    pub const SUCCESS: &str = "✅";
-    pub const INFO: &str = "ℹ️";
-    pub const DIAMOND: &str = "💠";
-    pub const MEDAL: &str = "🥇";
+    pub const SEARCH: &str = "";
+    pub const CHART: &str = "";
+    pub const FOLDER: &str = "";
+    pub const VIDEO: &str = "";
+    pub const IMAGE: &str = "";
+    pub const COMPRESS: &str = "";
+    pub const QUALITY: &str = "";
+    pub const GPU: &str = "";
+    pub const CPU: &str = "";
+    pub const CLOCK: &str = "";
+    pub const SAVE: &str = "";
+    pub const WARNING: &str = "!";
+    pub const ERROR: &str = "X";
+    pub const SUCCESS: &str = "OK";
+    pub const INFO: &str = "i";
+    pub const DIAMOND: &str = ">";
+    pub const MEDAL: &str = "";
     pub const SHIELD: &str = "";
-    pub const LINK: &str = "🔗";
-    pub const BUG: &str = "☢️";
-    pub const STOP: &str = "⛔️";
+    pub const LINK: &str = "";
+    pub const BUG: &str = "!";
+    pub const STOP: &str = "!";
 }
 
 pub mod progress_style {
-    pub const PROGRESS_CHARS: &str = "█▓░";
+    pub const PROGRESS_CHARS: &str = "=#-";
 
     pub const BAR_WIDTH: usize = 35;
 
-    pub const BAR_LEFT: &str = "▕";
-    pub const BAR_RIGHT: &str = "▏";
+    pub const BAR_LEFT: &str = "[";
+    pub const BAR_RIGHT: &str = "]";
 
-    pub const SPINNER_CHARS: &str = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
+    pub const SPINNER_CHARS: &str = "-/|\\";
 
-    pub const BATCH_TEMPLATE: &str = "{spinner:.green} {prefix:.cyan.bold} ▕{bar:35.green/black}▏ {percent:>3}% • {pos}/{len} • ⏱️ {elapsed_precise} (ETA: {eta}) • {msg}";
+    pub const BATCH_TEMPLATE: &str = "{spinner:.green} {prefix:.cyan.bold} [{bar:35.green/black}] {percent:>3}% * {pos}/{len} * {elapsed_precise} (ETA: {eta}) * {msg}";
 
-    pub const EXPLORE_TEMPLATE: &str = "{spinner:.green} {prefix:.cyan.bold} ▕{bar:35.green/black}▏ {percent:>3}% • ⏱️ {elapsed} • {msg}";
+    pub const EXPLORE_TEMPLATE: &str = "{spinner:.green} {prefix:.cyan.bold} [{bar:35.green/black}] {percent:>3}% * {elapsed} * {msg}";
 
     pub const COMPACT_TEMPLATE: &str =
-        "{prefix:.cyan} ▕{bar:30.green/black}▏ {percent:>3}% ({pos}/{len}) {msg:.dim}";
+        "{prefix:.cyan} [{bar:30.green/black}] {percent:>3}% ({pos}/{len}) {msg:.dim}";
 
     pub const SPINNER_TEMPLATE: &str =
-        "{spinner:.green} {prefix:.cyan.bold} • ⏱️ {elapsed} • {msg}";
+        "{spinner:.green} {prefix:.cyan.bold} * {elapsed} * {msg}";
 }
 
-const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-const SPINNER_DOTS: &[&str] = &["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
+const SPINNER_FRAMES: &[&str] = &["-", "/", "|", "\\"];
+const SPINNER_DOTS: &[&str] = &["*", ".", "o", "O"];
 
 static SPINNER_FRAME: AtomicU64 = AtomicU64::new(0);
 
@@ -162,7 +162,7 @@ pub fn render_progress_bar(progress: f64, width: usize, style: ProgressStyle) ->
             format!("[{}{}]", "█".repeat(filled), "░".repeat(empty))
         }
         ProgressStyle::Modern => {
-            format!("{}{}", "━".repeat(filled), "─".repeat(empty))
+            format!("{}{}", "=".repeat(filled), "-".repeat(empty))
         }
         ProgressStyle::Gradient => {
             let mut bar = String::new();

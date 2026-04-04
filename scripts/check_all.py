@@ -27,9 +27,7 @@ except ImportError:
         return s
 
 
-# ---------------------------------------------------------------------------
 # Core helpers
-# ---------------------------------------------------------------------------
 
 _RICH_TAG = re.compile(r"\[/?[^\]]+\]")
 
@@ -91,9 +89,7 @@ def format_duration(seconds: float) -> str:
     return f"{seconds:.2f}s"
 
 
-# ---------------------------------------------------------------------------
 # Tracker
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -109,15 +105,13 @@ class Tracker:
 
     def announce_step(self, kind: str, name: str) -> None:
         self.step_count += 1
-        icon = "🔍" if kind == "required" else "💡"
+        icon = ">" if kind == "required" else "*"
         cprint(
             f"\n[bold][{self.step_count}] {icon} {kind.upper()}: {escape(name)}[/bold]"
         )
 
 
-# ---------------------------------------------------------------------------
 # Step runners
-# ---------------------------------------------------------------------------
 
 
 def run_step(
@@ -152,17 +146,17 @@ def run_step(
 
     if proc.returncode == 0:
         tracker.passed += 1
-        cprint(f"  [green]✅ PASS[/green] ({duration})")
+        cprint(f"  [green]OK[/green] ({duration})")
         return True
 
     if kind == "required":
         tracker.failed += 1
         tracker.failed_steps.append(name)
-        cprint(f"  [red]❌ FAIL[/red] (exit {proc.returncode}, {duration})")
+        cprint(f"  [red]FAIL[/red] (exit {proc.returncode}, {duration})")
     else:
         tracker.warned += 1
         tracker.warned_steps.append(name)
-        cprint(f"  [yellow]⚠️  WARN[/yellow] (exit {proc.returncode}, {duration})")
+        cprint(f"  [yellow]WARN[/yellow] (exit {proc.returncode}, {duration})")
     return False
 
 
@@ -170,12 +164,10 @@ def skip_step(tracker: Tracker, name: str, reason: str) -> None:
     tracker.announce_step("optional", name)
     tracker.skipped += 1
     tracker.skipped_steps.append(f"{name} ({reason})")
-    cprint(f"  [blue]⏭️  SKIP[/blue] ({reason})")
+    cprint(f"  [blue]SKIP[/blue] ({reason})")
 
 
-# ---------------------------------------------------------------------------
 # AI smell check
-# ---------------------------------------------------------------------------
 
 # Agentic task prompt for Claude Code / Gemini CLI.
 # The agent has filesystem access and will enumerate + read .rs files itself.
@@ -221,7 +213,7 @@ def check_ai_smell(tracker: Tracker, repo_root: Path) -> bool:
     if agent is None:
         tracker.skipped += 1
         tracker.skipped_steps.append("AI smell (no agent CLI)")
-        cprint("  [blue]⏭️  SKIP[/blue] (neither 'claude' nor 'gemini' CLI found)")
+        cprint("  [blue]SKIP[/blue] (neither 'claude' nor 'gemini' CLI found)")
         return True
 
     result = subprocess.run(
@@ -237,12 +229,12 @@ def check_ai_smell(tracker: Tracker, repo_root: Path) -> bool:
 
     if result.returncode == 0:
         tracker.passed += 1
-        cprint("  [green]✅ PASS[/green]")
+        cprint("  [green]OK[/green]")
         return True
 
     tracker.warned += 1
     tracker.warned_steps.append("AI smell detection")
-    cprint(f"  [yellow]⚠️  WARN[/yellow] (exit {result.returncode})")
+    cprint(f"  [yellow]WARN[/yellow] (exit {result.returncode})")
     return False
 
 
@@ -254,7 +246,7 @@ def check_changelog_sync(tracker: Tracker) -> bool:
 
     if not changelog_path.exists():
         tracker.failed += 1
-        cprint("  [red]❌ CHANGELOG.md missing[/red]")
+        cprint("  [red]FAIL: CHANGELOG.md missing[/red]")
         return False
 
     try:
@@ -277,23 +269,21 @@ def check_changelog_sync(tracker: Tracker) -> bool:
         if not re.search(pattern, changelog_content):
             tracker.failed += 1
             cprint(
-                f"  [red]❌ Version '{version}' not found as a header in CHANGELOG.md[/red]"
+                f"  [red]FAIL: Version '{version}' not found as a header in CHANGELOG.md[/red]"
             )
             return False
 
         tracker.passed += 1
-        cprint(f"  [green]✅ Verified: {version} is documented[/green]")
+        cprint(f"  [green]OK: {version} is documented[/green]")
         return True
 
     except Exception as e:
         tracker.failed += 1
-        cprint(f"  [red]❌ Changelog check error: {e}[/red]")
+        cprint(f"  [red]FAIL: Changelog check error: {e}[/red]")
         return False
 
 
-# ---------------------------------------------------------------------------
 # macOS bundle metadata check
-# ---------------------------------------------------------------------------
 
 
 def check_bundle_metadata(tracker: Tracker) -> bool:
@@ -310,7 +300,7 @@ def check_bundle_metadata(tracker: Tracker) -> bool:
 
     if not plist_path.exists():
         tracker.failed += 1
-        cprint(f"  [red]❌ Info.plist not found at {plist_path}[/red]")
+        cprint(f"  [red]FAIL: Info.plist not found at {plist_path}[/red]")
         return False
 
     try:
@@ -351,49 +341,47 @@ def check_bundle_metadata(tracker: Tracker) -> bool:
         if errors:
             tracker.failed += 1
             for err in errors:
-                cprint(f"  [red]❌ {err}[/red]")
+                cprint(f"  [red]FAIL: {err}[/red]")
             return False
 
         tracker.passed += 1
-        cprint(f"  [green]✅ Verified: Version {workspace_version} aligned[/green]")
+        cprint(f"  [green]OK: Version {workspace_version} aligned[/green]")
         return True
 
     except Exception as e:
         tracker.failed += 1
-        cprint(f"  [red]❌ Audit error: {e}[/red]")
+        cprint(f"  [red]FAIL: Audit error: {e}[/red]")
         return False
 
 
-# ---------------------------------------------------------------------------
 # Summary
-# ---------------------------------------------------------------------------
 
 
 def print_summary(tracker: Tracker) -> None:
     if console:
         table = Table(
-            title="\n📊 Code Quality Summary", border_style="dim", expand=True
+            title="\nCode Quality Summary", border_style="dim", expand=True
         )
         table.add_column("Category", style="cyan")
         table.add_column("Count", justify="right")
         table.add_column("Details", style="dim")
-        table.add_row("✅ Passed", str(tracker.passed), "[green]All clear[/green]")
+        table.add_row("OK", str(tracker.passed), "[green]All clear[/green]")
         table.add_row(
-            "❌ Failed",
+            "FAIL",
             str(tracker.failed),
             f"[red]{escape(', '.join(tracker.failed_steps))}[/red]"
             if tracker.failed_steps
             else "-",
         )
         table.add_row(
-            "⚠️  Warned",
+            "WARN",
             str(tracker.warned),
             f"[yellow]{escape(', '.join(tracker.warned_steps))}[/yellow]"
             if tracker.warned_steps
             else "-",
         )
         table.add_row(
-            "⏭️  Skipped",
+            "SKIP",
             str(tracker.skipped),
             f"[blue]{len(tracker.skipped_steps)} items[/blue]"
             if tracker.skipped_steps
@@ -425,9 +413,7 @@ def print_summary(tracker: Tracker) -> None:
                     print(f"  {prefix} {s}")
 
 
-# ---------------------------------------------------------------------------
 # Argument parsing
-# ---------------------------------------------------------------------------
 
 
 def parse_args() -> argparse.Namespace:
@@ -462,9 +448,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-# ---------------------------------------------------------------------------
 # Main
-# ---------------------------------------------------------------------------
 
 
 def main() -> None:
@@ -476,7 +460,7 @@ def main() -> None:
     if console:
         console.print(
             Panel(
-                f"[bold cyan]🚀 Modern Quality Suite[/bold cyan]\n[dim]Root: {repo_root}[/dim]",
+                "Modern Quality Suite\n[dim]Root: {repo_root}[/dim]",
                 border_style="blue",
             )
         )
@@ -516,8 +500,6 @@ def main() -> None:
 
     # Auto-fix phase
     if args.fix:
-        cprint("\n[bold cyan]🔧 Running Auto-Fix Cycle...[/bold cyan]")
-
         subprocess.run(["cargo", "fmt", "--all"])
         subprocess.run(
             [

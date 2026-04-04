@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ## [0.11.2] — 2026-04-04
 
-#### 🏗️ Semantic Refactoring & Workspace Unification
+#### Semantic Refactoring & Workspace Unification
 
 Completed a major semantic refactoring of the media classification system and reorganized the project structure for long-term maintainability.
 
@@ -16,7 +16,7 @@ Completed a major semantic refactoring of the media classification system and re
 - **Hardened Detectors**: Unified the HDR metadata extraction and VFR enhanced detection logic, ensuring 100% definitive state transitions and removing redundant logic shadowing (`.unwrap_or(false)`).
 - **Maintenance**: Resolved all project-wide compilation warnings and updated workspace dependencies to their latest April 2026 iterations.
 
-#### 🛡️ Media Pipeline builders — Detail Hardening & Platform Safety
+#### Media Pipeline builders — Detail Hardening & Platform Safety
 
 Implemented 7 additional safety measures identified from the 4,801-line historical audit to eliminate edge-case regressions and platform-specific crashes.
 
@@ -31,7 +31,7 @@ Implemented 7 additional safety measures identified from the 4,801-line historic
 - **Parity Verification**: Expanded the regression test suite (`parity_tests.rs`) to 42 automated cases, confirming 100% flag-order parity with the project’s Golden Standard.
 
 
-#### 🧹 Granular Cache Maintenance — Targeted Cleanup
+#### Granular Cache Maintenance — Targeted Cleanup
 
 Enhanced the cache management utility to support fine-grained control over processing metadata and analysis results.
 
@@ -40,7 +40,7 @@ Enhanced the cache management utility to support fine-grained control over proce
 - **Database record removal**: Automated `DELETE` operations across all SQLite/PostgreSQL analysis databases for specific paths, preventing stale quality/feature data from affecting retries.
 - **Files**: `scripts/cache_cleaner.py`.
 
-#### 🔧 selective Build Optimization — Intelligent Dependency Sync
+#### selective Build Optimization — Intelligent Dependency Sync
 
 Optimized the build synchronization between the high-level Python processor and the low-level Shell build system.
 

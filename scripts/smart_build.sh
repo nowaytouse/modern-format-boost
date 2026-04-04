@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # Smart Build System v0.11.2 - Intelligent Selective Build
 #
-# 🔥 v0.11.2 New Features:
-# - ✅ Post-build timestamp verification (Ensures binary was truly updated)
-# - ✅ Automatic force rebuild on multiple verification failures
-# - ✅ Loud error reporting (Compilation errors MUST notify user)
-# - ✅ Compatibility with macOS bash 3.x (Removed associative arrays)
-# - ✅ Selective build (Build only required projects)
-# - ✅ Intelligent cleanup of obsolete binaries
-# - ✅ Intelligent timestamp comparison
-# - ✅ Force rebuild option
-# - ✅ Accurate path handling
+# v0.11.2 New Features
+# - Post-build timestamp verification (Ensures binary was truly updated)
+# - Automatic force rebuild on multiple verification failures
+# - Loud error reporting (Compilation errors MUST notify user)
+# - Compatibility with macOS bash 3.x (Removed associative arrays)
+# - Selective build (Build only required projects)
+# - Intelligent cleanup of obsolete binaries
+# - Intelligent timestamp comparison
+# - Force rebuild option
+# - Accurate path handling
 # (Merged common.sh dependencies)
 
 set -e
@@ -19,9 +19,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_ROOT"
 
-# ═══════════════════════════════════════════════════════════════
 # Color Definitions
-# ═══════════════════════════════════════════════════════════════
 if [[ -t 1 ]]; then
     RED='\033[38;5;196m'
     GREEN='\033[38;5;46m'
@@ -40,9 +38,7 @@ else
     NC=''
 fi
 
-# ═══════════════════════════════════════════════════════════════
 # Project Configuration - bash 3.x compatible
-# ═══════════════════════════════════════════════════════════════
 # Format: "project_dir:binary_name"
 ALL_PROJECTS=(
     "crates/img:img"
@@ -75,16 +71,14 @@ CLEAN_OLD_BINARIES=true
 BUILD_ALL=false
 SELECTED_PROJECTS=()
 
-# 🔥 v0.11.2: Timestamp Verification Config
+# v0.11.2: Timestamp Verification Config
 VERIFY_TIMESTAMPS=true
 MAX_STALE_RETRIES=2 # Allow up to 2 timestamp verification failures, force rebuild on the 3rd
 
-# ═══════════════════════════════════════════════════════════════
 # Output Functions
-# ═══════════════════════════════════════════════════════════════
 print_header() {
     echo ""
-    echo -e "${CYAN}${BOLD}🔧 Smart Build System v0.11.2${NC}"
+    echo -e "${CYAN}${BOLD}Smart Build System v0.11.2${NC}"
     echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 }
 
@@ -94,29 +88,27 @@ print_status() {
     local reason="$3"
 
     if [[ "$action" == "skip" ]]; then
-        echo -e "${GREEN}✓${NC} ${BOLD}$project${NC} ${DIM}(up-to-date)${NC}"
+        echo -e "[OK] ${BOLD}$project${NC} ${DIM}(up-to-date)${NC}"
     elif [[ "$action" == "rebuild" ]]; then
-        echo -e "${YELLOW}⏳${NC} ${BOLD}$project${NC} ${DIM}($reason)${NC}"
+        echo -e "[BUILD] ${BOLD}$project${NC} ${DIM}($reason)${NC}"
     fi
 }
 
 print_success() {
-    echo -e "${GREEN}✅${NC} ${BOLD}$1${NC} - compiled"
+    echo -e "[OK] ${BOLD}$1${NC} - compiled"
 }
 
 print_error() {
     echo ""
     echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${RED}❌ COMPILATION FAILED: $1${NC}"
+    echo -e "${RED}FAILURE: $1${NC}"
     echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
 }
 
-# ═══════════════════════════════════════════════════════════════
-# 🔥 v0.11.2: Intelligent obsolete binary cleanup
-# ═══════════════════════════════════════════════════════════════
+# v0.11.2: Intelligent obsolete binary cleanup
 clean_old_binaries() {
-    echo -e "${YELLOW}🧹 Cleaning old binaries...${NC}"
+    echo -e "${YELLOW}Cleaning old binaries...${NC}"
 
     local cleaned=0
 
@@ -124,38 +116,34 @@ clean_old_binaries() {
     for entry in "${ALL_PROJECTS[@]}"; do
         local binary_name="${entry##*:}"
         while IFS= read -r -d '' old_binary; do
-            echo -e "   ${RED}🗑️  Removing: ${DIM}$old_binary${NC}"
+            echo -e "   ${RED}Removing: ${DIM}$old_binary${NC}"
             rm -f "$old_binary"
             cleaned=$((cleaned + 1))
         done < <(find . -name "$binary_name" -type f -not -path "*/target/*" -print0 2>/dev/null)
     done
 
     if [ $cleaned -eq 0 ]; then
-        echo -e "   ${GREEN}✓${NC} ${DIM}No old binaries found${NC}"
+        echo -e "   [OK] ${DIM}No old binaries found${NC}"
     else
-        echo -e "   ${GREEN}✅ Cleaned $cleaned old binary file(s)${NC}"
+        echo -e "   [OK] Cleaned $cleaned old binary file(s)${NC}"
     fi
     echo ""
 }
 
-# ═══════════════════════════════════════════════════════════════
-# 🔥 v8.3: Kondo Deep Cleanup
-# ═══════════════════════════════════════════════════════════════
+# v8.3: Kondo Deep Cleanup
 clean_with_kondo() {
     if ! command -v kondo >/dev/null 2>&1; then
-        echo -e "${DIM}⚠️  kondo not found; skipping deep cleanup.${NC}"
+        echo -e "${DIM}kondo not found; skipping deep cleanup.${NC}"
         return 0
     fi
 
-    echo -e "${YELLOW}🧹 Project Deep Cleanup (kondo)...${NC}"
+    echo -e "${YELLOW}Project Deep Cleanup (kondo)...${NC}"
     # Use safe parameters: Clean current project only, exclude Time Machine volumes and libraries
     kondo -n -I /Volumes -I ~/Library .
     echo ""
 }
 
-# ═══════════════════════════════════════════════════════════════
 # Timestamp Functions
-# ═══════════════════════════════════════════════════════════════
 get_newest_source_mtime() {
     local project_dir="$1"
     local newest=0
@@ -184,7 +172,7 @@ get_newest_source_mtime() {
         done < <(find "crates/shared_utils/src" -type f -name "*.rs" -print0 2>/dev/null)
     fi
 
-    # 🔥 v8.2.4: Also check shared_utils/Cargo.toml and workspace Cargo.lock
+    # Also check shared_utils/Cargo.toml and workspace Cargo.lock
     for dep_file in "crates/shared_utils/Cargo.toml" "Cargo.lock"; do
         if [[ -f "$dep_file" ]]; then
             local mtime
@@ -202,14 +190,12 @@ get_binary_mtime() {
     stat -f %m "$binary_path" 2>/dev/null || stat -c %Y "$binary_path" 2>/dev/null || echo 0
 }
 
-# ═══════════════════════════════════════════════════════════════
 # Build Decision Logic
-# ═══════════════════════════════════════════════════════════════
 decide_build_action() {
     local project_dir="$1"
     local binary_name="$2"
 
-    # 🔥 v0.11.2: Use get_binary_path to locate the correct executable
+    # v0.11.2: Use get_binary_path to locate the correct executable
     local binary_path
     binary_path=$(get_binary_path "$project_dir" "$binary_name")
 
@@ -225,14 +211,12 @@ decide_build_action() {
     echo "skip"
 }
 
-# ═══════════════════════════════════════════════════════════════
-# 🔥 v0.11.2: Timestamp Verification Functions
-# ═══════════════════════════════════════════════════════════════
+# v0.11.2: Timestamp Verification Functions
 get_binary_path() {
     local project_dir="$1"
     local binary_name="$2"
 
-    # 🔥 v8.3: Unified workspace target directory
+    # Unified workspace target directory
     if [[ -f "target/release/$binary_name" ]]; then
         echo "target/release/$binary_name"
     else
@@ -245,7 +229,7 @@ verify_binary_timestamp() {
     local compile_start_time="$2"
 
     if [[ ! -f "$binary_path" ]]; then
-        echo -e "${RED}⚠️  TIMESTAMP VERIFICATION FAILED: Binary not found${NC}"
+        echo -e "${RED}ERROR: TIMESTAMP VERIFICATION FAILED: Binary not found${NC}"
         echo -e "${DIM}   Expected: $binary_path${NC}"
         return 1
     fi
@@ -255,19 +239,17 @@ verify_binary_timestamp() {
 
     # Binary modification time should be >= compile start time
     if [[ $binary_mtime -lt $compile_start_time ]]; then
-        echo -e "${RED}⚠️  TIMESTAMP VERIFICATION FAILED${NC}"
+        echo -e "${RED}FAILURE: TIMESTAMP VERIFICATION FAILED${NC}"
         echo -e "${DIM}   Binary mtime: $(date -r "$binary_mtime" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date -d @"$binary_mtime" '+%Y-%m-%d %H:%M:%S' 2>/dev/null)${NC}"
         echo -e "${DIM}   Compile start: $(date -r "$compile_start_time" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date -d @"$compile_start_time" '+%Y-%m-%d %H:%M:%S' 2>/dev/null)${NC}"
-        echo -e "${YELLOW}   ⚠️  Binary timestamp is older than compile time!${NC}"
+        echo -e "${YELLOW}Binary timestamp is older than compile time!${NC}"
         return 1
     fi
 
     return 0
 }
 
-# ═══════════════════════════════════════════════════════════════
 # Build Functions
-# ═══════════════════════════════════════════════════════════════
 build_project() {
     local project_dir="$1"
     local binary_name="$2"
@@ -277,19 +259,19 @@ build_project() {
     local compile_start_time
     compile_start_time=$(date +%s)
 
-    # 🔥 Fix: Handled cargo output and return codes correctly
+    # Handled cargo output and return codes correctly
     if ! cargo build --release --manifest-path "$project_dir/Cargo.toml"; then
         print_error "$project_dir"
         return 1
     fi
 
-    # 🔥 v0.11.2: Post-build timestamp verification
+    # v0.11.2: Post-build timestamp verification
     if [[ "$VERIFY_TIMESTAMPS" == "true" ]]; then
         local binary_path
         binary_path=$(get_binary_path "$project_dir" "$binary_name")
 
         if [[ -z "$binary_path" ]]; then
-            echo -e "${RED}⚠️  TIMESTAMP VERIFICATION FAILED: Binary not found${NC}"
+            echo -e "${RED}FAILURE: Binary not found${NC}"
             echo -e "${DIM}   Project: $project_dir, Binary: $binary_name${NC}"
             return 1
         fi
@@ -300,16 +282,16 @@ build_project() {
         if ! verify_binary_timestamp "$binary_path" "$compile_start_time"; then
             # Timestamp verification failed
             if [[ $retry_count -lt $MAX_STALE_RETRIES ]]; then
-                echo -e "${YELLOW}🔄 Retry $((retry_count + 1))/$MAX_STALE_RETRIES: Rebuilding with clean...${NC}"
+                echo -e "${YELLOW}Retry $((retry_count + 1))/$MAX_STALE_RETRIES: Rebuilding with clean...${NC}"
                 # Cleanup and retry
-                # 🔥 v8.3: Only clean root target
+                # Cleanup and retry
                 rm -rf "target/release/deps" 2>/dev/null || true
                 rm -rf "target/release/.fingerprint" 2>/dev/null || true
                 build_project "$project_dir" "$binary_name" $((retry_count + 1))
                 return $?
             else
-                echo -e "${RED}❌ CRITICAL: Timestamp verification failed after $MAX_STALE_RETRIES retries${NC}"
-                echo -e "${YELLOW}💡 Suggestion: Try 'cargo clean' or check file system issues${NC}"
+                echo -e "${RED}FAILURE: Timestamp verification failed after $MAX_STALE_RETRIES retries${NC}"
+                echo -e "${YELLOW}Suggestion: Try 'cargo clean' or check file system issues${NC}"
                 return 1
             fi
         fi
@@ -318,9 +300,7 @@ build_project() {
     return 0
 }
 
-# ═══════════════════════════════════════════════════════════════
 # CLI Parameter Parsing
-# ═══════════════════════════════════════════════════════════════
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -393,9 +373,7 @@ parse_args() {
     done
 }
 
-# ═══════════════════════════════════════════════════════════════
 # Main Function
-# ═══════════════════════════════════════════════════════════════
 main() {
     parse_args "$@"
     print_header
@@ -413,7 +391,7 @@ main() {
         projects_to_build=("${DEFAULT_PROJECTS[@]}")
     fi
 
-    echo -e "${CYAN}📦 Building:${NC} ${BOLD}${projects_to_build[*]}${NC}"
+    echo -e "${CYAN}Building:${NC} ${BOLD}${projects_to_build[*]}${NC}"
     echo ""
 
     # Cleanup old binaries
@@ -423,7 +401,7 @@ main() {
 
     # Cleanup build artifacts
     if [[ "$CLEAN_BUILD" == "true" ]]; then
-        echo -e "${YELLOW}🧹 Cleaning build artifacts...${NC}"
+        echo -e "${YELLOW}Cleaning build artifacts...${NC}"
         for proj_dir in "${projects_to_build[@]}"; do
             rm -rf "$proj_dir/target/release/deps" 2>/dev/null || true
             rm -rf "$proj_dir/target/release/.fingerprint" 2>/dev/null || true
@@ -431,7 +409,7 @@ main() {
         rm -rf "crates/shared_utils/target/release/deps" 2>/dev/null || true
         echo ""
 
-        # 🔥 v8.3: Auto-trigger kondo cleanup
+        # Auto-trigger kondo cleanup
         clean_with_kondo
     fi
 
@@ -448,7 +426,7 @@ main() {
         binary_name=$(get_binary_name "$proj_dir")
 
         if [[ -z "$binary_name" ]]; then
-            echo -e "${RED}❌ Unknown project: $proj_dir${NC}"
+            echo -e "${RED}ERROR: Unknown project: $proj_dir${NC}"
             failed=$((failed + 1))
             continue
         fi
@@ -476,14 +454,14 @@ main() {
     echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
     if [[ $failed -gt 0 ]]; then
-        echo -e "${RED}❌ Build failed: $failed project(s)${NC}"
+        echo -e "${RED}Build failed: $failed project(s)${NC}"
         exit 1
     fi
 
     if [[ $rebuilt -eq 0 ]]; then
-        echo -e "${GREEN}✅ All binaries up-to-date (skipped $skipped)${NC}"
+        echo -e "${GREEN}OK: All binaries up-to-date (skipped $skipped)${NC}"
     else
-        echo -e "${GREEN}✅ Built $rebuilt, skipped $skipped${NC}"
+        echo -e "${GREEN}OK: Built $rebuilt, skipped $skipped${NC}"
     fi
 
     # Show binary information

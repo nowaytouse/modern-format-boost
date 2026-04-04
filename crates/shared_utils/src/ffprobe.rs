@@ -91,13 +91,13 @@ pub struct FFprobeResult {
     pub tags: std::collections::HashMap<String, String>,
     /// Optional: Loop count from metadata (0 = infinite)
     pub loop_count: Option<u16>,
-    /// 🎞️ Frame types (I, P, B) for the initial sample.
+    /// Frame types (I, P, B) for the initial sample.
     pub frame_types: Vec<char>,
-    /// 🎞️ PTS deltas (frame intervals) for the initial sample.
+    /// PTS deltas (frame intervals) for the initial sample.
     pub pts_deltas: Vec<f64>,
-    /// 🎞️ Motion vector magnitudes (if available).
+    /// Motion vector magnitudes (if available).
     pub mv_magnitudes: Vec<f64>,
-    /// 🎞️ Captured packet sizes for bitrate inequality analysis.
+    /// Captured packet sizes for bitrate inequality analysis.
     pub pkt_sizes: Vec<u64>,
 }
 

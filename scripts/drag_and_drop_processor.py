@@ -159,7 +159,7 @@ def spinner_run():
     while not spinner_event.is_set():
         elapsed = int(time.time() - start)
         if sys.stdout.isatty():
-            sys.stdout.write(f"\033]0;⏱ {_fmt_elapsed(elapsed)}\007")
+            sys.stdout.write(f"\033]0;{_fmt_elapsed(elapsed)}\007")
             sys.stdout.flush()
         time.sleep(0.15)
 
@@ -244,14 +244,14 @@ def draw_header():
     except Exception:
         pass
 
-    title = f"🚀 MODERN FORMAT BOOST v{version}"
+    title = f"MODERN FORMAT BOOST v{version}"
 
     if "Panel" in globals():
         console.print(
             Panel(
                 f"[bold #ffffff]{title}[/bold #ffffff]{tag}\n"
                 f"[#888888]PREMIUM MEDIA OPTIMIZER[/#888888]\n"
-                f"[#00ff00]●[/#00ff00] [#aaaaaa]No Data Loss[/#aaaaaa]   [#00ff00]●[/#00ff00] [#aaaaaa]Smart Conversion[/#aaaaaa]   [#00ff00]●[/#00ff00] [#aaaaaa]Auto-Repair[/#aaaaaa]",
+                f"[#00ff00]- [/#00ff00] [#aaaaaa]No Data Loss[/#aaaaaa]   [#00ff00]- [/#00ff00] [#aaaaaa]Smart Conversion[/#aaaaaa]   [#00ff00]- [/#00ff00] [#aaaaaa]Auto-Repair[/#aaaaaa]",
                 title="[bold #00aaff]Modern Format Boost[/bold #00aaff]",
                 subtitle="[dim]Secure & High-Precision Pipeline[/dim]",
                 expand=False,
@@ -270,11 +270,11 @@ def draw_header():
             f"{BLUE}│{RESET}  {DIM}PREMIUM MEDIA OPTIMIZER{RESET}{' ' * (69 - 25)}{BLUE}│{RESET}"
         )
         print(
-            f"{BLUE}│{RESET}  {GREEN}●{RESET} {DIM}No Data Loss{RESET}   {GREEN}●{RESET} {DIM}Smart Conversion{RESET}   {GREEN}●{RESET} {DIM}Auto-Repair{' ' * (69 - 58)}{BLUE}│{RESET}"
+            f"{BLUE}│{RESET}  {GREEN}-{RESET} {DIM}No Data Loss{RESET}   {GREEN}-{RESET} {DIM}Smart Conversion{RESET}   {GREEN}-{RESET} {DIM}Auto-Repair{' ' * (69 - 58)}{BLUE}│{RESET}"
         )
         print(f"{BLUE}╰{'─' * 70}╯{RESET}")
     print(
-        f"   {RED}⚠️  WARNING: Always keep a backup of your original media before optimization.{RESET}\n"
+        f"   {RED}WARNING: Always keep a backup of your original media before optimization.{RESET}\n"
     )
 
 
@@ -293,7 +293,7 @@ def check_tools():
 
     res = subprocess.run(cmd)
     if res.returncode != 0:
-        print(f"{RED}❌ Build failed. Please check the logs.{RESET}")
+        print(f"{RED}ERROR: Build failed. Please check the logs.{RESET}")
         input("Press Enter to exit...")
         sys.exit(1)
 
@@ -305,7 +305,7 @@ def rebuild_tools():
         print(f"{RED}❌ Build script not found: {build_script}{RESET}")
         return False
 
-    print(f"\n{YELLOW}🔧 Attempting automatic rebuild...{RESET}")
+    print(f"\n{YELLOW}Attempting automatic rebuild...{RESET}")
     cmd = [str(build_script)]
     if PROCESSING_MODE == "images_only":
         cmd.append("--img")
@@ -314,34 +314,34 @@ def rebuild_tools():
 
     res = subprocess.run(cmd)
     if res.returncode != 0:
-        print(f"{RED}❌ Automatic rebuild failed. Please check the logs.{RESET}")
+        print(f"{RED}ERROR: Automatic rebuild failed. Please check the logs.{RESET}")
         return False
 
-    print(f"{GREEN}✅ Rebuild completed successfully.{RESET}\n")
+    print(f"{GREEN}OK: Rebuild completed successfully.{RESET}\n")
     return True
 
 
 def draw_separator(title):
-    print(f"{DIM}── {BOLD}{WHITE}{title}{RESET} {DIM}{'─' * 50}{RESET}\n")
+    print(f"{DIM}# {BOLD}{WHITE}{title}{RESET} {DIM}{'#' * 50}{RESET}\n")
 
 
 def get_target_directory():
     global TARGET_DIR
     if not TARGET_DIR and not os.environ.get("FROM_APP"):
         draw_header()
-        print(f"{CYAN}📂 Waiting for input...{RESET}")
+        print(f"{CYAN}Waiting for input...{RESET}")
         print(f"{DIM}   Please drag and drop a folder here, then press Enter.{RESET}")
         drain_stdin()
         TARGET_DIR = input(f"   {BOLD}> {RESET}").strip()
         TARGET_DIR = TARGET_DIR.strip("\"'")
 
     if "\n" in TARGET_DIR or "\r" in TARGET_DIR:
-        print(f"\n{RED}❌ Error: Path contains unsupported control characters.{RESET}")
+        print(f"\n{RED}ERROR: Path contains unsupported control characters.{RESET}")
         sys.exit(1)
 
     p = Path(TARGET_DIR)
     if not p.is_dir():
-        print(f"\n{RED}❌ Error: Directory not found.{RESET}")
+        print(f"\n{RED}ERROR: Directory not found.{RESET}")
         print(f"{DIM}   Path: {TARGET_DIR}{RESET}")
         sys.exit(1)
 
@@ -398,7 +398,7 @@ def acquire_global_lock(dir_path: str):
             fcntl.flock(_GLOBAL_LOCK_FILE, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             # Lock is already held
-            print(f"\n{RED}❌ ERROR: Directory Already In Use!{RESET}")
+            print(f"\n{RED}ERROR: Directory Already In Use!{RESET}")
             print(f"   Target: {DIM}{dir_path}{RESET}")
             print(
                 f"   {YELLOW}Another instance of Modern Format Boost is currently processing this folder.{RESET}"
@@ -482,7 +482,7 @@ def select_mode():
     # Internal state for the "Mode" item (0: adjacent, 1: inplace)
     mode_sub_state = 0 if OUTPUT_MODE == "adjacent" else 1
 
-    options = ["📂 Optimization Mode", "🧹 Cleanup Cache & Logs"]
+    options = ["Optimization Mode", "Cleanup Cache & Logs"]
 
     while True:
         clear_screen()
@@ -494,9 +494,9 @@ def select_mode():
 
             if i == 0:  # Combined Mode Item
                 display_text = (
-                    "📂 Mode: Output to Adjacent Folder [Tab to Switch]"
+                    "Mode: Output to Adjacent Folder [Tab to Switch]"
                     if mode_sub_state == 0
-                    else "🚀 Mode: In-Place Optimization [Tab to Switch]"
+                    else "Mode: In-Place Optimization [Tab to Switch]"
                 )
                 description = (
                     "Safe mode. Keeps originals untouched."
@@ -518,7 +518,7 @@ def select_mode():
                         console.print(f"     [dim]○ {display_text}[/dim]")
                         console.print(f"     [dim]{description}[/dim]\n")
                     else:
-                        print(f"    {DIM}○ {display_text}{RESET}")
+                        print(f"    {DIM}- {display_text}{RESET}")
                         print(f"    {DIM}{description}{RESET}\n")
             else:  # Other items
                 if is_selected:
@@ -570,7 +570,7 @@ def select_mode():
                                 tdir.parent / (tdir.name + "_optimized")
                             )
                         )
-                        print(f"\n{GREEN}✅ ADJACENT MODE SELECTED{RESET}")
+                        print(f"\n{GREEN}ADJACENT MODE SELECTED{RESET}")
                         print(f"   Output: {DIM}{OUTPUT_DIR}{RESET}")
                         print(f"   {DIM}Creating directory structure...{RESET}")
                         create_directory_structure(TARGET_DIR, OUTPUT_DIR)
@@ -579,7 +579,7 @@ def select_mode():
                     else:
                         OUTPUT_MODE = "inplace"
                         print(
-                            f"\n{RED}⚠️  DANGER: IN-PLACE OPTIMIZATION SELECTED{RESET}"
+                            f"\n{RED}WARNING: IN-PLACE OPTIMIZATION SELECTED{RESET}"
                         )
                         print(
                             f"{BOLD}{WHITE}   Original files will be replaced after successful conversion.{RESET}"
@@ -593,7 +593,7 @@ def select_mode():
                         )
                         if confirm != "yes":
                             print(
-                                f"\n{RED}❌ Error: In-place optimization cancelled. Incorrect confirmation.{RESET}"
+                                f"\n{RED}ERROR: In-place optimization cancelled. Incorrect confirmation.{RESET}"
                             )
                             print(
                                 f"{DIM}   Returning to main menu in 3 seconds...{RESET}"
@@ -606,7 +606,7 @@ def select_mode():
                             break  # Confirmed, start processing
                 elif selected == 1:
                     OUTPUT_MODE = "cache_clean"
-                    print(f"\n{RED}🧹 CACHE & LOG CLEANUP MODE{RESET}")
+                    print(f"\n{RED}CACHE & LOG CLEANUP MODE{RESET}")
                     print(
                         f"{DIM}   Analysis cache and ALL task progress will be permanently deleted.{RESET}\n"
                     )
