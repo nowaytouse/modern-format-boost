@@ -134,7 +134,7 @@ impl CjxlBuilder {
         }
 
         if let Some(cicp) = &self.cicp {
-            cmd.arg(format!("{}={}", constants::JXL_ARG_CICP, cicp));
+            cmd.arg("-x").arg(format!("{}={}", constants::JXL_ARG_COLOR_SPACE, cicp));
         }
 
         if let Some(icc) = &self.icc_profile {

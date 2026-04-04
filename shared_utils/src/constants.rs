@@ -320,7 +320,7 @@ pub const JXL_ARG_DISTANCE: &str = "-d";
 pub const JXL_ARG_EFFORT: &str = "-e";
 pub const JXL_ARG_THREADS: &str = "-j";
 pub const JXL_ARG_LOSSLESS_JPEG: &str = "--lossless_jpeg=1";
-pub const JXL_ARG_CICP: &str = "--cicp";
+pub const JXL_ARG_COLOR_SPACE: &str = "color_space";
 pub const JXL_ARG_COMPRESS_BOXES: &str = "--compress_boxes=0";
 pub const JXL_ARG_ALLOW_JPEG_RECON: &str = "--allow_jpeg_reconstruction";
 pub const JXL_ARG_ICC_PATHNAME: &str = "icc_pathname";

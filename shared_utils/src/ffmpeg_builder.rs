@@ -371,11 +371,11 @@ impl FfmpegBuilder {
         }
 
         if self.hide_banner {
-            cmd.arg("-hide_banner");
+            cmd.arg(constants::FFMPEG_ARG_HIDE_BANNER);
         }
 
         if let Some(level) = &self.loglevel {
-            cmd.arg("-v").arg(level);
+            cmd.arg(constants::FFMPEG_ARG_LOGLEVEL).arg(level);
         }
 
         if let Some(threads) = self.threads {
@@ -388,7 +388,7 @@ impl FfmpegBuilder {
         }
 
         for input in &self.inputs {
-            cmd.arg("-i");
+            cmd.arg(constants::FFMPEG_ARG_INPUT);
             cmd.arg(crate::safe_path_arg(input).as_ref());
         }
 
