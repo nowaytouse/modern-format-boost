@@ -1071,7 +1071,7 @@ checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 [[package]]
 name = "image"
 version = "0.25.9"
-source = "git+https://github.com/image-rs/image#26112dbdb2b1edd700b2bb91e792475efb804784"
+source = "git+https://github.com/image-rs/image#b654e0dc52689de2e948f63d72b7b7df5c3c0fa3"
 dependencies = [
  "bytemuck",
  "byteorder-lite",
@@ -1141,7 +1141,7 @@ dependencies = [
 [[package]]
 name = "indicatif"
 version = "0.18.4"
-source = "git+https://github.com/console-rs/indicatif#3dcd5446a57fc2b629e636a7c5ed9474f38453c5"
+source = "git+https://github.com/console-rs/indicatif#ce922c9eebe65c4a990ab7b65be520e3b5c36164"
 dependencies = [
  "console",
  "portable-atomic",
@@ -2117,9 +2117,9 @@ checksum = "490dcfcbfef26be6800d11870ff2df8774fa6e86d047e3e8c8a76b25655e41ca"
 
 [[package]]
 name = "semver"
-version = "1.0.27"
+version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d767eb0aabc880b29956c35734170f26ed551a859dbd361d140cdbeca61ab1e2"
+checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
 
 [[package]]
 name = "serde"

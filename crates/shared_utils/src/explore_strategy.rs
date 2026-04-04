@@ -24,7 +24,7 @@
 use anyhow::Result;
 use std::path::PathBuf;
 
-use crate::types::EncoderPreset;
+use crate::types::{CheckResult, EncoderPreset};
 use crate::video_explorer::{
     ExploreConfig, ExploreMode, ExploreResult, SsimSource, VideoEncoder,
 };
@@ -324,7 +324,7 @@ impl ExploreContext {
         size: u64,
         ssim_result: Option<SsimResult>,
         iterations: u32,
-        quality_passed: bool,
+        quality_passed: CheckResult,
         confidence: f64,
     ) -> ExploreResult {
         use crate::video_explorer::ConfidenceBreakdown;
@@ -668,7 +668,7 @@ impl ExploreStrategy for SizeOnlyStrategy {
             max_size,
             ssim_result,
             1,
-            quality_passed,
+            if quality_passed { CheckResult::Passed } else { CheckResult::Failed("Total file size not compressed".into()) },
             0.7,
         ))
     }
@@ -710,7 +710,7 @@ impl ExploreStrategy for QualityMatchStrategy {
             output_size,
             ssim_result,
             1,
-            quality_passed,
+            if quality_passed { CheckResult::Passed } else { CheckResult::Failed("SSIM below target".into()) },
             0.6,
         ))
     }
@@ -746,7 +746,7 @@ impl ExploreStrategy for PreciseQualityMatchStrategy {
             best_size,
             Some(SsimResult::actual(best_ssim, None)),
             iterations,
-            quality_passed,
+            if quality_passed { CheckResult::Passed } else { CheckResult::Failed("No CRF meeting quality target found".into()) },
             0.85,
         ))
     }
@@ -782,7 +782,7 @@ impl ExploreStrategy for PreciseQualityMatchWithCompressionStrategy {
                 size,
                 None,
                 ctx.config.max_iterations / 2 + 1,
-                false,
+                CheckResult::Failed("No compressing CRF found".into()),
                 0.85,
             ));
         };
@@ -824,7 +824,7 @@ impl ExploreStrategy for PreciseQualityMatchWithCompressionStrategy {
             best_size,
             Some(SsimResult::actual(best_ssim, None)),
             iterations,
-            quality_passed,
+            if quality_passed { CheckResult::Passed } else { CheckResult::Failed("No CRF meeting quality target found".into()) },
             0.85,
         ))
     }
@@ -865,7 +865,7 @@ impl ExploreStrategy for CompressOnlyStrategy {
             best_size,
             None,
             iterations,
-            best_size < ctx.input_size,
+            if best_size < ctx.input_size { CheckResult::Passed } else { CheckResult::Failed("Not compressed".into()) },
             0.7,
         ))
     }
@@ -901,7 +901,7 @@ impl ExploreStrategy for CompressWithQualityStrategy {
                 size,
                 None,
                 ctx.config.max_iterations,
-                false,
+                CheckResult::Failed("No compressing CRF found".into()),
                 0.75,
             ));
         };
@@ -925,7 +925,7 @@ impl ExploreStrategy for CompressWithQualityStrategy {
             best_size,
             ssim_result,
             iterations,
-            quality_passed,
+            if quality_passed { CheckResult::Passed } else { CheckResult::Failed("SSIM below target".into()) },
             0.8,
         ))
     }

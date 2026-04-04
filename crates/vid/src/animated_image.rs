@@ -1198,7 +1198,7 @@ pub fn convert_to_mp4_matched(
     // apple_compat: if quality_passed=false only because the file couldn't be compressed
     // (not because of actual quality degradation), still accept the HEVC output.
     // A larger-but-playable HEVC is always better than a non-playable original (e.g. AVIF).
-    let quality_or_compat_ok = explore_result.quality_passed
+    let quality_or_compat_ok = explore_result.quality_passed.is_ok()
         || (options.apple_compat && explore_result.ssim.is_some_and(|s| s >= 0.90));
 
     if !quality_or_compat_ok {
@@ -1345,7 +1345,7 @@ pub fn convert_to_mp4_matched(
         String::new()
     };
 
-    if explore_result.quality_passed && explore_result.optimal_crf > 0.0 {
+    if explore_result.quality_passed.is_ok() && explore_result.optimal_crf > 0.0 {
         match options.codec {
             SelectedCodec::Hevc => shared_utils::crf_constants::update_global_last_hit_crf_hevc(
                 explore_result.optimal_crf,

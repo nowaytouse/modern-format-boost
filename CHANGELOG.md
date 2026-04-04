@@ -6,6 +6,16 @@ All notable changes to this project will be documented in this file.
 
 ## [0.11.2] — 2026-04-04
 
+#### 🏗️ Semantic Refactoring & Workspace Unification
+
+Completed a major semantic refactoring of the media classification system and reorganized the project structure for long-term maintainability.
+
+- **Workspace Reorganization**: Migrated all core crates (`shared_utils`, `vid`, `img`) into a unified `crates/` directory, streamlining the project root and improving build discovery.
+- **Explicit State Management**: Eliminated ambiguous tri-state `Option<bool>` logic across the entire media pipeline. Definitive metadata (HDR flags, audio presence, B-frames, etc.) is now handled as explicit `bool` or descriptive enums.
+- **Granular Quality Reporting**: Refactored `ExploreResult` and `IterationMetrics` to use the new `CheckResult` enum. Success/failure is no longer a binary; failures now carry specific reasons (e.g., `"SSIM 0.94 < 0.96"`, `"Total file size not compressed"`) for improved debuggability.
+- **Hardened Detectors**: Unified the HDR metadata extraction and VFR enhanced detection logic, ensuring 100% definitive state transitions and removing redundant logic shadowing (`.unwrap_or(false)`).
+- **Maintenance**: Resolved all project-wide compilation warnings and updated workspace dependencies to their latest April 2026 iterations.
+
 #### 🛡️ Media Pipeline builders — Detail Hardening & Platform Safety
 
 Implemented 7 additional safety measures identified from the 4,801-line historical audit to eliminate edge-case regressions and platform-specific crashes.

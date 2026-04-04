@@ -86,9 +86,21 @@ impl From<&FeatureStats> for DistributionStats {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LabelStatus {
+    /// Manually verified / High confidence: Looping intent.
+    LoopStrong,
+    /// Manually verified / High confidence: Non-looping (video) intent.
+    LoopWeak,
+    /// Edge case / Low confidence label.
+    Uncertain,
+    /// Not yet labeled by a human or model.
+    NotLabeled,
+}
+
 #[derive(Debug, Clone)]
 pub struct SampleMatch {
-    pub exact_label: Option<bool>,
+    pub exact_label: LabelStatus,
     pub keep_probability: Option<f64>,
     /// Confidence score in [0, 1]: how tightly clustered the KNN neighbors are.
     /// confidence = 1.0 - (std_dev_distance / mean_distance), clamped to [0, 1].
@@ -620,13 +632,20 @@ fn lookup_similar_samples_inner(
         return Ok(None);
     }
 
-    let candidates: Vec<(String, f64, f64)> = rows
+    let candidates: Vec<(LabelStatus, f64, f64)> = rows
         .iter()
         .map(|row| {
+            let label_str: Option<String> = row.get(0);
+            let label = match label_str.as_deref() {
+                Some("high") => LabelStatus::LoopStrong,
+                Some("video") => LabelStatus::LoopWeak,
+                Some("uncertain") => LabelStatus::Uncertain,
+                _ => LabelStatus::NotLabeled,
+            };
             (
-                row.get::<_, Option<String>>(0).unwrap_or_default(), // loss_tolerance
-                row.get::<_, f64>(1),                                // duration_secs
-                row.get::<_, f64>(2),                                // dist
+                label,               // label status
+                row.get::<_, f64>(1), // duration_secs
+                row.get::<_, f64>(2), // dist
             )
         })
         .collect();
@@ -642,17 +661,17 @@ fn lookup_similar_samples_inner(
     let mut distances = Vec::new();
     let mut loop_durations = Vec::new();
 
-    for (loss_tolerance, duration_secs, distance) in neighbors {
+    for (label, duration_secs, distance) in neighbors {
         if *distance > radius {
             continue;
         }
-
+ 
         let relative_distance = (*distance - min_distance).max(0.0);
         let weight = 1.0 / (1.0 + relative_distance * relative_distance * 3.0);
-        let prob = match loss_tolerance.as_str() {
-            "high" => 1.0,  // Loop intent (Meme/Sticker/Video sticker)
-            "video" => 0.0, // Non-loop intent (Clip/Record/Long Video)
-            _ => 0.5,       // Uncertain/Fallback
+        let prob = match label {
+            LabelStatus::LoopStrong => 1.0,  // Loop intent (Meme/Sticker/Video sticker)
+            LabelStatus::LoopWeak => 0.0,    // Non-loop intent (Clip/Record/Long Video)
+            _ => 0.5,                        // Uncertain/Fallback
         };
 
         if prob >= 0.5 {
@@ -706,7 +725,7 @@ fn lookup_similar_samples_inner(
     };
 
     Ok(Some(SampleMatch {
-        exact_label: None,
+        exact_label: LabelStatus::NotLabeled,
         keep_probability: Some(keep_probability),
         confidence,
         neighbor_count: distances.len(),
@@ -1390,7 +1409,7 @@ fn adaptive_neighbor_count(total: usize) -> usize {
         .min(total)
 }
 
-fn dynamic_neighbor_radius(neighbors: &[(String, f64, f64)]) -> f64 {
+fn dynamic_neighbor_radius(neighbors: &[(LabelStatus, f64, f64)]) -> f64 {
     let mut distances: Vec<f64> = neighbors.iter().map(|(_, _, d)| *d).collect();
     distances.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let q1 = distances[distances.len() / 4];

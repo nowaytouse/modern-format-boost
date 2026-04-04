@@ -154,7 +154,7 @@ pub struct ImageAnalysis {
 impl Default for ImageAnalysis {
     fn default() -> Self {
         Self {
-            cache_version: 1,
+            cache_version: 2,
             file_path: String::new(),
             format: "unknown".into(),
             width: 0,
@@ -382,7 +382,7 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
     let color_depth = detect_color_depth(&img);
     let color_space = detect_color_space(&img);
 
-    let is_animated = is_animated_format(path, format)?;
+    let is_animated = is_animated_format(path, format).unwrap_or(false);
 
     let is_lossless =
         detect_lossless(format, path).unwrap_or_else(|_| pixel_fallback_lossless(path));
@@ -443,7 +443,7 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
     };
 
     Ok(ImageAnalysis {
-        cache_version: 1,
+        cache_version: 2,
         file_path: path.display().to_string(),
         format: format_str,
         width,
@@ -581,7 +581,7 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
             (
                 0,
                 0,
-                false,
+                false, // Assume no alpha due to failure
                 8,
                 is_lossless_fallback,
                 "unknown".to_string(),
@@ -615,7 +615,7 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
     };
 
     Ok(ImageAnalysis {
-        cache_version: 1,
+        cache_version: 2,
         file_path: path.display().to_string(),
         format: "HEIC".to_string(),
         width,
@@ -707,7 +707,7 @@ fn analyze_jpeg_fast_path(path: &Path, file_size: u64) -> Result<ImageAnalysis> 
     };
 
     Ok(ImageAnalysis {
-        cache_version: 1,
+        cache_version: 2,
         file_path: path.display().to_string(),
         format: "JPEG".to_string(),
         width,

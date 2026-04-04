@@ -24,7 +24,7 @@ use crate::explore_strategy::CrfCache;
 
 use crate::crf_constants::EMERGENCY_MAX_ITERATIONS;
 use crate::float_compare::SSIM_EPSILON;
-use crate::types::{EncoderPreset, FileSize, Ssim};
+use crate::types::{CheckResult, EncoderPreset, FileSize, Ssim};
 
 pub mod error_handling;
 pub mod ssim_calculator;
@@ -372,10 +372,10 @@ pub struct ExploreResult {
     pub ssim: Option<f64>,
     pub psnr: Option<f64>,
     pub ms_ssim: Option<f64>,
-    pub ms_ssim_passed: Option<bool>,
+    pub ms_ssim_passed: CheckResult,
     pub ms_ssim_score: Option<f64>,
     pub iterations: u32,
-    pub quality_passed: bool,
+    pub quality_passed: CheckResult,
     /// When quality/size would pass but enhanced verification (duration/stream) failed; used for accurate failure messaging.
     pub enhanced_verify_fail_reason: Option<String>,
     pub log: Vec<String>,
@@ -404,10 +404,10 @@ impl Default for ExploreResult {
             ssim: None,
             psnr: None,
             ms_ssim: None,
-            ms_ssim_passed: None,
+            ms_ssim_passed: CheckResult::NotChecked,
             ms_ssim_score: None,
             iterations: 0,
-            quality_passed: false,
+            quality_passed: CheckResult::NotChecked,
             enhanced_verify_fail_reason: None,
             log: Vec::new(),
             confidence: 0.0,
@@ -752,7 +752,7 @@ pub struct IterationMetrics {
     pub ssim_source: SsimSource,
     pub psnr: Option<f64>,
     pub can_compress: bool,
-    pub quality_passed: Option<bool>,
+    pub quality_passed: CheckResult,
     pub decision: String,
 }
 
@@ -768,9 +768,9 @@ impl IterationMetrics {
             .map_or_else(|| "----".to_string(), |p| format!("{p:.1}"));
         let compress_icon = if self.can_compress { "✅" } else { "❌" };
         let quality_icon = match self.quality_passed {
-            Some(true) => "✅",
-            Some(false) => "⚠️",
-            None => "--",
+            CheckResult::Passed => "✅",
+            CheckResult::Failed(_) => "⚠️",
+            CheckResult::NotChecked => "--",
         };
 
         crate::log_eprintln!(
@@ -1121,10 +1121,10 @@ impl VideoExplorer {
             ssim,
             psnr: None,
             ms_ssim: None,
-            ms_ssim_passed: None,
+            ms_ssim_passed: CheckResult::NotChecked,
             ms_ssim_score: None,
             iterations,
-            quality_passed,
+            quality_passed: if quality_passed { CheckResult::Passed } else { CheckResult::Failed("Total file size target not met".into()) },
             log,
             confidence: 0.7,
             confidence_detail: ConfidenceBreakdown::default(),
@@ -1156,13 +1156,14 @@ impl VideoExplorer {
         ));
 
         let quality_passed = self.check_quality_passed(quality.0, quality.1, quality.2);
-        if quality_passed {
+        if quality_passed.is_ok() {
             log.push("   ✅ Quality validation passed".to_string());
         } else {
-            log.push(format!(
-                "   ⚠️ Quality below threshold (min SSIM: {:.4})",
-                self.config.quality_thresholds.min_ssim
-            ));
+            if let CheckResult::Failed(ref reason) = quality_passed {
+                log.push(format!("   ⚠️ Quality below threshold: {reason}"));
+            } else {
+                log.push("   ⚠️ Quality validation skipped or indeterminate".to_string());
+            }
         }
 
         Ok(ExploreResult {
@@ -1240,10 +1241,10 @@ impl VideoExplorer {
                 ssim: None,
                 psnr: None,
                 ms_ssim: None,
-                ms_ssim_passed: None,
+                ms_ssim_passed: CheckResult::NotChecked,
                 ms_ssim_score: None,
                 iterations,
-                quality_passed: true,
+                quality_passed: CheckResult::Passed,
                 log,
                 confidence: 0.7,
                 confidence_detail: ConfidenceBreakdown::default(),
@@ -1315,10 +1316,10 @@ impl VideoExplorer {
             ssim: None,
             psnr: None,
             ms_ssim: None,
-            ms_ssim_passed: None,
+            ms_ssim_passed: CheckResult::NotChecked,
             ms_ssim_score: None,
             iterations,
-            quality_passed: compressed,
+            quality_passed: if compressed { CheckResult::Passed } else { CheckResult::Failed("Size check failed".into()) },
             log,
             confidence: 0.65,
             confidence_detail: ConfidenceBreakdown::default(),
@@ -1451,10 +1452,10 @@ impl VideoExplorer {
             ssim: Some(final_ssim),
             psnr: None,
             ms_ssim: None,
-            ms_ssim_passed: None,
+            ms_ssim_passed: CheckResult::NotChecked,
             ms_ssim_score: None,
             iterations,
-            quality_passed: passed,
+            quality_passed: if passed { CheckResult::Passed } else { CheckResult::Failed("Quality check failed".into()) },
             log,
             confidence: 0.75,
             confidence_detail: ConfidenceBreakdown::default(),
@@ -1730,7 +1731,7 @@ impl VideoExplorer {
             psnr: final_quality.1,
             ms_ssim: final_quality.2,
             iterations,
-            quality_passed,
+            quality_passed: if quality_passed { CheckResult::Passed } else { CheckResult::Failed(format!("SSIM {:.4} below target", best_ssim)) },
             log,
             confidence: 0.8,
             confidence_detail: ConfidenceBreakdown::default(),
@@ -1937,7 +1938,7 @@ impl VideoExplorer {
                 psnr: psnr_opt.map(|x| x as f64),
                 ms_ssim: ms_ssim_opt.map(|x| x as f64),
                 iterations,
-                quality_passed: true,
+                quality_passed: CheckResult::Passed,
                 log,
                 confidence: 0.85,
                 confidence_detail: ConfidenceBreakdown::default(),
@@ -1978,7 +1979,7 @@ impl VideoExplorer {
                 psnr: quality.1.map(|x| x as f64),
                 ms_ssim: quality.2.map(|x| x as f64),
                 iterations,
-                quality_passed: false,
+                quality_passed: CheckResult::Failed("Enhanced verification failed".into()),
                 log,
                 confidence: 0.3,
                 confidence_detail: ConfidenceBreakdown::default(),
@@ -2209,7 +2210,7 @@ impl VideoExplorer {
             psnr: quality.1.map(|x| x as f64),
             ms_ssim: quality.2.map(|x| x as f64),
             iterations,
-            quality_passed: ssim >= self.config.quality_thresholds.min_ssim,
+            quality_passed: if ssim >= self.config.quality_thresholds.min_ssim { CheckResult::Passed } else { CheckResult::Failed(format!("SSIM {:.4} below threshold", ssim)) },
             log,
             confidence: 0.85,
             confidence_detail: ConfidenceBreakdown::default(),
@@ -2889,7 +2890,7 @@ impl VideoExplorer {
         ssim: Option<f64>,
         psnr: Option<f64>,
         vmaf: Option<f64>,
-    ) -> bool {
+    ) -> CheckResult {
         let t = &self.config.quality_thresholds;
 
         if t.validate_ssim {
@@ -2897,11 +2898,11 @@ impl VideoExplorer {
                 Some(s) => {
                     let epsilon = precision::SSIM_COMPARE_EPSILON;
                     if s + epsilon < t.min_ssim {
-                        return false;
+                        return CheckResult::Failed(format!("SSIM {s:.4} below target {}", t.min_ssim));
                     }
                 }
                 None => {
-                    return false;
+                    return CheckResult::Failed("SSIM not available".to_string());
                 }
             }
         }
@@ -2910,11 +2911,11 @@ impl VideoExplorer {
             match psnr {
                 Some(p) => {
                     if p < t.min_psnr && !p.is_infinite() {
-                        return false;
+                        return CheckResult::Failed(format!("PSNR {p:.1} below target {}", t.min_psnr));
                     }
                 }
                 None => {
-                    return false;
+                    return CheckResult::Failed("PSNR not available".to_string());
                 }
             }
         }
@@ -2923,16 +2924,16 @@ impl VideoExplorer {
             match vmaf {
                 Some(v) => {
                     if v < t.min_ms_ssim {
-                        return false;
+                        return CheckResult::Failed(format!("MS-SSIM {v:.4} below target {}", t.min_ms_ssim));
                     }
                 }
                 None => {
-                    return false;
+                    return CheckResult::Failed("MS-SSIM not available".to_string());
                 }
             }
         }
 
-        true
+        CheckResult::Passed
     }
 }
 

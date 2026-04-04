@@ -22,6 +22,25 @@ pub use iteration::{IterationError, IterationGuard};
 pub use perception::{ProcessHistory, VisualPerception};
 pub use ssim::{Ssim, SsimError, SSIM_EPSILON};
 
+/// Result of a specific verification check.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum CheckResult {
+    /// The check was performed and passed.
+    Passed,
+    /// The check was performed and failed with the given reason.
+    Failed(String),
+    /// The check was not performed (e.g., not required by options or prerequisite failed).
+    NotChecked,
+}
+
+impl CheckResult {
+    /// Returns true if the check did not explicitly fail.
+    #[must_use]
+    pub fn is_ok(&self) -> bool {
+        !matches!(self, Self::Failed(_))
+    }
+}
+
 #[cfg(test)]
 mod property_tests {
     use super::*;

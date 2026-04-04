@@ -547,6 +547,9 @@ fn extract_hdr_side_data(json: &serde_json::Value) -> HdrSideData {
         }
     }
 
+    // All side data arrays from streams and frames are scanned.
+    // If not found, they remain false (Default).
+
     for sd in &side_data_entries {
         let sd_type = sd["side_data_type"].as_str().unwrap_or("").to_lowercase();
 

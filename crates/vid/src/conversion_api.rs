@@ -1024,7 +1024,7 @@ pub fn auto_convert_with_cache(
                 }
 
                 // --- Explore phase: quality/SSIM or size did not meet target; decide whether to keep or discard output. ---
-                if !explore_result.quality_passed
+                if !explore_result.quality_passed.is_ok()
                     && (config.match_quality || config.explore_smaller)
                 {
                     let actual_ssim = if let Some(s) = explore_result.ssim {
@@ -1314,7 +1314,7 @@ pub fn auto_convert_with_cache(
     }
 
     if let Some(ref result) = explore_result_opt {
-        if result.ms_ssim_passed == Some(false) {
+        if !result.ms_ssim_passed.is_ok() {
             let score_str = result
                 .ms_ssim_score
                 .map_or_else(|| "Unknown".to_string(), |s| format!("{s:.4}"));
@@ -1624,7 +1624,7 @@ fn success_status_for_cache(
         || (matches!(
             target,
             TargetVideoFormat::HevcMp4 | TargetVideoFormat::Av1Mp4
-        ) && explore_result.as_ref().is_some_and(|r| r.quality_passed))
+        ) && explore_result.as_ref().is_some_and(|r| r.quality_passed.is_ok()))
 }
 
 fn best_effort_status_for_cache(
@@ -1636,7 +1636,7 @@ fn best_effort_status_for_cache(
         target,
         TargetVideoFormat::HevcMp4 | TargetVideoFormat::Av1Mp4
     ) && final_crf > 0.0
-        && explore_result.as_ref().is_some_and(|r| !r.quality_passed)
+        && explore_result.as_ref().is_some_and(|r| !r.quality_passed.is_ok())
 }
 
 /// Calculate matched CRF based on detection results and selected codec.

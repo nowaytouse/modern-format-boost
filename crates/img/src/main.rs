@@ -73,9 +73,7 @@ enum Commands {
         #[arg(short, long)]
         verbose: bool,
 
-        /// Callers should skip video conversion and treat as static image (e.g. route to JXL in `img`).
-        #[arg(long)]
-        force_video: bool,
+
 
         /// Resume from last run: skip files already in progress file.
         #[arg(long, default_value_t = false)]
@@ -195,7 +193,7 @@ fn main() -> anyhow::Result<()> {
             allow_size_tolerance,
             no_allow_size_tolerance,
             verbose,
-            force_video,
+
             base_dir,
             resume: resume_flag,
             no_resume,
@@ -258,15 +256,7 @@ fn main() -> anyhow::Result<()> {
                 ));
                 std::env::set_var("MODERN_FORMAT_BOOST_APPLE_COMPAT", "1");
             }
-            if force_video {
-                shared_utils::progress_mode::emit_stderr(&format!(
-                    "{} Force Video: {}ENABLED{} (skip meme-score)",
-                    symbols::ROCKET,
-                    colors::BOLD,
-                    colors::RESET
-                ));
-                std::env::set_var("MODERN_FORMAT_BOOST_FORCE_VIDEO", "1");
-            }
+
             if in_place {
                 shared_utils::progress_mode::emit_stderr(&format!(
                     "{} In-place mode: {}ENABLED{} (auto-delete original)",
@@ -308,7 +298,7 @@ fn main() -> anyhow::Result<()> {
                 allow_size_tolerance,
                 verbose,
                 child_threads: 0,
-                force_video,
+    
                 cache: cache.clone(),
                 codec: selected_codec,
             };
@@ -556,7 +546,7 @@ struct AutoConvertConfig {
     allow_size_tolerance: bool,
     verbose: bool,
     child_threads: usize,
-    force_video: bool,
+
     cache: Option<Arc<AnalysisCache>>,
     codec: shared_utils::conversion_types::SelectedCodec,
 }
@@ -632,6 +622,22 @@ fn auto_convert_single_file(
 
     let analysis =
         shared_utils::image_analyzer::analyze_image_with_cache(input, config.cache.as_deref())?;
+
+    // --- Strict Static Isolation: Skip all animated assets ---
+    if analysis.is_animated {
+        let reason = "Animated media detected - img strictly processes static images only (handled by vid)";
+        shared_utils::progress_mode::image_skipped(reason);
+        copy_original_if_adjacent_mode(input, config)?;
+        return Ok(ConversionOutput {
+            original_path: input.display().to_string(),
+            output_path: input.display().to_string(),
+            skipped: true,
+            message: reason.to_string(),
+            original_size: analysis.file_size,
+            output_size: None,
+            size_reduction: None,
+        });
+    }
 
     // Single source of truth for static skip: JXL + modern lossy (avoid generational loss).
     if !analysis.is_animated {
@@ -712,11 +718,7 @@ fn auto_convert_single_file(
         codec: config.codec.clone(),
     };
 
-    let result = if analysis.is_animated {
-        dispatch_animated_conversion(input, &analysis, &options, config)?
-    } else {
-        dispatch_static_conversion(input, &analysis, &options, config)?
-    };
+    let result = dispatch_static_conversion(input, &analysis, &options, config)?;
 
     let output = convert_result_to_output(result);
 
@@ -813,238 +815,11 @@ fn dispatch_static_conversion(
     })
 }
 
-fn calculate_matched_crf_for_animation(
-    analysis: &shared_utils::image_analyzer::ImageAnalysis,
-    file_size: u64,
-    codec: &shared_utils::conversion_types::SelectedCodec,
-) -> anyhow::Result<f32> {
-    let estimated_quality = analysis.jpeg_analysis.as_ref().map(|j| j.estimated_quality);
 
-    let quality_analysis = shared_utils::from_image_analysis(
-        &analysis.format,
-        analysis.width,
-        analysis.height,
-        analysis.color_depth,
-        analysis.has_alpha,
-        file_size,
-        analysis.duration_secs.map(f64::from),
-        None,
-        estimated_quality,
-    );
 
-    let result = match codec {
-        shared_utils::conversion_types::SelectedCodec::Hevc => {
-            shared_utils::calculate_hevc_crf(&quality_analysis)
-        }
-        shared_utils::conversion_types::SelectedCodec::Av1 => {
-            shared_utils::calculate_av1_crf(&quality_analysis)
-        }
-    };
 
-    match result {
-        Ok(result) => {
-            let encoder = match codec {
-                shared_utils::conversion_types::SelectedCodec::Hevc => {
-                    shared_utils::EncoderType::Hevc
-                }
-                shared_utils::conversion_types::SelectedCodec::Av1 => {
-                    shared_utils::EncoderType::Av1
-                }
-            };
-            shared_utils::log_quality_analysis(&quality_analysis, &result, encoder);
-            Ok(result.crf)
-        }
-        Err(e) => Err(anyhow::anyhow!("Quality analysis failed: {e}")),
-    }
-}
 
-fn dispatch_animated_conversion(
-    input: &Path,
-    analysis: &shared_utils::image_analyzer::ImageAnalysis,
-    options: &img::lossless_converter::ConvertOptions,
-    config: &AutoConvertConfig,
-) -> anyhow::Result<shared_utils::ConversionResult> {
-    let format = analysis.format.as_str();
-    let is_lossless = analysis.is_lossless;
-    let codec = shared_utils::quality_matcher::parse_source_codec(format);
-    let is_animated = codec.can_be_animated();
-    let is_apple_native = shared_utils::quality_matcher::is_apple_native_format(format);
-    let is_non_native_animated = is_animated && !is_apple_native;
 
-    let should_skip_modern = if codec.is_modern() && is_animated && !is_lossless {
-        if config.apple_compat {
-            is_apple_native
-        } else {
-            true
-        }
-    } else {
-        false
-    };
-
-    if should_skip_modern {
-        if config.verbose {
-            println!(
-                "⏭️ Skipping modern lossy animated format (avoid generational loss): {}",
-                input.display()
-            );
-        }
-        copy_original_if_adjacent_mode(input, config)?;
-        return Ok(shared_utils::ConversionResult::skipped_custom(
-            input,
-            analysis.file_size,
-            "Skipping modern lossy animated format",
-            "modern_lossy_animated",
-        ));
-    }
-
-    let duration = match analysis.duration_secs {
-        Some(d) if d > 0.0 => d,
-        Some(0.0) => {
-            return dispatch_static_disguised_animated(input, analysis, options, config);
-        }
-        _ => {
-            let retry = shared_utils::image_analyzer::get_animation_duration_for_path(input);
-            if let Some(d) = retry {
-                d
-            } else {
-                shared_utils::log_eprintln!(
-                    "⚠️  {}: {}",
-                    "\x1b[33mCannot get animation duration, skipping conversion\x1b[0m",
-                    input.display()
-                );
-                copy_original_if_adjacent_mode(input, config)?;
-                return Ok(shared_utils::ConversionResult::skipped_custom(
-                    input,
-                    analysis.file_size,
-                    "Cannot get animation duration",
-                    "no_duration",
-                ));
-            }
-        }
-    };
-
-    let meme_keep = if config.force_video {
-        false
-    } else {
-        match shared_utils::probe_video(input) {
-            Ok(probe) => {
-                let verdict = shared_utils::assess_loop_intent_from_probe(&probe, input);
-                verdict.is_keep_gif()
-            }
-            Err(e) => {
-                shared_utils::progress_mode::emit_stderr(&format!(
-                    "🎞️  GIF [{}] probe failed ({}) → KEEP GIF",
-                    input.file_name().unwrap_or_default().to_string_lossy(),
-                    e
-                ));
-                true
-            }
-        }
-    };
-
-    let initial_crf =
-        calculate_matched_crf_for_animation(analysis, analysis.file_size, &config.codec)?;
-
-    if config.apple_compat && is_non_native_animated {
-        if meme_keep {
-            shared_utils::progress_mode::emit_stderr(&format!(
-                "🍎 Animated {}→GIF (Apple Compat, meme-score: keep): {}",
-                format,
-                input.display()
-            ));
-            Ok(
-                vid::animated_image::convert_to_gif_apple_compat(input, options)
-                    .map_err(|e| anyhow::anyhow!(e))?,
-            )
-        } else {
-            shared_utils::progress_mode::emit_stderr(&format!(
-                "🍎 Animated {}→HEVC MP4 (Apple Compat, {:.1}s): {}",
-                format,
-                duration,
-                input.display()
-            ));
-            Ok(vid::animated_image::convert_to_mp4_matched(
-                input,
-                options,
-                initial_crf,
-                analysis.has_alpha,
-            )
-            .map_err(|e| anyhow::anyhow!(e))?)
-        }
-    } else {
-        if meme_keep {
-            copy_original_if_adjacent_mode(input, config)?;
-            return Ok(shared_utils::ConversionResult::skipped_custom(
-                input,
-                analysis.file_size,
-                "GIF meme-score: keep as original",
-                "meme_score_keep",
-            ));
-        }
-        let codec_name = config.codec.as_str().to_uppercase();
-        shared_utils::progress_mode::emit_stderr(&format!(
-            "🔄 Animated→{} MP4 (SMART QUALITY, {:.1}s): {}",
-            codec_name,
-            duration,
-            input.display()
-        ));
-        Ok(vid::animated_image::convert_to_mp4_matched(
-            input,
-            options,
-            initial_crf,
-            analysis.has_alpha,
-        )
-        .map_err(|e| anyhow::anyhow!(e))?)
-    }
-}
-
-fn dispatch_static_disguised_animated(
-    input: &Path,
-    analysis: &shared_utils::image_analyzer::ImageAnalysis,
-    options: &img::lossless_converter::ConvertOptions,
-    config: &AutoConvertConfig,
-) -> anyhow::Result<shared_utils::ConversionResult> {
-    use img::lossless_converter::convert_to_jxl;
-
-    let is_modern =
-        shared_utils::quality_matcher::parse_source_codec(analysis.format.as_str()).is_modern();
-    let use_lossless = analysis.is_lossless;
-
-    if is_modern && !use_lossless {
-        if config.verbose {
-            println!(
-                "⏭️ Skipping static-disguised modern format (lossy): {}",
-                input.display()
-            );
-        }
-        copy_original_if_adjacent_mode(input, config)?;
-        return Ok(shared_utils::ConversionResult::skipped_custom(
-            input,
-            analysis.file_size,
-            "Skipping static modern format to avoid generational loss",
-            "modern_lossy_static",
-        ));
-    }
-
-    let distance = if use_lossless { 0.0_f32 } else { 0.001_f32 };
-    if config.verbose {
-        println!(
-            "🔄 Static GIF/Modern→JXL ({}): {}",
-            if distance == 0.0 {
-                "Lossless"
-            } else {
-                "Quality 100"
-            },
-            input.display()
-        );
-    }
-    Ok(convert_to_jxl(
-        input,
-        options,
-        distance,
-        analysis.hdr_info.as_ref(),
-    )?)
-}
 
 fn auto_convert_directory(
     input: &Path,

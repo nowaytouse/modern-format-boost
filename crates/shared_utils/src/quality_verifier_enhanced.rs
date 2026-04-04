@@ -66,23 +66,24 @@ impl VerifyOptions {
     }
 }
 
+use crate::types::{CheckResult};
+
 /// Result of enhanced verification.
 #[derive(Clone, Debug)]
 #[must_use]
 pub struct EnhancedVerifyResult {
     pub file_ok: bool,
-    pub duration_match: Option<bool>,
-    pub has_video_stream: Option<bool>,
+    pub duration_match: CheckResult,
+    pub has_video_stream: CheckResult,
     pub message: String,
     pub details: Vec<String>,
 }
 
 impl EnhancedVerifyResult {
     /// True only when file is OK and no required check explicitly failed.
-    /// None = check was not required (treat as pass); Some(false) = required check failed (do not fake success).
     #[must_use]
     pub fn passed(&self) -> bool {
-        self.file_ok && self.duration_match != Some(false) && self.has_video_stream != Some(false)
+        self.file_ok && self.duration_match.is_ok() && self.has_video_stream.is_ok()
     }
 
     #[must_use]
@@ -128,16 +129,15 @@ pub fn verify_after_encode(
             details.push(format!("Output file check failed: {e}"));
             return EnhancedVerifyResult {
                 file_ok: false,
-                duration_match: None,
-                has_video_stream: None,
+                duration_match: CheckResult::NotChecked,
+                has_video_stream: CheckResult::NotChecked,
                 message: e,
                 details,
             };
         }
     };
-
-    let mut duration_match: Option<bool> = None;
-    let mut has_video_stream: Option<bool> = None;
+    let mut duration_match = CheckResult::NotChecked;
+    let mut has_video_stream = CheckResult::NotChecked;
     let mut probe_failed = false;
 
     if options.require_duration_match || options.require_video_stream {
@@ -148,7 +148,11 @@ pub fn verify_after_encode(
             (Ok(ref inp), Ok(ref out)) => {
                 if options.require_video_stream {
                     let has_video = !out.video_codec.is_empty() && out.video_codec != "unknown";
-                    has_video_stream = Some(has_video);
+                    has_video_stream = if has_video {
+                        CheckResult::Passed
+                    } else {
+                        CheckResult::Failed("No valid video stream in output".to_string())
+                    };
                     if has_video {
                         details.push(format!("Output has video stream: {}", out.video_codec));
                     } else {
@@ -159,7 +163,14 @@ pub fn verify_after_encode(
                     let tol = options.duration_tolerance_secs.max(0.0);
                     let diff = (inp.duration - out.duration).abs();
                     let ok = diff <= tol;
-                    duration_match = Some(ok);
+                    duration_match = if ok {
+                        CheckResult::Passed
+                    } else {
+                        CheckResult::Failed(format!(
+                            "Duration mismatch: {:.2}s vs {:.2}s (diff {:.2}s > tolerance {:.2}s)",
+                            inp.duration, out.duration, diff, tol
+                        ))
+                    };
                     details.push(format!(
                         "Duration: input {:.2}s, output {:.2}s, diff {:.2}s (tolerance {:.2}s) → {}",
                         inp.duration,
@@ -174,33 +185,33 @@ pub fn verify_after_encode(
                 probe_failed = true;
                 details.push(format!("Input probe failed: {e}"));
                 if options.require_duration_match {
-                    duration_match = Some(false);
+                    duration_match = CheckResult::Failed(format!("Input probe failed: {e}"));
                 }
                 if options.require_video_stream {
-                    has_video_stream = Some(false);
+                    has_video_stream = CheckResult::Failed(format!("Input probe failed: {e}"));
                 }
             }
             (_, Err(e)) => {
                 probe_failed = true;
                 details.push(format!("Output probe failed: {e}"));
                 if options.require_duration_match {
-                    duration_match = Some(false);
+                    duration_match = CheckResult::Failed(format!("Output probe failed: {e}"));
                 }
                 if options.require_video_stream {
-                    has_video_stream = Some(false);
+                    has_video_stream = CheckResult::Failed(format!("Output probe failed: {e}"));
                 }
                 details.push("Duration/stream not verified (probe unavailable)".to_string());
             }
         }
     }
 
-    let failed = duration_match == Some(false) || has_video_stream == Some(false);
+    let failed = !duration_match.is_ok() || !has_video_stream.is_ok();
     let message = if failed {
         if probe_failed {
             "Probe failed; duration/stream not verified".to_string()
-        } else if duration_match == Some(false) {
+        } else if !duration_match.is_ok() {
             "Duration mismatch (input vs output beyond tolerance)".to_string()
-        } else if has_video_stream == Some(false) {
+        } else if !has_video_stream.is_ok() {
             "Output has no valid video stream".to_string()
         } else {
             "Verification failed".to_string()
@@ -263,24 +274,24 @@ mod tests {
     fn test_enhanced_result_passed() {
         let r = EnhancedVerifyResult {
             file_ok: true,
-            duration_match: Some(true),
-            has_video_stream: Some(true),
+            duration_match: CheckResult::Passed,
+            has_video_stream: CheckResult::Passed,
             message: "OK".to_string(),
             details: vec![],
         };
         assert!(r.passed());
         let r2 = EnhancedVerifyResult {
             file_ok: true,
-            duration_match: None,
-            has_video_stream: None,
+            duration_match: CheckResult::NotChecked,
+            has_video_stream: CheckResult::NotChecked,
             message: "OK".to_string(),
             details: vec![],
         };
         assert!(r2.passed());
         let r3 = EnhancedVerifyResult {
             file_ok: true,
-            duration_match: Some(false),
-            has_video_stream: Some(true),
+            duration_match: CheckResult::Failed("mismatch".to_string()),
+            has_video_stream: CheckResult::Passed,
             message: "Duration mismatch".to_string(),
             details: vec![],
         };

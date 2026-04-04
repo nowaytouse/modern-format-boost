@@ -12,7 +12,7 @@ use super::precheck;
 use super::{
     bail, calculate_adaptive_max_walls, calculate_max_iterations_for_duration,
     calculate_ms_ssim_yuv, calculate_smart_thresholds, calculate_ssim_all, calculate_ssim_enhanced,
-    calculate_zero_gains_for_duration_and_range, compression_target_size, ConfidenceBreakdown,
+    calculate_zero_gains_for_duration_and_range, compression_target_size, CheckResult, ConfidenceBreakdown,
     CrfCache, ExploreResult, VideoEncoder, ABSOLUTE_MIN_CRF, NORMAL_MAX_WALL_HITS,
 };
 use crate::constants::{
@@ -131,25 +131,31 @@ pub(crate) fn format_quality_check_line(
     result: &ExploreResult,
     quality_verification_skipped_for_format: bool,
 ) -> String {
-    match (result.ms_ssim_passed, result.quality_passed) {
-        (Some(false), _) => "   QualityCheck: FAILED (quality metrics below target)".to_string(),
-        (Some(true), true) => {
-            "   QualityCheck: PASSED (quality + total file size target met)".to_string()
+    match (result.ms_ssim_passed.is_ok(), result.quality_passed.is_ok()) {
+        (true, true) => "   QualityCheck: PASSED (quality + total file size target met)".to_string(),
+        (false, true) => {
+            if let CheckResult::Failed(ref reason) = result.ms_ssim_passed {
+                format!("   QualityCheck: FAILED ({reason})")
+            } else {
+                "   QualityCheck: FAILED (quality metrics below target)".to_string()
+            }
         }
-        (Some(true), false) => {
-            if let Some(ref reason) = result.enhanced_verify_fail_reason {
-                format!(
-                    "   QualityCheck: FAILED (quality met but enhanced verification failed: {reason})"
-                )
+        (true, false) => {
+            if let CheckResult::Failed(ref reason) = result.quality_passed {
+                format!("   QualityCheck: FAILED ({reason})")
+            } else if let Some(ref reason) = result.enhanced_verify_fail_reason {
+                format!("   QualityCheck: FAILED (quality met but enhanced verification failed: {reason})")
             } else {
                 "   QualityCheck: FAILED (quality met but total file not smaller)".to_string()
             }
         }
-        (None, true) => "   QualityCheck: PASSED (total file size target met)".to_string(),
-        (None, false) if quality_verification_skipped_for_format => {
-            "   QualityCheck: N/A (GIF/size-only, quality not measured)".to_string()
+        (false, false) => {
+             if quality_verification_skipped_for_format {
+                 "   QualityCheck: N/A (GIF/size-only, quality not measured)".to_string()
+             } else {
+                 "   QualityCheck: FAILED (quality not verified)".to_string()
+             }
         }
-        (None, false) => "   QualityCheck: FAILED (quality not verified)".to_string(),
     }
 }
 
@@ -669,10 +675,10 @@ pub fn explore_with_gpu_coarse_search(
 
                 if integrity_ok {
                     crate::log_eprintln!("   ✅ INTEGRITY CHECK: PASSED");
-                    result.ms_ssim_passed = Some(true);
+                    result.ms_ssim_passed = CheckResult::Passed;
                 } else {
                     crate::log_eprintln!("   ❌ INTEGRITY CHECK: FAILED (possible encode error)");
-                    result.ms_ssim_passed = Some(false);
+                    result.ms_ssim_passed = CheckResult::Failed("SSIM below target".into());
                 }
                 // Leave ms_ssim_score as None to signal lossless path (no perceptual score)
             } else {
@@ -696,21 +702,21 @@ pub fn explore_with_gpu_coarse_search(
                             all,
                             gif_threshold
                         );
-                        result.ms_ssim_passed = Some(false);
+                        result.ms_ssim_passed = CheckResult::Failed("SSIM below target".into());
                     } else {
                         crate::log_eprintln!(
                             "   ✅ SSIM ALL TARGET MET: {:.4} ≥ {:.2}",
                             all,
                             gif_threshold
                         );
-                        result.ms_ssim_passed = Some(true);
+                        result.ms_ssim_passed = CheckResult::Passed;
                     }
                     result.ms_ssim_score = Some(all);
                 } else {
                     quality_verification_skipped_for_format = true;
                     let msg = "⚠️  SSIM verification failed (Animated format) - accepting based on size compression only";
                     result.log.push(msg.to_string());
-                    result.ms_ssim_passed = None;
+                    result.ms_ssim_passed = CheckResult::NotChecked;
                     result.ms_ssim_score = None;
                 }
             } // end else (non-CRF=0 SSIM path)
@@ -803,7 +809,7 @@ pub fn explore_with_gpu_coarse_search(
 
                 if all_passed {
                     crate::log_eprintln!("   ✅ QUALITY GATE: PASSED");
-                    result.ms_ssim_passed = Some(true);
+                    result.ms_ssim_passed = CheckResult::Passed;
                     // Store a representative score (VMAF-Y) for log/report
                     result.ms_ssim_score = vmaf_y.map(|v| v / 100.0);
                     result.vmaf_y_score = vmaf_y;
@@ -849,7 +855,7 @@ pub fn explore_with_gpu_coarse_search(
                         );
                     }
                     crate::log_eprintln!("      Suggestion: Lower CRF or disable --compress");
-                    result.ms_ssim_passed = Some(false);
+                    result.ms_ssim_passed = CheckResult::Failed("SSIM below target".into());
                     result.ms_ssim_score = vmaf_y.map(|v| v / 100.0);
                     result.vmaf_y_score = vmaf_y;
                     result.cambi_score = cambi;
@@ -970,7 +976,7 @@ pub fn explore_with_gpu_coarse_search(
                         );
                         crate::log_eprintln!("      ⚠️  Quality does not meet threshold!");
                         crate::log_eprintln!("      Suggestion: Lower CRF or disable --compress");
-                        result.ms_ssim_passed = Some(false);
+                        result.ms_ssim_passed = CheckResult::Failed("SSIM below target".into());
                         result.ms_ssim_score = Some(score);
                     } else {
                         crate::log_eprintln!(
@@ -978,7 +984,7 @@ pub fn explore_with_gpu_coarse_search(
                             score,
                             quality_target
                         );
-                        result.ms_ssim_passed = Some(true);
+                        result.ms_ssim_passed = CheckResult::Passed;
                         result.ms_ssim_score = Some(score);
                     }
                 } else {
@@ -993,7 +999,7 @@ pub fn explore_with_gpu_coarse_search(
                         crate::log_eprintln!("{}", line);
                         result.log.push((*line).to_string());
                     }
-                    result.ms_ssim_passed = Some(false);
+                    result.ms_ssim_passed = CheckResult::Failed("SSIM below target".into());
                     result.ms_ssim_score = None;
                 }
             }
@@ -1014,14 +1020,14 @@ pub fn explore_with_gpu_coarse_search(
                         all,
                         long_threshold
                     );
-                    result.ms_ssim_passed = Some(false);
+                    result.ms_ssim_passed = CheckResult::Failed("SSIM below target".into());
                 } else {
                     crate::log_eprintln!(
                         "   ✅ SSIM ALL TARGET MET: {:.4} ≥ {:.2}",
                         all,
                         long_threshold
                     );
-                    result.ms_ssim_passed = Some(true);
+                    result.ms_ssim_passed = CheckResult::Passed;
                 }
                 result.ms_ssim_score = Some(all);
             } else {
@@ -1032,7 +1038,7 @@ pub fn explore_with_gpu_coarse_search(
                     crate::log_eprintln!("{}", line);
                     result.log.push((*line).to_string());
                 }
-                result.ms_ssim_passed = Some(false);
+                result.ms_ssim_passed = CheckResult::Failed("SSIM below target".into());
                 result.ms_ssim_score = None;
             }
         }
@@ -1050,14 +1056,14 @@ pub fn explore_with_gpu_coarse_search(
                     all,
                     no_duration_threshold
                 );
-                result.ms_ssim_passed = Some(false);
+                result.ms_ssim_passed = CheckResult::Failed("SSIM below target".into());
             } else {
                 crate::log_eprintln!(
                     "   ✅ SSIM ALL TARGET MET: {:.4} ≥ {:.2}",
                     all,
                     no_duration_threshold
                 );
-                result.ms_ssim_passed = Some(true);
+                result.ms_ssim_passed = CheckResult::Passed;
             }
             result.ms_ssim_score = Some(all);
         } else {
@@ -1068,7 +1074,7 @@ pub fn explore_with_gpu_coarse_search(
                 crate::log_eprintln!("{}", line);
                 result.log.push((*line).to_string());
             }
-            result.ms_ssim_passed = Some(false);
+            result.ms_ssim_passed = CheckResult::Failed("SSIM below target".into());
             result.ms_ssim_score = None;
         }
     }
@@ -1091,7 +1097,7 @@ pub fn explore_with_gpu_coarse_search(
         };
     result.log.push(size_change_line);
 
-    let quality_line = if result.ms_ssim_passed == Some(false) && result.ms_ssim_score.is_none() {
+    let quality_line = if !result.ms_ssim_passed.is_ok() && result.ms_ssim_score.is_none() {
         "   Quality: N/A (quality check failed)".to_string()
     } else if let Some(score) = result.ms_ssim_score {
         let pct = (score * 100.0 * 10.0).round() / 10.0;
@@ -3581,10 +3587,10 @@ fn cpu_fine_tune_from_gpu_boundary(
         ssim,
         psnr: None,
         ms_ssim: None,
-        ms_ssim_passed: None,
+        ms_ssim_passed: CheckResult::NotChecked,
         ms_ssim_score: None,
         iterations,
-        quality_passed,
+        quality_passed: if quality_passed { CheckResult::Passed } else { CheckResult::Failed("GPU search failed".into()) },
         enhanced_verify_fail_reason,
         log,
         confidence,

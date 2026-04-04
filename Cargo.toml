@@ -1,8 +1,8 @@
 [workspace]
 members = [
-    "vid",
-    "img",
-    "shared_utils"
+    "crates/vid",
+    "crates/img",
+    "crates/shared_utils"
 ]
 resolver = "2"
 
@@ -219,7 +219,7 @@ crc32fast = { git = "https://github.com/srijs/rust-crc32fast" }
 quick-xml = { git = "https://github.com/tafia/quick-xml" }
 exr = { git = "https://github.com/johannesvollmer/exrs" }
 
-shared_utils = { path = "shared_utils" }
+shared_utils = { path = "crates/shared_utils" }
 
 # NIGHTLY ONLY: Patch section to unify duplicate dependencies and use GitHub nightly sources
 [patch.crates-io]
