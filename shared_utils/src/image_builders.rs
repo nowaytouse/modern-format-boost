@@ -92,6 +92,10 @@ impl MagickBuilder {
             cmd.arg("--").arg(crate::safe_path_arg(input).as_ref());
         }
 
+        for arg in &self.extra_args {
+            cmd.arg(arg);
+        }
+
         if self.strip {
             cmd.arg(constants::MAGICK_ARG_STRIP);
         }
@@ -116,14 +120,11 @@ impl MagickBuilder {
             cmd.arg("-format").arg(fmt);
         }
 
-        for arg in &self.extra_args {
-            cmd.arg(arg);
-        }
-
         if self.use_stdout {
             if !self.extra_args.iter().any(|a| a.ends_with(":-")) {
                  cmd.arg("png:-");
             }
+            cmd.stdin(Stdio::null()); // Default for IM piped
             cmd.stdout(Stdio::piped());
         } else if let Some(output) = &self.output {
             cmd.arg(crate::safe_path_arg(output).as_ref());
@@ -135,6 +136,74 @@ impl MagickBuilder {
     #[must_use]
     pub fn check_available() -> bool {
         Command::new(constants::TOOL_MAGICK).arg("-version").output().map(|o| o.status.success()).unwrap_or(false)
+    }
+}
+
+/// Builder for constructing `identify` (ImageMagick) commands.
+#[derive(Debug, Default)]
+pub struct IdentifyBuilder {
+    input: Option<PathBuf>,
+    format: Option<String>,
+    extra_args: Vec<String>,
+    use_magick: bool, // toggle between 'magick identify' and 'identify'
+}
+
+impl IdentifyBuilder {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn input<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
+        self.input = Some(path.as_ref().to_path_buf());
+        self
+    }
+
+    pub fn format<S: AsRef<str>>(&mut self, format: S) -> &mut Self {
+        self.format = Some(format.as_ref().to_string());
+        self
+    }
+
+    pub fn use_magick(&mut self, enabled: bool) -> &mut Self {
+        self.use_magick = enabled;
+        self
+    }
+
+    pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
+        self.extra_args.push(arg.as_ref().to_string());
+        self
+    }
+
+    #[must_use]
+    pub fn build(&self) -> Command {
+        let mut cmd = if self.use_magick {
+            let mut c = Command::new(constants::TOOL_MAGICK);
+            c.arg("identify");
+            c
+        } else {
+            Command::new(constants::TOOL_IDENTIFY)
+        };
+
+        if let Some(fmt) = &self.format {
+            cmd.arg("-format").arg(fmt);
+        }
+
+        for arg in &self.extra_args {
+            cmd.arg(arg);
+        }
+
+        if let Some(input) = &self.input {
+            cmd.arg(crate::safe_path_arg(input).as_ref());
+        }
+
+        cmd
+    }
+
+    #[must_use]
+    pub fn check_available() -> bool {
+        Command::new(constants::TOOL_IDENTIFY).arg("-version").output().map(|o| o.status.success()).unwrap_or_else(|_| {
+            Command::new(constants::TOOL_MAGICK).arg("identify").arg("-version").output().map(|o| o.status.success()).unwrap_or(false)
+        })
     }
 }
 
@@ -252,12 +321,13 @@ pub struct GifskiBuilder {
     output: Option<PathBuf>,
     inputs: Vec<PathBuf>,
     input_pattern: Option<String>,
-    fps: Option<u32>,
+    fps: Option<f32>,
     quality: Option<u8>,
     motion_quality: Option<u8>,
     lossy_quality: Option<u8>,
     width: Option<u32>,
     height: Option<u32>,
+    repeat: Option<u32>,
     extra_args: Vec<String>,
 }
 
@@ -282,7 +352,7 @@ impl GifskiBuilder {
         self
     }
 
-    pub fn fps(&mut self, fps: u32) -> &mut Self {
+    pub fn fps(&mut self, fps: f32) -> &mut Self {
         self.fps = Some(fps);
         self
     }
@@ -308,6 +378,11 @@ impl GifskiBuilder {
         self
     }
 
+    pub fn repeat(&mut self, repeat: u32) -> &mut Self {
+        self.repeat = Some(repeat);
+        self
+    }
+
     pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
         self.extra_args.push(arg.as_ref().to_string());
         self
@@ -323,7 +398,7 @@ impl GifskiBuilder {
         }
 
         if let Some(fps) = self.fps {
-            cmd.arg("--fps").arg(fps.to_string());
+            cmd.arg("--fps").arg(format!("{fps:.3}"));
         }
 
         if let Some(q) = self.quality {
@@ -340,6 +415,10 @@ impl GifskiBuilder {
 
         if let (Some(w), Some(h)) = (self.width, self.height) {
             cmd.arg("--width").arg(w.to_string()).arg("--height").arg(h.to_string());
+        }
+
+        if let Some(r) = self.repeat {
+            cmd.arg("--repeat").arg(r.to_string());
         }
 
         for arg in &self.extra_args {
@@ -466,6 +545,10 @@ impl AvifencBuilder {
             cmd.arg(arg);
         }
 
+        if self.input.is_some() || self.output.is_some() {
+            cmd.arg("--");
+        }
+
         if let Some(input) = &self.input {
             cmd.arg(crate::safe_path_arg(input).as_ref());
         }
@@ -560,6 +643,7 @@ pub struct ExiftoolBuilder {
     input: Option<PathBuf>,
     args: Vec<String>,
     overwrite_original: bool,
+    use_stdin: bool,
 }
 
 impl ExiftoolBuilder {
@@ -605,6 +689,11 @@ impl ExiftoolBuilder {
         self
     }
 
+    pub fn use_stdin(&mut self) -> &mut Self {
+        self.use_stdin = true;
+        self
+    }
+
     #[must_use]
     pub fn build(&self) -> Command {
         let mut cmd = Command::new("exiftool");
@@ -619,6 +708,10 @@ impl ExiftoolBuilder {
 
         if let Some(input) = &self.input {
             cmd.arg(crate::safe_path_arg(input).as_ref());
+        }
+
+        if self.use_stdin {
+            cmd.stdin(std::process::Stdio::piped());
         }
 
         cmd

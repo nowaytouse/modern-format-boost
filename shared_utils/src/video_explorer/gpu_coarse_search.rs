@@ -3,9 +3,8 @@
 use anyhow::{Context, Result};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use tracing::{debug, error, warn};
+use std::path::Path;
+use std::process::Stdio;
 
 use super::calibration;
 use super::dynamic_mapping;

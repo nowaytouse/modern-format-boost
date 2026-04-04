@@ -225,10 +225,11 @@ pub fn get_rsync_path() -> &'static str {
 
 #[must_use]
 pub fn get_rsync_version() -> Option<String> {
-    use std::process::Command;
 
-    let output = Command::new(get_rsync_path())
+    let output = crate::tool_builders::RsyncBuilder::new()
+        .executable(get_rsync_path())
         .arg("--version")
+        .build()
         .output()
         .ok()?;
 

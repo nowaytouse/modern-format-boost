@@ -4,7 +4,6 @@
 //! `calculate_ms_ssim` is single-channel luma with standalone-vmaf fallback for other callers.
 
 use std::path::Path;
-use std::process::Command;
 
 fn common_even_metric_dimensions(
     input_width: u32,

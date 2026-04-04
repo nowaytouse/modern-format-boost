@@ -181,6 +181,7 @@ pub struct FfmpegBuilder {
     loglevel: Option<String>,
     map: Vec<String>,
     filter_complex: Option<String>,
+    input_args: Vec<String>,
     extra_args: Vec<String>,
     is_gpu: bool,
     params: FfmpegParams,
@@ -225,6 +226,10 @@ impl FfmpegBuilder {
     }
 
     pub fn codec_video<S: AsRef<str>>(&mut self, codec: S) -> &mut Self {
+        self.vcodec_str(codec)
+    }
+
+    pub fn codec_v<S: AsRef<str>>(&mut self, codec: S) -> &mut Self {
         self.vcodec_str(codec)
     }
 
@@ -310,6 +315,11 @@ impl FfmpegBuilder {
         self
     }
 
+    pub fn filter_lavfi<S: AsRef<str>>(&mut self, filter: S) -> &mut Self {
+        self.filter_complex = Some(filter.as_ref().to_string());
+        self
+    }
+
     pub fn hide_banner(&mut self) -> &mut Self {
         self.hide_banner = true;
         self
@@ -322,6 +332,11 @@ impl FfmpegBuilder {
 
     pub fn arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
         self.extra_args.push(arg.as_ref().to_string());
+        self
+    }
+
+    pub fn input_arg<S: AsRef<str>>(&mut self, arg: S) -> &mut Self {
+        self.input_args.push(arg.as_ref().to_string());
         self
     }
 
@@ -363,6 +378,15 @@ impl FfmpegBuilder {
             cmd.arg("-v").arg(level);
         }
 
+        if let Some(threads) = self.threads {
+            cmd.arg(constants::FFMPEG_ARG_THREADS);
+            cmd.arg(threads.to_string());
+        }
+
+        for i_arg in &self.input_args {
+            cmd.arg(i_arg);
+        }
+
         for input in &self.inputs {
             cmd.arg("-i");
             cmd.arg(crate::safe_path_arg(input).as_ref());
@@ -384,7 +408,11 @@ impl FfmpegBuilder {
 
         if let Some(preset) = self.preset {
             cmd.arg(constants::FFMPEG_ARG_PRESET);
-            cmd.arg(preset.x26x_name());
+            if matches!(self.vcodec, Some(VideoCodec::Av1)) {
+                cmd.arg(preset.svtav1_preset().to_string());
+            } else {
+                cmd.arg(preset.x26x_name());
+            }
         }
 
         if let Some(profile) = self.profile {
@@ -395,11 +423,6 @@ impl FfmpegBuilder {
         if let Some(pix_fmt) = self.pix_fmt {
             cmd.arg(constants::FFMPEG_ARG_PIX_FMT);
             cmd.arg(pix_fmt.ffmpeg_name());
-        }
-
-        if let Some(threads) = self.threads {
-            cmd.arg(constants::FFMPEG_ARG_THREADS);
-            cmd.arg(threads.to_string());
         }
 
         if let Some(fmt) = &self.format {

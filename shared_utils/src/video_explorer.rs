@@ -13,7 +13,6 @@ use std::fmt::Write as _;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-use std::process::Command;
 
 const SSIM_PLATEAU_THRESHOLD: f64 = 0.0002;
 const PHI: f32 = 0.618;
@@ -656,7 +655,7 @@ impl VideoEncoder {
     }
 
     fn is_encoder_available(encoder: &str) -> bool {
-        use std::process::Command;
+        
 
         static LIBX265_AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         static LIBX264_AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();

@@ -1160,8 +1160,6 @@ fn get_animation_duration(path: &Path) -> Option<f32> {
 }
 
 fn try_jxl_via_apng(path: &Path) -> Option<f32> {
-    use std::process::Command;
-
     // Check if djxl is available
     if which::which("djxl").is_err() {
         log_eprintln!("⚠️  djxl not found; cannot process animated JXL");
@@ -1272,8 +1270,6 @@ fn try_jxl_via_apng(path: &Path) -> Option<f32> {
 }
 
 fn try_ffprobe_json(path: &Path) -> Option<f32> {
-    use std::process::Command;
-
     let output = crate::ffmpeg_builder::FfprobeBuilder::new()
         .input(path)
         .loglevel("error")
@@ -1328,8 +1324,6 @@ fn try_ffprobe_json(path: &Path) -> Option<f32> {
 }
 
 fn try_ffprobe_default(path: &Path) -> Option<f32> {
-    use std::process::Command;
-
     let output = crate::ffmpeg_builder::FfprobeBuilder::new()
         .input(path)
         .loglevel("error")
@@ -1377,8 +1371,6 @@ fn try_ffprobe_default(path: &Path) -> Option<f32> {
 /// Use as fallback when ffprobe has no stream/format duration. Emits a warning log when used.
 #[must_use]
 pub fn get_animation_duration_and_frames_imagemagick(path: &Path) -> Option<(f64, u64)> {
-    use std::process::Command;
-
     log_eprintln!(
         "⚠️  [Duration Fallback] Using ImageMagick identify for animation duration: {}",
         path.display()
@@ -1584,7 +1576,6 @@ fn is_jxl_file(path: &Path) -> bool {
 
 fn analyze_jxl_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
     use crate::image_detection::{detect_animation, DetectedFormat};
-    use std::process::Command;
 
     let (width, height, has_alpha, color_depth) = if crate::tool_builders::JxlinfoBuilder::check_available() {
         let output = crate::tool_builders::JxlinfoBuilder::new()

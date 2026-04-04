@@ -17,9 +17,8 @@
 
 use anyhow::{bail, Context, Result};
 use std::fmt::Write as FmtWrite;
-use std::io::BufReader;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use tracing::{debug, error, warn};
 
 #[derive(Debug, Clone)]

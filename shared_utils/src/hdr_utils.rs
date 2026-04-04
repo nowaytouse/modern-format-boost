@@ -7,7 +7,6 @@
 
 use crate::ffprobe_json::ColorInfo;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// Convert `ColorInfo` to CICP string for JXL encoding.
 /// CICP format: --cicp=`<primaries>`-`<transfer>`-`<matrix>`

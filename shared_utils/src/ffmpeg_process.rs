@@ -400,8 +400,10 @@ pub fn get_error_suggestion(stderr: &str) -> Option<String> {
 /// # Errors
 /// Returns error if command fails, also prints error details to stderr.
 pub fn run_ffmpeg_with_error_report(args: &[&str]) -> Result<std::process::Output> {
-    let mut cmd = std::process::Command::new(crate::constants::TOOL_FFMPEG);
-    cmd.args(args);
+    let mut builder = crate::tool_builders::FfmpegBuilder::new();
+    for arg in args {
+        builder.arg(arg);
+    }
 
     let command_str = format!("{} {}", crate::constants::TOOL_FFMPEG, args.join(" "));
 
@@ -410,7 +412,10 @@ pub fn run_ffmpeg_with_error_report(args: &[&str]) -> Result<std::process::Outpu
         "Executing FFmpeg command"
     );
 
-    let output = cmd.output().context("Failed to execute FFmpeg")?;
+    let output = builder
+        .build()
+        .output()
+        .context("Failed to execute FFmpeg")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();

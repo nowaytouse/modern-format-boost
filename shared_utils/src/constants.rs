@@ -272,6 +272,7 @@ pub const TOOL_JXLINFO: &str = "jxlinfo";
 pub const TOOL_WEBPMUX: &str = "webpmux";
 pub const TOOL_GIFSKI: &str = "gifski";
 pub const TOOL_MAGICK: &str = "magick";
+pub const TOOL_IDENTIFY: &str = "identify";
 pub const TOOL_SIPS: &str = "sips";
 pub const TOOL_EXIFTOOL: &str = "exiftool";
 pub const TOOL_DWEBP: &str = "dwebp";

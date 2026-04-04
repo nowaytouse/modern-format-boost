@@ -1773,10 +1773,10 @@ fn prepare_input_for_cjxl(
                 .frames_v(1)
                 .output(&temp_png);
             
-            let result = builder.spawn()?.wait_with_output();
+            let result = builder.build().output();
 
             match result {
-                Ok((status, _)) if status.success() && temp_png.exists() => {
+                Ok(out) if out.status.success() && temp_png.exists() => {
                     shared_utils::progress_mode::preprocessing_success();
                     Ok((temp_png, Some(temp_png_file)))
                 }

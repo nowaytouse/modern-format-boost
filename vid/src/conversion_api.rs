@@ -11,7 +11,6 @@ use shared_utils::conversion_types::{
 use std::fmt::Write as _;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::Command;
 use tracing::{info, warn};
 
 fn convert_options_from_config(
@@ -1956,7 +1955,7 @@ fn execute_lossless(
 
     args.push(output_arg);
 
-    let result = crate::tool_builders::FfmpegBuilder::new()
+    let result = shared_utils::FfmpegBuilder::new()
         .args(args)
         .build()
         .output()?;

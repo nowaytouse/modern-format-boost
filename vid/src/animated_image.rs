@@ -4,7 +4,6 @@ use crate::{Result, VidQualityError};
 use shared_utils::conversion::{ConversionResult, ConvertOptions};
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
 use shared_utils::constants::ANIMATION_CLIP_THRESHOLD_SECS;
 use shared_utils::conversion::{
@@ -124,8 +123,8 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
     let mut builder = shared_utils::FfmpegBuilder::new();
     builder
         .overwrite()
-        .arg("-r") // Use -r for input frame rate
-        .arg(fps.to_string())
+        .input_arg("-r") // Use -r for input frame rate
+        .input_arg(fps.to_string())
         .input(&pattern)
         .vcodec(shared_utils::VideoCodec::Apng)
         .format("apng")
@@ -1643,7 +1642,7 @@ pub fn convert_to_gif_apple_compat(
             let temp_apng_path = temp_apng.path().to_path_buf();
 
             // Convert JXL to APNG using djxl
-            let djxl_result = crate::tool_builders::DjxlBuilder::new()
+            let djxl_result = shared_utils::DjxlBuilder::new()
                 .input(input)
                 .output(&temp_apng_path)
                 .build()
@@ -1834,26 +1833,17 @@ pub fn convert_to_gif_apple_compat(
             .filter(|fps| fps.is_finite() && *fps >= 1.0)
             .unwrap_or(20.0)
             .clamp(1.0, 60.0);
-        let fps_str = format!("{fps:.3}");
-        let res = Command::new("gifski")
-            .arg("--output")
-            .arg(shared_utils::safe_path_arg(&temp_output).as_ref())
-            .arg("--fps")
-            .arg(&fps_str)
-            .arg("--width")
-            .arg(width.to_string())
-            .arg("--height")
-            .arg(height.to_string())
-            .arg("--quality")
-            .arg("100")
-            .arg("--motion-quality")
-            .arg("100")
-            .arg("--lossy-quality")
-            .arg("100")
-            .arg("--repeat")
-            .arg("0")
+        let res = shared_utils::GifskiBuilder::new()
+            .output(&temp_output)
+            .fps(fps as f32)
+            .dimensions(width, height)
+            .quality(100)
+            .motion_quality(100)
+            .lossy_quality(100)
+            .repeat(0)
             .arg("--extra")
-            .arg(shared_utils::safe_path_arg(&gifski_input).as_ref())
+            .add_input(&gifski_input)
+            .build()
             .output();
 
         drop(extracted_stream_apng);

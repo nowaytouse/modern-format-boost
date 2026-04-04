@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
@@ -104,9 +104,12 @@ impl MsssimProgressMonitor {
         ffmpeg_args: &[&str],
         channel: &str,
     ) -> Result<(), String> {
-        let mut cmd = Command::new("ffmpeg");
-        cmd.args(ffmpeg_args)
-            .arg("-progress")
+        let mut builder = crate::tool_builders::FfmpegBuilder::new();
+        for arg in ffmpeg_args {
+            builder.arg(arg);
+        }
+        let mut cmd = builder.build();
+        cmd.arg("-progress")
             .arg("pipe:1")
             .stdout(Stdio::piped())
             .stderr(Stdio::null());

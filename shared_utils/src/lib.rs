@@ -133,6 +133,9 @@ pub mod media_passthrough;
 pub mod video_detection;
 pub use media_passthrough::{audio_args_for_container, subtitle_args_for_container};
 
+#[cfg(test)]
+mod parity_tests;
+
 pub mod depth_channel;
 pub mod gif_value_db;
 pub mod hdr_synthesis;
@@ -296,6 +299,12 @@ pub use ffmpeg_builder::{
     FfmpegBuilder, FfprobeBuilder, PixFmt, StreamType, VideoCodec, VideoProfile,
 };
 pub use image_builders::{AvifencBuilder, DwebpBuilder, ExiftoolBuilder, GifskiBuilder, MagickBuilder, SipsBuilder, WebpmuxBuilder};
+// - [x] Fix `MagickBuilder` ordering for ImageMagick 7 compatibility
+// - [x] Verify/Audit `FFmpegBuilder` flag construction sequence
+// - [x] Verify/Audit `CjxlBuilder` separator and path ordering
+// - [x] Implement `test_builder_flag_order` in `shared_utils` tests
+// - [ ] Perform a final workspace-wide sweep for any non-aligned Command calls
+// - [ ] Update `CHANGELOG.md` with the Hardening & Parity section
 pub use jxl_builder::{CjxlBuilder, DjxlBuilder};
 pub use ffmpeg_process::{
     format_ffmpeg_error, is_recoverable_error, FfmpegProcess, FfmpegProgressParser,

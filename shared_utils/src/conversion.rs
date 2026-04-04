@@ -885,16 +885,18 @@ pub fn get_input_dimensions(input: &Path) -> Result<(u32, u32), String> {
 
     // Method 3: ImageMagick identify
     {
-        use std::process::Command;
-        let safe_path = crate::safe_path_arg(input);
-        let output = Command::new("magick")
-            .args(["identify", "-format", "%w %h\n"])
-            .arg(safe_path.as_ref())
+        let output = crate::image_builders::IdentifyBuilder::new()
+            .use_magick(true)
+            .format("%w %h\n")
+            .input(input)
+            .build()
             .output()
             .or_else(|_| {
-                Command::new("identify")
-                    .args(["-format", "%w %h\n"])
-                    .arg(safe_path.as_ref())
+                crate::image_builders::IdentifyBuilder::new()
+                    .use_magick(false)
+                    .format("%w %h\n")
+                    .input(input)
+                    .build()
                     .output()
             });
         if let Ok(out) = output {

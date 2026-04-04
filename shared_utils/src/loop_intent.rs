@@ -1638,7 +1638,7 @@ fn detect_localized_motion(mvs: &[f64]) -> bool {
 
 /// Extract first frame from video to temporary PNG for analysis.
 fn extract_frame_to_temp(path: &Path) -> Option<std::path::PathBuf> {
-    use std::process::Command;
+    
     use std::time::{SystemTime, UNIX_EPOCH};
 
     // Generate unique filename: timestamp + random seed
@@ -1813,9 +1813,9 @@ mod tests {
     }
 
     fn verdict_with_profile(meta: &LoopMeta, profile: &LoopReferenceProfile) -> LoopIntentVerdict {
-        // Hidden Layer 1 overrides are opt-in; keep them disabled for pure tree tests.
-        std::env::remove_var(crate::constants::ENV_FORCE_SHORT_GIFS);
-        std::env::remove_var(crate::constants::ENV_INTERCEPT_LONG_SILENT);
+        // Hidden Layer 1 overrides are opt-in for tree tests; set to "0" to bypass global defaults.
+        std::env::set_var(crate::constants::ENV_FORCE_SHORT_GIFS, "0");
+        std::env::set_var(crate::constants::ENV_INTERCEPT_LONG_SILENT, "0");
         let result = evaluate_loop_tree(meta, Some(profile)).verdict;
         result
     }
@@ -2052,8 +2052,8 @@ mod tests {
         let mut meta = base_meta();
         meta.duration_secs = 5.0;
 
-        std::env::remove_var(crate::constants::ENV_FORCE_SHORT_GIFS);
-        std::env::remove_var(crate::constants::ENV_INTERCEPT_LONG_SILENT);
+        std::env::set_var(crate::constants::ENV_FORCE_SHORT_GIFS, "0");
+        std::env::set_var(crate::constants::ENV_INTERCEPT_LONG_SILENT, "0");
         let default_verdict = evaluate_loop_tree(&meta, Some(&profile)).verdict;
         assert!(
             !default_verdict.reason().contains("Layer 1-C"),
@@ -2069,7 +2069,7 @@ mod tests {
         );
 
         meta.duration_secs = 18.0;
-        std::env::remove_var(crate::constants::ENV_INTERCEPT_LONG_SILENT);
+        std::env::set_var(crate::constants::ENV_INTERCEPT_LONG_SILENT, "0");
         let default_long_verdict = evaluate_loop_tree(&meta, Some(&profile)).verdict;
         assert!(
             !default_long_verdict.reason().contains("Layer 1-D"),

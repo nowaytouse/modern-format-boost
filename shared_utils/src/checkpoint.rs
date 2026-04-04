@@ -198,11 +198,11 @@ fn get_process_start_time() -> Option<u64> {
 
 #[cfg(unix)]
 fn get_process_start_time_for_pid(pid: u32) -> Option<u64> {
-    use std::process::Command;
-
     for field in ["etimes", "etime"] {
-        let output = match Command::new("ps")
-            .args(["-p", &pid.to_string(), "-o", &format!("{field}=")])
+        let output = match crate::tool_builders::PsBuilder::new()
+            .pid(pid)
+            .output_field(field)
+            .build()
             .output()
         {
             Ok(o) => o,
@@ -293,8 +293,7 @@ fn get_process_start_time_for_pid(_pid: u32) -> Option<u64> {
 fn get_hostname() -> String {
     #[cfg(unix)]
     {
-        use std::process::Command;
-        match Command::new("hostname").output() {
+        match crate::tool_builders::HostnameBuilder::new().build().output() {
             Ok(output) if output.status.success() => String::from_utf8(output.stdout).map_or_else(
                 |err| {
                     eprintln!("⚠️ [checkpoint] Non-UTF-8 hostname output: {err}");
@@ -418,9 +417,10 @@ impl CheckpointManager {
 
             #[cfg(unix)]
             {
-                use std::process::Command;
-                let exists = match Command::new("kill")
-                    .args(["-0", &lock_info.pid.to_string()])
+                let exists = match crate::tool_builders::KillBuilder::new()
+                    .signal("-0")
+                    .pid(lock_info.pid)
+                    .build()
                     .status()
                 {
                     Ok(status) => status.success(),

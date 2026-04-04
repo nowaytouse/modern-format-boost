@@ -3,7 +3,6 @@ use anyhow::{bail, Context, Result};
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use walkdir::WalkDir;
 
 const EXCLUDED_EXTENSIONS: &[&str] = &[
@@ -692,6 +691,7 @@ impl XmpMerger {
 
         let mut builder = crate::tool_builders::ExiftoolBuilder::new();
         builder
+            .use_stdin()
             .arg("-P")
             .arg("-charset")
             .arg("filename=utf8")
@@ -1053,7 +1053,7 @@ pub fn merge_xmp_for_copied_file(input: &Path, dest: &Path) -> Result<bool> {
 mod tests {
     use super::*;
     use std::fs;
-    use std::process::Command;
+    
     use tempfile::TempDir;
 
     #[test]

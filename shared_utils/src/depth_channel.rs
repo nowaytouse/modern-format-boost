@@ -278,10 +278,10 @@ pub fn encode_jxl_depth_fallback(
     main_image: &DynamicImage,
     depth_map: &DepthMap,
     output: &Path,
-    distance: f32,
+    _distance: f32,
     effort: u8,
 ) -> Result<(std::path::PathBuf, std::path::PathBuf)> {
-    use std::process::Command;
+    
     use tempfile::NamedTempFile;
 
     // Write main image to temp PNG

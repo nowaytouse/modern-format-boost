@@ -4,7 +4,6 @@
 use anyhow::{Context, Result};
 use serde_json::Value;
 use std::path::Path;
-use std::process::Command;
 
 #[must_use]
 pub fn is_vmaf_available() -> bool {

@@ -101,6 +101,18 @@ impl CjxlBuilder {
     pub fn build(&self) -> Command {
         let mut cmd = Command::new(constants::TOOL_CJXL);
 
+        if self.use_stdin {
+            cmd.arg("-");
+        } else if let Some(input) = &self.input {
+            cmd.arg(crate::safe_path_arg(input).as_ref());
+        }
+
+        if let Some(output) = &self.output {
+            cmd.arg(crate::safe_path_arg(output).as_ref());
+        } else {
+            cmd.arg("-");
+        }
+
         if let Some(d) = self.distance {
             cmd.arg(constants::JXL_ARG_DISTANCE).arg(format!("{d:.2}"));
         }
@@ -141,20 +153,8 @@ impl CjxlBuilder {
             cmd.arg(arg);
         }
 
-        cmd.arg("--");
-
         if self.use_stdin {
-            cmd.arg("-");
             cmd.stdin(Stdio::piped());
-        } else if let Some(input) = &self.input {
-            cmd.arg(crate::safe_path_arg(input).as_ref());
-        }
-
-        if let Some(output) = &self.output {
-            cmd.arg(crate::safe_path_arg(output).as_ref());
-        } else {
-            // For piping to stdout, but cjxl usually expects a filename or '-'
-            cmd.arg("-");
         }
 
         cmd

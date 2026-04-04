@@ -468,20 +468,15 @@ impl ExploreContext {
     fn do_encode(&self, crf: f32) -> Result<u64> {
         use anyhow::{bail, Context};
         use std::fs;
-        use std::process::Command;
 
-        let mut cmd = Command::new(crate::constants::TOOL_FFMPEG);
-        cmd.arg(crate::constants::FFMPEG_ARG_OVERWRITE)
-            .arg(crate::constants::FFMPEG_ARG_THREADS)
-            .arg(self.max_threads.to_string())
-            .arg(crate::constants::FFMPEG_ARG_INPUT)
-            .arg(crate::safe_path_arg(&self.input_path).as_ref())
-            .arg(crate::constants::FFMPEG_ARG_CODEC_VIDEO)
-            .arg(self.encoder.ffmpeg_name())
-            .arg(crate::constants::FFMPEG_ARG_CRF)
-            .arg(format!("{crf:.1}"))
-            .arg(crate::constants::FFMPEG_ARG_PRESET)
-            .arg(self.preset.x26x_name());
+        let mut builder = crate::ffmpeg_builder::FfmpegBuilder::new();
+        builder
+            .overwrite()
+            .threads(self.max_threads)
+            .input(&self.input_path)
+            .codec_v(self.encoder.ffmpeg_name())
+            .crf(crf)
+            .preset(self.preset);
 
         for arg in self.encoder.extra_args_with_preset(
             self.max_threads,
@@ -489,16 +484,16 @@ impl ExploreContext {
             self.hdr_x265_params.clone(),
             self.apple_compat,
         ) {
-            cmd.arg(arg);
+            builder.arg(arg);
         }
 
         for arg in &self.vf_args {
-            cmd.arg(arg);
+            builder.arg(arg);
         }
 
-        cmd.arg(crate::safe_path_arg(&self.output_path).as_ref());
+        builder.output(&self.output_path);
 
-        let output = cmd.output().context("Failed to run ffmpeg")?;
+        let output = builder.build().output().context("Failed to run ffmpeg")?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -540,20 +535,16 @@ impl ExploreContext {
 
     /// SSIM is computed from current `input_path` vs `output_path` on disk. Cache key is CRF; value is valid only if output was produced by encode(crf) and not overwritten. Call `calculate_ssim` immediately after encode when using the same output path.
     fn do_calculate_ssim(&self) -> Result<SsimResult> {
-        use std::process::Command;
 
         let filter = "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];[ref][1:v]ssim";
 
-        let output = Command::new(crate::constants::TOOL_FFMPEG)
-            .arg(crate::constants::FFMPEG_ARG_INPUT)
-            .arg(crate::safe_path_arg(&self.input_path).as_ref())
-            .arg(crate::constants::FFMPEG_ARG_INPUT)
-            .arg(crate::safe_path_arg(&self.output_path).as_ref())
-            .arg(crate::constants::FFMPEG_ARG_FILTER_LAVFI)
-            .arg(filter)
-            .arg(crate::constants::FFMPEG_ARG_OUTPUT_FORMAT)
-            .arg("null")
-            .arg("-")
+        let output = crate::ffmpeg_builder::FfmpegBuilder::new()
+            .input(&self.input_path)
+            .input(&self.output_path)
+            .filter_lavfi(filter)
+            .format("null")
+            .output("-")
+            .build()
             .output();
 
         if let Ok(out) = output {
@@ -603,20 +594,16 @@ impl ExploreContext {
     /// # Errors
     /// Returns error if calculation fails.
     pub fn calculate_psnr(&self) -> Result<Option<f64>> {
-        use std::process::Command;
 
         let filter = "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];[ref][1:v]psnr";
 
-        let output = Command::new(crate::constants::TOOL_FFMPEG)
-            .arg(crate::constants::FFMPEG_ARG_INPUT)
-            .arg(crate::safe_path_arg(&self.input_path).as_ref())
-            .arg(crate::constants::FFMPEG_ARG_INPUT)
-            .arg(crate::safe_path_arg(&self.output_path).as_ref())
-            .arg(crate::constants::FFMPEG_ARG_FILTER_LAVFI)
-            .arg(filter)
-            .arg(crate::constants::FFMPEG_ARG_OUTPUT_FORMAT)
-            .arg("null")
-            .arg("-")
+        let output = crate::ffmpeg_builder::FfmpegBuilder::new()
+            .input(&self.input_path)
+            .input(&self.output_path)
+            .filter_lavfi(filter)
+            .format("null")
+            .output("-")
+            .build()
             .output();
 
         if let Ok(out) = output {

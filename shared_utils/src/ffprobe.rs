@@ -6,7 +6,6 @@
 use serde::{Deserialize, Serialize};
 use std::io;
 use std::path::Path;
-use std::process::Command;
 use tracing::warn;
 
 #[derive(Debug)]

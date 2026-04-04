@@ -4,7 +4,6 @@ use crate::quality_matcher::parse_source_codec;
 use crate::unified_error::UnifiedError;
 use anyhow::{bail, Context, Result};
 use std::path::Path;
-use std::process::Command;
 use tracing::{error, info, warn};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

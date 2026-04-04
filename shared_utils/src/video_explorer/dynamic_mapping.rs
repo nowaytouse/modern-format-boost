@@ -134,7 +134,7 @@ pub fn quick_calibrate(
     apple_compat: bool,
 ) -> Result<DynamicCrfMapper> {
     use std::fs;
-    use std::process::Command;
+    
 
     let mut mapper = DynamicCrfMapper::new(input_size);
 

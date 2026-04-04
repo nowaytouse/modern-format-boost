@@ -16,7 +16,6 @@ use chrono::{Datelike, NaiveDateTime};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::Command;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DateSource {
@@ -141,7 +140,8 @@ pub fn analyze_directory(
         return Err(format!("Not a directory: {}", dir.display()));
     }
 
-    let output = Command::new("exiftool")
+    let mut builder = crate::ExiftoolBuilder::new();
+    builder
         .arg("-m") // Suppress warnings for non-critical errors (e.g., corrupted EXIF in JPEG, PNG without metadata)
         .arg("-r")
         .arg("-j")
@@ -161,8 +161,9 @@ pub fn analyze_directory(
                 .iter()
                 .flat_map(|e| vec!["-ext".to_string(), e.clone()]),
         )
-        .arg(dir)
-        .output()
+        .input(dir);
+        
+    let output = builder.build().output()
         .map_err(|e| format!("Failed to run exiftool: {e}"))?;
 
     if !output.status.success() {

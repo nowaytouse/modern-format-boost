@@ -691,16 +691,15 @@ pub fn is_isobmff_animated_sequence(path: &Path) -> bool {
 /// JXL stores animation natively in its container; we use ffprobe to check duration > 0.
 /// Falls back to jxlinfo "animation" keyword detection if ffprobe is unavailable.
 fn is_jxl_animated_via_ffprobe(path: &Path) -> bool {
-    use std::process::Command;
-
     // FFmpeg's jpegxl_anim decoder is incomplete and cannot properly detect JXL animation.
     // We need to convert to APNG first, then check frame count.
 
     // Check if djxl is available
-    if which::which(crate::constants::TOOL_DJXL).is_err() {
+    if !crate::jxl_builder::DjxlBuilder::check_available() {
         // Fallback: try jxlinfo
-        if let Ok(output) = Command::new(crate::constants::TOOL_JXLINFO)
-            .arg(crate::safe_path_arg(path).as_ref())
+        if let Ok(output) = crate::tool_builders::JxlinfoBuilder::new()
+            .input(path)
+            .build()
             .output()
         {
             if output.status.success() {
@@ -718,9 +717,10 @@ fn is_jxl_animated_via_ffprobe(path: &Path) -> bool {
     let temp_apng_path = temp_apng.path();
 
     // Convert JXL to APNG using djxl
-    let djxl_result = Command::new(crate::constants::TOOL_DJXL)
-        .arg(crate::safe_path_arg(path).as_ref())
-        .arg(crate::safe_path_arg(temp_apng_path).as_ref())
+    let djxl_result = crate::jxl_builder::DjxlBuilder::new()
+        .input(path)
+        .output(temp_apng_path)
+        .build()
         .output();
 
     if djxl_result.is_err() || !temp_apng_path.exists() {
@@ -728,20 +728,15 @@ fn is_jxl_animated_via_ffprobe(path: &Path) -> bool {
     }
 
     // Check frame count using ffprobe with -count_frames
-    if let Ok(output) = Command::new(crate::constants::TOOL_FFPROBE)
-        .args([
-            crate::constants::FFMPEG_ARG_LOG_LEVEL,
-            crate::constants::FFMPEG_VAL_ERROR,
-            crate::constants::FFMPEG_ARG_SELECT_STREAMS,
-            "v:0",
-            crate::constants::FFMPEG_ARG_COUNT_FRAMES,
-            crate::constants::FFMPEG_ARG_SHOW_ENTRIES,
-            "stream=nb_read_frames",
-            crate::constants::FFMPEG_ARG_OUTPUT_FORMAT,
-            crate::constants::FFMPEG_VAL_JSON,
-            "--",
-        ])
-        .arg(crate::safe_path_arg(temp_apng_path).as_ref())
+    if let Ok(output) = crate::tool_builders::FfprobeBuilder::new()
+        .loglevel(crate::constants::FFMPEG_VAL_ERROR)
+        .select_streams_custom("v:0")
+        .count_frames()
+        .show_entries("stream=nb_read_frames")
+        .print_format(crate::constants::FFMPEG_VAL_JSON)
+        .arg("--")
+        .input(temp_apng_path)
+        .build()
         .output()
     {
         if output.status.success() {

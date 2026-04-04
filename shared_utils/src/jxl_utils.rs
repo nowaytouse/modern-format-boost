@@ -7,7 +7,6 @@
 //! - ICC Profile extraction and preservation
 
 use std::path::Path;
-use std::process::Command;
 
 /// Extract ICC Profile from source image and return temp file path
 #[must_use]
@@ -79,13 +78,6 @@ pub fn extract_icc_with_d50_patch(src: &Path) -> Option<tempfile::NamedTempFile>
     }
 }
 
-/// Add ICC Profile argument to cjxl command if available
-pub fn add_icc_to_cjxl(cmd: &mut Command, icc_file: Option<&Path>) {
-    if let Some(icc_path) = icc_file {
-        cmd.arg("-x")
-            .arg(format!("icc_pathname={}", icc_path.display()));
-    }
-}
 
 /// Verify that a JXL file is valid by checking its signature and optionally running jxlinfo.
 /// Verify the health of a JXL file.

@@ -418,14 +418,6 @@ impl X265Builder {
             cmd.arg("--y4m");
         }
 
-        if let Some(input) = &self.input {
-            cmd.arg("--input").arg(crate::safe_path_arg(input).as_ref());
-        }
-
-        if let Some(output) = &self.output {
-            cmd.arg("--output").arg(crate::safe_path_arg(output).as_ref());
-        }
-
         if let Some(crf) = self.crf {
             cmd.arg("--crf").arg(format!("{:.1}", crf));
         }
@@ -476,6 +468,14 @@ impl X265Builder {
 
         for arg in &self.extra_args {
             cmd.arg(arg);
+        }
+
+        if let Some(input) = &self.input {
+            cmd.arg("--input").arg(crate::safe_path_arg(input).as_ref());
+        }
+
+        if let Some(output) = &self.output {
+            cmd.arg("--output").arg(crate::safe_path_arg(output).as_ref());
         }
 
         cmd
@@ -721,5 +721,177 @@ impl AttribBuilder {
     #[must_use]
     pub fn check_available() -> bool {
         Command::new("attrib").arg("/?").output().map(|o| o.status.success()).unwrap_or(false)
+    }
+}
+
+/// Builder for constructing `rsync` commands.
+#[derive(Debug, Default)]
+pub struct RsyncBuilder {
+    executable: Option<String>,
+    args: Vec<String>,
+    sources: Vec<PathBuf>,
+    destination: Option<PathBuf>,
+}
+
+impl RsyncBuilder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn executable<S: Into<String>>(&mut self, path: S) -> &mut Self {
+        self.executable = Some(path.into());
+        self
+    }
+
+    pub fn arg<S: Into<String>>(&mut self, arg: S) -> &mut Self {
+        self.args.push(arg.into());
+        self
+    }
+
+    pub fn add_source<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
+        self.sources.push(path.as_ref().to_path_buf());
+        self
+    }
+
+    pub fn destination<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
+        self.destination = Some(path.as_ref().to_path_buf());
+        self
+    }
+
+    #[must_use]
+    pub fn build(&self) -> Command {
+        let exe = self.executable.as_deref().unwrap_or("rsync");
+        let mut cmd = Command::new(exe);
+        for arg in &self.args {
+            cmd.arg(arg);
+        }
+        for src in &self.sources {
+            cmd.arg(crate::safe_path_arg(src).as_ref());
+        }
+        if let Some(dest) = &self.destination {
+            cmd.arg(crate::safe_path_arg(dest).as_ref());
+        }
+        cmd
+    }
+}
+
+/// Builder for constructing `ps` commands (Unix).
+#[derive(Debug, Default)]
+pub struct PsBuilder {
+    pid: Option<u32>,
+    output_fields: Vec<String>,
+}
+
+impl PsBuilder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn pid(&mut self, pid: u32) -> &mut Self {
+        self.pid = Some(pid);
+        self
+    }
+
+    pub fn output_field<S: Into<String>>(&mut self, field: S) -> &mut Self {
+        self.output_fields.push(field.into());
+        self
+    }
+
+    #[must_use]
+    pub fn build(&self) -> Command {
+        let mut cmd = Command::new("ps");
+        if let Some(pid) = self.pid {
+            cmd.args(["-p", &pid.to_string()]);
+        }
+        if !self.output_fields.is_empty() {
+            cmd.arg("-o");
+            cmd.arg(format!("{}=", self.output_fields.join(",")));
+        }
+        cmd
+    }
+}
+
+/// Builder for constructing `kill` commands (Unix).
+#[derive(Debug, Default)]
+pub struct KillBuilder {
+    signal: Option<String>,
+    pid: Option<u32>,
+}
+
+impl KillBuilder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn signal<S: Into<String>>(&mut self, sig: S) -> &mut Self {
+        self.signal = Some(sig.into());
+        self
+    }
+
+    pub fn pid(&mut self, pid: u32) -> &mut Self {
+        self.pid = Some(pid);
+        self
+    }
+
+    #[must_use]
+    pub fn build(&self) -> Command {
+        let mut cmd = Command::new("kill");
+        if let Some(sig) = &self.signal {
+            cmd.arg(sig);
+        }
+        if let Some(pid) = self.pid {
+            cmd.arg(pid.to_string());
+        }
+        cmd
+    }
+}
+
+/// Builder for constructing `hostname` commands.
+#[derive(Debug, Default)]
+pub struct HostnameBuilder {}
+
+impl HostnameBuilder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[must_use]
+    pub fn build(&self) -> Command {
+        Command::new("hostname")
+    }
+}
+
+/// Builder for constructing `taskkill` commands (Windows).
+#[derive(Debug, Default)]
+pub struct TaskkillBuilder {
+    pid: Option<u32>,
+    force: bool,
+}
+
+impl TaskkillBuilder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn pid(&mut self, pid: u32) -> &mut Self {
+        self.pid = Some(pid);
+        self
+    }
+
+    pub fn force(&mut self) -> &mut Self {
+        self.force = true;
+        self
+    }
+
+    #[must_use]
+    pub fn build(&self) -> Command {
+        let mut cmd = Command::new("taskkill");
+        if let Some(pid) = self.pid {
+            cmd.args(["/PID", &pid.to_string()]);
+        }
+        if self.force {
+            cmd.arg("/F");
+        }
+        cmd
     }
 }

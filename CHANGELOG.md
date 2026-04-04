@@ -30,15 +30,18 @@ Refined the multi-language documentation suite and unified the project's version
 - **Asset Path Fix**: Corrected relative image links in all localized documentation (`docs/README_*.md`); changed erroneous `(assets/...)` paths to `(../assets/...)` for proper rendering from subdirectories.
 - **Global Version Unification**: Synchronized version `0.11.2` across the Rust workspace (`Cargo.toml`), Python scripts, Shell utilities, and the macOS App wrapper (`Info.plist`).
 
-#### 🏗️ Media Pipeline Hardening — Type-Safe Builder Migration
+#### 🏗️ Media Pipeline Hardening — Type-Safe Builder Migration & Parity Audit
 
-Completed the transition of the entire media processing pipeline to a type-safe, fluent builder architecture and stabilized the loop intent classification system.
+Achieved 100% transition to the type-safe `Builder` pattern across the entire 28-tool media pipeline, while strictly maintaining character-perfect flag parity with established "best choice" command sequences.
 
-- **100% Architectural Coverage**: Achieved full migration of the entire media processing pipeline to the type-safe `Builder` pattern. Eliminated all remaining legacy `Command` manual invocations in primary processing modules, including `x265` and `dwebp`.
-- **Dwebp & X265 Builders**: Introduced a dedicated `DwebpBuilder` and expanded `X265Builder` to support advanced encoding parameters, centralizing tool execution logic and eliminating magic strings.
-- **Helper Deprecation**: Deprecated and removed the legacy `convert_to_temp_png` generic runners in `jxl_utils.rs` and `lossless_converter.rs`, replacing them with direct, type-safe Builder pipelines for WebP and GIF pre-processing.
-- **Tool Constant Centralization**: Unified all tool binary names (including `x265` and `dwebp`) into the global `shared_utils/src/constants.rs` registry.
-- **Files**: `shared_utils/src/ffmpeg_builder.rs`, `shared_utils/src/image_builders.rs`, `shared_utils/src/tool_builders.rs`, `shared_utils/src/constants.rs`, `shared_utils/src/x265_encoder.rs`, `shared_utils/src/jxl_utils.rs`, `img/src/lossless_converter.rs`.
+- **Deep Flag-Order Alignment (Commit 73edfa6)**: Performed a comprehensive audit of all builder-generated command lines to ensure 100% parity with legacy manual invocations.
+    - **MagickBuilder**: Re-aligned to the canonical ImageMagick 7 sequence: `magick -- [input] [options] [output]`.
+    - **CjxlBuilder**: Re-aligned to the historical "best-choice" order: `cjxl [input] [output] [options]`, specifically optimized for stdin-piping workflows in commit `73edfa6`.
+    - **X265Builder**: Refactored to follow the standard CLI flag-first pattern: `x265 [options] --input [in] --output [out]`.
+    - **FFmpeg/FFprobe**: Guaranteed preservation of global flags (`-y`, `-v error`) at the very front of all argument lists.
+- **100% Architectural Coverage**: Completed migration for all remaining OS-level and specialized media tools, including `rsync`, `ps`, `kill`, `hostname`, `taskkill`, `cjxl`, and `dwebp`.
+- **Regressive Parity Tests**: Introduced a dedicated `parity_tests` suite in `shared_utils` to protect the project's "best choice" flag ordering against any future architectural changes.
+- **Files**: `shared_utils/src/ffmpeg_builder.rs`, `shared_utils/src/image_builders.rs`, `shared_utils/src/jxl_builder.rs`, `shared_utils/src/tool_builders.rs`, `shared_utils/src/parity_tests.rs`.
 
 #### 🚀 HEVC Pipeline Optimization — Quality & Compatibility
 

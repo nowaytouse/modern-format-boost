@@ -26,7 +26,6 @@
 use chrono::{DateTime, FixedOffset, Utc};
 use std::any::Any;
 use std::collections::VecDeque;
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
@@ -201,8 +200,10 @@ impl HeartbeatMonitor {
 
                     #[cfg(windows)]
                     {
-                        match std::process::Command::new("taskkill")
-                            .args(&["/PID", &self.child_pid.to_string(), "/F"])
+                        match crate::tool_builders::TaskkillBuilder::new()
+                            .pid(self.child_pid)
+                            .force()
+                            .build()
                             .output()
                         {
                             Ok(output) if !output.status.success() => {
@@ -829,9 +830,10 @@ impl GpuAccel {
 }
 
 fn get_available_encoders() -> Vec<String> {
-    let output = Command::new(crate::constants::TOOL_FFMPEG)
-        .arg("-hide_banner")
+    let output = crate::tool_builders::FfmpegBuilder::new()
+        .hide_banner()
         .arg("-encoders")
+        .build()
         .output();
 
     match output {
@@ -848,19 +850,15 @@ fn get_available_encoders() -> Vec<String> {
 }
 
 fn test_encoder(encoder: &str) -> bool {
-    let output = Command::new(crate::constants::TOOL_FFMPEG)
-        .arg("-hide_banner")
-        .arg("-f")
-        .arg("lavfi")
-        .arg("-i")
-        .arg("nullsrc=s=64x64:d=0.1")
-        .arg("-c:v")
-        .arg(encoder)
-        .arg("-frames:v")
-        .arg("1")
-        .arg("-f")
-        .arg("null")
-        .arg("-")
+    let output = crate::tool_builders::FfmpegBuilder::new()
+        .hide_banner()
+        .format("lavfi")
+        .input("nullsrc=s=64x64:d=0.1")
+        .codec_video(encoder)
+        .frames_v(1)
+        .format("null")
+        .output_null()
+        .build()
         .output();
 
     match output {
@@ -902,7 +900,7 @@ pub fn calculate_smart_sample(
     target_sample_duration: f32,
 ) -> anyhow::Result<SmartSampleResult> {
     use anyhow::Context;
-    use std::process::Command;
+    
 
     if total_duration <= target_sample_duration * 1.2 {
         return Ok(SmartSampleResult {
@@ -936,17 +934,16 @@ pub fn calculate_smart_sample(
         )
     };
 
-    let test_output = Command::new(crate::constants::TOOL_FFMPEG)
-        .arg("-hide_banner")
+    let test_output = crate::tool_builders::FfmpegBuilder::new()
+        .hide_banner()
         .arg("-t")
         .arg("10")
-        .arg("-i")
-        .arg(crate::safe_path_arg(input).as_ref())
+        .input(input)
         .arg("-vf")
         .arg(format!("select='{select_expr}',showinfo"))
-        .arg("-f")
-        .arg("null")
-        .arg("-")
+        .format("null")
+        .output_null()
+        .build()
         .output()
         .context("Failed to test smart sample filter")?;
 
@@ -1263,16 +1260,13 @@ impl Default for GpuCoarseConfig {
 }
 
 fn calculate_psnr_fast(input: &str, output: &str) -> Result<f64, String> {
-    let psnr_output = Command::new(crate::constants::TOOL_FFMPEG)
-        .arg("-i")
-        .arg(crate::safe_path_arg(std::path::Path::new(input)).as_ref())
-        .arg("-i")
-        .arg(crate::safe_path_arg(std::path::Path::new(output)).as_ref())
-        .arg("-filter_complex")
-        .arg("[0:v][1:v]psnr=stats_file=-")
-        .arg("-f")
-        .arg("null")
-        .arg("-")
+    let psnr_output = crate::tool_builders::FfmpegBuilder::new()
+        .input(std::path::Path::new(input))
+        .input(std::path::Path::new(output))
+        .filter_complex("[0:v][1:v]psnr=stats_file=-")
+        .format("null")
+        .output_null()
+        .build()
         .output()
         .map_err(|e| format!("PSNR calculation failed: {e}"))?;
 
@@ -1546,7 +1540,7 @@ fn gpu_coarse_search_with_log_impl(
     log_cb: Option<&dyn Fn(&str)>,
 ) -> anyhow::Result<GpuCoarseResult> {
     use anyhow::{bail, Context};
-    use std::process::Command;
+    
 
     const LARGE_FILE_THRESHOLD: u64 = 500 * 1024 * 1024;
     const VERY_LARGE_FILE_THRESHOLD: u64 = 2 * 1024 * 1024 * 1024;
@@ -1639,17 +1633,13 @@ fn gpu_coarse_search_with_log_impl(
     let skip_gpu_duration_threshold: f32 = if config.ultimate_mode { 1.0 } else { 3.0 };
 
     let quick_duration: f32 = {
-        let duration_output = Command::new(crate::constants::TOOL_FFPROBE)
-            .args([
-                "-v",
-                "error",
-                "-show_entries",
-                "format=duration",
-                "-of",
-                "default=noprint_wrappers=1:nokey=1",
-                "--",
-            ])
-            .arg(crate::safe_path_arg(input).as_ref())
+        let duration_output = crate::tool_builders::FfprobeBuilder::new()
+            .loglevel("error")
+            .show_entries("format=duration")
+            .print_format("default=noprint_wrappers=1:nokey=1")
+            .arg("--")
+            .input(input)
+            .build()
             .output();
 
         duration_output
@@ -1767,24 +1757,25 @@ fn gpu_coarse_search_with_log_impl(
         let extra_args = gpu_encoder.extra_args();
         let warmup_output = output.with_extension(temp_extension_for(output, "warmup"));
 
-        let mut cmd = Command::new("ffmpeg");
-        cmd.arg("-y")
+        let mut builder = crate::tool_builders::FfmpegBuilder::new();
+        builder
+            .overwrite()
             .arg("-t")
             .arg(format!("{warmup_duration}"))
-            .arg("-i")
-            .arg(crate::safe_path_arg(input).as_ref())
-            .arg("-c:v")
-            .arg(gpu_encoder.name);
+            .input(input)
+            .vcodec_str(gpu_encoder.name);
 
         for arg in &crf_args {
-            cmd.arg(arg);
+            builder.arg(arg);
         }
         for arg in extra_args {
-            cmd.arg(arg);
+            builder.arg(arg);
         }
 
-        cmd.arg("-an")
-            .arg(crate::safe_path_arg(&warmup_output).as_ref());
+        builder.codec_audio("none")
+            .output(&warmup_output);
+
+        let mut cmd = builder.build();
 
         let result = cmd.output().context("Failed to run warmup encode")?;
         let size = if result.status.success() {
@@ -1867,19 +1858,17 @@ fn gpu_coarse_search_with_log_impl(
         let crf_args = gpu_encoder.get_crf_args(crf);
         let extra_args = gpu_encoder.extra_args();
 
-        let mut cmd = Command::new("ffmpeg");
-        cmd.arg("-y");
+        let mut builder = crate::tool_builders::FfmpegBuilder::new();
+        builder.overwrite();
 
         let use_multi_segment = duration >= 60.0;
 
         if !use_multi_segment {
-            cmd.arg("-t").arg(format!("{actual_sample_duration}"));
+            builder.arg("-t").arg(format!("{actual_sample_duration}"));
         }
 
-        cmd.arg("-i")
-            .arg(crate::safe_path_arg(input).as_ref())
-            .arg("-c:v")
-            .arg(gpu_encoder.name);
+        builder.input(input)
+            .vcodec_str(gpu_encoder.name);
 
         if use_multi_segment {
             let seg_dur = if config.ultimate_mode {
@@ -1904,21 +1893,23 @@ fn gpu_coarse_search_with_log_impl(
                     .join("+")
             );
 
-            cmd.arg("-vf").arg(&select_filter);
+            builder.arg("-vf").arg(&select_filter);
         }
 
         for arg in &crf_args {
-            cmd.arg(arg);
+            builder.arg(arg);
         }
         for arg in extra_args {
-            cmd.arg(arg);
+            builder.arg(arg);
         }
 
-        cmd.arg("-an")
+        builder.codec_audio("none")
             .arg("-progress")
             .arg("pipe:1")
-            .arg(crate::safe_path_arg(output).as_ref())
-            .stdout(Stdio::piped())
+            .output(output);
+
+        let mut cmd = builder.build();
+        cmd.stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
         let mut child = cmd.spawn().context("Failed to spawn ffmpeg")?;
@@ -2090,24 +2081,24 @@ fn gpu_coarse_search_with_log_impl(
                 thread::spawn(move || {
                     let _guard = GpuSlotGuard;
                     acquire_gpu_slot();
-                    let mut cmd = Command::new("ffmpeg");
-                    cmd.arg("-y")
+                    let mut builder = crate::tool_builders::FfmpegBuilder::new();
+                    builder.overwrite()
                         .arg("-t")
                         .arg(format!("{sample_dur}"))
-                        .arg("-i")
-                        .arg(crate::safe_path_arg(&input_path).as_ref())
-                        .arg("-c:v")
-                        .arg(&encoder_name);
+                        .input(&input_path)
+                        .vcodec_str(&encoder_name);
 
                     for arg in &crf_args {
-                        cmd.arg(arg);
+                        builder.arg(arg);
                     }
                     for arg in &extra_args {
-                        cmd.arg(arg);
+                        builder.arg(arg);
                     }
 
-                    cmd.arg("-an")
-                        .arg(crate::safe_path_arg(&output_path).as_ref());
+                    builder.codec_audio("none")
+                        .output(&output_path);
+
+                    let mut cmd = builder.build();
 
                     let result = cmd.output();
 
@@ -2744,16 +2735,13 @@ fn gpu_coarse_search_with_log_impl(
         );
         match encode_gpu(last_tested_crf) {
             Ok(_) => {
-                let ssim_output = Command::new(crate::constants::TOOL_FFMPEG)
-                    .arg("-i")
-                    .arg(crate::safe_path_arg(input).as_ref())
-                    .arg("-i")
-                    .arg(crate::safe_path_arg(output).as_ref())
-                    .arg("-lavfi")
-                    .arg("ssim")
-                    .arg("-f")
-                    .arg("null")
-                    .arg("-")
+                let ssim_output = crate::tool_builders::FfmpegBuilder::new()
+                    .input(input)
+                    .input(output)
+                    .filter_complex("ssim")
+                    .format("null")
+                    .output_null()
+                    .build()
                     .output();
 
                 let psnr_result =

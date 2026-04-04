@@ -3,7 +3,6 @@
 //! Used by `thread_manager` to reduce `parallel_tasks` and `child_threads` when
 //! available memory is low, avoiding OOM kills (e.g. spinner/sleep or encoder processes).
 
-use std::process::Command;
 use tracing::warn;
 
 /// Memory pressure level derived from available vs total RAM.
