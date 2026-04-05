@@ -15,7 +15,7 @@ use crate::constants::{
     DIRECTORY_CONTEXT_POSITIVE_LOG_ODDS, FILENAME_CONTEXT_POSITIVE_LOG_ODDS,
     LAYER6_HIGH_SCORE_THRESHOLD, LAYER6_RELAXED_CONFIDENCE_THRESHOLD,
     LOCALIZED_MOTION_POSITIVE_LOG_ODDS, LONG_SILENT_PRIOR_NEGATIVE_LOG_ODDS,
-    MEME_DIRECTORY_KEYWORDS, MODERN_MASTER_NEGATIVE_LOG_ODDS, PLAY_ONCE_NEGATIVE_LOG_ODDS,
+    MODERN_MASTER_NEGATIVE_LOG_ODDS, PLAY_ONCE_NEGATIVE_LOG_ODDS,
 };
 use crate::database::LoopReferenceProfile;
 use crate::file_copier::{SUPPORTED_IMAGE_EXTENSIONS, SUPPORTED_VIDEO_EXTENSIONS};
@@ -1548,16 +1548,33 @@ fn fps_anomaly_score(fps: f64) -> f64 {
     (min_delta / 2.5).min(1.0)
 }
 
+use std::collections::HashMap;
+use std::sync::OnceLock;
+
+static MEME_KEYWORDS_CACHE: OnceLock<Vec<String>> = OnceLock::new();
+
+fn get_meme_keywords() -> &'static [String] {
+    MEME_KEYWORDS_CACHE.get_or_init(|| {
+        let json_str = include_str!("meme_keywords.json");
+        let languages: HashMap<String, Vec<String>> =
+            serde_json::from_str(json_str).unwrap_or_default();
+        let mut all_keywords = Vec::new();
+        for list in languages.values() {
+            all_keywords.extend(list.clone());
+        }
+        all_keywords
+    })
+}
+
 pub fn score_directory_context(parts: Option<&[String]>, keywords: &[String]) -> f64 {
     let Some(parts) = parts else {
         return 0.5;
     };
+    let global_keywords = get_meme_keywords();
     for part in parts {
         let lower = part.to_lowercase();
         if keywords.iter().any(|keyword| lower.contains(keyword))
-            || MEME_DIRECTORY_KEYWORDS
-                .iter()
-                .any(|keyword| lower.contains(keyword))
+            || global_keywords.iter().any(|keyword| lower.contains(keyword))
         {
             return 1.0;
         }
@@ -1577,11 +1594,11 @@ pub fn analyze_filename(name: Option<&str>, keywords: &[String]) -> FilenameAnal
         .map_or(name, |(s, _)| s)
         .to_lowercase();
 
-    // 1. Dynamic Keyword Match from Database
+    let global_keywords = get_meme_keywords();
+
+    // 1. Dynamic Keyword Match from Database & JSON config
     if keywords.iter().any(|keyword| stem.contains(keyword))
-        || MEME_DIRECTORY_KEYWORDS
-            .iter()
-            .any(|keyword| stem.contains(keyword))
+        || global_keywords.iter().any(|keyword| stem.contains(keyword))
     {
         return FilenameAnalysis {
             raw: 0.85,
@@ -2422,5 +2439,25 @@ mod tests {
             dev_long_verdict.reason().contains("Layer 1-D"),
             "developer override should enable hidden Layer 1-D: {dev_long_verdict:?}"
         );
+    }
+
+    #[test]
+    fn test_multilingual_meme_keywords() {
+        // Test Chinese keyword (from JSON)
+        let analysis_zh = analyze_filename(Some("gif表情 (379).gif"), &[]);
+        assert_eq!(analysis_zh.raw, 0.85);
+        assert_eq!(analysis_zh.kind, FilenameKind::HumanSemantic);
+
+        // Test English keyword (from JSON)
+        let analysis_en = analyze_filename(Some("my_funny_meme.webp"), &[]);
+        assert_eq!(analysis_en.raw, 0.85);
+
+        // Test Korean keyword (from JSON)
+        let analysis_ko = analyze_filename(Some("cute_sticker_움짤.avif"), &[]);
+        assert_eq!(analysis_ko.raw, 0.85);
+
+        // Test non-meme filename
+        let analysis_none = analyze_filename(Some("vacation_photo.jpg"), &[]);
+        assert_eq!(analysis_none.raw, 0.5);
     }
 }

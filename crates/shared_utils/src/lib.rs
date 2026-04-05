@@ -1,16 +1,3 @@
-#![warn(
-    clippy::cast_possible_wrap,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::manual_let_else,
-    clippy::items_after_statements
-)]
-#![allow(
-    clippy::cast_precision_loss, // Audited: acceptable for media metrics (bitrate, size, time)
-    clippy::too_many_lines,
-    clippy::struct_excessive_bools,
-    clippy::fn_params_excessive_bools
-)]
 //! Shared Utilities for `modern_format_boost` tools
 //!
 //! This crate provides common functionality shared across imgquality, vidquality, and vid-hevc:
@@ -26,6 +13,21 @@
 //! - Date analysis (deep EXIF/XMP date extraction)
 //! - Quality matching (unified CRF/distance calculation for all encoders)
 //! - Unified version management (program, cache, schema versions)
+
+#![warn(
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::manual_let_else,
+    clippy::items_after_statements,
+    missing_docs
+)]
+#![allow(
+    clippy::cast_precision_loss, // Audited: acceptable for media metrics (bitrate, size, time)
+    clippy::too_many_lines,
+    clippy::struct_excessive_bools,
+    clippy::fn_params_excessive_bools
+)]
 
 pub mod analysis_cache;
 pub mod batch;

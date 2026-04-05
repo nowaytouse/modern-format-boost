@@ -244,12 +244,16 @@ pub const GPU_SAMPLE_DURATION_ULTIMATE: f32 = 60.0;
 /// Ultimate mode: longer segment per position (5 segments = 65s total, was 50s)
 pub const GPU_SEGMENT_DURATION_ULTIMATE: f32 = 13.0;
 
+/// Number of segments to sample in multi-segment GPU probing.
 pub const GPU_SAMPLE_SEGMENTS: usize = 5;
 
+/// Step size for CRF adjustments during GPU coarse search.
 pub const GPU_COARSE_STEP: f32 = 1.0;
 
+/// Absolute maximum number of iterations allowed in GPU coarse search.
 pub const GPU_ABSOLUTE_MAX_ITERATIONS: u32 = 750;
 
+/// Maximum number of iterations for GPU coarse search (alias for `GPU_ABSOLUTE_MAX_ITERATIONS`).
 pub const GPU_MAX_ITERATIONS: u32 = GPU_ABSOLUTE_MAX_ITERATIONS;
 
 static GPU_ACCEL: OnceLock<GpuAccel> = OnceLock::new();
@@ -316,13 +320,20 @@ pub fn derive_gpu_temp_extension(output: &std::path::Path) -> String {
     temp_extension_for(output, "gpu_temp")
 }
 
+/// The type of GPU hardware encoder available on this system.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GpuType {
+    /// NVIDIA NVENC encoder.
     Nvidia,
+    /// Apple VideoToolbox encoder (Apple Silicon).
     Apple,
+    /// Intel Quick Sync Video encoder.
     IntelQsv,
+    /// AMD AMF encoder.
     AmdAmf,
+    /// VA-API encoder (Linux).
     Vaapi,
+    /// No GPU encoder available; falls back to CPU.
     None,
 }
 
@@ -339,23 +350,36 @@ impl std::fmt::Display for GpuType {
     }
 }
 
+/// Represents a specific GPU hardware encoder with its configuration parameters.
 #[derive(Debug, Clone)]
 pub struct GpuEncoder {
+    /// The GPU type this encoder belongs to.
     pub gpu_type: GpuType,
+    /// The FFmpeg encoder name (e.g., "hevc_nvenc").
     pub name: &'static str,
+    /// The codec this encoder produces (e.g., "hevc", "av1", "h264").
     pub codec: &'static str,
+    /// Whether this encoder supports CRF-based quality control.
     pub supports_crf: bool,
+    /// The FFmpeg parameter name used for CRF/quality (e.g., "cq", "q:v").
     pub crf_param: &'static str,
+    /// The valid CRF range as (min, max) inclusive.
     pub crf_range: (u8, u8),
+    /// Additional FFmpeg arguments passed to this encoder.
     pub extra_args: Vec<&'static str>,
 }
 
 impl GpuEncoder {
+    /// Returns the FFmpeg encoder name (e.g., "hevc_nvenc").
     #[must_use]
     pub const fn ffmpeg_name(&self) -> &'static str {
         self.name
     }
 
+    /// Converts a CRF value to encoder-specific arguments for this GPU encoder.
+    ///
+    /// For CRF-supporting encoders, returns the CRF parameter with clamping.
+    /// For non-CRF encoders, falls back to bitrate-based arguments.
     #[must_use]
     pub fn get_crf_args(&self, crf: f32) -> Vec<String> {
         if self.supports_crf {
@@ -375,18 +399,25 @@ impl GpuEncoder {
         }
     }
 
+    /// Returns the extra arguments for this encoder as a slice.
     #[must_use]
     pub fn extra_args(&self) -> &[&'static str] {
         &self.extra_args
     }
 }
 
+/// Represents the detected GPU acceleration capabilities.
 #[derive(Debug, Clone)]
 pub struct GpuAccel {
+    /// The type of GPU detected.
     pub gpu_type: GpuType,
+    /// Available HEVC hardware encoder, if any.
     pub hevc_encoder: Option<GpuEncoder>,
+    /// Available AV1 hardware encoder, if any.
     pub av1_encoder: Option<GpuEncoder>,
+    /// Available H.264 hardware encoder, if any.
     pub h264_encoder: Option<GpuEncoder>,
+    /// Whether GPU acceleration is enabled and usable.
     pub enabled: bool,
 }
 
@@ -403,15 +434,20 @@ impl Default for GpuAccel {
 }
 
 impl GpuAccel {
+    /// Detects available GPU acceleration and returns a singleton reference.
+    ///
+    /// The result is cached for the lifetime of the program.
     pub fn detect() -> &'static Self {
         GPU_ACCEL.get_or_init(Self::detect_internal)
     }
 
+    /// Performs a fresh GPU detection, bypassing the singleton cache.
     #[must_use]
     pub fn detect_fresh() -> Self {
         Self::detect_internal()
     }
 
+    /// Prints GPU detection information to stderr.
     pub fn print_detection_info(&self) {
         if !crate::progress_mode::is_verbose_mode() {
             if self.enabled {
@@ -800,6 +836,7 @@ impl GpuAccel {
         })
     }
 
+    /// Returns the available HEVC encoder, or `None` if GPU is not enabled.
     #[must_use]
     pub const fn get_hevc_encoder(&self) -> Option<&GpuEncoder> {
         if self.enabled {
@@ -809,6 +846,7 @@ impl GpuAccel {
         }
     }
 
+    /// Returns the available AV1 encoder, or `None` if GPU is not enabled.
     #[must_use]
     pub const fn get_av1_encoder(&self) -> Option<&GpuEncoder> {
         if self.enabled {
@@ -818,6 +856,7 @@ impl GpuAccel {
         }
     }
 
+    /// Returns the available H.264 encoder, or `None` if GPU is not enabled.
     #[must_use]
     pub const fn get_h264_encoder(&self) -> Option<&GpuEncoder> {
         if self.enabled {
@@ -827,11 +866,13 @@ impl GpuAccel {
         }
     }
 
+    /// Returns `true` if GPU acceleration is available and enabled.
     #[must_use]
     pub const fn is_available(&self) -> bool {
         self.enabled
     }
 
+    /// Returns a human-readable description of the GPU acceleration status.
     #[must_use]
     pub fn description(&self) -> String {
         if self.enabled {
@@ -898,10 +939,14 @@ fn crf_to_estimated_bitrate(crf: f32, codec: &str) -> u32 {
     val
 }
 
+/// Result of a smart sampling strategy for selecting representative video segments.
 #[derive(Debug, Clone)]
 pub struct SmartSampleResult {
+    /// The FFmpeg filter string for the smart sample, if applicable.
     pub sample_filter: String,
+    /// The actual duration of the sample used.
     pub actual_duration: f32,
+    /// A human-readable description of the sampling strategy used.
     pub strategy: String,
 }
 
@@ -983,20 +1028,26 @@ pub fn calculate_smart_sample(
     })
 }
 
+/// A quality score combining SSIM, compression ratio, and a weighted combined score.
 #[derive(Debug, Clone, Copy)]
 pub struct QualityScore {
+    /// The SSIM (Structural Similarity Index) score.
     pub ssim: f64,
+    /// The ratio of output size to input size.
     pub compression_ratio: f64,
+    /// A weighted combination of SSIM and compression ratio.
     pub combined_score: f64,
 }
 
 impl QualityScore {
+    /// Returns the SSIM score as a typed `Ssim` value, if valid.
     #[inline]
     #[must_use]
     pub fn ssim_typed(&self) -> Option<crate::types::Ssim> {
         crate::types::Ssim::new(self.ssim).ok()
     }
 
+    /// Returns whether the SSIM score meets the given threshold.
     #[inline]
     #[must_use]
     pub fn ssim_meets(&self, threshold: f64) -> bool {
@@ -1004,12 +1055,16 @@ impl QualityScore {
     }
 }
 
+/// The phase of a quality search: GPU coarse search or CPU fine search.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SearchPhase {
+    /// GPU coarse search phase.
     Gpu,
+    /// CPU fine search phase.
     Cpu,
 }
 
+/// Calculates a quality score from SSIM, file sizes, and search phase.
 #[must_use]
 pub fn calculate_quality_score(
     ssim: f64,
@@ -1038,6 +1093,7 @@ pub fn calculate_quality_score(
     }
 }
 
+/// Returns whether the new quality score is meaningfully better than the old one.
 #[must_use]
 pub fn is_quality_better(
     new_score: &QualityScore,
@@ -1055,6 +1111,7 @@ pub fn is_quality_better(
     improvement > 0.005
 }
 
+/// Estimates the center of the CPU search range based on a GPU boundary CRF and GPU type.
 #[must_use]
 pub fn estimate_cpu_search_center_dynamic(
     gpu_boundary: f32,
@@ -1084,6 +1141,7 @@ pub fn estimate_cpu_search_center_dynamic(
     gpu_boundary + base_offset + adjustment
 }
 
+/// Estimates a CPU search range from a GPU range, adjusting for GPU type and codec.
 #[must_use]
 pub fn estimate_cpu_search_range(
     gpu_range: (f32, f32),
@@ -1104,11 +1162,13 @@ pub fn estimate_cpu_search_range(
     }
 }
 
+/// Estimates the CPU search center from a GPU boundary CRF and GPU type.
 #[must_use]
 pub fn estimate_cpu_search_center(gpu_boundary: f32, gpu_type: GpuType, codec: &str) -> f32 {
     estimate_cpu_search_center_dynamic(gpu_boundary, gpu_type, codec, None)
 }
 
+/// Converts a GPU boundary CRF to a CPU search range, clamped to min/max CRF.
 #[must_use]
 pub fn gpu_boundary_to_cpu_range(
     gpu_boundary: f32,
@@ -1125,29 +1185,44 @@ pub fn gpu_boundary_to_cpu_range(
     (cpu_low, cpu_high)
 }
 
+/// Converts a GPU CRF to an estimated CPU CRF (deprecated, use `estimate_cpu_search_center`).
 #[deprecated(since = "5.0.1", note = "use estimate_cpu_search_center instead")]
 #[must_use]
 pub fn gpu_to_cpu_crf(gpu_crf: f32, gpu_type: GpuType, codec: &str) -> f32 {
     estimate_cpu_search_center(gpu_crf, gpu_type, codec)
 }
 
+/// Result of a GPU-based coarse search for optimal CRF.
 #[derive(Debug, Clone)]
 pub struct GpuCoarseResult {
+    /// The CRF value at the compression boundary found by the GPU search.
     pub gpu_boundary_crf: f32,
+    /// The output file size (bytes) at the best CRF found, if any compression point was found.
     pub gpu_best_size: Option<u64>,
+    /// The SSIM score at the best CRF found, if measured.
     pub gpu_best_ssim: Option<f64>,
+    /// The type of GPU used for the search.
     pub gpu_type: GpuType,
+    /// The codec that was searched (e.g., "hevc", "av1", "h264").
     pub codec: String,
+    /// Number of encode iterations performed during the search.
     pub iterations: u32,
+    /// Whether a compression boundary was successfully found.
     pub found_boundary: bool,
+    /// Whether the search included fine-tuning (more than 8 iterations).
     pub fine_tuned: bool,
+    /// Log messages produced during the search.
     pub log: Vec<String>,
+    /// The estimated input file size used for sample scaling.
     pub sample_input_size: u64,
+    /// The CRF at which a quality ceiling was detected, if any.
     pub quality_ceiling_crf: Option<f32>,
+    /// The SSIM score at the quality ceiling, if detected.
     pub quality_ceiling_ssim: Option<f64>,
 }
 
 impl GpuCoarseResult {
+    /// Returns the best SSIM score as a typed `Ssim` value, if available.
     #[inline]
     #[must_use]
     pub fn best_ssim_typed(&self) -> Option<crate::types::Ssim> {
@@ -1155,6 +1230,7 @@ impl GpuCoarseResult {
             .and_then(|v| crate::types::Ssim::new(v).ok())
     }
 
+    /// Returns the quality ceiling SSIM as a typed `Ssim` value, if available.
     #[inline]
     #[must_use]
     pub fn ceiling_ssim_typed(&self) -> Option<crate::types::Ssim> {
@@ -1162,21 +1238,28 @@ impl GpuCoarseResult {
             .and_then(|v| crate::types::Ssim::new(v).ok())
     }
 
+    /// Returns the best file size as a typed `FileSize` value, if available.
     #[inline]
     pub fn best_size_typed(&self) -> Option<crate::types::FileSize> {
         self.gpu_best_size.map(crate::types::FileSize::new)
     }
 }
 
+/// Mapping between GPU and CPU CRF values for a specific GPU type and codec.
 #[derive(Debug, Clone)]
 pub struct CrfMapping {
+    /// The GPU type this mapping applies to.
     pub gpu_type: GpuType,
+    /// The codec this mapping is for (e.g., "hevc", "av1").
     pub codec: &'static str,
+    /// The offset to add to GPU CRF to estimate equivalent CPU CRF.
     pub offset: f32,
+    /// The uncertainty range in the CRF mapping.
     pub uncertainty: f32,
 }
 
 impl CrfMapping {
+    /// Creates a CRF mapping for HEVC encoding with the given GPU type.
     #[must_use]
     pub const fn hevc(gpu_type: GpuType) -> Self {
         let (offset, uncertainty) = match gpu_type {
@@ -1195,6 +1278,7 @@ impl CrfMapping {
         }
     }
 
+    /// Creates a CRF mapping for AV1 encoding with the given GPU type.
     #[must_use]
     pub const fn av1(gpu_type: GpuType) -> Self {
         let (offset, uncertainty) = match gpu_type {
@@ -1211,6 +1295,7 @@ impl CrfMapping {
         }
     }
 
+    /// Converts a GPU CRF to a CPU search range, returning (center, low, high).
     #[must_use]
     pub fn gpu_to_cpu_range(&self, gpu_crf: f32, min_crf: f32, max_crf: f32) -> (f32, f32, f32) {
         let center = (gpu_crf + self.offset).min(max_crf);
@@ -1219,11 +1304,13 @@ impl CrfMapping {
         (center, low, high)
     }
 
+    /// Converts a CPU CRF back to the equivalent GPU CRF.
     #[must_use]
     pub fn cpu_to_gpu(&self, cpu_crf: f32) -> f32 {
         cpu_crf - self.offset
     }
 
+    /// Prints the CRF mapping information to stderr.
     pub fn print_mapping_info(&self) {
         crate::log_eprintln!(
             "   📊 GPU/CPU CRF Mapping ({} - {}):",
@@ -1247,15 +1334,22 @@ impl CrfMapping {
     }
 }
 
+/// Configuration for a GPU-based coarse CRF search.
 #[derive(Debug, Clone)]
 pub struct GpuCoarseConfig {
+    /// The initial CRF value to start the search from.
     pub initial_crf: f32,
+    /// The minimum CRF value allowed during the search.
     pub min_crf: f32,
+    /// The maximum CRF value allowed during the search.
     pub max_crf: f32,
+    /// The step size for CRF adjustments during the search.
     pub step: f32,
+    /// Maximum number of iterations before the search stops.
     pub max_iterations: u32,
     /// When true (ultimate mode), use longer sample/segment durations for SSIM.
     pub ultimate_mode: bool,
+    /// The encoding preset to use (e.g., Medium, Fast).
     pub preset: crate::types::EncoderPreset,
 }
 
@@ -2915,6 +3009,7 @@ fn gpu_coarse_search_with_log_impl(
     })
 }
 
+/// Derives the CPU search range from a GPU coarse search result.
 #[must_use]
 pub fn get_cpu_search_range_from_gpu(
     gpu_result: &GpuCoarseResult,

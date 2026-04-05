@@ -1,3 +1,11 @@
+//! PostgreSQL-backed KNN learning system for loop-intent classification.
+//!
+//! This module provides database schema management, sample ingestion,
+//! feature vector computation (pgvector/HNSW), similarity search,
+//! inference logging, and health diagnostics. It enables the system
+//! to learn from labeled GIF/video samples and improve classification
+//! accuracy over time.
+
 use crate::loop_intent::LoopMeta;
 use crate::media_meta_utils::scan_gif_headers;
 use crate::progress_mode::emit_stderr;
@@ -42,25 +50,36 @@ struct FeatureMap {
     top_keywords: Vec<String>,
 }
 
+/// Statistical summary of a feature distribution across the training dataset.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DistributionStats {
+    /// Arithmetic mean of the feature values.
     pub mean: f64,
+    /// Standard deviation of the feature values.
     pub std_dev: f64,
+    /// Learned weight for this feature in distance calculations (optional).
     #[serde(default)]
     pub weight: Option<f64>,
+    /// 10th percentile value.
     #[serde(default)]
     pub p10: Option<f64>,
+    /// 25th percentile value (Q1).
     #[serde(default)]
     pub p25: Option<f64>,
+    /// 50th percentile value (median).
     #[serde(default)]
     pub p50: Option<f64>,
+    /// 75th percentile value (Q3).
     #[serde(default)]
     pub p75: Option<f64>,
+    /// 90th percentile value.
     #[serde(default)]
     pub p90: Option<f64>,
 }
 
 impl DistributionStats {
+    /// Compute the z-score of a value relative to this distribution.
+    /// Returns 0.0 if the standard deviation is near zero.
     #[must_use]
     pub fn z_score(&self, value: f64) -> f64 {
         if self.std_dev > 1e-6 {
@@ -71,6 +90,7 @@ impl DistributionStats {
     }
 }
 
+/// Convert internal `FeatureStats` into a public `DistributionStats`.
 impl From<&FeatureStats> for DistributionStats {
     fn from(value: &FeatureStats) -> Self {
         Self {
@@ -86,115 +106,188 @@ impl From<&FeatureStats> for DistributionStats {
     }
 }
 
+/// Classification label for a sample's looping intent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LabelStatus {
-    /// Manually verified / High confidence: Looping intent.
+    /// Manually verified / high confidence: looping intent (meme/sticker/video sticker).
     LoopStrong,
-    /// Manually verified / High confidence: Non-looping (video) intent.
+    /// Manually verified / high confidence: non-looping intent (clip/record/long video).
     LoopWeak,
-    /// Edge case / Low confidence label.
+    /// Edge case / low confidence label.
     Uncertain,
     /// Not yet labeled by a human or model.
     NotLabeled,
 }
 
+/// Result of a KNN similarity search against the training database.
 #[derive(Debug, Clone)]
 pub struct SampleMatch {
+    /// The label status matched (usually NotLabeled; use `keep_probability` for probability).
     pub exact_label: LabelStatus,
+    /// Probability that this sample should be kept as a looping asset (None if no match).
     pub keep_probability: Option<f64>,
     /// Confidence score in [0, 1]: how tightly clustered the KNN neighbors are.
     /// confidence = 1.0 - (std_dev_distance / mean_distance), clamped to [0, 1].
     /// High confidence (>0.75) means neighbors are homogeneous; safe to trust keep_probability.
     pub confidence: f64,
+    /// Number of neighbors used in the computation.
     pub neighbor_count: usize,
+    /// Mean L2 distance to the KNN neighbors.
     pub mean_distance: Option<f64>,
+    /// Standard deviation of distances to the KNN neighbors.
     pub std_dev_distance: Option<f64>,
+    /// Minimum distance among the KNN neighbors.
     pub min_distance: Option<f64>,
+    /// 25th percentile of distances to the KNN neighbors.
     pub p25_distance: Option<f64>,
+    /// 75th percentile of distances to the KNN neighbors.
     pub p75_distance: Option<f64>,
     /// Dynamic baseline: P90 duration of neighbors with high loss tolerance.
     pub p90_duration: Option<f64>,
 }
 
+/// A single inference result logged to the inference_log table for feedback analysis.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoopInferenceRecord {
+    /// Probability output from the decision tree classifier.
     pub tree_probability: f64,
+    /// KNN-derived keep probability (None if KNN was not available).
     pub knn_keep_probability: Option<f64>,
+    /// KNN confidence score (None if KNN was not available).
     pub knn_confidence: Option<f64>,
+    /// Number of KNN neighbors used (None if KNN was not available).
     pub knn_neighbor_count: Option<usize>,
+    /// Final blended probability after combining tree and KNN signals.
     pub final_probability: f64,
+    /// The final verdict string (e.g., "LoopStrong", "LoopWeak").
     pub final_verdict: String,
+    /// Human-readable explanation of the decision.
     pub decision_reason: String,
+    /// Which decision layer produced the exit (e.g., "Layer 1-A").
     pub layer_exit: String,
 }
 
+/// Measures how well a single feature separates LoopStrong from LoopWeak samples.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoopFeatureDiscriminativePower {
+    /// Name of the feature being measured.
     pub feature_name: String,
+    /// Mean feature value among LoopStrong samples.
     pub mean_loop_strong: Option<f64>,
+    /// Mean feature value among LoopWeak samples.
     pub mean_loop_weak: Option<f64>,
+    /// Discriminative power = (mean_loop_strong - mean_loop_weak) / stddev.
     pub discriminative_power: f64,
+    /// Number of samples used in the calculation.
     pub sample_count: i64,
 }
 
+/// Identifies regions in feature space where the inference system is most uncertain.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InferenceBlindSpot {
+    /// Duration bucket boundary (seconds).
     pub duration_bucket: f64,
+    /// WebP compression ratio bucket boundary.
     pub webp_bucket: f64,
+    /// Average KNN confidence in this bucket.
     pub avg_knn_confidence: f64,
+    /// Average tree probability in this bucket.
     pub avg_tree_probability: Option<f64>,
+    /// Average final probability in this bucket.
     pub avg_final_probability: Option<f64>,
+    /// Average neighbor count in this bucket.
     pub avg_neighbor_count: Option<f64>,
+    /// Number of inference records in this bucket.
     pub sample_count: i64,
+    /// A representative layer exit string from this bucket.
     pub example_layer_exit: Option<String>,
 }
 
+/// Aggregate statistics computed across the entire GIF/animation collection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GlobalCollectionStats {
+    /// Minimum duration in seconds.
     pub duration_min: f64,
+    /// Average duration in seconds.
     pub duration_avg: f64,
+    /// Maximum duration in seconds.
     pub duration_max: f64,
+    /// 90th percentile duration in seconds.
     pub duration_p90: f64,
 
+    /// Minimum file size in bytes.
     pub size_min: f64,
+    /// Average file size in bytes.
     pub size_avg: f64,
+    /// Maximum file size in bytes.
     pub size_max: f64,
 
+    /// Minimum bitrate in bits/sec.
     pub bitrate_min: f64,
+    /// Average bitrate in bits/sec.
     pub bitrate_avg: f64,
+    /// Maximum bitrate in bits/sec.
     pub bitrate_max: f64,
 
+    /// Minimum width in pixels.
     pub width_min: u32,
+    /// Average width in pixels.
     pub width_avg: f64,
+    /// Maximum width in pixels.
     pub width_max: u32,
 
+    /// Minimum height in pixels.
     pub height_min: u32,
+    /// Average height in pixels.
     pub height_avg: f64,
+    /// Maximum height in pixels.
     pub height_max: u32,
 
+    /// Minimum aspect ratio (width/height).
     pub aspect_min: f64,
+    /// Average aspect ratio (width/height).
     pub aspect_avg: f64,
+    /// Maximum aspect ratio (width/height).
     pub aspect_max: f64,
+    /// Top keywords extracted from LoopStrong filenames.
     pub top_keywords: Vec<String>,
 }
 
+/// A comprehensive reference profile for loop-intent classification, combining
+/// collection statistics with per-feature distribution statistics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoopReferenceProfile {
+    /// Aggregate collection-wide statistics.
     pub collection: GlobalCollectionStats,
+    /// Duration distribution statistics.
     pub duration: DistributionStats,
+    /// Frames-per-second distribution statistics.
     pub fps: DistributionStats,
+    /// Frame density (frames/sec) distribution statistics.
     pub frame_density: DistributionStats,
+    /// File size in bytes distribution statistics.
     pub file_size_bytes: DistributionStats,
+    /// Total pixel count distribution statistics.
     pub pixels: DistributionStats,
+    /// Temporal bits-per-pixel distribution statistics.
     pub temporal_bpp: DistributionStats,
+    /// Spatial bits-per-pixel distribution statistics.
     pub spatial_bpp: DistributionStats,
+    /// Frame payload variation distribution statistics.
     pub payload_variation: DistributionStats,
+    /// Frame delay variation distribution statistics.
     pub delay_variation: DistributionStats,
+    /// Palette depth distribution statistics.
     pub palette_depth: DistributionStats,
+    /// Motion Gini coefficient distribution statistics.
     pub motion_gini: DistributionStats,
+    /// Temporal flatness distribution statistics.
     pub temporal_flatness: DistributionStats,
+    /// WebP compression ratio distribution statistics.
     pub webp_ratio: DistributionStats,
+    /// Cadence score distribution statistics.
     pub cadence: DistributionStats,
+    /// Top discriminative keywords from filenames.
     pub top_keywords: Vec<String>,
 }
 
@@ -477,6 +570,11 @@ fn pg_connstr() -> String {
     std::env::var("MFB_PG_CONNSTR").unwrap_or_else(|_| PG_DEFAULT_CONNSTR.to_string())
 }
 
+/// Open a connection to the PostgreSQL database.
+///
+/// Reads the connection string from `MFB_PG_CONNSTR` env var or falls back
+/// to the default localhost connection. Emits a one-time warning to stderr
+/// if the connection fails.
 pub fn open_pg_client() -> Result<Client> {
     let connstr = pg_connstr();
     match Client::connect(&connstr, postgres::NoTls) {
@@ -495,7 +593,7 @@ pub fn open_pg_client() -> Result<Client> {
     }
 }
 
-/// One-time status report for the database.
+/// Prints a one-line status message indicating whether the database is reachable.
 pub fn report_db_status() {
     if let Ok(_conn) = open_pg_client() {
         crate::progress_mode::emit_stderr(
@@ -504,10 +602,18 @@ pub fn report_db_status() {
     }
 }
 
+/// Look up similar samples in the database using HNSW vector search.
+///
+/// Returns a `SampleMatch` if enough labeled training data exists and
+/// similar neighbors are found. Returns `None` on DB error or if the
+/// database is too immature for reliable KNN.
 pub fn lookup_similar_samples(meta: &LoopMeta, path: Option<&Path>) -> Option<SampleMatch> {
     lookup_similar_samples_inner(meta, path).ok().flatten()
 }
 
+/// Retrieve aggregate collection statistics from the metadata table.
+///
+/// Returns default stats if no stored stats are found.
 pub fn fetch_global_collection_stats(conn: &mut Client) -> Result<GlobalCollectionStats> {
     let row = conn.query_opt(
         "SELECT value FROM sample_metadata WHERE key = 'collection_stats_v1'",
@@ -522,6 +628,8 @@ pub fn fetch_global_collection_stats(conn: &mut Client) -> Result<GlobalCollecti
     }
 }
 
+/// Fetch the full loop reference profile, combining collection stats
+/// with per-feature distribution statistics.
 pub fn fetch_loop_reference_profile(conn: &mut Client) -> Result<LoopReferenceProfile> {
     let collection = fetch_global_collection_stats(conn).unwrap_or_default();
     let feature_map = fetch_feature_map(conn)?;
@@ -881,6 +989,12 @@ fn resolved_duration_secs(meta: &LoopMeta) -> f64 {
     }
 }
 
+/// Determine whether it is safe to explore lossless encoding (CRF 0.00)
+/// for the given asset.
+///
+/// Uses KNN to classify the asset as "meme" (higher duration limit) or
+/// "high-value art" (lower duration limit). Logs a warning if the asset
+/// exceeds the dynamic threshold.
 #[must_use]
 pub fn is_lossless_exploration_safe(meta: &LoopMeta, path: Option<&Path>) -> bool {
     let mut current_meta = meta.clone();
@@ -912,6 +1026,11 @@ pub fn is_lossless_exploration_safe(meta: &LoopMeta, path: Option<&Path>) -> boo
     is_safe
 }
 
+/// Initialize or migrate the database schema.
+///
+/// Creates the `samples`, `sample_metadata`, and `inference_log` tables
+/// if they do not exist, enables the pgvector extension, creates HNSW
+/// indexes, and performs any necessary column additions for schema upgrades.
 pub fn init_schema(conn: &mut Client) -> Result<()> {
     emit_stderr("🐘 Initializing Database Schema (PostgreSQL + pgvector)...");
     // Enable pgvector extension
@@ -1098,42 +1217,79 @@ fn seed_positive_dataset_if_needed(conn: &mut Client) -> Result<()> {
     Ok(())
 }
 
+/// Intermediate representation of a sample's metadata ready for database
+/// insertion. Contains all extracted features and classification labels.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SampleInsert {
+    /// BLAKE3 hash of the file contents.
     file_hash: String,
+    /// Absolute path to the source file.
     source_path: String,
+    /// Base filename (may be None if not determinable).
     file_name: Option<String>,
+    /// File extension (e.g., "gif", "webp").
     source_ext: Option<String>,
+    /// Image width in pixels.
     width: u32,
+    /// Image height in pixels.
     height: u32,
+    /// Total animation duration in seconds.
     duration_secs: f64,
+    /// Total number of frames.
     frame_count: u64,
+    /// File size in bytes.
     file_size_bytes: u64,
+    /// Frames per second.
     fps: f64,
+    /// Whether the file has an embedded ICC color profile.
     has_embedded_icc: bool,
+    /// Whether the file uses a complex color profile.
     has_complex_color_profile: bool,
+    /// Whether the file has transparency.
     has_transparency: bool,
+    /// Number of unique colors in the palette (if applicable).
     palette_size: Option<u32>,
+    /// Variation in frame payload sizes (0-1 range).
     frame_payload_variation: Option<f64>,
+    /// Variation in frame delay timings (0-1 range).
     frame_delay_variation: Option<f64>,
+    /// Temporal bits per pixel -- measures compression efficiency over time.
     temporal_bpp: f64,
+    /// Spatial bits per pixel -- measures compression efficiency per frame.
     spatial_bpp: f64,
+    /// Classification label: "low" (high value), "high" (meme), "video", or "medium".
     loss_tolerance: String,
+    /// Who or what labeled this sample (e.g., "cli_ingest", "integrity_refresh").
     labeled_by: String,
+    /// Width/height ratio.
     aspect_ratio: Option<f64>,
+    /// Total pixel count (width * height).
     total_pixels: u64,
+    /// Score indicating how likely the asset is to loop (0-1 range).
     loop_frequency: f64,
+    /// Whether the asset originates from a meme/sticker platform.
     is_meme_platform: bool,
+    /// Whether the filename uses human-readable semantic naming.
     is_human_semantic_name: bool,
+    /// Score measuring the regularity of frame timing patterns.
     cadence_score: f64,
+    /// Score indicating how meme-like the source directory appears.
     directory_meme_score: f64,
+    /// Whether the source is considered high-value art.
     is_high_value_source: bool,
+    /// Whether the source format is natively GIF.
     is_native_gif: bool,
+    /// Depth of the color palette as a normalized score (0-1).
     palette_depth: Option<f64>,
+    /// Motion Gini coefficient -- measures how concentrated motion is across frames.
     motion_gini: Option<f64>,
+    /// Block skew measurement -- detects geometric distortion.
     block_skew: Option<f64>,
+    /// Temporal flatness -- how uniform the temporal features are.
     temporal_flatness: Option<f64>,
+    /// WebP compression ratio relative to the original.
     webp_compression_ratio: Option<f64>,
+    /// Loop intent classification ("LoopStrong", "LoopWeak", or "Uncertain").
     loop_verdict: String,
 }
 
@@ -1217,6 +1373,13 @@ fn determine_loss_tolerance(
     "medium".to_string()
 }
 
+/// Analyze a file and produce a `SampleInsert` record suitable for
+/// database ingestion.
+///
+/// Probes the file, extracts metadata, determines loss tolerance based
+/// on content characteristics and directory heuristics, and computes
+/// derived features like temporal/spatial BPP. Returns `None` if the
+/// file cannot be probed.
 pub fn sample_from_path(
     path: &Path,
     labeled_by: &str,
@@ -1328,6 +1491,9 @@ pub fn sample_from_path(
     })
 }
 
+/// Compute the BLAKE3 hash of a file's contents, returned as a hex string.
+///
+/// Used as a unique identifier (`file_hash`) for deduplication in the database.
 pub fn calculate_blake3_hex(path: &Path) -> Result<String> {
     let mut file = std::fs::File::open(path)?;
     let mut hasher = Hasher::new();
@@ -1620,6 +1786,13 @@ fn build_feature_stats(values: &[f64]) -> FeatureStats {
     }
 }
 
+/// Scan a directory tree for media files and ingest them into the database
+/// as training samples.
+///
+/// Walks the given path, extracts sample metadata for each GIF/WebP/APNG/AVIF/MP4/MOV
+/// file, computes feature vectors, and inserts them into the `samples` table.
+/// Static images (frame_count <= 1) are excluded. Returns the number of
+/// successfully ingested samples.
 pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -> Result<usize> {
     let mut conn = open_pg_client()?;
 
@@ -1810,6 +1983,13 @@ pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -
     Ok(count)
 }
 
+/// Recompute global feature statistics and update the training model.
+///
+/// Queries all labeled samples, computes per-feature statistics (mean,
+/// std_dev, percentiles), extracts dynamic keywords from LoopStrong
+/// filenames, computes discriminative power for each feature, and stores
+/// the resulting `FeatureMap` in the metadata table. Also triggers
+/// pgvector feature backfill.
 pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
     emit_stderr("🏋️  Recomputing Global KNN Feature Statistics (Training Model)...");
 
@@ -2105,6 +2285,11 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
     Ok(())
 }
 
+/// Recompute pgvector feature encodings for all labeled samples.
+///
+/// Reads each sample's features, computes the 31-dimensional vector
+/// using the current `FeatureMap`, and writes it back to the `samples`
+/// table for HNSW index usage.
 pub fn recompute_all_features(conn: &mut Client) -> Result<()> {
     let feature_map = fetch_feature_map(conn)?;
     
@@ -2217,9 +2402,11 @@ fn build_signal_snapshot(meta: &LoopMeta) -> Value {
     })
 }
 
-/// Log one inference record to the database. Fails silently — never blocks the pipeline.
+/// Log one inference record to the database for later analysis.
 ///
-/// Called by `assess_loop_intent_from_meta` after every verdict to build the feedback loop.
+/// Fails silently -- never blocks the pipeline. Called after every
+/// verdict to build the feedback loop. Stores the meta snapshot,
+/// tree/KNN probabilities, final verdict, and layer exit information.
 pub fn log_inference_record(
     conn: &mut Client,
     meta: &LoopMeta,
@@ -2276,10 +2463,12 @@ pub fn log_inference_record(
 
 // ── Level 1: Feature Discriminative Power Analysis ───────────────────────────
 
-/// Query which features have real discriminative power between loop_strong and loop_weak.
+/// Query which features have real discriminative power between
+/// LoopStrong and LoopWeak samples.
 ///
 /// Returns features sorted by absolute discriminative power descending.
-/// `discriminative_power = (mean_loop_strong - mean_loop_weak) / stddev`
+/// `discriminative_power = (mean_loop_strong - mean_loop_weak) / stddev`.
+/// Used to assign dynamic weights to features in the distance metric.
 pub fn query_feature_discriminative_power(
     conn: &mut Client,
 ) -> Result<Vec<LoopFeatureDiscriminativePower>> {
@@ -2383,16 +2572,24 @@ pub fn query_inference_blind_spots(
 /// Summary statistics for the inference log, used by diagnostics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InferenceLogSummary {
+    /// Total number of inference log records.
     pub total_records: i64,
+    /// Counts per verdict string (e.g., "LoopStrong", "LoopWeak").
     pub verdict_counts: Vec<(String, i64)>,
+    /// Counts per layer exit string.
     pub layer_exit_counts: Vec<(String, i64)>,
+    /// Average tree probability across all records.
     pub avg_tree_probability: Option<f64>,
+    /// Average KNN confidence across all records.
     pub avg_knn_confidence: Option<f64>,
+    /// Average final probability across all records.
     pub avg_final_probability: Option<f64>,
+    /// Number of records that fell back to Layer 7.
     pub layer7_fallback_count: i64,
 }
 
-/// Get a summary of all inference log records.
+/// Get a summary of all inference log records, including verdict counts,
+/// layer exit distributions, and average probability/confidence metrics.
 pub fn query_inference_log_summary(conn: &mut Client) -> Result<InferenceLogSummary> {
     let count_row = conn.query_one("SELECT COUNT(*) FROM inference_log", &[])?;
     let total_records: i64 = count_row.get(0);
@@ -2446,19 +2643,33 @@ pub fn query_inference_log_summary(conn: &mut Client) -> Result<InferenceLogSumm
 
 // ── Database Health Diagnostics ──────────────────────────────────────────────
 
+/// Detailed health report for the database infrastructure and data integrity.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DbHealthReport {
+    /// Whether a database connection was successfully established.
     pub connected: bool,
+    /// PostgreSQL server version string.
     pub pg_version: String,
+    /// Whether the pgvector extension is installed.
     pub has_vector_extension: bool,
+    /// Version of the installed pgvector extension (if present).
     pub vector_extension_version: Option<String>,
+    /// Row counts per table (samples, inference_log, etc.).
     pub table_counts: std::collections::HashMap<String, i64>,
+    /// Whether any data corruption (NaN/Inf vectors) was detected.
     pub corruption_found: bool,
+    /// Descriptions of any corruption found.
     pub corruption_details: Vec<String>,
+    /// Maturity status of the training dataset (e.g., "Mature (KNN Active)").
     pub maturity_status: String,
 }
 
-/// Perform a deep diagnostic scan of the database infrastructure and data integrity.
+/// Perform a deep diagnostic scan of the database infrastructure and data
+/// integrity.
+///
+/// Checks PostgreSQL connectivity, pgvector extension presence, table row
+/// counts, NaN/Infinity corruption in feature vectors, and dataset
+/// maturity status. Returns a `DbHealthReport` with all findings.
 pub fn check_database_health() -> Result<DbHealthReport> {
     let mut conn = open_pg_client()?;
     let mut report = DbHealthReport {

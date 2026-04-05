@@ -27,7 +27,9 @@ use crate::float_compare::SSIM_EPSILON;
 use crate::types::{CheckResult, EncoderPreset, FileSize, Ssim};
 
 pub mod error_handling;
+/// SSIM calculator sub-module (re-exported).
 pub mod ssim_calculator;
+/// Stream analysis sub-module (re-exported).
 pub mod stream_analysis;
 
 pub use ssim_calculator::*;
@@ -74,18 +76,21 @@ pub fn calculate_metadata_margin(input_size: u64) -> u64 {
     percent_based.clamp(METADATA_MARGIN_MIN, METADATA_MARGIN_MAX)
 }
 
+/// Calculates the metadata size from pre- and post-insertion file sizes.
 #[inline]
 #[must_use]
 pub const fn detect_metadata_size(pre_metadata_size: u64, post_metadata_size: u64) -> u64 {
     post_metadata_size.saturating_sub(pre_metadata_size)
 }
 
+/// Extracts the pure video size by subtracting metadata from the total file size.
 #[inline]
 #[must_use]
 pub const fn pure_video_size(total_size: u64, metadata_size: u64) -> u64 {
     total_size.saturating_sub(metadata_size)
 }
 
+/// Calculates the target file size for compression, accounting for metadata overhead.
 #[inline]
 #[must_use]
 pub fn compression_target_size(input_size: u64) -> u64 {
@@ -93,18 +98,28 @@ pub fn compression_target_size(input_size: u64) -> u64 {
     input_size.saturating_sub(margin)
 }
 
+/// Returns true if the output file size is below the compression target (accounting for metadata).
 #[inline]
 #[must_use]
 pub fn can_compress_with_metadata(output_size: u64, input_size: u64) -> bool {
     output_size < compression_target_size(input_size)
 }
 
+/// Strategy used to verify whether compression actually reduced file size.
+///
+/// - `PureVideo`: compare only the video stream size (excludes container/metadata).
+/// - `TotalSize`: compare the total output file size against the input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompressionVerifyStrategy {
+    /// Compare only the pure video stream size, ignoring container overhead.
     PureVideo,
+    /// Compare the total output file size (including container/metadata).
     TotalSize,
 }
 
+/// Verifies compression using a strategy-aware comparison (pure video vs total size).
+///
+/// Returns `(can_compress, compare_size, strategy_used)`.
 #[inline]
 #[must_use]
 pub const fn verify_compression_precise(
@@ -128,6 +143,7 @@ pub const fn verify_compression_precise(
     }
 }
 
+/// Simplified compression verification: returns `(can_compress, compare_size)`.
 #[inline]
 #[must_use]
 pub const fn verify_compression_simple(
@@ -142,8 +158,10 @@ pub const fn verify_compression_simple(
 
 pub use precision::*;
 
+/// Minimum consecutive wall-clock hits required for saturation detection in ultimate mode.
 pub const ULTIMATE_MIN_WALL_HITS: u32 = 15;
 
+/// Maximum consecutive wall-clock hits allowed for saturation detection in ultimate mode.
 pub const ULTIMATE_MAX_WALL_HITS: u32 = 100;
 
 /// In ultimate mode, absolute saturation requires 50 consecutive samples to be statistically certain.
@@ -151,11 +169,13 @@ use crate::constants::{
     LONG_VIDEO_THRESHOLD_SECS, VERY_LONG_VIDEO_THRESHOLD_SECS, VMAF_SKIP_THRESHOLD_ULTIMATE_SECS,
 };
 
-/// In ultimate mode, absolute saturation requires 100 consecutive samples to be statistically certain.
+/// Required consecutive zero-gain encodes for saturation detection in ultimate mode.
 pub const ULTIMATE_REQUIRED_ZERO_GAINS: u32 = crate::constants::ULTIMATE_REQUIRED_ZERO_GAINS;
 
-pub const NORMAL_MAX_WALL_HITS: u32 = crate::constants::NORMAL_REQUIRED_ZERO_GAINS; // Using zero gains as proxy for consistency
+/// Maximum consecutive wall hits for normal mode (uses zero-gains as proxy).
+pub const NORMAL_MAX_WALL_HITS: u32 = crate::constants::NORMAL_REQUIRED_ZERO_GAINS;
 
+/// Required consecutive zero-gain encodes for saturation detection in normal mode.
 pub const NORMAL_REQUIRED_ZERO_GAINS: u32 = crate::constants::NORMAL_REQUIRED_ZERO_GAINS;
 
 /// Max iterations for 5–10 min videos. Longer videos use a *lower* cap (see below) because each
@@ -166,8 +186,12 @@ pub const LONG_VIDEO_FALLBACK_ITERATIONS: u32 = 150;
 /// cost more per iteration, so we cap iterations to keep total runtime reasonable.
 pub const VERY_LONG_VIDEO_FALLBACK_ITERATIONS: u32 = 130;
 
+/// Required consecutive zero-gain encodes for saturation detection in long videos (5-10 min).
 pub const LONG_VIDEO_REQUIRED_ZERO_GAINS: u32 = crate::constants::LONG_VIDEO_REQUIRED_ZERO_GAINS;
 
+/// Calculates the maximum exploration iterations allowed based on video duration and mode.
+///
+/// Longer videos get fewer iterations to keep total runtime reasonable.
 #[must_use]
 pub fn calculate_max_iterations_for_duration(duration_secs: f32, ultimate_mode: bool) -> u32 {
     if duration_secs >= VERY_LONG_VIDEO_THRESHOLD_SECS {
@@ -181,11 +205,15 @@ pub fn calculate_max_iterations_for_duration(duration_secs: f32, ultimate_mode: 
     }
 }
 
+/// Calculates the required zero-gain encodes for saturation detection based on video duration.
 #[must_use]
 pub fn calculate_zero_gains_for_duration(duration_secs: f32, ultimate_mode: bool) -> u32 {
     calculate_zero_gains_for_duration_and_range(duration_secs, 41.0, ultimate_mode)
 }
 
+/// Calculates the required zero-gain encodes for saturation detection, with explicit CRF range.
+///
+/// Scales the base requirement based on video duration and CRF range.
 #[must_use]
 pub fn calculate_zero_gains_for_duration_and_range(
     duration_secs: f32,
@@ -211,8 +239,12 @@ pub fn calculate_zero_gains_for_duration_and_range(
     scaled.max(min_gains)
 }
 
+/// Logarithmic base constant used in adaptive wall-hit calculations.
 pub const ADAPTIVE_WALL_LOG_BASE: u32 = 8;
 
+/// Calculates the adaptive maximum wall-clock hits based on CRF search range.
+///
+/// Uses a logarithmic formula to scale the hit requirement with search range breadth.
 #[must_use]
 pub fn calculate_adaptive_max_walls(crf_range: f32) -> u32 {
     if crf_range.is_nan() || crf_range.is_infinite() || crf_range <= 1.0 {
@@ -223,28 +255,42 @@ pub fn calculate_adaptive_max_walls(crf_range: f32) -> u32 {
     total.clamp(ULTIMATE_MIN_WALL_HITS, ULTIMATE_MAX_WALL_HITS)
 }
 
+/// Minimum number of threads to use for video encoding.
 pub const MIN_ENCODE_THREADS: usize = 1;
 
+/// Default maximum number of encoding threads for typical machines.
 pub const DEFAULT_MAX_ENCODE_THREADS: usize = 4;
 
+/// Maximum number of encoding threads for server-class machines.
 pub const SERVER_MAX_ENCODE_THREADS: usize = 16;
 
+/// Default initial CRF for exploration (starting point for search).
 pub const EXPLORE_DEFAULT_INITIAL_CRF: f32 = 18.0;
 
+/// Default minimum CRF allowed in exploration (lossless boundary).
 pub const EXPLORE_DEFAULT_MIN_CRF: f32 = 0.0;
 
+/// Default maximum CRF allowed in exploration (HEVC limit).
 pub const EXPLORE_DEFAULT_MAX_CRF: f32 = 51.0;
 
+/// Default target size ratio (1.0 = same size as input).
 pub const EXPLORE_DEFAULT_TARGET_RATIO: f64 = 1.0;
 
+/// Default maximum number of exploration iterations.
 pub const EXPLORE_DEFAULT_MAX_ITERATIONS: u32 = 12;
 
+/// Default minimum SSIM threshold for quality validation.
 pub const EXPLORE_DEFAULT_MIN_SSIM: f64 = 0.95;
 
+/// Default minimum PSNR threshold for quality validation.
 pub const EXPLORE_DEFAULT_MIN_PSNR: f64 = 35.0;
 
+/// Default minimum MS-SSIM threshold for quality validation.
 pub const EXPLORE_DEFAULT_MIN_MS_SSIM: f64 = 0.90;
 
+/// Calculates the optimal number of encoding threads based on CPU count and resolution.
+///
+/// Balances parallelism against per-thread overhead for different resolutions.
 #[must_use]
 pub fn calculate_max_threads(cpu_count: usize, resolution_pixels: Option<u64>) -> usize {
     let half_cpus = cpu_count / 2;
@@ -260,54 +306,71 @@ pub fn calculate_max_threads(cpu_count: usize, resolution_pixels: Option<u64>) -
     half_cpus.clamp(MIN_ENCODE_THREADS, resolution_limit)
 }
 
+/// Operation mode for the CRF exploration process.
+///
+/// Each mode determines how aggressively the explorer searches for the optimal CRF value
+/// and whether it prioritizes quality matching, compression, or both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExploreMode {
+    /// Only search for a CRF that produces a smaller file; no quality checks.
     SizeOnly,
-
+    /// Encode at the predicted CRF and verify quality meets thresholds.
     QualityMatch,
-
+    /// Iteratively search for the CRF that best matches the input quality (SSIM).
     PreciseQualityMatch,
-
+    /// Like `PreciseQualityMatch` but also ensures the output is smaller than the input.
     PreciseQualityMatchWithCompression,
-
+    /// Search for the highest CRF that still produces a smaller file; no quality checks.
     CompressOnly,
-
+    /// Search for compression that also maintains a minimum quality threshold.
     CompressWithQuality,
 }
 
-/// Per-component confidence; `overall()` is computed from weights.
-/// Explore results currently use a fixed confidence value per mode; this breakdown is not yet filled.
+/// Per-component confidence scores; `overall()` computes a weighted aggregate.
+///
+/// Each field represents a different aspect of the exploration result's reliability.
 #[derive(Debug, Clone, Default)]
 pub struct ConfidenceBreakdown {
+    /// How well the CRF search space was sampled (0.0–1.0).
     pub sampling_coverage: f64,
+    /// How accurate the CRF predictions were compared to actual encodes (0.0–1.0).
     pub prediction_accuracy: f64,
+    /// How safe the resulting size/quality margins are (0.0–1.0).
     pub margin_safety: f64,
+    /// How reliable the SSIM measurement is (0.0–1.0).
     pub ssim_confidence: f64,
 }
 
+/// Weight for sampling coverage in the overall confidence calculation.
 pub const CONFIDENCE_WEIGHT_SAMPLING: f64 = 0.3;
+/// Weight for prediction accuracy in the overall confidence calculation.
 pub const CONFIDENCE_WEIGHT_PREDICTION: f64 = 0.3;
+/// Weight for margin safety in the overall confidence calculation.
 pub const CONFIDENCE_WEIGHT_MARGIN: f64 = 0.2;
+/// Weight for SSIM reliability in the overall confidence calculation.
 pub const CONFIDENCE_WEIGHT_SSIM: f64 = 0.2;
 
 /// A specific state in the GPU-accelerated CRF exploration.
+///
+/// Represents one GPU probe result and its corresponding CPU prediction.
 #[derive(Debug, Clone)]
 pub struct CalibrationPoint {
-    /// The CRF used in the GPU probe.
+    /// The CRF value used in the GPU probe.
     pub gpu_crf: f32,
-    /// Resulting file size from GPU.
+    /// Resulting file size from the GPU encode.
     pub gpu_size: u64,
-    /// SSIM score from GPU (if measured).
+    /// SSIM score from the GPU encode (if measured).
     pub gpu_ssim: Option<f64>,
     /// The starting point predicted for the CPU fine-search.
     pub predicted_cpu_crf: f32,
-    /// Confidence level in this prediction [0.0 - 1.0].
+    /// Confidence level in the CPU prediction, from 0.0 to 1.0.
     pub confidence: f64,
     /// Human-readable rationale for the prediction adjustment.
     pub reason: &'static str,
 }
 
 impl ConfidenceBreakdown {
+    /// Computes the overall confidence score as a weighted aggregate of all components.
     #[must_use]
     pub fn overall(&self) -> f64 {
         self.ssim_confidence
@@ -324,6 +387,7 @@ impl ConfidenceBreakdown {
             .min(1.0)
     }
 
+    /// Prints a formatted confidence report to the log (verbose mode only).
     pub fn print_report(&self) {
         if !crate::progress_mode::is_verbose_mode() {
             return;
@@ -364,26 +428,47 @@ impl ConfidenceBreakdown {
     }
 }
 
+/// The result of a CRF exploration.
+///
+/// Contains the optimal CRF found, quality metrics, and metadata about the exploration process.
 #[derive(Debug, Clone)]
 pub struct ExploreResult {
+    /// The optimal CRF value found by the exploration.
     pub optimal_crf: f32,
+    /// The resulting output file size in bytes.
     pub output_size: u64,
+    /// Percentage change in file size compared to input.
     pub size_change_pct: f64,
+    /// Structural Similarity Index score (if measured).
     pub ssim: Option<f64>,
+    /// Peak Signal-to-Noise Ratio in dB (if measured).
     pub psnr: Option<f64>,
+    /// Multi-Scale SSIM score (if measured).
     pub ms_ssim: Option<f64>,
+    /// Whether the MS-SSIM quality check passed.
     pub ms_ssim_passed: CheckResult,
+    /// The actual MS-SSIM score achieved (may differ from `ms_ssim` in some modes).
     pub ms_ssim_score: Option<f64>,
+    /// Number of encode iterations performed during exploration.
     pub iterations: u32,
+    /// Whether the overall quality check passed.
     pub quality_passed: CheckResult,
-    /// When quality/size would pass but enhanced verification (duration/stream) failed; used for accurate failure messaging.
+    /// When quality/size would pass but enhanced verification (duration/stream) failed;
+    /// used for accurate failure messaging.
     pub enhanced_verify_fail_reason: Option<String>,
+    /// Human-readable log messages produced during exploration.
     pub log: Vec<String>,
+    /// Overall confidence score (0.0–1.0).
     pub confidence: f64,
+    /// Detailed breakdown of confidence components.
     pub confidence_detail: ConfidenceBreakdown,
+    /// The minimum SSIM threshold that was used during exploration.
     pub actual_min_ssim: f64,
+    /// Size of the input video stream (excluding container overhead).
     pub input_video_stream_size: u64,
+    /// Size of the output video stream (excluding container overhead).
     pub output_video_stream_size: u64,
+    /// Container overhead in bytes (metadata, headers, etc.).
     pub container_overhead: u64,
     /// Ultimate mode 3D quality gate: VMAF Y-channel score (0–100).
     pub vmaf_y_score: Option<f64>,
@@ -391,7 +476,7 @@ pub struct ExploreResult {
     pub cambi_score: Option<f64>,
     /// Ultimate mode 3D quality gate: (`PSNR_U`, `PSNR_V`) in dB.
     pub psnr_uv_score: Option<(f64, f64)>,
-    /// Early insight triggered: quality plateau detected, skipped further exploration.
+    /// Whether an early insight triggered (quality plateau detected, skipped further exploration).
     pub early_insight_triggered: bool,
 }
 
@@ -425,18 +510,21 @@ impl Default for ExploreResult {
 }
 
 impl ExploreResult {
+    /// Returns the SSIM value as a typed `Ssim` if available and valid.
     #[inline]
     #[must_use]
     pub fn ssim_typed(&self) -> Option<Ssim> {
         self.ssim.and_then(|v| Ssim::new(v).ok())
     }
 
+    /// Returns the output size as a typed `FileSize`.
     #[inline]
     #[must_use]
     pub const fn output_size_typed(&self) -> FileSize {
         FileSize::new(self.output_size)
     }
 
+    /// Returns true if the SSIM score meets or exceeds the given threshold.
     #[inline]
     #[must_use]
     pub fn ssim_meets(&self, threshold: f64) -> bool {
@@ -445,14 +533,22 @@ impl ExploreResult {
     }
 }
 
+/// Quality thresholds and validation flags for an exploration.
 #[derive(Debug, Clone)]
 pub struct QualityThresholds {
+    /// Minimum acceptable SSIM score.
     pub min_ssim: f64,
+    /// Minimum acceptable PSNR in dB.
     pub min_psnr: f64,
+    /// Minimum acceptable Multi-Scale SSIM score.
     pub min_ms_ssim: f64,
+    /// Whether to validate SSIM during quality checks.
     pub validate_ssim: bool,
+    /// Whether to validate PSNR during quality checks.
     pub validate_psnr: bool,
+    /// Whether to validate MS-SSIM during quality checks.
     pub validate_ms_ssim: bool,
+    /// Force MS-SSIM validation even for long videos (normally skipped for performance).
     pub force_ms_ssim_long: bool,
 }
 
@@ -470,16 +566,29 @@ impl Default for QualityThresholds {
     }
 }
 
+/// Configuration for a CRF exploration.
+///
+/// Controls the mode, CRF range, quality thresholds, and other parameters
+/// that determine how the exploration behaves.
 #[derive(Debug, Clone)]
 pub struct ExploreConfig {
+    /// The exploration mode to use.
     pub mode: ExploreMode,
+    /// The initial CRF to start the exploration from.
     pub initial_crf: f32,
+    /// The minimum CRF allowed during search.
     pub min_crf: f32,
+    /// The maximum CRF allowed during search.
     pub max_crf: f32,
+    /// Target size ratio (1.0 = same size as input).
     pub target_ratio: f64,
+    /// Quality thresholds and validation flags.
     pub quality_thresholds: QualityThresholds,
+    /// Maximum number of encode iterations before giving up.
     pub max_iterations: u32,
+    /// Whether to use ultimate mode (stricter quality gates, more thorough search).
     pub ultimate_mode: bool,
+    /// Whether to compare pure video stream sizes instead of total file sizes.
     pub use_pure_media_comparison: bool,
 }
 
@@ -500,6 +609,7 @@ impl Default for ExploreConfig {
 }
 
 impl ExploreConfig {
+    /// Creates a config for size-only exploration (no quality checks).
     #[must_use]
     pub fn size_only(initial_crf: f32, max_crf: f32) -> Self {
         Self {
@@ -515,6 +625,7 @@ impl ExploreConfig {
         }
     }
 
+    /// Creates a config for quality-match mode (single encode at predicted CRF).
     #[must_use]
     pub fn quality_match(predicted_crf: f32) -> Self {
         Self {
@@ -530,6 +641,7 @@ impl ExploreConfig {
         }
     }
 
+    /// Creates a config for precise quality match with iterative CRF search.
     #[must_use]
     pub fn precise_quality_match(initial_crf: f32, max_crf: f32, min_ssim: f64) -> Self {
         Self {
@@ -549,6 +661,7 @@ impl ExploreConfig {
         }
     }
 
+    /// Creates a config for precise quality match that also requires compression.
     #[must_use]
     pub fn precise_quality_match_with_compression(
         initial_crf: f32,
@@ -572,6 +685,7 @@ impl ExploreConfig {
         }
     }
 
+    /// Creates a config for compression-only mode (no quality validation).
     #[must_use]
     pub fn compress_only(initial_crf: f32, max_crf: f32) -> Self {
         Self {
@@ -589,6 +703,7 @@ impl ExploreConfig {
         }
     }
 
+    /// Creates a config for compression that also enforces a minimum SSIM threshold.
     #[must_use]
     pub fn compress_with_quality(initial_crf: f32, max_crf: f32) -> Self {
         Self {
@@ -608,10 +723,16 @@ impl ExploreConfig {
     }
 }
 
+/// Supported video encoder types.
+///
+/// Each variant maps to a specific FFmpeg encoder and container format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VideoEncoder {
+    /// H.265/HEVC encoder (libx265 or hardware fallback).
     Hevc,
+    /// AV1 encoder (SVT-AV1).
     Av1,
+    /// H.264/AVC encoder (libx264 or hardware fallback).
     H264,
 }
 
@@ -627,6 +748,8 @@ impl From<VideoEncoder> for crate::ffmpeg_builder::VideoCodec {
 
 
 impl VideoEncoder {
+    /// Returns the FFmpeg encoder name, with automatic fallback to hardware encoders
+    /// if the software encoder is not available.
     #[must_use]
     pub fn ffmpeg_name(&self) -> &'static str {
         match self {
@@ -673,6 +796,7 @@ impl VideoEncoder {
         })
     }
 
+    /// Returns the default container extension for this encoder (always "mp4").
     #[must_use]
     pub const fn container(&self) -> &'static str {
         match self {
@@ -680,11 +804,14 @@ impl VideoEncoder {
         }
     }
 
+    /// Returns extra FFmpeg arguments for this encoder with default preset.
     #[must_use]
     pub fn extra_args(&self, max_threads: usize, apple_compat: bool) -> Vec<String> {
         self.extra_args_with_preset(max_threads, EncoderPreset::default(), None, apple_compat)
     }
 
+    /// Returns extra FFmpeg arguments for this encoder with a specific preset and optional
+    /// HDR x265 parameters.
     #[must_use]
     pub fn extra_args_with_preset(
         &self,
@@ -734,29 +861,46 @@ impl VideoEncoder {
     }
 }
 
+/// Indicates the source of an SSIM value in iteration metrics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SsimSource {
+    /// SSIM was actually measured from an encode.
     Actual,
+    /// SSIM was predicted/estimated without a full encode.
     Predicted,
+    /// No SSIM value is available.
     None,
 }
 
+/// Metrics recorded during a single iteration of the CRF search.
 #[derive(Debug, Clone)]
 pub struct IterationMetrics {
+    /// Iteration number (1-based).
     pub iteration: u32,
+    /// Name of the current search phase.
     pub phase: String,
+    /// The CRF value tested in this iteration.
     pub crf: f32,
+    /// The resulting output file size in bytes.
     pub output_size: u64,
+    /// Percentage change in size compared to input.
     pub size_change_pct: f64,
+    /// SSIM score achieved (if measured).
     pub ssim: Option<f64>,
+    /// Whether the SSIM was measured or predicted.
     pub ssim_source: SsimSource,
+    /// PSNR score in dB (if measured).
     pub psnr: Option<f64>,
+    /// Whether the output could be compressed further with margin.
     pub can_compress: bool,
+    /// Whether the quality check passed for this iteration.
     pub quality_passed: CheckResult,
+    /// Human-readable description of the decision made after this iteration.
     pub decision: String,
 }
 
 impl IterationMetrics {
+    /// Prints this iteration's metrics as a formatted table row.
     pub fn print_line(&self) {
         let ssim_str = match (self.ssim, self.ssim_source) {
             (Some(s), SsimSource::Predicted) => format!("~{s:.4}"),
@@ -788,17 +932,28 @@ impl IterationMetrics {
     }
 }
 
+/// A transparency report that logs all iterations of the CRF search process.
+///
+/// Provides a detailed, human-readable view of every step taken during exploration,
+/// useful for debugging and auditing.
 #[derive(Debug, Clone, Default)]
 pub struct TransparencyReport {
+    /// All iteration metrics recorded during the search.
     pub iterations: Vec<IterationMetrics>,
+    /// When the exploration started (for elapsed time calculation).
     pub start_time: Option<std::time::Instant>,
+    /// Input file size in bytes.
     pub input_size: u64,
+    /// Final optimal CRF found.
     pub final_crf: Option<f32>,
+    /// Final SSIM score achieved.
     pub final_ssim: Option<f64>,
+    /// Final PSNR score achieved.
     pub final_psnr: Option<f64>,
 }
 
 impl TransparencyReport {
+    /// Creates a new transparency report for the given input size.
     #[must_use]
     pub fn new(input_size: u64) -> Self {
         Self {
@@ -811,11 +966,13 @@ impl TransparencyReport {
         }
     }
 
+    /// Records an iteration's metrics and prints the current progress line.
     pub fn add_iteration(&mut self, metrics: IterationMetrics) {
         metrics.print_line();
         self.iterations.push(metrics);
     }
 
+    /// Prints the header row for the transparency report table.
     pub fn print_header(&self) {
         crate::log_eprintln!("┌────────────────────────────────────────────────────────────────────────────────────────────┐");
         crate::log_eprintln!("│ 📊 Transparency Report - CRF Search Process                                               │");
@@ -824,6 +981,7 @@ impl TransparencyReport {
         crate::log_eprintln!("├────┼──────────────┼───────────┼─────────────┼─────────────┼──────────┼────────────────────┤");
     }
 
+    /// Prints the footer and summary statistics (iterations, time, final CRF/SSIM/PSNR).
     pub fn print_summary(&self) {
         crate::log_eprintln!("└────┴──────────────┴───────────┴─────────────┴─────────────┴──────────┴────────────────────┘");
 
@@ -847,22 +1005,38 @@ impl TransparencyReport {
     }
 }
 
+/// The main video exploration engine.
+///
+/// Manages encoding, quality measurement, and CRF search for a given input/output pair.
 pub struct VideoExplorer {
+    /// Configuration controlling the exploration behavior.
     config: ExploreConfig,
+    /// The video encoder to use (HEVC, AV1, or H264).
     encoder: VideoEncoder,
+    /// Path to the input video file.
     input_path: std::path::PathBuf,
+    /// Path where the output video will be written.
     output_path: std::path::PathBuf,
+    /// Size of the input file in bytes.
     input_size: u64,
+    /// Additional video filter arguments passed to FFmpeg.
     vf_args: Vec<String>,
+    /// Whether GPU acceleration is enabled.
     use_gpu: bool,
+    /// Maximum number of encoding threads.
     max_threads: usize,
+    /// Encoder preset (speed vs quality tradeoff).
     preset: EncoderPreset,
+    /// Size of the input video stream (excluding container overhead).
     input_video_stream_size: u64,
+    /// Optional HDR x265 encoder parameters.
     hdr_x265_params: Option<String>,
+    /// Whether to use Apple-compatible container tags.
     apple_compat: bool,
 }
 
 impl VideoExplorer {
+    /// Internal builder that validates paths, detects GPU availability, and initializes state.
     fn build(
         input: &Path,
         output: &Path,
@@ -1003,7 +1177,7 @@ impl VideoExplorer {
         )
     }
 
-    /// Run the quality exploration.
+    /// Runs the quality exploration according to the configured mode.
     ///
     /// # Errors
     /// Returns an error if exploration fails.
@@ -1020,7 +1194,7 @@ impl VideoExplorer {
         }
     }
 
-    /// Run the quality exploration with a specific strategy.
+    /// Runs the quality exploration using the strategy pattern (delegates to `explore_strategy`).
     ///
     /// # Errors
     /// Returns an error if exploration fails.
@@ -2600,10 +2774,10 @@ impl VideoExplorer {
         Ok((ssim, psnr, ms_ssim))
     }
 
-    /// Calculate SSIM and PSNR for the video.
+    /// Calculates both SSIM and PSNR for the current input vs output video.
     ///
     /// # Errors
-    /// Returns an error if calculation fails.
+    /// Returns an error if the calculation fails.
     pub fn calculate_ssim_and_psnr(&self) -> Result<(Option<f64>, Option<f64>)> {
         eprint!("      📊 Calculating SSIM+PSNR...");
         let _ = std::io::stderr().flush();
@@ -2935,7 +3109,7 @@ impl VideoExplorer {
     }
 }
 
-/// Explore size only.
+/// Explores size-only mode: finds a CRF that produces a smaller file without quality checks.
 ///
 /// # Errors
 /// Returns an error if exploration fails.
@@ -2953,7 +3127,7 @@ pub fn explore_size_only(
     VideoExplorer::new(input, output, encoder, vf_args, config, max_threads, None, apple_compat)?.explore()
 }
 
-/// Explore quality match.
+/// Explores quality-match mode: encodes at a predicted CRF and validates quality.
 ///
 /// # Errors
 /// Returns an error if exploration fails.
@@ -2970,7 +3144,7 @@ pub fn explore_quality_match(
     VideoExplorer::new(input, output, encoder, vf_args, config, max_threads, None, apple_compat)?.explore()
 }
 
-/// Explore precise quality match.
+/// Explores precise quality-match mode: iteratively searches for the best SSIM within a CRF range.
 ///
 /// # Errors
 /// Returns an error if exploration fails.
@@ -2989,7 +3163,7 @@ pub fn explore_precise_quality_match(
     VideoExplorer::new(input, output, encoder, vf_args, config, max_threads, None, apple_compat)?.explore()
 }
 
-/// Explore precise quality match with compression.
+/// Explores precise quality match while also ensuring the output is smaller than the input.
 ///
 /// # Errors
 /// Returns an error if exploration fails.
@@ -3009,7 +3183,7 @@ pub fn explore_precise_quality_match_with_compression(
     VideoExplorer::new(input, output, encoder, vf_args, config, max_threads, None, apple_compat)?.explore()
 }
 
-/// Explore compression only.
+/// Explores compression-only mode: searches for the highest CRF that still produces a smaller file.
 ///
 /// # Errors
 /// Returns an error if exploration fails.
@@ -3027,7 +3201,7 @@ pub fn explore_compress_only(
     VideoExplorer::new(input, output, encoder, vf_args, config, max_threads, None, apple_compat)?.explore()
 }
 
-/// Explore compression with quality.
+/// Explores compression with a minimum SSIM quality threshold.
 ///
 /// # Errors
 /// Returns an error if exploration fails.
@@ -3045,7 +3219,7 @@ pub fn explore_compress_with_quality(
     VideoExplorer::new(input, output, encoder, vf_args, config, max_threads, None, apple_compat)?.explore()
 }
 
-/// Explore precise quality match with compression (GPU).
+/// Explores precise quality match with compression using GPU acceleration.
 ///
 /// # Errors
 /// Returns an error if exploration fails.
@@ -3077,7 +3251,7 @@ pub fn explore_precise_quality_match_with_compression_gpu(
     .explore()
 }
 
-/// Explore precise quality match (GPU).
+/// Explores precise quality match using GPU acceleration.
 ///
 /// # Errors
 /// Returns an error if exploration fails.
@@ -3108,7 +3282,7 @@ pub fn explore_precise_quality_match_gpu(
     .explore()
 }
 
-/// Explore compression only (GPU).
+/// Explores compression-only mode using GPU acceleration.
 ///
 /// # Errors
 /// Returns an error if exploration fails.
@@ -3138,7 +3312,7 @@ pub fn explore_compress_only_gpu(
     .explore()
 }
 
-/// Explore compression with quality (GPU).
+/// Explores compression with quality threshold using GPU acceleration.
 ///
 /// # Errors
 /// Returns an error if exploration fails.
@@ -3168,7 +3342,7 @@ pub fn explore_compress_with_quality_gpu(
     .explore()
 }
 
-/// Explore size only (GPU).
+/// Explores size-only mode using GPU acceleration.
 ///
 /// # Errors
 /// Returns an error if exploration fails.
@@ -3198,7 +3372,7 @@ pub fn explore_size_only_gpu(
     .explore()
 }
 
-/// Explore quality match (GPU).
+/// Explores quality-match mode using GPU acceleration.
 ///
 /// # Errors
 /// Returns an error if exploration fails.
@@ -3227,6 +3401,9 @@ pub fn explore_quality_match_gpu(
     .explore()
 }
 
+/// Calculates adaptive CRF range and minimum SSIM threshold based on the encoder and initial CRF.
+///
+/// Returns `(max_crf, min_ssim)` tuned for the specific encoder's characteristics.
 #[must_use]
 pub fn calculate_smart_thresholds(initial_crf: f32, encoder: VideoEncoder) -> (f32, f64) {
     let (crf_scale, max_crf_cap) = match encoder {
@@ -3259,7 +3436,7 @@ pub fn calculate_smart_thresholds(initial_crf: f32, encoder: VideoEncoder) -> (f
     (max_crf, min_ssim.clamp(0.85, 0.98))
 }
 
-/// Explore HEVC quality.
+/// Explores HEVC quality with adaptive thresholds (precise quality match mode).
 ///
 /// # Errors
 /// Returns an error if exploration fails.
@@ -3285,7 +3462,7 @@ pub fn explore_hevc(
     )
 }
 
-/// Explore HEVC size only.
+/// Explores HEVC size-only mode with adaptive thresholds.
 ///
 /// # Errors
 /// Returns an error if exploration fails.
@@ -3310,7 +3487,7 @@ pub fn explore_hevc_size_only(
     )
 }
 
-/// Explore HEVC quality match.
+/// Explores HEVC quality-match mode at a predicted CRF.
 ///
 /// # Errors
 /// Returns an error if exploration fails.
@@ -3333,7 +3510,7 @@ pub fn explore_hevc_quality_match(
     )
 }
 
-/// Explore HEVC compression only.
+/// Explores HEVC compression-only mode with adaptive thresholds.
 ///
 /// # Errors
 /// Returns an error if exploration fails.
@@ -3358,7 +3535,7 @@ pub fn explore_hevc_compress_only(
     )
 }
 
-/// Explore HEVC compression with quality.
+/// Explores HEVC compression with quality threshold.
 ///
 /// # Errors
 /// Returns an error if exploration fails.
@@ -3383,7 +3560,7 @@ pub fn explore_hevc_compress_with_quality(
     )
 }
 
-/// Explore AV1 quality.
+/// Explores AV1 quality with adaptive thresholds (precise quality match mode).
 ///
 /// # Errors
 /// Returns an error if exploration fails.
@@ -3409,7 +3586,7 @@ pub fn explore_av1(
     )
 }
 
-/// Explore AV1 size only.
+/// Explores AV1 size-only mode with adaptive thresholds.
 ///
 /// # Errors
 /// Returns an error if exploration fails.
@@ -3434,7 +3611,7 @@ pub fn explore_av1_size_only(
     )
 }
 
-/// Explore AV1 quality match.
+/// Explores AV1 quality-match mode at a predicted CRF.
 ///
 /// # Errors
 /// Returns an error if exploration fails.
@@ -3457,7 +3634,7 @@ pub fn explore_av1_quality_match(
     )
 }
 
-/// Explore AV1 compression only.
+/// Explores AV1 compression-only mode with adaptive thresholds.
 ///
 /// # Errors
 /// Returns an error if exploration fails.
@@ -3482,7 +3659,7 @@ pub fn explore_av1_compress_only(
     )
 }
 
-/// Explore AV1 compression with quality.
+/// Explores AV1 compression with quality threshold.
 ///
 /// # Errors
 /// Returns an error if exploration fails.
@@ -3507,14 +3684,19 @@ pub fn explore_av1_compress_with_quality(
     )
 }
 
+/// Precision constants and utilities for CRF search (step sizes, SSIM thresholds, etc.).
 pub mod precision;
 
+/// Pre-check utilities for validating inputs before exploration.
 pub mod precheck;
 
+/// Calibration utilities for GPU/CPU CRF mapping.
 pub mod calibration;
 
+/// Dynamic mapping functions for adaptive CRF/quality thresholds.
 pub mod dynamic_mapping;
 
+/// GPU-accelerated coarse search implementations.
 pub mod gpu_coarse_search;
 pub use gpu_coarse_search::{
     explore_av1_with_gpu_coarse, explore_av1_with_gpu_coarse_full,

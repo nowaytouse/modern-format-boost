@@ -6,6 +6,13 @@ All notable changes to this project will be documented in this file.
 
 ## [0.11.2] — 2026-04-05
 
+#### 🌍 Dynamic Multilingual Meme Recognition System (Intelligence Boost)
+
+- **Decoupled Keyword Logic**: Migrated from hardcoded `MEME_DIRECTORY_KEYWORDS` to a structured `meme_keywords.json` configuration.
+- **Multilingual Support**: Added support for Chinese, English, Japanese, Korean, and Russian meme keywords (e.g., "表情", "表情包", "gif", "动图", "움짤", "スタンプ").
+- **High-Performance Dynamic Loading**: Implemented `OnceLock`-based lazy loading for the JSON keyword database, ensuring zero performance overhead during batch processing.
+- **Improved Accuracy**: Drastically reduced "false video" conversions for animated GIFs with non-English filenames (e.g., `gif表情 (379).gif` now correctly identifies as a high-value loop asset).
+
 #### 🎬 Media Integrity & GIF Playback Rhythm (Rhythm Fixes)
 
 - **Strict Data-Driven FPS**: Implemented a 100% physical-fact calculation for GIF conversion: `FPS = (实际提取帧数) / (原始时长)`. This fixes the "Ghost Rhythm" (hyper-speed鬼畜) issue in AVIF-to-GIF conversions.

@@ -39,24 +39,6 @@ pub const VMAF_SKIP_THRESHOLD_ULTIMATE_SECS: f32 = 3600.0;
 pub const LOOP_PLATFORM_MARKERS: &[&str] =
     &["GIPHY", "TENOR", "STICKER", "TELEGRAM", "TIKTOK", "DISCORD"];
 
-/// Directory keywords that suggest an asset is a meme or reaction.
-pub const MEME_DIRECTORY_KEYWORDS: &[&str] = &[
-    "meme",
-    "memes",
-    "sticker",
-    "stickers",
-    "emoji",
-    "emojis",
-    "reaction",
-    "reactions",
-    "sticker_pack",
-    "sticker_pkg",
-    "sticker_collection",
-    "meme_collection",
-    "funny",
-    "humor",
-];
-
 // 1. Dynamic Multipliers (Relative to KNN P90 Baseline)
 /// Multiplier for the "Safe Zone" beyond the P90 baseline.
 pub const LOOP_KNN_P90_SAFE_ZONE_MULTIPLIER: f64 = 7.5;
