@@ -20,7 +20,6 @@ use tracing::{debug, info, warn};
 // Import unified version management
 use crate::version::{cache_algorithm_version, CACHE_SCHEMA_VERSION};
 
-const PG_DEFAULT_CONNSTR: &str = "host=localhost dbname=modern_format_boost";
 
 /// 📊 Cache Statistics
 #[derive(Debug, Clone)]

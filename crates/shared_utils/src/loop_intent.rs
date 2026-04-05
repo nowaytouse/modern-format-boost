@@ -1138,7 +1138,7 @@ pub fn assess_loop_intent_from_probe(
 /// build the feedback loop described in Level 4 of the database utilization plan.
 pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> LoopIntentVerdict {
     use crate::database::{
-        calculate_blake3_hex, fetch_loop_reference_profile, log_inference_record, lookup_similar_samples, open_pg_client,
+         fetch_loop_reference_profile, log_inference_record, lookup_similar_samples, open_pg_client,
         LoopInferenceRecord,
     };
 
