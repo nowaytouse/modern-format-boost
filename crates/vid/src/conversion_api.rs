@@ -639,6 +639,42 @@ pub fn auto_convert_with_cache(
 
     let mut detection = crate::detection_api::detect_video_with_cache(input, cache)?;
 
+    // --- Strict Animated Isolation: Skip static images in vid ---
+    if detection.frame_count <= 1 {
+        let reason = "Static image detected (1 frame) - vid strictly processes animated media only (handled by img)";
+        shared_utils::progress_mode::video_skipped(reason);
+
+        let file_size = std::fs::metadata(input).map(|m| m.len()).unwrap_or(0);
+
+        shared_utils::copy_on_skip_or_fail(
+            input,
+            config.output_dir.as_deref(),
+            config.base_dir.as_deref(),
+            false,
+        )
+        .map_err(|e| VidQualityError::GeneralError(e.to_string()))?;
+
+        return Ok(ConversionOutput {
+            input_path: input.display().to_string(),
+            output_path: String::new(),
+            strategy: ConversionStrategy {
+                target: TargetVideoFormat::Skip,
+                reason: reason.to_string(),
+                command: String::new(),
+                preserve_audio: false,
+                crf: 0.0,
+                lossless: false,
+            },
+            input_size: file_size,
+            output_size: 0,
+            size_ratio: 0.0,
+            success: true,
+            message: "Skipped static image in vid module".to_string(),
+            final_crf: 0.0,
+            exploration_attempts: 0,
+        });
+    }
+
     // Warn about dynamic HDR metadata that will be stripped during re-encode
     if detection.is_dolby_vision {
         if shared_utils::is_dovi_tool_available() {

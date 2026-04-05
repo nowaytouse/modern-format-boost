@@ -76,10 +76,20 @@ pub fn collect_files(dir: &Path, extensions: &[&str], recursive: bool) -> Vec<Pa
     for entry in walker {
         match entry {
             Ok(entry) => {
-                if entry.file_type().is_file()
-                    && crate::common_utils::has_extension(entry.path(), extensions)
-                {
-                    files.push(entry.path().to_path_buf());
+                let path = entry.path();
+                if !entry.file_type().is_file() {
+                    continue;
+                }
+
+                // 1. Fast extension filter (optional but good for skipping noise like .txt, .log)
+                // If extensions list is provided, we use it as a pre-filter.
+                if !extensions.is_empty() && !crate::common_utils::has_extension(path, extensions) {
+                    continue;
+                }
+
+                // 2. Strict content-based identification
+                if crate::quality_matcher::SourceCodec::identify_by_content(path).is_some() {
+                    files.push(path.to_path_buf());
                 }
             }
             Err(err) => {
@@ -582,11 +592,18 @@ fn scan_image_tree_snapshot(
                     continue;
                 }
 
-                if entry.file_type().is_file()
-                    && crate::common_utils::has_extension(entry.path(), extensions)
-                {
-                    if let Some(file_entry) = build_cached_image_entry(&root, entry.path()) {
-                        files.push(file_entry);
+                if entry.file_type().is_file() {
+                    let path = entry.path();
+                    if !extensions.is_empty() && !crate::common_utils::has_extension(path, extensions) {
+                        continue;
+                    }
+
+                    if let Some(codec) = crate::quality_matcher::SourceCodec::identify_by_content(path) {
+                        if codec.is_image() {
+                            if let Some(file_entry) = build_cached_image_entry(&root, path) {
+                                files.push(file_entry);
+                            }
+                        }
                     }
                 }
             }
@@ -735,11 +752,19 @@ fn scan_video_tree_snapshot(
                     continue;
                 }
 
-                if entry.file_type().is_file()
-                    && crate::common_utils::has_extension(entry.path(), extensions)
-                {
-                    if let Some(file_entry) = build_cached_video_entry(&root, entry.path()) {
-                        files.push(file_entry);
+                if entry.file_type().is_file() {
+                    let path = entry.path();
+                    if !extensions.is_empty() && !crate::common_utils::has_extension(path, extensions) {
+                        continue;
+                    }
+
+                    if let Some(codec) = crate::quality_matcher::SourceCodec::identify_by_content(path) {
+                        // Admission: it's a video OR it's an animated image candidate for the 'vid' tool
+                        if codec.is_video() || codec.can_be_animated() {
+                            if let Some(file_entry) = build_cached_video_entry(&root, path) {
+                                files.push(file_entry);
+                            }
+                        }
                     }
                 }
             }

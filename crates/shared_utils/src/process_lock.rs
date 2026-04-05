@@ -13,6 +13,12 @@ pub fn init_ghost_mode() -> Result<()> {
 
 /// Returns the central home for MFB metadata and transient files (~/.modern_format_boost)
 pub fn get_mfb_root() -> Result<PathBuf> {
+    if let Ok(root) = std::env::var("MFB_HOME_ROOT") {
+        let root = PathBuf::from(root);
+        fs::create_dir_all(&root).context("Failed to create MFB_HOME_ROOT directory")?;
+        return Ok(root);
+    }
+
     std::env::var("HOME")
         .map(PathBuf::from)
         .or_else(|_| std::env::var("USERPROFILE").map(PathBuf::from))

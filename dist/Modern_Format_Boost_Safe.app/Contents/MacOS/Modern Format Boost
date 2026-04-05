@@ -9,6 +9,19 @@ PROJECT_ROOT="$(dirname "$APP_DIR")"
 export LC_ALL=en_US.UTF-8
 export LANG=en_US.UTF-8
 PROCESSOR_SCRIPT="$PROJECT_ROOT/scripts/drag_and_drop_processor.py"
+PYTHON_BIN="$PROJECT_ROOT/.venv/bin/python"
+APP_PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+if [[ ! -x "$PYTHON_BIN" ]]; then
+    if command -v python3 >/dev/null 2>&1; then
+        PYTHON_BIN="$(command -v python3)"
+    elif [[ -x /usr/bin/python3 ]]; then
+        PYTHON_BIN="/usr/bin/python3"
+    else
+        osascript -e 'display alert "Error" message "Python 3 was not found. Please install project dependencies first." as critical'
+        exit 1
+    fi
+fi
 
 contains_control_chars() {
     # Strictly check for Newline (\012) and Carriage Return (\015) using octal literals.
@@ -41,26 +54,46 @@ escape_applescript_string() {
     printf '%s' "$value"
 }
 
+escape_shell_double_quotes() {
+    local value="$1"
+    value=${value//\\/\\\\}
+    value=${value//\"/\\\"}
+    value=${value//\$/\\$}
+    value=${value//\`/\\\`}
+    printf '%s' "$value"
+}
+
 launch_in_terminal() {
     local target_path="$1"
     local mode_flag="$2"
     local keep_open="${3:-false}"
-    # Construct command with virtual environment support
-    local cmd="cd $(shell_quote "$PROJECT_ROOT")"
-    cmd+=" && if [[ -f .venv/bin/activate ]]; then source .venv/bin/activate; fi"
-    cmd+=" && export FROM_APP=1 && $(shell_quote "$PROCESSOR_SCRIPT") $mode_flag"
+    local inner_cmd="export PATH=$(shell_quote "$APP_PATH")"
+    inner_cmd+=" && export LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 FROM_APP=1"
+    inner_cmd+=" && cd $(shell_quote "$PROJECT_ROOT")"
+    inner_cmd+=" && $(shell_quote "$PYTHON_BIN") $(shell_quote "$PROCESSOR_SCRIPT")"
+
+    if [[ -n "$mode_flag" ]]; then
+        inner_cmd+=" $mode_flag"
+    fi
 
     if [[ -n "$target_path" ]]; then
         if contains_control_chars "$target_path"; then
             osascript -e 'display alert "Invalid Path" message "Selected path contains unsupported control characters." as critical'
             return 1
         fi
-        cmd+=" $(shell_quote "$target_path")"
+        inner_cmd+=" $(shell_quote "$target_path")"
     fi
 
     if [[ "$keep_open" == "true" ]]; then
-        cmd+="; echo 'Press any key to close...'; read -n 1"
+        inner_cmd+="; status=\$?; echo; echo 'Press any key to close...'; read -n 1; exit \$status"
+    else
+        inner_cmd+="; exit \$?"
     fi
+
+    local escaped_inner_cmd
+    escaped_inner_cmd=$(escape_shell_double_quotes "$inner_cmd")
+
+    local cmd="clear; exec /bin/zsh -f -c \"$escaped_inner_cmd\""
 
     local escaped_cmd
     escaped_cmd=$(escape_applescript_string "$cmd")

@@ -60,15 +60,31 @@ fn main() -> Result<()> {
     println!("📂 Input: {} (Label: {:?}", cli.input.display(), cli.label);
 
     let mut count = 0;
+    let supported_extensions = [
+        "jpg", "jpeg", "jpe", "png", "webp", "gif", "tiff", "tif", "bmp", "ico", "avif", "heic",
+        "heif", "hif", "jxl",
+    ];
+
     for entry in walkdir::WalkDir::new(&cli.input).into_iter().flatten() {
         if entry.file_type().is_file() {
+            let path = entry.path();
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+
+            if !supported_extensions.contains(&ext.as_str()) {
+                continue;
+            }
+
             if let Err(e) = ingest_quality_sample(
                 &mut client,
-                entry.path(),
+                path,
                 cli.label.as_str(),
                 "manual_training",
             ) {
-                eprintln!("⚠️ Failed to ingest {}: {}", entry.path().display(), e);
+                eprintln!("⚠️ Failed to ingest {}: {}", path.display(), e);
             } else {
                 count += 1;
             }

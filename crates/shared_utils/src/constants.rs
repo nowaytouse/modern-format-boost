@@ -106,6 +106,8 @@ pub const ENV_STICKER_LIMIT_SECS: &str = "MODERN_FORMAT_STICKER_LIMIT_SECS";
 pub const ENV_DISABLE_DB_FEEDBACK: &str = "MODERN_FORMAT_DISABLE_DB_FEEDBACK";
 /// Independent kill-switch for the static image quality DB (does not affect GIF/Video KNN).
 pub const ENV_DISABLE_IMAGE_QUALITY_DB: &str = "MODERN_FORMAT_DISABLE_IMAGE_QUALITY_DB";
+/// Developer override to force KNN database lookup for static quality testing.
+pub const ENV_FORCE_QUALITY_KNN: &str = "MODERN_FORMAT_FORCE_QUALITY_KNN";
 
 // --- Database Maturity Thresholds ---
 // KNN results are unreliable when training data is too sparse or non-diverse.
@@ -116,7 +118,7 @@ pub const ENV_DISABLE_IMAGE_QUALITY_DB: &str = "MODERN_FORMAT_DISABLE_IMAGE_QUAL
 pub const MIN_GIF_SAMPLES_TOTAL: i64 = 150;
 /// Minimum samples per class (high/video) for GIF/Video KNN.
 /// Without both sides of the decision boundary, KNN will be biased toward one class.
-pub const MIN_GIF_SAMPLES_PER_CLASS: i64 = 30;
+pub const MIN_GIF_SAMPLES_PER_CLASS: i64 = 10;
 
 /// Minimum total labeled samples required for static image KNN to engage.
 pub const MIN_QUALITY_SAMPLES_TOTAL: i64 = 50;
@@ -177,6 +179,14 @@ pub const EXTENDED_SHORT_ASSET_PRIOR_LOG_ODDS: f64 = 0.20;
 pub const LONG_SILENT_PRIOR_NEGATIVE_LOG_ODDS: f64 = 0.26;
 pub const LAYER6_HIGH_SCORE_THRESHOLD: f64 = 0.70;
 pub const LAYER6_RELAXED_CONFIDENCE_THRESHOLD: f64 = 0.68;
+pub const LAYER6_MIN_KNN_WEIGHT: f64 = 0.25;
+pub const LAYER6_MAX_KNN_WEIGHT: f64 = 0.60;
+pub const LAYER6_KNN_COLD_START_NEIGHBORS: usize = 6;
+pub const LAYER6_KNN_FULL_WEIGHT_NEIGHBORS: usize = 16;
+pub const LAYER6_LR_W_KNN: f64 = 3.8;
+pub const LAYER6_LR_W_TREE: f64 = 2.5;
+pub const LAYER6_LR_W_DENSITY: f64 = 0.18;
+pub const LAYER6_LR_BIAS: f64 = -3.2;
 
 // --- Video Quality & Compression Boundaries ---
 

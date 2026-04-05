@@ -39,7 +39,10 @@ Thumbs.db
 
 # Session / drag-and-drop logs and default run logs
 logs/
+*.log
 *_run.log
+inference_logs/
+analysis_cache/
 
 # Local test data (user-specific paths)
 # /path/to/local/test/data
@@ -51,19 +54,82 @@ __pycache__/
 # App-specific runtime/temp data
 .modern_format_boost/
 
-# Prevent accidental media check-ins
+# --- Comprehensive Media Block (Image, Video, Audio) ---
+# Images
 *.jpg
 *.jpeg
 *.png
 *.gif
-*.GIF
+*.webp
+*.heic
+*.avif
+*.jxl
+*.bmp
+*.tiff
+*.tif
+*.svg
+*.ico
+*.psd
+*.raw
+*.ai
+*.eps
+
+# Video
 *.mp4
 *.mov
-*.heic
-*.HEIC
-*.avif
-*.webp
-*.jxl
-# Except assets folder
-!assets/
+*.avi
+*.mkv
+*.flv
+*.wmv
+*.m4v
+*.mpg
+*.mpeg
+*.3gp
+*.webm
+*.ogv
+*.ts
+
+# Audio
+*.mp3
+*.wav
+*.flac
+*.aac
+*.ogg
+*.m4a
+*.opus
+*.wma
+!assets/runtime.png
 debug_out/
+
+# Database & Data Files
+*.db
+*.sqlite
+*.sqlite3
+*.sql.gz
+*.csv
+*.parquet
+*.feather
+*.bin
+*.dat
+*.pkl
+*.pb
+*.onnx
+
+# ML/Scientific Data
+*.npy
+*.npz
+*.h5
+*.hdf5
+*.pt
+*.pth
+*.t7
+
+# Temporary & Local Runtime
+tmp/
+temp/
+out/
+exports/
+import_samples/
+ingest_samples/
+.mfb_runtime/
+.modern_format_boost/

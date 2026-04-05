@@ -2182,8 +2182,11 @@ fn estimate_lossy_quality_fallback(
     let entropy_adj = (7.5 / entropy.max(1.0)).sqrt().clamp(0.7, 1.3);
 
     let effective_bpp = raw_bpp * efficiency_factor * entropy_adj;
-    let bpp_quality = 15.0f64
-        .mul_add((effective_bpp * 5.0).max(0.001).log2(), 70.0)
+    // Calibrated formula for multi-format heuristic:
+    // 12 * log2(effective_bpp * 1.5) + 60
+    // Results: 0.2 bpp -> ~39, 1.0 bpp -> ~67, 5.0 bpp -> ~95, 10.0 bpp -> 100
+    let bpp_quality = 12.0f64
+        .mul_add((effective_bpp * 1.5).max(0.001).log2(), 60.0)
         .clamp(10.0, 100.0) as u8;
 
     crate::progress_mode::emit_stderr(&format!(

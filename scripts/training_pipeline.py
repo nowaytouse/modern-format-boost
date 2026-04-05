@@ -75,7 +75,7 @@ BOOL_COLUMNS = [
     "is_native_gif",
 ]
 
-LABEL_MAP = {"high": 1, "low": 0, "medium": 0}
+LABEL_MAP = {"high": 1, "low": 0, "medium": 0, "video": 0}
 
 STATS_KEY = "feature_stats_v1"
 

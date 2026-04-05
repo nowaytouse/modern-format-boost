@@ -649,6 +649,22 @@ static VIDEO_SKIP_COUNT: AtomicU64 = AtomicU64::new(0);
 static PREPROCESSING_COUNT: AtomicU64 = AtomicU64::new(0);
 static FALLBACK_SUCCESS_COUNT: AtomicU64 = AtomicU64::new(0);
 
+/// Resets all global session statistics to zero.
+/// Use this when starting a new batch or session to ensure progress counters are accurate.
+pub fn reset_session_stats() {
+    XMP_ATTEMPT_COUNT.store(0, Ordering::Relaxed);
+    XMP_SUCCESS_COUNT.store(0, Ordering::Relaxed);
+    JXL_SUCCESS_COUNT.store(0, Ordering::Relaxed);
+    IMAGE_SUCCESS_COUNT.store(0, Ordering::Relaxed);
+    IMAGE_FAIL_COUNT.store(0, Ordering::Relaxed);
+    IMAGE_SKIP_COUNT.store(0, Ordering::Relaxed);
+    VIDEO_SUCCESS_COUNT.store(0, Ordering::Relaxed);
+    VIDEO_FAIL_COUNT.store(0, Ordering::Relaxed);
+    VIDEO_SKIP_COUNT.store(0, Ordering::Relaxed);
+    PREPROCESSING_COUNT.store(0, Ordering::Relaxed);
+    FALLBACK_SUCCESS_COUNT.store(0, Ordering::Relaxed);
+}
+
 /// Call when a pre-processing step completes successfully (e.g. GIF→FFmpeg static frame). No per-line log; count is shown in the combined status line.
 pub fn preprocessing_success() {
     PREPROCESSING_COUNT.fetch_add(1, Ordering::Relaxed);

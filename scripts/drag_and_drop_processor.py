@@ -13,6 +13,10 @@ import threading
 import datetime
 import pty
 from pathlib import Path
+ 
+class ReturnToHomeException(Exception):
+    """Custom exception to trigger a return to the main selection menu."""
+    pass
 
 try:
     import psutil
@@ -55,10 +59,21 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 IMGQUALITY_HEVC = PROJECT_ROOT / "target" / "release" / "img"
 VIDQUALITY_HEVC = PROJECT_ROOT / "target" / "release" / "vid"
 
+
+def get_mfb_state_root() -> Path:
+    env_root = os.environ.get("MFB_HOME_ROOT")
+    if env_root:
+        return Path(env_root).expanduser()
+    if os.environ.get("FROM_APP"):
+        return PROJECT_ROOT / ".cache" / "mfb_runtime"
+    return Path.home() / ".modern_format_boost"
+
 # MFB Ghost Mode - Isolated Temporary Directory
 # This prevents folder mtime updates by redirecting all intermediate IO away from source folders
-MFB_TMP_ROOT = Path.home() / ".modern_format_boost" / "tmp"
+MFB_STATE_ROOT = get_mfb_state_root()
+MFB_TMP_ROOT = MFB_STATE_ROOT / "tmp"
 MFB_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+os.environ["MFB_HOME_ROOT"] = str(MFB_STATE_ROOT)
 os.environ["TMPDIR"] = str(MFB_TMP_ROOT)
 
 OUTPUT_MODE = "adjacent"
@@ -294,7 +309,11 @@ def check_tools():
     res = subprocess.run(cmd)
     if res.returncode != 0:
         print(f"{RED}ERROR: Build failed. Please check the logs.{RESET}")
-        input("Press Enter to exit...")
+        if sys.stdin.isatty():
+            try:
+                input("Press Enter to exit...")
+            except EOFError:
+                pass
         sys.exit(1)
 
 
@@ -384,7 +403,7 @@ def acquire_global_lock(dir_path: str):
         lock_hash = result.stdout.strip()
 
         # 2. Prepare lock directory
-        lock_dir = Path.home() / ".modern_format_boost" / "locks"
+        lock_dir = MFB_STATE_ROOT / "locks"
         lock_dir.mkdir(parents=True, exist_ok=True)
 
         lock_file_path = lock_dir / f"{lock_hash}.lock"
@@ -729,7 +748,9 @@ def check_system_resources(check_dir):
                 console.print(
                     f"   Available: {free_gb:.2f} GB, Required: {required_gb:.2f} GB"
                 )
-                sys.exit(1)
+                print(f"\n{YELLOW}   Returning to home menu in 5 seconds...{RESET}")
+                time.sleep(5)
+                raise ReturnToHomeException()
 
             # Memory Check
             mem = psutil.virtual_memory()
@@ -750,7 +771,9 @@ def check_system_resources(check_dir):
             required = MEDIA_TOTAL_SIZE + 1024**3
             if free < required:
                 print(f"{RED}❌ Insufficient disk space{RESET}")
-                sys.exit(1)
+                print(f"\n{YELLOW}   Returning to home menu in 5 seconds...{RESET}")
+                time.sleep(5)
+                raise ReturnToHomeException()
 
         os.environ["MFB_SKIP_DISK_PRECHECK"] = "1"
     except Exception:
@@ -1181,17 +1204,25 @@ def main():
 
     safety_check()
 
-    select_mode()
-
-    # Mutex logic: Only enforce exclusive locking if we are modifying original files (In-Place)
-    if OUTPUT_MODE == "in_place":
-        acquire_global_lock(str(TARGET_DIR))
-
-    count_files()
-
-    if IMG_COUNT > 0 or VID_COUNT > 0:
-        check_path = OUTPUT_DIR if OUTPUT_MODE == "adjacent" else TARGET_DIR
-        check_system_resources(check_path)
+    while True:
+        try:
+            select_mode()
+ 
+            # Mutex logic: Only enforce exclusive locking if we are modifying original files (In-Place)
+            if OUTPUT_MODE == "in_place":
+                acquire_global_lock(str(TARGET_DIR))
+ 
+            count_files()
+ 
+            if IMG_COUNT > 0 or VID_COUNT > 0:
+                check_path = OUTPUT_DIR if OUTPUT_MODE == "adjacent" else TARGET_DIR
+                check_system_resources(check_path)
+            
+            # If we reach here, we proceed to process
+            break
+        except ReturnToHomeException:
+            # Clear any partial state if necessary and loop back to menu
+            continue
 
     if WATCH_MODE:
         draw_separator("Watch Mode Enabled")

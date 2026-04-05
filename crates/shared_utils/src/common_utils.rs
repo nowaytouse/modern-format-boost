@@ -95,7 +95,9 @@ pub fn ensure_parent_dir_exists(file_path: &Path) -> Result<()> {
 /// # Errors
 /// Returns an I/O error if the directory cannot be determined or created.
 pub fn get_user_project_cache_dir() -> anyhow::Result<PathBuf> {
-    let mut path = if let Ok(home) = std::env::var("HOME") {
+    let mut path = if let Ok(root) = std::env::var("MFB_HOME_ROOT") {
+        PathBuf::from(root)
+    } else if let Ok(home) = std::env::var("HOME") {
         PathBuf::from(home)
     } else if let Ok(userprofile) = std::env::var("USERPROFILE") {
         PathBuf::from(userprofile)
@@ -107,7 +109,9 @@ pub fn get_user_project_cache_dir() -> anyhow::Result<PathBuf> {
         }
     };
 
-    path.push(".modern_format_boost");
+    if path.file_name().is_none_or(|name| name != ".modern_format_boost") {
+        path.push(".modern_format_boost");
+    }
     path.push("cache");
 
     if let Err(_err) = std::fs::create_dir_all(&path) {

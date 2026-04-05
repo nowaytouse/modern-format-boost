@@ -135,6 +135,9 @@ pub struct LoopMeta {
     pub motion_gini: Option<f64>,
     pub temporal_flatness: Option<f64>,
     pub block_skew: Option<f64>,
+    pub loop_closure_score: Option<f64>,
+    pub motion_periodicity: Option<f64>,
+    pub temporal_jitter: Option<f64>,
 
     // ── Layer 5 signals (context semantics) ──
     pub directory_meme_score: f64,
@@ -219,6 +222,9 @@ impl LoopMeta {
             },
             temporal_flatness: None,
             block_skew: None,
+            loop_closure_score: Some(loop_closure_score(&detection.pkt_sizes)),
+            motion_periodicity: Some(motion_periodicity_score(&detection.mv_magnitudes)),
+            temporal_jitter: Some(temporal_jitter_score(&detection.pts_deltas)),
             directory_meme_score: 0.5,
             filename_meme_score: 0.5,
             frame_types: detection.frame_types.clone(),
@@ -299,6 +305,9 @@ impl LoopMeta {
                 Some(calculate_gini_f64(&sizes))
             },
             block_skew: None,
+            loop_closure_score: Some(loop_closure_score(&probe.pkt_sizes)),
+            motion_periodicity: Some(motion_periodicity_score(&probe.mv_magnitudes)),
+            temporal_jitter: Some(temporal_jitter_score(&probe.pts_deltas)),
             directory_meme_score: 0.5,
             filename_meme_score: 0.5,
             frame_types: probe.frame_types.clone(),
@@ -896,9 +905,8 @@ fn developer_layer1_override_enabled(name: &str) -> bool {
             "1" | "true" | "yes" | "on"
         )
     } else {
-        // PATCH: Enable these two critical heuristics by default to avoid Layer 7 fallbacks
-        name == crate::constants::ENV_FORCE_SHORT_GIFS || 
-        name == crate::constants::ENV_INTERCEPT_LONG_SILENT
+        // PATCH: Default disabled. All logic now relies on DB-tuned thresholds (Layer 1-B) and KNN (Layer 6).
+        false
     }
 }
 
@@ -930,6 +938,15 @@ fn evaluate_loop_tree(
         return finalize(
             LoopIntentVerdict::LoopWeak(
                 "Layer 1-A: audio track present in a video container".to_string(),
+            ),
+            log_odds,
+        );
+    }
+
+    if meta.frame_count <= 1 {
+        return finalize(
+            LoopIntentVerdict::LoopWeak(
+                "Layer 1-A: single frame media (cannot loop)".to_string(),
             ),
             log_odds,
         );
@@ -1051,6 +1068,55 @@ fn should_accept_layer6_loopstrong(
         && (short_clip_like || is_image || is_gif_family)
 }
 
+#[derive(Debug, Clone, Copy)]
+struct Layer6Fusion {
+    knn_weight: f64,
+    tree_weight: f64,
+    final_score: f64,
+}
+
+/// Fuses KNN results with the decision tree output using a Logistic Regression model.
+///
+/// Formula: P(keep) = sigmoid(w_knn*knn + w_tree*tree + w_density*log(n) + bias)
+fn logistic_regression_fusion(
+    knn_prob: f64,
+    tree_prob: f64,
+    neighbor_count: usize,
+    nudge: f64,
+) -> f64 {
+    use crate::constants::{
+        LAYER6_LR_BIAS, LAYER6_LR_W_DENSITY, LAYER6_LR_W_KNN, LAYER6_LR_W_TREE,
+    };
+
+    // neighbor_count is log-scaled to normalized density signal
+    let density_signal = (neighbor_count as f64).ln_1p();
+
+    let score = (knn_prob * LAYER6_LR_W_KNN)
+        + (tree_prob * LAYER6_LR_W_TREE)
+        + (density_signal * LAYER6_LR_W_DENSITY)
+        + LAYER6_LR_BIAS;
+
+    // Apply sigmoid and then the micro-nudge adjustment
+    let fused_prob = 1.0 / (1.0 + (-score).exp());
+    (fused_prob + nudge).clamp(0.01, 0.99)
+}
+
+fn compute_layer6_fusion(
+    keep_prob: f64,
+    tree_probability: f64,
+    neighbor_count: usize,
+    nudge_score: f64,
+) -> Layer6Fusion {
+    let final_score = logistic_regression_fusion(keep_prob, tree_probability, neighbor_count, nudge_score);
+
+    // Legacy weights kept for logging purposes, but the final_score now uses LR
+    Layer6Fusion {
+        knn_weight: crate::constants::LAYER6_MAX_KNN_WEIGHT, // Representational
+        tree_weight: 1.0 - crate::constants::LAYER6_MAX_KNN_WEIGHT,
+        final_score,
+    }
+}
+
 /// Execute the loop intent identification for a given detection result.
 pub fn assess_loop_intent(detection: &VideoDetectionResult) -> LoopIntentVerdict {
     let meta = LoopMeta::from_video_detection(detection);
@@ -1149,8 +1215,14 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
                 knn_neighbor_count = Some(m.neighbor_count);
 
                 let nudges = calculate_micro_nudges(meta);
+                let fusion = compute_layer6_fusion(
+                    keep_prob,
+                    tree_probability,
+                    m.neighbor_count,
+                    nudges.score,
+                );
 
-                let mut final_score = keep_prob * 0.6 + tree_probability * 0.4 + nudges.score;
+                let mut final_score = fusion.final_score;
 
                 if !nudges.trace.is_empty() {
                     emit_stderr(&format!(
@@ -1211,15 +1283,29 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
                     confidence,
                 ) {
                     let v = LoopIntentVerdict::LoopStrong(format!(
-                        "Layer 6: KNN+Nudges score={:.2} (knn={:.2}, tree={:.2}, nudge={:+.2}, conf={:.2})",
-                        final_score, keep_prob, tree_probability, nudges.score, confidence
+                        "Layer 6: KNN+Nudges score={:.2} (knn={:.2}×{:.2}, tree={:.2}×{:.2}, nudge={:+.2}, conf={:.2}, n={})",
+                        final_score,
+                        keep_prob,
+                        fusion.knn_weight,
+                        tree_probability,
+                        fusion.tree_weight,
+                        nudges.score,
+                        confidence,
+                        m.neighbor_count
                     ));
                     emit_stderr(&format!("✅ KNN Fusion Success: {}", v.reason()));
                     v
                 } else if confidence >= 0.75 && final_score <= 0.4 {
                     let v = LoopIntentVerdict::LoopWeak(format!(
-                        "Layer 6: KNN+Nudges score={:.2} (knn={:.2}, tree={:.2}, nudge={:+.2}, conf={:.2})",
-                        final_score, keep_prob, tree_probability, nudges.score, confidence
+                        "Layer 6: KNN+Nudges score={:.2} (knn={:.2}×{:.2}, tree={:.2}×{:.2}, nudge={:+.2}, conf={:.2}, n={})",
+                        final_score,
+                        keep_prob,
+                        fusion.knn_weight,
+                        tree_probability,
+                        fusion.tree_weight,
+                        nudges.score,
+                        confidence,
+                        m.neighbor_count
                     ));
                     emit_stderr(&format!("ℹ️  KNN Fusion Exit: {}", v.reason()));
                     v
@@ -2234,4 +2320,83 @@ fn palette_depth_score(quantized_unique_colors: usize) -> f64 {
     let max_possible = 32_f64.powi(3);
     let score = 1.0 - (count.ln() / max_possible.ln()).min(1.0);
     score.clamp(0.0, 1.0)
+}
+
+fn loop_closure_score(pkt_sizes: &[u64]) -> f64 {
+    if pkt_sizes.len() < 4 {
+        return 0.5;
+    }
+
+    let vals: Vec<f64> = pkt_sizes.iter().map(|&v| v as f64).collect();
+    let n = vals.len();
+    let mean = vals.iter().sum::<f64>() / n as f64;
+    let variance = vals.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / n as f64;
+    if variance < 1e-6 {
+        // All frames identical — perfect loop structure
+        return 1.0;
+    }
+
+    // Normalized autocorrelation at lag = half sequence length.
+    // A looping sequence has high self-similarity between its first and second half.
+    let lag = n / 2;
+    let autocorr: f64 = (0..n - lag)
+        .map(|i| (vals[i] - mean) * (vals[i + lag] - mean))
+        .sum::<f64>()
+        / ((n - lag) as f64 * variance);
+
+    // Map [-1, 1] → [0, 1]; high positive autocorrelation = strong loop closure
+    ((autocorr + 1.0) / 2.0).clamp(0.0, 1.0)
+}
+
+fn motion_periodicity_score(mv_magnitudes: &[f64]) -> f64 {
+    let n = mv_magnitudes.len();
+    if n < 6 {
+        return 0.5;
+    }
+
+    let mean = mv_magnitudes.iter().sum::<f64>() / n as f64;
+    let variance = mv_magnitudes.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / n as f64;
+    if variance < 1e-6 {
+        return 1.0; // Perfectly static — synthetic/sticker content
+    }
+
+    // Average normalized autocorrelation over lags n/4, n/3, n/2.
+    // A periodic (looping) sequence scores high across multiple lags.
+    let lags = [n / 4, n / 3, n / 2];
+    let autocorr_sum: f64 = lags
+        .iter()
+        .filter(|&&lag| lag > 0 && lag < n)
+        .map(|&lag| {
+            let r: f64 = (0..n - lag)
+                .map(|i| (mv_magnitudes[i] - mean) * (mv_magnitudes[i + lag] - mean))
+                .sum::<f64>()
+                / ((n - lag) as f64 * variance);
+            r.clamp(-1.0, 1.0)
+        })
+        .sum();
+    let valid_lags = lags.iter().filter(|&&lag| lag > 0 && lag < n).count();
+
+    ((autocorr_sum / valid_lags as f64 + 1.0) / 2.0).clamp(0.0, 1.0)
+}
+
+fn temporal_jitter_score(pts_deltas: &[f64]) -> f64 {
+    let n = pts_deltas.len();
+    if n < 3 {
+        return 0.5;
+    }
+
+    let mean = pts_deltas.iter().sum::<f64>() / n as f64;
+    let variance = pts_deltas.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / n as f64;
+    if variance < 1e-12 {
+        return 1.0; // Perfectly uniform frame timing
+    }
+
+    // Lag-1 autocorrelation: measures rhythmic regularity of frame intervals.
+    // A looping animation has consistent, self-similar inter-frame timing.
+    let lag1: f64 = (0..n - 1)
+        .map(|i| (pts_deltas[i] - mean) * (pts_deltas[i + 1] - mean))
+        .sum::<f64>()
+        / ((n - 1) as f64 * variance);
+
+    (lag1.clamp(-1.0, 1.0) + 1.0) / 2.0
 }

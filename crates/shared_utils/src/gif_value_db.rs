@@ -425,9 +425,52 @@ struct SampleRow {
     motion_gini: Option<f64>,
     block_skew: Option<f64>,
     temporal_flatness: Option<f64>,
+    loop_closure_score: Option<f64>,
+    motion_periodicity: Option<f64>,
+    temporal_jitter: Option<f64>,
     webp_compression_ratio: Option<f64>,
     #[allow(dead_code)]
     labeled_by: Option<String>,
+}
+
+impl From<SampleInsert> for SampleRow {
+    fn from(s: SampleInsert) -> Self {
+        Self {
+            loss_tolerance: Some(s.loss_tolerance),
+            width: s.width,
+            height: s.height,
+            duration_secs: s.duration_secs,
+            frame_count: s.frame_count,
+            file_size_bytes: s.file_size_bytes,
+            fps: s.fps,
+            temporal_bpp: s.temporal_bpp,
+            spatial_bpp: s.spatial_bpp,
+            has_transparency: s.has_transparency,
+            has_embedded_icc: s.has_embedded_icc,
+            has_complex_color_profile: s.has_complex_color_profile,
+            palette_size: s.palette_size,
+            frame_payload_variation: s.frame_payload_variation,
+            frame_delay_variation: s.frame_delay_variation,
+            aspect_ratio: s.aspect_ratio,
+            total_pixels: Some(s.total_pixels),
+            loop_frequency: Some(s.loop_frequency),
+            is_meme_platform: s.is_meme_platform,
+            is_human_semantic_name: s.is_human_semantic_name,
+            cadence_score: Some(s.cadence_score),
+            directory_meme_score: Some(s.directory_meme_score),
+            is_high_value_source: s.is_high_value_source,
+            is_native_gif: s.is_native_gif,
+            palette_depth: s.palette_depth,
+            motion_gini: s.motion_gini,
+            block_skew: s.block_skew,
+            temporal_flatness: s.temporal_flatness,
+            loop_closure_score: None,
+            motion_periodicity: None,
+            temporal_jitter: None,
+            webp_compression_ratio: s.webp_compression_ratio,
+            labeled_by: Some(s.labeled_by),
+        }
+    }
 }
 
 fn pg_connstr() -> String {
@@ -551,31 +594,57 @@ fn distribution_from_feature(
         .map_or(fallback, DistributionStats::from)
 }
 
-/// Validates whether the GIF database has enough diverse samples to merit KNN lookup.
-fn check_gif_db_maturity(conn: &mut Client) -> bool {
+/// Retrieves the count of samples in 'low', 'high', and 'video' classes.
+fn get_class_counts(conn: &mut Client) -> (i64, i64, i64) {
     let Ok(rows) = conn.query(
-        "SELECT loss_tolerance, count(*) FROM samples WHERE loss_tolerance IN ('high', 'video') GROUP BY loss_tolerance",
+        "SELECT 
+            CASE WHEN loss_tolerance = 'low' THEN 'low'
+                 WHEN loss_tolerance = 'high' THEN 'high' 
+                 WHEN loss_tolerance = 'video' THEN 'video' 
+                 ELSE 'other' 
+            END as class, 
+            count(*) 
+         FROM samples 
+         WHERE loss_tolerance IN ('low', 'high', 'video')
+         GROUP BY 1",
         &[],
     ) else {
-        return false;
+        return (0, 0, 0);
     };
 
+    let mut low_count: i64 = 0;
     let mut high_count: i64 = 0;
     let mut video_count: i64 = 0;
     for row in rows {
         let class: String = row.get(0);
         let count: i64 = row.get(1);
-        if class == "high" {
+        if class == "low" {
+            low_count = count;
+        } else if class == "high" {
             high_count = count;
         } else if class == "video" {
             video_count = count;
         }
     }
+    (low_count, high_count, video_count)
+}
 
-    let total = high_count + video_count;
+/// Validates whether the GIF database has enough diverse samples to merit KNN lookup.
+fn check_gif_db_maturity(conn: &mut Client) -> bool {
+    let (low_count, high_count, video_count) = get_class_counts(conn);
+    let total = low_count + high_count + video_count;
+    
+    // For maturity, we consider 'low' as our high-quality baseline (LoopStrong)
+    // and 'high' + 'video' as our conversion baseline (LoopWeak).
+    let quality_class = low_count;
+    let video_equivalent_class = high_count + video_count;
+
+    log::info!("📊 GIF DB Check: low(quality)={}, high={}, video={}, total={} (Needed per class: {})", 
+        low_count, high_count, video_count, total, crate::constants::MIN_GIF_SAMPLES_PER_CLASS);
+    
     total >= crate::constants::MIN_GIF_SAMPLES_TOTAL
-        && high_count >= crate::constants::MIN_GIF_SAMPLES_PER_CLASS
-        && video_count >= crate::constants::MIN_GIF_SAMPLES_PER_CLASS
+        && quality_class >= crate::constants::MIN_GIF_SAMPLES_PER_CLASS
+        && video_equivalent_class >= crate::constants::MIN_GIF_SAMPLES_PER_CLASS
 }
 
 fn lookup_similar_samples_inner(
@@ -593,6 +662,17 @@ fn lookup_similar_samples_inner(
 
     init_schema(&mut conn)?;
     seed_positive_dataset_if_needed(&mut conn)?;
+
+    // ── Automated Vector Hydration Check ──
+    // If we have samples but no feature vectors, trigger a one-time backfill
+    let missing_vec_count: i64 = conn.query_one("SELECT COUNT(*) FROM samples WHERE features IS NULL", &[])?.get(0);
+    if missing_vec_count > 0 {
+        let total_count: i64 = conn.query_one("SELECT COUNT(*) FROM samples", &[])?.get(0);
+        if total_count > 0 {
+            log::info!("🧩 Detected {} samples with missing feature vectors. Triggering automated recompute...", missing_vec_count);
+            recompute_all_features(&mut conn)?;
+        }
+    }
 
     if !check_gif_db_maturity(&mut conn) {
         log::info!(
@@ -628,6 +708,13 @@ fn lookup_similar_samples_inner(
         &[&target_pg_vector],
     )?;
 
+    println!("🔍 KNN Search Status: Processing {} database rows...", rows.len());
+    
+    let candidate_distances: Vec<f64> = rows.iter().map(|r: &postgres::Row| r.get::<_, f64>(2)).collect();
+    if !candidate_distances.is_empty() {
+        println!("📊 Top 5 raw distances: {:?}", &candidate_distances[..5.min(candidate_distances.len())]);
+    }
+
     if rows.is_empty() {
         return Ok(None);
     }
@@ -637,7 +724,8 @@ fn lookup_similar_samples_inner(
         .map(|row| {
             let label_str: Option<String> = row.get(0);
             let label = match label_str.as_deref() {
-                Some("high") => LabelStatus::LoopStrong,
+                Some("low") => LabelStatus::LoopStrong,
+                Some("high") => LabelStatus::LoopWeak,
                 Some("video") => LabelStatus::LoopWeak,
                 Some("uncertain") => LabelStatus::Uncertain,
                 _ => LabelStatus::NotLabeled,
@@ -655,11 +743,23 @@ fn lookup_similar_samples_inner(
 
     let min_distance = neighbors.first().map_or(0.0, |(_, _, d)| *d);
     let radius = dynamic_neighbor_radius(neighbors);
+    
+    println!("🎯 KNN Context: radius={:.4}, min_dist={:.4}, candidates={}", radius, min_distance, neighbors.len());
+
+    let (low_count, high_count, video_count) = get_class_counts(&mut conn);
+    let total_samples = low_count + high_count + video_count;
+    let quality_count = low_count;
+    let video_equivalent_count = high_count + video_count;
+    
+    // Inverse Frequency Weights: w_i = N_total / (C * N_i) where C is number of classes (2).
+    // This normalizes the influence of each class regardless of imbalances in the sample database.
+    let w_quality = if quality_count > 0 { total_samples as f64 / (2.0 * quality_count as f64) } else { 1.0 };
+    let w_video = if video_equivalent_count > 0 { total_samples as f64 / (2.0 * video_equivalent_count as f64) } else { 1.0 };
 
     let mut weighted_keep = 0.0;
     let mut total_weight = 0.0;
-    let mut distances = Vec::new();
-    let mut loop_durations = Vec::new();
+    let mut distances: Vec<f64> = Vec::new();
+    let mut loop_durations: Vec<f64> = Vec::new();
 
     for (label, duration_secs, distance) in neighbors {
         if *distance > radius {
@@ -667,7 +767,16 @@ fn lookup_similar_samples_inner(
         }
  
         let relative_distance = (*distance - min_distance).max(0.0);
-        let weight = 1.0 / (1.0 + relative_distance * relative_distance * 3.0);
+        let distance_weight = 1.0 / (1.0 + relative_distance * relative_distance * 3.0);
+        
+        let class_weight = match label {
+            LabelStatus::LoopStrong => w_quality,
+            LabelStatus::LoopWeak => w_video,
+            _ => 1.0,
+        };
+        
+        let final_weight = distance_weight * class_weight;
+        
         let prob = match label {
             LabelStatus::LoopStrong => 1.0,  // Loop intent (Meme/Sticker/Video sticker)
             LabelStatus::LoopWeak => 0.0,    // Non-loop intent (Clip/Record/Long Video)
@@ -678,8 +787,8 @@ fn lookup_similar_samples_inner(
             loop_durations.push(*duration_secs);
         }
 
-        weighted_keep += prob * weight;
-        total_weight += weight;
+        weighted_keep += prob * final_weight;
+        total_weight += final_weight;
         distances.push(*distance);
     }
 
@@ -688,9 +797,9 @@ fn lookup_similar_samples_inner(
     }
 
     let keep_probability = weighted_keep / total_weight.max(1e-6);
-    let mean_distance = distances.iter().sum::<f64>() / distances.len() as f64;
+    let mean_distance: f64 = distances.iter().sum::<f64>() / distances.len() as f64;
 
-    let variance = distances
+    let variance: f64 = distances
         .iter()
         .map(|d| {
             let diff = d - mean_distance;
@@ -703,21 +812,21 @@ fn lookup_similar_samples_inner(
     // Confidence: how tightly clustered the neighbors are.
     // High std_dev relative to mean → low confidence (mixed signals).
     let confidence = if mean_distance > 1e-6 {
-        (1.0 - (std_dev_distance / mean_distance)).clamp(0.0, 1.0)
+        (1.0f64 - (std_dev_distance / mean_distance)).clamp(0.0, 1.0)
     } else {
         // All neighbors at distance ≈0 → exact match level confidence
         1.0
     };
 
     // Sort for percentiles
-    distances.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    distances.sort_by(|a: &f64, b: &f64| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let n = distances.len();
     let min_distance = distances.first().copied();
     let p25_distance = distances.get(n / 4).copied();
     let p75_distance = distances.get(3 * n / 4).copied();
 
     let p90_duration = if !loop_durations.is_empty() {
-        loop_durations.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        loop_durations.sort_by(|a: &f64, b: &f64| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let idx = (loop_durations.len() as f64 * 0.90).floor() as usize;
         Some(loop_durations[idx.min(loop_durations.len() - 1)])
     } else {
@@ -842,11 +951,14 @@ pub fn init_schema(conn: &mut Client) -> Result<()> {
             motion_gini DOUBLE PRECISION,
             block_skew DOUBLE PRECISION,
             temporal_flatness DOUBLE PRECISION,
+            loop_closure_score DOUBLE PRECISION,
+            motion_periodicity DOUBLE PRECISION,
+            temporal_jitter DOUBLE PRECISION,
             loss_tolerance TEXT,
             loop_verdict TEXT,
             labeled_by TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            features vector(28)
+            features vector(31)
         )",
         &[],
     )?;
@@ -856,7 +968,20 @@ pub fn init_schema(conn: &mut Client) -> Result<()> {
         "ALTER TABLE samples DROP COLUMN IF EXISTS features CASCADE",
         &[],
     );
-    let _ = conn.execute("ALTER TABLE samples ADD COLUMN features vector(28)", &[]);
+    let _ = conn.execute("ALTER TABLE samples ADD COLUMN features vector(31)", &[]);
+
+    let _ = conn.execute(
+        "ALTER TABLE samples ADD COLUMN IF NOT EXISTS loop_closure_score DOUBLE PRECISION",
+        &[],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE samples ADD COLUMN IF NOT EXISTS motion_periodicity DOUBLE PRECISION",
+        &[],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE samples ADD COLUMN IF NOT EXISTS temporal_jitter DOUBLE PRECISION",
+        &[],
+    );
 
     // The HNSW index for high-performance vector retrieval
     conn.execute(
@@ -872,7 +997,6 @@ pub fn init_schema(conn: &mut Client) -> Result<()> {
         )",
         &[],
     )?;
-
     conn.execute(
         "CREATE TABLE IF NOT EXISTS inference_log (
             id BIGSERIAL PRIMARY KEY,
@@ -894,6 +1018,11 @@ pub fn init_schema(conn: &mut Client) -> Result<()> {
         &[],
     )?;
 
+    // Migration for existing tables
+    let _ = conn.execute("ALTER TABLE inference_log ADD COLUMN IF NOT EXISTS layer_exit TEXT DEFAULT 'Unknown'", &[]);
+    let _ = conn.execute("ALTER TABLE inference_log ADD COLUMN IF NOT EXISTS signal_snapshot JSONB DEFAULT '{}'", &[]);
+    let _ = conn.execute("ALTER TABLE inference_log ALTER COLUMN layer_exit SET NOT NULL", &[]);
+    let _ = conn.execute("ALTER TABLE inference_log ALTER COLUMN signal_snapshot SET NOT NULL", &[]);
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_samples_lookup
          ON samples(loss_tolerance, width, height, duration_secs, has_transparency)",
@@ -967,6 +1096,7 @@ fn seed_positive_dataset_if_needed(conn: &mut Client) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SampleInsert {
     file_hash: String,
     source_path: String,
@@ -1210,7 +1340,7 @@ fn calculate_blake3_hex(path: &Path) -> Result<String> {
     Ok(hasher.finalize().to_hex().to_string())
 }
 
-/// Compute a 28-dimensional pgvector encoding for a sample using pre-calculated std deviations.
+/// Compute a 31-dimensional pgvector encoding for a sample using pre-calculated std deviations.
 /// This precisely bakes the weights and normalization terms from the old dynamically computed KNN
 /// into an L2-compatible vector, allowing PostgreSQL's HNSW index to do the heavy lifting!
 fn compute_sample_vector(sample: &SampleRow, stats_map: &FeatureMap) -> Vec<f32> {
@@ -1275,6 +1405,12 @@ fn compute_sample_vector(sample: &SampleRow, stats_map: &FeatureMap) -> Vec<f32>
     let v_bskew = sample.block_skew.unwrap_or(0.5) / get_std("b_skew") * get_w("b_skew").sqrt();
     let v_tflat =
         sample.temporal_flatness.unwrap_or(0.5) / get_std("t_flat") * get_w("t_flat").sqrt();
+    let v_lclose = sample.loop_closure_score.unwrap_or(0.5) / get_std("l_close")
+        * get_w("l_close").sqrt();
+    let v_mperiod = sample.motion_periodicity.unwrap_or(0.5) / get_std("m_period")
+        * get_w("m_period").sqrt();
+    let v_tjitter = sample.temporal_jitter.unwrap_or(0.5) / get_std("t_jitter")
+        * get_w("t_jitter").sqrt();
 
     // Directory context
     let v_dir = sample.directory_meme_score.unwrap_or(0.5) * get_w("dir_meme").sqrt();
@@ -1315,6 +1451,9 @@ fn compute_sample_vector(sample: &SampleRow, stats_map: &FeatureMap) -> Vec<f32>
         v_mgini as f32,
         v_bskew as f32,
         v_tflat as f32,
+        v_lclose as f32,
+        v_mperiod as f32,
+        v_tjitter as f32,
         v_dir as f32,
         v_meme as f32,
         v_name as f32,
@@ -1365,13 +1504,16 @@ fn sample_row_from_meta(meta: &LoopMeta, temporal_bpp: f64, spatial_bpp: f64) ->
             &[],
         )),
         is_high_value_source: meta.has_embedded_icc
-            || meta.has_complex_color_profile
-            || meta.has_audio,
+            || meta.has_complex_color_profile,
+
         is_native_gif: meta.source_extension.as_deref() == Some("gif"),
         palette_depth: meta.palette_depth,
         motion_gini: meta.motion_gini,
         block_skew: meta.block_skew,
         temporal_flatness: meta.temporal_flatness,
+        loop_closure_score: meta.loop_closure_score,
+        motion_periodicity: meta.motion_periodicity,
+        temporal_jitter: meta.temporal_jitter,
         webp_compression_ratio: meta.webp_compression_ratio,
         labeled_by: None,
     }
@@ -1540,6 +1682,8 @@ pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -
     pb.finish_with_message("Learning complete.");
 
     println!("💾 Persisting {} samples to database...", samples.len());
+    
+    let initial_feature_map = fetch_feature_map(&mut conn).unwrap_or_default();
     let mut tx = conn.transaction()?;
     let mut count = 0;
 
@@ -1553,7 +1697,7 @@ pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -
             total_pixels, loop_frequency, is_meme_platform, is_human_semantic_name,
             cadence_score, directory_meme_score, is_high_value_source, is_native_gif,
             palette_depth, motion_gini, block_skew, temporal_flatness, webp_compression_ratio,
-            loop_verdict
+            loop_verdict, features
          ) VALUES (
             $1, $2, $3, $4,
             $5, $6, $7, $8, $9, $10,
@@ -1561,9 +1705,10 @@ pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -
             $14, $15, $16,
             $17, $18, $19, $20, $21,
             $22, $23, $24, $25, $26, $27, $28, $29,
-            $30, $31, $32, $33, $34, $35
+            $30, $31, $32, $33, $34, $35, $36::vector
          )
          ON CONFLICT (file_hash) DO UPDATE SET
+            features = EXCLUDED.features,
             source_path = EXCLUDED.source_path,
             file_name = EXCLUDED.file_name,
             source_ext = EXCLUDED.source_ext,
@@ -1608,6 +1753,10 @@ pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -
         let width_i32 = sample.width as i32;
         let height_i32 = sample.height as i32;
 
+        let sample_row = SampleRow::from(sample.clone());
+        let vec_data = compute_sample_vector(&sample_row, &initial_feature_map);
+        let pg_vector = pgvector::Vector::from(vec_data);
+
         let res = tx.execute(
             &stmt,
             &[
@@ -1646,6 +1795,7 @@ pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -
                 &sample.temporal_flatness,
                 &sample.webp_compression_ratio,
                 &sample.loop_verdict,
+                &pg_vector,
             ],
         );
         if res.is_ok() {
@@ -1654,7 +1804,7 @@ pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -
     }
 
     tx.commit()?;
-    refresh_feature_stats(&mut conn)?;
+    recompute_all_features(&mut conn)?;
     Ok(count)
 }
 
@@ -1946,6 +2096,13 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
         &[&col_json],
     )?;
 
+    recompute_all_features(conn)?;
+    Ok(())
+}
+
+pub fn recompute_all_features(conn: &mut Client) -> Result<()> {
+    let feature_map = fetch_feature_map(conn)?;
+    
     // ── pgvector HNSW Migration: Backfill Vectors ──
     emit_stderr("   ⚙️  Backfilling pgvector encodings for all labeled samples...");
 
@@ -1958,7 +2115,8 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
             aspect_ratio, labeled_by,
             total_pixels, loop_frequency, is_meme_platform, is_human_semantic_name,
             cadence_score, directory_meme_score, is_high_value_source, is_native_gif,
-            palette_depth, motion_gini, block_skew, temporal_flatness, webp_compression_ratio
+            palette_depth, motion_gini, block_skew, temporal_flatness,
+            loop_closure_score, motion_periodicity, temporal_jitter, webp_compression_ratio
          FROM samples WHERE loss_tolerance IS NOT NULL AND frame_count > 1",
         &[],
     )?;
@@ -1999,7 +2157,10 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
             motion_gini: row.get(27),
             block_skew: row.get(28),
             temporal_flatness: row.get(29),
-            webp_compression_ratio: row.get::<_, Option<f64>>(30),
+            loop_closure_score: row.get(30),
+            motion_periodicity: row.get(31),
+            temporal_jitter: row.get(32),
+            webp_compression_ratio: row.get::<_, Option<f64>>(33),
         };
 
         let vec_data = compute_sample_vector(&sample, &feature_map);
@@ -2021,11 +2182,14 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
 
 /// Build a JSON snapshot of key LoopMeta fields for the inference log.
 fn build_signal_snapshot(meta: &LoopMeta) -> Value {
+    let f64_safe = |v: f64| if v.is_finite() { json!(v) } else { json!(null) };
+    let opt_f64_safe = |v: Option<f64>| v.and_then(|x| if x.is_finite() { Some(json!(x)) } else { None }).unwrap_or(json!(null));
+
     json!({
-        "duration_secs": meta.duration_secs,
+        "duration_secs": f64_safe(meta.duration_secs),
         "width": meta.width,
         "height": meta.height,
-        "fps": meta.fps,
+        "fps": f64_safe(meta.fps),
         "frame_count": meta.frame_count,
         "file_size_bytes": meta.file_size_bytes,
         "has_audio": meta.has_audio,
@@ -2035,15 +2199,15 @@ fn build_signal_snapshot(meta: &LoopMeta) -> Value {
         "has_complex_color_profile": meta.has_complex_color_profile,
         "is_meme_platform": meta.is_meme_platform,
         "loop_count": meta.loop_count,
-        "webp_compression_ratio": meta.webp_compression_ratio,
-        "palette_depth": meta.palette_depth,
-        "motion_gini": meta.motion_gini,
-        "temporal_flatness": meta.temporal_flatness,
-        "block_skew": meta.block_skew,
-        "frame_payload_variation": meta.frame_payload_variation,
-        "frame_delay_variation": meta.frame_delay_variation,
-        "directory_meme_score": meta.directory_meme_score,
-        "filename_meme_score": meta.filename_meme_score,
+        "webp_compression_ratio": opt_f64_safe(meta.webp_compression_ratio),
+        "palette_depth": opt_f64_safe(meta.palette_depth),
+        "motion_gini": opt_f64_safe(meta.motion_gini),
+        "temporal_flatness": opt_f64_safe(meta.temporal_flatness),
+        "block_skew": opt_f64_safe(meta.block_skew),
+        "frame_payload_variation": opt_f64_safe(meta.frame_payload_variation),
+        "frame_delay_variation": opt_f64_safe(meta.frame_delay_variation),
+        "directory_meme_score": f64_safe(meta.directory_meme_score),
+        "filename_meme_score": f64_safe(meta.filename_meme_score),
         "source_extension": meta.source_extension,
         "container": meta.container,
     })
@@ -2061,9 +2225,21 @@ pub fn log_inference_record(
     let file_hash: Option<String> = path.and_then(|p| calculate_blake3_hex(p).ok());
     let source_path: Option<String> = path.map(|p| p.display().to_string());
     let snapshot = build_signal_snapshot(meta);
-    let snapshot_str = serde_json::to_string(&snapshot).unwrap_or_else(|_| "{}".to_string());
 
     let knn_neighbor_count_i32 = record.knn_neighbor_count.map(|n| n as i32);
+
+    // Explicit type binding for ToSql stability
+    let duration_secs = meta.duration_secs;
+    let webp_ratio = meta.webp_compression_ratio;
+    let tree_prob = record.tree_probability;
+    let knn_prob = record.knn_keep_probability;
+    let knn_conf = record.knn_confidence;
+    let final_prob = record.final_probability;
+    let final_verdict = &record.final_verdict;
+    let decision_reason = &record.decision_reason;
+    let layer_exit = &record.layer_exit;
+
+    let snapshot_str = serde_json::to_string(&snapshot).unwrap_or_else(|_| "{}".to_string());
 
     let result = conn.execute(
         "INSERT INTO inference_log (
@@ -2075,22 +2251,22 @@ pub fn log_inference_record(
         &[
             &file_hash,
             &source_path,
-            &meta.duration_secs,
-            &meta.webp_compression_ratio,
-            &record.tree_probability,
-            &record.knn_keep_probability,
-            &record.knn_confidence,
+            &duration_secs,
+            &webp_ratio,
+            &tree_prob,
+            &knn_prob,
+            &knn_conf,
             &knn_neighbor_count_i32,
-            &record.final_probability,
-            &record.final_verdict,
-            &record.decision_reason,
-            &record.layer_exit,
+            &final_prob,
+            &final_verdict,
+            &decision_reason,
+            &layer_exit,
             &snapshot_str,
         ],
     );
 
     if let Err(e) = result {
-        log::warn!("⚠️ Failed to write inference log (non-fatal): {e}");
+        log::warn!("⚠️ Failed to write inference log (non-fatal): {e} | Parameter count: 13 | Exit Layer: {layer_exit}");
     }
 }
 
@@ -2304,6 +2480,9 @@ mod tests {
             motion_gini: Some(0.7),
             block_skew: Some(0.6),
             temporal_flatness: Some(0.9),
+            loop_closure_score: Some(0.85),
+            motion_periodicity: Some(0.75),
+            temporal_jitter: Some(0.90),
             pkt_sizes: Vec::new(),
             webp_compression_ratio: None,
         }
@@ -2341,6 +2520,9 @@ mod tests {
             motion_gini: Some(0.7),
             block_skew: Some(0.6),
             temporal_flatness: Some(0.9),
+            loop_closure_score: Some(0.88),
+            motion_periodicity: Some(0.78),
+            temporal_jitter: Some(0.92),
             webp_compression_ratio: Some(0.9),
             labeled_by: Some("cli_ingest".to_string()),
         };
@@ -2373,6 +2555,9 @@ mod tests {
             motion_gini: Some(0.2),
             block_skew: Some(0.1),
             temporal_flatness: Some(0.1),
+            loop_closure_score: Some(0.15),
+            motion_periodicity: Some(0.20),
+            temporal_jitter: Some(0.18),
             webp_compression_ratio: Some(0.1),
             labeled_by: Some("cli_ingest".to_string()),
         };

@@ -122,6 +122,10 @@ where
     info!("📂 Found {} video files to process", files.len());
     info!("⚡ Queue Strategy: deeper paths → lighter workload → shorter duration → smaller files → lower resolution");
 
+    // Reset global session stats to zero at the start of each directory processing run.
+    // This ensures that progressive UI stats (X: 12v, etc.) reflect the current task.
+    crate::progress_mode::reset_session_stats();
+
     // Pre-flight disk space check: require at least the total input size free on the output volume.
     // This catches "No space left on device" before encoding starts rather than mid-encode.
     // Skip if MFB_SKIP_DISK_PRECHECK=1 (script has already done the check).
@@ -259,6 +263,9 @@ where
         // Skip if already processed
         if let Some(ref cp) = checkpoint {
             if cp.is_completed(&fixed) {
+                if config.verbose {
+                    info!("⏭️  {} → SKIP (Already recorded as completed)", fixed.file_name().unwrap_or_default().to_string_lossy());
+                }
                 batch_result.skip();
                 progress_bar.set(batch_result.total as u64);
                 continue;

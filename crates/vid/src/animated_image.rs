@@ -14,6 +14,13 @@ use shared_utils::loop_intent::{
 };
 use shared_utils::types::EncoderPreset;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VideoStreamInfo {
+    index: usize,
+    frame_count: u64,
+    pix_fmt: String,
+}
+
 fn cleanup_temp_output(temp_output: &Path, input: &Path) {
     if let Err(e) = fs::remove_file(temp_output) {
         if e.kind() != std::io::ErrorKind::NotFound {
@@ -25,6 +32,144 @@ fn cleanup_temp_output(temp_output: &Path, input: &Path) {
             );
         }
     }
+}
+
+fn probe_video_streams(input: &Path) -> Vec<VideoStreamInfo> {
+    let output = match shared_utils::FfprobeBuilder::new()
+        .input(input)
+        .loglevel("error")
+        .print_format("json")
+        .show_streams()
+        .build()
+        .output()
+    {
+        Ok(output) if output.status.success() => output,
+        _ => return Vec::new(),
+    };
+
+    let json: serde_json::Value = match serde_json::from_slice(&output.stdout) {
+        Ok(json) => json,
+        Err(_) => return Vec::new(),
+    };
+
+    json["streams"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|stream| stream["codec_type"].as_str() == Some("video"))
+        .map(|stream| VideoStreamInfo {
+            index: stream["index"].as_u64().unwrap_or(0) as usize,
+            frame_count: stream["nb_frames"]
+                .as_str()
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(0),
+            pix_fmt: stream["pix_fmt"]
+                .as_str()
+                .unwrap_or_default()
+                .to_ascii_lowercase(),
+        })
+        .collect()
+}
+
+fn looks_like_alpha_stream(pix_fmt: &str) -> bool {
+    matches!(pix_fmt, "gray" | "gray8" | "gray10le" | "gray12le" | "gray16le")
+        || pix_fmt.starts_with("gray")
+        || pix_fmt.starts_with("ya")
+}
+
+fn is_probable_alpha_aux_pair(streams: &[VideoStreamInfo], selected_stream_index: usize) -> bool {
+    if streams.len() != 2 {
+        return false;
+    }
+
+    let Some(selected_stream) = streams.iter().find(|stream| stream.index == selected_stream_index)
+    else {
+        return false;
+    };
+    let Some(aux_stream) = streams.iter().find(|stream| stream.index != selected_stream_index)
+    else {
+        return false;
+    };
+
+    selected_stream.frame_count > 0
+        && selected_stream.frame_count == aux_stream.frame_count
+        && looks_like_alpha_stream(&aux_stream.pix_fmt)
+}
+
+fn has_probable_avif_alpha_stream(input: &Path) -> bool {
+    let streams = probe_video_streams(input);
+    let Ok(probe) = shared_utils::probe_video(input) else {
+        return false;
+    };
+    is_probable_alpha_aux_pair(&streams, probe.stream_index)
+}
+
+fn should_copy_original_on_skip(input: &Path, options: &ConvertOptions) -> bool {
+    if !options.apple_compat {
+        return true;
+    }
+
+    let input_ext = input
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(str::to_lowercase)
+        .unwrap_or_default();
+
+    shared_utils::is_apple_native_format(&input_ext)
+}
+
+fn extract_frames_for_gifski(
+    input: &Path,
+    selected_stream_index: Option<usize>,
+    verbose: bool,
+) -> Result<(tempfile::TempDir, String)> {
+    let frame_dir = tempfile::Builder::new()
+        .prefix("gifski_frames_")
+        .tempdir()
+        .map_err(|e| {
+            VidQualityError::ConversionError(format!("Failed to create frame temp dir: {e}"))
+        })?;
+    let frame_pattern = frame_dir.path().join("frame_%06d.png");
+
+    let mut builder = shared_utils::FfmpegBuilder::new();
+    builder.overwrite().input(input);
+    if let Some(stream_index) = selected_stream_index {
+        builder.arg("-map").arg(format!("0:{stream_index}"));
+    }
+    builder.arg("-vsync").arg("0").output(&frame_pattern);
+
+    let output = builder.build().output().map_err(|e| {
+        VidQualityError::ConversionError(format!("FFmpeg frame extraction failed: {e}"))
+    })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(VidQualityError::ConversionError(format!(
+            "FFmpeg frame extraction failed: {stderr}"
+        )));
+    }
+
+    let frame_count = fs::read_dir(frame_dir.path())
+        .map_err(|e| {
+            VidQualityError::ConversionError(format!("Failed to inspect extracted frames: {e}"))
+        })?
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("png"))
+        .count();
+
+    if frame_count < 2 {
+        return Err(VidQualityError::ConversionError(format!(
+            "Only extracted {frame_count} frame(s) for GIF encoding"
+        )));
+    }
+
+    if verbose {
+        shared_utils::progress_mode::emit_stderr(&format!(
+            "   ✅ Extracted {frame_count} frames for GIF encoding"
+        ));
+    }
+
+    Ok((frame_dir, frame_pattern.to_string_lossy().into_owned()))
 }
 
 /// Extract frames from animated WebP using webpmux and create APNG with correct timing
@@ -170,6 +315,19 @@ fn get_output_path(
 }
 
 fn copy_original_on_skip(input: &Path, options: &ConvertOptions) -> Option<std::path::PathBuf> {
+    if !should_copy_original_on_skip(input, options) {
+        tracing::warn!(
+            input = %input.display(),
+            "Apple-compat skip/failure: not copying incompatible original to output"
+        );
+        if options.verbose {
+            eprintln!(
+                "   ⚠️  Apple compatibility mode: not copying incompatible original to output"
+            );
+        }
+        return None;
+    }
+
     match shared_utils::copy_on_skip_or_fail(
         input,
         options.output_dir.as_deref(),
@@ -467,20 +625,13 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
                     });
                 }
             }
-        } else if input_ext == shared_utils::constants::EXT_AVIF && {
-            let mut builder = shared_utils::FfprobeBuilder::new();
-            builder
-                .input(input)
-                .select_streams(shared_utils::StreamType::Video)
-                .show_entries("stream=index")
-                .print_format("csv=p=0");
-            
-            let out = builder.build().output();
-            out.map(|o| String::from_utf8_lossy(&o.stdout).lines().count() > 1)
-                .unwrap_or(false)
-        } {
+        } else if input_ext == shared_utils::constants::EXT_AVIF
+            && has_probable_avif_alpha_stream(input)
+        {
             if options.verbose {
-                eprintln!("   🔧 Detected transparent AVIF format, pre-converting to APNG to retain alpha explicitly");
+                eprintln!(
+                    "   🔧 Detected AVIF auxiliary alpha stream, pre-converting to APNG"
+                );
             }
             let temp_apng = tempfile::Builder::new().suffix(".apng").tempfile()?;
             let temp_apng_path = temp_apng.path().to_path_buf();
@@ -510,18 +661,8 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
     let has_alpha = input_ext == shared_utils::constants::EXT_WEBP
         || input_ext == shared_utils::constants::EXT_GIF
         || input_ext == shared_utils::constants::EXT_JXL
-        || (input_ext == shared_utils::constants::EXT_AVIF && {
-            let mut builder = shared_utils::FfprobeBuilder::new();
-            builder
-                .input(input)
-                .select_streams(shared_utils::StreamType::Video)
-                .show_entries("stream=index")
-                .print_format("csv=p=0");
-            
-            let out = builder.build().output();
-            out.map(|o| String::from_utf8_lossy(&o.stdout).lines().count() > 1)
-                .unwrap_or(false)
-        })
+        || (input_ext == shared_utils::constants::EXT_AVIF
+            && has_probable_avif_alpha_stream(input))
         || input_ext == shared_utils::constants::EXT_APNG
         || input_ext == shared_utils::constants::EXT_PNG;
     let mut vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, has_alpha);
@@ -1731,20 +1872,11 @@ pub fn convert_to_gif_apple_compat(
                     });
                 }
             }
-        } else if input_ext == "avif" && {
-            let mut builder = shared_utils::FfprobeBuilder::new();
-            builder
-                .input(input)
-                .select_streams(shared_utils::StreamType::Video)
-                .show_entries("stream=index")
-                .print_format("csv=p=0");
-            
-            let out = builder.build().output();
-            out.map(|o| String::from_utf8_lossy(&o.stdout).lines().count() > 1)
-                .unwrap_or(false)
-        } {
+        } else if input_ext == "avif" && has_probable_avif_alpha_stream(input) {
             if options.verbose {
-                eprintln!("   🔧 Detected transparent AVIF format, pre-converting to APNG to retain alpha explicitly");
+                eprintln!(
+                    "   🔧 Detected AVIF auxiliary alpha stream, pre-converting to APNG"
+                );
             }
             let temp_apng = tempfile::Builder::new().suffix(".apng").tempfile()?;
             let temp_apng_path = temp_apng.path().to_path_buf();
@@ -1788,54 +1920,46 @@ pub fn convert_to_gif_apple_compat(
         stream_idx
     };
 
-    let has_multiple_streams = {
-        let mut builder = shared_utils::FfprobeBuilder::new();
-        builder
-            .input(&actual_input)
-            .select_streams(shared_utils::StreamType::Video)
-            .show_entries("stream=index")
-            .print_format("csv=p=0");
-        
-        if let Ok(output) = builder.build().output() {
-            String::from_utf8_lossy(&output.stdout).lines().count() > 1
-        } else {
-            false
-        }
+    let has_multiple_streams = probe_video_streams(&actual_input).len() > 1;
+    let frame_stream_index = if input_ext == "jxl" || input_ext == "webp" || temp_apng_file.is_some()
+    {
+        None
+    } else if has_multiple_streams && effective_stream_idx != 0 {
+        Some(effective_stream_idx)
+    } else {
+        None
     };
 
     let gifski_ok = if which::which("gifski").is_err() {
         false
     } else {
-        let mut gifski_input = actual_input.clone();
-        let mut extracted_stream_apng = None;
-
-        if has_multiple_streams && effective_stream_idx != 0 {
-            let temp_apng = tempfile::Builder::new().suffix(".apng").tempfile().ok();
-            if let Some(temp_apng) = temp_apng {
-                let temp_apng_path = temp_apng.path().to_path_buf();
-                let mut builder = shared_utils::FfmpegBuilder::new();
-                builder
-                    .overwrite()
-                    .input(&actual_input)
-                    .arg("-map")
-                    .arg(format!("0:{effective_stream_idx}"))
-                    .arg("-plays")
-                    .arg("0")
-                    .vcodec(shared_utils::VideoCodec::Apng)
-                    .output(&temp_apng_path);
-                
-                let extract_res = builder.build().output();
-
-                if matches!(extract_res, Ok(o) if o.status.success() && temp_apng_path.exists()) {
-                    gifski_input = temp_apng_path;
-                    extracted_stream_apng = Some(temp_apng);
+        let (gifski_frames_dir, gifski_pattern) =
+            match extract_frames_for_gifski(&actual_input, frame_stream_index, options.verbose) {
+                Ok(value) => value,
+                Err(e) => {
+                    tracing::error!(
+                        input = %input.display(),
+                        error = %e,
+                        "Failed to extract frames for GIF conversion"
+                    );
+                    return Ok(ConversionResult {
+                        success: false,
+                        input_path: input.display().to_string(),
+                        output_path: None,
+                        input_size,
+                        output_size: None,
+                        size_reduction: None,
+                        message: format!("GIF frame extraction failed: {e}"),
+                        skipped: true,
+                        skip_reason: Some("gif_frame_extraction_failed".to_string()),
+                    });
                 }
-            }
-        }
+            };
 
-        let fps = shared_utils::probe_video(&gifski_input)
+        let fps = shared_utils::probe_video(input)
             .ok()
             .map(|p| p.frame_rate)
+            .or_else(|| shared_utils::probe_video(&actual_input).ok().map(|p| p.frame_rate))
             .filter(|fps| fps.is_finite() && *fps >= 1.0)
             .unwrap_or(20.0)
             .clamp(1.0, 60.0);
@@ -1848,11 +1972,11 @@ pub fn convert_to_gif_apple_compat(
             .lossy_quality(100)
             .repeat(0)
             .arg("--extra")
-            .add_input(&gifski_input)
+            .input_pattern(&gifski_pattern)
             .build()
             .output();
 
-        drop(extracted_stream_apng);
+        drop(gifski_frames_dir);
         match res {
             Ok(o) if o.status.success() && temp_output.exists() => true,
             Ok(o) => {
@@ -2016,4 +2140,58 @@ pub fn convert_to_gif_apple_compat(
         skipped: false,
         skip_reason: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_alpha_aux_detection_rejects_poster_plus_animation_avif() {
+        let streams = vec![
+            VideoStreamInfo {
+                index: 0,
+                frame_count: 1,
+                pix_fmt: "yuv420p".to_string(),
+            },
+            VideoStreamInfo {
+                index: 1,
+                frame_count: 11,
+                pix_fmt: "yuv420p".to_string(),
+            },
+        ];
+
+        assert!(!is_probable_alpha_aux_pair(&streams, 1));
+    }
+
+    #[test]
+    fn test_alpha_aux_detection_accepts_matching_gray_aux_stream() {
+        let streams = vec![
+            VideoStreamInfo {
+                index: 0,
+                frame_count: 24,
+                pix_fmt: "yuv420p".to_string(),
+            },
+            VideoStreamInfo {
+                index: 1,
+                frame_count: 24,
+                pix_fmt: "gray8".to_string(),
+            },
+        ];
+
+        assert!(is_probable_alpha_aux_pair(&streams, 0));
+    }
+
+    #[test]
+    fn test_apple_compat_blocks_copying_incompatible_originals() {
+        let options = ConvertOptions {
+            apple_compat: true,
+            ..ConvertOptions::default()
+        };
+
+        assert!(!should_copy_original_on_skip(Path::new("/tmp/test.avif"), &options));
+        assert!(!should_copy_original_on_skip(Path::new("/tmp/test.webp"), &options));
+        assert!(should_copy_original_on_skip(Path::new("/tmp/test.gif"), &options));
+        assert!(should_copy_original_on_skip(Path::new("/tmp/test.heic"), &options));
+    }
 }

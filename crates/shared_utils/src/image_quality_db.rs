@@ -103,15 +103,37 @@ pub fn init_quality_schema(conn: &mut Client) -> Result<()> {
         &[],
     )?;
 
+    // Ensure exhaustive schema migration for existing tables
+    let _ = conn.execute("ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS entropy DOUBLE PRECISION", &[]);
+    let _ = conn.execute("ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS compression_ratio DOUBLE PRECISION", &[]);
+    let _ = conn.execute("ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS spatial_bpp DOUBLE PRECISION", &[]);
+    let _ = conn.execute("ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS log_pixels DOUBLE PRECISION", &[]);
+    let _ = conn.execute("ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS aspect_ratio DOUBLE PRECISION", &[]);
+    let _ = conn.execute("ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS is_lossless BOOLEAN", &[]);
+    let _ = conn.execute("ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS knn_score DOUBLE PRECISION DEFAULT 0.0", &[]);
+    let _ = conn.execute("ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS knn_confidence DOUBLE PRECISION DEFAULT 0.0", &[]);
+    let _ = conn.execute("ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS knn_neighbor_count INTEGER DEFAULT 0", &[]);
+    let _ = conn.execute("ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS bpp_fallback_score DOUBLE PRECISION", &[]);
+    let _ = conn.execute("ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS final_verdict TEXT DEFAULT 'low'", &[]);
+    
+    // Ensure NOT NULL constraints
+    let _ = conn.execute("ALTER TABLE quality_inference_log ALTER COLUMN knn_score SET NOT NULL", &[]);
+    let _ = conn.execute("ALTER TABLE quality_inference_log ALTER COLUMN knn_confidence SET NOT NULL", &[]);
+    let _ = conn.execute("ALTER TABLE quality_inference_log ALTER COLUMN knn_neighbor_count SET NOT NULL", &[]);
+    let _ = conn.execute("ALTER TABLE quality_inference_log ALTER COLUMN final_verdict SET NOT NULL", &[]);
+
     Ok(())
 }
 
 // ── Feature vector ───────────────────────────────────────────────────────────
 
-/// Compute the 6-dimensional feature vector for a static image.
+/// Compute the 6-dimensional normalized feature vector for a static image.
 ///
-/// Dimensions (in order):
-/// `[entropy, compression_ratio, spatial_bpp, log10(pixels), aspect_ratio, is_lossless]`
+/// Weighting and Scaling Philosophy:
+/// - Entropy [0-8] -> [0-1]: High entropy is the primary high-quality signal.
+/// - BPP [0.1-30] -> [0-1] (log): Spatial density indicator. We use log to prevent outliers.
+/// - Pixels -> [0-1] (log10): Size context.
+/// - Lossless -> [0, 2.0]: Very strong anchor to prioritize format fidelity.
 fn get_quality_features(analysis: &ImageAnalysis) -> pgvector::Vector {
     let total_pixels = f64::from(analysis.width) * f64::from(analysis.height);
     let spatial_bpp = analysis.file_size as f64 / total_pixels.max(1.0);
@@ -122,16 +144,12 @@ fn get_quality_features(analysis: &ImageAnalysis) -> pgvector::Vector {
     };
 
     pgvector::Vector::from(vec![
-        analysis.features.entropy as f32,
-        analysis.features.compression_ratio as f32,
-        spatial_bpp as f32,
-        (total_pixels.log10() as f32).max(0.0),
-        aspect_ratio as f32,
-        if analysis.is_lossless {
-            1.0_f32
-        } else {
-            0.0_f32
-        },
+        (analysis.features.entropy as f32 / 8.0).clamp(0.0, 1.0),
+        ((1.0 + analysis.features.compression_ratio as f32).ln() / 3.0),
+        ((1.0 + spatial_bpp as f32).ln() / 3.5),
+        (total_pixels.max(1.0).log10() as f32 / 10.0),
+        ((1.0 + aspect_ratio as f32).ln() / 2.5),
+        if analysis.is_lossless { 2.0_f32 } else { 0.0_f32 },
     ])
 }
 
@@ -160,12 +178,29 @@ fn bpp_heuristic_quality(analysis: &ImageAnalysis) -> QualityScore {
 // ── DB Maturity ───────────────────────────────────────────────────────────────
 
 /// Validates whether the static database has enough diverse samples to merit KNN lookup.
-fn check_quality_db_maturity(conn: &mut Client) -> bool {
+pub fn check_quality_db_maturity(conn: &mut Client) -> bool {
+    let (high_count, low_count) = get_class_counts(conn);
+    
+    let total = high_count + low_count;
+    total >= crate::constants::MIN_QUALITY_SAMPLES_TOTAL
+        && high_count >= crate::constants::MIN_QUALITY_SAMPLES_PER_CLASS
+        && low_count >= crate::constants::MIN_QUALITY_SAMPLES_PER_CLASS
+}
+
+/// Retrieves the count of samples in 'high' and 'low' quality classes.
+pub fn get_class_counts(conn: &mut Client) -> (i64, i64) {
     let Ok(rows) = conn.query(
-        "SELECT labeled_quality, count(*) FROM quality_samples WHERE labeled_quality IN ('high', 'low') GROUP BY labeled_quality",
+        "SELECT 
+            CASE WHEN labeled_quality LIKE '%high%' THEN 'high' 
+                 WHEN labeled_quality LIKE '%low%' THEN 'low' 
+                 ELSE 'other' 
+            END as class, 
+            count(*) 
+         FROM quality_samples 
+         GROUP BY 1",
         &[],
     ) else {
-        return false;
+        return (0, 0);
     };
 
     let mut high_count: i64 = 0;
@@ -179,11 +214,7 @@ fn check_quality_db_maturity(conn: &mut Client) -> bool {
             low_count = count;
         }
     }
-
-    let total = high_count + low_count;
-    total >= crate::constants::MIN_QUALITY_SAMPLES_TOTAL
-        && high_count >= crate::constants::MIN_QUALITY_SAMPLES_PER_CLASS
-        && low_count >= crate::constants::MIN_QUALITY_SAMPLES_PER_CLASS
+    (high_count, low_count)
 }
 
 // ── KNN Lookup ────────────────────────────────────────────────────────────────
@@ -210,14 +241,25 @@ pub fn lookup_image_quality(analysis: &ImageAnalysis) -> Option<QualityScore> {
         return Some(heuristic);
     }
 
+    let force_knn = std::env::var(crate::constants::ENV_FORCE_QUALITY_KNN)
+        .map(|v| v == "1" || v.to_ascii_lowercase() == "true")
+        .unwrap_or(false);
+
+    if force_knn {
+        crate::progress_mode::emit_stderr("  🐘 [OVERRIDE] Forcing KNN Database lookup...");
+    }
+
     // Use the shared pg client (which prints the "DB unavailable" warning at most once).
     let Ok(mut conn) = crate::gif_value_db::open_pg_client() else {
         return Some(bpp_heuristic_quality(analysis));
     };
 
-    if !check_quality_db_maturity(&mut conn) {
-        log::info!("🔬 Static Image Database is immature (needs >={} total, >={} per class). Bypassing KNN.", 
-            crate::constants::MIN_QUALITY_SAMPLES_TOTAL, crate::constants::MIN_QUALITY_SAMPLES_PER_CLASS);
+    let force_knn = std::env::var(crate::constants::ENV_FORCE_QUALITY_KNN).is_ok();
+    
+    if !force_knn && !check_quality_db_maturity(&mut conn) {
+        let (high_total, low_total) = get_class_counts(&mut conn);
+        log::info!("🔬 Static Image Database is immature (high={}, low={}). Bypassing KNN.", 
+            high_total, low_total);
         let bpp = bpp_heuristic_quality(analysis);
         // We still log the inference record even if immature, to gather blind spots
         let record = QualityInferenceRecord {
@@ -247,21 +289,47 @@ pub fn lookup_image_quality(analysis: &ImageAnalysis) -> Option<QualityScore> {
         return Some(bpp_heuristic_quality(analysis));
     };
 
-    if rows.is_empty() {
-        // DB connected but empty — return BPP heuristic.
+    let mut total_weight = 0.0f64;
+    let mut high_weight = 0.0f64;
+    let total_count = rows.len();
+
+    if total_count == 0 {
         return Some(bpp_heuristic_quality(analysis));
     }
 
-    let mut high_count = 0usize;
-    let total_count = rows.len();
-    for row in &rows {
+    // Calculate Dynamic Class Balancing Factors based on database distribution.
+    let (high_total, low_total) = get_class_counts(&mut conn);
+    let total_db_samples = high_total + low_total;
+
+    // Factor = Total / (NumClasses * ClassCount)
+    let high_factor = if high_total > 0 {
+        total_db_samples as f64 / (2.0 * high_total as f64)
+    } else { 1.0 };
+    let low_factor = if low_total > 0 {
+        total_db_samples as f64 / (2.0 * low_total as f64)
+    } else { 1.0 };
+
+    for row in rows {
         let label: String = row.get(0);
+        let distance: f64 = row.get(1);
+
+        // Inverse Distance Weighting (IDW)
+        let mut weight = 1.0f64 / (distance + 0.01);
+
         if label.contains("high") {
-            high_count += 1;
+            weight *= high_factor;
+            high_weight += weight;
+        } else {
+            weight *= low_factor;
         }
+        total_weight += weight;
     }
 
-    let knn_score = high_count as f64 / total_count as f64;
+    let knn_score = if total_weight > 0.0 {
+        high_weight / total_weight
+    } else {
+        0.0f64
+    };
     let knn_confidence = (total_count as f64 / target_k as f64).min(1.0);
     let bpp = bpp_heuristic_quality(analysis);
 
@@ -309,6 +377,18 @@ pub fn log_quality_inference_record(
     let source_path: Option<String> = path.map(|p| p.display().to_string());
     let neighbor_count_i32 = record.knn_neighbor_count as i32;
 
+    let f64_safe = |v: f64| if v.is_finite() { Some(v) } else { None };
+    let entropy = f64_safe(analysis.features.entropy);
+    let compression = f64_safe(analysis.features.compression_ratio);
+    let bpp = f64_safe(spatial_bpp);
+    let lp = f64_safe(log_pixels);
+    let ar = f64_safe(aspect_ratio);
+    let is_lossless = analysis.is_lossless;
+    let knn_score = f64_safe(record.knn_score).unwrap_or(0.0);
+    let knn_conf = f64_safe(record.knn_confidence).unwrap_or(0.0);
+    let bpp_fallback = record.bpp_fallback_score.and_then(f64_safe);
+    let verdict = &record.final_verdict;
+
     let result = conn.execute(
         "INSERT INTO quality_inference_log (
             file_hash, source_path,
@@ -319,22 +399,22 @@ pub fn log_quality_inference_record(
         &[
             &file_hash,
             &source_path,
-            &analysis.features.entropy,
-            &analysis.features.compression_ratio,
-            &spatial_bpp,
-            &log_pixels,
-            &aspect_ratio,
-            &analysis.is_lossless,
-            &record.knn_score,
-            &record.knn_confidence,
+            &entropy,
+            &compression,
+            &bpp,
+            &lp,
+            &ar,
+            &is_lossless,
+            &knn_score,
+            &knn_conf,
             &neighbor_count_i32,
-            &record.bpp_fallback_score,
-            &record.final_verdict,
+            &bpp_fallback,
+            verdict,
         ],
     );
 
     if let Err(e) = result {
-        log::warn!("⚠️ Failed to write quality inference log (non-fatal): {e}");
+        log::warn!("⚠️ Failed to write quality inference log (non-fatal): {e} | Verdict: {}", record.final_verdict);
     }
 }
 

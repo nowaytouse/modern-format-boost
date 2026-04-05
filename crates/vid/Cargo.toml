@@ -9,6 +9,7 @@ description = "High-performance video and animated media converter"
 [dependencies]
 clap = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 rayon = { workspace = true }
 anyhow = { workspace = true }
 shared_utils = { workspace = true }

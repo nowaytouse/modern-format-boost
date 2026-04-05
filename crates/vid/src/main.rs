@@ -76,6 +76,8 @@ enum Commands {
     IngestSamples {
         #[arg(value_name = "INPUT_DIR")]
         input: PathBuf,
+        #[arg(short, long)]
+        label: Option<String>,
     },
 }
 
@@ -305,13 +307,17 @@ fn main() -> anyhow::Result<()> {
             println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         }
 
-        Commands::IngestSamples { input } => {
+        Commands::IngestSamples { input, label } => {
             if !input.is_dir() {
                 shared_utils::log_eprintln!("❌ Input path must be a directory");
                 std::process::exit(1);
             }
-            println!("📥 Ingesting GIF samples from: {}", input.display());
-            match shared_utils::gif_value_db::batch_ingest_samples(&input, None) {
+            if let Some(lbl) = &label {
+                println!("📥 Ingesting GIF samples with label '{}' from: {}", lbl, input.display());
+            } else {
+                println!("📥 Ingesting GIF samples from: {}", input.display());
+            }
+            match shared_utils::gif_value_db::batch_ingest_samples(&input, label.as_deref()) {
                 Ok(count) => {
                     println!("✅ Successfully ingested {count} samples into PostgreSQL database");
                 }

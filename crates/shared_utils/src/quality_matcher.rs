@@ -148,7 +148,6 @@ impl SourceCodec {
             Self::Gif
                 | Self::Apng
                 | Self::WebpAnimated
-                | Self::WebpStatic
                 | Self::Avif
                 | Self::Heic
                 | Self::JpegXl
@@ -222,8 +221,149 @@ impl SourceCodec {
     pub const fn supported_video_extensions() -> &'static [&'static str] {
         &[
             "mp4", "mov", "avi", "mkv", "webm", "m4v", "wmv", "flv", "mpg", "mpeg", "ts", "mts",
-            "m2ts", "m2v", "3gp", "3g2", "ogv", "f4v", "asf",
+            "m2ts", "m2v", "3gp", "3g2", "ogv", "f4v", "asf", "gif", "webp", "avif", "heic",
         ]
+    }
+
+    /// Returns the canonical/default file extension for this codec.
+    #[must_use]
+    pub const fn default_extension(&self) -> &'static str {
+        match self {
+            Self::H264 | Self::H265 | Self::Vvc | Self::Vp8 | Self::Vp9 | Self::Av1 | Self::Av2 | Self::Mpeg4 => "mp4",
+            Self::Mpeg2 | Self::Mpeg1 => "mpg",
+            Self::Wmv => "wmv",
+            Self::Theora => "ogv",
+            Self::RealVideo => "rm",
+            Self::FlashVideo => "flv",
+            Self::ProRes | Self::DnxHD => "mov",
+            Self::Mjpeg => "jpg",
+            Self::Ffv1 | Self::UtVideo | Self::HuffYuv | Self::RawVideo | Self::Lagarith | Self::MagicYuv => "mkv",
+            Self::Gif => "gif",
+            Self::Apng => "apng",
+            Self::WebpAnimated | Self::WebpStatic => "webp",
+            Self::Jpeg => "jpg",
+            Self::JpegXl => "jxl",
+            Self::Png => "png",
+            Self::Avif => "avif",
+            Self::Heic => "heic",
+            Self::Bmp => "bmp",
+            Self::Tiff => "tiff",
+            Self::Unknown => "bin",
+        }
+    }
+
+    /// Checks if a file extension is compatible with this codec.
+    #[must_use]
+    pub fn is_extension_compatible(&self, ext: &str) -> bool {
+        let ext = ext.to_lowercase();
+        match self {
+            Self::H264 | Self::H265 | Self::Vvc | Self::Vp8 | Self::Vp9 | Self::Av1 | Self::Av2 | Self::Mpeg4 => {
+                matches!(ext.as_str(), "mp4" | "m4v" | "mov" | "avi" | "mkv" | "webm")
+            }
+            Self::Mpeg2 | Self::Mpeg1 => matches!(ext.as_str(), "mpg" | "mpeg" | "ts" | "mts" | "m2ts" | "m2v"),
+            Self::Wmv => matches!(ext.as_str(), "wmv" | "asf"),
+            Self::Jpeg | Self::Mjpeg => matches!(ext.as_str(), "jpg" | "jpeg" | "jpe" | "jfif"),
+            Self::Png => ext == "png",
+            Self::Gif => ext == "gif",
+            Self::WebpStatic | Self::WebpAnimated => ext == "webp",
+            Self::Heic => matches!(ext.as_str(), "heic" | "heif" | "hif"),
+            Self::Avif => ext == "avif",
+            Self::JpegXl => ext == "jxl",
+            Self::Bmp => ext == "bmp",
+            Self::Tiff => matches!(ext.as_str(), "tiff" | "tif"),
+            Self::Apng => matches!(ext.as_str(), "apng" | "png"),
+            _ => true, // Relaxed for other video formats
+        }
+    }
+
+    /// Identifies the file format based on internal magic bytes.
+    /// This is the "Tight Entry" mechanism that avoids relying on file extensions.
+    #[must_use]
+    pub fn identify_by_content(path: &std::path::Path) -> Option<Self> {
+        use std::io::Read;
+        let mut file = std::fs::File::open(path).ok()?;
+        let mut header = [0u8; 16];
+        let n = file.read(&mut header).ok()?;
+        if n < 2 {
+            return None;
+        }
+
+        Self::identify_by_header(&header[..n])
+    }
+
+    /// Identifies format from a byte slice (header).
+    #[must_use]
+    pub fn identify_by_header(header: &[u8]) -> Option<Self> {
+        if header.len() < 2 {
+            return None;
+        }
+
+        // 1. Static Image Patterns
+        // JPEG: FF D8
+        if header.starts_with(&[0xFF, 0xD8]) {
+            return Some(Self::Jpeg);
+        }
+        // PNG: 89 50 4E 47 0D 0A 1A 0A
+        if header.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
+            return Some(Self::Png);
+        }
+        // GIF: GIF87a / GIF89a
+        if header.starts_with(b"GIF87a") || header.starts_with(b"GIF89a") {
+            return Some(Self::Gif);
+        }
+        // BMP: BM
+        if header.starts_with(b"BM") {
+            return Some(Self::Bmp);
+        }
+        // TIFF: II* (LE) or MM* (BE)
+        if header.starts_with(&[0x49, 0x49, 0x2A, 0x00]) || header.starts_with(&[0x4D, 0x4D, 0x00, 0x2A]) {
+            return Some(Self::Tiff);
+        }
+        // JPEG-XL: [FF 0A] or Container [00 00 00 0C 4A 58 4C 20 0D 0A 87 0A]
+        if header.starts_with(&[0xFF, 0x0A]) || (header.len() >= 12 && &header[..12] == &[0x00, 0x00, 0x00, 0x0C, 0x4A, 0x58, 0x4C, 0x20, 0x0D, 0x0A, 0x87, 0x0A]) {
+            return Some(Self::JpegXl);
+        }
+
+        // 2. RIFF Containers (WebP, AVI)
+        if header.len() >= 12 && &header[..4] == b"RIFF" {
+            let brand = &header[8..12];
+            if brand == b"WEBP" {
+                // Determine if animated requires deeper probe, but for identification WebpStatic/Animated is fine
+                // Here we return WebpStatic as the base type.
+                return Some(Self::WebpStatic); 
+            }
+            if brand == b"AVI " {
+                return Some(Self::Mpeg4); // AVI often contains MPEG4 variants
+            }
+        }
+
+        // 3. ISO Base Media File Format (MP4, MOV, HEIC, AVIF)
+        // [Any 4 bytes] + "ftyp"
+        if header.len() >= 12 && &header[4..8] == b"ftyp" {
+            let brand = &header[8..12];
+            match brand {
+                b"heic" | b"heix" | b"heim" | b"heis" | b"mif1" | b"msf1" => return Some(Self::Heic),
+                b"avif" | b"avis" => return Some(Self::Avif),
+                b"mp41" | b"mp42" | b"isom" | b"iso2" => return Some(Self::H264), // Assuming H264 for MP4 container logic
+                b"qt  " => return Some(Self::H264), // QuickTime
+                _ => return Some(Self::H264), // Differentiate via ffprobe later
+            }
+        }
+
+        // 4. MKV / WebM (EBML)
+        if header.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) {
+            return Some(Self::Av1); // MKV/WebM is a catch-all for modern video identification here
+        }
+
+        // 5. MPEG Transport/Program Stream
+        if header.starts_with(&[0x47]) {
+            return Some(Self::Mpeg2); // TS sync byte
+        }
+        if header.starts_with(&[0x00, 0x00, 0x01, 0xBA]) {
+            return Some(Self::Mpeg2); // PS start code
+        }
+
+        None
     }
 }
 
@@ -3216,4 +3356,77 @@ fn test_h264_apple_compat_should_not_skip() {
         "H.264 should NOT be skipped in Apple compat"
     );
     assert_eq!(decision.codec, SourceCodec::H264);
+}
+
+#[cfg(test)]
+mod content_id_tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    fn create_temp_with_content(content: &[u8]) -> NamedTempFile {
+        let mut file = NamedTempFile::new().expect("Failed to create temp file");
+        file.write_all(content).expect("Failed to write to temp file");
+        file
+    }
+
+    #[test]
+    fn test_identify_jpeg() {
+        let file = create_temp_with_content(&[0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, b'J', b'F', b'I', b'F']);
+        let codec = SourceCodec::identify_by_content(file.path()).expect("Should identify JPEG");
+        assert_eq!(codec, SourceCodec::Jpeg);
+        assert!(codec.is_extension_compatible("jpg"));
+        assert!(codec.is_extension_compatible("jpeg"));
+        assert!(!codec.is_extension_compatible("png"));
+    }
+
+    #[test]
+    fn test_identify_png() {
+        let file = create_temp_with_content(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+        let codec = SourceCodec::identify_by_content(file.path()).expect("Should identify PNG");
+        assert_eq!(codec, SourceCodec::Png);
+        assert!(codec.is_extension_compatible("png"));
+    }
+
+    #[test]
+    fn test_identify_mp4() {
+        let file = create_temp_with_content(&[0x00, 0x00, 0x00, 0x20, b'f', b't', b'y', b'p', b'i', b's', b'o', b'm']);
+        let codec = SourceCodec::identify_by_content(file.path()).expect("Should identify MP4 (H264 fallback)");
+        assert_eq!(codec, SourceCodec::H264);
+        assert!(codec.is_extension_compatible("mp4"));
+        assert!(codec.is_extension_compatible("mov"));
+    }
+
+    #[test]
+    fn test_identify_heic() {
+        let file = create_temp_with_content(&[0x00, 0x00, 0x00, 0x1C, b'f', b't', b'y', b'p', b'h', b'e', b'i', b'c']);
+        let codec = SourceCodec::identify_by_content(file.path()).expect("Should identify HEIC");
+        assert_eq!(codec, SourceCodec::Heic);
+        assert!(codec.is_extension_compatible("heic"));
+    }
+
+    #[test]
+    fn test_identify_mkv() {
+        let file = create_temp_with_content(&[0x1A, 0x45, 0xDF, 0xA3, 0x01, 0x00, 0x00, 0x00]);
+        let codec = SourceCodec::identify_by_content(file.path()).expect("Should identify EBML/MKV");
+        assert_eq!(codec, SourceCodec::Av1); // MKV catch-all
+        assert!(codec.is_extension_compatible("mkv"));
+        assert!(codec.is_extension_compatible("webm"));
+    }
+
+    #[test]
+    fn test_mismatch_extension_correction() {
+        // Create a PNG file but name it .jpg
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let png_as_jpg = temp_dir.path().join("image.jpg");
+        {
+            let mut file = std::fs::File::create(&png_as_jpg).expect("Failed to create file");
+            file.write_all(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]).expect("Failed to write PNG header");
+        }
+
+        let fixed_path = crate::smart_file_copier::fix_extension_if_mismatch(&png_as_jpg).expect("Should fix extension");
+        assert_eq!(fixed_path.extension().unwrap().to_string_lossy().to_lowercase(), "png");
+        assert!(fixed_path.exists());
+        assert!(!png_as_jpg.exists());
+    }
 }
