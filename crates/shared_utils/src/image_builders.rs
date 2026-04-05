@@ -687,6 +687,7 @@ impl ExiftoolBuilder {
 
     pub fn tags_from_file<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
         self.arg("-tagsfromfile");
+        // ExifTool format-interprets % in tagsfromfile argument, so we must double them.
         self.arg(crate::path_safety::property_safe_path(path.as_ref()).to_string());
         self
     }
@@ -731,8 +732,29 @@ impl ExiftoolBuilder {
 
     /// Ignores minor errors and warnings.
     /// Equivalent to `exiftool -m`.
-    pub fn ignore_minor_errors(&mut self) -> &mut Self {
+    pub fn ignore_minor(&mut self) -> &mut Self {
         self.arg("-m");
+        self
+    }
+
+    /// Suppresses warnings and logs.
+    /// Equivalent to `exiftool -q`. Call twice for absolute silence.
+    pub fn quiet(&mut self) -> &mut Self {
+        self.arg("-q");
+        self
+    }
+
+    /// Preserves file modification date/time.
+    /// Equivalent to `exiftool -P`.
+    pub fn preserve_date(&mut self) -> &mut Self {
+        self.arg("-P");
+        self
+    }
+
+    /// Allows processing of 'unsafe' tags.
+    /// Equivalent to `exiftool -unsafe`.
+    pub fn unsafe_tags(&mut self) -> &mut Self {
+        self.arg("-unsafe");
         self
     }
 

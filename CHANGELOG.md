@@ -14,6 +14,8 @@ All notable changes to this project will be documented in this file.
 - **Average Frame Rate Support**: Added `avg_frame_rate` to the core `FFprobeResult` schema, allowing for more accurate playback speed detection in Variable Frame Rate (VFR) containers.
 - **Alpha Protection (Transparency Reinforcement)**: Enforced explicit `RGBA` pixel format across the entire extraction and alpha-merging pipeline. This prevents transparency-to-black bleeding and ensures professional color accuracy for transparent animated images (WebP/AVIF/GIF).
 - **Professional Log Standardization**: Audited and simplified the `cli_runner.rs` terminal output, removing decorative Emojis from core processing paths to ensure professional log clarity.
+- **Type-safe Metadata Builder**: Refactored `ExiftoolBuilder` to provide high-level methods like `.quiet()`, `.ignore_minor()`, and `.tags_from_file()`, eliminating redundant raw command-line strings across the codebase.
+- **Log Silence (Zero-Noise)**: Suppressed non-actionable `ExifTool` warnings (e.g., "No writable tags set from JXL") via dual-quiet flags and proper `stderr` piping in the concurrent `XmpMerger` pipeline, ensuring a clean and focused terminal output.
 
 #### 🏗️ Architecture: Strict Static vs. Animated Module Isolation (img & vid)
 

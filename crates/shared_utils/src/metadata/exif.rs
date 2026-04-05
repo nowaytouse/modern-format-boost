@@ -273,7 +273,7 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
         .overwrite_original()
         .tags_from_file(src)
         .arg("-all:all")
-        .arg("-unsafe");
+        .unsafe_tags();
     
     if !jxl_already_has_icc {
         // Non-JXL OR JXL without embedded ICC: inject via ExifTool as fallback
@@ -286,8 +286,9 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
         .arg("MWG")
         .arg("-api")
         .arg("LargeFileSupport=1")
-        .arg("-q")
-        .arg("-m")
+        .quiet()
+        .quiet()
+        .ignore_minor()
         .input(dst);
     
     let mut output = builder.build().output()?;
@@ -458,8 +459,8 @@ fn fix_quicktime_dates(src: &Path, dst: &Path) -> io::Result<()> {
         .arg(format!("-EXIF:CreateDate={best_date}"))
         .arg(format!("-XMP:DateCreated={best_date}"))
         .arg(format!("-XMP:CreateDate={best_date}"))
-        .arg("-q")
-        .arg("-m")
+        .quiet()
+        .ignore_minor()
         .input(dst);
     
     let output = builder.build().output()?;

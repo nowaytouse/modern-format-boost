@@ -692,17 +692,19 @@ impl XmpMerger {
         let mut builder = crate::tool_builders::ExiftoolBuilder::new();
         builder
             .use_stdin()
-            .arg("-P")
+            .preserve_date()
+            .quiet()
+            .quiet()
+            .ignore_minor()
             .arg("-charset")
             .arg("filename=utf8")
             .arg("-api")
             .arg("windowsunicode=1")
             .arg("-api")
             .arg("LargeFileSupport=1")
-            .arg("-tagsfromfile")
-            .arg("-")
+            .tags_from_file("-")
             .arg("-all:all")
-            .arg("-unsafe")
+            .unsafe_tags()
             .arg("-FileModifyDate<FileModifyDate")
             .arg(safe_path_arg(media_path).as_ref());
 
@@ -716,16 +718,19 @@ impl XmpMerger {
         let apple_compat = std::env::var("MODERN_FORMAT_BOOST_APPLE_COMPAT").is_ok();
 
         if is_jxl && apple_compat {
-            builder.arg("-all=");
-            builder.arg("-tagsfromfile");
-            builder.arg("@");
-            builder.arg("-all:all");
-            builder.arg("-unsafe");
-            builder.arg("-icc_profile");
+            builder
+                .strip_all()
+                .tags_from_file("@")
+                .arg("-all:all")
+                .unsafe_tags()
+                .arg("-icc_profile");
         }
 
-        let mut child = builder
-            .build()
+        let mut cmd = builder.build();
+        cmd.stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+            
+        let mut child = cmd
             .spawn()
             .context("Failed to spawn exiftool merge process")?;
 
