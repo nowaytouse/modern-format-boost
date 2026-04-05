@@ -48,6 +48,7 @@ analysis_cache/
 # /path/to/local/test/data
 .github/prompts/
 debug/
+!crates/dev/
 __pycache__/
 .qwen/
 

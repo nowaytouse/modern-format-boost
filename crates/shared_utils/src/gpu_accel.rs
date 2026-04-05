@@ -2737,7 +2737,11 @@ fn gpu_coarse_search_with_log_impl(
                     log_msg!("   📦 Cache hit: CRF {:.1}", test_crf);
                     Ok(cached_size)
                 } else {
-                    encode_cached(test_crf, &mut size_cache)
+                    let r = encode_cached(test_crf, &mut size_cache);
+                    if r.is_ok() {
+                        iterations += 1;
+                    }
+                    r
                 };
 
                 if let Ok(size) = result {

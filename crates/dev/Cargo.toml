@@ -1,0 +1,26 @@
+[package]
+name = "dev"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Regression test suite and development tools for Modern Format Boost"
+
+[dependencies]
+shared_utils = { workspace = true }
+tempfile = { workspace = true }
+rusqlite = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+blake3 = { workspace = true }
+walkdir = { workspace = true }
+
+[dev-dependencies]
+shared_utils = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

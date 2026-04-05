@@ -19,6 +19,7 @@ pub trait CliProcessingResult {
     fn input_size(&self) -> u64;
     fn output_size(&self) -> Option<u64>;
     fn message(&self) -> &str;
+    fn blake3(&self) -> Option<&str>;
 }
 
 impl CliProcessingResult for crate::conversion::ConversionResult {
@@ -45,6 +46,9 @@ impl CliProcessingResult for crate::conversion::ConversionResult {
     }
     fn message(&self) -> &str {
         &self.message
+    }
+    fn blake3(&self) -> Option<&str> {
+        self.blake3.as_deref()
     }
 }
 
@@ -209,6 +213,12 @@ where
     let mut recent_success_ext: Option<String> = None;
     let mut recent_success_parent: Option<PathBuf> = None;
 
+    // 📡 Optional: Initialize audit log directory
+    let debug_dir = Path::new("debug");
+    if debug_dir.exists() && debug_dir.is_dir() {
+        let _ = std::fs::create_dir_all(debug_dir);
+    }
+
     while !pending_files.is_empty() {
         if pause_controller.is_paused() {
             break;
@@ -297,6 +307,14 @@ where
                     total_output_bytes += result.output_size().unwrap_or(result.input_size());
                     recent_success_ext = extension_lower(&fixed);
                     recent_success_parent = fixed.parent().map(Path::to_path_buf);
+
+                    // 📡 Audit: Log live decision to JSONL if debug/ exists
+                    log_live_audit_to_jsonl(
+                        result.blake3(),
+                        &config.label,
+                        result.output_path().unwrap_or("original"),
+                        result.message(),
+                    );
 
                     // Mark as completed
                     if let Some(ref mut cp) = checkpoint {
@@ -575,7 +593,58 @@ where
     }
     info!("   Result: {}", result.message());
 
+    // 📡 Audit: Log live decision to JSONL if debug/ exists
+    log_live_audit_to_jsonl(
+        result.blake3(),
+        &config.label,
+        result.output_path().unwrap_or("original"),
+        result.message(),
+    );
+
     Ok(())
+}
+
+
+#[derive(serde::Serialize)]
+struct AuditRecord<'a> {
+    blake3: &'a str,
+    session_id: &'a str,
+    actual_format: &'a str,
+    actual_params_json: &'a str,
+    audit_at: i64,
+}
+
+fn log_live_audit_to_jsonl(
+    blake3: Option<&str>,
+    session_id: &str,
+    actual_format: &str,
+    actual_params_json: &str,
+) {
+    let Some(hash) = blake3 else { return };
+    let debug_dir = Path::new("debug");
+    if !debug_dir.exists() {
+        return;
+    }
+
+    let audit_file = debug_dir.join("live_audit.jsonl");
+    let record = AuditRecord {
+        blake3: hash,
+        session_id,
+        actual_format,
+        actual_params_json,
+        audit_at: chrono::Utc::now().timestamp(),
+    };
+
+    if let Ok(json) = serde_json::to_string(&record) {
+        use std::io::Write;
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(audit_file)
+        {
+            let _ = writeln!(file, "{}", json);
+        }
+    }
 }
 
 #[cfg(test)]

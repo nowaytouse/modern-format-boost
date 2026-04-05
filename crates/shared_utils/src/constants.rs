@@ -66,9 +66,10 @@ pub const STICKER_MAX_DIMENSION: u32 = 512;
 /// "Bottom-line" size control: assets below this size are likely stickers.
 pub const STICKER_MAX_SIZE_BYTES: u64 = 1_572_864; // 1.5 MB
 
-/// Upper bound on `width * height` for **GIF** assets that qualify for **Layer 1-B2** in
-/// [`crate::loop_intent::evaluate_loop_tree`]: a silent, sticker-class canvas is treated as
-/// **strong loop/sticker prior** (not a `vid` strategy bypass). Larger canvases stay in Layer 4 / KNN.
+/// Upper bound on `width * height` for **GIF** assets.
+///
+/// Refers to [`crate::loop_intent::evaluate_loop_tree`]: a silent, sticker-class canvas is treated as
+/// a strong loop/sticker prior (not a `vid` strategy bypass). Larger canvases stay in Layer 4 / KNN.
 pub const STICKER_TIER_NATIVE_GIF_MAX_PIXELS: u64 = 200_000;
 
 // 3. Physical Intensity & Bitrate Analysis

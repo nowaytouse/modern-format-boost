@@ -581,6 +581,7 @@ fn convert_result_to_output(result: shared_utils::ConversionResult) -> Conversio
         size_reduction: result
             .size_reduction
             .map(shared_utils::numeric_cast::f64_to_f32_lossy),
+        blake3: result.blake3,
     }
 }
 
@@ -626,6 +627,7 @@ fn auto_convert_single_file(
             original_size: file_size,
             output_size: None,
             size_reduction: None,
+            blake3: None,
         });
     }
 
@@ -646,6 +648,7 @@ fn auto_convert_single_file(
             original_size: analysis.file_size,
             output_size: None,
             size_reduction: None,
+            blake3: None,
         });
     }
 
@@ -665,6 +668,7 @@ fn auto_convert_single_file(
                 original_size: analysis.file_size,
                 output_size: None,
                 size_reduction: None,
+                blake3: None,
             });
         }
 
@@ -686,7 +690,8 @@ fn auto_convert_single_file(
                 original_size: analysis.file_size,
                 output_size: None,
                 size_reduction: None,
-            });
+                blake3: None,
+             });
         }
     }
 

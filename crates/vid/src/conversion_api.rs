@@ -565,6 +565,7 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
         message: "Simple conversion successful (HEVC CRF 18)".to_string(),
         final_crf: 18.0,
         exploration_attempts: 0,
+        blake3: None,
     })
 }
 
@@ -634,6 +635,7 @@ pub fn auto_convert_with_cache(
             message: "Skipped Live Photo in Apple compat mode".to_string(),
             final_crf: 0.0,
             exploration_attempts: 0,
+            blake3: None,
         });
     }
 
@@ -672,6 +674,7 @@ pub fn auto_convert_with_cache(
             message: "Skipped static image in vid module".to_string(),
             final_crf: 0.0,
             exploration_attempts: 0,
+            blake3: None,
         });
     }
 
@@ -724,6 +727,7 @@ pub fn auto_convert_with_cache(
             message: "Skipped modern codec to avoid generation loss".to_string(),
             final_crf: 0.0,
             exploration_attempts: 0,
+            blake3: None,
         });
     }
 
@@ -787,6 +791,7 @@ pub fn auto_convert_with_cache(
             message: format!("Skipped: output exists ({})", output_path.display()),
             final_crf: 0.0,
             exploration_attempts: 0,
+            blake3: None,
         });
     }
 
@@ -860,6 +865,7 @@ pub fn auto_convert_with_cache(
                 message: result.message,
                 final_crf: 0.0,
                 exploration_attempts: 0,
+                blake3: None,
             });
         }
         TargetVideoFormat::HevcMp4 | TargetVideoFormat::Av1Mp4 => {
@@ -1223,6 +1229,7 @@ pub fn auto_convert_with_cache(
                             ),
                             final_crf: explore_result.optimal_crf,
                             exploration_attempts: explore_result.iterations as u8,
+                            blake3: None,
                         });
                     }
 
@@ -1259,6 +1266,7 @@ pub fn auto_convert_with_cache(
                         message: fail_message,
                         final_crf: explore_result.optimal_crf,
                         exploration_attempts: explore_result.iterations as u8,
+                        blake3: None,
                     });
                 }
 
@@ -1350,6 +1358,7 @@ pub fn auto_convert_with_cache(
             message: "Skipped: output was created concurrently".to_string(),
             final_crf: 0.0,
             exploration_attempts: 0,
+            blake3: None,
         });
     }
 
@@ -1397,6 +1406,7 @@ pub fn auto_convert_with_cache(
                     ),
                     final_crf: result.optimal_crf,
                     exploration_attempts: result.iterations as u8,
+                    blake3: None,
                 });
             }
 
@@ -1434,6 +1444,7 @@ pub fn auto_convert_with_cache(
                 message: format!("Skipped: MS-SSIM {score_str} below target 0.90"),
                 final_crf: result.optimal_crf,
                 exploration_attempts: result.iterations as u8,
+                blake3: None,
             });
         }
     }
@@ -1548,6 +1559,7 @@ pub fn auto_convert_with_cache(
                 ),
                 final_crf,
                 exploration_attempts: attempts,
+                blake3: None,
             });
         }
 
@@ -1599,6 +1611,7 @@ pub fn auto_convert_with_cache(
             ),
             final_crf,
             exploration_attempts: attempts,
+            blake3: None,
         });
     }
 
@@ -1653,6 +1666,7 @@ pub fn auto_convert_with_cache(
         },
         final_crf,
         exploration_attempts: attempts,
+        blake3: None,
     })
 }
 

@@ -387,8 +387,12 @@ fn skipped_already_processed(input: &Path) -> ConversionResult {
         size_reduction: None,
         message: "Skipped: Already processed".to_string(),
         skipped: true,
+
         skip_reason: Some("duplicate".to_string()),
-    }
+
+        blake3: None,
+
+        }
 }
 
 fn skipped_output_exists(input: &Path, output: &Path, input_size: u64) -> ConversionResult {
@@ -401,8 +405,12 @@ fn skipped_output_exists(input: &Path, output: &Path, input_size: u64) -> Conver
         size_reduction: None,
         message: "Skipped: Output file exists".to_string(),
         skipped: true,
+
         skip_reason: Some("exists".to_string()),
-    }
+
+        blake3: None,
+
+        }
 }
 
 /// Return true when the input is either a native GIF or a GIF-like silent loop
@@ -446,8 +454,12 @@ fn skipped_static_animated(input: &Path, input_size: u64) -> ConversionResult {
         size_reduction: None,
         message: "Skipped: Static image (1 frame), use image conversion path instead".to_string(),
         skipped: true,
+
         skip_reason: Some("static_animated".to_string()),
-    }
+
+        blake3: None,
+
+        }
 }
 
 /// Convert animated image to MP4 (HEVC or AV1).
@@ -489,8 +501,12 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
             message: "Skipped: GIF-like asset identified as meme/sticker (meme-score / loop score)"
                 .to_string(),
             skipped: true,
+
             skip_reason: Some("gif_meme".to_string()),
-        });
+
+            blake3: None,
+
+            });
     }
 
     let input_size = fs::metadata(input)?.len();
@@ -536,8 +552,12 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
                     size_reduction: None,
                     message: "Skipped: djxl not found (required for animated JXL)".to_string(),
                     skipped: true,
+
                     skip_reason: Some("djxl_not_found".to_string()),
-                });
+
+                    blake3: None,
+
+                    });
             }
 
             // Create temporary APNG file
@@ -576,8 +596,12 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
                         size_reduction: None,
                         message: "JXL → APNG conversion failed (djxl error)".to_string(),
                         skipped: true,
+
                         skip_reason: Some("djxl_failed".to_string()),
-                    });
+
+                        blake3: None,
+
+                        });
                 }
             }
         } else if input_ext == shared_utils::constants::EXT_WEBP {
@@ -599,8 +623,12 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
                     size_reduction: None,
                     message: "Skipped: webpmux not found (required for animated WebP)".to_string(),
                     skipped: true,
+
                     skip_reason: Some("webpmux_not_found".to_string()),
-                });
+
+                    blake3: None,
+
+                    });
             }
 
             // Create temporary APNG file
@@ -628,8 +656,12 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
                         size_reduction: None,
                         message: format!("WebP extraction failed: {e}"),
                         skipped: true,
+
                         skip_reason: Some("webp_extraction_failed".to_string()),
-                    });
+
+                        blake3: None,
+
+                        });
                 }
             }
         } else if input_ext == shared_utils::constants::EXT_AVIF
@@ -776,8 +808,12 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
                     size_reduction: None,
                     message: format!("{codec_name} output invalid; original copied"),
                     skipped: true,
+
                     skip_reason: Some(format!("{}_invalid_output", options.codec.as_str())),
-                });
+
+                    blake3: None,
+
+                    });
             }
 
             if !shared_utils::conversion::commit_temp_to_output_with_metadata(
@@ -827,8 +863,12 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
                 size_reduction: Some(reduction_pct),
                 message,
                 skipped: false,
+
                 skip_reason: None,
-            })
+
+                blake3: None,
+
+                })
         }
         Ok(output_cmd) => {
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
@@ -851,8 +891,12 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
                     stderr.lines().last().unwrap_or("")
                 ),
                 skipped: true,
+
                 skip_reason: Some(format!("{}_encode_failed", options.codec.as_str())),
-            })
+
+                blake3: None,
+
+                })
         }
         Err(e) => {
             cleanup_temp_output(&temp_output, input);
@@ -869,8 +913,12 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
                 size_reduction: None,
                 message: format!("HEVC encode failed (ffmpeg not found: {e}); original copied"),
                 skipped: true,
+
                 skip_reason: Some("hevc_encode_failed".to_string()),
-            })
+
+                blake3: None,
+
+                })
         }
     }
 }
@@ -913,8 +961,12 @@ pub fn convert_to_mp4_matched(
             message: "Skipped: GIF-like asset identified as meme/sticker (meme-score / loop score)"
                 .to_string(),
             skipped: true,
+
             skip_reason: Some("gif_meme".to_string()),
-        });
+
+            blake3: None,
+
+            });
     }
 
     let input_size = fs::metadata(input)?.len();
@@ -955,8 +1007,12 @@ pub fn convert_to_mp4_matched(
                     size_reduction: None,
                     message: "Skipped: djxl not found (required for animated JXL)".to_string(),
                     skipped: true,
+
                     skip_reason: Some("djxl_not_found".to_string()),
-                });
+
+                    blake3: None,
+
+                    });
             }
             let temp_apng = tempfile::Builder::new()
                 .suffix(".apng")
@@ -990,8 +1046,12 @@ pub fn convert_to_mp4_matched(
                         size_reduction: None,
                         message: "JXL → APNG conversion failed (djxl error)".to_string(),
                         skipped: true,
+
                         skip_reason: Some("djxl_failed".to_string()),
-                    });
+
+                        blake3: None,
+
+                        });
                 }
             }
         } else if input_ext == shared_utils::constants::EXT_WEBP {
@@ -1013,8 +1073,12 @@ pub fn convert_to_mp4_matched(
                     size_reduction: None,
                     message: "Skipped: webpmux not found (required for animated WebP)".to_string(),
                     skipped: true,
+
                     skip_reason: Some("webpmux_not_found".to_string()),
-                });
+
+                    blake3: None,
+
+                    });
             }
 
             // Create temporary APNG file
@@ -1042,8 +1106,12 @@ pub fn convert_to_mp4_matched(
                         size_reduction: None,
                         message: format!("WebP extraction failed: {e}"),
                         skipped: true,
+
                         skip_reason: Some("webp_extraction_failed".to_string()),
-                    });
+
+                        blake3: None,
+
+                        });
                 }
             }
         } else if input_ext == shared_utils::constants::EXT_AVIF && {
@@ -1324,8 +1392,12 @@ pub fn convert_to_mp4_matched(
                 "Skipped: {codec_name} output larger than input by {size_increase_pct:.1}% ({width}x{height}, tolerance exceeded)"
             ),
             skipped: true,
+
             skip_reason: Some("size_increase_beyond_tolerance".to_string()),
-        });
+
+            blake3: None,
+
+            });
     }
 
     // apple_compat: if quality_passed=false only because the file couldn't be compressed
@@ -1357,8 +1429,12 @@ pub fn convert_to_mp4_matched(
                 size_reduction: None,
                 message: "Skipped: SSIM calculation failed".to_string(),
                 skipped: true,
+
                 skip_reason: Some("ssim_failed".to_string()),
-            });
+
+                blake3: None,
+
+                });
         };
         let threshold = explore_result.actual_min_ssim;
 
@@ -1444,8 +1520,12 @@ pub fn convert_to_mp4_matched(
             size_reduction: None,
             message: format!("Skipped: SSIM {actual_ssim:.4} below threshold {threshold:.4}"),
             skipped: true,
+
             skip_reason: Some("quality_failed".to_string()),
-        });
+
+            blake3: None,
+
+            });
     }
 
     if !shared_utils::conversion::commit_temp_to_output_with_metadata(
@@ -1516,8 +1596,12 @@ pub fn convert_to_mp4_matched(
         size_reduction: Some(reduction_pct),
         message,
         skipped: false,
+
         skip_reason: None,
-    })
+
+        blake3: None,
+
+        })
 }
 
 /// Convert to MKV losslessly (HEVC-only for now).
@@ -1624,8 +1708,12 @@ pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result
                 size_reduction: Some(reduction_pct),
                 message,
                 skipped: false,
+
                 skip_reason: None,
-            })
+
+                blake3: None,
+
+                })
         }
         Ok(output_cmd) => {
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
@@ -1646,8 +1734,12 @@ pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result
                     stderr.lines().last().unwrap_or("")
                 ),
                 skipped: true,
+
                 skip_reason: Some("lossless_failed".to_string()),
-            })
+
+                blake3: None,
+
+                })
         }
         Err(e) => {
             cleanup_temp_output(&temp_output, input);
@@ -1664,8 +1756,12 @@ pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result
                 size_reduction: None,
                 message: format!("Lossless failed (ffmpeg not found: {e}); original copied"),
                 skipped: true,
+
                 skip_reason: Some("lossless_failed".to_string()),
-            })
+
+                blake3: None,
+
+                })
         }
     }
 }
@@ -1715,8 +1811,12 @@ pub fn convert_to_gif_apple_compat(
             size_reduction: Some(0.0),
             message: "Skipped: Already GIF (re-encoding would increase size)".to_string(),
             skipped: true,
+
             skip_reason: Some("already_gif".to_string()),
-        });
+
+            blake3: None,
+
+            });
     }
 
     let output = get_output_path(input, "GIF", options)?;
@@ -1735,8 +1835,12 @@ pub fn convert_to_gif_apple_compat(
             size_reduction: None,
             message: "Skipped: Output already exists".to_string(),
             skipped: true,
+
             skip_reason: Some("exists".to_string()),
-        });
+
+            blake3: None,
+
+            });
     }
 
     let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
@@ -1767,8 +1871,12 @@ pub fn convert_to_gif_apple_compat(
                     size_reduction: None,
                     message: "Skipped: djxl not found (required for animated JXL)".to_string(),
                     skipped: true,
+
                     skip_reason: Some("djxl_not_found".to_string()),
-                });
+
+                    blake3: None,
+
+                    });
             }
 
             // Create temporary APNG file
@@ -1809,8 +1917,12 @@ pub fn convert_to_gif_apple_compat(
                         size_reduction: None,
                         message: "JXL → APNG conversion failed (djxl error)".to_string(),
                         skipped: true,
+
                         skip_reason: Some("djxl_failed".to_string()),
-                    });
+
+                        blake3: None,
+
+                        });
                 }
             }
         } else if input_ext == shared_utils::constants::EXT_WEBP {
@@ -1832,8 +1944,12 @@ pub fn convert_to_gif_apple_compat(
                     size_reduction: None,
                     message: "Skipped: webpmux not found (required for animated WebP)".to_string(),
                     skipped: true,
+
                     skip_reason: Some("webpmux_not_found".to_string()),
-                });
+
+                    blake3: None,
+
+                    });
             }
 
             // Create temporary APNG file
@@ -1861,8 +1977,12 @@ pub fn convert_to_gif_apple_compat(
                         size_reduction: None,
                         message: format!("WebP extraction failed: {e}"),
                         skipped: true,
+
                         skip_reason: Some("webp_extraction_failed".to_string()),
-                    });
+
+                        blake3: None,
+
+                        });
                 }
             }
         } else if input_ext == "avif" && has_probable_avif_alpha_stream(input) {
@@ -1943,8 +2063,12 @@ pub fn convert_to_gif_apple_compat(
                         size_reduction: None,
                         message: format!("GIF frame extraction failed: {e}"),
                         skipped: true,
+
                         skip_reason: Some("gif_frame_extraction_failed".to_string()),
-                    });
+
+                        blake3: None,
+
+                        });
                 }
             };
 
@@ -2039,8 +2163,12 @@ pub fn convert_to_gif_apple_compat(
             message: "GIF conversion failed (gifski unavailable or failed); original copied"
                 .to_string(),
             skipped: true,
+
             skip_reason: Some("gif_encode_failed".to_string()),
-        });
+
+            blake3: None,
+
+            });
     }
 
     // Validate output
@@ -2059,8 +2187,12 @@ pub fn convert_to_gif_apple_compat(
             size_reduction: None,
             message: "GIF output invalid; original copied".to_string(),
             skipped: true,
+
             skip_reason: Some("gif_invalid_output".to_string()),
-        });
+
+            blake3: None,
+
+            });
     }
 
     let reduction = 1.0 - (output_size as f64 / input_size as f64);
@@ -2107,8 +2239,12 @@ pub fn convert_to_gif_apple_compat(
                 "Skipped: GIF output larger than input by {size_increase_pct:.1}% (tolerance exceeded)"
             ),
             skipped: true,
+
             skip_reason: Some("size_increase_beyond_tolerance".to_string()),
-        });
+
+            blake3: None,
+
+            });
     }
 
     if !shared_utils::conversion::commit_temp_to_output_with_metadata(
@@ -2126,8 +2262,12 @@ pub fn convert_to_gif_apple_compat(
             size_reduction: None,
             message: "Skipped: Output already exists".to_string(),
             skipped: true,
+
             skip_reason: Some("exists".to_string()),
-        });
+
+            blake3: None,
+
+            });
     }
 
     shared_utils::copy_metadata(input, &output);
@@ -2161,8 +2301,12 @@ pub fn convert_to_gif_apple_compat(
         size_reduction: Some(reduction_pct),
         message,
         skipped: false,
+
         skip_reason: None,
-    })
+
+        blake3: None,
+
+        })
 }
 
 #[cfg(test)]

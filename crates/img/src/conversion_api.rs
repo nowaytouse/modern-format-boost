@@ -45,6 +45,7 @@ pub struct ConversionOutput {
     pub original_size: u64,
     pub output_size: Option<u64>,
     pub size_reduction: Option<f32>,
+    pub blake3: Option<String>,
 }
 
 impl ConversionOutput {
@@ -175,6 +176,7 @@ pub fn execute_conversion(
             original_size: detection.file_size,
             output_size: None,
             size_reduction: None,
+            blake3: None,
         });
     }
 
@@ -201,6 +203,7 @@ pub fn execute_conversion(
             original_size: detection.file_size,
             output_size: None,
             size_reduction: None,
+            blake3: None,
         });
     }
 
@@ -239,6 +242,7 @@ pub fn execute_conversion(
             original_size: detection.file_size,
             output_size: None,
             size_reduction: None,
+            blake3: None,
         });
     }
 
@@ -274,6 +278,7 @@ pub fn execute_conversion(
                 original_size: detection.file_size,
                 output_size: None,
                 size_reduction: None,
+                blake3: None,
             });
         }
     }
@@ -319,6 +324,7 @@ pub fn execute_conversion(
         original_size: detection.file_size,
         output_size,
         size_reduction,
+        blake3: None,
     })
 }
 

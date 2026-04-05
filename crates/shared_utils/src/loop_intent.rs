@@ -1242,8 +1242,6 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
 
             if let Some(m) = sample_match {
                 let Some(keep_prob) = m.keep_probability else {
-                    knn_confidence = Some(m.confidence);
-                    knn_neighbor_count = Some(m.neighbor_count);
                     emit_stderr(&format!(
                         "   ⚠️  KNN match missing keep-probability (conf={:.2}, n={}) — treating as unknown and deferring to Layer 7",
                         m.confidence, m.neighbor_count
@@ -2401,15 +2399,34 @@ mod tests {
     }
 
     #[test]
-    fn built_in_semantic_keywords_work_without_db_keywords() {
+    #[allow(clippy::float_cmp)]
+    fn test_score_directory_context() {
         let directory_score = score_directory_context(
             Some(&["Downloads".to_string(), "ReactionPacks".to_string()]),
             &[],
         );
-        let filename = analyze_filename(Some("party_sticker.webp"), &[]);
-
         assert!((directory_score - 1.0).abs() < f64::EPSILON);
-        assert_eq!(filename.kind, FilenameKind::HumanSemantic);
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn test_analyze_filename_with_keywords() {
+        // Test Chinese keyword (from JSON)
+        let analysis_zh = analyze_filename(Some("gif表情 (379).gif"), &[]);
+        assert_eq!(analysis_zh.raw, 0.85);
+        assert_eq!(analysis_zh.kind, FilenameKind::HumanSemantic);
+
+        // Test English keyword (from JSON)
+        let analysis_en = analyze_filename(Some("my_funny_meme.webp"), &[]);
+        assert_eq!(analysis_en.raw, 0.85);
+
+        // Test Korean keyword (from JSON)
+        let analysis_ko = analyze_filename(Some("cute_sticker_움짤.avif"), &[]);
+        assert_eq!(analysis_ko.raw, 0.85);
+
+        // Test non-meme filename
+        let analysis_none = analyze_filename(Some("vacation_photo.jpg"), &[]);
+        assert_eq!(analysis_none.raw, 0.5);
     }
 
     #[test]
@@ -2536,13 +2553,8 @@ mod tests {
     }
 
     #[test]
-    fn test_multilingual_meme_keywords() {
-        // Test Chinese keyword (from JSON)
-        let analysis_zh = analyze_filename(Some("gif表情 (379).gif"), &[]);
-        assert_eq!(analysis_zh.raw, 0.85);
-        assert_eq!(analysis_zh.kind, FilenameKind::HumanSemantic);
-
-        // Test English keyword (from JSON)
+    #[allow(clippy::float_cmp)]
+    fn test_analyze_filename_variants() {
         let analysis_en = analyze_filename(Some("my_funny_meme.webp"), &[]);
         assert_eq!(analysis_en.raw, 0.85);
 

@@ -14,11 +14,21 @@ pub fn safe_path_arg(path: &Path) -> Cow<'_, str> {
         );
     }
 
-    // Prepend ./ to filenames starting with - or @ to prevent them from being
-    // interpreted as command-line options or argument files (argfiles).
-    if s.starts_with('-') || s.starts_with('@') {
+    // ULTIMATE DEFENSE: If path contains shell metacharacters that could compromise
+    // ImageMagick delegates or sub-shells, ensure it is treated strictly as a 
+    // relative literal by prepending './'.
+    let has_meta = s.contains(|c: char| {
+        matches!(c, ';' | '&' | '|' | '$' | '`' | '(' | ')' | '{' | '}' | '[' | ']' | '*' | '?' | '<' | '>' | '\\' | '\n' | '\r' | '\'' | '\"')
+    });
+
+    // Handle trailing spaces which can cause I/O misinterpretation
+    let has_trailing_space = s.ends_with(' ');
+
+    if s.starts_with('-') || s.starts_with('@') || has_meta || has_trailing_space {
         let mut out = String::with_capacity(2 + s.len());
-        out.push_str("./");
+        if !s.starts_with("./") && !s.starts_with('/') {
+            out.push_str("./");
+        }
         out.push_str(&s);
         Cow::Owned(out)
     } else {
@@ -44,16 +54,44 @@ pub fn property_safe_path(path: &Path) -> Cow<'_, str> {
 #[inline]
 #[must_use]
 pub fn magick_safe_path(path: &Path) -> Cow<'_, str> {
-    let s = property_safe_path(path);
-    if s.starts_with("file:") {
-        s
+    // 1. Relativize first to bypass the '/Users' bug and avoid delegates
+    let rel_string: Cow<'_, str> = if path.is_relative() {
+        path.to_string_lossy()
+    } else if let Ok(cwd) = std::env::current_dir() {
+        if let Ok(rel) = path.strip_prefix(&cwd) {
+            rel.to_string_lossy().into_owned().into()
+        } else {
+            path.to_string_lossy()
+        }
     } else {
-        let mut out = String::with_capacity(7 + s.len());
-        out.push_str("file:");
-        if !s.starts_with('/') && !s.starts_with("./") {
+        path.to_string_lossy()
+    };
+
+    // 2. Perform property escaping (%%) on the chosen string
+    let s_escaped = if rel_string.contains('%') {
+        Cow::Owned(rel_string.replace('%', "%%"))
+    } else {
+        rel_string
+    };
+
+    // 3. Apply the Shell/Argfile shield (./) to the escaped string
+    // This blocks metacharacter expansion and argfile hijacking
+    if s_escaped.starts_with('/') {
+        // Absolute path fallback (triple-slash)
+        let mut out = String::with_capacity(8 + s_escaped.len());
+        out.push_str("file:///");
+        out.push_str(&s_escaped[1..]); // Remove leading slash for URI
+        Cow::Owned(out)
+    } else if s_escaped.starts_with("file:") || s_escaped.starts_with("mp4:") || s_escaped.starts_with("gif:") {
+        s_escaped
+    } else {
+        // ULTIMATE DEFENSE: Always prepend ./ to relative paths.
+        // This bypasses many IM7 path-parsing bugs (like skip-first-two-chars).
+        let mut out = String::with_capacity(2 + s_escaped.len());
+        if !s_escaped.starts_with("./") {
             out.push_str("./");
         }
-        out.push_str(&s);
+        out.push_str(&s_escaped);
         Cow::Owned(out)
     }
 }
@@ -62,7 +100,18 @@ pub fn magick_safe_path(path: &Path) -> Cow<'_, str> {
 #[inline]
 #[must_use]
 pub fn exiftool_path_arg(path: &Path) -> Cow<'_, str> {
-    safe_path_arg(path)
+    let s = path.to_string_lossy();
+    
+    if path.is_relative() {
+        let mut out = String::with_capacity(2 + s.len());
+        if !s.starts_with("./") {
+            out.push_str("./");
+        }
+        out.push_str(&s);
+        Cow::Owned(out)
+    } else {
+        s
+    }
 }
 
 /// Returns a unique temporary path for search iterations, fully isolated from user folders.
@@ -122,7 +171,7 @@ mod tests {
         // Test with %
         assert_eq!(
             magick_safe_path(Path::new("img%1.jpg")),
-            "file:./img%%1.jpg"
+            "img%%1.jpg"
         );
         // Test absolute
         assert_eq!(

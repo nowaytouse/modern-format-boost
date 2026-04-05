@@ -257,9 +257,15 @@ pub struct ConversionResult {
     pub message: String,
     pub skipped: bool,
     pub skip_reason: Option<String>,
+    pub blake3: Option<String>,
 }
 
 impl ConversionResult {
+    #[must_use]
+    pub fn with_blake3(mut self, hash: String) -> Self {
+        self.blake3 = Some(hash);
+        self
+    }
     #[must_use]
     pub fn is_jpeg_transcode(&self) -> bool {
         // After terminology fix, "transcoding" is only used for JPEG bitstream reconstruction (lossless JXL)
@@ -278,6 +284,7 @@ impl ConversionResult {
             message: "Skipped: Already processed".to_string(),
             skipped: true,
             skip_reason: Some("duplicate".to_string()),
+            blake3: None,
         }
     }
 
@@ -294,6 +301,7 @@ impl ConversionResult {
             message: "Skipped: Output file exists".to_string(),
             skipped: true,
             skip_reason: Some("exists".to_string()),
+            blake3: None,
         }
     }
 
@@ -309,6 +317,7 @@ impl ConversionResult {
             message: reason.to_string(),
             skipped: true,
             skip_reason: Some(skip_reason.to_string()),
+            blake3: None,
         }
     }
 
@@ -327,6 +336,7 @@ impl ConversionResult {
             message: format!("Skipped: Output would be larger ({size_diff})"),
             skipped: true,
             skip_reason: Some("size_increase".to_string()),
+            blake3: None,
         }
     }
 
@@ -345,6 +355,7 @@ impl ConversionResult {
             ),
             skipped: true,
             skip_reason: Some("size_unchanged".to_string()),
+            blake3: None,
         }
     }
 
@@ -419,6 +430,7 @@ impl ConversionResult {
             message,
             skipped: false,
             skip_reason: None,
+            blake3: None,
         }
     }
 }

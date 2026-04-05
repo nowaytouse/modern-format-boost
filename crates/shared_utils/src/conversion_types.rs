@@ -131,6 +131,7 @@ pub struct ConversionOutput {
     pub message: String,
     pub final_crf: f32,
     pub exploration_attempts: u8,
+    pub blake3: Option<String>,
 }
 
 impl crate::cli_runner::CliProcessingResult for ConversionOutput {
@@ -172,5 +173,8 @@ impl crate::cli_runner::CliProcessingResult for ConversionOutput {
     }
     fn message(&self) -> &str {
         &self.message
+    }
+    fn blake3(&self) -> Option<&str> {
+        self.blake3.as_deref()
     }
 }

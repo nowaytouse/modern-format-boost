@@ -20,31 +20,8 @@ fn is_exiftool_available() -> bool {
     *EXIFTOOL_AVAILABLE.get_or_init(|| which::which("exiftool").is_ok())
 }
 
-fn magick_path(path: &Path, is_output: bool) -> String {
-    let s = crate::safe_path_arg(path).to_string();
-
-    // For ImageMagick, percent signs in filenames are interpreted as properties.
-    // They MUST be doubled to be treated literally.
-    let escaped = if s.contains('%') {
-        s.replace('%', "%%")
-    } else {
-        s
-    };
-
-    let path_with_prefix = if !path.is_absolute() && !escaped.starts_with("./") {
-        format!("./{escaped}")
-    } else {
-        escaped
-    };
-
-    if !is_output && (path_with_prefix.contains(':') || path_with_prefix.contains('%')) {
-        // Prepend 'file:' for input paths to force local file treatment and avoid
-        // protocol delegates (like http:) or property expansion at the beginning of the path.
-        format!("file:{path_with_prefix}")
-    } else {
-        path_with_prefix
-    }
-}
+// Deleted redundant and bug-prone local magick_path implementation.
+// Use crate::path_safety::magick_safe_path instead.
 
 fn is_video_file(path: &Path) -> bool {
     path.extension()
@@ -350,10 +327,10 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
         eprintln!("🔧  [Structural Repair] executing ImageMagick rebuild...");
 
         let mut magick_builder = crate::MagickBuilder::new();
-        // ImageMagick repair requires custom path logic (magick_path)
+        // ImageMagick repair requires proper protocol shielding
         magick_builder
-            .arg(magick_path(dst, false))
-            .arg(magick_path(dst, true));
+            .arg(crate::path_safety::magick_safe_path(dst))
+            .arg(crate::path_safety::magick_safe_path(dst));
 
         let magick_result = magick_builder.build().output();
 

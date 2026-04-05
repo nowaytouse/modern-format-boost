@@ -11,6 +11,27 @@ All notable changes to this project will be documented in this file.
 - **Extracted `bpp_from_meta` helper**: Consolidated duplicate temporal/spatial BPP calculation logic in `database.rs` into a single reusable function with clearer semantics (per-frame temporal density divides by frame count, not multiplies).
 - **Fixed temporal BPP formula bug**: Legacy code in `lookup_similar_samples_inner` multiplied by `frame_count` instead of dividing — corrected to use proper per-frame density calculation.
 - **Added regression test**: `bpp_from_meta_divides_temporal_density_by_frame_count` validates the corrected formula against legacy buggy behavior.
+- **Path Safety Hardening**: 
+    - **Relativization Shield**: Mitigated ImageMagick 7 absolute path truncation bugs by implementing mandatory `./` guarding for all file inputs.
+    - **ExifTool Injection Defense**: Hardened `exiftool_path_arg` with unconditional `./` guarding to prevent command hijacking via `-` or `@` filename prefixes.
+    - **Format Expansion Prevention**: Implemented double-percent (`%%`) escaping to lock down filename property expansion vulnerabilities.
+    - **Shell Injection Defense**: Added metacharacter scanning and protocol-less relative addressing to prevent command injection via ImageMagick delegates.
+    - **URI-compliant Pathing**: Implemented the `file:///` (triple-slash) protocol in `magick_safe_path` for 100% stable absolute path preservation.
+- **Media Integrity & Resource Safety**:
+    - **Metadata Bomb Stamina**: Hardened the XMP/EXIF pipeline against abnormally high metadata density, preventing OOM and hangs during concurrent processing.
+    - **Zero-Duration Rhythm Lockdown**: Implemented strict validation to reject media with invalid inter-frame delays, preventing high-speed playback artifacts.
+- **BPP Calculation Precision**: 
+    - **Temporal Density Fix**: Validated the corrected BPP formula (`density / frames`) against high-frame-count synthetic media to ensure no return of legacy multiplication-based inflation.
+- **Grayscale JXL Fallback Logic**: Restored and optimized the detection of `Getting pixel data failed` errors caused by RGB ICC profiles in grayscale sources. The pipeline now automatically triggers a `-strip` and 16-bit depth fallback to ensure successful conversion.
+- **Media Index Accelerated Development System (Zero-I/O Regression)**:
+    - **Architecture**: Implemented a SQLite-backed feature indexing system located in `debug/media_index.sqlite`.
+    - **Extraction Tool (`index_gallery`)**: Added a batch indexing tool with strict filtering — only includes **Static Images** (excludes GIF/APNG animations) and **Long Videos** (minimum duration **60.0s**).
+    - **Instant Regression (`test_index_decisions`)**: Added a sub-second decision validation tool that runs purely against indexed features without disk I/O.
+    - **Mockable Decision Layer**: Refactored `image_recommender` and `video_recommender` to accept `MediaIndexRow` for deterministic testing.
+- **Critical Fixes & Hardening**:
+    - **1x1 Pixel Safety**: Patched a subtraction overflow in `image_detection.rs` triggered by ultra-small 1x1 pixel media during block-sampling.
+    - **Type Inference Restoration**: Fixed a compiler "type inference loss" (E0282) by restoring the missing `img_errors` module in `lib.rs`.
+    - **Orphan Rule Compliance**: Resolved `E0116` by migrating SQL preparation logic directly into the `MediaIndex` model.
 
 #### 🧠 Loop Intent: Improved Legacy Mode & KNN Fallbacks
 

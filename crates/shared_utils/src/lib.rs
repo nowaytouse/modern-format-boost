@@ -143,11 +143,14 @@ pub mod image_jpeg_analysis;
 pub mod image_metrics;
 pub mod image_quality_db;
 pub mod image_recommender;
+pub mod video_recommender;
 pub mod img_errors;
 pub mod live_photo;
 pub mod loop_intent;
 pub mod media_meta_utils;
+pub mod media_index_types;
 
+pub use blake3;
 pub use database::{lookup_similar_samples, SampleMatch};
 pub use depth_channel::{
     encode_jxl_depth_fallback, encode_jxl_with_depth, extract_depth_from_heic, DepthMap, DepthType,

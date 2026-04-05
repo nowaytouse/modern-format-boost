@@ -1641,8 +1641,8 @@ fn analyze_color_distribution(img: &DynamicImage, _palette_size: Option<usize>) 
 
     for by in 0..grid_size {
         for bx in 0..grid_size {
-            let x0 = bx * block_w;
-            let y0 = by * block_h;
+            let x0 = (bx * block_w).min(width);
+            let y0 = (by * block_h).min(height);
             let x1 = ((bx + 1) * block_w).min(width);
             let y1 = ((by + 1) * block_h).min(height);
             let current_block_width = x1 - x0;

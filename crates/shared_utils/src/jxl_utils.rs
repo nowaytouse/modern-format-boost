@@ -144,15 +144,13 @@ pub fn is_grayscale_icc_cjxl_error(stderr: &str) -> bool {
     // Match the specific pattern: ICC profile color space mismatch on grayscale PNG
     // Example: "libpng warning: iCCP: profile 'icc': 'RGB ': RGB color space not permitted on grayscale PNG"
     // Relaxed matching: check for libpng warning + grayscale + icc/color space issues
-    let has_libpng_warning = s.contains("libpng") && s.contains("warning");
-    let has_grayscale_issue = s.contains("grayscale");
-    let has_icc_issue = s.contains("iccp") || s.contains("icc") || s.contains("color space");
-    let has_pixel_failure = s.contains("getting pixel data failed") || s.contains("pixel data");
+    let has_grayscale_issue = s.contains("grayscale") || s.contains("pixel data");
+    let has_icc_issue = s.contains("iccp") || s.contains("color space") || s.contains("icc profile");
+    let has_libpng_warning = s.contains("libpng warning");
 
-    // Either the specific error pattern OR a combination of indicators
-    (s.contains("rgb color space not permitted on grayscale")
-        || (has_libpng_warning && has_grayscale_issue && has_icc_issue))
-        && has_pixel_failure
+    s.contains("rgb color space not permitted on grayscale")
+        || (has_libpng_warning && has_grayscale_issue && has_icc_issue)
+        || (s.contains("iccp") && s.contains("grayscale"))
 }
 
 /// True when cjxl failed with decode/pixel errors that may be helped by a simpler pipeline.
@@ -195,7 +193,7 @@ pub fn get_png_bit_depth(path: &Path) -> Option<u8> {
 /// - `depth`: PNG bit depth to emit (8 or 16); use 8 only for confirmed 8-bit sources
 /// - `normalize_icc`: replaces embedded ICC with standard sRGB without truncating bit depth
 /// - `apple_compat`: adds --`compress_boxes=0` to cjxl for Apple device compatibility
-fn run_imagemagick_cjxl_pipeline(
+pub fn run_imagemagick_cjxl_pipeline(
     input: &Path,
     output: &Path,
     distance: f32,

@@ -697,6 +697,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "dev"
+version = "0.11.2"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "chrono",
+ "clap",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "shared_utils",
+ "tempfile",
+ "walkdir",
+]
+
+[[package]]
 name = "digest"
 version = "0.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -798,6 +814,18 @@ name = "fallible-iterator"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4443176a9f2c162692bd3d352d745ef9413eec5782a80d8fd6f8a1ac692a07f7"
+
+[[package]]
+name = "fallible-iterator"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2acce4a10f12dc2fb14a218589d4f1f62ef011b2d0cc4b3cb1bba8e94da14649"
+
+[[package]]
+name = "fallible-streaming-iterator"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7360491ce676a36bf9bb3c56c1aa791658183a54d2744120f27285738d90465a"
 
 [[package]]
 name = "fallible_collections"
@@ -1009,6 +1037,15 @@ version = "0.16.1"
 source = "git+https://github.com/rust-lang/hashbrown#e16b65ce5a57c62cca8ae3cbd008cdb4e2bd62fc"
 
 [[package]]
+name = "hashlink"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ba4ff7128dee98c7dc9794b6a411377e1404dba1c97deb8d1a55297bd25d8af"
+dependencies = [
+ "hashbrown 0.14.5",
+]
+
+[[package]]
 name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1071,7 +1108,7 @@ checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 [[package]]
 name = "image"
 version = "0.25.9"
-source = "git+https://github.com/image-rs/image#d2a68f4ccf89a88faaeb40aab26a1e37e25c3c8b"
+source = "git+https://github.com/image-rs/image#645b1e5a6ed1559eee15156d21c7d01ab98baf4e"
 dependencies = [
  "bytemuck",
  "byteorder-lite",
@@ -1324,6 +1361,17 @@ dependencies = [
  "libc 0.2.184",
  "plain",
  "redox_syscall 0.7.3",
+]
+
+[[package]]
+name = "libsqlite3-sys"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c10584274047cb335c23d3e61bcef8e323adae7c5c8c760540f73610177fc3f"
+dependencies = [
+ "cc",
+ "pkg-config",
+ "vcpkg",
 ]
 
 [[package]]
@@ -1710,7 +1758,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aacf632d0554ff75f58183694f41dc8999c8a3a43a386994d0ec2d034f1dfbe1"
 dependencies = [
  "bytes",
- "fallible-iterator",
+ "fallible-iterator 0.2.0",
  "futures-util",
  "log",
  "tokio",
@@ -1726,7 +1774,7 @@ dependencies = [
  "base64",
  "byteorder",
  "bytes",
- "fallible-iterator",
+ "fallible-iterator 0.2.0",
  "hmac",
  "md-5",
  "memchr",
@@ -1742,7 +1790,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8dc729a129e682e8d24170cd30ae1aa01b336b096cbb56df6d534ffec133d186"
 dependencies = [
  "bytes",
- "fallible-iterator",
+ "fallible-iterator 0.2.0",
  "postgres-protocol",
  "serde_core",
  "serde_json",
@@ -2052,6 +2100,20 @@ source = "git+https://github.com/3Hren/msgpack-rust#cf880019f72e35a884659a9b29d9
 dependencies = [
  "rmp",
  "serde",
+]
+
+[[package]]
+name = "rusqlite"
+version = "0.31.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b838eba278d213a8beaf485bd313fd580ca4505a00d5871caeb1457c55322cae"
+dependencies = [
+ "bitflags",
+ "fallible-iterator 0.3.0",
+ "fallible-streaming-iterator",
+ "hashlink",
+ "libsqlite3-sys",
+ "smallvec",
 ]
 
 [[package]]
@@ -2490,7 +2552,7 @@ dependencies = [
  "async-trait",
  "byteorder",
  "bytes",
- "fallible-iterator",
+ "fallible-iterator 0.2.0",
  "futures-channel",
  "futures-util",
  "log",
