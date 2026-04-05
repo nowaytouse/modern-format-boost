@@ -968,6 +968,31 @@ fn evaluate_loop_tree(
         );
     }
 
+    // Layer 1-B2: Sticker-class native GIF — strong loop/sticker prior from physical envelope.
+    // Runs only after Layer 1-B (duration is above the DB short cutoff). Uncertain cases that
+    // do not match this profile still defer to Layer 4 and Layer 6 KNN.
+    if ext_lower == "gif"
+        && !meta.has_audio
+        && meta.frame_count > 1
+        && meta.duration_secs > 0.0
+        && meta.duration_secs <= f64::from(crate::constants::ANIMATION_CLIP_THRESHOLD_SECS)
+        && meta.width > 0
+        && meta.height > 0
+        && meta.width <= crate::constants::STICKER_MAX_DIMENSION
+        && meta.height <= crate::constants::STICKER_MAX_DIMENSION
+    {
+        let px = u64::from(meta.width) * u64::from(meta.height);
+        if px <= crate::constants::STICKER_TIER_NATIVE_GIF_MAX_PIXELS {
+            return finalize(
+                LoopIntentVerdict::LoopStrong(format!(
+                    "Layer 1-B2: sticker-class native GIF ({}x{}, {:.2}s, {} px; strong loop/sticker prior)",
+                    meta.width, meta.height, meta.duration_secs, px
+                )),
+                log_odds,
+            );
+        }
+    }
+
     let force_short_gifs =
         developer_layer1_override_enabled(crate::constants::ENV_FORCE_SHORT_GIFS);
     if force_short_gifs
@@ -2189,6 +2214,51 @@ mod tests {
         let verdict = verdict_with_profile(&meta, &profile);
         assert!(matches!(verdict, LoopIntentVerdict::LoopStrong(_)));
         assert!(verdict.reason().contains("Layer 1-B"));
+    }
+
+    #[test]
+    fn layer_1_b2_sticker_class_native_gif_above_short_duration_cutoff() {
+        let profile = base_profile();
+        let mut meta = base_meta();
+        meta.source_extension = Some("gif".to_string());
+        meta.container = Some("gif".to_string());
+        meta.is_native_gif = true;
+        meta.has_audio = false;
+        meta.duration_secs = 4.0;
+        meta.width = 150;
+        meta.height = 108;
+        meta.frame_count = 40;
+        meta.file_size_bytes = 24_000;
+
+        let verdict = verdict_with_profile(&meta, &profile);
+        assert!(matches!(verdict, LoopIntentVerdict::LoopStrong(_)));
+        assert!(
+            verdict.reason().contains("Layer 1-B2"),
+            "expected Layer 1-B2 sticker-class GIF prior, got {}",
+            verdict.reason()
+        );
+    }
+
+    #[test]
+    fn layer_1_b2_does_not_apply_to_large_pixel_gif() {
+        let profile = base_profile();
+        let mut meta = base_meta();
+        meta.source_extension = Some("gif".to_string());
+        meta.container = Some("gif".to_string());
+        meta.is_native_gif = true;
+        meta.has_audio = false;
+        meta.duration_secs = 4.0;
+        meta.width = 500;
+        meta.height = 500;
+        meta.frame_count = 40;
+        meta.file_size_bytes = 400_000;
+
+        let verdict = verdict_with_profile(&meta, &profile);
+        assert!(
+            !verdict.reason().contains("Layer 1-B2"),
+            "large canvas should not hit B2: {}",
+            verdict.reason()
+        );
     }
 
     #[test]

@@ -33,6 +33,19 @@ pub const HEAVY_VIDEO_THRESHOLD_SECS: f32 = 1200.0;
 pub const VMAF_SKIP_THRESHOLD_SECS: f32 = 1800.0;
 pub const VMAF_SKIP_THRESHOLD_ULTIMATE_SECS: f32 = 3600.0;
 
+/// When MS-SSIM / VMAF-style metrics switch from a single full pass to three-segment sampling.
+/// Same band as [`crate::gpu_accel::GPU_SAMPLE_DURATION`] (60s).
+pub const MS_SSIM_THREE_SEGMENT_MIN_DURATION_SECS: f64 = 60.0;
+
+/// Animated image CPU CRF search: above this duration, exploration encodes use three-segment
+/// timeline sampling. Uses [`ANIMATION_CLIP_THRESHOLD_SECS`] (short vs long animation split).
+pub const ANIMATED_IMAGE_EXPLORATION_SAMPLING_MIN_DURATION_SECS: f32 = ANIMATION_CLIP_THRESHOLD_SECS;
+
+/// Fraction of total duration per segment (start / mid / end) for animated exploration sampling.
+pub const ANIMATED_IMAGE_EXPLORATION_SEGMENT_FRACTION: f64 = 0.15;
+/// Ultimate mode: wider segments.
+pub const ANIMATED_IMAGE_EXPLORATION_SEGMENT_FRACTION_ULTIMATE: f64 = 0.25;
+
 // --- Loop Intent System (Tree & KNN) ---
 
 /// Platform markers that indicate a strong likelihood of being a GIF/sticker.
@@ -52,6 +65,11 @@ pub const DEFAULT_LOOP_BASELINE_DURATION_SECS: f64 = 2.0;
 pub const STICKER_MAX_DIMENSION: u32 = 512;
 /// "Bottom-line" size control: assets below this size are likely stickers.
 pub const STICKER_MAX_SIZE_BYTES: u64 = 1_572_864; // 1.5 MB
+
+/// Upper bound on `width * height` for **GIF** assets that qualify for **Layer 1-B2** in
+/// [`crate::loop_intent::evaluate_loop_tree`]: a silent, sticker-class canvas is treated as
+/// **strong loop/sticker prior** (not a `vid` strategy bypass). Larger canvases stay in Layer 4 / KNN.
+pub const STICKER_TIER_NATIVE_GIF_MAX_PIXELS: u64 = 200_000;
 
 // 3. Physical Intensity & Bitrate Analysis
 /// Threshold for "Physical Intensity" (Pixels per second normalized).

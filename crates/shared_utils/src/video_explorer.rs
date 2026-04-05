@@ -166,7 +166,10 @@ pub const ULTIMATE_MAX_WALL_HITS: u32 = 100;
 
 /// In ultimate mode, absolute saturation requires 50 consecutive samples to be statistically certain.
 use crate::constants::{
-    LONG_VIDEO_THRESHOLD_SECS, VERY_LONG_VIDEO_THRESHOLD_SECS, VMAF_SKIP_THRESHOLD_ULTIMATE_SECS,
+    ANIMATED_IMAGE_EXPLORATION_SEGMENT_FRACTION,
+    ANIMATED_IMAGE_EXPLORATION_SEGMENT_FRACTION_ULTIMATE, LONG_VIDEO_THRESHOLD_SECS,
+    MS_SSIM_THREE_SEGMENT_MIN_DURATION_SECS, VERY_LONG_VIDEO_THRESHOLD_SECS,
+    VMAF_SKIP_THRESHOLD_ULTIMATE_SECS,
 };
 
 /// Required consecutive zero-gain encodes for saturation detection in ultimate mode.
@@ -2990,11 +2993,11 @@ impl VideoExplorer {
         let duration = get_video_duration(&self.input_path);
 
         let filter = match duration {
-            Some(dur) if dur > 60.0 => {
+            Some(dur) if dur > MS_SSIM_THREE_SEGMENT_MIN_DURATION_SECS => {
                 let segment_pct = if self.config.ultimate_mode {
-                    0.25
+                    ANIMATED_IMAGE_EXPLORATION_SEGMENT_FRACTION_ULTIMATE
                 } else {
-                    0.15
+                    ANIMATED_IMAGE_EXPLORATION_SEGMENT_FRACTION
                 };
                 let start_end = dur * segment_pct;
                 let mid_start = dur * (0.5 - segment_pct / 2.0);
@@ -3019,7 +3022,8 @@ impl VideoExplorer {
                 .to_string(),
         };
 
-        let use_sampling = duration.is_some_and(|d| d > 60.0);
+        let use_sampling =
+            duration.is_some_and(|d| d > MS_SSIM_THREE_SEGMENT_MIN_DURATION_SECS);
 
         let output = crate::ffmpeg_builder::FfmpegBuilder::new()
             .input(&self.input_path)

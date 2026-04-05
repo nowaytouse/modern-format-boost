@@ -6,6 +6,19 @@ All notable changes to this project will be documented in this file.
 
 ## [0.11.2] — 2026-04-05
 
+#### ⚡ Long animated image → video (CRF exploration)
+
+- **Segmented CPU exploration**: For animated-image inputs longer than `ANIMATION_CLIP_THRESHOLD_SECS`, `cpu_fine_tune_from_gpu_boundary` applies a three-window FFmpeg `select`+`setpts` prefix during CRF search, then performs one **full-timeline** encode at the chosen CRF before SSIM / verification (output is not truncated).
+- **Named thresholds**: Added `MS_SSIM_THREE_SEGMENT_MIN_DURATION_SECS`, `ANIMATED_IMAGE_EXPLORATION_*` in `constants.rs`; MS-SSIM path uses the same segment fractions instead of raw `60.0` / `0.15` / `0.25` literals.
+
+#### 🧰 `shared_utils` quality & lint hygiene
+
+- **`missing_docs`**: Moved from crate `warn` to `allow` with a short rationale (internal utilities; document stable public API incrementally) to avoid thousands of noisy warnings.
+- **Clippy `similar_names`**: Renamed bindings in `analysis_cache`, `database`, and `video_explorer/gpu_coarse_search`; dropped redundant `similar_names` allows on GPU-coarse entry points.
+- **`database`**: Removed unused `relative_distance` helper; consolidated `SampleRow` `dead_code` suppression onto the struct with a comment.
+- **`gpu_accel`**: Replaced `while_immutable_condition` allow with a **Stage 3 spin safety cap**; removed unused variance closure and `WINDOW_SIZE`; simplified quality-ceiling `Option` handling; split GPU→CPU center estimate into `_impl` + public wrapper (documented reserved `codec` param); RAII GPU slot guard uses a targeted `unused_variables` allow with comment.
+- **`analysis_cache`**: Blake3 / fingerprint readers use a heap `Vec` buffer instead of a 64 KiB stack array (dropped `large_stack_arrays` allows).
+
 #### 🌍 Dynamic Multilingual Meme Recognition System (Intelligence Boost)
 
 - **Decoupled Keyword Logic**: Migrated from hardcoded `MEME_DIRECTORY_KEYWORDS` to a structured `meme_keywords.json` configuration.
@@ -38,6 +51,7 @@ All notable changes to this project will be documented in this file.
 
 #### 🏗️ Architecture: Strict Static vs. Animated Module Isolation (img & vid)
 
+- **Loop intent: Layer 1-B2 (deliberate patch / bridge rule)** — *sticker-class native GIF*: Layer 1-B’s **DB short-duration cutoff** can clear while emoji-tier GIFs (e.g. small canvas, a few seconds) still read as “non-loop” downstream. **1-B2** is an explicit, auditable **patch** inside `evaluate_loop_tree`: **silent multi-frame `.gif`**, sticker-class envelope (`STICKER_MAX_DIMENSION`, `width * height` ≤ `STICKER_TIER_NATIVE_GIF_MAX_PIXELS`, duration ≤ `ANIMATION_CLIP_THRESHOLD_SECS`) → **LoopStrong** (“strong loop/sticker prior”) so `vid` keeps the **loop-intent → GIF** contract without a second heuristic in `conversion_api`. It is **not** a substitute for re-tuning DB/KNN; **uncertain** assets still defer to Layer 4 + KNN. Log tag: **`Layer 1-B2`**.
 - **Fixed static modern format detection**: Updated `SourceCodec::is_animated()` to remove default animation flags for AVIF and HEIC. These formats are now treated as static by default until container analysis confirms an image sequence.
 - **Added "Single-Frame Interception" in vid**: Implemented a mandatory check in the `vid` conversion pipeline (`auto_convert_with_cache`). If `frame_count <= 1`, the file is identified as a static image and skipped by `vid`, ensuring it is handled by the `img` module for optimal JXL encoding.
 - **Cleaned up animation capability metadata**: Removed `WebpStatic` from `can_be_animated()` to prevent misrouting static WebP files to the animated media pipeline.

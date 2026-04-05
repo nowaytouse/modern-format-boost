@@ -16,8 +16,11 @@ use super::{
     CrfCache, ExploreResult, VideoEncoder, ABSOLUTE_MIN_CRF, NORMAL_MAX_WALL_HITS,
 };
 use crate::constants::{
-    HEAVY_VIDEO_THRESHOLD_SECS, LONG_VIDEO_THRESHOLD_SECS, VERY_LONG_VIDEO_THRESHOLD_SECS,
-    VMAF_SKIP_THRESHOLD_SECS, VMAF_SKIP_THRESHOLD_ULTIMATE_SECS,
+    ANIMATED_IMAGE_EXPLORATION_SAMPLING_MIN_DURATION_SECS,
+    ANIMATED_IMAGE_EXPLORATION_SEGMENT_FRACTION,
+    ANIMATED_IMAGE_EXPLORATION_SEGMENT_FRACTION_ULTIMATE, HEAVY_VIDEO_THRESHOLD_SECS,
+    LONG_VIDEO_THRESHOLD_SECS, VERY_LONG_VIDEO_THRESHOLD_SECS, VMAF_SKIP_THRESHOLD_SECS,
+    VMAF_SKIP_THRESHOLD_ULTIMATE_SECS,
 };
 use crate::modern_ui::colors::{
     BRIGHT_CYAN, BRIGHT_GREEN, BRIGHT_MAGENTA, BRIGHT_RED, BRIGHT_YELLOW, CYAN, DIM, GREEN,
@@ -163,7 +166,7 @@ pub(crate) fn format_quality_check_line(
 ///
 /// # Errors
 /// Returns an error if exploration fails.
-#[allow(clippy::too_many_arguments, clippy::similar_names)]
+#[allow(clippy::too_many_arguments)]
 pub fn explore_with_gpu_coarse_search(
     input: &Path,
     output: &Path,
@@ -1177,7 +1180,43 @@ fn is_animated_image_like_input(
     })
 }
 
-#[allow(clippy::too_many_arguments, clippy::similar_names)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AnimatedExplorationEncodeMode {
+    /// CRF search iterations: three-segment timeline sampling when enabled for long animated sources.
+    ExplorationSample,
+    /// One full-length encode at the chosen CRF (deliverable timeline).
+    FullTimeline,
+}
+
+/// FFmpeg `-vf` prefix: keep frames in three windows (start / mid / end) and reset PTS for encode.
+#[must_use]
+fn animated_exploration_three_segment_vf_prefix(dur: f64, ultimate_mode: bool) -> String {
+    let segment_pct = if ultimate_mode {
+        ANIMATED_IMAGE_EXPLORATION_SEGMENT_FRACTION_ULTIMATE
+    } else {
+        ANIMATED_IMAGE_EXPLORATION_SEGMENT_FRACTION
+    };
+    let start_end = dur * segment_pct;
+    let mid_start = dur * (0.5 - segment_pct / 2.0);
+    let mid_end = dur * (0.5 + segment_pct / 2.0);
+    let tail_start = dur * (1.0 - segment_pct);
+    format!(
+        "select='lt(t\\,{start_end:.3})+between(t\\,{mid_start:.3}\\,{mid_end:.3})+gte(t\\,{tail_start:.3})',setpts=N/FRAME_RATE/TB"
+    )
+}
+
+/// Prepends `prefix` to the filter chain after `-vf`, or builds `-vf prefix` when no `-vf` pair exists.
+#[must_use]
+fn merge_vf_with_animated_exploration_prefix(vf_args: &[String], prefix: &str) -> Vec<String> {
+    if vf_args.len() >= 2 && vf_args[0] == "-vf" {
+        let merged = format!("{prefix},{}", vf_args[1]);
+        vec!["-vf".to_string(), merged]
+    } else {
+        vec!["-vf".to_string(), prefix.to_string()]
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn cpu_fine_tune_from_gpu_boundary(
     input: &Path,
     output: &Path,
@@ -1225,6 +1264,18 @@ fn cpu_fine_tune_from_gpu_boundary(
                 "Duplicate PTS"
             },
             pts_integrity
+        );
+    }
+
+    let use_animated_exploration_sampling = input_is_animated_image_like
+        && duration > ANIMATED_IMAGE_EXPLORATION_SAMPLING_MIN_DURATION_SECS;
+    if use_animated_exploration_sampling {
+        crate::log_eprintln!(
+            "{}🎞️  Long animated source ({:.1}s > {:.1}s): CPU CRF search uses 3-segment timeline sampling; one full-length encode follows before quality checks.{}",
+            BRIGHT_CYAN,
+            duration,
+            ANIMATED_IMAGE_EXPLORATION_SAMPLING_MIN_DURATION_SECS,
+            RESET
         );
     }
 
@@ -1302,7 +1353,19 @@ fn cpu_fine_tune_from_gpu_boundary(
         }
     };
 
-    let encode_full = move |crf: f32| -> Result<u64> {
+    let encode_full = move |crf: f32, mode: AnimatedExplorationEncodeMode| -> Result<u64> {
+        let apply_segment_vf = mode == AnimatedExplorationEncodeMode::ExplorationSample
+            && use_animated_exploration_sampling;
+        let vf_for_encode: Vec<String> = if apply_segment_vf {
+            let prefix = animated_exploration_three_segment_vf_prefix(
+                f64::from(duration),
+                ultimate_mode,
+            );
+            merge_vf_with_animated_exploration_prefix(&vf_args, &prefix)
+        } else {
+            vf_args.clone()
+        };
+
         let mut builder = crate::ffmpeg_builder::FfmpegBuilder::new();
         builder
             .overwrite()
@@ -1371,7 +1434,7 @@ fn cpu_fine_tune_from_gpu_boundary(
             }
         }
 
-        for arg in &vf_args {
+        for arg in &vf_for_encode {
             if !arg.is_empty() {
                 builder.arg(arg);
             }
@@ -1459,7 +1522,16 @@ fn cpu_fine_tune_from_gpu_boundary(
             let mut last_fps = 0.0_f64;
             let mut last_speed = String::new();
             let mut last_time_us = 0_i64;
-            let duration_secs = f64::from(duration);
+            let progress_duration_secs = if apply_segment_vf {
+                let p = if ultimate_mode {
+                    ANIMATED_IMAGE_EXPLORATION_SEGMENT_FRACTION_ULTIMATE
+                } else {
+                    ANIMATED_IMAGE_EXPLORATION_SEGMENT_FRACTION
+                };
+                (f64::from(duration) * 3.0 * p).max(0.5)
+            } else {
+                f64::from(duration)
+            };
 
             for line in reader.lines() {
                 let line = match line {
@@ -1486,10 +1558,10 @@ fn cpu_fine_tune_from_gpu_boundary(
                     last_speed = val.trim().to_string();
                 } else if line == "progress=continue" || line == "progress=end" {
                     let current_secs = crate::numeric_cast::i64_to_f64(last_time_us) / 1_000_000.0;
-                    if duration_secs > 0.0 {
-                        let pct = (current_secs / duration_secs * 100.0).min(100.0);
+                    if progress_duration_secs > 0.0 {
+                        let pct = (current_secs / progress_duration_secs * 100.0).min(100.0);
                         eprint!(
-                            "\r      ⏳ CRF {crf:.1} | {pct:.1}% | {current_secs:.1}s/{duration_secs:.1}s | {last_fps:.0}fps | {last_speed}   "
+                            "\r      ⏳ CRF {crf:.1} | {pct:.1}% | {current_secs:.1}s/{progress_duration_secs:.1}s | {last_fps:.0}fps | {last_speed}   "
                         );
                     }
                     let _ = std::io::stderr().flush();
@@ -1617,12 +1689,18 @@ fn cpu_fine_tune_from_gpu_boundary(
     let mut iterations = 0u32;
     let mut size_cache: CrfCache<u64> = CrfCache::new();
 
+    let exploration_mode = if use_animated_exploration_sampling {
+        AnimatedExplorationEncodeMode::ExplorationSample
+    } else {
+        AnimatedExplorationEncodeMode::FullTimeline
+    };
+
     let encode_cached = |crf: f32, cache: &mut CrfCache<u64>| -> Result<u64> {
         if let Some(&size) = cache.get(crf) {
             cpu_progress.inc_iteration(crf, size, None);
             return Ok(size);
         }
-        let size = encode_full(crf)?;
+        let size = encode_full(crf, exploration_mode)?;
         cache.insert(crf, size);
         cpu_progress.inc_iteration(crf, size, None);
         Ok(size)
@@ -2093,7 +2171,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                             );
                             bail!("Quality wall hit but VMAF not measured");
                         };
-                        let uvmaf_metric = if let Some((u, v)) = best_psnr_uv_tracked {
+                        let psnr_uv_min_channel = if let Some((u, v)) = best_psnr_uv_tracked {
                             (*u).min(*v)
                         } else {
                             crate::log_eprintln!(
@@ -2104,10 +2182,10 @@ fn cpu_fine_tune_from_gpu_boundary(
                             bail!("Quality wall hit but PSNR UV not measured");
                         };
 
-                        if *vmaf_metric < VMAF_Y_MIN || uvmaf_metric < PSNR_UV_MIN {
+                        if *vmaf_metric < VMAF_Y_MIN || psnr_uv_min_channel < PSNR_UV_MIN {
                             crate::log_eprintln!(
                                 "   \x1b[1;31m❌ QUALITY CEILING HIT (NOT CREDIBLE):\x1b[0m Saturated at VMAF:{:.2}, UV:{:.2}. Below mandatory gate. Aborting.",
-                                vmaf_metric, uvmaf_metric
+                                vmaf_metric, psnr_uv_min_channel
                             );
                             quality_wall_hit = true;
                             break;
@@ -2819,9 +2897,9 @@ fn cpu_fine_tune_from_gpu_boundary(
                     };
 
                     let metrics_str = if ultimate_mode {
-                        let vmaf_metric = *best_vmaf_tracked;
-                        let uvmaf_metric = *best_psnr_uv_tracked;
-                        if let (Some(v), Some((u, v_score))) = (vmaf_metric, uvmaf_metric) {
+                        let vmaf_opt = *best_vmaf_tracked;
+                        let psnr_uv_opt = *best_psnr_uv_tracked;
+                        if let (Some(v), Some((u, v_score))) = (vmaf_opt, psnr_uv_opt) {
                             let chroma_avg = f64::midpoint(u, v_score);
                             format!(
                                 " │ VMAF:{v:.2} UV:{chroma_avg:.2} ({failure_credibility:.0}/3 {improvement_indicator})"
@@ -2943,9 +3021,9 @@ fn cpu_fine_tune_from_gpu_boundary(
                     consecutive_failures += 1;
 
                     let metrics_str = if ultimate_mode {
-                        let vmaf_metric = *best_vmaf_tracked;
-                        let uvmaf_metric = *best_psnr_uv_tracked;
-                        if let (Some(v), Some((u, v_score))) = (vmaf_metric, uvmaf_metric) {
+                        let vmaf_opt = *best_vmaf_tracked;
+                        let psnr_uv_opt = *best_psnr_uv_tracked;
+                        if let (Some(v), Some((u, v_score))) = (vmaf_opt, psnr_uv_opt) {
                             let chroma_avg = f64::midpoint(u, v_score);
                             format!(
                                 " │ VMAF:{v:.2} UV:{chroma_avg:.2} ({failure_credibility:.0}/3 →)"
@@ -3341,11 +3419,11 @@ fn cpu_fine_tune_from_gpu_boundary(
     } else {
         0
     };
-    let (final_crf, final_full_size) = match (best_crf, best_size) {
+    let (final_crf, mut final_full_size) = match (best_crf, best_size) {
         (Some(crf), Some(size)) if crf < max_crf => {
             if size <= input_size + size_tolerance {
                 crate::log_eprintln!(
-                    "{}✅ Best CRF {:.2} already encoded (full video){}",
+                    "{}✅ Best CRF {:.2} settled from search (output on disk){}",
                     BRIGHT_GREEN,
                     crf,
                     RESET
@@ -3390,6 +3468,17 @@ fn cpu_fine_tune_from_gpu_boundary(
             }
         }
     };
+
+    if use_animated_exploration_sampling && !early_insight_triggered {
+        crate::log_eprintln!(
+            "{}🎞️  Full-timeline encode at CRF {:.2} (replacing segmented exploration output){}",
+            BRIGHT_CYAN,
+            final_crf,
+            RESET
+        );
+        final_full_size = encode_full(final_crf, AnimatedExplorationEncodeMode::FullTimeline)?;
+        iterations += 1;
+    }
 
     crate::verbose_eprintln!(
         "Final: CRF {:.2} | Size: {} bytes ({:.2} MB)",

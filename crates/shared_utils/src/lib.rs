@@ -20,13 +20,13 @@
     clippy::cast_sign_loss,
     clippy::manual_let_else,
     clippy::items_after_statements,
-    missing_docs
 )]
 #![allow(
     clippy::cast_precision_loss, // Audited: acceptable for media metrics (bitrate, size, time)
     clippy::too_many_lines,
     clippy::struct_excessive_bools,
-    clippy::fn_params_excessive_bools
+    clippy::fn_params_excessive_bools,
+    missing_docs, // Internal utility crate: add `///` on new stable public API when stabilizing.
 )]
 
 pub mod analysis_cache;

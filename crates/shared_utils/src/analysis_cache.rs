@@ -214,11 +214,11 @@ impl AnalysisCache {
         if let Some(row) = row {
             let algorithm_version: i32 = row.get(1);
             if algorithm_version >= cache_algorithm_version() {
-                let cached_ctime: i64 = row.get(3);
-                let cached_btime: i64 = row.get(4);
+                let row_ctime_epoch: i64 = row.get(3);
+                let row_birthtime_epoch: i64 = row.get(4);
 
-                if (cached_ctime == 0 || cached_ctime == sig.ctime)
-                    && (cached_btime == 0 || cached_btime == sig.btime)
+                if (row_ctime_epoch == 0 || row_ctime_epoch == sig.ctime)
+                    && (row_birthtime_epoch == 0 || row_birthtime_epoch == sig.btime)
                 {
                     let data: Vec<u8> = row.get(0);
                     if let Some(stored_checksum) = row.get::<_, Option<i64>>(2) {
@@ -295,11 +295,11 @@ impl AnalysisCache {
         )?;
 
         if let Some(row) = row {
-            let cached_ctime: i64 = row.get(2);
-            let cached_btime: i64 = row.get(3);
+            let row_ctime_epoch: i64 = row.get(2);
+            let row_birthtime_epoch: i64 = row.get(3);
 
-            if (cached_ctime == 0 || cached_ctime == sig.ctime)
-                && (cached_btime == 0 || cached_btime == sig.btime)
+            if (row_ctime_epoch == 0 || row_ctime_epoch == sig.ctime)
+                && (row_birthtime_epoch == 0 || row_birthtime_epoch == sig.btime)
             {
                 let data: Vec<u8> = row.get(0);
                 if let Some(stored_checksum) = row.get::<_, Option<i64>>(1) {
@@ -430,11 +430,11 @@ impl AnalysisCache {
         )?;
 
         if let Some(row) = row {
-            let cached_ctime: i64 = row.get(2);
-            let cached_btime: i64 = row.get(3);
+            let row_ctime_epoch: i64 = row.get(2);
+            let row_birthtime_epoch: i64 = row.get(3);
 
-            if (cached_ctime == 0 || cached_ctime == sig.ctime)
-                && (cached_btime == 0 || cached_btime == sig.btime)
+            if (row_ctime_epoch == 0 || row_ctime_epoch == sig.ctime)
+                && (row_birthtime_epoch == 0 || row_birthtime_epoch == sig.btime)
             {
                 let data: Vec<u8> = row.get(0);
                 if let Some(stored_checksum) = row.get::<_, Option<i64>>(1) {
@@ -589,8 +589,7 @@ impl AnalysisCache {
 fn calculate_blake3(path: &Path) -> Result<blake3::Hash> {
     let mut file = std::fs::File::open(path)?;
     let mut hasher = Hasher::new();
-    #[allow(clippy::large_stack_arrays)]
-    let mut buffer = [0u8; 65536];
+    let mut buffer = vec![0u8; 65536];
     loop {
         let bytes_read = file.read(&mut buffer)?;
         if bytes_read == 0 {
@@ -604,8 +603,7 @@ fn calculate_blake3(path: &Path) -> Result<blake3::Hash> {
 fn calculate_content_fingerprint(path: &Path) -> Result<[u8; 32]> {
     let mut file = std::fs::File::open(path)?;
     let mut hasher = Hasher::new();
-    #[allow(clippy::large_stack_arrays)]
-    let mut buffer = [0u8; 65536];
+    let mut buffer = vec![0u8; 65536];
     let bytes_read = file.read(&mut buffer)?;
     hasher.update(&buffer[..bytes_read]);
     Ok(*hasher.finalize().as_bytes())

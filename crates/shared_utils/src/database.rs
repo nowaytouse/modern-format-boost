@@ -486,9 +486,10 @@ impl Default for LoopReferenceProfile {
     }
 }
 
+/// Row shape for GIF/video KNN features; some fields are stored for DB round-trip / future use.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct SampleRow {
-    #[allow(dead_code)]
     loss_tolerance: Option<String>,
     width: u32,
     height: u32,
@@ -505,7 +506,6 @@ struct SampleRow {
     frame_payload_variation: Option<f64>,
     frame_delay_variation: Option<f64>,
     aspect_ratio: Option<f64>,
-    #[allow(dead_code)]
     total_pixels: Option<u64>,
     loop_frequency: Option<f64>,
     is_meme_platform: bool,
@@ -522,7 +522,6 @@ struct SampleRow {
     motion_periodicity: Option<f64>,
     temporal_jitter: Option<f64>,
     webp_compression_ratio: Option<f64>,
-    #[allow(dead_code)]
     labeled_by: Option<String>,
 }
 
@@ -1547,8 +1546,9 @@ fn compute_sample_vector(sample: &SampleRow, stats_map: &FeatureMap) -> Vec<f32>
         * get_w("file_size_bytes").sqrt();
     let v_dens = sample_frame_density / get_std("density") * get_w("density").sqrt();
     let v_gap = sample_frame_gap / get_std("gap") * get_w("gap").sqrt();
-    let v_tbpp = sample.temporal_bpp / get_std("temporal_bpp") * get_w("temporal_bpp").sqrt();
-    let v_sbpp = sample.spatial_bpp / get_std("spatial_bpp") * get_w("spatial_bpp").sqrt();
+    let v_temporal_bpp =
+        sample.temporal_bpp / get_std("temporal_bpp") * get_w("temporal_bpp").sqrt();
+    let v_spatial_bpp = sample.spatial_bpp / get_std("spatial_bpp") * get_w("spatial_bpp").sqrt();
 
     let sample_webp_ratio = sample.webp_compression_ratio.unwrap_or(0.0);
     let v_wratio = sample_webp_ratio / get_std("webp_ratio") * get_w("webp_ratio").sqrt();
@@ -1581,7 +1581,7 @@ fn compute_sample_vector(sample: &SampleRow, stats_map: &FeatureMap) -> Vec<f32>
         * get_w("t_jitter").sqrt();
 
     // Directory context
-    let v_dir = sample.directory_meme_score.unwrap_or(0.5) * get_w("dir_meme").sqrt();
+    let v_directory_meme = sample.directory_meme_score.unwrap_or(0.5) * get_w("dir_meme").sqrt();
 
     // Categorical variables (weight mapped so diff^2 = penalty weight)
     // If w = penalty weight, v = sqrt(w)/2. If diff is `sqrt(w)`, squared diff is `w`.
@@ -1605,8 +1605,8 @@ fn compute_sample_vector(sample: &SampleRow, stats_map: &FeatureMap) -> Vec<f32>
         crate::numeric_cast::f64_to_f32_lossy(v_fsize),
         crate::numeric_cast::f64_to_f32_lossy(v_dens),
         crate::numeric_cast::f64_to_f32_lossy(v_gap),
-        crate::numeric_cast::f64_to_f32_lossy(v_tbpp),
-        crate::numeric_cast::f64_to_f32_lossy(v_sbpp),
+        crate::numeric_cast::f64_to_f32_lossy(v_temporal_bpp),
+        crate::numeric_cast::f64_to_f32_lossy(v_spatial_bpp),
         crate::numeric_cast::f64_to_f32_lossy(v_wratio),
         crate::numeric_cast::f64_to_f32_lossy(v_lfreq),
         crate::numeric_cast::f64_to_f32_lossy(v_laffin),
@@ -1622,7 +1622,7 @@ fn compute_sample_vector(sample: &SampleRow, stats_map: &FeatureMap) -> Vec<f32>
         crate::numeric_cast::f64_to_f32_lossy(v_lclose),
         crate::numeric_cast::f64_to_f32_lossy(v_mperiod),
         crate::numeric_cast::f64_to_f32_lossy(v_tjitter),
-        crate::numeric_cast::f64_to_f32_lossy(v_dir),
+        crate::numeric_cast::f64_to_f32_lossy(v_directory_meme),
         crate::numeric_cast::f64_to_f32_lossy(v_meme),
         crate::numeric_cast::f64_to_f32_lossy(v_name),
         crate::numeric_cast::f64_to_f32_lossy(v_native),
@@ -1733,11 +1733,6 @@ fn normalize_log_ratio(a: f64, b: f64, scale: f64) -> f64 {
         return 1.0;
     }
     ((a.ln() - b.ln()).abs() / scale).clamp(0.0, 1.0)
-}
-
-#[allow(dead_code)]
-fn relative_distance(a: f64, b: f64) -> f64 {
-    (a - b).abs() / a.abs().max(b.abs()).max(1.0)
 }
 
 fn percentile_value(sorted_values: &[f64], quantile: f64) -> Option<f64> {

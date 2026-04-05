@@ -1111,12 +1111,9 @@ pub fn is_quality_better(
     improvement > 0.005
 }
 
-/// Estimates the center of the CPU search range based on a GPU boundary CRF and GPU type.
-#[must_use]
-pub fn estimate_cpu_search_center_dynamic(
+fn estimate_cpu_search_center_dynamic_impl(
     gpu_boundary: f32,
     gpu_type: GpuType,
-    _codec: &str,
     compression_potential: Option<f64>,
 ) -> f32 {
     let base_offset = match gpu_type {
@@ -1139,6 +1136,21 @@ pub fn estimate_cpu_search_center_dynamic(
     };
 
     gpu_boundary + base_offset + adjustment
+}
+
+/// Estimates the center of the CPU search range based on a GPU boundary CRF and GPU type.
+///
+/// `codec` is reserved for future codec-specific GPU→CPU CRF mapping; it is accepted for API
+/// stability and intentionally ignored until tuning data exists.
+#[must_use]
+pub fn estimate_cpu_search_center_dynamic(
+    gpu_boundary: f32,
+    gpu_type: GpuType,
+    codec: &str,
+    compression_potential: Option<f64>,
+) -> f32 {
+    let _ = codec;
+    estimate_cpu_search_center_dynamic_impl(gpu_boundary, gpu_type, compression_potential)
 }
 
 /// Estimates a CPU search range from a GPU range, adjusting for GPU type and codec.
@@ -1654,7 +1666,6 @@ fn gpu_coarse_search_with_log_impl(
     const LONG_DURATION_THRESHOLD: f32 = 600.0;
     const VERY_LONG_DURATION_THRESHOLD: f32 = 3600.0;
     const WARMUP_DURATION: f32 = 5.0;
-    const WINDOW_SIZE: usize = 3;
     const CHANGE_RATE_THRESHOLD: f64 = 0.02;
 
     let mut log = Vec::new();
@@ -2194,7 +2205,9 @@ fn gpu_coarse_search_with_log_impl(
                 let sample_dur = actual_sample_duration;
 
                 thread::spawn(move || {
-                    let _guard = GpuSlotGuard;
+                    // Concurrency slot released on drop (see `GpuSlotGuard`).
+                    #[allow(unused_variables)]
+                    let gpu_slot_guard = GpuSlotGuard;
                     acquire_gpu_slot();
                     let mut builder = crate::tool_builders::FfmpegBuilder::new();
                     builder
@@ -2264,21 +2277,6 @@ fn gpu_coarse_search_with_log_impl(
         let size = encode_gpu(crf)?;
         cache.insert(crf, size);
         Ok(size)
-    };
-
-    // Reserved for future variance-based early exit; currently unused.
-    let _calc_window_variance = |history: &[(f32, u64)], _input_size: u64| -> f64 {
-        if history.len() < WINDOW_SIZE {
-            return f64::MAX;
-        }
-        let recent: Vec<f64> = history
-            .iter()
-            .rev()
-            .take(WINDOW_SIZE)
-            .map(|(_, s)| f64::from(u32::try_from(*s).unwrap_or(u32::MAX)) / f64::from(u32::try_from(input_size).unwrap_or(u32::MAX)))
-            .collect();
-        let mean = if recent.is_empty() { 0.0 } else { recent.iter().sum::<f64>() / f64::from(u32::try_from(recent.len()).unwrap_or(1)) };
-        if recent.is_empty() { 0.0 } else { recent.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / f64::from(u32::try_from(recent.len()).unwrap_or(1)) }
     };
 
     let calc_change_rate = |prev: u64, curr: u64| -> f64 {
@@ -2714,9 +2712,20 @@ fn gpu_coarse_search_with_log_impl(
 
             let mut offset = stage3_step;
             let mut consecutive_small_improvements = 0;
+            // `iterations` only increases on real encodes; cache hits can advance `offset`/`break`
+            // without bumping it — bound total spins so the loop cannot run unbounded.
+            let mut stage3_spins = 0u32;
+            let stage3_spin_cap = max_iterations_limit.saturating_mul(8).max(512);
 
-            #[allow(clippy::while_immutable_condition)]
             while iterations < max_iterations_limit {
+                stage3_spins += 1;
+                if stage3_spins > stage3_spin_cap {
+                    log_msg!(
+                        "   ⚠️ Stage 3: stopping after spin safety cap ({stage3_spin_cap})"
+                    );
+                    break;
+                }
+
                 let test_crf = current_best - offset;
 
                 if test_crf < config.min_crf {
@@ -2840,10 +2849,7 @@ fn gpu_coarse_search_with_log_impl(
         None
     };
 
-    let (quality_ceiling_crf, _quality_ceiling_psnr) = quality_ceiling_info
-        .map_or((None, None), |(crf, psnr)| {
-            (Some(crf), if psnr > 0.0 { Some(psnr) } else { None })
-        });
+    let quality_ceiling_crf = quality_ceiling_info.map(|(crf, _psnr)| crf);
 
     let (gpu_ssim, gpu_psnr) = if found {
         log_msg!(
@@ -3070,8 +3076,12 @@ mod tests {
             "high={high} should be in [15, 22]"
         );
 
-        let (low, _high) = gpu_boundary_to_cpu_range(12.0, GpuType::Nvidia, "hevc", 10.0, 28.0);
+        let (low, high) = gpu_boundary_to_cpu_range(12.0, GpuType::Nvidia, "hevc", 10.0, 28.0);
         assert!((low - 12.0).abs() < 0.1, "low should be GPU boundary");
+        assert!(
+            (10.0..=28.0).contains(&high),
+            "high={high} should stay within CRF clamp"
+        );
     }
 
     #[test]

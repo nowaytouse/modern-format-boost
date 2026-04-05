@@ -368,8 +368,8 @@ pub fn determine_strategy_with_apple_compat(
         && result.duration_secs <= 3.0
         && result.width > 0
         && result.height > 0
-        && result.width <= 512
-        && result.height <= 512
+        && result.width <= shared_utils::constants::STICKER_MAX_DIMENSION
+        && result.height <= shared_utils::constants::STICKER_MAX_DIMENSION
         && (result.pkt_sizes.len() < 3 || result.pts_deltas.len() < 3)
     {
         return ConversionStrategy {
