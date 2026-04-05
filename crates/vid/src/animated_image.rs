@@ -122,7 +122,7 @@ fn extract_frames_for_gifski(
     input: &Path,
     selected_stream_index: Option<usize>,
     verbose: bool,
-) -> Result<(tempfile::TempDir, String)> {
+) -> Result<(tempfile::TempDir, String, usize)> {
     let frame_dir = tempfile::Builder::new()
         .prefix("gifski_frames_")
         .tempdir()
@@ -136,7 +136,9 @@ fn extract_frames_for_gifski(
     if let Some(stream_index) = selected_stream_index {
         builder.arg("-map").arg(format!("0:{stream_index}"));
     }
-    builder.arg("-vsync").arg("0").output(&frame_pattern);
+    builder.arg("-vsync").arg("0")
+        .pix_fmt(shared_utils::PixFmt::Rgba)
+        .output(&frame_pattern);
 
     let output = builder.build().output().map_err(|e| {
         VidQualityError::ConversionError(format!("FFmpeg frame extraction failed: {e}"))
@@ -169,7 +171,7 @@ fn extract_frames_for_gifski(
         ));
     }
 
-    Ok((frame_dir, frame_pattern.to_string_lossy().into_owned()))
+    Ok((frame_dir, frame_pattern.to_string_lossy().into_owned(), frame_count))
 }
 
 /// Extract frames from animated WebP using webpmux and create APNG with correct timing
@@ -249,6 +251,7 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
             .overwrite()
             .with_odd_dim_correction()
             .input(&frame_webp_path)
+            .pix_fmt(shared_utils::PixFmt::Rgba)
             .output(&frame_png_path);
             
         let convert_result = builder.build().output()
@@ -273,6 +276,7 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
         .input_arg("-r") // Use -r for input frame rate
         .input_arg(fps.to_string())
         .input(&pattern)
+        .pix_fmt(shared_utils::PixFmt::Rgba)
         .vcodec(shared_utils::VideoCodec::Apng)
         .format("apng")
         .arg("-plays")
@@ -1889,6 +1893,7 @@ pub fn convert_to_gif_apple_compat(
                 .arg("[0:v:0][0:v:1]alphamerge")
                 .arg("-plays")
                 .arg("0")
+                .pix_fmt(shared_utils::PixFmt::Rgba)
                 .vcodec(shared_utils::VideoCodec::Apng)
                 .output(&temp_apng_path);
             
@@ -1933,7 +1938,7 @@ pub fn convert_to_gif_apple_compat(
     let gifski_ok = if which::which("gifski").is_err() {
         false
     } else {
-        let (gifski_frames_dir, gifski_pattern) =
+        let (gifski_frames_dir, gifski_pattern, extracted_count) =
             match extract_frames_for_gifski(&actual_input, frame_stream_index, options.verbose) {
                 Ok(value) => value,
                 Err(e) => {
@@ -1956,13 +1961,29 @@ pub fn convert_to_gif_apple_compat(
                 }
             };
 
-        let fps = shared_utils::probe_video(input)
-            .ok()
-            .map(|p| p.frame_rate)
-            .or_else(|| shared_utils::probe_video(&actual_input).ok().map(|p| p.frame_rate))
-            .filter(|fps| fps.is_finite() && *fps >= 1.0)
-            .unwrap_or(20.0)
-            .clamp(1.0, 60.0);
+        let probe_res = shared_utils::probe_video(input).map_err(|e| {
+            VidQualityError::ConversionError(format!("Failed to probe source for FPS: {e}"))
+        })?;
+        
+        let fps = if probe_res.duration > 0.0 && extracted_count > 0 {
+             // 100% data-driven: Actual extracted frames / Metadata total duration
+             extracted_count as f64 / probe_res.duration
+        } else if probe_res.avg_frame_rate > 0.0 {
+             // Use directly reported average frame rate
+             probe_res.avg_frame_rate
+        } else if probe_res.frame_rate > 0.0 {
+             // Use directly reported r_frame_rate
+             probe_res.frame_rate
+        } else {
+             return Err(VidQualityError::ConversionError(
+                "Source metadata lacks both duration and frame rate - cannot determine native speed".to_string()
+             ));
+        };
+
+        if options.verbose {
+            eprintln!("   🔧 GIF Encoding: Native speed ({} frames / {:.2}s duration) -> target speed: {:.3} FPS", 
+                extracted_count, probe_res.duration, fps);
+        }
         let res = shared_utils::GifskiBuilder::new()
             .output(&temp_output)
             .fps(fps as f32)

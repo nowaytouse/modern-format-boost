@@ -2376,7 +2376,7 @@ fn motion_periodicity_score(mv_magnitudes: &[f64]) -> f64 {
         .sum();
     let valid_lags = lags.iter().filter(|&&lag| lag > 0 && lag < n).count();
 
-    ((autocorr_sum / valid_lags as f64 + 1.0) / 2.0).clamp(0.0, 1.0)
+    f64::midpoint(autocorr_sum / valid_lags as f64, 1.0).clamp(0.0, 1.0)
 }
 
 fn temporal_jitter_score(pts_deltas: &[f64]) -> f64 {
@@ -2398,5 +2398,5 @@ fn temporal_jitter_score(pts_deltas: &[f64]) -> f64 {
         .sum::<f64>()
         / ((n - 1) as f64 * variance);
 
-    (lag1.clamp(-1.0, 1.0) + 1.0) / 2.0
+    f64::midpoint(lag1.clamp(-1.0, 1.0), 1.0)
 }

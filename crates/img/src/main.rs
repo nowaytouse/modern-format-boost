@@ -715,7 +715,7 @@ fn auto_convert_single_file(
         },
         input_format: Some(analysis.format.clone()),
         quality_label: Some(quality_label),
-        codec: config.codec.clone(),
+        codec: config.codec,
     };
 
     let result = dispatch_static_conversion(input, &analysis, &options, config)?;

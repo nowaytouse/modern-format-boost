@@ -6,6 +6,15 @@ All notable changes to this project will be documented in this file.
 
 ## [0.11.2] — 2026-04-05
 
+#### 🎬 Media Integrity & GIF Playback Rhythm (Rhythm Fixes)
+
+- **Strict Data-Driven FPS**: Implemented a 100% physical-fact calculation for GIF conversion: `FPS = (实际提取帧数) / (原始时长)`. This fixes the "Ghost Rhythm" (hyper-speed鬼畜) issue in AVIF-to-GIF conversions.
+- **Zero Numerical Tampering (Anti-Tampering)**: Completely removed all "silent magic-number fallbacks" (e.g., 20.0 or 25.0 FPS) for missing metadata. If timing information cannot be derived from source data, the conversion now fails with a clear error instead of guessing.
+- **Enhanced Bit-Depth Accuracy**: Refactored `ffprobe.rs` to derive bit depth directly from `pix_fmt` strings (e.g., `yuv420p10le`) rather than defaulting to 8-bit, ensuring faithful color rendering.
+- **Average Frame Rate Support**: Added `avg_frame_rate` to the core `FFprobeResult` schema, allowing for more accurate playback speed detection in Variable Frame Rate (VFR) containers.
+- **Alpha Protection (Transparency Reinforcement)**: Enforced explicit `RGBA` pixel format across the entire extraction and alpha-merging pipeline. This prevents transparency-to-black bleeding and ensures professional color accuracy for transparent animated images (WebP/AVIF/GIF).
+- **Professional Log Standardization**: Audited and simplified the `cli_runner.rs` terminal output, removing decorative Emojis from core processing paths to ensure professional log clarity.
+
 #### 🏗️ Architecture: Strict Static vs. Animated Module Isolation (img & vid)
 
 - **Fixed static modern format detection**: Updated `SourceCodec::is_animated()` to remove default animation flags for AVIF and HEIC. These formats are now treated as static by default until container analysis confirms an image sequence.
@@ -48,7 +57,7 @@ All notable changes to this project will be documented in this file.
 
 #### 🐞 Bugfixes & Stability
 
-- **Animated AVIF to GIF Reliability**: Fixed a critical bug where `gifski` would fail on multi-stream animated AVIFs. Implemented a robust frame extraction pipeline (`ffmpeg` -> PNG sequence -> `gifski`) that ensures all frames are correctly captured.
+- **Animated AVIF to GIF Reliability**: Fixed a critical bug where `gifski` would fail on multi-stream animated AVIFs. Implemented a robust frame extraction pipeline (`ffmpeg` -> PNG sequence -> `gifski`) that ensures all frames are correctly captured and timed according to source duration.
 - **AVIF Alpha Stream Detection**: Added heuristic logic to detect and accurately map auxiliary alpha streams (`yuv420p` + `gray8`) in animated AVIFs, preventing transparency loss during conversion.
 - **Apple Compatibility Enforcement**: Fixed a bug where `apple_compat` mode incorrectly allowed copying incompatible original files (AVIF/WebP) to the output. The system now strictly enforces conversion to GIF/HEIC for Apple ecosystem compatibility.
 - **Enhanced GIF Pipeline Safety**: Replaced direct single-file input for `gifski` with a managed pattern-based input system, eliminating "Only a single image file was given" errors.

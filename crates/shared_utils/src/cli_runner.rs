@@ -111,16 +111,16 @@ where
 
     if files.is_empty() {
         anyhow::bail!(
-            "❌ No video files found in directory: {}\n\
-             💡 Supported video formats: {}\n\
-             💡 Use imgquality tool for images",
+            "No video files found in directory: {}\n\
+             Supported video formats: {}\n\
+             Use imgquality tool for images",
             input.display(),
             SUPPORTED_VIDEO_EXTENSIONS.join(", ")
         );
     }
 
-    info!("📂 Found {} video files to process", files.len());
-    info!("⚡ Queue Strategy: deeper paths → lighter workload → shorter duration → smaller files → lower resolution");
+    info!("Found {} video files to process", files.len());
+    info!("Strategy: deeper paths -> lighter workload -> shorter duration -> smaller files -> lower resolution");
 
     // Reset global session stats to zero at the start of each directory processing run.
     // This ensures that progressive UI stats (X: 12v, etc.) reflect the current task.
@@ -263,8 +263,8 @@ where
         // Skip if already processed
         if let Some(ref cp) = checkpoint {
             if cp.is_completed(&fixed) {
-                if config.verbose {
-                    info!("⏭️  {} → SKIP (Already recorded as completed)", fixed.file_name().unwrap_or_default().to_string_lossy());
+                if crate::progress_mode::is_verbose_mode() {
+                    info!("   SKIP: {} (Already recorded as completed in checkpoint)", fixed.file_name().unwrap_or_default().to_string_lossy());
                 }
                 batch_result.skip();
                 progress_bar.set(batch_result.total as u64);

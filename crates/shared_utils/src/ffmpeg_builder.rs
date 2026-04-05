@@ -103,6 +103,7 @@ pub enum PixFmt {
     Yuv444p,
     Yuv444p10le,
     Rgb24,
+    Rgba,
     Rgb48le,
     Gray,
 }
@@ -116,6 +117,7 @@ impl PixFmt {
             Self::Yuv444p => "yuv444p",
             Self::Yuv444p10le => "yuv444p10le",
             Self::Rgb24 => "rgb24",
+            Self::Rgba => "rgba",
             Self::Rgb48le => "rgb48le",
             Self::Gray => "gray",
         }
@@ -132,6 +134,7 @@ impl FromStr for PixFmt {
             "yuv444p" => Ok(Self::Yuv444p),
             "yuv444p10le" => Ok(Self::Yuv444p10le),
             "rgb24" => Ok(Self::Rgb24),
+            "rgba" => Ok(Self::Rgba),
             "rgb48le" => Ok(Self::Rgb48le),
             "gray" => Ok(Self::Gray),
             _ => Err(()),
