@@ -1221,49 +1221,30 @@ pub fn convert_to_mp4_matched(
         );
     }
 
-    let (_max_crf, _min_ssim) = shared_utils::video_explorer::calculate_smart_thresholds(
-        actual_initial_crf,
-        match options.codec {
-            SelectedCodec::Hevc => shared_utils::VideoEncoder::Hevc,
-            SelectedCodec::Av1 => shared_utils::VideoEncoder::Av1,
-        },
-    );
-
     let explore_result = if flag_mode.is_ultimate() {
         match options.codec {
             SelectedCodec::Hevc => shared_utils::explore_hevc_with_gpu_coarse_ultimate(
                 &final_input,
                 &temp_output,
-                shared_utils::video_explorer::GpuExploreOptions {
-                    vf_args: vf_args.clone(),
-                    initial_crf: actual_initial_crf,
-                    max_crf: 51.0,
-                    min_ssim: _min_ssim,
-                    ultimate_mode: true,
-                    force_ms_ssim_long: false,
-                    allow_size_tolerance: options.allow_size_tolerance,
-                    max_threads: options.child_threads,
-                    hdr_x265_params: None,
-                    apple_compat: options.apple_compat,
-                    preset: shared_utils::EncoderPreset::Slower,
-                },
+                vf_args.clone(),
+                actual_initial_crf,
+                true,
+                options.allow_size_tolerance,
+                options.child_threads,
+                None,
+                options.apple_compat,
+                shared_utils::EncoderPreset::Slower,
             ),
             SelectedCodec::Av1 => shared_utils::explore_av1_with_gpu_coarse_ultimate(
                 &final_input,
                 &temp_output,
-                shared_utils::video_explorer::GpuExploreOptions {
-                    vf_args: vf_args.clone(),
-                    initial_crf: actual_initial_crf,
-                    max_crf: 51.0,
-                    min_ssim: _min_ssim,
-                    ultimate_mode: true,
-                    force_ms_ssim_long: false,
-                    allow_size_tolerance: options.allow_size_tolerance,
-                    max_threads: options.child_threads,
-                    hdr_x265_params: None,
-                    apple_compat: options.apple_compat,
-                    preset: shared_utils::EncoderPreset::Slower,
-                },
+                vf_args.clone(),
+                actual_initial_crf,
+                true,
+                options.allow_size_tolerance,
+                options.child_threads,
+                options.apple_compat,
+                shared_utils::EncoderPreset::Slower,
             ),
         }
     } else {
@@ -1271,36 +1252,22 @@ pub fn convert_to_mp4_matched(
             SelectedCodec::Hevc => shared_utils::explore_hevc_with_gpu_coarse(
                 &final_input,
                 &temp_output,
-                shared_utils::video_explorer::GpuExploreOptions {
-                    vf_args: vf_args.clone(),
-                    initial_crf: actual_initial_crf,
-                    max_crf: 51.0,
-                    min_ssim: _min_ssim,
-                    ultimate_mode: false,
-                    force_ms_ssim_long: false,
-                    allow_size_tolerance: options.allow_size_tolerance,
-                    max_threads: options.child_threads,
-                    hdr_x265_params: None,
-                    apple_compat: options.apple_compat,
-                    preset: shared_utils::EncoderPreset::Medium,
-                },
+                vf_args.clone(),
+                actual_initial_crf,
+                options.allow_size_tolerance,
+                options.child_threads,
+                None,
+                options.apple_compat,
             ),
             SelectedCodec::Av1 => shared_utils::explore_av1_with_gpu_coarse(
                 &final_input,
                 &temp_output,
-                shared_utils::video_explorer::GpuExploreOptions {
-                    vf_args: vf_args.clone(),
-                    initial_crf: actual_initial_crf,
-                    max_crf: 51.0,
-                    min_ssim: _min_ssim,
-                    ultimate_mode: false,
-                    force_ms_ssim_long: false,
-                    allow_size_tolerance: options.allow_size_tolerance,
-                    max_threads: options.child_threads,
-                    hdr_x265_params: None,
-                    apple_compat: options.apple_compat,
-                    preset: shared_utils::EncoderPreset::Medium,
-                },
+                vf_args.clone(),
+                actual_initial_crf,
+                options.allow_size_tolerance,
+                options.child_threads,
+                options.apple_compat,
+                shared_utils::EncoderPreset::Medium,
             ),
         }
     }

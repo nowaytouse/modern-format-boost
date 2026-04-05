@@ -990,83 +990,69 @@ pub fn auto_convert_with_cache(
                 let explore_result = match config.codec {
                     SelectedCodec::Hevc => {
                         if ultimate {
-                            shared_utils::explore_hevc_with_gpu_coarse_ultimate_warm_start(
+                            shared_utils::explore_hevc_with_gpu_coarse_full_warm_start(
                                 input_path,
                                 &temp_path,
+                                vf_args.clone(),
+                                predicted_crf,
                                 warm_start_crf,
-                                shared_utils::video_explorer::GpuExploreOptions {
-                                    vf_args: vf_args.clone(),
-                                    initial_crf: predicted_crf,
-                                    max_crf: 51.0, // dummy, overwritten
-                                    min_ssim: config.min_ssim,
-                                    ultimate_mode: ultimate,
-                                    force_ms_ssim_long: config.force_ms_ssim_long,
-                                    allow_size_tolerance: config.allow_size_tolerance,
-                                    max_threads: config.child_threads,
-                                    hdr_x265_params: hdr_x265_params_opt.clone(),
-                                    apple_compat: config.apple_compat,
-                                    preset: shared_utils::EncoderPreset::Slower,
-                                },
+                                true,
+                                config.force_ms_ssim_long,
+                                config.allow_size_tolerance,
+                                config.min_ssim,
+                                config.child_threads,
+                                hdr_x265_params_opt.clone(),
+                                config.apple_compat,
+                                shared_utils::EncoderPreset::Slower,
                             )
                         } else {
                             shared_utils::explore_hevc_with_gpu_coarse_full_warm_start(
                                 input_path,
                                 &temp_path,
+                                vf_args.clone(),
+                                predicted_crf,
                                 warm_start_crf,
-                                shared_utils::video_explorer::GpuExploreOptions {
-                                    vf_args: vf_args.clone(),
-                                    initial_crf: predicted_crf,
-                                    max_crf: 51.0,
-                                    min_ssim: config.min_ssim,
-                                    ultimate_mode: ultimate,
-                                    force_ms_ssim_long: config.force_ms_ssim_long,
-                                    allow_size_tolerance: config.allow_size_tolerance,
-                                    max_threads: config.child_threads,
-                                    hdr_x265_params: hdr_x265_params_opt.clone(),
-                                    apple_compat: config.apple_compat,
-                                    preset: shared_utils::EncoderPreset::Medium,
-                                },
+                                false,
+                                config.force_ms_ssim_long,
+                                config.allow_size_tolerance,
+                                config.min_ssim,
+                                config.child_threads,
+                                hdr_x265_params_opt.clone(),
+                                config.apple_compat,
+                                shared_utils::EncoderPreset::Medium,
                             )
                         }
                     }
                     SelectedCodec::Av1 => {
                         if ultimate {
-                            shared_utils::explore_av1_with_gpu_coarse_ultimate_warm_start(
+                            shared_utils::explore_av1_with_gpu_coarse_full_warm_start(
                                 input_path,
                                 &temp_path,
+                                vf_args.clone(),
+                                predicted_crf,
                                 warm_start_crf,
-                                shared_utils::video_explorer::GpuExploreOptions {
-                                    vf_args: vf_args.clone(),
-                                    initial_crf: predicted_crf,
-                                    max_crf: 51.0,
-                                    min_ssim: config.min_ssim,
-                                    ultimate_mode: ultimate,
-                                    force_ms_ssim_long: config.force_ms_ssim_long,
-                                    allow_size_tolerance: config.allow_size_tolerance,
-                                    max_threads: config.child_threads,
-                                    hdr_x265_params: None,
-                                    apple_compat: config.apple_compat,
-                                    preset: shared_utils::EncoderPreset::Slower,
-                                },
+                                true,
+                                config.force_ms_ssim_long,
+                                config.allow_size_tolerance,
+                                config.min_ssim,
+                                config.child_threads,
+                                config.apple_compat,
+                                shared_utils::EncoderPreset::Slower,
                             )
                         } else {
                             shared_utils::explore_av1_with_gpu_coarse_full_warm_start(
                                 input_path,
                                 &temp_path,
+                                vf_args.clone(),
+                                predicted_crf,
                                 warm_start_crf,
-                                shared_utils::video_explorer::GpuExploreOptions {
-                                    vf_args: vf_args.clone(),
-                                    initial_crf: predicted_crf,
-                                    max_crf: 51.0,
-                                    min_ssim: config.min_ssim,
-                                    ultimate_mode: ultimate,
-                                    force_ms_ssim_long: config.force_ms_ssim_long,
-                                    allow_size_tolerance: config.allow_size_tolerance,
-                                    max_threads: config.child_threads,
-                                    hdr_x265_params: None,
-                                    apple_compat: config.apple_compat,
-                                    preset: shared_utils::EncoderPreset::Medium,
-                                },
+                                false,
+                                config.force_ms_ssim_long,
+                                config.allow_size_tolerance,
+                                config.min_ssim,
+                                config.child_threads,
+                                config.apple_compat,
+                                shared_utils::EncoderPreset::Medium,
                             )
                         }
                     }
