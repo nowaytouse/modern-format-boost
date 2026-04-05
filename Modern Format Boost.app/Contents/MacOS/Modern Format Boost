@@ -121,9 +121,9 @@ if [[ "$MODE" == "CANCEL" ]]; then
 fi
 
 MODE_FLAG=""
-if [[ "$MODE" == *"Images"* ]]; then
+if [[ "$MODE" == "🖼️ Only Static Images" ]]; then
     MODE_FLAG="--images-only"
-elif [[ "$MODE" == *"Videos"* ]]; then
+elif [[ "$MODE" == "🎬 Only Animated/Videos" ]]; then
     MODE_FLAG="--videos-only"
 fi
 

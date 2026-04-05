@@ -170,7 +170,7 @@ fn calculate_ssim_simple(original: &DynamicImage, converted: &DynamicImage) -> O
     let orig_gray = original.to_luma8();
     let conv_gray = converted.to_luma8();
 
-    let n = f64::from(u32::try_from(orig_gray.width() * orig_gray.height()).unwrap_or(0));
+    let n = f64::from(orig_gray.width() * orig_gray.height());
     if n < 2.0 {
         return None;
     }

@@ -1640,7 +1640,8 @@ pub fn score_loop_frequency(duration_secs: f64, frame_count: u64) -> f64 {
         0.0
     };
 
-    (f64::from(loop_score) + f64::from(density_adj)).clamp(0.0_f64, 1.0_f64)
+    let combined_score: f64 = loop_score + density_adj;
+    combined_score.clamp(0.0_f64, 1.0_f64)
 }
 
 pub fn score_sparse_cadence(duration_secs: f64, frame_count: u64) -> f64 {

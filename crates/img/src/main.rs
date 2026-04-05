@@ -578,8 +578,9 @@ fn convert_result_to_output(result: shared_utils::ConversionResult) -> Conversio
         message: result.message,
         original_size: result.input_size,
         output_size: result.output_size,
-        #[allow(clippy::cast_possible_truncation)]
-        size_reduction: result.size_reduction.map(|r| r as f32),
+        size_reduction: result
+            .size_reduction
+            .map(shared_utils::numeric_cast::f64_to_f32_lossy),
     }
 }
 
@@ -949,10 +950,10 @@ fn auto_convert_directory(
             // Reserve 1 GB headroom on top of total input size (temp files, partial encodes, etc.)
             let required = total_input_size.saturating_add(1024 * 1024 * 1024);
             if avail < required {
-                #[allow(clippy::cast_precision_loss)]
-                let avail_gb = avail as f64 / (1024.0 * 1024.0 * 1024.0);
-                #[allow(clippy::cast_precision_loss)]
-                let required_gb = required as f64 / (1024.0 * 1024.0 * 1024.0);
+                let avail_gb = shared_utils::numeric_cast::u64_to_f64(avail)
+                    / (1024.0 * 1024.0 * 1024.0);
+                let required_gb = shared_utils::numeric_cast::u64_to_f64(required)
+                    / (1024.0 * 1024.0 * 1024.0);
                 eprintln!(
                     "❌ Insufficient disk space on output volume.\n\
                      💾 Available: {avail_gb:.2} GB\n\

@@ -2036,8 +2036,10 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
 
     let entropy = calculate_entropy(&img);
 
-    #[allow(clippy::field_reassign_with_default)]
-    let mut precision = PrecisionMetadata::default();
+    let mut precision = PrecisionMetadata {
+        is_lossless_deterministic: matches!(format, DetectedFormat::PNG),
+        ..PrecisionMetadata::default()
+    };
 
     match format {
         DetectedFormat::PNG => {
@@ -2047,7 +2049,6 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
                 precision.bit_depth = Some(info.bit_depth);
                 precision.palette_size = info.palette_size;
                 precision.color_type = Some(info.color_type);
-                precision.is_lossless_deterministic = true;
             }
         }
         DetectedFormat::GIF => {
@@ -2114,7 +2115,7 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
     }
 
     let duration = if is_animated {
-        fps.map(|f| crate::numeric_cast::f64_to_f32_lossy(f64::from(u32::try_from(frame_count).unwrap_or(u32::MAX))) / f)
+        fps.map(|f| crate::numeric_cast::f64_to_f32_lossy(f64::from(frame_count)) / f)
     } else {
         None
     };
@@ -2208,7 +2209,7 @@ fn estimate_jpeg_quality(path: &Path) -> Result<u8> {
     use crate::image_jpeg_analysis::analyze_jpeg_quality;
     let data = std::fs::read(path)?;
     let analysis = analyze_jpeg_quality(&data).map_err(ImgQualityError::AnalysisError)?;
-    Ok(u8::try_from(analysis.estimated_quality).unwrap_or(0))
+    Ok(analysis.estimated_quality)
 }
 
 /// Estimate WebP VP8 quality by parsing the bitstream quantization index.

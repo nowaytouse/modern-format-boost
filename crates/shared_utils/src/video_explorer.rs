@@ -1908,7 +1908,7 @@ impl VideoExplorer {
             progress_line("│ Computing SSIM... │".to_string());
             let (ssim_opt, psnr_opt, ms_ssim_opt) =
                 validate_ssim(best_crf, &mut quality_cache, self)?;
-            let ssim = ssim_opt.unwrap_or(0.0) as f64;
+            let ssim = ssim_opt.unwrap_or(0.0);
 
             progress_done();
 
@@ -3242,7 +3242,7 @@ pub fn calculate_smart_thresholds(initial_crf: f32, encoder: VideoEncoder) -> (f
         // High headroom for lossless-first starts (e.g. GIFs) to ensure we reach 25-30+
         28.0_f32
     } else {
-        crate::numeric_cast::f64_to_f32_lossy(f64::from(quality_level)).mul_add(7.0, 8.0)
+        crate::numeric_cast::f64_to_f32_lossy(quality_level).mul_add(7.0, 8.0)
     };
     let max_crf = (initial_crf + headroom).min(max_crf_cap);
 

@@ -181,22 +181,13 @@ mod tests {
     #[test]
     fn test_ssim_clamped() {
         let clamped = Ssim::clamped(1.5);
-        assert!(crate::float_compare::approx_eq_f64(
-            clamped.value() as f64,
-            1.0
-        ));
+        assert!(crate::float_compare::approx_eq_f64(clamped.value(), 1.0));
 
         let clamped_neg = Ssim::clamped(-0.5);
-        assert!(crate::float_compare::approx_eq_f64(
-            clamped_neg.value() as f64,
-            0.0
-        ));
+        assert!(crate::float_compare::approx_eq_f64(clamped_neg.value(), 0.0));
 
         let clamped_nan = Ssim::clamped(f64::NAN);
-        assert!(crate::float_compare::approx_eq_f64(
-            clamped_nan.value() as f64,
-            0.0
-        ));
+        assert!(crate::float_compare::approx_eq_f64(clamped_nan.value(), 0.0));
     }
 
     #[test]

@@ -867,7 +867,7 @@ pub fn explore_with_gpu_coarse_search(
 
                 let max_duration_min = ms_ssim_duration_threshold_secs / 60.0;
                 let ms_ssim_yuv_result =
-                    calculate_ms_ssim_yuv(input, output, max_duration_min.into());
+                    calculate_ms_ssim_yuv(input, output, max_duration_min);
                 let ssim_all_result = calculate_ssim_all(input, output);
 
                 crate::log_eprintln!("   ═══════════════════════════════════════════════════");

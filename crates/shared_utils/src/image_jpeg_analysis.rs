@@ -1105,14 +1105,14 @@ mod tests {
     fn test_sse_identical() {
         let table = IJG_LUMINANCE_BASE;
         let sse = calculate_sse(&table, &table);
-        assert!(crate::float_compare::approx_eq_f64(f64::from(sse), 0.0));
+        assert!(crate::float_compare::approx_eq_f64(sse, 0.0));
     }
 
     #[test]
     fn test_weighted_sse_identical() {
         let table = IJG_LUMINANCE_BASE;
         let wsse = calculate_weighted_sse(&table, &table);
-        assert!(crate::float_compare::approx_eq_f64(f64::from(wsse), 0.0));
+        assert!(crate::float_compare::approx_eq_f64(wsse, 0.0));
     }
 
     #[test]
@@ -1120,7 +1120,7 @@ mod tests {
         let qt = generate_standard_qt(75, &IJG_LUMINANCE_BASE);
         let (quality, sse, is_standard) = estimate_quality_from_table(&qt, true);
         assert_eq!(quality, 75);
-        assert!(crate::float_compare::approx_eq_f64(f64::from(sse), 0.0));
+        assert!(crate::float_compare::approx_eq_f64(sse, 0.0));
         assert!(is_standard);
     }
 
@@ -1130,7 +1130,7 @@ mod tests {
             let qt = generate_standard_qt(expected_q, &IJG_LUMINANCE_BASE);
             let (detected_q, sse, _) = estimate_quality_from_table(&qt, true);
             assert_eq!(detected_q, expected_q, "Failed to detect Q={expected_q}");
-            assert!(crate::float_compare::approx_eq_f64(f64::from(sse), 0.0));
+            assert!(crate::float_compare::approx_eq_f64(sse, 0.0));
         }
     }
 
@@ -1154,7 +1154,7 @@ mod tests {
                 detected_q, *expected_q,
                 "Failed to detect chroma Q={expected_q}"
             );
-            assert!(crate::float_compare::approx_eq_f64(f64::from(sse), 0.0));
+            assert!(crate::float_compare::approx_eq_f64(sse, 0.0));
         }
     }
 

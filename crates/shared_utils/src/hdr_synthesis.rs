@@ -353,7 +353,7 @@ fn decode_heif_handle(handle: &ImageHandle, color_space: ColorSpace) -> Result<D
                 };
                 let mut buffer = ImageBuffer::new(width, height);
                 for (x, y, pixel) in buffer.enumerate_pixels_mut() {
-                    let offset = usize::try_from(y).unwrap_or(0) * (usize::try_from(r_plane.stride).unwrap_or(0) / 2) + usize::try_from(x).unwrap_or(0) * 3;
+                    let offset = usize::try_from(y).unwrap_or(0) * (r_plane.stride / 2) + usize::try_from(x).unwrap_or(0) * 3;
                     let r = data_u16[offset];
                     let g = data_u16[offset + 1];
                     let b = data_u16[offset + 2];
@@ -363,7 +363,7 @@ fn decode_heif_handle(handle: &ImageHandle, color_space: ColorSpace) -> Result<D
             } else {
                 let mut buffer = ImageBuffer::new(width, height);
                 for (x, y, pixel) in buffer.enumerate_pixels_mut() {
-                    let offset = usize::try_from(y).unwrap_or(0) * usize::try_from(r_plane.stride).unwrap_or(0) + usize::try_from(x).unwrap_or(0) * 3;
+                    let offset = usize::try_from(y).unwrap_or(0) * r_plane.stride + usize::try_from(x).unwrap_or(0) * 3;
                     let r = r_plane.data[offset];
                     let g = r_plane.data[offset + 1];
                     let b = r_plane.data[offset + 2];
@@ -386,7 +386,7 @@ fn decode_heif_handle(handle: &ImageHandle, color_space: ColorSpace) -> Result<D
                 };
                 let mut buffer = ImageBuffer::new(width, height);
                 for (x, y, pixel) in buffer.enumerate_pixels_mut() {
-                    let offset = usize::try_from(y).unwrap_or(0) * (usize::try_from(y_plane.stride).unwrap_or(0) / 2) + usize::try_from(x).unwrap_or(0);
+                    let offset = usize::try_from(y).unwrap_or(0) * (y_plane.stride / 2) + usize::try_from(x).unwrap_or(0);
                     let val = data_u16[offset];
                     *pixel = image::Luma([val]);
                 }
@@ -394,7 +394,7 @@ fn decode_heif_handle(handle: &ImageHandle, color_space: ColorSpace) -> Result<D
             } else {
                 let mut buffer = ImageBuffer::new(width, height);
                 for (x, y, pixel) in buffer.enumerate_pixels_mut() {
-                    let offset = usize::try_from(y).unwrap_or(0) * usize::try_from(y_plane.stride).unwrap_or(0) + usize::try_from(x).unwrap_or(0);
+                    let offset = usize::try_from(y).unwrap_or(0) * y_plane.stride + usize::try_from(x).unwrap_or(0);
                     let val = y_plane.data[offset];
                     *pixel = image::Luma([val]);
                 }

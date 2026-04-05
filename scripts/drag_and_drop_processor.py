@@ -677,7 +677,7 @@ def count_files():
     draw_separator("Scanning Content")
     print(f"{DIM}   Analyzing directory structure...{RESET}")
 
-    total, img, vid, xmp, media_size = 0, 0, 0, 0, 0
+    total, img, vid, xmp, other, media_size = 0, 0, 0, 0, 0, 0
     img_exts = {
         ".jpg",
         ".jpeg",
@@ -688,12 +688,23 @@ def count_files():
         ".heic",
         ".heif",
         ".avif",
-        ".gif",
         ".tiff",
         ".tif",
         ".bmp",
     }
-    vid_exts = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".wmv", ".flv"}
+    # GIFs need the video pipeline in full/video mode, but the image pipeline may still
+    # touch them in image-only runs to preserve/copy skipped originals.
+    vid_exts = {
+        ".gif",
+        ".mp4",
+        ".mov",
+        ".mkv",
+        ".avi",
+        ".webm",
+        ".m4v",
+        ".wmv",
+        ".flv",
+    }
     media_exts = img_exts | vid_exts
 
     for root, _, files in os.walk(TARGET_DIR):
@@ -703,19 +714,24 @@ def count_files():
             total += 1
             p = Path(root) / file
             ext = p.suffix.lower()
-            if ext in img_exts:
+
+            is_img = ext in img_exts or ext == ".gif"
+            is_vid = ext in vid_exts
+
+            if is_img:
                 img += 1
-            elif ext in vid_exts:
+            if is_vid:
                 vid += 1
-            elif ext == ".xmp":
+            if ext == ".xmp":
                 xmp += 1
+            elif not is_img and not is_vid:
+                other += 1
+
             if ext in media_exts:
                 try:
                     media_size += p.stat().st_size
                 except OSError:
                     pass
-
-    other = total - img - vid - xmp
 
     # Apply filtering based on PROCESSING_MODE
     if PROCESSING_MODE == "images_only":
@@ -1257,6 +1273,7 @@ def main():
                         ".jpg",
                         ".jpeg",
                         ".png",
+                        ".gif",
                         ".heic",
                         ".mp4",
                         ".mov",
@@ -1281,6 +1298,7 @@ def main():
                         ".jpg",
                         ".jpeg",
                         ".png",
+                        ".gif",
                         ".heic",
                         ".mp4",
                         ".mov",

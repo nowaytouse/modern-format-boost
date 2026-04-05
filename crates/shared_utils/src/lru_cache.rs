@@ -22,13 +22,16 @@ pub struct CacheEntry<V> {
 }
 
 impl<V> CacheEntry<V> {
-    fn new(value: V) -> Self {
+    fn current_epoch_millis_u64() -> u64 {
         let now_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or(Duration::ZERO)
             .as_millis();
-        #[allow(clippy::cast_possible_truncation)]
-        let now_ms_u64 = now_ms as u64; // u64 is sufficient for ~584 million years of milliseconds
+        u64::try_from(now_ms).unwrap_or(u64::MAX)
+    }
+
+    fn new(value: V) -> Self {
+        let now_ms_u64 = Self::current_epoch_millis_u64();
         Self {
             value,
             accessed_at_ms: now_ms_u64,
@@ -38,13 +41,7 @@ impl<V> CacheEntry<V> {
     }
 
     fn touch(&mut self) {
-        let now_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or(Duration::ZERO)
-            .as_millis();
-        #[allow(clippy::cast_possible_truncation)]
-        let ms = now_ms as u64; // u64 is sufficient for ~584 million years of milliseconds
-        self.accessed_at_ms = ms;
+        self.accessed_at_ms = Self::current_epoch_millis_u64();
         self.accessed_instant = Some(Instant::now());
     }
 }

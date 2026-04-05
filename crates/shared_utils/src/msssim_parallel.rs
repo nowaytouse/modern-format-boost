@@ -51,7 +51,6 @@ impl MsssimResult {
             return;
         }
 
-        #[allow(clippy::cast_precision_loss)]
         let speedup = crate::numeric_cast::u64_to_f64(self.total_frames) / crate::numeric_cast::u64_to_f64(self.sampled_frames.max(1));
         eprintln!(
             "⏱️  MS-SSIM completed in {:.2}s (sampled {}/{} frames)",
@@ -380,7 +379,6 @@ mod tests {
                 let sampled_frames = sampled.min(total);
                 let total_frames = total.max(sampled);
 
-                #[allow(clippy::cast_precision_loss)]
                 let speedup = crate::numeric_cast::u64_to_f64(total_frames) / crate::numeric_cast::u64_to_f64(sampled_frames.max(1));
 
                 prop_assert!(speedup >= 1.0);

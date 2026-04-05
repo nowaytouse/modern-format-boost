@@ -721,7 +721,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
     builder
         .overwrite()
         .with_odd_dim_correction()
-        .threads(max_threads as usize)
+        .threads(max_threads)
         .input(&actual_input)
         .arg(shared_utils::constants::FFMPEG_ARG_MAP)
         .arg(format!("0:{effective_stream_idx}")) // Select the correct stream
@@ -1552,7 +1552,7 @@ pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result
     let mut builder = shared_utils::FfmpegBuilder::new();
     builder
         .overwrite()
-        .threads(max_threads as usize)
+        .threads(max_threads)
         .input(input)
         .vcodec(shared_utils::VideoCodec::Hevc)
         .x265_params(x265_params);

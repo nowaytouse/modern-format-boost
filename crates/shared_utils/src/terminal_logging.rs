@@ -201,13 +201,21 @@ impl TerminalLogger {
         const MB: u64 = KB * 1024;
         const GB: u64 = MB * 1024;
 
-        #[allow(clippy::cast_precision_loss)]
         if bytes >= GB {
-            format!("{:.2} GB", bytes as f64 / GB as f64)
+            format!(
+                "{:.2} GB",
+                crate::numeric_cast::u64_to_f64(bytes) / crate::numeric_cast::u64_to_f64(GB)
+            )
         } else if bytes >= MB {
-            format!("{:.2} MB", bytes as f64 / MB as f64)
+            format!(
+                "{:.2} MB",
+                crate::numeric_cast::u64_to_f64(bytes) / crate::numeric_cast::u64_to_f64(MB)
+            )
         } else if bytes >= KB {
-            format!("{:.2} KB", bytes as f64 / KB as f64)
+            format!(
+                "{:.2} KB",
+                crate::numeric_cast::u64_to_f64(bytes) / crate::numeric_cast::u64_to_f64(KB)
+            )
         } else {
             format!("{bytes} B")
         }

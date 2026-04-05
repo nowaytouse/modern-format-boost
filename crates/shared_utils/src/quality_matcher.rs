@@ -649,7 +649,8 @@ pub fn calculate_av1_crf_with_options(
 
     let crf_rounded = (crf_with_bias * 2.0).round() / 2.0;
     // Last line of defense: guarantee CRF in valid range regardless of extreme BPP or content/bias.
-    let crf = (crate::numeric_cast::f64_to_f32_lossy(f64::from(crf_rounded))).clamp(AV1_CRF_CLAMP_MIN, AV1_CRF_CLAMP_MAX);
+    let crf =
+        (crate::numeric_cast::f64_to_f32_lossy(crf_rounded)).clamp(AV1_CRF_CLAMP_MIN, AV1_CRF_CLAMP_MAX);
 
     Ok(MatchedQuality {
         crf,
@@ -718,7 +719,8 @@ pub fn calculate_hevc_crf_with_options(
     };
 
     let crf_rounded = (crf_with_bias * 2.0).round() / 2.0;
-    let crf = (crate::numeric_cast::f64_to_f32_lossy(f64::from(crf_rounded))).clamp(HEVC_CRF_CLAMP_MIN, HEVC_CRF_CLAMP_MAX);
+    let crf =
+        (crate::numeric_cast::f64_to_f32_lossy(crf_rounded)).clamp(HEVC_CRF_CLAMP_MIN, HEVC_CRF_CLAMP_MAX);
 
     Ok(MatchedQuality {
         crf,
