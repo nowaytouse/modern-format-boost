@@ -6,6 +6,33 @@ All notable changes to this project will be documented in this file.
 
 ## [0.11.2] — 2026-04-05
 
+#### 🔧 BPP Calculation Refactoring & Bugfixes
+
+- **Extracted `bpp_from_meta` helper**: Consolidated duplicate temporal/spatial BPP calculation logic in `database.rs` into a single reusable function with clearer semantics (per-frame temporal density divides by frame count, not multiplies).
+- **Fixed temporal BPP formula bug**: Legacy code in `lookup_similar_samples_inner` multiplied by `frame_count` instead of dividing — corrected to use proper per-frame density calculation.
+- **Added regression test**: `bpp_from_meta_divides_temporal_density_by_frame_count` validates the corrected formula against legacy buggy behavior.
+
+#### 🧠 Loop Intent: Improved Legacy Mode & KNN Fallbacks
+
+- **Better legacy fallback**: When loop DB is unavailable/disabled, system now evaluates loop tree first and only uses Layer 7 fallback if tree returns uncertain — instead of blindly using duration-based heuristics.
+- **Explicit KNN missing probability handling**: When KNN match lacks `keep_probability`, system now logs confidence/neighbor count and defers to Layer 7 fallback instead of using `DEFAULT_SCORE_PRIOR` — prevents fabricated priors from skewing decisions.
+- **Clearer logging**: Added explicit warnings when running without KNN evidence; improved fallback result messages for better observability.
+
+#### 📊 Optional Scoring Functions (No Fabricated Defaults)
+
+- **Changed scoring functions to return `Option<f64>`**: `calculate_cv`, `calculate_cv_f64`, `calculate_gini_f64`, `loop_closure_score`, `motion_periodicity_score`, and `temporal_jitter_score` now return `None` for empty/insufficient data instead of fabricating default values (e.g., `0.5`, `DEFAULT_SCORE_PRIOR`).
+- **Explicit uncertainty propagation**: Callers must now handle `None` explicitly, preventing silent insertion of made-up scores into decision logic.
+- **Removed misleading defaults**: Eliminated `tracing::debug!` messages about "admitting unknown state via 0.5 prior" — uncertainty is now surfaced through the type system.
+
+#### 🐛 Metadata Field Usage Fix
+
+- **Fixed `is_native_gif` field access**: Replaced fragile string comparison (`meta.source_extension.as_deref() == Some("gif")`) with proper `meta.is_native_gif` boolean field in `sample_from_path` and `sample_row_from_meta`.
+
+#### 🧹 Code Quality
+
+- **Reduced code duplication**: Extracted BPP calculation eliminated ~20 lines of repeated logic across database functions.
+- **Improved test coverage**: Added dedicated unit test for BPP calculation correctness with explicit validation against legacy buggy formula.
+
 #### ⚡ Long animated image → video (CRF exploration)
 
 - **Segmented CPU exploration**: For animated-image inputs longer than `ANIMATION_CLIP_THRESHOLD_SECS`, `cpu_fine_tune_from_gpu_boundary` applies a three-window FFmpeg `select`+`setpts` prefix during CRF search, then performs one **full-timeline** encode at the chosen CRF before SSIM / verification (output is not truncated).

@@ -209,8 +209,8 @@ impl LoopMeta {
                 ColorSpace::BT2020 | ColorSpace::AdobeRGB
             ) || detection.is_dolby_vision
                 || detection.is_hdr10_plus,
-            frame_payload_variation: Some(calculate_cv(&detection.pkt_sizes)),
-            frame_delay_variation: Some(calculate_cv_f64(&detection.pts_deltas)),
+            frame_payload_variation: calculate_cv(&detection.pkt_sizes),
+            frame_delay_variation: calculate_cv_f64(&detection.pts_deltas),
             pkt_sizes: detection.pkt_sizes.clone(),
             pts_deltas: detection.pts_deltas.clone(),
             palette_size,
@@ -218,13 +218,13 @@ impl LoopMeta {
             palette_depth: None,
             motion_gini: {
                 let sizes: Vec<f64> = detection.pkt_sizes.iter().map(|&s| f64::from(u32::try_from(s).unwrap_or(u32::MAX))).collect();
-                Some(calculate_gini_f64(&sizes))
+                calculate_gini_f64(&sizes)
             },
             temporal_flatness: None,
             block_skew: None,
-            loop_closure_score: Some(loop_closure_score(&detection.pkt_sizes)),
-            motion_periodicity: Some(motion_periodicity_score(&detection.mv_magnitudes)),
-            temporal_jitter: Some(temporal_jitter_score(&detection.pts_deltas)),
+            loop_closure_score: loop_closure_score(&detection.pkt_sizes),
+            motion_periodicity: motion_periodicity_score(&detection.mv_magnitudes),
+            temporal_jitter: temporal_jitter_score(&detection.pts_deltas),
             directory_meme_score: 0.5,
             filename_meme_score: 0.5,
             frame_types: detection.frame_types.clone(),
@@ -292,8 +292,8 @@ impl LoopMeta {
             loop_count: probe.loop_count,
             app_extensions: Some(Vec::new()),
             container: Some(probe.format_name.clone()),
-            frame_payload_variation: Some(calculate_cv(&probe.pkt_sizes)),
-            frame_delay_variation: Some(calculate_cv_f64(&probe.pts_deltas)),
+            frame_payload_variation: calculate_cv(&probe.pkt_sizes),
+            frame_delay_variation: calculate_cv_f64(&probe.pts_deltas),
             pkt_sizes: probe.pkt_sizes.clone(),
             pts_deltas: probe.pts_deltas.clone(),
             palette_size,
@@ -302,12 +302,12 @@ impl LoopMeta {
             webp_compression_ratio: None,
             motion_gini: {
                 let sizes: Vec<f64> = probe.pkt_sizes.iter().map(|&s| f64::from(u32::try_from(s).unwrap_or(u32::MAX))).collect();
-                Some(calculate_gini_f64(&sizes))
+                calculate_gini_f64(&sizes)
             },
             block_skew: None,
-            loop_closure_score: Some(loop_closure_score(&probe.pkt_sizes)),
-            motion_periodicity: Some(motion_periodicity_score(&probe.mv_magnitudes)),
-            temporal_jitter: Some(temporal_jitter_score(&probe.pts_deltas)),
+            loop_closure_score: loop_closure_score(&probe.pkt_sizes),
+            motion_periodicity: motion_periodicity_score(&probe.mv_magnitudes),
+            temporal_jitter: temporal_jitter_score(&probe.pts_deltas),
             directory_meme_score: 0.5,
             filename_meme_score: 0.5,
             frame_types: probe.frame_types.clone(),
@@ -1184,32 +1184,39 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
         .and_then(|client| fetch_loop_reference_profile(client).ok());
 
     let thresholds = LoopThresholds::from_profile(reference_profile.as_ref());
-
-    // ── Layer 0: Legacy Fallback ──
-    if is_legacy_mode {
-        let legacy_verdict = if meta.duration_secs < 10.0 {
-            LoopIntentVerdict::LoopStrong(format!(
-                "Legacy Limited Mode: Short duration ({:.1}s < 10s)",
-                meta.duration_secs
-            ))
-        } else {
-            LoopIntentVerdict::LoopWeak(format!(
-                "Legacy Limited Mode: Long duration ({:.1}s >= 10s)",
-                meta.duration_secs
-            ))
-        };
-        emit_stderr(&format!("💡 Result: {}", legacy_verdict.reason()));
-        return legacy_verdict;
-    }
-
-    let sample_match = lookup_similar_samples(meta, path);
-
     let keywords = reference_profile
         .as_ref()
         .map_or(&[][..], |profile| profile.top_keywords.as_slice());
 
     let mut mutable_meta = meta.clone();
     mutable_meta.refresh_semantics(keywords);
+
+    // ── Layer 0: Legacy Fallback ──
+    if is_legacy_mode {
+        emit_stderr(
+            "⚠️  Loop DB unavailable or disabled — running tree without KNN and refusing fabricated priors",
+        );
+        let tree_only = evaluate_loop_tree(&mutable_meta, None);
+        match &tree_only.verdict {
+            LoopIntentVerdict::LoopStrong(reason) | LoopIntentVerdict::LoopWeak(reason) => {
+                emit_stderr(&format!("💡 Tree-only Result: {reason}"));
+                return tree_only.verdict;
+            }
+            LoopIntentVerdict::Uncertain(reason) => {
+                emit_stderr(&format!(
+                    "⚠️  Tree-only result remained uncertain ({reason}) — using Layer 7 fallback"
+                ));
+                let fallback = layer7_fallback(
+                    &mutable_meta,
+                    "Layer 0: DB unavailable / KNN disabled",
+                );
+                emit_stderr(&format!("💡 Fallback Result: {}", fallback.reason()));
+                return fallback;
+            }
+        }
+    }
+
+    let sample_match = lookup_similar_samples(meta, path);
 
     let tree = evaluate_loop_tree(&mutable_meta, reference_profile.as_ref());
     let tree_probability = tree.tree_probability;
@@ -1234,12 +1241,21 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
             ));
 
             if let Some(m) = sample_match {
-                let keep_prob = m.keep_probability.unwrap_or_else(|| {
-                    tracing::debug!(
-                        "Missing score prior; admitting unknown state via neutral default"
-                    );
-                    crate::constants::DEFAULT_SCORE_PRIOR
-                });
+                let Some(keep_prob) = m.keep_probability else {
+                    knn_confidence = Some(m.confidence);
+                    knn_neighbor_count = Some(m.neighbor_count);
+                    emit_stderr(&format!(
+                        "   ⚠️  KNN match missing keep-probability (conf={:.2}, n={}) — treating as unknown and deferring to Layer 7",
+                        m.confidence, m.neighbor_count
+                    ));
+                    let final_v = layer7_fallback(meta, "Layer 6: KNN match missing probability");
+                    if final_v.is_keep_gif() {
+                        emit_stderr(&format!("✅ Fallback Result: {}", final_v.reason()));
+                    } else {
+                        emit_stderr(&format!("ℹ️  Fallback Result: {}", final_v.reason()));
+                    }
+                    return final_v;
+                };
                 let confidence = m.confidence;
 
                 // Capture KNN data for inference log
@@ -1352,15 +1368,10 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
                     }
                     final_v
                 }
-            } else if tree_probability > 0.78 {
-                emit_stderr(&format!(
-                    "   ⚖️ Tree strong ({tree_probability:.2}) but no KNN match — promoting to LoopStrong"
-                ));
-                LoopIntentVerdict::LoopStrong(format!(
-                    "Layer 6: Tree-only promotion (score={tree_probability:.2}) - no KNN match"
-                ))
             } else {
-                emit_stderr("   ⚠️ KNN returned no match — using Layer 7 fallback");
+                emit_stderr(&format!(
+                    "   ⚠️ KNN returned no usable match (tree_prob={tree_probability:.2}) — keeping uncertainty explicit and using Layer 7 fallback"
+                ));
                 let final_v = layer7_fallback(meta, reason);
                 if final_v.is_keep_gif() {
                     emit_stderr(&format!("✅ Fallback Result: {}", final_v.reason()));
@@ -1475,21 +1486,30 @@ fn extract_layer_tag(reason: &str) -> String {
 #[must_use]
 pub fn is_lossless_exploration_safe(meta: &LoopMeta, path: Option<&Path>) -> bool {
     let sample_match = crate::database::lookup_similar_samples(meta, path);
-    let keep_prob = sample_match
+    let (threshold, keep_prob_label) = match sample_match
         .as_ref()
         .and_then(|m| m.keep_probability)
-        .unwrap_or_else(|| {
-            tracing::debug!("Missing score prior; admitting unknown state via neutral default");
-            crate::constants::DEFAULT_SCORE_PRIOR
-        });
-
-    let threshold = lossless_duration_limit_for_keep_prob(keep_prob);
+    {
+        Some(keep_prob) => (
+            lossless_duration_limit_for_keep_prob(keep_prob),
+            format!("keep_prob={keep_prob:.2}"),
+        ),
+        None => {
+            emit_stderr(
+                "   ⚠️  Lossless-first safety: KNN evidence unavailable — using conservative high-value limit",
+            );
+            (
+                crate::constants::HIGH_VALUE_LOSSLESS_DURATION_LIMIT,
+                "keep_prob=unknown".to_string(),
+            )
+        }
+    };
     let is_safe = meta.duration_secs < f64::from(threshold);
 
     if !is_safe {
         emit_stderr(&format!(
-            "   ⚠️  Lossless-first (CRF 0.00) skip: duration {:.1}s exceeds dynamic limit {:.1}s (keep_prob={:.2})",
-            meta.duration_secs, threshold, keep_prob
+            "   ⚠️  Lossless-first (CRF 0.00) skip: duration {:.1}s exceeds limit {:.1}s ({})",
+            meta.duration_secs, threshold, keep_prob_label
         ));
     }
     is_safe
@@ -1512,55 +1532,53 @@ fn lossless_duration_limit_for_keep_prob(keep_prob: f64) -> f32 {
 
 // ── Signal Scorers ────────────────────────────────────────────────────────────
 
-fn calculate_cv(values: &[u64]) -> f64 {
+fn calculate_cv(values: &[u64]) -> Option<f64> {
     if values.is_empty() {
-        tracing::debug!("Coefficient of variation requested for empty set; admitting unknown state via 0.5 prior");
-        return crate::constants::DEFAULT_SCORE_PRIOR;
+        return None;
     }
     let n = f64::from(u32::try_from(values.len()).unwrap_or(1));
     let mean = values.iter().map(|&v| f64::from(u32::try_from(v).unwrap_or(u32::MAX))).sum::<f64>() / n;
     if mean <= 0.0 {
-        return 0.0;
+        return Some(0.0);
     }
     let var = values
         .iter()
         .map(|&v| (f64::from(u32::try_from(v).unwrap_or(u32::MAX)) - mean).powi(2))
         .sum::<f64>()
         / n;
-    var.sqrt() / mean
+    Some(var.sqrt() / mean)
 }
 
-fn calculate_cv_f64(values: &[f64]) -> f64 {
+fn calculate_cv_f64(values: &[f64]) -> Option<f64> {
     if values.is_empty() {
-        tracing::debug!("Coefficient of variation requested for empty set; admitting unknown state via 0.5 prior");
-        return crate::constants::DEFAULT_SCORE_PRIOR;
+        return None;
     }
     let n = f64::from(u32::try_from(values.len()).unwrap_or(1));
     let mean = values.iter().sum::<f64>() / n;
     if mean <= 0.0 {
-        return 0.0;
+        return Some(0.0);
     }
     let var = values.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / n;
-    var.sqrt() / mean
+    Some(var.sqrt() / mean)
 }
 
-fn calculate_gini_f64(values: &[f64]) -> f64 {
+fn calculate_gini_f64(values: &[f64]) -> Option<f64> {
     if values.is_empty() {
-        return 0.0;
+        return None;
     }
     let mut sorted = values.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let n = f64::from(u32::try_from(sorted.len()).unwrap_or(1));
     let sum: f64 = sorted.iter().sum();
     if sum.abs() < 1e-9 {
-        return 0.0;
+        return Some(0.0);
     }
     let weighted_sum: f64 = sorted
         .iter()
         .enumerate()
         .map(|(i, &v)| f64::from(u32::try_from(2 * (i + 1)).unwrap_or(1)) * v)
         .sum();
-    (weighted_sum / (n * sum)) - (n + 1.0) / n
+    Some((weighted_sum / (n * sum)) - (n + 1.0) / n)
 }
 
 fn fps_anomaly_score(fps: f64) -> f64 {
@@ -2024,9 +2042,9 @@ fn palette_depth_score(quantized_unique_colors: usize) -> f64 {
     score.clamp(0.0, 1.0)
 }
 
-fn loop_closure_score(pkt_sizes: &[u64]) -> f64 {
+fn loop_closure_score(pkt_sizes: &[u64]) -> Option<f64> {
     if pkt_sizes.len() < 4 {
-        return 0.5;
+        return None;
     }
 
     let vals: Vec<f64> = pkt_sizes.iter().map(|&v| f64::from(u32::try_from(v).unwrap_or(u32::MAX))).collect();
@@ -2035,7 +2053,7 @@ fn loop_closure_score(pkt_sizes: &[u64]) -> f64 {
     let variance = vals.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / f64::from(u32::try_from(n).unwrap_or(1));
     if variance < 1e-6 {
         // All frames identical — perfect loop structure
-        return 1.0;
+        return Some(1.0);
     }
 
     // Normalized autocorrelation at lag = half sequence length.
@@ -2047,13 +2065,13 @@ fn loop_closure_score(pkt_sizes: &[u64]) -> f64 {
         / (f64::from(u32::try_from(n - lag).unwrap_or(1)) * variance);
 
     // Map [-1, 1] → [0, 1]; high positive autocorrelation = strong loop closure
-    f64::midpoint(autocorr, 1.0).clamp(0.0, 1.0)
+    Some(f64::midpoint(autocorr, 1.0).clamp(0.0, 1.0))
 }
 
-fn motion_periodicity_score(mv_magnitudes: &[f64]) -> f64 {
+fn motion_periodicity_score(mv_magnitudes: &[f64]) -> Option<f64> {
     let n = mv_magnitudes.len();
     if n < 6 {
-        return 0.5;
+        return None;
     }
 
     let mean = mv_magnitudes.iter().sum::<f64>() / f64::from(u32::try_from(n).unwrap_or(1));
@@ -2063,7 +2081,7 @@ fn motion_periodicity_score(mv_magnitudes: &[f64]) -> f64 {
         .sum::<f64>()
         / f64::from(u32::try_from(n).unwrap_or(1));
     if variance < 1e-6 {
-        return 1.0; // Perfectly static — synthetic/sticker content
+        return Some(1.0); // Perfectly static — synthetic/sticker content
     }
 
     // Average normalized autocorrelation over lags n/4, n/3, n/2.
@@ -2082,19 +2100,25 @@ fn motion_periodicity_score(mv_magnitudes: &[f64]) -> f64 {
         .sum();
     let valid_lags = lags.iter().filter(|&&lag| lag > 0 && lag < n).count();
 
-    f64::midpoint(autocorr_sum / f64::from(u32::try_from(valid_lags).unwrap_or(1)), 1.0).clamp(0.0, 1.0)
+    Some(
+        f64::midpoint(
+            autocorr_sum / f64::from(u32::try_from(valid_lags).unwrap_or(1)),
+            1.0,
+        )
+        .clamp(0.0, 1.0),
+    )
 }
 
-fn temporal_jitter_score(pts_deltas: &[f64]) -> f64 {
+fn temporal_jitter_score(pts_deltas: &[f64]) -> Option<f64> {
     let n = pts_deltas.len();
     if n < 3 {
-        return 0.5;
+        return None;
     }
 
     let mean = pts_deltas.iter().sum::<f64>() / f64::from(u32::try_from(n).unwrap_or(1));
     let variance = pts_deltas.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / f64::from(u32::try_from(n).unwrap_or(1));
     if variance < 1e-12 {
-        return 1.0; // Perfectly uniform frame timing
+        return Some(1.0); // Perfectly uniform frame timing
     }
 
     // Lag-1 autocorrelation: measures rhythmic regularity of frame intervals.
@@ -2104,7 +2128,7 @@ fn temporal_jitter_score(pts_deltas: &[f64]) -> f64 {
         .sum::<f64>()
         / (f64::from(u32::try_from(n - 1).unwrap_or(1)) * variance);
 
-    f64::midpoint(lag1.clamp(-1.0, 1.0), 1.0)
+    Some(f64::midpoint(lag1.clamp(-1.0, 1.0), 1.0))
 }
 
 #[cfg(test)]

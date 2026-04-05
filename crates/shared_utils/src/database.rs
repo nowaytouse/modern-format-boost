@@ -791,11 +791,7 @@ fn lookup_similar_samples_inner(
     }
 
     // Map the incoming LoopMeta into a SampleRow to compute its HNSW search vector
-    let target_temporal_bpp = crate::numeric_cast::u64_to_f64(meta.file_size_bytes)
-        / (f64::from(meta.width) * f64::from(meta.height)).max(1.0)
-        * crate::numeric_cast::u64_to_f64(meta.frame_count.max(1));
-    let target_spatial_bpp = crate::numeric_cast::u64_to_f64(meta.file_size_bytes)
-        / (f64::from(meta.width) * f64::from(meta.height)).max(1.0);
+    let (target_temporal_bpp, target_spatial_bpp) = bpp_from_meta(meta);
 
     let target_sample = sample_row_from_meta(meta, target_temporal_bpp, target_spatial_bpp);
 
@@ -1403,10 +1399,7 @@ pub fn sample_from_path(
     // Call deep refinement to populate palette_depth, temporal_flatness, etc.
     let _ = crate::loop_intent::deep_refine_meta(&mut meta, path);
 
-    let pixel_count = f64::from(meta.width) * f64::from(meta.height);
-    let temporal_bpp =
-        crate::numeric_cast::u64_to_f64(meta.file_size_bytes) / (pixel_count.max(1.0) * crate::numeric_cast::u64_to_f64(meta.frame_count.max(1)));
-    let spatial_bpp = crate::numeric_cast::u64_to_f64(meta.file_size_bytes) / pixel_count.max(1.0);
+    let (temporal_bpp, spatial_bpp) = bpp_from_meta(&meta);
 
     let loss_tolerance = if let Some(label) = label_override {
         label.to_string()
@@ -1444,7 +1437,7 @@ pub fn sample_from_path(
         )
     };
     let is_meme_platform = meta.is_meme_platform;
-    let is_native_gif = meta.source_extension.as_deref() == Some("gif");
+    let is_native_gif = meta.is_native_gif;
     let is_high_value_source = loss_tolerance == "low";
 
     Some(SampleInsert {
@@ -1674,7 +1667,7 @@ fn sample_row_from_meta(meta: &LoopMeta, temporal_bpp: f64, spatial_bpp: f64) ->
         is_high_value_source: meta.has_embedded_icc
             || meta.has_complex_color_profile,
 
-        is_native_gif: meta.source_extension.as_deref() == Some("gif"),
+        is_native_gif: meta.is_native_gif,
         palette_depth: meta.palette_depth,
         motion_gini: meta.motion_gini,
         block_skew: meta.block_skew,
@@ -1685,6 +1678,14 @@ fn sample_row_from_meta(meta: &LoopMeta, temporal_bpp: f64, spatial_bpp: f64) ->
         webp_compression_ratio: meta.webp_compression_ratio,
         labeled_by: None,
     }
+}
+
+fn bpp_from_meta(meta: &LoopMeta) -> (f64, f64) {
+    let pixel_count = (f64::from(meta.width) * f64::from(meta.height)).max(1.0);
+    let file_size = crate::numeric_cast::u64_to_f64(meta.file_size_bytes);
+    let frame_count = crate::numeric_cast::u64_to_f64(meta.frame_count.max(1));
+
+    (file_size / (pixel_count * frame_count), file_size / pixel_count)
 }
 
 #[cfg(test)]
@@ -2877,9 +2878,7 @@ mod tests {
             webp_compression_ratio: Some(0.1),
             labeled_by: Some("cli_ingest".to_string()),
         };
-        let pixel_count = f64::from(meta.width) * f64::from(meta.height);
-        let tbpp = crate::numeric_cast::u64_to_f64(meta.file_size_bytes) / (pixel_count * crate::numeric_cast::u64_to_f64(meta.frame_count));
-        let sbpp = crate::numeric_cast::u64_to_f64(meta.file_size_bytes) / pixel_count;
+        let (tbpp, sbpp) = bpp_from_meta(&meta);
 
         let stats = FeatureMap::default();
 
@@ -2915,6 +2914,37 @@ mod tests {
         assert_eq!(stats.p10, Some(1.4));
         assert_eq!(stats.p50, Some(3.0));
         assert_eq!(stats.p90, Some(4.6));
+    }
+
+    #[test]
+    fn bpp_from_meta_divides_temporal_density_by_frame_count() {
+        let mut meta = base_meta();
+        meta.width = 1200;
+        meta.height = 1200;
+        meta.frame_count = 36;
+        meta.file_size_bytes = 2_391_699;
+
+        let (temporal_bpp, spatial_bpp) = bpp_from_meta(&meta);
+        let pixel_count = f64::from(meta.width) * f64::from(meta.height);
+        let expected_temporal = crate::numeric_cast::u64_to_f64(meta.file_size_bytes)
+            / (pixel_count * crate::numeric_cast::u64_to_f64(meta.frame_count));
+        let legacy_buggy_temporal = crate::numeric_cast::u64_to_f64(meta.file_size_bytes)
+            / pixel_count
+            * crate::numeric_cast::u64_to_f64(meta.frame_count);
+        let expected_spatial = crate::numeric_cast::u64_to_f64(meta.file_size_bytes) / pixel_count;
+
+        assert!(crate::float_compare::approx_eq_f64(
+            temporal_bpp,
+            expected_temporal
+        ));
+        assert!(crate::float_compare::approx_eq_f64(
+            spatial_bpp,
+            expected_spatial
+        ));
+        assert!(
+            (temporal_bpp - legacy_buggy_temporal).abs() > 1.0,
+            "temporal_bpp should use per-frame density, not multiply by frame count"
+        );
     }
 
     #[test]
