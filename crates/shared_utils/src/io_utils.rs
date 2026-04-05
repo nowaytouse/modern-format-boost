@@ -8,6 +8,42 @@ use std::fs;
 use std::path::Path;
 use tracing::warn;
 
+/// Read file metadata with a retry mechanism to handle transient OS locks or network glitches.
+///
+/// Default: 3 retries with 100ms delay.
+/// This prevents one-off "Failed to read file metadata" errors from breaking batch processing.
+pub fn metadata_with_retry<P: AsRef<Path>>(path: P) -> std::io::Result<fs::Metadata> {
+    let p = path.as_ref();
+    let mut last_err = None;
+
+    for i in 0..3 {
+        match fs::metadata(p) {
+            Ok(m) => return Ok(m),
+            Err(e) => {
+                // If the file is not found, retry won't help. Return immediately.
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    return Err(e);
+                }
+                
+                last_err = Some(e);
+                if i < 2 {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+            }
+        }
+    }
+
+    let err = last_err.expect("Metadata retry loop failed unexpectedly without an error");
+
+    warn!(
+        path = %p.display(),
+        error = %err,
+        "HARD FAILURE: Persistent metadata read failure after 3 retries"
+    );
+
+    Err(err)
+}
+
 /// Safely remove a file, ignoring its absence but logging other errors.
 ///
 /// This is preferred over `let _ = fs::remove_file(path)` as it ensures

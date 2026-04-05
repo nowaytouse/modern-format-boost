@@ -242,7 +242,9 @@ pub fn execute_conversion(
         });
     }
 
-    let output_size = std::fs::metadata(&output_path).ok().map(|m| m.len());
+    let output_size = shared_utils::io_utils::metadata_with_retry(&output_path)
+        .ok()
+        .map(|m| m.len());
     let size_reduction = output_size.map(|s| {
         if detection.file_size == 0 {
             0.0
@@ -379,7 +381,7 @@ fn convert_to_jxl(
     }
 
     // Verify output file
-    let output_size = std::fs::metadata(output)
+    let output_size = shared_utils::io_utils::metadata_with_retry(output)
         .map_err(|e| ImgQualityError::ConversionError(format!("Failed to read JXL output: {e}")))?
         .len();
     if output_size == 0 {
@@ -399,7 +401,7 @@ fn convert_to_jxl(
 
     // Compress mode: only accept if output is strictly smaller than input
     if config.compress {
-        let input_size = std::fs::metadata(input)
+        let input_size = shared_utils::io_utils::metadata_with_retry(input)
             .map_err(|e| ImgQualityError::ConversionError(format!("Failed to read input: {e}")))?
             .len();
         if output_size >= input_size {

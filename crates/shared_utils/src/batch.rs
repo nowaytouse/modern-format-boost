@@ -191,7 +191,7 @@ pub fn calculate_directory_size_by_extensions(
                 {
                     continue;
                 }
-                match std::fs::metadata(entry.path()) {
+                match crate::io_utils::metadata_with_retry(entry.path()) {
                     Ok(metadata) => total += metadata.len(),
                     Err(err) => {
                         warn!(

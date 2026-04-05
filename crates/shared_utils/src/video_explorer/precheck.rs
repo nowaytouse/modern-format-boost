@@ -398,7 +398,7 @@ pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'s
 /// # Errors
 /// Returns an error if information gathering fails.
 pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
-    let file_size = std::fs::metadata(input)
+    let file_size = crate::io_utils::metadata_with_retry(input)
         .context("Failed to read file metadata")?
         .len();
 

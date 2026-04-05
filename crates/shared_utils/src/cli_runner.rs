@@ -164,7 +164,7 @@ where
     if std::env::var("MFB_SKIP_DISK_PRECHECK").as_deref() != Ok("1") {
         let total_input_size: u64 = files
             .iter()
-            .map(|f| match std::fs::metadata(f) {
+            .map(|f| match crate::io_utils::metadata_with_retry(f) {
                 Ok(metadata) => metadata.len(),
                 Err(err) => {
                     warn!(

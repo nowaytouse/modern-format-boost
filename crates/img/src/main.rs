@@ -607,7 +607,7 @@ fn auto_convert_single_file(
     if shared_utils::is_live_photo(input) {
         let reason = "Live Photo detected, skipping in Apple compat mode";
         shared_utils::progress_mode::image_skipped(reason);
-        let file_size = std::fs::metadata(input).map(|m| m.len()).unwrap_or(0);
+        let file_size = shared_utils::io_utils::metadata_with_retry(input).map(|m| m.len()).unwrap_or(0);
         copy_original_if_adjacent_mode(input, config)?;
         return Ok(ConversionOutput {
             original_path: input.display().to_string(),
@@ -929,7 +929,7 @@ fn auto_convert_directory(
     if std::env::var("MFB_SKIP_DISK_PRECHECK").as_deref() != Ok("1") {
         let total_input_size: u64 = files
             .iter()
-            .map(|f| match std::fs::metadata(f) {
+            .map(|f| match shared_utils::io_utils::metadata_with_retry(f) {
                 Ok(metadata) => metadata.len(),
                 Err(err) => {
                     shared_utils::log_eprintln!(

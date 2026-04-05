@@ -116,7 +116,7 @@ pub fn get_container_overhead_percent(path: &Path) -> f64 {
 }
 
 pub fn extract_stream_sizes(path: &Path) -> StreamSizeInfo {
-    let total_file_size = match std::fs::metadata(path) {
+    let total_file_size = match crate::io_utils::metadata_with_retry(path) {
         Ok(metadata) => metadata.len(),
         Err(err) => {
             warn!(
