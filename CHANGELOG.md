@@ -8,6 +8,10 @@ All notable changes to this project will be documented in this file.
 
 #### 🔧 BPP Calculation Refactoring & Bugfixes
 
+- **Fixed Animated Media Handling in `img`**:
+    - Animated images (GIFs, animated WebP, etc.) and Apple Live Photos are now **completely ignored** by the `img` tool.
+    - Previously, these files were incorrectly copied to the output directory and counted as "Skipped" in the statistics.
+    - They are now bypassed entirely (no copy, no stats), ensuring the `img` tool strictly focuses on static image optimization as intended.
 - **Extracted `bpp_from_meta` helper**: Consolidated duplicate temporal/spatial BPP calculation logic in `database.rs` into a single reusable function with clearer semantics (per-frame temporal density divides by frame count, not multiplies).
 - **Fixed temporal BPP formula bug**: Legacy code in `lookup_similar_samples_inner` multiplied by `frame_count` instead of dividing — corrected to use proper per-frame density calculation.
 - **Added regression test**: `bpp_from_meta_divides_temporal_density_by_frame_count` validates the corrected formula against legacy buggy behavior.

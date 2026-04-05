@@ -575,6 +575,7 @@ fn convert_result_to_output(result: shared_utils::ConversionResult) -> Conversio
         original_path: result.input_path,
         output_path: result.output_path.unwrap_or(input_path),
         skipped: result.skipped,
+        ignored: result.ignored,
         message: result.message,
         original_size: result.input_size,
         output_size: result.output_size,
@@ -613,16 +614,17 @@ fn auto_convert_single_file(
 
     // Check for Live Photos first (before any analysis)
     if shared_utils::is_live_photo(input) {
-        let reason = "Live Photo detected, skipping in Apple compat mode";
+        let reason = "Live Photo detected - img strictly processes static images only (handled by vid)";
         shared_utils::progress_mode::image_skipped(reason);
         let file_size = shared_utils::io_utils::metadata_with_retry(input)
             .map(|m| m.len())
             .unwrap_or(0);
-        copy_original_if_adjacent_mode(input, config)?;
+        // [FIX] Completely ignore: NO COPY, NO STATS
         return Ok(ConversionOutput {
             original_path: input.display().to_string(),
             output_path: input.display().to_string(),
-            skipped: true,
+            skipped: false,
+            ignored: true,
             message: reason.to_string(),
             original_size: file_size,
             output_size: None,
@@ -639,11 +641,12 @@ fn auto_convert_single_file(
         let reason =
             "Animated media detected - img strictly processes static images only (handled by vid)";
         shared_utils::progress_mode::image_skipped(reason);
-        copy_original_if_adjacent_mode(input, config)?;
+        // [FIX] Completely ignore: NO COPY, NO STATS
         return Ok(ConversionOutput {
             original_path: input.display().to_string(),
             output_path: input.display().to_string(),
-            skipped: true,
+            skipped: false,
+            ignored: true,
             message: reason.to_string(),
             original_size: analysis.file_size,
             output_size: None,
@@ -664,6 +667,7 @@ fn auto_convert_single_file(
                 original_path: input.display().to_string(),
                 output_path: input.display().to_string(),
                 skipped: true,
+                ignored: false,
                 message: reason.to_string(),
                 original_size: analysis.file_size,
                 output_size: None,
@@ -686,6 +690,7 @@ fn auto_convert_single_file(
                 original_path: input.display().to_string(),
                 output_path: input.display().to_string(),
                 skipped: true,
+                ignored: false,
                 message: reason,
                 original_size: analysis.file_size,
                 output_size: None,
@@ -980,6 +985,7 @@ fn auto_convert_directory(
     let success = AtomicUsize::new(0);
     let skipped = AtomicUsize::new(0);
     let failed = AtomicUsize::new(0);
+    let ignored = AtomicUsize::new(0);
     let processed = AtomicUsize::new(0);
     let actual_input_bytes = std::sync::atomic::AtomicU64::new(0);
     let actual_output_bytes = std::sync::atomic::AtomicU64::new(0);
@@ -1068,7 +1074,9 @@ fn auto_convert_directory(
 
                     match auto_convert_single_file(path, config) {
                         Ok(result) => {
-                            if result.skipped {
+                            if result.ignored {
+                                ignored.fetch_add(1, Ordering::Relaxed);
+                            } else if result.skipped {
                                 skipped.fetch_add(1, Ordering::Relaxed);
                             } else {
                                 success.fetch_add(1, Ordering::Relaxed);
@@ -1170,13 +1178,15 @@ fn auto_convert_directory(
     let success_count = success.load(Ordering::Relaxed);
     let skipped_count = skipped.load(Ordering::Relaxed);
     let failed_count = failed.load(Ordering::Relaxed);
+    let ignored_count = ignored.load(Ordering::Relaxed);
     let processed_count = processed.load(Ordering::Relaxed);
 
     let mut result = BatchResult::new();
     result.succeeded = success_count;
     result.failed = failed_count;
     result.skipped = skipped_count;
-    result.total = processed_count;
+    // [FIX] Completely ignore: remove from total reported
+    result.total = processed_count.saturating_sub(ignored_count);
     if let Some(pause) = pause_controller.pause_info() {
         result.pause(
             pause.path,

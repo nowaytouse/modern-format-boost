@@ -256,6 +256,7 @@ pub struct ConversionResult {
     pub size_reduction: Option<f64>,
     pub message: String,
     pub skipped: bool,
+    pub ignored: bool,
     pub skip_reason: Option<String>,
     pub blake3: Option<String>,
 }
@@ -283,6 +284,7 @@ impl ConversionResult {
             size_reduction: None,
             message: "Skipped: Already processed".to_string(),
             skipped: true,
+            ignored: false,
             skip_reason: Some("duplicate".to_string()),
             blake3: None,
         }
@@ -300,6 +302,7 @@ impl ConversionResult {
             size_reduction: None,
             message: "Skipped: Output file exists".to_string(),
             skipped: true,
+            ignored: false,
             skip_reason: Some("exists".to_string()),
             blake3: None,
         }
@@ -316,6 +319,7 @@ impl ConversionResult {
             size_reduction: None,
             message: reason.to_string(),
             skipped: true,
+            ignored: false,
             skip_reason: Some(skip_reason.to_string()),
             blake3: None,
         }
@@ -335,6 +339,7 @@ impl ConversionResult {
             size_reduction: None,
             message: format!("Skipped: Output would be larger ({size_diff})"),
             skipped: true,
+            ignored: false,
             skip_reason: Some("size_increase".to_string()),
             blake3: None,
         }
@@ -354,6 +359,7 @@ impl ConversionResult {
                 "Skipped: {format_label} output size unchanged (compression goal not achieved)"
             ),
             skipped: true,
+            ignored: false,
             skip_reason: Some("size_unchanged".to_string()),
             blake3: None,
         }
@@ -429,6 +435,7 @@ impl ConversionResult {
             size_reduction: Some(reduction_pct),
             message,
             skipped: false,
+            ignored: false,
             skip_reason: None,
             blake3: None,
         }

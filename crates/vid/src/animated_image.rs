@@ -379,7 +379,7 @@ pub fn is_high_quality_animated(width: u32, height: u32) -> bool {
 
 fn skipped_already_processed(input: &Path) -> ConversionResult {
     ConversionResult {
-        success: true,
+ ignored: false, success: true,
         input_path: input.display().to_string(),
         output_path: None,
         input_size: fs::metadata(input).map(|m| m.len()).unwrap_or(0),
@@ -389,15 +389,13 @@ fn skipped_already_processed(input: &Path) -> ConversionResult {
         skipped: true,
 
         skip_reason: Some("duplicate".to_string()),
-
         blake3: None,
-
-        }
+    }
 }
 
 fn skipped_output_exists(input: &Path, output: &Path, input_size: u64) -> ConversionResult {
     ConversionResult {
-        success: true,
+ ignored: false, success: true,
         input_path: input.display().to_string(),
         output_path: Some(output.display().to_string()),
         input_size,
@@ -407,10 +405,8 @@ fn skipped_output_exists(input: &Path, output: &Path, input_size: u64) -> Conver
         skipped: true,
 
         skip_reason: Some("exists".to_string()),
-
         blake3: None,
-
-        }
+    }
 }
 
 /// Return true when the input is either a native GIF or a GIF-like silent loop
@@ -446,7 +442,7 @@ fn is_static_animated_image(path: &Path) -> bool {
 
 fn skipped_static_animated(input: &Path, input_size: u64) -> ConversionResult {
     ConversionResult {
-        success: true,
+ ignored: false, success: true,
         input_path: input.display().to_string(),
         output_path: None,
         input_size,
@@ -456,10 +452,8 @@ fn skipped_static_animated(input: &Path, input_size: u64) -> ConversionResult {
         skipped: true,
 
         skip_reason: Some("static_animated".to_string()),
-
         blake3: None,
-
-        }
+    }
 }
 
 /// Convert animated image to MP4 (HEVC or AV1).
@@ -492,7 +486,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
         copy_original_on_skip(input, options);
         mark_as_processed(input);
         return Ok(ConversionResult {
-            success: true,
+ ignored: false, success: true,
             input_path: input.display().to_string(),
             output_path: None,
             input_size,
@@ -544,7 +538,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
                 copy_original_on_skip(input, options);
                 mark_as_processed(input);
                 return Ok(ConversionResult {
-                    success: false,
+ ignored: false, success: false,
                     input_path: input.display().to_string(),
                     output_path: None,
                     input_size,
@@ -588,7 +582,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
                     copy_original_on_skip(input, options);
                     mark_as_processed(input);
                     return Ok(ConversionResult {
-                        success: false,
+ ignored: false, success: false,
                         input_path: input.display().to_string(),
                         output_path: None,
                         input_size,
@@ -615,7 +609,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
                 copy_original_on_skip(input, options);
                 mark_as_processed(input);
                 return Ok(ConversionResult {
-                    success: false,
+ ignored: false, success: false,
                     input_path: input.display().to_string(),
                     output_path: None,
                     input_size,
@@ -648,7 +642,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
                     copy_original_on_skip(input, options);
                     mark_as_processed(input);
                     return Ok(ConversionResult {
-                        success: false,
+ ignored: false, success: false,
                         input_path: input.display().to_string(),
                         output_path: None,
                         input_size,
@@ -800,7 +794,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
                 mark_as_processed(input);
                 let sz = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
                 return Ok(ConversionResult {
-                    success: false,
+ ignored: false, success: false,
                     input_path: input.display().to_string(),
                     output_path: None,
                     input_size: sz,
@@ -855,7 +849,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
             };
 
             Ok(ConversionResult {
-                success: true,
+ ignored: false, success: true,
                 input_path: input.display().to_string(),
                 output_path: Some(output.display().to_string()),
                 input_size,
@@ -879,7 +873,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
             mark_as_processed(input);
             let sz = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
             Ok(ConversionResult {
-                success: false,
+ ignored: false, success: false,
                 input_path: input.display().to_string(),
                 output_path: None,
                 input_size: sz,
@@ -905,7 +899,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
             mark_as_processed(input);
             let sz = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
             Ok(ConversionResult {
-                success: false,
+ ignored: false, success: false,
                 input_path: input.display().to_string(),
                 output_path: None,
                 input_size: sz,
@@ -952,7 +946,7 @@ pub fn convert_to_mp4_matched(
         copy_original_on_skip(input, options);
         mark_as_processed(input);
         return Ok(ConversionResult {
-            success: true,
+ ignored: false, success: true,
             input_path: input.display().to_string(),
             output_path: None,
             input_size,
@@ -999,7 +993,7 @@ pub fn convert_to_mp4_matched(
                 copy_original_on_skip(input, options);
                 mark_as_processed(input);
                 return Ok(ConversionResult {
-                    success: false,
+ ignored: false, success: false,
                     input_path: input.display().to_string(),
                     output_path: None,
                     input_size,
@@ -1038,7 +1032,7 @@ pub fn convert_to_mp4_matched(
                     copy_original_on_skip(input, options);
                     mark_as_processed(input);
                     return Ok(ConversionResult {
-                        success: false,
+ ignored: false, success: false,
                         input_path: input.display().to_string(),
                         output_path: None,
                         input_size,
@@ -1065,7 +1059,7 @@ pub fn convert_to_mp4_matched(
                 copy_original_on_skip(input, options);
                 mark_as_processed(input);
                 return Ok(ConversionResult {
-                    success: false,
+ ignored: false, success: false,
                     input_path: input.display().to_string(),
                     output_path: None,
                     input_size,
@@ -1098,7 +1092,7 @@ pub fn convert_to_mp4_matched(
                     copy_original_on_skip(input, options);
                     mark_as_processed(input);
                     return Ok(ConversionResult {
-                        success: false,
+ ignored: false, success: false,
                         input_path: input.display().to_string(),
                         output_path: None,
                         input_size,
@@ -1382,7 +1376,7 @@ pub fn convert_to_mp4_matched(
         );
         copy_original_on_skip(input, options);
         return Ok(ConversionResult {
-            success: true,
+ ignored: false, success: true,
             input_path: input.display().to_string(),
             output_path: None,
             input_size,
@@ -1421,7 +1415,7 @@ pub fn convert_to_mp4_matched(
             }
             mark_as_processed(input);
             return Ok(ConversionResult {
-                success: false,
+ ignored: false, success: false,
                 input_path: input.display().to_string(),
                 output_path: None,
                 input_size,
@@ -1512,7 +1506,7 @@ pub fn convert_to_mp4_matched(
         mark_as_processed(input);
 
         return Ok(ConversionResult {
-            success: false,
+ ignored: false, success: false,
             input_path: input.display().to_string(),
             output_path: None,
             input_size,
@@ -1588,7 +1582,7 @@ pub fn convert_to_mp4_matched(
     );
 
     Ok(ConversionResult {
-        success: true,
+ ignored: false, success: true,
         input_path: input.display().to_string(),
         output_path: Some(output.display().to_string()),
         input_size,
@@ -1700,7 +1694,7 @@ pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result
             };
 
             Ok(ConversionResult {
-                success: true,
+ ignored: false, success: true,
                 input_path: input.display().to_string(),
                 output_path: Some(output.display().to_string()),
                 input_size,
@@ -1723,7 +1717,7 @@ pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result
             mark_as_processed(input);
             let sz = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
             Ok(ConversionResult {
-                success: false,
+ ignored: false, success: false,
                 input_path: input.display().to_string(),
                 output_path: None,
                 input_size: sz,
@@ -1748,7 +1742,7 @@ pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result
             mark_as_processed(input);
             let sz = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
             Ok(ConversionResult {
-                success: false,
+ ignored: false, success: false,
                 input_path: input.display().to_string(),
                 output_path: None,
                 input_size: sz,
@@ -1803,7 +1797,7 @@ pub fn convert_to_gif_apple_compat(
         eprintln!("   ⏭️  Input is already GIF, skipping re-encode (would likely increase size)");
         mark_as_processed(input);
         return Ok(ConversionResult {
-            success: true,
+ ignored: false, success: true,
             input_path: input.display().to_string(),
             output_path: Some(input.display().to_string()),
             input_size,
@@ -1827,7 +1821,7 @@ pub fn convert_to_gif_apple_compat(
 
     if output.exists() && !options.force {
         return Ok(ConversionResult {
-            success: true,
+ ignored: false, success: true,
             input_path: input.display().to_string(),
             output_path: Some(output.display().to_string()),
             input_size,
@@ -1863,7 +1857,7 @@ pub fn convert_to_gif_apple_compat(
                 copy_original_on_skip(input, options);
                 mark_as_processed(input);
                 return Ok(ConversionResult {
-                    success: false,
+ ignored: false, success: false,
                     input_path: input.display().to_string(),
                     output_path: None,
                     input_size,
@@ -1909,7 +1903,7 @@ pub fn convert_to_gif_apple_compat(
                     copy_original_on_skip(input, options);
                     mark_as_processed(input);
                     return Ok(ConversionResult {
-                        success: false,
+ ignored: false, success: false,
                         input_path: input.display().to_string(),
                         output_path: None,
                         input_size,
@@ -1936,7 +1930,7 @@ pub fn convert_to_gif_apple_compat(
                 copy_original_on_skip(input, options);
                 mark_as_processed(input);
                 return Ok(ConversionResult {
-                    success: false,
+ ignored: false, success: false,
                     input_path: input.display().to_string(),
                     output_path: None,
                     input_size,
@@ -1969,7 +1963,7 @@ pub fn convert_to_gif_apple_compat(
                     copy_original_on_skip(input, options);
                     mark_as_processed(input);
                     return Ok(ConversionResult {
-                        success: false,
+ ignored: false, success: false,
                         input_path: input.display().to_string(),
                         output_path: None,
                         input_size,
@@ -2055,7 +2049,7 @@ pub fn convert_to_gif_apple_compat(
                         "Failed to extract frames for GIF conversion"
                     );
                     return Ok(ConversionResult {
-                        success: false,
+ ignored: false, success: false,
                         input_path: input.display().to_string(),
                         output_path: None,
                         input_size,
@@ -2154,7 +2148,7 @@ pub fn convert_to_gif_apple_compat(
         mark_as_processed(input);
         let input_size_fb = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
         return Ok(ConversionResult {
-            success: false,
+ ignored: false, success: false,
             input_path: input.display().to_string(),
             output_path: None,
             input_size: input_size_fb,
@@ -2179,7 +2173,7 @@ pub fn convert_to_gif_apple_compat(
         copy_original_on_skip(input, options);
         mark_as_processed(input);
         return Ok(ConversionResult {
-            success: false,
+ ignored: false, success: false,
             input_path: input.display().to_string(),
             output_path: None,
             input_size,
@@ -2229,7 +2223,7 @@ pub fn convert_to_gif_apple_compat(
         copy_original_on_skip(input, options);
         mark_as_processed(input);
         return Ok(ConversionResult {
-            success: true,
+ ignored: false, success: true,
             input_path: input.display().to_string(),
             output_path: None,
             input_size,
@@ -2254,7 +2248,7 @@ pub fn convert_to_gif_apple_compat(
         Some(input),
     )? {
         return Ok(ConversionResult {
-            success: true,
+ ignored: false, success: true,
             input_path: input.display().to_string(),
             output_path: Some(output.display().to_string()),
             input_size,
@@ -2293,7 +2287,7 @@ pub fn convert_to_gif_apple_compat(
     };
 
     Ok(ConversionResult {
-        success: true,
+ ignored: false, success: true,
         input_path: input.display().to_string(),
         output_path: Some(output.display().to_string()),
         input_size,
