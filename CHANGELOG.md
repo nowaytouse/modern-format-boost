@@ -12,6 +12,8 @@ All notable changes to this project will be documented in this file.
 - **Added "Single-Frame Interception" in vid**: Implemented a mandatory check in the `vid` conversion pipeline (`auto_convert_with_cache`). If `frame_count <= 1`, the file is identified as a static image and skipped by `vid`, ensuring it is handled by the `img` module for optimal JXL encoding.
 - **Cleaned up animation capability metadata**: Removed `WebpStatic` from `can_be_animated()` to prevent misrouting static WebP files to the animated media pipeline.
 - **Expanded video extensions**: Added `gif`, `webp`, `avif`, `heic` to `supported_video_extensions` to ensure the `vid` tool correctly scans potential animated candidates.
+- **Content-Based Media Identification**: Implemented `SourceCodec::identify_by_content` using magic-byte detection (16-byte header probe), ensuring accurate format identification even with incorrect file extensions.
+- **Auto-Correction of Extensions**: Refactored `smart_file_copier.rs` and `cli_runner.rs` to automatically correct file extensions based on content before processing.
 - **New Classification Metrics (Loop Intent)**: Integrated advanced temporal analysis into the classification logic:
   - **Motion Periodicity**: Measures rhythmic regularity of motion vectors to identify looping sequences.
   - **Temporal Jitter**: Analyzes PTS (Presentation Time Stamp) regularity to detect consistent frame timing.
@@ -29,13 +31,13 @@ All notable changes to this project will be documented in this file.
   - Enhanced error reporting in `image_quality_db.rs` to include the final verdict in non-fatal logging failures.
 
 #### 🖥️ App Wrapper & Platform Safety
-
 - **Major App Script Refactoring**: Completely rewrote the macOS App entry point (`Modern Format Boost` binary).
   - Implemented robust `PYTHON_BIN` discovery (checks `.venv`, system python3, and `/usr/bin/python3`).
   - Enhanced path security with `escape_shell_double_quotes` and improved AppleScript string escaping.
   - Switched to `exec /bin/zsh -f -c` for terminal execution to ensure a clean, predictable shell environment.
 - **Improved State Management**: Added `MFB_HOME_ROOT` logic to `drag_and_drop_processor.py`. When launched from the App, it now defaults to an isolated `.cache/mfb_runtime` directory instead of the user's home folder.
 - **UI & Flow Control**: Added `ReturnToHomeException` and a main retry loop to the processor script, allowing the system to return to the selection menu after specific errors (like insufficient disk space) instead of exiting.
+- **Progress UI Synchronization**: Added `reset_session_stats()` in `progress_mode.rs` to ensure terminal progress counters (e.g., `V:12✓`) accurately reflect the current directory processing task instead of cumulative session totals.
 
 #### 🔬 Quality Training & Database Enhancements
 
@@ -50,6 +52,9 @@ All notable changes to this project will be documented in this file.
 - **AVIF Alpha Stream Detection**: Added heuristic logic to detect and accurately map auxiliary alpha streams (`yuv420p` + `gray8`) in animated AVIFs, preventing transparency loss during conversion.
 - **Apple Compatibility Enforcement**: Fixed a bug where `apple_compat` mode incorrectly allowed copying incompatible original files (AVIF/WebP) to the output. The system now strictly enforces conversion to GIF/HEIC for Apple ecosystem compatibility.
 - **Enhanced GIF Pipeline Safety**: Replaced direct single-file input for `gifski` with a managed pattern-based input system, eliminating "Only a single image file was given" errors.
+- **Single-Frame Loop Veto**: Added "Layer 1-A" logic in `loop_intent.rs` to strictly reject single-frame media from being classified as loop assets, preventing misrouting of static images to the `gifski` pipeline.
+- **Skip Reporting Transparency**: Enhanced `cli_runner.rs` with verbose logging for skipped files (checkpoint hit or output existing), resolving user confusion regarding progress bar increments without new output.
+- **Checkpoint Resilience**: Audited `CheckpointManager` initialization to ensure progress directory persistence across process restarts.
 
 #### 🧹 Maintenance & Documentation
 
