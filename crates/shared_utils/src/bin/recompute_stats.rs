@@ -1,5 +1,5 @@
 use anyhow::Result;
-use shared_utils::gif_value_db::{init_schema, open_pg_client, refresh_feature_stats};
+use shared_utils::database::{init_schema, open_pg_client, refresh_feature_stats};
 
 fn main() -> Result<()> {
     println!("🚀 Starting KNN Database Retraining (Feature Stats Refresh)...");

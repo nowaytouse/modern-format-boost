@@ -281,7 +281,7 @@ fn main() -> anyhow::Result<()> {
                     colors::RESET
                 ));
             }
-            shared_utils::gif_value_db::report_db_status();
+            shared_utils::database::report_db_status();
 
             let config = AutoConvertConfig {
                 output_dir: output,

@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
-use shared_utils::gif_value_db::batch_ingest_samples;
+use shared_utils::database::batch_ingest_samples;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]

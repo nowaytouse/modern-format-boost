@@ -810,9 +810,9 @@ dependencies = [
 
 [[package]]
 name = "fastrand"
-version = "2.3.0"
+version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
+checksum = "a043dc74da1e37d6afe657061213aa6f425f855399a11d3463c6ecccc4dfda1f"
 
 [[package]]
 name = "fax"
@@ -1071,7 +1071,7 @@ checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 [[package]]
 name = "image"
 version = "0.25.9"
-source = "git+https://github.com/image-rs/image#b654e0dc52689de2e948f63d72b7b7df5c3c0fa3"
+source = "git+https://github.com/image-rs/image#d2a68f4ccf89a88faaeb40aab26a1e37e25c3c8b"
 dependencies = [
  "bytemuck",
  "byteorder-lite",

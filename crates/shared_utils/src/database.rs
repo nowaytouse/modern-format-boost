@@ -4,7 +4,7 @@ use crate::progress_mode::emit_stderr;
 use anyhow::{Context, Result};
 use blake3::Hasher;
 use indicatif::{ProgressBar, ProgressStyle};
-use postgres::{Client, NoTls};
+use postgres::Client;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -479,7 +479,7 @@ fn pg_connstr() -> String {
 
 pub fn open_pg_client() -> Result<Client> {
     let connstr = pg_connstr();
-    match Client::connect(&connstr, NoTls) {
+    match Client::connect(&connstr, postgres::NoTls) {
         Ok(client) => Ok(client),
         Err(e) => {
             if !DB_WARN_ONCE.swap(true, std::sync::atomic::Ordering::Relaxed) {
@@ -1326,7 +1326,7 @@ pub fn sample_from_path(
     })
 }
 
-fn calculate_blake3_hex(path: &Path) -> Result<String> {
+pub fn calculate_blake3_hex(path: &Path) -> Result<String> {
     let mut file = std::fs::File::open(path)?;
     let mut hasher = Hasher::new();
     let mut buffer = vec![0u8; 65536].into_boxed_slice();
@@ -1352,9 +1352,9 @@ fn compute_sample_vector(sample: &SampleRow, stats_map: &FeatureMap) -> Vec<f32>
     let sample_audio_score = if sample.is_native_gif { 1.0 } else { 0.55 };
     // We normalize fps against a baseline 30fps for the database encoded vector. Target queries will normalize identically.
     let baseline_fps = 30.0;
-    let sample_fps_score = (1.0
-        - crate::gif_value_db::normalize_log_ratio(sample.fps.max(1e-3), baseline_fps, 1.2))
-    .clamp(0.0, 1.0);
+    let sample_fps_score: f64 = (1.0_f64
+        - normalize_log_ratio(sample.fps.max(1e-3), baseline_fps, 1.2))
+        .clamp(0.0_f64, 1.0_f64);
     let sample_loop_affinity = (sample.loop_frequency.unwrap_or(0.5) * 0.45
         + sample.cadence_score.unwrap_or(0.5) * 0.25
         + sample_audio_score * 0.20
@@ -2438,6 +2438,114 @@ pub fn query_inference_log_summary(conn: &mut Client) -> Result<InferenceLogSumm
         avg_final_probability: agg_row.get(2),
         layer7_fallback_count: agg_row.get(3),
     })
+}
+
+// ── Database Health Diagnostics ──────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DbHealthReport {
+    pub connected: bool,
+    pub pg_version: String,
+    pub has_vector_extension: bool,
+    pub vector_extension_version: Option<String>,
+    pub table_counts: std::collections::HashMap<String, i64>,
+    pub corruption_found: bool,
+    pub corruption_details: Vec<String>,
+    pub maturity_status: String,
+}
+
+/// Perform a deep diagnostic scan of the database infrastructure and data integrity.
+pub fn check_database_health() -> Result<DbHealthReport> {
+    let mut conn = open_pg_client()?;
+    let mut report = DbHealthReport {
+        connected: true,
+        pg_version: "Unknown".to_string(),
+        has_vector_extension: false,
+        vector_extension_version: None,
+        table_counts: std::collections::HashMap::new(),
+        corruption_found: false,
+        corruption_details: Vec::new(),
+        maturity_status: "Immature".to_string(),
+    };
+
+    // 1. Infrastructure Checks
+    if let Ok(row) = conn.query_one("SELECT version()", &[]) {
+        report.pg_version = row.get(0);
+    }
+
+    if let Ok(row) = conn.query_opt(
+        "SELECT installed_version FROM pg_available_extensions WHERE name = 'vector'",
+        &[],
+    ) {
+        if let Some(row) = row {
+            report.has_vector_extension = true;
+            report.vector_extension_version = row.get(0);
+        }
+    }
+
+    // 2. Table Statistics
+    let tables = vec![
+        "samples",
+        "quality_samples",
+        "analysis_records",
+        "path_index",
+        "inference_log",
+        "quality_inference_log",
+    ];
+    for table in tables {
+        let count_query = format!("SELECT COUNT(*) FROM {table}");
+        if let Ok(row) = conn.query_one(&count_query, &[]) {
+            report.table_counts.insert(table.to_string(), row.get(0));
+        }
+    }
+
+    // 3. Data Integrity: NaN/Infinity Scan for pgvector columns
+    // We scan both the feature search vector columns which are critical for KNN stability.
+    
+    // Check 'samples' table
+    if let Ok(rows) = conn.query(
+        "SELECT file_hash FROM samples WHERE features::text ~ 'NaN|Infinity'",
+        &[],
+    ) {
+        if !rows.is_empty() {
+            report.corruption_found = true;
+            report.corruption_details.push(format!(
+                "🔥 Found {} records with NaN/Inf vectors in 'samples' table.",
+                rows.len()
+            ));
+        }
+    }
+
+    // Check 'quality_samples' table
+    if let Ok(rows) = conn.query(
+        "SELECT file_hash FROM quality_samples WHERE features::text ~ 'NaN|Infinity'",
+        &[],
+    ) {
+        if !rows.is_empty() {
+            report.corruption_found = true;
+            report.corruption_details.push(format!(
+                "🔥 Found {} records with NaN/Inf vectors in 'quality_samples' table.",
+                rows.len()
+            ));
+        }
+    }
+
+    // 4. Maturity Analysis
+    let (low, high, video) = get_class_counts(&mut conn);
+    let total_samples = low + high + video;
+    let min_total = crate::constants::MIN_GIF_SAMPLES_TOTAL;
+    let min_per_class = crate::constants::MIN_GIF_SAMPLES_PER_CLASS;
+
+    if total_samples >= min_total 
+       && low >= min_per_class 
+       && (high + video) >= min_per_class {
+        report.maturity_status = "Mature (KNN Active)".to_string();
+    } else {
+        let needed = min_total.saturating_sub(total_samples);
+        report.maturity_status = format!("Immature (Need {} more samples)", needed);
+    }
+
+    Ok(report)
 }
 
 #[cfg(test)]

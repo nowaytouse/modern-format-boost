@@ -250,7 +250,7 @@ pub fn lookup_image_quality(analysis: &ImageAnalysis) -> Option<QualityScore> {
     }
 
     // Use the shared pg client (which prints the "DB unavailable" warning at most once).
-    let Ok(mut conn) = crate::gif_value_db::open_pg_client() else {
+    let Ok(mut conn) = crate::database::open_pg_client() else {
         return Some(bpp_heuristic_quality(analysis));
     };
 

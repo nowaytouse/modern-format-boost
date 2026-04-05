@@ -11,7 +11,7 @@ use crate::image_quality_detector::ImageQualityAnalysis;
 use crate::video_detection::VideoDetectionResult;
 use anyhow::{Context, Result};
 use blake3::Hasher;
-use postgres::{Client, NoTls};
+use postgres::Client;
 use std::io::Read;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -65,14 +65,8 @@ impl CacheStatistics {
 
 pub const CACHE_SIZE_LIMIT_BYTES: u64 = 85 * 1024 * 1024 * 1024; // 85 GB
 
-fn pg_connstr() -> String {
-    std::env::var("MFB_PG_CONNSTR").unwrap_or_else(|_| PG_DEFAULT_CONNSTR.to_string())
-}
-
 fn open_pg_client() -> Result<Client> {
-    let connstr = pg_connstr();
-    Client::connect(&connstr, NoTls)
-        .with_context(|| format!("Failed to connect to PostgreSQL: {connstr}"))
+    crate::database::open_pg_client()
 }
 
 /// 🏷️ File Signature for robust change detection

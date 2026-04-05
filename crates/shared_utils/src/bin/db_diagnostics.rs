@@ -6,7 +6,7 @@
 //! Usage: cargo run --bin db_diagnostics
 
 use anyhow::Result;
-use shared_utils::gif_value_db::{
+use shared_utils::database::{
     init_schema, open_pg_client, query_feature_discriminative_power, query_inference_blind_spots,
     query_inference_log_summary,
 };

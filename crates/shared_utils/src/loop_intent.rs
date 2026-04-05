@@ -17,8 +17,8 @@ use crate::constants::{
     LOCALIZED_MOTION_POSITIVE_LOG_ODDS, LONG_SILENT_PRIOR_NEGATIVE_LOG_ODDS,
     MEME_DIRECTORY_KEYWORDS, MODERN_MASTER_NEGATIVE_LOG_ODDS, PLAY_ONCE_NEGATIVE_LOG_ODDS,
 };
+use crate::database::LoopReferenceProfile;
 use crate::file_copier::{SUPPORTED_IMAGE_EXTENSIONS, SUPPORTED_VIDEO_EXTENSIONS};
-use crate::gif_value_db::LoopReferenceProfile;
 use crate::progress_mode::emit_stderr;
 use crate::video_detection::ColorSpace;
 use crate::video_detection::VideoDetectionResult;
@@ -1137,8 +1137,8 @@ pub fn assess_loop_intent_from_probe(
 /// Every invocation logs an inference record to the database (if connected) to
 /// build the feedback loop described in Level 4 of the database utilization plan.
 pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> LoopIntentVerdict {
-    use crate::gif_value_db::{
-        fetch_loop_reference_profile, log_inference_record, lookup_similar_samples, open_pg_client,
+    use crate::database::{
+        calculate_blake3_hex, fetch_loop_reference_profile, log_inference_record, lookup_similar_samples, open_pg_client,
         LoopInferenceRecord,
     };
 
@@ -1440,7 +1440,7 @@ fn extract_layer_tag(reason: &str) -> String {
 /// Dynamic safety-guard for CRF 0.00 (lossless) exploration.
 #[must_use]
 pub fn is_lossless_exploration_safe(meta: &LoopMeta, path: Option<&Path>) -> bool {
-    let sample_match = crate::gif_value_db::lookup_similar_samples(meta, path);
+    let sample_match = crate::database::lookup_similar_samples(meta, path);
     let keep_prob = sample_match
         .as_ref()
         .and_then(|m| m.keep_probability)
@@ -1790,6 +1790,7 @@ fn calculate_band_variance(img: &image::DynamicImage, y_start: u32, y_end: u32) 
 }
 
 fn detect_high_text_density_from_image(img: &image::DynamicImage) -> bool {
+    // Consolidation cleanup
     let gray = img.to_luma8();
     let (w, h) = gray.dimensions();
     if w < 3 || h < 3 {
@@ -1820,7 +1821,7 @@ fn detect_high_text_density_from_image(img: &image::DynamicImage) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gif_value_db::{DistributionStats, LoopReferenceProfile};
+    use crate::database::{DistributionStats, LoopReferenceProfile};
 
     fn distribution(
         mean: f64,

@@ -137,7 +137,7 @@ pub use media_passthrough::{audio_args_for_container, subtitle_args_for_containe
 mod parity_tests;
 
 pub mod depth_channel;
-pub mod gif_value_db;
+pub mod database;
 pub mod hdr_synthesis;
 pub mod image_analyzer;
 pub mod image_detection;
@@ -155,7 +155,7 @@ pub mod media_meta_utils;
 pub use depth_channel::{
     encode_jxl_depth_fallback, encode_jxl_with_depth, extract_depth_from_heic, DepthMap, DepthType,
 };
-pub use gif_value_db::{lookup_similar_samples, SampleMatch};
+pub use database::{lookup_similar_samples, SampleMatch};
 pub use image_quality_db::{lookup_image_quality, QualityScore};
 pub use loop_intent::{
     assess_loop_intent, assess_loop_intent_from_meta, assess_loop_intent_from_probe,

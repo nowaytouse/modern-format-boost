@@ -19,6 +19,16 @@ All notable changes to this project will be documented in this file.
 - **Hardware-Resilient Metadata (Hardened IO)**: Implemented `metadata_with_retry` in `shared_utils` to handle transient file-system locks (e.g., macOS `cscachefs`). This prevents random "Failed to read file metadata" errors from interrupting large batch jobs.
 - **Path-Aware Error Context**: Every file metadata failure now includes the specific file path in the logs for precise debugging.
 
+#### 🛢️ Database & Infrastructure Hardening (Architectural Simplification)
+
+- **Unified Database Engine**: Renamed `gif_value_db` to `database` to reflect its role as the project's central PostgreSQL and SQLite persistence layer.
+- **Connection Consolidation**: Subsumed redundant connection logic from `AnalysisCache` and `ImageQualityDb` into a single, unified `database::open_pg_client` entry point. This eliminates redundant TLS configurations and ensures consistent "Warn Once" error reporting across the entire workspace.
+- **Deep Health Diagnostics**: Implemented a comprehensive `db-health` system (accessible via `vid db-health`) to scan for infrastructure issues and data corruption:
+    - **Integrity Scanning**: Detects `NaN` or `Infinity` values in floating-point feature vectors (`pgvector`), preventing runtime crashes during KNN similarity searches.
+    - **Environment Validation**: Automatically verifies PostgreSQL version, `pgvector` extension status, and table statistics.
+    - **Maturity Analysis**: Provides a real-time report on dataset density to determine if the Active Learning loop is ready for production engagement.
+- **Resilient I/O Utilities**: Centralized file metadata operations into a hardened `metadata_with_retry` utility in `shared_utils::io_utils`, simplifying error handling for transient system locks across all media processing modules.
+
 #### 🏗️ Architecture: Strict Static vs. Animated Module Isolation (img & vid)
 
 - **Fixed static modern format detection**: Updated `SourceCodec::is_animated()` to remove default animation flags for AVIF and HEIC. These formats are now treated as static by default until container analysis confirms an image sequence.

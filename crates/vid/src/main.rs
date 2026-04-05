@@ -79,6 +79,12 @@ enum Commands {
         #[arg(short, long)]
         label: Option<String>,
     },
+
+    #[command(
+        name = "db-health",
+        about = "Perform deep diagnostic scan of the database infrastructure and data integrity"
+    )]
+    DbHealth,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -256,7 +262,7 @@ fn main() -> anyhow::Result<()> {
             if cache.is_some() {
                 info!("   💽 Persistent Cache: ENABLED");
             }
-            shared_utils::gif_value_db::report_db_status();
+            shared_utils::database::report_db_status();
 
             info!("");
 
@@ -317,13 +323,45 @@ fn main() -> anyhow::Result<()> {
             } else {
                 println!("📥 Ingesting GIF samples from: {}", input.display());
             }
-            match shared_utils::gif_value_db::batch_ingest_samples(&input, label.as_deref()) {
+            match shared_utils::database::batch_ingest_samples(&input, label.as_deref()) {
                 Ok(count) => {
                     println!("✅ Successfully ingested {count} samples into PostgreSQL database");
                 }
                 Err(e) => {
                     shared_utils::log_eprintln!("❌ Failed to ingest samples: {e}");
                     std::process::exit(1);
+                }
+            }
+        }
+        Commands::DbHealth => {
+            use shared_utils::progress_mode::emit_stderr;
+            emit_stderr("🔍 Starting Deep Database Health Scan...");
+            match shared_utils::database::check_database_health() {
+                Ok(report) => {
+                    emit_stderr("\n🐘 [DATABASE HEALTH REPORT]");
+                    emit_stderr(&format!("   - Connection: {}", if report.connected { "✅ Connected" } else { "❌ Failed" }));
+                    emit_stderr(&format!("   - PG Version: {}", report.pg_version));
+                    emit_stderr(&format!("   - pgvector Status: {}", if report.has_vector_extension { format!("✅ Installed ({})", report.vector_extension_version.unwrap_or_default()) } else { "❌ Missing".to_string() }));
+                    emit_stderr(&format!("   - Maturity: {}", report.maturity_status));
+                    
+                    emit_stderr("\n📊 [Table Statistics]");
+                    let mut tables: Vec<_> = report.table_counts.iter().collect();
+                    tables.sort_by_key(|(name, _)| *name);
+                    for (name, count) in tables {
+                        emit_stderr(&format!("   - {:<20}: {:>8} records", name, count));
+                    }
+
+                    if report.corruption_found {
+                        emit_stderr("\n⚠️  [INTEGRITY WARNINGS]");
+                        for detail in report.corruption_details {
+                            emit_stderr(&format!("   {}", detail));
+                        }
+                    } else {
+                        emit_stderr("\n✅ [Integrity]: No NaN/Inf corruption found in feature vectors.");
+                    }
+                }
+                Err(e) => {
+                    emit_stderr(&format!("❌ Health Check Failed: {e}"));
                 }
             }
         }
