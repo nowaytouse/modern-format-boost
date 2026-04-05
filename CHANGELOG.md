@@ -16,6 +16,8 @@ All notable changes to this project will be documented in this file.
 - **Professional Log Standardization**: Audited and simplified the `cli_runner.rs` terminal output, removing decorative Emojis from core processing paths to ensure professional log clarity.
 - **Type-safe Metadata Builder**: Refactored `ExiftoolBuilder` to provide high-level methods like `.quiet()`, `.ignore_minor()`, and `.tags_from_file()`, eliminating redundant raw command-line strings across the codebase.
 - **Log Silence (Zero-Noise)**: Suppressed non-actionable `ExifTool` warnings (e.g., "No writable tags set from JXL") via dual-quiet flags and proper `stderr` piping in the concurrent `XmpMerger` pipeline, ensuring a clean and focused terminal output.
+- **Hardware-Resilient Metadata (Hardened IO)**: Implemented `metadata_with_retry` in `shared_utils` to handle transient file-system locks (e.g., macOS `cscachefs`). This prevents random "Failed to read file metadata" errors from interrupting large batch jobs.
+- **Path-Aware Error Context**: Every file metadata failure now includes the specific file path in the logs for precise debugging.
 
 #### 🏗️ Architecture: Strict Static vs. Animated Module Isolation (img & vid)
 
@@ -62,7 +64,7 @@ All notable changes to this project will be documented in this file.
 - **Animated AVIF to GIF Reliability**: Fixed a critical bug where `gifski` would fail on multi-stream animated AVIFs. Implemented a robust frame extraction pipeline (`ffmpeg` -> PNG sequence -> `gifski`) that ensures all frames are correctly captured and timed according to source duration.
 - **AVIF Alpha Stream Detection**: Added heuristic logic to detect and accurately map auxiliary alpha streams (`yuv420p` + `gray8`) in animated AVIFs, preventing transparency loss during conversion.
 - **Apple Compatibility Enforcement**: Fixed a bug where `apple_compat` mode incorrectly allowed copying incompatible original files (AVIF/WebP) to the output. The system now strictly enforces conversion to GIF/HEIC for Apple ecosystem compatibility.
-- **Enhanced GIF Pipeline Safety**: Replaced direct single-file input for `gifski` with a managed pattern-based input system, eliminating "Only a single image file was given" errors.
+- **Enhanced GIF Pipeline Safety**: Replaced the unreliable `%06d` printf-style pattern with a robust **sorted frame-sequence list** for `gifski`. This eliminates "Unable to find input file" errors and ensures 100% correct playback rhythm for animated sequences.
 - **Single-Frame Loop Veto**: Added "Layer 1-A" logic in `loop_intent.rs` to strictly reject single-frame media from being classified as loop assets, preventing misrouting of static images to the `gifski` pipeline.
 - **Skip Reporting Transparency**: Enhanced `cli_runner.rs` with verbose logging for skipped files (checkpoint hit or output existing), resolving user confusion regarding progress bar increments without new output.
 - **Checkpoint Resilience**: Audited `CheckpointManager` initialization to ensure progress directory persistence across process restarts.
