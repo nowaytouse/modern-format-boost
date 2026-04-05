@@ -255,12 +255,12 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
                     .unwrap_or(0)
             })
             .map(|(_, s)| {
-                let actual_index = s["index"].as_u64().unwrap_or(0) as usize;
+                let actual_index = usize::try_from(s["index"].as_u64().unwrap_or(0)).unwrap_or(0);
                 (actual_index, *s)
             })
             .unwrap()
     } else {
-        let actual_index = video_streams[0].1["index"].as_u64().unwrap_or(0) as usize;
+        let actual_index = usize::try_from(video_streams[0].1["index"].as_u64().unwrap_or(0)).unwrap_or(0);
         (actual_index, video_streams[0].1)
     };
 
@@ -287,14 +287,18 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         .as_str()
         .unwrap_or("")
         .to_string();
-    let width = video_stream["width"]
-        .as_u64()
-        .ok_or_else(|| FFprobeError::ParseError("Missing width".to_string()))?
-        as u32;
-    let height = video_stream["height"]
-        .as_u64()
-        .ok_or_else(|| FFprobeError::ParseError("Missing height".to_string()))?
-        as u32;
+    let width = u32::try_from(
+        video_stream["width"]
+            .as_u64()
+            .ok_or_else(|| FFprobeError::ParseError("Missing width".to_string()))?,
+    )
+    .unwrap_or(0);
+    let height = u32::try_from(
+        video_stream["height"]
+            .as_u64()
+            .ok_or_else(|| FFprobeError::ParseError("Missing height".to_string()))?,
+    )
+    .unwrap_or(0);
     if width == 0 || height == 0 {
         return Err(FFprobeError::ParseError(format!(
             "Invalid dimensions: {width}x{height}"
@@ -313,7 +317,11 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
     let frame_count = video_stream["nb_frames"]
         .as_str()
         .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or((duration * frame_rate) as u64);
+        .unwrap_or_else(|| {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let count = (duration * frame_rate) as u64;
+            count
+        });
 
     let pix_fmt = video_stream["pix_fmt"]
         .as_str()
@@ -355,7 +363,7 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         .map(|l| format!("{:.1}", l as f64 / 10.0));
 
     // Extract actual B-frame count (integer) instead of just a boolean
-    let max_b_frames = video_stream["has_b_frames"].as_i64().unwrap_or(0) as u8;
+    let max_b_frames = u8::try_from(video_stream["has_b_frames"].as_i64().unwrap_or(0)).unwrap_or(0);
     let has_b_frames = max_b_frames > 0;
 
     // Extract encoder settings from tags (x264-params, x265-params, etc.)
@@ -368,7 +376,9 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
     let video_bit_rate = video_stream["bit_rate"]
         .as_str()
         .and_then(|s| s.parse::<u64>().ok());
-    let refs = video_stream["refs"].as_u64().map(|r| r as u32);
+    let refs = video_stream["refs"]
+        .as_u64()
+        .map(|r| u32::try_from(r).unwrap_or(0));
 
     let audio_stream = streams
         .iter()
@@ -385,7 +395,7 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         .and_then(|s| s.parse::<u32>().ok());
     let audio_channels = audio_stream
         .and_then(|s| s["channels"].as_u64())
-        .map(|c| c as u32);
+        .map(|c| u32::try_from(c).unwrap_or(0));
 
     let subtitle_stream = streams
         .iter()
@@ -560,10 +570,10 @@ fn extract_hdr_side_data(json: &serde_json::Value) -> HdrSideData {
 
             // Parse DOVI configuration record fields
             if let Some(profile) = sd["dv_profile"].as_u64() {
-                result.dv_profile = Some(profile as u8);
+                result.dv_profile = Some(u8::try_from(profile).unwrap_or(0));
             }
             if let Some(compat_id) = sd["dv_bl_signal_compatibility_id"].as_u64() {
-                result.dv_bl_signal_compatibility_id = Some(compat_id as u8);
+                result.dv_bl_signal_compatibility_id = Some(u8::try_from(compat_id).unwrap_or(0));
             }
         }
 
@@ -602,16 +612,22 @@ fn parse_rational_to_50k(s: &str) -> Option<u64> {
             return None;
         }
         // Normalise to denominator 50000
-        Some(((n / d) * 50000.0).round() as u64)
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let val = ((n / d) * 50000.0).round() as u64;
+        Some(val)
     } else {
         // plain float
         let v: f64 = s.trim().parse().ok()?;
         // Already normalised value (some ffprobe versions give 0.265 style)
         if v <= 1.0 {
-            Some((v * 50000.0).round() as u64)
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let val = (v * 50000.0).round() as u64;
+            Some(val)
         } else {
             // raw integer-style already in 50k units
-            Some(v.round() as u64)
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let val = v.round() as u64;
+            Some(val)
         }
     }
 }
@@ -624,13 +640,19 @@ fn parse_luminance_to_10k(s: &str) -> Option<u64> {
         if d == 0.0 {
             return None;
         }
-        Some(((n / d) * 10000.0).round() as u64)
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let val = ((n / d) * 10000.0).round() as u64;
+        Some(val)
     } else {
         let v: f64 = s.trim().parse().ok()?;
         if v <= 10000.0 {
-            Some((v * 10000.0).round() as u64)
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let val = (v * 10000.0).round() as u64;
+            Some(val)
         } else {
-            Some(v.round() as u64)
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let val = v.round() as u64;
+            Some(val)
         }
     }
 }
@@ -639,16 +661,22 @@ fn parse_luminance_to_10k(s: &str) -> Option<u64> {
 /// Format: "G(gx,gy)B(bx,by)R(rx,ry)WP(wx,wy)L(lmax,lmin)"
 fn build_mastering_display_string(sd: &serde_json::Value) -> Option<String> {
     let get_coord = |field: &str| -> Option<u64> {
-        sd[field]
-            .as_str()
-            .and_then(parse_rational_to_50k)
-            .or_else(|| sd[field].as_f64().map(|v| (v * 50000.0).round() as u64))
+        sd[field].as_str().and_then(parse_rational_to_50k).or_else(|| {
+            sd[field].as_f64().map(|v| {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let val = (v * 50000.0).round() as u64;
+                val
+            })
+        })
     };
     let get_lum = |field: &str| -> Option<u64> {
-        sd[field]
-            .as_str()
-            .and_then(parse_luminance_to_10k)
-            .or_else(|| sd[field].as_f64().map(|v| (v * 10000.0).round() as u64))
+        sd[field].as_str().and_then(parse_luminance_to_10k).or_else(|| {
+            sd[field].as_f64().map(|v| {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let val = (v * 10000.0).round() as u64;
+                val
+            })
+        })
     };
 
     let gx = get_coord("green_x")?;

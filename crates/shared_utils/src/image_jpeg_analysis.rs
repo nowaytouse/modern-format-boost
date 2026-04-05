@@ -62,7 +62,7 @@ fn generate_standard_qt(quality: u8, base_table: &[[u16; 8]; 8]) -> [[u16; 8]; 8
     for i in 0..8 {
         for j in 0..8 {
             let value = ((scale * f64::from(base_table[i][j])) + 50.0) / 100.0;
-            result[i][j] = value.floor().clamp(1.0, 255.0) as u16;
+            result[i][j] = crate::numeric_cast::f64_to_u16_sat(value.floor().clamp(1.0, 255.0));
         }
     }
 
@@ -309,7 +309,7 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
         if pos + 2 > data.len() {
             break;
         }
-        let length = ((data[pos] as usize) << 8) | (data[pos + 1] as usize);
+        let length = (usize::from(data[pos]) << 8) | usize::from(data[pos + 1]);
 
         if marker == MARKER_DQT {
             let segment_end = (pos + length).min(data.len());
@@ -425,7 +425,7 @@ pub fn analyze_jpeg_quality(data: &[u8]) -> Result<JpegQualityAnalysis, String> 
                 let weighted = luma_estimate
                     .interpolated_quality
                     .mul_add(0.7, chroma.interpolated_quality * 0.3);
-                weighted.round() as u8
+                crate::numeric_cast::f64_to_u8_sat(weighted.round())
             } else {
                 luma_estimate.quality
             }
@@ -522,7 +522,7 @@ pub fn is_ultra_hdr_jpeg(data: &[u8]) -> bool {
         if pos + 2 > data.len() {
             break;
         }
-        let seg_len = u16::from_be_bytes([data[pos], data[pos + 1]]) as usize;
+        let seg_len = usize::from(u16::from_be_bytes([data[pos], data[pos + 1]]));
         if seg_len < 2 || pos + seg_len > data.len() {
             break;
         }
@@ -609,7 +609,7 @@ pub fn extract_xmp_from_jpeg_data(data: &[u8]) -> Option<String> {
         if pos + 2 > data.len() {
             break;
         }
-        let seg_len = u16::from_be_bytes([data[pos], data[pos + 1]]) as usize;
+        let seg_len = usize::from(u16::from_be_bytes([data[pos], data[pos + 1]]));
         if seg_len < 2 || pos + seg_len > data.len() {
             break;
         }
@@ -790,7 +790,7 @@ fn find_mpf_segment(data: &[u8]) -> Result<Vec<u8>, String> {
             return Err(format!("Truncated segment at position {pos}"));
         }
 
-        let seg_len = u16::from_be_bytes([data[pos], data[pos + 1]]) as usize;
+        let seg_len = usize::from(u16::from_be_bytes([data[pos], data[pos + 1]]));
         if seg_len < 2 || pos + seg_len > data.len() {
             return Err(format!(
                 "Invalid segment length {seg_len} at position {pos} (marker 0x{marker:02X})"
@@ -843,7 +843,7 @@ fn extract_gainmap_from_mpf(jpeg_data: &[u8], mpf_data: &[u8]) -> Result<Vec<u8>
     info!("First IFD offset: {}", first_ifd_offset);
 
     // Navigate to first IFD
-    if first_ifd_offset as usize + 2 > mpf_data.len() {
+    if usize::try_from(first_ifd_offset).unwrap_or(0) + 2 > mpf_data.len() {
         return Err(format!(
             "Invalid first IFD offset {}: exceeds MPF data size {}",
             first_ifd_offset,
@@ -852,16 +852,16 @@ fn extract_gainmap_from_mpf(jpeg_data: &[u8], mpf_data: &[u8]) -> Result<Vec<u8>
     }
 
     // Read number of entries in IFD
-    let num_entries = read_u16(&mpf_data[first_ifd_offset as usize..], is_big_endian)?;
+    let num_entries = read_u16(&mpf_data[usize::try_from(first_ifd_offset).unwrap_or(0)..], is_big_endian)?;
     info!("IFD entries: {}", num_entries);
 
     // Find MPEntry tag
     let mut mp_entry_offset: Option<u32> = None;
     let mut num_images: Option<u32> = None;
 
-    let ifd_start = first_ifd_offset as usize;
+    let ifd_start = usize::try_from(first_ifd_offset).unwrap_or(0);
     for i in 0..num_entries {
-        let entry_offset = ifd_start + 2 + (i as usize * 12);
+        let entry_offset = ifd_start + 2 + (usize::from(i) * 12);
         if entry_offset + 12 > mpf_data.len() {
             return Err(format!(
                 "IFD entry {} offset {} exceeds MPF data size {}",
@@ -916,7 +916,7 @@ fn extract_gainmap_from_mpf(jpeg_data: &[u8], mpf_data: &[u8]) -> Result<Vec<u8>
     }
 
     // Navigate to MP Entry array
-    let mp_entry_array_offset = mp_entry_offset as usize;
+    let mp_entry_array_offset = usize::try_from(mp_entry_offset).unwrap_or(0);
     if mp_entry_array_offset + 16 > mpf_data.len() {
         return Err(format!(
             "MP entry array offset {} exceeds MPF data size {}",
@@ -955,7 +955,7 @@ fn extract_gainmap_from_mpf(jpeg_data: &[u8], mpf_data: &[u8]) -> Result<Vec<u8>
         return Err("Gainmap length is 0. Invalid MPF structure.".to_string());
     }
 
-    if gainmap_length > jpeg_data.len() as u32 {
+    if gainmap_length > u32::try_from(jpeg_data.len()).unwrap_or(u32::MAX) {
         return Err(format!(
             "Gainmap length {} exceeds JPEG file size {}",
             gainmap_length,
@@ -967,9 +967,9 @@ fn extract_gainmap_from_mpf(jpeg_data: &[u8], mpf_data: &[u8]) -> Result<Vec<u8>
     // MPF offset is relative to the MPF base (position after "MPF\0")
     // We need to find the absolute position in the JPEG file
     let mpf_base_pos = find_mpf_base_position(jpeg_data)?;
-    let gainmap_abs_pos = mpf_base_pos + gainmap_offset as usize;
+    let gainmap_abs_pos = mpf_base_pos + usize::try_from(gainmap_offset).unwrap_or(0);
 
-    if gainmap_abs_pos + gainmap_length as usize > jpeg_data.len() {
+    if gainmap_abs_pos + usize::try_from(gainmap_length).unwrap_or(0) > jpeg_data.len() {
         return Err(format!(
             "Gainmap data at position {} with length {} exceeds JPEG file size {}",
             gainmap_abs_pos,
@@ -990,7 +990,7 @@ fn extract_gainmap_from_mpf(jpeg_data: &[u8], mpf_data: &[u8]) -> Result<Vec<u8>
 
     // Extract gainmap data
     let gainmap_data =
-        jpeg_data[gainmap_abs_pos..gainmap_abs_pos + gainmap_length as usize].to_vec();
+        jpeg_data[gainmap_abs_pos..gainmap_abs_pos + usize::try_from(gainmap_length).unwrap_or(0)].to_vec();
 
     Ok(gainmap_data)
 }
@@ -1024,7 +1024,7 @@ fn find_mpf_base_position(jpeg_data: &[u8]) -> Result<usize, String> {
             break;
         }
 
-        let seg_len = u16::from_be_bytes([jpeg_data[pos], jpeg_data[pos + 1]]) as usize;
+        let seg_len = usize::from(u16::from_be_bytes([jpeg_data[pos], jpeg_data[pos + 1]]));
         if seg_len < 2 || pos + seg_len > jpeg_data.len() {
             break;
         }
@@ -1102,39 +1102,35 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::float_cmp)]
     fn test_sse_identical() {
         let table = IJG_LUMINANCE_BASE;
         let sse = calculate_sse(&table, &table);
-        assert_eq!(sse, 0.0);
+        assert!(crate::float_compare::approx_eq_f64(f64::from(sse), 0.0));
     }
 
     #[test]
-    #[allow(clippy::float_cmp)]
     fn test_weighted_sse_identical() {
         let table = IJG_LUMINANCE_BASE;
         let wsse = calculate_weighted_sse(&table, &table);
-        assert_eq!(wsse, 0.0);
+        assert!(crate::float_compare::approx_eq_f64(f64::from(wsse), 0.0));
     }
 
     #[test]
-    #[allow(clippy::float_cmp)]
     fn test_estimate_quality_perfect_match() {
         let qt = generate_standard_qt(75, &IJG_LUMINANCE_BASE);
         let (quality, sse, is_standard) = estimate_quality_from_table(&qt, true);
         assert_eq!(quality, 75);
-        assert_eq!(sse, 0.0);
+        assert!(crate::float_compare::approx_eq_f64(f64::from(sse), 0.0));
         assert!(is_standard);
     }
 
     #[test]
-    #[allow(clippy::float_cmp)]
     fn test_estimate_quality_all_levels() {
         for expected_q in 1..=100 {
             let qt = generate_standard_qt(expected_q, &IJG_LUMINANCE_BASE);
             let (detected_q, sse, _) = estimate_quality_from_table(&qt, true);
             assert_eq!(detected_q, expected_q, "Failed to detect Q={expected_q}");
-            assert_eq!(sse, 0.0, "Non-zero SSE for Q={expected_q}");
+            assert!(crate::float_compare::approx_eq_f64(f64::from(sse), 0.0));
         }
     }
 
@@ -1150,7 +1146,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::float_cmp)]
     fn test_chrominance_detection() {
         for expected_q in &[50, 75, 90, 95] {
             let qt = generate_standard_qt(*expected_q, &IJG_CHROMINANCE_BASE);
@@ -1159,7 +1154,7 @@ mod tests {
                 detected_q, *expected_q,
                 "Failed to detect chroma Q={expected_q}"
             );
-            assert_eq!(sse, 0.0);
+            assert!(crate::float_compare::approx_eq_f64(f64::from(sse), 0.0));
         }
     }
 
@@ -1193,7 +1188,7 @@ mod tests {
             0xFF, 0xD8, // SOI
             0xFF, 0xE1, // APP1 for XMP
         ];
-        let xmp_len = (xmp_header.len() + xmp_content.len() + 2) as u16;
+        let xmp_len = u16::try_from(xmp_header.len() + xmp_content.len() + 2).unwrap_or(0);
         jpeg_with_xmp.extend_from_slice(&xmp_len.to_be_bytes());
         jpeg_with_xmp.extend_from_slice(xmp_header);
         jpeg_with_xmp.extend_from_slice(xmp_content);
@@ -1227,7 +1222,7 @@ mod tests {
             0xFF, 0xD8, // SOI
             0xFF, 0xE1, // APP1 for XMP
         ];
-        let xmp_len = (xmp_header.len() + xmp_content.len() + 2) as u16;
+        let xmp_len = u16::try_from(xmp_header.len() + xmp_content.len() + 2).unwrap_or(0);
         jpeg_with_gainmap.extend_from_slice(&xmp_len.to_be_bytes());
         jpeg_with_gainmap.extend_from_slice(xmp_header);
         jpeg_with_gainmap.extend_from_slice(xmp_content);
@@ -1295,9 +1290,18 @@ mod tests {
     fn test_gainmap_params_default() {
         use crate::hdr_synthesis::GainMapParams;
         let params = GainMapParams::default();
-        assert_eq!(params.gain_map_max, 1.0);
-        assert_eq!(params.gain_map_min, 0.0);
-        assert_eq!(params.gamma, 1.0);
+        assert!(crate::float_compare::approx_eq_f64(
+            f64::from(params.gain_map_max),
+            1.0
+        ));
+        assert!(crate::float_compare::approx_eq_f64(
+            f64::from(params.gain_map_min),
+            0.0
+        ));
+        assert!(crate::float_compare::approx_eq_f64(
+            f64::from(params.gamma),
+            1.0
+        ));
         assert!((params.offset_sdr - 1.0 / 64.0).abs() < f32::EPSILON);
         assert!((params.offset_hdr - 1.0 / 64.0).abs() < f32::EPSILON);
     }
@@ -1346,7 +1350,7 @@ mod tests {
             0xFF, 0xD8, // SOI
             0xFF, 0xFF, 0xFF, 0xE1, // APP1 with padding
         ];
-        let xmp_len = (xmp_header.len() + xmp_content.len() + 2) as u16;
+        let xmp_len = u16::try_from(xmp_header.len() + xmp_content.len() + 2).unwrap_or(u16::MAX);
         data.extend_from_slice(&xmp_len.to_be_bytes());
         data.extend_from_slice(xmp_header);
         data.extend_from_slice(xmp_content);

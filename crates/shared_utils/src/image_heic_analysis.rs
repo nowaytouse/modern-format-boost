@@ -128,7 +128,7 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
                         if pixi_data.is_empty() {
                             None
                         } else {
-                            let num_ch = pixi_data[0] as usize;
+                            let num_ch = crate::numeric_cast::u8_to_usize_sat(pixi_data[0]);
                             if num_ch > 0 && pixi_data.len() > num_ch {
                                 Some(pixi_data[1..=num_ch].iter().copied().max().unwrap_or(0))
                             } else {
@@ -200,14 +200,14 @@ fn parse_sps_for_transquant_bypass_flag(hvcc_data: &[u8]) -> Option<bool> {
     if hvcc_data.len() < 25 {
         return None;
     }
-    let num_nalu_arrays = hvcc_data[24] as usize;
+    let num_nalu_arrays = crate::numeric_cast::u8_to_usize_sat(hvcc_data[24]);
     let mut pos = 25;
     for _ in 0..num_nalu_arrays {
         if pos + 3 > hvcc_data.len() {
             return None;
         }
         let nal_unit_type = hvcc_data[pos] & 0x3F;
-        let num_nalus = u16::from_be_bytes([hvcc_data[pos + 1], hvcc_data[pos + 2]]) as usize;
+        let num_nalus = crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([hvcc_data[pos + 1], hvcc_data[pos + 2]]));
         pos += 3;
         if nal_unit_type == 33 {
             for _ in 0..num_nalus {
@@ -215,7 +215,7 @@ fn parse_sps_for_transquant_bypass_flag(hvcc_data: &[u8]) -> Option<bool> {
                     return None;
                 }
                 let nal_unit_length =
-                    u16::from_be_bytes([hvcc_data[pos], hvcc_data[pos + 1]]) as usize;
+                    crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([hvcc_data[pos], hvcc_data[pos + 1]]));
                 pos += 2;
                 if pos + nal_unit_length > hvcc_data.len() {
                     return None;
@@ -233,7 +233,7 @@ fn parse_sps_for_transquant_bypass_flag(hvcc_data: &[u8]) -> Option<bool> {
                     return None;
                 }
                 let nal_unit_length =
-                    u16::from_be_bytes([hvcc_data[pos], hvcc_data[pos + 1]]) as usize;
+                    crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([hvcc_data[pos], hvcc_data[pos + 1]]));
                 pos += 2 + nal_unit_length;
             }
         }
@@ -276,7 +276,7 @@ fn parse_sps_rbsp_for_transquant_bypass(sps_payload: &[u8]) -> Option<bool> {
                 leading_zeros += 1;
             }
             let info = if leading_zeros > 0 {
-                self.read_bits(leading_zeros as usize)?
+                self.read_bits(crate::numeric_cast::u32_to_usize_sat(leading_zeros))?
             } else {
                 0
             };
@@ -568,8 +568,7 @@ fn find_box_payload_by_magic(data: &[u8], box_type: [u8; 4]) -> Option<&[u8]> {
     if let Some(pos) = data.windows(4).position(|w| w == box_type) {
         if pos >= 4 {
             let size =
-                u32::from_be_bytes([data[pos - 4], data[pos - 3], data[pos - 2], data[pos - 1]])
-                    as usize;
+                crate::numeric_cast::u32_to_usize_sat(u32::from_be_bytes([data[pos - 4], data[pos - 3], data[pos - 2], data[pos - 1]]));
             if size >= 8 && pos + size - 4 <= data.len() {
                 return Some(&data[pos + 4..pos - 4 + size]);
             }

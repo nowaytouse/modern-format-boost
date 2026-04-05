@@ -100,10 +100,7 @@ fn get_memory_macos() -> (u64, u64) {
         }
     };
 
-    let available = match crate::tool_builders::VmstatBuilder::new()
-        .build()
-        .output()
-    {
+    let available = match crate::tool_builders::VmstatBuilder::new().build().output() {
         Ok(output) if output.status.success() => match String::from_utf8(output.stdout) {
             Ok(stdout) => {
                 if let Some(available) = parse_vm_stat_available(&stdout) {

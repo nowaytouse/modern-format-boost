@@ -198,11 +198,17 @@ mod tests {
     #[test]
     fn test_progress_percent() {
         let mut guard = IterationGuard::new(100, "test");
-        assert_eq!(guard.progress_percent(), 0.0);
+        assert!(crate::float_compare::approx_eq_f64(
+            guard.progress_percent(),
+            0.0
+        ));
 
         for _ in 0..50 {
             guard.increment().unwrap();
         }
-        assert_eq!(guard.progress_percent(), 50.0);
+        assert!(crate::float_compare::approx_eq_f64(
+            guard.progress_percent(),
+            50.0
+        ));
     }
 }

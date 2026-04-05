@@ -23,9 +23,9 @@ pub fn crf_to_cache_key(crf: f32) -> i32 {
     }
     let capped = crf.min(CRF_CACHE_MAX_VALID);
     let normalized = (capped * CACHE_KEY_MULTIPLIER).round();
-    let key = normalized as i32;
+    let key = crate::numeric_cast::f32_to_i32_sat(normalized);
     debug_assert!(
-        key >= 0 && key <= (CRF_CACHE_MAX_VALID * CACHE_KEY_MULTIPLIER) as i32,
+        key >= 0 && key <= crate::numeric_cast::f32_to_i32_sat(CRF_CACHE_MAX_VALID * CACHE_KEY_MULTIPLIER),
         "Cache key {key} out of expected range for CRF {crf}"
     );
     key
@@ -141,7 +141,7 @@ pub fn required_iterations(min_crf: u8, max_crf: u8) -> u32 {
     if range <= 0.0 {
         return 1;
     }
-    (range.log2().ceil() as u32) + 1
+    crate::numeric_cast::f64_to_u32_sat(range.log2().ceil()) + 1
 }
 
 #[must_use]

@@ -162,8 +162,10 @@ pub fn analyze_directory(
                 .flat_map(|e| vec!["-ext".to_string(), e.clone()]),
         )
         .input(dir);
-        
-    let output = builder.build().output()
+
+    let output = builder
+        .build()
+        .output()
         .map_err(|e| format!("Failed to run exiftool: {e}"))?;
 
     if !output.status.success() {
@@ -377,6 +379,7 @@ pub fn print_analysis(result: &DateAnalysisResult) {
         years.sort_by_key(|&(y, _)| y);
         let total = result.files_with_dates as f64;
         for (year, count) in years {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let pct = (*count as f64 / total * 100.0) as usize;
             let bar: String = "█".repeat(pct / 3 + 1);
             println!("   {year}: {count:4} files ({pct:2}%) {bar}");

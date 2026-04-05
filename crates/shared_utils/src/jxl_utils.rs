@@ -78,7 +78,6 @@ pub fn extract_icc_with_d50_patch(src: &Path) -> Option<tempfile::NamedTempFile>
     }
 }
 
-
 /// Verify that a JXL file is valid by checking its signature and optionally running jxlinfo.
 /// Verify the health of a JXL file.
 ///
@@ -134,14 +133,6 @@ pub fn verify_jxl_has_icc(path: &Path) -> bool {
         Err(_) => false,
     }
 }
-
-/// Run an external tool to convert input to a temp PNG.
-///
-/// Returns (`temp_path`, `temp_handle`) on success, or (`original_input`, None) on failure (graceful fallback).
-/// Decode a file to a temporary PNG for analysis.
-///
-/// # Errors
-/// Returns an I/O error if decoding fails.
 
 /// True when cjxl failed due to grayscale PNG + ICC profile (libpng: "RGB color space not permitted on grayscale").
 ///
@@ -218,10 +209,7 @@ fn run_imagemagick_cjxl_pipeline(
     use std::process::Stdio;
 
     let mut magick_builder = crate::image_builders::MagickBuilder::new();
-    magick_builder
-        .input(input)
-        .strip(strip)
-        .use_stdout(true);
+    magick_builder.input(input).strip(strip).use_stdout(true);
 
     if let Some(d) = Some(depth) {
         magick_builder.depth(d);

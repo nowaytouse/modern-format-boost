@@ -1,11 +1,11 @@
 //! Type-safe builder for constructing `ffmpeg` and `ffprobe` commands.
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::str::FromStr;
 use crate::constants;
 use crate::ffmpeg_process::FfmpegProcess;
 pub use crate::types::EncoderPreset;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::str::FromStr;
 
 /// Common video codecs supported by the system.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,8 +30,20 @@ impl VideoCodec {
     #[must_use]
     pub fn ffmpeg_name(&self, is_gpu: bool) -> &'static str {
         match self {
-            Self::H264 => if is_gpu { "h264_videotoolbox" } else { constants::FFMPEG_ENCODER_X264 },
-            Self::Hevc => if is_gpu { "hevc_videotoolbox" } else { constants::FFMPEG_ENCODER_X265 },
+            Self::H264 => {
+                if is_gpu {
+                    "h264_videotoolbox"
+                } else {
+                    constants::FFMPEG_ENCODER_X264
+                }
+            }
+            Self::Hevc => {
+                if is_gpu {
+                    "hevc_videotoolbox"
+                } else {
+                    constants::FFMPEG_ENCODER_X265
+                }
+            }
             Self::Av1 => constants::FFMPEG_ENCODER_SVTAV1,
             Self::Vp9 => "libvpx-vp9",
             Self::Png => "png",
@@ -305,7 +317,8 @@ impl FfmpegBuilder {
     }
 
     pub fn map_stream_index(&mut self, stream_type: StreamType, index: usize) -> &mut Self {
-        self.map.push(format!("{}:{}", stream_type.ffmpeg_name(), index));
+        self.map
+            .push(format!("{}:{}", stream_type.ffmpeg_name(), index));
         self
     }
 
@@ -361,10 +374,10 @@ impl FfmpegBuilder {
         self
     }
 
-    pub fn args<I, S>(&mut self, args: I) -> &mut Self 
-    where 
+    pub fn args<I, S>(&mut self, args: I) -> &mut Self
+    where
         I: IntoIterator<Item = S>,
-        S: AsRef<str>
+        S: AsRef<str>,
     {
         for arg in args {
             self.extra_args.push(arg.as_ref().to_string());
@@ -406,11 +419,12 @@ impl FfmpegBuilder {
         if let Some(mut filter) = self.filter_complex.clone() {
             if self.odd_dim_correction {
                 // Prepend scaling to align dimensions - standard fix for filter compatibility
-                filter = format!("scale=trunc(iw/2)*2:trunc(ih/2)*2,{}", filter);
+                filter = format!("scale=trunc(iw/2)*2:trunc(ih/2)*2,{filter}");
             }
             cmd.arg(constants::FFMPEG_ARG_FILTER_COMPLEX).arg(filter);
         } else if self.odd_dim_correction {
-            cmd.arg(constants::FFMPEG_ARG_FILTER_COMPLEX).arg("scale=trunc(iw/2)*2:trunc(ih/2)*2");
+            cmd.arg(constants::FFMPEG_ARG_FILTER_COMPLEX)
+                .arg("scale=trunc(iw/2)*2:trunc(ih/2)*2");
         }
 
         if let Some(vcodec) = self.vcodec {
@@ -640,7 +654,11 @@ impl FfprobeBuilder {
 
     #[must_use]
     pub fn check_available() -> bool {
-        Command::new(constants::TOOL_FFPROBE).arg("-version").output().map(|o| o.status.success()).unwrap_or(false)
+        Command::new(constants::TOOL_FFPROBE)
+            .arg("-version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
     }
 }
 

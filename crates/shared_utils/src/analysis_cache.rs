@@ -14,12 +14,11 @@ use blake3::Hasher;
 use postgres::Client;
 use std::io::Read;
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 use tracing::{debug, info, warn};
 
 // Import unified version management
 use crate::version::{cache_algorithm_version, CACHE_SCHEMA_VERSION};
-
 
 /// 📊 Cache Statistics
 #[derive(Debug, Clone)]
@@ -43,13 +42,13 @@ impl CacheStatistics {
     #[must_use]
     #[allow(clippy::cast_precision_loss)]
     pub fn db_size_mb(&self) -> f64 {
-        self.db_size_bytes as f64 / 1024.0 / 1024.0
+        crate::numeric_cast::u64_to_f64(self.db_size_bytes) / 1024.0 / 1024.0
     }
 
     #[must_use]
     #[allow(clippy::cast_precision_loss)]
     pub fn db_size_gb(&self) -> f64 {
-        self.db_size_bytes as f64 / 1024.0 / 1024.0 / 1024.0
+        crate::numeric_cast::u64_to_f64(self.db_size_bytes) / 1024.0 / 1024.0 / 1024.0
     }
 
     #[must_use]
@@ -97,7 +96,7 @@ impl FileSignature {
         #[cfg(windows)]
         use std::os::windows::fs::MetadataExt;
         #[cfg(windows)]
-        let ctime = metadata.last_write_time() as i64;
+        let ctime = crate::numeric_cast::u64_to_i64_sat(metadata.last_write_time());
         #[cfg(not(any(unix, windows)))]
         let ctime = mtime;
 
@@ -171,7 +170,7 @@ impl AnalysisCache {
                     &format!("DELETE FROM {table} WHERE algorithm_version < $1"),
                     &[&current_version],
                 )
-                .map(|n| n as i64)?;
+                .map(|n| n.cast_signed())?;
 
             total_invalidated += count;
         }
@@ -223,7 +222,7 @@ impl AnalysisCache {
                 {
                     let data: Vec<u8> = row.get(0);
                     if let Some(stored_checksum) = row.get::<_, Option<i64>>(2) {
-                        if calculate_checksum(&data) != (stored_checksum as u32) {
+                        if calculate_checksum(&data) != u32::try_from(stored_checksum).unwrap_or(0) {
                             warn!(
                                 "⚠️  [Cache] Checksum mismatch for {}. Invalidating.",
                                 path.display()
@@ -253,7 +252,7 @@ impl AnalysisCache {
             if algorithm_version >= cache_algorithm_version() {
                 let data: Vec<u8> = row.get(0);
                 if let Some(stored_checksum) = row.get::<_, Option<i64>>(2) {
-                    if calculate_checksum(&data) != (stored_checksum as u32) {
+                    if calculate_checksum(&data) != u32::try_from(stored_checksum).unwrap_or(0) {
                         warn!(
                             "⚠️  [Cache] Checksum mismatch for {}. Invalidating.",
                             path.display()
@@ -304,7 +303,7 @@ impl AnalysisCache {
             {
                 let data: Vec<u8> = row.get(0);
                 if let Some(stored_checksum) = row.get::<_, Option<i64>>(1) {
-                    if calculate_checksum(&data) != (stored_checksum as u32) {
+                    if calculate_checksum(&data) != u32::try_from(stored_checksum).unwrap_or(0) {
                         warn!("⚠️  [Cache] Quality checksum mismatch (Path).");
                         return Ok(None);
                     }
@@ -327,7 +326,7 @@ impl AnalysisCache {
         if let Some(row) = row {
             let data: Vec<u8> = row.get(0);
             if let Some(stored_checksum) = row.get::<_, Option<i64>>(1) {
-                if calculate_checksum(&data) != (stored_checksum as u32) {
+                if calculate_checksum(&data) != u32::try_from(stored_checksum).unwrap_or(0) {
                     warn!("⚠️  [Cache] Quality checksum mismatch (Hash).");
                     return Ok(None);
                 }
@@ -363,7 +362,7 @@ impl AnalysisCache {
         let content_fingerprint = calculate_content_fingerprint(path)?;
         let packed_data = rmp_serde::to_vec(analysis).context("Failed to pack analysis data")?;
         let checksum = calculate_checksum(&packed_data);
-        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+        let now = crate::numeric_cast::unix_secs_i64_result()?;
 
         let mut tx = client.transaction()?;
         tx.execute(
@@ -396,7 +395,7 @@ impl AnalysisCache {
         let content_fingerprint = calculate_content_fingerprint(path)?;
         let packed_data = rmp_serde::to_vec(analysis).context("Failed to pack quality data")?;
         let checksum = calculate_checksum(&packed_data);
-        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+        let now = crate::numeric_cast::unix_secs_i64_result()?;
 
         let mut tx = client.transaction()?;
         tx.execute(
@@ -439,7 +438,7 @@ impl AnalysisCache {
             {
                 let data: Vec<u8> = row.get(0);
                 if let Some(stored_checksum) = row.get::<_, Option<i64>>(1) {
-                    if calculate_checksum(&data) != (stored_checksum as u32) {
+                    if calculate_checksum(&data) != u32::try_from(stored_checksum).unwrap_or(0) {
                         warn!("⚠️  [Cache] Video checksum mismatch (Path).");
                         return Ok(None);
                     }
@@ -461,7 +460,7 @@ impl AnalysisCache {
         if let Some(row) = row {
             let data: Vec<u8> = row.get(0);
             if let Some(stored_checksum) = row.get::<_, Option<i64>>(1) {
-                if calculate_checksum(&data) != (stored_checksum as u32) {
+                if calculate_checksum(&data) != u32::try_from(stored_checksum).unwrap_or(0) {
                     warn!("⚠️  [Cache] Video checksum mismatch (Hash).");
                     return Ok(None);
                 }
@@ -492,7 +491,7 @@ impl AnalysisCache {
         let content_fingerprint = calculate_content_fingerprint(path)?;
         let packed_data = rmp_serde::to_vec(analysis).context("Failed to pack video data")?;
         let checksum = calculate_checksum(&packed_data);
-        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+        let now = crate::numeric_cast::unix_secs_i64_result()?;
 
         let mut tx = client.transaction()?;
         tx.execute(
@@ -515,13 +514,13 @@ impl AnalysisCache {
 
     pub fn cleanup_old_records(&self, max_age_secs: i64) -> Result<usize> {
         let mut client = open_pg_client()?;
-        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+        let now = crate::numeric_cast::unix_secs_i64_result()?;
         let threshold = now - max_age_secs;
 
-        let removed = client.execute(
+        let removed = usize::try_from(client.execute(
             "DELETE FROM analysis_records WHERE created_at < $1",
             &[&threshold],
-        )? as usize;
+        )?).unwrap_or(0);
 
         if removed > 0 {
             info!("🧹 [Cache] Pruned {} old records", removed);
@@ -569,10 +568,10 @@ impl AnalysisCache {
 
         Ok(CacheStatistics {
             db_size_bytes: 0, // In Postgres, tracking actual disk size is complex per-table
-            analysis_records: analysis_count as usize,
-            quality_records: quality_count as usize,
-            video_records: video_count as usize,
-            path_index_entries: path_index_count as usize,
+            analysis_records: usize::try_from(analysis_count).unwrap_or(0),
+            quality_records: usize::try_from(quality_count).unwrap_or(0),
+            video_records: usize::try_from(video_count).unwrap_or(0),
+            path_index_entries: usize::try_from(path_index_count).unwrap_or(0),
             schema_version,
             algorithm_version_distribution: version_dist,
             current_algorithm_version: cache_algorithm_version(),

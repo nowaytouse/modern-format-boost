@@ -123,7 +123,7 @@ pub fn analyze_image_quality(
     frame_count: u32,
     precision: PrecisionMetadata,
 ) -> Result<ImageQualityAnalysis, String> {
-    let expected_size = (width as usize) * (height as usize) * 4;
+    let expected_size = crate::numeric_cast::u32_to_usize_sat(width) * crate::numeric_cast::u32_to_usize_sat(height) * 4;
     if rgba_data.len() < expected_size {
         return Err(format!(
             "❌ Invalid RGBA data: expected {} bytes for {}x{}, got {}",
@@ -143,7 +143,7 @@ pub fn analyze_image_quality(
     let edge_density = calculate_edge_density(rgba_data, width, height);
 
     let color_diversity = if let Some(p_size) = precision.palette_size {
-        (p_size as f64 / 256.0).min(1.0)
+        (crate::numeric_cast::usize_to_f64(p_size) / 256.0).min(1.0)
     } else {
         calculate_color_diversity(rgba_data, width, height)
     };
@@ -209,7 +209,7 @@ fn calculate_edge_density(rgba: &[u8], width: u32, height: u32) -> f64 {
         return 0.0;
     }
 
-    let pixels = (width as usize) * (height as usize);
+    let pixels = crate::numeric_cast::u32_to_usize_sat(width) * crate::numeric_cast::u32_to_usize_sat(height);
     let step = if pixels > 4_000_000 {
         4
     } else if pixels > 1_000_000 {
@@ -221,7 +221,7 @@ fn calculate_edge_density(rgba: &[u8], width: u32, height: u32) -> f64 {
     let mut edge_count = 0usize;
     let mut sample_count = 0usize;
 
-    let w = width as usize;
+    let w = crate::numeric_cast::u32_to_usize_sat(width);
 
     for y in (1..(height - 1) as usize).step_by(step) {
         for x in (1..(width - 1) as usize).step_by(step) {
@@ -248,14 +248,14 @@ fn calculate_edge_density(rgba: &[u8], width: u32, height: u32) -> f64 {
         return 0.0;
     }
 
-    let raw_density = edge_count as f64 / sample_count as f64;
+    let raw_density = crate::numeric_cast::usize_to_f64(edge_count) / crate::numeric_cast::usize_to_f64(sample_count);
     (raw_density * 3.0).min(1.0)
 }
 
 fn calculate_color_diversity(rgba: &[u8], width: u32, height: u32) -> f64 {
     use std::collections::HashSet;
 
-    let pixels = (width as usize) * (height as usize);
+    let pixels = crate::numeric_cast::u32_to_usize_sat(width) * crate::numeric_cast::u32_to_usize_sat(height);
     let step = if pixels > 1_000_000 {
         20
     } else if pixels > 100_000 {
@@ -283,8 +283,8 @@ fn calculate_color_diversity(rgba: &[u8], width: u32, height: u32) -> f64 {
         return 0.0;
     }
 
-    let max_colors = sample_count.min(10000) as f64;
-    (colors.len() as f64 / max_colors).min(1.0)
+    let max_colors = crate::numeric_cast::usize_to_f64(sample_count.min(10000));
+    (crate::numeric_cast::usize_to_f64(colors.len()) / max_colors).min(1.0)
 }
 
 fn calculate_texture_variance(rgba: &[u8], width: u32, height: u32) -> f64 {
@@ -292,7 +292,7 @@ fn calculate_texture_variance(rgba: &[u8], width: u32, height: u32) -> f64 {
         return 0.0;
     }
 
-    let pixels = (width as usize) * (height as usize);
+    let pixels = crate::numeric_cast::u32_to_usize_sat(width) * crate::numeric_cast::u32_to_usize_sat(height);
     let step = if pixels > 1_000_000 {
         10
     } else if pixels > 100_000 {
@@ -311,9 +311,11 @@ fn calculate_texture_variance(rgba: &[u8], width: u32, height: u32) -> f64 {
 
             for dy in -1i32..=1 {
                 for dx in -1i32..=1 {
-                    let px = (x as i32 + dx) as usize;
-                    let py = (y as i32 + dy) as usize;
-                    let idx = (py * width as usize + px) * 4;
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    let px = crate::numeric_cast::i32_to_usize_sat(crate::numeric_cast::usize_to_i32_sat(x) + dx);
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    let py = crate::numeric_cast::i32_to_usize_sat(crate::numeric_cast::usize_to_i32_sat(y) + dy);
+                    let idx = (py * crate::numeric_cast::u32_to_usize_sat(width) + px) * 4;
 
                     let gray = (i32::from(rgba[idx]) * 299
                         + i32::from(rgba[idx + 1]) * 587
@@ -325,7 +327,7 @@ fn calculate_texture_variance(rgba: &[u8], width: u32, height: u32) -> f64 {
             }
 
             let mean = f64::from(sum) / 9.0;
-            let variance = (sq_sum as f64 / 9.0) - (mean * mean);
+            let variance = (crate::numeric_cast::i64_to_f64(sq_sum) / 9.0) - (mean * mean);
             variance_sum += variance.sqrt();
             sample_count += 1;
         }
@@ -335,7 +337,7 @@ fn calculate_texture_variance(rgba: &[u8], width: u32, height: u32) -> f64 {
         return 0.0;
     }
 
-    let avg_std = variance_sum / sample_count as f64;
+    let avg_std = variance_sum / crate::numeric_cast::usize_to_f64(sample_count);
     (avg_std / 80.0).min(1.0)
 }
 
@@ -344,7 +346,7 @@ fn calculate_noise_level(rgba: &[u8], width: u32, height: u32) -> f64 {
         return 0.0;
     }
 
-    let pixels = (width as usize) * (height as usize);
+    let pixels = crate::numeric_cast::u32_to_usize_sat(width) * crate::numeric_cast::u32_to_usize_sat(height);
     let step = if pixels > 1_000_000 {
         10
     } else if pixels > 100_000 {
@@ -358,9 +360,9 @@ fn calculate_noise_level(rgba: &[u8], width: u32, height: u32) -> f64 {
 
     for y in (0..(height - 1) as usize).step_by(step) {
         for x in (0..(width - 1) as usize).step_by(step) {
-            let idx = (y * width as usize + x) * 4;
+            let idx = (y * crate::numeric_cast::u32_to_usize_sat(width) + x) * 4;
             let idx_right = idx + 4;
-            let idx_down = idx + (width as usize * 4);
+            let idx_down = idx + (crate::numeric_cast::u32_to_usize_sat(width) * 4);
 
             if idx_down + 2 < rgba.len() {
                 let curr =
@@ -386,7 +388,7 @@ fn calculate_noise_level(rgba: &[u8], width: u32, height: u32) -> f64 {
         return 0.0;
     }
 
-    let avg_diff = diff_sum / sample_count as f64;
+    let avg_diff = diff_sum / crate::numeric_cast::usize_to_f64(sample_count);
     (avg_diff / 30.0).min(1.0)
 }
 
@@ -395,7 +397,7 @@ fn calculate_sharpness(rgba: &[u8], width: u32, height: u32) -> f64 {
         return 0.0;
     }
 
-    let pixels = (width as usize) * (height as usize);
+    let pixels = crate::numeric_cast::u32_to_usize_sat(width) * crate::numeric_cast::u32_to_usize_sat(height);
     let step = if pixels > 1_000_000 {
         10
     } else if pixels > 100_000 {
@@ -408,7 +410,7 @@ fn calculate_sharpness(rgba: &[u8], width: u32, height: u32) -> f64 {
     let mut sample_count = 0usize;
 
     let get_gray = |x: usize, y: usize| -> i32 {
-        let idx = (y * width as usize + x) * 4;
+        let idx = (y * crate::numeric_cast::u32_to_usize_sat(width) + x) * 4;
         (i32::from(rgba[idx]) * 299
             + i32::from(rgba[idx + 1]) * 587
             + i32::from(rgba[idx + 2]) * 114)
@@ -433,12 +435,12 @@ fn calculate_sharpness(rgba: &[u8], width: u32, height: u32) -> f64 {
         return 0.0;
     }
 
-    let avg_laplacian = laplacian_sum / sample_count as f64;
+    let avg_laplacian = laplacian_sum / crate::numeric_cast::usize_to_f64(sample_count);
     (avg_laplacian / 100.0).min(1.0)
 }
 
 fn calculate_contrast(rgba: &[u8], width: u32, height: u32) -> f64 {
-    let pixels = (width as usize) * (height as usize);
+    let pixels = crate::numeric_cast::u32_to_usize_sat(width) * crate::numeric_cast::u32_to_usize_sat(height);
     let step = if pixels > 1_000_000 {
         20
     } else if pixels > 100_000 {
@@ -468,8 +470,8 @@ fn calculate_contrast(rgba: &[u8], width: u32, height: u32) -> f64 {
         return 0.0;
     }
 
-    let mean = sum as f64 / sample_count as f64;
-    let mean_sq = sq_sum as f64 / sample_count as f64;
+    let mean = crate::numeric_cast::u64_to_f64(sum) / crate::numeric_cast::usize_to_f64(sample_count);
+    let mean_sq = crate::numeric_cast::u64_to_f64(sq_sum) / crate::numeric_cast::usize_to_f64(sample_count);
     let variance = mean.mul_add(-mean, mean_sq);
     let std_dev = variance.sqrt();
 

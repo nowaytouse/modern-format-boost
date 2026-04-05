@@ -122,8 +122,8 @@ const fn pick_pix_fmt(probe: &crate::ffprobe::FFprobeResult) -> &'static str {
 /// Percentage change from input stream size (avoids div-by-zero / inf when input is 0).
 #[inline]
 fn stream_size_change_pct(output_size: u64, input_size: u64) -> f64 {
-    let denom = input_size.max(1) as f64;
-    (output_size as f64 / denom - 1.0) * 100.0
+    let denom = crate::numeric_cast::u64_to_f64(input_size.max(1));
+    (crate::numeric_cast::u64_to_f64(output_size) / denom - 1.0) * 100.0
 }
 
 /// Format the `QualityCheck` log line from result; used for logging and unit tests (regression: enhanced failure shows reason, not "total file not smaller").
@@ -210,7 +210,7 @@ pub fn explore_with_gpu_coarse_search(
     crate::verbose_eprintln!(
         "   Input: {} bytes ({:.2} MB)",
         input_size,
-        input_size as f64 / 1024.0 / 1024.0
+        crate::numeric_cast::u64_to_f64(input_size) / 1024.0 / 1024.0
     );
     crate::verbose_eprintln!();
     crate::verbose_eprintln!("STRATEGY: GPU Coarse → CPU Fine");
@@ -232,12 +232,12 @@ pub fn explore_with_gpu_coarse_search(
     };
     let duration: f32 = probe_result
         .as_ref()
-        .map_or(crate::gpu_accel::GPU_SAMPLE_DURATION, |p| p.duration as f32);
+        .map_or(crate::gpu_accel::GPU_SAMPLE_DURATION, |p| crate::numeric_cast::f64_to_f32_lossy(p.duration));
 
     // [New Logic] Bitrate-based GPU Start Condition
     // Low bitrate videos (animation/PPT < 5Mbps) don't benefit from GPU pre-scan
     let bitrate_bps = if duration > 0.0 {
-        (input_size as f64 * 8.0) / f64::from(duration)
+        (crate::numeric_cast::u64_to_f64(input_size) * 8.0) / f64::from(duration)
     } else {
         0.0
     };
@@ -299,7 +299,7 @@ pub fn explore_with_gpu_coarse_search(
             input_size
         } else {
             let ratio = sample_dur / duration;
-            (input_size as f64 * f64::from(ratio)) as u64
+            crate::numeric_cast::f64_to_u64_sat(crate::numeric_cast::u64_to_f64(input_size) * f64::from(ratio))
         };
 
         let gpu_step = if ultimate_mode { 0.5 } else { 2.0 };
@@ -389,7 +389,7 @@ pub fn explore_with_gpu_coarse_search(
                     };
 
                     if let Some(ceiling_crf) = gpu_result.quality_ceiling_crf {
-                        if ceiling_crf == gpu_crf {
+                        if (ceiling_crf - gpu_crf).abs() < 1e-6_f32 {
                             crate::verbose_eprintln!(
                                 "GPU Boundary = Quality Ceiling: CRF {:.2}",
                                 gpu_crf
@@ -1088,7 +1088,7 @@ pub fn explore_with_gpu_coarse_search(
             if in_sz == 0 {
                 "   SizeChange: N/A (zero input size)".to_string()
             } else {
-                let ratio = out_sz as f64 / in_sz as f64;
+                let ratio = crate::numeric_cast::u64_to_f64(out_sz) / crate::numeric_cast::u64_to_f64(in_sz);
                 let pct = (ratio - 1.0) * 100.0;
                 format!("   SizeChange: {ratio:.2}x ({pct:+.1}%) vs original")
             }
@@ -1485,7 +1485,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                 } else if let Some(val) = line.strip_prefix("speed=") {
                     last_speed = val.trim().to_string();
                 } else if line == "progress=continue" || line == "progress=end" {
-                    let current_secs = last_time_us as f64 / 1_000_000.0;
+                    let current_secs = crate::numeric_cast::i64_to_f64(last_time_us) / 1_000_000.0;
                     if duration_secs > 0.0 {
                         let pct = (current_secs / duration_secs * 100.0).min(100.0);
                         eprint!(
@@ -1724,7 +1724,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     })?;
     iterations += 1;
     let gpu_pct = if input_size > 0 {
-        (gpu_size as f64 / input_size as f64 - 1.0) * 100.0
+        (crate::numeric_cast::u64_to_f64(gpu_size) / crate::numeric_cast::u64_to_f64(input_size.max(1)) - 1.0) * 100.0
     } else {
         0.0
     };
@@ -1918,7 +1918,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         let search_floor = if ultimate_mode { 0.0 } else { min_crf };
 
         // Milestone tracking to ensure "integer stages" are visible in the terminal
-        let mut last_logged_int_crf = gpu_boundary_crf.floor() as i32;
+        let mut last_logged_int_crf = crate::numeric_cast::f32_to_i32_sat(gpu_boundary_crf.floor());
         crate::log_eprintln!(
             "{}💠 Entering CRF {}.x zone{}",
             BRIGHT_CYAN,
@@ -1928,7 +1928,7 @@ fn cpu_fine_tune_from_gpu_boundary(
 
         while iterations < max_iterations_for_video && test_crf >= search_floor {
             // Milestone logging check
-            let current_int_crf = test_crf.floor() as i32;
+            let current_int_crf = crate::numeric_cast::f32_to_i32_sat(test_crf.floor());
             if current_int_crf != last_logged_int_crf {
                 last_logged_int_crf = current_int_crf;
                 crate::log_eprintln!(
@@ -1976,7 +1976,7 @@ fn cpu_fine_tune_from_gpu_boundary(
             let size = encode_cached(test_crf, &mut size_cache)?;
             iterations += 1;
             let total_size_pct = if input_size > 0 {
-                (size as f64 / input_size as f64 - 1.0) * 100.0
+                (crate::numeric_cast::u64_to_f64(size) / crate::numeric_cast::u64_to_f64(input_size.max(1)) - 1.0) * 100.0
             } else {
                 0.0
             };
@@ -2206,10 +2206,10 @@ fn cpu_fine_tune_from_gpu_boundary(
             } else {
                 wall_hits += 1;
 
-                let _total_file_diff = crate::format_size_diff(size as i64 - input_size as i64);
+                let _total_file_diff = crate::format_size_diff(i64::try_from(size).unwrap_or(0) - i64::try_from(input_size).unwrap_or(0));
 
                 // Calculate new_step first for phase_info
-                let curve_step = initial_step * DECAY_FACTOR.powi(wall_hits as i32);
+                let curve_step = initial_step * DECAY_FACTOR.powi(i32::try_from(wall_hits).unwrap_or(0));
                 let new_step = if curve_step < 1.0 {
                     MIN_STEP
                 } else {
@@ -2375,7 +2375,7 @@ fn cpu_fine_tune_from_gpu_boundary(
             iterations += 1;
 
             let ceiling_pct = if input_size > 0 {
-                (ceiling_size as f64 / input_size as f64 - 1.0) * 100.0
+                (crate::numeric_cast::u64_to_f64(ceiling_size) / crate::numeric_cast::u64_to_f64(input_size.max(1)) - 1.0) * 100.0
             } else {
                 0.0
             };
@@ -2426,7 +2426,7 @@ fn cpu_fine_tune_from_gpu_boundary(
             feedback.upward_iteration_count += 1;
 
             let total_size_pct = if input_size > 0 {
-                (size as f64 / input_size as f64 - 1.0) * 100.0
+                (crate::numeric_cast::u64_to_f64(size) / crate::numeric_cast::u64_to_f64(input_size.max(1)) - 1.0) * 100.0
             } else {
                 0.0
             };
@@ -2731,7 +2731,7 @@ fn cpu_fine_tune_from_gpu_boundary(
             let compress_point = best_crf.unwrap_or(gpu_boundary_crf);
             let mut current_step = PHASE3_DOWNWARD_STEP;
             let mut last_size_pct = if input_size > 0 {
-                (best_size.unwrap_or(input_size) as f64 / input_size as f64 - 1.0) * 100.0
+                (crate::numeric_cast::u64_to_f64(best_size.unwrap_or(input_size)) / crate::numeric_cast::u64_to_f64(input_size.max(1)) - 1.0) * 100.0
             } else {
                 0.0
             };
@@ -2753,7 +2753,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                 let size = encode_cached(test_crf, &mut size_cache)?;
                 iterations += 1;
                 let total_size_pct = if input_size > 0 {
-                    (size as f64 / input_size as f64 - 1.0) * 100.0
+                    (crate::numeric_cast::u64_to_f64(size) / crate::numeric_cast::u64_to_f64(input_size.max(1)) - 1.0) * 100.0
                 } else {
                     0.0
                 };
@@ -3067,7 +3067,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     if ultimate_mode && !early_insight_triggered {
         if let Some(best) = best_crf {
             // Only refine if we actually have a compressed result (or within 1% tolerance)
-            let current_ratio = best_size.unwrap_or(u64::MAX) as f64 / input_size as f64;
+            let current_ratio = crate::numeric_cast::u64_to_f64(best_size.unwrap_or(u64::MAX)) / crate::numeric_cast::u64_to_f64(input_size.max(1));
             if best < max_crf && current_ratio < 1.01 {
                 crate::log_eprintln!();
                 crate::log_eprintln!(
@@ -3093,7 +3093,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                 let mut test_crf = best - current_step;
                 let mut fine_failures = 0;
                 let mut last_size_pct = if input_size > 0 {
-                    (best_size.unwrap_or(input_size) as f64 / input_size as f64 - 1.0) * 100.0
+                    (crate::numeric_cast::u64_to_f64(best_size.unwrap_or(input_size)) / crate::numeric_cast::u64_to_f64(input_size.max(1)) - 1.0) * 100.0
                 } else {
                     0.0
                 };
@@ -3122,7 +3122,7 @@ fn cpu_fine_tune_from_gpu_boundary(
 
                     let is_effectively_compressed = size < input_size;
                     let total_size_pct = if input_size > 0 {
-                        (size as f64 / input_size as f64 - 1.0) * 100.0
+                        (crate::numeric_cast::u64_to_f64(size) / crate::numeric_cast::u64_to_f64(input_size.max(1)) - 1.0) * 100.0
                     } else {
                         0.0
                     };
@@ -3294,7 +3294,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                         if let Ok(size) = encode_cached(0.0, &mut size_cache) {
                             iterations += 1;
                             let total_size_pct = if input_size > 0 {
-                                (size as f64 / input_size as f64 - 1.0) * 100.0
+                                (crate::numeric_cast::u64_to_f64(size) / crate::numeric_cast::u64_to_f64(input_size.max(1)) - 1.0) * 100.0
                             } else {
                                 0.0
                             };
@@ -3355,7 +3355,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                     "{}❌ Best tested CRF {:.2} yielded larger file (+{:+.1}%){}",
                     BRIGHT_RED,
                     crf,
-                    (size as f64 / input_size as f64 - 1.0) * 100.0,
+                    (crate::numeric_cast::u64_to_f64(size) / crate::numeric_cast::u64_to_f64(input_size.max(1)) - 1.0) * 100.0,
                     RESET
                 );
             }
@@ -3395,7 +3395,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         "Final: CRF {:.2} | Size: {} bytes ({:.2} MB)",
         final_crf,
         final_full_size,
-        final_full_size as f64 / 1024.0 / 1024.0
+        crate::numeric_cast::u64_to_f64(final_full_size) / 1024.0 / 1024.0
     );
 
     let ssim = if input_is_animated_image_like && final_crf == 0.0 {
@@ -3436,7 +3436,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     let size_change_pct = if input_size == 0 {
         0.0
     } else {
-        (final_full_size as f64 / input_size as f64 - 1.0) * 100.0
+        (crate::numeric_cast::u64_to_f64(final_full_size) / crate::numeric_cast::u64_to_f64(input_size.max(1)) - 1.0) * 100.0
     };
 
     // User-relevant success: total file smaller (with 1MB tolerance if allowed) and quality met
@@ -3457,7 +3457,7 @@ fn cpu_fine_tune_from_gpu_boundary(
 
     let target = compression_target_size(input_size);
     let margin_safety = if target > 0 && final_full_size < target {
-        let margin = (target - final_full_size) as f64 / target as f64;
+        let margin = crate::numeric_cast::u64_to_f64(target.saturating_sub(final_full_size)) / crate::numeric_cast::u64_to_f64(target.max(1));
         (margin / 0.05).min(1.0)
     } else {
         0.0
@@ -3513,7 +3513,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     let output_stream_info = crate::stream_size::extract_stream_sizes(output);
     let input_stream_info = crate::stream_size::extract_stream_sizes(input);
     let video_stream_pct = if input_stream_info.video_stream_size > 0 {
-        (output_stream_info.video_stream_size as f64 / input_stream_info.video_stream_size as f64
+        (crate::numeric_cast::u64_to_f64(output_stream_info.video_stream_size) / crate::numeric_cast::u64_to_f64(input_stream_info.video_stream_size.max(1))
             - 1.0)
             * 100.0
     } else {
@@ -3555,7 +3555,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     let total_file_pct = if input_size == 0 {
         0.0
     } else {
-        (final_full_size as f64 / input_size as f64 - 1.0) * 100.0
+        (crate::numeric_cast::u64_to_f64(final_full_size) / crate::numeric_cast::u64_to_f64(input_size.max(1)) - 1.0) * 100.0
     };
     if output_stream_info.is_overhead_excessive() {
         crate::log_eprintln!(
@@ -3641,6 +3641,7 @@ pub fn explore_hevc_with_gpu_coarse(
 ///
 /// # Errors
 /// Returns an error if exploration fails.
+#[allow(clippy::too_many_arguments)]
 pub fn explore_hevc_with_gpu_coarse_ultimate_warm_start(
     input: &Path,
     output: &Path,
@@ -3757,6 +3758,7 @@ pub fn explore_hevc_with_gpu_coarse_full_warm_start(
 ///
 /// # Errors
 /// Returns an error if exploration fails.
+#[allow(clippy::too_many_arguments)]
 pub fn explore_hevc_with_gpu_coarse_full(
     input: &Path,
     output: &Path,
@@ -3890,6 +3892,7 @@ pub fn explore_av1_with_gpu_coarse_ultimate(
 ///
 /// # Errors
 /// Returns an error if exploration fails.
+#[allow(clippy::too_many_arguments)]
 pub fn explore_av1_with_gpu_coarse_full_warm_start(
     input: &Path,
     output: &Path,
@@ -3935,6 +3938,7 @@ pub fn explore_av1_with_gpu_coarse_full_warm_start(
 ///
 /// # Errors
 /// Returns an error if exploration fails.
+#[allow(clippy::too_many_arguments)]
 pub fn explore_av1_with_gpu_coarse_full(
     input: &Path,
     output: &Path,

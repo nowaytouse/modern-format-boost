@@ -181,7 +181,7 @@ fn parse_fps_from_stream(stream: &serde_json::Value) -> Option<f64> {
 /// If fps looks like `time_base` (e.g. 90000) rather than real FPS, derive from `frame_count/duration`.
 fn fps_sanitise_for_validation(fps: f64, duration: f64, frame_count: u64) -> f64 {
     if fps > FPS_THRESHOLD_INVALID && frame_count > 0 && duration >= 0.001 {
-        let inferred = frame_count as f64 / duration;
+        let inferred = crate::numeric_cast::u64_to_f64(frame_count) / duration;
         if inferred > 0.0 && inferred <= FPS_THRESHOLD_INVALID {
             return inferred;
         }
@@ -233,7 +233,7 @@ fn parse_duration_from_precheck_json(
 
     warn!("DURATION: format.duration failed, trying frame_count/fps");
     if frame_count > 0 && fps > 0.0 && !fps.is_nan() {
-        let duration = frame_count as f64 / fps;
+        let duration = crate::numeric_cast::u64_to_f64(frame_count) / fps;
         if duration > 0.0 {
             info!(duration_secs = %duration, frames = frame_count, fps = %fps, "DURATION RECOVERED via frame_count/fps");
             return Ok((duration, fps, frame_count));
@@ -245,7 +245,7 @@ fn parse_duration_from_precheck_json(
         crate::image_analyzer::get_animation_duration_and_frames_imagemagick(input)
     {
         if duration_secs > 0.0 && frames > 0 {
-            let inferred_fps = frames as f64 / duration_secs;
+            let inferred_fps = crate::numeric_cast::u64_to_f64(frames) / duration_secs;
             info!(duration_secs = %duration_secs, frames, fps = %inferred_fps, "DURATION RECOVERED via ImageMagick");
             return Ok((duration_secs, inferred_fps, frames));
         }
@@ -282,7 +282,7 @@ fn bpp_from_precheck_json(json: &serde_json::Value, file_size: u64, input: &Path
         parse_duration_from_precheck_json(json, fps, frame_count_raw, input)?;
     let fps = fps_sanitise_for_validation(fps, duration, frame_count_raw);
     let frame_count = if frame_count_raw == 0 && duration > 0.0 {
-        (duration * fps) as u64
+        crate::numeric_cast::f64_to_u64_sat(duration * fps)
     } else {
         frame_count_raw.max(1)
     };
@@ -290,7 +290,7 @@ fn bpp_from_precheck_json(json: &serde_json::Value, file_size: u64, input: &Path
         .as_str()
         .and_then(|s| s.parse::<u64>().ok())
         .filter(|&br| br > 0)
-        .map_or(0, |br| (br as f64 * duration / 8.0) as u64);
+        .map_or(0, |br| crate::numeric_cast::f64_to_u64_sat(crate::numeric_cast::u64_to_f64(br) * duration / 8.0));
     let bytes_for_bpp = if video_bytes > 0 {
         video_bytes
     } else {
@@ -298,7 +298,7 @@ fn bpp_from_precheck_json(json: &serde_json::Value, file_size: u64, input: &Path
     };
     let total_pixels = u64::from(width) * u64::from(height) * frame_count;
     if total_pixels > 0 {
-        Ok((bytes_for_bpp as f64 * 8.0) / total_pixels as f64)
+        Ok((crate::numeric_cast::u64_to_f64(bytes_for_bpp) * 8.0) / crate::numeric_cast::u64_to_f64(total_pixels.max(1)))
     } else {
         bail!("Total pixels is 0, cannot calculate BPP")
     }
@@ -368,7 +368,7 @@ pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'s
 
     warn!("DURATION: format.duration failed, trying frame_count/fps");
     if frame_count > 0 && fps > 0.0 && !fps.is_nan() && fps <= FPS_THRESHOLD_INVALID {
-        let duration = frame_count as f64 / fps;
+        let duration = crate::numeric_cast::u64_to_f64(frame_count) / fps;
         if duration > 0.0 {
             info!(duration_secs = %duration, frames = frame_count, fps = %fps, "DURATION RECOVERED via frame_count/fps");
             return Ok((duration, fps, frame_count, "frame_count/fps"));
@@ -380,7 +380,7 @@ pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'s
         crate::image_analyzer::get_animation_duration_and_frames_imagemagick(input)
     {
         if duration_secs > 0.0 && frames > 0 {
-            let inferred_fps = frames as f64 / duration_secs;
+            let inferred_fps = crate::numeric_cast::u64_to_f64(frames) / duration_secs;
             info!(duration_secs = %duration_secs, frames, fps = %inferred_fps, "DURATION RECOVERED via ImageMagick");
             return Ok((duration_secs, inferred_fps, frames, "imagemagick"));
         }
@@ -444,7 +444,7 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
         parse_duration_from_precheck_json(&json, fps, frame_count_raw, input)?;
     let fps = fps_sanitise_for_validation(fps, duration, frame_count_raw);
     let frame_count = if frame_count_raw == 0 && duration > 0.0 {
-        (duration * fps) as u64
+        crate::numeric_cast::f64_to_u64_sat(duration * fps)
     } else {
         frame_count_raw.max(1)
     };
@@ -455,7 +455,7 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
         .map_or_else(
             || {
                 if duration > 0.0 {
-                    (file_size as f64 * 8.0) / (duration * 1000.0)
+                    (crate::numeric_cast::u64_to_f64(file_size) * 8.0) / (duration * 1000.0)
                 } else {
                     0.0
                 }
@@ -467,7 +467,7 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
         .as_str()
         .and_then(|s| s.parse::<u64>().ok())
         .filter(|&br| br > 0)
-        .map_or(0, |br| (br as f64 * duration / 8.0) as u64);
+        .map_or(0, |br| crate::numeric_cast::f64_to_u64_sat(crate::numeric_cast::u64_to_f64(br) * duration / 8.0));
     let bytes_for_bpp = if video_bytes > 0 {
         video_bytes
     } else {
@@ -475,7 +475,7 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
     };
     let total_pixels = u64::from(width) * u64::from(height) * frame_count;
     let bpp = if total_pixels > 0 {
-        (bytes_for_bpp as f64 * 8.0) / total_pixels as f64
+        (crate::numeric_cast::u64_to_f64(bytes_for_bpp) * 8.0) / crate::numeric_cast::u64_to_f64(total_pixels.max(1))
     } else {
         bail!("Total pixels is 0, cannot calculate BPP");
     };
@@ -639,7 +639,7 @@ fn evaluate_processing_recommendation(
     let source_codec = parse_source_codec(codec);
     let codec_efficiency = source_codec.efficiency_factor();
 
-    let resolution_factor = f64::from(width * height) / (1920.0 * 1080.0);
+    let resolution_factor = (f64::from(width) * f64::from(height)) / (1920.0 * 1080.0);
     let fps_factor = fps / 30.0;
 
     let base_bitrate_1080p30_h264 = 2500.0;
@@ -714,7 +714,7 @@ pub fn print_precheck_report(info: &VideoInfo) {
     ));
     lines.push(format!(
         "│ File Size: {:.2} MB",
-        info.file_size as f64 / 1024.0 / 1024.0
+        crate::numeric_cast::u64_to_f64(info.file_size) / 1024.0 / 1024.0
     ));
     lines.push(format!("│ Bitrate: {:.0} kbps", info.bitrate_kbps));
     lines.push(format!("│ BPP: {:.4} bits/pixel", info.bpp));

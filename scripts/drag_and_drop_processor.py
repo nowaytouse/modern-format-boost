@@ -13,10 +13,13 @@ import threading
 import datetime
 import pty
 from pathlib import Path
- 
+
+
 class ReturnToHomeException(Exception):
     """Custom exception to trigger a return to the main selection menu."""
+
     pass
+
 
 try:
     import psutil
@@ -67,6 +70,7 @@ def get_mfb_state_root() -> Path:
     if os.environ.get("FROM_APP"):
         return PROJECT_ROOT / ".cache" / "mfb_runtime"
     return Path.home() / ".modern_format_boost"
+
 
 # MFB Ghost Mode - Isolated Temporary Directory
 # This prevents folder mtime updates by redirecting all intermediate IO away from source folders
@@ -597,9 +601,7 @@ def select_mode():
                         break  # Exit select_mode and start processing
                     else:
                         OUTPUT_MODE = "inplace"
-                        print(
-                            f"\n{RED}WARNING: IN-PLACE OPTIMIZATION SELECTED{RESET}"
-                        )
+                        print(f"\n{RED}WARNING: IN-PLACE OPTIMIZATION SELECTED{RESET}")
                         print(
                             f"{BOLD}{WHITE}   Original files will be replaced after successful conversion.{RESET}"
                         )
@@ -1207,17 +1209,17 @@ def main():
     while True:
         try:
             select_mode()
- 
+
             # Mutex logic: Only enforce exclusive locking if we are modifying original files (In-Place)
             if OUTPUT_MODE == "in_place":
                 acquire_global_lock(str(TARGET_DIR))
- 
+
             count_files()
- 
+
             if IMG_COUNT > 0 or VID_COUNT > 0:
                 check_path = OUTPUT_DIR if OUTPUT_MODE == "adjacent" else TARGET_DIR
                 check_system_resources(check_path)
-            
+
             # If we reach here, we proceed to process
             break
         except ReturnToHomeException:

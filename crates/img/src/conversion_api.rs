@@ -360,7 +360,10 @@ fn convert_to_jxl(
     .child_threads;
 
     let mut builder = shared_utils::CjxlBuilder::new();
-    builder.input(&input_abs).output(&output_abs).threads(max_threads as usize);
+    builder
+        .input(&input_abs)
+        .output(&output_abs)
+        .threads(max_threads as usize);
 
     if *format == DetectedFormat::JPEG {
         builder.lossless_jpeg(true);
@@ -441,10 +444,8 @@ fn convert_to_avif(
     let output_abs = resolve_output_absolute(output);
 
     let mut builder = shared_utils::AvifencBuilder::new();
-    builder
-        .input(&input_abs)
-        .output(&output_abs);
-    
+    builder.input(&input_abs).output(&output_abs);
+
     if let Ok(q) = q.parse::<u8>() {
         builder.quality(q, q);
     }

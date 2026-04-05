@@ -86,18 +86,18 @@ pub mod tiff {
         let mut ifd_count = 0u32;
         while ifd_offset != 0 && ifd_count < 100 {
             ifd_count += 1;
-            let ifd_pos = ifd_offset as usize;
+            let ifd_pos = usize::try_from(ifd_offset).unwrap_or(usize::MAX);
             let (num_entries, entries_start, entry_size, next_offset_pos) = if is_bigtiff {
                 if ifd_pos + 8 > data.len() {
                     break;
                 }
-                let n = read_u64(ifd_pos) as usize;
+                let n = usize::try_from(read_u64(ifd_pos)).unwrap_or(usize::MAX);
                 (n, ifd_pos + 8, 20usize, ifd_pos + 8 + n * 20)
             } else {
                 if ifd_pos + 2 > data.len() {
                     break;
                 }
-                let n = read_u16(ifd_pos) as usize;
+                let n = usize::from(read_u16(ifd_pos));
                 (n, ifd_pos + 2, 12usize, ifd_pos + 2 + n * 12)
             };
 
@@ -229,9 +229,7 @@ pub mod webp {
 
         while pos + 8 <= data.len() {
             let chunk_id = &data[pos..pos + 4];
-            let chunk_size =
-                u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]])
-                    as usize;
+            let chunk_size = usize::try_from(u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]])).unwrap_or(usize::MAX);
             let payload_start = pos + 8;
             let payload_end = (payload_start + chunk_size).min(data.len());
 
@@ -286,7 +284,7 @@ pub mod webp {
             let chunk_id = &data[pos..pos + 4];
             let chunk_size =
                 u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]])
-                    as usize;
+                    as usize; // TODO: manual fix needed for multi-line
             let payload_start = pos + 8;
             let payload_end = (payload_start + chunk_size).min(data.len());
 
@@ -294,7 +292,7 @@ pub mod webp {
                 let vp8_data = &data[payload_start..payload_end];
                 if vp8_data.len() >= 10 && vp8_data[3..6] == [0x9D, 0x01, 0x2A] {
                     let y_ac_qi = vp8_data[10] & 0x7F;
-                    let quality = (u32::from(127 - y_ac_qi) * 100 / 127).min(100) as u8;
+                    let quality = crate::numeric_cast::u32_to_u8_sat((u32::from(127 - y_ac_qi) * 100).checked_div(127).unwrap_or(0).min(100));
                     return Ok(quality);
                 }
             }
@@ -328,7 +326,7 @@ pub mod webp {
 
     #[must_use]
     pub fn count_frames_from_bytes(data: &[u8]) -> u32 {
-        let count = data.windows(4).filter(|w| *w == b"ANMF").count() as u32;
+        let count = crate::numeric_cast::usize_to_u32_sat(data.windows(4).filter(|w| *w == b"ANMF").count()); // Marker
         count.max(1)
     }
 
@@ -344,13 +342,11 @@ pub mod webp {
         if !data.windows(4).any(|w| w == b"ANIM") {
             return None;
         }
-        let mut pos = 12u32 as usize;
+        let mut pos = 12usize; // TODO: manual fix needed for multi-line
         let mut total_ms = 0u64;
         while pos + 8 <= data.len() {
             let chunk_id = &data[pos..pos + 4];
-            let chunk_size =
-                u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]])
-                    as usize;
+            let chunk_size = usize::try_from(u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]])).unwrap_or(usize::MAX);
             let payload_start = pos + 8;
             let payload_end = (payload_start + chunk_size).min(data.len());
             if chunk_id == b"ANMF" && payload_end >= payload_start + 20 {
@@ -368,7 +364,7 @@ pub mod webp {
         if total_ms == 0 {
             return None;
         }
-        Some((total_ms as f32) / 1000.0)
+        Some(crate::numeric_cast::f64_to_f32_lossy(crate::numeric_cast::u64_to_f64(total_ms) / 1000.0))
     }
 
     #[must_use]
@@ -439,7 +435,7 @@ pub mod gif {
 
                     // Skip Image Data sub-blocks
                     while pos < data.len() {
-                        let block_size = data[pos] as usize;
+                        let block_size = usize::from(data[pos]); // TODO: manual fix needed for multi-line
                         pos += 1;
                         if block_size == 0 {
                             break;
@@ -464,7 +460,7 @@ pub mod gif {
                     pos += 2;
                     // Skip Extension Data blocks
                     while pos < data.len() {
-                        let block_size = data[pos] as usize;
+                        let block_size = usize::from(data[pos]); // TODO: manual fix needed for multi-line
                         pos += 1;
                         if block_size == 0 {
                             break;
@@ -505,7 +501,7 @@ pub mod gif {
     #[must_use]
     pub fn get_frame_count(path: &Path) -> usize {
         fs::read(path)
-            .map(|b| count_frames_from_bytes(&b) as usize)
+            .map(|b| usize::try_from(count_frames_from_bytes(&b)).unwrap_or(0))
             .unwrap_or(0)
     }
 }
@@ -578,7 +574,7 @@ pub mod avif {
                 if is_444 {
                     if let Some(pixi_data) = find_box_data_recursive(data, *b"pixi") {
                         if !pixi_data.is_empty() {
-                            let num_ch = pixi_data[0] as usize;
+                            let num_ch = usize::from(pixi_data[0]); // TODO: manual fix needed for multi-line
                             if num_ch > 0 && pixi_data.len() > num_ch {
                                 let max_depth =
                                     pixi_data[1..=num_ch].iter().copied().max().unwrap_or(0);
@@ -704,7 +700,7 @@ pub mod jxl {
             self.read_bits(1).map(|v| v == 1)
         }
         fn read_u32(&mut self, dists: [(u32, u8); 4]) -> Option<u32> {
-            let sel = self.read_bits(2)? as usize;
+            let sel = crate::numeric_cast::u32_to_usize_sat(self.read_bits(2)?);
             let (base, extra_bits) = dists[sel];
             let extra = self.read_bits(extra_bits)?;
             Some(base + extra)

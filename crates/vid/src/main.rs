@@ -152,6 +152,12 @@ fn main() -> anyhow::Result<()> {
             no_resume,
             codec,
         } => {
+            // Fail-fast if critical sub-tools are missing
+            if let Err(e) = shared_utils::tools::require_tools(&["ffmpeg", "ffprobe", "exiftool"]) {
+                shared_utils::log_eprintln!("{e}");
+                std::process::exit(1);
+            }
+
             let apple_compat = apple_compat && !no_apple_compat;
             let allow_size_tolerance = allow_size_tolerance && !no_allow_size_tolerance;
             let resume = resume && !no_resume;
@@ -319,7 +325,11 @@ fn main() -> anyhow::Result<()> {
                 std::process::exit(1);
             }
             if let Some(lbl) = &label {
-                println!("📥 Ingesting GIF samples with label '{}' from: {}", lbl, input.display());
+                println!(
+                    "📥 Ingesting GIF samples with label '{}' from: {}",
+                    lbl,
+                    input.display()
+                );
             } else {
                 println!("📥 Ingesting GIF samples from: {}", input.display());
             }
@@ -339,25 +349,44 @@ fn main() -> anyhow::Result<()> {
             match shared_utils::database::check_database_health() {
                 Ok(report) => {
                     emit_stderr("\n🐘 [DATABASE HEALTH REPORT]");
-                    emit_stderr(&format!("   - Connection: {}", if report.connected { "✅ Connected" } else { "❌ Failed" }));
+                    emit_stderr(&format!(
+                        "   - Connection: {}",
+                        if report.connected {
+                            "✅ Connected"
+                        } else {
+                            "❌ Failed"
+                        }
+                    ));
                     emit_stderr(&format!("   - PG Version: {}", report.pg_version));
-                    emit_stderr(&format!("   - pgvector Status: {}", if report.has_vector_extension { format!("✅ Installed ({})", report.vector_extension_version.unwrap_or_default()) } else { "❌ Missing".to_string() }));
+                    emit_stderr(&format!(
+                        "   - pgvector Status: {}",
+                        if report.has_vector_extension {
+                            format!(
+                                "✅ Installed ({})",
+                                report.vector_extension_version.unwrap_or_default()
+                            )
+                        } else {
+                            "❌ Missing".to_string()
+                        }
+                    ));
                     emit_stderr(&format!("   - Maturity: {}", report.maturity_status));
-                    
+
                     emit_stderr("\n📊 [Table Statistics]");
                     let mut tables: Vec<_> = report.table_counts.iter().collect();
                     tables.sort_by_key(|(name, _)| *name);
                     for (name, count) in tables {
-                        emit_stderr(&format!("   - {:<20}: {:>8} records", name, count));
+                        emit_stderr(&format!("   - {name:<20}: {count:>8} records"));
                     }
 
                     if report.corruption_found {
                         emit_stderr("\n⚠️  [INTEGRITY WARNINGS]");
                         for detail in report.corruption_details {
-                            emit_stderr(&format!("   {}", detail));
+                            emit_stderr(&format!("   {detail}"));
                         }
                     } else {
-                        emit_stderr("\n✅ [Integrity]: No NaN/Inf corruption found in feature vectors.");
+                        emit_stderr(
+                            "\n✅ [Integrity]: No NaN/Inf corruption found in feature vectors.",
+                        );
                     }
                 }
                 Err(e) => {

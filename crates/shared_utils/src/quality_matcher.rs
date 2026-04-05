@@ -145,12 +145,7 @@ impl SourceCodec {
     pub const fn can_be_animated(&self) -> bool {
         matches!(
             self,
-            Self::Gif
-                | Self::Apng
-                | Self::WebpAnimated
-                | Self::Avif
-                | Self::Heic
-                | Self::JpegXl
+            Self::Gif | Self::Apng | Self::WebpAnimated | Self::Avif | Self::Heic | Self::JpegXl
         )
     }
 
@@ -229,19 +224,30 @@ impl SourceCodec {
     #[must_use]
     pub const fn default_extension(&self) -> &'static str {
         match self {
-            Self::H264 | Self::H265 | Self::Vvc | Self::Vp8 | Self::Vp9 | Self::Av1 | Self::Av2 | Self::Mpeg4 => "mp4",
+            Self::H264
+            | Self::H265
+            | Self::Vvc
+            | Self::Vp8
+            | Self::Vp9
+            | Self::Av1
+            | Self::Av2
+            | Self::Mpeg4 => "mp4",
             Self::Mpeg2 | Self::Mpeg1 => "mpg",
             Self::Wmv => "wmv",
             Self::Theora => "ogv",
             Self::RealVideo => "rm",
             Self::FlashVideo => "flv",
             Self::ProRes | Self::DnxHD => "mov",
-            Self::Mjpeg => "jpg",
-            Self::Ffv1 | Self::UtVideo | Self::HuffYuv | Self::RawVideo | Self::Lagarith | Self::MagicYuv => "mkv",
+            Self::Ffv1
+            | Self::UtVideo
+            | Self::HuffYuv
+            | Self::RawVideo
+            | Self::Lagarith
+            | Self::MagicYuv => "mkv",
             Self::Gif => "gif",
             Self::Apng => "apng",
             Self::WebpAnimated | Self::WebpStatic => "webp",
-            Self::Jpeg => "jpg",
+            Self::Mjpeg | Self::Jpeg => "jpg",
             Self::JpegXl => "jxl",
             Self::Png => "png",
             Self::Avif => "avif",
@@ -257,10 +263,19 @@ impl SourceCodec {
     pub fn is_extension_compatible(&self, ext: &str) -> bool {
         let ext = ext.to_lowercase();
         match self {
-            Self::H264 | Self::H265 | Self::Vvc | Self::Vp8 | Self::Vp9 | Self::Av1 | Self::Av2 | Self::Mpeg4 => {
+            Self::H264
+            | Self::H265
+            | Self::Vvc
+            | Self::Vp8
+            | Self::Vp9
+            | Self::Av1
+            | Self::Av2
+            | Self::Mpeg4 => {
                 matches!(ext.as_str(), "mp4" | "m4v" | "mov" | "avi" | "mkv" | "webm")
             }
-            Self::Mpeg2 | Self::Mpeg1 => matches!(ext.as_str(), "mpg" | "mpeg" | "ts" | "mts" | "m2ts" | "m2v"),
+            Self::Mpeg2 | Self::Mpeg1 => {
+                matches!(ext.as_str(), "mpg" | "mpeg" | "ts" | "mts" | "m2ts" | "m2v")
+            }
             Self::Wmv => matches!(ext.as_str(), "wmv" | "asf"),
             Self::Jpeg | Self::Mjpeg => matches!(ext.as_str(), "jpg" | "jpeg" | "jpe" | "jfif"),
             Self::Png => ext == "png",
@@ -316,21 +331,27 @@ impl SourceCodec {
             return Some(Self::Bmp);
         }
         // TIFF: II* (LE) or MM* (BE)
-        if header.starts_with(&[0x49, 0x49, 0x2A, 0x00]) || header.starts_with(&[0x4D, 0x4D, 0x00, 0x2A]) {
+        if header.starts_with(&[0x49, 0x49, 0x2A, 0x00])
+            || header.starts_with(&[0x4D, 0x4D, 0x00, 0x2A])
+        {
             return Some(Self::Tiff);
         }
         // JPEG-XL: [FF 0A] or Container [00 00 00 0C 4A 58 4C 20 0D 0A 87 0A]
-        if header.starts_with(&[0xFF, 0x0A]) || (header.len() >= 12 && &header[..12] == &[0x00, 0x00, 0x00, 0x0C, 0x4A, 0x58, 0x4C, 0x20, 0x0D, 0x0A, 0x87, 0x0A]) {
+        if header.starts_with(&[0xFF, 0x0A])
+            || header.starts_with(&[
+                0x00, 0x00, 0x00, 0x0C, 0x4A, 0x58, 0x4C, 0x20, 0x0D, 0x0A, 0x87, 0x0A,
+            ])
+        {
             return Some(Self::JpegXl);
         }
 
         // 2. RIFF Containers (WebP, AVI)
-        if header.len() >= 12 && &header[..4] == b"RIFF" {
+        if header.starts_with(b"RIFF") {
             let brand = &header[8..12];
             if brand == b"WEBP" {
                 // Determine if animated requires deeper probe, but for identification WebpStatic/Animated is fine
                 // Here we return WebpStatic as the base type.
-                return Some(Self::WebpStatic); 
+                return Some(Self::WebpStatic);
             }
             if brand == b"AVI " {
                 return Some(Self::Mpeg4); // AVI often contains MPEG4 variants
@@ -342,10 +363,12 @@ impl SourceCodec {
         if header.len() >= 12 && &header[4..8] == b"ftyp" {
             let brand = &header[8..12];
             match brand {
-                b"heic" | b"heix" | b"heim" | b"heis" | b"mif1" | b"msf1" => return Some(Self::Heic),
+                b"heic" | b"heix" | b"heim" | b"heis" | b"mif1" | b"msf1" => {
+                    return Some(Self::Heic)
+                }
                 b"avif" | b"avis" => return Some(Self::Avif),
                 b"mp41" | b"mp42" | b"isom" | b"iso2" => return Some(Self::H264), // Assuming H264 for MP4 container logic
-                b"qt  " => return Some(Self::H264), // QuickTime
+                b"qt  " => return Some(Self::H264),                               // QuickTime
                 _ => return Some(Self::H264), // Differentiate via ffprobe later
             }
         }
@@ -626,7 +649,7 @@ pub fn calculate_av1_crf_with_options(
 
     let crf_rounded = (crf_with_bias * 2.0).round() / 2.0;
     // Last line of defense: guarantee CRF in valid range regardless of extreme BPP or content/bias.
-    let crf = (crf_rounded as f32).clamp(AV1_CRF_CLAMP_MIN, AV1_CRF_CLAMP_MAX);
+    let crf = (crate::numeric_cast::f64_to_f32_lossy(f64::from(crf_rounded))).clamp(AV1_CRF_CLAMP_MIN, AV1_CRF_CLAMP_MAX);
 
     Ok(MatchedQuality {
         crf,
@@ -695,7 +718,7 @@ pub fn calculate_hevc_crf_with_options(
     };
 
     let crf_rounded = (crf_with_bias * 2.0).round() / 2.0;
-    let crf = (crf_rounded as f32).clamp(HEVC_CRF_CLAMP_MIN, HEVC_CRF_CLAMP_MAX);
+    let crf = (crate::numeric_cast::f64_to_f32_lossy(f64::from(crf_rounded))).clamp(HEVC_CRF_CLAMP_MIN, HEVC_CRF_CLAMP_MAX);
 
     Ok(MatchedQuality {
         crf,
@@ -765,7 +788,7 @@ pub fn calculate_jxl_distance_with_options(
     let estimated_quality = 15.0f64.mul_add((effective_bpp * 5.0).max(0.001).log2(), 70.0);
 
     let clamped_quality = estimated_quality.clamp(50.0, 100.0);
-    let base_distance = ((100.0 - clamped_quality) / 10.0) as f32;
+    let base_distance = crate::numeric_cast::f64_to_f32_lossy((100.0 - clamped_quality) / 10.0);
 
     let content_adj = f32::from(details.content_type_adjustment) * 0.1;
     let distance_with_content = base_distance - content_adj;
@@ -901,8 +924,8 @@ fn calculate_raw_bpp(analysis: &QualityAnalysis, pixels: u64) -> Result<f64, Str
         if video_bitrate > 0 {
             if let Some(fps) = analysis.fps {
                 if fps > 0.0 {
-                    let bits_per_frame = video_bitrate as f64 / fps;
-                    return Ok(bits_per_frame / pixels as f64);
+                    let bits_per_frame = f64::from(u32::try_from(video_bitrate).unwrap_or(u32::MAX)) / fps;
+                    return Ok(bits_per_frame / f64::from(u32::try_from(pixels).unwrap_or(1)));
                 }
             }
         }
@@ -914,12 +937,12 @@ fn calculate_raw_bpp(analysis: &QualityAnalysis, pixels: u64) -> Result<f64, Str
                 let fps = analysis
                     .fps
                     .ok_or_else(|| "Missing FPS for BPP calculation".to_string())?;
-                let total_frames = (duration * fps) as u64;
-                let bits_per_frame = (analysis.file_size * 8) as f64 / total_frames.max(1) as f64;
-                return Ok(bits_per_frame / pixels as f64);
+                let total_frames = crate::numeric_cast::f64_to_u64_sat(duration * fps);
+                let bits_per_frame = f64::from(u32::try_from(analysis.file_size * 8).unwrap_or(u32::MAX)) / f64::from(u32::try_from(total_frames.max(1)).unwrap_or(1));
+                return Ok(bits_per_frame / f64::from(u32::try_from(pixels).unwrap_or(1)));
             }
         }
-        return Ok(analysis.file_size as f64 / pixels as f64);
+        return Ok(f64::from(u32::try_from(analysis.file_size).unwrap_or(u32::MAX)) / f64::from(u32::try_from(pixels).unwrap_or(1)));
     }
 
     Err("❌ Cannot calculate bpp: no video_bitrate, file_size, or bpp provided".to_string())
@@ -1010,7 +1033,7 @@ fn calculate_codec_efficiency(codec: SourceCodec, preset: Option<&str>) -> f64 {
 }
 
 fn calculate_resolution_factor(pixels: u64) -> f64 {
-    let megapixels = pixels as f64 / 1_000_000.0;
+    let megapixels = f64::from(u32::try_from(pixels).unwrap_or(1)) / 1_000_000.0;
     if megapixels > 8.0 {
         0.05f64.mul_add((8.0 / megapixels).min(1.0), 0.80)
     } else if megapixels > 2.0 {
@@ -1187,7 +1210,7 @@ fn calculate_confidence_v3(analysis: &QualityAnalysis) -> f64 {
     if let (Some(video_bitrate), Some(fps)) = (analysis.video_bitrate, analysis.fps) {
         let pixels = u64::from(analysis.width) * u64::from(analysis.height);
         if pixels > 0 && video_bitrate > 0 {
-            let bpp_estimate = video_bitrate as f64 / (pixels as f64 * fps);
+            let bpp_estimate = f64::from(u32::try_from(video_bitrate).unwrap_or(u32::MAX)) / (f64::from(u32::try_from(pixels).unwrap_or(1)) * fps);
             if (0.01..=5.0).contains(&bpp_estimate) {
                 score += 2.0;
                 max_score += 2.0;
@@ -1426,8 +1449,12 @@ pub fn log_quality_analysis(
     if analysis.spatial_complexity.is_some() || analysis.temporal_complexity.is_some() {
         eprintln!(
             "            └─ SI: {:.1}, TI: {:.1}",
-            analysis.spatial_complexity.unwrap_or(0.0),
-            analysis.temporal_complexity.unwrap_or(0.0)
+            analysis
+                .spatial_complexity
+                .unwrap_or(crate::constants::DEFAULT_COMPLEXITY_PRIOR),
+            analysis
+                .temporal_complexity
+                .unwrap_or(crate::constants::DEFAULT_COMPLEXITY_PRIOR)
         );
     }
     eprintln!("         Grain factor: {:.2}", d.grain_factor);
@@ -1470,7 +1497,7 @@ pub fn from_video_detection(
     let pixels_per_second = pixels_per_frame * fps;
 
     let bpp = if pixels_per_second > 0.0 && bitrate > 0 {
-        (bitrate as f64) / pixels_per_second
+        (f64::from(u32::try_from(bitrate).unwrap_or(u32::MAX))) / pixels_per_second
     } else {
         if pixels_per_second <= 0.0 {
             eprintln!("   ⚠️  Warning: pixels_per_second is {pixels_per_second} for {file_path}");
@@ -1537,7 +1564,7 @@ impl VideoAnalysisBuilder {
         if let (Some(fps), w, h) = (self.analysis.fps, self.analysis.width, self.analysis.height) {
             if fps > 0.0 && w > 0 && h > 0 {
                 let pixels = f64::from(w) * f64::from(h);
-                self.analysis.bpp = (bitrate as f64 / fps) / pixels;
+                self.analysis.bpp = (crate::numeric_cast::u64_to_f64(bitrate) / fps) / pixels;
             }
         }
         self
@@ -1778,14 +1805,14 @@ pub fn from_image_analysis(
 
     let bpp = if let (Some(duration), Some(frame_rate)) = (duration_secs, fps) {
         if duration > 0.0 && frame_rate > 0.0 {
-            let total_frames = (duration * frame_rate) as u64;
-            let bits_per_frame = (file_size * 8) as f64 / total_frames.max(1) as f64;
-            bits_per_frame / pixels as f64
+            let total_frames = crate::numeric_cast::f64_to_u64_sat(duration * frame_rate);
+            let bits_per_frame = f64::from(u32::try_from(file_size * 8).unwrap_or(u32::MAX)) / f64::from(u32::try_from(total_frames.max(1)).unwrap_or(1));
+            bits_per_frame / f64::from(u32::try_from(pixels).unwrap_or(1))
         } else {
-            file_size as f64 / pixels as f64
+            f64::from(u32::try_from(file_size).unwrap_or(u32::MAX)) / f64::from(u32::try_from(pixels).unwrap_or(1))
         }
     } else {
-        file_size as f64 / pixels as f64
+        f64::from(u32::try_from(file_size).unwrap_or(u32::MAX)) / f64::from(u32::try_from(pixels).unwrap_or(1))
     };
 
     QualityAnalysis {
@@ -2133,7 +2160,7 @@ mod tests {
         let base_result = calculate_av1_crf(&base).unwrap();
         let anim_result = calculate_av1_crf(&animation).unwrap();
 
-        let crf_diff = anim_result.crf as i32 - base_result.crf as i32;
+        let crf_diff = crate::numeric_cast::f32_to_i32_sat(anim_result.crf) - crate::numeric_cast::f32_to_i32_sat(base_result.crf);
         assert!(
             (2..=6).contains(&crf_diff),
             "Animation CRF adjustment: expected +2 to +6, got {crf_diff:+}"
@@ -2480,10 +2507,9 @@ mod tests {
         let result1 = calculate_av1_crf(&analysis).unwrap();
         let result2 = calculate_av1_crf(&analysis).unwrap();
 
-        assert_eq!(
-            result1.crf, result2.crf,
-            "Same input should produce same CRF"
-        );
+        assert!(crate::float_compare::approx_eq_crf(
+            result1.crf, result2.crf
+        ), "Same input should produce same CRF");
         assert!(
             (result1.effective_bpp - result2.effective_bpp).abs() < 0.0001,
             "Same input should produce same effective BPP"
@@ -3366,13 +3392,15 @@ mod content_id_tests {
 
     fn create_temp_with_content(content: &[u8]) -> NamedTempFile {
         let mut file = NamedTempFile::new().expect("Failed to create temp file");
-        file.write_all(content).expect("Failed to write to temp file");
+        file.write_all(content)
+            .expect("Failed to write to temp file");
         file
     }
 
     #[test]
     fn test_identify_jpeg() {
-        let file = create_temp_with_content(&[0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, b'J', b'F', b'I', b'F']);
+        let file =
+            create_temp_with_content(&[0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, b'J', b'F', b'I', b'F']);
         let codec = SourceCodec::identify_by_content(file.path()).expect("Should identify JPEG");
         assert_eq!(codec, SourceCodec::Jpeg);
         assert!(codec.is_extension_compatible("jpg"));
@@ -3390,8 +3418,11 @@ mod content_id_tests {
 
     #[test]
     fn test_identify_mp4() {
-        let file = create_temp_with_content(&[0x00, 0x00, 0x00, 0x20, b'f', b't', b'y', b'p', b'i', b's', b'o', b'm']);
-        let codec = SourceCodec::identify_by_content(file.path()).expect("Should identify MP4 (H264 fallback)");
+        let file = create_temp_with_content(&[
+            0x00, 0x00, 0x00, 0x20, b'f', b't', b'y', b'p', b'i', b's', b'o', b'm',
+        ]);
+        let codec = SourceCodec::identify_by_content(file.path())
+            .expect("Should identify MP4 (H264 fallback)");
         assert_eq!(codec, SourceCodec::H264);
         assert!(codec.is_extension_compatible("mp4"));
         assert!(codec.is_extension_compatible("mov"));
@@ -3399,7 +3430,9 @@ mod content_id_tests {
 
     #[test]
     fn test_identify_heic() {
-        let file = create_temp_with_content(&[0x00, 0x00, 0x00, 0x1C, b'f', b't', b'y', b'p', b'h', b'e', b'i', b'c']);
+        let file = create_temp_with_content(&[
+            0x00, 0x00, 0x00, 0x1C, b'f', b't', b'y', b'p', b'h', b'e', b'i', b'c',
+        ]);
         let codec = SourceCodec::identify_by_content(file.path()).expect("Should identify HEIC");
         assert_eq!(codec, SourceCodec::Heic);
         assert!(codec.is_extension_compatible("heic"));
@@ -3408,7 +3441,8 @@ mod content_id_tests {
     #[test]
     fn test_identify_mkv() {
         let file = create_temp_with_content(&[0x1A, 0x45, 0xDF, 0xA3, 0x01, 0x00, 0x00, 0x00]);
-        let codec = SourceCodec::identify_by_content(file.path()).expect("Should identify EBML/MKV");
+        let codec =
+            SourceCodec::identify_by_content(file.path()).expect("Should identify EBML/MKV");
         assert_eq!(codec, SourceCodec::Av1); // MKV catch-all
         assert!(codec.is_extension_compatible("mkv"));
         assert!(codec.is_extension_compatible("webm"));
@@ -3421,11 +3455,20 @@ mod content_id_tests {
         let png_as_jpg = temp_dir.path().join("image.jpg");
         {
             let mut file = std::fs::File::create(&png_as_jpg).expect("Failed to create file");
-            file.write_all(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]).expect("Failed to write PNG header");
+            file.write_all(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+                .expect("Failed to write PNG header");
         }
 
-        let fixed_path = crate::smart_file_copier::fix_extension_if_mismatch(&png_as_jpg).expect("Should fix extension");
-        assert_eq!(fixed_path.extension().unwrap().to_string_lossy().to_lowercase(), "png");
+        let fixed_path = crate::smart_file_copier::fix_extension_if_mismatch(&png_as_jpg)
+            .expect("Should fix extension");
+        assert_eq!(
+            fixed_path
+                .extension()
+                .unwrap()
+                .to_string_lossy()
+                .to_lowercase(),
+            "png"
+        );
         assert!(fixed_path.exists());
         assert!(!png_as_jpg.exists());
     }

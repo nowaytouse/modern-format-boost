@@ -264,7 +264,10 @@ where
         if let Some(ref cp) = checkpoint {
             if cp.is_completed(&fixed) {
                 if crate::progress_mode::is_verbose_mode() {
-                    info!("   SKIP: {} (Already recorded as completed in checkpoint)", fixed.file_name().unwrap_or_default().to_string_lossy());
+                    info!(
+                        "   SKIP: {} (Already recorded as completed in checkpoint)",
+                        fixed.file_name().unwrap_or_default().to_string_lossy()
+                    );
                 }
                 batch_result.skip();
                 progress_bar.set(batch_result.total as u64);
@@ -477,7 +480,7 @@ fn select_hot_start_file_index(
             recent_success_parent.is_some_and(|parent| path.parent() == Some(parent));
 
         let hot_start_score = i32::from(ext_match) * 4 + i32::from(parent_match) * 2;
-        let proximity_score = (window - index) as i32;
+        let proximity_score = crate::numeric_cast::usize_to_i32_sat(window - index);
         let score = (hot_start_score, proximity_score);
 
         if score > best_score {

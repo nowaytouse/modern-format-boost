@@ -51,14 +51,17 @@ pub static GLOBAL_LAST_HIT_CRF_HEVC: AtomicU32 = AtomicU32::new(0);
 
 pub fn update_global_last_hit_crf_av1(crf: f32) {
     if crf > 0.0 {
-        GLOBAL_LAST_HIT_CRF_AV1.store((crf * 100.0).round() as u32, Ordering::Relaxed);
+        GLOBAL_LAST_HIT_CRF_AV1.store(
+            crate::numeric_cast::f32_to_u32_sat((crf * 100.0).round()),
+            Ordering::Relaxed,
+        );
     }
 }
 
 pub fn get_global_last_hit_crf_av1() -> Option<f32> {
     let val = GLOBAL_LAST_HIT_CRF_AV1.load(Ordering::Relaxed);
     if val > 0 {
-        Some(val as f32 / 100.0)
+        Some(crate::numeric_cast::u32_to_f32(val) / 100.0)
     } else {
         None
     }
@@ -66,14 +69,17 @@ pub fn get_global_last_hit_crf_av1() -> Option<f32> {
 
 pub fn update_global_last_hit_crf_hevc(crf: f32) {
     if crf > 0.0 {
-        GLOBAL_LAST_HIT_CRF_HEVC.store((crf * 100.0).round() as u32, Ordering::Relaxed);
+        GLOBAL_LAST_HIT_CRF_HEVC.store(
+            crate::numeric_cast::f32_to_u32_sat((crf * 100.0).round()),
+            Ordering::Relaxed,
+        );
     }
 }
 
 pub fn get_global_last_hit_crf_hevc() -> Option<f32> {
     let val = GLOBAL_LAST_HIT_CRF_HEVC.load(Ordering::Relaxed);
     if val > 0 {
-        Some(val as f32 / 100.0)
+        Some(crate::numeric_cast::u32_to_f32(val) / 100.0)
     } else {
         None
     }

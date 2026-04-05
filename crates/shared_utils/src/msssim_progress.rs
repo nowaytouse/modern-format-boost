@@ -38,9 +38,9 @@ impl MsssimProgressMonitor {
             if let Ok(time_us) = val.parse::<u64>() {
                 self.current_time_us.store(time_us, Ordering::Relaxed);
 
-                let current_secs = time_us as f64 / 1_000_000.0;
+                let current_secs = crate::numeric_cast::u64_to_f64(time_us) / 1_000_000.0;
                 let progress_pct = if self.duration_secs > 0.0 {
-                    (current_secs / self.duration_secs * 100.0).min(100.0) as u32
+                    crate::numeric_cast::f64_to_u32_sat((current_secs / self.duration_secs * 100.0).min(100.0))
                 } else {
                     0
                 };
@@ -53,7 +53,7 @@ impl MsssimProgressMonitor {
     }
 
     pub fn print_progress(&self, channel: &str, progress_pct: u32) {
-        let current_secs = self.current_time_us.load(Ordering::Relaxed) as f64 / 1_000_000.0;
+        let current_secs = crate::numeric_cast::u64_to_f64(self.current_time_us.load(Ordering::Relaxed)) / 1_000_000.0;
 
         let elapsed = self.start_time.elapsed().as_secs_f64();
         let eta_secs = if progress_pct > 0 {
@@ -83,9 +83,9 @@ impl MsssimProgressMonitor {
     }
 
     pub fn current_progress(&self) -> u32 {
-        let current_secs = self.current_time_us.load(Ordering::Relaxed) as f64 / 1_000_000.0;
+        let current_secs = crate::numeric_cast::u64_to_f64(self.current_time_us.load(Ordering::Relaxed)) / 1_000_000.0;
         if self.duration_secs > 0.0 {
-            (current_secs / self.duration_secs * 100.0).min(100.0) as u32
+            crate::numeric_cast::f64_to_u32_sat((current_secs / self.duration_secs * 100.0).min(100.0))
         } else {
             0
         }
@@ -156,7 +156,10 @@ mod tests {
     #[test]
     fn test_progress_monitor_creation() {
         let monitor = MsssimProgressMonitor::new(120.0, 3000);
-        assert_eq!(monitor.duration_secs, 120.0);
+        assert!(crate::float_compare::approx_eq_f64(
+            monitor.duration_secs,
+            120.0
+        ));
         assert_eq!(monitor.current_progress(), 0);
     }
 
@@ -234,8 +237,8 @@ mod tests {
                 let progress = monitor.update_from_line(&line);
                 prop_assert!(progress.is_some());
                 let pct = progress.unwrap();
-                let expected_secs = time_us as f64 / 1_000_000.0;
-                let expected_pct = ((expected_secs / duration_secs * 100.0).min(100.0)) as u32;
+                let expected_secs = crate::numeric_cast::u64_to_f64(time_us) / 1_000_000.0;
+                let expected_pct = crate::numeric_cast::f64_to_u32_sat((expected_secs / duration_secs * 100.0).min(100.0));
                 prop_assert_eq!(pct, expected_pct);
             }
 

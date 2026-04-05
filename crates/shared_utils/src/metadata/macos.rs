@@ -118,8 +118,10 @@ pub fn get_added_time(path: &Path) -> io::Result<std::time::SystemTime> {
     if ret != 0 {
         return Err(io::Error::last_os_error());
     }
-    let duration =
-        std::time::Duration::new(buf.added_time.tv_sec as u64, buf.added_time.tv_nsec as u32);
+    let duration = std::time::Duration::new(
+        crate::numeric_cast::i64_to_u64_sat(buf.added_time.tv_sec),
+        u32::try_from(buf.added_time.tv_nsec).unwrap_or(0),
+    );
     Ok(std::time::SystemTime::UNIX_EPOCH + duration)
 }
 
@@ -147,7 +149,7 @@ fn set_time_attr(path: &Path, time: std::time::SystemTime, attr: u32) -> io::Res
         .duration_since(std::time::SystemTime::UNIX_EPOCH)
         .map_err(io::Error::other)?;
     let mut buf = Timespec {
-        tv_sec: duration.as_secs() as i64,
+        tv_sec: crate::numeric_cast::u64_to_i64_sat(duration.as_secs()),
         tv_nsec: i64::from(duration.subsec_nanos()),
     };
     // SAFETY: c_path and local buffers are valid; setattrlist is synchronous and does not retain pointers.
@@ -175,8 +177,6 @@ fn set_time_attr(path: &Path, time: std::time::SystemTime, attr: u32) -> io::Res
 /// # Errors
 /// Returns an `io::Result` if `AppleScript` execution fails.
 pub fn append_mfb_branding(path: &Path) -> io::Result<()> {
-    
-
     // Branding is disabled by default to minimize metadata pollution.
     // To enable, set the environment variable: MODERN_FORMAT_BOOST_ENABLE_BRANDING=1
     if std::env::var("MODERN_FORMAT_BOOST_ENABLE_BRANDING").as_deref() != Ok("1") {

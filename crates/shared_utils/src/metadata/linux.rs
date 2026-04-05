@@ -2,7 +2,6 @@
 
 use std::io;
 use std::path::Path;
-use std::process::Command;
 
 pub fn preserve_linux_attributes(src: &Path, dst: &Path) -> io::Result<()> {
     // ACL preservation via getfacl/setfacl --restore (more complete than -m per-entry)
@@ -29,32 +28,36 @@ pub fn preserve_linux_attributes(src: &Path, dst: &Path) -> io::Result<()> {
 
                 // Feed rewritten ACL to setfacl --restore via stdin
                 use std::io::Write;
-                                e
-                            );
-                        }
+                let mut child = crate::tool_builders::AclBuilder::restore()
+                    .build()
+                    .stdin(std::process::Stdio::piped())
+                    .spawn()?;
+
+                if let Some(mut stdin) = child.stdin.take() {
+                    if let Err(e) = stdin.write_all(rewritten.as_bytes()) {
+                        eprintln!(
+                            "⚠️ [metadata] Failed to write ACL data to setfacl for {}: {}",
+                            dst.display(),
+                            e
+                        );
                     }
-                    match child.wait() {
-                        Ok(status) if !status.success() => {
-                            eprintln!(
-                                "⚠️ [metadata] setfacl --restore returned non-zero status for {}",
-                                dst.display()
-                            );
-                        }
-                        Err(e) => {
-                            eprintln!(
-                                "⚠️ [metadata] Failed waiting for setfacl while restoring {}: {}",
-                                dst.display(),
-                                e
-                            );
-                        }
-                        _ => {}
+                }
+
+                match child.wait() {
+                    Ok(status) if !status.success() => {
+                        eprintln!(
+                            "⚠️ [metadata] setfacl --restore returned non-zero status for {}",
+                            dst.display()
+                        );
                     }
-                } else if let Err(e) = child {
-                    eprintln!(
-                        "⚠️ [metadata] Failed to launch setfacl for {}: {}",
-                        dst.display(),
-                        e
-                    );
+                    Err(e) => {
+                        eprintln!(
+                            "⚠️ [metadata] Failed waiting for setfacl while restoring {}: {}",
+                            dst.display(),
+                            e
+                        );
+                    }
+                    _ => {}
                 }
             } else {
                 eprintln!(

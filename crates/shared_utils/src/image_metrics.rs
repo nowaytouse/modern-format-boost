@@ -20,13 +20,13 @@ const WINDOW_SIZE: usize = 11;
 fn get_gaussian_window() -> [[f64; WINDOW_SIZE]; WINDOW_SIZE] {
     let sigma = 1.5;
     let mut window = [[0.0f64; WINDOW_SIZE]; WINDOW_SIZE];
-    let center = (WINDOW_SIZE / 2) as f64;
+    let center = crate::numeric_cast::usize_to_f64(WINDOW_SIZE / 2);
     let mut sum = 0.0;
 
     for (i, row) in window.iter_mut().enumerate() {
         for (j, cell) in row.iter_mut().enumerate() {
-            let x = i as f64 - center;
-            let y = j as f64 - center;
+            let x = crate::numeric_cast::usize_to_f64(i) - center;
+            let y = crate::numeric_cast::usize_to_f64(j) - center;
             let g = (-((x * x + y * y) / (2.0 * sigma * sigma))).exp();
             *cell = g;
             sum += g;
@@ -66,7 +66,8 @@ pub fn calculate_psnr(original: &DynamicImage, converted: &DynamicImage) -> Opti
         })
         .sum();
 
-    let pixel_count = orig_pixels.len() as f64;
+    #[allow(clippy::cast_precision_loss)]
+    let pixel_count = f64::from(u32::try_from(orig_pixels.len()).unwrap_or(u32::MAX));
     let mse = mse_sum / (3.0 * pixel_count);
 
     if mse < 1e-10 {
@@ -89,8 +90,8 @@ pub fn calculate_ssim(original: &DynamicImage, converted: &DynamicImage) -> Opti
     let orig_gray = original.to_luma8();
     let conv_gray = converted.to_luma8();
 
-    let width = w1 as usize;
-    let height = h1 as usize;
+    let width = usize::try_from(w1).unwrap_or(0);
+    let height = usize::try_from(h1).unwrap_or(0);
 
     if width < WINDOW_SIZE || height < WINDOW_SIZE {
         return calculate_ssim_simple(original, converted);
@@ -113,7 +114,8 @@ pub fn calculate_ssim(original: &DynamicImage, converted: &DynamicImage) -> Opti
     if positions.is_empty() {
         return None;
     }
-    let count = positions.len() as f64;
+    #[allow(clippy::cast_precision_loss)]
+    let count = f64::from(u32::try_from(positions.len()).unwrap_or(u32::MAX));
     Some(ssim_sum / count)
 }
 
@@ -131,8 +133,8 @@ fn calculate_window_ssim(
         for (j, _) in row.iter().enumerate() {
             let px = x + j;
             let py = y + i;
-            buf_x[i][j] = f64::from(orig.get_pixel(px as u32, py as u32)[0]);
-            buf_y[i][j] = f64::from(conv.get_pixel(px as u32, py as u32)[0]);
+            buf_x[i][j] = f64::from(orig.get_pixel(u32::try_from(px).unwrap_or(0), u32::try_from(py).unwrap_or(0))[0]);
+            buf_y[i][j] = f64::from(conv.get_pixel(u32::try_from(px).unwrap_or(0), u32::try_from(py).unwrap_or(0))[0]);
         }
     }
 
@@ -168,7 +170,7 @@ fn calculate_ssim_simple(original: &DynamicImage, converted: &DynamicImage) -> O
     let orig_gray = original.to_luma8();
     let conv_gray = converted.to_luma8();
 
-    let n = f64::from(orig_gray.width() * orig_gray.height());
+    let n = f64::from(u32::try_from(orig_gray.width() * orig_gray.height()).unwrap_or(0));
     if n < 2.0 {
         return None;
     }
@@ -217,7 +219,7 @@ pub fn calculate_ms_ssim(original: &DynamicImage, converted: &DynamicImage) -> O
 
     for (i, &weight) in weights.iter().enumerate().take(scales) {
         let (w, h) = orig.dimensions();
-        if w < WINDOW_SIZE as u32 || h < WINDOW_SIZE as u32 {
+        if w < u32::try_from(WINDOW_SIZE).unwrap_or(u32::MAX) || h < u32::try_from(WINDOW_SIZE).unwrap_or(u32::MAX) {
             break;
         }
 
@@ -292,7 +294,7 @@ mod tests {
     fn test_identical_images() {
         let img1 = DynamicImage::ImageRgb8(RgbImage::from_fn(100, 100, |x, y| {
             #[allow(clippy::cast_possible_truncation)]
-            image::Rgb([(x % 256) as u8, (y % 256) as u8, 128])
+            image::Rgb([u8::try_from(x % 256).unwrap_or(0), u8::try_from(y % 256).unwrap_or(0), 128])
         }));
         let img2 = img1.clone();
 
@@ -368,7 +370,7 @@ mod tests {
     fn test_ms_ssim_identical() {
         let img = DynamicImage::ImageRgb8(RgbImage::from_fn(64, 64, |x, y| {
             #[allow(clippy::cast_possible_truncation)]
-            image::Rgb([(x.wrapping_add(y) % 256) as u8, 128, 200])
+            image::Rgb([u8::try_from(x.wrapping_add(y) % 256).unwrap_or(0), 128, 200])
         }));
         let result = calculate_ms_ssim(&img, &img);
         assert!(result.is_some());

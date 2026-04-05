@@ -51,7 +51,8 @@ impl MsssimResult {
             return;
         }
 
-        let speedup = self.total_frames as f64 / self.sampled_frames.max(1) as f64;
+        #[allow(clippy::cast_precision_loss)]
+        let speedup = crate::numeric_cast::u64_to_f64(self.total_frames) / crate::numeric_cast::u64_to_f64(self.sampled_frames.max(1));
         eprintln!(
             "⏱️  MS-SSIM completed in {:.2}s (sampled {}/{} frames)",
             elapsed_secs, self.sampled_frames, self.total_frames
@@ -260,10 +261,22 @@ mod tests {
     fn test_msssim_result_skipped() {
         let result = MsssimResult::skipped();
         assert!(result.is_skipped());
-        assert_eq!(result.y_score, 0.0);
-        assert_eq!(result.u_score, 0.0);
-        assert_eq!(result.v_score, 0.0);
-        assert_eq!(result.combined_score, 0.0);
+        assert!(crate::float_compare::approx_eq_f64(
+            result.y_score,
+            0.0
+        ));
+        assert!(crate::float_compare::approx_eq_f64(
+            result.u_score,
+            0.0
+        ));
+        assert!(crate::float_compare::approx_eq_f64(
+            result.v_score,
+            0.0
+        ));
+        assert!(crate::float_compare::approx_eq_f64(
+            result.combined_score,
+            0.0
+        ));
     }
 
     #[test]
@@ -367,11 +380,12 @@ mod tests {
                 let sampled_frames = sampled.min(total);
                 let total_frames = total.max(sampled);
 
-                let speedup = total_frames as f64 / sampled_frames.max(1) as f64;
+                #[allow(clippy::cast_precision_loss)]
+                let speedup = crate::numeric_cast::u64_to_f64(total_frames) / crate::numeric_cast::u64_to_f64(sampled_frames.max(1));
 
                 prop_assert!(speedup >= 1.0);
 
-                let expected = total_frames as f64 / sampled_frames as f64;
+                let expected = crate::numeric_cast::u64_to_f64(total_frames) / crate::numeric_cast::u64_to_f64(sampled_frames);
                 prop_assert!((speedup - expected).abs() < 1e-10);
             }
         }

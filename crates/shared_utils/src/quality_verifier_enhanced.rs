@@ -66,7 +66,7 @@ impl VerifyOptions {
     }
 }
 
-use crate::types::{CheckResult};
+use crate::types::CheckResult;
 
 /// Result of enhanced verification.
 #[derive(Clone, Debug)]

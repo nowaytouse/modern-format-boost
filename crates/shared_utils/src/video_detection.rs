@@ -339,21 +339,28 @@ pub fn calculate_quality_score(
     width: u32,
     height: u32,
 ) -> u8 {
-    let base_score = match compression {
+    let base_score: u8 = match compression {
         CompressionType::Lossless => 100,
         CompressionType::VisuallyLossless => 95,
         CompressionType::HighQuality => 80,
         CompressionType::Standard => 60,
         CompressionType::LowQuality => 40,
     };
-    let depth_bonus = if bit_depth >= 10 { 5 } else { 0 };
+    let depth_bonus = if bit_depth >= crate::numeric_cast::u32_to_u8_sat(crate::constants::HDR_BIT_DEPTH_THRESHOLD) {
+        crate::numeric_cast::u32_to_u8_sat(crate::constants::HDR_QUALITY_BONUS)
+    } else {
+        0
+    };
     let res_bonus =
         if width >= crate::constants::WIDTH_UHD_4K || height >= crate::constants::HEIGHT_UHD_4K {
             3
         } else {
             0
         };
-    (base_score + depth_bonus + res_bonus).min(100)
+    base_score
+        .saturating_add(depth_bonus)
+        .saturating_add(res_bonus)
+        .min(100)
 }
 
 /// Analyzes a video file with optional `SQLite` caching.

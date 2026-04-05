@@ -66,7 +66,7 @@ fn main() -> Result<()> {
     let label_str = cli.label.map(|l| l.to_db_label());
     let count = batch_ingest_samples(&cli.input, label_str).context("Batch ingestion failed")?;
 
-    println!("✅ Success! Ingested {} dynamic samples.", count);
+    println!("✅ Success! Ingested {count} dynamic samples.");
     println!("📊 Global feature stats and baselines have been auto-refreshed.");
 
     Ok(())

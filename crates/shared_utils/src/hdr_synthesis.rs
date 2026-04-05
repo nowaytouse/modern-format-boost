@@ -167,7 +167,7 @@ pub fn convert_heic_with_gainmap_to_jxl_hdr(
         .arg("color_space=sRGB");
 
     if let Some(it) = resolve_intensity_target(intensity_target) {
-        builder.intensity_target(it as f32);
+        builder.intensity_target(crate::numeric_cast::f64_to_f32_lossy(f64::from(it)));
         info!("Applying intensity_target {} for HDR synthesis", it);
     } else {
         warn!("No valid intensity_target — proceeding without --intensity_target");
@@ -294,7 +294,7 @@ pub fn convert_ultrahdr_jpeg_to_jxl_hdr(
         .arg("color_space=sRGB");
 
     if let Some(it) = resolve_intensity_target(intensity_target) {
-        builder.intensity_target(it as f32);
+        builder.intensity_target(crate::numeric_cast::f64_to_f32_lossy(f64::from(it)));
         info!("Applying intensity_target {} for UltraHDR synthesis", it);
     } else {
         warn!("No valid intensity_target — proceeding without --intensity_target");
@@ -353,7 +353,7 @@ fn decode_heif_handle(handle: &ImageHandle, color_space: ColorSpace) -> Result<D
                 };
                 let mut buffer = ImageBuffer::new(width, height);
                 for (x, y, pixel) in buffer.enumerate_pixels_mut() {
-                    let offset = y as usize * (r_plane.stride / 2) + x as usize * 3;
+                    let offset = usize::try_from(y).unwrap_or(0) * (usize::try_from(r_plane.stride).unwrap_or(0) / 2) + usize::try_from(x).unwrap_or(0) * 3;
                     let r = data_u16[offset];
                     let g = data_u16[offset + 1];
                     let b = data_u16[offset + 2];
@@ -363,7 +363,7 @@ fn decode_heif_handle(handle: &ImageHandle, color_space: ColorSpace) -> Result<D
             } else {
                 let mut buffer = ImageBuffer::new(width, height);
                 for (x, y, pixel) in buffer.enumerate_pixels_mut() {
-                    let offset = y as usize * r_plane.stride + x as usize * 3;
+                    let offset = usize::try_from(y).unwrap_or(0) * usize::try_from(r_plane.stride).unwrap_or(0) + usize::try_from(x).unwrap_or(0) * 3;
                     let r = r_plane.data[offset];
                     let g = r_plane.data[offset + 1];
                     let b = r_plane.data[offset + 2];
@@ -386,7 +386,7 @@ fn decode_heif_handle(handle: &ImageHandle, color_space: ColorSpace) -> Result<D
                 };
                 let mut buffer = ImageBuffer::new(width, height);
                 for (x, y, pixel) in buffer.enumerate_pixels_mut() {
-                    let offset = y as usize * (y_plane.stride / 2) + x as usize;
+                    let offset = usize::try_from(y).unwrap_or(0) * (usize::try_from(y_plane.stride).unwrap_or(0) / 2) + usize::try_from(x).unwrap_or(0);
                     let val = data_u16[offset];
                     *pixel = image::Luma([val]);
                 }
@@ -394,7 +394,7 @@ fn decode_heif_handle(handle: &ImageHandle, color_space: ColorSpace) -> Result<D
             } else {
                 let mut buffer = ImageBuffer::new(width, height);
                 for (x, y, pixel) in buffer.enumerate_pixels_mut() {
-                    let offset = y as usize * y_plane.stride + x as usize;
+                    let offset = usize::try_from(y).unwrap_or(0) * usize::try_from(y_plane.stride).unwrap_or(0) + usize::try_from(x).unwrap_or(0);
                     let val = y_plane.data[offset];
                     *pixel = image::Luma([val]);
                 }
@@ -556,7 +556,7 @@ fn synthesize_hdr(
         g
     };
 
-    let mut hdr_pixels = Vec::with_capacity((width * height * 3) as usize);
+    let mut hdr_pixels = Vec::with_capacity(usize::try_from(width * height * 3).unwrap_or(0));
 
     // Get typed buffers to avoid scale-to-u8 bug in GenericImageView::get_pixel
     let sdr_8 = if sdr.color().bits_per_pixel() <= 24 {
@@ -702,7 +702,7 @@ fn resolve_intensity_target(derived: f32) -> Option<u32> {
                 if (clamped - v).abs() > f32::EPSILON {
                     warn!("MFB_JXL_INTENSITY_TARGET value {v} clamped to {clamped}");
                 }
-                return Some(clamped.round() as u32);
+                return Some(crate::numeric_cast::f32_to_u32_sat(clamped.round()));
             }
             _ => {
                 warn!("Invalid MFB_JXL_INTENSITY_TARGET='{}' — ignoring", ov);
@@ -725,7 +725,7 @@ fn resolve_intensity_target(derived: f32) -> Option<u32> {
             derived, clamped
         );
     }
-    Some(clamped.round() as u32)
+    Some(crate::numeric_cast::f32_to_u32_sat(clamped.round()))
 }
 
 fn srgb_to_linear(v: f32) -> f32 {
@@ -746,12 +746,12 @@ fn write_png16(pixels: &[f32], width: u32, height: u32, path: &Path) -> Result<(
     let mut buffer: ImageBuffer<Rgb<u16>, Vec<u16>> = ImageBuffer::new(width, height);
 
     for (x, y, pixel) in buffer.enumerate_pixels_mut() {
-        let idx = (y * width + x) as usize * 3;
+        let idx = usize::try_from(y * width + x).unwrap_or(0) * 3;
         // Convert f32 [0.0, 1.0] to u16 [0, 65535]
         // HDR values > 1.0 are preserved up to ~2.0 (130k+)
-        let r = ((pixels[idx].min(2.0) / 2.0) * 65535.0) as u16;
-        let g = ((pixels[idx + 1].min(2.0) / 2.0) * 65535.0) as u16;
-        let b = ((pixels[idx + 2].min(2.0) / 2.0) * 65535.0) as u16;
+        let r = crate::numeric_cast::f32_to_u16_sat((pixels[idx].min(2.0) / 2.0) * 65535.0);
+        let g = crate::numeric_cast::f32_to_u16_sat((pixels[idx + 1].min(2.0) / 2.0) * 65535.0);
+        let b = crate::numeric_cast::f32_to_u16_sat((pixels[idx + 2].min(2.0) / 2.0) * 65535.0);
         *pixel = Rgb([r, g, b]);
     }
 
@@ -765,8 +765,8 @@ fn write_png16(pixels: &[f32], width: u32, height: u32, path: &Path) -> Result<(
 fn write_exr(pixels: &[f32], width: u32, height: u32, path: &Path) -> Result<()> {
     use exr::prelude::*;
 
-    write_rgb_file(path, width as usize, height as usize, |x, y| {
-        let idx = (y * width as usize + x) * 3;
+    write_rgb_file(path, usize::try_from(width).unwrap_or(0), usize::try_from(height).unwrap_or(0), |x, y| {
+        let idx = (y * usize::try_from(width).unwrap_or(0) + x) * 3;
         (pixels[idx], pixels[idx + 1], pixels[idx + 2])
     })
     .context("Failed to write EXR file")?;
@@ -790,7 +790,10 @@ mod tests {
 
     #[test]
     fn test_srgb_to_linear() {
-        assert_eq!(srgb_to_linear(0.0), 0.0);
+        assert!(crate::float_compare::approx_eq_f64(
+            f64::from(srgb_to_linear(0.0)),
+            0.0
+        ));
         assert!((srgb_to_linear(1.0) - 1.0).abs() < 1e-6);
         // Middle grey roughly 0.214
         assert!((srgb_to_linear(0.5) - 0.214_041_14).abs() < 1e-6);
@@ -811,10 +814,22 @@ mod tests {
             </xmpmeta>
         "#;
         let params = parse_gainmap_from_xmp(xmp);
-        assert_eq!(params.gain_map_max, 3.0);
-        assert_eq!(params.gain_map_min, 1.0);
-        assert_eq!(params.offset_sdr, 0.01);
-        assert_eq!(params.offset_hdr, 0.02);
+        assert!(crate::float_compare::approx_eq_f64(
+            f64::from(params.gain_map_max),
+            3.0
+        ));
+        assert!(crate::float_compare::approx_eq_f64(
+            f64::from(params.gain_map_min),
+            1.0
+        ));
+        assert!(crate::float_compare::approx_eq_f64(
+            f64::from(params.offset_sdr),
+            0.01
+        ));
+        assert!(crate::float_compare::approx_eq_f64(
+            f64::from(params.offset_hdr),
+            0.02
+        ));
     }
 
     #[test]
@@ -833,11 +848,26 @@ mod tests {
             </xmpmeta>
         "#;
         let params = parse_gainmap_from_xmp(xmp);
-        assert_eq!(params.gain_map_max, 4.5);
-        assert_eq!(params.gain_map_min, 0.5);
-        assert_eq!(params.gamma, 2.2);
-        assert_eq!(params.offset_sdr, 0.05);
-        assert_eq!(params.offset_hdr, 0.08);
+        assert!(crate::float_compare::approx_eq_f64(
+            f64::from(params.gain_map_max),
+            4.5
+        ));
+        assert!(crate::float_compare::approx_eq_f64(
+            f64::from(params.gain_map_min),
+            0.5
+        ));
+        assert!(crate::float_compare::approx_eq_f64(
+            f64::from(params.gamma),
+            2.2
+        ));
+        assert!(crate::float_compare::approx_eq_f64(
+            f64::from(params.offset_sdr),
+            0.05
+        ));
+        assert!(crate::float_compare::approx_eq_f64(
+            f64::from(params.offset_hdr),
+            0.08
+        ));
     }
 
     #[test]

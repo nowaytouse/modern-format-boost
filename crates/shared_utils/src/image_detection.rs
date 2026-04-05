@@ -402,7 +402,7 @@ fn resolve_mif1_from_compatible_brands(path: &Path, major_brand: &[u8]) -> Detec
         return DetectedFormat::HEIC;
     }
 
-    let box_size = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize;
+    let box_size = usize::try_from(u32::from_be_bytes([data[0], data[1], data[2], data[3]])).unwrap_or(0);
     let ftyp_end = box_size.min(data.len());
 
     // compatible_brands start at offset 16 (after size[4] + "ftyp"[4] + major_brand[4] + minor_version[4])
@@ -496,9 +496,9 @@ pub fn detect_animation(path: &Path, format: &DetectedFormat) -> Result<(bool, u
     let mut fps = None;
     if crate::ffprobe::is_ffprobe_available() {
         if let Ok(probe) = crate::ffprobe::probe_video(path) {
-            let probe_frames = probe.frame_count as u32;
+            let probe_frames = u32::try_from(probe.frame_count).unwrap_or(1);
             if probe.frame_rate > 0.0 {
-                fps = Some(probe.frame_rate as f32);
+                fps = Some(crate::numeric_cast::f64_to_f32_lossy(probe.frame_rate));
             }
 
             if probe_frames > 1 {
@@ -515,7 +515,7 @@ pub fn detect_animation(path: &Path, format: &DetectedFormat) -> Result<(bool, u
         if matches!(format, DetectedFormat::AVIF | DetectedFormat::JXL) {
             if let Some(explicit_count) = crate::ffprobe::get_frame_count(path) {
                 if explicit_count > 1 {
-                    return Ok((true, explicit_count as u32, fps));
+                    return Ok((true, u32::try_from(explicit_count).unwrap_or(0), fps));
                 }
                 return Ok((false, 1, fps));
             }
@@ -607,7 +607,7 @@ pub fn parse_gif_precision_metadata(path: &Path) -> Result<PrecisionMetadata> {
                     }
                     // Skip image data blocks
                     while current_pos < data.len() && data[current_pos] != 0 {
-                        let block_size = data[current_pos] as usize;
+                        let block_size = usize::from(data[current_pos]);
                         current_pos += block_size + 1;
                     }
                     current_pos += 1;
@@ -619,7 +619,7 @@ pub fn parse_gif_precision_metadata(path: &Path) -> Result<PrecisionMetadata> {
                     }
                     current_pos += 2;
                     while current_pos < data.len() && data[current_pos] != 0 {
-                        let block_size = data[current_pos] as usize;
+                        let block_size = usize::from(data[current_pos]);
                         current_pos += block_size + 1;
                     }
                     current_pos += 1;
@@ -662,7 +662,7 @@ pub fn is_isobmff_animated_sequence(path: &Path) -> bool {
     }
 
     // Scan compatible_brands (each 4 bytes, starting at offset 16)
-    let ftyp_box_size = u32::from_be_bytes([header[0], header[1], header[2], header[3]]) as usize;
+    let ftyp_box_size = usize::try_from(u32::from_be_bytes([header[0], header[1], header[2], header[3]])).unwrap_or(0);
     if !(16..=4096).contains(&ftyp_box_size) {
         return false;
     }
@@ -894,12 +894,12 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
         let is_medium_image = pixel_count > 10_000;
 
         let colors_per_megapixel =
-            (palette_size as f64 / (pixel_count as f64 / 1_000_000.0)).min(1000.0);
+            ((f64::from(u32::try_from(palette_size).unwrap_or(u32::MAX))) / (f64::from(u32::try_from(pixel_count).unwrap_or(u32::MAX)) / 1_000_000.0)).min(1000.0);
 
         // Palette density: entries per sqrt(pixel_count).
         // Small image + small palette = normal (icon, pixel art).
         // Large image + small palette = quantization indicator.
-        let palette_density = palette_size as f64 / (pixel_count as f64).sqrt();
+        let palette_density = f64::from(u32::try_from(palette_size).unwrap_or(u32::MAX)) / f64::from(u32::try_from(pixel_count).unwrap_or(u32::MAX)).sqrt();
 
         if palette_size > 240 {
             factors.large_palette = 0.95;
@@ -966,7 +966,7 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
                 let is_large_image = pixel_count > 100_000;
 
                 if let Some(palette_size) = png_info.palette_size {
-                    let usage_ratio = unique_colors as f64 / palette_size as f64;
+                    let usage_ratio = f64::from(u32::try_from(unique_colors).unwrap_or(u32::MAX)) / f64::from(u32::try_from(palette_size).unwrap_or(u32::MAX));
 
                     if is_large_image {
                         if usage_ratio > 0.8 {
@@ -1038,7 +1038,7 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
                         (pe.0, pe.1, pe.2)
                     },
                 );
-                let palette_size = png_info.palette_size.unwrap_or(256) as f64;
+                let palette_size = f64::from(u16::try_from(png_info.palette_size.unwrap_or(256)).unwrap_or(256));
                 if palette_size >= 64.0 && entropy_ratio < 0.6 && pixel_count > 10_000 {
                     factors.entropy_anomaly = (0.6 - entropy_ratio).mul_add(0.5, 0.5);
                     factors.entropy_anomaly = factors.entropy_anomaly.clamp(0.0, 0.75);
@@ -1066,7 +1066,7 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
     let expected_size = estimate_uncompressed_size(&png_info);
     let actual_size = reader.seek(std::io::SeekFrom::End(0)).unwrap_or(0);
     let compression_ratio = if expected_size > 0 {
-        actual_size as f64 / expected_size as f64
+        f64::from(u32::try_from(actual_size).unwrap_or(u32::MAX)) / f64::from(u32::try_from(expected_size).unwrap_or(u32::MAX))
     } else {
         1.0
     };
@@ -1397,7 +1397,7 @@ pub fn parse_png_structure<R: std::io::Read + std::io::Seek>(
 
         match chunk_type {
             b"PLTE" if color_type == 3 => {
-                palette_size = Some((chunk_len as usize) / 3);
+                palette_size = Some(usize::try_from(chunk_len).unwrap_or(0) / 3);
                 skip_bytes(&mut reader, chunk_len + 4, "PLTE chunk")?;
             }
             b"tRNS" => {
@@ -1406,7 +1406,7 @@ pub fn parse_png_structure<R: std::io::Read + std::io::Seek>(
             }
             b"tEXt" | b"iTXt" | b"zTXt" if detected_tool.is_none() => {
                 has_text_chunks = true;
-                let mut payload = vec![0u8; chunk_len as usize];
+                let mut payload = vec![0u8; usize::try_from(chunk_len).unwrap_or(0)];
                 reader.read_exact(&mut payload).map_err(|e| {
                     ImgQualityError::AnalysisError(format!(
                         "Failed to read PNG text chunk payload: {e}"
@@ -1481,7 +1481,7 @@ fn detect_dithering_pattern(img: &DynamicImage) -> f64 {
     let mut high_freq_count = 0u64;
     let mut total_comparisons = 0u64;
 
-    let step = (f64::from(width * height) / 10000.0).max(1.0) as u32;
+    let step = crate::numeric_cast::f64_to_u32_sat((f64::from(width * height) / 10000.0).max(1.0));
 
     for y in 1..height - 1 {
         for x in 1..width - 1 {
@@ -1521,7 +1521,7 @@ fn detect_dithering_pattern(img: &DynamicImage) -> f64 {
         return 0.0;
     }
 
-    let dithering_ratio = high_freq_count as f64 / total_comparisons as f64;
+    let dithering_ratio = f64::from(u32::try_from(high_freq_count).unwrap_or(u32::MAX)) / f64::from(u32::try_from(total_comparisons).unwrap_or(u32::MAX));
 
     let floyd_steinberg_score = (dithering_ratio * 5.0).min(1.0);
 
@@ -1546,7 +1546,7 @@ fn detect_dithering_pattern(img: &DynamicImage) -> f64 {
         }
     }
     let bayer_score = if bayer_total > 0 {
-        ((bayer_count as f64 / bayer_total as f64) * 4.0).min(1.0)
+        ((f64::from(u32::try_from(bayer_count).unwrap_or(u32::MAX)) / f64::from(u32::try_from(bayer_total).unwrap_or(u32::MAX))) * 4.0).min(1.0)
     } else {
         0.0
     };
@@ -1584,14 +1584,14 @@ fn sample_unique_color_count(img: &DynamicImage, max_samples: usize) -> usize {
     }
 
     let total = u64::from(width) * u64::from(height);
-    let step = ((total as f64) / (max_samples as f64)).sqrt().ceil() as u32;
+    let step = crate::numeric_cast::f64_to_u32_sat((f64::from(u32::try_from(total).unwrap_or(u32::MAX)) / f64::from(u32::try_from(max_samples).unwrap_or(u32::MAX))).sqrt().ceil());
     let step = step.max(1);
 
     let mut set = HashSet::new();
 
     let mut sampled = 0usize;
-    for y in (0..height).step_by(step as usize) {
-        for x in (0..width).step_by(step as usize) {
+    for y in (0..height).step_by(usize::try_from(step).unwrap_or(1)) {
+        for x in (0..width).step_by(usize::try_from(step).unwrap_or(1)) {
             let p = rgba.get_pixel(x, y);
             // 5-bit per channel quantization (approximate palette bins)
             let r5 = p[0] >> 3;
@@ -1621,14 +1621,14 @@ fn analyze_color_distribution(img: &DynamicImage, _palette_size: Option<usize>) 
     let mut color_set: HashMap<[u8; 4], u32> = HashMap::new();
 
     let (width, height) = rgba.dimensions();
-    let total_pixels = (width * height) as usize;
+    let total_pixels = usize::try_from(width * height).unwrap_or(0);
 
     // Target ~50k samples, distributed across a grid of blocks
     let target_samples: usize = 50_000;
     let grid_size: u32 = 16; // 16x16 = 256 blocks
     let block_w = (width / grid_size).max(1);
     let block_h = (height / grid_size).max(1);
-    let samples_per_block = (target_samples / (grid_size * grid_size) as usize).max(1);
+    let samples_per_block = (target_samples / usize::try_from(grid_size * grid_size).unwrap_or(1)).max(1);
 
     // Simple LCG for deterministic pseudo-random sampling (no need for rand crate)
     let mut rng_state: u64 = 0x1234_5678_9ABC_DEF0;
@@ -1636,7 +1636,7 @@ fn analyze_color_distribution(img: &DynamicImage, _palette_size: Option<usize>) 
         *state = state
             .wrapping_mul(6_364_136_223_846_793_005)
             .wrapping_add(1);
-        (*state >> 32) as u32
+        u32::try_from(*state >> 32).unwrap_or(0)
     };
 
     for by in 0..grid_size {
@@ -1647,7 +1647,7 @@ fn analyze_color_distribution(img: &DynamicImage, _palette_size: Option<usize>) 
             let y1 = ((by + 1) * block_h).min(height);
             let current_block_width = x1 - x0;
             let current_block_height = y1 - y0;
-            let block_pixels = (current_block_width * current_block_height) as usize;
+            let block_pixels = usize::try_from(current_block_width * current_block_height).unwrap_or(0);
             if block_pixels == 0 {
                 continue;
             }
@@ -1683,7 +1683,7 @@ fn analyze_color_distribution(img: &DynamicImage, _palette_size: Option<usize>) 
 fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
     let rgba = img.to_rgba8();
     let (width, height) = rgba.dimensions();
-    let total_pixels = (width as usize) * (height as usize);
+    let total_pixels = usize::try_from(width).unwrap_or(0) * usize::try_from(height).unwrap_or(0);
     if total_pixels < 100 {
         return 0.0;
     }
@@ -1692,9 +1692,9 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
     // per block at a deterministic-but-spread position. Avoids stride bias where
     // step-based sampling always hits the same spatial columns/rows.
     let target_samples: usize = 50_000.min(total_pixels);
-    let block_size = ((total_pixels as f64 / target_samples as f64).max(1.0)) as usize;
-    let blocks_x = (width as usize).div_ceil(block_size);
-    let blocks_y = (height as usize).div_ceil(block_size);
+    let block_size = crate::numeric_cast::f64_to_usize_sat((f64::from(u32::try_from(total_pixels).unwrap_or(u32::MAX)) / f64::from(u32::try_from(target_samples).unwrap_or(u32::MAX))).max(1.0));
+    let blocks_x = usize::try_from(width).unwrap_or(0).div_ceil(block_size);
+    let blocks_y = usize::try_from(height).unwrap_or(0).div_ceil(block_size);
 
     let mut color_freq: std::collections::HashMap<[u8; 4], u32> = std::collections::HashMap::new();
     let mut sampled = 0u64;
@@ -1702,8 +1702,8 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
     for by in 0..blocks_y {
         for bx in 0..blocks_x {
             // Pick a pixel near the center of each block (deterministic, no RNG needed)
-            let px = ((bx * block_size + block_size / 2) as u32).min(width - 1);
-            let py = ((by * block_size + block_size / 2) as u32).min(height - 1);
+            let px = u32::try_from(bx * block_size + block_size / 2).unwrap_or(u32::MAX).min(width - 1);
+            let py = u32::try_from(by * block_size + block_size / 2).unwrap_or(u32::MAX).min(height - 1);
             let pixel = rgba.get_pixel(px, py);
             let key = [pixel[0], pixel[1], pixel[2], pixel[3]];
             *color_freq.entry(key).or_insert(0) += 1;
@@ -1719,7 +1719,7 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
     freqs.sort_unstable_by(|a, b| b.cmp(a));
 
     // How many distinct colors cover 85% of sampled pixels?
-    let target = (sampled as f64 * 0.85) as u64;
+    let target = crate::numeric_cast::f64_to_u64_sat(f64::from(u32::try_from(sampled).unwrap_or(u32::MAX)) * 0.85);
     let mut cumulative = 0u64;
     let mut colors_for_85pct = 0usize;
     for &f in &freqs {
@@ -1731,7 +1731,7 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
     }
 
     // Low ratio = few colors dominate = quantized
-    let coverage_ratio = colors_for_85pct as f64 / freqs.len() as f64;
+    let coverage_ratio = f64::from(u32::try_from(colors_for_85pct).unwrap_or(u32::MAX)) / f64::from(u32::try_from(freqs.len()).unwrap_or(u32::MAX));
 
     if coverage_ratio < 0.05 {
         0.85
@@ -1916,15 +1916,15 @@ pub fn calculate_entropy(img: &DynamicImage) -> f64 {
     let mut histogram = [0u64; 256];
 
     for pixel in gray.pixels() {
-        histogram[pixel[0] as usize] += 1;
+        histogram[usize::from(pixel[0])] += 1;
     }
 
-    let total = gray.pixels().count() as f64;
+    let total = f64::from(u32::try_from(gray.pixels().count()).unwrap_or(u32::MAX));
     let mut entropy = 0.0;
 
     for &count in &histogram {
         if count > 0 {
-            let p = count as f64 / total;
+            let p = f64::from(u32::try_from(count).unwrap_or(u32::MAX)) / total;
             entropy -= p * p.log2();
         }
     }
@@ -1945,7 +1945,7 @@ pub fn calculate_entropy(img: &DynamicImage) -> f64 {
 fn calculate_palette_index_entropy(img: &DynamicImage, palette_size: usize) -> (f64, f64, f64) {
     let rgba = img.to_rgba8();
     let (width, height) = rgba.dimensions();
-    let total = (u64::from(width) * u64::from(height)) as f64;
+    let total = f64::from(u32::try_from(u64::from(width) * u64::from(height)).unwrap_or(u32::MAX));
     if total == 0.0 || palette_size == 0 {
         return (0.0, 0.0, 0.0);
     }
@@ -1963,12 +1963,12 @@ fn calculate_palette_index_entropy(img: &DynamicImage, palette_size: usize) -> (
     let mut entropy = 0.0;
     for &count in color_freq.values() {
         if count > 0 {
-            let p = count as f64 / total;
+            let p = f64::from(u32::try_from(count).unwrap_or(u32::MAX)) / total;
             entropy -= p * p.log2();
         }
     }
 
-    let max_entropy = (palette_size as f64).log2();
+    let max_entropy = f64::from(u32::try_from(palette_size).unwrap_or(u32::MAX)).log2();
     let ratio = if max_entropy > 0.0 {
         entropy / max_entropy
     } else {
@@ -1983,7 +1983,7 @@ fn calculate_rgb_entropy(img: &DynamicImage) -> f64 {
         let mut h = 0.0;
         for &count in hist {
             if count > 0 {
-                let p = count as f64 / total;
+                let p = f64::from(u32::try_from(count).unwrap_or(u32::MAX)) / total;
                 h -= p * p.log2();
             }
         }
@@ -1995,12 +1995,12 @@ fn calculate_rgb_entropy(img: &DynamicImage) -> f64 {
     let mut hist_b = [0u64; 256];
 
     for pixel in rgba.pixels() {
-        hist_r[pixel[0] as usize] += 1;
-        hist_g[pixel[1] as usize] += 1;
-        hist_b[pixel[2] as usize] += 1;
+        hist_r[usize::from(pixel[0])] += 1;
+        hist_g[usize::from(pixel[1])] += 1;
+        hist_b[usize::from(pixel[2])] += 1;
     }
 
-    let total = rgba.pixels().count() as f64;
+    let total = f64::from(u32::try_from(rgba.pixels().count()).unwrap_or(u32::MAX));
 
     let er = channel_entropy(&hist_r, total);
     let eg = channel_entropy(&hist_g, total);
@@ -2114,7 +2114,7 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
     }
 
     let duration = if is_animated {
-        fps.map(|f| frame_count as f32 / f)
+        fps.map(|f| crate::numeric_cast::f64_to_f32_lossy(f64::from(u32::try_from(frame_count).unwrap_or(u32::MAX))) / f)
     } else {
         None
     };
@@ -2166,7 +2166,7 @@ fn estimate_lossy_quality_fallback(
     }
 
     // Heuristic v2: Multi-factor quality estimation
-    let raw_bpp = (file_size * 8) as f64 / pixels as f64 / f64::from(frame_count.max(1));
+    let raw_bpp = f64::from(u32::try_from(file_size * 8).unwrap_or(u32::MAX)) / f64::from(u32::try_from(pixels).unwrap_or(u32::MAX)) / f64::from(frame_count.max(1));
 
     // Format efficiency multiplier (relative to JPEG)
     // AVIF/HEIC ~ 3.0x, WebP ~ 1.5x
@@ -2185,9 +2185,9 @@ fn estimate_lossy_quality_fallback(
     // Calibrated formula for multi-format heuristic:
     // 12 * log2(effective_bpp * 1.5) + 60
     // Results: 0.2 bpp -> ~39, 1.0 bpp -> ~67, 5.0 bpp -> ~95, 10.0 bpp -> 100
-    let bpp_quality = 12.0f64
+    let bpp_quality = crate::numeric_cast::f64_to_u8_sat(12.0f64
         .mul_add((effective_bpp * 1.5).max(0.001).log2(), 60.0)
-        .clamp(10.0, 100.0) as u8;
+        .clamp(10.0, 100.0));
 
     crate::progress_mode::emit_stderr(&format!(
         "   \x1b[1;33m⚠️  [QUALITY FALLBACK]\x1b[0m \x1b[33mExact detection unavailable for {} codec.\x1b[0m\n\
@@ -2208,7 +2208,7 @@ fn estimate_jpeg_quality(path: &Path) -> Result<u8> {
     use crate::image_jpeg_analysis::analyze_jpeg_quality;
     let data = std::fs::read(path)?;
     let analysis = analyze_jpeg_quality(&data).map_err(ImgQualityError::AnalysisError)?;
-    Ok(analysis.estimated_quality as u8)
+    Ok(u8::try_from(analysis.estimated_quality).unwrap_or(0))
 }
 
 /// Estimate WebP VP8 quality by parsing the bitstream quantization index.
@@ -2250,7 +2250,7 @@ pub(crate) fn parse_apng_frames(data: &[u8]) -> (bool, u32) {
         }
 
         // Skip chunk data and CRC
-        pos += length as usize + 4;
+        pos += usize::try_from(length).unwrap_or(0) + 4;
     }
 
     (false, 1)
@@ -2319,12 +2319,12 @@ fn detect_ico_compression(path: &Path) -> Result<CompressionType> {
         return Ok(CompressionType::Lossless);
     }
 
-    let image_count = u16::from_le_bytes([header[4], header[5]]) as usize;
+    let image_count = usize::from(u16::from_le_bytes([header[4], header[5]]));
     let png_magic: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
     // Each directory entry is 16 bytes, starting at offset 6
     for i in 0..image_count {
-        let entry_offset = 6 + (i as u64) * 16;
+        let entry_offset = 6 + u64::try_from(i).unwrap_or(0) * 16;
         file.seek(SeekFrom::Start(entry_offset))
             .map_err(ImgQualityError::IoError)?;
 
@@ -2353,7 +2353,7 @@ fn detect_ico_compression(path: &Path) -> Result<CompressionType> {
             // Since analyze_png_quantization_from_reader needs Seek, and take() doesn't provide it easily,
             // we read the PNG part into memory. BUT: PNGs inside ICO are usually small (max 512KB for 256x256).
             // This is infinitely safer than loading the whole 64MB ICO.
-            let mut png_data = Vec::with_capacity(img_size as usize);
+            let mut png_data = Vec::with_capacity(crate::numeric_cast::u64_to_usize_sat(img_size));
             img_reader
                 .read_to_end(&mut png_data)
                 .map_err(ImgQualityError::IoError)?;
@@ -2436,8 +2436,7 @@ fn detect_exr_compression(path: &Path) -> Result<CompressionType> {
                 break;
             }
             let value_size =
-                u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]])
-                    as usize;
+                crate::numeric_cast::u32_to_usize_sat(u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]));
             pos += 4;
 
             if name == b"compression" && value_size >= 1 && pos < data.len() {
@@ -2586,8 +2585,7 @@ fn detect_jp2_compression(path: &Path) -> Result<CompressionType> {
 fn find_jp2c_offset(data: &[u8]) -> Option<usize> {
     let mut pos = 0;
     while pos + 8 <= data.len() {
-        let size =
-            u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
+        let size = crate::numeric_cast::u32_to_usize_sat(u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]));
         let box_type = &data[pos + 4..pos + 8];
 
         if box_type == b"jp2c" {
@@ -2600,7 +2598,7 @@ fn find_jp2c_offset(data: &[u8]) -> Option<usize> {
             if pos + 16 > data.len() {
                 break;
             }
-            let ext = u64::from_be_bytes([
+            let ext = crate::numeric_cast::u64_to_usize_sat(u64::from_be_bytes([
                 data[pos + 8],
                 data[pos + 9],
                 data[pos + 10],
@@ -2609,7 +2607,7 @@ fn find_jp2c_offset(data: &[u8]) -> Option<usize> {
                 data[pos + 13],
                 data[pos + 14],
                 data[pos + 15],
-            ]) as usize;
+            ]));
             pos += ext;
         } else if size < 8 {
             break;
@@ -2649,7 +2647,7 @@ fn find_jp2_wavelets(cs: &[u8]) -> (Option<u8>, Vec<(u16, u8)>) {
 
         // COD marker (FF 52)
         if marker == 0x52 && pos + 4 <= cs.len() {
-            let seg_len = u16::from_be_bytes([cs[pos + 2], cs[pos + 3]]) as usize;
+            let seg_len = crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([cs[pos + 2], cs[pos + 3]]));
             // COD segment: Scod(1) + SGcod(4) + SPcod(variable)
             // SPcod starts at offset 5 within segment data
             // SPcod layout: NL(1) + cb_width(1) + cb_height(1) + cb_style(1) + transform(1)
@@ -2666,7 +2664,7 @@ fn find_jp2_wavelets(cs: &[u8]) -> (Option<u8>, Vec<(u16, u8)>) {
 
         // COC marker (FF 53) — component-specific coding style
         if marker == 0x53 && pos + 4 <= cs.len() {
-            let seg_len = u16::from_be_bytes([cs[pos + 2], cs[pos + 3]]) as usize;
+            let seg_len = crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([cs[pos + 2], cs[pos + 3]]));
             // COC segment: Ccoc(1 or 2 bytes) + Scoc(1) + SPcoc(variable)
             // For images with < 257 components, Ccoc is 1 byte; otherwise 2 bytes
             // We'll assume 1 byte for simplicity (most common case)
@@ -2688,7 +2686,7 @@ fn find_jp2_wavelets(cs: &[u8]) -> (Option<u8>, Vec<(u16, u8)>) {
         if pos + 4 > cs.len() {
             break;
         }
-        let seg_len = u16::from_be_bytes([cs[pos + 2], cs[pos + 3]]) as usize;
+        let seg_len = crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([cs[pos + 2], cs[pos + 3]]));
         pos += 2 + seg_len;
     }
 

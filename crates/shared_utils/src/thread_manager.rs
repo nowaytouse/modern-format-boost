@@ -145,7 +145,7 @@ pub fn get_balanced_thread_config(workload: WorkloadType) -> ThreadAllocation {
         .map(std::num::NonZero::get)
         .unwrap_or(4);
 
-    let reserved = (total_cores as f64 * 0.2).ceil() as usize;
+    let reserved = crate::numeric_cast::f64_to_usize_sat((crate::numeric_cast::usize_to_f64(total_cores) * 0.2).ceil());
     let reserved = reserved.clamp(1, 2);
 
     let available_cores = total_cores.saturating_sub(reserved).max(1);
@@ -225,7 +225,6 @@ pub fn get_rsync_path() -> &'static str {
 
 #[must_use]
 pub fn get_rsync_version() -> Option<String> {
-
     let output = crate::tool_builders::RsyncBuilder::new()
         .executable(get_rsync_path())
         .arg("--version")

@@ -124,8 +124,7 @@ pub mod progress_style {
     pub const COMPACT_TEMPLATE: &str =
         "{prefix:.cyan} [{bar:30.green/black}] {percent:>3}% ({pos}/{len}) {msg:.dim}";
 
-    pub const SPINNER_TEMPLATE: &str =
-        "{spinner:.green} {prefix:.cyan.bold} * {elapsed} * {msg}";
+    pub const SPINNER_TEMPLATE: &str = "{spinner:.green} {prefix:.cyan.bold} * {elapsed} * {msg}";
 }
 
 const SPINNER_FRAMES: &[&str] = &["-", "/", "|", "\\"];
@@ -134,12 +133,12 @@ const SPINNER_DOTS: &[&str] = &["*", ".", "o", "O"];
 static SPINNER_FRAME: AtomicU64 = AtomicU64::new(0);
 
 pub fn spinner_frame() -> &'static str {
-    let frame = SPINNER_FRAME.fetch_add(1, Ordering::Relaxed) as usize;
+    let frame = usize::try_from(SPINNER_FRAME.fetch_add(1, Ordering::Relaxed)).unwrap_or(0);
     SPINNER_FRAMES[frame % SPINNER_FRAMES.len()]
 }
 
 pub fn spinner_dots() -> &'static str {
-    let frame = SPINNER_FRAME.fetch_add(1, Ordering::Relaxed) as usize;
+    let frame = usize::try_from(SPINNER_FRAME.fetch_add(1, Ordering::Relaxed)).unwrap_or(0);
     SPINNER_DOTS[frame % SPINNER_DOTS.len()]
 }
 
@@ -154,6 +153,7 @@ pub enum ProgressStyle {
 #[must_use]
 pub fn render_progress_bar(progress: f64, width: usize, style: ProgressStyle) -> String {
     let progress = progress.clamp(0.0, 1.0);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let filled = (progress * width as f64).round() as usize;
     let empty = width.saturating_sub(filled);
 
@@ -201,6 +201,7 @@ pub fn render_colored_progress(progress: f64, width: usize) -> String {
     use colors::{BRIGHT_CYAN, BRIGHT_GREEN, BRIGHT_RED, BRIGHT_YELLOW, RESET};
 
     let bar = render_progress_bar(progress, width, ProgressStyle::Modern);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let pct = (progress * 100.0) as u32;
 
     let color = if pct >= 80 {
@@ -476,12 +477,17 @@ pub fn format_size(bytes: u64) -> String {
 #[must_use]
 pub fn format_duration(secs: f64) -> String {
     if secs >= 3600.0 {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let h = (secs / 3600.0).floor() as u32;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let m = ((secs % 3600.0) / 60.0).floor() as u32;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let s = (secs % 60.0).floor() as u32;
         format!("{h}h {m:02}m {s:02}s")
     } else if secs >= 60.0 {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let m = (secs / 60.0).floor() as u32;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let s = (secs % 60.0).floor() as u32;
         format!("{m}m {s:02}s")
     } else {

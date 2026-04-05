@@ -121,7 +121,7 @@ mod tests {
 
         let utc_hour = utc_now.hour();
         let beijing_hour = beijing_time.hour();
-        let hour_diff = (beijing_hour as i32 - utc_hour as i32 + 24) % 24;
+        let hour_diff = (crate::numeric_cast::u32_to_i32_sat(beijing_hour) - crate::numeric_cast::u32_to_i32_sat(utc_hour) + 24) % 24;
         assert_eq!(hour_diff, 8);
     }
 

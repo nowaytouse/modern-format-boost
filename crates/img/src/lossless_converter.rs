@@ -337,7 +337,7 @@ pub fn convert_to_jxl(
                 if let Some(icc) = patched_icc_path {
                     builder.icc_profile(icc);
                 }
-                
+
                 let retry_out = builder.build().output();
                 if let Ok(ref o) = retry_out {
                     if o.status.success() {
@@ -433,7 +433,8 @@ pub fn convert_to_jxl(
                     .format("image2pipe")
                     .arg("-"); // output to pipe
 
-                let ffmpeg_result = ffmpeg_builder.build()
+                let ffmpeg_result = ffmpeg_builder
+                    .build()
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
                     .spawn();
@@ -450,7 +451,8 @@ pub fn convert_to_jxl(
                                 .threads(max_threads)
                                 .apple_compat(options.apple_compat);
 
-                            let cjxl_result = cjxl_builder.build()
+                            let cjxl_result = cjxl_builder
+                                .build()
                                 .stdin(ffmpeg_stdout)
                                 .stderr(Stdio::piped())
                                 .spawn();
@@ -1127,7 +1129,7 @@ pub fn convert_to_avif(
         .quality(q, q)
         .input(input)
         .output(&temp_output);
-    
+
     let result = builder.build().output();
 
     match result {
@@ -1204,7 +1206,7 @@ pub fn convert_to_avif_lossless(
         .jobs("all")
         .input(input)
         .output(&temp_output);
-    
+
     let result = builder.build().output();
 
     match result {
@@ -1391,7 +1393,6 @@ fn try_imagemagick_fallback(
     )
 }
 
-
 fn prepare_input_for_cjxl(
     input: &Path,
     options: &ConvertOptions,
@@ -1549,15 +1550,15 @@ fn prepare_input_for_cjxl(
 
                 let mut builder = shared_utils::MagickBuilder::new();
                 builder.input(input).output(&temp_path);
-                
+
                 if is_float {
                     builder.format("exr");
                 }
-                
+
                 if let Ok(depth) = depth_str.parse::<u8>() {
                     builder.depth(depth);
                 }
-                
+
                 let result = builder.build().output();
 
                 match result {
@@ -1600,7 +1601,7 @@ fn prepare_input_for_cjxl(
 
             let mut builder = shared_utils::image_builders::DwebpBuilder::new();
             builder.input(input).output(&temp_png);
-            
+
             let result = builder.build().output();
 
             match result {
@@ -1704,13 +1705,9 @@ fn prepare_input_for_cjxl(
 
             eprintln!("   🍎 Trying macOS sips first...");
             let mut builder = shared_utils::SipsBuilder::new();
-            builder
-                .format("png")
-                .input(input)
-                .output(&temp_png);
-            
-            let result = builder.build().output();
+            builder.format("png").input(input).output(&temp_png);
 
+            let result = builder.build().output();
 
             match result {
                 Ok(output) if output.status.success() && temp_png.exists() => {
@@ -1729,17 +1726,16 @@ fn prepare_input_for_cjxl(
 
                     let mut builder = shared_utils::MagickBuilder::new();
                     builder.input(input).output(&temp_path);
-                    
+
                     if is_float {
                         builder.format("exr");
                     }
-                    
+
                     if let Ok(depth) = depth_str.parse::<u8>() {
                         builder.depth(depth);
                     }
-                    
-                    match builder.build().output() {
 
+                    match builder.build().output() {
                         Ok(output) if output.status.success() && temp_path.exists() => {
                             eprintln!("   ✅ ImageMagick HEIC pre-processing successful");
                             Ok((temp_path, Some(temp_file)))
@@ -1772,7 +1768,7 @@ fn prepare_input_for_cjxl(
                 .input(input)
                 .frames_v(1)
                 .output(&temp_png);
-            
+
             let result = builder.build().output();
 
             match result {

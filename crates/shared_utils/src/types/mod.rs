@@ -16,10 +16,10 @@ pub mod preset;
 pub mod ssim;
 
 pub use crf::{Av1Encoder, Crf, CrfError, EncoderBounds, HevcEncoder, Vp9Encoder, X264Encoder};
-pub use preset::EncoderPreset;
 pub use file_size::FileSize;
 pub use iteration::{IterationError, IterationGuard};
 pub use perception::{ProcessHistory, VisualPerception};
+pub use preset::EncoderPreset;
 pub use ssim::{Ssim, SsimError, SSIM_EPSILON};
 
 /// Result of a specific verification check.

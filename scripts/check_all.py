@@ -359,9 +359,7 @@ def check_bundle_metadata(tracker: Tracker) -> bool:
 
 def print_summary(tracker: Tracker) -> None:
     if console:
-        table = Table(
-            title="\nCode Quality Summary", border_style="dim", expand=True
-        )
+        table = Table(title="\nCode Quality Summary", border_style="dim", expand=True)
         table.add_column("Category", style="cyan")
         table.add_column("Count", justify="right")
         table.add_column("Details", style="dim")

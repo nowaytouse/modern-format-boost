@@ -173,8 +173,8 @@ fn print_blind_spots(conn: &mut postgres::Client) -> Result<()> {
     }
 
     println!(
-        "   {:<12} {:<12} {:>10} {:>10} {:>8} {}",
-        "Duration(s)", "WebP Ratio", "Avg Conf.", "Avg Final", "Count", "Typical Layer"
+        "   {:<12} {:<12} {:>10} {:>10} {:>8} Typical Layer",
+        "Duration(s)", "WebP Ratio", "Avg Conf.", "Avg Final", "Count"
     );
     println!("   {}", "─".repeat(70));
 

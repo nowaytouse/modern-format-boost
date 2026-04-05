@@ -120,11 +120,20 @@ mod tests {
         // Test relative
         assert_eq!(magick_safe_path(Path::new("img.jpg")), "file:./img.jpg");
         // Test with %
-        assert_eq!(magick_safe_path(Path::new("img%1.jpg")), "file:./img%%1.jpg");
+        assert_eq!(
+            magick_safe_path(Path::new("img%1.jpg")),
+            "file:./img%%1.jpg"
+        );
         // Test absolute
-        assert_eq!(magick_safe_path(Path::new("/abs/img.jpg")), "file:/abs/img.jpg");
+        assert_eq!(
+            magick_safe_path(Path::new("/abs/img.jpg")),
+            "file:/abs/img.jpg"
+        );
         // Test already prepended (idempotency)
-        assert_eq!(magick_safe_path(Path::new("file:./img.jpg")), "file:./img.jpg");
+        assert_eq!(
+            magick_safe_path(Path::new("file:./img.jpg")),
+            "file:./img.jpg"
+        );
     }
 
     #[test]

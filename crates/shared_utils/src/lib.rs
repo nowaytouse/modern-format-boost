@@ -1,22 +1,15 @@
-#![allow(
-    clippy::missing_panics_doc,
-    clippy::cast_precision_loss,
+#![warn(
     clippy::cast_possible_wrap,
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
-    clippy::too_many_lines,
-    clippy::struct_excessive_bools,
-    clippy::fn_params_excessive_bools,
-    clippy::unnecessary_wraps,
-    clippy::default_trait_access,
-    clippy::float_cmp,
-    clippy::module_name_repetitions,
-    clippy::wildcard_imports
-)]
-#![warn(
-    clippy::match_same_arms,
     clippy::manual_let_else,
     clippy::items_after_statements
+)]
+#![allow(
+    clippy::cast_precision_loss, // Audited: acceptable for media metrics (bitrate, size, time)
+    clippy::too_many_lines,
+    clippy::struct_excessive_bools,
+    clippy::fn_params_excessive_bools
 )]
 //! Shared Utilities for `modern_format_boost` tools
 //!
@@ -46,13 +39,13 @@ pub mod error_handler;
 pub mod explore_strategy;
 pub mod ffmpeg_builder;
 pub mod ffmpeg_process;
-pub mod image_builders;
-pub mod jxl_builder;
 pub mod ffprobe;
 pub mod flag_validator;
 pub mod float_compare;
 pub mod gpu_accel;
+pub mod image_builders;
 pub mod image_quality_detector;
+pub mod jxl_builder;
 pub mod lru_cache;
 pub mod metadata;
 pub mod modern_ui;
@@ -88,9 +81,10 @@ pub mod quality_verifier_enhanced;
 pub mod smart_file_copier;
 pub mod stream_size;
 pub mod system_memory;
-pub mod types;
 pub mod tool_builders;
-pub use tool_builders::{X265Builder};
+pub mod types;
+pub mod numeric_cast;
+pub use tool_builders::X265Builder;
 
 pub mod progress_mode;
 
@@ -136,8 +130,8 @@ pub use media_passthrough::{audio_args_for_container, subtitle_args_for_containe
 #[cfg(test)]
 mod parity_tests;
 
-pub mod depth_channel;
 pub mod database;
+pub mod depth_channel;
 pub mod hdr_synthesis;
 pub mod image_analyzer;
 pub mod image_detection;
@@ -152,10 +146,10 @@ pub mod live_photo;
 pub mod loop_intent;
 pub mod media_meta_utils;
 
+pub use database::{lookup_similar_samples, SampleMatch};
 pub use depth_channel::{
     encode_jxl_depth_fallback, encode_jxl_with_depth, extract_depth_from_heic, DepthMap, DepthType,
 };
-pub use database::{lookup_similar_samples, SampleMatch};
 pub use image_quality_db::{lookup_image_quality, QualityScore};
 pub use loop_intent::{
     assess_loop_intent, assess_loop_intent_from_meta, assess_loop_intent_from_probe,
@@ -226,10 +220,10 @@ pub use video_explorer::{
     explore_precise_quality_match, explore_precise_quality_match_with_compression,
     explore_quality_match, explore_size_only, precision, precision::SearchPhase,
     precision::ThreePhaseSearch, pure_video_size, verify_compression_precise,
-    verify_compression_simple, CompressionVerifyStrategy, ExploreConfig,
-    ExploreMode, ExploreResult, IterationMetrics, QualityThresholds, SsimSource,
-    TransparencyReport, VideoEncoder, VideoExplorer, METADATA_MARGIN_MAX, METADATA_MARGIN_MIN,
-    METADATA_MARGIN_PERCENT, SMALL_FILE_THRESHOLD,
+    verify_compression_simple, CompressionVerifyStrategy, ExploreConfig, ExploreMode,
+    ExploreResult, IterationMetrics, QualityThresholds, SsimSource, TransparencyReport,
+    VideoEncoder, VideoExplorer, METADATA_MARGIN_MAX, METADATA_MARGIN_MIN, METADATA_MARGIN_PERCENT,
+    SMALL_FILE_THRESHOLD,
 };
 
 pub use types::EncoderPreset;
@@ -298,11 +292,14 @@ pub use explore_strategy::{
 pub use ffmpeg_builder::{
     FfmpegBuilder, FfprobeBuilder, PixFmt, StreamType, VideoCodec, VideoProfile,
 };
-pub use image_builders::{AvifencBuilder, DwebpBuilder, ExiftoolBuilder, GifskiBuilder, MagickBuilder, SipsBuilder, WebpmuxBuilder};
-pub use jxl_builder::{CjxlBuilder, DjxlBuilder};
 pub use ffmpeg_process::{
     format_ffmpeg_error, is_recoverable_error, FfmpegProcess, FfmpegProgressParser,
 };
+pub use image_builders::{
+    AvifencBuilder, DwebpBuilder, ExiftoolBuilder, GifskiBuilder, MagickBuilder, SipsBuilder,
+    WebpmuxBuilder,
+};
+pub use jxl_builder::{CjxlBuilder, DjxlBuilder};
 
 pub use float_compare::{
     approx_eq_crf, approx_eq_f32, approx_eq_f64, approx_eq_psnr, approx_eq_ssim, approx_ge_f64,

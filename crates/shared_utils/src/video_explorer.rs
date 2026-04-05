@@ -70,7 +70,7 @@ pub const METADATA_MARGIN_PERCENT: f64 = crate::constants::METADATA_MARGIN_RATIO
 #[inline]
 #[must_use]
 pub fn calculate_metadata_margin(input_size: u64) -> u64 {
-    let percent_based = (input_size as f64 * METADATA_MARGIN_PERCENT) as u64;
+    let percent_based = crate::numeric_cast::f64_to_u64_sat(input_size as f64 * METADATA_MARGIN_PERCENT);
     percent_based.clamp(METADATA_MARGIN_MIN, METADATA_MARGIN_MAX)
 }
 
@@ -206,7 +206,7 @@ pub fn calculate_zero_gains_for_duration_and_range(
         1.0
     };
 
-    let scaled = (base as f32 * factor).round() as u32;
+    let scaled = crate::numeric_cast::f32_to_u32_sat((base as f32 * factor).round());
     let min_gains = if ultimate_mode { 15 } else { 3 };
     scaled.max(min_gains)
 }
@@ -218,7 +218,7 @@ pub fn calculate_adaptive_max_walls(crf_range: f32) -> u32 {
     if crf_range.is_nan() || crf_range.is_infinite() || crf_range <= 1.0 {
         return ULTIMATE_MIN_WALL_HITS;
     }
-    let log_component = crf_range.log2().ceil() as u32;
+    let log_component = crate::numeric_cast::f32_to_u32_sat(crf_range.log2().ceil());
     let total = log_component + ADAPTIVE_WALL_LOG_BASE;
     total.clamp(ULTIMATE_MIN_WALL_HITS, ULTIMATE_MAX_WALL_HITS)
 }
@@ -1063,7 +1063,7 @@ impl VideoExplorer {
             crate::log_eprintln!("┌ 🔍 Size-Only Explore ({:?})", self.encoder);
             crate::log_eprintln!(
                 "└ 📁 Input: {:.2} MB",
-                self.input_size as f64 / 1024.0 / 1024.0
+                crate::numeric_cast::f64_to_f32_lossy(self.input_size as f64 / 1024.0 / 1024.0)
             );
         });
 
@@ -1158,21 +1158,19 @@ impl VideoExplorer {
         let quality_passed = self.check_quality_passed(quality.0, quality.1, quality.2);
         if quality_passed.is_ok() {
             log.push("   ✅ Quality validation passed".to_string());
+        } else if let CheckResult::Failed(ref reason) = quality_passed {
+            log.push(format!("   ⚠️ Quality below threshold: {reason}"));
         } else {
-            if let CheckResult::Failed(ref reason) = quality_passed {
-                log.push(format!("   ⚠️ Quality below threshold: {reason}"));
-            } else {
-                log.push("   ⚠️ Quality validation skipped or indeterminate".to_string());
-            }
+            log.push("   ⚠️ Quality validation skipped or indeterminate".to_string());
         }
 
         Ok(ExploreResult {
             optimal_crf: self.config.initial_crf,
             output_size,
             size_change_pct: self.calc_change_pct(output_size),
-            ssim: quality.0.map(|x| x as f64),
-            psnr: quality.1.map(|x| x as f64),
-            ms_ssim: quality.2.map(|x| x as f64),
+            ssim: quality.0,
+            psnr: quality.1,
+            ms_ssim: quality.2,
             iterations: 1,
             quality_passed,
             log,
@@ -1208,7 +1206,7 @@ impl VideoExplorer {
             crate::log_eprintln!("┌ 📦 Compress-Only ({:?})", self.encoder);
             crate::log_eprintln!(
                 "└ 📁 Input: {:.2} MB",
-                self.input_size as f64 / 1024.0 / 1024.0
+                crate::numeric_cast::f64_to_f32_lossy(self.input_size as f64 / 1024.0 / 1024.0)
             );
         });
         log.push(format!("📦 Compress-Only ({:?})", self.encoder));
@@ -1481,7 +1479,7 @@ impl VideoExplorer {
         log_realtime!(
             "   📁 Input: {} bytes ({:.2} MB)",
             self.input_size,
-            self.input_size as f64 / 1024.0 / 1024.0
+            crate::numeric_cast::f64_to_f32_lossy(self.input_size as f64 / 1024.0 / 1024.0)
         );
         log_realtime!(
             "   📐 CRF range: [{:.1}, {:.1}]",
@@ -1493,7 +1491,7 @@ impl VideoExplorer {
 
         let mut iterations = 0u32;
         let crf_range = (self.config.max_crf - self.config.min_crf).max(1.0);
-        let dynamic_max_iterations = (f64::from(crf_range).log2().ceil() as u32)
+        let dynamic_max_iterations = crate::numeric_cast::f64_to_u32_sat(f64::from(crf_range).log2().ceil())
             .saturating_add(6)
             .saturating_add(4)
             .clamp(10, GLOBAL_MAX_ITERATIONS);
@@ -1731,7 +1729,7 @@ impl VideoExplorer {
             psnr: final_quality.1,
             ms_ssim: final_quality.2,
             iterations,
-            quality_passed: if quality_passed { CheckResult::Passed } else { CheckResult::Failed(format!("SSIM {:.4} below target", best_ssim)) },
+            quality_passed: if quality_passed { CheckResult::Passed } else { CheckResult::Failed(format!("SSIM {best_ssim:.4} below target")) },
             log,
             confidence: 0.8,
             confidence_detail: ConfidenceBreakdown::default(),
@@ -1773,7 +1771,7 @@ impl VideoExplorer {
         macro_rules! log_progress {
             ($stage:expr, $crf:expr, $size:expr, $iter:expr) => {{
                 let size_pct = if self.input_size > 0 {
-                    (($size as f64 / self.input_size as f64) - 1.0) * 100.0
+                    (($size as f64 / (self.input_size.max(1) as f64)) - 1.0) * 100.0
                 } else {
                     0.0
                 };
@@ -1825,7 +1823,7 @@ impl VideoExplorer {
         log_header!(
             "🔬 Precise Quality + Compression ({:?}) • Input: {:.2} MB",
             self.encoder,
-            self.input_size as f64 / 1024.0 / 1024.0
+            crate::numeric_cast::f64_to_f32_lossy(self.input_size as f64 / 1024.0 / 1024.0)
         );
         log_header!(
             "   Goal: Best SSIM + Output < Input • Range: [{:.1}, {:.1}]",
@@ -1928,15 +1926,15 @@ impl VideoExplorer {
             let saved = self.input_size - best_size;
             pb.finish_and_clear();
             crate::log_eprintln!("✅ Result: CRF {:.1} • SSIM {:.4} {} • {:+.1}% ({:.2} MB saved) • {} iter in {:.1}s",
-                best_crf, ssim, status, self.calc_change_pct(best_size), saved as f64 / 1024.0 / 1024.0, iterations, elapsed.as_secs_f64());
+                best_crf, ssim, status, self.calc_change_pct(best_size), crate::numeric_cast::f64_to_f32_lossy(saved as f64 / 1024.0 / 1024.0), iterations, elapsed.as_secs_f64());
 
             return Ok(ExploreResult {
                 optimal_crf: best_crf,
                 output_size: best_size,
                 size_change_pct: self.calc_change_pct(best_size),
-                ssim: ssim_opt.map(|x| x as f64),
-                psnr: psnr_opt.map(|x| x as f64),
-                ms_ssim: ms_ssim_opt.map(|x| x as f64),
+                ssim: ssim_opt,
+                psnr: psnr_opt,
+                ms_ssim: ms_ssim_opt,
                 iterations,
                 quality_passed: CheckResult::Passed,
                 log,
@@ -1975,9 +1973,9 @@ impl VideoExplorer {
                 optimal_crf: self.config.max_crf,
                 output_size: max_size,
                 size_change_pct: self.calc_change_pct(max_size),
-                ssim: quality.0.map(|x| x as f64),
-                psnr: quality.1.map(|x| x as f64),
-                ms_ssim: quality.2.map(|x| x as f64),
+                ssim: quality.0,
+                psnr: quality.1,
+                ms_ssim: quality.2,
                 iterations,
                 quality_passed: CheckResult::Failed("Enhanced verification failed".into()),
                 log,
@@ -2003,17 +2001,17 @@ impl VideoExplorer {
                 .iter()
                 .rev()
                 .take(WINDOW_SIZE)
-                .map(|(_, s)| *s as f64 / input_size as f64)
+                .map(|(_, s)| f64::from(crate::numeric_cast::f64_to_f32_lossy(*s as f64 / input_size as f64)))
                 .collect();
-            let mean = recent.iter().sum::<f64>() / recent.len() as f64;
-            recent.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / recent.len() as f64
+            let mean = if recent.is_empty() { 0.0 } else { recent.iter().sum::<f64>() / recent.len() as f64 };
+            if recent.is_empty() { 0.0 } else { recent.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / recent.len() as f64 }
         };
 
         let calc_change_rate = |prev: u64, curr: u64| -> f64 {
             if prev == 0 {
                 return f64::MAX;
             }
-            ((curr as f64 - prev as f64) / prev as f64).abs()
+            ((curr as f64 - prev as f64) / (prev.max(1) as f64)).abs()
         };
 
         log_header!("   Stage A: Binary search (0.5 step)");
@@ -2114,7 +2112,7 @@ impl VideoExplorer {
             }
         }
 
-        if best_boundary == boundary_crf {
+        if (best_boundary - boundary_crf).abs() < 1e-6_f32 {
             fine_tune_history.clear();
 
             for offset in [0.25_f32, 0.5, 0.75, 1.0] {
@@ -2157,7 +2155,7 @@ impl VideoExplorer {
         }
         progress_done();
 
-        if best_boundary != boundary_crf {
+        if (best_boundary - boundary_crf).abs() > 1e-6_f32 {
             boundary_crf = best_boundary;
         }
 
@@ -2197,7 +2195,7 @@ impl VideoExplorer {
             ssim,
             status,
             size_change_pct,
-            saved as f64 / 1024.0 / 1024.0,
+            crate::numeric_cast::f64_to_f32_lossy(saved as f64 / 1024.0 / 1024.0),
             iterations,
             elapsed.as_secs_f64()
         );
@@ -2206,11 +2204,11 @@ impl VideoExplorer {
             optimal_crf: boundary_crf,
             output_size: final_size,
             size_change_pct,
-            ssim: quality.0.map(|x| x as f64),
-            psnr: quality.1.map(|x| x as f64),
-            ms_ssim: quality.2.map(|x| x as f64),
+            ssim: quality.0,
+            psnr: quality.1,
+            ms_ssim: quality.2,
             iterations,
-            quality_passed: if ssim >= self.config.quality_thresholds.min_ssim { CheckResult::Passed } else { CheckResult::Failed(format!("SSIM {:.4} below threshold", ssim)) },
+            quality_passed: if ssim >= self.config.quality_thresholds.min_ssim { CheckResult::Passed } else { CheckResult::Failed(format!("SSIM {ssim:.4} below threshold")) },
             log,
             confidence: 0.85,
             confidence_detail: ConfidenceBreakdown::default(),
@@ -2439,7 +2437,7 @@ impl VideoExplorer {
                 } else if let Some(val) = line.strip_prefix("speed=") {
                     last_speed = val.to_string();
                 } else if line == "progress=continue" || line == "progress=end" {
-                    let current_secs = last_time_us as f64 / 1_000_000.0;
+                    let current_secs = f64::from(crate::numeric_cast::f64_to_f32_lossy(last_time_us as f64 / 1_000_000.0));
                     if duration_secs > 0.0 {
                         let pct = (current_secs / duration_secs * 100.0).min(100.0);
                         eprint!(
@@ -2529,7 +2527,7 @@ impl VideoExplorer {
         if self.input_size == 0 {
             return 0.0;
         }
-        (output_size as f64 / self.input_size as f64 - 1.0) * 100.0
+        (output_size as f64 / (self.input_size.max(1) as f64) - 1.0) * 100.0
     }
 
     #[inline]
@@ -2829,7 +2827,7 @@ impl VideoExplorer {
                 let mid_end = dur * (0.5 + segment_pct / 2.0);
                 let tail_start = dur * (1.0 - segment_pct);
 
-                let pct_label = (segment_pct * 100.0) as u32;
+                let pct_label = crate::numeric_cast::f64_to_u32_sat(segment_pct * 100.0);
                 crate::log_eprintln!(
                     "   MS-SSIM: 3-segment sampling (start {}% + mid {}% + end {}%)",
                     pct_label,
@@ -3244,7 +3242,7 @@ pub fn calculate_smart_thresholds(initial_crf: f32, encoder: VideoEncoder) -> (f
         // High headroom for lossless-first starts (e.g. GIFs) to ensure we reach 25-30+
         28.0_f32
     } else {
-        (quality_level as f32).mul_add(7.0, 8.0)
+        crate::numeric_cast::f64_to_f32_lossy(f64::from(quality_level)).mul_add(7.0, 8.0)
     };
     let max_crf = (initial_crf + headroom).min(max_crf_cap);
 
@@ -3606,8 +3604,8 @@ mod tests {
 
     fn test_binary_search_precision_proof() {
         let range = 28.0 - 10.0;
-        let coarse_iterations = (range / COARSE_STEP).ceil() as u32;
-        let fine_iterations = (COARSE_STEP / FINE_STEP).ceil() as u32;
+        let coarse_iterations = crate::numeric_cast::f32_to_u32_sat((range / COARSE_STEP).ceil());
+        let fine_iterations = crate::numeric_cast::f32_to_u32_sat((COARSE_STEP / FINE_STEP).ceil());
         let total = coarse_iterations + fine_iterations;
 
         assert!(
@@ -3624,8 +3622,8 @@ mod tests {
 
     fn test_binary_search_worst_case() {
         let range = 51.0 - 0.0;
-        let coarse_iterations = (range / COARSE_STEP).ceil() as u32;
-        let fine_iterations = (COARSE_STEP / FINE_STEP).ceil() as u32;
+        let coarse_iterations = crate::numeric_cast::f32_to_u32_sat((range / COARSE_STEP).ceil());
+        let fine_iterations = crate::numeric_cast::f32_to_u32_sat((COARSE_STEP / FINE_STEP).ceil());
         let total = coarse_iterations + fine_iterations;
 
         assert!(
@@ -3828,11 +3826,11 @@ mod tests {
         let initial = 20.0_f32;
         let max_crf = 30.0_f32;
 
-        let coarse_up = ((max_crf - initial) / COARSE_STEP).ceil() as u32;
+        let coarse_up = crate::numeric_cast::f32_to_u32_sat(((max_crf - initial) / COARSE_STEP).ceil());
         assert_eq!(coarse_up, 5, "Coarse search up should be 5 iterations");
 
         let boundary_range = 4.0_f32;
-        let fine_iterations = (boundary_range / FINE_STEP).ceil() as u32;
+        let fine_iterations = crate::numeric_cast::f32_to_u32_sat((boundary_range / FINE_STEP).ceil());
         assert_eq!(fine_iterations, 8, "Fine search should be 8 iterations");
 
         let total = 1 + coarse_up + fine_iterations + 1;
@@ -3890,8 +3888,8 @@ mod tests {
         let config = ExploreConfig::default();
 
         let worst_range = 30.0_f32;
-        let worst_coarse = (worst_range / COARSE_STEP).ceil() as u32;
-        let worst_fine = (COARSE_STEP / FINE_STEP).ceil() as u32 * 2;
+        let worst_coarse = crate::numeric_cast::f32_to_u32_sat((worst_range / COARSE_STEP).ceil());
+        let worst_fine = crate::numeric_cast::f32_to_u32_sat((COARSE_STEP / FINE_STEP).ceil()) * 2;
         let worst_total = 1 + worst_coarse + worst_fine + 1;
 
         assert!(
@@ -4002,7 +4000,10 @@ mod tests {
         let mut prev_min_ssim = 1.0_f64;
 
         for crf in (10..=40).step_by(2) {
-            let (max_crf, min_ssim) = calculate_smart_thresholds(crf as f32, VideoEncoder::Hevc);
+            let (max_crf, min_ssim) = calculate_smart_thresholds(
+                crate::numeric_cast::f64_to_f32_lossy(f64::from(crf)),
+                VideoEncoder::Hevc
+            );
 
             if crf > 10 {
                 assert!(
@@ -4065,17 +4066,17 @@ mod tests {
     fn test_v4_four_phase_search_strategy() {
         let phase1_step = 1.0_f32;
         let range = 28.0 - 10.0;
-        let phase1_iterations = (range / phase1_step).ceil() as u32;
+        let phase1_iterations = crate::numeric_cast::f32_to_u32_sat((range / phase1_step).ceil());
         assert_eq!(phase1_iterations, 18, "Phase 1 should scan 18 CRF values");
 
         let phase2_step = 0.5_f32;
         let phase2_range = 4.0_f32;
-        let phase2_iterations = (phase2_range / phase2_step).ceil() as u32;
+        let phase2_iterations = crate::numeric_cast::f32_to_u32_sat((phase2_range / phase2_step).ceil());
         assert_eq!(phase2_iterations, 8, "Phase 2 should test 8 CRF values");
 
         let phase3_step = 0.1_f32;
         let phase3_range = 1.0_f32;
-        let phase3_iterations = (phase3_range / phase3_step).ceil() as u32;
+        let phase3_iterations = crate::numeric_cast::f32_to_u32_sat((phase3_range / phase3_step).ceil());
         assert_eq!(phase3_iterations, 10, "Phase 3 should test 10 CRF values");
     }
 
@@ -4222,9 +4223,9 @@ mod tests {
 
     fn test_v4_no_iteration_limit() {
         let range = 51.0_f64 - 0.0;
-        let phase1 = (range / 1.0_f64).ceil() as u32;
-        let phase2 = (4.0_f64 / 0.5_f64).ceil() as u32;
-        let phase3 = (1.0_f64 / 0.1_f64).ceil() as u32;
+        let phase1 = crate::numeric_cast::f64_to_u32_sat((range / 1.0_f64).ceil());
+        let phase2 = crate::numeric_cast::f64_to_u32_sat((4.0_f64 / 0.5_f64).ceil());
+        let phase3 = crate::numeric_cast::f64_to_u32_sat((1.0_f64 / 0.1_f64).ceil());
         let phase4_max = 50_u32;
 
         let total_max = phase1 + phase2 + phase3 + phase4_max;
@@ -4293,10 +4294,10 @@ mod tests {
                 .iter()
                 .rev()
                 .take(window_size)
-                .map(|s| *s as f64 / input_size as f64)
+                .map(|s| f64::from(crate::numeric_cast::f64_to_f32_lossy(*s as f64 / input_size as f64)))
                 .collect();
-            let mean = recent.iter().sum::<f64>() / recent.len() as f64;
-            recent.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / recent.len() as f64
+            let mean = if recent.is_empty() { 0.0 } else { recent.iter().sum::<f64>() / recent.len() as f64 };
+            if recent.is_empty() { 0.0 } else { recent.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / recent.len() as f64 }
         };
 
         let stable_sizes = vec![500_000_u64, 500_100, 500_050];
@@ -4323,7 +4324,7 @@ mod tests {
             if prev == 0 {
                 return f64::MAX;
             }
-            ((curr as f64 - prev as f64) / prev as f64).abs()
+            ((curr as f64 - prev as f64) / (prev.max(1) as f64)).abs()
         };
 
         let small_change = calc_change_rate(1_000_000, 1_004_000);
@@ -4344,7 +4345,7 @@ mod tests {
     fn test_v413_three_phase_search() {
         let phase1_step = 0.5_f32;
         let crf_range = 28.0_f32 - 10.0_f32;
-        let phase1_iterations = (crf_range / phase1_step).log2().ceil() as u32;
+        let phase1_iterations = crate::numeric_cast::f32_to_u32_sat((crf_range / phase1_step).log2().ceil());
         assert!(
             phase1_iterations <= 6,
             "Phase 1 should need ~6 iterations: {phase1_iterations}"
@@ -4352,7 +4353,7 @@ mod tests {
 
         let phase2_range = 0.8_f32;
         let phase2_step = 0.1_f32;
-        let phase2_max_iterations = (phase2_range / phase2_step).ceil() as u32;
+        let phase2_max_iterations = crate::numeric_cast::f32_to_u32_sat((phase2_range / phase2_step).ceil());
         assert_eq!(
             phase2_max_iterations, 8,
             "Phase 2 should need max 8 iterations"
@@ -4415,12 +4416,14 @@ mod tests {
             );
         }
 
-        assert_eq!(
-            precision::ULTRA_FINE_STEP,
-            0.25,
+        assert!(
+            (precision::ULTRA_FINE_STEP - 0.25).abs() < 1e-6,
             "ULTRA_FINE_STEP should be 0.25"
         );
-        assert_eq!(precision::FINE_STEP, 0.5, "FINE_STEP should be 0.5");
+        assert!(
+            (precision::FINE_STEP - 0.5).abs() < 1e-6,
+            "FINE_STEP should be 0.5"
+        );
     }
 
     #[test]
@@ -4471,7 +4474,7 @@ mod tests {
 
         assert_eq!(
             calculate_adaptive_max_walls(100_000.0),
-            (100_000.0_f32.log2().ceil() as u32 + ADAPTIVE_WALL_LOG_BASE)
+            (crate::numeric_cast::f32_to_u32_sat(100_000.0_f32.log2().ceil()) + ADAPTIVE_WALL_LOG_BASE)
                 .min(ULTIMATE_MAX_WALL_HITS)
         );
     }

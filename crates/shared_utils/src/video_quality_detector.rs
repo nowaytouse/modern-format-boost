@@ -229,7 +229,7 @@ pub fn analyze_video_quality(
         return Err("❌ Invalid duration: must be > 0".to_string());
     }
 
-    let frame_count = (duration_secs * fps) as u64;
+    let frame_count = crate::numeric_cast::f64_to_u64_sat(duration_secs * fps);
 
     let source_codec = parse_source_codec(codec);
     let codec_type = VideoCodecType::from_source_codec(source_codec);
@@ -240,7 +240,7 @@ pub fn analyze_video_quality(
     let effective_bitrate = video_bitrate.unwrap_or(total_bitrate);
     let pixels_per_second = f64::from(width) * f64::from(height) * fps;
     let bpp = if pixels_per_second > 0.0 {
-        effective_bitrate as f64 / pixels_per_second
+        f64::from(u32::try_from(effective_bitrate).unwrap_or(u32::MAX)) / pixels_per_second
     } else {
         0.0
     };
@@ -357,7 +357,7 @@ fn extract_crf_from_params(params: &str) -> Option<u8> {
                 .unwrap_or(rest.len());
             let val_str = rest[..end].trim();
             if let Ok(val) = val_str.parse::<f64>() {
-                return Some(val.round() as u8);
+                return Some(crate::numeric_cast::f64_to_u8_sat(val.round()));
             }
         }
     }
@@ -424,7 +424,7 @@ pub fn log_media_info_for_quality(analysis: &VideoQualityAnalysis, input_path: &
 
 #[must_use]
 pub fn to_quality_analysis(analysis: &VideoQualityAnalysis) -> QualityAnalysis {
-    let gop_fallback = (analysis.fps * 2.5).round().clamp(12.0, 250.0) as u32;
+    let gop_fallback = crate::numeric_cast::f64_to_u32_sat((analysis.fps * 2.5).round().clamp(12.0, 250.0));
     let color_fallback = if analysis.height <= 576 {
         "bt601"
     } else {
@@ -512,12 +512,12 @@ fn calculate_quality_score(
 
     let bpp_tweak = match compression {
         CompressionLevel::Standard => {
-            let t = ((bpp - 0.1).clamp(0.0, 0.2) / 0.2 * 5.0).round() as i32;
-            t.clamp(0, 5) as u8
+            let t = crate::numeric_cast::f64_to_u32_sat(((bpp - 0.1).clamp(0.0, 0.2) / 0.2 * 5.0).round());
+            u8::try_from(t.clamp(0, 5)).unwrap_or(0)
         }
         CompressionLevel::HighQuality => {
-            let t = ((bpp - 0.3).clamp(0.0, 0.2) / 0.2 * 3.0).round() as i32;
-            t.clamp(0, 3) as u8
+            let t = crate::numeric_cast::f64_to_u32_sat(((bpp - 0.3).clamp(0.0, 0.2) / 0.2 * 3.0).round());
+            u8::try_from(t.clamp(0, 3)).unwrap_or(0)
         }
         _ => 0,
     };
@@ -1808,7 +1808,7 @@ mod tests {
             )
             .unwrap();
 
-            let expected = bitrate as f64 / (f64::from(w) * f64::from(h) * fps);
+            let expected = f64::from(u32::try_from(bitrate).unwrap_or(u32::MAX)) / (f64::from(w) * f64::from(h) * fps);
             assert!(
                 (result.bpp - expected).abs() < 0.0001,
                 "STRICT: BPP for {}x{}@{}fps@{}bps: expected {}, got {}",

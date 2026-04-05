@@ -594,11 +594,15 @@ fn scan_image_tree_snapshot(
 
                 if entry.file_type().is_file() {
                     let path = entry.path();
-                    if !extensions.is_empty() && !crate::common_utils::has_extension(path, extensions) {
+                    if !extensions.is_empty()
+                        && !crate::common_utils::has_extension(path, extensions)
+                    {
                         continue;
                     }
 
-                    if let Some(codec) = crate::quality_matcher::SourceCodec::identify_by_content(path) {
+                    if let Some(codec) =
+                        crate::quality_matcher::SourceCodec::identify_by_content(path)
+                    {
                         if codec.is_image() {
                             if let Some(file_entry) = build_cached_image_entry(&root, path) {
                                 files.push(file_entry);
@@ -754,11 +758,15 @@ fn scan_video_tree_snapshot(
 
                 if entry.file_type().is_file() {
                     let path = entry.path();
-                    if !extensions.is_empty() && !crate::common_utils::has_extension(path, extensions) {
+                    if !extensions.is_empty()
+                        && !crate::common_utils::has_extension(path, extensions)
+                    {
                         continue;
                     }
 
-                    if let Some(codec) = crate::quality_matcher::SourceCodec::identify_by_content(path) {
+                    if let Some(codec) =
+                        crate::quality_matcher::SourceCodec::identify_by_content(path)
+                    {
                         // Admission: it's a video OR it's an animated image candidate for the 'vid' tool
                         if codec.is_video() || codec.can_be_animated() {
                             if let Some(file_entry) = build_cached_video_entry(&root, path) {
@@ -1118,7 +1126,7 @@ mod tests {
         let snapshot = scan_image_tree_snapshot(root, &["jpg"], true);
         assert!(validate_cached_image_tree(&snapshot, root, &["jpg"], true));
 
-        let bumped = FileTime::from_unix_time(path_modified_unix_secs(&nested) as i64 + 10, 0);
+        let bumped = FileTime::from_unix_time(crate::numeric_cast::u64_to_i64_sat(path_modified_unix_secs(&nested)) + 10, 0);
         filetime::set_file_mtime(&nested, bumped).unwrap();
 
         assert!(

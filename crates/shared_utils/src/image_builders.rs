@@ -1,8 +1,8 @@
 //! Type-safe builders for imaging tools (ImageMagick, webpmux, gifski, avifenc, sips, exiftool).
 
+use crate::constants;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use crate::constants;
 
 /// Builder for constructing `magick` (ImageMagick) commands.
 #[derive(Debug, Default)]
@@ -50,21 +50,23 @@ impl MagickBuilder {
         self
     }
 
-    pub fn define<K, V>(&mut self, key: K, value: V) -> &mut Self 
-    where 
+    pub fn define<K, V>(&mut self, key: K, value: V) -> &mut Self
+    where
         K: AsRef<str>,
-        V: AsRef<str>
+        V: AsRef<str>,
     {
-        self.defines.push((key.as_ref().to_string(), value.as_ref().to_string()));
+        self.defines
+            .push((key.as_ref().to_string(), value.as_ref().to_string()));
         self
     }
 
-    pub fn set<K, V>(&mut self, key: K, value: V) -> &mut Self 
-    where 
+    pub fn set<K, V>(&mut self, key: K, value: V) -> &mut Self
+    where
         K: AsRef<str>,
-        V: AsRef<str>
+        V: AsRef<str>,
     {
-        self.sets.push((key.as_ref().to_string(), value.as_ref().to_string()));
+        self.sets
+            .push((key.as_ref().to_string(), value.as_ref().to_string()));
         self
     }
 
@@ -89,7 +91,8 @@ impl MagickBuilder {
         let mut cmd = Command::new(constants::TOOL_MAGICK);
 
         if let Some(input) = &self.input {
-            cmd.arg("--").arg(crate::path_safety::magick_safe_path(input).as_ref());
+            cmd.arg("--")
+                .arg(crate::path_safety::magick_safe_path(input).as_ref());
         }
 
         for arg in &self.extra_args {
@@ -101,7 +104,8 @@ impl MagickBuilder {
         }
 
         for (k, v) in &self.defines {
-            cmd.arg(constants::MAGICK_ARG_DEFINE).arg(format!("{}={}", k, v));
+            cmd.arg(constants::MAGICK_ARG_DEFINE)
+                .arg(format!("{k}={v}"));
         }
 
         for (k, v) in &self.sets {
@@ -122,7 +126,7 @@ impl MagickBuilder {
 
         if self.use_stdout {
             if !self.extra_args.iter().any(|a| a.ends_with(":-")) {
-                 cmd.arg("png:-");
+                cmd.arg("png:-");
             }
             cmd.stdin(Stdio::null()); // Default for IM piped
             cmd.stdout(Stdio::piped());
@@ -135,7 +139,11 @@ impl MagickBuilder {
 
     #[must_use]
     pub fn check_available() -> bool {
-        Command::new(constants::TOOL_MAGICK).arg("-version").output().map(|o| o.status.success()).unwrap_or(false)
+        Command::new(constants::TOOL_MAGICK)
+            .arg("-version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
     }
 }
 
@@ -212,9 +220,20 @@ impl IdentifyBuilder {
 
     #[must_use]
     pub fn check_available() -> bool {
-        Command::new(constants::TOOL_IDENTIFY).arg("-version").output().map(|o| o.status.success()).unwrap_or_else(|_| {
-            Command::new(constants::TOOL_MAGICK).arg("identify").arg("-version").output().map(|o| o.status.success()).unwrap_or(false)
-        })
+        Command::new(constants::TOOL_IDENTIFY)
+            .arg("-version")
+            .output()
+            .map_or_else(
+                |_| {
+                    Command::new(constants::TOOL_MAGICK)
+                        .arg("identify")
+                        .arg("-version")
+                        .output()
+                        .map(|o| o.status.success())
+                        .unwrap_or(false)
+                },
+                |o| o.status.success(),
+            )
     }
 }
 
@@ -257,8 +276,16 @@ impl WebpmuxBuilder {
         self
     }
 
-    pub fn add_frame<P: AsRef<Path>>(&mut self, path: P, duration: u32, x: i32, y: i32, blend: bool) -> &mut Self {
-        self.frames.push((path.as_ref().to_path_buf(), duration, x, y, blend));
+    pub fn add_frame<P: AsRef<Path>>(
+        &mut self,
+        path: P,
+        duration: u32,
+        x: i32,
+        y: i32,
+        blend: bool,
+    ) -> &mut Self {
+        self.frames
+            .push((path.as_ref().to_path_buf(), duration, x, y, blend));
         self
     }
 
@@ -322,7 +349,11 @@ impl WebpmuxBuilder {
 
     #[must_use]
     pub fn check_available() -> bool {
-        Command::new(constants::TOOL_WEBPMUX).arg("-version").output().map(|o| o.status.success()).unwrap_or(false)
+        Command::new(constants::TOOL_WEBPMUX)
+            .arg("-version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
     }
 }
 
@@ -357,7 +388,6 @@ impl GifskiBuilder {
         self.inputs.push(path.as_ref().to_path_buf());
         self
     }
-
 
     pub fn fps(&mut self, fps: f32) -> &mut Self {
         self.fps = Some(fps);
@@ -422,7 +452,10 @@ impl GifskiBuilder {
         }
 
         if let (Some(w), Some(h)) = (self.width, self.height) {
-            cmd.arg("--width").arg(w.to_string()).arg("--height").arg(h.to_string());
+            cmd.arg("--width")
+                .arg(w.to_string())
+                .arg("--height")
+                .arg(h.to_string());
         }
 
         if let Some(r) = self.repeat {
@@ -450,7 +483,11 @@ impl GifskiBuilder {
 
     #[must_use]
     pub fn check_available() -> bool {
-        Command::new(constants::TOOL_GIFSKI).arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
+        Command::new(constants::TOOL_GIFSKI)
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
     }
 }
 
@@ -569,7 +606,11 @@ impl AvifencBuilder {
 
     #[must_use]
     pub fn check_available() -> bool {
-        Command::new("avifenc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
+        Command::new("avifenc")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
     }
 }
 
@@ -646,7 +687,11 @@ impl SipsBuilder {
     pub fn check_available() -> bool {
         #[cfg(target_os = "macos")]
         {
-            Command::new(constants::TOOL_SIPS).arg("-v").output().map(|o| o.status.success()).unwrap_or(false)
+            Command::new(constants::TOOL_SIPS)
+                .arg("-v")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -678,7 +723,7 @@ impl ExiftoolBuilder {
     pub fn tags_from_file<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
         self.arg("-tagsfromfile");
         // ExifTool format-interprets % in tagsfromfile argument, so we must double them.
-        self.arg(crate::path_safety::property_safe_path(path.as_ref()).to_string());
+        self.arg(crate::path_safety::property_safe_path(path.as_ref()));
         self
     }
 
@@ -687,10 +732,10 @@ impl ExiftoolBuilder {
         self
     }
 
-    pub fn args<I, S>(&mut self, args: I) -> &mut Self 
-    where 
+    pub fn args<I, S>(&mut self, args: I) -> &mut Self
+    where
         I: IntoIterator<Item = S>,
-        S: AsRef<str>
+        S: AsRef<str>,
     {
         for arg in args {
             self.args.push(arg.as_ref().to_string());
@@ -773,7 +818,11 @@ impl ExiftoolBuilder {
 
     #[must_use]
     pub fn check_available() -> bool {
-        Command::new("exiftool").arg("-ver").output().map(|o| o.status.success()).unwrap_or(false)
+        Command::new("exiftool")
+            .arg("-ver")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
     }
 }
 
@@ -827,6 +876,10 @@ impl DwebpBuilder {
 
     #[must_use]
     pub fn check_available() -> bool {
-        Command::new(crate::constants::TOOL_DWEBP).arg("-version").output().map(|o| o.status.success()).unwrap_or(false)
+        Command::new(crate::constants::TOOL_DWEBP)
+            .arg("-version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
     }
 }

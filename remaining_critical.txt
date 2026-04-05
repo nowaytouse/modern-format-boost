@@ -1,0 +1,3303 @@
+    Checking shared_utils v0.11.2 (/Users/nyamiiko/Downloads/GitHub/modern_format_boost/crates/shared_utils)
+error: casting `i64` to `u32` may truncate the value
+   --> crates/shared_utils/src/analysis_cache.rs:225:57
+    |
+225 | ...&data) != (stored_checksum as u32) {
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    |
+
+error: casting `i64` to `u32` may lose the sign of the value
+   --> crates/shared_utils/src/analysis_cache.rs:225:57
+    |
+225 | ...&data) != (stored_checksum as u32) {
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: to override `-D warnings` add `#[allow(clippy::cast_sign_loss)]`
+
+error: casting `i64` to `u32` may truncate the value
+   --> crates/shared_utils/src/analysis_cache.rs:255:53
+    |
+255 | ...&data) != (stored_checksum as u32) {
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    |
+
+error: casting `i64` to `u32` may lose the sign of the value
+   --> crates/shared_utils/src/analysis_cache.rs:255:53
+    |
+255 | ...&data) != (stored_checksum as u32) {
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `i64` to `u32` may truncate the value
+   --> crates/shared_utils/src/analysis_cache.rs:306:53
+    |
+306 | ...&data) != (stored_checksum as u32) {
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    |
+
+error: casting `i64` to `u32` may lose the sign of the value
+   --> crates/shared_utils/src/analysis_cache.rs:306:53
+    |
+306 | ...&data) != (stored_checksum as u32) {
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `i64` to `u32` may truncate the value
+   --> crates/shared_utils/src/analysis_cache.rs:329:49
+    |
+329 | ...&data) != (stored_checksum as u32) {
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    |
+
+error: casting `i64` to `u32` may lose the sign of the value
+   --> crates/shared_utils/src/analysis_cache.rs:329:49
+    |
+329 | ...&data) != (stored_checksum as u32) {
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `u64` to `i64` may wrap around the value
+   --> crates/shared_utils/src/analysis_cache.rs:365:19
+    |
+365 | ... = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, use `cast_signed()` instead: `SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs().cast_signed()`
+    |
+--
+    = help: to override `-D warnings` add `#[allow(clippy::cast_possible_wrap)]`
+
+error: casting `u64` to `i64` may wrap around the value
+   --> crates/shared_utils/src/analysis_cache.rs:398:19
+    |
+398 | ... = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, use `cast_signed()` instead: `SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs().cast_signed()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_wrap
+
+error: casting `i64` to `u32` may truncate the value
+   --> crates/shared_utils/src/analysis_cache.rs:441:53
+    |
+441 | ...&data) != (stored_checksum as u32) {
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    |
+
+error: casting `i64` to `u32` may lose the sign of the value
+   --> crates/shared_utils/src/analysis_cache.rs:441:53
+    |
+441 | ...&data) != (stored_checksum as u32) {
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `i64` to `u32` may truncate the value
+   --> crates/shared_utils/src/analysis_cache.rs:463:49
+    |
+463 | ...&data) != (stored_checksum as u32) {
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    |
+
+error: casting `i64` to `u32` may lose the sign of the value
+   --> crates/shared_utils/src/analysis_cache.rs:463:49
+    |
+463 | ...&data) != (stored_checksum as u32) {
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `u64` to `i64` may wrap around the value
+   --> crates/shared_utils/src/analysis_cache.rs:494:19
+    |
+494 | ... = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, use `cast_signed()` instead: `SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs().cast_signed()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_wrap
+
+error: casting `u64` to `i64` may wrap around the value
+   --> crates/shared_utils/src/analysis_cache.rs:517:19
+    |
+517 | ... = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, use `cast_signed()` instead: `SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs().cast_signed()`
+    |
+--
+    |
+
+error: casting `i128` to `i64` may truncate the value
+   --> crates/shared_utils/src/conversion.rs:319:30
+    |
+319 |         let diff_bytes_i64 = diff_bytes as i64;
+    |                              ^^^^^^^^^^^^^^^^^
+    |
+--
+    |
+
+error: casting `i128` to `i64` may truncate the value
+   --> crates/shared_utils/src/conversion.rs:375:34
+    |
+375 |             let diff_bytes_i64 = diff_bytes as i64;
+    |                                  ^^^^^^^^^^^^^^^^^
+    |
+--
+    |
+
+error: casting `f64` to `usize` may truncate the value
+   --> crates/shared_utils/src/date_analysis.rs:382:23
+    |
+382 | ... = (*count as f64 / total * 100.0) as usize;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `usize` may lose the sign of the value
+   --> crates/shared_utils/src/date_analysis.rs:382:23
+    |
+382 | ... = (*count as f64 / total * 100.0) as usize;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `u64` to `usize` may truncate the value on targets with 32-bit wide pointers
+   --> crates/shared_utils/src/ffprobe.rs:258:36
+    |
+258 | ... = s["index"].as_u64().unwrap_or(0) as usize;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    |
+
+error: casting `u64` to `usize` may truncate the value on targets with 32-bit wide pointers
+   --> crates/shared_utils/src/ffprobe.rs:263:28
+    |
+263 | ... = video_streams[0].1["index"].as_u64().unwrap_or(0) as usize;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    |
+
+error: casting `u64` to `u32` may truncate the value
+   --> crates/shared_utils/src/ffprobe.rs:290:17
+    |
+290 |       let width = video_stream["width"]
+    |  _________________^
+291 | |         .as_u64()
+--
+    |
+
+error: casting `u64` to `u32` may truncate the value
+   --> crates/shared_utils/src/ffprobe.rs:294:18
+    |
+294 |       let height = video_stream["height"]
+    |  __________________^
+295 | |         .as_u64()
+--
+    |
+
+error: casting `f64` to `u64` may truncate the value
+   --> crates/shared_utils/src/ffprobe.rs:316:20
+    |
+316 |         .unwrap_or((duration * frame_rate) as u64);
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/ffprobe.rs:316:20
+    |
+316 |         .unwrap_or((duration * frame_rate) as u64);
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `i64` to `u8` may truncate the value
+   --> crates/shared_utils/src/ffprobe.rs:358:24
+    |
+358 | ... = video_stream["has_b_frames"].as_i64().unwrap_or(0) as u8;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    |
+
+error: casting `i64` to `u8` may lose the sign of the value
+   --> crates/shared_utils/src/ffprobe.rs:358:24
+    |
+358 | ... = video_stream["has_b_frames"].as_i64().unwrap_or(0) as u8;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `u64` to `u32` may truncate the value
+   --> crates/shared_utils/src/ffprobe.rs:371:54
+    |
+371 | ....as_u64().map(|r| r as u32);
+    |                      ^^^^^^^^
+    |
+--
+    |
+
+error: casting `u64` to `u32` may truncate the value
+   --> crates/shared_utils/src/ffprobe.rs:388:18
+    |
+388 |         .map(|c| c as u32);
+    |                  ^^^^^^^^
+    |
+--
+    |
+
+error: casting `u64` to `u8` may truncate the value
+   --> crates/shared_utils/src/ffprobe.rs:563:42
+    |
+563 | ...   result.dv_profile = Some(profile as u8);
+    |                                ^^^^^^^^^^^^^
+    |
+--
+    |
+
+error: casting `u64` to `u8` may truncate the value
+   --> crates/shared_utils/src/ffprobe.rs:566:61
+    |
+566 | ...lity_id = Some(compat_id as u8);
+    |                   ^^^^^^^^^^^^^^^
+    |
+--
+    |
+
+error: casting `f64` to `u64` may truncate the value
+   --> crates/shared_utils/src/ffprobe.rs:605:14
+    |
+605 |         Some(((n / d) * 50000.0).round() as u64)
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/ffprobe.rs:605:14
+    |
+605 |         Some(((n / d) * 50000.0).round() as u64)
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+   --> crates/shared_utils/src/ffprobe.rs:611:18
+    |
+611 |             Some((v * 50000.0).round() as u64)
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/ffprobe.rs:611:18
+    |
+611 |             Some((v * 50000.0).round() as u64)
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+   --> crates/shared_utils/src/ffprobe.rs:614:18
+    |
+614 |             Some(v.round() as u64)
+    |                  ^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/ffprobe.rs:614:18
+    |
+614 |             Some(v.round() as u64)
+    |                  ^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+   --> crates/shared_utils/src/ffprobe.rs:627:14
+    |
+627 |         Some(((n / d) * 10000.0).round() as u64)
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/ffprobe.rs:627:14
+    |
+627 |         Some(((n / d) * 10000.0).round() as u64)
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+   --> crates/shared_utils/src/ffprobe.rs:631:18
+    |
+631 |             Some((v * 10000.0).round() as u64)
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/ffprobe.rs:631:18
+    |
+631 |             Some((v * 10000.0).round() as u64)
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+   --> crates/shared_utils/src/ffprobe.rs:633:18
+    |
+633 |             Some(v.round() as u64)
+    |                  ^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/ffprobe.rs:633:18
+    |
+633 |             Some(v.round() as u64)
+    |                  ^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+   --> crates/shared_utils/src/ffprobe.rs:645:52
+    |
+645 | ...map(|v| (v * 50000.0).round() as u64))
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/ffprobe.rs:645:52
+    |
+645 | ...map(|v| (v * 50000.0).round() as u64))
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+   --> crates/shared_utils/src/ffprobe.rs:651:52
+    |
+651 | ...map(|v| (v * 10000.0).round() as u64))
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/ffprobe.rs:651:52
+    |
+651 | ...map(|v| (v * 10000.0).round() as u64))
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `u32` to `i32` may wrap around the value
+   --> crates/shared_utils/src/gpu_accel.rs:192:39
+    |
+192 | ...bc::kill(self.child_pid as i32, libc::SIGKILL...
+    |             ^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, use `cast_signed()` instead: `self.child_pid.cast_signed()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_wrap
+
+error: casting `f32` to `u32` may truncate the value
+   --> crates/shared_utils/src/gpu_accel.rs:896:5
+    |
+896 |     (base_bitrate as f32 * crf_factor) as u32
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f32` to `u32` may lose the sign of the value
+   --> crates/shared_utils/src/gpu_accel.rs:896:5
+    |
+896 |     (base_bitrate as f32 * crf_factor) as u32
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f32` to `u32` may truncate the value
+    --> crates/shared_utils/src/gpu_accel.rs:1705:13
+     |
+1705 |             limit as u32
+     |             ^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f32` to `u32` may lose the sign of the value
+    --> crates/shared_utils/src/gpu_accel.rs:1705:13
+     |
+1705 |             limit as u32
+     |             ^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f32` to `u32` may truncate the value
+    --> crates/shared_utils/src/gpu_accel.rs:1716:13
+     |
+1716 |             limit as u32
+     |             ^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f32` to `u32` may lose the sign of the value
+    --> crates/shared_utils/src/gpu_accel.rs:1716:13
+     |
+1716 |             limit as u32
+     |             ^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f32` to `u32` may truncate the value
+    --> crates/shared_utils/src/gpu_accel.rs:1727:13
+     |
+1727 |             limit as u32
+     |             ^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f32` to `u32` may lose the sign of the value
+    --> crates/shared_utils/src/gpu_accel.rs:1727:13
+     |
+1727 |             limit as u32
+     |             ^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+    --> crates/shared_utils/src/gpu_accel.rs:1761:9
+     |
+1761 | ...   (input_size as f64 * f64::from(ratio)) as u64
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+    --> crates/shared_utils/src/gpu_accel.rs:1761:9
+     |
+1761 | ...   (input_size as f64 * f64::from(ratio)) as u64
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+    --> crates/shared_utils/src/gpu_accel.rs:1813:9
+     |
+1813 | ...   (input_size as f64 * f64::from(warmup_duration) / f64::from(duration)) as u64
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+    --> crates/shared_utils/src/gpu_accel.rs:1813:9
+     |
+1813 | ...   (input_size as f64 * f64::from(warmup_duration) / f64::from(duration)) as u64
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+    --> crates/shared_utils/src/gpu_accel.rs:1983:49
+     |
+1983 | / ...   ((f64::from(actual_sample_duration) - c...
+1984 | | ...       / speed)
+1985 | | ...       .max(0.0)
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+    --> crates/shared_utils/src/gpu_accel.rs:1983:49
+     |
+1983 | / ...   ((f64::from(actual_sample_duration) - c...
+1984 | | ...       / speed)
+1985 | | ...       .max(0.0)
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+    --> crates/shared_utils/src/gpu_accel.rs:2003:45
+     |
+2003 | ...   (current_size as f64 / pct.max(1.0) * 100.0) as u64
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+    --> crates/shared_utils/src/gpu_accel.rs:2003:45
+     |
+2003 | ...   (current_size as f64 / pct.max(1.0) * 100.0) as u64
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+    --> crates/shared_utils/src/gpu_accel.rs:2011:45
+     |
+2011 | / ...   (sample_input_size as f64 * (1.0 / pct....
+2012 | | ...       .min(sample_input_size as f64 * 10.0)
+2013 | | ...       as u64
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+    --> crates/shared_utils/src/gpu_accel.rs:2011:45
+     |
+2011 | / ...   (sample_input_size as f64 * (1.0 / pct....
+2012 | | ...       .min(sample_input_size as f64 * 10.0)
+2013 | | ...       as u64
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `u32` to `i32` may wrap around the value
+    --> crates/shared_utils/src/gpu_accel.rs:2411:83
+     |
+2411 | ...actor.powi(wall_hits as i32);
+     |               ^^^^^^^^^^^^^^^^ help: if this is intentional, use `cast_signed()` instead: `wall_hits.cast_signed()`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_wrap
+
+error: casting `u32` to `i32` may wrap around the value
+    --> crates/shared_utils/src/gpu_accel.rs:2505:79
+     |
+2505 | ...actor.powi(wall_hits as i32);
+     |               ^^^^^^^^^^^^^^^^ help: if this is intentional, use `cast_signed()` instead: `wall_hits.cast_signed()`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_wrap
+
+error: casting `f32` to `i32` may truncate the value
+    --> crates/shared_utils/src/gpu_accel.rs:2538:22
+     |
+2538 |         let mut lo = boundary_low.ceil() as i32;
+     |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f32` to `i32` may truncate the value
+    --> crates/shared_utils/src/gpu_accel.rs:2539:22
+     |
+2539 |         let mut hi = boundary_high.floor() as i32;
+     |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `i32` to `usize` may lose the sign of the value
+   --> crates/shared_utils/src/image_quality_detector.rs:314:30
+    |
+314 | ...   let px = (x as i32 + dx) as usize;
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `usize` to `i32` may truncate the value on targets with 64-bit wide pointers
+   --> crates/shared_utils/src/image_quality_detector.rs:314:31
+    |
+314 | ...   let px = (x as i32 + dx) as usize;
+    |                 ^^^^^^^^
+    |
+--
+    |
+
+error: casting `usize` to `i32` may wrap around the value on targets with 32-bit wide pointers
+   --> crates/shared_utils/src/image_quality_detector.rs:314:31
+    |
+314 | ...   let px = (x as i32 + dx) as usize;
+    |                 ^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_wrap
+
+error: casting `i32` to `usize` may lose the sign of the value
+   --> crates/shared_utils/src/image_quality_detector.rs:315:30
+    |
+315 | ...   let py = (y as i32 + dy) as usize;
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `usize` to `i32` may truncate the value on targets with 64-bit wide pointers
+   --> crates/shared_utils/src/image_quality_detector.rs:315:31
+    |
+315 | ...   let py = (y as i32 + dy) as usize;
+    |                 ^^^^^^^^
+    |
+--
+    |
+
+error: casting `usize` to `i32` may wrap around the value on targets with 32-bit wide pointers
+   --> crates/shared_utils/src/image_quality_detector.rs:315:31
+    |
+315 | ...   let py = (y as i32 + dy) as usize;
+    |                 ^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_wrap
+
+error: casting `u128` to `u64` may truncate the value
+  --> crates/shared_utils/src/lru_cache.rs:26:22
+   |
+26 |           let now_ms = SystemTime::now()
+   |  ______________________^
+27 | |             .duration_since(UNIX_EPOCH)
+--
+   |
+
+error: casting `u128` to `u64` may truncate the value
+  --> crates/shared_utils/src/lru_cache.rs:39:31
+   |
+39 |           self.accessed_at_ms = SystemTime::now()
+   |  _______________________________^
+40 | |             .duration_since(UNIX_EPOCH)
+--
+   |
+
+error: casting `i64` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/metadata/macos.rs:122:34
+    |
+122 | ...n::new(buf.added_time.tv_sec as u64, buf.adde...
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, use `cast_unsigned()` instead: `buf.added_time.tv_sec.cast_unsigned()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `i64` to `u32` may truncate the value
+   --> crates/shared_utils/src/metadata/macos.rs:122:64
+    |
+122 | ...as u64, buf.added_time.tv_nsec as u32);
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    |
+
+error: casting `i64` to `u32` may lose the sign of the value
+   --> crates/shared_utils/src/metadata/macos.rs:122:64
+    |
+122 | ...as u64, buf.added_time.tv_nsec as u32);
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `u64` to `i64` may wrap around the value
+   --> crates/shared_utils/src/metadata/macos.rs:150:17
+    |
+150 |         tv_sec: duration.as_secs() as i64,
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, use `cast_signed()` instead: `duration.as_secs().cast_signed()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_wrap
+
+error: casting `u64` to `usize` may truncate the value on targets with 32-bit wide pointers
+   --> crates/shared_utils/src/modern_ui.rs:136:17
+    |
+136 | ... = SPINNER_FRAME.fetch_add(1, Ordering::Relaxed) as usize;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    |
+
+error: casting `u64` to `usize` may truncate the value on targets with 32-bit wide pointers
+   --> crates/shared_utils/src/modern_ui.rs:141:17
+    |
+141 | ... = SPINNER_FRAME.fetch_add(1, Ordering::Relaxed) as usize;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    |
+
+error: casting `f64` to `usize` may truncate the value
+   --> crates/shared_utils/src/modern_ui.rs:156:18
+    |
+156 | ... = (progress * width as f64).round() as usize;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `usize` may lose the sign of the value
+   --> crates/shared_utils/src/modern_ui.rs:156:18
+    |
+156 | ... = (progress * width as f64).round() as usize;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u32` may truncate the value
+   --> crates/shared_utils/src/modern_ui.rs:203:15
+    |
+203 |     let pct = (progress * 100.0) as u32;
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u32` may lose the sign of the value
+   --> crates/shared_utils/src/modern_ui.rs:203:15
+    |
+203 |     let pct = (progress * 100.0) as u32;
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u32` may truncate the value
+   --> crates/shared_utils/src/modern_ui.rs:478:17
+    |
+478 |         let h = (secs / 3600.0).floor() as u32;
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u32` may lose the sign of the value
+   --> crates/shared_utils/src/modern_ui.rs:478:17
+    |
+478 |         let h = (secs / 3600.0).floor() as u32;
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u32` may truncate the value
+   --> crates/shared_utils/src/modern_ui.rs:479:17
+    |
+479 | ... = ((secs % 3600.0) / 60.0).floor() as u32;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u32` may lose the sign of the value
+   --> crates/shared_utils/src/modern_ui.rs:479:17
+    |
+479 | ... = ((secs % 3600.0) / 60.0).floor() as u32;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u32` may truncate the value
+   --> crates/shared_utils/src/modern_ui.rs:480:17
+    |
+480 |         let s = (secs % 60.0).floor() as u32;
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u32` may lose the sign of the value
+   --> crates/shared_utils/src/modern_ui.rs:480:17
+    |
+480 |         let s = (secs % 60.0).floor() as u32;
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u32` may truncate the value
+   --> crates/shared_utils/src/modern_ui.rs:483:17
+    |
+483 |         let m = (secs / 60.0).floor() as u32;
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u32` may lose the sign of the value
+   --> crates/shared_utils/src/modern_ui.rs:483:17
+    |
+483 |         let m = (secs / 60.0).floor() as u32;
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u32` may truncate the value
+   --> crates/shared_utils/src/modern_ui.rs:484:17
+    |
+484 |         let s = (secs % 60.0).floor() as u32;
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u32` may lose the sign of the value
+   --> crates/shared_utils/src/modern_ui.rs:484:17
+    |
+484 |         let s = (secs % 60.0).floor() as u32;
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `usize` may truncate the value
+   --> crates/shared_utils/src/progress.rs:189:26
+    |
+189 | ... = ((percent / 100.0) * bar_width as f64) as usize;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `usize` may lose the sign of the value
+   --> crates/shared_utils/src/progress.rs:189:26
+    |
+189 | ... = ((percent / 100.0) * bar_width as f64) as usize;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `usize` may truncate the value
+   --> crates/shared_utils/src/progress.rs:225:30
+    |
+225 | ... = ((percent / 100.0) * bar_width as f64) as usize;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `usize` may lose the sign of the value
+   --> crates/shared_utils/src/progress.rs:225:30
+    |
+225 | ... = ((percent / 100.0) * bar_width as f64) as usize;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+   --> crates/shared_utils/src/progress.rs:397:34
+    |
+397 | ... = ((total - current) as f64 * avg_time) as u64;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/progress.rs:397:34
+    |
+397 | ... = ((total - current) as f64 * avg_time) as u64;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `usize` may truncate the value
+   --> crates/shared_utils/src/progress.rs:545:22
+    |
+545 | ... = ((percent / 100.0) * bar_width as f64) as usize;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `usize` may lose the sign of the value
+   --> crates/shared_utils/src/progress.rs:545:22
+    |
+545 | ... = ((percent / 100.0) * bar_width as f64) as usize;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `u64` to `u32` may truncate the value
+   --> crates/shared_utils/src/progress.rs:567:39
+    |
+567 | ...ts(self.best_crf.load(Ordering::Relaxed) as u32);
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    |
+
+error: casting `u64` to `u32` may truncate the value
+   --> crates/shared_utils/src/progress.rs:606:34
+    |
+606 | ...ts(self.current_crf.load(Ordering::Relaxed) as u32);
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    |
+
+error: casting `f64` to `u64` may truncate the value
+    --> crates/shared_utils/src/progress.rs:1231:16
+     |
+1231 |     let secs = seconds as u64;
+     |                ^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+    --> crates/shared_utils/src/progress.rs:1231:16
+     |
+1231 |     let secs = seconds as u64;
+     |                ^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `f32` may truncate the value
+   --> crates/shared_utils/src/quality_matcher.rs:652:15
+    |
+652 |     let crf = (crf_rounded as f32).clamp(AV1_CRF...
+    |               ^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `f32` may truncate the value
+   --> crates/shared_utils/src/quality_matcher.rs:721:15
+    |
+721 |     let crf = (crf_rounded as f32).clamp(HEVC_CR...
+    |               ^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `f32` may truncate the value
+   --> crates/shared_utils/src/quality_matcher.rs:791:25
+    |
+791 | ... = ((100.0 - clamped_quality) / 10.0) as f32;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may truncate the value
+   --> crates/shared_utils/src/quality_matcher.rs:940:36
+    |
+940 | ...l_frames = (duration * fps) as u64;
+    |               ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/quality_matcher.rs:940:36
+    |
+940 | ...l_frames = (duration * fps) as u64;
+    |               ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `u64` to `i64` may wrap around the value
+    --> crates/shared_utils/src/batch.rs:1129:47
+     |
+1129 | ...me(path_modified_unix_secs(&nested) as i64 + ...
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, use `cast_signed()` instead: `path_modified_unix_secs(&nested).cast_signed()`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_wrap
+
+error: casting `f64` to `u64` may truncate the value
+    --> crates/shared_utils/src/quality_matcher.rs:1808:32
+     |
+1808 | ...ames = (duration * frame_rate) as u64;
+     |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+    --> crates/shared_utils/src/quality_matcher.rs:1808:32
+     |
+1808 | ...ames = (duration * frame_rate) as u64;
+     |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `usize` may truncate the value
+   --> crates/shared_utils/src/thread_manager.rs:148:20
+    |
+148 | ... = (total_cores as f64 * 0.2).ceil() as usize;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `usize` may lose the sign of the value
+   --> crates/shared_utils/src/thread_manager.rs:148:20
+    |
+148 | ... = (total_cores as f64 * 0.2).ceil() as usize;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+  --> crates/shared_utils/src/video_explorer/ssim_calculator.rs:94:30
+   |
+94 | ... = (duration / sample_rate as f64 * 3.0) as u64;
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+--
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+  --> crates/shared_utils/src/video_explorer/ssim_calculator.rs:94:30
+   |
+94 | ... = (duration / sample_rate as f64 * 3.0) as u64;
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+  --> crates/shared_utils/src/video_explorer/ssim_calculator.rs:97:30
+   |
+97 | ...ted_time = (duration * 3.0) as u64;
+   |               ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+--
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+  --> crates/shared_utils/src/video_explorer/ssim_calculator.rs:97:30
+   |
+97 | ...ted_time = (duration * 3.0) as u64;
+   |               ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+  --> crates/shared_utils/src/video_explorer.rs:73:25
+   |
+73 | ... = (input_size as f64 * METADATA_MARGIN_PERCENT) as u64;
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+--
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+  --> crates/shared_utils/src/video_explorer.rs:73:25
+   |
+73 | ... = (input_size as f64 * METADATA_MARGIN_PERCENT) as u64;
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f32` to `u32` may truncate the value
+   --> crates/shared_utils/src/video_explorer.rs:209:18
+    |
+209 | ...d = (base as f32 * factor).round() as u32;
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f32` to `u32` may lose the sign of the value
+   --> crates/shared_utils/src/video_explorer.rs:209:18
+    |
+209 | ...d = (base as f32 * factor).round() as u32;
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f32` to `u32` may truncate the value
+   --> crates/shared_utils/src/video_explorer.rs:225:25
+    |
+225 | ...nent = crf_range.log2().ceil() as u32;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f32` to `u32` may lose the sign of the value
+   --> crates/shared_utils/src/video_explorer.rs:225:25
+    |
+225 | ...nent = crf_range.log2().ceil() as u32;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u32` may truncate the value
+    --> crates/shared_utils/src/video_explorer.rs:1514:38
+     |
+1514 | ... = (f64::from(crf_range).log2().ceil() as u32)
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u32` may lose the sign of the value
+    --> crates/shared_utils/src/video_explorer.rs:1514:38
+     |
+1514 | ... = (f64::from(crf_range).log2().ceil() as u32)
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u32` may truncate the value
+    --> crates/shared_utils/src/video_explorer.rs:2879:33
+     |
+2879 | ...label = (segment_pct * 100.0) as u32;
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u32` may lose the sign of the value
+    --> crates/shared_utils/src/video_explorer.rs:2879:33
+     |
+2879 | ...label = (segment_pct * 100.0) as u32;
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `f32` may truncate the value
+    --> crates/shared_utils/src/video_explorer.rs:3363:9
+     |
+3363 |         (quality_level as f32).mul_add(7.0, 8.0)
+     |         ^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f32` to `i32` may truncate the value
+  --> crates/shared_utils/src/video_explorer/precision.rs:26:15
+   |
+26 |     let key = normalized as i32;
+   |               ^^^^^^^^^^^^^^^^^
+   |
+--
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f32` to `i32` may truncate the value
+  --> crates/shared_utils/src/video_explorer/precision.rs:28:28
+   |
+28 | ...<= (CRF_CACHE_MAX_VALID * CACHE_KEY_MULTIPLIER) as i32,
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+--
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u32` may truncate the value
+   --> crates/shared_utils/src/video_explorer/precision.rs:144:5
+    |
+144 |     (range.log2().ceil() as u32) + 1
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u32` may lose the sign of the value
+   --> crates/shared_utils/src/video_explorer/precision.rs:144:5
+    |
+144 |     (range.log2().ceil() as u32) + 1
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+   --> crates/shared_utils/src/video_explorer/precheck.rs:285:9
+    |
+285 |         (duration * fps) as u64
+    |         ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/video_explorer/precheck.rs:285:9
+    |
+285 |         (duration * fps) as u64
+    |         ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+   --> crates/shared_utils/src/video_explorer/precheck.rs:293:25
+    |
+293 | ...|br| (br as f64 * duration / 8.0) as u64);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/video_explorer/precheck.rs:293:25
+    |
+293 | ...|br| (br as f64 * duration / 8.0) as u64);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+   --> crates/shared_utils/src/video_explorer/precheck.rs:447:9
+    |
+447 |         (duration * fps) as u64
+    |         ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/video_explorer/precheck.rs:447:9
+    |
+447 |         (duration * fps) as u64
+    |         ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+   --> crates/shared_utils/src/video_explorer/precheck.rs:470:25
+    |
+470 | ...|br| (br as f64 * duration / 8.0) as u64);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/video_explorer/precheck.rs:470:25
+    |
+470 | ...|br| (br as f64 * duration / 8.0) as u64);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `f32` may truncate the value
+   --> crates/shared_utils/src/video_explorer/gpu_coarse_search.rs:258:60
+    |
+258 | ...DURATION, |p| p.duration as f32);
+    |                  ^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may truncate the value
+   --> crates/shared_utils/src/video_explorer/gpu_coarse_search.rs:325:13
+    |
+325 | ...   (input_size as f64 * f64::from(ratio)) as u64
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/video_explorer/gpu_coarse_search.rs:325:13
+    |
+325 | ...   (input_size as f64 * f64::from(ratio)) as u64
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f32` to `i32` may truncate the value
+    --> crates/shared_utils/src/video_explorer/gpu_coarse_search.rs:1952:39
+     |
+1952 | ...crf = gpu_boundary_crf.floor() as i32;
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f32` to `i32` may truncate the value
+    --> crates/shared_utils/src/video_explorer/gpu_coarse_search.rs:1962:35
+     |
+1962 | ...int_crf = test_crf.floor() as i32;
+     |              ^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `u64` to `i64` may wrap around the value
+    --> crates/shared_utils/src/video_explorer/gpu_coarse_search.rs:2244:64
+     |
+2244 | ...at_size_diff(size as i64 - input_size as i64);
+     |                 ^^^^^^^^^^^ help: if this is intentional, use `cast_signed()` instead: `size.cast_signed()`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_wrap
+
+error: casting `u64` to `i64` may wrap around the value
+    --> crates/shared_utils/src/video_explorer/gpu_coarse_search.rs:2244:78
+     |
+2244 | ...e as i64 - input_size as i64);
+     |               ^^^^^^^^^^^^^^^^^ help: if this is intentional, use `cast_signed()` instead: `input_size.cast_signed()`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_wrap
+
+error: casting `u32` to `i32` may wrap around the value
+    --> crates/shared_utils/src/video_explorer/gpu_coarse_search.rs:2247:67
+     |
+2247 | ...ACTOR.powi(wall_hits as i32);
+     |               ^^^^^^^^^^^^^^^^ help: if this is intentional, use `cast_signed()` instead: `wall_hits.cast_signed()`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_wrap
+
+error: casting `f64` to `u64` may truncate the value
+   --> crates/shared_utils/src/video_quality_detector.rs:232:23
+    |
+232 |     let frame_count = (duration_secs * fps) as u64;
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/video_quality_detector.rs:232:23
+    |
+232 |     let frame_count = (duration_secs * fps) as u64;
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u8` may truncate the value
+   --> crates/shared_utils/src/video_quality_detector.rs:360:29
+    |
+360 |                 return Some(val.round() as u8);
+    |                             ^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u8` may lose the sign of the value
+   --> crates/shared_utils/src/video_quality_detector.rs:360:29
+    |
+360 |                 return Some(val.round() as u8);
+    |                             ^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u32` may truncate the value
+   --> crates/shared_utils/src/video_quality_detector.rs:427:24
+    |
+427 | ... = (analysis.fps * 2.5).round().clamp(12.0, 250.0) as u32;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u32` may lose the sign of the value
+   --> crates/shared_utils/src/video_quality_detector.rs:427:24
+    |
+427 | ... = (analysis.fps * 2.5).round().clamp(12.0, 250.0) as u32;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `i32` may truncate the value
+   --> crates/shared_utils/src/video_quality_detector.rs:515:21
+    |
+515 | ... = ((bpp - 0.1).clamp(0.0, 0.2) / 0.2 * 5.0).round() as i32;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `i32` to `u8` may lose the sign of the value
+   --> crates/shared_utils/src/video_quality_detector.rs:516:13
+    |
+516 |             t.clamp(0, 5) as u8
+    |             ^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `i32` may truncate the value
+   --> crates/shared_utils/src/video_quality_detector.rs:519:21
+    |
+519 | ... = ((bpp - 0.3).clamp(0.0, 0.2) / 0.2 * 3.0).round() as i32;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `i32` to `u8` may lose the sign of the value
+   --> crates/shared_utils/src/video_quality_detector.rs:520:13
+    |
+520 |             t.clamp(0, 3) as u8
+    |             ^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+   --> crates/shared_utils/src/ffprobe_json.rs:100:22
+    |
+100 | ...   Some(((n / d) * 50000.0).round() as u64)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/ffprobe_json.rs:100:22
+    |
+100 | ...   Some(((n / d) * 50000.0).round() as u64)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+   --> crates/shared_utils/src/ffprobe_json.rs:104:26
+    |
+104 | ...   Some((f * 50000.0).round() as u64)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/ffprobe_json.rs:104:26
+    |
+104 | ...   Some((f * 50000.0).round() as u64)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+   --> crates/shared_utils/src/ffprobe_json.rs:106:26
+    |
+106 |                     Some(f.round() as u64)
+    |                          ^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/ffprobe_json.rs:106:26
+    |
+106 |                     Some(f.round() as u64)
+    |                          ^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+   --> crates/shared_utils/src/ffprobe_json.rs:113:22
+    |
+113 |                 Some((f * 50000.0).round() as u64)
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/ffprobe_json.rs:113:22
+    |
+113 |                 Some((f * 50000.0).round() as u64)
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+   --> crates/shared_utils/src/ffprobe_json.rs:115:22
+    |
+115 |                 Some(f.round() as u64)
+    |                      ^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/ffprobe_json.rs:115:22
+    |
+115 |                 Some(f.round() as u64)
+    |                      ^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+   --> crates/shared_utils/src/ffprobe_json.rs:131:22
+    |
+131 | ...   Some(((n / d) * 10000.0).round() as u64)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/ffprobe_json.rs:131:22
+    |
+131 | ...   Some(((n / d) * 10000.0).round() as u64)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+   --> crates/shared_utils/src/ffprobe_json.rs:135:26
+    |
+135 | ...   Some((f * 10000.0).round() as u64)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/ffprobe_json.rs:135:26
+    |
+135 | ...   Some((f * 10000.0).round() as u64)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+   --> crates/shared_utils/src/ffprobe_json.rs:137:26
+    |
+137 |                     Some(f.round() as u64)
+    |                          ^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/ffprobe_json.rs:137:26
+    |
+137 |                     Some(f.round() as u64)
+    |                          ^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+   --> crates/shared_utils/src/ffprobe_json.rs:144:22
+    |
+144 |                 Some((f * 10000.0).round() as u64)
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/ffprobe_json.rs:144:22
+    |
+144 |                 Some((f * 10000.0).round() as u64)
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+   --> crates/shared_utils/src/ffprobe_json.rs:146:22
+    |
+146 |                 Some(f.round() as u64)
+    |                      ^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/ffprobe_json.rs:146:22
+    |
+146 |                 Some(f.round() as u64)
+    |                      ^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `usize` to `i64` may wrap around the value on targets with 64-bit wide pointers
+   --> crates/shared_utils/src/file_copier.rs:419:16
+    |
+419 |     let diff = expected as i64 - actual as i64;
+    |                ^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_wrap
+
+error: casting `usize` to `i64` may wrap around the value on targets with 64-bit wide pointers
+   --> crates/shared_utils/src/file_copier.rs:419:34
+    |
+419 |     let diff = expected as i64 - actual as i64;
+    |                                  ^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_wrap
+
+error: casting `u64` to `usize` may truncate the value on targets with 32-bit wide pointers
+   --> crates/shared_utils/src/lru_cache.rs:291:28
+    |
+291 | ... = ((simple_rng(seed, 0) % 19) + 1) as usize;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    |
+
+error: casting `u64` to `i64` may wrap around the value
+  --> crates/shared_utils/src/pure_media_verifier.rs:93:9
+   |
+93 | ...   output_info.container_overhead as i64 - inp...
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, use `cast_signed()` instead: `output_info.container_overhead.cast_signed()`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_wrap
+
+error: casting `u64` to `i64` may wrap around the value
+  --> crates/shared_utils/src/pure_media_verifier.rs:93:49
+   |
+93 | ... - input_info.container_overhead as i64;
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, use `cast_signed()` instead: `input_info.container_overhead.cast_signed()`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_wrap
+
+error: casting `u64` to `usize` may truncate the value on targets with 32-bit wide pointers
+   --> crates/shared_utils/src/lru_cache.rs:352:28
+    |
+352 | ... = ((simple_rng(seed, 0) % 10) + 1) as usize;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    |
+
+error: casting `f64` to `u64` may truncate the value
+   --> crates/shared_utils/src/stream_size.rs:216:28
+    |
+216 | ... = (br as f64 * duration_secs / 8.0) as u64;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/stream_size.rs:216:28
+    |
+216 | ... = (br as f64 * duration_secs / 8.0) as u64;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+   --> crates/shared_utils/src/stream_size.rs:231:28
+    |
+231 | ... = (br as f64 * duration_secs / 8.0) as u64;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/stream_size.rs:231:28
+    |
+231 | ... = (br as f64 * duration_secs / 8.0) as u64;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+   --> crates/shared_utils/src/stream_size.rs:302:30
+    |
+302 | ... = (total_file_size as f64 * overhead_percent) as u64;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/stream_size.rs:302:30
+    |
+302 | ... = (total_file_size as f64 * overhead_percent) as u64;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f32` to `u32` may truncate the value
+   --> crates/shared_utils/src/types/crf.rs:168:9
+    |
+168 | ...   (self.value * CRF_CACHE_KEY_MULTIPLIER).round() as u32
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f32` to `u32` may lose the sign of the value
+   --> crates/shared_utils/src/types/crf.rs:168:9
+    |
+168 | ...   (self.value * CRF_CACHE_KEY_MULTIPLIER).round() as u32
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+  --> crates/shared_utils/src/types/file_size.rs:92:29
+   |
+92 | ... = (self.0 as f64 * METADATA_MARGIN_PERCENT) as u64;
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+--
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+  --> crates/shared_utils/src/types/file_size.rs:92:29
+   |
+92 | ... = (self.0 as f64 * METADATA_MARGIN_PERCENT) as u64;
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u32` may truncate the value
+  --> crates/shared_utils/src/msssim_progress.rs:43:21
+   |
+43 | ...   ((current_secs / self.duration_secs * 100.0).min(100.0)) as u32
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+--
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u32` may lose the sign of the value
+  --> crates/shared_utils/src/msssim_progress.rs:43:21
+   |
+43 | ...   ((current_secs / self.duration_secs * 100.0).min(100.0)) as u32
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u32` may truncate the value
+  --> crates/shared_utils/src/msssim_progress.rs:88:13
+   |
+88 | ...   (current_secs / self.duration_secs * 100.0).min(100.0) as u32
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+--
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u32` may lose the sign of the value
+  --> crates/shared_utils/src/msssim_progress.rs:88:13
+   |
+88 | ...   (current_secs / self.duration_secs * 100.0).min(100.0) as u32
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f32` to `i32` may truncate the value
+    --> crates/shared_utils/src/quality_matcher.rs:2163:24
+     |
+2163 | ...   let crf_diff = anim_result.crf as i32 - b...
+     |                      ^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f32` to `i32` may truncate the value
+    --> crates/shared_utils/src/quality_matcher.rs:2163:49
+     |
+2163 | ...f as i32 - base_result.crf as i32;
+     |               ^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `u64` to `usize` may truncate the value on targets with 32-bit wide pointers
+   --> crates/shared_utils/src/common_utils.rs:372:23
+    |
+372 |               let ext = u64::from_be_bytes([
+    |  _______________________^
+373 | |                 data[pos + 8],
+--
+    |
+
+error: casting `u64` to `usize` may truncate the value on targets with 32-bit wide pointers
+   --> crates/shared_utils/src/common_utils.rs:470:23
+    |
+470 |               let ext = u64::from_be_bytes([
+    |  _______________________^
+471 | |                 data[pos + 8],
+--
+    |
+
+error: casting `usize` to `i32` may truncate the value on targets with 64-bit wide pointers
+   --> crates/shared_utils/src/cli_runner.rs:483:31
+    |
+483 | ...ty_score = (window - index) as i32;
+    |               ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    |
+
+error: casting `usize` to `i32` may wrap around the value on targets with 32-bit wide pointers
+   --> crates/shared_utils/src/cli_runner.rs:483:31
+    |
+483 | ...ty_score = (window - index) as i32;
+    |               ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_wrap
+
+error: casting `u32` to `u8` may truncate the value
+   --> crates/shared_utils/src/video_detection.rs:349:39
+    |
+349 | ...>= crate::constants::HDR_BIT_DEPTH_THRESHOLD as u8 {
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    |
+
+error: casting `u32` to `u8` may truncate the value
+   --> crates/shared_utils/src/video_detection.rs:350:9
+    |
+350 |         crate::constants::HDR_QUALITY_BONUS as u8
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    |
+
+error: casting `f64` to `usize` may truncate the value
+   --> crates/shared_utils/src/database.rs:887:19
+    |
+887 | ... = (loop_durations.len() as f64 * 0.90).floor() as usize;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `usize` may lose the sign of the value
+   --> crates/shared_utils/src/database.rs:887:19
+    |
+887 | ... = (loop_durations.len() as f64 * 0.90).floor() as usize;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `f32` may truncate the value
+   --> crates/shared_utils/src/database.rs:922:9
+    |
+922 | ...   (limit_high + (t * (limit_meme - limit_high))) as f32
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `f32` may truncate the value
+    --> crates/shared_utils/src/database.rs:1523:9
+     |
+1523 |         v_pix as f32,
+     |         ^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `f32` may truncate the value
+    --> crates/shared_utils/src/database.rs:1524:9
+     |
+1524 |         v_dur as f32,
+     |         ^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `f32` may truncate the value
+    --> crates/shared_utils/src/database.rs:1525:9
+     |
+1525 |         v_frm as f32,
+     |         ^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `f32` may truncate the value
+    --> crates/shared_utils/src/database.rs:1526:9
+     |
+1526 |         v_fsize as f32,
+     |         ^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `f32` may truncate the value
+    --> crates/shared_utils/src/database.rs:1527:9
+     |
+1527 |         v_dens as f32,
+     |         ^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `f32` may truncate the value
+    --> crates/shared_utils/src/database.rs:1528:9
+     |
+1528 |         v_gap as f32,
+     |         ^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `f32` may truncate the value
+    --> crates/shared_utils/src/database.rs:1529:9
+     |
+1529 |         v_tbpp as f32,
+     |         ^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `f32` may truncate the value
+    --> crates/shared_utils/src/database.rs:1530:9
+     |
+1530 |         v_sbpp as f32,
+     |         ^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `f32` may truncate the value
+    --> crates/shared_utils/src/database.rs:1531:9
+     |
+1531 |         v_wratio as f32,
+     |         ^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `f32` may truncate the value
+    --> crates/shared_utils/src/database.rs:1532:9
+     |
+1532 |         v_lfreq as f32,
+     |         ^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `f32` may truncate the value
+    --> crates/shared_utils/src/database.rs:1533:9
+     |
+1533 |         v_laffin as f32,
+     |         ^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `f32` may truncate the value
+    --> crates/shared_utils/src/database.rs:1534:9
+     |
+1534 |         v_cadence as f32,
+     |         ^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `f32` may truncate the value
+    --> crates/shared_utils/src/database.rs:1535:9
+     |
+1535 |         v_payload as f32,
+     |         ^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `f32` may truncate the value
+    --> crates/shared_utils/src/database.rs:1536:9
+     |
+1536 |         v_delay as f32,
+     |         ^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `f32` may truncate the value
+    --> crates/shared_utils/src/database.rs:1537:9
+     |
+1537 |         v_aspect as f32,
+     |         ^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `f32` may truncate the value
+    --> crates/shared_utils/src/database.rs:1538:9
+     |
+1538 |         v_pal as f32,
+     |         ^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `f32` may truncate the value
+    --> crates/shared_utils/src/database.rs:1539:9
+     |
+1539 |         v_pdepth as f32,
+     |         ^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `f32` may truncate the value
+    --> crates/shared_utils/src/database.rs:1540:9
+     |
+1540 |         v_mgini as f32,
+     |         ^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `f32` may truncate the value
+    --> crates/shared_utils/src/database.rs:1541:9
+     |
+1541 |         v_bskew as f32,
+     |         ^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `f32` may truncate the value
+    --> crates/shared_utils/src/database.rs:1542:9
+     |
+1542 |         v_tflat as f32,
+     |         ^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `f32` may truncate the value
+    --> crates/shared_utils/src/database.rs:1543:9
+     |
+1543 |         v_lclose as f32,
+     |         ^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `f32` may truncate the value
+    --> crates/shared_utils/src/database.rs:1544:9
+     |
+1544 |         v_mperiod as f32,
+     |         ^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `f32` may truncate the value
+    --> crates/shared_utils/src/database.rs:1545:9
+     |
+1545 |         v_tjitter as f32,
+     |         ^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `f32` may truncate the value
+    --> crates/shared_utils/src/database.rs:1546:9
+     |
+1546 |         v_dir as f32,
+     |         ^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `f32` may truncate the value
+    --> crates/shared_utils/src/database.rs:1547:9
+     |
+1547 |         v_meme as f32,
+     |         ^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `f32` may truncate the value
+    --> crates/shared_utils/src/database.rs:1548:9
+     |
+1548 |         v_name as f32,
+     |         ^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `f32` may truncate the value
+    --> crates/shared_utils/src/database.rs:1549:9
+     |
+1549 |         v_native as f32,
+     |         ^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `f32` may truncate the value
+    --> crates/shared_utils/src/database.rs:1550:9
+     |
+1550 |         v_hv as f32,
+     |         ^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `f32` may truncate the value
+    --> crates/shared_utils/src/database.rs:1551:9
+     |
+1551 |         v_trans as f32,
+     |         ^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `f32` may truncate the value
+    --> crates/shared_utils/src/database.rs:1552:9
+     |
+1552 |         v_icc as f32,
+     |         ^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `f32` may truncate the value
+    --> crates/shared_utils/src/database.rs:1553:9
+     |
+1553 |         v_complex as f32,
+     |         ^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `usize` may truncate the value
+    --> crates/shared_utils/src/database.rs:1637:5
+     |
+1637 |     ((total as f64).sqrt().round() as usize)
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `usize` may lose the sign of the value
+    --> crates/shared_utils/src/database.rs:1637:5
+     |
+1637 |     ((total as f64).sqrt().round() as usize)
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `usize` may truncate the value
+    --> crates/shared_utils/src/database.rs:1670:23
+     |
+1670 | ...ndex = scaled_index.floor() as usize;
+     |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `usize` may lose the sign of the value
+    --> crates/shared_utils/src/database.rs:1670:23
+     |
+1670 | ...ndex = scaled_index.floor() as usize;
+     |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `usize` may truncate the value
+    --> crates/shared_utils/src/database.rs:1671:23
+     |
+1671 | ...index = scaled_index.ceil() as usize;
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `usize` may lose the sign of the value
+    --> crates/shared_utils/src/database.rs:1671:23
+     |
+1671 | ...index = scaled_index.ceil() as usize;
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `u32` to `i32` may wrap around the value
+    --> crates/shared_utils/src/database.rs:1837:60
+     |
+1837 | ...e_size.map(|v| v as i32);
+     |                   ^^^^^^^^ help: if this is intentional, use `cast_signed()` instead: `v.cast_signed()`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_wrap
+
+error: casting `u64` to `i64` may wrap around the value
+    --> crates/shared_utils/src/database.rs:1838:32
+     |
+1838 | ..._i64 = sample.total_pixels as i64;
+     |           ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, use `cast_signed()` instead: `sample.total_pixels.cast_signed()`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_wrap
+
+error: casting `u64` to `i64` may wrap around the value
+    --> crates/shared_utils/src/database.rs:1839:31
+     |
+1839 | ..._i64 = sample.frame_count as i64;
+     |           ^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, use `cast_signed()` instead: `sample.frame_count.cast_signed()`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_wrap
+
+error: casting `u64` to `i64` may wrap around the value
+    --> crates/shared_utils/src/database.rs:1840:29
+     |
+1840 | ...64 = sample.file_size_bytes as i64;
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, use `cast_signed()` instead: `sample.file_size_bytes.cast_signed()`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_wrap
+
+error: casting `u32` to `i32` may wrap around the value
+    --> crates/shared_utils/src/database.rs:1841:25
+     |
+1841 |         let width_i32 = sample.width as i32;
+     |                         ^^^^^^^^^^^^^^^^^^^ help: if this is intentional, use `cast_signed()` instead: `sample.width.cast_signed()`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_wrap
+
+error: casting `u32` to `i32` may wrap around the value
+    --> crates/shared_utils/src/database.rs:1842:26
+     |
+1842 |         let height_i32 = sample.height as i32;
+     |                          ^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, use `cast_signed()` instead: `sample.height.cast_signed()`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_wrap
+
+error: casting `i32` to `u32` may lose the sign of the value
+    --> crates/shared_utils/src/database.rs:2176:20
+     |
+2176 |         width_min: w_min_i32 as u32,
+     |                    ^^^^^^^^^^^^^^^^ help: if this is intentional, use `cast_unsigned()` instead: `w_min_i32.cast_unsigned()`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `i32` to `u32` may lose the sign of the value
+    --> crates/shared_utils/src/database.rs:2178:20
+     |
+2178 |         width_max: w_max_i32 as u32,
+     |                    ^^^^^^^^^^^^^^^^ help: if this is intentional, use `cast_unsigned()` instead: `w_max_i32.cast_unsigned()`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `i32` to `u32` may lose the sign of the value
+    --> crates/shared_utils/src/database.rs:2180:21
+     |
+2180 |         height_min: h_min_i32 as u32,
+     |                     ^^^^^^^^^^^^^^^^ help: if this is intentional, use `cast_unsigned()` instead: `h_min_i32.cast_unsigned()`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `i32` to `u32` may lose the sign of the value
+    --> crates/shared_utils/src/database.rs:2182:21
+     |
+2182 |         height_max: h_max_i32 as u32,
+     |                     ^^^^^^^^^^^^^^^^ help: if this is intentional, use `cast_unsigned()` instead: `h_max_i32.cast_unsigned()`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `i32` to `u32` may lose the sign of the value
+    --> crates/shared_utils/src/database.rs:2231:20
+     |
+2231 |             width: row.get::<_, i32>(2) as u32,
+     |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, use `cast_unsigned()` instead: `row.get::<_, i32>(2).cast_unsigned()`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `i32` to `u32` may lose the sign of the value
+    --> crates/shared_utils/src/database.rs:2232:21
+     |
+2232 |             height: row.get::<_, i32>(3) as u32,
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, use `cast_unsigned()` instead: `row.get::<_, i32>(3).cast_unsigned()`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `i64` to `u64` may lose the sign of the value
+    --> crates/shared_utils/src/database.rs:2234:26
+     |
+2234 | ...count: row.get::<_, i64>(5) as u64,
+     |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, use `cast_unsigned()` instead: `row.get::<_, i64>(5).cast_unsigned()`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `i64` to `u64` may lose the sign of the value
+    --> crates/shared_utils/src/database.rs:2235:30
+     |
+2235 | ...bytes: row.get::<_, i64>(6) as u64,
+     |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, use `cast_unsigned()` instead: `row.get::<_, i64>(6).cast_unsigned()`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `i32` to `u32` may lose the sign of the value
+    --> crates/shared_utils/src/database.rs:2242:65
+     |
+2242 | ...>>(13).map(|v| v as u32),
+     |                   ^^^^^^^^ help: if this is intentional, use `cast_unsigned()` instead: `v.cast_unsigned()`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `i64` to `u64` may lose the sign of the value
+    --> crates/shared_utils/src/database.rs:2247:65
+     |
+2247 | ...>>(18).map(|v| v as u64),
+     |                   ^^^^^^^^ help: if this is intentional, use `cast_unsigned()` instead: `v.cast_unsigned()`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `usize` to `i32` may truncate the value on targets with 64-bit wide pointers
+    --> crates/shared_utils/src/database.rs:2330:68
+     |
+2330 | ...bor_count.map(|n| n as i32);
+     |                      ^^^^^^^^
+     |
+--
+     |
+
+error: casting `usize` to `i32` may wrap around the value on targets with 32-bit wide pointers
+    --> crates/shared_utils/src/database.rs:2330:68
+     |
+2330 | ...bor_count.map(|n| n as i32);
+     |                      ^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_wrap
+
+error: casting `f32` to `u32` may truncate the value
+   --> crates/shared_utils/src/hdr_synthesis.rs:705:29
+    |
+705 | ...   return Some(clamped.round() as u32);
+    |                   ^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f32` to `u32` may lose the sign of the value
+   --> crates/shared_utils/src/hdr_synthesis.rs:705:29
+    |
+705 | ...   return Some(clamped.round() as u32);
+    |                   ^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f32` to `u32` may truncate the value
+   --> crates/shared_utils/src/hdr_synthesis.rs:728:10
+    |
+728 |     Some(clamped.round() as u32)
+    |          ^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f32` to `u32` may lose the sign of the value
+   --> crates/shared_utils/src/hdr_synthesis.rs:728:10
+    |
+728 |     Some(clamped.round() as u32)
+    |          ^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f32` to `u16` may truncate the value
+   --> crates/shared_utils/src/hdr_synthesis.rs:752:17
+    |
+752 | ... = ((pixels[idx].min(2.0) / 2.0) * 65535.0) as u16;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f32` to `u16` may lose the sign of the value
+   --> crates/shared_utils/src/hdr_synthesis.rs:752:17
+    |
+752 | ... = ((pixels[idx].min(2.0) / 2.0) * 65535.0) as u16;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f32` to `u16` may truncate the value
+   --> crates/shared_utils/src/hdr_synthesis.rs:753:17
+    |
+753 | ... = ((pixels[idx + 1].min(2.0) / 2.0) * 65535.0) as u16;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f32` to `u16` may lose the sign of the value
+   --> crates/shared_utils/src/hdr_synthesis.rs:753:17
+    |
+753 | ... = ((pixels[idx + 1].min(2.0) / 2.0) * 65535.0) as u16;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f32` to `u16` may truncate the value
+   --> crates/shared_utils/src/hdr_synthesis.rs:754:17
+    |
+754 | ... = ((pixels[idx + 2].min(2.0) / 2.0) * 65535.0) as u16;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f32` to `u16` may lose the sign of the value
+   --> crates/shared_utils/src/hdr_synthesis.rs:754:17
+    |
+754 | ... = ((pixels[idx + 2].min(2.0) / 2.0) * 65535.0) as u16;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f32` to `u32` may truncate the value
+    --> crates/shared_utils/src/video_explorer.rs:3726:33
+     |
+3726 | ...s = (range / COARSE_STEP).ceil() as u32;
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f32` to `u32` may lose the sign of the value
+    --> crates/shared_utils/src/video_explorer.rs:3726:33
+     |
+3726 | ...s = (range / COARSE_STEP).ceil() as u32;
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f32` to `u32` may truncate the value
+    --> crates/shared_utils/src/video_explorer.rs:3727:31
+     |
+3727 | ... = (COARSE_STEP / FINE_STEP).ceil() as u32;
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f32` to `u32` may lose the sign of the value
+    --> crates/shared_utils/src/video_explorer.rs:3727:31
+     |
+3727 | ... = (COARSE_STEP / FINE_STEP).ceil() as u32;
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f32` to `u32` may truncate the value
+    --> crates/shared_utils/src/video_explorer.rs:3744:33
+     |
+3744 | ...s = (range / COARSE_STEP).ceil() as u32;
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f32` to `u32` may lose the sign of the value
+    --> crates/shared_utils/src/video_explorer.rs:3744:33
+     |
+3744 | ...s = (range / COARSE_STEP).ceil() as u32;
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f32` to `u32` may truncate the value
+    --> crates/shared_utils/src/video_explorer.rs:3745:31
+     |
+3745 | ... = (COARSE_STEP / FINE_STEP).ceil() as u32;
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f32` to `u32` may lose the sign of the value
+    --> crates/shared_utils/src/video_explorer.rs:3745:31
+     |
+3745 | ... = (COARSE_STEP / FINE_STEP).ceil() as u32;
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f32` to `u32` may truncate the value
+    --> crates/shared_utils/src/video_explorer.rs:3948:25
+     |
+3948 | ... = ((max_crf - initial) / COARSE_STEP).ceil() as u32;
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f32` to `u32` may lose the sign of the value
+    --> crates/shared_utils/src/video_explorer.rs:3948:25
+     |
+3948 | ... = ((max_crf - initial) / COARSE_STEP).ceil() as u32;
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f32` to `u32` may truncate the value
+    --> crates/shared_utils/src/video_explorer.rs:3952:31
+     |
+3952 | ... = (boundary_range / FINE_STEP).ceil() as u32;
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f32` to `u32` may lose the sign of the value
+    --> crates/shared_utils/src/video_explorer.rs:3952:31
+     |
+3952 | ... = (boundary_range / FINE_STEP).ceil() as u32;
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `i32` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/image_analyzer.rs:843:48
+    |
+843 | ...rom(height) * (channels as u64) * (bits_per_c...
+    |                  ^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `i32` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/image_analyzer.rs:843:69
+    |
+843 | ...as u64) * (bits_per_channel as u64 / 8);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f32` to `u32` may truncate the value
+    --> crates/shared_utils/src/video_explorer.rs:4010:28
+     |
+4010 | ... = (worst_range / COARSE_STEP).ceil() as u32;
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f32` to `u32` may lose the sign of the value
+    --> crates/shared_utils/src/video_explorer.rs:4010:28
+     |
+4010 | ... = (worst_range / COARSE_STEP).ceil() as u32;
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f32` to `u32` may truncate the value
+    --> crates/shared_utils/src/video_explorer.rs:4011:26
+     |
+4011 | ... = (COARSE_STEP / FINE_STEP).ceil() as u32 * 2;
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f32` to `u32` may lose the sign of the value
+    --> crates/shared_utils/src/video_explorer.rs:4011:26
+     |
+4011 | ... = (COARSE_STEP / FINE_STEP).ceil() as u32 * 2;
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `usize` to `u32` may truncate the value on targets with 64-bit wide pointers
+    --> crates/shared_utils/src/image_analyzer.rs:1001:21
+     |
+1001 | ... = bytes.windows(3).filter(|w| *w == gce_marker).count() as u32;
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     |
+
+error: casting `f32` to `u32` may truncate the value
+    --> crates/shared_utils/src/video_explorer.rs:4185:33
+     |
+4185 | ...s = (range / phase1_step).ceil() as u32;
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f32` to `u32` may lose the sign of the value
+    --> crates/shared_utils/src/video_explorer.rs:4185:33
+     |
+4185 | ...s = (range / phase1_step).ceil() as u32;
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f32` to `u32` may truncate the value
+    --> crates/shared_utils/src/video_explorer.rs:4190:33
+     |
+4190 | ... = (phase2_range / phase2_step).ceil() as u32;
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f32` to `u32` may lose the sign of the value
+    --> crates/shared_utils/src/video_explorer.rs:4190:33
+     |
+4190 | ... = (phase2_range / phase2_step).ceil() as u32;
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f32` to `u32` may truncate the value
+    --> crates/shared_utils/src/video_explorer.rs:4195:33
+     |
+4195 | ... = (phase3_range / phase3_step).ceil() as u32;
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f32` to `u32` may lose the sign of the value
+    --> crates/shared_utils/src/video_explorer.rs:4195:33
+     |
+4195 | ... = (phase3_range / phase3_step).ceil() as u32;
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `f32` may truncate the value
+    --> crates/shared_utils/src/image_analyzer.rs:1237:21
+     |
+1237 |                     rate as f32
+     |                     ^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u32` may truncate the value
+    --> crates/shared_utils/src/video_explorer.rs:4342:22
+     |
+4342 | ...se1 = (range / 1.0_f64).ceil() as u32;
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u32` may lose the sign of the value
+    --> crates/shared_utils/src/video_explorer.rs:4342:22
+     |
+4342 | ...se1 = (range / 1.0_f64).ceil() as u32;
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u32` may truncate the value
+    --> crates/shared_utils/src/video_explorer.rs:4343:22
+     |
+4343 | ...e2 = (4.0_f64 / 0.5_f64).ceil() as u32;
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u32` may lose the sign of the value
+    --> crates/shared_utils/src/video_explorer.rs:4343:22
+     |
+4343 | ...e2 = (4.0_f64 / 0.5_f64).ceil() as u32;
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u32` may truncate the value
+    --> crates/shared_utils/src/video_explorer.rs:4344:22
+     |
+4344 | ...e3 = (1.0_f64 / 0.1_f64).ceil() as u32;
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u32` may lose the sign of the value
+    --> crates/shared_utils/src/video_explorer.rs:4344:22
+     |
+4344 | ...e3 = (1.0_f64 / 0.1_f64).ceil() as u32;
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `f32` may truncate the value
+    --> crates/shared_utils/src/image_analyzer.rs:1442:21
+     |
+1442 |         return Some(duration_secs as f32);
+     |                     ^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f32` to `u32` may truncate the value
+    --> crates/shared_utils/src/video_explorer.rs:4464:33
+     |
+4464 | ... = (crf_range / phase1_step).log2().ceil() as u32;
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f32` to `u32` may lose the sign of the value
+    --> crates/shared_utils/src/video_explorer.rs:4464:33
+     |
+4464 | ... = (crf_range / phase1_step).log2().ceil() as u32;
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f32` to `u32` may truncate the value
+    --> crates/shared_utils/src/video_explorer.rs:4472:37
+     |
+4472 | ... = (phase2_range / phase2_step).ceil() as u32;
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f32` to `u32` may lose the sign of the value
+    --> crates/shared_utils/src/video_explorer.rs:4472:37
+     |
+4472 | ... = (phase2_range / phase2_step).ceil() as u32;
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f32` to `u32` may truncate the value
+    --> crates/shared_utils/src/video_explorer.rs:4593:14
+     |
+4593 | ...   (100_000.0_f32.log2().ceil() as u32 + ADA...
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f32` to `u32` may lose the sign of the value
+    --> crates/shared_utils/src/video_explorer.rs:4593:14
+     |
+4593 | ...   (100_000.0_f32.log2().ceil() as u32 + ADA...
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `u64` to `u32` may truncate the value
+   --> crates/shared_utils/src/image_detection.rs:499:32
+    |
+499 | ..._frames = probe.frame_count as u32;
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    |
+
+error: casting `f64` to `f32` may truncate the value
+   --> crates/shared_utils/src/image_detection.rs:501:28
+    |
+501 | ...   fps = Some(probe.frame_rate as f32);
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `u64` to `u32` may truncate the value
+   --> crates/shared_utils/src/image_detection.rs:518:38
+    |
+518 | ...   return Ok((true, explicit_count as u32, fp...
+    |                        ^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    |
+
+error: casting `u64` to `usize` may truncate the value on targets with 32-bit wide pointers
+    --> crates/shared_utils/src/image_detection.rs:1400:37
+     |
+1400 | ...size = Some((chunk_len as usize) / 3);
+     |                ^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     |
+
+error: casting `u64` to `usize` may truncate the value on targets with 32-bit wide pointers
+    --> crates/shared_utils/src/image_detection.rs:1409:45
+     |
+1409 | ... = vec![0u8; chunk_len as usize];
+     |                 ^^^^^^^^^^^^^^^^^^
+     |
+--
+     |
+
+error: casting `f64` to `u32` may truncate the value
+    --> crates/shared_utils/src/image_detection.rs:1484:16
+     |
+1484 | ... = (f64::from(width * height) / 10000.0).max(1.0) as u32;
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u32` may lose the sign of the value
+    --> crates/shared_utils/src/image_detection.rs:1484:16
+     |
+1484 | ... = (f64::from(width * height) / 10000.0).max(1.0) as u32;
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u32` may truncate the value
+    --> crates/shared_utils/src/image_detection.rs:1587:16
+     |
+1587 | ... = ((total as f64) / (max_samples as f64)).sqrt().ceil() as u32;
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u32` may lose the sign of the value
+    --> crates/shared_utils/src/image_detection.rs:1587:16
+     |
+1587 | ... = ((total as f64) / (max_samples as f64)).sqrt().ceil() as u32;
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `usize` may truncate the value
+    --> crates/shared_utils/src/image_detection.rs:1695:22
+     |
+1695 | ... = ((total_pixels as f64 / target_samples as f64).max(1.0)) as usize;
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `usize` may lose the sign of the value
+    --> crates/shared_utils/src/image_detection.rs:1695:22
+     |
+1695 | ... = ((total_pixels as f64 / target_samples as f64).max(1.0)) as usize;
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `usize` to `u32` may truncate the value on targets with 64-bit wide pointers
+    --> crates/shared_utils/src/image_detection.rs:1705:22
+     |
+1705 | ... = ((bx * block_size + block_size / 2) as u32).mi...
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     |
+
+error: casting `usize` to `u32` may truncate the value on targets with 64-bit wide pointers
+    --> crates/shared_utils/src/image_detection.rs:1706:22
+     |
+1706 | ... = ((by * block_size + block_size / 2) as u32).mi...
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     |
+
+error: casting `f64` to `u64` may truncate the value
+    --> crates/shared_utils/src/image_detection.rs:1722:18
+     |
+1722 |     let target = (sampled as f64 * 0.85) as u64;
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+    --> crates/shared_utils/src/image_detection.rs:1722:18
+     |
+1722 |     let target = (sampled as f64 * 0.85) as u64;
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u8` may truncate the value
+    --> crates/shared_utils/src/image_detection.rs:2188:23
+     |
+2188 |       let bpp_quality = 12.0f64
+     |  _______________________^
+2189 | |         .mul_add((effective_bpp * 1.5).max(0....
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u8` may lose the sign of the value
+    --> crates/shared_utils/src/image_detection.rs:2188:23
+     |
+2188 |       let bpp_quality = 12.0f64
+     |  _______________________^
+2189 | |         .mul_add((effective_bpp * 1.5).max(0....
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `u64` to `usize` may truncate the value on targets with 32-bit wide pointers
+    --> crates/shared_utils/src/image_detection.rs:2356:51
+     |
+2356 | ...ith_capacity(img_size as usize);
+     |                 ^^^^^^^^^^^^^^^^^
+     |
+--
+     |
+
+error: casting `u64` to `usize` may truncate the value on targets with 32-bit wide pointers
+    --> crates/shared_utils/src/image_detection.rs:2603:23
+     |
+2603 |               let ext = u64::from_be_bytes([
+     |  _______________________^
+2604 | |                 data[pos + 8],
+--
+     |
+
+error: casting `u64` to `usize` may truncate the value on targets with 32-bit wide pointers
+  --> crates/shared_utils/src/image_formats.rs:89:27
+   |
+89 |             let ifd_pos = ifd_offset as usize;
+   |                           ^^^^^^^^^^^^^^^^^^^
+   |
+--
+   |
+
+error: casting `u64` to `usize` may truncate the value on targets with 32-bit wide pointers
+  --> crates/shared_utils/src/image_formats.rs:94:25
+   |
+94 |                 let n = read_u64(ifd_pos) as usize;
+   |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+--
+   |
+
+error: casting `usize` to `u32` may truncate the value on targets with 64-bit wide pointers
+   --> crates/shared_utils/src/image_formats.rs:331:21
+    |
+331 | ... = data.windows(4).filter(|w| *w == b"ANMF").count() as u32;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    |
+
+error: casting `f64` to `u16` may truncate the value
+  --> crates/shared_utils/src/image_jpeg_analysis.rs:65:28
+   |
+65 | ...] = value.floor().clamp(1.0, 255.0) as u16;
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+--
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u16` may lose the sign of the value
+  --> crates/shared_utils/src/image_jpeg_analysis.rs:65:28
+   |
+65 | ...] = value.floor().clamp(1.0, 255.0) as u16;
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u8` may truncate the value
+   --> crates/shared_utils/src/image_jpeg_analysis.rs:428:17
+    |
+428 |                 weighted.round() as u8
+    |                 ^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u8` may lose the sign of the value
+   --> crates/shared_utils/src/image_jpeg_analysis.rs:428:17
+    |
+428 |                 weighted.round() as u8
+    |                 ^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `usize` to `u32` may truncate the value on targets with 64-bit wide pointers
+   --> crates/shared_utils/src/image_jpeg_analysis.rs:958:25
+    |
+958 |     if gainmap_length > jpeg_data.len() as u32 {
+    |                         ^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    |
+
+error: casting `usize` to `u32` may truncate the value on targets with 64-bit wide pointers
+   --> crates/shared_utils/src/image_metrics.rs:222:16
+    |
+222 | ...   if w < WINDOW_SIZE as u32 || h < WINDOW_SI...
+    |              ^^^^^^^^^^^^^^^^^^
+    |
+--
+    |
+
+error: casting `usize` to `u32` may truncate the value on targets with 64-bit wide pointers
+   --> crates/shared_utils/src/image_metrics.rs:222:42
+    |
+222 | ...s u32 || h < WINDOW_SIZE as u32 {
+    |                 ^^^^^^^^^^^^^^^^^^
+    |
+--
+    |
+
+error: casting `f64` to `f32` may truncate the value
+   --> crates/shared_utils/src/image_quality_db.rs:174:10
+    |
+174 | ...   (analysis.features.entropy as f32 / 8.0).c...
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `f32` may truncate the value
+   --> crates/shared_utils/src/image_quality_db.rs:175:10
+    |
+175 | ...  ((analysis.features.compression_ratio as f32).ln...
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `f32` may truncate the value
+   --> crates/shared_utils/src/image_quality_db.rs:176:10
+    |
+176 |         ((spatial_bpp as f32).ln_1p() / 3.5),
+    |          ^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `f32` may truncate the value
+   --> crates/shared_utils/src/image_quality_db.rs:177:10
+    |
+177 | ...   (total_pixels.max(1.0).log10() as f32 / 10...
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `f32` may truncate the value
+   --> crates/shared_utils/src/image_quality_db.rs:178:10
+    |
+178 |         ((aspect_ratio as f32).ln_1p() / 2.5),
+    |          ^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `usize` to `i32` may truncate the value on targets with 64-bit wide pointers
+   --> crates/shared_utils/src/image_quality_db.rs:414:30
+    |
+414 | ...i32 = record.knn_neighbor_count as i32;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    |
+
+error: casting `usize` to `i32` may wrap around the value on targets with 32-bit wide pointers
+   --> crates/shared_utils/src/image_quality_db.rs:414:30
+    |
+414 | ...i32 = record.knn_neighbor_count as i32;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_wrap
+
+error: casting `u32` to `i32` may wrap around the value
+   --> crates/shared_utils/src/image_quality_db.rs:496:14
+    |
+496 |             &(analysis.width as i32),
+    |              ^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, use `cast_signed()` instead: `analysis.width.cast_signed()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_wrap
+
+error: casting `u32` to `i32` may wrap around the value
+   --> crates/shared_utils/src/image_quality_db.rs:497:14
+    |
+497 |             &(analysis.height as i32),
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, use `cast_signed()` instead: `analysis.height.cast_signed()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_wrap
+
+error: casting `u64` to `i64` may wrap around the value
+   --> crates/shared_utils/src/image_quality_db.rs:498:14
+    |
+498 |             &(analysis.file_size as i64),
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, use `cast_signed()` instead: `analysis.file_size.cast_signed()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_wrap
+
+error: casting `f64` to `u32` may truncate the value
+   --> crates/shared_utils/src/loop_intent.rs:375:21
+    |
+375 | ...   ((dur * 10.0_f64).ceil() as u32).min(10000...
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u32` may lose the sign of the value
+   --> crates/shared_utils/src/loop_intent.rs:375:21
+    |
+375 | ...   ((dur * 10.0_f64).ceil() as u32).min(10000...
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `f32` may truncate the value
+    --> crates/shared_utils/src/loop_intent.rs:1484:9
+     |
+1484 | ...   (limit_high + (t * (limit_meme - limit_high))) as f32
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `u128` to `u32` may truncate the value
+    --> crates/shared_utils/src/loop_intent.rs:1748:42
+     |
+1748 | ...cess::id() ^ (timestamp as u32);
+     |                 ^^^^^^^^^^^^^^^^^^
+     |
+--
+     |
+
+error: casting `f64` to `u32` may truncate the value
+    --> crates/shared_utils/src/loop_intent.rs:1775:20
+     |
+1775 |     let top_band = (f64::from(h) * 0.15) as u32;
+     |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u32` may lose the sign of the value
+    --> crates/shared_utils/src/loop_intent.rs:1775:20
+     |
+1775 |     let top_band = (f64::from(h) * 0.15) as u32;
+     |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u32` may truncate the value
+    --> crates/shared_utils/src/loop_intent.rs:1846:17
+     |
+1846 | ...   (f64::from(WEBP_RATIO_SAMPLE_MAX_DIM) / ratio) as u32,
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u32` may lose the sign of the value
+    --> crates/shared_utils/src/loop_intent.rs:1846:17
+     |
+1846 | ...   (f64::from(WEBP_RATIO_SAMPLE_MAX_DIM) / ratio) as u32,
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u32` may truncate the value
+    --> crates/shared_utils/src/loop_intent.rs:1850:17
+     |
+1850 | ...   (f64::from(WEBP_RATIO_SAMPLE_MAX_DIM) * ratio) as u32,
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+--
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u32` may lose the sign of the value
+    --> crates/shared_utils/src/loop_intent.rs:1850:17
+     |
+1850 | ...   (f64::from(WEBP_RATIO_SAMPLE_MAX_DIM) * ratio) as u32,
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+   --> crates/shared_utils/src/stream_size.rs:422:28
+    |
+422 | ... = (pure_media as f64 * overhead_percent) as u64;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/stream_size.rs:422:28
+    |
+422 | ... = (pure_media as f64 * overhead_percent) as u64;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+   --> crates/shared_utils/src/stream_size.rs:472:28
+    |
+472 | ... = (total_size as f64 * overhead_percent) as u64;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/stream_size.rs:472:28
+    |
+472 | ... = (total_size as f64 * overhead_percent) as u64;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+   --> crates/shared_utils/src/stream_size.rs:500:38
+    |
+500 | ... = (total_size as f64 * overhead_percent) as u64;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/stream_size.rs:500:38
+    |
+500 | ... = (total_size as f64 * overhead_percent) as u64;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+   --> crates/shared_utils/src/stream_size.rs:530:28
+    |
+530 | ... = (total_size as f64 * overhead_percent) as u64;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/stream_size.rs:530:28
+    |
+530 | ... = (total_size as f64 * overhead_percent) as u64;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `f64` to `u64` may truncate the value
+   --> crates/shared_utils/src/types/file_size.rs:206:54
+    |
+206 | ...gin().bytes(), expected as u64);
+    |                   ^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u64` may lose the sign of the value
+   --> crates/shared_utils/src/types/file_size.rs:206:54
+    |
+206 | ...gin().bytes(), expected as u64);
+    |                   ^^^^^^^^^^^^^^^
+    |
+--
+error: could not compile `shared_utils` (lib) due to 335 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: casting `u32` to `i32` may wrap around the value
+   --> crates/shared_utils/src/msssim_heartbeat.rs:124:26
+    |
+124 | ...ur_diff = (beijing_hour as i32 - utc_hour as ...
+    |               ^^^^^^^^^^^^^^^^^^^ help: if this is intentional, use `cast_signed()` instead: `beijing_hour.cast_signed()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_wrap
+
+error: casting `u32` to `i32` may wrap around the value
+   --> crates/shared_utils/src/msssim_heartbeat.rs:124:48
+    |
+124 | ...r as i32 - utc_hour as i32 + 24) % 24;
+    |               ^^^^^^^^^^^^^^^ help: if this is intentional, use `cast_signed()` instead: `utc_hour.cast_signed()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_wrap
+
+error: casting `f64` to `u32` may truncate the value
+   --> crates/shared_utils/src/msssim_progress.rs:241:36
+    |
+241 | ... = ((expected_secs / duration_secs * 100.0).min(100.0)) as u32;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+--
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+error: casting `f64` to `u32` may lose the sign of the value
+   --> crates/shared_utils/src/msssim_progress.rs:241:36
+    |
+241 | ... = ((expected_secs / duration_secs * 100.0).min(100.0)) as u32;
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_sign_loss
+
+error: casting `usize` to `u16` may truncate the value
+    --> crates/shared_utils/src/image_jpeg_analysis.rs:1353:23
+     |
+1353 | ... = (xmp_header.len() + xmp_content.len() + 2) as u16;
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |

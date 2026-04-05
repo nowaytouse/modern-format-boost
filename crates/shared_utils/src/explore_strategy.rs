@@ -25,9 +25,7 @@ use anyhow::Result;
 use std::path::PathBuf;
 
 use crate::types::{CheckResult, EncoderPreset};
-use crate::video_explorer::{
-    ExploreConfig, ExploreMode, ExploreResult, SsimSource, VideoEncoder,
-};
+use crate::video_explorer::{ExploreConfig, ExploreMode, ExploreResult, SsimSource, VideoEncoder};
 
 pub trait ExploreStrategy: Send + Sync {
     /// # Errors
@@ -156,7 +154,7 @@ impl<T> CrfCache<T> {
         }
         #[allow(clippy::cast_possible_truncation)]
         #[allow(clippy::cast_sign_loss)]
-        let idx = (crf * CRF_CACHE_MULTIPLIER).round() as usize;
+        let idx = crate::numeric_cast::f32_to_usize_sat((crf * CRF_CACHE_MULTIPLIER).round());
         if idx < CRF_CACHE_SIZE {
             Some(idx)
         } else {
@@ -216,6 +214,7 @@ pub struct ExploreContext {
 impl ExploreContext {
     /// Construct context for strategy-based explore. Consider a builder if adding more optional params.
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         input_path: PathBuf,
         output_path: PathBuf,
@@ -308,7 +307,7 @@ impl ExploreContext {
         if self.input_size == 0 {
             return 0.0;
         }
-        ((output_size as f64 / self.input_size as f64) - 1.0) * 100.0
+        ((crate::numeric_cast::u64_to_f64(output_size) / crate::numeric_cast::u64_to_f64(self.input_size)) - 1.0) * 100.0
     }
 
     #[inline]
@@ -535,7 +534,6 @@ impl ExploreContext {
 
     /// SSIM is computed from current `input_path` vs `output_path` on disk. Cache key is CRF; value is valid only if output was produced by encode(crf) and not overwritten. Call `calculate_ssim` immediately after encode when using the same output path.
     fn do_calculate_ssim(&self) -> Result<SsimResult> {
-
         let filter = "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];[ref][1:v]ssim";
 
         let output = crate::ffmpeg_builder::FfmpegBuilder::new()
@@ -594,7 +592,6 @@ impl ExploreContext {
     /// # Errors
     /// Returns error if calculation fails.
     pub fn calculate_psnr(&self) -> Result<Option<f64>> {
-
         let filter = "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];[ref][1:v]psnr";
 
         let output = crate::ffmpeg_builder::FfmpegBuilder::new()
@@ -668,7 +665,11 @@ impl ExploreStrategy for SizeOnlyStrategy {
             max_size,
             ssim_result,
             1,
-            if quality_passed { CheckResult::Passed } else { CheckResult::Failed("Total file size not compressed".into()) },
+            if quality_passed {
+                CheckResult::Passed
+            } else {
+                CheckResult::Failed("Total file size not compressed".into())
+            },
             0.7,
         ))
     }
@@ -710,7 +711,11 @@ impl ExploreStrategy for QualityMatchStrategy {
             output_size,
             ssim_result,
             1,
-            if quality_passed { CheckResult::Passed } else { CheckResult::Failed("SSIM below target".into()) },
+            if quality_passed {
+                CheckResult::Passed
+            } else {
+                CheckResult::Failed("SSIM below target".into())
+            },
             0.6,
         ))
     }
@@ -746,7 +751,11 @@ impl ExploreStrategy for PreciseQualityMatchStrategy {
             best_size,
             Some(SsimResult::actual(best_ssim, None)),
             iterations,
-            if quality_passed { CheckResult::Passed } else { CheckResult::Failed("No CRF meeting quality target found".into()) },
+            if quality_passed {
+                CheckResult::Passed
+            } else {
+                CheckResult::Failed("No CRF meeting quality target found".into())
+            },
             0.85,
         ))
     }
@@ -824,7 +833,11 @@ impl ExploreStrategy for PreciseQualityMatchWithCompressionStrategy {
             best_size,
             Some(SsimResult::actual(best_ssim, None)),
             iterations,
-            if quality_passed { CheckResult::Passed } else { CheckResult::Failed("No CRF meeting quality target found".into()) },
+            if quality_passed {
+                CheckResult::Passed
+            } else {
+                CheckResult::Failed("No CRF meeting quality target found".into())
+            },
             0.85,
         ))
     }
@@ -865,7 +878,11 @@ impl ExploreStrategy for CompressOnlyStrategy {
             best_size,
             None,
             iterations,
-            if best_size < ctx.input_size { CheckResult::Passed } else { CheckResult::Failed("Not compressed".into()) },
+            if best_size < ctx.input_size {
+                CheckResult::Passed
+            } else {
+                CheckResult::Failed("Not compressed".into())
+            },
             0.7,
         ))
     }
@@ -925,7 +942,11 @@ impl ExploreStrategy for CompressWithQualityStrategy {
             best_size,
             ssim_result,
             iterations,
-            if quality_passed { CheckResult::Passed } else { CheckResult::Failed("SSIM below target".into()) },
+            if quality_passed {
+                CheckResult::Passed
+            } else {
+                CheckResult::Failed("SSIM below target".into())
+            },
             0.8,
         ))
     }

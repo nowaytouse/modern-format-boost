@@ -8,8 +8,8 @@ pub use crate::ffmpeg_builder::{
     FfmpegBuilder, FfprobeBuilder, PixFmt, StreamType, VideoCodec, VideoProfile,
 };
 pub use crate::image_builders::{
-    AvifencBuilder, DwebpBuilder, ExiftoolBuilder, GifskiBuilder, MagickBuilder,
-    SipsBuilder, WebpmuxBuilder,
+    AvifencBuilder, DwebpBuilder, ExiftoolBuilder, GifskiBuilder, MagickBuilder, SipsBuilder,
+    WebpmuxBuilder,
 };
 pub use crate::jxl_builder::{CjxlBuilder, DjxlBuilder};
 
@@ -79,11 +79,13 @@ impl VmafBuilder {
         let mut cmd = Command::new("vmaf");
 
         if let Some(reference) = &self.reference {
-            cmd.arg("--reference").arg(crate::safe_path_arg(reference).as_ref());
+            cmd.arg("--reference")
+                .arg(crate::safe_path_arg(reference).as_ref());
         }
 
         if let Some(distorted) = &self.distorted {
-            cmd.arg("--distorted").arg(crate::safe_path_arg(distorted).as_ref());
+            cmd.arg("--distorted")
+                .arg(crate::safe_path_arg(distorted).as_ref());
         }
 
         for feature in &self.features {
@@ -103,7 +105,8 @@ impl VmafBuilder {
         }
 
         if let Some(output) = &self.output {
-            cmd.arg("--output").arg(crate::safe_path_arg(output).as_ref());
+            cmd.arg("--output")
+                .arg(crate::safe_path_arg(output).as_ref());
         }
 
         for arg in &self.extra_args {
@@ -115,7 +118,11 @@ impl VmafBuilder {
 
     #[must_use]
     pub fn check_available() -> bool {
-        Command::new("vmaf").arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
+        Command::new("vmaf")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
     }
 }
 
@@ -171,7 +178,11 @@ impl Exiv2Builder {
 
     #[must_use]
     pub fn check_available() -> bool {
-        Command::new("exiv2").arg("-V").output().map(|o| o.status.success()).unwrap_or(false)
+        Command::new("exiv2")
+            .arg("-V")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
     }
 }
 
@@ -205,7 +216,11 @@ impl JxlinfoBuilder {
 
     #[must_use]
     pub fn check_available() -> bool {
-        Command::new("jxlinfo").arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
+        Command::new("jxlinfo")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
     }
 }
 
@@ -269,7 +284,11 @@ impl DoviBuilder {
 
     #[must_use]
     pub fn check_available() -> bool {
-        Command::new("dovi_tool").arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
+        Command::new("dovi_tool")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
     }
 }
 
@@ -333,7 +352,11 @@ impl Hdr10PlusBuilder {
 
     #[must_use]
     pub fn check_available() -> bool {
-        Command::new("hdr10plus_tool").arg("--help").output().map(|o| o.status.success()).unwrap_or(false)
+        Command::new("hdr10plus_tool")
+            .arg("--help")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
     }
 }
 
@@ -453,7 +476,7 @@ impl X265Builder {
         }
 
         if let Some(crf) = self.crf {
-            cmd.arg("--crf").arg(format!("{:.1}", crf));
+            cmd.arg("--crf").arg(format!("{crf:.1}"));
         }
 
         if self.lossless {
@@ -509,7 +532,8 @@ impl X265Builder {
         }
 
         if let Some(output) = &self.output {
-            cmd.arg("--output").arg(crate::safe_path_arg(output).as_ref());
+            cmd.arg("--output")
+                .arg(crate::safe_path_arg(output).as_ref());
         }
 
         cmd
@@ -517,7 +541,11 @@ impl X265Builder {
 
     #[must_use]
     pub fn check_available() -> bool {
-        Command::new(crate::constants::TOOL_X265).arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
+        Command::new(crate::constants::TOOL_X265)
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
     }
 }
 
@@ -559,7 +587,12 @@ impl OsascriptBuilder {
     pub fn check_available() -> bool {
         #[cfg(target_os = "macos")]
         {
-            Command::new("osascript").arg("-e").arg("return").output().map(|o| o.status.success()).unwrap_or(false)
+            Command::new("osascript")
+                .arg("-e")
+                .arg("return")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -607,7 +640,12 @@ impl PowershellBuilder {
     pub fn check_available() -> bool {
         #[cfg(target_os = "windows")]
         {
-            Command::new("powershell").arg("-Command").arg("Get-Date").output().map(|o| o.status.success()).unwrap_or(false)
+            Command::new("powershell")
+                .arg("-Command")
+                .arg("Get-Date")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
         }
         #[cfg(not(target_os = "windows"))]
         {
@@ -630,6 +668,13 @@ impl AclBuilder {
             tool: "getfacl".to_string(),
             ..Default::default()
         }
+    }
+
+    /// Configures setfacl to restore ACLs from stdin (-R --restore=-).
+    pub fn restore() -> Self {
+        let mut builder = Self::setfacl();
+        builder.arg("--restore=-");
+        builder
     }
 
     pub fn setfacl() -> Self {
@@ -663,7 +708,11 @@ impl AclBuilder {
 
     #[must_use]
     pub fn check_available() -> bool {
-        Command::new("getfacl").arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
+        Command::new("getfacl")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
     }
 }
 
@@ -694,7 +743,11 @@ impl SysctlBuilder {
 
     #[must_use]
     pub fn check_available() -> bool {
-        Command::new("sysctl").arg("-a").output().map(|o| o.status.success()).unwrap_or(false)
+        Command::new("sysctl")
+            .arg("-a")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
     }
 }
 
@@ -714,7 +767,10 @@ impl VmstatBuilder {
 
     #[must_use]
     pub fn check_available() -> bool {
-        Command::new("vm_stat").output().map(|o| o.status.success()).unwrap_or(false)
+        Command::new("vm_stat")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
     }
 }
 
@@ -754,7 +810,11 @@ impl AttribBuilder {
 
     #[must_use]
     pub fn check_available() -> bool {
-        Command::new("attrib").arg("/?").output().map(|o| o.status.success()).unwrap_or(false)
+        Command::new("attrib")
+            .arg("/?")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
     }
 }
 
@@ -796,7 +856,7 @@ impl RsyncBuilder {
     pub fn build(&self) -> Command {
         let exe = self.executable.as_deref().unwrap_or("rsync");
         let mut cmd = Command::new(exe);
-        
+
         // Protect args against shell/remote interpretation (requires rsync 3.0.0+)
         cmd.arg("--protect-args");
 

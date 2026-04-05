@@ -205,7 +205,7 @@ fn encode_to_hevc(
     for arg in vf_args {
         ffmpeg_builder.arg(arg);
     }
-    
+
     let mut ffmpeg_cmd = ffmpeg_builder.build();
     ffmpeg_cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
@@ -476,7 +476,10 @@ fn mux_hevc_to_container(
     }
 
     if (config.container == "mp4" || config.container == "mov") && config.apple_compat {
-        mux_builder.tag_video("hvc1").arg("-movflags").arg("+faststart");
+        mux_builder
+            .tag_video("hvc1")
+            .arg("-movflags")
+            .arg("+faststart");
     } else if config.container == "mp4" || config.container == "mov" {
         mux_builder.arg("-movflags").arg("+faststart");
     }

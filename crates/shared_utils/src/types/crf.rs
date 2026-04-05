@@ -165,7 +165,7 @@ impl<E: EncoderBounds> Crf<E> {
     #[inline]
     #[must_use]
     pub fn to_cache_key(&self) -> u32 {
-        (self.value * CRF_CACHE_KEY_MULTIPLIER).round() as u32
+        crate::numeric_cast::f32_to_u32_sat((self.value * CRF_CACHE_KEY_MULTIPLIER).round())
     }
 
     /// Create a CRF value from a cache key.
@@ -173,7 +173,7 @@ impl<E: EncoderBounds> Crf<E> {
     /// # Errors
     /// Returns an error if the key is invalid.
     pub fn from_cache_key(key: u32) -> Result<Self, CrfError> {
-        let value = key as f32 / CRF_CACHE_KEY_MULTIPLIER;
+        let value = crate::numeric_cast::u32_to_f32(key) / CRF_CACHE_KEY_MULTIPLIER;
         Self::new(value).map_err(|_| CrfError::InvalidCacheKey {
             key,
             encoder: E::NAME,
@@ -278,19 +278,31 @@ mod tests {
     #[test]
     fn test_crf_default() {
         let hevc = Crf::<HevcEncoder>::default();
-        assert_eq!(hevc.value(), 23.0);
+        assert!(crate::float_compare::approx_eq_f64(
+            f64::from(hevc.value()),
+            23.0
+        ));
 
         let av1 = Crf::<Av1Encoder>::default();
-        assert_eq!(av1.value(), 30.0);
+        assert!(crate::float_compare::approx_eq_f64(
+            f64::from(av1.value()),
+            30.0
+        ));
     }
 
     #[test]
     fn test_crf_clamped() {
         let clamped = Crf::<HevcEncoder>::clamped(100.0);
-        assert_eq!(clamped.value(), 51.0);
+        assert!(crate::float_compare::approx_eq_f64(
+            f64::from(clamped.value()),
+            51.0
+        ));
 
         let clamped_nan = Crf::<HevcEncoder>::clamped(f32::NAN);
-        assert_eq!(clamped_nan.value(), 23.0);
+        assert!(crate::float_compare::approx_eq_f64(
+            f64::from(clamped_nan.value()),
+            23.0
+        ));
     }
 
     #[test]

@@ -825,25 +825,25 @@ fn generate_jxl_indicator(
 fn calculate_image_features(img: &DynamicImage, file_size: u64) -> ImageFeatures {
     let (width, height) = img.dimensions();
     let channels = match img.color() {
-        image::ColorType::L8 | image::ColorType::L16 => 1,
-        image::ColorType::La8 | image::ColorType::La16 => 2,
-        image::ColorType::Rgb8 | image::ColorType::Rgb16 | image::ColorType::Rgb32F => 3,
-        _ => 4,
+        image::ColorType::L8 | image::ColorType::L16 => 1u32,
+        image::ColorType::La8 | image::ColorType::La16 => 2u32,
+        image::ColorType::Rgb8 | image::ColorType::Rgb16 | image::ColorType::Rgb32F => 3u32,
+        _ => 4u32,
     };
     let bits_per_channel = match img.color() {
         image::ColorType::L16
         | image::ColorType::La16
         | image::ColorType::Rgb16
-        | image::ColorType::Rgba16 => 16,
-        image::ColorType::Rgb32F | image::ColorType::Rgba32F => 32,
-        _ => 8,
+        | image::ColorType::Rgba16 => 16u32,
+        image::ColorType::Rgb32F | image::ColorType::Rgba32F => 32u32,
+        _ => 8u32,
     };
 
     let raw_size =
-        u64::from(width) * u64::from(height) * (channels as u64) * (bits_per_channel as u64 / 8);
+        u64::from(width) * u64::from(height) * (u64::from(channels)) * (u64::from(bits_per_channel) / 8);
 
     let compression_ratio = if raw_size > 0 {
-        file_size as f64 / raw_size as f64
+        crate::numeric_cast::u64_to_f64(file_size) / crate::numeric_cast::u64_to_f64(raw_size)
     } else {
         1.0
     };
@@ -862,15 +862,15 @@ fn calculate_entropy(img: &DynamicImage) -> f64 {
 
     let mut histogram = [0u64; 256];
     for &pixel in pixels {
-        histogram[pixel as usize] += 1;
+        histogram[usize::from(pixel)] += 1;
     }
 
-    let total = pixels.len() as f64;
+    let total = crate::numeric_cast::usize_to_f64(pixels.len());
     let mut entropy = 0.0;
 
     for &count in &histogram {
         if count > 0 {
-            let p = count as f64 / total;
+            let p = crate::numeric_cast::u64_to_f64(count) / total;
             entropy -= p * p.log2();
         }
     }
@@ -998,7 +998,7 @@ fn check_gif_animation(path: &Path) -> Result<bool> {
     // Stage 2: Feature Scan (Signal B)
     // Look for GCE markers [0x21, 0xF9, 0x04] globally
     let gce_marker = &[0x21, 0xF9, 0x04];
-    let gce_hints = bytes.windows(3).filter(|w| *w == gce_marker).count() as u32;
+    let gce_hints = crate::numeric_cast::usize_to_u32_sat(bytes.windows(3).filter(|w| *w == gce_marker).count());
 
     if gce_hints > structural_count {
         // [Disagreement] Internal Deep Research
@@ -1234,20 +1234,20 @@ fn try_jxl_via_apng(path: &Path) -> Option<f32> {
 
                 // Parse frame rate (format: "num/den")
                 let fps = if let Ok(rate) = crate::ffprobe::parse_frame_rate(r_frame_rate) {
-                    rate as f32
+                    crate::numeric_cast::f64_to_f32_lossy(rate)
                 } else {
                     0.0
                 };
 
                 if nb_frames > 0 && fps > 0.0 {
-                    let duration = nb_frames as f32 / fps;
+                    let duration = crate::numeric_cast::u64_to_f64(nb_frames) / f64::from(fps);
                     log_eprintln!(
                         "📊 JXL animation: {} frames @ {:.2} fps = {:.2}s",
                         nb_frames,
                         fps,
                         duration
                     );
-                    return Some(duration);
+                    return Some(crate::numeric_cast::f64_to_f32_lossy(duration));
                 }
             }
         } else {
@@ -1439,7 +1439,7 @@ fn try_imagemagick_identify(path: &Path) -> Option<f32> {
             "📊 ImageMagick: animation detected ({frame_count} frames, {duration_secs:.2}s)"
         );
         crate::progress_mode::emit_stderr(&msg);
-        return Some(duration_secs as f32);
+        return Some(crate::numeric_cast::f64_to_f32_lossy(duration_secs));
     }
     None
 }
@@ -1577,29 +1577,32 @@ fn is_jxl_file(path: &Path) -> bool {
 fn analyze_jxl_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
     use crate::image_detection::{detect_animation, DetectedFormat};
 
-    let (width, height, has_alpha, color_depth) = if crate::tool_builders::JxlinfoBuilder::check_available() {
-        let output = crate::tool_builders::JxlinfoBuilder::new()
-            .input(path)
-            .build()
-            .output();
+    let (width, height, has_alpha, color_depth) =
+        if crate::tool_builders::JxlinfoBuilder::check_available() {
+            let output = crate::tool_builders::JxlinfoBuilder::new()
+                .input(path)
+                .build()
+                .output();
 
-        if let Ok(out) = output {
-            if out.status.success() {
-                let stdout = String::from_utf8_lossy(&out.stdout);
-                parse_jxlinfo_output(&stdout)
+            if let Ok(out) = output {
+                if out.status.success() {
+                    let stdout = String::from_utf8_lossy(&out.stdout);
+                    parse_jxlinfo_output(&stdout)
+                } else {
+                    (0, 0, false, 8)
+                }
             } else {
                 (0, 0, false, 8)
             }
+        } else if let Ok(probe) = crate::probe_video(path) {
+            (probe.width, probe.height, false, 8)
         } else {
+            log_eprintln!(
+                "⚠️  Cannot get JXL file dimensions: both jxlinfo and ffprobe unavailable"
+            );
+            log_eprintln!("   💡 Suggestion: install jxlinfo: brew install jpeg-xl");
             (0, 0, false, 8)
-        }
-    } else if let Ok(probe) = crate::probe_video(path) {
-        (probe.width, probe.height, false, 8)
-    } else {
-        log_eprintln!("⚠️  Cannot get JXL file dimensions: both jxlinfo and ffprobe unavailable");
-        log_eprintln!("   💡 Suggestion: install jxlinfo: brew install jpeg-xl");
-        (0, 0, false, 8)
-    };
+        };
 
     let metadata = extract_metadata(path)?;
 

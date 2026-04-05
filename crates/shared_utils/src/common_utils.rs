@@ -109,7 +109,10 @@ pub fn get_user_project_cache_dir() -> anyhow::Result<PathBuf> {
         }
     };
 
-    if path.file_name().is_none_or(|name| name != ".modern_format_boost") {
+    if path
+        .file_name()
+        .is_none_or(|name| name != ".modern_format_boost")
+    {
         path.push(".modern_format_boost");
     }
     path.push("cache");
@@ -237,7 +240,7 @@ pub fn calculate_blake3_hash(path: &Path) -> Result<String> {
     use std::io::Read;
     let mut file = std::fs::File::open(path)?;
     let mut hasher = blake3::Hasher::new();
-    let mut buffer = [0u8; 65536]; // 64KB buffer
+    let mut buffer = vec![0u8; 65536]; // 64KB buffer on heap
 
     loop {
         let bytes_read = file.read(&mut buffer)?;
@@ -277,7 +280,13 @@ pub fn extract_digits(s: &str) -> String {
 
 #[must_use]
 pub fn parse_float_or_default(s: &str, default: f64) -> f64 {
-    s.parse::<f64>().unwrap_or(default)
+    match s.parse::<f64>() {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(input = s, error = %e, "Failed to parse float; admitting unknown input via default value {}", default);
+            default
+        }
+    }
 }
 
 /// Execute a command and log its output.
@@ -347,8 +356,7 @@ fn find_box_data_recursive_impl(
 
     let mut pos = 0;
     while pos + 8 <= data.len() {
-        let size =
-            u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
+        let size = crate::numeric_cast::u32_to_usize_sat(u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]));
         let current_type = &data[pos + 4..pos + 8];
 
         let (payload_start, next_pos) = if size == 0 {
@@ -360,7 +368,7 @@ fn find_box_data_recursive_impl(
                 pos += 8;
                 continue;
             }
-            let ext = u64::from_be_bytes([
+            let ext = crate::numeric_cast::u64_to_usize_sat(u64::from_be_bytes([
                 data[pos + 8],
                 data[pos + 9],
                 data[pos + 10],
@@ -369,7 +377,7 @@ fn find_box_data_recursive_impl(
                 data[pos + 13],
                 data[pos + 14],
                 data[pos + 15],
-            ]) as usize;
+            ]));
             if ext < 16 || pos + ext > data.len() {
                 pos += 16;
                 continue;
@@ -445,8 +453,7 @@ fn find_any_box_recursive_impl(data: &[u8], box_type: [u8; 4], depth: u32, max_d
 
     let mut pos = 0;
     while pos + 8 <= data.len() {
-        let size =
-            u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
+        let size = crate::numeric_cast::u32_to_usize_sat(u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]));
         let current_type = &data[pos + 4..pos + 8];
         if current_type == box_type {
             return true;
@@ -458,7 +465,7 @@ fn find_any_box_recursive_impl(data: &[u8], box_type: [u8; 4], depth: u32, max_d
                 pos += 8;
                 continue;
             }
-            let ext = u64::from_be_bytes([
+            let ext = crate::numeric_cast::u64_to_usize_sat(u64::from_be_bytes([
                 data[pos + 8],
                 data[pos + 9],
                 data[pos + 10],
@@ -467,7 +474,7 @@ fn find_any_box_recursive_impl(data: &[u8], box_type: [u8; 4], depth: u32, max_d
                 data[pos + 13],
                 data[pos + 14],
                 data[pos + 15],
-            ]) as usize;
+            ]));
             (pos + 16, (pos + ext).min(data.len()))
         } else if size < 8 {
             pos += 8;
@@ -665,9 +672,18 @@ mod tests {
 
     #[test]
     fn test_parse_float_or_default() {
-        assert_eq!(parse_float_or_default("5.67", 0.0), 5.67);
-        assert_eq!(parse_float_or_default("invalid", 1.0), 1.0);
-        assert_eq!(parse_float_or_default("", 2.5), 2.5);
+        assert!(crate::float_compare::approx_eq_f64(
+            parse_float_or_default("5.67", 0.0),
+            5.67
+        ));
+        assert!(crate::float_compare::approx_eq_f64(
+            parse_float_or_default("invalid", 1.0),
+            1.0
+        ));
+        assert!(crate::float_compare::approx_eq_f64(
+            parse_float_or_default("", 2.5),
+            2.5
+        ));
     }
 
     #[test]

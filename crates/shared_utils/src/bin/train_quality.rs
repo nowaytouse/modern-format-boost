@@ -78,12 +78,9 @@ fn main() -> Result<()> {
                 continue;
             }
 
-            if let Err(e) = ingest_quality_sample(
-                &mut client,
-                path,
-                cli.label.as_str(),
-                "manual_training",
-            ) {
+            if let Err(e) =
+                ingest_quality_sample(&mut client, path, cli.label.as_str(), "manual_training")
+            {
                 eprintln!("⚠️ Failed to ingest {}: {}", path.display(), e);
             } else {
                 count += 1;
@@ -91,6 +88,6 @@ fn main() -> Result<()> {
         }
     }
 
-    println!("✅ Finished! Ingested {} samples.", count);
+    println!("✅ Finished! Ingested {count} samples.");
     Ok(())
 }

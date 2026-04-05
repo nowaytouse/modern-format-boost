@@ -14,7 +14,6 @@ use std::io;
 use std::path::Path;
 use std::sync::OnceLock;
 
-
 static EXIFTOOL_AVAILABLE: OnceLock<bool> = OnceLock::new();
 
 fn is_exiftool_available() -> bool {
@@ -64,7 +63,7 @@ fn get_best_date_from_source(src: &Path) -> Option<String> {
         .arg("-EXIF:DateTimeOriginal")
         .arg("-EXIF:CreateDate")
         .input(src);
-    
+
     let output = builder.build().output().ok()?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -267,19 +266,22 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
 
     let mut builder = crate::ExiftoolBuilder::new();
     builder
-        .arg("-charset").arg("filename=utf8")
-        .arg("-api").arg("windowsunicode=1")
-        .arg("-api").arg("LargeFileSupport=1")
+        .arg("-charset")
+        .arg("filename=utf8")
+        .arg("-api")
+        .arg("windowsunicode=1")
+        .arg("-api")
+        .arg("LargeFileSupport=1")
         .overwrite_original()
         .tags_from_file(src)
         .arg("-all:all")
         .unsafe_tags();
-    
+
     if !jxl_already_has_icc {
         // Non-JXL OR JXL without embedded ICC: inject via ExifTool as fallback
         builder.arg("-ICC_Profile<ICC_Profile");
     }
-    
+
     // JXL with already-embedded ICC: skip to preserve cjxl's authoritative profile
     builder
         .arg("-use")
@@ -290,7 +292,7 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
         .quiet()
         .ignore_minor()
         .input(dst);
-    
+
     let mut output = builder.build().output()?;
 
     // Log exiftool stderr to file (debug/warn level only — never reaches terminal).
@@ -384,7 +386,7 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
                         .arg("-q")
                         .arg("-m")
                         .input(dst);
-                    
+
                     output = repair_builder.build().output()?;
                 } else {
                     eprintln!(
@@ -462,7 +464,7 @@ fn fix_quicktime_dates(src: &Path, dst: &Path) -> io::Result<()> {
         .quiet()
         .ignore_minor()
         .input(dst);
-    
+
     let output = builder.build().output()?;
 
     if !output.status.success() {

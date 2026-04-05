@@ -189,7 +189,7 @@ impl HeartbeatMonitor {
                     #[cfg(unix)]
                     // SAFETY: child_pid is the PID of the child process we spawned; we own it and may signal it.
                     unsafe {
-                        if libc::kill(self.child_pid as i32, libc::SIGKILL) != 0 {
+                        if libc::kill(self.child_pid.cast_signed(), libc::SIGKILL) != 0 {
                             crate::log_eprintln!(
                                 "⚠️  Failed to terminate ffmpeg PID {} via SIGKILL: {}",
                                 self.child_pid,
@@ -572,7 +572,7 @@ impl GpuAccel {
                     supports_crf: true,
                     crf_param: "cq",
                     crf_range: (0, 63),
-                                        extra_args: vec![
+                    extra_args: vec![
                         crate::constants::FFMPEG_ARG_PRESET,
                         crate::constants::VAL_P4,
                         crate::constants::FFMPEG_ARG_TUNE,
@@ -634,7 +634,12 @@ impl GpuAccel {
                     supports_crf: true,
                     crf_param: "global_quality",
                     crf_range: (1, 51),
-                    extra_args: vec![crate::constants::FFMPEG_ARG_PRESET, crate::constants::VAL_MEDIUM, crate::constants::FFMPEG_ARG_PROFILE_VIDEO, crate::constants::VAL_MAIN],
+                    extra_args: vec![
+                        crate::constants::FFMPEG_ARG_PRESET,
+                        crate::constants::VAL_MEDIUM,
+                        crate::constants::FFMPEG_ARG_PROFILE_VIDEO,
+                        crate::constants::VAL_MAIN,
+                    ],
                 })
             } else {
                 None
@@ -647,7 +652,10 @@ impl GpuAccel {
                     supports_crf: true,
                     crf_param: "global_quality",
                     crf_range: (1, 63),
-                    extra_args: vec![crate::constants::FFMPEG_ARG_PRESET, crate::constants::VAL_MEDIUM],
+                    extra_args: vec![
+                        crate::constants::FFMPEG_ARG_PRESET,
+                        crate::constants::VAL_MEDIUM,
+                    ],
                 })
             } else {
                 None
@@ -660,7 +668,12 @@ impl GpuAccel {
                     supports_crf: true,
                     crf_param: "global_quality",
                     crf_range: (1, 51),
-                    extra_args: vec![crate::constants::FFMPEG_ARG_PRESET, crate::constants::VAL_MEDIUM, crate::constants::FFMPEG_ARG_PROFILE_VIDEO, crate::constants::VAL_HIGH],
+                    extra_args: vec![
+                        crate::constants::FFMPEG_ARG_PRESET,
+                        crate::constants::VAL_MEDIUM,
+                        crate::constants::FFMPEG_ARG_PROFILE_VIDEO,
+                        crate::constants::VAL_HIGH,
+                    ],
                 })
             } else {
                 None
@@ -880,7 +893,9 @@ fn crf_to_estimated_bitrate(crf: f32, codec: &str) -> u32 {
         _ => 1.0,
     };
 
-    (base_bitrate as f32 * crf_factor) as u32
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let val = crate::numeric_cast::f32_to_u32_sat(crate::numeric_cast::f64_to_f32_lossy(f64::from(base_bitrate)) * crf_factor);
+    val
 }
 
 #[derive(Debug, Clone)]
@@ -900,7 +915,6 @@ pub fn calculate_smart_sample(
     target_sample_duration: f32,
 ) -> anyhow::Result<SmartSampleResult> {
     use anyhow::Context;
-    
 
     if total_duration <= target_sample_duration * 1.2 {
         return Ok(SmartSampleResult {
@@ -1006,7 +1020,7 @@ pub fn calculate_quality_score(
     let compression_ratio = if input_size == 0 {
         1.0
     } else {
-        output_size as f64 / input_size as f64
+        f64::from(u32::try_from(output_size).unwrap_or(u32::MAX)) / f64::from(u32::try_from(input_size).unwrap_or(u32::MAX))
     };
 
     let (ssim_weight, size_weight): (f64, f64) = match phase {
@@ -1440,7 +1454,7 @@ impl PsnrSsimMapper {
             return 0.5;
         }
 
-        let n = self.calibration_points.len() as f64;
+        let n = f64::from(u32::try_from(self.calibration_points.len()).unwrap_or(u32::MAX));
         (0.6 + (n / 20.0).min(0.35)).min(0.95)
     }
 
@@ -1540,7 +1554,6 @@ fn gpu_coarse_search_with_log_impl(
     log_cb: Option<&dyn Fn(&str)>,
 ) -> anyhow::Result<GpuCoarseResult> {
     use anyhow::{bail, Context};
-    
 
     const LARGE_FILE_THRESHOLD: u64 = 500 * 1024 * 1024;
     const VERY_LARGE_FILE_THRESHOLD: u64 = 2 * 1024 * 1024 * 1024;
@@ -1655,7 +1668,7 @@ fn gpu_coarse_search_with_log_impl(
         let reason = if input_size < skip_gpu_size_threshold {
             format!(
                 "file too small ({:.1}KB < {}KB)",
-                input_size as f64 / 1024.0,
+                f64::from(u32::try_from(input_size).unwrap_or(u32::MAX)) / 1024.0,
                 skip_gpu_size_threshold / 1024
             )
         } else {
@@ -1689,9 +1702,11 @@ fn gpu_coarse_search_with_log_impl(
         } else {
             30.0_f32
         };
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let display_limit = crate::numeric_cast::f32_to_u32_sat(limit);
         log_msg!(
             "   ⚠️ Very large file detected → Conservative mode ({}s sample)",
-            limit as u32
+            display_limit
         );
         (limit, true)
     } else if is_large_file || is_long_video {
@@ -1700,9 +1715,11 @@ fn gpu_coarse_search_with_log_impl(
         } else {
             45.0_f32
         };
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let display_limit = crate::numeric_cast::f32_to_u32_sat(limit);
         log_msg!(
             "   📊 Large file detected → Sequential mode ({}s sample)",
-            limit as u32
+            display_limit
         );
         (limit, true)
     } else {
@@ -1711,9 +1728,11 @@ fn gpu_coarse_search_with_log_impl(
         } else {
             GPU_SAMPLE_DURATION
         };
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let display_limit = crate::numeric_cast::f32_to_u32_sat(limit);
         log_msg!(
             "   ✅ Normal file → Parallel mode ({}s sample)",
-            limit as u32
+            display_limit
         );
         (limit, false)
     };
@@ -1723,13 +1742,13 @@ fn gpu_coarse_search_with_log_impl(
     log_msg!(
         "GPU Search ({}, {:.2}MB, {:.1}s)",
         gpu.gpu_type,
-        input_size as f64 / 1024.0 / 1024.0,
+        f64::from(u32::try_from(input_size).unwrap_or(u32::MAX)) / 1024.0 / 1024.0,
         quick_duration
     );
     log.push(format!(
         "GPU: {} | Input: {:.2}MB | Duration: {:.1}s",
         gpu.gpu_type,
-        input_size as f64 / 1024.0 / 1024.0,
+        f64::from(u32::try_from(input_size).unwrap_or(u32::MAX)) / 1024.0 / 1024.0,
         quick_duration
     ));
 
@@ -1747,7 +1766,9 @@ fn gpu_coarse_search_with_log_impl(
             GPU_SAMPLE_DURATION
         };
         let ratio = multi_segment_duration / duration;
-        (input_size as f64 * f64::from(ratio)) as u64
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let val = crate::numeric_cast::f64_to_u64_sat(f64::from(u32::try_from(input_size).unwrap_or(u32::MAX)) * f64::from(ratio));
+        val
     };
 
     let warmup_duration = duration.min(WARMUP_DURATION);
@@ -1772,8 +1793,7 @@ fn gpu_coarse_search_with_log_impl(
             builder.arg(arg);
         }
 
-        builder.codec_audio("none")
-            .output(&warmup_output);
+        builder.codec_audio("none").output(&warmup_output);
 
         let mut cmd = builder.build();
 
@@ -1800,7 +1820,9 @@ fn gpu_coarse_search_with_log_impl(
     let warmup_input_size = if duration <= WARMUP_DURATION || duration == 0.0 {
         input_size
     } else {
-        (input_size as f64 * f64::from(warmup_duration) / f64::from(duration)) as u64
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let val = crate::numeric_cast::f64_to_u64_sat(f64::from(u32::try_from(input_size).unwrap_or(u32::MAX)) * f64::from(warmup_duration) / f64::from(duration));
+        val
     };
 
     let warmup_result = encode_warmup(config.max_crf);
@@ -1867,8 +1889,7 @@ fn gpu_coarse_search_with_log_impl(
             builder.arg("-t").arg(format!("{actual_sample_duration}"));
         }
 
-        builder.input(input)
-            .vcodec_str(gpu_encoder.name);
+        builder.input(input).vcodec_str(gpu_encoder.name);
 
         if use_multi_segment {
             let seg_dur = if config.ultimate_mode {
@@ -1903,14 +1924,14 @@ fn gpu_coarse_search_with_log_impl(
             builder.arg(arg);
         }
 
-        builder.codec_audio("none")
+        builder
+            .codec_audio("none")
             .arg("-progress")
             .arg("pipe:1")
             .output(output);
 
         let mut cmd = builder.build();
-        cmd.stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
         let mut child = cmd.spawn().context("Failed to spawn ffmpeg")?;
         let start_time = Instant::now();
@@ -1962,7 +1983,7 @@ fn gpu_coarse_search_with_log_impl(
                         if let Some(val) = line.strip_prefix("out_time_us=") {
                             if let Ok(time_us) = val.parse::<u64>() {
                                 if last_progress_time.elapsed().as_secs_f64() >= 1.0 {
-                                    let current_secs = time_us as f64 / 1_000_000.0;
+                                    let current_secs = f64::from(u32::try_from(time_us).unwrap_or(u32::MAX)) / 1_000_000.0;
                                     let pct = (current_secs / f64::from(actual_sample_duration)
                                         * 100.0)
                                         .min(100.0);
@@ -1971,10 +1992,9 @@ fn gpu_coarse_search_with_log_impl(
                                         if pct > 0.1 && current_secs > 0.0 && elapsed_secs > 0.0 {
                                             let speed = current_secs / elapsed_secs;
                                             if speed > 0.0 {
-                                                ((f64::from(actual_sample_duration) - current_secs)
-                                                    / speed)
-                                                    .max(0.0)
-                                                    as u64
+                                                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                                                let val = crate::numeric_cast::f64_to_u64_sat(((f64::from(actual_sample_duration) - current_secs) / speed).max(0.0));
+                                                val
                                             } else {
                                                 0
                                             }
@@ -1991,7 +2011,9 @@ fn gpu_coarse_search_with_log_impl(
                                         if let Ok(metadata) = std::fs::metadata(output) {
                                             let current_size = metadata.len();
                                             fallback_logged = false;
-                                            (current_size as f64 / pct.max(1.0) * 100.0) as u64
+                                            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                                            let val = crate::numeric_cast::f64_to_u64_sat(f64::from(u32::try_from(current_size).unwrap_or(u32::MAX)) / pct.max(1.0) * 100.0);
+                                            val
                                         } else {
                                             if !fallback_logged {
                                                 crate::log_eprintln!(
@@ -1999,9 +2021,8 @@ fn gpu_coarse_search_with_log_impl(
                                             );
                                                 fallback_logged = true;
                                             }
-                                            (sample_input_size as f64 * (1.0 / pct.max(0.1)))
-                                                .min(sample_input_size as f64 * 10.0)
-                                                as u64
+                                            crate::numeric_cast::f64_to_u64_sat((f64::from(u32::try_from(sample_input_size).unwrap_or(u32::MAX)) * (1.0 / pct.max(0.1)))
+                                                .min(f64::from(u32::try_from(sample_input_size).unwrap_or(u32::MAX)) * 10.0))
                                         };
 
                                     crate::log_eprintln!("⏳ Progress: {:.1}% ({:.1}s / {:.1}s) - ETA: {}s - Speed: {:.2}x",
@@ -2082,7 +2103,8 @@ fn gpu_coarse_search_with_log_impl(
                     let _guard = GpuSlotGuard;
                     acquire_gpu_slot();
                     let mut builder = crate::tool_builders::FfmpegBuilder::new();
-                    builder.overwrite()
+                    builder
+                        .overwrite()
                         .arg("-t")
                         .arg(format!("{sample_dur}"))
                         .input(&input_path)
@@ -2095,8 +2117,7 @@ fn gpu_coarse_search_with_log_impl(
                         builder.arg(arg);
                     }
 
-                    builder.codec_audio("none")
-                        .output(&output_path);
+                    builder.codec_audio("none").output(&output_path);
 
                     let mut cmd = builder.build();
 
@@ -2160,17 +2181,17 @@ fn gpu_coarse_search_with_log_impl(
             .iter()
             .rev()
             .take(WINDOW_SIZE)
-            .map(|(_, s)| *s as f64 / input_size as f64)
+            .map(|(_, s)| f64::from(u32::try_from(*s).unwrap_or(u32::MAX)) / f64::from(u32::try_from(input_size).unwrap_or(u32::MAX)))
             .collect();
-        let mean = recent.iter().sum::<f64>() / recent.len() as f64;
-        recent.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / recent.len() as f64
+        let mean = if recent.is_empty() { 0.0 } else { recent.iter().sum::<f64>() / f64::from(u32::try_from(recent.len()).unwrap_or(1)) };
+        if recent.is_empty() { 0.0 } else { recent.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / f64::from(u32::try_from(recent.len()).unwrap_or(1)) }
     };
 
     let calc_change_rate = |prev: u64, curr: u64| -> f64 {
         if prev == 0 {
             return f64::MAX;
         }
-        ((curr as f64 - prev as f64) / prev as f64).abs()
+        ((f64::from(u32::try_from(curr).unwrap_or(u32::MAX)) - f64::from(u32::try_from(prev).unwrap_or(u32::MAX))) / f64::from(u32::try_from(prev.max(1)).unwrap_or(u32::MAX))).abs()
     };
 
     let mut boundary_low: f32 = config.min_crf;
@@ -2272,7 +2293,7 @@ fn gpu_coarse_search_with_log_impl(
                     log_msg!(
                         "   📊 max_crf {:.0} is better: {:.1}% smaller",
                         config.max_crf,
-                        (1.0 - *max_size as f64 / *initial_size as f64) * 100.0
+                        (1.0 - f64::from(u32::try_from(*max_size).unwrap_or(u32::MAX)) / f64::from(u32::try_from(*initial_size).unwrap_or(u32::MAX))) * 100.0
                     );
                 }
             }
@@ -2346,7 +2367,7 @@ fn gpu_coarse_search_with_log_impl(
                         }
 
                         let size_delta_pct = if last_size > 0 {
-                            (size as f64 - last_size as f64).abs() / last_size as f64 * 100.0
+                            (f64::from(u32::try_from(size).unwrap_or(u32::MAX)) - f64::from(u32::try_from(last_size).unwrap_or(u32::MAX))).abs() / f64::from(u32::try_from(last_size.max(1)).unwrap_or(u32::MAX)) * 100.0
                         } else {
                             100.0
                         };
@@ -2367,7 +2388,7 @@ fn gpu_coarse_search_with_log_impl(
                             log_msg!(
                                 "   ✓ CRF {:.1}: {:.1}% (step {:.1}) → continue",
                                 test_crf,
-                                (size as f64 / sample_input_size as f64 - 1.0) * 100.0,
+                                (f64::from(u32::try_from(size).unwrap_or(u32::MAX)) / f64::from(u32::try_from(sample_input_size.max(1)).unwrap_or(u32::MAX)) - 1.0) * 100.0,
                                 current_step
                             );
 
@@ -2386,7 +2407,7 @@ fn gpu_coarse_search_with_log_impl(
                                 "   ✗ CRF {:.1}: WALL HIT #{} (size +{:.1}%)",
                                 test_crf,
                                 wall_hits,
-                                (size as f64 / sample_input_size as f64 - 1.0) * 100.0
+                                (f64::from(u32::try_from(size).unwrap_or(u32::MAX)) / f64::from(u32::try_from(sample_input_size.max(1)).unwrap_or(u32::MAX)) - 1.0) * 100.0
                             );
 
                             if wall_hits >= gpu_max_wall_hits {
@@ -2399,7 +2420,7 @@ fn gpu_coarse_search_with_log_impl(
                                 break;
                             }
 
-                            let curve_step = initial_step * gpu_decay_factor.powi(wall_hits as i32);
+                            let curve_step = initial_step * gpu_decay_factor.powi(wall_hits.cast_signed());
                             let new_step = if curve_step < 1.0 {
                                 gpu_min_step
                             } else {
@@ -2472,7 +2493,7 @@ fn gpu_coarse_search_with_log_impl(
                             log_msg!(
                                 "   ✓ CRF {:.1}: {:.1}% (step {:.1}) → found compress point",
                                 test_crf,
-                                (size as f64 / sample_input_size as f64 - 1.0) * 100.0,
+                                (f64::from(u32::try_from(size).unwrap_or(u32::MAX)) / f64::from(u32::try_from(sample_input_size.max(1)).unwrap_or(u32::MAX)) - 1.0) * 100.0,
                                 current_step
                             );
                             break;
@@ -2482,7 +2503,7 @@ fn gpu_coarse_search_with_log_impl(
                             "   ✗ CRF {:.1}: WALL HIT #{} (size +{:.1}%)",
                             test_crf,
                             wall_hits,
-                            (size as f64 / sample_input_size as f64 - 1.0) * 100.0
+                            (f64::from(u32::try_from(size).unwrap_or(u32::MAX)) / f64::from(u32::try_from(sample_input_size.max(1)).unwrap_or(u32::MAX)) - 1.0) * 100.0
                         );
 
                         if wall_hits >= gpu_max_wall_hits {
@@ -2493,7 +2514,7 @@ fn gpu_coarse_search_with_log_impl(
                             break;
                         }
 
-                        let curve_step = initial_step * gpu_decay_factor.powi(wall_hits as i32);
+                        let curve_step = initial_step * gpu_decay_factor.powi(wall_hits.cast_signed());
                         let new_step = if curve_step < 1.0 {
                             gpu_min_step
                         } else {
@@ -2526,8 +2547,10 @@ fn gpu_coarse_search_with_log_impl(
     };
 
     if found_compress_point && !skip_stage2 && (boundary_high - boundary_low) > 1.0 {
-        let mut lo = boundary_low.ceil() as i32;
-        let mut hi = boundary_high.floor() as i32;
+        #[allow(clippy::cast_possible_truncation)]
+        let mut lo = crate::numeric_cast::f32_to_i32_sat(boundary_low.ceil());
+        #[allow(clippy::cast_possible_truncation)]
+        let mut hi = crate::numeric_cast::f32_to_i32_sat(boundary_high.floor());
 
         let max_binary_iter = 5;
         let mut binary_iter = 0;
@@ -2535,7 +2558,7 @@ fn gpu_coarse_search_with_log_impl(
         while lo < hi && iterations < max_iterations_limit && binary_iter < max_binary_iter {
             binary_iter += 1;
             let mid = lo + (hi - lo) / 2;
-            let test_crf = mid as f32;
+            let test_crf = f32::from(u16::try_from(mid.max(0)).unwrap_or(0));
 
             if let Some(&cached_size) = size_cache.get(test_crf) {
                 if cached_size < sample_input_size {
@@ -2621,7 +2644,7 @@ fn gpu_coarse_search_with_log_impl(
 
                     if size < sample_input_size {
                         let improvement =
-                            best_size.map_or(0.0, |b| (b as f64 - size as f64) / b as f64 * 100.0);
+                            best_size.map_or(0.0, |b| (f64::from(u32::try_from(b).unwrap_or(u32::MAX)) - f64::from(u32::try_from(size).unwrap_or(u32::MAX))) / f64::from(u32::try_from(b.max(1)).unwrap_or(u32::MAX)) * 100.0);
                         log_msg!("   ✓ CRF {:.1}: {:.1}% improvement", test_crf, improvement);
 
                         best_crf = Some(test_crf);
@@ -2808,7 +2831,7 @@ fn gpu_coarse_search_with_log_impl(
         log_msg!("   🎯 GPU Quality Ceiling Detected!");
         log_msg!("      └─ Ceiling CRF: {:.1} (PSNR plateau)", ceiling_crf);
         log_msg!("      └─ Last tested CRF: {:.1}", last_tested_crf);
-        if ceiling_crf != last_tested_crf {
+        if !crate::float_compare::approx_eq_crf(ceiling_crf, last_tested_crf) {
             log_msg!("      └─ Boundary = Ceiling (lower CRFs are bloated, no quality gain)");
         }
         ceiling_crf
@@ -2823,7 +2846,7 @@ fn gpu_coarse_search_with_log_impl(
             gpu_boundary_crf
         );
         if let Some(size) = best_size {
-            let ratio = size as f64 / sample_input_size as f64 * 100.0;
+            let ratio = f64::from(u32::try_from(size).unwrap_or(u32::MAX)) / f64::from(u32::try_from(sample_input_size.max(1)).unwrap_or(u32::MAX)) * 100.0;
             log_msg!("   📊 GPU Best Size: {:.1}% of input", ratio);
         }
         if let Some(ssim) = gpu_ssim {

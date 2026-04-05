@@ -24,7 +24,7 @@ pub fn metadata_with_retry<P: AsRef<Path>>(path: P) -> std::io::Result<fs::Metad
                 if e.kind() == std::io::ErrorKind::NotFound {
                     return Err(e);
                 }
-                
+
                 last_err = Some(e);
                 if i < 2 {
                     std::thread::sleep(std::time::Duration::from_millis(100));

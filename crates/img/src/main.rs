@@ -73,8 +73,6 @@ enum Commands {
         #[arg(short, long)]
         verbose: bool,
 
-
-
         /// Resume from last run: skip files already in progress file.
         #[arg(long, default_value_t = false)]
         resume: bool,
@@ -229,6 +227,14 @@ fn main() -> anyhow::Result<()> {
                 }
             };
 
+            // Fail-fast if critical sub-tools are missing
+            if let Err(e) =
+                shared_utils::tools::require_tools(&["cjxl", "djxl", "exiftool", "ffmpeg"])
+            {
+                shared_utils::log_eprintln!("{e}");
+                std::process::exit(1);
+            }
+
             shared_utils::progress_mode::set_verbose_mode(verbose);
             // Create run log first; all subsequent output is captured here
             if let Err(e) = shared_utils::progress_mode::set_default_run_log_file("img") {
@@ -298,7 +304,7 @@ fn main() -> anyhow::Result<()> {
                 allow_size_tolerance,
                 verbose,
                 child_threads: 0,
-    
+
                 cache: cache.clone(),
                 codec: selected_codec,
             };
@@ -499,7 +505,6 @@ fn load_image_safe(path: &std::path::Path) -> anyhow::Result<image::DynamicImage
     let is_jxl = shared_utils::quality_matcher::parse_source_codec(&ext) == SourceCodec::JpegXl;
 
     if is_jxl {
-
         let temp_png_file = tempfile::Builder::new()
             .suffix(".png")
             .tempfile_in(shared_utils::get_mfb_tmp_dir()?)
@@ -509,8 +514,9 @@ fn load_image_safe(path: &std::path::Path) -> anyhow::Result<image::DynamicImage
 
         let mut builder = shared_utils::jxl_builder::DjxlBuilder::new();
         builder.input(path).output(temp_path);
-        
-        let status = builder.build()
+
+        let status = builder
+            .build()
             .status()
             .map_err(|e| anyhow::anyhow!("Failed to execute djxl: {e}"))?;
 
@@ -607,7 +613,9 @@ fn auto_convert_single_file(
     if shared_utils::is_live_photo(input) {
         let reason = "Live Photo detected, skipping in Apple compat mode";
         shared_utils::progress_mode::image_skipped(reason);
-        let file_size = shared_utils::io_utils::metadata_with_retry(input).map(|m| m.len()).unwrap_or(0);
+        let file_size = shared_utils::io_utils::metadata_with_retry(input)
+            .map(|m| m.len())
+            .unwrap_or(0);
         copy_original_if_adjacent_mode(input, config)?;
         return Ok(ConversionOutput {
             original_path: input.display().to_string(),
@@ -625,7 +633,8 @@ fn auto_convert_single_file(
 
     // --- Strict Static Isolation: Skip all animated assets ---
     if analysis.is_animated {
-        let reason = "Animated media detected - img strictly processes static images only (handled by vid)";
+        let reason =
+            "Animated media detected - img strictly processes static images only (handled by vid)";
         shared_utils::progress_mode::image_skipped(reason);
         copy_original_if_adjacent_mode(input, config)?;
         return Ok(ConversionOutput {
@@ -814,12 +823,6 @@ fn dispatch_static_conversion(
         }
     })
 }
-
-
-
-
-
-
 
 fn auto_convert_directory(
     input: &Path,

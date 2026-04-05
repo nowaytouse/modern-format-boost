@@ -1,8 +1,8 @@
 //! Type-safe builders for JPEG XL (cjxl, djxl) tools.
 
+use crate::constants;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use crate::constants;
 
 /// Builder for constructing `cjxl` commands.
 #[derive(Debug, Default)]
@@ -130,15 +130,24 @@ impl CjxlBuilder {
         }
 
         if let Some(allow) = self.allow_jpeg_recon {
-            cmd.arg(format!("{}={}", constants::JXL_ARG_ALLOW_JPEG_RECON, if allow { "1" } else { "0" }));
+            cmd.arg(format!(
+                "{}={}",
+                constants::JXL_ARG_ALLOW_JPEG_RECON,
+                if allow { "1" } else { "0" }
+            ));
         }
 
         if let Some(cicp) = &self.cicp {
-            cmd.arg("-x").arg(format!("{}={}", constants::JXL_ARG_COLOR_SPACE, cicp));
+            cmd.arg("-x")
+                .arg(format!("{}={}", constants::JXL_ARG_COLOR_SPACE, cicp));
         }
 
         if let Some(icc) = &self.icc_profile {
-            cmd.arg("-x").arg(format!("{}={}", constants::JXL_ARG_ICC_PATHNAME, icc.display()));
+            cmd.arg("-x").arg(format!(
+                "{}={}",
+                constants::JXL_ARG_ICC_PATHNAME,
+                icc.display()
+            ));
         }
 
         if self.apple_compat {
@@ -162,7 +171,11 @@ impl CjxlBuilder {
 
     #[must_use]
     pub fn check_available() -> bool {
-        Command::new(constants::TOOL_CJXL).arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
+        Command::new(constants::TOOL_CJXL)
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
     }
 }
 
@@ -217,6 +230,10 @@ impl DjxlBuilder {
 
     #[must_use]
     pub fn check_available() -> bool {
-        Command::new(constants::TOOL_DJXL).arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
+        Command::new(constants::TOOL_DJXL)
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
     }
 }

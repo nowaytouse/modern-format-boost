@@ -314,8 +314,9 @@ impl ConversionResult {
 
     #[must_use]
     pub fn skipped_size_increase(input: &Path, input_size: u64, output_size: u64) -> Self {
-        let diff_bytes = output_size as i64 - input_size as i64;
-        let size_diff = crate::modern_ui::format_size_diff(diff_bytes);
+        let diff_bytes = i128::from(output_size) - i128::from(input_size);
+        let diff_bytes_i64 = i64::try_from(diff_bytes).unwrap_or(i64::MAX);
+        let size_diff = crate::modern_ui::format_size_diff(diff_bytes_i64);
         Self {
             success: true,
             input_path: input.display().to_string(),
@@ -368,8 +369,9 @@ impl ConversionResult {
         let size_tag = if reduction >= 0.0 {
             format!("\x1b[1;32m-{reduction_pct:.1}%\x1b[0m")
         } else {
-            let diff_bytes = output_size as i64 - input_size as i64;
-            let size_diff = crate::modern_ui::format_size_diff(diff_bytes);
+            let diff_bytes = i128::from(output_size) - i128::from(input_size);
+            let diff_bytes_i64 = i64::try_from(diff_bytes).unwrap_or(i64::MAX);
+            let size_diff = crate::modern_ui::format_size_diff(diff_bytes_i64);
             format!("\x1b[1;33m{size_diff}\x1b[0m")
         };
 

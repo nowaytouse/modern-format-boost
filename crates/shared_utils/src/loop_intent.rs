@@ -217,7 +217,7 @@ impl LoopMeta {
             webp_compression_ratio: None,
             palette_depth: None,
             motion_gini: {
-                let sizes: Vec<f64> = detection.pkt_sizes.iter().map(|&s| s as f64).collect();
+                let sizes: Vec<f64> = detection.pkt_sizes.iter().map(|&s| f64::from(u32::try_from(s).unwrap_or(u32::MAX))).collect();
                 Some(calculate_gini_f64(&sizes))
             },
             temporal_flatness: None,
@@ -301,7 +301,7 @@ impl LoopMeta {
             temporal_flatness: None,
             webp_compression_ratio: None,
             motion_gini: {
-                let sizes: Vec<f64> = probe.pkt_sizes.iter().map(|&s| s as f64).collect();
+                let sizes: Vec<f64> = probe.pkt_sizes.iter().map(|&s| f64::from(u32::try_from(s).unwrap_or(u32::MAX))).collect();
                 Some(calculate_gini_f64(&sizes))
             },
             block_skew: None,
@@ -372,7 +372,7 @@ impl LoopMeta {
         let frame_count = if let Some(dur) = total_dur {
             if dur > 0.0 {
                 if let Some(_v) = delay_variation {
-                    ((dur * 10.0_f64).ceil() as u32).min(10000_u32)
+                    crate::numeric_cast::f64_to_u32_sat((dur * 10.0_f64).ceil()).min(10000_u32)
                 } else {
                     1_u32
                 }
@@ -383,16 +383,22 @@ impl LoopMeta {
             1_u32
         };
 
+        let fps = if let Some(dur) = total_dur {
+            if frame_count > 1 && dur > 0.0 {
+                f64::from(frame_count) / dur
+            } else {
+                12.0
+            }
+        } else {
+            12.0
+        };
+
         let mut meta = Self {
             duration_secs: total_dur.unwrap_or(0.0),
             width,
             height,
-            fps: if frame_count > 1 && total_dur.is_some() && total_dur.unwrap() > 0.0 {
-                frame_count as f64 / total_dur.unwrap()
-            } else {
-                12.0 // Conservative estimate for header-only path
-            },
-            frame_count: frame_count as u64,
+            fps,
+            frame_count: u64::from(frame_count),
             file_size_bytes: file_size,
             file_name,
             source_extension: Some("gif".to_string()),
@@ -523,8 +529,7 @@ impl LoopThresholds {
         let median_scaled = reference
             .duration
             .p50
-            .map(|median| median * 0.60)
-            .unwrap_or(short_percentile);
+            .map_or(short_percentile, |median| median * 0.60);
         let duration_override_secs = if duration_percentiles_available {
             short_percentile
                 .min(median_scaled.max(0.35))
@@ -646,7 +651,7 @@ fn zero_motion_ratio(mvs: &[f64]) -> f64 {
         return 0.0;
     }
     let zero_count = mvs.iter().filter(|&&value| value.abs() < 0.1).count();
-    zero_count as f64 / mvs.len() as f64
+    f64::from(u32::try_from(zero_count).unwrap_or(u32::MAX)) / f64::from(u32::try_from(mvs.len()).unwrap_or(1))
 }
 
 fn is_near_16_by_9(width: u32, height: u32) -> bool {
@@ -696,7 +701,7 @@ fn evaluate_kinetics_and_physics(
         log_odds.add(-crate::constants::SCENE_CUT_NEGATIVE_LOG_ODDS);
     }
 
-    let compactness_signal = (-thresholds.file_size_z(meta.file_size_bytes as f64)).max(0.0) * 0.70
+    let compactness_signal = (-thresholds.file_size_z(f64::from(u32::try_from(meta.file_size_bytes).unwrap_or(u32::MAX)))).max(0.0) * 0.70
         + (-thresholds.pixels_z(total_pixels)).max(0.0) * 0.45;
     if !meta.has_audio && compactness_signal > 0.0 {
         log_odds.add(
@@ -705,7 +710,7 @@ fn evaluate_kinetics_and_physics(
         );
     }
 
-    let large_media_signal = thresholds.file_size_z(meta.file_size_bytes as f64).max(0.0) * 0.75
+    let large_media_signal = thresholds.file_size_z(f64::from(u32::try_from(meta.file_size_bytes).unwrap_or(u32::MAX))).max(0.0) * 0.75
         + thresholds.pixels_z(total_pixels).max(0.0) * 0.35;
     if large_media_signal > 0.0 {
         let audio_multiplier = if meta.has_audio { 1.0 } else { 0.65 };
@@ -945,9 +950,7 @@ fn evaluate_loop_tree(
 
     if meta.frame_count <= 1 {
         return finalize(
-            LoopIntentVerdict::LoopWeak(
-                "Layer 1-A: single frame media (cannot loop)".to_string(),
-            ),
+            LoopIntentVerdict::LoopWeak("Layer 1-A: single frame media (cannot loop)".to_string()),
             log_odds,
         );
     }
@@ -1089,7 +1092,7 @@ fn logistic_regression_fusion(
     };
 
     // neighbor_count is log-scaled to normalized density signal
-    let density_signal = (neighbor_count as f64).ln_1p();
+    let density_signal = f64::from(u32::try_from(neighbor_count).unwrap_or(u32::MAX)).ln_1p();
 
     let score = (knn_prob * LAYER6_LR_W_KNN)
         + (tree_prob * LAYER6_LR_W_TREE)
@@ -1107,7 +1110,8 @@ fn compute_layer6_fusion(
     neighbor_count: usize,
     nudge_score: f64,
 ) -> Layer6Fusion {
-    let final_score = logistic_regression_fusion(keep_prob, tree_probability, neighbor_count, nudge_score);
+    let final_score =
+        logistic_regression_fusion(keep_prob, tree_probability, neighbor_count, nudge_score);
 
     // Legacy weights kept for logging purposes, but the final_score now uses LR
     Layer6Fusion {
@@ -1138,7 +1142,7 @@ pub fn assess_loop_intent_from_probe(
 /// build the feedback loop described in Level 4 of the database utilization plan.
 pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> LoopIntentVerdict {
     use crate::database::{
-         fetch_loop_reference_profile, log_inference_record, lookup_similar_samples, open_pg_client,
+        fetch_loop_reference_profile, log_inference_record, lookup_similar_samples, open_pg_client,
         LoopInferenceRecord,
     };
 
@@ -1177,8 +1181,7 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
 
     let keywords = reference_profile
         .as_ref()
-        .map(|profile| profile.top_keywords.as_slice())
-        .unwrap_or(&[]);
+        .map_or(&[][..], |profile| profile.top_keywords.as_slice());
 
     let mut mutable_meta = meta.clone();
     mutable_meta.refresh_semantics(keywords);
@@ -1206,7 +1209,12 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
             ));
 
             if let Some(m) = sample_match {
-                let keep_prob = m.keep_probability.unwrap_or(0.5);
+                let keep_prob = m.keep_probability.unwrap_or_else(|| {
+                    tracing::debug!(
+                        "Missing score prior; admitting unknown state via neutral default"
+                    );
+                    crate::constants::DEFAULT_SCORE_PRIOR
+                });
                 let confidence = m.confidence;
 
                 // Capture KNN data for inference log
@@ -1244,13 +1252,11 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
                             if let Ok(img) = image::load_from_memory(bytes) {
                                 img_opt = Some(img);
                             }
-                        } else {
-                            if let Some(temp_frame) = extract_frame_to_temp(p) {
-                                if let Ok(bytes) = std::fs::read(&temp_frame) {
-                                    let _ = std::fs::remove_file(&temp_frame);
-                                    if let Ok(img) = image::load_from_memory(&bytes) {
-                                        img_opt = Some(img);
-                                    }
+                        } else if let Some(temp_frame) = extract_frame_to_temp(p) {
+                            if let Ok(bytes) = std::fs::read(&temp_frame) {
+                                let _ = std::fs::remove_file(&temp_frame);
+                                if let Ok(img) = image::load_from_memory(&bytes) {
+                                    img_opt = Some(img);
                                 }
                             }
                         }
@@ -1321,25 +1327,22 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
                     }
                     final_v
                 }
+            } else if tree_probability > 0.78 {
+                emit_stderr(&format!(
+                    "   ⚖️ Tree strong ({tree_probability:.2}) but no KNN match — promoting to LoopStrong"
+                ));
+                LoopIntentVerdict::LoopStrong(format!(
+                    "Layer 6: Tree-only promotion (score={tree_probability:.2}) - no KNN match"
+                ))
             } else {
-                if tree_probability > 0.78 {
-                    emit_stderr(&format!(
-                        "   ⚖️ Tree strong ({tree_probability:.2}) but no KNN match — promoting to LoopStrong"
-                    ));
-                    LoopIntentVerdict::LoopStrong(format!(
-                        "Layer 6: Tree-only promotion (score={:.2}) - no KNN match",
-                        tree_probability
-                    ))
+                emit_stderr("   ⚠️ KNN returned no match — using Layer 7 fallback");
+                let final_v = layer7_fallback(meta, reason);
+                if final_v.is_keep_gif() {
+                    emit_stderr(&format!("✅ Fallback Result: {}", final_v.reason()));
                 } else {
-                    emit_stderr("   ⚠️ KNN returned no match — using Layer 7 fallback");
-                    let final_v = layer7_fallback(meta, reason);
-                    if final_v.is_keep_gif() {
-                        emit_stderr(&format!("✅ Fallback Result: {}", final_v.reason()));
-                    } else {
-                        emit_stderr(&format!("ℹ️  Fallback Result: {}", final_v.reason()));
-                    }
-                    final_v
+                    emit_stderr(&format!("ℹ️  Fallback Result: {}", final_v.reason()));
                 }
+                final_v
             }
         }
     };
@@ -1394,10 +1397,16 @@ fn layer7_fallback(meta: &LoopMeta, upstream_reason: &str) -> LoopIntentVerdict 
     } else if is_gif {
         LoopIntentVerdict::LoopStrong(format!("{reason} → preserve GIF as-is (Layer 7 default)"))
     } else if is_video {
-        let sticker_limit = std::env::var(crate::constants::ENV_STICKER_LIMIT_SECS)
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(crate::constants::MODERN_FORMAT_VIDEO_BIAS_THRESHOLD_SECS);
+        let sticker_limit = match std::env::var(crate::constants::ENV_STICKER_LIMIT_SECS) {
+            Ok(s) => match s.parse::<f64>() {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::error!(env = crate::constants::ENV_STICKER_LIMIT_SECS, input = s, error = %e, "Invalid sticker limit env var; admitting unknown input via default value {}", crate::constants::MODERN_FORMAT_VIDEO_BIAS_THRESHOLD_SECS);
+                    crate::constants::MODERN_FORMAT_VIDEO_BIAS_THRESHOLD_SECS
+                }
+            },
+            Err(_) => crate::constants::MODERN_FORMAT_VIDEO_BIAS_THRESHOLD_SECS,
+        };
 
         let is_sticker_safe_zone = !meta.has_audio
             && meta.duration_secs > 0.0
@@ -1444,7 +1453,10 @@ pub fn is_lossless_exploration_safe(meta: &LoopMeta, path: Option<&Path>) -> boo
     let keep_prob = sample_match
         .as_ref()
         .and_then(|m| m.keep_probability)
-        .unwrap_or(0.5);
+        .unwrap_or_else(|| {
+            tracing::debug!("Missing score prior; admitting unknown state via neutral default");
+            crate::constants::DEFAULT_SCORE_PRIOR
+        });
 
     let threshold = lossless_duration_limit_for_keep_prob(keep_prob);
     let is_safe = meta.duration_secs < f64::from(threshold);
@@ -1469,7 +1481,7 @@ fn lossless_duration_limit_for_keep_prob(keep_prob: f64) -> f32 {
         let t = (keep_prob - 0.3) / 0.4;
         let limit_meme = f64::from(MEME_LOSSLESS_DURATION_LIMIT);
         let limit_high = f64::from(HIGH_VALUE_LOSSLESS_DURATION_LIMIT);
-        (limit_high + (t * (limit_meme - limit_high))) as f32
+        crate::numeric_cast::f64_to_f32_lossy(limit_high + (t * (limit_meme - limit_high)))
     }
 }
 
@@ -1477,16 +1489,17 @@ fn lossless_duration_limit_for_keep_prob(keep_prob: f64) -> f32 {
 
 fn calculate_cv(values: &[u64]) -> f64 {
     if values.is_empty() {
-        return 0.5;
+        tracing::debug!("Coefficient of variation requested for empty set; admitting unknown state via 0.5 prior");
+        return crate::constants::DEFAULT_SCORE_PRIOR;
     }
-    let n = values.len() as f64;
-    let mean = values.iter().map(|&v| v as f64).sum::<f64>() / n;
+    let n = f64::from(u32::try_from(values.len()).unwrap_or(1));
+    let mean = values.iter().map(|&v| f64::from(u32::try_from(v).unwrap_or(u32::MAX))).sum::<f64>() / n;
     if mean <= 0.0 {
         return 0.0;
     }
     let var = values
         .iter()
-        .map(|&v| (v as f64 - mean).powi(2))
+        .map(|&v| (f64::from(u32::try_from(v).unwrap_or(u32::MAX)) - mean).powi(2))
         .sum::<f64>()
         / n;
     var.sqrt() / mean
@@ -1494,9 +1507,10 @@ fn calculate_cv(values: &[u64]) -> f64 {
 
 fn calculate_cv_f64(values: &[f64]) -> f64 {
     if values.is_empty() {
-        return 0.5;
+        tracing::debug!("Coefficient of variation requested for empty set; admitting unknown state via 0.5 prior");
+        return crate::constants::DEFAULT_SCORE_PRIOR;
     }
-    let n = values.len() as f64;
+    let n = f64::from(u32::try_from(values.len()).unwrap_or(1));
     let mean = values.iter().sum::<f64>() / n;
     if mean <= 0.0 {
         return 0.0;
@@ -1511,7 +1525,7 @@ fn calculate_gini_f64(values: &[f64]) -> f64 {
     }
     let mut sorted = values.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let n = sorted.len() as f64;
+    let n = f64::from(u32::try_from(sorted.len()).unwrap_or(1));
     let sum: f64 = sorted.iter().sum();
     if sum.abs() < 1e-9 {
         return 0.0;
@@ -1519,7 +1533,7 @@ fn calculate_gini_f64(values: &[f64]) -> f64 {
     let weighted_sum: f64 = sorted
         .iter()
         .enumerate()
-        .map(|(i, &v)| (2 * (i + 1)) as f64 * v)
+        .map(|(i, &v)| f64::from(u32::try_from(2 * (i + 1)).unwrap_or(1)) * v)
         .sum();
     (weighted_sum / (n * sum)) - (n + 1.0) / n
 }
@@ -1602,7 +1616,7 @@ pub fn score_loop_frequency(duration_secs: f64, frame_count: u64) -> f64 {
         return 0.5;
     }
     let loops_per_minute = 60.0 / duration_secs;
-    let frame_density = frame_count as f64 / duration_secs;
+    let frame_density = f64::from(u32::try_from(frame_count).unwrap_or(u32::MAX)) / duration_secs;
 
     let loop_score = if loops_per_minute >= 20.0 {
         1.0
@@ -1626,15 +1640,15 @@ pub fn score_loop_frequency(duration_secs: f64, frame_count: u64) -> f64 {
         0.0
     };
 
-    (loop_score as f64 + density_adj as f64).clamp(0.0_f64, 1.0_f64)
+    (f64::from(loop_score) + f64::from(density_adj)).clamp(0.0_f64, 1.0_f64)
 }
 
 pub fn score_sparse_cadence(duration_secs: f64, frame_count: u64) -> f64 {
     if duration_secs <= 0.01 || frame_count <= 1 {
         return 0.5;
     }
-    let frame_density = frame_count as f64 / duration_secs.max(0.01);
-    let avg_gap = duration_secs / frame_count as f64;
+    let frame_density = f64::from(u32::try_from(frame_count).unwrap_or(u32::MAX)) / duration_secs.max(0.01);
+    let avg_gap = duration_secs / f64::from(u32::try_from(frame_count).unwrap_or(u32::MAX));
 
     if duration_secs <= 1.5 && frame_density >= 12.0 {
         return 0.98;
@@ -1707,13 +1721,13 @@ fn detect_scene_cut(pkt_sizes: &[u64]) -> bool {
     let inner = &pkt_sizes[1..pkt_sizes.len() - 1];
     let mut baseline = inner.to_vec();
     baseline.sort_unstable();
-    let median = baseline[baseline.len() / 2] as f64;
+    let median = f64::from(u32::try_from(baseline[baseline.len() / 2]).unwrap_or(u32::MAX));
 
     if median <= 0.0 {
         return false;
     }
 
-    inner.iter().any(|&size| (size as f64) > median * 5.0)
+    inner.iter().any(|&size| (f64::from(u32::try_from(size).unwrap_or(u32::MAX))) > median * 5.0)
 }
 
 /// Detect localized motion (high concentration of motion in small area).
@@ -1724,7 +1738,6 @@ fn detect_localized_motion(mvs: &[f64]) -> bool {
 
 /// Extract first frame from video to temporary PNG for analysis.
 fn extract_frame_to_temp(path: &Path) -> Option<std::path::PathBuf> {
-    
     use std::time::{SystemTime, UNIX_EPOCH};
 
     // Generate unique filename: timestamp + random seed
@@ -1732,10 +1745,10 @@ fn extract_frame_to_temp(path: &Path) -> Option<std::path::PathBuf> {
         .duration_since(UNIX_EPOCH)
         .ok()?
         .as_nanos();
-    let rand_seed = std::process::id() ^ (timestamp as u32);
+    let rand_seed = std::process::id() ^ (u32::try_from(timestamp).unwrap_or(u32::MAX));
 
     let temp_dir = std::env::temp_dir();
-    let temp_path = temp_dir.join(format!("mfb_frame_{:x}_{:x}.png", timestamp, rand_seed));
+    let temp_path = temp_dir.join(format!("mfb_frame_{timestamp:x}_{rand_seed:x}.png"));
 
     let output = crate::ffmpeg_builder::FfmpegBuilder::new()
         .input(path)
@@ -1759,7 +1772,7 @@ fn detect_heavy_letterboxing_from_image(img: &image::DynamicImage) -> bool {
     if h < 100 {
         return false;
     }
-    let top_band = (f64::from(h) * 0.15) as u32;
+    let top_band = crate::numeric_cast::f64_to_u32_sat(f64::from(h) * 0.15);
     let bottom_start = h - top_band;
     let top_var = calculate_band_variance(img, 0, top_band);
     let bottom_var = calculate_band_variance(img, bottom_start, h);
@@ -1785,8 +1798,8 @@ fn calculate_band_variance(img: &image::DynamicImage, y_start: u32, y_end: u32) 
     if values.is_empty() {
         return 0.0;
     }
-    let mean = values.iter().sum::<f64>() / values.len() as f64;
-    values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / values.len() as f64
+    let mean = values.iter().sum::<f64>() / f64::from(u32::try_from(values.len()).unwrap_or(1));
+    values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / f64::from(u32::try_from(values.len()).unwrap_or(1))
 }
 
 fn detect_high_text_density_from_image(img: &image::DynamicImage) -> bool {
@@ -1798,7 +1811,7 @@ fn detect_high_text_density_from_image(img: &image::DynamicImage) -> bool {
     }
 
     let mut edge_count = 0usize;
-    let total_pixels = (w as f64) * (h as f64);
+    let total_pixels = f64::from(w) * f64::from(h);
 
     for y in 1..h - 1 {
         for x in 1..w - 1 {
@@ -1812,11 +1825,244 @@ fn detect_high_text_density_from_image(img: &image::DynamicImage) -> bool {
         }
     }
 
-    let edge_ratio = edge_count as f64 / total_pixels;
+    let edge_ratio = f64::from(u32::try_from(edge_count).unwrap_or(u32::MAX)) / total_pixels;
     edge_ratio > 0.15
 }
 
 // ── Unit Tests ────────────────────────────────────────────────────────────────
+
+fn sampled_webp_compression_ratio_from_image(img: &image::DynamicImage) -> Option<f64> {
+    let (w, h) = img.dimensions();
+    if w == 0 || h == 0 {
+        return None;
+    }
+
+    // Only sample if image isn't too large to avoid performance hit
+    let (target_w, target_h) = if w > WEBP_RATIO_SAMPLE_MAX_DIM || h > WEBP_RATIO_SAMPLE_MAX_DIM {
+        let ratio = f64::from(w) / f64::from(h);
+        if ratio > 1.0 {
+            (
+                WEBP_RATIO_SAMPLE_MAX_DIM,
+                crate::numeric_cast::f64_to_u32_sat(f64::from(WEBP_RATIO_SAMPLE_MAX_DIM) / ratio),
+            )
+        } else {
+            (
+                crate::numeric_cast::f64_to_u32_sat(f64::from(WEBP_RATIO_SAMPLE_MAX_DIM) * ratio),
+                WEBP_RATIO_SAMPLE_MAX_DIM,
+            )
+        }
+    } else {
+        (w, h)
+    };
+
+    let resized = if target_w != w || target_h != h {
+        img.thumbnail(target_w, target_h)
+    } else {
+        img.clone()
+    };
+
+    // Explicitly convert to RGBA8 before encoding.
+    //
+    // Bug fix: resized.as_bytes() returns channel-native bytes (RGB8 = 3 bytes/px,
+    // RGBA8 = 4 bytes/px, etc.), but the encoder was unconditionally told the data
+    // is ExtendedColorType::Rgba8 (4 bytes/px). When the source image is RGB (no alpha
+    // channel), the byte length is w*h*3 while the encoder expects w*h*4, causing an
+    // assertion panic inside the WebP encoder. Forcing to_rgba8() guarantees the buffer
+    // is always exactly w*h*4 bytes regardless of the original pixel format.
+    let rgba = resized.to_rgba8();
+    let raw_size = f64::from(rgba.width() * rgba.height() * 4);
+
+    let mut buffer = std::io::Cursor::new(Vec::new());
+    let encoder = WebPEncoder::new_lossless(&mut buffer);
+    encoder
+        .encode(
+            rgba.as_raw(),
+            rgba.width(),
+            rgba.height(),
+            ExtendedColorType::Rgba8,
+        )
+        .ok()?;
+
+    let webp_size = f64::from(u32::try_from(buffer.get_ref().len()).unwrap_or(u32::MAX));
+
+    if webp_size <= 0.0 {
+        return None;
+    }
+    Some(raw_size / webp_size)
+}
+
+/// Check if a file path should use the GIF fast-path (from_gif_path) instead of ffprobe.
+#[must_use]
+pub fn should_use_gif_fast_path(path: &std::path::Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.to_ascii_lowercase()),
+        Some(ext) if ext == "gif"
+    )
+}
+
+/// Performs deep signal extraction (Palette, YDIF, Block Skew) using ffmpeg benchmarks.
+pub fn deep_refine_meta(meta: &mut LoopMeta, path: &std::path::Path) -> anyhow::Result<()> {
+    // 1. Extract Temporal Flatness (YDIF)
+    let output = crate::ffmpeg_builder::FfmpegBuilder::new()
+        .input(path)
+        .arg("-vf")
+        .arg("signalstats,metadata=print")
+        .format("null")
+        .output_null()
+        .build()
+        .output()?;
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let mut ydif_values = Vec::new();
+    for line in stderr.lines() {
+        if let Some(idx) = line.find("lavfi.signalstats.YDIF=") {
+            if let Ok(val) = line[idx + 23..]
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .parse::<f64>()
+            {
+                ydif_values.push(val);
+            }
+        }
+    }
+    if !ydif_values.is_empty() {
+        meta.temporal_flatness = Some(temporal_flatness_score(&ydif_values));
+    }
+
+    // 2. Extract Palette Depth
+    let thumb_output = crate::ffmpeg_builder::FfmpegBuilder::new()
+        .input(path)
+        .frames_v(1)
+        .arg("-vf")
+        .arg("scale=64:64")
+        .format("rawvideo")
+        .pix_fmt(crate::ffmpeg_builder::PixFmt::Rgb24)
+        .output_null()
+        .build()
+        .output()?;
+
+    if thumb_output.status.success() && thumb_output.stdout.len() >= 64 * 64 * 3 {
+        let mut quantized = std::collections::HashSet::new();
+        for chunk in thumb_output.stdout.chunks_exact(3) {
+            let r = chunk[0] >> 3;
+            let g = chunk[1] >> 3;
+            let b = chunk[2] >> 3;
+            quantized.insert((r, g, b));
+        }
+        meta.palette_depth = Some(palette_depth_score(quantized.len()));
+    }
+    Ok(())
+}
+
+fn temporal_flatness_score(ydif_values: &[f64]) -> f64 {
+    if ydif_values.is_empty() {
+        return 0.5;
+    }
+    let n = f64::from(u32::try_from(ydif_values.len()).unwrap_or(1));
+    let mean = ydif_values.iter().sum::<f64>() / n;
+    if mean < 1e-6 {
+        return 1.0;
+    }
+    let variance = ydif_values.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / n;
+    let std = variance.sqrt();
+    1.0 / (1.0 + std / (mean + 1e-6))
+}
+
+fn palette_depth_score(quantized_unique_colors: usize) -> f64 {
+    if quantized_unique_colors == 0 {
+        return 0.5;
+    }
+    let count = f64::from(u32::try_from(quantized_unique_colors).unwrap_or(u32::MAX));
+    let max_possible = 32_f64.powi(3);
+    let score = 1.0 - (count.ln() / max_possible.ln()).min(1.0);
+    score.clamp(0.0, 1.0)
+}
+
+fn loop_closure_score(pkt_sizes: &[u64]) -> f64 {
+    if pkt_sizes.len() < 4 {
+        return 0.5;
+    }
+
+    let vals: Vec<f64> = pkt_sizes.iter().map(|&v| f64::from(u32::try_from(v).unwrap_or(u32::MAX))).collect();
+    let n = vals.len();
+    let mean = vals.iter().sum::<f64>() / f64::from(u32::try_from(n).unwrap_or(1));
+    let variance = vals.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / f64::from(u32::try_from(n).unwrap_or(1));
+    if variance < 1e-6 {
+        // All frames identical — perfect loop structure
+        return 1.0;
+    }
+
+    // Normalized autocorrelation at lag = half sequence length.
+    // A looping sequence has high self-similarity between its first and second half.
+    let lag = n / 2;
+    let autocorr: f64 = (0..n - lag)
+        .map(|i| (vals[i] - mean) * (vals[i + lag] - mean))
+        .sum::<f64>()
+        / (f64::from(u32::try_from(n - lag).unwrap_or(1)) * variance);
+
+    // Map [-1, 1] → [0, 1]; high positive autocorrelation = strong loop closure
+    f64::midpoint(autocorr, 1.0).clamp(0.0, 1.0)
+}
+
+fn motion_periodicity_score(mv_magnitudes: &[f64]) -> f64 {
+    let n = mv_magnitudes.len();
+    if n < 6 {
+        return 0.5;
+    }
+
+    let mean = mv_magnitudes.iter().sum::<f64>() / f64::from(u32::try_from(n).unwrap_or(1));
+    let variance = mv_magnitudes
+        .iter()
+        .map(|&v| (v - mean).powi(2))
+        .sum::<f64>()
+        / f64::from(u32::try_from(n).unwrap_or(1));
+    if variance < 1e-6 {
+        return 1.0; // Perfectly static — synthetic/sticker content
+    }
+
+    // Average normalized autocorrelation over lags n/4, n/3, n/2.
+    // A periodic (looping) sequence scores high across multiple lags.
+    let lags = [n / 4, n / 3, n / 2];
+    let autocorr_sum: f64 = lags
+        .iter()
+        .filter(|&&lag| lag > 0 && lag < n)
+        .map(|&lag| {
+            let r: f64 = (0..n - lag)
+                .map(|i| (mv_magnitudes[i] - mean) * (mv_magnitudes[i + lag] - mean))
+                .sum::<f64>()
+                / (f64::from(u32::try_from(n - lag).unwrap_or(1)) * variance);
+            r.clamp(-1.0, 1.0)
+        })
+        .sum();
+    let valid_lags = lags.iter().filter(|&&lag| lag > 0 && lag < n).count();
+
+    f64::midpoint(autocorr_sum / f64::from(u32::try_from(valid_lags).unwrap_or(1)), 1.0).clamp(0.0, 1.0)
+}
+
+fn temporal_jitter_score(pts_deltas: &[f64]) -> f64 {
+    let n = pts_deltas.len();
+    if n < 3 {
+        return 0.5;
+    }
+
+    let mean = pts_deltas.iter().sum::<f64>() / f64::from(u32::try_from(n).unwrap_or(1));
+    let variance = pts_deltas.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / f64::from(u32::try_from(n).unwrap_or(1));
+    if variance < 1e-12 {
+        return 1.0; // Perfectly uniform frame timing
+    }
+
+    // Lag-1 autocorrelation: measures rhythmic regularity of frame intervals.
+    // A looping animation has consistent, self-similar inter-frame timing.
+    let lag1: f64 = (0..n - 1)
+        .map(|i| (pts_deltas[i] - mean) * (pts_deltas[i + 1] - mean))
+        .sum::<f64>()
+        / (f64::from(u32::try_from(n - 1).unwrap_or(1)) * variance);
+
+    f64::midpoint(lag1.clamp(-1.0, 1.0), 1.0)
+}
 
 #[cfg(test)]
 mod tests {
@@ -1845,40 +2091,46 @@ mod tests {
     }
 
     fn base_profile() -> LoopReferenceProfile {
-        let mut profile = LoopReferenceProfile::default();
-        profile.duration = distribution(8.0, 4.0, 1.0, 2.5, 6.0, 12.0, 16.0);
-        profile.fps = distribution(12.0, 6.0, 4.0, 8.0, 12.0, 18.0, 24.0);
-        profile.frame_density = distribution(12.0, 6.0, 4.0, 8.0, 12.0, 18.0, 24.0);
-        profile.file_size_bytes = distribution(
-            1_800_000.0,
-            1_200_000.0,
-            120_000.0,
-            450_000.0,
-            1_200_000.0,
-            3_000_000.0,
-            7_000_000.0,
-        );
-        profile.pixels = distribution(
-            300_000.0,
-            500_000.0,
-            64_000.0,
-            160_000.0,
-            262_144.0,
-            640_000.0,
-            2_073_600.0,
-        );
-        profile.delay_variation = distribution(0.24, 0.12, 0.05, 0.12, 0.22, 0.32, 0.48);
-        profile.webp_ratio = distribution(11.0, 4.0, 4.0, 7.0, 10.0, 13.0, 16.0);
-        profile.motion_gini = distribution(0.55, 0.16, 0.25, 0.40, 0.55, 0.70, 0.84);
-        profile.palette_depth = distribution(0.55, 0.16, 0.25, 0.40, 0.55, 0.70, 0.84);
-        profile.temporal_flatness = distribution(0.55, 0.16, 0.25, 0.40, 0.55, 0.70, 0.84);
-        profile.collection.duration_p90 = 16.0;
-        profile.top_keywords = vec![
-            "meme".to_string(),
-            "reaction".to_string(),
-            "sticker".to_string(),
-        ];
-        profile
+        let collection = crate::database::GlobalCollectionStats {
+            duration_p90: 16.0,
+            ..Default::default()
+        };
+
+        LoopReferenceProfile {
+            duration: distribution(8.0, 4.0, 1.0, 2.5, 6.0, 12.0, 16.0),
+            fps: distribution(12.0, 6.0, 4.0, 8.0, 12.0, 18.0, 24.0),
+            frame_density: distribution(12.0, 6.0, 4.0, 8.0, 12.0, 18.0, 24.0),
+            file_size_bytes: distribution(
+                1_800_000.0,
+                1_200_000.0,
+                120_000.0,
+                450_000.0,
+                1_200_000.0,
+                3_000_000.0,
+                7_000_000.0,
+            ),
+            pixels: distribution(
+                300_000.0,
+                500_000.0,
+                64_000.0,
+                160_000.0,
+                262_144.0,
+                640_000.0,
+                2_073_600.0,
+            ),
+            delay_variation: distribution(0.24, 0.12, 0.05, 0.12, 0.22, 0.32, 0.48),
+            webp_ratio: distribution(11.0, 4.0, 4.0, 7.0, 10.0, 13.0, 16.0),
+            motion_gini: distribution(0.55, 0.16, 0.25, 0.40, 0.55, 0.70, 0.84),
+            palette_depth: distribution(0.55, 0.16, 0.25, 0.40, 0.55, 0.70, 0.84),
+            temporal_flatness: distribution(0.55, 0.16, 0.25, 0.40, 0.55, 0.70, 0.84),
+            collection,
+            top_keywords: vec![
+                "meme".to_string(),
+                "reaction".to_string(),
+                "sticker".to_string(),
+            ],
+            ..Default::default()
+        }
     }
 
     fn base_meta() -> LoopMeta {
@@ -1903,8 +2155,7 @@ mod tests {
         // Hidden Layer 1 overrides are opt-in for tree tests; set to "0" to bypass global defaults.
         std::env::set_var(crate::constants::ENV_FORCE_SHORT_GIFS, "0");
         std::env::set_var(crate::constants::ENV_INTERCEPT_LONG_SILENT, "0");
-        let result = evaluate_loop_tree(meta, Some(profile)).verdict;
-        result
+        evaluate_loop_tree(meta, Some(profile)).verdict
     }
 
     #[test]
@@ -2171,233 +2422,4 @@ mod tests {
             "developer override should enable hidden Layer 1-D: {dev_long_verdict:?}"
         );
     }
-}
-
-fn sampled_webp_compression_ratio_from_image(img: &image::DynamicImage) -> Option<f64> {
-    let (w, h) = img.dimensions();
-    if w == 0 || h == 0 {
-        return None;
-    }
-
-    // Only sample if image isn't too large to avoid performance hit
-    let (target_w, target_h) = if w > WEBP_RATIO_SAMPLE_MAX_DIM || h > WEBP_RATIO_SAMPLE_MAX_DIM {
-        let ratio = f64::from(w) / f64::from(h);
-        if ratio > 1.0 {
-            (
-                WEBP_RATIO_SAMPLE_MAX_DIM,
-                (f64::from(WEBP_RATIO_SAMPLE_MAX_DIM) / ratio) as u32,
-            )
-        } else {
-            (
-                (f64::from(WEBP_RATIO_SAMPLE_MAX_DIM) * ratio) as u32,
-                WEBP_RATIO_SAMPLE_MAX_DIM,
-            )
-        }
-    } else {
-        (w, h)
-    };
-
-    let resized = if target_w != w || target_h != h {
-        img.thumbnail(target_w, target_h)
-    } else {
-        img.clone()
-    };
-
-    // Explicitly convert to RGBA8 before encoding.
-    //
-    // Bug fix: resized.as_bytes() returns channel-native bytes (RGB8 = 3 bytes/px,
-    // RGBA8 = 4 bytes/px, etc.), but the encoder was unconditionally told the data
-    // is ExtendedColorType::Rgba8 (4 bytes/px). When the source image is RGB (no alpha
-    // channel), the byte length is w*h*3 while the encoder expects w*h*4, causing an
-    // assertion panic inside the WebP encoder. Forcing to_rgba8() guarantees the buffer
-    // is always exactly w*h*4 bytes regardless of the original pixel format.
-    let rgba = resized.to_rgba8();
-    let raw_size = (rgba.width() * rgba.height() * 4) as f64;
-
-    let mut buffer = std::io::Cursor::new(Vec::new());
-    let encoder = WebPEncoder::new_lossless(&mut buffer);
-    encoder
-        .encode(
-            rgba.as_raw(),
-            rgba.width(),
-            rgba.height(),
-            ExtendedColorType::Rgba8,
-        )
-        .ok()?;
-
-    let webp_size = buffer.get_ref().len() as f64;
-
-    if webp_size <= 0.0 {
-        return None;
-    }
-    Some(raw_size / webp_size)
-}
-
-/// Check if a file path should use the GIF fast-path (from_gif_path) instead of ffprobe.
-#[must_use]
-pub fn should_use_gif_fast_path(path: &std::path::Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|e| e.to_str())
-            .map(|s| s.to_ascii_lowercase()),
-        Some(ext) if ext == "gif"
-    )
-}
-
-/// Performs deep signal extraction (Palette, YDIF, Block Skew) using ffmpeg benchmarks.
-pub fn deep_refine_meta(meta: &mut LoopMeta, path: &std::path::Path) -> anyhow::Result<()> {
-    // 1. Extract Temporal Flatness (YDIF)
-    let output = crate::ffmpeg_builder::FfmpegBuilder::new()
-        .input(path)
-        .arg("-vf")
-        .arg("signalstats,metadata=print")
-        .format("null")
-        .output_null()
-        .build()
-        .output()?;
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let mut ydif_values = Vec::new();
-    for line in stderr.lines() {
-        if let Some(idx) = line.find("lavfi.signalstats.YDIF=") {
-            if let Ok(val) = line[idx + 23..]
-                .split_whitespace()
-                .next()
-                .unwrap_or("")
-                .parse::<f64>()
-            {
-                ydif_values.push(val);
-            }
-        }
-    }
-    if !ydif_values.is_empty() {
-        meta.temporal_flatness = Some(temporal_flatness_score(&ydif_values));
-    }
-
-    // 2. Extract Palette Depth
-    let thumb_output = crate::ffmpeg_builder::FfmpegBuilder::new()
-        .input(path)
-        .frames_v(1)
-        .arg("-vf")
-        .arg("scale=64:64")
-        .format("rawvideo")
-        .pix_fmt(crate::ffmpeg_builder::PixFmt::Rgb24)
-        .output_null()
-        .build()
-        .output()?;
-
-    if thumb_output.status.success() && thumb_output.stdout.len() >= 64 * 64 * 3 {
-        let mut quantized = std::collections::HashSet::new();
-        for chunk in thumb_output.stdout.chunks_exact(3) {
-            let r = chunk[0] >> 3;
-            let g = chunk[1] >> 3;
-            let b = chunk[2] >> 3;
-            quantized.insert((r, g, b));
-        }
-        meta.palette_depth = Some(palette_depth_score(quantized.len()));
-    }
-    Ok(())
-}
-
-fn temporal_flatness_score(ydif_values: &[f64]) -> f64 {
-    if ydif_values.is_empty() {
-        return 0.5;
-    }
-    let n = ydif_values.len() as f64;
-    let mean = ydif_values.iter().sum::<f64>() / n;
-    if mean < 1e-6 {
-        return 1.0;
-    }
-    let variance = ydif_values.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / n;
-    let std = variance.sqrt();
-    1.0 / (1.0 + std / (mean + 1e-6))
-}
-
-fn palette_depth_score(quantized_unique_colors: usize) -> f64 {
-    if quantized_unique_colors == 0 {
-        return 0.5;
-    }
-    let count = quantized_unique_colors as f64;
-    let max_possible = 32_f64.powi(3);
-    let score = 1.0 - (count.ln() / max_possible.ln()).min(1.0);
-    score.clamp(0.0, 1.0)
-}
-
-fn loop_closure_score(pkt_sizes: &[u64]) -> f64 {
-    if pkt_sizes.len() < 4 {
-        return 0.5;
-    }
-
-    let vals: Vec<f64> = pkt_sizes.iter().map(|&v| v as f64).collect();
-    let n = vals.len();
-    let mean = vals.iter().sum::<f64>() / n as f64;
-    let variance = vals.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / n as f64;
-    if variance < 1e-6 {
-        // All frames identical — perfect loop structure
-        return 1.0;
-    }
-
-    // Normalized autocorrelation at lag = half sequence length.
-    // A looping sequence has high self-similarity between its first and second half.
-    let lag = n / 2;
-    let autocorr: f64 = (0..n - lag)
-        .map(|i| (vals[i] - mean) * (vals[i + lag] - mean))
-        .sum::<f64>()
-        / ((n - lag) as f64 * variance);
-
-    // Map [-1, 1] → [0, 1]; high positive autocorrelation = strong loop closure
-    ((autocorr + 1.0) / 2.0).clamp(0.0, 1.0)
-}
-
-fn motion_periodicity_score(mv_magnitudes: &[f64]) -> f64 {
-    let n = mv_magnitudes.len();
-    if n < 6 {
-        return 0.5;
-    }
-
-    let mean = mv_magnitudes.iter().sum::<f64>() / n as f64;
-    let variance = mv_magnitudes.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / n as f64;
-    if variance < 1e-6 {
-        return 1.0; // Perfectly static — synthetic/sticker content
-    }
-
-    // Average normalized autocorrelation over lags n/4, n/3, n/2.
-    // A periodic (looping) sequence scores high across multiple lags.
-    let lags = [n / 4, n / 3, n / 2];
-    let autocorr_sum: f64 = lags
-        .iter()
-        .filter(|&&lag| lag > 0 && lag < n)
-        .map(|&lag| {
-            let r: f64 = (0..n - lag)
-                .map(|i| (mv_magnitudes[i] - mean) * (mv_magnitudes[i + lag] - mean))
-                .sum::<f64>()
-                / ((n - lag) as f64 * variance);
-            r.clamp(-1.0, 1.0)
-        })
-        .sum();
-    let valid_lags = lags.iter().filter(|&&lag| lag > 0 && lag < n).count();
-
-    f64::midpoint(autocorr_sum / valid_lags as f64, 1.0).clamp(0.0, 1.0)
-}
-
-fn temporal_jitter_score(pts_deltas: &[f64]) -> f64 {
-    let n = pts_deltas.len();
-    if n < 3 {
-        return 0.5;
-    }
-
-    let mean = pts_deltas.iter().sum::<f64>() / n as f64;
-    let variance = pts_deltas.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / n as f64;
-    if variance < 1e-12 {
-        return 1.0; // Perfectly uniform frame timing
-    }
-
-    // Lag-1 autocorrelation: measures rhythmic regularity of frame intervals.
-    // A looping animation has consistent, self-similar inter-frame timing.
-    let lag1: f64 = (0..n - 1)
-        .map(|i| (pts_deltas[i] - mean) * (pts_deltas[i + 1] - mean))
-        .sum::<f64>()
-        / ((n - 1) as f64 * variance);
-
-    f64::midpoint(lag1.clamp(-1.0, 1.0), 1.0)
 }

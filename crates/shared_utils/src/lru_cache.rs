@@ -26,20 +26,25 @@ impl<V> CacheEntry<V> {
         let now_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or(Duration::ZERO)
-            .as_millis() as u64;
+            .as_millis();
+        #[allow(clippy::cast_possible_truncation)]
+        let now_ms_u64 = now_ms as u64; // u64 is sufficient for ~584 million years of milliseconds
         Self {
             value,
-            accessed_at_ms: now_ms,
-            created_at_ms: now_ms,
+            accessed_at_ms: now_ms_u64,
+            created_at_ms: now_ms_u64,
             accessed_instant: Some(Instant::now()),
         }
     }
 
     fn touch(&mut self) {
-        self.accessed_at_ms = SystemTime::now()
+        let now_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or(Duration::ZERO)
-            .as_millis() as u64;
+            .as_millis();
+        #[allow(clippy::cast_possible_truncation)]
+        let ms = now_ms as u64; // u64 is sufficient for ~584 million years of milliseconds
+        self.accessed_at_ms = ms;
         self.accessed_instant = Some(Instant::now());
     }
 }
@@ -288,7 +293,7 @@ mod prop_tests {
     #[test]
     fn prop_capacity_invariant() {
         for seed in 0..100u64 {
-            let capacity = ((simple_rng(seed, 0) % 19) + 1) as usize;
+            let capacity = crate::numeric_cast::u64_to_usize_sat((simple_rng(seed, 0) % 19) + 1);
             let num_ops = (simple_rng(seed, 1) % 200) as usize;
 
             let mut cache: LruCache<i32, i32> = LruCache::new(capacity);
@@ -349,7 +354,7 @@ mod prop_tests {
     #[test]
     fn prop_serialization_round_trip() {
         for seed in 0..50u64 {
-            let capacity = ((simple_rng(seed, 0) % 10) + 1) as usize;
+            let capacity = crate::numeric_cast::u64_to_usize_sat((simple_rng(seed, 0) % 10) + 1);
             let num_entries = (simple_rng(seed, 1) % 20) as usize;
 
             let mut original: LruCache<i32, i32> = LruCache::new(capacity);

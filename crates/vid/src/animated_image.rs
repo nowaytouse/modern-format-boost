@@ -12,8 +12,6 @@ use shared_utils::conversion::{
 use shared_utils::loop_intent::{
     assess_loop_intent_from_probe, is_lossless_exploration_safe, LoopMeta,
 };
-use shared_utils::types::EncoderPreset;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct VideoStreamInfo {
     index: usize,
@@ -72,8 +70,10 @@ fn probe_video_streams(input: &Path) -> Vec<VideoStreamInfo> {
 }
 
 fn looks_like_alpha_stream(pix_fmt: &str) -> bool {
-    matches!(pix_fmt, "gray" | "gray8" | "gray10le" | "gray12le" | "gray16le")
-        || pix_fmt.starts_with("gray")
+    matches!(
+        pix_fmt,
+        "gray" | "gray8" | "gray10le" | "gray12le" | "gray16le"
+    ) || pix_fmt.starts_with("gray")
         || pix_fmt.starts_with("ya")
 }
 
@@ -82,11 +82,15 @@ fn is_probable_alpha_aux_pair(streams: &[VideoStreamInfo], selected_stream_index
         return false;
     }
 
-    let Some(selected_stream) = streams.iter().find(|stream| stream.index == selected_stream_index)
+    let Some(selected_stream) = streams
+        .iter()
+        .find(|stream| stream.index == selected_stream_index)
     else {
         return false;
     };
-    let Some(aux_stream) = streams.iter().find(|stream| stream.index != selected_stream_index)
+    let Some(aux_stream) = streams
+        .iter()
+        .find(|stream| stream.index != selected_stream_index)
     else {
         return false;
     };
@@ -136,7 +140,9 @@ fn extract_frames_for_gifski(
     if let Some(stream_index) = selected_stream_index {
         builder.arg("-map").arg(format!("0:{stream_index}"));
     }
-    builder.arg("-vsync").arg("0")
+    builder
+        .arg("-vsync")
+        .arg("0")
         .pix_fmt(shared_utils::PixFmt::Rgba)
         .output(&frame_pattern);
 
@@ -187,7 +193,9 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
     // Get WebP info to determine frame count and duration
     let mut builder = shared_utils::WebpmuxBuilder::new();
     builder.input(input).info(true);
-    let webpmux_info = builder.build().output()
+    let webpmux_info = builder
+        .build()
+        .output()
         .map_err(|e| VidQualityError::ConversionError(format!("webpmux not found: {e}")))?;
 
     if !webpmux_info.status.success() {
@@ -230,15 +238,11 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
 
         // Extract frame as WebP
         let mut builder = shared_utils::WebpmuxBuilder::new();
-        builder
-            .get_frame(i)
-            .input(input)
-            .output(&frame_webp_path);
-        
-        let extract_result = builder.build().output()
-            .map_err(|e| {
-                VidQualityError::ConversionError(format!("webpmux extract failed: {e}"))
-            })?;
+        builder.get_frame(i).input(input).output(&frame_webp_path);
+
+        let extract_result = builder.build().output().map_err(|e| {
+            VidQualityError::ConversionError(format!("webpmux extract failed: {e}"))
+        })?;
 
         if !extract_result.status.success() {
             return Err(VidQualityError::ConversionError(format!(
@@ -254,11 +258,10 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
             .input(&frame_webp_path)
             .pix_fmt(shared_utils::PixFmt::Rgba)
             .output(&frame_png_path);
-            
-        let convert_result = builder.build().output()
-            .map_err(|e| {
-                VidQualityError::ConversionError(format!("FFmpeg WebP→PNG conversion failed: {e}"))
-            })?;
+
+        let convert_result = builder.build().output().map_err(|e| {
+            VidQualityError::ConversionError(format!("FFmpeg WebP→PNG conversion failed: {e}"))
+        })?;
 
         if !convert_result.status.success() {
             let stderr = String::from_utf8_lossy(&convert_result.stderr);
@@ -284,10 +287,9 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
         .arg("0") // Loop forever
         .output(output_apng);
 
-    let ffmpeg_result = builder.build().output()
-        .map_err(|e| {
-            VidQualityError::ConversionError(format!("FFmpeg APNG creation failed: {e}"))
-        })?;
+    let ffmpeg_result = builder.build().output().map_err(|e| {
+        VidQualityError::ConversionError(format!("FFmpeg APNG creation failed: {e}"))
+    })?;
 
     if !ffmpeg_result.status.success() {
         let stderr = String::from_utf8_lossy(&ffmpeg_result.stderr);
@@ -634,9 +636,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
             && has_probable_avif_alpha_stream(input)
         {
             if options.verbose {
-                eprintln!(
-                    "   🔧 Detected AVIF auxiliary alpha stream, pre-converting to APNG"
-                );
+                eprintln!("   🔧 Detected AVIF auxiliary alpha stream, pre-converting to APNG");
             }
             let temp_apng = tempfile::Builder::new().suffix(".apng").tempfile()?;
             let temp_apng_path = temp_apng.path().to_path_buf();
@@ -651,7 +651,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
                 .arg("0")
                 .vcodec(shared_utils::VideoCodec::Apng)
                 .output(&temp_apng_path);
-            
+
             let res = builder.build().output()?;
             if res.status.success() {
                 (temp_apng_path, Some(temp_apng))
@@ -774,7 +774,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
                     input_size: sz,
                     output_size: None,
                     size_reduction: None,
-                    message: format!("{} output invalid; original copied", codec_name),
+                    message: format!("{codec_name} output invalid; original copied"),
                     skipped: true,
                     skip_reason: Some(format!("{}_invalid_output", options.codec.as_str())),
                 });
@@ -808,15 +808,13 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
             let codec_name = options.codec.as_str().to_uppercase();
             let message = if reduction >= 0.0 {
                 format!(
-                    "{} conversion successful: size reduced \x1b[1;32m{reduction_pct:.1}%\x1b[0m",
-                    codec_name
+                    "{codec_name} conversion successful: size reduced \x1b[1;32m{reduction_pct:.1}%\x1b[0m"
                 )
             } else {
                 let diff_bytes = output_size as i64 - input_size as i64;
                 let size_diff = shared_utils::modern_ui::format_size_diff(diff_bytes);
                 format!(
-                    "{} conversion successful: size increased \x1b[1;33m{size_diff}\x1b[0m",
-                    codec_name
+                    "{codec_name} conversion successful: size increased \x1b[1;33m{size_diff}\x1b[0m"
                 )
             };
 
@@ -1055,7 +1053,7 @@ pub fn convert_to_mp4_matched(
                 .select_streams(shared_utils::StreamType::Video)
                 .show_entries("stream=index")
                 .print_format("csv=p=0");
-            
+
             let out = builder.build().output();
             out.map(|o| String::from_utf8_lossy(&o.stdout).lines().count() > 1)
                 .unwrap_or(false)
@@ -1076,7 +1074,7 @@ pub fn convert_to_mp4_matched(
                 .arg("0")
                 .vcodec(shared_utils::VideoCodec::Apng)
                 .output(&temp_apng_path);
-            
+
             let res = builder.build().output()?;
             if res.status.success() {
                 (temp_apng_path, Some(temp_apng))
@@ -1101,7 +1099,7 @@ pub fn convert_to_mp4_matched(
                     .select_streams(shared_utils::StreamType::Video)
                     .show_entries("stream=index")
                     .print_format("csv=p=0");
-                
+
                 let stream_count_output = builder.build().output();
 
                 let has_multiple_streams = stream_count_output
@@ -1137,7 +1135,7 @@ pub fn convert_to_mp4_matched(
                         .arg("-plays")
                         .arg("0")
                         .output(&temp_stream_path);
-                    
+
                     let extract_result = builder.build().output();
 
                     match extract_result {
@@ -1236,25 +1234,36 @@ pub fn convert_to_mp4_matched(
             SelectedCodec::Hevc => shared_utils::explore_hevc_with_gpu_coarse_ultimate(
                 &final_input,
                 &temp_output,
-                vf_args,
-                actual_initial_crf,
-                true,
-                options.allow_size_tolerance,
-                options.child_threads,
-                None,
-                options.apple_compat,
-                EncoderPreset::Slower,
+                shared_utils::video_explorer::GpuExploreOptions {
+                    vf_args: vf_args.clone(),
+                    initial_crf: actual_initial_crf,
+                    max_crf: 51.0,
+                    min_ssim: _min_ssim,
+                    ultimate_mode: true,
+                    force_ms_ssim_long: false,
+                    allow_size_tolerance: options.allow_size_tolerance,
+                    max_threads: options.child_threads,
+                    hdr_x265_params: None,
+                    apple_compat: options.apple_compat,
+                    preset: shared_utils::EncoderPreset::Slower,
+                },
             ),
             SelectedCodec::Av1 => shared_utils::explore_av1_with_gpu_coarse_ultimate(
                 &final_input,
                 &temp_output,
-                vf_args,
-                actual_initial_crf,
-                true,
-                options.allow_size_tolerance,
-                options.child_threads,
-                options.apple_compat,
-                EncoderPreset::Slower,
+                shared_utils::video_explorer::GpuExploreOptions {
+                    vf_args: vf_args.clone(),
+                    initial_crf: actual_initial_crf,
+                    max_crf: 51.0,
+                    min_ssim: _min_ssim,
+                    ultimate_mode: true,
+                    force_ms_ssim_long: false,
+                    allow_size_tolerance: options.allow_size_tolerance,
+                    max_threads: options.child_threads,
+                    hdr_x265_params: None,
+                    apple_compat: options.apple_compat,
+                    preset: shared_utils::EncoderPreset::Slower,
+                },
             ),
         }
     } else {
@@ -1262,22 +1271,36 @@ pub fn convert_to_mp4_matched(
             SelectedCodec::Hevc => shared_utils::explore_hevc_with_gpu_coarse(
                 &final_input,
                 &temp_output,
-                vf_args,
-                actual_initial_crf,
-                options.allow_size_tolerance,
-                options.child_threads,
-                None,
-                options.apple_compat,
+                shared_utils::video_explorer::GpuExploreOptions {
+                    vf_args: vf_args.clone(),
+                    initial_crf: actual_initial_crf,
+                    max_crf: 51.0,
+                    min_ssim: _min_ssim,
+                    ultimate_mode: false,
+                    force_ms_ssim_long: false,
+                    allow_size_tolerance: options.allow_size_tolerance,
+                    max_threads: options.child_threads,
+                    hdr_x265_params: None,
+                    apple_compat: options.apple_compat,
+                    preset: shared_utils::EncoderPreset::Medium,
+                },
             ),
             SelectedCodec::Av1 => shared_utils::explore_av1_with_gpu_coarse(
                 &final_input,
                 &temp_output,
-                vf_args,
-                actual_initial_crf,
-                options.allow_size_tolerance,
-                options.child_threads,
-                options.apple_compat,
-                EncoderPreset::Medium,
+                shared_utils::video_explorer::GpuExploreOptions {
+                    vf_args: vf_args.clone(),
+                    initial_crf: actual_initial_crf,
+                    max_crf: 51.0,
+                    min_ssim: _min_ssim,
+                    ultimate_mode: false,
+                    force_ms_ssim_long: false,
+                    allow_size_tolerance: options.allow_size_tolerance,
+                    max_threads: options.child_threads,
+                    hdr_x265_params: None,
+                    apple_compat: options.apple_compat,
+                    preset: shared_utils::EncoderPreset::Medium,
+                },
             ),
         }
     }
@@ -1307,18 +1330,15 @@ pub fn convert_to_mp4_matched(
             ((explore_result.output_size as f64 / input_size as f64) - 1.0) * 100.0;
         let codec_name = options.codec.as_str().to_uppercase();
         if let Err(e) = fs::remove_file(&temp_output) {
-            eprintln!(
-                "⚠️ [cleanup] Failed to remove oversized {} output: {e}",
-                codec_name
-            );
+            eprintln!("⚠️ [cleanup] Failed to remove oversized {codec_name} output: {e}");
         }
         if options.allow_size_tolerance {
             eprintln!(
-                "   ⏭️  Skipping: {} output larger than input by {size_increase_pct:.1}% (tolerance: 1.0%)", codec_name
+                "   ⏭️  Skipping: {codec_name} output larger than input by {size_increase_pct:.1}% (tolerance: 1.0%)"
             );
         } else {
             eprintln!(
-                "   ⏭️  Skipping: {} output larger than input by {size_increase_pct:.1}% (strict mode: no tolerance)", codec_name
+                "   ⏭️  Skipping: {codec_name} output larger than input by {size_increase_pct:.1}% (strict mode: no tolerance)"
             );
         }
         eprintln!(
@@ -1334,7 +1354,7 @@ pub fn convert_to_mp4_matched(
             output_size: None,
             size_reduction: None,
             message: format!(
-                "Skipped: {} output larger than input by {size_increase_pct:.1}% ({width}x{height}, tolerance exceeded)", codec_name
+                "Skipped: {codec_name} output larger than input by {size_increase_pct:.1}% ({width}x{height}, tolerance exceeded)"
             ),
             skipped: true,
             skip_reason: Some("size_increase_beyond_tolerance".to_string()),
@@ -1507,11 +1527,12 @@ pub fn convert_to_mp4_matched(
         .map(|s| format!(", SSIM: {s:.4}"))
         .unwrap_or_default();
 
-    let crf_display = if explore_result.optimal_crf < shared_utils::constants::NEGLIGIBLE_DURATION_SECS as f32 {
-        format!("{:.2} (Lossless)", explore_result.optimal_crf)
-    } else {
-        format!("{:.2}", explore_result.optimal_crf)
-    };
+    let crf_display =
+        if explore_result.optimal_crf < shared_utils::constants::NEGLIGIBLE_DURATION_SECS as f32 {
+            format!("{:.2} (Lossless)", explore_result.optimal_crf)
+        } else {
+            format!("{:.2}", explore_result.optimal_crf)
+        };
 
     let codec_name = options.codec.as_str().to_uppercase();
     let message = format!(
@@ -1568,7 +1589,7 @@ pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result
         .input(input)
         .vcodec(shared_utils::VideoCodec::Hevc)
         .x265_params(x265_params);
-        
+
     if options.ultimate {
         builder.preset(shared_utils::EncoderPreset::Slower);
     } else {
@@ -1587,7 +1608,7 @@ pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result
         .arg("-movflags")
         .arg("+faststart")
         .output(&temp_output);
-    
+
     let result = builder.build().output();
 
     match result {
@@ -1879,9 +1900,7 @@ pub fn convert_to_gif_apple_compat(
             }
         } else if input_ext == "avif" && has_probable_avif_alpha_stream(input) {
             if options.verbose {
-                eprintln!(
-                    "   🔧 Detected AVIF auxiliary alpha stream, pre-converting to APNG"
-                );
+                eprintln!("   🔧 Detected AVIF auxiliary alpha stream, pre-converting to APNG");
             }
             let temp_apng = tempfile::Builder::new().suffix(".apng").tempfile()?;
             let temp_apng_path = temp_apng.path().to_path_buf();
@@ -1897,7 +1916,7 @@ pub fn convert_to_gif_apple_compat(
                 .pix_fmt(shared_utils::PixFmt::Rgba)
                 .vcodec(shared_utils::VideoCodec::Apng)
                 .output(&temp_apng_path);
-            
+
             let res = builder.build().output()?;
             if res.status.success() {
                 (temp_apng_path, Some(temp_apng))
@@ -1927,14 +1946,14 @@ pub fn convert_to_gif_apple_compat(
     };
 
     let has_multiple_streams = probe_video_streams(&actual_input).len() > 1;
-    let frame_stream_index = if input_ext == "jxl" || input_ext == "webp" || temp_apng_file.is_some()
-    {
-        None
-    } else if has_multiple_streams && effective_stream_idx != 0 {
-        Some(effective_stream_idx)
-    } else {
-        None
-    };
+    let frame_stream_index =
+        if input_ext == "jxl" || input_ext == "webp" || temp_apng_file.is_some() {
+            None
+        } else if has_multiple_streams && effective_stream_idx != 0 {
+            Some(effective_stream_idx)
+        } else {
+            None
+        };
 
     let gifski_ok = if which::which("gifski").is_err() {
         false
@@ -1965,18 +1984,18 @@ pub fn convert_to_gif_apple_compat(
         let probe_res = shared_utils::probe_video(input).map_err(|e| {
             VidQualityError::ConversionError(format!("Failed to probe source for FPS: {e}"))
         })?;
-        
+
         let fps = if probe_res.duration > 0.0 && extracted_count > 0 {
-             // 100% data-driven: Actual extracted frames / Metadata total duration
-             extracted_count as f64 / probe_res.duration
+            // 100% data-driven: Actual extracted frames / Metadata total duration
+            extracted_count as f64 / probe_res.duration
         } else if probe_res.avg_frame_rate > 0.0 {
-             // Use directly reported average frame rate
-             probe_res.avg_frame_rate
+            // Use directly reported average frame rate
+            probe_res.avg_frame_rate
         } else if probe_res.frame_rate > 0.0 {
-             // Use directly reported r_frame_rate
-             probe_res.frame_rate
+            // Use directly reported r_frame_rate
+            probe_res.frame_rate
         } else {
-             return Err(VidQualityError::ConversionError(
+            return Err(VidQualityError::ConversionError(
                 "Source metadata lacks both duration and frame rate - cannot determine native speed".to_string()
              ));
         };
@@ -1998,7 +2017,9 @@ pub fn convert_to_gif_apple_compat(
 
         // Collect and sort extracted PNG frames to ensure correct sequence
         let mut frames: Vec<std::path::PathBuf> = std::fs::read_dir(&gifski_frames_path)
-            .map_err(|e| VidQualityError::ConversionError(format!("Failed to read frame directory: {e}")))?
+            .map_err(|e| {
+                VidQualityError::ConversionError(format!("Failed to read frame directory: {e}"))
+            })?
             .filter_map(|e| e.ok())
             .map(|e| e.path())
             .filter(|p| p.extension().is_some_and(|ext| ext == "png"))
@@ -2224,9 +2245,21 @@ mod tests {
             ..ConvertOptions::default()
         };
 
-        assert!(!should_copy_original_on_skip(Path::new("/tmp/test.avif"), &options));
-        assert!(!should_copy_original_on_skip(Path::new("/tmp/test.webp"), &options));
-        assert!(should_copy_original_on_skip(Path::new("/tmp/test.gif"), &options));
-        assert!(should_copy_original_on_skip(Path::new("/tmp/test.heic"), &options));
+        assert!(!should_copy_original_on_skip(
+            Path::new("/tmp/test.avif"),
+            &options
+        ));
+        assert!(!should_copy_original_on_skip(
+            Path::new("/tmp/test.webp"),
+            &options
+        ));
+        assert!(should_copy_original_on_skip(
+            Path::new("/tmp/test.gif"),
+            &options
+        ));
+        assert!(should_copy_original_on_skip(
+            Path::new("/tmp/test.heic"),
+            &options
+        ));
     }
 }

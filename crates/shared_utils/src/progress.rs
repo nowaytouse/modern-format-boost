@@ -186,7 +186,8 @@ fn build_coarse_progress_line(
         line.push(' ');
 
         if variant.show_bar {
-            let filled = ((percent / 100.0) * bar_width as f64) as usize;
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let filled = ((percent / 100.0) * bar_width as f64).round() as usize;
             let empty = bar_width.saturating_sub(filled);
             let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
             line.push_str(progress_style::BAR_LEFT);
@@ -222,7 +223,8 @@ fn build_coarse_progress_line(
         if variant.show_bar && bar_width > min_bar {
             while bar_width > min_bar {
                 bar_width -= 1;
-                let filled = ((percent / 100.0) * bar_width as f64) as usize;
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let filled = ((percent / 100.0) * bar_width as f64).round() as usize;
                 let empty = bar_width.saturating_sub(filled);
                 let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
                 let mut shrunk = String::new();
@@ -394,6 +396,7 @@ impl CoarseProgressBar {
 
         let eta_str = if current > 0 && current < total {
             let avg_time = elapsed.as_secs_f64() / current as f64;
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let remaining_secs = ((total - current) as f64 * avg_time) as u64;
             format_eta_simple(remaining_secs)
         } else {
@@ -542,7 +545,8 @@ impl DetailedCoarseProgressBar {
         let elapsed = self.start_time.elapsed();
 
         let bar_width: usize = progress_style::BAR_WIDTH;
-        let filled = ((percent / 100.0) * bar_width as f64) as usize;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let filled = ((percent / 100.0) * bar_width as f64).round() as usize;
         let empty = bar_width.saturating_sub(filled);
         let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
 
@@ -564,7 +568,9 @@ impl DetailedCoarseProgressBar {
             String::new()
         };
 
-        let best_crf = f32::from_bits(self.best_crf.load(Ordering::Relaxed) as u32);
+        let best_crf = f32::from_bits(
+            u32::try_from(self.best_crf.load(Ordering::Relaxed)).unwrap_or(0),
+        );
         let best_str = if best_crf > 0.0 {
             format!("Best: {best_crf:.1}")
         } else {
@@ -603,7 +609,9 @@ impl DetailedCoarseProgressBar {
         eprintln!("{msg}");
 
         let iter = self.current_iteration.load(Ordering::Relaxed);
-        let crf = f32::from_bits(self.current_crf.load(Ordering::Relaxed) as u32);
+        let crf = f32::from_bits(
+            u32::try_from(self.current_crf.load(Ordering::Relaxed)).unwrap_or(0),
+        );
         let size = self.current_size.load(Ordering::Relaxed);
         let ssim = if self.has_ssim.load(Ordering::Relaxed) {
             Some(f64::from_bits(self.current_ssim.load(Ordering::Relaxed)))
@@ -1228,6 +1236,7 @@ fn format_eta(seconds: f64) -> String {
         return "unknown".to_string();
     }
 
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let secs = seconds as u64;
 
     if secs > 86400 {

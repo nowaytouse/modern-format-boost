@@ -33,7 +33,7 @@ fn convert_options_from_config(
         child_threads: config.child_threads,
         input_format: None,
         quality_label: None,
-        codec: config.codec.clone(),
+        codec: config.codec,
     }
 }
 
@@ -425,7 +425,7 @@ pub fn determine_strategy_with_apple_compat(
             let codec_name = codec.as_str().to_uppercase();
             (
                 TargetVideoFormat::HevcLosslessMkv,
-                format!("Source is lossless - using {} Lossless MKV", codec_name),
+                format!("Source is lossless - using {codec_name} Lossless MKV"),
                 0.0_f32,
                 true,
             )
@@ -692,7 +692,7 @@ pub fn auto_convert_with_cache(
         &detection,
         config.apple_compat,
         config.force,
-        config.codec.clone(),
+        config.codec,
     );
 
     // Enforcement check: if strategy resulted in skip due to AV1/Apple-compat conflict
@@ -810,7 +810,7 @@ pub fn auto_convert_with_cache(
                 &detection,
                 &temp_path,
                 config.child_threads,
-                config.codec.clone(),
+                config.codec,
                 config.apple_compat,
                 config.ultimate_mode,
             )?;
@@ -872,7 +872,7 @@ pub fn auto_convert_with_cache(
                     &detection,
                     &temp_path,
                     config.child_threads,
-                    config.codec.clone(),
+                    config.codec,
                     config.apple_compat,
                     config.ultimate_mode,
                 )?;
@@ -993,31 +993,39 @@ pub fn auto_convert_with_cache(
                             shared_utils::explore_hevc_with_gpu_coarse_ultimate_warm_start(
                                 input_path,
                                 &temp_path,
-                                vf_args,
-                                predicted_crf,
                                 warm_start_crf,
-                                ultimate,
-                                config.allow_size_tolerance,
-                                config.child_threads,
-                                hdr_x265_params_opt,
-                                config.apple_compat,
-                                shared_utils::EncoderPreset::Slower,
+                                shared_utils::video_explorer::GpuExploreOptions {
+                                    vf_args: vf_args.clone(),
+                                    initial_crf: predicted_crf,
+                                    max_crf: 51.0, // dummy, overwritten
+                                    min_ssim: config.min_ssim,
+                                    ultimate_mode: ultimate,
+                                    force_ms_ssim_long: config.force_ms_ssim_long,
+                                    allow_size_tolerance: config.allow_size_tolerance,
+                                    max_threads: config.child_threads,
+                                    hdr_x265_params: hdr_x265_params_opt.clone(),
+                                    apple_compat: config.apple_compat,
+                                    preset: shared_utils::EncoderPreset::Slower,
+                                },
                             )
                         } else {
                             shared_utils::explore_hevc_with_gpu_coarse_full_warm_start(
                                 input_path,
                                 &temp_path,
-                                vf_args,
-                                predicted_crf,
                                 warm_start_crf,
-                                ultimate,
-                                config.force_ms_ssim_long,
-                                config.allow_size_tolerance,
-                                config.min_ssim,
-                                config.child_threads,
-                                hdr_x265_params_opt,
-                                config.apple_compat,
-                                shared_utils::EncoderPreset::Medium,
+                                shared_utils::video_explorer::GpuExploreOptions {
+                                    vf_args: vf_args.clone(),
+                                    initial_crf: predicted_crf,
+                                    max_crf: 51.0,
+                                    min_ssim: config.min_ssim,
+                                    ultimate_mode: ultimate,
+                                    force_ms_ssim_long: config.force_ms_ssim_long,
+                                    allow_size_tolerance: config.allow_size_tolerance,
+                                    max_threads: config.child_threads,
+                                    hdr_x265_params: hdr_x265_params_opt.clone(),
+                                    apple_compat: config.apple_compat,
+                                    preset: shared_utils::EncoderPreset::Medium,
+                                },
                             )
                         }
                     }
@@ -1026,29 +1034,39 @@ pub fn auto_convert_with_cache(
                             shared_utils::explore_av1_with_gpu_coarse_ultimate_warm_start(
                                 input_path,
                                 &temp_path,
-                                vf_args,
-                                predicted_crf,
                                 warm_start_crf,
-                                ultimate,
-                                config.allow_size_tolerance,
-                                config.child_threads,
-                                config.apple_compat,
-                                shared_utils::EncoderPreset::Slower,
+                                shared_utils::video_explorer::GpuExploreOptions {
+                                    vf_args: vf_args.clone(),
+                                    initial_crf: predicted_crf,
+                                    max_crf: 51.0,
+                                    min_ssim: config.min_ssim,
+                                    ultimate_mode: ultimate,
+                                    force_ms_ssim_long: config.force_ms_ssim_long,
+                                    allow_size_tolerance: config.allow_size_tolerance,
+                                    max_threads: config.child_threads,
+                                    hdr_x265_params: None,
+                                    apple_compat: config.apple_compat,
+                                    preset: shared_utils::EncoderPreset::Slower,
+                                },
                             )
                         } else {
                             shared_utils::explore_av1_with_gpu_coarse_full_warm_start(
                                 input_path,
                                 &temp_path,
-                                vf_args,
-                                predicted_crf,
                                 warm_start_crf,
-                                ultimate,
-                                config.force_ms_ssim_long,
-                                config.allow_size_tolerance,
-                                config.min_ssim,
-                                config.child_threads,
-                                config.apple_compat,
-                                shared_utils::EncoderPreset::Medium,
+                                shared_utils::video_explorer::GpuExploreOptions {
+                                    vf_args: vf_args.clone(),
+                                    initial_crf: predicted_crf,
+                                    max_crf: 51.0,
+                                    min_ssim: config.min_ssim,
+                                    ultimate_mode: ultimate,
+                                    force_ms_ssim_long: config.force_ms_ssim_long,
+                                    allow_size_tolerance: config.allow_size_tolerance,
+                                    max_threads: config.child_threads,
+                                    hdr_x265_params: None,
+                                    apple_compat: config.apple_compat,
+                                    preset: shared_utils::EncoderPreset::Medium,
+                                },
                             )
                         }
                     }
@@ -1660,7 +1678,9 @@ fn success_status_for_cache(
         || (matches!(
             target,
             TargetVideoFormat::HevcMp4 | TargetVideoFormat::Av1Mp4
-        ) && explore_result.as_ref().is_some_and(|r| r.quality_passed.is_ok()))
+        ) && explore_result
+            .as_ref()
+            .is_some_and(|r| r.quality_passed.is_ok()))
 }
 
 fn best_effort_status_for_cache(
@@ -1672,7 +1692,9 @@ fn best_effort_status_for_cache(
         target,
         TargetVideoFormat::HevcMp4 | TargetVideoFormat::Av1Mp4
     ) && final_crf > 0.0
-        && explore_result.as_ref().is_some_and(|r| !r.quality_passed.is_ok())
+        && explore_result
+            .as_ref()
+            .is_some_and(|r| !r.quality_passed.is_ok())
 }
 
 /// Calculate matched CRF based on detection results and selected codec.
@@ -1799,7 +1821,7 @@ fn execute_conversion(
             SelectedCodec::Hevc => shared_utils::VideoCodec::Hevc,
             SelectedCodec::Av1 => shared_utils::VideoCodec::Av1,
         })
-        .crf(crf as f32)
+        .crf(f32::from(crf))
         .preset(if codec == SelectedCodec::Hevc && ultimate {
             shared_utils::EncoderPreset::Slower
         } else {
@@ -1814,14 +1836,18 @@ fn execute_conversion(
     if codec == SelectedCodec::Hevc {
         if apple_compat {
             builder.profile(shared_utils::VideoProfile::Main);
-            builder.arg(shared_utils::constants::FFMPEG_ARG_TAG_VIDEO).arg(shared_utils::constants::FFMPEG_TAG_HVC1);
+            builder
+                .arg(shared_utils::constants::FFMPEG_ARG_TAG_VIDEO)
+                .arg(shared_utils::constants::FFMPEG_TAG_HVC1);
         }
         builder.arg("-x265-params").arg(x265_params);
     }
 
     // Preserve variable frame rate (VFR) for iPhone slow-motion videos
     if detection.is_variable_frame_rate {
-        builder.arg(shared_utils::constants::FFMPEG_ARG_VSYNC).arg(shared_utils::constants::FFMPEG_VAL_VFR);
+        builder
+            .arg(shared_utils::constants::FFMPEG_ARG_VSYNC)
+            .arg(shared_utils::constants::FFMPEG_VAL_VFR);
     }
 
     // Append HDR colour metadata args (color_primaries, color_trc, colorspace,

@@ -729,7 +729,7 @@ impl XmpMerger {
         let mut cmd = builder.build();
         cmd.stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
-            
+
         let mut child = cmd
             .spawn()
             .context("Failed to spawn exiftool merge process")?;
@@ -1058,7 +1058,7 @@ pub fn merge_xmp_for_copied_file(input: &Path, dest: &Path) -> Result<bool> {
 mod tests {
     use super::*;
     use std::fs;
-    
+
     use tempfile::TempDir;
 
     #[test]

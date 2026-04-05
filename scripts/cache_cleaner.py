@@ -152,7 +152,7 @@ def clean_mfb_progress(target_path: Path):
                             ):
                                 found = True
                                 continue
-                        except:
+                        except Exception:
                             pass
                     new_lines.append(line)
 
@@ -189,7 +189,7 @@ def clean_path_tree(target_path: Path):
                 cfile.unlink()
                 deleted_count += 1
                 print(f"   {GREEN}✅ Removed path-tree cache for: {DIM}{root}{RESET}")
-        except:
+        except Exception:
             pass
     return deleted_count
 

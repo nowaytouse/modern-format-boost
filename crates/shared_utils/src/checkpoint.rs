@@ -293,7 +293,10 @@ fn get_process_start_time_for_pid(_pid: u32) -> Option<u64> {
 fn get_hostname() -> String {
     #[cfg(unix)]
     {
-        match crate::tool_builders::HostnameBuilder::new().build().output() {
+        match crate::tool_builders::HostnameBuilder::new()
+            .build()
+            .output()
+        {
             Ok(output) if output.status.success() => String::from_utf8(output.stdout).map_or_else(
                 |err| {
                     eprintln!("⚠️ [checkpoint] Non-UTF-8 hostname output: {err}");

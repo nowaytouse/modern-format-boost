@@ -91,10 +91,10 @@ pub fn calculate_ms_ssim_yuv(
     eprintln!("   📹 Video: {duration:.1}s ({duration_min:.1}min)");
 
     if sample_rate > 1 {
-        let estimated_time = (duration / sample_rate as f64 * 3.0) as u64;
+        let estimated_time = crate::numeric_cast::f64_to_u64_sat(duration / f64::from(u32::try_from(sample_rate).unwrap_or(1)) * 3.0);
         eprintln!("   ⚡ Sampling: 1/{sample_rate} frames (est. {estimated_time}s)");
     } else {
-        let estimated_time = (duration * 3.0) as u64;
+        let estimated_time = crate::numeric_cast::f64_to_u64_sat(duration * 3.0);
         eprintln!("   🎯 Full calculation (est. {estimated_time}s)");
     }
     eprintln!("   🔄 Parallel processing: Y+U+V channels simultaneously");
@@ -785,7 +785,10 @@ mod tests {
         let json = r#"{"pooled_metrics": {"vmaf": {"mean": 100, "min": 99}}}"#;
         let result = parse_vmaf_mean_from_json(json);
         assert!(result.is_some());
-        assert_eq!(result.unwrap(), 100.0);
+        assert!(crate::float_compare::approx_eq_f64(
+            result.unwrap(),
+            100.0
+        ));
     }
 
     #[test]
@@ -843,7 +846,7 @@ mod tests {
         let result = parse_cambi_mean_from_json(json);
         // Both Some(0.0) and None are acceptable depending on the trivial "0" parse.
         if let Some(v) = result {
-            assert_eq!(v, 0.0);
+            assert!(crate::float_compare::approx_eq_f64(v, 0.0));
         }
     }
 

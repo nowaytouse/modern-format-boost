@@ -281,7 +281,6 @@ pub fn encode_jxl_depth_fallback(
     _distance: f32,
     effort: u8,
 ) -> Result<(std::path::PathBuf, std::path::PathBuf)> {
-    
     use tempfile::NamedTempFile;
 
     // Write main image to temp PNG

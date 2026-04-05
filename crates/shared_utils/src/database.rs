@@ -669,7 +669,7 @@ fn lookup_similar_samples_inner(
     if missing_vec_count > 0 {
         let total_count: i64 = conn.query_one("SELECT COUNT(*) FROM samples", &[])?.get(0);
         if total_count > 0 {
-            log::info!("🧩 Detected {} samples with missing feature vectors. Triggering automated recompute...", missing_vec_count);
+            log::info!("🧩 Detected {missing_vec_count} samples with missing feature vectors. Triggering automated recompute...");
             recompute_all_features(&mut conn)?;
         }
     }
@@ -684,11 +684,11 @@ fn lookup_similar_samples_inner(
     }
 
     // Map the incoming LoopMeta into a SampleRow to compute its HNSW search vector
-    let target_temporal_bpp = meta.file_size_bytes as f64
-        / (((f64::from(meta.width) * f64::from(meta.height)).max(1.0))
-            * meta.frame_count.max(1) as f64);
-    let target_spatial_bpp =
-        meta.file_size_bytes as f64 / (f64::from(meta.width) * f64::from(meta.height)).max(1.0);
+    let target_temporal_bpp = crate::numeric_cast::u64_to_f64(meta.file_size_bytes)
+        / (f64::from(meta.width) * f64::from(meta.height)).max(1.0)
+        * crate::numeric_cast::u64_to_f64(meta.frame_count.max(1));
+    let target_spatial_bpp = crate::numeric_cast::u64_to_f64(meta.file_size_bytes)
+        / (f64::from(meta.width) * f64::from(meta.height)).max(1.0);
 
     let target_sample = sample_row_from_meta(meta, target_temporal_bpp, target_spatial_bpp);
 
@@ -753,8 +753,8 @@ fn lookup_similar_samples_inner(
     
     // Inverse Frequency Weights: w_i = N_total / (C * N_i) where C is number of classes (2).
     // This normalizes the influence of each class regardless of imbalances in the sample database.
-    let w_quality = if quality_count > 0 { total_samples as f64 / (2.0 * quality_count as f64) } else { 1.0 };
-    let w_video = if video_equivalent_count > 0 { total_samples as f64 / (2.0 * video_equivalent_count as f64) } else { 1.0 };
+    let w_quality = if quality_count > 0 { crate::numeric_cast::i64_to_f64(total_samples) / (2.0 * crate::numeric_cast::i64_to_f64(quality_count)) } else { 1.0 };
+    let w_video = if video_equivalent_count > 0 { crate::numeric_cast::i64_to_f64(total_samples) / (2.0 * crate::numeric_cast::i64_to_f64(video_equivalent_count)) } else { 1.0 };
 
     let mut weighted_keep = 0.0;
     let mut total_weight = 0.0;
@@ -797,7 +797,7 @@ fn lookup_similar_samples_inner(
     }
 
     let keep_probability = weighted_keep / total_weight.max(1e-6);
-    let mean_distance: f64 = distances.iter().sum::<f64>() / distances.len() as f64;
+    let mean_distance: f64 = if distances.is_empty() { 0.0 } else { distances.iter().sum::<f64>() / crate::numeric_cast::usize_to_f64(distances.len()) };
 
     let variance: f64 = distances
         .iter()
@@ -806,8 +806,8 @@ fn lookup_similar_samples_inner(
             diff * diff
         })
         .sum::<f64>()
-        / distances.len() as f64;
-    let std_dev_distance = variance.sqrt();
+        / crate::numeric_cast::usize_to_f64(distances.len());
+    let std_dev_distance = (variance / crate::numeric_cast::usize_to_f64(distances.len())).sqrt();
 
     // Confidence: how tightly clustered the neighbors are.
     // High std_dev relative to mean → low confidence (mixed signals).
@@ -825,12 +825,14 @@ fn lookup_similar_samples_inner(
     let p25_distance = distances.get(n / 4).copied();
     let p75_distance = distances.get(3 * n / 4).copied();
 
-    let p90_duration = if !loop_durations.is_empty() {
-        loop_durations.sort_by(|a: &f64, b: &f64| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let idx = (loop_durations.len() as f64 * 0.90).floor() as usize;
-        Some(loop_durations[idx.min(loop_durations.len() - 1)])
-    } else {
+    let p90_duration = if loop_durations.is_empty() {
         None
+    } else {
+        loop_durations.sort_by(|a: &f64, b: &f64| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let idx = crate::numeric_cast::f64_to_usize_sat(
+            (crate::numeric_cast::usize_to_f64(loop_durations.len()) * 0.90).floor(),
+        );
+        Some(loop_durations[idx.min(loop_durations.len() - 1)])
     };
 
     Ok(Some(SampleMatch {
@@ -864,7 +866,7 @@ fn lossless_duration_limit_for_keep_prob(keep_prob: f64) -> f32 {
         let t = (keep_prob - 0.3) / 0.4;
         let limit_meme = f64::from(MEME_LOSSLESS_DURATION_LIMIT);
         let limit_high = f64::from(HIGH_VALUE_LOSSLESS_DURATION_LIMIT);
-        (limit_high + (t * (limit_meme - limit_high))) as f32
+        crate::numeric_cast::f64_to_f32_lossy(limit_high + (t * (limit_meme - limit_high)))
     }
 }
 
@@ -873,9 +875,9 @@ fn resolved_duration_secs(meta: &LoopMeta) -> f64 {
     if meta.duration_secs > 0.11 {
         meta.duration_secs
     } else if meta.frame_count > 1 && meta.fps > 0.1 {
-        meta.frame_count as f64 / meta.fps
+        crate::numeric_cast::u64_to_f64(meta.frame_count) / meta.fps
     } else {
-        meta.frame_count.max(1) as f64 / 12.0
+        crate::numeric_cast::u64_to_f64(meta.frame_count.max(1)) / 12.0
     }
 }
 
@@ -1241,8 +1243,8 @@ pub fn sample_from_path(
 
     let pixel_count = f64::from(meta.width) * f64::from(meta.height);
     let temporal_bpp =
-        meta.file_size_bytes as f64 / (pixel_count.max(1.0) * meta.frame_count.max(1) as f64);
-    let spatial_bpp = meta.file_size_bytes as f64 / pixel_count.max(1.0);
+        crate::numeric_cast::u64_to_f64(meta.file_size_bytes) / (pixel_count.max(1.0) * crate::numeric_cast::u64_to_f64(meta.frame_count.max(1)));
+    let spatial_bpp = crate::numeric_cast::u64_to_f64(meta.file_size_bytes) / pixel_count.max(1.0);
 
     let loss_tolerance = if let Some(label) = label_override {
         label.to_string()
@@ -1346,8 +1348,8 @@ pub fn calculate_blake3_hex(path: &Path) -> Result<String> {
 fn compute_sample_vector(sample: &SampleRow, stats_map: &FeatureMap) -> Vec<f32> {
     let sample_pixels = (f64::from(sample.width) * f64::from(sample.height)).max(1.0);
 
-    let sample_frame_density = sample.frame_count as f64 / sample.duration_secs.max(0.05);
-    let sample_frame_gap = sample.duration_secs / sample.frame_count.max(1) as f64;
+    let sample_frame_density = crate::numeric_cast::u64_to_f64(sample.frame_count) / sample.duration_secs.max(0.05);
+    let sample_frame_gap = sample.duration_secs / crate::numeric_cast::u64_to_f64(sample.frame_count.max(1));
 
     let sample_audio_score = if sample.is_native_gif { 1.0 } else { 0.55 };
     // We normalize fps against a baseline 30fps for the database encoded vector. Target queries will normalize identically.
@@ -1374,8 +1376,8 @@ fn compute_sample_vector(sample: &SampleRow, stats_map: &FeatureMap) -> Vec<f32>
     // Continuous standardizations (Scaled by sqrt(weight) since target_query <-> sample squares it)
     let v_pix = sample_pixels / get_std("pixels") * get_w("pixels").sqrt();
     let v_dur = sample.duration_secs / get_std("duration") * get_w("duration").sqrt();
-    let v_frm = sample.frame_count as f64 / get_std("frame_count") * get_w("frame_count").sqrt();
-    let v_fsize = sample.file_size_bytes as f64 / get_std("file_size_bytes")
+    let v_frm = crate::numeric_cast::u64_to_f64(sample.frame_count) / get_std("frame_count") * get_w("frame_count").sqrt();
+    let v_fsize = crate::numeric_cast::u64_to_f64(sample.file_size_bytes) / get_std("file_size_bytes")
         * get_w("file_size_bytes").sqrt();
     let v_dens = sample_frame_density / get_std("density") * get_w("density").sqrt();
     let v_gap = sample_frame_gap / get_std("gap") * get_w("gap").sqrt();
@@ -1431,37 +1433,37 @@ fn compute_sample_vector(sample: &SampleRow, stats_map: &FeatureMap) -> Vec<f32>
     let v_complex = cat(sample.has_complex_color_profile, 1.2 / 2.0);
 
     vec![
-        v_pix as f32,
-        v_dur as f32,
-        v_frm as f32,
-        v_fsize as f32,
-        v_dens as f32,
-        v_gap as f32,
-        v_tbpp as f32,
-        v_sbpp as f32,
-        v_wratio as f32,
-        v_lfreq as f32,
-        v_laffin as f32,
-        v_cadence as f32,
-        v_payload as f32,
-        v_delay as f32,
-        v_aspect as f32,
-        v_pal as f32,
-        v_pdepth as f32,
-        v_mgini as f32,
-        v_bskew as f32,
-        v_tflat as f32,
-        v_lclose as f32,
-        v_mperiod as f32,
-        v_tjitter as f32,
-        v_dir as f32,
-        v_meme as f32,
-        v_name as f32,
-        v_native as f32,
-        v_hv as f32,
-        v_trans as f32,
-        v_icc as f32,
-        v_complex as f32,
+        crate::numeric_cast::f64_to_f32_lossy(v_pix),
+        crate::numeric_cast::f64_to_f32_lossy(v_dur),
+        crate::numeric_cast::f64_to_f32_lossy(v_frm),
+        crate::numeric_cast::f64_to_f32_lossy(v_fsize),
+        crate::numeric_cast::f64_to_f32_lossy(v_dens),
+        crate::numeric_cast::f64_to_f32_lossy(v_gap),
+        crate::numeric_cast::f64_to_f32_lossy(v_tbpp),
+        crate::numeric_cast::f64_to_f32_lossy(v_sbpp),
+        crate::numeric_cast::f64_to_f32_lossy(v_wratio),
+        crate::numeric_cast::f64_to_f32_lossy(v_lfreq),
+        crate::numeric_cast::f64_to_f32_lossy(v_laffin),
+        crate::numeric_cast::f64_to_f32_lossy(v_cadence),
+        crate::numeric_cast::f64_to_f32_lossy(v_payload),
+        crate::numeric_cast::f64_to_f32_lossy(v_delay),
+        crate::numeric_cast::f64_to_f32_lossy(v_aspect),
+        crate::numeric_cast::f64_to_f32_lossy(v_pal),
+        crate::numeric_cast::f64_to_f32_lossy(v_pdepth),
+        crate::numeric_cast::f64_to_f32_lossy(v_mgini),
+        crate::numeric_cast::f64_to_f32_lossy(v_bskew),
+        crate::numeric_cast::f64_to_f32_lossy(v_tflat),
+        crate::numeric_cast::f64_to_f32_lossy(v_lclose),
+        crate::numeric_cast::f64_to_f32_lossy(v_mperiod),
+        crate::numeric_cast::f64_to_f32_lossy(v_tjitter),
+        crate::numeric_cast::f64_to_f32_lossy(v_dir),
+        crate::numeric_cast::f64_to_f32_lossy(v_meme),
+        crate::numeric_cast::f64_to_f32_lossy(v_name),
+        crate::numeric_cast::f64_to_f32_lossy(v_native),
+        crate::numeric_cast::f64_to_f32_lossy(v_hv),
+        crate::numeric_cast::f64_to_f32_lossy(v_trans),
+        crate::numeric_cast::f64_to_f32_lossy(v_icc),
+        crate::numeric_cast::f64_to_f32_lossy(v_complex),
     ]
 }
 
@@ -1546,7 +1548,7 @@ fn sample_distance(
 }
 
 fn adaptive_neighbor_count(total: usize) -> usize {
-    ((total as f64).sqrt().round() as usize)
+    crate::numeric_cast::f64_to_usize_sat((crate::numeric_cast::usize_to_f64(total)).sqrt().round())
         .clamp(6, 24)
         .min(total)
 }
@@ -1578,9 +1580,9 @@ fn percentile_value(sorted_values: &[f64], quantile: f64) -> Option<f64> {
     }
 
     let clamped = quantile.clamp(0.0, 1.0);
-    let scaled_index = clamped * (sorted_values.len().saturating_sub(1)) as f64;
-    let lower_index = scaled_index.floor() as usize;
-    let upper_index = scaled_index.ceil() as usize;
+    let scaled_index = clamped * crate::numeric_cast::usize_to_f64(sorted_values.len().saturating_sub(1));
+    let lower_index = crate::numeric_cast::f64_to_usize_sat(scaled_index.floor());
+    let upper_index = crate::numeric_cast::f64_to_usize_sat(scaled_index.ceil());
 
     if lower_index == upper_index {
         return sorted_values.get(lower_index).copied();
@@ -1588,7 +1590,7 @@ fn percentile_value(sorted_values: &[f64], quantile: f64) -> Option<f64> {
 
     let lower = sorted_values.get(lower_index).copied()?;
     let upper = sorted_values.get(upper_index).copied()?;
-    Some(lower + (upper - lower) * (scaled_index - lower_index as f64))
+    Some(lower + (upper - lower) * (scaled_index - crate::numeric_cast::usize_to_f64(lower_index)))
 }
 
 fn build_feature_stats(values: &[f64]) -> FeatureStats {
@@ -1596,12 +1598,12 @@ fn build_feature_stats(values: &[f64]) -> FeatureStats {
         return FeatureStats::default();
     }
 
-    let mean = values.iter().sum::<f64>() / values.len() as f64;
+    let mean = if values.is_empty() { 0.0 } else { values.iter().sum::<f64>() / crate::numeric_cast::usize_to_f64(values.len()) };
     let variance = values
         .iter()
         .map(|value| (value - mean).powi(2))
         .sum::<f64>()
-        / values.len() as f64;
+        / crate::numeric_cast::usize_to_f64(values.len());
 
     let mut sorted = values.to_vec();
     sorted.sort_by(|lhs, rhs| lhs.partial_cmp(rhs).unwrap_or(std::cmp::Ordering::Equal));
@@ -1652,7 +1654,7 @@ pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -
         return Ok(0);
     }
 
-    let pb = ProgressBar::new(candidate_paths.len() as u64);
+    let pb = ProgressBar::new(u64::try_from(candidate_paths.len()).unwrap_or(u64::MAX));
     pb.set_style(
         ProgressStyle::default_bar()
             .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}")
@@ -1746,12 +1748,12 @@ pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -
     )?;
 
     for sample in samples {
-        let palette_size_i32 = sample.palette_size.map(|v| v as i32);
-        let total_pixels_i64 = sample.total_pixels as i64;
-        let frame_count_i64 = sample.frame_count as i64;
-        let file_size_i64 = sample.file_size_bytes as i64;
-        let width_i32 = sample.width as i32;
-        let height_i32 = sample.height as i32;
+        let palette_size_i32 = sample.palette_size.map(|v| i32::try_from(v).unwrap_or(0));
+        let total_pixels_i64 = i64::try_from(sample.total_pixels).unwrap_or(0);
+        let frame_count_i64 = i64::try_from(sample.frame_count).unwrap_or(0);
+        let file_size_i64 = i64::try_from(sample.file_size_bytes).unwrap_or(0);
+        let width_i32 = i32::try_from(sample.width).unwrap_or(0);
+        let height_i32 = i32::try_from(sample.height).unwrap_or(0);
 
         let sample_row = SampleRow::from(sample.clone());
         let vec_data = compute_sample_vector(&sample_row, &initial_feature_map);
@@ -1844,6 +1846,7 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
                                 &file_hash,
                             ],
                         );
+
                         fixed_count += 1;
                     }
                 }
@@ -1851,8 +1854,7 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
         }
         if fixed_count > 0 {
             emit_stderr(&format!(
-                "   ✅ Refreshed feature integrity for {} labeled samples.",
-                fixed_count
+                "   ✅ Refreshed feature integrity for {fixed_count} labeled samples."
             ));
         }
     }
@@ -1881,7 +1883,7 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
         .iter()
         .map(|row| {
             let duration = row.get::<_, f64>(2);
-            let frame_count = row.get::<_, i64>(3) as f64;
+            let frame_count = f64::from(u32::try_from(row.get::<_, i64>(3).max(0)).unwrap_or(0));
             let fps = row.get::<_, Option<f64>>(5).unwrap_or(0.0);
             let density = if duration > 0.05 {
                 frame_count / duration
@@ -1898,7 +1900,7 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
                 f64::from(row.get::<_, i32>(0)) * f64::from(row.get::<_, i32>(1)), // pixels
                 duration,
                 frame_count,
-                row.get::<_, i64>(4) as f64, // file_size_bytes
+                crate::numeric_cast::i64_to_f64(row.get::<_, i64>(4)), // file_size_bytes
                 fps,
                 density,
                 gap,
@@ -1966,8 +1968,10 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
         ));
     }
 
-    let mut feature_map = FeatureMap::default();
-    feature_map.top_keywords = top_keywords.clone();
+    let mut feature_map = FeatureMap {
+        top_keywords: top_keywords.clone(),
+        ..Default::default()
+    };
 
     for (idx, name) in names.iter().enumerate() {
         let values: Vec<f64> = all_data
@@ -1982,6 +1986,7 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
     // Assign learned dynamic weights based on data-driven discriminative power
     if let Ok(powers) = query_feature_discriminative_power(conn) {
         for power in powers {
+
             // Map DB column names back to feature_map string keys
             let mapped_name = match power.feature_name.as_str() {
                 "duration_secs" => "duration",
@@ -2066,21 +2071,21 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
             .and_then(|stats| stats.p90)
             .unwrap_or(dur_avg),
 
-        size_min: size_min_i64 as f64,
+        size_min: f64::from(u32::try_from(size_min_i64.max(0)).unwrap_or(0)),
         size_avg,
-        size_max: size_max_i64 as f64,
+        size_max: f64::from(u32::try_from(size_max_i64.max(0)).unwrap_or(0)),
 
         bitrate_min: bitrate_row.get(0),
         bitrate_avg: bitrate_row.get(1),
         bitrate_max: bitrate_row.get(2),
 
-        width_min: w_min_i32 as u32,
+        width_min: u32::try_from(w_min_i32).unwrap_or(0),
         width_avg: w_avg,
-        width_max: w_max_i32 as u32,
+        width_max: u32::try_from(w_max_i32).unwrap_or(0),
 
-        height_min: h_min_i32 as u32,
+        height_min: u32::try_from(h_min_i32).unwrap_or(0),
         height_avg: h_avg,
-        height_max: h_max_i32 as u32,
+        height_max: u32::try_from(h_max_i32).unwrap_or(0),
 
         aspect_min,
         aspect_avg,
@@ -2129,23 +2134,23 @@ pub fn recompute_all_features(conn: &mut Client) -> Result<()> {
         let file_hash: String = row.get(0);
         let sample = SampleRow {
             loss_tolerance: row.get(1),
-            width: row.get::<_, i32>(2) as u32,
-            height: row.get::<_, i32>(3) as u32,
+            width: u32::try_from(row.get::<_, i32>(2)).unwrap_or(0),
+            height: u32::try_from(row.get::<_, i32>(3)).unwrap_or(0),
             duration_secs: row.get(4),
-            frame_count: row.get::<_, i64>(5) as u64,
-            file_size_bytes: row.get::<_, i64>(6) as u64,
+            frame_count: u64::try_from(row.get::<_, i64>(5)).unwrap_or(0),
+            file_size_bytes: u64::try_from(row.get::<_, i64>(6)).unwrap_or(0),
             fps: row.get::<_, Option<f64>>(7).unwrap_or(0.0),
             temporal_bpp: row.get(8),
             spatial_bpp: row.get(9),
             has_transparency: row.get(10),
             has_embedded_icc: row.get(11),
             has_complex_color_profile: row.get(12),
-            palette_size: row.get::<_, Option<i32>>(13).map(|v| v as u32),
+            palette_size: row.get::<_, Option<i32>>(13).map(|v| u32::try_from(v).unwrap_or(0)),
             frame_payload_variation: row.get(14),
             frame_delay_variation: row.get(15),
             aspect_ratio: row.get(16),
             labeled_by: row.get(17),
-            total_pixels: row.get::<_, Option<i64>>(18).map(|v| v as u64),
+            total_pixels: row.get::<_, Option<i64>>(18).map(|v| u64::try_from(v).unwrap_or(0)),
             loop_frequency: row.get(19),
             is_meme_platform: row.get(20),
             is_human_semantic_name: row.get(21),
@@ -2170,8 +2175,7 @@ pub fn recompute_all_features(conn: &mut Client) -> Result<()> {
     }
     tx.commit()?;
     emit_stderr(&format!(
-        "   ✅ pgvector backfill complete ({} samples encoded).",
-        updated_count
+        "   ✅ pgvector backfill complete ({updated_count} samples encoded)."
     ));
 
     emit_stderr("✅ KNN Model Training Complete: Internal statistics synchronized.");
@@ -2226,7 +2230,7 @@ pub fn log_inference_record(
     let source_path: Option<String> = path.map(|p| p.display().to_string());
     let snapshot = build_signal_snapshot(meta);
 
-    let knn_neighbor_count_i32 = record.knn_neighbor_count.map(|n| n as i32);
+    let knn_neighbor_count_i32 = record.knn_neighbor_count.map(|n| i32::try_from(n).unwrap_or(0));
 
     // Explicit type binding for ToSql stability
     let duration_secs = meta.duration_secs;
@@ -2473,14 +2477,12 @@ pub fn check_database_health() -> Result<DbHealthReport> {
         report.pg_version = row.get(0);
     }
 
-    if let Ok(row) = conn.query_opt(
+    if let Ok(Some(row)) = conn.query_opt(
         "SELECT installed_version FROM pg_available_extensions WHERE name = 'vector'",
         &[],
     ) {
-        if let Some(row) = row {
-            report.has_vector_extension = true;
-            report.vector_extension_version = row.get(0);
-        }
+        report.has_vector_extension = true;
+        report.vector_extension_version = row.get(0);
     }
 
     // 2. Table Statistics
@@ -2542,7 +2544,7 @@ pub fn check_database_health() -> Result<DbHealthReport> {
         report.maturity_status = "Mature (KNN Active)".to_string();
     } else {
         let needed = min_total.saturating_sub(total_samples);
-        report.maturity_status = format!("Immature (Need {} more samples)", needed);
+        report.maturity_status = format!("Immature (Need {} more samples)", crate::numeric_cast::i64_to_usize_sat(needed));
     }
 
     Ok(report)
@@ -2579,8 +2581,8 @@ mod tests {
             has_complex_color_profile: false,
             loop_count: None,
             has_audio: false,
-            frame_types: vec!['P'; frames as usize],
-            pts_deltas: vec![duration / frames as f64; frames as usize],
+            frame_types: vec!['P'; usize::try_from(frames).unwrap_or(0)],
+            pts_deltas: vec![duration / f64::from(u32::try_from(frames).unwrap_or(u32::MAX)); usize::try_from(frames).unwrap_or(0)],
             mv_magnitudes: Vec::new(),
             cached_frame_png: None,
             is_meme_platform: false,
@@ -2670,8 +2672,8 @@ mod tests {
             labeled_by: Some("cli_ingest".to_string()),
         };
         let pixel_count = f64::from(meta.width) * f64::from(meta.height);
-        let tbpp = meta.file_size_bytes as f64 / (pixel_count * meta.frame_count as f64);
-        let sbpp = meta.file_size_bytes as f64 / pixel_count;
+        let tbpp = crate::numeric_cast::u64_to_f64(meta.file_size_bytes) / (pixel_count * crate::numeric_cast::u64_to_f64(meta.frame_count));
+        let sbpp = crate::numeric_cast::u64_to_f64(meta.file_size_bytes) / pixel_count;
 
         let stats = FeatureMap::default();
 
@@ -2744,7 +2746,7 @@ mod tests {
 
         let profile = build_loop_reference_profile(GlobalCollectionStats::default(), &feature_map);
         assert_eq!(profile.duration.p25, Some(2.0));
-        assert_eq!(profile.fps.mean, 14.0);
+        assert!(crate::float_compare::approx_eq_f64(profile.fps.mean, 14.0));
         assert_eq!(profile.top_keywords, vec!["meme".to_string()]);
     }
 }

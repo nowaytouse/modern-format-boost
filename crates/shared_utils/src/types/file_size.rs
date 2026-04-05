@@ -61,7 +61,7 @@ impl FileSize {
         if original.0 == 0 {
             None
         } else {
-            Some(self.0 as f64 / original.0 as f64)
+            Some(crate::numeric_cast::u64_to_f64(self.0) / crate::numeric_cast::u64_to_f64(original.0))
         }
     }
 
@@ -70,18 +70,18 @@ impl FileSize {
         if original.0 == 0 {
             None
         } else {
-            Some((self.0 as f64 - original.0 as f64) / original.0 as f64 * 100.0)
+            Some((crate::numeric_cast::u64_to_f64(self.0) - crate::numeric_cast::u64_to_f64(original.0)) / crate::numeric_cast::u64_to_f64(original.0) * 100.0)
         }
     }
 
     #[must_use]
     pub fn display(&self) -> String {
         if self.0 >= Self::GB {
-            format!("{:.2} GB", self.0 as f64 / Self::GB as f64)
+            format!("{:.2} GB", crate::numeric_cast::u64_to_f64(self.0) / crate::numeric_cast::u64_to_f64(Self::GB))
         } else if self.0 >= Self::MB {
-            format!("{:.2} MB", self.0 as f64 / Self::MB as f64)
+            format!("{:.2} MB", crate::numeric_cast::u64_to_f64(self.0) / crate::numeric_cast::u64_to_f64(Self::MB))
         } else if self.0 >= Self::KB {
-            format!("{:.2} KB", self.0 as f64 / Self::KB as f64)
+            format!("{:.2} KB", crate::numeric_cast::u64_to_f64(self.0) / crate::numeric_cast::u64_to_f64(Self::KB))
         } else {
             format!("{} B", self.0)
         }
@@ -89,7 +89,7 @@ impl FileSize {
 
     #[must_use]
     pub fn metadata_margin(&self) -> Self {
-        let percent_based = (self.0 as f64 * METADATA_MARGIN_PERCENT) as u64;
+        let percent_based = crate::numeric_cast::f64_to_u64_sat(crate::numeric_cast::u64_to_f64(self.0) * METADATA_MARGIN_PERCENT);
         let margin = percent_based.clamp(METADATA_MARGIN_MIN, METADATA_MARGIN_MAX);
         Self(margin)
     }
@@ -202,8 +202,8 @@ mod tests {
         assert_eq!(small.metadata_margin().bytes(), METADATA_MARGIN_MIN);
 
         let medium = FileSize::new(10 * 1_048_576);
-        let expected = f64::from(10 * 1_048_576) * METADATA_MARGIN_PERCENT;
-        assert_eq!(medium.metadata_margin().bytes(), expected as u64);
+        let expected = crate::numeric_cast::u64_to_f64(10 * 1_048_576) * METADATA_MARGIN_PERCENT;
+        assert_eq!(medium.metadata_margin().bytes(), crate::numeric_cast::f64_to_u64_sat(expected));
 
         let large = FileSize::new(100 * 1_048_576 * 1024);
         assert_eq!(large.metadata_margin().bytes(), METADATA_MARGIN_MAX);

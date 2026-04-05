@@ -325,7 +325,7 @@ pub const FFMPEG_ARG_TUNE: &str = "-tune";
 pub const FFMPEG_ARG_RC: &str = "-rc";
 pub const FFMPEG_ARG_QUALITY: &str = "-quality";
 pub const FFMPEG_ARG_LOG_LEVEL: &str = "-v";
- 
+
 // --- JXL Argument Constants ---
 pub const JXL_ARG_DISTANCE: &str = "-d";
 pub const JXL_ARG_EFFORT: &str = "-e";
@@ -335,7 +335,7 @@ pub const JXL_ARG_COLOR_SPACE: &str = "color_space";
 pub const JXL_ARG_COMPRESS_BOXES: &str = "--compress_boxes=0";
 pub const JXL_ARG_ALLOW_JPEG_RECON: &str = "--allow_jpeg_reconstruction";
 pub const JXL_ARG_ICC_PATHNAME: &str = "icc_pathname";
- 
+
 // --- ImageMagick Argument Constants ---
 pub const MAGICK_ARG_STRIP: &str = "-strip";
 pub const MAGICK_ARG_DEPTH: &str = "-depth";
@@ -357,3 +357,55 @@ pub const VAL_HIGH: &str = "high";
 pub const VAL_P4: &str = "p4";
 pub const VAL_HQ: &str = "hq";
 pub const VAL_VBR: &str = "vbr";
+
+// --- Prototypical Priors & Scoring Fallbacks ---
+
+/// Default probability/affinity prior when feature data is missing (0.5 = Neutral).
+pub const DEFAULT_SCORE_PRIOR: f64 = 0.5;
+/// Default aspect ratio fallback (1.0 = Square).
+pub const DEFAULT_ASPECT_RATIO: f64 = 1.0;
+/// Default compression ratio fallback for raw/unweighted samples.
+pub const DEFAULT_COMPRESSION_RATIO: f64 = 1.0;
+/// Default palette size fallback (256 colors).
+pub const DEFAULT_PALETTE_SIZE: f64 = 256.0;
+/// Default frame complexity/payload fallback.
+pub const DEFAULT_COMPLEXITY_PRIOR: f64 = 0.5;
+
+// --- GPU Search Step & Boundary Constants ---
+
+/// CRF step size for coarse search in ultimate mode (High precision).
+pub const GPU_SEARCH_STEP_ULTIMATE: f32 = 0.5;
+/// CRF step size for coarse search in normal mode (Standard).
+pub const GPU_SEARCH_STEP_NORMAL: f32 = 2.0;
+
+/// Sampling rate multiplier for short videos (<= 1 min).
+pub const GPU_SAMPLE_RATE_SHORT: usize = 1;
+/// Sampling rate multiplier for standard videos (> 1 min).
+pub const GPU_SAMPLE_RATE_STANDARD: usize = 3;
+
+/// Maximum allowable failures during fine-search phase (Ultimate).
+pub const MAX_FINE_SEARCH_FAILURES_ULTIMATE: usize = 20;
+/// Maximum allowable failures during fine-search phase (Normal).
+pub const MAX_FINE_SEARCH_FAILURES_NORMAL: usize = 3;
+
+/// Deceleration multiplier for search convergence (Ultimate).
+pub const GPU_SEARCH_DECEL_ULTIMATE: f32 = 1.0;
+/// Deceleration multiplier for search convergence (Normal).
+pub const GPU_SEARCH_DECEL_NORMAL: f32 = 2.0;
+
+// --- Video Detection & Quality Bonuses ---
+
+/// Bit depth threshold for HDR/Extended Dynamic Range (10-bit).
+pub const HDR_BIT_DEPTH_THRESHOLD: u32 = 10;
+/// Quality scoring bonus for HDR/10-bit content.
+pub const HDR_QUALITY_BONUS: u32 = 5;
+
+// --- Convergence & Minimum Gain Thresholds ---
+
+/// Minimum consecutive gainless iterations before exit (Ultimate).
+pub const ULTIMATE_MIN_GAINS: u32 = 15;
+/// Minimum consecutive gainless iterations before exit (Normal).
+pub const NORMAL_MIN_GAINS: u32 = 3;
+
+/// Default SSIM fallback value when measurement fails (0.0 = Minimum).
+pub const DEFAULT_SSIM_PRIOR: f64 = 0.0;
