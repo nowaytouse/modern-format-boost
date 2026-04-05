@@ -331,7 +331,6 @@ impl WebpmuxBuilder {
 pub struct GifskiBuilder {
     output: Option<PathBuf>,
     inputs: Vec<PathBuf>,
-    input_pattern: Option<String>,
     fps: Option<f32>,
     quality: Option<u8>,
     motion_quality: Option<u8>,
@@ -359,10 +358,6 @@ impl GifskiBuilder {
         self
     }
 
-    pub fn input_pattern<S: AsRef<str>>(&mut self, pattern: S) -> &mut Self {
-        self.input_pattern = Some(pattern.as_ref().to_string());
-        self
-    }
 
     pub fn fps(&mut self, fps: f32) -> &mut Self {
         self.fps = Some(fps);
@@ -446,10 +441,6 @@ impl GifskiBuilder {
             cmd.arg("-o").arg(crate::safe_path_arg(output).as_ref());
         }
 
-        if let Some(pattern) = &self.input_pattern {
-            cmd.arg(pattern);
-        }
-
         for input in &self.inputs {
             cmd.arg(crate::safe_path_arg(input).as_ref());
         }
@@ -479,7 +470,6 @@ pub struct AvifencBuilder {
 }
 
 impl AvifencBuilder {
-    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }

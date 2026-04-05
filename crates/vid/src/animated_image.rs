@@ -122,7 +122,7 @@ fn extract_frames_for_gifski(
     input: &Path,
     selected_stream_index: Option<usize>,
     verbose: bool,
-) -> Result<(tempfile::TempDir, String, usize)> {
+) -> Result<(tempfile::TempDir, std::path::PathBuf, usize)> {
     let frame_dir = tempfile::Builder::new()
         .prefix("gifski_frames_")
         .tempdir()
@@ -171,7 +171,8 @@ fn extract_frames_for_gifski(
         ));
     }
 
-    Ok((frame_dir, frame_pattern.to_string_lossy().into_owned(), frame_count))
+    let frame_dir_path = frame_dir.path().to_path_buf();
+    Ok((frame_dir, frame_dir_path, frame_count))
 }
 
 /// Extract frames from animated WebP using webpmux and create APNG with correct timing
@@ -1938,7 +1939,7 @@ pub fn convert_to_gif_apple_compat(
     let gifski_ok = if which::which("gifski").is_err() {
         false
     } else {
-        let (gifski_frames_dir, gifski_pattern, extracted_count) =
+        let (gifski_frames_dir, gifski_frames_path, extracted_count) =
             match extract_frames_for_gifski(&actual_input, frame_stream_index, options.verbose) {
                 Ok(value) => value,
                 Err(e) => {
@@ -1984,7 +1985,8 @@ pub fn convert_to_gif_apple_compat(
             eprintln!("   🔧 GIF Encoding: Native speed ({} frames / {:.2}s duration) -> target speed: {:.3} FPS", 
                 extracted_count, probe_res.duration, fps);
         }
-        let res = shared_utils::GifskiBuilder::new()
+        let mut gifski_builder = shared_utils::GifskiBuilder::new();
+        gifski_builder
             .output(&temp_output)
             .fps(fps as f32)
             .dimensions(width, height)
@@ -1992,10 +1994,22 @@ pub fn convert_to_gif_apple_compat(
             .motion_quality(100)
             .lossy_quality(100)
             .repeat(0)
-            .arg("--extra")
-            .input_pattern(&gifski_pattern)
-            .build()
-            .output();
+            .arg("--extra");
+
+        // Collect and sort extracted PNG frames to ensure correct sequence
+        let mut frames: Vec<std::path::PathBuf> = std::fs::read_dir(&gifski_frames_path)
+            .map_err(|e| VidQualityError::ConversionError(format!("Failed to read frame directory: {e}")))?
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|ext| ext == "png"))
+            .collect();
+        frames.sort();
+
+        for frame in frames {
+            gifski_builder.add_input(frame);
+        }
+
+        let res = gifski_builder.build().output();
 
         drop(gifski_frames_dir);
         match res {
