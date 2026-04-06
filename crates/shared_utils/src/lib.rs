@@ -1,6 +1,6 @@
 //! Shared Utilities for `modern_format_boost` tools
 //!
-//! This crate provides common functionality shared across imgquality, vidquality, and vid-hevc:
+//! This crate provides common functionality shared across `img` and `vid`:
 //! - Progress bar with ETA
 //! - Safety checks (dangerous directory detection)
 //! - Batch processing utilities
@@ -21,12 +21,7 @@
     clippy::manual_let_else,
     clippy::items_after_statements
 )]
-#![allow(
-    clippy::cast_precision_loss, // Audited: acceptable for media metrics (bitrate, size, time)
-    clippy::too_many_lines,
-    clippy::struct_excessive_bools,
-    clippy::fn_params_excessive_bools,
-)]
+#![allow(clippy::fn_params_excessive_bools)]
 
 /// Cache system for analysis results.
 pub mod analysis_cache;
