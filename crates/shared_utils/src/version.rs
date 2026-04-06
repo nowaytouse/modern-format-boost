@@ -22,7 +22,7 @@
 //! ensures that the project remains complete for all builds.
 
 use std::sync::LazyLock;
-use tracing::info;
+// no-op (removed tracing::info)
 
 /// 📦 Program Version (from Cargo.toml)
 ///
@@ -133,7 +133,7 @@ fn parse_version_to_code(version: &str, context: &str) -> i32 {
 
     let version_code = major * 10000 + minor * 100 + patch;
 
-    info!(
+    tracing::debug!(
         "{} version initialized: {} (from program version: {})",
         context, version_code, version
     );

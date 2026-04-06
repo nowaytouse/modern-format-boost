@@ -96,9 +96,11 @@ impl CompressionResult {
                 target_score,
                 ..
             } => {
-                let score = actual_score.unwrap_or(0.0);
+                let score = actual_score
+                    .map(|value| format!("{value:.4}"))
+                    .unwrap_or_else(|| "unknown".to_string());
                 Some(format!(
-                    "Quality check failed: {reason} (score: {score:.4}, target: {target_score:.2})"
+                    "Quality check failed: {reason} (score: {score}, target: {target_score:.2})"
                 ))
             }
             Self::SizeFailed {
@@ -139,5 +141,24 @@ pub fn validate_size_reduction(output_size: u64, input_size: u64) -> Result<()> 
             "Output size {output_size} bytes >= input size {input_size} bytes ({:+.1}%)",
             ((output_size as f64 / input_size as f64) - 1.0) * 100.0
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CompressionResult;
+
+    #[test]
+    fn error_message_reports_unknown_score_honestly() {
+        let result = CompressionResult::QualityFailed {
+            attempted_crf: 23.0,
+            reason: "SSIM not measured".to_string(),
+            actual_score: None,
+            target_score: 0.99,
+        };
+
+        let message = result.error_message().expect("quality failure should have a message");
+        assert!(message.contains("score: unknown"));
+        assert!(!message.contains("score: 0.0000"));
     }
 }

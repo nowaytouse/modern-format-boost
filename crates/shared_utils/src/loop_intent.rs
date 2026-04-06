@@ -2566,4 +2566,14 @@ mod tests {
         let analysis_none = analyze_filename(Some("vacation_photo.jpg"), &[]);
         assert_eq!(analysis_none.raw, 0.5);
     }
+
+    #[test]
+    fn structural_metrics_stay_unknown_when_inputs_are_missing() {
+        assert_eq!(calculate_cv(&[]), None);
+        assert_eq!(calculate_cv_f64(&[]), None);
+        assert_eq!(calculate_gini_f64(&[]), None);
+        assert_eq!(loop_closure_score(&[]), None);
+        assert_eq!(motion_periodicity_score(&[]), None);
+        assert_eq!(temporal_jitter_score(&[]), None);
+    }
 }

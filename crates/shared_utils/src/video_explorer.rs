@@ -1320,7 +1320,9 @@ impl VideoExplorer {
         let output_size = self.encode(self.config.initial_crf)?;
         let quality = self.validate_quality()?;
 
-        let mut quality_str = format!("SSIM: {:.4}", quality.0.unwrap_or(0.0));
+        let mut quality_str = quality
+            .0
+            .map_or_else(|| "SSIM: unknown".to_string(), |ssim| format!("SSIM: {ssim:.4}"));
         if let Some(vmaf) = quality.2 {
             let _ = write!(quality_str, ", MS-SSIM: {vmaf:.2}");
         }
@@ -1571,7 +1573,8 @@ impl VideoExplorer {
             };
 
             let quality = self.validate_quality()?;
-            let ssim = quality.0.unwrap_or(0.0);
+            let context = format!("Compress+Quality validation at CRF {boundary:.1}");
+            let ssim = self.require_ssim_metric(quality.0, &context)?;
             cache.insert(boundary, (size, Some(ssim)));
 
             log_realtime!(
@@ -1596,7 +1599,14 @@ impl VideoExplorer {
         } else {
             let size = self.encode(self.config.max_crf)?;
             let quality = self.validate_quality()?;
-            (self.config.max_crf, size, quality.0.unwrap_or(0.0))
+            (
+                self.config.max_crf,
+                size,
+                self.require_ssim_metric(
+                    quality.0,
+                    "Compress+Quality fallback validation at max CRF",
+                )?,
+            )
         };
 
         let size_change_pct = self.calc_change_pct(final_size);
@@ -1702,7 +1712,10 @@ impl VideoExplorer {
         let (min_size, min_quality) =
             encode_cached(self.config.min_crf, &mut cache, &mut last_encoded_crf, self)?;
         iterations += 1;
-        let min_ssim = min_quality.0.unwrap_or(0.0);
+        let min_ssim = self.require_ssim_metric(
+            min_quality.0,
+            "Precise Quality-Match minimum-boundary validation",
+        )?;
         log_realtime!(
             "      CRF {:.1}: SSIM {:.6}, Size {:+.1}%",
             self.config.min_crf,
@@ -1719,7 +1732,10 @@ impl VideoExplorer {
         let (max_size, max_quality) =
             encode_cached(self.config.max_crf, &mut cache, &mut last_encoded_crf, self)?;
         iterations += 1;
-        let max_ssim = max_quality.0.unwrap_or(0.0);
+        let max_ssim = self.require_ssim_metric(
+            max_quality.0,
+            "Precise Quality-Match maximum-boundary validation",
+        )?;
         log_realtime!(
             "      CRF {:.1}: SSIM {:.6}, Size {:+.1}%",
             self.config.max_crf,
@@ -1774,7 +1790,8 @@ impl VideoExplorer {
                 let (size, quality) =
                     encode_cached(mid_rounded, &mut cache, &mut last_encoded_crf, self)?;
                 iterations += 1;
-                let ssim = quality.0.unwrap_or(0.0);
+                let context = format!("Precise Quality-Match search at CRF {mid_rounded:.1}");
+                let ssim = self.require_ssim_metric(quality.0, &context)?;
                 log_realtime!(
                     "      CRF {:.1}: SSIM {:.6}, Size {:+.1}%",
                     mid_rounded,
@@ -1813,7 +1830,9 @@ impl VideoExplorer {
                     let (size, quality) =
                         encode_cached(crf, &mut cache, &mut last_encoded_crf, self)?;
                     iterations += 1;
-                    let ssim = quality.0.unwrap_or(0.0);
+                    let context =
+                        format!("Precise Quality-Match fine-tune validation at CRF {crf:.1}");
+                    let ssim = self.require_ssim_metric(quality.0, &context)?;
                     log_realtime!("      CRF {:.1}: SSIM {:.6}", crf, ssim);
 
                     if ssim > best_ssim + SSIM_EPSILON
@@ -1841,7 +1860,10 @@ impl VideoExplorer {
                         let (size, quality) =
                             encode_cached(crf, &mut cache, &mut last_encoded_crf, self)?;
                         iterations += 1;
-                        let ssim = quality.0.unwrap_or(0.0);
+                        let context = format!(
+                            "Precise Quality-Match secondary fine-tune validation at CRF {crf:.1}"
+                        );
+                        let ssim = self.require_ssim_metric(quality.0, &context)?;
                         log_realtime!("      CRF {:.1}: SSIM {:.6}", crf, ssim);
 
                         if ssim > best_ssim + 0.00001
@@ -2085,19 +2107,12 @@ impl VideoExplorer {
             progress_line("│ Computing SSIM... │".to_string());
             let (ssim_opt, psnr_opt, ms_ssim_opt) =
                 validate_ssim(best_crf, &mut quality_cache, self)?;
-            let ssim = ssim_opt.unwrap_or(0.0);
+            let ssim = self
+                .require_ssim_metric(ssim_opt, "Precise Quality + Compression stage C verification")?;
 
             progress_done();
 
-            let status = if ssim >= 0.999 {
-                "Excellent"
-            } else if ssim >= 0.99 {
-                "Very good"
-            } else if ssim >= 0.98 {
-                "Good"
-            } else {
-                "Acceptable"
-            };
+            let status = Self::ssim_status_label(ssim);
 
             let elapsed = start_time.elapsed();
             let saved = self.input_size - best_size;
@@ -2346,22 +2361,15 @@ impl VideoExplorer {
 
         progress_line("│ Computing SSIM... │".to_string());
         let quality = validate_ssim(boundary_crf, &mut quality_cache, self)?;
-        let ssim = quality.0.unwrap_or(0.0);
+        let ssim =
+            self.require_ssim_metric(quality.0, "Precise Quality + Compression boundary verification")?;
 
         progress_done();
 
         let final_size = size_cache.get(boundary_crf).copied().unwrap_or(0);
 
         let size_change_pct = self.calc_change_pct(final_size);
-        let status = if ssim >= 0.999 {
-            "Excellent"
-        } else if ssim >= 0.99 {
-            "Very good"
-        } else if ssim >= 0.98 {
-            "Good"
-        } else {
-            "Acceptable"
-        };
+        let status = Self::ssim_status_label(ssim);
 
         let elapsed = start_time.elapsed();
         let saved = self.input_size - final_size;
@@ -2552,7 +2560,7 @@ impl VideoExplorer {
 
         let mut child = cmd.spawn().context("Failed to spawn ffmpeg")?;
 
-        let duration_secs = self.get_input_duration().unwrap_or(0.0);
+        let duration_secs = self.get_input_duration();
 
         let stderr_handle = child.stderr.take().map(|stderr| {
             std::thread::spawn(move || {
@@ -2615,14 +2623,14 @@ impl VideoExplorer {
                     last_speed = val.to_string();
                 } else if line == "progress=continue" || line == "progress=end" {
                     let current_secs = f64::from(crate::numeric_cast::f64_to_f32_lossy(last_time_us as f64 / 1_000_000.0));
-                    if duration_secs > 0.0 {
-                        let pct = (current_secs / duration_secs * 100.0).min(100.0);
+                    if let Some(total_duration) = duration_secs.filter(|d| *d > 0.0) {
+                        let pct = (current_secs / total_duration * 100.0).min(100.0);
                         eprint!(
                             "\r      ⏳ {} {:.1}% | {:.1}s/{:.1}s | {:.0}fps | {}   ",
                             accel_type,
                             pct,
                             current_secs,
-                            duration_secs,
+                            total_duration,
                             last_fps,
                             last_speed.trim()
                         );
@@ -2775,6 +2783,22 @@ impl VideoExplorer {
         };
 
         Ok((ssim, psnr, ms_ssim))
+    }
+
+    fn require_ssim_metric(&self, ssim: Option<f64>, context: &str) -> Result<f64> {
+        ssim.ok_or_else(|| anyhow::anyhow!("SSIM not measured during {context}"))
+    }
+
+    fn ssim_status_label(ssim: f64) -> &'static str {
+        if ssim >= 0.999 {
+            "Excellent"
+        } else if ssim >= 0.99 {
+            "Very good"
+        } else if ssim >= 0.98 {
+            "Good"
+        } else {
+            "Acceptable"
+        }
     }
 
     /// Calculates both SSIM and PSNR for the current input vs output video.

@@ -992,6 +992,8 @@ fn resolved_duration_secs(meta: &LoopMeta) -> f64 {
 /// exceeds the dynamic threshold.
 #[must_use]
 pub fn is_lossless_exploration_safe(meta: &LoopMeta, path: Option<&Path>) -> bool {
+    use crate::constants::HIGH_VALUE_LOSSLESS_DURATION_LIMIT;
+
     let mut current_meta = meta.clone();
     if let Some(p) = path {
         let _ = crate::loop_intent::deep_refine_meta(&mut current_meta, p);
@@ -999,23 +1001,35 @@ pub fn is_lossless_exploration_safe(meta: &LoopMeta, path: Option<&Path>) -> boo
     current_meta.duration_secs = resolved_duration_secs(&current_meta);
 
     let sample_match = lookup_similar_samples(&current_meta, path);
-    let keep_prob = sample_match
-        .as_ref()
-        .and_then(|m| m.keep_probability)
-        .unwrap_or(0.5);
+    let keep_prob = sample_match.as_ref().and_then(|m| m.keep_probability);
 
     // Dynamic threshold:
     // keep_prob close to 1.0 (Meme / High Tolerance) -> 120s limit
     // keep_prob close to 0.0 (Art / High Value)  -> 30s limit
-    let threshold = lossless_duration_limit_for_keep_prob(keep_prob);
+    let threshold = if let Some(keep_prob) = keep_prob {
+        lossless_duration_limit_for_keep_prob(keep_prob)
+    } else {
+        crate::log_eprintln!(
+            "   ⚠️  Lossless-first safety KNN unavailable or unknown — using conservative limit {:.1}s",
+            HIGH_VALUE_LOSSLESS_DURATION_LIMIT
+        );
+        HIGH_VALUE_LOSSLESS_DURATION_LIMIT
+    };
 
     let is_safe = current_meta.duration_secs < f64::from(threshold);
 
     if !is_safe {
-        crate::log_eprintln!(
-            "   ⚠️  Lossless-first (CRF 0.00) skip: duration {:.1}s exceeds dynamic limit {:.1}s (Value Prob: {:.2})",
-            current_meta.duration_secs, threshold, keep_prob
-        );
+        if let Some(keep_prob) = keep_prob {
+            crate::log_eprintln!(
+                "   ⚠️  Lossless-first (CRF 0.00) skip: duration {:.1}s exceeds dynamic limit {:.1}s (Value Prob: {:.2})",
+                current_meta.duration_secs, threshold, keep_prob
+            );
+        } else {
+            crate::log_eprintln!(
+                "   ⚠️  Lossless-first (CRF 0.00) skip: duration {:.1}s exceeds conservative unknown-evidence limit {:.1}s",
+                current_meta.duration_secs, threshold
+            );
+        }
     }
 
     is_safe

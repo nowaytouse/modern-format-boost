@@ -22,20 +22,23 @@ use std::path::Path;
 /// Result of a KNN or heuristic quality lookup.
 ///
 /// `confidence = 0.0` signals a heuristic-only (BPP fallback) result with no DB backing.
+/// `fallback_reason` explains why KNN was unavailable or unusable.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QualityScore {
     /// Fraction of neighbors labeled "high" quality. 0.0 = all low, 1.0 = all high.
     pub score: f64,
     /// How many neighbors were found relative to the target K. 0.0 = heuristic only.
     pub confidence: f64,
+    /// Explicit reason why this score came from the heuristic path instead of KNN.
+    pub fallback_reason: Option<String>,
 }
 
 /// Record logged to `quality_inference_log` on every `lookup_image_quality` call.
 #[derive(Debug, Clone)]
 pub struct QualityInferenceRecord {
-    pub knn_score: f64,
-    pub knn_confidence: f64,
-    pub knn_neighbor_count: usize,
+    pub knn_score: Option<f64>,
+    pub knn_confidence: Option<f64>,
+    pub knn_neighbor_count: Option<usize>,
     pub bpp_fallback_score: Option<f64>,
     pub final_verdict: String,
 }
@@ -93,9 +96,9 @@ pub fn init_quality_schema(conn: &mut Client) -> Result<()> {
             aspect_ratio DOUBLE PRECISION,
             is_lossless BOOLEAN,
             -- Decision metadata
-            knn_score DOUBLE PRECISION NOT NULL,
-            knn_confidence DOUBLE PRECISION NOT NULL,
-            knn_neighbor_count INTEGER NOT NULL,
+            knn_score DOUBLE PRECISION,
+            knn_confidence DOUBLE PRECISION,
+            knn_neighbor_count INTEGER,
             bpp_fallback_score DOUBLE PRECISION,
             final_verdict TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -125,23 +128,35 @@ pub fn init_quality_schema(conn: &mut Client) -> Result<()> {
         "ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS is_lossless BOOLEAN",
         &[],
     );
-    let _ = conn.execute("ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS knn_score DOUBLE PRECISION DEFAULT 0.0", &[]);
-    let _ = conn.execute("ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS knn_confidence DOUBLE PRECISION DEFAULT 0.0", &[]);
-    let _ = conn.execute("ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS knn_neighbor_count INTEGER DEFAULT 0", &[]);
+    let _ = conn.execute("ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS knn_score DOUBLE PRECISION", &[]);
+    let _ = conn.execute("ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS knn_confidence DOUBLE PRECISION", &[]);
+    let _ = conn.execute("ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS knn_neighbor_count INTEGER", &[]);
     let _ = conn.execute("ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS bpp_fallback_score DOUBLE PRECISION", &[]);
     let _ = conn.execute("ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS final_verdict TEXT DEFAULT 'low'", &[]);
 
-    // Ensure NOT NULL constraints
+    // Remove legacy defaults/constraints that silently collapsed unknown KNN fields into zero.
     let _ = conn.execute(
-        "ALTER TABLE quality_inference_log ALTER COLUMN knn_score SET NOT NULL",
+        "ALTER TABLE quality_inference_log ALTER COLUMN knn_score DROP DEFAULT",
         &[],
     );
     let _ = conn.execute(
-        "ALTER TABLE quality_inference_log ALTER COLUMN knn_confidence SET NOT NULL",
+        "ALTER TABLE quality_inference_log ALTER COLUMN knn_confidence DROP DEFAULT",
         &[],
     );
     let _ = conn.execute(
-        "ALTER TABLE quality_inference_log ALTER COLUMN knn_neighbor_count SET NOT NULL",
+        "ALTER TABLE quality_inference_log ALTER COLUMN knn_neighbor_count DROP DEFAULT",
+        &[],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE quality_inference_log ALTER COLUMN knn_score DROP NOT NULL",
+        &[],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE quality_inference_log ALTER COLUMN knn_confidence DROP NOT NULL",
+        &[],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE quality_inference_log ALTER COLUMN knn_neighbor_count DROP NOT NULL",
         &[],
     );
     let _ = conn.execute(
@@ -189,7 +204,7 @@ fn get_quality_features(analysis: &ImageAnalysis) -> pgvector::Vector {
 /// Estimate quality purely from signal features when the DB is unavailable.
 ///
 /// Returns `confidence = 0.0` to clearly signal this is heuristic-only.
-fn bpp_heuristic_quality(analysis: &ImageAnalysis) -> QualityScore {
+fn bpp_heuristic_score(analysis: &ImageAnalysis) -> f64 {
     let total_pixels = f64::from(analysis.width) * f64::from(analysis.height);
     let spatial_bpp = f64::from(u32::try_from(analysis.file_size).unwrap_or(u32::MAX)) / total_pixels.max(1.0);
 
@@ -199,10 +214,14 @@ fn bpp_heuristic_quality(analysis: &ImageAnalysis) -> QualityScore {
     let bpp_score = (1.0 - (spatial_bpp / 20.0).clamp(0.0, 1.0)).max(0.0);
     let lossless_bonus = if analysis.is_lossless { 0.1 } else { 0.0 };
 
-    let score = (entropy_score * 0.5 + bpp_score * 0.5 + lossless_bonus).clamp(0.0, 1.0);
+    (entropy_score * 0.5 + bpp_score * 0.5 + lossless_bonus).clamp(0.0, 1.0)
+}
+
+fn bpp_heuristic_quality(analysis: &ImageAnalysis, reason: impl Into<String>) -> QualityScore {
     QualityScore {
-        score,
+        score: bpp_heuristic_score(analysis),
         confidence: 0.0,
+        fallback_reason: Some(reason.into()),
     }
 }
 
@@ -268,7 +287,8 @@ pub fn lookup_image_quality(analysis: &ImageAnalysis) -> Option<QualityScore> {
             .unwrap_or(false);
 
     if disable_db {
-        let heuristic = bpp_heuristic_quality(analysis);
+        emit_stderr("  ⚠️ Static image quality DB disabled — using heuristic score only");
+        let heuristic = bpp_heuristic_quality(analysis, "Static image quality DB disabled");
         return Some(heuristic);
     }
 
@@ -282,24 +302,29 @@ pub fn lookup_image_quality(analysis: &ImageAnalysis) -> Option<QualityScore> {
 
     // Use the shared pg client (which prints the "DB unavailable" warning at most once).
     let Ok(mut conn) = crate::database::open_pg_client() else {
-        return Some(bpp_heuristic_quality(analysis));
+        emit_stderr("  ⚠️ Static image quality DB unavailable — using heuristic score only");
+        return Some(bpp_heuristic_quality(
+            analysis,
+            "Static image quality DB unavailable",
+        ));
     };
-
-    let force_knn = std::env::var(crate::constants::ENV_FORCE_QUALITY_KNN).is_ok();
 
     if !force_knn && !check_quality_db_maturity(&mut conn) {
         let (high_total, low_total) = get_class_counts(&mut conn);
         log::info!(
             "🔬 Static Image Database is immature (high={high_total}, low={low_total}). Bypassing KNN."
         );
-        let bpp = bpp_heuristic_quality(analysis);
+        emit_stderr(&format!(
+            "  ⚠️ Static image quality DB immature (high={high_total}, low={low_total}) — using heuristic score only"
+        ));
+        let bpp = bpp_heuristic_quality(analysis, "Static image quality DB immature");
         // We still log the inference record even if immature, to gather blind spots
         let record = QualityInferenceRecord {
-            knn_score: 0.0,
-            knn_confidence: 0.0,
-            knn_neighbor_count: 0,
+            knn_score: None,
+            knn_confidence: None,
+            knn_neighbor_count: None,
             bpp_fallback_score: Some(bpp.score),
-            final_verdict: "immature_bypass".to_string(),
+            final_verdict: "heuristic_db_immature".to_string(),
         };
         log_quality_inference_record(&mut conn, analysis, None, &record);
         return Some(bpp);
@@ -318,7 +343,17 @@ pub fn lookup_image_quality(analysis: &ImageAnalysis) -> Option<QualityScore> {
          LIMIT $2",
         &[&features, &target_k],
     ) else {
-        return Some(bpp_heuristic_quality(analysis));
+        emit_stderr("  ⚠️ Static image KNN query failed — using heuristic score only");
+        let bpp = bpp_heuristic_quality(analysis, "Static image KNN query failed");
+        let record = QualityInferenceRecord {
+            knn_score: None,
+            knn_confidence: None,
+            knn_neighbor_count: None,
+            bpp_fallback_score: Some(bpp.score),
+            final_verdict: "heuristic_query_failed".to_string(),
+        };
+        log_quality_inference_record(&mut conn, analysis, None, &record);
+        return Some(bpp);
     };
 
     let mut total_weight = 0.0f64;
@@ -326,7 +361,17 @@ pub fn lookup_image_quality(analysis: &ImageAnalysis) -> Option<QualityScore> {
     let total_count = rows.len();
 
     if total_count == 0 {
-        return Some(bpp_heuristic_quality(analysis));
+        emit_stderr("  ⚠️ Static image KNN returned no neighbors — using heuristic score only");
+        let bpp = bpp_heuristic_quality(analysis, "Static image KNN returned no neighbors");
+        let record = QualityInferenceRecord {
+            knn_score: None,
+            knn_confidence: None,
+            knn_neighbor_count: Some(0),
+            bpp_fallback_score: Some(bpp.score),
+            final_verdict: "heuristic_no_neighbors".to_string(),
+        };
+        log_quality_inference_record(&mut conn, analysis, None, &record);
+        return Some(bpp);
     }
 
     // Calculate Dynamic Class Balancing Factors based on database distribution.
@@ -361,19 +406,29 @@ pub fn lookup_image_quality(analysis: &ImageAnalysis) -> Option<QualityScore> {
         total_weight += weight;
     }
 
-    let knn_score = if total_weight > 0.0 {
-        high_weight / total_weight
-    } else {
-        0.0f64
-    };
+    if total_weight <= 0.0 {
+        emit_stderr("  ⚠️ Static image KNN produced zero usable weight — using heuristic score only");
+        let bpp = bpp_heuristic_quality(analysis, "Static image KNN produced zero usable weight");
+        let record = QualityInferenceRecord {
+            knn_score: None,
+            knn_confidence: None,
+            knn_neighbor_count: Some(total_count),
+            bpp_fallback_score: Some(bpp.score),
+            final_verdict: "heuristic_zero_knn_weight".to_string(),
+        };
+        log_quality_inference_record(&mut conn, analysis, None, &record);
+        return Some(bpp);
+    }
+
+    let knn_score = high_weight / total_weight;
     let knn_confidence = (f64::from(u32::try_from(total_count).unwrap_or(u32::MAX)) / f64::from(u32::try_from(target_k).unwrap_or(1))).min(1.0);
-    let bpp = bpp_heuristic_quality(analysis);
+    let bpp_score = bpp_heuristic_score(analysis);
 
     let record = QualityInferenceRecord {
-        knn_score,
-        knn_confidence,
-        knn_neighbor_count: total_count,
-        bpp_fallback_score: Some(bpp.score),
+        knn_score: Some(knn_score),
+        knn_confidence: Some(knn_confidence),
+        knn_neighbor_count: Some(total_count),
+        bpp_fallback_score: Some(bpp_score),
         final_verdict: if knn_score >= 0.5 {
             "high".to_string()
         } else {
@@ -387,6 +442,7 @@ pub fn lookup_image_quality(analysis: &ImageAnalysis) -> Option<QualityScore> {
     Some(QualityScore {
         score: knn_score,
         confidence: knn_confidence,
+        fallback_reason: None,
     })
 }
 
@@ -411,7 +467,9 @@ pub fn log_quality_inference_record(
     let file_hash: Option<String> =
         path.and_then(|p| crate::common_utils::calculate_blake3_hash(p).ok());
     let source_path: Option<String> = path.map(|p| p.display().to_string());
-    let neighbor_count_i32 = i32::try_from(record.knn_neighbor_count).unwrap_or(0);
+    let neighbor_count_i32 = record
+        .knn_neighbor_count
+        .and_then(|n| i32::try_from(n).ok());
 
     let f64_safe = |v: f64| if v.is_finite() { Some(v) } else { None };
     let entropy = f64_safe(analysis.features.entropy);
@@ -420,8 +478,8 @@ pub fn log_quality_inference_record(
     let lp = f64_safe(log_pixels);
     let ar = f64_safe(aspect_ratio);
     let is_lossless = analysis.is_lossless;
-    let knn_score = f64_safe(record.knn_score).unwrap_or(0.0);
-    let knn_conf = f64_safe(record.knn_confidence).unwrap_or(0.0);
+    let knn_score = record.knn_score.and_then(f64_safe);
+    let knn_conf = record.knn_confidence.and_then(f64_safe);
     let bpp_fallback = record.bpp_fallback_score.and_then(f64_safe);
     let verdict = &record.final_verdict;
 

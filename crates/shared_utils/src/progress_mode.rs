@@ -778,16 +778,17 @@ pub fn append_stats_to_line(line: &str) -> String {
         return trimmed.to_string();
     }
 
-    // Only append to "Active" or "Result" lines
-    let is_result = plain.contains("✅")
-        || plain.contains("❌")
-        || plain.contains("⏭️")
+    // Only append to "Result" lines that indicate failure/warning, or to the progress bar itself.
+    // Skip appending to success (✅) and skip (⏭️) lines in the terminal as they are redundant
+    // with the progress bar's live counter.
+    let is_important_result = plain.contains("❌")
         || plain.contains("⚡")
         || plain.contains("☢️")
-        || plain.contains("⛔️");
+        || plain.contains("⛔️")
+        || plain.contains("⚠️");
     let is_progress = plain.contains("▕") && plain.contains('▏');
 
-    if !is_result && !is_progress {
+    if !is_important_result && !is_progress {
         return trimmed.to_string();
     }
 

@@ -777,15 +777,14 @@ fn dispatch_static_conversion(
 
     if let Some(ref q) = quality {
         if config.verbose {
-            let conf_label = if q.confidence > 0.0 {
-                "KNN"
+            if let Some(reason) = q.fallback_reason.as_deref() {
+                println!(
+                    "   🔭 Quality Score: {:.2} (BPP heuristic, reason: {reason})",
+                    q.score
+                );
             } else {
-                "BPP heuristic"
-            };
-            println!(
-                "   🔭 Quality Score: {:.2} ({conf_label}, conf={:.2})",
-                q.score, q.confidence
-            );
+                println!("   🔭 Quality Score: {:.2} (KNN, conf={:.2})", q.score, q.confidence);
+            }
         }
     }
 

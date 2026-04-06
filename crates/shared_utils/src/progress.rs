@@ -137,8 +137,11 @@ fn build_coarse_progress_line(
     ];
 
     for variant in variants {
-        let mut fixed_width = measure_text_width(prefix) + 1 + measure_text_width(&percent_str);
-        fixed_width += 3 + measure_text_width(&counts_str);
+        let mut fixed_width = measure_text_width(prefix) + 1;
+        if !variant.show_bar {
+            fixed_width += measure_text_width(&percent_str) + 3;
+        }
+        fixed_width += measure_text_width(&counts_str);
 
         if variant.show_elapsed {
             fixed_width += 3 + measure_text_width("⏱️ ") + measure_text_width(&elapsed_str);
@@ -175,7 +178,9 @@ fn build_coarse_progress_line(
             if available < 6 {
                 continue;
             }
-            truncate_progress_message(message, available)
+            // 📏 Unify Width: Cap filename to 24 chars for layout stability
+            let width_limit = available.min(24);
+            truncate_progress_message(message, width_limit)
         } else {
             String::new()
         };
@@ -196,8 +201,10 @@ fn build_coarse_progress_line(
             line.push(' ');
         }
 
-        line.push_str(&percent_str);
-        line.push_str(" • ");
+        if !variant.show_bar {
+            line.push_str(&percent_str);
+            line.push_str(" • ");
+        }
         line.push_str(&counts_str);
 
         if variant.show_elapsed {
@@ -235,8 +242,10 @@ fn build_coarse_progress_line(
                 shrunk.push_str(&bar);
                 shrunk.push_str(progress_style::BAR_RIGHT);
                 shrunk.push(' ');
-                shrunk.push_str(&percent_str);
-                shrunk.push_str(" • ");
+                if !variant.show_bar {
+                    shrunk.push_str(&percent_str);
+                    shrunk.push_str(" • ");
+                }
                 shrunk.push_str(&counts_str);
                 if variant.show_elapsed {
                     shrunk.push_str(" • ⏱️ ");
@@ -260,7 +269,12 @@ fn build_coarse_progress_line(
         }
     }
 
-    format!("{color}{prefix} {percent_str} • {counts_str}\x1b[0m{stats}")
+    let mut final_line = format!("{color}{prefix} ");
+    if percent < 100.0 {
+        final_line.push_str(&format!("{percent_str} • "));
+    }
+    final_line.push_str(&format!("{counts_str}\x1b[0m{stats}"));
+    final_line
 }
 
 fn build_finished_progress_line(
@@ -579,12 +593,11 @@ impl DetailedCoarseProgressBar {
 
         let color = "\x1b[32m";
         eprint!(
-            "\r\x1b[K{color}{prefix} {bar_left}{color}{bar}{color}▏ {percent:.1}% • CRF {crf:.1} | {size:+.1}% {icon} | {ssim} | {best} | {iter}/{total} • ⏱️ {elapsed:.1}s\x1b[0m",
+            "\r\x1b[K{color}{prefix} {bar_left}{color}{bar}{color}▏ CRF {crf:.1} • {size:+.1}% {icon} • {ssim} • {best} • {iter}/{total} • ⏱️ {elapsed:.1}s\x1b[0m",
             color = color,
             prefix = self.prefix,
             bar_left = progress_style::BAR_LEFT,
             bar = bar,
-            percent = percent,
             crf = crf,
             size = size_pct,
             icon = icon,

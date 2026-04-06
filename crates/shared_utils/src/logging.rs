@@ -94,8 +94,8 @@ where
             event.record(&mut visitor);
         }
 
-        // 3. Milestone Stats: Append to ERROR, WARN, INFO (but skip trace/debug for less noise)
-        if level <= tracing::Level::INFO {
+        // 3. Milestone Stats: Only append to WARN and ERROR for context (skip info for clean output)
+        if level <= tracing::Level::WARN {
             let stats = crate::progress_mode::get_current_stats_string();
             // Align stats for tracing logs
             write!(writer, "  {stats}")?;
@@ -498,7 +498,7 @@ pub fn init_logging(program_name: &str, config: LogConfig) -> Result<()> {
     // Note: We don't call append_stats_to_line here to avoid potential circular dependency during init.
     // The run log writer will handle it if we pass it through.
 
-    tracing::info!("{}", init_msg);
+    tracing::debug!("{}", init_msg);
     store_init_message_for_run_log(init_msg);
 
     // Only prune old logs when an explicit limit is set (default usize::MAX = no limit).
@@ -584,7 +584,7 @@ pub fn log_external_tool(
 
     match exit_code {
         Some(0) => {
-            tracing::info!(
+            tracing::debug!(
                 tool = tool_name,
                 command = %command,
                 duration_secs = duration.as_secs_f64(),
@@ -636,7 +636,7 @@ pub fn execute_external_command(tool_name: &str, args: &[&str]) -> Result<Extern
 
     let command_str = format!("{} {}", tool_name, args.join(" "));
 
-    tracing::info!(
+    tracing::debug!(
         tool = tool_name,
         command = %command_str,
         "Executing external command"
