@@ -48,6 +48,8 @@ All notable changes to this project will be documented in this file.
 - **Better legacy fallback**: When loop DB is unavailable/disabled, system now evaluates loop tree first and only uses Layer 7 fallback if tree returns uncertain — instead of blindly using duration-based heuristics.
 - **Explicit KNN missing probability handling**: When KNN match lacks `keep_probability`, system now logs confidence/neighbor count and defers to Layer 7 fallback instead of using `DEFAULT_SCORE_PRIOR` — prevents fabricated priors from skewing decisions.
 - **Clearer logging**: Added explicit warnings when running without KNN evidence; improved fallback result messages for better observability.
+- **Class-imbalance stable KNN math**: Replaced hard inverse-frequency scaling with **smoothed+damped class-balance weights**, added **Beta-smoothed global prior** and **effective-sample-size shrinkage** (`local posterior ↔ global prior`) so minority classes are protected without causing prediction cliffs under extreme dataset imbalance.
+- **Confidence anti-slope guard**: KNN confidence now includes imbalance and effective-neighbor penalties to avoid overconfident flips when nearest neighbors are sparse or class distribution is highly skewed.
 
 #### 📊 Optional Scoring Functions (No Fabricated Defaults)
 

@@ -854,13 +854,17 @@ fn lookup_similar_samples_inner(
     let quality_count = low_count;
     let video_equivalent_count = high_count + video_count;
     
-    // Inverse Frequency Weights: w_i = N_total / (C * N_i) where C is number of classes (2).
-    // This normalizes the influence of each class regardless of imbalances in the sample database.
-    let w_quality = if quality_count > 0 { crate::numeric_cast::i64_to_f64(total_samples) / (2.0 * crate::numeric_cast::i64_to_f64(quality_count)) } else { 1.0 };
-    let w_video = if video_equivalent_count > 0 { crate::numeric_cast::i64_to_f64(total_samples) / (2.0 * crate::numeric_cast::i64_to_f64(video_equivalent_count)) } else { 1.0 };
+    // Class-balance reweighting with smoothing + damping.
+    // Compared with raw inverse-frequency scaling, this avoids unstable over-corrections
+    // when one class is heavily underrepresented.
+    let w_quality = class_balance_weight(total_samples, quality_count);
+    let w_video = class_balance_weight(total_samples, video_equivalent_count);
+    let global_keep_prior = smoothed_keep_prior(quality_count, video_equivalent_count);
+    let global_imbalance_ratio = imbalance_ratio(quality_count, video_equivalent_count);
 
     let mut weighted_keep = 0.0;
     let mut total_weight = 0.0;
+    let mut weight_squares_sum = 0.0;
     let mut distances: Vec<f64> = Vec::new();
     let mut loop_durations: Vec<f64> = Vec::new();
 
@@ -892,6 +896,7 @@ fn lookup_similar_samples_inner(
 
         weighted_keep += prob * final_weight;
         total_weight += final_weight;
+        weight_squares_sum += final_weight * final_weight;
         distances.push(*distance);
     }
 
@@ -899,7 +904,13 @@ fn lookup_similar_samples_inner(
         return Ok(None);
     }
 
-    let keep_probability = weighted_keep / total_weight.max(1e-6);
+    let local_keep_probability = weighted_keep / total_weight.max(1e-6);
+    let eff_n = effective_sample_size(weight_squares_sum, total_weight);
+    // With higher imbalance, require stronger local evidence before moving away from global prior.
+    let prior_strength = 3.0 + 2.0 * global_imbalance_ratio.ln_1p();
+    let shrink = (eff_n / (eff_n + prior_strength)).clamp(0.0, 1.0);
+    let keep_probability =
+        (local_keep_probability * shrink + global_keep_prior * (1.0 - shrink)).clamp(0.0, 1.0);
     let mean_distance: f64 = if distances.is_empty() { 0.0 } else { distances.iter().sum::<f64>() / crate::numeric_cast::usize_to_f64(distances.len()) };
 
     let variance: f64 = distances
@@ -910,16 +921,20 @@ fn lookup_similar_samples_inner(
         })
         .sum::<f64>()
         / crate::numeric_cast::usize_to_f64(distances.len());
-    let std_dev_distance = (variance / crate::numeric_cast::usize_to_f64(distances.len())).sqrt();
+    let std_dev_distance = variance.sqrt();
 
     // Confidence: how tightly clustered the neighbors are.
     // High std_dev relative to mean → low confidence (mixed signals).
-    let confidence = if mean_distance > 1e-6 {
+    let mut confidence = if mean_distance > 1e-6 {
         (1.0f64 - (std_dev_distance / mean_distance)).clamp(0.0, 1.0)
     } else {
         // All neighbors at distance ≈0 → exact match level confidence
         1.0
     };
+    // Penalize confidence under severe class imbalance and low effective sample size.
+    let balance_penalty = (1.0 / global_imbalance_ratio.sqrt()).clamp(0.45, 1.0);
+    confidence *= balance_penalty;
+    confidence *= (eff_n / (eff_n + 2.0)).clamp(0.25, 1.0);
 
     // Sort for percentiles
     distances.sort_by(|a: &f64, b: &f64| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -1732,6 +1747,34 @@ fn adaptive_neighbor_count(total: usize) -> usize {
     crate::numeric_cast::f64_to_usize_sat((crate::numeric_cast::usize_to_f64(total)).sqrt().round())
         .clamp(6, 24)
         .min(total)
+}
+
+fn class_balance_weight(total: i64, class_count: i64) -> f64 {
+    let total_f = crate::numeric_cast::i64_to_f64(total.max(1));
+    let class_f = crate::numeric_cast::i64_to_f64(class_count.max(0) + 1);
+    // Smooth and dampen inverse-frequency weighting to avoid unstable over-correction
+    // when class counts are highly imbalanced.
+    ((total_f + 2.0) / (2.0 * class_f)).sqrt().clamp(0.67, 1.50)
+}
+
+fn smoothed_keep_prior(keep_count: i64, weak_count: i64) -> f64 {
+    let keep = crate::numeric_cast::i64_to_f64(keep_count.max(0));
+    let weak = crate::numeric_cast::i64_to_f64(weak_count.max(0));
+    // Beta(1,1) prior to prevent extreme 0/1 priors on sparse datasets.
+    (keep + 1.0) / (keep + weak + 2.0)
+}
+
+fn effective_sample_size(weight_squares_sum: f64, total_weight: f64) -> f64 {
+    if weight_squares_sum <= 1e-9 || total_weight <= 1e-9 {
+        return 0.0;
+    }
+    (total_weight * total_weight / weight_squares_sum).max(0.0)
+}
+
+fn imbalance_ratio(keep_count: i64, weak_count: i64) -> f64 {
+    let keep = crate::numeric_cast::i64_to_f64(keep_count.max(0) + 1);
+    let weak = crate::numeric_cast::i64_to_f64(weak_count.max(0) + 1);
+    (keep.max(weak) / keep.min(weak)).max(1.0)
 }
 
 fn dynamic_neighbor_radius(neighbors: &[(LabelStatus, f64, f64)]) -> f64 {
@@ -2959,6 +3002,29 @@ mod tests {
             (temporal_bpp - legacy_buggy_temporal).abs() > 1.0,
             "temporal_bpp should use per-frame density, not multiply by frame count"
         );
+    }
+
+    #[test]
+    fn balance_weight_is_damped_under_extreme_imbalance() {
+        let minority_weight = class_balance_weight(2_000, 10);
+        let majority_weight = class_balance_weight(2_000, 1_990);
+        assert!(minority_weight <= 1.50);
+        assert!(majority_weight >= 0.67);
+        assert!(minority_weight > majority_weight);
+    }
+
+    #[test]
+    fn smoothed_prior_avoids_extreme_zeros_and_ones() {
+        let all_keep = smoothed_keep_prior(100, 0);
+        let all_weak = smoothed_keep_prior(0, 100);
+        assert!(all_keep < 1.0 && all_keep > 0.95);
+        assert!(all_weak > 0.0 && all_weak < 0.05);
+    }
+
+    #[test]
+    fn effective_sample_size_matches_known_case() {
+        let eff_n = effective_sample_size(5.0, 5.0);
+        assert!(crate::float_compare::approx_eq_f64(eff_n, 5.0));
     }
 
     #[test]
