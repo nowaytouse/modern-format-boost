@@ -116,7 +116,9 @@ fn path_with_collision_suffix(path: &Path, collision_index: usize) -> PathBuf {
         _ => format!("{stem} ({collision_index})"),
     };
 
-    path.parent().unwrap_or_else(|| Path::new("")).join(file_name)
+    path.parent()
+        .unwrap_or_else(|| Path::new(""))
+        .join(file_name)
 }
 
 fn reserve_unique_output_path(input: &Path, candidate: PathBuf) -> PathBuf {

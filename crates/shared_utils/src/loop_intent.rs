@@ -243,7 +243,8 @@ impl LoopMeta {
                 })
             },
         };
-        meta.directory_loop_intent_score = score_directory_context(parent_directories.as_deref(), &[]);
+        meta.directory_loop_intent_score =
+            score_directory_context(parent_directories.as_deref(), &[]);
         meta.filename_loop_intent_score = analyze_filename(meta.file_name.as_deref(), &[]).raw;
         meta.populate_webp_compression_ratio_from_path(file_path);
         meta
@@ -336,7 +337,8 @@ impl LoopMeta {
                         .any(|&m| up.contains(m))
                 })
             });
-        meta.directory_loop_intent_score = score_directory_context(parent_directories.as_deref(), &[]);
+        meta.directory_loop_intent_score =
+            score_directory_context(parent_directories.as_deref(), &[]);
         meta.filename_loop_intent_score = analyze_filename(meta.file_name.as_deref(), &[]).raw;
         meta.populate_webp_compression_ratio_from_path(path);
         meta
@@ -431,7 +433,8 @@ impl LoopMeta {
             ..Default::default()
         };
 
-        meta.directory_loop_intent_score = score_directory_context(parent_directories.as_deref(), &[]);
+        meta.directory_loop_intent_score =
+            score_directory_context(parent_directories.as_deref(), &[]);
         meta.filename_loop_intent_score = analyze_filename(meta.file_name.as_deref(), &[]).raw;
         meta.populate_webp_compression_ratio_from_path(path);
         Some(meta)

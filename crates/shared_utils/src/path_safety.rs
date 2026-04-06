@@ -71,7 +71,8 @@ pub fn property_safe_path(path: &Path) -> Cow<'_, str> {
 }
 
 /// `ImageMagick` specific path armor.
-/// Prepends 'file:./' and doubles '%' to prevent protocol injection and property expansion.
+/// Prepends './' (protocol-less) to relative paths and doubles '%' to prevent
+/// protocol injection and property expansion. Absolute paths use 'file:///'.
 #[inline]
 #[must_use]
 pub fn magick_safe_path(path: &Path) -> Cow<'_, str> {
@@ -195,13 +196,13 @@ mod tests {
     #[test]
     fn test_magick_safe_path() {
         // Test relative
-        assert_eq!(magick_safe_path(Path::new("img.jpg")), "file:./img.jpg");
+        assert_eq!(magick_safe_path(Path::new("img.jpg")), "./img.jpg");
         // Test with %
-        assert_eq!(magick_safe_path(Path::new("img%1.jpg")), "img%%1.jpg");
+        assert_eq!(magick_safe_path(Path::new("img%1.jpg")), "./img%%1.jpg");
         // Test absolute
         assert_eq!(
             magick_safe_path(Path::new("/abs/img.jpg")),
-            "file:/abs/img.jpg"
+            "file:///abs/img.jpg"
         );
         // Test already prepended (idempotency)
         assert_eq!(
@@ -212,9 +213,9 @@ mod tests {
 
     #[test]
     fn test_exiftool_path_arg() {
-        assert_eq!(exiftool_path_arg(Path::new("normal.png")), "normal.png");
+        assert_eq!(exiftool_path_arg(Path::new("normal.png")), "./normal.png");
         // ExifTool path arg for main file SHOULD NOT have doubling (now)
-        assert_eq!(exiftool_path_arg(Path::new("file%2f.png")), "file%2f.png");
+        assert_eq!(exiftool_path_arg(Path::new("file%2f.png")), "./file%2f.png");
         // But it should have prefixing
         assert_eq!(exiftool_path_arg(Path::new("-dash%f.png")), "./-dash%f.png");
     }

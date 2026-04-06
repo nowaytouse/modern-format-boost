@@ -548,9 +548,9 @@ fn test_magick_path_armor_hardening() {
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
         .collect();
 
-    // Should have file:./ and %% escaping
+    // Should have ./ (protocol-less relative) and %% escaping
     assert_eq!(args[0], "--");
-    assert_eq!(args[1], "file:./img%%1.jpg");
+    assert_eq!(args[1], "./img%%1.jpg");
 }
 
 #[test]

@@ -303,7 +303,12 @@ pub fn determine_strategy_with_apple_compat(
         // GIF file: use header-level detection
         shared_utils::LoopMeta::from_gif_path(Path::new(&result.file_path)).map_or_else(
             || shared_utils::assess_loop_intent(result),
-            |meta| shared_utils::assess_loop_intent_from_meta(&meta, Some(Path::new(&result.file_path))),
+            |meta| {
+                shared_utils::assess_loop_intent_from_meta(
+                    &meta,
+                    Some(Path::new(&result.file_path)),
+                )
+            },
         )
     } else {
         // Video file: ensure structural signals are available
@@ -416,44 +421,47 @@ pub fn determine_strategy_with_apple_compat(
         }
     }
 
-    let (target, reason, crf, lossless) = if let (crate::detection_api::CompressionType::Lossless, _) = (result.compression, result.format.as_str()) {
-        let codec_name = codec.as_str().to_uppercase();
-        (
-            TargetVideoFormat::HevcLosslessMkv,
-            format!("Source is lossless - using {codec_name} Lossless MKV"),
-            0.0_f32,
-            true,
-        )
-    } else {
-        let (target, reason_prefix) = match codec {
-            SelectedCodec::Hevc => (TargetVideoFormat::HevcMp4, "HEVC"),
-            SelectedCodec::Av1 => (TargetVideoFormat::Av1Mp4, "AV1"),
-        };
-        if result.archival_candidate || result.quality_score >= 90 {
+    let (target, reason, crf, lossless) =
+        if let (crate::detection_api::CompressionType::Lossless, _) =
+            (result.compression, result.format.as_str())
+        {
+            let codec_name = codec.as_str().to_uppercase();
             (
-                target,
-                format!(
+                TargetVideoFormat::HevcLosslessMkv,
+                format!("Source is lossless - using {codec_name} Lossless MKV"),
+                0.0_f32,
+                true,
+            )
+        } else {
+            let (target, reason_prefix) = match codec {
+                SelectedCodec::Hevc => (TargetVideoFormat::HevcMp4, "HEVC"),
+                SelectedCodec::Av1 => (TargetVideoFormat::Av1Mp4, "AV1"),
+            };
+            if result.archival_candidate || result.quality_score >= 90 {
+                (
+                    target,
+                    format!(
                     "Source is high quality ({}) - compressing with {} CRF 18 (visually lossless)",
                     result.codec.as_str(),
                     reason_prefix
                 ),
-                18.0_f32,
-                false,
-            )
-        } else {
-            (
-                target,
-                format!(
-                    "Source is {} ({}) - compressing with {} CRF 20",
-                    result.codec.as_str(),
-                    result.compression.as_str(),
-                    reason_prefix
-                ),
-                20.0_f32,
-                false,
-            )
-        }
-    };
+                    18.0_f32,
+                    false,
+                )
+            } else {
+                (
+                    target,
+                    format!(
+                        "Source is {} ({}) - compressing with {} CRF 20",
+                        result.codec.as_str(),
+                        result.compression.as_str(),
+                        reason_prefix
+                    ),
+                    20.0_f32,
+                    false,
+                )
+            }
+        };
 
     ConversionStrategy {
         target,
@@ -480,7 +488,12 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
     let detection = crate::detection_api::detect_video_with_cache(input, None)?;
 
     let output_dir = output_dir.map_or_else(
-        || input.parent().unwrap_or_else(|| Path::new(".")).to_path_buf(),
+        || {
+            input
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .to_path_buf()
+        },
         std::path::Path::to_path_buf,
     );
 
@@ -733,10 +746,12 @@ pub fn auto_convert_with_cache(
                 .unwrap_or_else(|| Path::new(""));
             user_out.join(rel_path)
         } else {
-            config
-                .output_dir
-                .clone()
-                .unwrap_or_else(|| input.parent().unwrap_or_else(|| Path::new(".")).to_path_buf())
+            config.output_dir.clone().unwrap_or_else(|| {
+                input
+                    .parent()
+                    .unwrap_or_else(|| Path::new("."))
+                    .to_path_buf()
+            })
         };
 
     std::fs::create_dir_all(&output_dir)?;
@@ -987,43 +1002,47 @@ pub fn auto_convert_with_cache(
                 };
 
                 let explore_result = match config.codec {
-                    SelectedCodec::Hevc => shared_utils::explore_hevc_with_gpu_coarse_full_warm_start(
-                        input_path,
-                        &temp_path,
-                        vf_args,
-                        predicted_crf,
-                        warm_start_crf,
-                        ultimate,
-                        config.force_ms_ssim_long,
-                        config.allow_size_tolerance,
-                        config.min_ssim,
-                        config.child_threads,
-                        hdr_x265_params_opt,
-                        config.apple_compat,
-                        if ultimate {
-                            shared_utils::EncoderPreset::Slower
-                        } else {
-                            shared_utils::EncoderPreset::Medium
-                        },
-                    ),
-                    SelectedCodec::Av1 => shared_utils::explore_av1_with_gpu_coarse_full_warm_start(
-                        input_path,
-                        &temp_path,
-                        vf_args,
-                        predicted_crf,
-                        warm_start_crf,
-                        ultimate,
-                        config.force_ms_ssim_long,
-                        config.allow_size_tolerance,
-                        config.min_ssim,
-                        config.child_threads,
-                        config.apple_compat,
-                        if ultimate {
-                            shared_utils::EncoderPreset::Slower
-                        } else {
-                            shared_utils::EncoderPreset::Medium
-                        },
-                    ),
+                    SelectedCodec::Hevc => {
+                        shared_utils::explore_hevc_with_gpu_coarse_full_warm_start(
+                            input_path,
+                            &temp_path,
+                            vf_args,
+                            predicted_crf,
+                            warm_start_crf,
+                            ultimate,
+                            config.force_ms_ssim_long,
+                            config.allow_size_tolerance,
+                            config.min_ssim,
+                            config.child_threads,
+                            hdr_x265_params_opt,
+                            config.apple_compat,
+                            if ultimate {
+                                shared_utils::EncoderPreset::Slower
+                            } else {
+                                shared_utils::EncoderPreset::Medium
+                            },
+                        )
+                    }
+                    SelectedCodec::Av1 => {
+                        shared_utils::explore_av1_with_gpu_coarse_full_warm_start(
+                            input_path,
+                            &temp_path,
+                            vf_args,
+                            predicted_crf,
+                            warm_start_crf,
+                            ultimate,
+                            config.force_ms_ssim_long,
+                            config.allow_size_tolerance,
+                            config.min_ssim,
+                            config.child_threads,
+                            config.apple_compat,
+                            if ultimate {
+                                shared_utils::EncoderPreset::Slower
+                            } else {
+                                shared_utils::EncoderPreset::Medium
+                            },
+                        )
+                    }
                 }
                 .map_err(|e| VidQualityError::ConversionError(e.to_string()))?;
 

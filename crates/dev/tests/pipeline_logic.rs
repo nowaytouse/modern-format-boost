@@ -4,16 +4,22 @@ use std::path::Path;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    fn get_edge_file(name: &str) -> PathBuf {
+        let cargo_manifest = env!("CARGO_MANIFEST_DIR");
+        PathBuf::from(cargo_manifest).join("edge").join(name)
+    }
 
     #[test]
     fn test_grayscale_icc_fallback() {
         // Poison Pill: Synthetic image with Grayscale pixels but RGB ICC profile
-        let input = Path::new("crates/dev/edge/poison_pill_grayscale_icc.jpg");
+        let input = get_edge_file("poison_pill_grayscale_icc.jpg");
         let output_file = tempfile::Builder::new().suffix(".jxl").tempfile().unwrap();
         let output = output_file.path();
 
         let result =
-            run_imagemagick_cjxl_pipeline(input, output, 1.0, 1, false, 8, false, false, 7);
+            run_imagemagick_cjxl_pipeline(&input, output, 1.0, 1, false, 8, false, false, 7);
 
         assert!(result.is_ok(), "Grayscale fallback failed!");
     }
@@ -21,13 +27,13 @@ mod tests {
     #[test]
     fn test_alpha_bleed_prevention() {
         // Poison Pill: Semi-transparent WebP that may bleed into black during conversion
-        let input = Path::new("crates/dev/edge/poison_pill_alpha_bleed.webp");
+        let input = get_edge_file("poison_pill_alpha_bleed.webp");
         let output_file = tempfile::Builder::new().suffix(".jxl").tempfile().unwrap();
         let output = output_file.path();
 
         // Test pipeline handles compositing and premultiply issues
         let result =
-            run_imagemagick_cjxl_pipeline(input, output, 1.0, 1, false, 8, false, false, 7);
+            run_imagemagick_cjxl_pipeline(&input, output, 1.0, 1, false, 8, false, false, 7);
 
         assert!(result.is_ok(), "Alpha bleed prevention pipeline failed!");
     }
@@ -35,11 +41,11 @@ mod tests {
     #[test]
     fn test_single_frame_veto() {
         // Poison Pill: One-frame GIF that should be intercepted by Layer 1-A
-        let input = Path::new("crates/dev/edge/poison_pill_static_veto.gif");
+        let input = get_edge_file("poison_pill_static_veto.gif");
 
         // This is a unit test of the pipeline's handling of static veto fixtures
         let result = run_imagemagick_cjxl_pipeline(
-            input,
+            &input,
             Path::new("dummy.jxl"),
             1.0,
             1,
@@ -60,7 +66,12 @@ mod tests {
     #[test]
     fn test_vfr_fps_calculation() {
         // Poison Pill: PNG Sequence to bypass broken video delegates
-        let input = Path::new("crates/dev/edge/poison_pill_rhythm_seq/*.png");
+        // For glob patterns, we might need a different handling
+        let input_pattern = format!(
+            "{}/edge/poison_pill_rhythm_seq/*.png",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let input = Path::new(&input_pattern);
 
         let result = run_imagemagick_cjxl_pipeline(
             input,
@@ -83,7 +94,11 @@ mod tests {
     #[test]
     fn test_non_monotonic_pts_fallback() {
         // Poison Pill: PNG Sequence to bypass broken video delegates
-        let input = Path::new("crates/dev/edge/poison_pill_pts_seq/*.png");
+        let input_pattern = format!(
+            "{}/edge/poison_pill_pts_seq/*.png",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let input = Path::new(&input_pattern);
 
         let result = run_imagemagick_cjxl_pipeline(
             input,
@@ -107,10 +122,10 @@ mod tests {
     fn test_bpp_calculation_precision() {
         // Poison Pill: 100 frames, high temporal density.
         // Verifies the fix for 'multiplied instead of divided' BPP bug.
-        let input = Path::new("crates/dev/edge/poison_pill_bpp_precision.apng");
+        let input = get_edge_file("poison_pill_bpp_precision.apng");
 
         let result = run_imagemagick_cjxl_pipeline(
-            input,
+            &input,
             Path::new("bpp_test.jxl"),
             1.0,
             1,
@@ -126,10 +141,10 @@ mod tests {
     #[test]
     fn test_zero_duration_rhythm_interception() {
         // Poison Pill: GIF with 0ms delay between frames
-        let input = Path::new("crates/dev/edge/poison_pill_zero_duration.gif");
+        let input = get_edge_file("poison_pill_zero_duration.gif");
 
         let result = run_imagemagick_cjxl_pipeline(
-            input,
+            &input,
             Path::new("zero.jxl"),
             1.0,
             1,

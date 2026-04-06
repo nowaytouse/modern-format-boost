@@ -810,7 +810,10 @@ fn dispatch_static_conversion(
         ("JPEG", _) => {
             use shared_utils::image_jpeg_analysis::is_ultra_hdr_jpeg_file;
             if is_ultra_hdr_jpeg_file(input) {
-                println!("🌈 UltraHDR Migration: {} (Gainmap detected)", input.display());
+                println!(
+                    "🌈 UltraHDR Migration: {} (Gainmap detected)",
+                    input.display()
+                );
                 return Ok(img::lossless_converter::convert_ultrahdr_jpeg_to_jxl(
                     input, options,
                 )?);

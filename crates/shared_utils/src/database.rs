@@ -1670,7 +1670,8 @@ fn compute_sample_vector(sample: &SampleRow, stats_map: &FeatureMap) -> Vec<f32>
         sample.temporal_jitter.unwrap_or(0.5) / get_std("t_jitter") * get_w("t_jitter").sqrt();
 
     // Directory context
-    let v_directory_meme = sample.directory_loop_intent_score.unwrap_or(0.5) * get_w("dir_meme").sqrt();
+    let v_directory_meme =
+        sample.directory_loop_intent_score.unwrap_or(0.5) * get_w("dir_meme").sqrt();
 
     // Categorical variables (weight mapped so diff^2 = penalty weight)
     // If w = penalty weight, v = sqrt(w)/2. If diff is `sqrt(w)`, squared diff is `w`.
@@ -2980,7 +2981,7 @@ mod tests {
     fn distance_prefers_similar_samples() {
         let meta = base_meta();
         let near = SampleRow {
-            loss_tolerance: Some("high".to_string()),
+            _loss_tolerance: Some("high".to_string()),
             width: 300,
             height: 300,
             duration_secs: 2.2,
@@ -2996,7 +2997,7 @@ mod tests {
             frame_payload_variation: Some(0.35),
             frame_delay_variation: Some(0.55),
             aspect_ratio: Some(1.0),
-            total_pixels: Some(90000),
+            _total_pixels: Some(90000),
             loop_frequency: Some(0.8),
             is_meme_platform: true,
             is_human_semantic_name: true,
@@ -3012,10 +3013,10 @@ mod tests {
             motion_periodicity: Some(0.78),
             temporal_jitter: Some(0.92),
             webp_compression_ratio: Some(0.9),
-            labeled_by: Some("cli_ingest".to_string()),
+            _labeled_by: Some("cli_ingest".to_string()),
         };
         let far = SampleRow {
-            loss_tolerance: Some("low".to_string()),
+            _loss_tolerance: Some("low".to_string()),
             width: 1920,
             height: 1080,
             duration_secs: 20.0,
@@ -3031,7 +3032,7 @@ mod tests {
             frame_payload_variation: Some(0.05),
             frame_delay_variation: Some(0.02),
             aspect_ratio: Some(1.78),
-            total_pixels: Some(2_073_600),
+            _total_pixels: Some(2_073_600),
             loop_frequency: Some(0.1),
             is_meme_platform: false,
             is_human_semantic_name: false,
@@ -3047,7 +3048,7 @@ mod tests {
             motion_periodicity: Some(0.20),
             temporal_jitter: Some(0.18),
             webp_compression_ratio: Some(0.1),
-            labeled_by: Some("cli_ingest".to_string()),
+            _labeled_by: Some("cli_ingest".to_string()),
         };
         let (tbpp, sbpp) = bpp_from_meta(&meta);
 

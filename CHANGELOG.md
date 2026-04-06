@@ -8,12 +8,14 @@ All notable changes to this project will be documented in this file.
 
 #### 🧹 Codebase Cleanup & Clippy Hygiene (Updated 2026-04-06)
 
-- **Workspace-wide Clippy Compliance**: Resolved numerous `pedantic` and `nursery` warnings across `shared_utils`, `vid`, and `img` crates.
+- **Workspace-wide Clippy Compliance**: Resolved numerous `pedantic`, `nursery`, and `restriction` warnings (e.g., `doc_markdown`, `items_after_statements`, `collapsible_if`, `map_unwrap_or`, `missing_panics_doc`, `missing_errors_doc`, `uninlined_format_args`) across `shared_utils`, `vid`, `img`, and `dev` crates.
 - **Idiomaticity**: Improved code by replacing manual `match` or `if let` blocks with `let-else`, `map_or_else`, and `and_then` where appropriate.
+- **Path Armor Testing**: Synchronized `test_magick_path_armor_hardening` with the current protocol-less relative pathing implementation (`./`).
+- **Documentation Integrity**: Added required `# Panics` and `# Errors` sections to test helper functions and standardized backtick usage in UltraHDR/GainMap documentation.
 - **Performance Optimization**: Removed redundant `clone()` calls and utilized `unwrap_or_else` to avoid unnecessary allocations in hot paths.
 - **Structural Integrity**: Renamed unused required struct fields in `database.rs` with underscore prefixes to satisfy `dead_code` analysis while maintaining DB compatibility.
 - **Concurrency**: Tightened Mutex lock scopes in `checkpoint.rs` and `conversion.rs` to minimize potential resource contention.
-- **Formatting consistency**: Standardized long numeric literals with underscores (e.g., `500_000.0`) and fixed missing backticks in HDR synthesis documentation.
+- **Formatting consistency**: Automated workspace-wide alignment with `cargo fmt`, standardizing long numeric literals with underscores (e.g., `500_000.0`) and inlining format arguments.
 
 #### 🌈 Ultra HDR Migration Pipeline (Gain Map Support)
 
@@ -39,7 +41,7 @@ All notable changes to this project will be documented in this file.
 
 #### 🛡️ Path Safety & Media Integrity Hardening
 
-- **Relativization Shield**: Mitigated ImageMagick 7 absolute path truncation bugs by implementing mandatory `./` guarding for all file inputs.
+- **Relativization Shield**: Mitigated ImageMagick 7 absolute path truncation bugs by implementing mandatory `./` guarding for all file inputs; updated documentation to confirm protocol-less relative addressing.
 - **ExifTool Injection Defense**: Hardened `exiftool_path_arg` with unconditional `./` guarding to prevent command hijacking via `-` or `@` filename prefixes.
 - **Format Expansion Prevention**: Implemented double-percent (`%%`) escaping to lock down filename property expansion vulnerabilities.
 - **Shell Injection Defense**: Added metacharacter scanning and protocol-less relative addressing to prevent command injection via ImageMagick delegates.

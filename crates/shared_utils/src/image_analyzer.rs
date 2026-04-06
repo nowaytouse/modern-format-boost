@@ -758,11 +758,11 @@ fn generate_jxl_indicator(
             benefit: "30-60% size reduction while preserving full quality".to_string(),
         },
         ImageFormat::Jpeg => {
+            use crate::image_jpeg_analysis::is_ultra_hdr_jpeg_file;
             if let Some(ref jpeg) = jpeg_analysis {
                 let quality_info = format!("original quality Q={}", jpeg.estimated_quality);
-                
+
                 // Check if it's an Ultra HDR JPEG (Google Gain Map)
-                use crate::image_jpeg_analysis::is_ultra_hdr_jpeg_file;
                 if is_ultra_hdr_jpeg_file(path) {
                     return JxlIndicator {
                         should_convert: true,
