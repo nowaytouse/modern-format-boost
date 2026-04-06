@@ -207,15 +207,20 @@ fn parse_sps_for_transquant_bypass_flag(hvcc_data: &[u8]) -> Option<bool> {
             return None;
         }
         let nal_unit_type = hvcc_data[pos] & 0x3F;
-        let num_nalus = crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([hvcc_data[pos + 1], hvcc_data[pos + 2]]));
+        let num_nalus = crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([
+            hvcc_data[pos + 1],
+            hvcc_data[pos + 2],
+        ]));
         pos += 3;
         if nal_unit_type == 33 {
             for _ in 0..num_nalus {
                 if pos + 2 > hvcc_data.len() {
                     return None;
                 }
-                let nal_unit_length =
-                    crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([hvcc_data[pos], hvcc_data[pos + 1]]));
+                let nal_unit_length = crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([
+                    hvcc_data[pos],
+                    hvcc_data[pos + 1],
+                ]));
                 pos += 2;
                 if pos + nal_unit_length > hvcc_data.len() {
                     return None;
@@ -232,8 +237,10 @@ fn parse_sps_for_transquant_bypass_flag(hvcc_data: &[u8]) -> Option<bool> {
                 if pos + 2 > hvcc_data.len() {
                     return None;
                 }
-                let nal_unit_length =
-                    crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([hvcc_data[pos], hvcc_data[pos + 1]]));
+                let nal_unit_length = crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([
+                    hvcc_data[pos],
+                    hvcc_data[pos + 1],
+                ]));
                 pos += 2 + nal_unit_length;
             }
         }
@@ -567,8 +574,12 @@ fn extract_xmp_from_heic_data(data: &[u8]) -> Option<String> {
 fn find_box_payload_by_magic(data: &[u8], box_type: [u8; 4]) -> Option<&[u8]> {
     if let Some(pos) = data.windows(4).position(|w| w == box_type) {
         if pos >= 4 {
-            let size =
-                crate::numeric_cast::u32_to_usize_sat(u32::from_be_bytes([data[pos - 4], data[pos - 3], data[pos - 2], data[pos - 1]]));
+            let size = crate::numeric_cast::u32_to_usize_sat(u32::from_be_bytes([
+                data[pos - 4],
+                data[pos - 3],
+                data[pos - 2],
+                data[pos - 1],
+            ]));
             if size >= 8 && pos + size - 4 <= data.len() {
                 return Some(&data[pos + 4..pos - 4 + size]);
             }

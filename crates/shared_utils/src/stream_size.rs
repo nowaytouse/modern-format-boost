@@ -63,7 +63,9 @@ impl StreamSizeInfo {
         if self.total_file_size == 0 {
             return 0.0;
         }
-        f64::from(u32::try_from(self.container_overhead).unwrap_or(u32::MAX)) / f64::from(u32::try_from(self.total_file_size.max(1)).unwrap_or(u32::MAX)) * 100.0
+        f64::from(u32::try_from(self.container_overhead).unwrap_or(u32::MAX))
+            / f64::from(u32::try_from(self.total_file_size.max(1)).unwrap_or(u32::MAX))
+            * 100.0
     }
 
     #[must_use]
@@ -213,7 +215,9 @@ fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<StreamSiz
     let (video_stream_size, video_bitrate) = if let Some(vs) = video_stream {
         if let Some(br_str) = &vs.bit_rate {
             if let Ok(br) = br_str.parse::<u64>() {
-                let size = crate::numeric_cast::f64_to_u64_sat(f64::from(u32::try_from(br).unwrap_or(u32::MAX)) * duration_secs / 8.0);
+                let size = crate::numeric_cast::f64_to_u64_sat(
+                    f64::from(u32::try_from(br).unwrap_or(u32::MAX)) * duration_secs / 8.0,
+                );
                 (size, Some(br))
             } else {
                 (0, None)
@@ -228,7 +232,9 @@ fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<StreamSiz
     let (audio_stream_size, audio_bitrate) = if let Some(aus) = audio_stream {
         if let Some(br_str) = &aus.bit_rate {
             if let Ok(br) = br_str.parse::<u64>() {
-                let size = crate::numeric_cast::f64_to_u64_sat(f64::from(u32::try_from(br).unwrap_or(u32::MAX)) * duration_secs / 8.0);
+                let size = crate::numeric_cast::f64_to_u64_sat(
+                    f64::from(u32::try_from(br).unwrap_or(u32::MAX)) * duration_secs / 8.0,
+                );
                 (size, Some(br))
             } else {
                 (0, None)
@@ -299,7 +305,9 @@ pub fn get_output_video_stream_size(output_path: &Path) -> u64 {
 
 fn estimate_stream_sizes(path: &Path, total_file_size: u64) -> StreamSizeInfo {
     let overhead_percent = get_container_overhead_percent(path);
-    let estimated_overhead = crate::numeric_cast::f64_to_u64_sat(f64::from(u32::try_from(total_file_size).unwrap_or(u32::MAX)) * overhead_percent);
+    let estimated_overhead = crate::numeric_cast::f64_to_u64_sat(
+        f64::from(u32::try_from(total_file_size).unwrap_or(u32::MAX)) * overhead_percent,
+    );
     let estimated_video_size = total_file_size.saturating_sub(estimated_overhead);
 
     StreamSizeInfo {

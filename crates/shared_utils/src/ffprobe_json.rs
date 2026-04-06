@@ -97,7 +97,9 @@ fn rational_to_50k(v: &serde_json::Value) -> Option<u64> {
                 if d == 0.0 {
                     return None;
                 }
-                Some(crate::numeric_cast::f64_to_u64_sat(((n / d) * 50000.0).round()))
+                Some(crate::numeric_cast::f64_to_u64_sat(
+                    ((n / d) * 50000.0).round(),
+                ))
             } else {
                 let f: f64 = s.trim().parse().ok()?;
                 if f <= 1.0 {
@@ -128,7 +130,9 @@ fn rational_to_10k(v: &serde_json::Value) -> Option<u64> {
                 if d == 0.0 {
                     return None;
                 }
-                Some(crate::numeric_cast::f64_to_u64_sat(((n / d) * 10000.0).round()))
+                Some(crate::numeric_cast::f64_to_u64_sat(
+                    ((n / d) * 10000.0).round(),
+                ))
             } else {
                 let f: f64 = s.trim().parse().ok()?;
                 if f <= 10000.0 {

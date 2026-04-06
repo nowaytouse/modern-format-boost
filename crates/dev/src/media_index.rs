@@ -1,4 +1,4 @@
-//! 🗄️ Media Index System - SQLite Backend (Dev-only)
+//! 🗄️ Media Index System - `SQLite` Backend (Dev-only)
 //!
 //! Accelerates development by flattening physical conversion costs into a structured DB.
 //! Relocated to crates/dev to separate development auditing from production code.
@@ -16,10 +16,13 @@ pub struct MediaIndex {
 
 impl MediaIndex {
     /// Opens or creates the media index database at the specified path.
+    ///
+    /// # Errors
+    /// Returns an error if the database cannot be opened or schema initialization fails.
     pub fn open(db_path: &Path) -> Result<Self> {
         let conn = Connection::open(db_path)
             .with_context(|| format!("Failed to open MediaIndex at {}", db_path.display()))?;
-        
+
         Self::init_schema(&conn)?;
         Ok(Self { conn })
     }
@@ -73,12 +76,12 @@ impl MediaIndex {
             )",
             [],
         )?;
-        
+
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_media_type ON media_entries(media_type)",
             [],
         )?;
-        
+
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_format ON media_entries(format)",
             [],
@@ -93,6 +96,9 @@ impl MediaIndex {
     }
 
     /// Upserts a raw extraction record (only overwrites immutable features).
+    ///
+    /// # Errors
+    /// Returns an error if the database update fails.
     pub fn upsert_extraction(&self, row: &MediaIndexRow) -> Result<()> {
         self.conn.execute(
             "INSERT INTO media_entries (
@@ -111,8 +117,17 @@ impl MediaIndex {
                 raw_features_json = EXCLUDED.raw_features_json,
                 last_extracted_at = EXCLUDED.last_extracted_at",
             params![
-                row.blake3, row.rel_path, row.media_type, row.width, row.height, row.format,
-                row.file_size, row.has_hdr, row.has_alpha, row.duration, row.raw_features_json,
+                row.blake3,
+                row.rel_path,
+                row.media_type,
+                row.width,
+                row.height,
+                row.format,
+                row.file_size,
+                row.has_hdr,
+                row.has_alpha,
+                row.duration,
+                row.raw_features_json,
                 row.last_extracted_at
             ],
         )?;
@@ -120,13 +135,16 @@ impl MediaIndex {
     }
 
     /// Updates the decision columns for a specific record.
+    ///
+    /// # Errors
+    /// Returns an error if the database update fails.
     pub fn update_decision(
-        &self, 
-        blake3: &str, 
-        format: &str, 
-        params_json: &str, 
+        &self,
+        blake3: &str,
+        format: &str,
+        params_json: &str,
         reason: &str,
-        issue: Option<&str>
+        issue: Option<&str>,
     ) -> Result<()> {
         self.conn.execute(
             "UPDATE media_entries SET 
@@ -141,8 +159,13 @@ impl MediaIndex {
     }
 
     /// Retrieves a single record by content hash.
+    ///
+    /// # Errors
+    /// Returns an error if the database query fails.
     pub fn get_record(&self, blake3: &str) -> Result<Option<MediaIndexRow>> {
-        let mut stmt = self.conn.prepare("SELECT * FROM media_entries WHERE blake3 = ?1")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT * FROM media_entries WHERE blake3 = ?1")?;
         let mut rows = stmt.query_map(params![blake3], |row| {
             Ok(MediaIndexRow {
                 blake3: row.get(0)?,
@@ -171,20 +194,31 @@ impl MediaIndex {
     }
 
     /// Returns a count of records in the index.
+    ///
+    /// # Errors
+    /// Returns an error if the database query fails.
     pub fn count_records(&self) -> Result<usize> {
-        let count: usize = self.conn.query_row(
-            "SELECT COUNT(*) FROM media_entries",
-            [],
-            |row| row.get(0),
-        )?;
+        let count: usize =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM media_entries", [], |row| row.get(0))?;
         Ok(count)
     }
 
-    pub fn conn_prepare(&self, sql: &str) -> std::result::Result<rusqlite::Statement<'_>, rusqlite::Error> {
+    /// Returns a raw statement for the inner connection.
+    ///
+    /// # Errors
+    /// Returns an error if the SQL is invalid.
+    pub fn conn_prepare(
+        &self,
+        sql: &str,
+    ) -> std::result::Result<rusqlite::Statement<'_>, rusqlite::Error> {
         self.conn.prepare(sql)
     }
 
-    /// 🛡️ Snapshots all CURRENT decisions from media_entries into decision_snapshots under a tag.
+    /// 🛡️ Snapshots all CURRENT decisions from `media_entries` into `decision_snapshots` under a tag.
+    ///
+    /// # Errors
+    /// Returns an error if the database update fails.
     pub fn save_snapshot(&self, version_tag: &str) -> Result<()> {
         let ts = now_unix();
         self.conn.execute(
@@ -200,6 +234,9 @@ impl MediaIndex {
     }
 
     /// 📡 Logs a real-world production decision for audit/drift analysis.
+    ///
+    /// # Errors
+    /// Returns an error if the database update fails.
     pub fn log_live_details(
         &self,
         blake3: &str,
@@ -218,7 +255,7 @@ impl MediaIndex {
         Ok(())
     }
 
-    /// ⚡ Zero-overhead check: Returns true if a MediaIndex exists at the path.
+    /// ⚡ Zero-overhead check: Returns true if a `MediaIndex` exists at the path.
     pub fn exists_at(db_path: &Path) -> bool {
         db_path.exists() && db_path.is_file()
     }

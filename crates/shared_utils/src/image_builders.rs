@@ -4,7 +4,7 @@ use crate::constants;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-/// Builder for constructing `magick` (ImageMagick) commands.
+/// Builder for constructing `magick` (`ImageMagick`) commands.
 #[derive(Debug, Default)]
 pub struct MagickBuilder {
     input: Option<PathBuf>,
@@ -142,12 +142,11 @@ impl MagickBuilder {
         Command::new(constants::TOOL_MAGICK)
             .arg("-version")
             .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+            .is_ok_and(|o| o.status.success())
     }
 }
 
-/// Builder for constructing `identify` (ImageMagick) commands.
+/// Builder for constructing `identify` (`ImageMagick`) commands.
 #[derive(Debug, Default)]
 pub struct IdentifyBuilder {
     input: Option<PathBuf>,
@@ -229,8 +228,7 @@ impl IdentifyBuilder {
                         .arg("identify")
                         .arg("-version")
                         .output()
-                        .map(|o| o.status.success())
-                        .unwrap_or(false)
+                        .is_ok_and(|o| o.status.success())
                 },
                 |o| o.status.success(),
             )
@@ -352,8 +350,7 @@ impl WebpmuxBuilder {
         Command::new(constants::TOOL_WEBPMUX)
             .arg("-version")
             .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+            .is_ok_and(|o| o.status.success())
     }
 }
 
@@ -486,8 +483,7 @@ impl GifskiBuilder {
         Command::new(constants::TOOL_GIFSKI)
             .arg("--version")
             .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+            .is_ok_and(|o| o.status.success())
     }
 }
 
@@ -609,8 +605,7 @@ impl AvifencBuilder {
         Command::new("avifenc")
             .arg("--version")
             .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+            .is_ok_and(|o| o.status.success())
     }
 }
 
@@ -690,8 +685,7 @@ impl SipsBuilder {
             Command::new(constants::TOOL_SIPS)
                 .arg("-v")
                 .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false)
+                .is_ok_and(|o| o.status.success())
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -821,8 +815,7 @@ impl ExiftoolBuilder {
         Command::new("exiftool")
             .arg("-ver")
             .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+            .is_ok_and(|o| o.status.success())
     }
 }
 
@@ -879,7 +872,6 @@ impl DwebpBuilder {
         Command::new(crate::constants::TOOL_DWEBP)
             .arg("-version")
             .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+            .is_ok_and(|o| o.status.success())
     }
 }

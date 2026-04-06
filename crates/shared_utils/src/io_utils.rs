@@ -12,6 +12,13 @@ use tracing::warn;
 ///
 /// Default: 3 retries with 100ms delay.
 /// This prevents one-off "Failed to read file metadata" errors from breaking batch processing.
+/// Get metadata with retry.
+///
+/// # Errors
+/// Returns an error if the metadata cannot be retrieved after all retries.
+///
+/// # Panics
+/// Panics if the retry logic fails.
 pub fn metadata_with_retry<P: AsRef<Path>>(path: P) -> std::io::Result<fs::Metadata> {
     let p = path.as_ref();
     let mut last_err = None;
@@ -50,6 +57,10 @@ pub fn metadata_with_retry<P: AsRef<Path>>(path: P) -> std::io::Result<fs::Metad
 /// that permission issues or locked file errors are surfaced as warnings
 /// in the run logs and terminal, while missing files (common in temp cleanups)
 /// are handled silently.
+/// Safely remove a file.
+///
+/// # Errors
+/// Returns an error if the file cannot be removed.
 pub fn safe_remove_file<P: AsRef<Path>>(path: P) -> std::io::Result<()> {
     let p = path.as_ref();
     match fs::remove_file(p) {
@@ -67,6 +78,10 @@ pub fn safe_remove_file<P: AsRef<Path>>(path: P) -> std::io::Result<()> {
 }
 
 /// Safely remove a directory and its contents recursively, ignoring absence.
+/// Safely remove a directory and all its contents.
+///
+/// # Errors
+/// Returns an error if the directory cannot be removed.
 pub fn safe_remove_dir_all<P: AsRef<Path>>(path: P) -> std::io::Result<()> {
     let p = path.as_ref();
     match fs::remove_dir_all(p) {
@@ -87,6 +102,10 @@ pub fn safe_remove_dir_all<P: AsRef<Path>>(path: P) -> std::io::Result<()> {
 ///
 /// If `fs::rename` fails because the source and destination are on different
 /// mount points (e.g. system SSD to external HDD), falls back to `copy` + `delete`.
+/// Move a file robustly.
+///
+/// # Errors
+/// Returns an error if the move fails.
 pub fn robust_move(src: &Path, dst: &Path) -> std::io::Result<()> {
     if let Err(e) = std::fs::rename(src, dst) {
         // EXDEV (OS Error 18) indicates "Cross-device link"

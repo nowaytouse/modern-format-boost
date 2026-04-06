@@ -614,11 +614,10 @@ fn auto_convert_single_file(
 
     // Check for Live Photos first (before any analysis)
     if shared_utils::is_live_photo(input) {
-        let reason = "Live Photo detected - img strictly processes static images only (handled by vid)";
+        let reason =
+            "Live Photo detected - img strictly processes static images only (handled by vid)";
         shared_utils::progress_mode::image_skipped(reason);
-        let file_size = shared_utils::io_utils::metadata_with_retry(input)
-            .map(|m| m.len())
-            .unwrap_or(0);
+        let file_size = shared_utils::io_utils::metadata_with_retry(input).map_or(0, |m| m.len());
         // [FIX] Completely ignore: NO COPY, NO STATS
         return Ok(ConversionOutput {
             original_path: input.display().to_string(),
@@ -696,7 +695,7 @@ fn auto_convert_single_file(
                 output_size: None,
                 size_reduction: None,
                 blake3: None,
-             });
+            });
         }
     }
 
@@ -783,7 +782,10 @@ fn dispatch_static_conversion(
                     q.score
                 );
             } else {
-                println!("   🔭 Quality Score: {:.2} (KNN, conf={:.2})", q.score, q.confidence);
+                println!(
+                    "   🔭 Quality Score: {:.2} (KNN, conf={:.2})",
+                    q.score, q.confidence
+                );
             }
         }
     }
@@ -806,6 +808,14 @@ fn dispatch_static_conversion(
             convert_to_jxl(input, options, 0.0_f32, analysis.hdr_info.as_ref())?
         }
         ("JPEG", _) => {
+            use shared_utils::image_jpeg_analysis::is_ultra_hdr_jpeg_file;
+            if is_ultra_hdr_jpeg_file(input) {
+                println!("🌈 UltraHDR Migration: {} (Gainmap detected)", input.display());
+                return Ok(img::lossless_converter::convert_ultrahdr_jpeg_to_jxl(
+                    input, options,
+                )?);
+            }
+
             if config.verbose {
                 println!("🔄 JPEG→JXL lossless transcode: {}", input.display());
             }
@@ -959,10 +969,10 @@ fn auto_convert_directory(
             // Reserve 1 GB headroom on top of total input size (temp files, partial encodes, etc.)
             let required = total_input_size.saturating_add(1024 * 1024 * 1024);
             if avail < required {
-                let avail_gb = shared_utils::numeric_cast::u64_to_f64(avail)
-                    / (1024.0 * 1024.0 * 1024.0);
-                let required_gb = shared_utils::numeric_cast::u64_to_f64(required)
-                    / (1024.0 * 1024.0 * 1024.0);
+                let avail_gb =
+                    shared_utils::numeric_cast::u64_to_f64(avail) / (1024.0 * 1024.0 * 1024.0);
+                let required_gb =
+                    shared_utils::numeric_cast::u64_to_f64(required) / (1024.0 * 1024.0 * 1024.0);
                 eprintln!(
                     "❌ Insufficient disk space on output volume.\n\
                      💾 Available: {avail_gb:.2} GB\n\
@@ -1028,9 +1038,7 @@ fn auto_convert_directory(
             "🔧 Thread Strategy: {} parallel tasks x {} threads/task (CPU cores: {})",
             max_threads,
             child_threads,
-            std::thread::available_parallelism()
-                .map(std::num::NonZero::get)
-                .unwrap_or(4)
+            std::thread::available_parallelism().map_or(4, std::num::NonZero::get)
         );
         if let Some(hint) = shared_utils::thread_manager::memory_cap_hint() {
             shared_utils::log_eprintln!("   💡 {}", hint);

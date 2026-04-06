@@ -56,12 +56,20 @@ pub enum DepthType {
     Unknown,
 }
 
-/// Extract depth map from HEIC file
+/// Extract depth map from `HEIC` file.
 ///
 /// Searches for auxiliary images with depth-related types:
 /// - `urn:com:apple:heif:depth`
 /// - `urn:mpeg:mpegB:iclp:AuxiliaryDepth`
 /// - `depth` (generic)
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The file cannot be read.
+/// - The `HEIC` context cannot be parsed.
+/// - The primary image handle is missing.
+/// - An auxiliary depth image is found but cannot be decoded.
 pub fn extract_depth_from_heic(input: &Path) -> Result<Option<DepthMap>> {
     let data = std::fs::read(input).context("Failed to read HEIC file")?;
     let ctx = HeifContext::read_from_bytes(&data).context("Failed to parse HEIC context")?;
@@ -210,11 +218,18 @@ fn parse_depth_metadata(handle: &ImageHandle) -> Result<(Option<f32>, Option<f32
     Ok((near, far))
 }
 
-/// Encode image to JXL with depth extra channel using jpegxl-rs
+/// Encode image to `JXL` with depth extra channel using `jpegxl-rs`.
 ///
-/// Note: Current jpegxl-rs API has limited extra channel support.
+/// Note: Current `jpegxl-rs` API has limited extra channel support.
 /// This function encodes the main image. Depth map is saved separately
-/// as sidecar file since jpegxl-rs doesn't expose `JxlEncoderSetExtraChannelBuffer`.
+/// as sidecar file since `jpegxl-rs` doesn't expose `JxlEncoderSetExtraChannelBuffer`.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The `JXL` encoder fails to initialize.
+/// - The image encoding process fails.
+/// - The output file cannot be written.
 pub fn encode_jxl_with_depth(
     main_image: &DynamicImage,
     _depth_map: &DepthMap,
@@ -266,14 +281,21 @@ pub fn encode_jxl_with_depth(
     Ok(())
 }
 
-/// Encode JXL with depth using sidecar file approach
+/// Encode `JXL` with depth using sidecar file approach.
 ///
-/// This is the practical fallback: encodes main image to JXL
-/// and saves depth map as a separate PNG file with .depth.png suffix.
+/// This is the practical fallback: encodes main image to `JXL`
+/// and saves depth map as a separate `PNG` file with `.depth.png` suffix.
 ///
 /// ## Output Files
-/// - `output`: Main JXL file
+/// - `output`: Main `JXL` file
 /// - `output.with_extension("depth.png")`: Depth map sidecar
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - Temporary files cannot be created.
+/// - The `cjxl` tool fails to encode the main image.
+/// - The sidecar depth file cannot be saved.
 pub fn encode_jxl_depth_fallback(
     main_image: &DynamicImage,
     depth_map: &DepthMap,

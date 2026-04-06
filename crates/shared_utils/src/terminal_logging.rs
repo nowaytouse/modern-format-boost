@@ -37,42 +37,68 @@ impl ColorGuard {
     }
 }
 
-/// ANSI color codes
+/// ANSI color and style codes for terminal output.
 pub mod ansi {
+    /// Reset all styles and colors.
     pub const RESET: &str = "0";
+    /// Bold text style.
     pub const BOLD: &str = "1";
+    /// Dim/faint text style.
     pub const DIM: &str = "2";
+    /// Italic text style.
     pub const ITALIC: &str = "3";
+    /// Underline text style.
     pub const UNDERLINE: &str = "4";
 
-    // Foreground colors
+    /// Foreground: Black
     pub const FG_BLACK: &str = "30";
+    /// Foreground: Red
     pub const FG_RED: &str = "31";
+    /// Foreground: Green
     pub const FG_GREEN: &str = "32";
+    /// Foreground: Yellow
     pub const FG_YELLOW: &str = "33";
+    /// Foreground: Blue
     pub const FG_BLUE: &str = "34";
+    /// Foreground: Magenta
     pub const FG_MAGENTA: &str = "35";
+    /// Foreground: Cyan
     pub const FG_CYAN: &str = "36";
+    /// Foreground: White
     pub const FG_WHITE: &str = "37";
 
-    // Bright foreground colors
+    /// Bright Foreground: Black
     pub const FG_BRIGHT_BLACK: &str = "90";
+    /// Bright Foreground: Red
     pub const FG_BRIGHT_RED: &str = "91";
+    /// Bright Foreground: Green
     pub const FG_BRIGHT_GREEN: &str = "92";
+    /// Bright Foreground: Yellow
     pub const FG_BRIGHT_YELLOW: &str = "93";
+    /// Bright Foreground: Blue
     pub const FG_BRIGHT_BLUE: &str = "94";
+    /// Bright Foreground: Magenta
     pub const FG_BRIGHT_MAGENTA: &str = "95";
+    /// Bright Foreground: Cyan
     pub const FG_BRIGHT_CYAN: &str = "96";
+    /// Bright Foreground: White
     pub const FG_BRIGHT_WHITE: &str = "97";
 
-    // Background colors
+    /// Background: Black
     pub const BG_BLACK: &str = "40";
+    /// Background: Red
     pub const BG_RED: &str = "41";
+    /// Background: Green
     pub const BG_GREEN: &str = "42";
+    /// Background: Yellow
     pub const BG_YELLOW: &str = "43";
+    /// Background: Blue
     pub const BG_BLUE: &str = "44";
+    /// Background: Magenta
     pub const BG_MAGENTA: &str = "45";
+    /// Background: Cyan
     pub const BG_CYAN: &str = "46";
+    /// Background: White
     pub const BG_WHITE: &str = "47";
 }
 

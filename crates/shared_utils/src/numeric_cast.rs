@@ -33,10 +33,7 @@ pub fn f64_to_u64_sat(v: f64) -> u64 {
     if v.is_nan() || v < 0.0 {
         return 0;
     }
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss
-    )]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let result = v.min(u64::MAX as f64) as u64;
     result
 }
@@ -51,10 +48,7 @@ pub fn f64_to_u32_sat(v: f64) -> u32 {
     if v.is_nan() || v < 0.0 {
         return 0;
     }
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss
-    )]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let result = v.min(f64::from(u32::MAX)) as u32;
     result
 }
@@ -69,10 +63,7 @@ pub fn f64_to_usize_sat(v: f64) -> usize {
     if v.is_nan() || v < 0.0 {
         return 0;
     }
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss
-    )]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let result = v.min(usize::MAX as f64) as usize;
     result
 }
@@ -87,10 +78,7 @@ pub fn f64_to_u16_sat(v: f64) -> u16 {
     if v.is_nan() || v < 0.0 {
         return 0;
     }
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss
-    )]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let result = v.min(f64::from(u16::MAX)) as u16;
     result
 }
@@ -105,10 +93,7 @@ pub fn f64_to_u8_sat(v: f64) -> u8 {
     if v.is_nan() || v < 0.0 {
         return 0;
     }
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss
-    )]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let result = v.min(f64::from(u8::MAX)) as u8;
     result
 }
@@ -147,10 +132,7 @@ pub fn f32_to_u32_sat(v: f32) -> u32 {
         return 0;
     }
     // f32 cannot represent u32::MAX exactly; 4_294_967_000.0 is the safe upper bound
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss
-    )]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let result = v.min(u32::MAX as f32) as u32;
     result
 }
@@ -165,10 +147,7 @@ pub fn f32_to_u16_sat(v: f32) -> u16 {
     if v.is_nan() || v < 0.0 {
         return 0;
     }
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss
-    )]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let result = v.min(f32::from(u16::MAX)) as u16;
     result
 }
@@ -427,7 +406,6 @@ pub fn u32_to_u8_sat(v: u32) -> u8 {
     u8::try_from(v).unwrap_or(u8::MAX)
 }
 
-
 /// Saturating cast: `u32` → `i32`.
 ///
 /// Values > `i32::MAX` → `i32::MAX`.
@@ -468,9 +446,9 @@ pub fn i32_to_u8_sat(v: i32) -> u8 {
 // Timestamp helpers
 // ---------------------------------------------------------------------------
 
-/// Current Unix timestamp as `i64` (for SQLite `INTEGER` columns).
+/// Current Unix timestamp as `i64` (for `SQLite` `INTEGER` columns).
 ///
-/// SQLite stores integers as signed 64-bit. This helper avoids the recurring
+/// `SQLite` stores integers as signed 64-bit. This helper avoids the recurring
 /// `SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64` pattern
 /// and handles the `u64 → i64` wrap safely (current timestamps fit in i64
 /// until year 292,277,026,596).

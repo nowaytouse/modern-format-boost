@@ -229,7 +229,13 @@ pub mod webp {
 
         while pos + 8 <= data.len() {
             let chunk_id = &data[pos..pos + 4];
-            let chunk_size = usize::try_from(u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]])).unwrap_or(usize::MAX);
+            let chunk_size = usize::try_from(u32::from_le_bytes([
+                data[pos + 4],
+                data[pos + 5],
+                data[pos + 6],
+                data[pos + 7],
+            ]))
+            .unwrap_or(usize::MAX);
             let payload_start = pos + 8;
             let payload_end = (payload_start + chunk_size).min(data.len());
 
@@ -292,7 +298,12 @@ pub mod webp {
                 let vp8_data = &data[payload_start..payload_end];
                 if vp8_data.len() >= 10 && vp8_data[3..6] == [0x9D, 0x01, 0x2A] {
                     let y_ac_qi = vp8_data[10] & 0x7F;
-                    let quality = crate::numeric_cast::u32_to_u8_sat((u32::from(127 - y_ac_qi) * 100).checked_div(127).unwrap_or(0).min(100));
+                    let quality = crate::numeric_cast::u32_to_u8_sat(
+                        (u32::from(127 - y_ac_qi) * 100)
+                            .checked_div(127)
+                            .unwrap_or(0)
+                            .min(100),
+                    );
                     return Ok(quality);
                 }
             }
@@ -326,7 +337,9 @@ pub mod webp {
 
     #[must_use]
     pub fn count_frames_from_bytes(data: &[u8]) -> u32 {
-        let count = crate::numeric_cast::usize_to_u32_sat(data.windows(4).filter(|w| *w == b"ANMF").count()); // Marker
+        let count = crate::numeric_cast::usize_to_u32_sat(
+            data.windows(4).filter(|w| *w == b"ANMF").count(),
+        ); // Marker
         count.max(1)
     }
 
@@ -346,7 +359,13 @@ pub mod webp {
         let mut total_ms = 0u64;
         while pos + 8 <= data.len() {
             let chunk_id = &data[pos..pos + 4];
-            let chunk_size = usize::try_from(u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]])).unwrap_or(usize::MAX);
+            let chunk_size = usize::try_from(u32::from_le_bytes([
+                data[pos + 4],
+                data[pos + 5],
+                data[pos + 6],
+                data[pos + 7],
+            ]))
+            .unwrap_or(usize::MAX);
             let payload_start = pos + 8;
             let payload_end = (payload_start + chunk_size).min(data.len());
             if chunk_id == b"ANMF" && payload_end >= payload_start + 20 {
@@ -364,21 +383,19 @@ pub mod webp {
         if total_ms == 0 {
             return None;
         }
-        Some(crate::numeric_cast::f64_to_f32_lossy(crate::numeric_cast::u64_to_f64(total_ms) / 1000.0))
+        Some(crate::numeric_cast::f64_to_f32_lossy(
+            crate::numeric_cast::u64_to_f64(total_ms) / 1000.0,
+        ))
     }
 
     #[must_use]
     pub fn is_lossless(path: &Path) -> bool {
-        fs::read(path)
-            .map(|b| is_lossless_from_bytes(&b))
-            .unwrap_or(false)
+        fs::read(path).is_ok_and(|b| is_lossless_from_bytes(&b))
     }
 
     #[must_use]
     pub fn is_animated(path: &Path) -> bool {
-        fs::read(path)
-            .map(|b| is_animated_from_bytes(&b))
-            .unwrap_or(false)
+        fs::read(path).is_ok_and(|b| is_animated_from_bytes(&b))
     }
 }
 
@@ -493,16 +510,14 @@ pub mod gif {
 
     #[must_use]
     pub fn is_animated(path: &Path) -> bool {
-        fs::read(path)
-            .map(|b| is_animated_from_bytes(&b))
-            .unwrap_or(false)
+        fs::read(path).is_ok_and(|b| is_animated_from_bytes(&b))
     }
 
     #[must_use]
     pub fn get_frame_count(path: &Path) -> usize {
-        fs::read(path)
-            .map(|b| usize::try_from(count_frames_from_bytes(&b)).unwrap_or(0))
-            .unwrap_or(0)
+        fs::read(path).map_or(0, |b| {
+            usize::try_from(count_frames_from_bytes(&b)).unwrap_or(0)
+        })
     }
 }
 

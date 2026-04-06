@@ -56,7 +56,7 @@ FEATURE_COLUMNS = [
     "aspect_ratio",
     "loop_frequency",
     "cadence_score",
-    "directory_meme_score",
+    "directory_loop_intent_score",
     "palette_depth",
     "motion_gini",
     "block_skew",
@@ -105,7 +105,7 @@ def load_samples(conn: psycopg2.extensions.connection) -> pd.DataFrame:
             palette_size, frame_payload_variation, frame_delay_variation,
             temporal_bpp, spatial_bpp, aspect_ratio, total_pixels,
             loop_frequency, is_meme_platform, is_human_semantic_name,
-            cadence_score, directory_meme_score, is_high_value_source,
+            cadence_score, directory_loop_intent_score, is_high_value_source,
             is_native_gif, palette_depth, motion_gini, block_skew,
             temporal_flatness
         FROM samples

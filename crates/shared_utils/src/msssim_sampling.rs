@@ -103,6 +103,10 @@ impl SamplingConfig {
         }
     }
 
+    /// Print sampling information to the log.
+    ///
+    /// # Panics
+    /// Panics if the sampling rate is unavailable.
     pub fn print_info(&self) {
         if self.strategy == SamplingStrategy::Skip {
             eprintln!(

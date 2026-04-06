@@ -435,7 +435,7 @@ dependencies = [
 [[package]]
 name = "chrono"
 version = "0.4.44"
-source = "git+https://github.com/chronotope/chrono#120686c82c5da90377e815edb82c9a80b6b4f2be"
+source = "git+https://github.com/chronotope/chrono#c6063e6f5a03a48c6feeac3eb5b51ab4cb902759"
 dependencies = [
  "iana-time-zone",
  "js-sys",
@@ -1108,7 +1108,7 @@ checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 [[package]]
 name = "image"
 version = "0.25.9"
-source = "git+https://github.com/image-rs/image#645b1e5a6ed1559eee15156d21c7d01ab98baf4e"
+source = "git+https://github.com/image-rs/image#3a3f2493ff5e2a461f4c752551f4092db4326fda"
 dependencies = [
  "bytemuck",
  "byteorder-lite",
@@ -2295,6 +2295,7 @@ dependencies = [
  "indicatif",
  "infer",
  "jpegxl-rs",
+ "jpegxl-sys",
  "libc 1.0.0-alpha.3",
  "libheif-rs",
  "log",
@@ -2624,7 +2625,7 @@ checksum = "756daf9b1013ebe47a8776667b466417e2d4c5679d441c26230efd9ef78692db"
 [[package]]
 name = "tracing"
 version = "0.1.44"
-source = "git+https://github.com/tokio-rs/tracing#72cf52a9e2723cf99a238be1e823a50915ca3977"
+source = "git+https://github.com/tokio-rs/tracing#df055168a10373f73ac2ba4111563f6f0a1c67e6"
 dependencies = [
  "pin-project-lite",
  "tracing-attributes",
@@ -2634,7 +2635,7 @@ dependencies = [
 [[package]]
 name = "tracing-appender"
 version = "0.2.4"
-source = "git+https://github.com/tokio-rs/tracing#72cf52a9e2723cf99a238be1e823a50915ca3977"
+source = "git+https://github.com/tokio-rs/tracing#df055168a10373f73ac2ba4111563f6f0a1c67e6"
 dependencies = [
  "crossbeam-channel",
  "symlink",
@@ -2646,7 +2647,7 @@ dependencies = [
 [[package]]
 name = "tracing-attributes"
 version = "0.1.31"
-source = "git+https://github.com/tokio-rs/tracing#72cf52a9e2723cf99a238be1e823a50915ca3977"
+source = "git+https://github.com/tokio-rs/tracing#df055168a10373f73ac2ba4111563f6f0a1c67e6"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2656,7 +2657,7 @@ dependencies = [
 [[package]]
 name = "tracing-core"
 version = "0.1.36"
-source = "git+https://github.com/tokio-rs/tracing#72cf52a9e2723cf99a238be1e823a50915ca3977"
+source = "git+https://github.com/tokio-rs/tracing#df055168a10373f73ac2ba4111563f6f0a1c67e6"
 dependencies = [
  "valuable",
 ]
@@ -2664,7 +2665,7 @@ dependencies = [
 [[package]]
 name = "tracing-log"
 version = "0.2.0"
-source = "git+https://github.com/tokio-rs/tracing#72cf52a9e2723cf99a238be1e823a50915ca3977"
+source = "git+https://github.com/tokio-rs/tracing#df055168a10373f73ac2ba4111563f6f0a1c67e6"
 dependencies = [
  "log",
  "once_cell",
@@ -2674,7 +2675,7 @@ dependencies = [
 [[package]]
 name = "tracing-serde"
 version = "0.2.0"
-source = "git+https://github.com/tokio-rs/tracing#72cf52a9e2723cf99a238be1e823a50915ca3977"
+source = "git+https://github.com/tokio-rs/tracing#df055168a10373f73ac2ba4111563f6f0a1c67e6"
 dependencies = [
  "serde",
  "tracing-core",
@@ -2683,7 +2684,7 @@ dependencies = [
 [[package]]
 name = "tracing-subscriber"
 version = "0.3.23"
-source = "git+https://github.com/tokio-rs/tracing#72cf52a9e2723cf99a238be1e823a50915ca3977"
+source = "git+https://github.com/tokio-rs/tracing#df055168a10373f73ac2ba4111563f6f0a1c67e6"
 dependencies = [
  "matchers",
  "nu-ansi-term",

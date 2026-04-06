@@ -90,7 +90,8 @@ pub fn verify_pure_media_compression(
     };
 
     let container_overhead_diff =
-        crate::numeric_cast::u64_to_i64_sat(output_info.container_overhead) - crate::numeric_cast::u64_to_i64_sat(input_info.container_overhead);
+        crate::numeric_cast::u64_to_i64_sat(output_info.container_overhead)
+            - crate::numeric_cast::u64_to_i64_sat(input_info.container_overhead);
 
     PureMediaVerifyResult {
         video_compressed,

@@ -135,7 +135,9 @@ fn parse_version_to_code(version: &str, context: &str) -> i32 {
 
     tracing::debug!(
         "{} version initialized: {} (from program version: {})",
-        context, version_code, version
+        context,
+        version_code,
+        version
     );
 
     version_code

@@ -94,13 +94,10 @@ impl CheckpointEntry {
         #[cfg(not(any(unix, windows)))]
         let ctime = mtime;
 
-        let btime = match metadata.created() {
-            Ok(t) => t
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_nanos() as i64)
-                .unwrap_or(ctime),
-            Err(_) => ctime,
-        };
+        let btime = metadata.created().map_or(ctime, |t| {
+            t.duration_since(UNIX_EPOCH)
+                .map_or(ctime, |d| d.as_nanos() as i64)
+        });
 
         Ok(Self {
             path: CheckpointManager::normalize_path(path),
@@ -634,11 +631,10 @@ impl CheckpointManager {
     ///
     /// Returns an error if the progress file cannot be removed.
     pub fn clear_progress(&self) -> io::Result<()> {
-        let mut completed = self
-            .completed
+        self.completed
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        completed.clear();
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
         self.resume_mode.store(false, Ordering::Relaxed);
         if self.progress_file.exists() {
             fs::remove_file(&self.progress_file)?;

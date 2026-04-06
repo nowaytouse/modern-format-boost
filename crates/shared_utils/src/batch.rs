@@ -1126,7 +1126,10 @@ mod tests {
         let snapshot = scan_image_tree_snapshot(root, &["jpg"], true);
         assert!(validate_cached_image_tree(&snapshot, root, &["jpg"], true));
 
-        let bumped = FileTime::from_unix_time(crate::numeric_cast::u64_to_i64_sat(path_modified_unix_secs(&nested)) + 10, 0);
+        let bumped = FileTime::from_unix_time(
+            crate::numeric_cast::u64_to_i64_sat(path_modified_unix_secs(&nested)) + 10,
+            0,
+        );
         filetime::set_file_mtime(&nested, bumped).unwrap();
 
         assert!(

@@ -424,7 +424,8 @@ pub fn log_media_info_for_quality(analysis: &VideoQualityAnalysis, input_path: &
 
 #[must_use]
 pub fn to_quality_analysis(analysis: &VideoQualityAnalysis) -> QualityAnalysis {
-    let gop_fallback = crate::numeric_cast::f64_to_u32_sat((analysis.fps * 2.5).round().clamp(12.0, 250.0));
+    let gop_fallback =
+        crate::numeric_cast::f64_to_u32_sat((analysis.fps * 2.5).round().clamp(12.0, 250.0));
     let color_fallback = if analysis.height <= 576 {
         "bt601"
     } else {
@@ -512,11 +513,15 @@ fn calculate_quality_score(
 
     let bpp_tweak = match compression {
         CompressionLevel::Standard => {
-            let t = crate::numeric_cast::f64_to_u32_sat(((bpp - 0.1).clamp(0.0, 0.2) / 0.2 * 5.0).round());
+            let t = crate::numeric_cast::f64_to_u32_sat(
+                ((bpp - 0.1).clamp(0.0, 0.2) / 0.2 * 5.0).round(),
+            );
             u8::try_from(t.clamp(0, 5)).unwrap_or(0)
         }
         CompressionLevel::HighQuality => {
-            let t = crate::numeric_cast::f64_to_u32_sat(((bpp - 0.3).clamp(0.0, 0.2) / 0.2 * 3.0).round());
+            let t = crate::numeric_cast::f64_to_u32_sat(
+                ((bpp - 0.3).clamp(0.0, 0.2) / 0.2 * 3.0).round(),
+            );
             u8::try_from(t.clamp(0, 3)).unwrap_or(0)
         }
         _ => 0,
@@ -1808,7 +1813,8 @@ mod tests {
             )
             .unwrap();
 
-            let expected = f64::from(u32::try_from(bitrate).unwrap_or(u32::MAX)) / (f64::from(w) * f64::from(h) * fps);
+            let expected = f64::from(u32::try_from(bitrate).unwrap_or(u32::MAX))
+                / (f64::from(w) * f64::from(h) * fps);
             assert!(
                 (result.bpp - expected).abs() < 0.0001,
                 "STRICT: BPP for {}x{}@{}fps@{}bps: expected {}, got {}",

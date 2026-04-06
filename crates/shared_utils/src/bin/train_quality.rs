@@ -16,7 +16,7 @@ struct Cli {
     #[arg(value_enum)]
     label: QualityLabel,
 
-    /// PostgreSQL connection string
+    /// `PostgreSQL` connection string
     #[arg(
         short,
         long,

@@ -116,7 +116,7 @@ fn path_with_collision_suffix(path: &Path, collision_index: usize) -> PathBuf {
         _ => format!("{stem} ({collision_index})"),
     };
 
-    path.parent().unwrap_or(Path::new("")).join(file_name)
+    path.parent().unwrap_or_else(|| Path::new("")).join(file_name)
 }
 
 fn reserve_unique_output_path(input: &Path, candidate: PathBuf) -> PathBuf {
@@ -136,7 +136,7 @@ fn reserve_unique_output_path(input: &Path, candidate: PathBuf) -> PathBuf {
                 collision_index += 1;
             }
             _ => {
-                reservations.insert(output_key, input_key.clone());
+                reservations.insert(output_key, input_key);
                 return resolved;
             }
         }
@@ -279,7 +279,7 @@ impl ConversionResult {
             success: true,
             input_path: input.display().to_string(),
             output_path: None,
-            input_size: fs::metadata(input).map(|m| m.len()).unwrap_or(0),
+            input_size: fs::metadata(input).map_or(0, |m| m.len()),
             output_size: None,
             size_reduction: None,
             message: "Skipped: Already processed".to_string(),
@@ -292,7 +292,7 @@ impl ConversionResult {
 
     #[must_use]
     pub fn skipped_exists(input: &Path, output: &Path) -> Self {
-        let input_size = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
+        let input_size = fs::metadata(input).map_or(0, |m| m.len());
         Self {
             success: true,
             input_path: input.display().to_string(),
@@ -771,7 +771,7 @@ impl Drop for TempOutputGuard {
 
 /// **LEAKY**: Returns a path for temporary output in the same directory as `output`.
 ///
-/// [WARNING] This function pollutes the user's folder with intermediate files.
+/// \[WARNING\] This function pollutes the user's folder with intermediate files.
 /// For Ghost Mode (Zero Pollution), use `shared_utils::path_safety::isolated_temp_path_for_search` instead.
 ///
 /// Ensures `fs::rename(temp, output)` is atomic on the same filesystem. Use with `commit_temp_to_output`.

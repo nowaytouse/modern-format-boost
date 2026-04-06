@@ -260,7 +260,8 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
             })
             .unwrap()
     } else {
-        let actual_index = usize::try_from(video_streams[0].1["index"].as_u64().unwrap_or(0)).unwrap_or(0);
+        let actual_index =
+            usize::try_from(video_streams[0].1["index"].as_u64().unwrap_or(0)).unwrap_or(0);
         (actual_index, video_streams[0].1)
     };
 
@@ -363,7 +364,8 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         .map(|l| format!("{:.1}", l as f64 / 10.0));
 
     // Extract actual B-frame count (integer) instead of just a boolean
-    let max_b_frames = u8::try_from(video_stream["has_b_frames"].as_i64().unwrap_or(0)).unwrap_or(0);
+    let max_b_frames =
+        u8::try_from(video_stream["has_b_frames"].as_i64().unwrap_or(0)).unwrap_or(0);
     let has_b_frames = max_b_frames > 0;
 
     // Extract encoder settings from tags (x264-params, x265-params, etc.)
@@ -453,7 +455,7 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
     })
 }
 
-/// Attempt to extract loop count from format tags (e.g. NETSCAPE2.0 or LoopCount)
+/// Attempt to extract loop count from format tags (e.g. NETSCAPE2.0 or `LoopCount`)
 fn extract_loop_count(format: &serde_json::Value) -> Option<u16> {
     if let Some(tags) = format["tags"].as_object() {
         if let Some(val) = tags.get("loop_count").or_else(|| tags.get("loop")) {
@@ -661,22 +663,28 @@ fn parse_luminance_to_10k(s: &str) -> Option<u64> {
 /// Format: "G(gx,gy)B(bx,by)R(rx,ry)WP(wx,wy)L(lmax,lmin)"
 fn build_mastering_display_string(sd: &serde_json::Value) -> Option<String> {
     let get_coord = |field: &str| -> Option<u64> {
-        sd[field].as_str().and_then(parse_rational_to_50k).or_else(|| {
-            sd[field].as_f64().map(|v| {
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                let val = (v * 50000.0).round() as u64;
-                val
+        sd[field]
+            .as_str()
+            .and_then(parse_rational_to_50k)
+            .or_else(|| {
+                sd[field].as_f64().map(|v| {
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    let val = (v * 50000.0).round() as u64;
+                    val
+                })
             })
-        })
     };
     let get_lum = |field: &str| -> Option<u64> {
-        sd[field].as_str().and_then(parse_luminance_to_10k).or_else(|| {
-            sd[field].as_f64().map(|v| {
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                let val = (v * 10000.0).round() as u64;
-                val
+        sd[field]
+            .as_str()
+            .and_then(parse_luminance_to_10k)
+            .or_else(|| {
+                sd[field].as_f64().map(|v| {
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    let val = (v * 10000.0).round() as u64;
+                    val
+                })
             })
-        })
     };
 
     let gx = get_coord("green_x")?;

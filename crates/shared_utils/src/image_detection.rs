@@ -402,7 +402,8 @@ fn resolve_mif1_from_compatible_brands(path: &Path, major_brand: &[u8]) -> Detec
         return DetectedFormat::HEIC;
     }
 
-    let box_size = usize::try_from(u32::from_be_bytes([data[0], data[1], data[2], data[3]])).unwrap_or(0);
+    let box_size =
+        usize::try_from(u32::from_be_bytes([data[0], data[1], data[2], data[3]])).unwrap_or(0);
     let ftyp_end = box_size.min(data.len());
 
     // compatible_brands start at offset 16 (after size[4] + "ftyp"[4] + major_brand[4] + minor_version[4])
@@ -662,7 +663,10 @@ pub fn is_isobmff_animated_sequence(path: &Path) -> bool {
     }
 
     // Scan compatible_brands (each 4 bytes, starting at offset 16)
-    let ftyp_box_size = usize::try_from(u32::from_be_bytes([header[0], header[1], header[2], header[3]])).unwrap_or(0);
+    let ftyp_box_size = usize::try_from(u32::from_be_bytes([
+        header[0], header[1], header[2], header[3],
+    ]))
+    .unwrap_or(0);
     if !(16..=4096).contains(&ftyp_box_size) {
         return false;
     }
@@ -893,13 +897,15 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
         let is_large_image = pixel_count > 100_000;
         let is_medium_image = pixel_count > 10_000;
 
-        let colors_per_megapixel =
-            ((f64::from(u32::try_from(palette_size).unwrap_or(u32::MAX))) / (f64::from(u32::try_from(pixel_count).unwrap_or(u32::MAX)) / 1_000_000.0)).min(1000.0);
+        let colors_per_megapixel = ((f64::from(u32::try_from(palette_size).unwrap_or(u32::MAX)))
+            / (f64::from(u32::try_from(pixel_count).unwrap_or(u32::MAX)) / 1_000_000.0))
+            .min(1000.0);
 
         // Palette density: entries per sqrt(pixel_count).
         // Small image + small palette = normal (icon, pixel art).
         // Large image + small palette = quantization indicator.
-        let palette_density = f64::from(u32::try_from(palette_size).unwrap_or(u32::MAX)) / f64::from(u32::try_from(pixel_count).unwrap_or(u32::MAX)).sqrt();
+        let palette_density = f64::from(u32::try_from(palette_size).unwrap_or(u32::MAX))
+            / f64::from(u32::try_from(pixel_count).unwrap_or(u32::MAX)).sqrt();
 
         if palette_size > 240 {
             factors.large_palette = 0.95;
@@ -966,7 +972,8 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
                 let is_large_image = pixel_count > 100_000;
 
                 if let Some(palette_size) = png_info.palette_size {
-                    let usage_ratio = f64::from(u32::try_from(unique_colors).unwrap_or(u32::MAX)) / f64::from(u32::try_from(palette_size).unwrap_or(u32::MAX));
+                    let usage_ratio = f64::from(u32::try_from(unique_colors).unwrap_or(u32::MAX))
+                        / f64::from(u32::try_from(palette_size).unwrap_or(u32::MAX));
 
                     if is_large_image {
                         if usage_ratio > 0.8 {
@@ -1038,7 +1045,8 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
                         (pe.0, pe.1, pe.2)
                     },
                 );
-                let palette_size = f64::from(u16::try_from(png_info.palette_size.unwrap_or(256)).unwrap_or(256));
+                let palette_size =
+                    f64::from(u16::try_from(png_info.palette_size.unwrap_or(256)).unwrap_or(256));
                 if palette_size >= 64.0 && entropy_ratio < 0.6 && pixel_count > 10_000 {
                     factors.entropy_anomaly = (0.6 - entropy_ratio).mul_add(0.5, 0.5);
                     factors.entropy_anomaly = factors.entropy_anomaly.clamp(0.0, 0.75);
@@ -1066,7 +1074,8 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
     let expected_size = estimate_uncompressed_size(&png_info);
     let actual_size = reader.seek(std::io::SeekFrom::End(0)).unwrap_or(0);
     let compression_ratio = if expected_size > 0 {
-        f64::from(u32::try_from(actual_size).unwrap_or(u32::MAX)) / f64::from(u32::try_from(expected_size).unwrap_or(u32::MAX))
+        f64::from(u32::try_from(actual_size).unwrap_or(u32::MAX))
+            / f64::from(u32::try_from(expected_size).unwrap_or(u32::MAX))
     } else {
         1.0
     };
@@ -1521,7 +1530,8 @@ fn detect_dithering_pattern(img: &DynamicImage) -> f64 {
         return 0.0;
     }
 
-    let dithering_ratio = f64::from(u32::try_from(high_freq_count).unwrap_or(u32::MAX)) / f64::from(u32::try_from(total_comparisons).unwrap_or(u32::MAX));
+    let dithering_ratio = f64::from(u32::try_from(high_freq_count).unwrap_or(u32::MAX))
+        / f64::from(u32::try_from(total_comparisons).unwrap_or(u32::MAX));
 
     let floyd_steinberg_score = (dithering_ratio * 5.0).min(1.0);
 
@@ -1546,7 +1556,10 @@ fn detect_dithering_pattern(img: &DynamicImage) -> f64 {
         }
     }
     let bayer_score = if bayer_total > 0 {
-        ((f64::from(u32::try_from(bayer_count).unwrap_or(u32::MAX)) / f64::from(u32::try_from(bayer_total).unwrap_or(u32::MAX))) * 4.0).min(1.0)
+        ((f64::from(u32::try_from(bayer_count).unwrap_or(u32::MAX))
+            / f64::from(u32::try_from(bayer_total).unwrap_or(u32::MAX)))
+            * 4.0)
+            .min(1.0)
     } else {
         0.0
     };
@@ -1584,7 +1597,12 @@ fn sample_unique_color_count(img: &DynamicImage, max_samples: usize) -> usize {
     }
 
     let total = u64::from(width) * u64::from(height);
-    let step = crate::numeric_cast::f64_to_u32_sat((f64::from(u32::try_from(total).unwrap_or(u32::MAX)) / f64::from(u32::try_from(max_samples).unwrap_or(u32::MAX))).sqrt().ceil());
+    let step = crate::numeric_cast::f64_to_u32_sat(
+        (f64::from(u32::try_from(total).unwrap_or(u32::MAX))
+            / f64::from(u32::try_from(max_samples).unwrap_or(u32::MAX)))
+        .sqrt()
+        .ceil(),
+    );
     let step = step.max(1);
 
     let mut set = HashSet::new();
@@ -1628,7 +1646,8 @@ fn analyze_color_distribution(img: &DynamicImage, _palette_size: Option<usize>) 
     let grid_size: u32 = 16; // 16x16 = 256 blocks
     let block_w = (width / grid_size).max(1);
     let block_h = (height / grid_size).max(1);
-    let samples_per_block = (target_samples / usize::try_from(grid_size * grid_size).unwrap_or(1)).max(1);
+    let samples_per_block =
+        (target_samples / usize::try_from(grid_size * grid_size).unwrap_or(1)).max(1);
 
     // Simple LCG for deterministic pseudo-random sampling (no need for rand crate)
     let mut rng_state: u64 = 0x1234_5678_9ABC_DEF0;
@@ -1647,7 +1666,8 @@ fn analyze_color_distribution(img: &DynamicImage, _palette_size: Option<usize>) 
             let y1 = ((by + 1) * block_h).min(height);
             let current_block_width = x1 - x0;
             let current_block_height = y1 - y0;
-            let block_pixels = usize::try_from(current_block_width * current_block_height).unwrap_or(0);
+            let block_pixels =
+                usize::try_from(current_block_width * current_block_height).unwrap_or(0);
             if block_pixels == 0 {
                 continue;
             }
@@ -1692,7 +1712,11 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
     // per block at a deterministic-but-spread position. Avoids stride bias where
     // step-based sampling always hits the same spatial columns/rows.
     let target_samples: usize = 50_000.min(total_pixels);
-    let block_size = crate::numeric_cast::f64_to_usize_sat((f64::from(u32::try_from(total_pixels).unwrap_or(u32::MAX)) / f64::from(u32::try_from(target_samples).unwrap_or(u32::MAX))).max(1.0));
+    let block_size = crate::numeric_cast::f64_to_usize_sat(
+        (f64::from(u32::try_from(total_pixels).unwrap_or(u32::MAX))
+            / f64::from(u32::try_from(target_samples).unwrap_or(u32::MAX)))
+        .max(1.0),
+    );
     let blocks_x = usize::try_from(width).unwrap_or(0).div_ceil(block_size);
     let blocks_y = usize::try_from(height).unwrap_or(0).div_ceil(block_size);
 
@@ -1702,8 +1726,12 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
     for by in 0..blocks_y {
         for bx in 0..blocks_x {
             // Pick a pixel near the center of each block (deterministic, no RNG needed)
-            let px = u32::try_from(bx * block_size + block_size / 2).unwrap_or(u32::MAX).min(width - 1);
-            let py = u32::try_from(by * block_size + block_size / 2).unwrap_or(u32::MAX).min(height - 1);
+            let px = u32::try_from(bx * block_size + block_size / 2)
+                .unwrap_or(u32::MAX)
+                .min(width - 1);
+            let py = u32::try_from(by * block_size + block_size / 2)
+                .unwrap_or(u32::MAX)
+                .min(height - 1);
             let pixel = rgba.get_pixel(px, py);
             let key = [pixel[0], pixel[1], pixel[2], pixel[3]];
             *color_freq.entry(key).or_insert(0) += 1;
@@ -1719,7 +1747,9 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
     freqs.sort_unstable_by(|a, b| b.cmp(a));
 
     // How many distinct colors cover 85% of sampled pixels?
-    let target = crate::numeric_cast::f64_to_u64_sat(f64::from(u32::try_from(sampled).unwrap_or(u32::MAX)) * 0.85);
+    let target = crate::numeric_cast::f64_to_u64_sat(
+        f64::from(u32::try_from(sampled).unwrap_or(u32::MAX)) * 0.85,
+    );
     let mut cumulative = 0u64;
     let mut colors_for_85pct = 0usize;
     for &f in &freqs {
@@ -1731,7 +1761,8 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
     }
 
     // Low ratio = few colors dominate = quantized
-    let coverage_ratio = f64::from(u32::try_from(colors_for_85pct).unwrap_or(u32::MAX)) / f64::from(u32::try_from(freqs.len()).unwrap_or(u32::MAX));
+    let coverage_ratio = f64::from(u32::try_from(colors_for_85pct).unwrap_or(u32::MAX))
+        / f64::from(u32::try_from(freqs.len()).unwrap_or(u32::MAX));
 
     if coverage_ratio < 0.05 {
         0.85
@@ -2167,7 +2198,9 @@ fn estimate_lossy_quality_fallback(
     }
 
     // Heuristic v2: Multi-factor quality estimation
-    let raw_bpp = f64::from(u32::try_from(file_size * 8).unwrap_or(u32::MAX)) / f64::from(u32::try_from(pixels).unwrap_or(u32::MAX)) / f64::from(frame_count.max(1));
+    let raw_bpp = f64::from(u32::try_from(file_size * 8).unwrap_or(u32::MAX))
+        / f64::from(u32::try_from(pixels).unwrap_or(u32::MAX))
+        / f64::from(frame_count.max(1));
 
     // Format efficiency multiplier (relative to JPEG)
     // AVIF/HEIC ~ 3.0x, WebP ~ 1.5x
@@ -2186,9 +2219,11 @@ fn estimate_lossy_quality_fallback(
     // Calibrated formula for multi-format heuristic:
     // 12 * log2(effective_bpp * 1.5) + 60
     // Results: 0.2 bpp -> ~39, 1.0 bpp -> ~67, 5.0 bpp -> ~95, 10.0 bpp -> 100
-    let bpp_quality = crate::numeric_cast::f64_to_u8_sat(12.0f64
-        .mul_add((effective_bpp * 1.5).max(0.001).log2(), 60.0)
-        .clamp(10.0, 100.0));
+    let bpp_quality = crate::numeric_cast::f64_to_u8_sat(
+        12.0f64
+            .mul_add((effective_bpp * 1.5).max(0.001).log2(), 60.0)
+            .clamp(10.0, 100.0),
+    );
 
     crate::progress_mode::emit_stderr(&format!(
         "   \x1b[1;33m⚠️  [QUALITY FALLBACK]\x1b[0m \x1b[33mExact detection unavailable for {} codec.\x1b[0m\n\
@@ -2436,8 +2471,12 @@ fn detect_exr_compression(path: &Path) -> Result<CompressionType> {
             if pos + 4 > data.len() {
                 break;
             }
-            let value_size =
-                crate::numeric_cast::u32_to_usize_sat(u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]));
+            let value_size = crate::numeric_cast::u32_to_usize_sat(u32::from_le_bytes([
+                data[pos],
+                data[pos + 1],
+                data[pos + 2],
+                data[pos + 3],
+            ]));
             pos += 4;
 
             if name == b"compression" && value_size >= 1 && pos < data.len() {
@@ -2586,7 +2625,12 @@ fn detect_jp2_compression(path: &Path) -> Result<CompressionType> {
 fn find_jp2c_offset(data: &[u8]) -> Option<usize> {
     let mut pos = 0;
     while pos + 8 <= data.len() {
-        let size = crate::numeric_cast::u32_to_usize_sat(u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]));
+        let size = crate::numeric_cast::u32_to_usize_sat(u32::from_be_bytes([
+            data[pos],
+            data[pos + 1],
+            data[pos + 2],
+            data[pos + 3],
+        ]));
         let box_type = &data[pos + 4..pos + 8];
 
         if box_type == b"jp2c" {
@@ -2648,7 +2692,10 @@ fn find_jp2_wavelets(cs: &[u8]) -> (Option<u8>, Vec<(u16, u8)>) {
 
         // COD marker (FF 52)
         if marker == 0x52 && pos + 4 <= cs.len() {
-            let seg_len = crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([cs[pos + 2], cs[pos + 3]]));
+            let seg_len = crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([
+                cs[pos + 2],
+                cs[pos + 3],
+            ]));
             // COD segment: Scod(1) + SGcod(4) + SPcod(variable)
             // SPcod starts at offset 5 within segment data
             // SPcod layout: NL(1) + cb_width(1) + cb_height(1) + cb_style(1) + transform(1)
@@ -2665,7 +2712,10 @@ fn find_jp2_wavelets(cs: &[u8]) -> (Option<u8>, Vec<(u16, u8)>) {
 
         // COC marker (FF 53) — component-specific coding style
         if marker == 0x53 && pos + 4 <= cs.len() {
-            let seg_len = crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([cs[pos + 2], cs[pos + 3]]));
+            let seg_len = crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([
+                cs[pos + 2],
+                cs[pos + 3],
+            ]));
             // COC segment: Ccoc(1 or 2 bytes) + Scoc(1) + SPcoc(variable)
             // For images with < 257 components, Ccoc is 1 byte; otherwise 2 bytes
             // We'll assume 1 byte for simplicity (most common case)
@@ -2687,7 +2737,8 @@ fn find_jp2_wavelets(cs: &[u8]) -> (Option<u8>, Vec<(u16, u8)>) {
         if pos + 4 > cs.len() {
             break;
         }
-        let seg_len = crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([cs[pos + 2], cs[pos + 3]]));
+        let seg_len =
+            crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([cs[pos + 2], cs[pos + 3]]));
         pos += 2 + seg_len;
     }
 

@@ -102,14 +102,12 @@ impl FileSignature {
 
         let btime = metadata.created().map_or(ctime, |t| {
             t.duration_since(UNIX_EPOCH)
-                .map(|d| d.as_nanos().try_into().unwrap_or(ctime))
-                .unwrap_or(ctime)
+                .map_or(ctime, |d| d.as_nanos().try_into().unwrap_or(ctime))
         });
 
         let atime = metadata.accessed().map_or(mtime, |t| {
             t.duration_since(UNIX_EPOCH)
-                .map(|d| d.as_nanos().try_into().unwrap_or(mtime))
-                .unwrap_or(mtime)
+                .map_or(mtime, |d| d.as_nanos().try_into().unwrap_or(mtime))
         });
 
         Ok(Self {
@@ -128,6 +126,10 @@ pub struct AnalysisCache {
 }
 
 impl AnalysisCache {
+    /// Create a new analysis cache with default settings.
+    ///
+    /// # Errors
+    /// Returns an error if the database connection fails or the schema is invalid.
     pub fn new() -> Result<Self> {
         let mut client = open_pg_client()?;
         Self::init_schema(&mut client)?;
@@ -170,7 +172,7 @@ impl AnalysisCache {
                     &format!("DELETE FROM {table} WHERE algorithm_version < $1"),
                     &[&current_version],
                 )
-                .map(|n| n.cast_signed())?;
+                .map(u64::cast_signed)?;
 
             total_invalidated += count;
         }
@@ -194,10 +196,18 @@ impl AnalysisCache {
         Ok(())
     }
 
+    /// Create a local cache in the current working directory.
+    ///
+    /// # Errors
+    /// Returns an error if the cache directory cannot be created.
     pub fn default_local() -> Result<Self> {
         Self::new()
     }
 
+    /// Retrieve the analysis results for a given image file.
+    ///
+    /// # Errors
+    /// Returns an error if the database query fails.
     pub fn get_analysis(&self, path: &Path) -> Result<Option<ImageAnalysis>> {
         let mut client = open_pg_client()?;
         let sig = FileSignature::from_path(path)?;
@@ -222,7 +232,8 @@ impl AnalysisCache {
                 {
                     let data: Vec<u8> = row.get(0);
                     if let Some(stored_checksum) = row.get::<_, Option<i64>>(2) {
-                        if calculate_checksum(&data) != u32::try_from(stored_checksum).unwrap_or(0) {
+                        if calculate_checksum(&data) != u32::try_from(stored_checksum).unwrap_or(0)
+                        {
                             warn!(
                                 "⚠️  [Cache] Checksum mismatch for {}. Invalidating.",
                                 path.display()
@@ -281,6 +292,10 @@ impl AnalysisCache {
         Ok(None)
     }
 
+    /// Retrieve the quality analysis results for a given image file.
+    ///
+    /// # Errors
+    /// Returns an error if the database query fails.
     pub fn get_quality_analysis(&self, path: &Path) -> Result<Option<ImageQualityAnalysis>> {
         let mut client = open_pg_client()?;
         let sig = FileSignature::from_path(path)?;
@@ -350,6 +365,10 @@ impl AnalysisCache {
         Ok(None)
     }
 
+    /// Store the analysis results for a given image file.
+    ///
+    /// # Errors
+    /// Returns an error if the database insertion fails.
     pub fn store_analysis(&self, path: &Path, analysis: &ImageAnalysis) -> Result<()> {
         if analysis.analysis_error.is_some() {
             return Ok(());
@@ -383,6 +402,10 @@ impl AnalysisCache {
         Ok(())
     }
 
+    /// Store the quality analysis results for a given image file.
+    ///
+    /// # Errors
+    /// Returns an error if the database insertion fails.
     pub fn store_quality_analysis(
         &self,
         path: &Path,
@@ -416,6 +439,10 @@ impl AnalysisCache {
         Ok(())
     }
 
+    /// Retrieve the video detection results for a given file.
+    ///
+    /// # Errors
+    /// Returns an error if the database query fails.
     pub fn get_video_analysis(&self, path: &Path) -> Result<Option<VideoDetectionResult>> {
         let mut client = open_pg_client()?;
         let sig = FileSignature::from_path(path)?;
@@ -483,6 +510,10 @@ impl AnalysisCache {
         Ok(None)
     }
 
+    /// Store the video detection results for a given file.
+    ///
+    /// # Errors
+    /// Returns an error if the database insertion fails.
     pub fn store_video_analysis(&self, path: &Path, analysis: &VideoDetectionResult) -> Result<()> {
         let mut client = open_pg_client()?;
         let sig = FileSignature::from_path(path)?;
@@ -512,6 +543,10 @@ impl AnalysisCache {
         Ok(())
     }
 
+    /// Delete old records from the cache.
+    ///
+    /// # Errors
+    /// Returns an error if the database deletion fails.
     pub fn cleanup_old_records(&self, max_age_secs: i64) -> Result<usize> {
         let mut client = open_pg_client()?;
         let now = crate::numeric_cast::unix_secs_i64_result()?;
@@ -520,7 +555,8 @@ impl AnalysisCache {
         let removed = usize::try_from(client.execute(
             "DELETE FROM analysis_records WHERE created_at < $1",
             &[&threshold],
-        )?).unwrap_or(0);
+        )?)
+        .unwrap_or(0);
 
         if removed > 0 {
             info!("🧹 [Cache] Pruned {} old records", removed);
@@ -528,6 +564,10 @@ impl AnalysisCache {
         Ok(removed)
     }
 
+    /// Get cache usage statistics.
+    ///
+    /// # Errors
+    /// Returns an error if the database query fails.
     pub fn get_statistics(&self) -> Result<CacheStatistics> {
         let mut client = open_pg_client()?;
 
@@ -578,6 +618,10 @@ impl AnalysisCache {
         })
     }
 
+    /// Enforce the cache size limit by deleting old records.
+    ///
+    /// # Errors
+    /// Returns an error if the database deletion fails.
     pub fn enforce_size_limit(&self) -> Result<()> {
         // Size enforcement in shared Postgres is handled differently (usually by policy or quota)
         // or we can implement a row-count based pruning here if needed.

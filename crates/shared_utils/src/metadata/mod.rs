@@ -599,7 +599,7 @@ fn try_merge_xmp_exiv2(xmp_path: &Path, dst: &Path) -> bool {
         .input(dst)
         .build()
         .output();
-    let ok = out.as_ref().map(|o| o.status.success()).unwrap_or(false);
+    let ok = out.as_ref().is_ok_and(|o| o.status.success());
     if let Ok(out) = &out {
         if !out.status.success() {
             tracing::warn!(

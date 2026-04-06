@@ -19,19 +19,27 @@ pub fn get_recommendation(analysis: &ImageAnalysis) -> UpgradeRecommendation {
     format_recommendation(indicator, &analysis.format, analysis.is_lossless)
 }
 
-/// 🚀 New Entry Point: Subscribes to MediaIndexRow (Database-driven decision)
-#[must_use]
-pub fn get_recommendation_from_row(row: &MediaIndexRow) -> Result<UpgradeRecommendation, serde_json::Error> {
+/// 🚀 New Entry Point: Subscribes to `MediaIndexRow` (Database-driven decision)
+///
+/// # Errors
+/// Returns an error if the recommendation cannot be generated.
+pub fn get_recommendation_from_row(
+    row: &MediaIndexRow,
+) -> Result<UpgradeRecommendation, serde_json::Error> {
     let features: DetectionResult = serde_json::from_str(&row.raw_features_json)?;
     let is_lossless = features.compression == CompressionType::Lossless;
-    
+
     // We mock the JxlIndicator generation here based on DB features
     let indicator = mock_jxl_indicator_from_features(&features, &row.rel_path);
-    
+
     Ok(format_recommendation(&indicator, &row.format, is_lossless))
 }
 
-fn format_recommendation(indicator: &JxlIndicator, format: &str, is_lossless: bool) -> UpgradeRecommendation {
+fn format_recommendation(
+    indicator: &JxlIndicator,
+    format: &str,
+    is_lossless: bool,
+) -> UpgradeRecommendation {
     if indicator.should_convert {
         UpgradeRecommendation {
             current_format: format.to_string(),
@@ -57,9 +65,9 @@ fn format_recommendation(indicator: &JxlIndicator, format: &str, is_lossless: bo
     }
 }
 
-/// 🔬 Logic Replica: Mirror of image_analyzer::generate_jxl_indicator using DB features.
+/// 🔬 Logic Replica: Mirror of `image_analyzer::generate_jxl_indicator` using DB features.
 fn mock_jxl_indicator_from_features(features: &DetectionResult, rel_path: &str) -> JxlIndicator {
-    let output_path = format!("{}.jxl", rel_path);
+    let output_path = format!("{rel_path}.jxl");
     let is_lossless = features.compression == CompressionType::Lossless;
 
     match features.format {

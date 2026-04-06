@@ -270,10 +270,13 @@ fn build_coarse_progress_line(
     }
 
     let mut final_line = format!("{color}{prefix} ");
-    if percent < 100.0 {
-        final_line.push_str(&format!("{percent_str} • "));
+    {
+        use std::fmt::Write;
+        if percent < 100.0 {
+            let _ = write!(final_line, "{percent_str} • ");
+        }
+        let _ = write!(final_line, "{counts_str}\x1b[0m{stats}");
     }
-    final_line.push_str(&format!("{counts_str}\x1b[0m{stats}"));
     final_line
 }
 
@@ -582,9 +585,8 @@ impl DetailedCoarseProgressBar {
             String::new()
         };
 
-        let best_crf = f32::from_bits(
-            u32::try_from(self.best_crf.load(Ordering::Relaxed)).unwrap_or(0),
-        );
+        let best_crf =
+            f32::from_bits(u32::try_from(self.best_crf.load(Ordering::Relaxed)).unwrap_or(0));
         let best_str = if best_crf > 0.0 {
             format!("Best: {best_crf:.1}")
         } else {
@@ -610,6 +612,10 @@ impl DetailedCoarseProgressBar {
         let _ = io::stderr().flush();
     }
 
+    /// Print a message to the terminal without interfering with the progress bar.
+    ///
+    /// # Panics
+    /// Panics if the internal clock is invalid (e.g. `ImageMagick`'s internal property interpretation).
     pub fn println(&self, msg: &str) {
         if self.is_finished.load(Ordering::Relaxed) {
             eprintln!("{msg}");
@@ -622,9 +628,8 @@ impl DetailedCoarseProgressBar {
         eprintln!("{msg}");
 
         let iter = self.current_iteration.load(Ordering::Relaxed);
-        let crf = f32::from_bits(
-            u32::try_from(self.current_crf.load(Ordering::Relaxed)).unwrap_or(0),
-        );
+        let crf =
+            f32::from_bits(u32::try_from(self.current_crf.load(Ordering::Relaxed)).unwrap_or(0));
         let size = self.current_size.load(Ordering::Relaxed);
         let ssim = if self.has_ssim.load(Ordering::Relaxed) {
             Some(f64::from_bits(self.current_ssim.load(Ordering::Relaxed)))
@@ -729,6 +734,11 @@ pub struct FixedBottomProgress {
 }
 
 impl FixedBottomProgress {
+    /// Create a new fixed-bottom progress bar for batch processing.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the progress bar template is invalid.
     #[must_use]
     pub fn new(total: u64, prefix: &str) -> Self {
         let bar = ProgressBar::new(total);
@@ -929,13 +939,13 @@ impl ExploreProgress {
     }
 
     fn print_status(&self) {
-        let crf = self.current_crf.lock().map(|c| *c).unwrap_or(0.0);
-        let size = self.current_size.lock().map(|s| *s).unwrap_or(0);
+        let crf = self.current_crf.lock().map_or(0.0, |c| *c);
+        let size = self.current_size.lock().map_or(0, |s| *s);
         let ssim = self.current_ssim.lock().ok().and_then(|s| *s);
         let stage = self.stage.lock().map(|s| s.clone()).unwrap_or_default();
         let iter = self.iterations.load(Ordering::Relaxed);
-        let best_crf = self.best_crf.lock().map(|c| *c).unwrap_or(0.0);
-        let best_ssim = self.best_ssim.lock().map(|s| *s).unwrap_or(0.0);
+        let best_crf = self.best_crf.lock().map_or(0.0, |c| *c);
+        let best_ssim = self.best_ssim.lock().map_or(0.0, |s| *s);
 
         let size_change = if self.input_size > 0 {
             ((size as f64 / self.input_size as f64) - 1.0) * 100.0
@@ -1079,6 +1089,10 @@ impl ExploreLogger {
     }
 }
 
+/// Create a professional-looking spinner.
+///
+/// # Panics
+/// Panics if the spinner template is invalid.
 #[must_use]
 pub fn create_professional_spinner(prefix: &str) -> ProgressBar {
     let pb = ProgressBar::new_spinner();
@@ -1099,6 +1113,10 @@ pub fn create_professional_spinner(prefix: &str) -> ProgressBar {
     pb
 }
 
+/// Create a standard progress bar.
+///
+/// # Panics
+/// Panics if the progress bar template is invalid.
 #[must_use]
 pub fn create_progress_bar(total: u64, prefix: &str) -> ProgressBar {
     let pb = ProgressBar::new(total);
@@ -1122,6 +1140,10 @@ pub fn create_progress_bar(total: u64, prefix: &str) -> ProgressBar {
     pb
 }
 
+/// Create a detailed progress bar for batch operations.
+///
+/// # Panics
+/// Panics if the batch progress bar template is invalid.
 #[must_use]
 pub fn create_detailed_progress_bar(total: u64, prefix: &str) -> ProgressBar {
     let pb = ProgressBar::new(total);
@@ -1143,6 +1165,10 @@ pub fn create_detailed_progress_bar(total: u64, prefix: &str) -> ProgressBar {
     pb
 }
 
+/// Create a compact progress bar.
+///
+/// # Panics
+/// Panics if the compact progress bar template is invalid.
 #[must_use]
 pub fn create_compact_progress_bar(total: u64, prefix: &str) -> ProgressBar {
     let pb = ProgressBar::new(total);
@@ -1178,6 +1204,10 @@ pub struct SmartProgressBar {
 }
 
 impl SmartProgressBar {
+    /// Create a new `SmartProgressBar`.
+    ///
+    /// # Panics
+    /// Panics if the progress bar template is invalid.
     #[must_use]
     pub fn new(total: u64, prefix: &str) -> Self {
         let bar = ProgressBar::new(total);
@@ -1265,6 +1295,10 @@ fn format_eta(seconds: f64) -> String {
     }
 }
 
+/// Create a simple spinner with a message.
+///
+/// # Panics
+/// Panics if the spinner template is invalid.
 #[must_use]
 pub fn create_spinner(message: &str) -> ProgressBar {
     let spinner = ProgressBar::new_spinner();
@@ -1402,6 +1436,10 @@ impl GlobalProgressManager {
         }
     }
 
+    /// Create the main progress bar.
+    ///
+    /// # Panics
+    /// Panics if the template is invalid.
     pub fn create_main(&mut self, total: u64, prefix: &str) -> &ProgressBar {
         let bar = self.multi.add(ProgressBar::new(total));
 
@@ -1425,6 +1463,10 @@ impl GlobalProgressManager {
             .expect("main_bar set to Some immediately above")
     }
 
+    /// Create a sub-spinner.
+    ///
+    /// # Panics
+    /// Panics if the template is invalid.
     #[allow(clippy::literal_string_with_formatting_args)]
     pub fn create_sub(&mut self, prefix: &str) -> &ProgressBar {
         let bar = self.multi.add(ProgressBar::new_spinner());

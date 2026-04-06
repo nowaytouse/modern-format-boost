@@ -19,136 +19,225 @@
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
     clippy::manual_let_else,
-    clippy::items_after_statements,
+    clippy::items_after_statements
 )]
 #![allow(
     clippy::cast_precision_loss, // Audited: acceptable for media metrics (bitrate, size, time)
     clippy::too_many_lines,
     clippy::struct_excessive_bools,
     clippy::fn_params_excessive_bools,
-    missing_docs, // Internal utility crate: add `///` on new stable public API when stabilizing.
 )]
 
+/// Cache system for analysis results.
 pub mod analysis_cache;
+/// Batch processing engine for handling multiple files.
 pub mod batch;
+/// Checkpoint and integrity management for conversions.
 pub mod checkpoint;
+/// Video and audio codec definitions and helpers.
 pub mod codecs;
+/// System-wide constants and thresholds.
 pub mod constants;
+/// Core conversion logic and options.
 pub mod conversion;
+/// CRF (Constant Rate Factor) relacionadas constants.
 pub mod crf_constants;
+/// Metadata-based date extraction and analysis.
 pub mod date_analysis;
+/// Centralized error handling and recovery logic.
 pub mod error_handler;
+/// CRF exploration strategies.
 pub mod explore_strategy;
+/// High-level builder for `FFmpeg` commands.
 pub mod ffmpeg_builder;
+/// `FFmpeg` process management and progress parsing.
 pub mod ffmpeg_process;
+/// `FFprobe` wrapper for media identification.
 pub mod ffprobe;
+/// Command-line flag validation logic.
 pub mod flag_validator;
+/// Robust floating-point comparison utilities.
 pub mod float_compare;
+/// `GPU` acceleration detection and calibration.
 pub mod gpu_accel;
+/// High-level builders for image processing tools.
 pub mod image_builders;
+/// Image quality analytics and scoring.
 pub mod image_quality_detector;
+/// High-level builder for `cjxl` and `djxl` commands.
 pub mod jxl_builder;
+/// Thread-safe `LRU` cache implementation.
 pub mod lru_cache;
+/// Universal metadata preservation (EXIF, IPTC, xattr, etc.).
 pub mod metadata;
+/// Modern terminal UI components and styling.
 pub mod modern_ui;
+/// Path safety and validation utilities.
 pub mod path_validator;
+/// Progress bar and status reporting system.
 pub mod progress;
+/// Intelligent quality matching engine.
 pub mod quality_matcher;
+/// Summary and detailed reporting generation.
 pub mod report;
+/// High-risk directory and operation safety checks.
 pub mod safety;
+/// SSIM-to-CRF mapping and prediction.
 pub mod ssim_mapping;
+/// Platform-aware thread and workload management.
 pub mod thread_manager;
+/// Path-based tool discovery and health checks.
 pub mod tools;
+/// Unified error hierarchy for the entire workspace.
 pub mod unified_error;
+/// Versioning and schema management.
 pub mod version;
+/// Video-specific processing utilities.
 pub mod video;
+/// The core video quality exploration engine.
 pub mod video_explorer;
 // #[cfg(test)]
 // mod video_explorer_tests;
 // #[cfg(test)]
 // mod image_detection_tests;
+/// Video quality analytics and scoring.
 pub mod video_quality_detector;
+/// Metadata-aware `XMP` merging logic.
 pub mod xmp_merger;
 
+/// Path-safe argument formatting.
 pub mod path_safety;
+/// Global process locking for concurrency safety.
 pub mod process_lock;
 pub use path_safety::safe_path_arg;
+/// Application-level error definitions.
 pub mod app_error;
+/// `FFprobe` `JSON` schema and parsing logic.
 pub mod ffprobe_json;
+/// Robust file copying with retry logic.
 pub mod file_copier;
+/// High-bit-depth `HDR` image decoding.
 pub mod hdr_decode;
+/// `HDR` and Color Space utility functions.
 pub mod hdr_utils;
-pub mod pure_media_verifier;
-pub mod quality_verifier_enhanced;
-pub mod smart_file_copier;
-pub mod stream_size;
-pub mod system_memory;
-pub mod tool_builders;
-pub mod types;
+/// Safe numeric casting with saturation and range checks.
 pub mod numeric_cast;
+/// Verification of byte-exact media stream identity.
+pub mod pure_media_verifier;
+/// Post-encode quality verification engine.
+pub mod quality_verifier_enhanced;
+/// Structure-preserving file copying.
+pub mod smart_file_copier;
+/// Media stream and header size analysis.
+pub mod stream_size;
+/// System resources and memory monitoring.
+pub mod system_memory;
+/// Low-level tool process builders.
+pub mod tool_builders;
+/// Shared data types and structures.
+pub mod types;
 pub use tool_builders::X265Builder;
 
+/// User-facing progress mode configuration.
 pub mod progress_mode;
 
+/// Global `Ctrl+C` handling and guard system.
 pub mod ctrlc_guard;
 
+/// Unified progress bar interface.
 pub mod unified_progress;
 pub use unified_progress::UnifiedProgressBar;
 
+/// Intelligent file sorting and prioritization.
 pub mod file_sorter;
 
+/// `MS-SSIM` temporal sampling strategies.
 pub mod msssim_sampling;
 
+/// Temporal progress heartbeat for long-running encodes.
 pub mod msssim_heartbeat;
 
+/// `MS-SSIM` specific progress reporting.
 pub mod msssim_progress;
 
+/// Parallelized `MS-SSIM` calculation engine.
 pub mod msssim_parallel;
 
+/// Process-wide heartbeat lifecycle management.
 pub mod heartbeat_manager;
+/// Universal heartbeat signal for background tasks.
 pub mod universal_heartbeat;
 
+/// Asynchronous and robust error logging system.
 pub mod error_logging;
+/// Shared terminal and file logging initialization.
 pub mod logging;
 
+/// General-purpose utility functions.
 pub mod common_utils;
 
+/// `AVIF` and `AV1` bitstream health verification.
 pub mod avif_av1_health;
+/// Primitive I/O and filesystem helpers.
 pub mod io_utils;
+/// `JXL` specific bitstream and identification utilities.
 pub mod jxl_utils;
 
+/// Generic `x265` encoder interface.
 pub mod x265_encoder;
 
+/// Standalone `VMAF` calculation wrapper.
 pub mod vmaf_standalone;
 
+/// External tool execution and exit code handling.
 pub mod cli_runner;
 
+/// Centralized conversion types and enums.
 pub mod conversion_types;
 
+/// Audio and subtitle stream passthrough logic.
 pub mod media_passthrough;
+/// Advanced video stream detection and analysis.
 pub mod video_detection;
 pub use media_passthrough::{audio_args_for_container, subtitle_args_for_container};
 
 #[cfg(test)]
 mod parity_tests;
 
+/// Shared database interface for quality matching.
 pub mod database;
+/// Depth map extraction and embedding.
 pub mod depth_channel;
+/// Gainmap to `HDR` synthesis pipeline.
 pub mod hdr_synthesis;
+/// High-level image analyzer interface.
 pub mod image_analyzer;
+/// Image type and format detection.
 pub mod image_detection;
+/// Image format definitions and capabilities.
 pub mod image_formats;
+/// Apple `HEIC` specific analysis.
 pub mod image_heic_analysis;
+/// `JPEG` specific bitstream and metadata analysis.
 pub mod image_jpeg_analysis;
+/// Image quality metrics and score calculation.
 pub mod image_metrics;
+/// Quality database for image matching.
 pub mod image_quality_db;
+/// Quality-preserving image conversion recommender.
 pub mod image_recommender;
-pub mod video_recommender;
+/// Image-specific error types.
 pub mod img_errors;
+/// Apple Live Photo identification and grouping.
 pub mod live_photo;
+/// Loop-intent identification and 7-layer decision system.
 pub mod loop_intent;
-pub mod media_meta_utils;
+/// Database-backed media indexing types.
 pub mod media_index_types;
+/// Unified media metadata extraction.
+pub mod media_meta_utils;
+/// Quality-preserving video conversion recommender.
+pub mod video_recommender;
 
 pub use blake3;
 pub use database::{lookup_similar_samples, SampleMatch};
@@ -163,8 +252,8 @@ pub use loop_intent::{
 };
 
 pub use hdr_synthesis::{
-    convert_heic_with_gainmap_to_jxl_hdr, convert_ultrahdr_jpeg_to_jxl_hdr, GainMapParams,
-    HdrIntermediateFormat,
+    convert_heic_with_gainmap_to_jxl_hdr, convert_ultrahdr_jpeg_to_jxl_hdr,
+    convert_ultrahdr_jpeg_to_jxl_migration, GainMapParams, HdrIntermediateFormat,
 };
 
 pub use batch::*;

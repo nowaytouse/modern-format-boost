@@ -346,7 +346,9 @@ pub fn calculate_quality_score(
         CompressionType::Standard => 60,
         CompressionType::LowQuality => 40,
     };
-    let depth_bonus = if bit_depth >= crate::numeric_cast::u32_to_u8_sat(crate::constants::HDR_BIT_DEPTH_THRESHOLD) {
+    let depth_bonus = if bit_depth
+        >= crate::numeric_cast::u32_to_u8_sat(crate::constants::HDR_BIT_DEPTH_THRESHOLD)
+    {
         crate::numeric_cast::u32_to_u8_sat(crate::constants::HDR_QUALITY_BONUS)
     } else {
         0

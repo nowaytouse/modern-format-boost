@@ -604,7 +604,6 @@ where
     Ok(())
 }
 
-
 #[derive(serde::Serialize)]
 struct AuditRecord<'a> {
     blake3: &'a str,
@@ -642,7 +641,7 @@ fn log_live_audit_to_jsonl(
             .append(true)
             .open(audit_file)
         {
-            let _ = writeln!(file, "{}", json);
+            let _ = writeln!(file, "{json}");
         }
     }
 }

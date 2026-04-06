@@ -145,7 +145,8 @@ pub fn is_grayscale_icc_cjxl_error(stderr: &str) -> bool {
     // Example: "libpng warning: iCCP: profile 'icc': 'RGB ': RGB color space not permitted on grayscale PNG"
     // Relaxed matching: check for libpng warning + grayscale + icc/color space issues
     let has_grayscale_issue = s.contains("grayscale") || s.contains("pixel data");
-    let has_icc_issue = s.contains("iccp") || s.contains("color space") || s.contains("icc profile");
+    let has_icc_issue =
+        s.contains("iccp") || s.contains("color space") || s.contains("icc profile");
     let has_libpng_warning = s.contains("libpng warning");
 
     s.contains("rgb color space not permitted on grayscale")
@@ -188,11 +189,14 @@ pub fn get_png_bit_depth(path: &Path) -> Option<u8> {
     Some(buf[24])
 }
 
-/// One attempt of `ImageMagick` → cjxl pipeline.
+/// Run the `cjxl` pipeline via `ImageMagick`.
 /// - `strip`: adds -strip (drops ICC/EXIF)
 /// - `depth`: PNG bit depth to emit (8 or 16); use 8 only for confirmed 8-bit sources
 /// - `normalize_icc`: replaces embedded ICC with standard sRGB without truncating bit depth
-/// - `apple_compat`: adds --`compress_boxes=0` to cjxl for Apple device compatibility
+/// - `apple_compat`: adds `--compress_boxes=0` to cjxl for Apple device compatibility
+///
+/// # Errors
+/// Returns an error if the pipeline fails.
 pub fn run_imagemagick_cjxl_pipeline(
     input: &Path,
     output: &Path,

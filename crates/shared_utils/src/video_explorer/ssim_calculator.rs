@@ -91,7 +91,9 @@ pub fn calculate_ms_ssim_yuv(
     eprintln!("   📹 Video: {duration:.1}s ({duration_min:.1}min)");
 
     if sample_rate > 1 {
-        let estimated_time = crate::numeric_cast::f64_to_u64_sat(duration / f64::from(u32::try_from(sample_rate).unwrap_or(1)) * 3.0);
+        let estimated_time = crate::numeric_cast::f64_to_u64_sat(
+            duration / f64::from(u32::try_from(sample_rate).unwrap_or(1)) * 3.0,
+        );
         eprintln!("   ⚡ Sampling: 1/{sample_rate} frames (est. {estimated_time}s)");
     } else {
         let estimated_time = crate::numeric_cast::f64_to_u64_sat(duration * 3.0);
@@ -750,9 +752,7 @@ fn parse_cambi_mean_from_json(stdout: &str) -> Option<f64> {
 
 /// Returns a capped thread count for libvmaf (max 8 to avoid over-subscription).
 fn num_cpus_capped() -> usize {
-    std::thread::available_parallelism()
-        .map(|n| n.get().min(8))
-        .unwrap_or(4)
+    std::thread::available_parallelism().map_or(4, |n| n.get().min(8))
 }
 
 #[cfg(test)]
@@ -785,10 +785,7 @@ mod tests {
         let json = r#"{"pooled_metrics": {"vmaf": {"mean": 100, "min": 99}}}"#;
         let result = parse_vmaf_mean_from_json(json);
         assert!(result.is_some());
-        assert!(crate::float_compare::approx_eq_f64(
-            result.unwrap(),
-            100.0
-        ));
+        assert!(crate::float_compare::approx_eq_f64(result.unwrap(), 100.0));
     }
 
     #[test]

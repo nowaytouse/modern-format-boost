@@ -10,7 +10,7 @@ pub struct MediaIndexRow {
     pub rel_path: String,
     /// 'image' or 'video'.
     pub media_type: String,
-    
+
     // Core physical features (Immutable once extracted)
     pub width: u32,
     pub height: u32,
@@ -19,16 +19,16 @@ pub struct MediaIndexRow {
     pub has_hdr: bool,
     pub has_alpha: bool,
     pub duration: f64,
-    
-    /// Full JSON dump of original detection results (DetectionResult or VideoDetectionResult).
+
+    /// Full JSON dump of original detection results (`DetectionResult` or `VideoDetectionResult`).
     pub raw_features_json: String,
-    
+
     // Decision outcomes (Mutable during development/debugging)
     pub decided_format: Option<String>,
     pub decided_params_json: Option<String>,
     pub decision_reason: Option<String>,
     pub flagged_issue: Option<String>,
-    
+
     /// Unix timestamp of extraction.
     pub last_extracted_at: i64,
 }

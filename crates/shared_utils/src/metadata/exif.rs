@@ -548,7 +548,7 @@ mod tests {
     ///
     /// RATIONALE:
     /// This test explicitly uses a filename containing URL-encoded sequences (`%3A%2F`),
-    /// ExifTool format codes (`%d%f%e`), and suspicious command-line prefixes (`-@`).
+    /// `ExifTool` format codes (`%d%f%e`), and suspicious command-line prefixes (`-@`).
     ///
     /// This ensures that our `STDIN` piping strategy and path prefixing work
     /// correctly even under absolute "worst-case" filename conditions.

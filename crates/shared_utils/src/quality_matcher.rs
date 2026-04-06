@@ -649,8 +649,8 @@ pub fn calculate_av1_crf_with_options(
 
     let crf_rounded = (crf_with_bias * 2.0).round() / 2.0;
     // Last line of defense: guarantee CRF in valid range regardless of extreme BPP or content/bias.
-    let crf =
-        (crate::numeric_cast::f64_to_f32_lossy(crf_rounded)).clamp(AV1_CRF_CLAMP_MIN, AV1_CRF_CLAMP_MAX);
+    let crf = (crate::numeric_cast::f64_to_f32_lossy(crf_rounded))
+        .clamp(AV1_CRF_CLAMP_MIN, AV1_CRF_CLAMP_MAX);
 
     Ok(MatchedQuality {
         crf,
@@ -719,8 +719,8 @@ pub fn calculate_hevc_crf_with_options(
     };
 
     let crf_rounded = (crf_with_bias * 2.0).round() / 2.0;
-    let crf =
-        (crate::numeric_cast::f64_to_f32_lossy(crf_rounded)).clamp(HEVC_CRF_CLAMP_MIN, HEVC_CRF_CLAMP_MAX);
+    let crf = (crate::numeric_cast::f64_to_f32_lossy(crf_rounded))
+        .clamp(HEVC_CRF_CLAMP_MIN, HEVC_CRF_CLAMP_MAX);
 
     Ok(MatchedQuality {
         crf,
@@ -926,7 +926,8 @@ fn calculate_raw_bpp(analysis: &QualityAnalysis, pixels: u64) -> Result<f64, Str
         if video_bitrate > 0 {
             if let Some(fps) = analysis.fps {
                 if fps > 0.0 {
-                    let bits_per_frame = f64::from(u32::try_from(video_bitrate).unwrap_or(u32::MAX)) / fps;
+                    let bits_per_frame =
+                        f64::from(u32::try_from(video_bitrate).unwrap_or(u32::MAX)) / fps;
                     return Ok(bits_per_frame / f64::from(u32::try_from(pixels).unwrap_or(1)));
                 }
             }
@@ -940,11 +941,16 @@ fn calculate_raw_bpp(analysis: &QualityAnalysis, pixels: u64) -> Result<f64, Str
                     .fps
                     .ok_or_else(|| "Missing FPS for BPP calculation".to_string())?;
                 let total_frames = crate::numeric_cast::f64_to_u64_sat(duration * fps);
-                let bits_per_frame = f64::from(u32::try_from(analysis.file_size * 8).unwrap_or(u32::MAX)) / f64::from(u32::try_from(total_frames.max(1)).unwrap_or(1));
+                let bits_per_frame =
+                    f64::from(u32::try_from(analysis.file_size * 8).unwrap_or(u32::MAX))
+                        / f64::from(u32::try_from(total_frames.max(1)).unwrap_or(1));
                 return Ok(bits_per_frame / f64::from(u32::try_from(pixels).unwrap_or(1)));
             }
         }
-        return Ok(f64::from(u32::try_from(analysis.file_size).unwrap_or(u32::MAX)) / f64::from(u32::try_from(pixels).unwrap_or(1)));
+        return Ok(
+            f64::from(u32::try_from(analysis.file_size).unwrap_or(u32::MAX))
+                / f64::from(u32::try_from(pixels).unwrap_or(1)),
+        );
     }
 
     Err("❌ Cannot calculate bpp: no video_bitrate, file_size, or bpp provided".to_string())
@@ -1049,13 +1055,7 @@ fn calculate_resolution_factor(pixels: u64) -> f64 {
 
 fn calculate_color_depth_factor(bit_depth: u8, codec: SourceCodec) -> f64 {
     match bit_depth {
-        1..=8 => {
-            if codec == SourceCodec::Gif {
-                1.3
-            } else {
-                1.0
-            }
-        }
+        1..=8 if codec == SourceCodec::Gif => 1.3,
         10 => 1.25,
         12 => 1.5,
         16 => 2.0,
@@ -1212,7 +1212,8 @@ fn calculate_confidence_v3(analysis: &QualityAnalysis) -> f64 {
     if let (Some(video_bitrate), Some(fps)) = (analysis.video_bitrate, analysis.fps) {
         let pixels = u64::from(analysis.width) * u64::from(analysis.height);
         if pixels > 0 && video_bitrate > 0 {
-            let bpp_estimate = f64::from(u32::try_from(video_bitrate).unwrap_or(u32::MAX)) / (f64::from(u32::try_from(pixels).unwrap_or(1)) * fps);
+            let bpp_estimate = f64::from(u32::try_from(video_bitrate).unwrap_or(u32::MAX))
+                / (f64::from(u32::try_from(pixels).unwrap_or(1)) * fps);
             if (0.01..=5.0).contains(&bpp_estimate) {
                 score += 2.0;
                 max_score += 2.0;
@@ -1808,13 +1809,16 @@ pub fn from_image_analysis(
     let bpp = if let (Some(duration), Some(frame_rate)) = (duration_secs, fps) {
         if duration > 0.0 && frame_rate > 0.0 {
             let total_frames = crate::numeric_cast::f64_to_u64_sat(duration * frame_rate);
-            let bits_per_frame = f64::from(u32::try_from(file_size * 8).unwrap_or(u32::MAX)) / f64::from(u32::try_from(total_frames.max(1)).unwrap_or(1));
+            let bits_per_frame = f64::from(u32::try_from(file_size * 8).unwrap_or(u32::MAX))
+                / f64::from(u32::try_from(total_frames.max(1)).unwrap_or(1));
             bits_per_frame / f64::from(u32::try_from(pixels).unwrap_or(1))
         } else {
-            f64::from(u32::try_from(file_size).unwrap_or(u32::MAX)) / f64::from(u32::try_from(pixels).unwrap_or(1))
+            f64::from(u32::try_from(file_size).unwrap_or(u32::MAX))
+                / f64::from(u32::try_from(pixels).unwrap_or(1))
         }
     } else {
-        f64::from(u32::try_from(file_size).unwrap_or(u32::MAX)) / f64::from(u32::try_from(pixels).unwrap_or(1))
+        f64::from(u32::try_from(file_size).unwrap_or(u32::MAX))
+            / f64::from(u32::try_from(pixels).unwrap_or(1))
     };
 
     QualityAnalysis {
@@ -2162,7 +2166,8 @@ mod tests {
         let base_result = calculate_av1_crf(&base).unwrap();
         let anim_result = calculate_av1_crf(&animation).unwrap();
 
-        let crf_diff = crate::numeric_cast::f32_to_i32_sat(anim_result.crf) - crate::numeric_cast::f32_to_i32_sat(base_result.crf);
+        let crf_diff = crate::numeric_cast::f32_to_i32_sat(anim_result.crf)
+            - crate::numeric_cast::f32_to_i32_sat(base_result.crf);
         assert!(
             (2..=6).contains(&crf_diff),
             "Animation CRF adjustment: expected +2 to +6, got {crf_diff:+}"
@@ -2509,9 +2514,10 @@ mod tests {
         let result1 = calculate_av1_crf(&analysis).unwrap();
         let result2 = calculate_av1_crf(&analysis).unwrap();
 
-        assert!(crate::float_compare::approx_eq_crf(
-            result1.crf, result2.crf
-        ), "Same input should produce same CRF");
+        assert!(
+            crate::float_compare::approx_eq_crf(result1.crf, result2.crf),
+            "Same input should produce same CRF"
+        );
         assert!(
             (result1.effective_bpp - result2.effective_bpp).abs() < 0.0001,
             "Same input should produce same effective BPP"

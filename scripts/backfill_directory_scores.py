@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Backfill `directory_meme_score` by recomputing it from `source_path`.
+Backfill `directory_loop_intent_score` by recomputing it from `source_path`.
 Stops writing the legacy boolean `directory_meme_hint` (keeps DB column for now).
 """
 
@@ -55,7 +55,7 @@ def main() -> None:
     cur = conn.cursor()
     # Ensure schema has numeric score + conservative hint to tolerate older DBs
     cur.execute(
-        "ALTER TABLE samples ADD COLUMN IF NOT EXISTS directory_meme_score DOUBLE PRECISION DEFAULT 0.5"
+        "ALTER TABLE samples ADD COLUMN IF NOT EXISTS directory_loop_intent_score DOUBLE PRECISION DEFAULT 0.5"
     )
     cur.execute(
         "ALTER TABLE samples ADD COLUMN IF NOT EXISTS directory_meme_hint BOOLEAN DEFAULT false"
@@ -68,9 +68,9 @@ def main() -> None:
         score = compute_directory_score(source_path)
         updates.append((score, file_hash))
 
-    print(f"Updating {len(updates)} rows with computed directory_meme_score...")
+    print(f"Updating {len(updates)} rows with computed directory_loop_intent_score...")
     cur.executemany(
-        "UPDATE samples SET directory_meme_score = %s WHERE file_hash = %s",
+        "UPDATE samples SET directory_loop_intent_score = %s WHERE file_hash = %s",
         updates,
     )
     conn.commit()

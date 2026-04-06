@@ -70,6 +70,12 @@ fn cleanup_output_file(path: &Path, context: &str) {
     }
 }
 
+/// Determine the optimal conversion strategy based on image detection results.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The estimated quality of a lossy image cannot be determined.
 pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrategy> {
     if detection.format.is_modern_format() {
         return Ok(ConversionStrategy {

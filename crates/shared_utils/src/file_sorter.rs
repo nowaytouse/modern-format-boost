@@ -64,7 +64,7 @@ impl FileSorter {
     fn sort_by_size_descending(&self, files: Vec<PathBuf>) -> Vec<PathBuf> {
         let mut file_infos: Vec<FileInfo> = files.into_iter().filter_map(FileInfo::new).collect();
 
-        file_infos.sort_by(|a, b| b.size.cmp(&a.size));
+        file_infos.sort_by_key(|f| std::cmp::Reverse(f.size));
         file_infos.into_iter().map(|f| f.path).collect()
     }
 

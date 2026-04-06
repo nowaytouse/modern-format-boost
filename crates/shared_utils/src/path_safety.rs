@@ -15,10 +15,31 @@ pub fn safe_path_arg(path: &Path) -> Cow<'_, str> {
     }
 
     // ULTIMATE DEFENSE: If path contains shell metacharacters that could compromise
-    // ImageMagick delegates or sub-shells, ensure it is treated strictly as a 
+    // ImageMagick delegates or sub-shells, ensure it is treated strictly as a
     // relative literal by prepending './'.
     let has_meta = s.contains(|c: char| {
-        matches!(c, ';' | '&' | '|' | '$' | '`' | '(' | ')' | '{' | '}' | '[' | ']' | '*' | '?' | '<' | '>' | '\\' | '\n' | '\r' | '\'' | '\"')
+        matches!(
+            c,
+            ';' | '&'
+                | '|'
+                | '$'
+                | '`'
+                | '('
+                | ')'
+                | '{'
+                | '}'
+                | '['
+                | ']'
+                | '*'
+                | '?'
+                | '<'
+                | '>'
+                | '\\'
+                | '\n'
+                | '\r'
+                | '\''
+                | '\"'
+        )
     });
 
     // Handle trailing spaces which can cause I/O misinterpretation
@@ -37,7 +58,7 @@ pub fn safe_path_arg(path: &Path) -> Cow<'_, str> {
 }
 
 /// Specialized path argument escaping for format-interpreted strings.
-/// (e.g. ImageMagick's internal property interpretation).
+/// (e.g. `ImageMagick`'s internal property interpretation).
 #[inline]
 #[must_use]
 pub fn property_safe_path(path: &Path) -> Cow<'_, str> {
@@ -49,7 +70,7 @@ pub fn property_safe_path(path: &Path) -> Cow<'_, str> {
     }
 }
 
-/// ImageMagick specific path armor.
+/// `ImageMagick` specific path armor.
 /// Prepends 'file:./' and doubles '%' to prevent protocol injection and property expansion.
 #[inline]
 #[must_use]
@@ -82,7 +103,10 @@ pub fn magick_safe_path(path: &Path) -> Cow<'_, str> {
         out.push_str("file:///");
         out.push_str(&s_escaped[1..]); // Remove leading slash for URI
         Cow::Owned(out)
-    } else if s_escaped.starts_with("file:") || s_escaped.starts_with("mp4:") || s_escaped.starts_with("gif:") {
+    } else if s_escaped.starts_with("file:")
+        || s_escaped.starts_with("mp4:")
+        || s_escaped.starts_with("gif:")
+    {
         s_escaped
     } else {
         // ULTIMATE DEFENSE: Always prepend ./ to relative paths.
@@ -101,7 +125,7 @@ pub fn magick_safe_path(path: &Path) -> Cow<'_, str> {
 #[must_use]
 pub fn exiftool_path_arg(path: &Path) -> Cow<'_, str> {
     let s = path.to_string_lossy();
-    
+
     if path.is_relative() {
         let mut out = String::with_capacity(2 + s.len());
         if !s.starts_with("./") {
@@ -117,6 +141,10 @@ pub fn exiftool_path_arg(path: &Path) -> Cow<'_, str> {
 /// Returns a unique temporary path for search iterations, fully isolated from user folders.
 ///
 /// Ensures Ghost Mode (Zero Pollution) by using the central MFB tmp directory.
+/// Create an isolated temporary path for search operations.
+///
+/// # Errors
+/// Returns an error if the temporary file cannot be created.
 pub fn isolated_temp_path_for_search(output_path: &Path) -> anyhow::Result<PathBuf> {
     let tmp_dir = crate::process_lock::get_mfb_tmp_dir()?;
     let stem = output_path.file_stem().map_or_else(
@@ -169,10 +197,7 @@ mod tests {
         // Test relative
         assert_eq!(magick_safe_path(Path::new("img.jpg")), "file:./img.jpg");
         // Test with %
-        assert_eq!(
-            magick_safe_path(Path::new("img%1.jpg")),
-            "img%%1.jpg"
-        );
+        assert_eq!(magick_safe_path(Path::new("img%1.jpg")), "img%%1.jpg");
         // Test absolute
         assert_eq!(
             magick_safe_path(Path::new("/abs/img.jpg")),

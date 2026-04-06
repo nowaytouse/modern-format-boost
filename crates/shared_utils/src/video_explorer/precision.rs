@@ -25,7 +25,9 @@ pub fn crf_to_cache_key(crf: f32) -> i32 {
     let normalized = (capped * CACHE_KEY_MULTIPLIER).round();
     let key = crate::numeric_cast::f32_to_i32_sat(normalized);
     debug_assert!(
-        key >= 0 && key <= crate::numeric_cast::f32_to_i32_sat(CRF_CACHE_MAX_VALID * CACHE_KEY_MULTIPLIER),
+        key >= 0
+            && key
+                <= crate::numeric_cast::f32_to_i32_sat(CRF_CACHE_MAX_VALID * CACHE_KEY_MULTIPLIER),
         "Cache key {key} out of expected range for CRF {crf}"
     );
     key

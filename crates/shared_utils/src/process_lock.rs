@@ -3,15 +3,21 @@ use std::fs::{self, File};
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 
-/// Initializes Ghost Mode by redirecting the process's TMPDIR to the MFB isolated temp directory.
+/// Initializes Ghost Mode (Zero Pollution) by setting up the process lock.
 /// This ensures zero-pollution even when the binary is used independently of any scripts.
+///
+/// # Errors
+/// Returns an error if the MFB temporary directory cannot be created.
 pub fn init_ghost_mode() -> Result<()> {
     let tmp = get_mfb_tmp_dir()?;
     std::env::set_var("TMPDIR", &tmp);
     Ok(())
 }
 
-/// Returns the central home for MFB metadata and transient files (~/.modern_format_boost)
+/// Returns the central home for MFB metadata and transient files (~/.`modern_format_boost`).
+///
+/// # Errors
+/// Returns an error if the home directory cannot be determined.
 pub fn get_mfb_root() -> Result<PathBuf> {
     if let Ok(root) = std::env::var("MFB_HOME_ROOT") {
         let root = PathBuf::from(root);
@@ -27,6 +33,9 @@ pub fn get_mfb_root() -> Result<PathBuf> {
 }
 
 /// Returns the central temporary storage for MFB, ensuring it exists.
+///
+/// # Errors
+/// Returns an error if the MFB root cannot be determined or the temporary directory cannot be created.
 pub fn get_mfb_tmp_dir() -> Result<PathBuf> {
     let tmp = get_mfb_root()?.join("tmp");
     fs::create_dir_all(&tmp).context("Failed to create MFB tmp directory")?;
@@ -34,6 +43,9 @@ pub fn get_mfb_tmp_dir() -> Result<PathBuf> {
 }
 
 /// Generates a unique hex hash for a directory's canonical path using BLAKE3.
+///
+/// # Errors
+/// Returns an error if the path cannot be canonicalized.
 pub fn hash_path_to_hex(path: &Path) -> Result<String> {
     let abs_path = fs::canonicalize(path).with_context(|| {
         format!(
@@ -47,8 +59,11 @@ pub fn hash_path_to_hex(path: &Path) -> Result<String> {
 
 /// Attempts to acquire an exclusive advisory lock for a specific directory.
 ///
-/// The lock file is stored in a central location (~/.modern_format_boost/locks/)
+/// The lock file is stored in a central location (~/.`modern_format_boost/locks`/)
 /// hashed by the directory's absolute path to avoid polluting the user's data.
+///
+/// # Errors
+/// Returns an error if the lock file cannot be created or the lock is already held.
 pub fn acquire_dir_lock(dir_path: &Path) -> Result<File> {
     // 1. Get absolute, canonical path to ensure unique hashing
     let abs_path = fs::canonicalize(dir_path)

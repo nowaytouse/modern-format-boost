@@ -72,7 +72,8 @@ pub const METADATA_MARGIN_PERCENT: f64 = crate::constants::METADATA_MARGIN_RATIO
 #[inline]
 #[must_use]
 pub fn calculate_metadata_margin(input_size: u64) -> u64 {
-    let percent_based = crate::numeric_cast::f64_to_u64_sat(input_size as f64 * METADATA_MARGIN_PERCENT);
+    let percent_based =
+        crate::numeric_cast::f64_to_u64_sat(input_size as f64 * METADATA_MARGIN_PERCENT);
     percent_based.clamp(METADATA_MARGIN_MIN, METADATA_MARGIN_MAX)
 }
 
@@ -728,7 +729,7 @@ impl ExploreConfig {
 
 /// Supported video encoder types.
 ///
-/// Each variant maps to a specific FFmpeg encoder and container format.
+/// Each variant maps to a specific `FFmpeg` encoder and container format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VideoEncoder {
     /// H.265/HEVC encoder (libx265 or hardware fallback).
@@ -749,9 +750,8 @@ impl From<VideoEncoder> for crate::ffmpeg_builder::VideoCodec {
     }
 }
 
-
 impl VideoEncoder {
-    /// Returns the FFmpeg encoder name, with automatic fallback to hardware encoders
+    /// Returns the `FFmpeg` encoder name, with automatic fallback to hardware encoders
     /// if the software encoder is not available.
     #[must_use]
     pub fn ffmpeg_name(&self) -> &'static str {
@@ -781,8 +781,6 @@ impl VideoEncoder {
     }
 
     fn is_encoder_available(encoder: &str) -> bool {
-        
-
         static LIBX265_AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         static LIBX264_AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
@@ -793,9 +791,7 @@ impl VideoEncoder {
         };
 
         *cache.get_or_init(|| {
-            crate::ffmpeg_builder::FfmpegBuilder::list_encoders()
-                .map(|s| s.contains(encoder))
-                .unwrap_or(false)
+            crate::ffmpeg_builder::FfmpegBuilder::list_encoders().is_ok_and(|s| s.contains(encoder))
         })
     }
 
@@ -807,13 +803,13 @@ impl VideoEncoder {
         }
     }
 
-    /// Returns extra FFmpeg arguments for this encoder with default preset.
+    /// Returns extra `FFmpeg` arguments for this encoder with default preset.
     #[must_use]
     pub fn extra_args(&self, max_threads: usize, apple_compat: bool) -> Vec<String> {
         self.extra_args_with_preset(max_threads, EncoderPreset::default(), None, apple_compat)
     }
 
-    /// Returns extra FFmpeg arguments for this encoder with a specific preset and optional
+    /// Returns extra `FFmpeg` arguments for this encoder with a specific preset and optional
     /// HDR x265 parameters.
     #[must_use]
     pub fn extra_args_with_preset(
@@ -1022,7 +1018,7 @@ pub struct VideoExplorer {
     output_path: std::path::PathBuf,
     /// Size of the input file in bytes.
     input_size: u64,
-    /// Additional video filter arguments passed to FFmpeg.
+    /// Additional video filter arguments passed to `FFmpeg`.
     vf_args: Vec<String>,
     /// Whether GPU acceleration is enabled.
     use_gpu: bool,
@@ -1301,7 +1297,11 @@ impl VideoExplorer {
             ms_ssim_passed: CheckResult::NotChecked,
             ms_ssim_score: None,
             iterations,
-            quality_passed: if quality_passed { CheckResult::Passed } else { CheckResult::Failed("Total file size target not met".into()) },
+            quality_passed: if quality_passed {
+                CheckResult::Passed
+            } else {
+                CheckResult::Failed("Total file size target not met".into())
+            },
             log,
             confidence: 0.7,
             confidence_detail: ConfidenceBreakdown::default(),
@@ -1320,9 +1320,10 @@ impl VideoExplorer {
         let output_size = self.encode(self.config.initial_crf)?;
         let quality = self.validate_quality()?;
 
-        let mut quality_str = quality
-            .0
-            .map_or_else(|| "SSIM: unknown".to_string(), |ssim| format!("SSIM: {ssim:.4}"));
+        let mut quality_str = quality.0.map_or_else(
+            || "SSIM: unknown".to_string(),
+            |ssim| format!("SSIM: {ssim:.4}"),
+        );
         if let Some(vmaf) = quality.2 {
             let _ = write!(quality_str, ", MS-SSIM: {vmaf:.2}");
         }
@@ -1496,7 +1497,11 @@ impl VideoExplorer {
             ms_ssim_passed: CheckResult::NotChecked,
             ms_ssim_score: None,
             iterations,
-            quality_passed: if compressed { CheckResult::Passed } else { CheckResult::Failed("Size check failed".into()) },
+            quality_passed: if compressed {
+                CheckResult::Passed
+            } else {
+                CheckResult::Failed("Size check failed".into())
+            },
             log,
             confidence: 0.65,
             confidence_detail: ConfidenceBreakdown::default(),
@@ -1640,7 +1645,11 @@ impl VideoExplorer {
             ms_ssim_passed: CheckResult::NotChecked,
             ms_ssim_score: None,
             iterations,
-            quality_passed: if passed { CheckResult::Passed } else { CheckResult::Failed("Quality check failed".into()) },
+            quality_passed: if passed {
+                CheckResult::Passed
+            } else {
+                CheckResult::Failed("Quality check failed".into())
+            },
             log,
             confidence: 0.75,
             confidence_detail: ConfidenceBreakdown::default(),
@@ -1678,10 +1687,11 @@ impl VideoExplorer {
 
         let mut iterations = 0u32;
         let crf_range = (self.config.max_crf - self.config.min_crf).max(1.0);
-        let dynamic_max_iterations = crate::numeric_cast::f64_to_u32_sat(f64::from(crf_range).log2().ceil())
-            .saturating_add(6)
-            .saturating_add(4)
-            .clamp(10, GLOBAL_MAX_ITERATIONS);
+        let dynamic_max_iterations =
+            crate::numeric_cast::f64_to_u32_sat(f64::from(crf_range).log2().ceil())
+                .saturating_add(6)
+                .saturating_add(4)
+                .clamp(10, GLOBAL_MAX_ITERATIONS);
         let max_iterations = dynamic_max_iterations;
 
         let mut best_crf: f32;
@@ -1928,7 +1938,11 @@ impl VideoExplorer {
             psnr: final_quality.1,
             ms_ssim: final_quality.2,
             iterations,
-            quality_passed: if quality_passed { CheckResult::Passed } else { CheckResult::Failed(format!("SSIM {best_ssim:.4} below target")) },
+            quality_passed: if quality_passed {
+                CheckResult::Passed
+            } else {
+                CheckResult::Failed(format!("SSIM {best_ssim:.4} below target"))
+            },
             log,
             confidence: 0.8,
             confidence_detail: ConfidenceBreakdown::default(),
@@ -2107,8 +2121,10 @@ impl VideoExplorer {
             progress_line("│ Computing SSIM... │".to_string());
             let (ssim_opt, psnr_opt, ms_ssim_opt) =
                 validate_ssim(best_crf, &mut quality_cache, self)?;
-            let ssim = self
-                .require_ssim_metric(ssim_opt, "Precise Quality + Compression stage C verification")?;
+            let ssim = self.require_ssim_metric(
+                ssim_opt,
+                "Precise Quality + Compression stage C verification",
+            )?;
 
             progress_done();
 
@@ -2193,10 +2209,22 @@ impl VideoExplorer {
                 .iter()
                 .rev()
                 .take(WINDOW_SIZE)
-                .map(|(_, s)| f64::from(crate::numeric_cast::f64_to_f32_lossy(*s as f64 / input_size as f64)))
+                .map(|(_, s)| {
+                    f64::from(crate::numeric_cast::f64_to_f32_lossy(
+                        *s as f64 / input_size as f64,
+                    ))
+                })
                 .collect();
-            let mean = if recent.is_empty() { 0.0 } else { recent.iter().sum::<f64>() / recent.len() as f64 };
-            if recent.is_empty() { 0.0 } else { recent.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / recent.len() as f64 }
+            let mean = if recent.is_empty() {
+                0.0
+            } else {
+                recent.iter().sum::<f64>() / recent.len() as f64
+            };
+            if recent.is_empty() {
+                0.0
+            } else {
+                recent.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / recent.len() as f64
+            }
         };
 
         let calc_change_rate = |prev: u64, curr: u64| -> f64 {
@@ -2361,8 +2389,10 @@ impl VideoExplorer {
 
         progress_line("│ Computing SSIM... │".to_string());
         let quality = validate_ssim(boundary_crf, &mut quality_cache, self)?;
-        let ssim =
-            self.require_ssim_metric(quality.0, "Precise Quality + Compression boundary verification")?;
+        let ssim = self.require_ssim_metric(
+            quality.0,
+            "Precise Quality + Compression boundary verification",
+        )?;
 
         progress_done();
 
@@ -2393,7 +2423,11 @@ impl VideoExplorer {
             psnr: quality.1,
             ms_ssim: quality.2,
             iterations,
-            quality_passed: if ssim >= self.config.quality_thresholds.min_ssim { CheckResult::Passed } else { CheckResult::Failed(format!("SSIM {ssim:.4} below threshold")) },
+            quality_passed: if ssim >= self.config.quality_thresholds.min_ssim {
+                CheckResult::Passed
+            } else {
+                CheckResult::Failed(format!("SSIM {ssim:.4} below threshold"))
+            },
             log,
             confidence: 0.85,
             confidence_detail: ConfidenceBreakdown::default(),
@@ -2456,7 +2490,9 @@ impl VideoExplorer {
         };
 
         if let Some(profile) = match self.encoder {
-            VideoEncoder::Hevc if self.apple_compat => Some(crate::ffmpeg_builder::VideoProfile::Main),
+            VideoEncoder::Hevc if self.apple_compat => {
+                Some(crate::ffmpeg_builder::VideoProfile::Main)
+            }
             VideoEncoder::H264 => Some(crate::ffmpeg_builder::VideoProfile::High),
             _ => None,
         } {
@@ -2464,7 +2500,9 @@ impl VideoExplorer {
         }
 
         if self.encoder == VideoEncoder::Hevc && self.apple_compat {
-            builder.arg(crate::constants::FFMPEG_ARG_TAG_VIDEO).arg(crate::constants::FFMPEG_TAG_HVC1);
+            builder
+                .arg(crate::constants::FFMPEG_ARG_TAG_VIDEO)
+                .arg(crate::constants::FFMPEG_TAG_HVC1);
         }
 
         // Add extra encoder-specific args
@@ -2474,7 +2512,9 @@ impl VideoExplorer {
                 x265_params.push(':');
                 x265_params.push_str(params);
             }
-            builder.arg(crate::constants::FFMPEG_ARG_X265_PARAMS).arg(x265_params);
+            builder
+                .arg(crate::constants::FFMPEG_ARG_X265_PARAMS)
+                .arg(x265_params);
         } else if self.encoder == VideoEncoder::Av1 {
             builder.arg("-svtav1-params").arg(format!(
                 "tune=0:film-grain=0:preset={}:lp={}",
@@ -2489,7 +2529,11 @@ impl VideoExplorer {
         }
 
         // Status/Progress reporting
-        builder.arg("-progress").arg("pipe:1").arg("-stats_period").arg("0.5");
+        builder
+            .arg("-progress")
+            .arg("pipe:1")
+            .arg("-stats_period")
+            .arg("0.5");
 
         let mut cmd = builder.output(&self.output_path).build();
 
@@ -2622,7 +2666,9 @@ impl VideoExplorer {
                 } else if let Some(val) = line.strip_prefix("speed=") {
                     last_speed = val.to_string();
                 } else if line == "progress=continue" || line == "progress=end" {
-                    let current_secs = f64::from(crate::numeric_cast::f64_to_f32_lossy(last_time_us as f64 / 1_000_000.0));
+                    let current_secs = f64::from(crate::numeric_cast::f64_to_f32_lossy(
+                        last_time_us as f64 / 1_000_000.0,
+                    ));
                     if let Some(total_duration) = duration_secs.filter(|d| *d > 0.0) {
                         let pct = (current_secs / total_duration * 100.0).min(100.0);
                         eprint!(
@@ -3046,8 +3092,7 @@ impl VideoExplorer {
                 .to_string(),
         };
 
-        let use_sampling =
-            duration.is_some_and(|d| d > MS_SSIM_THREE_SEGMENT_MIN_DURATION_SECS);
+        let use_sampling = duration.is_some_and(|d| d > MS_SSIM_THREE_SEGMENT_MIN_DURATION_SECS);
 
         let output = crate::ffmpeg_builder::FfmpegBuilder::new()
             .input(&self.input_path)
@@ -3098,7 +3143,10 @@ impl VideoExplorer {
                 Some(s) => {
                     let epsilon = precision::SSIM_COMPARE_EPSILON;
                     if s + epsilon < t.min_ssim {
-                        return CheckResult::Failed(format!("SSIM {s:.4} below target {}", t.min_ssim));
+                        return CheckResult::Failed(format!(
+                            "SSIM {s:.4} below target {}",
+                            t.min_ssim
+                        ));
                     }
                 }
                 None => {
@@ -3111,7 +3159,10 @@ impl VideoExplorer {
             match psnr {
                 Some(p) => {
                     if p < t.min_psnr && !p.is_infinite() {
-                        return CheckResult::Failed(format!("PSNR {p:.1} below target {}", t.min_psnr));
+                        return CheckResult::Failed(format!(
+                            "PSNR {p:.1} below target {}",
+                            t.min_psnr
+                        ));
                     }
                 }
                 None => {
@@ -3124,7 +3175,10 @@ impl VideoExplorer {
             match vmaf {
                 Some(v) => {
                     if v < t.min_ms_ssim {
-                        return CheckResult::Failed(format!("MS-SSIM {v:.4} below target {}", t.min_ms_ssim));
+                        return CheckResult::Failed(format!(
+                            "MS-SSIM {v:.4} below target {}",
+                            t.min_ms_ssim
+                        ));
                     }
                 }
                 None => {
@@ -3152,7 +3206,17 @@ pub fn explore_size_only(
     apple_compat: bool,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::size_only(initial_crf, max_crf);
-    VideoExplorer::new(input, output, encoder, vf_args, config, max_threads, None, apple_compat)?.explore()
+    VideoExplorer::new(
+        input,
+        output,
+        encoder,
+        vf_args,
+        config,
+        max_threads,
+        None,
+        apple_compat,
+    )?
+    .explore()
 }
 
 /// Explores quality-match mode: encodes at a predicted CRF and validates quality.
@@ -3169,7 +3233,17 @@ pub fn explore_quality_match(
     apple_compat: bool,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::quality_match(predicted_crf);
-    VideoExplorer::new(input, output, encoder, vf_args, config, max_threads, None, apple_compat)?.explore()
+    VideoExplorer::new(
+        input,
+        output,
+        encoder,
+        vf_args,
+        config,
+        max_threads,
+        None,
+        apple_compat,
+    )?
+    .explore()
 }
 
 /// Explores precise quality-match mode: iteratively searches for the best SSIM within a CRF range.
@@ -3188,7 +3262,17 @@ pub fn explore_precise_quality_match(
     apple_compat: bool,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::precise_quality_match(initial_crf, max_crf, min_ssim);
-    VideoExplorer::new(input, output, encoder, vf_args, config, max_threads, None, apple_compat)?.explore()
+    VideoExplorer::new(
+        input,
+        output,
+        encoder,
+        vf_args,
+        config,
+        max_threads,
+        None,
+        apple_compat,
+    )?
+    .explore()
 }
 
 /// Explores precise quality match while also ensuring the output is smaller than the input.
@@ -3208,7 +3292,17 @@ pub fn explore_precise_quality_match_with_compression(
 ) -> Result<ExploreResult> {
     let config =
         ExploreConfig::precise_quality_match_with_compression(initial_crf, max_crf, min_ssim);
-    VideoExplorer::new(input, output, encoder, vf_args, config, max_threads, None, apple_compat)?.explore()
+    VideoExplorer::new(
+        input,
+        output,
+        encoder,
+        vf_args,
+        config,
+        max_threads,
+        None,
+        apple_compat,
+    )?
+    .explore()
 }
 
 /// Explores compression-only mode: searches for the highest CRF that still produces a smaller file.
@@ -3226,7 +3320,17 @@ pub fn explore_compress_only(
     apple_compat: bool,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::compress_only(initial_crf, max_crf);
-    VideoExplorer::new(input, output, encoder, vf_args, config, max_threads, None, apple_compat)?.explore()
+    VideoExplorer::new(
+        input,
+        output,
+        encoder,
+        vf_args,
+        config,
+        max_threads,
+        None,
+        apple_compat,
+    )?
+    .explore()
 }
 
 /// Explores compression with a minimum SSIM quality threshold.
@@ -3244,7 +3348,17 @@ pub fn explore_compress_with_quality(
     apple_compat: bool,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::compress_with_quality(initial_crf, max_crf);
-    VideoExplorer::new(input, output, encoder, vf_args, config, max_threads, None, apple_compat)?.explore()
+    VideoExplorer::new(
+        input,
+        output,
+        encoder,
+        vf_args,
+        config,
+        max_threads,
+        None,
+        apple_compat,
+    )?
+    .explore()
 }
 
 /// Explores precise quality match with compression using GPU acceleration.
@@ -4036,11 +4150,13 @@ mod tests {
         let initial = 20.0_f32;
         let max_crf = 30.0_f32;
 
-        let coarse_up = crate::numeric_cast::f32_to_u32_sat(((max_crf - initial) / COARSE_STEP).ceil());
+        let coarse_up =
+            crate::numeric_cast::f32_to_u32_sat(((max_crf - initial) / COARSE_STEP).ceil());
         assert_eq!(coarse_up, 5, "Coarse search up should be 5 iterations");
 
         let boundary_range = 4.0_f32;
-        let fine_iterations = crate::numeric_cast::f32_to_u32_sat((boundary_range / FINE_STEP).ceil());
+        let fine_iterations =
+            crate::numeric_cast::f32_to_u32_sat((boundary_range / FINE_STEP).ceil());
         assert_eq!(fine_iterations, 8, "Fine search should be 8 iterations");
 
         let total = 1 + coarse_up + fine_iterations + 1;
@@ -4212,7 +4328,7 @@ mod tests {
         for crf in (10..=40).step_by(2) {
             let (max_crf, min_ssim) = calculate_smart_thresholds(
                 crate::numeric_cast::f64_to_f32_lossy(f64::from(crf)),
-                VideoEncoder::Hevc
+                VideoEncoder::Hevc,
             );
 
             if crf > 10 {
@@ -4281,12 +4397,14 @@ mod tests {
 
         let phase2_step = 0.5_f32;
         let phase2_range = 4.0_f32;
-        let phase2_iterations = crate::numeric_cast::f32_to_u32_sat((phase2_range / phase2_step).ceil());
+        let phase2_iterations =
+            crate::numeric_cast::f32_to_u32_sat((phase2_range / phase2_step).ceil());
         assert_eq!(phase2_iterations, 8, "Phase 2 should test 8 CRF values");
 
         let phase3_step = 0.1_f32;
         let phase3_range = 1.0_f32;
-        let phase3_iterations = crate::numeric_cast::f32_to_u32_sat((phase3_range / phase3_step).ceil());
+        let phase3_iterations =
+            crate::numeric_cast::f32_to_u32_sat((phase3_range / phase3_step).ceil());
         assert_eq!(phase3_iterations, 10, "Phase 3 should test 10 CRF values");
     }
 
@@ -4504,10 +4622,22 @@ mod tests {
                 .iter()
                 .rev()
                 .take(window_size)
-                .map(|s| f64::from(crate::numeric_cast::f64_to_f32_lossy(*s as f64 / input_size as f64)))
+                .map(|s| {
+                    f64::from(crate::numeric_cast::f64_to_f32_lossy(
+                        *s as f64 / input_size as f64,
+                    ))
+                })
                 .collect();
-            let mean = if recent.is_empty() { 0.0 } else { recent.iter().sum::<f64>() / recent.len() as f64 };
-            if recent.is_empty() { 0.0 } else { recent.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / recent.len() as f64 }
+            let mean = if recent.is_empty() {
+                0.0
+            } else {
+                recent.iter().sum::<f64>() / recent.len() as f64
+            };
+            if recent.is_empty() {
+                0.0
+            } else {
+                recent.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / recent.len() as f64
+            }
         };
 
         let stable_sizes = vec![500_000_u64, 500_100, 500_050];
@@ -4555,7 +4685,8 @@ mod tests {
     fn test_v413_three_phase_search() {
         let phase1_step = 0.5_f32;
         let crf_range = 28.0_f32 - 10.0_f32;
-        let phase1_iterations = crate::numeric_cast::f32_to_u32_sat((crf_range / phase1_step).log2().ceil());
+        let phase1_iterations =
+            crate::numeric_cast::f32_to_u32_sat((crf_range / phase1_step).log2().ceil());
         assert!(
             phase1_iterations <= 6,
             "Phase 1 should need ~6 iterations: {phase1_iterations}"
@@ -4563,7 +4694,8 @@ mod tests {
 
         let phase2_range = 0.8_f32;
         let phase2_step = 0.1_f32;
-        let phase2_max_iterations = crate::numeric_cast::f32_to_u32_sat((phase2_range / phase2_step).ceil());
+        let phase2_max_iterations =
+            crate::numeric_cast::f32_to_u32_sat((phase2_range / phase2_step).ceil());
         assert_eq!(
             phase2_max_iterations, 8,
             "Phase 2 should need max 8 iterations"
@@ -4684,7 +4816,8 @@ mod tests {
 
         assert_eq!(
             calculate_adaptive_max_walls(100_000.0),
-            (crate::numeric_cast::f32_to_u32_sat(100_000.0_f32.log2().ceil()) + ADAPTIVE_WALL_LOG_BASE)
+            (crate::numeric_cast::f32_to_u32_sat(100_000.0_f32.log2().ceil())
+                + ADAPTIVE_WALL_LOG_BASE)
                 .min(ULTIMATE_MAX_WALL_HITS)
         );
     }

@@ -8,7 +8,10 @@ use std::path::Path;
 /// such as application extensions (GIPHY/TENOR markers), loop counts, and
 /// detailed frame delay variation.
 ///
-/// Returns: (palette_size, app_extensions, has_transparency, payload_var, delay_var, loop_count, duration_secs)
+/// Returns: (`palette_size`, `app_extensions`, `has_transparency`, `payload_var`, `delay_var`, `loop_count`, `duration_secs`)
+///
+/// # Errors
+/// Returns an error if the file cannot be read or if the `GIF` header is malformed.
 pub fn scan_gif_headers(
     path: &Path,
 ) -> std::io::Result<(
@@ -82,17 +85,16 @@ pub fn scan_gif_headers(
                     pos += 3 + block_size;
                     pos = skip_sub_blocks(&buf, pos);
                 }
-                0xF9 => {
-                    if pos + 7 < buf.len() && buf[pos + 2] == 0x04 {
-                        if buf[pos + 3] & 0x01 != 0 {
-                            has_transparency = true;
-                        }
-                        let delay = u16::from(buf[pos + 4]) | (u16::from(buf[pos + 5]) << 8);
-                        frame_delays_cs.push(delay);
-                        pos += 8;
-                    } else {
-                        pos += 1;
+                0xF9 if pos + 7 < buf.len() && buf[pos + 2] == 0x04 => {
+                    if buf[pos + 3] & 0x01 != 0 {
+                        has_transparency = true;
                     }
+                    let delay = u16::from(buf[pos + 4]) | (u16::from(buf[pos + 5]) << 8);
+                    frame_delays_cs.push(delay);
+                    pos += 8;
+                }
+                0xF9 => {
+                    pos += 1;
                 }
                 0xFE | 0x01 => {
                     pos += 2;

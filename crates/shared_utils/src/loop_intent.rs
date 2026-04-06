@@ -85,7 +85,7 @@ impl LoopIntentVerdict {
 
 /// Unified signal bundle consumed by the 7-layer decision tree.
 ///
-/// Populated by constructors (from_video_detection, from_ffprobe_result, from_gif_path).
+/// Populated by constructors (`from_video_detection`, `from_ffprobe_result`, `from_gif_path`).
 /// The tree itself is a pure function over this struct — no I/O, no side effects.
 #[derive(Debug, Clone, Default)]
 pub struct LoopMeta {
@@ -109,26 +109,26 @@ pub struct LoopMeta {
     pub is_native_gif: bool,
 
     // ── Layer 2 signals (explicit declarations) ──
-    /// 0 = infinite loop, 1 = play once, None = unknown
+    /// 0 = infinite loop, 1 = play once, `None` = unknown.
     pub loop_count: Option<u16>,
-    /// e.g. ["GIPHY", "NETSCAPE2.0", ...] from GIF Application Extension block
+    /// e.g. [`GIPHY`, `NETSCAPE2.0`, ...] from `GIF` Application Extension block.
     pub app_extensions: Option<Vec<String>>,
     /// "webm", "mp4", "gif", etc.
     pub container: Option<String>,
 
     // ── Layer 3 signals (self-referential structure) ──
-    /// frame_payload_variation: coefficient of variation of frame packet sizes (pkt_sizes CV)
+    /// `frame_payload_variation`: coefficient of variation of frame packet sizes (`pkt_sizes` CV)
     pub frame_payload_variation: Option<f64>,
-    /// frame_delay_variation: CV of presentation timestamps deltas
+    /// `frame_delay_variation`: CV of presentation timestamps deltas
     pub frame_delay_variation: Option<f64>,
-    /// Raw frame packet sizes — used to compute closure_ratio
+    /// Raw frame packet sizes — used to compute `closure_ratio`
     pub pkt_sizes: Vec<u64>,
-    /// Raw PTS deltas — used for interval consistency score
+    /// Raw PTS deltas — used for interval consistency score.
     pub pts_deltas: Vec<f64>,
 
     // ── Layer 4 signals (content features) ──
     pub palette_size: Option<u32>,
-    /// WebP compression ratio proxy: raw_size / webp_size for a sampled frame.
+    /// `WebP` compression ratio proxy: `raw_size` / `webp_size` for a sampled frame.
     /// Constructors populate this on a best-effort basis for image-like sources.
     pub webp_compression_ratio: Option<f64>,
     pub palette_depth: Option<f64>,
@@ -140,8 +140,8 @@ pub struct LoopMeta {
     pub temporal_jitter: Option<f64>,
 
     // ── Layer 5 signals (context semantics) ──
-    pub directory_meme_score: f64,
-    pub filename_meme_score: f64,
+    pub directory_loop_intent_score: f64,
+    pub filename_loop_intent_score: f64,
 
     // ── Color Profile signals ──
     pub has_embedded_icc: bool,
@@ -155,7 +155,7 @@ pub struct LoopMeta {
 }
 
 impl LoopMeta {
-    /// Build LoopMeta from a full VideoDetectionResult.
+    /// Build `LoopMeta` from a full `VideoDetectionResult`.
     pub fn from_video_detection(detection: &VideoDetectionResult) -> Self {
         let file_path = Path::new(&detection.file_path);
         let file_name = file_path
@@ -217,7 +217,11 @@ impl LoopMeta {
             webp_compression_ratio: None,
             palette_depth: None,
             motion_gini: {
-                let sizes: Vec<f64> = detection.pkt_sizes.iter().map(|&s| f64::from(u32::try_from(s).unwrap_or(u32::MAX))).collect();
+                let sizes: Vec<f64> = detection
+                    .pkt_sizes
+                    .iter()
+                    .map(|&s| f64::from(u32::try_from(s).unwrap_or(u32::MAX)))
+                    .collect();
                 calculate_gini_f64(&sizes)
             },
             temporal_flatness: None,
@@ -225,8 +229,8 @@ impl LoopMeta {
             loop_closure_score: loop_closure_score(&detection.pkt_sizes),
             motion_periodicity: motion_periodicity_score(&detection.mv_magnitudes),
             temporal_jitter: temporal_jitter_score(&detection.pts_deltas),
-            directory_meme_score: 0.5,
-            filename_meme_score: 0.5,
+            directory_loop_intent_score: 0.5,
+            filename_loop_intent_score: 0.5,
             frame_types: detection.frame_types.clone(),
             mv_magnitudes: detection.mv_magnitudes.clone(),
             cached_frame_png: None,
@@ -239,13 +243,13 @@ impl LoopMeta {
                 })
             },
         };
-        meta.directory_meme_score = score_directory_context(parent_directories.as_deref(), &[]);
-        meta.filename_meme_score = analyze_filename(meta.file_name.as_deref(), &[]).raw;
+        meta.directory_loop_intent_score = score_directory_context(parent_directories.as_deref(), &[]);
+        meta.filename_loop_intent_score = analyze_filename(meta.file_name.as_deref(), &[]).raw;
         meta.populate_webp_compression_ratio_from_path(file_path);
         meta
     }
 
-    /// Build LoopMeta from an FFprobeResult (used in pipelines without full detection).
+    /// Build `LoopMeta` from an `FFprobeResult` (used in pipelines without full detection).
     pub fn from_ffprobe_result(probe: &crate::ffprobe::FFprobeResult, path: &Path) -> Self {
         let file_name = path
             .file_name()
@@ -301,15 +305,19 @@ impl LoopMeta {
             temporal_flatness: None,
             webp_compression_ratio: None,
             motion_gini: {
-                let sizes: Vec<f64> = probe.pkt_sizes.iter().map(|&s| f64::from(u32::try_from(s).unwrap_or(u32::MAX))).collect();
+                let sizes: Vec<f64> = probe
+                    .pkt_sizes
+                    .iter()
+                    .map(|&s| f64::from(u32::try_from(s).unwrap_or(u32::MAX)))
+                    .collect();
                 calculate_gini_f64(&sizes)
             },
             block_skew: None,
             loop_closure_score: loop_closure_score(&probe.pkt_sizes),
             motion_periodicity: motion_periodicity_score(&probe.mv_magnitudes),
             temporal_jitter: temporal_jitter_score(&probe.pts_deltas),
-            directory_meme_score: 0.5,
-            filename_meme_score: 0.5,
+            directory_loop_intent_score: 0.5,
+            filename_loop_intent_score: 0.5,
             frame_types: probe.frame_types.clone(),
             mv_magnitudes: probe.mv_magnitudes.clone(),
             has_embedded_icc: false,
@@ -328,13 +336,13 @@ impl LoopMeta {
                         .any(|&m| up.contains(m))
                 })
             });
-        meta.directory_meme_score = score_directory_context(parent_directories.as_deref(), &[]);
-        meta.filename_meme_score = analyze_filename(meta.file_name.as_deref(), &[]).raw;
+        meta.directory_loop_intent_score = score_directory_context(parent_directories.as_deref(), &[]);
+        meta.filename_loop_intent_score = analyze_filename(meta.file_name.as_deref(), &[]).raw;
         meta.populate_webp_compression_ratio_from_path(path);
         meta
     }
 
-    /// Build LoopMeta from a GIF file using header-level scanning (fast, no ffprobe).
+    /// Build `LoopMeta` from a `GIF` file using header-level scanning (fast, no `ffprobe`).
     pub fn from_gif_path(path: &Path) -> Option<Self> {
         let (pal, exts, has_transparency, variation, delay_variation, loops, total_dur) =
             crate::media_meta_utils::scan_gif_headers(path).ok()?;
@@ -423,8 +431,8 @@ impl LoopMeta {
             ..Default::default()
         };
 
-        meta.directory_meme_score = score_directory_context(parent_directories.as_deref(), &[]);
-        meta.filename_meme_score = analyze_filename(meta.file_name.as_deref(), &[]).raw;
+        meta.directory_loop_intent_score = score_directory_context(parent_directories.as_deref(), &[]);
+        meta.filename_loop_intent_score = analyze_filename(meta.file_name.as_deref(), &[]).raw;
         meta.populate_webp_compression_ratio_from_path(path);
         Some(meta)
     }
@@ -461,9 +469,9 @@ impl LoopMeta {
 
     /// Re-run semantic scoring with dynamic keywords from the database.
     pub fn refresh_semantics(&mut self, keywords: &[String]) {
-        self.directory_meme_score =
+        self.directory_loop_intent_score =
             score_directory_context(self.parent_directories.as_deref(), keywords);
-        self.filename_meme_score = analyze_filename(self.file_name.as_deref(), keywords).raw;
+        self.filename_loop_intent_score = analyze_filename(self.file_name.as_deref(), keywords).raw;
     }
 }
 
@@ -629,9 +637,9 @@ impl LoopThresholds {
 }
 
 #[derive(Debug, Clone)]
-struct TreeEvaluation {
-    verdict: LoopIntentVerdict,
-    tree_probability: f64,
+pub struct TreeEvaluation {
+    pub verdict: LoopIntentVerdict,
+    pub tree_probability: f64,
 }
 
 fn has_platform_marker(app_extensions: Option<&[String]>) -> bool {
@@ -651,7 +659,8 @@ fn zero_motion_ratio(mvs: &[f64]) -> f64 {
         return 0.0;
     }
     let zero_count = mvs.iter().filter(|&&value| value.abs() < 0.1).count();
-    f64::from(u32::try_from(zero_count).unwrap_or(u32::MAX)) / f64::from(u32::try_from(mvs.len()).unwrap_or(1))
+    f64::from(u32::try_from(zero_count).unwrap_or(u32::MAX))
+        / f64::from(u32::try_from(mvs.len()).unwrap_or(1))
 }
 
 fn is_near_16_by_9(width: u32, height: u32) -> bool {
@@ -701,7 +710,11 @@ fn evaluate_kinetics_and_physics(
         log_odds.add(-crate::constants::SCENE_CUT_NEGATIVE_LOG_ODDS);
     }
 
-    let compactness_signal = (-thresholds.file_size_z(f64::from(u32::try_from(meta.file_size_bytes).unwrap_or(u32::MAX)))).max(0.0) * 0.70
+    let compactness_signal = (-thresholds.file_size_z(f64::from(
+        u32::try_from(meta.file_size_bytes).unwrap_or(u32::MAX),
+    )))
+    .max(0.0)
+        * 0.70
         + (-thresholds.pixels_z(total_pixels)).max(0.0) * 0.45;
     if !meta.has_audio && compactness_signal > 0.0 {
         log_odds.add(
@@ -710,7 +723,12 @@ fn evaluate_kinetics_and_physics(
         );
     }
 
-    let large_media_signal = thresholds.file_size_z(f64::from(u32::try_from(meta.file_size_bytes).unwrap_or(u32::MAX))).max(0.0) * 0.75
+    let large_media_signal = thresholds
+        .file_size_z(f64::from(
+            u32::try_from(meta.file_size_bytes).unwrap_or(u32::MAX),
+        ))
+        .max(0.0)
+        * 0.75
         + thresholds.pixels_z(total_pixels).max(0.0) * 0.35;
     if large_media_signal > 0.0 {
         let audio_multiplier = if meta.has_audio { 1.0 } else { 0.65 };
@@ -832,10 +850,10 @@ fn apply_weak_heuristics(
         log_odds.add(LOCALIZED_MOTION_POSITIVE_LOG_ODDS);
     }
 
-    if meta.directory_meme_score > 0.8 {
+    if meta.directory_loop_intent_score > 0.8 {
         log_odds.add(DIRECTORY_CONTEXT_POSITIVE_LOG_ODDS);
     }
-    if meta.filename_meme_score > 0.8 {
+    if meta.filename_loop_intent_score > 0.8 {
         log_odds.add(FILENAME_CONTEXT_POSITIVE_LOG_ODDS);
     }
 
@@ -882,8 +900,7 @@ fn apply_weak_heuristics(
     }
 
     let bias_enabled = std::env::var(crate::constants::ENV_MODERN_FORMAT_CONVERT_BIAS)
-        .map(|value| value == "1")
-        .unwrap_or(true);
+        .map_or(true, |value| value == "1");
     let is_modern = crate::constants::MODERN_ANIMATED_EXTENSIONS.contains(&ext_lower.as_str());
     if is_modern && bias_enabled && meta.duration_secs > thresholds.modern_bias_duration_secs {
         let master_like = meta.has_embedded_icc
@@ -915,7 +932,7 @@ fn developer_layer1_override_enabled(name: &str) -> bool {
     }
 }
 
-fn evaluate_loop_tree(
+pub fn evaluate_loop_tree(
     meta: &LoopMeta,
     reference_profile: Option<&LoopReferenceProfile>,
 ) -> TreeEvaluation {
@@ -1105,7 +1122,7 @@ struct Layer6Fusion {
 
 /// Fuses KNN results with the decision tree output using a Logistic Regression model.
 ///
-/// Formula: P(keep) = sigmoid(w_knn*knn + w_tree*tree + w_density*log(n) + bias)
+/// Formula: P(keep) = `sigmoid`(`w_knn`*knn + `w_tree`*tree + `w_density`*log(n) + bias)
 fn logistic_regression_fusion(
     knn_prob: f64,
     tree_prob: f64,
@@ -1147,12 +1164,20 @@ fn compute_layer6_fusion(
 }
 
 /// Execute the loop intent identification for a given detection result.
+///
+/// # Errors
+/// Returns an error if the underlying database fetches fail or the
+/// classification logic encounters an IO error.
 pub fn assess_loop_intent(detection: &VideoDetectionResult) -> LoopIntentVerdict {
     let meta = LoopMeta::from_video_detection(detection);
     assess_loop_intent_from_meta(&meta, Some(Path::new(&detection.file_path)))
 }
 
 /// Execute the loop intent identification for a given probe result.
+///
+/// # Errors
+/// Returns an error if the underlying database fetches fail or the
+/// classification logic encounters an IO error.
 pub fn assess_loop_intent_from_probe(
     probe: &crate::ffprobe::FFprobeResult,
     path: &Path,
@@ -1161,10 +1186,12 @@ pub fn assess_loop_intent_from_probe(
     assess_loop_intent_from_meta(&meta, Some(path))
 }
 
-/// Core entry point: runs the full tree including KNN Layer 6 and Layer 7 fallback.
-///
 /// Every invocation logs an inference record to the database (if connected) to
 /// build the feedback loop described in Level 4 of the database utilization plan.
+///
+/// # Errors
+/// Returns an error if the underlying database fetches fail or the
+/// classification logic encounters an IO error during visual sampling.
 pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> LoopIntentVerdict {
     use crate::database::{
         fetch_loop_reference_profile, log_inference_record, lookup_similar_samples, open_pg_client,
@@ -1206,10 +1233,8 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
                 emit_stderr(&format!(
                     "⚠️  Tree-only result remained uncertain ({reason}) — using Layer 7 fallback"
                 ));
-                let fallback = layer7_fallback(
-                    &mutable_meta,
-                    "Layer 0: DB unavailable / KNN disabled",
-                );
+                let fallback =
+                    layer7_fallback(&mutable_meta, "Layer 0: DB unavailable / KNN disabled");
                 emit_stderr(&format!("💡 Fallback Result: {}", fallback.reason()));
                 return fallback;
             }
@@ -1356,7 +1381,7 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
                     v
                 } else {
                     emit_stderr(&format!(
-                        "   ⚠️  KNN data inconclusive (conf={confidence:.2}, score={final_score:.2}) — deferring to Layer 7"
+                        "   ℹ️  KNN data inconclusive (conf={confidence:.2}, score={final_score:.2}) — deferring to Layer 7"
                     ));
                     let final_v = layer7_fallback(meta, reason);
                     if final_v.is_keep_gif() {
@@ -1368,7 +1393,7 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
                 }
             } else {
                 emit_stderr(&format!(
-                    "   ⚠️ KNN returned no usable match (tree_prob={tree_probability:.2}) — keeping uncertainty explicit and using Layer 7 fallback"
+                    "   ℹ️  KNN similarity match unavailable (tree_prob={tree_probability:.2}) — using Layer 7 fallback"
                 ));
                 let final_v = layer7_fallback(meta, reason);
                 if final_v.is_keep_gif() {
@@ -1484,9 +1509,7 @@ fn extract_layer_tag(reason: &str) -> String {
 #[must_use]
 pub fn is_lossless_exploration_safe(meta: &LoopMeta, path: Option<&Path>) -> bool {
     let sample_match = crate::database::lookup_similar_samples(meta, path);
-    let (threshold, keep_prob_label) = match sample_match
-        .as_ref()
-        .and_then(|m| m.keep_probability)
+    let (threshold, keep_prob_label) = match sample_match.as_ref().and_then(|m| m.keep_probability)
     {
         Some(keep_prob) => (
             lossless_duration_limit_for_keep_prob(keep_prob),
@@ -1535,7 +1558,11 @@ fn calculate_cv(values: &[u64]) -> Option<f64> {
         return None;
     }
     let n = f64::from(u32::try_from(values.len()).unwrap_or(1));
-    let mean = values.iter().map(|&v| f64::from(u32::try_from(v).unwrap_or(u32::MAX))).sum::<f64>() / n;
+    let mean = values
+        .iter()
+        .map(|&v| f64::from(u32::try_from(v).unwrap_or(u32::MAX)))
+        .sum::<f64>()
+        / n;
     if mean <= 0.0 {
         return Some(0.0);
     }
@@ -1607,6 +1634,10 @@ fn get_meme_keywords() -> &'static [String] {
     })
 }
 
+/// Returns `0.5` if no parts are provided.
+///
+/// # Errors
+/// This function does not typically return `Result`, but uses `0.5` as a neutral score.
 pub fn score_directory_context(parts: Option<&[String]>, keywords: &[String]) -> f64 {
     let Some(parts) = parts else {
         return 0.5;
@@ -1615,7 +1646,9 @@ pub fn score_directory_context(parts: Option<&[String]>, keywords: &[String]) ->
     for part in parts {
         let lower = part.to_lowercase();
         if keywords.iter().any(|keyword| lower.contains(keyword))
-            || global_keywords.iter().any(|keyword| lower.contains(keyword))
+            || global_keywords
+                .iter()
+                .any(|keyword| lower.contains(keyword))
         {
             return 1.0;
         }
@@ -1623,6 +1656,10 @@ pub fn score_directory_context(parts: Option<&[String]>, keywords: &[String]) ->
     0.5
 }
 
+/// Returns `0.5` (Ambiguous) if no name is provided.
+///
+/// # Errors
+/// This function does not typically return `Result`, but uses `0.5` as a neutral score.
 pub fn analyze_filename(name: Option<&str>, keywords: &[String]) -> FilenameAnalysis {
     let Some(name) = name else {
         return FilenameAnalysis {
@@ -1706,7 +1743,8 @@ pub fn score_sparse_cadence(duration_secs: f64, frame_count: u64) -> f64 {
     if duration_secs <= 0.01 || frame_count <= 1 {
         return 0.5;
     }
-    let frame_density = f64::from(u32::try_from(frame_count).unwrap_or(u32::MAX)) / duration_secs.max(0.01);
+    let frame_density =
+        f64::from(u32::try_from(frame_count).unwrap_or(u32::MAX)) / duration_secs.max(0.01);
     let avg_gap = duration_secs / f64::from(u32::try_from(frame_count).unwrap_or(u32::MAX));
 
     if duration_secs <= 1.5 && frame_density >= 12.0 {
@@ -1772,7 +1810,7 @@ fn calculate_micro_nudges(meta: &LoopMeta) -> AuxiliaryNudge {
 
 /// Detect hard scene cuts in packet size stream.
 /// If any inner frame is 5x larger than the median inner packet size,
-/// it's likely an I-frame scene cut.
+/// it's likely an `I-frame` scene cut.
 fn detect_scene_cut(pkt_sizes: &[u64]) -> bool {
     if pkt_sizes.len() < 5 {
         return false;
@@ -1786,7 +1824,9 @@ fn detect_scene_cut(pkt_sizes: &[u64]) -> bool {
         return false;
     }
 
-    inner.iter().any(|&size| (f64::from(u32::try_from(size).unwrap_or(u32::MAX))) > median * 5.0)
+    inner
+        .iter()
+        .any(|&size| (f64::from(u32::try_from(size).unwrap_or(u32::MAX))) > median * 5.0)
 }
 
 /// Detect localized motion (high concentration of motion in small area).
@@ -1795,7 +1835,7 @@ fn detect_localized_motion(mvs: &[f64]) -> bool {
     mvs.len() >= 10 && zero_motion_ratio(mvs) > 0.7
 }
 
-/// Extract first frame from video to temporary PNG for analysis.
+/// Extract first frame from video to temporary `PNG` for analysis.
 fn extract_frame_to_temp(path: &Path) -> Option<std::path::PathBuf> {
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1858,7 +1898,8 @@ fn calculate_band_variance(img: &image::DynamicImage, y_start: u32, y_end: u32) 
         return 0.0;
     }
     let mean = values.iter().sum::<f64>() / f64::from(u32::try_from(values.len()).unwrap_or(1));
-    values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / f64::from(u32::try_from(values.len()).unwrap_or(1))
+    values.iter().map(|v| (v - mean).powi(2)).sum::<f64>()
+        / f64::from(u32::try_from(values.len()).unwrap_or(1))
 }
 
 fn detect_high_text_density_from_image(img: &image::DynamicImage) -> bool {
@@ -1950,7 +1991,7 @@ fn sampled_webp_compression_ratio_from_image(img: &image::DynamicImage) -> Optio
     Some(raw_size / webp_size)
 }
 
-/// Check if a file path should use the GIF fast-path (from_gif_path) instead of ffprobe.
+/// Check if a file path should use the `GIF` fast-path (`from_gif_path`) instead of `ffprobe`.
 #[must_use]
 pub fn should_use_gif_fast_path(path: &std::path::Path) -> bool {
     matches!(
@@ -1961,7 +2002,10 @@ pub fn should_use_gif_fast_path(path: &std::path::Path) -> bool {
     )
 }
 
-/// Performs deep signal extraction (Palette, YDIF, Block Skew) using ffmpeg benchmarks.
+/// Performs deep signal extraction (Palette, `YDIF`, Block Skew) using `FFmpeg` benchmarks.
+///
+/// # Errors
+/// Returns an error if the `FFmpeg` command fails or the output cannot be parsed.
 pub fn deep_refine_meta(meta: &mut LoopMeta, path: &std::path::Path) -> anyhow::Result<()> {
     // 1. Extract Temporal Flatness (YDIF)
     let output = crate::ffmpeg_builder::FfmpegBuilder::new()
@@ -2045,10 +2089,14 @@ fn loop_closure_score(pkt_sizes: &[u64]) -> Option<f64> {
         return None;
     }
 
-    let vals: Vec<f64> = pkt_sizes.iter().map(|&v| f64::from(u32::try_from(v).unwrap_or(u32::MAX))).collect();
+    let vals: Vec<f64> = pkt_sizes
+        .iter()
+        .map(|&v| f64::from(u32::try_from(v).unwrap_or(u32::MAX)))
+        .collect();
     let n = vals.len();
     let mean = vals.iter().sum::<f64>() / f64::from(u32::try_from(n).unwrap_or(1));
-    let variance = vals.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / f64::from(u32::try_from(n).unwrap_or(1));
+    let variance = vals.iter().map(|&v| (v - mean).powi(2)).sum::<f64>()
+        / f64::from(u32::try_from(n).unwrap_or(1));
     if variance < 1e-6 {
         // All frames identical — perfect loop structure
         return Some(1.0);
@@ -2114,7 +2162,8 @@ fn temporal_jitter_score(pts_deltas: &[f64]) -> Option<f64> {
     }
 
     let mean = pts_deltas.iter().sum::<f64>() / f64::from(u32::try_from(n).unwrap_or(1));
-    let variance = pts_deltas.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / f64::from(u32::try_from(n).unwrap_or(1));
+    let variance = pts_deltas.iter().map(|&v| (v - mean).powi(2)).sum::<f64>()
+        / f64::from(u32::try_from(n).unwrap_or(1));
     if variance < 1e-12 {
         return Some(1.0); // Perfectly uniform frame timing
     }
@@ -2210,8 +2259,8 @@ mod tests {
             container: Some("mp4".to_string()),
             frame_payload_variation: Some(0.4),
             frame_delay_variation: Some(0.24),
-            directory_meme_score: 0.5,
-            filename_meme_score: 0.5,
+            directory_loop_intent_score: 0.5,
+            filename_loop_intent_score: 0.5,
             ..Default::default()
         }
     }
@@ -2375,8 +2424,8 @@ mod tests {
         meta.motion_gini = Some(0.82);
         meta.palette_depth = Some(0.82);
         meta.temporal_flatness = Some(0.80);
-        meta.directory_meme_score = 1.0;
-        meta.filename_meme_score = 1.0;
+        meta.directory_loop_intent_score = 1.0;
+        meta.filename_loop_intent_score = 1.0;
 
         let verdict = verdict_with_profile(&meta, &profile);
         assert!(

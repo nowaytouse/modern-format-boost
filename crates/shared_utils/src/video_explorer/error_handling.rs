@@ -97,8 +97,7 @@ impl CompressionResult {
                 ..
             } => {
                 let score = actual_score
-                    .map(|value| format!("{value:.4}"))
-                    .unwrap_or_else(|| "unknown".to_string());
+                    .map_or_else(|| "unknown".to_string(), |value| format!("{value:.4}"));
                 Some(format!(
                     "Quality check failed: {reason} (score: {score}, target: {target_score:.2})"
                 ))
@@ -157,7 +156,9 @@ mod tests {
             target_score: 0.99,
         };
 
-        let message = result.error_message().expect("quality failure should have a message");
+        let message = result
+            .error_message()
+            .expect("quality failure should have a message");
         assert!(message.contains("score: unknown"));
         assert!(!message.contains("score: 0.0000"));
     }

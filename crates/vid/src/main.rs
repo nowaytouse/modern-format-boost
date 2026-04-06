@@ -111,7 +111,7 @@ fn main() -> anyhow::Result<()> {
         _ => None,
     };
 
-    let _lock_guard = if let Some(input) = input_to_lock {
+    let _lock_guard = input_to_lock.and_then(|input| {
         let input_abs = std::fs::canonicalize(input).unwrap_or_else(|_| input.clone());
         if input_abs.is_dir() {
             match shared_utils::acquire_dir_lock(&input_abs) {
@@ -124,9 +124,7 @@ fn main() -> anyhow::Result<()> {
         } else {
             None
         }
-    } else {
-        None
-    };
+    });
     // ------------------------------------------------------
 
     match cli.command {

@@ -11,11 +11,15 @@ pub struct VideoRecommendation {
     pub command_hint: String,
 }
 
-/// 🚀 New Entry Point: Subscribes to MediaIndexRow (Database-driven decision)
-#[must_use]
-pub fn get_video_recommendation_from_row(row: &MediaIndexRow) -> Result<VideoRecommendation, serde_json::Error> {
+/// 🚀 New Entry Point: Subscribes to `MediaIndexRow` (Database-driven decision)
+///
+/// # Errors
+/// Returns an error if the recommendation cannot be generated.
+pub fn get_video_recommendation_from_row(
+    row: &MediaIndexRow,
+) -> Result<VideoRecommendation, serde_json::Error> {
     let features: VideoDetectionResult = serde_json::from_str(&row.raw_features_json)?;
-    
+
     Ok(generate_video_recommendation(&features))
 }
 
@@ -26,8 +30,12 @@ fn generate_video_recommendation(features: &VideoDetectionResult) -> VideoRecomm
     let mut command_hint = String::new();
 
     // Decision Logic: If it's a high-fidelity archival candidate but not yet in modern modern formats
-    let is_old_lossless = matches!(features.codec, DetectedCodec::ProRes | DetectedCodec::DNxHD | DetectedCodec::MJPEG);
-    let is_high_bitrate_h264 = features.codec == DetectedCodec::H264 && features.bitrate > 50_000_000;
+    let is_old_lossless = matches!(
+        features.codec,
+        DetectedCodec::ProRes | DetectedCodec::DNxHD | DetectedCodec::MJPEG
+    );
+    let is_high_bitrate_h264 =
+        features.codec == DetectedCodec::H264 && features.bitrate > 50_000_000;
 
     if is_old_lossless || is_high_bitrate_h264 {
         recommended_codec = "AV1 (SVT-AV1)".to_string();
@@ -37,7 +45,10 @@ fn generate_video_recommendation(features: &VideoDetectionResult) -> VideoRecomm
         } else {
             "High-bitrate H.264 detected; recommend AV1 for 50%+ size reduction".to_string()
         };
-        command_hint = format!("ffmpeg -i '{}' -c:v libsvtav1 -preset 6 -crf 20 output.mp4", features.file_path);
+        command_hint = format!(
+            "ffmpeg -i '{}' -c:v libsvtav1 -preset 6 -crf 20 output.mp4",
+            features.file_path
+        );
     }
 
     VideoRecommendation {

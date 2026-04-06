@@ -356,7 +356,12 @@ fn find_box_data_recursive_impl(
 
     let mut pos = 0;
     while pos + 8 <= data.len() {
-        let size = crate::numeric_cast::u32_to_usize_sat(u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]));
+        let size = crate::numeric_cast::u32_to_usize_sat(u32::from_be_bytes([
+            data[pos],
+            data[pos + 1],
+            data[pos + 2],
+            data[pos + 3],
+        ]));
         let current_type = &data[pos + 4..pos + 8];
 
         let (payload_start, next_pos) = if size == 0 {
@@ -453,7 +458,12 @@ fn find_any_box_recursive_impl(data: &[u8], box_type: [u8; 4], depth: u32, max_d
 
     let mut pos = 0;
     while pos + 8 <= data.len() {
-        let size = crate::numeric_cast::u32_to_usize_sat(u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]));
+        let size = crate::numeric_cast::u32_to_usize_sat(u32::from_be_bytes([
+            data[pos],
+            data[pos + 1],
+            data[pos + 2],
+            data[pos + 3],
+        ]));
         let current_type = &data[pos + 4..pos + 8];
         if current_type == box_type {
             return true;
@@ -503,8 +513,7 @@ pub fn is_command_available(command_name: &str) -> bool {
         .arg("--version")
         .output()
         .or_else(|_| Command::new(command_name).arg("-version").output())
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+        .is_ok_and(|o| o.status.success())
 }
 
 #[must_use]

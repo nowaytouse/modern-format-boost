@@ -50,7 +50,7 @@ fn cleanup_output_file(path: &Path, context: &str) {
     }
 }
 
-/// Build FFmpeg HDR metadata arguments from detection results.
+/// Build `FFmpeg` HDR metadata arguments from detection results.
 /// Preserves primaries, transfer characteristics, matrix, and static HDR10 metadata.
 fn build_hdr_ffmpeg_args(detection: &VideoDetectionResult) -> Vec<String> {
     let mut args: Vec<String> = Vec::new();
@@ -180,12 +180,10 @@ fn prepare_dv_rpu(detection: &VideoDetectionResult) -> Option<DvRpuResult> {
         };
 
     // Step 3: Determine x265 profile string
-    let profile_str = if let Some(s) = shared_utils::dv_x265_profile_string(
+    let Some(profile_str) = shared_utils::dv_x265_profile_string(
         detection.dv_profile,
         detection.dv_bl_signal_compatibility_id,
-    ) {
-        s
-    } else {
+    ) else {
         warn!(
             "Unsupported DV profile {:?} for x265 — falling back to HDR10",
             detection.dv_profile
@@ -303,12 +301,10 @@ pub fn determine_strategy_with_apple_compat(
     // For videos, use ffprobe path with structural signal refresh.
     let loop_verdict = if shared_utils::should_use_gif_fast_path(Path::new(&result.file_path)) {
         // GIF file: use header-level detection
-        if let Some(meta) = shared_utils::LoopMeta::from_gif_path(Path::new(&result.file_path)) {
-            shared_utils::assess_loop_intent_from_meta(&meta, Some(Path::new(&result.file_path)))
-        } else {
-            // Fallback if from_gif_path fails
-            shared_utils::assess_loop_intent(result)
-        }
+        shared_utils::LoopMeta::from_gif_path(Path::new(&result.file_path)).map_or_else(
+            || shared_utils::assess_loop_intent(result),
+            |meta| shared_utils::assess_loop_intent_from_meta(&meta, Some(Path::new(&result.file_path))),
+        )
     } else {
         // Video file: ensure structural signals are available
         let mut detection = result.clone();
@@ -420,45 +416,42 @@ pub fn determine_strategy_with_apple_compat(
         }
     }
 
-    let (target, reason, crf, lossless) = match (result.compression, result.format.as_str()) {
-        (crate::detection_api::CompressionType::Lossless, _) => {
-            let codec_name = codec.as_str().to_uppercase();
+    let (target, reason, crf, lossless) = if let (crate::detection_api::CompressionType::Lossless, _) = (result.compression, result.format.as_str()) {
+        let codec_name = codec.as_str().to_uppercase();
+        (
+            TargetVideoFormat::HevcLosslessMkv,
+            format!("Source is lossless - using {codec_name} Lossless MKV"),
+            0.0_f32,
+            true,
+        )
+    } else {
+        let (target, reason_prefix) = match codec {
+            SelectedCodec::Hevc => (TargetVideoFormat::HevcMp4, "HEVC"),
+            SelectedCodec::Av1 => (TargetVideoFormat::Av1Mp4, "AV1"),
+        };
+        if result.archival_candidate || result.quality_score >= 90 {
             (
-                TargetVideoFormat::HevcLosslessMkv,
-                format!("Source is lossless - using {codec_name} Lossless MKV"),
-                0.0_f32,
-                true,
+                target,
+                format!(
+                    "Source is high quality ({}) - compressing with {} CRF 18 (visually lossless)",
+                    result.codec.as_str(),
+                    reason_prefix
+                ),
+                18.0_f32,
+                false,
             )
-        }
-        _ => {
-            let (target, reason_prefix) = match codec {
-                SelectedCodec::Hevc => (TargetVideoFormat::HevcMp4, "HEVC"),
-                SelectedCodec::Av1 => (TargetVideoFormat::Av1Mp4, "AV1"),
-            };
-            if result.archival_candidate || result.quality_score >= 90 {
-                (
-                    target,
-                    format!(
-                        "Source is high quality ({}) - compressing with {} CRF 18 (visually lossless)",
-                        result.codec.as_str(),
-                        reason_prefix
-                    ),
-                    18.0_f32,
-                    false,
-                )
-            } else {
-                (
-                    target,
-                    format!(
-                        "Source is {} ({}) - compressing with {} CRF 20",
-                        result.codec.as_str(),
-                        result.compression.as_str(),
-                        reason_prefix
-                    ),
-                    20.0_f32,
-                    false,
-                )
-            }
+        } else {
+            (
+                target,
+                format!(
+                    "Source is {} ({}) - compressing with {} CRF 20",
+                    result.codec.as_str(),
+                    result.compression.as_str(),
+                    reason_prefix
+                ),
+                20.0_f32,
+                false,
+            )
         }
     };
 
@@ -487,7 +480,7 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
     let detection = crate::detection_api::detect_video_with_cache(input, None)?;
 
     let output_dir = output_dir.map_or_else(
-        || input.parent().unwrap_or(Path::new(".")).to_path_buf(),
+        || input.parent().unwrap_or_else(|| Path::new(".")).to_path_buf(),
         std::path::Path::to_path_buf,
     );
 
@@ -594,12 +587,12 @@ pub fn auto_convert_with_cache(
         return Err(VidQualityError::ConversionError(e));
     }
 
-    let _label = input
+    let label = input
         .file_name()
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
-    shared_utils::progress_mode::set_log_context(&_label);
+    shared_utils::progress_mode::set_log_context(&label);
     let _log_guard = shared_utils::progress_mode::LogContextGuard;
 
     // Skip Live Photos in Apple compat mode
@@ -607,7 +600,7 @@ pub fn auto_convert_with_cache(
         let reason = "Live Photo detected in Apple compat mode";
         shared_utils::progress_mode::video_skipped(reason);
 
-        let file_size = std::fs::metadata(input).map(|m| m.len()).unwrap_or(0);
+        let file_size = std::fs::metadata(input).map_or(0, |m| m.len());
 
         shared_utils::copy_on_skip_or_fail(
             input,
@@ -646,7 +639,7 @@ pub fn auto_convert_with_cache(
         let reason = "Static image detected (1 frame) - vid strictly processes animated media only (handled by img)";
         shared_utils::progress_mode::video_skipped(reason);
 
-        let file_size = std::fs::metadata(input).map(|m| m.len()).unwrap_or(0);
+        let file_size = std::fs::metadata(input).map_or(0, |m| m.len());
 
         shared_utils::copy_on_skip_or_fail(
             input,
@@ -737,13 +730,13 @@ pub fn auto_convert_with_cache(
                 .strip_prefix(base)
                 .unwrap_or(input)
                 .parent()
-                .unwrap_or(Path::new(""));
+                .unwrap_or_else(|| Path::new(""));
             user_out.join(rel_path)
         } else {
             config
                 .output_dir
                 .clone()
-                .unwrap_or_else(|| input.parent().unwrap_or(Path::new(".")).to_path_buf())
+                .unwrap_or_else(|| input.parent().unwrap_or_else(|| Path::new(".")).to_path_buf())
         };
 
     std::fs::create_dir_all(&output_dir)?;
@@ -994,74 +987,43 @@ pub fn auto_convert_with_cache(
                 };
 
                 let explore_result = match config.codec {
-                    SelectedCodec::Hevc => {
+                    SelectedCodec::Hevc => shared_utils::explore_hevc_with_gpu_coarse_full_warm_start(
+                        input_path,
+                        &temp_path,
+                        vf_args,
+                        predicted_crf,
+                        warm_start_crf,
+                        ultimate,
+                        config.force_ms_ssim_long,
+                        config.allow_size_tolerance,
+                        config.min_ssim,
+                        config.child_threads,
+                        hdr_x265_params_opt,
+                        config.apple_compat,
                         if ultimate {
-                            shared_utils::explore_hevc_with_gpu_coarse_full_warm_start(
-                                input_path,
-                                &temp_path,
-                                vf_args.clone(),
-                                predicted_crf,
-                                warm_start_crf,
-                                true,
-                                config.force_ms_ssim_long,
-                                config.allow_size_tolerance,
-                                config.min_ssim,
-                                config.child_threads,
-                                hdr_x265_params_opt.clone(),
-                                config.apple_compat,
-                                shared_utils::EncoderPreset::Slower,
-                            )
+                            shared_utils::EncoderPreset::Slower
                         } else {
-                            shared_utils::explore_hevc_with_gpu_coarse_full_warm_start(
-                                input_path,
-                                &temp_path,
-                                vf_args.clone(),
-                                predicted_crf,
-                                warm_start_crf,
-                                false,
-                                config.force_ms_ssim_long,
-                                config.allow_size_tolerance,
-                                config.min_ssim,
-                                config.child_threads,
-                                hdr_x265_params_opt.clone(),
-                                config.apple_compat,
-                                shared_utils::EncoderPreset::Medium,
-                            )
-                        }
-                    }
-                    SelectedCodec::Av1 => {
+                            shared_utils::EncoderPreset::Medium
+                        },
+                    ),
+                    SelectedCodec::Av1 => shared_utils::explore_av1_with_gpu_coarse_full_warm_start(
+                        input_path,
+                        &temp_path,
+                        vf_args,
+                        predicted_crf,
+                        warm_start_crf,
+                        ultimate,
+                        config.force_ms_ssim_long,
+                        config.allow_size_tolerance,
+                        config.min_ssim,
+                        config.child_threads,
+                        config.apple_compat,
                         if ultimate {
-                            shared_utils::explore_av1_with_gpu_coarse_full_warm_start(
-                                input_path,
-                                &temp_path,
-                                vf_args.clone(),
-                                predicted_crf,
-                                warm_start_crf,
-                                true,
-                                config.force_ms_ssim_long,
-                                config.allow_size_tolerance,
-                                config.min_ssim,
-                                config.child_threads,
-                                config.apple_compat,
-                                shared_utils::EncoderPreset::Slower,
-                            )
+                            shared_utils::EncoderPreset::Slower
                         } else {
-                            shared_utils::explore_av1_with_gpu_coarse_full_warm_start(
-                                input_path,
-                                &temp_path,
-                                vf_args.clone(),
-                                predicted_crf,
-                                warm_start_crf,
-                                false,
-                                config.force_ms_ssim_long,
-                                config.allow_size_tolerance,
-                                config.min_ssim,
-                                config.child_threads,
-                                config.apple_compat,
-                                shared_utils::EncoderPreset::Medium,
-                            )
-                        }
-                    }
+                            shared_utils::EncoderPreset::Medium
+                        },
+                    ),
                 }
                 .map_err(|e| VidQualityError::ConversionError(e.to_string()))?;
 
@@ -1073,9 +1035,7 @@ pub fn auto_convert_with_cache(
                 if !explore_result.quality_passed.is_ok()
                     && (config.match_quality || config.explore_smaller)
                 {
-                    let actual_ssim = if let Some(s) = explore_result.ssim {
-                        s
-                    } else {
+                    let Some(actual_ssim) = explore_result.ssim else {
                         warn!("   ⚠️  SSIM not measured, cannot verify quality");
                         cleanup_output_file(
                             &temp_path,
@@ -1278,13 +1238,13 @@ pub fn auto_convert_with_cache(
                 )
             }
         }
+        TargetVideoFormat::Ffv1Mkv => unreachable!("HEVC tool should not return AV1/FFV1 target"),
         TargetVideoFormat::Skip => unreachable!(),
-        _ => unreachable!("HEVC tool should not return AV1/FFV1 target"),
     };
 
-    let cache_exact_hint = success_status_for_cache(strategy.target, &explore_result_opt);
+    let cache_exact_hint = success_status_for_cache(strategy.target, explore_result_opt.as_ref());
     let cache_best_effort_hint =
-        best_effort_status_for_cache(strategy.target, &explore_result_opt, final_crf);
+        best_effort_status_for_cache(strategy.target, explore_result_opt.as_ref(), final_crf);
 
     if cache_exact_hint && final_crf > 0.0 {
         match config.codec {
@@ -1453,9 +1413,7 @@ pub fn auto_convert_with_cache(
 
     shared_utils::copy_metadata(input, &output_path);
 
-    let actual_output_size = std::fs::metadata(&output_path)
-        .map(|m| m.len())
-        .unwrap_or(output_size);
+    let actual_output_size = std::fs::metadata(&output_path).map_or(output_size, |m| m.len());
 
     let metadata_delta =
         shared_utils::video_explorer::detect_metadata_size(pre_metadata_size, actual_output_size);
@@ -1672,29 +1630,25 @@ pub fn auto_convert_with_cache(
 
 fn success_status_for_cache(
     target: TargetVideoFormat,
-    explore_result: &Option<shared_utils::ExploreResult>,
+    explore_result: Option<&shared_utils::ExploreResult>,
 ) -> bool {
     matches!(target, TargetVideoFormat::Gif)
         || (matches!(
             target,
             TargetVideoFormat::HevcMp4 | TargetVideoFormat::Av1Mp4
-        ) && explore_result
-            .as_ref()
-            .is_some_and(|r| r.quality_passed.is_ok()))
+        ) && explore_result.is_some_and(|r| r.quality_passed.is_ok()))
 }
 
 fn best_effort_status_for_cache(
     target: TargetVideoFormat,
-    explore_result: &Option<shared_utils::ExploreResult>,
+    explore_result: Option<&shared_utils::ExploreResult>,
     final_crf: f32,
 ) -> bool {
     matches!(
         target,
         TargetVideoFormat::HevcMp4 | TargetVideoFormat::Av1Mp4
     ) && final_crf > 0.0
-        && explore_result
-            .as_ref()
-            .is_some_and(|r| !r.quality_passed.is_ok())
+        && explore_result.is_some_and(|r| !r.quality_passed.is_ok())
 }
 
 /// Calculate matched CRF based on detection results and selected codec.

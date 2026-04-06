@@ -131,8 +131,7 @@ pub fn is_gif_magic(path: &Path) -> bool {
             f.read_exact(&mut magic)?;
             Ok(())
         })
-        .map(|()| &magic == b"GIF8")
-        .unwrap_or(false)
+        .is_ok_and(|()| &magic == b"GIF8")
 }
 
 pub fn calculate_ssim_enhanced(input: &Path, output: &Path) -> Option<f64> {

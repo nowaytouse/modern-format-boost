@@ -15,7 +15,7 @@ struct Cli {
     #[arg(value_enum)]
     label: Option<IntentLabel>,
 
-    /// PostgreSQL connection string
+    /// `PostgreSQL` connection string
     #[arg(
         short,
         long,

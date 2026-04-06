@@ -18,8 +18,7 @@ pub fn check_tool(name: &str) -> bool {
     Command::new(name)
         .arg("--version")
         .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+        .is_ok_and(|o| o.status.success())
 }
 
 #[must_use]
@@ -27,8 +26,7 @@ pub fn check_tool_alt(name: &str) -> bool {
     Command::new(name)
         .arg("-version")
         .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+        .is_ok_and(|o| o.status.success())
 }
 
 #[must_use]

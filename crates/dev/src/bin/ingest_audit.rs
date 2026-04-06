@@ -1,6 +1,6 @@
 //! 📥 Ingest Audit Tool - Media Index System
 //!
-//! Syncs production decision logs (JSONL) into the SQLite Media Index.
+//! Syncs production decision logs (JSONL) into the `SQLite` Media Index.
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -11,13 +11,17 @@ use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(author, version, about = "Syncs JSONL production logs into the Media Index SQLite database.")]
+#[command(
+    author,
+    version,
+    about = "Syncs JSONL production logs into the Media Index SQLite database."
+)]
 struct Args {
-    /// Path to the live_audit.jsonl
+    /// Path to the `live_audit.jsonl`
     #[arg(short, long, default_value = "debug/live_audit.jsonl")]
     input: PathBuf,
 
-    /// Path to the media_index.sqlite
+    /// Path to the `media_index.sqlite`
     #[arg(short, long, default_value = "debug/media_index.sqlite")]
     db: PathBuf,
 }
@@ -36,7 +40,8 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     if !args.input.exists() {
-        println!("ℹ️ No audit log found at {}. Nothing to ingest.", args.input.display());
+        let input_display = args.input.display();
+        println!("ℹ️ No audit log found at {input_display}. Nothing to ingest.");
         return Ok(());
     }
 
@@ -46,11 +51,15 @@ fn main() -> Result<()> {
     let file = File::open(&args.input).context("Failed to open audit log")?;
     let reader = BufReader::new(file);
 
-    println!("📥 Ingesting logs from {} into {}...", args.input.display(), args.db.display());
+    let input_display = args.input.display();
+    let db_display = args.db.display();
+    println!("📥 Ingesting logs from {input_display} into {db_display}...");
 
     for line in reader.lines() {
         let line = line?;
-        if line.trim().is_empty() { continue; }
+        if line.trim().is_empty() {
+            continue;
+        }
 
         if let Ok(record) = serde_json::from_str::<AuditRecord>(&line) {
             index.log_live_details(
@@ -64,6 +73,6 @@ fn main() -> Result<()> {
         }
     }
 
-    println!("✅ Successfully ingested {} decision records.", count);
+    println!("✅ Successfully ingested {count} decision records.");
     Ok(())
 }

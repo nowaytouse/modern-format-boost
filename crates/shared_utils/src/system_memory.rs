@@ -65,8 +65,7 @@ pub fn memory_pressure_level() -> Option<MemoryPressure> {
 #[must_use]
 pub fn is_low_memory_env() -> bool {
     std::env::var("MFB_LOW_MEMORY")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true") || v == "yes")
-        .unwrap_or(false)
+        .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true") || v == "yes")
 }
 
 fn get_memory_macos() -> (u64, u64) {

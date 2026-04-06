@@ -12,8 +12,9 @@ use super::precheck;
 use super::{
     bail, calculate_adaptive_max_walls, calculate_max_iterations_for_duration,
     calculate_ms_ssim_yuv, calculate_smart_thresholds, calculate_ssim_all, calculate_ssim_enhanced,
-    calculate_zero_gains_for_duration_and_range, compression_target_size, CheckResult, ConfidenceBreakdown,
-    CrfCache, ExploreResult, VideoEncoder, ABSOLUTE_MIN_CRF, NORMAL_MAX_WALL_HITS,
+    calculate_zero_gains_for_duration_and_range, compression_target_size, CheckResult,
+    ConfidenceBreakdown, CrfCache, ExploreResult, VideoEncoder, ABSOLUTE_MIN_CRF,
+    NORMAL_MAX_WALL_HITS,
 };
 use crate::constants::{
     ANIMATED_IMAGE_EXPLORATION_SAMPLING_MIN_DURATION_SECS,
@@ -135,7 +136,9 @@ pub(crate) fn format_quality_check_line(
     quality_verification_skipped_for_format: bool,
 ) -> String {
     match (result.ms_ssim_passed.is_ok(), result.quality_passed.is_ok()) {
-        (true, true) => "   QualityCheck: PASSED (quality + total file size target met)".to_string(),
+        (true, true) => {
+            "   QualityCheck: PASSED (quality + total file size target met)".to_string()
+        }
         (false, true) => {
             if let CheckResult::Failed(ref reason) = result.ms_ssim_passed {
                 format!("   QualityCheck: FAILED ({reason})")
@@ -153,11 +156,11 @@ pub(crate) fn format_quality_check_line(
             }
         }
         (false, false) => {
-             if quality_verification_skipped_for_format {
-                 "   QualityCheck: N/A (GIF/size-only, quality not measured)".to_string()
-             } else {
-                 "   QualityCheck: FAILED (quality not verified)".to_string()
-             }
+            if quality_verification_skipped_for_format {
+                "   QualityCheck: N/A (GIF/size-only, quality not measured)".to_string()
+            } else {
+                "   QualityCheck: FAILED (quality not verified)".to_string()
+            }
         }
     }
 }
@@ -235,7 +238,9 @@ pub fn explore_with_gpu_coarse_search(
     };
     let duration: f32 = probe_result
         .as_ref()
-        .map_or(crate::gpu_accel::GPU_SAMPLE_DURATION, |p| crate::numeric_cast::f64_to_f32_lossy(p.duration));
+        .map_or(crate::gpu_accel::GPU_SAMPLE_DURATION, |p| {
+            crate::numeric_cast::f64_to_f32_lossy(p.duration)
+        });
 
     // [New Logic] Bitrate-based GPU Start Condition
     // Low bitrate videos (animation/PPT < 5Mbps) don't benefit from GPU pre-scan
@@ -302,7 +307,9 @@ pub fn explore_with_gpu_coarse_search(
             input_size
         } else {
             let ratio = sample_dur / duration;
-            crate::numeric_cast::f64_to_u64_sat(crate::numeric_cast::u64_to_f64(input_size) * f64::from(ratio))
+            crate::numeric_cast::f64_to_u64_sat(
+                crate::numeric_cast::u64_to_f64(input_size) * f64::from(ratio),
+            )
         };
 
         let gpu_step = if ultimate_mode { 0.5 } else { 2.0 };
@@ -869,8 +876,7 @@ pub fn explore_with_gpu_coarse_search(
                 crate::log_eprintln!("   Enabling fusion quality verification (MS-SSIM + SSIM)...");
 
                 let max_duration_min = ms_ssim_duration_threshold_secs / 60.0;
-                let ms_ssim_yuv_result =
-                    calculate_ms_ssim_yuv(input, output, max_duration_min);
+                let ms_ssim_yuv_result = calculate_ms_ssim_yuv(input, output, max_duration_min);
                 let ssim_all_result = calculate_ssim_all(input, output);
 
                 crate::log_eprintln!("   ═══════════════════════════════════════════════════");
@@ -1091,7 +1097,8 @@ pub fn explore_with_gpu_coarse_search(
             if in_sz == 0 {
                 "   SizeChange: N/A (zero input size)".to_string()
             } else {
-                let ratio = crate::numeric_cast::u64_to_f64(out_sz) / crate::numeric_cast::u64_to_f64(in_sz);
+                let ratio = crate::numeric_cast::u64_to_f64(out_sz)
+                    / crate::numeric_cast::u64_to_f64(in_sz);
                 let pct = (ratio - 1.0) * 100.0;
                 format!("   SizeChange: {ratio:.2}x ({pct:+.1}%) vs original")
             }
@@ -1188,7 +1195,7 @@ enum AnimatedExplorationEncodeMode {
     FullTimeline,
 }
 
-/// FFmpeg `-vf` prefix: keep frames in three windows (start / mid / end) and reset PTS for encode.
+/// `FFmpeg` `-vf` prefix: keep frames in three windows (start / mid / end) and reset PTS for encode.
 #[must_use]
 fn animated_exploration_three_segment_vf_prefix(dur: f64, ultimate_mode: bool) -> String {
     let segment_pct = if ultimate_mode {
@@ -1357,10 +1364,8 @@ fn cpu_fine_tune_from_gpu_boundary(
         let apply_segment_vf = mode == AnimatedExplorationEncodeMode::ExplorationSample
             && use_animated_exploration_sampling;
         let vf_for_encode: Vec<String> = if apply_segment_vf {
-            let prefix = animated_exploration_three_segment_vf_prefix(
-                f64::from(duration),
-                ultimate_mode,
-            );
+            let prefix =
+                animated_exploration_three_segment_vf_prefix(f64::from(duration), ultimate_mode);
             merge_vf_with_animated_exploration_prefix(&vf_args, &prefix)
         } else {
             vf_args.clone()
@@ -1415,12 +1420,9 @@ fn cpu_fine_tune_from_gpu_boundary(
             });
         }
 
-        for arg in encoder.extra_args_with_preset(
-            max_threads,
-            preset,
-            adjusted_x265_params,
-            apple_compat,
-        ) {
+        for arg in
+            encoder.extra_args_with_preset(max_threads, preset, adjusted_x265_params, apple_compat)
+        {
             builder.arg(arg);
         }
 
@@ -1802,7 +1804,10 @@ fn cpu_fine_tune_from_gpu_boundary(
     })?;
     iterations += 1;
     let gpu_pct = if input_size > 0 {
-        (crate::numeric_cast::u64_to_f64(gpu_size) / crate::numeric_cast::u64_to_f64(input_size.max(1)) - 1.0) * 100.0
+        (crate::numeric_cast::u64_to_f64(gpu_size)
+            / crate::numeric_cast::u64_to_f64(input_size.max(1))
+            - 1.0)
+            * 100.0
     } else {
         0.0
     };
@@ -2054,7 +2059,10 @@ fn cpu_fine_tune_from_gpu_boundary(
             let size = encode_cached(test_crf, &mut size_cache)?;
             iterations += 1;
             let total_size_pct = if input_size > 0 {
-                (crate::numeric_cast::u64_to_f64(size) / crate::numeric_cast::u64_to_f64(input_size.max(1)) - 1.0) * 100.0
+                (crate::numeric_cast::u64_to_f64(size)
+                    / crate::numeric_cast::u64_to_f64(input_size.max(1))
+                    - 1.0)
+                    * 100.0
             } else {
                 0.0
             };
@@ -2101,9 +2109,8 @@ fn cpu_fine_tune_from_gpu_boundary(
 
                             // Check for integer-level improvement
                             let prev_best_vmaf = best_vmaf_tracked.unwrap_or(0.0);
-                            let prev_best_psnr = best_psnr_uv_tracked
-                                .map(|(u, v)| f64::midpoint(u, v))
-                                .unwrap_or(0.0);
+                            let prev_best_psnr =
+                                best_psnr_uv_tracked.map_or(0.0, |(u, v)| f64::midpoint(u, v));
                             let vmaf_improved = v.floor() > prev_best_vmaf.floor();
                             let psnr_improved = chroma_avg.floor() > prev_best_psnr.floor();
 
@@ -2284,10 +2291,13 @@ fn cpu_fine_tune_from_gpu_boundary(
             } else {
                 wall_hits += 1;
 
-                let _total_file_diff = crate::format_size_diff(i64::try_from(size).unwrap_or(0) - i64::try_from(input_size).unwrap_or(0));
+                let _total_file_diff = crate::format_size_diff(
+                    i64::try_from(size).unwrap_or(0) - i64::try_from(input_size).unwrap_or(0),
+                );
 
                 // Calculate new_step first for phase_info
-                let curve_step = initial_step * DECAY_FACTOR.powi(i32::try_from(wall_hits).unwrap_or(0));
+                let curve_step =
+                    initial_step * DECAY_FACTOR.powi(i32::try_from(wall_hits).unwrap_or(0));
                 let new_step = if curve_step < 1.0 {
                     MIN_STEP
                 } else {
@@ -2312,7 +2322,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                     // In ultimate mode, even at minimum step a size-wall does NOT mean
                     // we reached the physical quality floor — size might expand yet quality
                     // might still improve.  Let Phase 4 handle the 0.01-granularity walk.
-                    // In normal mode, a wall here means we really can't go lower.
+                    // `ExifTool` format codes (`%d%f%e`), and suspicious command-line prefixes (`-@`).
                     if ultimate_mode {
                         crate::verbose_eprintln!(
                             "   {} [CPU] At minimum step in ultimate mode — deferring to Phase 4 fine-tune.{}",
@@ -2453,7 +2463,10 @@ fn cpu_fine_tune_from_gpu_boundary(
             iterations += 1;
 
             let ceiling_pct = if input_size > 0 {
-                (crate::numeric_cast::u64_to_f64(ceiling_size) / crate::numeric_cast::u64_to_f64(input_size.max(1)) - 1.0) * 100.0
+                (crate::numeric_cast::u64_to_f64(ceiling_size)
+                    / crate::numeric_cast::u64_to_f64(input_size.max(1))
+                    - 1.0)
+                    * 100.0
             } else {
                 0.0
             };
@@ -2504,7 +2517,10 @@ fn cpu_fine_tune_from_gpu_boundary(
             feedback.upward_iteration_count += 1;
 
             let total_size_pct = if input_size > 0 {
-                (crate::numeric_cast::u64_to_f64(size) / crate::numeric_cast::u64_to_f64(input_size.max(1)) - 1.0) * 100.0
+                (crate::numeric_cast::u64_to_f64(size)
+                    / crate::numeric_cast::u64_to_f64(input_size.max(1))
+                    - 1.0)
+                    * 100.0
             } else {
                 0.0
             };
@@ -2662,9 +2678,8 @@ fn cpu_fine_tune_from_gpu_boundary(
 
                     // Track best metrics to check for improvement
                     let prev_best_vmaf = best_vmaf_tracked.unwrap_or(0.0);
-                    let prev_best_psnr = best_psnr_uv_tracked
-                        .map(|(u, v)| f64::midpoint(u, v))
-                        .unwrap_or(0.0);
+                    let prev_best_psnr =
+                        best_psnr_uv_tracked.map_or(0.0, |(u, v)| f64::midpoint(u, v));
 
                     // Check for integer-level improvement (ignoring decimals)
                     let vmaf_improved = v.floor() > prev_best_vmaf.floor();
@@ -2809,7 +2824,10 @@ fn cpu_fine_tune_from_gpu_boundary(
             let compress_point = best_crf.unwrap_or(gpu_boundary_crf);
             let mut current_step = PHASE3_DOWNWARD_STEP;
             let mut last_size_pct = if input_size > 0 {
-                (crate::numeric_cast::u64_to_f64(best_size.unwrap_or(input_size)) / crate::numeric_cast::u64_to_f64(input_size.max(1)) - 1.0) * 100.0
+                (crate::numeric_cast::u64_to_f64(best_size.unwrap_or(input_size))
+                    / crate::numeric_cast::u64_to_f64(input_size.max(1))
+                    - 1.0)
+                    * 100.0
             } else {
                 0.0
             };
@@ -2831,7 +2849,10 @@ fn cpu_fine_tune_from_gpu_boundary(
                 let size = encode_cached(test_crf, &mut size_cache)?;
                 iterations += 1;
                 let total_size_pct = if input_size > 0 {
-                    (crate::numeric_cast::u64_to_f64(size) / crate::numeric_cast::u64_to_f64(input_size.max(1)) - 1.0) * 100.0
+                    (crate::numeric_cast::u64_to_f64(size)
+                        / crate::numeric_cast::u64_to_f64(input_size.max(1))
+                        - 1.0)
+                        * 100.0
                 } else {
                     0.0
                 };
@@ -2851,9 +2872,8 @@ fn cpu_fine_tune_from_gpu_boundary(
                     if let (Some(v), Some((u, v_score))) = (vmaf, psnr_uv) {
                         let chroma_avg = f64::midpoint(u, v_score);
                         let prev_best_vmaf = best_vmaf_tracked.unwrap_or(0.0);
-                        let prev_best_psnr = best_psnr_uv_tracked
-                            .map(|(u, v)| f64::midpoint(u, v))
-                            .unwrap_or(0.0);
+                        let prev_best_psnr =
+                            best_psnr_uv_tracked.map_or(0.0, |(u, v)| f64::midpoint(u, v));
 
                         vmaf_improved = v.floor() > prev_best_vmaf.floor();
                         psnr_improved = chroma_avg.floor() > prev_best_psnr.floor();
@@ -3145,7 +3165,8 @@ fn cpu_fine_tune_from_gpu_boundary(
     if ultimate_mode && !early_insight_triggered {
         if let Some(best) = best_crf {
             // Only refine if we actually have a compressed result (or within 1% tolerance)
-            let current_ratio = crate::numeric_cast::u64_to_f64(best_size.unwrap_or(u64::MAX)) / crate::numeric_cast::u64_to_f64(input_size.max(1));
+            let current_ratio = crate::numeric_cast::u64_to_f64(best_size.unwrap_or(u64::MAX))
+                / crate::numeric_cast::u64_to_f64(input_size.max(1));
             if best < max_crf && current_ratio < 1.01 {
                 crate::log_eprintln!();
                 crate::log_eprintln!(
@@ -3171,7 +3192,10 @@ fn cpu_fine_tune_from_gpu_boundary(
                 let mut test_crf = best - current_step;
                 let mut fine_failures = 0;
                 let mut last_size_pct = if input_size > 0 {
-                    (crate::numeric_cast::u64_to_f64(best_size.unwrap_or(input_size)) / crate::numeric_cast::u64_to_f64(input_size.max(1)) - 1.0) * 100.0
+                    (crate::numeric_cast::u64_to_f64(best_size.unwrap_or(input_size))
+                        / crate::numeric_cast::u64_to_f64(input_size.max(1))
+                        - 1.0)
+                        * 100.0
                 } else {
                     0.0
                 };
@@ -3200,7 +3224,10 @@ fn cpu_fine_tune_from_gpu_boundary(
 
                     let is_effectively_compressed = size < input_size;
                     let total_size_pct = if input_size > 0 {
-                        (crate::numeric_cast::u64_to_f64(size) / crate::numeric_cast::u64_to_f64(input_size.max(1)) - 1.0) * 100.0
+                        (crate::numeric_cast::u64_to_f64(size)
+                            / crate::numeric_cast::u64_to_f64(input_size.max(1))
+                            - 1.0)
+                            * 100.0
                     } else {
                         0.0
                     };
@@ -3372,7 +3399,10 @@ fn cpu_fine_tune_from_gpu_boundary(
                         if let Ok(size) = encode_cached(0.0, &mut size_cache) {
                             iterations += 1;
                             let total_size_pct = if input_size > 0 {
-                                (crate::numeric_cast::u64_to_f64(size) / crate::numeric_cast::u64_to_f64(input_size.max(1)) - 1.0) * 100.0
+                                (crate::numeric_cast::u64_to_f64(size)
+                                    / crate::numeric_cast::u64_to_f64(input_size.max(1))
+                                    - 1.0)
+                                    * 100.0
                             } else {
                                 0.0
                             };
@@ -3433,7 +3463,10 @@ fn cpu_fine_tune_from_gpu_boundary(
                     "{}❌ Best tested CRF {:.2} yielded larger file (+{:+.1}%){}",
                     BRIGHT_RED,
                     crf,
-                    (crate::numeric_cast::u64_to_f64(size) / crate::numeric_cast::u64_to_f64(input_size.max(1)) - 1.0) * 100.0,
+                    (crate::numeric_cast::u64_to_f64(size)
+                        / crate::numeric_cast::u64_to_f64(input_size.max(1))
+                        - 1.0)
+                        * 100.0,
                     RESET
                 );
             }
@@ -3525,7 +3558,10 @@ fn cpu_fine_tune_from_gpu_boundary(
     let size_change_pct = if input_size == 0 {
         0.0
     } else {
-        (crate::numeric_cast::u64_to_f64(final_full_size) / crate::numeric_cast::u64_to_f64(input_size.max(1)) - 1.0) * 100.0
+        (crate::numeric_cast::u64_to_f64(final_full_size)
+            / crate::numeric_cast::u64_to_f64(input_size.max(1))
+            - 1.0)
+            * 100.0
     };
 
     // User-relevant success: total file smaller (with 1MB tolerance if allowed) and quality met
@@ -3546,7 +3582,8 @@ fn cpu_fine_tune_from_gpu_boundary(
 
     let target = compression_target_size(input_size);
     let margin_safety = if target > 0 && final_full_size < target {
-        let margin = crate::numeric_cast::u64_to_f64(target.saturating_sub(final_full_size)) / crate::numeric_cast::u64_to_f64(target.max(1));
+        let margin = crate::numeric_cast::u64_to_f64(target.saturating_sub(final_full_size))
+            / crate::numeric_cast::u64_to_f64(target.max(1));
         (margin / 0.05).min(1.0)
     } else {
         0.0
@@ -3602,7 +3639,8 @@ fn cpu_fine_tune_from_gpu_boundary(
     let output_stream_info = crate::stream_size::extract_stream_sizes(output);
     let input_stream_info = crate::stream_size::extract_stream_sizes(input);
     let video_stream_pct = if input_stream_info.video_stream_size > 0 {
-        (crate::numeric_cast::u64_to_f64(output_stream_info.video_stream_size) / crate::numeric_cast::u64_to_f64(input_stream_info.video_stream_size.max(1))
+        (crate::numeric_cast::u64_to_f64(output_stream_info.video_stream_size)
+            / crate::numeric_cast::u64_to_f64(input_stream_info.video_stream_size.max(1))
             - 1.0)
             * 100.0
     } else {
@@ -3644,7 +3682,10 @@ fn cpu_fine_tune_from_gpu_boundary(
     let total_file_pct = if input_size == 0 {
         0.0
     } else {
-        (crate::numeric_cast::u64_to_f64(final_full_size) / crate::numeric_cast::u64_to_f64(input_size.max(1)) - 1.0) * 100.0
+        (crate::numeric_cast::u64_to_f64(final_full_size)
+            / crate::numeric_cast::u64_to_f64(input_size.max(1))
+            - 1.0)
+            * 100.0
     };
     if output_stream_info.is_overhead_excessive() {
         crate::log_eprintln!(
@@ -3679,7 +3720,11 @@ fn cpu_fine_tune_from_gpu_boundary(
         ms_ssim_passed: CheckResult::NotChecked,
         ms_ssim_score: None,
         iterations,
-        quality_passed: if quality_passed { CheckResult::Passed } else { CheckResult::Failed("GPU search failed".into()) },
+        quality_passed: if quality_passed {
+            CheckResult::Passed
+        } else {
+            CheckResult::Failed("GPU search failed".into())
+        },
         enhanced_verify_fail_reason,
         log,
         confidence,

@@ -290,7 +290,11 @@ fn bpp_from_precheck_json(json: &serde_json::Value, file_size: u64, input: &Path
         .as_str()
         .and_then(|s| s.parse::<u64>().ok())
         .filter(|&br| br > 0)
-        .map_or(0, |br| crate::numeric_cast::f64_to_u64_sat(crate::numeric_cast::u64_to_f64(br) * duration / 8.0));
+        .map_or(0, |br| {
+            crate::numeric_cast::f64_to_u64_sat(
+                crate::numeric_cast::u64_to_f64(br) * duration / 8.0,
+            )
+        });
     let bytes_for_bpp = if video_bytes > 0 {
         video_bytes
     } else {
@@ -298,7 +302,8 @@ fn bpp_from_precheck_json(json: &serde_json::Value, file_size: u64, input: &Path
     };
     let total_pixels = u64::from(width) * u64::from(height) * frame_count;
     if total_pixels > 0 {
-        Ok((crate::numeric_cast::u64_to_f64(bytes_for_bpp) * 8.0) / crate::numeric_cast::u64_to_f64(total_pixels.max(1)))
+        Ok((crate::numeric_cast::u64_to_f64(bytes_for_bpp) * 8.0)
+            / crate::numeric_cast::u64_to_f64(total_pixels.max(1)))
     } else {
         bail!("Total pixels is 0, cannot calculate BPP")
     }
@@ -467,7 +472,11 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
         .as_str()
         .and_then(|s| s.parse::<u64>().ok())
         .filter(|&br| br > 0)
-        .map_or(0, |br| crate::numeric_cast::f64_to_u64_sat(crate::numeric_cast::u64_to_f64(br) * duration / 8.0));
+        .map_or(0, |br| {
+            crate::numeric_cast::f64_to_u64_sat(
+                crate::numeric_cast::u64_to_f64(br) * duration / 8.0,
+            )
+        });
     let bytes_for_bpp = if video_bytes > 0 {
         video_bytes
     } else {
@@ -475,7 +484,8 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
     };
     let total_pixels = u64::from(width) * u64::from(height) * frame_count;
     let bpp = if total_pixels > 0 {
-        (crate::numeric_cast::u64_to_f64(bytes_for_bpp) * 8.0) / crate::numeric_cast::u64_to_f64(total_pixels.max(1))
+        (crate::numeric_cast::u64_to_f64(bytes_for_bpp) * 8.0)
+            / crate::numeric_cast::u64_to_f64(total_pixels.max(1))
     } else {
         bail!("Total pixels is 0, cannot calculate BPP");
     };

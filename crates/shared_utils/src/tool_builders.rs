@@ -121,8 +121,7 @@ impl VmafBuilder {
         Command::new("vmaf")
             .arg("--version")
             .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+            .is_ok_and(|o| o.status.success())
     }
 }
 
@@ -181,8 +180,7 @@ impl Exiv2Builder {
         Command::new("exiv2")
             .arg("-V")
             .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+            .is_ok_and(|o| o.status.success())
     }
 }
 
@@ -219,8 +217,7 @@ impl JxlinfoBuilder {
         Command::new("jxlinfo")
             .arg("--version")
             .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+            .is_ok_and(|o| o.status.success())
     }
 }
 
@@ -287,8 +284,7 @@ impl DoviBuilder {
         Command::new("dovi_tool")
             .arg("--version")
             .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+            .is_ok_and(|o| o.status.success())
     }
 }
 
@@ -355,8 +351,7 @@ impl Hdr10PlusBuilder {
         Command::new("hdr10plus_tool")
             .arg("--help")
             .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+            .is_ok_and(|o| o.status.success())
     }
 }
 
@@ -544,8 +539,7 @@ impl X265Builder {
         Command::new(crate::constants::TOOL_X265)
             .arg("--version")
             .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+            .is_ok_and(|o| o.status.success())
     }
 }
 
@@ -591,8 +585,7 @@ impl OsascriptBuilder {
                 .arg("-e")
                 .arg("return")
                 .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false)
+                .is_ok_and(|o| o.status.success())
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -711,8 +704,7 @@ impl AclBuilder {
         Command::new("getfacl")
             .arg("--version")
             .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+            .is_ok_and(|o| o.status.success())
     }
 }
 
@@ -746,8 +738,7 @@ impl SysctlBuilder {
         Command::new("sysctl")
             .arg("-a")
             .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+            .is_ok_and(|o| o.status.success())
     }
 }
 
@@ -769,8 +760,7 @@ impl VmstatBuilder {
     pub fn check_available() -> bool {
         Command::new("vm_stat")
             .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+            .is_ok_and(|o| o.status.success())
     }
 }
 
@@ -813,8 +803,7 @@ impl AttribBuilder {
         Command::new("attrib")
             .arg("/?")
             .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+            .is_ok_and(|o| o.status.success())
     }
 }
 

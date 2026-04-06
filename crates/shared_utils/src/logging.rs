@@ -552,7 +552,7 @@ fn cleanup_old_logs(log_dir: &Path, program_name: &str, max_files: usize) -> Res
     }
 
     if log_files.len() > max_files {
-        log_files.sort_by(|a, b| b.1.cmp(&a.1));
+        log_files.sort_by_key(|f| std::cmp::Reverse(f.1));
 
         for (path, _) in log_files.iter().skip(max_files) {
             if let Err(e) = fs::remove_file(path) {

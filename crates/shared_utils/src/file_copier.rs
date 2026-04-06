@@ -416,7 +416,8 @@ pub fn verify_output_completeness(
 
     let expected = input_stats.expected_output();
     let actual = output_stats.total;
-    let diff = crate::numeric_cast::usize_to_i64_sat(expected) - crate::numeric_cast::usize_to_i64_sat(actual);
+    let diff = crate::numeric_cast::usize_to_i64_sat(expected)
+        - crate::numeric_cast::usize_to_i64_sat(actual);
 
     let (passed, message) = if diff == 0 {
         (

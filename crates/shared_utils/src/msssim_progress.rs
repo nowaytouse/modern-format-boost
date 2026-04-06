@@ -40,7 +40,9 @@ impl MsssimProgressMonitor {
 
                 let current_secs = crate::numeric_cast::u64_to_f64(time_us) / 1_000_000.0;
                 let progress_pct = if self.duration_secs > 0.0 {
-                    crate::numeric_cast::f64_to_u32_sat((current_secs / self.duration_secs * 100.0).min(100.0))
+                    crate::numeric_cast::f64_to_u32_sat(
+                        (current_secs / self.duration_secs * 100.0).min(100.0),
+                    )
                 } else {
                     0
                 };
@@ -53,7 +55,9 @@ impl MsssimProgressMonitor {
     }
 
     pub fn print_progress(&self, channel: &str, progress_pct: u32) {
-        let current_secs = crate::numeric_cast::u64_to_f64(self.current_time_us.load(Ordering::Relaxed)) / 1_000_000.0;
+        let current_secs =
+            crate::numeric_cast::u64_to_f64(self.current_time_us.load(Ordering::Relaxed))
+                / 1_000_000.0;
 
         let elapsed = self.start_time.elapsed().as_secs_f64();
         let eta_secs = if progress_pct > 0 {
@@ -83,9 +87,13 @@ impl MsssimProgressMonitor {
     }
 
     pub fn current_progress(&self) -> u32 {
-        let current_secs = crate::numeric_cast::u64_to_f64(self.current_time_us.load(Ordering::Relaxed)) / 1_000_000.0;
+        let current_secs =
+            crate::numeric_cast::u64_to_f64(self.current_time_us.load(Ordering::Relaxed))
+                / 1_000_000.0;
         if self.duration_secs > 0.0 {
-            crate::numeric_cast::f64_to_u32_sat((current_secs / self.duration_secs * 100.0).min(100.0))
+            crate::numeric_cast::f64_to_u32_sat(
+                (current_secs / self.duration_secs * 100.0).min(100.0),
+            )
         } else {
             0
         }

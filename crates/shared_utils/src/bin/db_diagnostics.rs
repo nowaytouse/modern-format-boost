@@ -3,7 +3,7 @@
 //! Prints inference log summary, feature discriminative power analysis,
 //! and blind spot reports to help calibrate the decision tree.
 //!
-//! Usage: cargo run --bin db_diagnostics
+//! Usage: cargo run --bin `db_diagnostics`
 
 use anyhow::Result;
 use shared_utils::database::{
@@ -38,6 +38,10 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+/// Prints a summary of the inference logs.
+///
+/// # Errors
+/// Returns an error if the database query fails.
 fn print_inference_summary(conn: &mut postgres::Client) -> Result<()> {
     println!("┌─────────────────────────────────────────────────────────────┐");
     println!("│  📊 Inference Log Summary (Level 4)                        │");
@@ -88,6 +92,10 @@ fn print_inference_summary(conn: &mut postgres::Client) -> Result<()> {
     Ok(())
 }
 
+/// Prints the discriminative power of each feature.
+///
+/// # Errors
+/// Returns an error if the database query fails.
 fn print_discriminative_power(conn: &mut postgres::Client) -> Result<()> {
     println!("┌─────────────────────────────────────────────────────────────┐");
     println!("│  🔬 Feature Discriminative Power (Level 1)                 │");
@@ -158,6 +166,10 @@ fn print_discriminative_power(conn: &mut postgres::Client) -> Result<()> {
     Ok(())
 }
 
+/// Prints the blind spots discovered in the inference logs.
+///
+/// # Errors
+/// Returns an error if the database query fails.
 fn print_blind_spots(conn: &mut postgres::Client) -> Result<()> {
     println!("┌─────────────────────────────────────────────────────────────┐");
     println!("│  🔍 Blind Spot Discovery (Level 3)                        │");

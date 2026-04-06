@@ -133,8 +133,18 @@ fn calculate_window_ssim(
         for (j, _) in row.iter().enumerate() {
             let px = x + j;
             let py = y + i;
-            buf_x[i][j] = f64::from(orig.get_pixel(u32::try_from(px).unwrap_or(0), u32::try_from(py).unwrap_or(0))[0]);
-            buf_y[i][j] = f64::from(conv.get_pixel(u32::try_from(px).unwrap_or(0), u32::try_from(py).unwrap_or(0))[0]);
+            buf_x[i][j] = f64::from(
+                orig.get_pixel(
+                    u32::try_from(px).unwrap_or(0),
+                    u32::try_from(py).unwrap_or(0),
+                )[0],
+            );
+            buf_y[i][j] = f64::from(
+                conv.get_pixel(
+                    u32::try_from(px).unwrap_or(0),
+                    u32::try_from(py).unwrap_or(0),
+                )[0],
+            );
         }
     }
 
@@ -219,7 +229,9 @@ pub fn calculate_ms_ssim(original: &DynamicImage, converted: &DynamicImage) -> O
 
     for (i, &weight) in weights.iter().enumerate().take(scales) {
         let (w, h) = orig.dimensions();
-        if w < u32::try_from(WINDOW_SIZE).unwrap_or(u32::MAX) || h < u32::try_from(WINDOW_SIZE).unwrap_or(u32::MAX) {
+        if w < u32::try_from(WINDOW_SIZE).unwrap_or(u32::MAX)
+            || h < u32::try_from(WINDOW_SIZE).unwrap_or(u32::MAX)
+        {
             break;
         }
 
@@ -294,7 +306,11 @@ mod tests {
     fn test_identical_images() {
         let img1 = DynamicImage::ImageRgb8(RgbImage::from_fn(100, 100, |x, y| {
             #[allow(clippy::cast_possible_truncation)]
-            image::Rgb([u8::try_from(x % 256).unwrap_or(0), u8::try_from(y % 256).unwrap_or(0), 128])
+            image::Rgb([
+                u8::try_from(x % 256).unwrap_or(0),
+                u8::try_from(y % 256).unwrap_or(0),
+                128,
+            ])
         }));
         let img2 = img1.clone();
 

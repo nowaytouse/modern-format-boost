@@ -307,7 +307,10 @@ impl ExploreContext {
         if self.input_size == 0 {
             return 0.0;
         }
-        ((crate::numeric_cast::u64_to_f64(output_size) / crate::numeric_cast::u64_to_f64(self.input_size)) - 1.0) * 100.0
+        ((crate::numeric_cast::u64_to_f64(output_size)
+            / crate::numeric_cast::u64_to_f64(self.input_size))
+            - 1.0)
+            * 100.0
     }
 
     #[inline]

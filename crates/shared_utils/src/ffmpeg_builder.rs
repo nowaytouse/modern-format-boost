@@ -72,7 +72,7 @@ impl FromStr for VideoCodec {
     }
 }
 
-/// FFmpeg video profiles.
+/// `FFmpeg` video profiles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VideoProfile {
     Main,
@@ -490,6 +490,10 @@ impl FfmpegBuilder {
     }
 
     /// Spawn the command and return an `FfmpegProcess` for monitoring.
+    /// Spawn the `FFmpeg` process.
+    ///
+    /// # Errors
+    /// Returns an error if the process fails to start.
     pub fn spawn(&self) -> anyhow::Result<FfmpegProcess> {
         let mut cmd = self.build();
         FfmpegProcess::spawn(&mut cmd)
@@ -657,12 +661,15 @@ impl FfprobeBuilder {
         Command::new(constants::TOOL_FFPROBE)
             .arg("-version")
             .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+            .is_ok_and(|o| o.status.success())
     }
 }
 
 impl FfmpegBuilder {
+    /// List available `FFmpeg` encoders.
+    ///
+    /// # Errors
+    /// Returns an error if the command fails.
     pub fn list_encoders() -> anyhow::Result<String> {
         let output = Command::new(constants::TOOL_FFMPEG)
             .arg("-hide_banner")

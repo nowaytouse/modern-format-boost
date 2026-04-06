@@ -73,7 +73,7 @@ pub fn color_info_to_cicp(info: &ColorInfo) -> Option<String> {
 }
 
 /// Convert `ColorInfo` to `FFmpeg` color parameters for video encoding.
-/// Returns a vector of `FFmpeg` arguments: ["-colorspace", "bt2020nc", "-color_trc", "smpte2084", ...]
+/// Returns a vector of `FFmpeg` arguments: ["-colorspace", "bt2020nc", "-`color_trc`", "smpte2084", ...]
 #[must_use]
 pub fn color_info_to_ffmpeg_args(info: &ColorInfo) -> Vec<String> {
     let mut args = Vec::new();

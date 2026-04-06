@@ -48,6 +48,10 @@ pub struct QualityInferenceRecord {
 /// Create or migrate the static image quality schema.
 ///
 /// Safe to call on every startup — all DDL is idempotent.
+/// Initialize the `quality_samples` and `quality_inference_log` tables.
+///
+/// # Errors
+/// Returns an error if the database schema cannot be initialized.
 pub fn init_quality_schema(conn: &mut Client) -> Result<()> {
     emit_stderr("🐘 Initializing Static Image Quality Database (PostgreSQL + pgvector)...");
 
@@ -128,9 +132,15 @@ pub fn init_quality_schema(conn: &mut Client) -> Result<()> {
         "ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS is_lossless BOOLEAN",
         &[],
     );
-    let _ = conn.execute("ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS knn_score DOUBLE PRECISION", &[]);
+    let _ = conn.execute(
+        "ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS knn_score DOUBLE PRECISION",
+        &[],
+    );
     let _ = conn.execute("ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS knn_confidence DOUBLE PRECISION", &[]);
-    let _ = conn.execute("ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS knn_neighbor_count INTEGER", &[]);
+    let _ = conn.execute(
+        "ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS knn_neighbor_count INTEGER",
+        &[],
+    );
     let _ = conn.execute("ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS bpp_fallback_score DOUBLE PRECISION", &[]);
     let _ = conn.execute("ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS final_verdict TEXT DEFAULT 'low'", &[]);
 
@@ -178,7 +188,8 @@ pub fn init_quality_schema(conn: &mut Client) -> Result<()> {
 /// - Lossless -> [0, 2.0]: Very strong anchor to prioritize format fidelity.
 fn get_quality_features(analysis: &ImageAnalysis) -> pgvector::Vector {
     let total_pixels = f64::from(analysis.width) * f64::from(analysis.height);
-    let spatial_bpp = f64::from(u32::try_from(analysis.file_size).unwrap_or(u32::MAX)) / total_pixels.max(1.0);
+    let spatial_bpp =
+        f64::from(u32::try_from(analysis.file_size).unwrap_or(u32::MAX)) / total_pixels.max(1.0);
     let aspect_ratio = if analysis.height > 0 {
         f64::from(analysis.width) / f64::from(analysis.height)
     } else {
@@ -187,7 +198,8 @@ fn get_quality_features(analysis: &ImageAnalysis) -> pgvector::Vector {
 
     pgvector::Vector::from(vec![
         (crate::numeric_cast::f64_to_f32_lossy(analysis.features.entropy) / 8.0).clamp(0.0, 1.0),
-        ((crate::numeric_cast::f64_to_f32_lossy(analysis.features.compression_ratio)).ln_1p() / 3.0),
+        ((crate::numeric_cast::f64_to_f32_lossy(analysis.features.compression_ratio)).ln_1p()
+            / 3.0),
         ((crate::numeric_cast::f64_to_f32_lossy(spatial_bpp)).ln_1p() / 3.5),
         (crate::numeric_cast::f64_to_f32_lossy(total_pixels.max(1.0).log10()) / 10.0),
         ((crate::numeric_cast::f64_to_f32_lossy(aspect_ratio)).ln_1p() / 2.5),
@@ -206,7 +218,8 @@ fn get_quality_features(analysis: &ImageAnalysis) -> pgvector::Vector {
 /// Returns `confidence = 0.0` to clearly signal this is heuristic-only.
 fn bpp_heuristic_score(analysis: &ImageAnalysis) -> f64 {
     let total_pixels = f64::from(analysis.width) * f64::from(analysis.height);
-    let spatial_bpp = f64::from(u32::try_from(analysis.file_size).unwrap_or(u32::MAX)) / total_pixels.max(1.0);
+    let spatial_bpp =
+        f64::from(u32::try_from(analysis.file_size).unwrap_or(u32::MAX)) / total_pixels.max(1.0);
 
     // High entropy + low BPP (efficient encoding) → high quality signal.
     // Scale: entropy [0, 8 bits max], spatial_bpp typical range [0.05, 20.0].
@@ -280,11 +293,8 @@ pub fn lookup_image_quality(analysis: &ImageAnalysis) -> Option<QualityScore> {
     }
 
     let disable_db = std::env::var(crate::constants::ENV_DISABLE_IMAGE_QUALITY_DB)
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
-        || std::env::var(crate::constants::ENV_DISABLE_DB_FEEDBACK)
-            .map(|v| v == "1")
-            .unwrap_or(false);
+        .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        || std::env::var(crate::constants::ENV_DISABLE_DB_FEEDBACK).is_ok_and(|v| v == "1");
 
     if disable_db {
         emit_stderr("  ⚠️ Static image quality DB disabled — using heuristic score only");
@@ -293,8 +303,7 @@ pub fn lookup_image_quality(analysis: &ImageAnalysis) -> Option<QualityScore> {
     }
 
     let force_knn = std::env::var(crate::constants::ENV_FORCE_QUALITY_KNN)
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
+        .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
 
     if force_knn {
         crate::progress_mode::emit_stderr("  🐘 [OVERRIDE] Forcing KNN Database lookup...");
@@ -380,12 +389,14 @@ pub fn lookup_image_quality(analysis: &ImageAnalysis) -> Option<QualityScore> {
 
     // Factor = Total / (NumClasses * ClassCount)
     let high_factor = if high_total > 0 {
-        f64::from(u32::try_from(total_db_samples).unwrap_or(u32::MAX)) / (2.0 * f64::from(u32::try_from(high_total).unwrap_or(1)))
+        f64::from(u32::try_from(total_db_samples).unwrap_or(u32::MAX))
+            / (2.0 * f64::from(u32::try_from(high_total).unwrap_or(1)))
     } else {
         1.0
     };
     let low_factor = if low_total > 0 {
-        f64::from(u32::try_from(total_db_samples).unwrap_or(u32::MAX)) / (2.0 * f64::from(u32::try_from(low_total).unwrap_or(1)))
+        f64::from(u32::try_from(total_db_samples).unwrap_or(u32::MAX))
+            / (2.0 * f64::from(u32::try_from(low_total).unwrap_or(1)))
     } else {
         1.0
     };
@@ -407,7 +418,9 @@ pub fn lookup_image_quality(analysis: &ImageAnalysis) -> Option<QualityScore> {
     }
 
     if total_weight <= 0.0 {
-        emit_stderr("  ⚠️ Static image KNN produced zero usable weight — using heuristic score only");
+        emit_stderr(
+            "  ⚠️ Static image KNN produced zero usable weight — using heuristic score only",
+        );
         let bpp = bpp_heuristic_quality(analysis, "Static image KNN produced zero usable weight");
         let record = QualityInferenceRecord {
             knn_score: None,
@@ -421,7 +434,9 @@ pub fn lookup_image_quality(analysis: &ImageAnalysis) -> Option<QualityScore> {
     }
 
     let knn_score = high_weight / total_weight;
-    let knn_confidence = (f64::from(u32::try_from(total_count).unwrap_or(u32::MAX)) / f64::from(u32::try_from(target_k).unwrap_or(1))).min(1.0);
+    let knn_confidence = (f64::from(u32::try_from(total_count).unwrap_or(u32::MAX))
+        / f64::from(u32::try_from(target_k).unwrap_or(1)))
+    .min(1.0);
     let bpp_score = bpp_heuristic_score(analysis);
 
     let record = QualityInferenceRecord {
@@ -456,7 +471,8 @@ pub fn log_quality_inference_record(
     record: &QualityInferenceRecord,
 ) {
     let total_pixels = f64::from(analysis.width) * f64::from(analysis.height);
-    let spatial_bpp = f64::from(u32::try_from(analysis.file_size).unwrap_or(u32::MAX)) / total_pixels.max(1.0);
+    let spatial_bpp =
+        f64::from(u32::try_from(analysis.file_size).unwrap_or(u32::MAX)) / total_pixels.max(1.0);
     let log_pixels = total_pixels.log10();
     let aspect_ratio = if analysis.height > 0 {
         f64::from(analysis.width) / f64::from(analysis.height)
@@ -518,6 +534,10 @@ pub fn log_quality_inference_record(
 // ── Sample ingestion ──────────────────────────────────────────────────────────
 
 /// Ingest a labelled static image into the quality training set.
+/// Ingest a quality sample into the database.
+///
+/// # Errors
+/// Returns an error if the sample cannot be ingested.
 pub fn ingest_quality_sample(
     conn: &mut Client,
     path: &Path,
@@ -535,7 +555,8 @@ pub fn ingest_quality_sample(
 
     let file_hash = crate::common_utils::calculate_blake3_hash(path)?;
     let total_pixels = i64::from(analysis.width) * i64::from(analysis.height);
-    let spatial_bpp = f64::from(u32::try_from(analysis.file_size).unwrap_or(u32::MAX)) / (f64::from(u32::try_from(total_pixels).unwrap_or(1))).max(1.0);
+    let spatial_bpp = f64::from(u32::try_from(analysis.file_size).unwrap_or(u32::MAX))
+        / (f64::from(u32::try_from(total_pixels).unwrap_or(1))).max(1.0);
     let features = get_quality_features(&analysis);
 
     conn.execute(

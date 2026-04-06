@@ -119,10 +119,13 @@ impl DynamicCrfMapper {
     }
 }
 
-/// Quickly calibrate the CRF mapper for a video.
+/// Quickly calibrate a CRF value using a GPU-accelerated coarse search.
 ///
 /// # Errors
-/// Returns an error if calibration fails.
+/// Returns an error if the search fails.
+///
+/// # Panics
+/// Panics if the input file path is not a valid UTF-8 string.
 pub fn quick_calibrate(
     input: &Path,
     input_size: u64,
@@ -137,9 +140,8 @@ pub fn quick_calibrate(
 
     let mut mapper = DynamicCrfMapper::new(input_size);
 
-    let is_gif_input = crate::ffprobe::probe_video(input)
-        .map(|p| p.format_name.eq_ignore_ascii_case("gif"))
-        .unwrap_or(false);
+    let is_gif_input =
+        crate::ffprobe::probe_video(input).is_ok_and(|p| p.format_name.eq_ignore_ascii_case("gif"));
     if is_gif_input {
         crate::verbose_eprintln!(
             "   GIF detected: using FFmpeg libx265 path for calibration (no Y4M pipeline)"
@@ -184,9 +186,7 @@ pub fn quick_calibrate(
             .output();
 
         let gpu_size = match gpu_result {
-            Ok(out) if out.status.success() => {
-                fs::metadata(&gpu_path).map(|m| m.len()).unwrap_or(0)
-            }
+            Ok(out) if out.status.success() => fs::metadata(&gpu_path).map_or(0, |m| m.len()),
             Ok(out) => {
                 let stderr = String::from_utf8_lossy(&out.stderr);
                 eprintln!("   ❌ GPU calibration failed for CRF {anchor_crf:.1}");
@@ -230,9 +230,7 @@ pub fn quick_calibrate(
 
             let mut cpu_cmd = cpu_builder.output(&cpu_path).build();
             match cpu_cmd.output() {
-                Ok(out) if out.status.success() => {
-                    fs::metadata(&cpu_path).map(|m| m.len()).unwrap_or(0)
-                }
+                Ok(out) if out.status.success() => fs::metadata(&cpu_path).map_or(0, |m| m.len()),
                 Ok(out) => {
                     let stderr = String::from_utf8_lossy(&out.stderr);
                     eprintln!("   ❌ CPU calibration (GIF/libx265) failed for CRF {anchor_crf:.1}");
@@ -321,7 +319,7 @@ pub fn quick_calibrate(
             // "unable to open input file" which looks like a file-not-found error
             // but is really a race/empty-file issue.  Skip this CRF attempt and
             // try the next one rather than propagating a misleading x265 error.
-            let y4m_size = fs::metadata(&temp_input).map(|m| m.len()).unwrap_or(0);
+            let y4m_size = fs::metadata(&temp_input).map_or(0, |m| m.len());
             if y4m_size == 0 {
                 eprintln!(
                     "   ❌ Extracted y4m sample is empty for CRF {anchor_crf:.1} (ffmpeg exited 0 but wrote nothing); skipping"
@@ -330,7 +328,7 @@ pub fn quick_calibrate(
             }
 
             match encode_with_x265(&temp_input, &cpu_path, &config, vf_args) {
-                Ok(_) => fs::metadata(&cpu_path).map(|m| m.len()).unwrap_or(0),
+                Ok(_) => fs::metadata(&cpu_path).map_or(0, |m| m.len()),
                 Err(e) => {
                     eprintln!("   ❌ CPU x265 encoding failed for CRF {anchor_crf:.1}: {e}");
                     continue;
@@ -377,9 +375,7 @@ pub fn quick_calibrate(
             let cpu_result = cpu_cmd.output();
 
             match cpu_result {
-                Ok(out) if out.status.success() => {
-                    fs::metadata(&cpu_path).map(|m| m.len()).unwrap_or(0)
-                }
+                Ok(out) if out.status.success() => fs::metadata(&cpu_path).map_or(0, |m| m.len()),
                 Ok(out) => {
                     let stderr = String::from_utf8_lossy(&out.stderr);
                     eprintln!("   ❌ CPU encoding failed for CRF {anchor_crf:.1}");

@@ -66,9 +66,7 @@ impl ThreadConfig {
 
 #[must_use]
 pub fn calculate_optimal_threads(config: &ThreadConfig) -> usize {
-    let cpu_count = std::thread::available_parallelism()
-        .map(std::num::NonZero::get)
-        .unwrap_or(4);
+    let cpu_count = std::thread::available_parallelism().map_or(4, std::num::NonZero::get);
 
     let effective_percentage = if config.multi_instance_aware && is_multi_instance() {
         config.core_percentage / 2
@@ -141,11 +139,11 @@ fn apply_multi_instance_cap(
 
 #[must_use]
 pub fn get_balanced_thread_config(workload: WorkloadType) -> ThreadAllocation {
-    let total_cores = std::thread::available_parallelism()
-        .map(std::num::NonZero::get)
-        .unwrap_or(4);
+    let total_cores = std::thread::available_parallelism().map_or(4, std::num::NonZero::get);
 
-    let reserved = crate::numeric_cast::f64_to_usize_sat((crate::numeric_cast::usize_to_f64(total_cores) * 0.2).ceil());
+    let reserved = crate::numeric_cast::f64_to_usize_sat(
+        (crate::numeric_cast::usize_to_f64(total_cores) * 0.2).ceil(),
+    );
     let reserved = reserved.clamp(1, 2);
 
     let available_cores = total_cores.saturating_sub(reserved).max(1);

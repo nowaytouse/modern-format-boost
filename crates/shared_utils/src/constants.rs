@@ -39,7 +39,8 @@ pub const MS_SSIM_THREE_SEGMENT_MIN_DURATION_SECS: f64 = 60.0;
 
 /// Animated image CPU CRF search: above this duration, exploration encodes use three-segment
 /// timeline sampling. Uses [`ANIMATION_CLIP_THRESHOLD_SECS`] (short vs long animation split).
-pub const ANIMATED_IMAGE_EXPLORATION_SAMPLING_MIN_DURATION_SECS: f32 = ANIMATION_CLIP_THRESHOLD_SECS;
+pub const ANIMATED_IMAGE_EXPLORATION_SAMPLING_MIN_DURATION_SECS: f32 =
+    ANIMATION_CLIP_THRESHOLD_SECS;
 
 /// Fraction of total duration per segment (start / mid / end) for animated exploration sampling.
 pub const ANIMATED_IMAGE_EXPLORATION_SEGMENT_FRACTION: f64 = 0.15;

@@ -760,6 +760,18 @@ fn generate_jxl_indicator(
         ImageFormat::Jpeg => {
             if let Some(ref jpeg) = jpeg_analysis {
                 let quality_info = format!("original quality Q={}", jpeg.estimated_quality);
+                
+                // Check if it's an Ultra HDR JPEG (Google Gain Map)
+                use crate::image_jpeg_analysis::is_ultra_hdr_jpeg_file;
+                if is_ultra_hdr_jpeg_file(path) {
+                    return JxlIndicator {
+                        should_convert: true,
+                        reason: format!("Ultra HDR JPEG detected ({quality_info}); recommend high-fidelity HDR synthesis"),
+                        command: format!("cjxl '{file_path}' '{output_path}' --lossless_jpeg=1"),
+                        benefit: "Produces a single, true 32-bit HDR JXL file (OpenEXR via Gainmap mathematics)".to_string(),
+                    };
+                }
+
                 JxlIndicator {
                     should_convert: true,
                     reason: format!("JPEG ({quality_info}), lossless transcode to JXL"),
@@ -839,8 +851,10 @@ fn calculate_image_features(img: &DynamicImage, file_size: u64) -> ImageFeatures
         _ => 8u32,
     };
 
-    let raw_size =
-        u64::from(width) * u64::from(height) * (u64::from(channels)) * (u64::from(bits_per_channel) / 8);
+    let raw_size = u64::from(width)
+        * u64::from(height)
+        * (u64::from(channels))
+        * (u64::from(bits_per_channel) / 8);
 
     let compression_ratio = if raw_size > 0 {
         crate::numeric_cast::u64_to_f64(file_size) / crate::numeric_cast::u64_to_f64(raw_size)
@@ -998,7 +1012,9 @@ fn check_gif_animation(path: &Path) -> Result<bool> {
     // Stage 2: Feature Scan (Signal B)
     // Look for GCE markers [0x21, 0xF9, 0x04] globally
     let gce_marker = &[0x21, 0xF9, 0x04];
-    let gce_hints = crate::numeric_cast::usize_to_u32_sat(bytes.windows(3).filter(|w| *w == gce_marker).count());
+    let gce_hints = crate::numeric_cast::usize_to_u32_sat(
+        bytes.windows(3).filter(|w| *w == gce_marker).count(),
+    );
 
     if gce_hints > structural_count {
         // [Disagreement] Internal Deep Research
