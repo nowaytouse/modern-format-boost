@@ -15,6 +15,7 @@ All notable changes to this project will be documented in this file.
 - **Terminal Logging Tidy**: 
     - Demoted startup information ("Logging system initialized", "Cache Algorithm version initialized") and external tool execution logs to `DEBUG` level.
     - This provides a much cleaner terminal experience while keeping detailed traces in the `.log` files.
+    - Database internals that used to flood terminal output (`init_schema` bootstrap line, pgvector backfill banner, KNN row/radius diagnostics) now emit to `DEBUG` instead of regular terminal channels.
 - **Milestone Stats Refinement**: 
     - Cumulative milestone statistics (`│ X:12✓ I:5✓`) are now only appended to `WARN` and `ERROR` logs to provide context for failures.
     - Standard `INFO` logs and success messages (`✅`) remain clean and concise, reducing terminal visual clutter.
@@ -50,6 +51,7 @@ All notable changes to this project will be documented in this file.
 - **Clearer logging**: Added explicit warnings when running without KNN evidence; improved fallback result messages for better observability.
 - **Class-imbalance stable KNN math**: Replaced hard inverse-frequency scaling with **smoothed+damped class-balance weights**, added **Beta-smoothed global prior** and **effective-sample-size shrinkage** (`local posterior ↔ global prior`) so minority classes are protected without causing prediction cliffs under extreme dataset imbalance.
 - **Confidence anti-slope guard**: KNN confidence now includes imbalance and effective-neighbor penalties to avoid overconfident flips when nearest neighbors are sparse or class distribution is highly skewed.
+- **Debug observability for balancing math**: Added structured `DEBUG` logs for KNN balancing internals (`w_keep/w_weak`, global prior, imbalance ratio, effective-N, shrink factor, posterior) to support on-data tuning without polluting terminal output.
 
 #### 📊 Optional Scoring Functions (No Fabricated Defaults)
 

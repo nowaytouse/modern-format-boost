@@ -25,6 +25,8 @@ const IMPORT_KEY: &str = "dataset_seeds_import_v4";
 const STATS_KEY: &str = "feature_stats_v1";
 
 static DB_WARN_ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static DB_SCHEMA_INIT_LOGGED_ONCE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct FeatureStats {
@@ -811,11 +813,14 @@ fn lookup_similar_samples_inner(
         &[&target_pg_vector],
     )?;
 
-    println!("🔍 KNN Search Status: Processing {} database rows...", rows.len());
-    
+    tracing::debug!(rows = rows.len(), "KNN search rows loaded");
+
     let candidate_distances: Vec<f64> = rows.iter().map(|r: &postgres::Row| r.get::<_, f64>(2)).collect();
     if !candidate_distances.is_empty() {
-        println!("📊 Top 5 raw distances: {:?}", &candidate_distances[..5.min(candidate_distances.len())]);
+        tracing::debug!(
+            top5 = ?&candidate_distances[..5.min(candidate_distances.len())],
+            "KNN raw distance sample"
+        );
     }
 
     if rows.is_empty() {
@@ -847,8 +852,6 @@ fn lookup_similar_samples_inner(
     let min_distance = neighbors.first().map_or(0.0, |(_, _, d)| *d);
     let radius = dynamic_neighbor_radius(neighbors);
     
-    println!("🎯 KNN Context: radius={:.4}, min_dist={:.4}, candidates={}", radius, min_distance, neighbors.len());
-
     let (low_count, high_count, video_count) = get_class_counts(&mut conn);
     let total_samples = low_count + high_count + video_count;
     let quality_count = low_count;
@@ -861,6 +864,16 @@ fn lookup_similar_samples_inner(
     let w_video = class_balance_weight(total_samples, video_equivalent_count);
     let global_keep_prior = smoothed_keep_prior(quality_count, video_equivalent_count);
     let global_imbalance_ratio = imbalance_ratio(quality_count, video_equivalent_count);
+    tracing::debug!(
+        radius = radius,
+        min_distance = min_distance,
+        candidate_count = neighbors.len(),
+        w_keep = w_quality,
+        w_weak = w_video,
+        prior = global_keep_prior,
+        imbalance_ratio = global_imbalance_ratio,
+        "KNN balance context"
+    );
 
     let mut weighted_keep = 0.0;
     let mut total_weight = 0.0;
@@ -935,6 +948,15 @@ fn lookup_similar_samples_inner(
     let balance_penalty = (1.0 / global_imbalance_ratio.sqrt()).clamp(0.45, 1.0);
     confidence *= balance_penalty;
     confidence *= (eff_n / (eff_n + 2.0)).clamp(0.25, 1.0);
+    tracing::debug!(
+        local_keep_probability = local_keep_probability,
+        keep_probability = keep_probability,
+        effective_n = eff_n,
+        shrink = shrink,
+        prior_strength = prior_strength,
+        confidence = confidence,
+        "KNN posterior fusion result"
+    );
 
     // Sort for percentiles
     distances.sort_by(|a: &f64, b: &f64| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -1056,7 +1078,9 @@ pub fn is_lossless_exploration_safe(meta: &LoopMeta, path: Option<&Path>) -> boo
 /// if they do not exist, enables the pgvector extension, creates HNSW
 /// indexes, and performs any necessary column additions for schema upgrades.
 pub fn init_schema(conn: &mut Client) -> Result<()> {
-    emit_stderr("🐘 Initializing Database Schema (PostgreSQL + pgvector)...");
+    if !DB_SCHEMA_INIT_LOGGED_ONCE.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        tracing::debug!("Initializing Database Schema (PostgreSQL + pgvector)");
+    }
     // Enable pgvector extension
     if let Err(e) = conn.execute("CREATE EXTENSION IF NOT EXISTS vector", &[]) {
         emit_stderr(&format!("⚠️  pgvector extension failed to load: {e}"));
@@ -2347,7 +2371,7 @@ pub fn recompute_all_features(conn: &mut Client) -> Result<()> {
     let feature_map = fetch_feature_map(conn)?;
     
     // ── pgvector HNSW Migration: Backfill Vectors ──
-    emit_stderr("   ⚙️  Backfilling pgvector encodings for all labeled samples...");
+    tracing::debug!("Backfilling pgvector encodings for all labeled samples");
 
     let sample_rows = conn.query(
         "SELECT
