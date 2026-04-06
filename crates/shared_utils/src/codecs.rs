@@ -1,7 +1,7 @@
 //! Codec Information Module
 //!
 //! Contains codec-specific information and characteristics.
-//! Shared between vidquality and vid-hevc.
+//! Shared between the `vid` conversion and analysis paths.
 
 use serde::{Deserialize, Serialize};
 

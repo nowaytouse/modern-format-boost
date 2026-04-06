@@ -9,7 +9,8 @@
 //!
 //! ## Atomic output (TOCTOU)
 //! All conversion paths **must** write to a temp path via `temp_path_for_output()` then
-//! call `commit_temp_to_output(temp, output, force)`. Do not write directly to the final output.
+//! call `commit_temp_to_output_with_metadata(temp, output, force, original)`.
+//! Do not write directly to the final output.
 //!
 //! ## Compress mode (authoritative)
 //! When `options.compress` is true: **only** `output_size < input_size` is accepted.
@@ -842,11 +843,16 @@ pub fn commit_temp_to_output_with_metadata(
             ));
         }
     }
-    if !force && output.exists() {
+    let in_place_commit = temp == output;
+
+    if !in_place_commit && !force && output.exists() {
         let _ = crate::io_utils::safe_remove_file(temp);
         return Ok(false);
     }
-    crate::io_utils::robust_move(temp, output)?;
+
+    if !in_place_commit {
+        crate::io_utils::robust_move(temp, output)?;
+    }
 
     // Preserve complete metadata from original file if provided
     if let Some(src) = original {
@@ -1477,6 +1483,23 @@ mod tests {
             err.to_string()
                 .contains("commit_temp_to_output has been removed"),
             "unexpected error message: {err}"
+        );
+    }
+
+    #[test]
+    fn test_commit_temp_to_output_with_metadata_accepts_in_place_output() {
+        let temp_dir = tempdir_in("/tmp").expect("create temp dir");
+        let output = temp_dir.path().join("already-final.jxl");
+        std::fs::write(&output, b"jxl").expect("write output");
+
+        let committed = commit_temp_to_output_with_metadata(&output, &output, false, None)
+            .expect("in-place commit should succeed");
+
+        assert!(committed);
+        assert_eq!(
+            std::fs::read(&output).expect("read output"),
+            b"jxl",
+            "in-place commit must not remove the synthesized file"
         );
     }
 

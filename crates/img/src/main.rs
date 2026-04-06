@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 #[derive(Parser)]
-#[command(name = "imgquality")]
+#[command(name = "img")]
 #[command(version, about = "Image quality analyzer and format upgrade tool", long_about = None)]
 struct Cli {
     #[command(subcommand)]

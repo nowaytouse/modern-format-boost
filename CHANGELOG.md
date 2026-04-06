@@ -9,10 +9,21 @@ All notable changes to this project will be documented in this file.
 ### 🛡️ UltraHDR & cjxl Pipeline Hardening (Updated 2026-04-07)
 
 - **UltraHDR Gainmap Resilience**:
-  - **Search Window Fallback**: Implemented a 4KB "sliding window" search for JPEG SOI markers (`0xFFD8`) to handle cases where mobile camera MPF metadata provides offsets with a constant bias.
-  - **Absolute Offset Support**: Added fallback detection for absolute file-start offsets vs. relative MPF-base offsets.
-  - **Truncation Recovery**: Added graceful recovery for files where the gainmap data is physically shorter than its metadata claims (common in truncated downloads), allowing partial extraction and successful HDR synthesis.
-  - **MPF Segment Hardening**: Improved MPF segment detection to support non-standard `XMPF` identifiers found in modern mobile devices.
+  - **Multi-Strategy Candidate Recovery**: Replaced the previous two-way fallback (absolute offset check + 4 KB sliding window) with a unified **four-source candidate system**:
+    - `RelativeOffset` — standard MPF-relative position (highest priority, score 4 000)
+    - `AbsoluteOffset` — file-start absolute position (score 3 500)
+    - `NearbyScan` — bounded-radius scan around both relative and absolute positions (score 2 500)
+    - `TailScan` — full sweep from MPF base to EOF as last resort (score 1 500)
+  - **XMPF Identifier Support**: In addition to standard `MPF\0`, the pipeline now recognizes the non-standard `XMPF` APP2 marker used by some mobile devices (`crates/shared_utils/src/image_jpeg_analysis.rs:757`).
+  - **Scoring & Selection**: Each decodable candidate is scored on source weight, aspect-ratio match to the base image, length deviation from the claimed MPF length, and EOI repair penalty. The highest-scoring candidate wins.
+  - **Raw Direct Fallback**: When no candidate can be decoded as an image, candidates with valid SOI + EOI from trusted offset sources are still returned as raw JPEG slices, scored without the aspect-ratio term.
+  - **EOI Auto-Repair**: If a candidate's JPEG ends before the claimed length or EOF, the first `0xFF 0xD9` is located automatically; if missing, it is appended and flagged.
+  - **Overlong Length Recovery**: When MPF `gainmap_length` exceeds the file size, the system no longer hard-fails — it logs a `warn!` and delegates to the candidate recovery pipeline.
+  - **Aspect Ratio Validation**: Base image aspect ratio is now passed into `extract_gainmap_from_mpf` so the candidate scorer can penalize mismatched dimensions.
+- **UltraHDR Synthesis Finalization Bugfix**:
+  - **Isolated Temp Output**: `convert_ultrahdr_jpeg_to_jxl` now synthesizes into an isolated temp path via `isolated_temp_path_for_search` before any finalization (`crates/img/src/lossless_converter.rs:211`).
+  - **Health Check Cleanup**: If `verify_jxl_health` fails, the temp file is now properly cleaned up instead of leaking.
+  - **In-Place Commit Support**: `commit_temp_to_output_with_metadata` now detects `temp == output` and skips the destructive `robust_move`, preventing accidental deletion of already-finalized synthesized files (`crates/shared_utils/src/conversion.rs:846`). Covered by new test `test_commit_temp_to_output_with_metadata_accepts_in_place_output`.
 - **`cjxl` Upstream Robustness**:
   - **Grayscale ICC Mismatch Detection**: Hardened the detection of `libpng` warnings and "Grayscale image + RGB ICC profile" mismatches that cause `cjxl` exit code 1.
   - **Automated Fallback**: Triggered the ImageMagick fallback pipeline (`-strip`) specifically for these metadata-related failures, ensuring zero-touch conversion for problematic grayscale sources.
@@ -20,6 +31,8 @@ All notable changes to this project will be documented in this file.
 - **Testing Infrastructure**:
   - **Real-World Regression Tests**: Added integration tests (`test_ultrahdr_real_file_final.rs`) that validate the pipeline against problematic real-world HDR samples.
   - **Error Simulation**: Added `test_cjxl_errors.rs` to simulate grayscale ICC mismatches and verify the fallback recovery logic.
+  - **XMPF Detection Test**: `test_is_ultra_hdr_jpeg_true_with_xmpf_identifier` validates identification of JPEGs using the `XMPF` APP2 marker.
+  - **EOI Truncation Test**: `test_extract_gainmap_uses_eoi_when_length_runs_past_eof` verifies correct extraction when MPF length exceeds EOF.
 
 ### 🌟 100% Workspace Health Milestone (Updated 2026-04-07)
 
@@ -34,10 +47,46 @@ Achieved a pristine, warning-free state across the entire workspace by resolving
   - **Clippy Nursery**: Fixed `suspicious-operation-groupings` in the loop intent heuristic and consolidated redundant `allow` attributes into workspace-level configurations.
   - **Zero-Warning Terminal**: Verified that `scripts/check_all.py` now reports **0 Failures** and **0 Warnings** across all 19 integrated quality checks (excluding the 1 allowed RUSTSEC upstream audit).
 
+### 🏷️ CLI Naming & Shared Messaging Standardization
+
+- **CLI Binary Rename**: The image tool's CLI command is now `img` instead of `imgquality` (`crates/img/src/main.rs:17`).
+- **Shared Messaging Updates**: All cross-tool references and error messages now consistently direct users to `img` for images and `vid` for video paths (`crates/shared_utils/src/cli_runner.rs`, `crates/shared_utils/src/codecs.rs`, `crates/shared_utils/src/ffprobe.rs`, `crates/shared_utils/src/lib.rs`, `crates/img/src/conversion_api.rs`).
+- **Module Documentation Sync**: Doc comments updated to reflect the current `vid` pipeline nomenclature (replacing legacy `vidquality` / `vid-hevc` references).
+
+### 📐 FFprobe Parse Refactor (`ffprobe.rs`)
+
+- **Function Decomposition**: The monolithic 200+ line `probe_video` (previously gated by `#[allow(clippy::too_many_lines)]`) has been split into 12 focused helper functions, eliminating the broad lint suppression entirely:
+  - `validate_probe_target` — input file existence / readability / non-empty checks
+  - `run_ffprobe_json` — ffprobe execution and JSON deserialization
+  - `parse_probe_format` — format node → `ProbeFormatInfo`
+  - `select_video_stream` — multi-stream selection (highest frame count)
+  - `resolve_probe_duration` — duration fallback chain (format → stream → error)
+  - `parse_video_stream_fields` → `VideoStreamFields` (20 fields)
+  - `extract_audio_stream_fields` → `AudioStreamFields`
+  - `extract_subtitle_stream_fields` → `SubtitleStreamFields`
+- **Parser Helpers**: Added `parse_u64_string_field`, `parse_f64_string_field`, `parse_optional_known_string`, `collect_string_tags`, `parse_required_u32_field` for safe, reusable JSON extraction.
+- **Internal Structs**: `ProbeFormatInfo`, `VideoStreamFields`, `AudioStreamFields`, `SubtitleStreamFields` group related fields and make the main `probe_video` body a clean assembly of parsed components.
+- **No Behavioral Change**: The public `FFprobeResult` shape and error semantics are preserved — this is a pure structural refactor for maintainability.
+
 ### 🧹 Codebase Cleanup & Clippy Hygiene (Updated 2026-04-06)
 
 - **Workspace-wide Clippy Compliance**: Resolved numerous `pedantic`, `nursery`, and `restriction` warnings (e.g., `doc_markdown`, `items_after_statements`, `collapsible_if`, `map_unwrap_or`, `missing_panics_doc`, `missing_errors_doc`, `uninlined_format_args`) across `shared_utils`, `vid`, `img`, and `dev` crates.
 - **Idiomaticity**: Improved code by replacing manual `match` or `if let` blocks with `let-else`, `map_or_else`, and `and_then` where appropriate.
+- **Lint Suppression Cleanup**: Removed broad file-level `#![allow(clippy::needless_range_loop, clippy::manual_range_contains)]` from `image_jpeg_analysis.rs`; the old index-based loops have been replaced with idiomatic iterators. The `#[allow(clippy::too_many_lines)]` on `ffprobe.rs` is also gone after decomposition.
+- **Remaining `allow(...)` Usage**: Narrow numeric-cast / pointer-alignment suppression plus the bool-heavy `FFprobeResult` struct at `ffprobe.rs:39` — no broad accidental debt remains.
+
+### ✅ Verification
+
+All changes pass the full workspace quality suite:
+
+- `cargo fmt --all --check` — formatting clean
+- `cargo test --workspace --all-targets` — all tests pass
+- `cargo clippy --workspace --all-targets -- -D warnings` — zero warnings
+
+### 📝 Log Notes
+
+- Recurring grayscale ICC `cjxl` failures observed in `logs/img_run_2026-04-06_20-36-57.log` and `logs/img_run_2026-04-06_20-37-27.log` are treated as expected/recovered upstream noise — the existing fallback pipeline handles them successfully.
+- The real rare failure class was **malformed UltraHDR gainmap extraction** plus the **finalization bug** described above — those are the paths that have been hardened.
 - **Path Armor Testing**: Synchronized `test_magick_path_armor_hardening` with the current protocol-less relative pathing implementation (`./`).
 - **Documentation Integrity**: Added required `# Panics` and `# Errors` sections to test helper functions and standardized backtick usage in UltraHDR/GainMap documentation.
 - **Performance Optimization**: Removed redundant `clone()` calls and utilized `unwrap_or_else` to avoid unnecessary allocations in hot paths.

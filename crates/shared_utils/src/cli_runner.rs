@@ -117,7 +117,7 @@ where
         anyhow::bail!(
             "No video files found in directory: {}\n\
              Supported video formats: {}\n\
-             Use imgquality tool for images",
+             Use img for images",
             input.display(),
             SUPPORTED_VIDEO_EXTENSIONS.join(", ")
         );
@@ -548,7 +548,7 @@ where
             "❌ Not a video file: {}\n\
              💡 Extension (after content fix): .{}\n\
              💡 Supported video formats: {}\n\
-             💡 Use imgquality tool for images",
+             💡 Use img for images",
             input.display(),
             ext_str,
             SUPPORTED_VIDEO_EXTENSIONS.join(", ")

@@ -1,9 +1,10 @@
 //! `FFprobe` wrapper module
 //!
 //! Shared `FFprobe` functionality for video analysis.
-//! Used by vidquality and vid-hevc.
+//! Used by the `vid` pipeline.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::io;
 use std::path::Path;
 use tracing::warn;
@@ -89,7 +90,7 @@ pub struct FFprobeResult {
     /// Stream index of the selected video stream (for multi-stream files like animated AVIF)
     pub stream_index: usize,
     /// Format tags (e.g. encoder, `creation_time`) from the format section
-    pub tags: std::collections::HashMap<String, String>,
+    pub tags: HashMap<String, String>,
     /// Optional: Loop count from metadata (0 = infinite)
     pub loop_count: Option<u16>,
     /// Frame types (I, P, B) for the initial sample.
@@ -136,21 +137,55 @@ fn detect_vfr_enhanced(
     diff_ratio > 0.02
 }
 
-/// Probe video file using ffprobe.
-///
-/// # Errors
-/// Returns `FFprobeError` if `ffprobe` is not found, execution fails, or parsing results fails.
-///
-/// # Panics
-/// Panics if no video streams are found.
-#[allow(clippy::too_many_lines)]
-pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
-    if !is_ffprobe_available() {
-        return Err(FFprobeError::ToolNotFound(
-            "ffprobe not found. Install with: brew install ffmpeg".to_string(),
-        ));
-    }
+#[derive(Debug)]
+struct ProbeFormatInfo {
+    format_name: String,
+    size: u64,
+    bit_rate: u64,
+    duration: f64,
+    tags: HashMap<String, String>,
+}
 
+#[derive(Debug)]
+struct VideoStreamFields {
+    video_codec: String,
+    video_codec_long: String,
+    width: u32,
+    height: u32,
+    frame_rate: f64,
+    avg_frame_rate: f64,
+    frame_count: u64,
+    pix_fmt: String,
+    color_space: Option<String>,
+    color_transfer: Option<String>,
+    color_primaries: Option<String>,
+    bit_depth: u8,
+    profile: Option<String>,
+    level: Option<String>,
+    max_b_frames: u8,
+    has_b_frames: bool,
+    encoder_settings: Option<String>,
+    video_bit_rate: Option<u64>,
+    refs: Option<u32>,
+    is_variable_frame_rate: bool,
+}
+
+#[derive(Debug, Default)]
+struct AudioStreamFields {
+    has_audio: bool,
+    audio_codec: Option<String>,
+    audio_bit_rate: Option<u64>,
+    audio_sample_rate: Option<u32>,
+    audio_channels: Option<u32>,
+}
+
+#[derive(Debug, Default)]
+struct SubtitleStreamFields {
+    has_subtitles: bool,
+    subtitle_codec: Option<String>,
+}
+
+fn validate_probe_target(path: &Path) -> Result<(), FFprobeError> {
     if !path.exists() {
         return Err(FFprobeError::ExecutionFailed(format!(
             "File not found: {}",
@@ -165,6 +200,10 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         )));
     }
 
+    Ok(())
+}
+
+fn run_ffprobe_json(path: &Path) -> Result<serde_json::Value, FFprobeError> {
     let output = crate::ffmpeg_builder::FfprobeBuilder::new()
         .input(path)
         .loglevel("error")
@@ -192,49 +231,60 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
     }
 
     let json_str = String::from_utf8_lossy(&output.stdout);
-    let json: serde_json::Value =
-        serde_json::from_str(&json_str).map_err(|e| FFprobeError::ParseError(e.to_string()))?;
+    serde_json::from_str(&json_str).map_err(|e| FFprobeError::ParseError(e.to_string()))
+}
 
-    let format = &json["format"];
+fn parse_u64_string_field(value: &serde_json::Value) -> Option<u64> {
+    value.as_str().and_then(|s| s.parse::<u64>().ok())
+}
+
+fn parse_f64_string_field(value: &serde_json::Value) -> Option<f64> {
+    value.as_str().and_then(|s| s.parse::<f64>().ok())
+}
+
+fn parse_optional_known_string(value: &serde_json::Value) -> Option<String> {
+    value
+        .as_str()
+        .filter(|s| !s.is_empty() && *s != "unknown")
+        .map(str::to_string)
+}
+
+fn collect_string_tags(tags_value: &serde_json::Value) -> HashMap<String, String> {
+    let mut tags = HashMap::new();
+    if let Some(tags_obj) = tags_value.as_object() {
+        for (key, value) in tags_obj {
+            if let Some(string_value) = value.as_str() {
+                tags.insert(key.clone(), string_value.to_string());
+            }
+        }
+    }
+    tags
+}
+
+fn parse_probe_format(format: &serde_json::Value) -> Result<ProbeFormatInfo, FFprobeError> {
     let format_name = format["format_name"]
         .as_str()
         .ok_or_else(|| FFprobeError::ParseError("Missing format_name".to_string()))?
         .to_string();
-
-    let size = format["size"]
-        .as_str()
-        .and_then(|s| s.parse::<u64>().ok())
+    let size = parse_u64_string_field(&format["size"])
         .ok_or_else(|| FFprobeError::ParseError("Missing or invalid file size".to_string()))?;
 
-    let bit_rate = format["bit_rate"]
-        .as_str()
-        .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or(0); // overall bitrate can be 0 if unknown, handled downstream
+    Ok(ProbeFormatInfo {
+        format_name,
+        size,
+        bit_rate: parse_u64_string_field(&format["bit_rate"]).unwrap_or(0),
+        duration: parse_f64_string_field(&format["duration"]).unwrap_or(0.0),
+        tags: collect_string_tags(&format["tags"]),
+    })
+}
 
-    let mut duration = format["duration"]
-        .as_str()
-        .and_then(|s| s.parse::<f64>().ok())
-        .unwrap_or(0.0);
-
-    let mut tags = std::collections::HashMap::new();
-    if let Some(tags_obj) = format["tags"].as_object() {
-        for (k, v) in tags_obj {
-            if let Some(val) = v.as_str() {
-                tags.insert(k.clone(), val.to_string());
-            }
-        }
-    }
-
-    let streams = json["streams"]
-        .as_array()
-        .ok_or_else(|| FFprobeError::ParseError("No streams found".to_string()))?;
-
-    // For animated images (AVIF/HEIC) with multiple video streams, select the one with most frames
-    // First stream is often a thumbnail/poster, second stream contains the actual animation
-    let video_streams: Vec<(usize, &serde_json::Value)> = streams
+fn select_video_stream<'a>(
+    streams: &'a [serde_json::Value],
+) -> Result<(usize, &'a serde_json::Value), FFprobeError> {
+    let video_streams: Vec<(usize, &'a serde_json::Value)> = streams
         .iter()
         .enumerate()
-        .filter(|(_, s)| s["codec_type"].as_str() == Some("video"))
+        .filter(|(_, stream)| stream["codec_type"].as_str() == Some("video"))
         .collect();
 
     if video_streams.is_empty() {
@@ -243,43 +293,60 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         ));
     }
 
-    // Select stream with most frames (for animated images) or first stream (for regular videos)
-    // Use the actual stream index from the JSON, not the enumerate index
-    let (stream_index, video_stream) = if video_streams.len() > 1 {
+    let (fallback_index, stream) = if video_streams.len() > 1 {
         video_streams
-            .iter()
-            .max_by_key(|(_, s)| {
-                s["nb_frames"]
-                    .as_str()
-                    .and_then(|n| n.parse::<u64>().ok())
-                    .unwrap_or(0)
-            })
-            .map(|(_, s)| {
-                let actual_index = usize::try_from(s["index"].as_u64().unwrap_or(0)).unwrap_or(0);
-                (actual_index, *s)
-            })
-            .unwrap()
+            .into_iter()
+            .max_by_key(|(_, stream)| parse_u64_string_field(&stream["nb_frames"]).unwrap_or(0))
+            .ok_or_else(|| FFprobeError::ParseError("No video stream found".to_string()))?
     } else {
-        let actual_index =
-            usize::try_from(video_streams[0].1["index"].as_u64().unwrap_or(0)).unwrap_or(0);
-        (actual_index, video_streams[0].1)
+        video_streams[0]
     };
 
-    if duration <= 0.0 {
-        if let Some(d) = video_stream["duration"]
-            .as_str()
-            .and_then(|s| s.parse::<f64>().ok())
-        {
-            duration = d;
-        }
-    }
-    if duration <= 0.0 {
-        return Err(FFprobeError::ParseError(
+    let actual_index = stream["index"]
+        .as_u64()
+        .and_then(|index| usize::try_from(index).ok())
+        .unwrap_or(fallback_index);
+
+    Ok((actual_index, stream))
+}
+
+fn resolve_probe_duration(
+    format_duration: f64,
+    video_stream: &serde_json::Value,
+) -> Result<f64, FFprobeError> {
+    let duration = if format_duration > 0.0 {
+        format_duration
+    } else {
+        parse_f64_string_field(&video_stream["duration"]).unwrap_or(0.0)
+    };
+
+    if duration > 0.0 {
+        Ok(duration)
+    } else {
+        Err(FFprobeError::ParseError(
             "Missing duration (both format and video stream reported 0 or invalid duration)"
                 .to_string(),
-        ));
+        ))
     }
+}
 
+fn parse_required_u32_field(
+    video_stream: &serde_json::Value,
+    field_name: &str,
+) -> Result<u32, FFprobeError> {
+    let raw_value = video_stream[field_name]
+        .as_u64()
+        .ok_or_else(|| FFprobeError::ParseError(format!("Missing {field_name}")))?;
+
+    u32::try_from(raw_value)
+        .map_err(|_| FFprobeError::ParseError(format!("Invalid {field_name}: {raw_value}")))
+}
+
+fn parse_video_stream_fields(
+    video_stream: &serde_json::Value,
+    format_name: &str,
+    duration: f64,
+) -> Result<VideoStreamFields, FFprobeError> {
     let video_codec = video_stream["codec_name"]
         .as_str()
         .ok_or_else(|| FFprobeError::ParseError("Missing video codec name".to_string()))?
@@ -288,18 +355,8 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         .as_str()
         .unwrap_or("")
         .to_string();
-    let width = u32::try_from(
-        video_stream["width"]
-            .as_u64()
-            .ok_or_else(|| FFprobeError::ParseError("Missing width".to_string()))?,
-    )
-    .unwrap_or(0);
-    let height = u32::try_from(
-        video_stream["height"]
-            .as_u64()
-            .ok_or_else(|| FFprobeError::ParseError("Missing height".to_string()))?,
-    )
-    .unwrap_or(0);
+    let width = parse_required_u32_field(video_stream, "width")?;
+    let height = parse_required_u32_field(video_stream, "height")?;
     if width == 0 || height == 0 {
         return Err(FFprobeError::ParseError(format!(
             "Invalid dimensions: {width}x{height}"
@@ -310,104 +367,19 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         .map_err(|e| FFprobeError::ParseError(format!("Invalid r_frame_rate: {e}")))?;
     let avg_frame_rate = parse_frame_rate(video_stream["avg_frame_rate"].as_str().unwrap_or("0/1"))
         .map_err(|e| FFprobeError::ParseError(format!("Invalid avg_frame_rate: {e}")))?;
-
-    // Enhanced VFR detection with slow-motion handling
     let is_variable_frame_rate =
-        detect_vfr_enhanced(video_stream, frame_rate, avg_frame_rate, &format_name);
-
-    let frame_count = video_stream["nb_frames"]
-        .as_str()
-        .and_then(|s| s.parse::<u64>().ok())
+        detect_vfr_enhanced(video_stream, frame_rate, avg_frame_rate, format_name);
+    let frame_count = parse_u64_string_field(&video_stream["nb_frames"])
         .unwrap_or_else(|| crate::numeric_cast::f64_to_u64_sat(duration * frame_rate));
 
     let pix_fmt = video_stream["pix_fmt"]
         .as_str()
         .ok_or_else(|| FFprobeError::ParseError("Missing pixel format".to_string()))?
         .to_string();
-    let color_space = video_stream["color_space"].as_str().and_then(|s| {
-        if s.is_empty() || s == "unknown" {
-            None
-        } else {
-            Some(s.to_string())
-        }
-    });
-    let color_transfer = video_stream["color_transfer"].as_str().and_then(|s| {
-        if s.is_empty() || s == "unknown" {
-            None
-        } else {
-            Some(s.to_string())
-        }
-    });
-    let color_primaries = video_stream["color_primaries"].as_str().and_then(|s| {
-        if s.is_empty() || s == "unknown" {
-            None
-        } else {
-            Some(s.to_string())
-        }
-    });
-
-    // Parse HDR side data: Dolby Vision, HDR10+, mastering display, CLL
-    // We scan all objects across streams and frames for side_data entries
-    let hdr = extract_hdr_side_data(&json);
-
-    let bit_depth = detect_bit_depth(&pix_fmt);
-
-    let profile = video_stream["profile"]
-        .as_str()
-        .map(std::string::ToString::to_string);
-    let level = video_stream["level"]
-        .as_u64()
-        .map(|l| format!("{:.1}", l as f64 / 10.0));
-
-    // Extract actual B-frame count (integer) instead of just a boolean
     let max_b_frames =
         u8::try_from(video_stream["has_b_frames"].as_i64().unwrap_or(0)).unwrap_or(0);
-    let has_b_frames = max_b_frames > 0;
 
-    // Extract encoder settings from tags (x264-params, x265-params, etc.)
-    let encoder_settings = video_stream["tags"]["x265-params"]
-        .as_str()
-        .or_else(|| video_stream["tags"]["x264-params"].as_str())
-        .or_else(|| video_stream["tags"]["encoder_settings"].as_str())
-        .map(std::string::ToString::to_string);
-
-    let video_bit_rate = video_stream["bit_rate"]
-        .as_str()
-        .and_then(|s| s.parse::<u64>().ok());
-    let refs = video_stream["refs"]
-        .as_u64()
-        .map(|r| u32::try_from(r).unwrap_or(0));
-
-    let audio_stream = streams
-        .iter()
-        .find(|s| s["codec_type"].as_str() == Some("audio"));
-    let has_audio = audio_stream.is_some();
-    let audio_codec = audio_stream
-        .and_then(|s| s["codec_name"].as_str())
-        .map(std::string::ToString::to_string);
-    let audio_bit_rate = audio_stream
-        .and_then(|s| s["bit_rate"].as_str())
-        .and_then(|s| s.parse::<u64>().ok());
-    let audio_sample_rate = audio_stream
-        .and_then(|s| s["sample_rate"].as_str())
-        .and_then(|s| s.parse::<u32>().ok());
-    let audio_channels = audio_stream
-        .and_then(|s| s["channels"].as_u64())
-        .map(|c| u32::try_from(c).unwrap_or(0));
-
-    let subtitle_stream = streams
-        .iter()
-        .find(|s| s["codec_type"].as_str() == Some("subtitle"));
-    let has_subtitles = subtitle_stream.is_some();
-    let subtitle_codec = subtitle_stream
-        .and_then(|s| s["codec_name"].as_str())
-        .map(std::string::ToString::to_string);
-
-    Ok(FFprobeResult {
-        format_name,
-        duration,
-        size,
-        bit_rate,
+    Ok(VideoStreamFields {
         video_codec,
         video_codec_long,
         width,
@@ -415,35 +387,138 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         frame_rate,
         avg_frame_rate,
         frame_count,
-        pix_fmt,
-        color_space,
-        color_transfer,
-        color_primaries,
-        bit_depth,
-        has_audio,
-        audio_codec,
-        audio_bit_rate,
-        audio_sample_rate,
-        audio_channels,
-        profile,
-        level,
+        pix_fmt: pix_fmt.clone(),
+        color_space: parse_optional_known_string(&video_stream["color_space"]),
+        color_transfer: parse_optional_known_string(&video_stream["color_transfer"]),
+        color_primaries: parse_optional_known_string(&video_stream["color_primaries"]),
+        bit_depth: detect_bit_depth(&pix_fmt),
+        profile: video_stream["profile"].as_str().map(str::to_string),
+        level: video_stream["level"]
+            .as_u64()
+            .map(|level| format!("{:.1}", level as f64 / 10.0)),
         max_b_frames,
-        has_b_frames,
-        encoder_settings,
-        video_bit_rate,
-        refs,
+        has_b_frames: max_b_frames > 0,
+        encoder_settings: video_stream["tags"]["x265-params"]
+            .as_str()
+            .or_else(|| video_stream["tags"]["x264-params"].as_str())
+            .or_else(|| video_stream["tags"]["encoder_settings"].as_str())
+            .map(str::to_string),
+        video_bit_rate: parse_u64_string_field(&video_stream["bit_rate"]),
+        refs: video_stream["refs"]
+            .as_u64()
+            .and_then(|refs| u32::try_from(refs).ok()),
+        is_variable_frame_rate,
+    })
+}
+
+fn extract_audio_stream_fields(streams: &[serde_json::Value]) -> AudioStreamFields {
+    let Some(audio_stream) = streams
+        .iter()
+        .find(|stream| stream["codec_type"].as_str() == Some("audio"))
+    else {
+        return AudioStreamFields::default();
+    };
+
+    AudioStreamFields {
+        has_audio: true,
+        audio_codec: audio_stream["codec_name"].as_str().map(str::to_string),
+        audio_bit_rate: parse_u64_string_field(&audio_stream["bit_rate"]),
+        audio_sample_rate: parse_u64_string_field(&audio_stream["sample_rate"])
+            .and_then(|sample_rate| u32::try_from(sample_rate).ok()),
+        audio_channels: audio_stream["channels"]
+            .as_u64()
+            .and_then(|channels| u32::try_from(channels).ok()),
+    }
+}
+
+fn extract_subtitle_stream_fields(streams: &[serde_json::Value]) -> SubtitleStreamFields {
+    let Some(subtitle_stream) = streams
+        .iter()
+        .find(|stream| stream["codec_type"].as_str() == Some("subtitle"))
+    else {
+        return SubtitleStreamFields::default();
+    };
+
+    SubtitleStreamFields {
+        has_subtitles: true,
+        subtitle_codec: subtitle_stream["codec_name"].as_str().map(str::to_string),
+    }
+}
+
+/// Probe video file using ffprobe.
+///
+/// # Errors
+/// Returns `FFprobeError` if `ffprobe` is not found, execution fails, or parsing results fails.
+///
+/// # Panics
+/// Panics if no video streams are found.
+pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
+    if !is_ffprobe_available() {
+        return Err(FFprobeError::ToolNotFound(
+            "ffprobe not found. Install with: brew install ffmpeg".to_string(),
+        ));
+    }
+
+    validate_probe_target(path)?;
+    let json = run_ffprobe_json(path)?;
+    let ProbeFormatInfo {
+        format_name,
+        size,
+        bit_rate,
+        duration: format_duration,
+        tags,
+    } = parse_probe_format(&json["format"])?;
+    let streams = json["streams"]
+        .as_array()
+        .ok_or_else(|| FFprobeError::ParseError("No streams found".to_string()))?;
+    let (stream_index, video_stream) = select_video_stream(streams)?;
+    let duration = resolve_probe_duration(format_duration, video_stream)?;
+    let video = parse_video_stream_fields(video_stream, &format_name, duration)?;
+    let hdr = extract_hdr_side_data(&json);
+    let audio = extract_audio_stream_fields(streams);
+    let subtitles = extract_subtitle_stream_fields(streams);
+
+    Ok(FFprobeResult {
+        format_name,
+        duration,
+        size,
+        bit_rate,
+        video_codec: video.video_codec,
+        video_codec_long: video.video_codec_long,
+        width: video.width,
+        height: video.height,
+        frame_rate: video.frame_rate,
+        avg_frame_rate: video.avg_frame_rate,
+        frame_count: video.frame_count,
+        pix_fmt: video.pix_fmt,
+        color_space: video.color_space,
+        color_transfer: video.color_transfer,
+        color_primaries: video.color_primaries,
+        bit_depth: video.bit_depth,
+        has_audio: audio.has_audio,
+        audio_codec: audio.audio_codec,
+        audio_bit_rate: audio.audio_bit_rate,
+        audio_sample_rate: audio.audio_sample_rate,
+        audio_channels: audio.audio_channels,
+        profile: video.profile,
+        level: video.level,
+        max_b_frames: video.max_b_frames,
+        has_b_frames: video.has_b_frames,
+        encoder_settings: video.encoder_settings,
+        video_bit_rate: video.video_bit_rate,
+        refs: video.refs,
         mastering_display: hdr.mastering_display,
         max_cll: hdr.max_cll,
         is_dolby_vision: hdr.is_dolby_vision,
         dv_profile: hdr.dv_profile,
         dv_bl_signal_compatibility_id: hdr.dv_bl_signal_compatibility_id,
         is_hdr10_plus: hdr.is_hdr10_plus,
-        has_subtitles,
-        subtitle_codec,
-        is_variable_frame_rate,
+        has_subtitles: subtitles.has_subtitles,
+        subtitle_codec: subtitles.subtitle_codec,
+        is_variable_frame_rate: video.is_variable_frame_rate,
         stream_index,
         tags,
-        loop_count: extract_loop_count(format),
+        loop_count: extract_loop_count(&json["format"]),
         frame_types: extract_frame_types(&json),
         pts_deltas: extract_pts_deltas(&json),
         pkt_sizes: extract_pkt_sizes(&json),

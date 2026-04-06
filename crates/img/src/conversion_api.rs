@@ -61,7 +61,7 @@ fn cleanup_output_file(path: &Path, context: &str) {
     if let Err(e) = std::fs::remove_file(path) {
         if e.kind() != std::io::ErrorKind::NotFound {
             eprintln!(
-                "⚠️ [img-hevc] Failed to remove {} {}: {}",
+                "⚠️ [img] Failed to remove {} {}: {}",
                 context,
                 path.display(),
                 e

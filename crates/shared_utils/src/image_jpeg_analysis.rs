@@ -5,10 +5,9 @@
 //!
 //! Algorithm accuracy target: ±1 quality factor for standard tables
 
-#![allow(clippy::needless_range_loop, clippy::manual_range_contains)]
-
 use image::{DynamicImage, GenericImageView};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use tracing::{info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,10 +58,10 @@ fn generate_standard_qt(quality: u8, base_table: &[[u16; 8]; 8]) -> [[u16; 8]; 8
 
     let mut result = [[0u16; 8]; 8];
 
-    for i in 0..8 {
-        for j in 0..8 {
-            let value = ((scale * f64::from(base_table[i][j])) + 50.0) / 100.0;
-            result[i][j] = crate::numeric_cast::f64_to_u16_sat(value.floor().clamp(1.0, 255.0));
+    for (row, base_row) in result.iter_mut().zip(base_table.iter()) {
+        for (cell, &base_value) in row.iter_mut().zip(base_row.iter()) {
+            let value = ((scale * f64::from(base_value)) + 50.0) / 100.0;
+            *cell = crate::numeric_cast::f64_to_u16_sat(value.floor().clamp(1.0, 255.0));
         }
     }
 
@@ -84,10 +83,9 @@ fn calculate_weighted_sse(table1: &[[u16; 8]; 8], table2: &[[u16; 8]; 8]) -> f64
     let mut weighted_sse = 0.0;
     let mut total_weight = 0.0;
 
-    for i in 0..8 {
-        for j in 0..8 {
-            let diff = f64::from(table1[i][j]) - f64::from(table2[i][j]);
-            let weight = WEIGHTS[i][j];
+    for ((row1, row2), weight_row) in table1.iter().zip(table2.iter()).zip(WEIGHTS.iter()) {
+        for ((&lhs, &rhs), &weight) in row1.iter().zip(row2.iter()).zip(weight_row.iter()) {
+            let diff = f64::from(lhs) - f64::from(rhs);
             weighted_sse += weight * diff * diff;
             total_weight += weight;
         }
@@ -98,9 +96,9 @@ fn calculate_weighted_sse(table1: &[[u16; 8]; 8], table2: &[[u16; 8]; 8]) -> f64
 
 fn calculate_sse(table1: &[[u16; 8]; 8], table2: &[[u16; 8]; 8]) -> f64 {
     let mut sse = 0.0;
-    for i in 0..8 {
-        for j in 0..8 {
-            let diff = f64::from(table1[i][j]) - f64::from(table2[i][j]);
+    for (row1, row2) in table1.iter().zip(table2.iter()) {
+        for (&lhs, &rhs) in row1.iter().zip(row2.iter()) {
+            let diff = f64::from(lhs) - f64::from(rhs);
             sse += diff * diff;
         }
     }
@@ -330,9 +328,9 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
                     if seg_pos + 64 > data.len() {
                         break;
                     }
-                    for i in 0..64 {
-                        let row = ZIGZAG_ORDER[i] / 8;
-                        let col = ZIGZAG_ORDER[i] % 8;
+                    for &zigzag in &ZIGZAG_ORDER {
+                        let row = zigzag / 8;
+                        let col = zigzag % 8;
                         table[row][col] = u16::from(data[seg_pos]);
                         seg_pos += 1;
                     }
@@ -340,9 +338,9 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
                     if seg_pos + 128 > data.len() {
                         break;
                     }
-                    for i in 0..64 {
-                        let row = ZIGZAG_ORDER[i] / 8;
-                        let col = ZIGZAG_ORDER[i] % 8;
+                    for &zigzag in &ZIGZAG_ORDER {
+                        let row = zigzag / 8;
+                        let col = zigzag % 8;
                         table[row][col] =
                             (u16::from(data[seg_pos]) << 8) | u16::from(data[seg_pos + 1]);
                         seg_pos += 2;
@@ -537,7 +535,7 @@ pub fn is_ultra_hdr_jpeg(data: &[u8]) -> bool {
                     has_gainmap_xmp = true;
                 }
             }
-            if payload.starts_with(mpf::MPF_IDENTIFIER) {
+            if strip_mpf_identifier(payload).is_some() {
                 has_mpf = true;
             }
         }
@@ -671,13 +669,14 @@ pub fn extract_gainmap_from_jpeg(data: &[u8]) -> Result<(DynamicImage, DynamicIm
     }
 
     info!("Base image decoded: {}x{} pixels", base_dims.0, base_dims.1);
+    let base_aspect = f64::from(base_dims.0) / f64::from(base_dims.1);
 
     // Find and parse MPF segment
     let mpf_segment = find_mpf_segment(data)?;
     info!("MPF segment found: {} bytes", mpf_segment.len());
 
     // Extract gainmap from MPF
-    let gainmap_data = extract_gainmap_from_mpf(data, &mpf_segment)?;
+    let gainmap_data = extract_gainmap_from_mpf(data, &mpf_segment, Some(base_aspect))?;
     info!("Gainmap extracted: {} bytes", gainmap_data.len());
 
     // Decode gainmap image
@@ -704,7 +703,6 @@ pub fn extract_gainmap_from_jpeg(data: &[u8]) -> Result<(DynamicImage, DynamicIm
     }
 
     // Validate gainmap aspect ratio matches base image
-    let base_aspect = f64::from(base_dims.0) / f64::from(base_dims.1);
     let gainmap_aspect = f64::from(gainmap_dims.0) / f64::from(gainmap_dims.1);
     let aspect_diff = (base_aspect - gainmap_aspect).abs();
     if aspect_diff > 0.01 {
@@ -733,6 +731,8 @@ pub fn extract_gainmap_from_jpeg(data: &[u8]) -> Result<(DynamicImage, DynamicIm
 mod mpf {
     // MPF identifier: "MPF\0"
     pub const MPF_IDENTIFIER: &[u8] = b"MPF\0";
+    // Some devices use a non-standard APP2 identifier while keeping the MPF TIFF layout.
+    pub const XMPF_IDENTIFIER: &[u8] = b"XMPF";
 
     // TIFF big-endian marker: "MM\0*"
     pub const TIFF_BIG_ENDIAN: &[u8] = b"MM\0*";
@@ -744,8 +744,335 @@ mod mpf {
     pub const TAG_MP_ENTRY: u16 = 0xB002;
 }
 
-/// Find MPF segment in JPEG data
-/// Returns the MPF payload (after "MPF\0" identifier)
+const JPEG_SOI_BYTES: [u8; 3] = [0xFF, 0xD8, 0xFF];
+const JPEG_EOI_BYTES: [u8; 2] = [0xFF, 0xD9];
+const GAINMAP_SCAN_WINDOW_MIN: usize = 4_096;
+const GAINMAP_SCAN_WINDOW_MAX: usize = 131_072;
+const MAX_GAINMAP_SCAN_CANDIDATES: usize = 48;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GainmapCandidateSource {
+    RelativeOffset,
+    AbsoluteOffset,
+    NearbyScan,
+    TailScan,
+}
+
+#[derive(Debug)]
+struct GainmapCandidate {
+    data: Vec<u8>,
+    start: usize,
+    source: GainmapCandidateSource,
+    repaired_eoi: bool,
+    aspect_diff: Option<f64>,
+    decoded: bool,
+}
+
+fn strip_mpf_identifier(payload: &[u8]) -> Option<&[u8]> {
+    payload
+        .strip_prefix(mpf::MPF_IDENTIFIER)
+        .or_else(|| payload.strip_prefix(mpf::XMPF_IDENTIFIER))
+}
+
+fn starts_with_jpeg_at(data: &[u8], position: usize) -> bool {
+    data.get(position..position + 2) == Some(&[0xFF, 0xD8])
+}
+
+fn push_gainmap_candidate(
+    jpeg_data: &[u8],
+    position: usize,
+    source: GainmapCandidateSource,
+    seen: &mut BTreeSet<usize>,
+    candidates: &mut Vec<(usize, GainmapCandidateSource)>,
+) {
+    if starts_with_jpeg_at(jpeg_data, position) && seen.insert(position) {
+        candidates.push((position, source));
+    }
+}
+
+fn collect_scanned_gainmap_candidates(
+    jpeg_data: &[u8],
+    range_start: usize,
+    range_end: usize,
+    source: GainmapCandidateSource,
+    seen: &mut BTreeSet<usize>,
+    candidates: &mut Vec<(usize, GainmapCandidateSource)>,
+) {
+    let bounded_end = range_end.min(jpeg_data.len());
+    if bounded_end.saturating_sub(range_start) < JPEG_SOI_BYTES.len() {
+        return;
+    }
+
+    for (offset, window) in jpeg_data[range_start..bounded_end]
+        .windows(JPEG_SOI_BYTES.len())
+        .enumerate()
+    {
+        if window == JPEG_SOI_BYTES {
+            let position = range_start + offset;
+            if seen.insert(position) {
+                candidates.push((position, source));
+                if candidates.len() >= MAX_GAINMAP_SCAN_CANDIDATES {
+                    break;
+                }
+            }
+        }
+    }
+}
+
+fn collect_gainmap_candidate_offsets(
+    jpeg_data: &[u8],
+    relative_start: usize,
+    absolute_start: usize,
+    mpf_base_pos: usize,
+    claimed_length: usize,
+) -> Vec<(usize, GainmapCandidateSource)> {
+    let mut seen = BTreeSet::new();
+    let mut candidates = Vec::new();
+
+    push_gainmap_candidate(
+        jpeg_data,
+        relative_start,
+        GainmapCandidateSource::RelativeOffset,
+        &mut seen,
+        &mut candidates,
+    );
+    push_gainmap_candidate(
+        jpeg_data,
+        absolute_start,
+        GainmapCandidateSource::AbsoluteOffset,
+        &mut seen,
+        &mut candidates,
+    );
+
+    let search_radius = claimed_length.clamp(GAINMAP_SCAN_WINDOW_MIN, GAINMAP_SCAN_WINDOW_MAX);
+
+    collect_scanned_gainmap_candidates(
+        jpeg_data,
+        relative_start.saturating_sub(search_radius),
+        relative_start
+            .saturating_add(search_radius)
+            .min(jpeg_data.len()),
+        GainmapCandidateSource::NearbyScan,
+        &mut seen,
+        &mut candidates,
+    );
+
+    if absolute_start != relative_start {
+        collect_scanned_gainmap_candidates(
+            jpeg_data,
+            absolute_start.saturating_sub(search_radius),
+            absolute_start
+                .saturating_add(search_radius)
+                .min(jpeg_data.len()),
+            GainmapCandidateSource::NearbyScan,
+            &mut seen,
+            &mut candidates,
+        );
+    }
+
+    if candidates.is_empty() {
+        collect_scanned_gainmap_candidates(
+            jpeg_data,
+            mpf_base_pos.min(jpeg_data.len()),
+            jpeg_data.len(),
+            GainmapCandidateSource::TailScan,
+            &mut seen,
+            &mut candidates,
+        );
+    }
+
+    candidates
+}
+
+fn find_first_eoi_end(jpeg_data: &[u8], start: usize) -> Option<usize> {
+    jpeg_data
+        .get(start..)?
+        .windows(JPEG_EOI_BYTES.len())
+        .position(|window| window == JPEG_EOI_BYTES)
+        .map(|offset| start + offset + JPEG_EOI_BYTES.len())
+}
+
+fn candidate_gainmap_bytes(
+    jpeg_data: &[u8],
+    start: usize,
+    claimed_length: usize,
+) -> Option<(Vec<u8>, bool)> {
+    if !starts_with_jpeg_at(jpeg_data, start) {
+        return None;
+    }
+
+    let claimed_end = start.saturating_add(claimed_length).min(jpeg_data.len());
+    let end = match find_first_eoi_end(jpeg_data, start) {
+        Some(eoi_end) if claimed_end == jpeg_data.len() || eoi_end <= claimed_end => eoi_end,
+        _ if claimed_end > start => claimed_end,
+        _ => return None,
+    };
+
+    let mut candidate = jpeg_data[start..end].to_vec();
+    let repaired_eoi = !candidate.ends_with(&JPEG_EOI_BYTES);
+    if repaired_eoi {
+        candidate.extend_from_slice(&JPEG_EOI_BYTES);
+    }
+
+    Some((candidate, repaired_eoi))
+}
+
+fn decode_gainmap_dimensions(candidate: &[u8]) -> Option<(u32, u32)> {
+    use image::ImageReader;
+    use std::io::Cursor;
+
+    let decoded = ImageReader::new(Cursor::new(candidate))
+        .with_guessed_format()
+        .ok()?
+        .decode()
+        .ok()?;
+
+    Some(decoded.dimensions())
+}
+
+fn gainmap_candidate_score(
+    source: GainmapCandidateSource,
+    candidate_len: usize,
+    claimed_len: usize,
+    aspect_diff: Option<f64>,
+    repaired_eoi: bool,
+) -> f64 {
+    let source_weight = match source {
+        GainmapCandidateSource::RelativeOffset => 4_000.0,
+        GainmapCandidateSource::AbsoluteOffset => 3_500.0,
+        GainmapCandidateSource::NearbyScan => 2_500.0,
+        GainmapCandidateSource::TailScan => 1_500.0,
+    };
+    let aspect_penalty = aspect_diff.unwrap_or(0.0) * 10_000.0;
+    let length_penalty = if claimed_len == 0 {
+        0.0
+    } else {
+        (candidate_len.abs_diff(claimed_len) as f64 / claimed_len as f64) * 100.0
+    };
+    let repair_penalty = if repaired_eoi { 25.0 } else { 0.0 };
+
+    source_weight - aspect_penalty - length_penalty - repair_penalty
+}
+
+fn gainmap_raw_fallback_score(
+    source: GainmapCandidateSource,
+    candidate_len: usize,
+    claimed_len: usize,
+    repaired_eoi: bool,
+) -> f64 {
+    let source_weight = match source {
+        GainmapCandidateSource::RelativeOffset => 200.0,
+        GainmapCandidateSource::AbsoluteOffset => 150.0,
+        GainmapCandidateSource::NearbyScan | GainmapCandidateSource::TailScan => 0.0,
+    };
+    let length_penalty = if claimed_len == 0 {
+        0.0
+    } else {
+        (candidate_len.abs_diff(claimed_len) as f64 / claimed_len as f64) * 100.0
+    };
+    let repair_penalty = if repaired_eoi { 25.0 } else { 0.0 };
+
+    source_weight - length_penalty - repair_penalty
+}
+
+fn can_use_raw_direct_gainmap_candidate(
+    source: GainmapCandidateSource,
+    candidate_data: &[u8],
+) -> bool {
+    matches!(
+        source,
+        GainmapCandidateSource::RelativeOffset | GainmapCandidateSource::AbsoluteOffset
+    ) && candidate_data.len() >= 4
+        && candidate_data.starts_with(&JPEG_SOI_BYTES[..2])
+        && candidate_data.ends_with(&JPEG_EOI_BYTES)
+}
+
+fn recover_gainmap_candidate(
+    jpeg_data: &[u8],
+    mpf_base_pos: usize,
+    gainmap_offset: usize,
+    claimed_length: usize,
+    expected_aspect: Option<f64>,
+) -> Option<GainmapCandidate> {
+    let relative_start = mpf_base_pos.saturating_add(gainmap_offset);
+    let absolute_start = gainmap_offset;
+    let mut best_decoded_match: Option<(f64, GainmapCandidate)> = None;
+    let mut best_raw_direct_match: Option<(f64, GainmapCandidate)> = None;
+
+    for (start, source) in collect_gainmap_candidate_offsets(
+        jpeg_data,
+        relative_start,
+        absolute_start,
+        mpf_base_pos,
+        claimed_length,
+    ) {
+        let Some((candidate_data, repaired_eoi)) =
+            candidate_gainmap_bytes(jpeg_data, start, claimed_length)
+        else {
+            continue;
+        };
+
+        if let Some((width, height)) = decode_gainmap_dimensions(&candidate_data) {
+            let aspect_diff = expected_aspect
+                .filter(|_| height > 0)
+                .map(|aspect| (aspect - (f64::from(width) / f64::from(height))).abs());
+            let score = gainmap_candidate_score(
+                source,
+                candidate_data.len(),
+                claimed_length,
+                aspect_diff,
+                repaired_eoi,
+            );
+            let candidate = GainmapCandidate {
+                data: candidate_data,
+                start,
+                source,
+                repaired_eoi,
+                aspect_diff,
+                decoded: true,
+            };
+
+            if best_decoded_match
+                .as_ref()
+                .is_none_or(|(best_score, _)| score > *best_score)
+            {
+                best_decoded_match = Some((score, candidate));
+            }
+            continue;
+        }
+
+        if can_use_raw_direct_gainmap_candidate(source, &candidate_data) {
+            let score = gainmap_raw_fallback_score(
+                source,
+                candidate_data.len(),
+                claimed_length,
+                repaired_eoi,
+            );
+            let candidate = GainmapCandidate {
+                data: candidate_data,
+                start,
+                source,
+                repaired_eoi,
+                aspect_diff: None,
+                decoded: false,
+            };
+
+            if best_raw_direct_match
+                .as_ref()
+                .is_none_or(|(best_score, _)| score > *best_score)
+            {
+                best_raw_direct_match = Some((score, candidate));
+            }
+        }
+    }
+
+    best_decoded_match
+        .or(best_raw_direct_match)
+        .map(|(_, candidate)| candidate)
+}
+
+/// Find the MPF segment in JPEG data.
+/// Returns the TIFF payload after the `MPF\0` or `XMPF` APP2 identifier.
 fn find_mpf_segment(data: &[u8]) -> Result<Vec<u8>, String> {
     let mut pos = 2;
 
@@ -787,11 +1114,10 @@ fn find_mpf_segment(data: &[u8]) -> Result<Vec<u8>, String> {
 
         let payload = &data[pos + 2..pos + seg_len];
 
-        // APP2 (0xE2): Check for MPF
-        if marker == 0xE2 && payload.starts_with(mpf::MPF_IDENTIFIER) && payload.len() > 4 {
-            // Return MPF data after the 4-byte identifier
-            let mpf_data = payload[4..].to_vec();
-            return Ok(mpf_data);
+        if marker == 0xE2 {
+            if let Some(mpf_payload) = strip_mpf_identifier(payload) {
+                return Ok(mpf_payload.to_vec());
+            }
         }
 
         pos += seg_len;
@@ -800,8 +1126,12 @@ fn find_mpf_segment(data: &[u8]) -> Result<Vec<u8>, String> {
     Err("No MPF (Multi-Picture Format) segment found in APP2 markers".to_string())
 }
 
-/// Extract gainmap image data from MPF segment
-fn extract_gainmap_from_mpf(jpeg_data: &[u8], mpf_data: &[u8]) -> Result<Vec<u8>, String> {
+/// Extract gainmap image data from MPF segment.
+fn extract_gainmap_from_mpf(
+    jpeg_data: &[u8],
+    mpf_data: &[u8],
+    expected_aspect: Option<f64>,
+) -> Result<Vec<u8>, String> {
     // Determine endianness
     let is_big_endian = if mpf_data.starts_with(mpf::TIFF_BIG_ENDIAN) {
         true
@@ -947,70 +1277,50 @@ fn extract_gainmap_from_mpf(jpeg_data: &[u8], mpf_data: &[u8]) -> Result<Vec<u8>
     }
 
     if gainmap_length > u32::try_from(jpeg_data.len()).unwrap_or(u32::MAX) {
-        return Err(format!(
-            "Gainmap length {} exceeds JPEG file size {}",
+        warn!(
             gainmap_length,
-            jpeg_data.len()
-        ));
+            jpeg_len = jpeg_data.len(),
+            "Gainmap length exceeds JPEG file size; attempting recovery from available bytes"
+        );
     }
 
-    // Calculate absolute position of gainmap data
-    // MPF offset is relative to the MPF base (position after "MPF\0")
-    // We need to find the absolute position in the JPEG file
     let mpf_base_pos = find_mpf_base_position(jpeg_data)?;
-    let gainmap_abs_pos = mpf_base_pos + usize::try_from(gainmap_offset).unwrap_or(0);
     let gainmap_len_usize = usize::try_from(gainmap_length).unwrap_or(0);
-    // [HARDENING] Check for absolute offset fallback (common in some non-standard mobile implementations)
-    let mut actual_abs_pos = gainmap_abs_pos;
-    let mut actual_len = gainmap_len_usize;
-    if gainmap_abs_pos + gainmap_len_usize > jpeg_data.len() {
-        // Option A: Check if the offset was actually absolute from file start
-        let abs_pos = usize::try_from(gainmap_offset).unwrap_or(0);
-        if abs_pos + gainmap_len_usize <= jpeg_data.len()
-            && jpeg_data.get(abs_pos..abs_pos + 2) == Some(&[0xFF, 0xD8])
-        {
-            actual_abs_pos = abs_pos;
-        } else {
-            // Option B: Search Fallback (scan for nearby SOI if offset has bias)
-            // Some cameras have a fixed offset bias. We'll look 4KB back/forward.
-            let search_start = gainmap_abs_pos.saturating_sub(4096);
-            let search_end = (gainmap_abs_pos + 4096).min(jpeg_data.len());
-            let mut found_soi = false;
+    let gainmap_offset_usize = usize::try_from(gainmap_offset).unwrap_or(0);
+    let gainmap_candidate = recover_gainmap_candidate(
+        jpeg_data,
+        mpf_base_pos,
+        gainmap_offset_usize,
+        gainmap_len_usize,
+        expected_aspect,
+    )
+    .ok_or_else(|| {
+        let relative_start = mpf_base_pos.saturating_add(gainmap_offset_usize);
+        format!(
+            "Gainmap data at calculated position {} (offset {}, base {}) with length {} could not be recovered from JPEG file size {}",
+            relative_start,
+            gainmap_offset,
+            mpf_base_pos,
+            gainmap_len_usize,
+            jpeg_data.len()
+        )
+    })?;
 
-            if search_start < jpeg_data.len() {
-                let range = &jpeg_data[search_start..search_end];
-                if let Some(offset) = range.windows(2).position(|w| w == [0xFF, 0xD8]) {
-                    actual_abs_pos = search_start + offset;
-                    found_soi = true;
-                    // If it exceeds the length, truncate it
-                    if actual_abs_pos + gainmap_len_usize > jpeg_data.len() {
-                        actual_len = jpeg_data.len() - actual_abs_pos;
-                    }
-                }
-            }
-
-            if !found_soi {
-                return Err(format!(
-                    "Gainmap data at calculated position {} (offset {}, base {}) with length {} exceeds JPEG file size {}",
-                    gainmap_abs_pos, gainmap_offset, mpf_base_pos, gainmap_len_usize, jpeg_data.len()
-                ));
-            }
-        }
-    }
-
-    // Verify gainmap starts with JPEG SOI
-    if actual_abs_pos >= jpeg_data.len()
-        || jpeg_data.get(actual_abs_pos..actual_abs_pos + 2) != Some(&[0xFF, 0xD8])
+    if gainmap_candidate.source != GainmapCandidateSource::RelativeOffset
+        || gainmap_candidate.repaired_eoi
+        || !gainmap_candidate.decoded
     {
-        return Err(format!(
-            "Gainmap at position {actual_abs_pos} is not a valid JPEG (SOI missing)"
-        ));
+        warn!(
+            start = gainmap_candidate.start,
+            source = ?gainmap_candidate.source,
+            repaired_eoi = gainmap_candidate.repaired_eoi,
+            decoded = gainmap_candidate.decoded,
+            aspect_diff = gainmap_candidate.aspect_diff.unwrap_or_default(),
+            "Recovered gainmap using MPF fallback candidate"
+        );
     }
 
-    // Extract gainmap data (using the validated bounds)
-    let gainmap_data = jpeg_data[actual_abs_pos..actual_abs_pos + actual_len].to_vec();
-
-    Ok(gainmap_data)
+    Ok(gainmap_candidate.data)
 }
 
 /// Find the absolute position of MPF base in JPEG data
@@ -1049,11 +1359,9 @@ fn find_mpf_base_position(jpeg_data: &[u8]) -> Result<usize, String> {
 
         let payload = &jpeg_data[pos + 2..pos + seg_len];
 
-        // APP2 (0xE2): Check for MPF
-        if marker == 0xE2 && payload.starts_with(mpf::MPF_IDENTIFIER) {
-            // MPF base is the position AFTER the TIFF header (which starts after "MPF\0")
-            // Actually, offsets in MPF are relative to the TIFF header (Endian marker 'II' or 'MM')
-            // The TIFF header starts 4 bytes into the APP2 payload (after "MPF\0")
+        if marker == 0xE2 && strip_mpf_identifier(payload).is_some() {
+            // Offsets are relative to the TIFF header that begins immediately after
+            // the MPF/XMPF identifier in the APP2 payload.
             return Ok(pos + 2 + 4);
         }
 
@@ -1255,6 +1563,24 @@ mod tests {
         jpeg_with_gainmap.extend_from_slice(mpf::MPF_IDENTIFIER);
 
         jpeg_with_gainmap.extend_from_slice(&[0xFF, 0xD9]); // EOI
+
+        assert!(is_ultra_hdr_jpeg(&jpeg_with_gainmap));
+    }
+
+    #[test]
+    fn test_is_ultra_hdr_jpeg_true_with_xmpf_identifier() {
+        let xmp_header = b"http://ns.adobe.com/xap/1.0/\0";
+        let xmp_content = b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF><rdf:Description hdrgm:GainMapMax=\"1.0\" xmlns:hdrgm=\"http://ns.adobe.com/hdr-gain-map/1.0/\"/></rdf:RDF></x:xmpmeta>";
+
+        let mut jpeg_with_gainmap = vec![0xFF, 0xD8, 0xFF, 0xE1];
+        let xmp_len = u16::try_from(xmp_header.len() + xmp_content.len() + 2).unwrap_or(u16::MAX);
+        jpeg_with_gainmap.extend_from_slice(&xmp_len.to_be_bytes());
+        jpeg_with_gainmap.extend_from_slice(xmp_header);
+        jpeg_with_gainmap.extend_from_slice(xmp_content);
+
+        jpeg_with_gainmap.extend_from_slice(&[0xFF, 0xE2, 0x00, 0x06]);
+        jpeg_with_gainmap.extend_from_slice(mpf::XMPF_IDENTIFIER);
+        jpeg_with_gainmap.extend_from_slice(&[0xFF, 0xD9]);
 
         assert!(is_ultra_hdr_jpeg(&jpeg_with_gainmap));
     }
@@ -1473,7 +1799,61 @@ mod tests {
 
         // [THEN] Standard relative logic would fail, but fallback should work
         let gainmap_extracted =
-            extract_gainmap_from_mpf(&data, &mpf_segment).expect("Fallback failed");
+            extract_gainmap_from_mpf(&data, &mpf_segment, None).expect("Fallback failed");
+        assert_eq!(gainmap_extracted, vec![0xFF, 0xD8, 0xFF, 0xD9]);
+    }
+
+    #[test]
+    fn test_extract_gainmap_uses_eoi_when_length_runs_past_eof() {
+        let mut data = vec![0xFF, 0xD8];
+        let xmp_header = b"http://ns.adobe.com/xap/1.0/\0";
+        let xmp_content = b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF><rdf:Description hdrgm:GainMapMax=\"2.0\" xmlns:hdrgm=\"http://ns.adobe.com/hdr-gain-map/1.0/\"/></rdf:RDF></x:xmpmeta>";
+        let xmp_len = u16::try_from(xmp_header.len() + xmp_content.len() + 2).unwrap_or(u16::MAX);
+        data.extend_from_slice(&[0xFF, 0xE1]);
+        data.extend_from_slice(&xmp_len.to_be_bytes());
+        data.extend_from_slice(xmp_header);
+        data.extend_from_slice(xmp_content);
+
+        let mpf_id = mpf::MPF_IDENTIFIER;
+        let mut mpf_payload = Vec::new();
+        mpf_payload.extend_from_slice(b"MM\0*");
+        mpf_payload.extend_from_slice(&8u32.to_be_bytes());
+        mpf_payload.extend_from_slice(&2u16.to_be_bytes());
+        mpf_payload.extend_from_slice(&0xB001u16.to_be_bytes());
+        mpf_payload.extend_from_slice(&4u16.to_be_bytes());
+        mpf_payload.extend_from_slice(&1u32.to_be_bytes());
+        mpf_payload.extend_from_slice(&2u32.to_be_bytes());
+        let mp_entry_val_offset = crate::numeric_cast::usize_to_u32_sat(mpf_payload.len() + 12 + 4);
+        mpf_payload.extend_from_slice(&0xB002u16.to_be_bytes());
+        mpf_payload.extend_from_slice(&7u16.to_be_bytes());
+        mpf_payload.extend_from_slice(&32u32.to_be_bytes());
+        mpf_payload.extend_from_slice(&mp_entry_val_offset.to_be_bytes());
+        mpf_payload.extend_from_slice(&0u32.to_be_bytes());
+        mpf_payload.extend_from_slice(&[0u8; 16]);
+
+        let app2_segment_overhead = 2 + 2 + mpf_id.len();
+        let absolute_offset = crate::numeric_cast::usize_to_u32_sat(
+            data.len() + app2_segment_overhead + mpf_payload.len() + 16,
+        );
+
+        mpf_payload.extend_from_slice(&0u32.to_be_bytes());
+        mpf_payload.extend_from_slice(&100u32.to_be_bytes());
+        mpf_payload.extend_from_slice(&absolute_offset.to_be_bytes());
+        mpf_payload.extend_from_slice(&0u32.to_be_bytes());
+
+        let app2_len = crate::numeric_cast::usize_to_u16_sat(mpf_id.len() + mpf_payload.len() + 2);
+        data.extend_from_slice(&[0xFF, 0xE2]);
+        data.extend_from_slice(&app2_len.to_be_bytes());
+        data.extend_from_slice(mpf_id);
+        data.extend_from_slice(&mpf_payload);
+
+        assert_eq!(data.len(), absolute_offset as usize);
+        data.extend_from_slice(&[0xFF, 0xD8, 0xFF, 0xD9]);
+
+        let mpf_segment = find_mpf_segment(&data).expect("Should find MPF");
+        let gainmap_extracted =
+            extract_gainmap_from_mpf(&data, &mpf_segment, None).expect("Fallback failed");
+
         assert_eq!(gainmap_extracted, vec![0xFF, 0xD8, 0xFF, 0xD9]);
     }
 }

@@ -184,11 +184,11 @@ pub fn convert_heic_gainmap_to_jxl(
     })
 }
 
-/// Convert `UltraHDR JPEG` with Gainmap to `JXL` with `.gainmap.png` sidecar.
+/// Convert `UltraHDR JPEG` with gainmap metadata to synthesized HDR `JXL`.
 ///
 /// # Errors
 ///
-/// Returns an error if extraction or migration fails.
+/// Returns an error if extraction, synthesis, or finalization fails.
 pub fn convert_ultrahdr_jpeg_to_jxl(
     input: &Path,
     options: &ConvertOptions,
@@ -208,10 +208,13 @@ pub fn convert_ultrahdr_jpeg_to_jxl(
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
-    // Use True HDR Synthesis instead of Sidecar Migration
+    let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
+        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
+
+    // Synthesize into an isolated temp path so final commit/metadata handling stays atomic.
     shared_utils::hdr_synthesis::convert_ultrahdr_jpeg_to_jxl_hdr(
         input,
-        &output,
+        &temp_output,
         shared_utils::hdr_synthesis::HdrIntermediateFormat::Png16,
     )
     .map_err(|e| {
@@ -219,7 +222,7 @@ pub fn convert_ultrahdr_jpeg_to_jxl(
         ImgQualityError::ConversionError(msg)
     })?;
 
-    let output_size = fs::metadata(&output)
+    let output_size = fs::metadata(&temp_output)
         .map_err(|e| {
             ImgQualityError::ConversionError(format!(
                 "☢️ Failed to retrieve synthesized JXL metadata: {e}"
@@ -228,16 +231,16 @@ pub fn convert_ultrahdr_jpeg_to_jxl(
         .len();
 
     // Verify health
-    if let Err(e) = verify_jxl_health(&output) {
+    if let Err(e) = verify_jxl_health(&temp_output) {
+        cleanup_temp_output(&temp_output, input);
         return Err(ImgQualityError::ConversionError(format!(
             "⛔️ Synthesized UltraHDR JXL health check failed: {e}"
         )));
     }
 
-    // Finalize
     finalize_with_size_check(
         input,
-        &output, // For synthesis, output and temp identical here
+        &temp_output,
         &output,
         input_size,
         output_size,
