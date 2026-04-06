@@ -39,6 +39,10 @@ pub struct GainMapParams {
     pub gamma: f32,
     pub offset_sdr: f32,
     pub offset_hdr: f32,
+    /// ISO 21496-1: Scaling for the gain map range.
+    pub use_base_color_space: bool,
+    /// ISO 21496-1: Indicates if the base rendition is HDR.
+    pub base_rendition_is_hdr: bool,
 }
 
 impl Default for GainMapParams {
@@ -49,11 +53,22 @@ impl Default for GainMapParams {
             gamma: 1.0,
             offset_sdr: 1.0 / 64.0,
             offset_hdr: 1.0 / 64.0,
+            use_base_color_space: true,
+            base_rendition_is_hdr: false,
         }
     }
 }
 
-/// Main entry point for converting a HEIC with Gainmap to an HDR JXL via intermediate format.
+/// Main entry point for converting a `HEIC` with Gainmap to an HDR `JXL` via intermediate format.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The file cannot be read or parsed.
+/// - No gainmap is found in auxiliary images.
+/// - `SDR` or Gainmap decoding fails.
+/// - `HDR` synthesis math fails.
+/// - Intermediate files cannot be written or the `cjxl` tool fails.
 pub fn convert_heic_with_gainmap_to_jxl_hdr(
     input: &Path,
     output: &Path,
@@ -151,8 +166,7 @@ pub fn convert_heic_with_gainmap_to_jxl_hdr(
             let tmp_png = output.with_extension("tmp_hdr.png");
             write_png16(&hdr_pixels, sdr.width(), sdr.height(), &tmp_png)
                 .context("Failed to write intermediate 16-bit PNG buffer")?;
-            // For PNG16, use a simplified intensity target
-            (tmp_png, 1000.0) // Standard HDR10 nits
+            (tmp_png, 203.0 * params.gain_map_max.exp2())
         }
     };
 
@@ -164,7 +178,7 @@ pub fn convert_heic_with_gainmap_to_jxl_hdr(
         .output(output)
         .distance(1.0)
         .arg("-x")
-        .arg("color_space=sRGB");
+        .arg("color_space=RGB_D65_SRG_Rel_PeQ");
 
     if let Some(it) = resolve_intensity_target(intensity_target) {
         builder.intensity_target(crate::numeric_cast::f64_to_f32_lossy(f64::from(it)));
@@ -211,12 +225,20 @@ pub fn convert_heic_with_gainmap_to_jxl_hdr(
     Ok(())
 }
 
-/// Main entry point for converting an `UltraHDR` JPEG to an HDR JXL via intermediate format.
+/// Main entry point for converting an `UltraHDR` JPEG to an HDR `JXL` via intermediate format.
 ///
 /// `UltraHDR` JPEGs contain:
-/// - Base SDR image (standard JPEG)
-/// - Gainmap image (embedded via MPF - Multi Picture Format)
-/// - XMP metadata with gainmap parameters (hdrgm: namespace)
+/// - Base `SDR` image (standard `JPEG`)
+/// - Gainmap image (embedded via `MPF` - Multi Picture Format)
+/// - `XMP` metadata with gainmap parameters (`hdrgm:` namespace)
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The `JPEG` file cannot be read.
+/// - Gainmap extraction from the `JPEG` fails.
+/// - `HDR` synthesis math fails.
+/// - Intermediate files cannot be written or the `cjxl` tool fails.
 pub fn convert_ultrahdr_jpeg_to_jxl_hdr(
     input: &Path,
     output: &Path,
@@ -248,10 +270,9 @@ pub fn convert_ultrahdr_jpeg_to_jxl_hdr(
     let needs_p3_conversion = false; // UltraHDR is sRGB by definition
 
     // 4. Parse XMP parameters from JPEG
-    let params = parse_gainmap_params_from_jpeg_xmp(&data).unwrap_or_else(|| {
-        warn!("⚠️  No XMP gainmap params found, using defaults");
-        GainMapParams::default()
-    });
+    let params = parse_gainmap_params_from_jpeg_xmp(&data).ok_or_else(|| {
+        anyhow::anyhow!("No valid XMP gainmap parameters found in the image")
+    })?;
     info!("Gainmap parameters: {:?}", params);
 
     // 5. Perform Synthesis
@@ -280,7 +301,7 @@ pub fn convert_ultrahdr_jpeg_to_jxl_hdr(
                 &tmp_png,
             )
             .context("Failed to write intermediate 16-bit PNG buffer")?;
-            (tmp_png, 1000.0)
+            (tmp_png, 203.0 * params.gain_map_max.exp2())
         }
     };
 
@@ -291,7 +312,7 @@ pub fn convert_ultrahdr_jpeg_to_jxl_hdr(
         .output(output)
         .distance(1.0)
         .arg("-x")
-        .arg("color_space=sRGB");
+        .arg("color_space=RGB_D65_SRG_Rel_PeQ");
 
     if let Some(it) = resolve_intensity_target(intensity_target) {
         builder.intensity_target(crate::numeric_cast::f64_to_f32_lossy(f64::from(it)));
@@ -326,6 +347,82 @@ pub fn convert_ultrahdr_jpeg_to_jxl_hdr(
     Ok(())
 }
 
+/// Migration Path B: Encode UltraHDR JPEG to JXL with GainMap as sidecar.
+///
+/// This does NOT synthesize a single HDR plane. Instead, it:
+/// 1. Extracts the SDR base image.
+/// 2. Extracts the GainMap sub-image.
+/// 3. Losslessly recompresses the SDR base to JXL.
+/// 4. Saves the GainMap as a sidecar `.gainmap.png`.
+/// 5. Preserves Ultra HDR XMP metadata (`hdrgm`) via `ExiftoolBuilder`.
+///
+/// This preserves the original SDR appearance bit-perfectly while
+/// keeping the gainmap for future HDR reconstruction.
+///
+/// # Errors
+///
+/// Returns an error if extraction or encoding fails.
+pub fn convert_ultrahdr_jpeg_to_jxl_migration(
+    input: &Path,
+    output: &Path,
+    _distance: f32,
+    effort: u8,
+) -> Result<()> {
+    use crate::image_jpeg_analysis::extract_gainmap_from_jpeg;
+    use crate::image_builders::ExiftoolBuilder;
+    use crate::jxl_builder::CjxlBuilder;
+
+    info!(
+        "📤 UltraHDR JPEG Gainmap migration started (Sidecar Path): {}",
+        input.display()
+    );
+
+    // 1. Read and Extract
+    let data = std::fs::read(input).context("Failed to read UltraHDR JPEG file")?;
+    let (_base_image, gainmap_image) = extract_gainmap_from_jpeg(&data)
+        .map_err(|e| anyhow!("Failed to extract gainmap for migration: {e}"))?;
+
+    // 2. Save GainMap sidecar (.gainmap.png)
+    let gainmap_sidecar = output.with_extension("gainmap.png");
+    gainmap_image.save(&gainmap_sidecar)
+        .context("Failed to save gainmap sidecar file")?;
+    info!("💾 Gainmap saved as sidecar: {}", gainmap_sidecar.display());
+
+    let encode_status = CjxlBuilder::new()
+        .input(input)
+        .output(output)
+        .lossless_jpeg(true)
+        .effort(effort)
+        .build()
+        .status()
+        .context("Failed to spawn cjxl for UltraHDR migration")?;
+
+    if !encode_status.success() {
+        return Err(anyhow::anyhow!("Lossless JPEG recompression failed for UltraHDR migration"));
+    }
+
+    // 4. Preserve Ultra HDR Metadata via Exiftool
+    // We specifically target XMP-hdrgm and MPF segments
+    let mut exiftool = ExiftoolBuilder::new();
+    exiftool
+        .tags_from_file(input)
+        .input(output)
+        .overwrite_original()
+        .preserve_date()
+        .ignore_minor();
+    
+    let status = exiftool.build().status();
+    if let Err(e) = status {
+        warn!("⚠️ Metadata preservation warning for {}: {}", output.display(), e);
+    }
+
+    info!(
+        "✅ UltraHDR JPEG migration completed: {}",
+        output.display()
+    );
+    Ok(())
+}
+
 fn decode_heif_handle(handle: &ImageHandle, color_space: ColorSpace) -> Result<DynamicImage> {
     let img = libheif_rs::LibHeif::new()
         .decode(handle, color_space, None)
@@ -353,7 +450,8 @@ fn decode_heif_handle(handle: &ImageHandle, color_space: ColorSpace) -> Result<D
                 };
                 let mut buffer = ImageBuffer::new(width, height);
                 for (x, y, pixel) in buffer.enumerate_pixels_mut() {
-                    let offset = usize::try_from(y).unwrap_or(0) * (r_plane.stride / 2) + usize::try_from(x).unwrap_or(0) * 3;
+                    let offset = usize::try_from(y).unwrap_or(0) * (r_plane.stride / 2)
+                        + usize::try_from(x).unwrap_or(0) * 3;
                     let r = data_u16[offset];
                     let g = data_u16[offset + 1];
                     let b = data_u16[offset + 2];
@@ -363,7 +461,8 @@ fn decode_heif_handle(handle: &ImageHandle, color_space: ColorSpace) -> Result<D
             } else {
                 let mut buffer = ImageBuffer::new(width, height);
                 for (x, y, pixel) in buffer.enumerate_pixels_mut() {
-                    let offset = usize::try_from(y).unwrap_or(0) * r_plane.stride + usize::try_from(x).unwrap_or(0) * 3;
+                    let offset = usize::try_from(y).unwrap_or(0) * r_plane.stride
+                        + usize::try_from(x).unwrap_or(0) * 3;
                     let r = r_plane.data[offset];
                     let g = r_plane.data[offset + 1];
                     let b = r_plane.data[offset + 2];
@@ -386,7 +485,8 @@ fn decode_heif_handle(handle: &ImageHandle, color_space: ColorSpace) -> Result<D
                 };
                 let mut buffer = ImageBuffer::new(width, height);
                 for (x, y, pixel) in buffer.enumerate_pixels_mut() {
-                    let offset = usize::try_from(y).unwrap_or(0) * (y_plane.stride / 2) + usize::try_from(x).unwrap_or(0);
+                    let offset = usize::try_from(y).unwrap_or(0) * (y_plane.stride / 2)
+                        + usize::try_from(x).unwrap_or(0);
                     let val = data_u16[offset];
                     *pixel = image::Luma([val]);
                 }
@@ -394,7 +494,8 @@ fn decode_heif_handle(handle: &ImageHandle, color_space: ColorSpace) -> Result<D
             } else {
                 let mut buffer = ImageBuffer::new(width, height);
                 for (x, y, pixel) in buffer.enumerate_pixels_mut() {
-                    let offset = usize::try_from(y).unwrap_or(0) * y_plane.stride + usize::try_from(x).unwrap_or(0);
+                    let offset = usize::try_from(y).unwrap_or(0) * y_plane.stride
+                        + usize::try_from(x).unwrap_or(0);
                     let val = y_plane.data[offset];
                     *pixel = image::Luma([val]);
                 }
@@ -438,13 +539,14 @@ fn parse_gainmap_params(handle: &ImageHandle) -> Option<GainMapParams> {
 
     let xmp_data = handle.metadata(ids[0]).ok()?;
     let xmp_str = String::from_utf8_lossy(&xmp_data);
-    Some(parse_gainmap_from_xmp(&xmp_str))
+    parse_gainmap_from_xmp(&xmp_str)
 }
 
-fn parse_gainmap_from_xmp(xmp_str: &str) -> GainMapParams {
+fn parse_gainmap_from_xmp(xmp_str: &str) -> Option<GainMapParams> {
     let mut params = GainMapParams::default();
     let mut reader = Reader::from_str(xmp_str);
     let mut buf = Vec::new();
+    let mut found_any = false;
 
     loop {
         match reader.read_event_into(&mut buf) {
@@ -454,16 +556,17 @@ fn parse_gainmap_from_xmp(xmp_str: &str) -> GainMapParams {
                     let local_name = attr.key.local_name();
                     let attr_name = String::from_utf8_lossy(local_name.as_ref());
                     let attr_val = String::from_utf8_lossy(attr.value.as_ref());
+                    
                     if let Ok(f) = attr_val.parse::<f32>() {
                         match attr_name.as_ref() {
-                            n if n.contains("GainMapMax") => params.gain_map_max = f,
-                            n if n.contains("GainMapMin") => params.gain_map_min = f,
-                            n if n.contains("Gamma") => params.gamma = f,
+                            n if n.contains("GainMapMax") => { params.gain_map_max = f; found_any = true; },
+                            n if n.contains("GainMapMin") => { params.gain_map_min = f; found_any = true; },
+                            n if n.contains("Gamma") => { params.gamma = f; found_any = true; },
                             n if n.contains("OffsetSDR") || n.contains("OffsetSdr") => {
-                                params.offset_sdr = f;
+                                params.offset_sdr = f; found_any = true;
                             }
                             n if n.contains("OffsetHDR") || n.contains("OffsetHdr") => {
-                                params.offset_hdr = f;
+                                params.offset_hdr = f; found_any = true;
                             }
                             _ => (),
                         }
@@ -483,6 +586,7 @@ fn parse_gainmap_from_xmp(xmp_str: &str) -> GainMapParams {
                             .to_string();
                         if let Ok(f) = text.parse::<f32>() {
                             params.gain_map_max = f;
+                            found_any = true;
                         }
                     }
                 } else if name.contains("GainMapMin") {
@@ -494,6 +598,7 @@ fn parse_gainmap_from_xmp(xmp_str: &str) -> GainMapParams {
                             .to_string();
                         if let Ok(f) = text.parse::<f32>() {
                             params.gain_map_min = f;
+                            found_any = true;
                         }
                     }
                 } else if name.contains("OffsetSDR") || name.contains("OffsetSdr") {
@@ -505,6 +610,7 @@ fn parse_gainmap_from_xmp(xmp_str: &str) -> GainMapParams {
                             .to_string();
                         if let Ok(f) = text.parse::<f32>() {
                             params.offset_sdr = f;
+                            found_any = true;
                         }
                     }
                 } else if name.contains("OffsetHDR") || name.contains("OffsetHdr") {
@@ -516,6 +622,7 @@ fn parse_gainmap_from_xmp(xmp_str: &str) -> GainMapParams {
                             .to_string();
                         if let Ok(f) = text.parse::<f32>() {
                             params.offset_hdr = f;
+                            found_any = true;
                         }
                     }
                 } else if name.contains("Gamma") {
@@ -527,16 +634,23 @@ fn parse_gainmap_from_xmp(xmp_str: &str) -> GainMapParams {
                             .to_string();
                         if let Ok(f) = text.parse::<f32>() {
                             params.gamma = f;
+                            found_any = true;
                         }
                     }
                 }
             }
+            Err(_) => break,
             Ok(Event::Eof) => break,
             _ => (),
         }
         buf.clear();
     }
-    params
+    
+    if found_any {
+        Some(params)
+    } else {
+        None
+    }
 }
 
 fn synthesize_hdr(
@@ -691,7 +805,7 @@ fn synthesize_hdr(
 /// Resolve and sanitize an intensity target for `cjxl`.
 ///
 /// - Honor `MFB_JXL_INTENSITY_TARGET` if set (numeric, nits).
-/// - Clamp derived values into a safe range [100, 1_000_000].
+/// - Clamp derived values into a safe range [100, `1_000_000`].
 /// - Return `None` when the derived value is invalid.
 fn resolve_intensity_target(derived: f32) -> Option<u32> {
     // Env override takes precedence
@@ -736,10 +850,23 @@ fn srgb_to_linear(v: f32) -> f32 {
     }
 }
 
-/// Write HDR pixels to a 16-bit PNG file.
-///
-/// Converts f32 [0.0, 1.0+] to u16 [0, 65535].
-/// Values > 1.0 are clamped to 65535 (HDR highlights).
+fn linear_to_pq(linear: f32) -> f32 {
+    let l = (linear * 203.0) / 10000.0;
+    let l = l.clamp(0.0, 1.0);
+    
+    let m1 = 2610.0 / 16384.0;
+    let m2 = 2523.0 / 32.0;
+    let c1 = 3424.0 / 4096.0;
+    let c2 = 2413.0 / 128.0;
+    let c3 = 2392.0 / 128.0;
+    
+    let lm = l.powf(m1);
+    let num = c1 + c2 * lm;
+    let den = 1.0 + c3 * lm;
+    (num / den).powf(m2)
+}
+
+/// Write HDR pixels to a 16-bit PNG file using the PQ (ST 2084) transfer curve.
 fn write_png16(pixels: &[f32], width: u32, height: u32, path: &Path) -> Result<()> {
     use image::{ImageBuffer, Rgb};
 
@@ -747,11 +874,9 @@ fn write_png16(pixels: &[f32], width: u32, height: u32, path: &Path) -> Result<(
 
     for (x, y, pixel) in buffer.enumerate_pixels_mut() {
         let idx = usize::try_from(y * width + x).unwrap_or(0) * 3;
-        // Convert f32 [0.0, 1.0] to u16 [0, 65535]
-        // HDR values > 1.0 are preserved up to ~2.0 (130k+)
-        let r = crate::numeric_cast::f32_to_u16_sat((pixels[idx].min(2.0) / 2.0) * 65535.0);
-        let g = crate::numeric_cast::f32_to_u16_sat((pixels[idx + 1].min(2.0) / 2.0) * 65535.0);
-        let b = crate::numeric_cast::f32_to_u16_sat((pixels[idx + 2].min(2.0) / 2.0) * 65535.0);
+        let r = crate::numeric_cast::f32_to_u16_sat(linear_to_pq(pixels[idx]) * 65535.0);
+        let g = crate::numeric_cast::f32_to_u16_sat(linear_to_pq(pixels[idx + 1]) * 65535.0);
+        let b = crate::numeric_cast::f32_to_u16_sat(linear_to_pq(pixels[idx + 2]) * 65535.0);
         *pixel = Rgb([r, g, b]);
     }
 
@@ -765,10 +890,15 @@ fn write_png16(pixels: &[f32], width: u32, height: u32, path: &Path) -> Result<(
 fn write_exr(pixels: &[f32], width: u32, height: u32, path: &Path) -> Result<()> {
     use exr::prelude::*;
 
-    write_rgb_file(path, usize::try_from(width).unwrap_or(0), usize::try_from(height).unwrap_or(0), |x, y| {
-        let idx = (y * usize::try_from(width).unwrap_or(0) + x) * 3;
-        (pixels[idx], pixels[idx + 1], pixels[idx + 2])
-    })
+    write_rgb_file(
+        path,
+        usize::try_from(width).unwrap_or(0),
+        usize::try_from(height).unwrap_or(0),
+        |x, y| {
+            let idx = (y * usize::try_from(width).unwrap_or(0) + x) * 3;
+            (pixels[idx], pixels[idx + 1], pixels[idx + 2])
+        },
+    )
     .context("Failed to write EXR file")?;
 
     Ok(())
@@ -778,8 +908,13 @@ fn write_exr(pixels: &[f32], width: u32, height: u32, path: &Path) -> Result<()>
 fn parse_gainmap_params_from_jpeg_xmp(data: &[u8]) -> Option<GainMapParams> {
     use crate::image_jpeg_analysis::extract_xmp_from_jpeg_data;
 
-    let xmp_str = extract_xmp_from_jpeg_data(data)?;
-    Some(parse_gainmap_from_xmp(&xmp_str))
+    let xmp_blocks = extract_xmp_from_jpeg_data(data)?;
+    for xmp_str in xmp_blocks {
+        if let Some(params) = parse_gainmap_from_xmp(&xmp_str) {
+            return Some(params);
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -813,7 +948,7 @@ mod tests {
                 </rdf:RDF>
             </xmpmeta>
         "#;
-        let params = parse_gainmap_from_xmp(xmp);
+        let params = parse_gainmap_from_xmp(xmp).unwrap();
         assert!(crate::float_compare::approx_eq_f64(
             f64::from(params.gain_map_max),
             3.0
@@ -847,7 +982,7 @@ mod tests {
                 </rdf:RDF>
             </xmpmeta>
         "#;
-        let params = parse_gainmap_from_xmp(xmp);
+        let params = parse_gainmap_from_xmp(xmp).unwrap();
         assert!(crate::float_compare::approx_eq_f64(
             f64::from(params.gain_map_max),
             4.5

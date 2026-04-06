@@ -108,7 +108,14 @@ fn finalize_fallback_jxl(
     )
 }
 
-/// Convert HEIC with Gainmap to HDR JXL.
+/// Convert `HEIC` with Gainmap to `HDR` `JXL`.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The input file is invalid or a duplicate.
+/// - The `HDR` synthesis process fails.
+/// - The output file cannot be written or finalized.
 pub fn convert_heic_gainmap_to_jxl(
     input: &Path,
     options: &ConvertOptions,
@@ -131,8 +138,8 @@ pub fn convert_heic_gainmap_to_jxl(
     let temp_output = shared_utils::path_safety::isolated_temp_path_for_search(&output)
         .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
 
-    // Use 32-bit OpenEXR for maximum HDR precision
-    let intermediate_format = shared_utils::HdrIntermediateFormat::OpenExr32;
+    // Use 16-bit PNG for PQ HDR encoding with cjxl
+    let intermediate_format = shared_utils::HdrIntermediateFormat::Png16;
 
     // Call the synthesis logic from shared_utils
     shared_utils::hdr_synthesis::convert_heic_with_gainmap_to_jxl_hdr(
@@ -177,6 +184,72 @@ pub fn convert_heic_gainmap_to_jxl(
     })
 }
 
+/// Convert `UltraHDR JPEG` with Gainmap to `JXL` with `.gainmap.png` sidecar.
+///
+/// # Errors
+///
+/// Returns an error if extraction or migration fails.
+pub fn convert_ultrahdr_jpeg_to_jxl(
+    input: &Path,
+    options: &ConvertOptions,
+) -> Result<ConversionResult> {
+    if let Err(e) = shared_utils::conversion::validate_input_file(input) {
+        return Err(ImgQualityError::ConversionError(e));
+    }
+
+    if !options.force && is_already_processed(input) {
+        return Ok(ConversionResult::skipped_duplicate(input));
+    }
+
+    let input_size = fs::metadata(input)?.len();
+    let output = get_output_path(input, "jxl", options)?;
+
+    if output.exists() && !options.force {
+        return Ok(ConversionResult::skipped_exists(input, &output));
+    }
+
+    // Use True HDR Synthesis instead of Sidecar Migration
+    shared_utils::hdr_synthesis::convert_ultrahdr_jpeg_to_jxl_hdr(
+        input,
+        &output,
+        shared_utils::hdr_synthesis::HdrIntermediateFormat::Png16,
+    )
+    .map_err(|e| {
+        let msg = format!("☢️ UltraHDR Synthesis Failure: {e}");
+        ImgQualityError::ConversionError(msg)
+    })?;
+
+    let output_size = fs::metadata(&output)
+        .map_err(|e| {
+            ImgQualityError::ConversionError(format!(
+                "☢️ Failed to retrieve synthesized JXL metadata: {e}"
+            ))
+        })?
+        .len();
+
+    // Verify health
+    if let Err(e) = verify_jxl_health(&output) {
+        return Err(ImgQualityError::ConversionError(format!(
+            "⛔️ Synthesized UltraHDR JXL health check failed: {e}"
+        )));
+    }
+
+    // Finalize
+    finalize_with_size_check(
+        input,
+        &output, // For synthesis, output and temp identical here
+        &output,
+        input_size,
+        output_size,
+        options,
+        "JXL (UltraHDR Synthesis ☀️)",
+        Some("Native HDR".to_string()),
+    )
+    .map_err(|e| {
+        ImgQualityError::ConversionError(format!("☢️ UltraHDR Synthesis Finalization Error: {e}"))
+    })
+}
+
 /// Convert an image to JXL format with specified quality distance.
 ///
 /// # Arguments
@@ -210,7 +283,11 @@ pub fn convert_heic_gainmap_to_jxl(
 /// Convert to JXL using specific distance.
 ///
 /// # Errors
-/// Returns an error if cjxl execution fails.
+///
+/// Returns an error if:
+/// - Input validation fails.
+/// - `cjxl` execution fails and all fallbacks (`FFmpeg`, `ImageMagick`) also fail.
+/// - The output file cannot be written or verified.
 pub fn convert_to_jxl(
     input: &Path,
     options: &ConvertOptions,
@@ -829,7 +906,7 @@ fn commit_jpeg_to_jxl_success(
         cleanup_temp_output(temp_output, input);
         return Err(e);
     }
-    let output_size = fs::metadata(temp_output).map(|m| m.len()).unwrap_or(0);
+    let output_size = fs::metadata(temp_output).map_or(0, |m| m.len());
     finalize_with_size_check(
         input,
         temp_output,

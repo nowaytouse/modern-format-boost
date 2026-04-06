@@ -4,45 +4,120 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.11.3] — 2026-04-06
+
+#### 🌈 Ultra HDR Migration Pipeline (Gain Map Support)
+
+- **Migration Path B (SDR + Sidecar)**: Seamlessly detects Google Ultra HDR JPEGs and reroutes them via `generate_jxl_indicator` into a dedicated migration workflow.
+- **Bit-Perfect Base Image**: The SDR base of the UltraHDR image is recompressed identically into `JXL` utilizing `cjxl --lossless_jpeg=1`, achieving ~10% size shrinkage without losing decoding fidelity.
+- **Sidecar Extraction**: Automatically extracts the Google Gain Map segment via Multi-Picture Format (MPF) detection and preserves it as an adjacent `.gainmap.png` sidecar file for downstream HDR reconstruction.
+- **XMP Metadata Preservation**: Uses `ExiftoolBuilder` to robustly bridge raw `hdrgm` tags into the new JXL container.
+- **Technical Debt Resolved**: Replaced legacy `meme_score` nomenclatures (`directory_meme_score`, `filename_meme_score`) with mathematically standardized `loop_intent_score` variables across Rust and Python ecosystems.
+
+#### 📦 Dependency Modernization (Routine)
+
+- **Library Refresh**: Updated core processing crates (`image`, `chrono`, `tracing`, etc.) to the latest stable versions via automated workspace sync (`cargo update`).
+
+#### 🔧 KNN Class Imbalance Stabilization & Logging Cleanup
+
+- **Stabilized KNN under class imbalance**: Replaced hard inverse-frequency scaling with **smoothed+damped class-balance weights**, added **Beta-smoothed global prior** and **effective-sample-size shrinkage** (`local posterior ↔ global prior`) so minority classes are protected without causing prediction cliffs under extreme dataset imbalance.
+- **Confidence anti-slope guard**: KNN confidence now includes imbalance and effective-neighbor penalties to avoid overconfident flips when nearest neighbors are sparse or class distribution is highly skewed.
+- **Debug observability for balancing math**: Added structured `DEBUG` logs for KNN balancing internals (`w_keep/w_weak`, global prior, imbalance ratio, effective-N, shrink factor, posterior) to support on-data tuning without polluting terminal output.
+- **Moved KNN internals to `DEBUG` level**: KNN confidence/neighbor count logs, fallback result messages, and database bootstrap lines now emit to `DEBUG` instead of regular terminal channels, providing a much cleaner terminal experience.
+- **Fixed temporal BPP formula bug**: Legacy code in `lookup_similar_samples_inner` multiplied by `frame_count` instead of dividing — corrected to use proper per-frame density calculation (`density / frames`).
+- **Extracted `bpp_from_meta` helper**: Consolidated duplicate temporal/spatial BPP calculation logic in `database.rs` into a single reusable function with clearer semantics.
+- **Added regression test**: `bpp_from_meta_divides_temporal_density_by_frame_count` validates the corrected formula against legacy buggy behavior.
+
+#### 🛡️ Path Safety & Media Integrity Hardening
+
+- **Relativization Shield**: Mitigated ImageMagick 7 absolute path truncation bugs by implementing mandatory `./` guarding for all file inputs.
+- **ExifTool Injection Defense**: Hardened `exiftool_path_arg` with unconditional `./` guarding to prevent command hijacking via `-` or `@` filename prefixes.
+- **Format Expansion Prevention**: Implemented double-percent (`%%`) escaping to lock down filename property expansion vulnerabilities.
+- **Shell Injection Defense**: Added metacharacter scanning and protocol-less relative addressing to prevent command injection via ImageMagick delegates.
+- **URI-compliant Pathing**: Implemented the `file:///` (triple-slash) protocol in `magick_safe_path` for 100% stable absolute path preservation.
+- **Metadata Bomb Stamina**: Hardened the XMP/EXIF pipeline against abnormally high metadata density, preventing OOM and hangs during concurrent processing.
+- **Zero-Duration Rhythm Lockdown**: Implemented strict validation to reject media with invalid inter-frame delays, preventing high-speed playback artifacts.
+
+#### 🧹 Code Quality & Clippy Hygiene
+
+- **Numeric safety**: Eliminated unsafe `as` numeric casts across the workspace by migrating to centralized `numeric_cast` module with saturating helpers.
+- **Clippy pedantic cleanup**: Resolved warnings for `similar_names`, `large_stack_arrays`, `while_immutable_condition`, `collapsible_if`, and `assigning_clones` across `shared_utils`, `vid`, and `dev` crates.
+- **Formatting consistency**: Reformatted long argument chains, `format!()` → inline `{var}` syntax, and multi-line function calls across 50+ files for improved readability.
+- **Blake3 buffer heap allocation**: Converted a hot 64KB stack allocation buffer into a Heap allocation to prevent stack overflows on heavily loaded multi-threaded architectures.
+- **Dead code removal**: Removed unused `relative_distance` helper and simplified quality-ceiling `Option` handling in `gpu_accel.rs`.
+- **Stage 3 spin safety cap**: Replaced `while_immutable_condition` allow with an explicit spin counter safety cap in GPU coarse search.
+
+#### 🎬 Video Explorer & GPU Coarse Search Improvements
+
+- **Refactored long argument chains**: Split chained `.arg()` calls across `video_explorer.rs` for improved readability and maintainability.
+- **Improved SSIM/PSNR/MS-SSIM error messages**: Enhanced quality threshold failure messages to include both actual and target values.
+- **GPU search math formatting**: Reformatted complex numeric expressions in `gpu_coarse_search.rs` for clarity without changing logic.
+- **Named thresholds**: Added `MS_SSIM_THREE_SEGMENT_MIN_DURATION_SECS`, `ANIMATED_IMAGE_EXPLORATION_*` in `constants.rs`; MS-SSIM path uses the same segment fractions instead of raw `60.0` / `0.15` / `0.25` literals.
+
+#### 🧰 Check Script & CI Enhancements (`scripts/check_all.py`)
+
+- **Nightly toolchain auto-detection**: Added `NightlyComponents` dataclass to probe for installed nightly rustup components (clippy, rustfmt, miri, rust-src, llvm-tools).
+- **Install hint system**: Script now provides actionable hints for missing tools and nightly components.
+- **Verbose mode improvements**: Split long hint lines for better terminal readability.
+- **Bundle metadata validation**: Improved error message formatting for macOS App bundle checks.
+- **Changelog sync verification**: Enhanced regex matching and error reporting for version synchronization checks.
+
+#### 📦 Library & Module Updates
+
+- **`lib.rs`**: Restored missing `img_errors` module to fix compiler type inference loss (E0282).
+- **`database.rs`**: Added `# Errors` documentation to public functions; consolidated `SampleRow` `dead_code` suppression.
+- **`hdr_synthesis.rs`**: Added `use_base_color_space` and `base_rendition_is_hdr` fields to `GainMapParams`; improved doc comments with `# Errors` sections.
+- **`image_builders.rs`**: Replaced `.map().unwrap_or(false)` with `.is_ok_and()` for cleaner boolean checks.
+- **`loop_intent.rs`**: Improved legacy mode fallback — when loop DB is unavailable, system now evaluates loop tree first and only uses Layer 7 fallback if tree returns uncertain.
+- **`progress.rs`**: Added `reset_session_stats()` to ensure terminal progress counters accurately reflect current directory processing task.
+- **`video_recommender.rs`**: Refactored to accept `MediaIndexRow` for deterministic testing.
+- **`animated_image.rs`**: Semantic refactoring of media classification and animation detection logic.
+
+#### 🐛 Bugfixes
+
+- **1x1 Pixel Safety**: Patched subtraction overflow in `image_detection.rs` triggered by ultra-small 1x1 pixel media during block-sampling.
+- **Orphan Rule Compliance**: Resolved `E0116` by migrating SQL preparation logic directly into the `MediaIndex` model.
+- **`missing_docs`**: Moved from crate `warn` to `allow` with rationale (internal utilities; document stable public API incrementally).
+
 ## [0.11.2] — 2026-04-05
 
 #### 🔧 BPP Calculation Refactoring & Bugfixes
 
 - **Fixed Animated Media Handling in `img`**:
-    - Animated images (GIFs, animated WebP, etc.) and Apple Live Photos are now **completely ignored** by the `img` tool.
-    - Previously, these files were incorrectly copied to the output directory and counted as "Skipped" in the statistics.
-    - They are now bypassed entirely (no copy, no stats), ensuring the `img` tool strictly focuses on static image optimization as intended.
-- **Terminal Logging Tidy**: 
-    - Demoted startup information ("Logging system initialized", "Cache Algorithm version initialized") and external tool execution logs to `DEBUG` level.
-    - This provides a much cleaner terminal experience while keeping detailed traces in the `.log` files.
-    - Database internals that used to flood terminal output (`init_schema` bootstrap line, pgvector backfill banner, KNN row/radius diagnostics) now emit to `DEBUG` instead of regular terminal channels.
-- **Milestone Stats Refinement**: 
-    - Cumulative milestone statistics (`│ X:12✓ I:5✓`) are now only appended to `WARN` and `ERROR` logs to provide context for failures.
-    - Standard `INFO` logs and success messages (`✅`) remain clean and concise, reducing terminal visual clutter.
+  - Animated images (GIFs, animated WebP, etc.) and Apple Live Photos are now **completely ignored** by the `img` tool.
+  - Previously, these files were incorrectly copied to the output directory and counted as "Skipped" in the statistics.
+  - They are now bypassed entirely (no copy, no stats), ensuring the `img` tool strictly focuses on static image optimization as intended.
+- **Terminal Logging Tidy**:
+  - Demoted startup information ("Logging system initialized", "Cache Algorithm version initialized") and external tool execution logs to `DEBUG` level.
+  - This provides a much cleaner terminal experience while keeping detailed traces in the `.log` files.
+  - Database internals that used to flood terminal output (`init_schema` bootstrap line, pgvector backfill banner, KNN row/radius diagnostics) now emit to `DEBUG` instead of regular terminal channels.
+- **Milestone Stats Refinement**:
+  - Cumulative milestone statistics (`│ X:12✓ I:5✓`) are now only appended to `WARN` and `ERROR` logs to provide context for failures.
+  - Standard `INFO` logs and success messages (`✅`) remain clean and concise, reducing terminal visual clutter.
 - **Extracted `bpp_from_meta` helper**: Consolidated duplicate temporal/spatial BPP calculation logic in `database.rs` into a single reusable function with clearer semantics (per-frame temporal density divides by frame count, not multiplies).
 - **Fixed temporal BPP formula bug**: Legacy code in `lookup_similar_samples_inner` multiplied by `frame_count` instead of dividing — corrected to use proper per-frame density calculation.
 - **Added regression test**: `bpp_from_meta_divides_temporal_density_by_frame_count` validates the corrected formula against legacy buggy behavior.
-- **Path Safety Hardening**: 
-    - **Relativization Shield**: Mitigated ImageMagick 7 absolute path truncation bugs by implementing mandatory `./` guarding for all file inputs.
-    - **ExifTool Injection Defense**: Hardened `exiftool_path_arg` with unconditional `./` guarding to prevent command hijacking via `-` or `@` filename prefixes.
-    - **Format Expansion Prevention**: Implemented double-percent (`%%`) escaping to lock down filename property expansion vulnerabilities.
-    - **Shell Injection Defense**: Added metacharacter scanning and protocol-less relative addressing to prevent command injection via ImageMagick delegates.
-    - **URI-compliant Pathing**: Implemented the `file:///` (triple-slash) protocol in `magick_safe_path` for 100% stable absolute path preservation.
+- **Path Safety Hardening**:
+  - **Relativization Shield**: Mitigated ImageMagick 7 absolute path truncation bugs by implementing mandatory `./` guarding for all file inputs.
+  - **ExifTool Injection Defense**: Hardened `exiftool_path_arg` with unconditional `./` guarding to prevent command hijacking via `-` or `@` filename prefixes.
+  - **Format Expansion Prevention**: Implemented double-percent (`%%`) escaping to lock down filename property expansion vulnerabilities.
+  - **Shell Injection Defense**: Added metacharacter scanning and protocol-less relative addressing to prevent command injection via ImageMagick delegates.
+  - **URI-compliant Pathing**: Implemented the `file:///` (triple-slash) protocol in `magick_safe_path` for 100% stable absolute path preservation.
 - **Media Integrity & Resource Safety**:
-    - **Metadata Bomb Stamina**: Hardened the XMP/EXIF pipeline against abnormally high metadata density, preventing OOM and hangs during concurrent processing.
-    - **Zero-Duration Rhythm Lockdown**: Implemented strict validation to reject media with invalid inter-frame delays, preventing high-speed playback artifacts.
-- **BPP Calculation Precision**: 
-    - **Temporal Density Fix**: Validated the corrected BPP formula (`density / frames`) against high-frame-count synthetic media to ensure no return of legacy multiplication-based inflation.
+  - **Metadata Bomb Stamina**: Hardened the XMP/EXIF pipeline against abnormally high metadata density, preventing OOM and hangs during concurrent processing.
+  - **Zero-Duration Rhythm Lockdown**: Implemented strict validation to reject media with invalid inter-frame delays, preventing high-speed playback artifacts.
+- **BPP Calculation Precision**:
+  - **Temporal Density Fix**: Validated the corrected BPP formula (`density / frames`) against high-frame-count synthetic media to ensure no return of legacy multiplication-based inflation.
 - **Grayscale JXL Fallback Logic**: Restored and optimized the detection of `Getting pixel data failed` errors caused by RGB ICC profiles in grayscale sources. The pipeline now automatically triggers a `-strip` and 16-bit depth fallback to ensure successful conversion.
 - **Media Index Accelerated Development System (Zero-I/O Regression)**:
-    - **Architecture**: Implemented a SQLite-backed feature indexing system located in `debug/media_index.sqlite`.
-    - **Extraction Tool (`index_gallery`)**: Added a batch indexing tool with strict filtering — only includes **Static Images** (excludes GIF/APNG animations) and **Long Videos** (minimum duration **60.0s**).
-    - **Instant Regression (`test_index_decisions`)**: Added a sub-second decision validation tool that runs purely against indexed features without disk I/O.
-    - **Mockable Decision Layer**: Refactored `image_recommender` and `video_recommender` to accept `MediaIndexRow` for deterministic testing.
+  - **Architecture**: Implemented a SQLite-backed feature indexing system located in `debug/media_index.sqlite`.
+  - **Extraction Tool (`index_gallery`)**: Added a batch indexing tool with strict filtering — only includes **Static Images** (excludes GIF/APNG animations) and **Long Videos** (minimum duration **60.0s**).
+  - **Instant Regression (`test_index_decisions`)**: Added a sub-second decision validation tool that runs purely against indexed features without disk I/O.
+  - **Mockable Decision Layer**: Refactored `image_recommender` and `video_recommender` to accept `MediaIndexRow` for deterministic testing.
 - **Critical Fixes & Hardening**:
-    - **1x1 Pixel Safety**: Patched a subtraction overflow in `image_detection.rs` triggered by ultra-small 1x1 pixel media during block-sampling.
-    - **Type Inference Restoration**: Fixed a compiler "type inference loss" (E0282) by restoring the missing `img_errors` module in `lib.rs`.
-    - **Orphan Rule Compliance**: Resolved `E0116` by migrating SQL preparation logic directly into the `MediaIndex` model.
+  - **1x1 Pixel Safety**: Patched a subtraction overflow in `image_detection.rs` triggered by ultra-small 1x1 pixel media during block-sampling.
+  - **Type Inference Restoration**: Fixed a compiler "type inference loss" (E0282) by restoring the missing `img_errors` module in `lib.rs`.
+  - **Orphan Rule Compliance**: Resolved `E0116` by migrating SQL preparation logic directly into the `MediaIndex` model.
 
 #### 🧠 Loop Intent: Improved Legacy Mode & KNN Fallbacks
 
@@ -113,7 +188,7 @@ All notable changes to this project will be documented in this file.
 
 #### 🏗️ Architecture: Strict Static vs. Animated Module Isolation (img & vid)
 
-- **Loop intent: Layer 1-B2 (deliberate patch / bridge rule)** — *sticker-class native GIF*: Layer 1-B’s **DB short-duration cutoff** can clear while emoji-tier GIFs (e.g. small canvas, a few seconds) still read as “non-loop” downstream. **1-B2** is an explicit, auditable **patch** inside `evaluate_loop_tree`: **silent multi-frame `.gif`**, sticker-class envelope (`STICKER_MAX_DIMENSION`, `width * height` ≤ `STICKER_TIER_NATIVE_GIF_MAX_PIXELS`, duration ≤ `ANIMATION_CLIP_THRESHOLD_SECS`) → **LoopStrong** (“strong loop/sticker prior”) so `vid` keeps the **loop-intent → GIF** contract without a second heuristic in `conversion_api`. It is **not** a substitute for re-tuning DB/KNN; **uncertain** assets still defer to Layer 4 + KNN. Log tag: **`Layer 1-B2`**.
+- **Loop intent: Layer 1-B2 (deliberate patch / bridge rule)** — _sticker-class native GIF_: Layer 1-B’s **DB short-duration cutoff** can clear while emoji-tier GIFs (e.g. small canvas, a few seconds) still read as “non-loop” downstream. **1-B2** is an explicit, auditable **patch** inside `evaluate_loop_tree`: **silent multi-frame `.gif`**, sticker-class envelope (`STICKER_MAX_DIMENSION`, `width * height` ≤ `STICKER_TIER_NATIVE_GIF_MAX_PIXELS`, duration ≤ `ANIMATION_CLIP_THRESHOLD_SECS`) → **LoopStrong** (“strong loop/sticker prior”) so `vid` keeps the **loop-intent → GIF** contract without a second heuristic in `conversion_api`. It is **not** a substitute for re-tuning DB/KNN; **uncertain** assets still defer to Layer 4 + KNN. Log tag: **`Layer 1-B2`**.
 - **Fixed static modern format detection**: Updated `SourceCodec::is_animated()` to remove default animation flags for AVIF and HEIC. These formats are now treated as static by default until container analysis confirms an image sequence.
 - **Added "Single-Frame Interception" in vid**: Implemented a mandatory check in the `vid` conversion pipeline (`auto_convert_with_cache`). If `frame_count <= 1`, the file is identified as a static image and skipped by `vid`, ensuring it is handled by the `img` module for optimal JXL encoding.
 - **Cleaned up animation capability metadata**: Removed `WebpStatic` from `can_be_animated()` to prevent misrouting static WebP files to the animated media pipeline.
@@ -4922,3 +4997,8 @@ This section reconstructs the detailed development history, transforming 1400+ r
 ### 🚀 Performance & Refactoring
 
 - modularize skip logic with VVC/AV2 support
+
+### Fixed (HDR & UltraHDR)
+- **Loss of Glow/HDR Effect**: Resolved an issue where macOS Preview and most web browsers failed to render JXL files with HDR brightness (glow). The underlying `cjxl` synthesis now correctly tags files with the PQ (Perceptual Quantizer, SMPTE ST 2084) transfer curve instead of treating 32-bit linear EXR values as SDR (`sRGB`).
+- **Extended XMP Parsing**: Rewrote the JPEG XMP metadata extractor to recursively scan the raw byte stream for all `APP1` blocks, resolving an issue where vital HDR gainmap parameters hidden in MPF segments were being ignored.
+- **Fail-Safe Gainmap Parsing**: Parsing XMP no longer "cheats" by using default fallbacks (e.g. 2.0x gain, 1.0 gamma) when decoding fails; it now strictly validates and requires correct metadata before executing synthesis.

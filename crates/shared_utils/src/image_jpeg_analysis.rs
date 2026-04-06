@@ -566,9 +566,7 @@ pub fn is_ultra_hdr_jpeg(data: &[u8]) -> bool {
 /// Detect `UltraHDR` from file path.
 #[must_use]
 pub fn is_ultra_hdr_jpeg_file(path: &std::path::Path) -> bool {
-    std::fs::read(path)
-        .map(|data| is_ultra_hdr_jpeg(&data))
-        .unwrap_or(false)
+    std::fs::read(path).is_ok_and(|data| is_ultra_hdr_jpeg(&data))
 }
 
 /// Extract XMP metadata string from JPEG data.
@@ -578,58 +576,48 @@ pub fn is_ultra_hdr_jpeg_file(path: &std::path::Path) -> bool {
 /// # Returns
 /// - `Some(String)`: XMP metadata content
 /// - `None`: No XMP segment found
-pub fn extract_xmp_from_jpeg_data(data: &[u8]) -> Option<String> {
-    if data.len() < 4 || data[0] != 0xFF || data[1] != 0xD8 {
-        warn!("Invalid JPEG signature for XMP extraction");
-        return None;
-    }
+pub fn extract_xmp_from_jpeg_data(data: &[u8]) -> Option<Vec<String>> {
+    let mut xmp_blocks = Vec::new();
+    let mut pos = 0;
 
-    let mut pos = 2;
-    while pos + 1 < data.len() {
-        // Skip padding
-        while pos + 1 < data.len() && data[pos] == 0xFF && data[pos + 1] == 0xFF {
+    while pos < data.len() {
+        // Look for APP1 marker 0xFF 0xE1
+        if data[pos] == 0xFF && pos + 1 < data.len() && data[pos + 1] == 0xE1 {
+            if pos + 3 >= data.len() {
+                break;
+            }
+            let seg_len = usize::from(u16::from_be_bytes([data[pos + 2], data[pos + 3]]));
+            if seg_len < 2 || pos + 2 + seg_len > data.len() {
+                pos += 1;
+                continue;
+            }
+
+            let payload = &data[pos + 4..pos + 2 + seg_len];
+
+            // APP1 (0xE1): XMP Standard
+            if payload.starts_with(b"http://ns.adobe.com/xap/1.0/\0") && payload.len() > 29 {
+                let xmp = String::from_utf8_lossy(&payload[29..]).to_string();
+                xmp_blocks.push(xmp);
+            }
+            // APP1 (0xE1): XMP Extended
+            else if payload.starts_with(b"http://ns.adobe.com/xmp/extension/\0") && payload.len() > 35 {
+                if payload.len() > 35 + 32 + 8 {
+                    let xmp = String::from_utf8_lossy(&payload[35 + 32 + 8..]).to_string();
+                    xmp_blocks.push(xmp);
+                }
+            }
+            pos += 2 + seg_len;
+        } else {
             pos += 1;
         }
-
-        if pos + 1 >= data.len() || data[pos] != 0xFF {
-            break;
-        }
-
-        let marker = data[pos + 1];
-        pos += 2;
-
-        if marker == 0xDA || marker == 0xD9 {
-            break;
-        }
-
-        if marker == 0x01 || (0xD0..=0xD8).contains(&marker) {
-            continue;
-        }
-
-        if pos + 2 > data.len() {
-            break;
-        }
-        let seg_len = usize::from(u16::from_be_bytes([data[pos], data[pos + 1]]));
-        if seg_len < 2 || pos + seg_len > data.len() {
-            break;
-        }
-
-        let payload = &data[pos + 2..pos + seg_len];
-
-        // APP1 (0xE1): XMP
-        if marker == 0xE1
-            && payload.starts_with(b"http://ns.adobe.com/xap/1.0/\0")
-            && payload.len() > 29
-        {
-            let xmp = String::from_utf8_lossy(&payload[29..]).to_string();
-            info!("Extracted XMP from JPEG: {} bytes", xmp.len());
-            return Some(xmp);
-        }
-
-        pos += seg_len;
     }
 
-    None
+    if xmp_blocks.is_empty() {
+        None
+    } else {
+        info!("Extracted {} XMP blocks from JPEG stream", xmp_blocks.len());
+        Some(xmp_blocks)
+    }
 }
 
 /// Extract gainmap image from `UltraHDR` JPEG.
@@ -852,7 +840,10 @@ fn extract_gainmap_from_mpf(jpeg_data: &[u8], mpf_data: &[u8]) -> Result<Vec<u8>
     }
 
     // Read number of entries in IFD
-    let num_entries = read_u16(&mpf_data[usize::try_from(first_ifd_offset).unwrap_or(0)..], is_big_endian)?;
+    let num_entries = read_u16(
+        &mpf_data[usize::try_from(first_ifd_offset).unwrap_or(0)..],
+        is_big_endian,
+    )?;
     info!("IFD entries: {}", num_entries);
 
     // Find MPEntry tag
@@ -989,8 +980,9 @@ fn extract_gainmap_from_mpf(jpeg_data: &[u8], mpf_data: &[u8]) -> Result<Vec<u8>
     }
 
     // Extract gainmap data
-    let gainmap_data =
-        jpeg_data[gainmap_abs_pos..gainmap_abs_pos + usize::try_from(gainmap_length).unwrap_or(0)].to_vec();
+    let gainmap_data = jpeg_data
+        [gainmap_abs_pos..gainmap_abs_pos + usize::try_from(gainmap_length).unwrap_or(0)]
+        .to_vec();
 
     Ok(gainmap_data)
 }
@@ -1196,7 +1188,9 @@ mod tests {
 
         let extracted = extract_xmp_from_jpeg_data(&jpeg_with_xmp);
         assert!(extracted.is_some());
-        let xmp_str = extracted.unwrap();
+        let xmp_blocks = extracted.unwrap();
+        assert_eq!(xmp_blocks.len(), 1);
+        let xmp_str = &xmp_blocks[0];
         assert!(xmp_str.contains("<x:xmpmeta>"));
         assert!(xmp_str.contains("test content"));
     }
