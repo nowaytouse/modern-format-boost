@@ -25,9 +25,9 @@ The `--distance` (`-d`) parameter in the JPEG XL encoder controls perceived visu
 
 ### 1.1 The Distance Parameter
 
-```bash
+````bash
 cjxl input.png output.jxl -d <distance>
-```
+```text
 
 Distance is a non-negative float that scales the quantization matrices used by the VarDCT encoder. Lower values preserve more detail at the cost of file size. The special case `d=0.0` bypasses VarDCT entirely and activates Modular lossless compression.
 
@@ -112,12 +112,12 @@ Byte-exact equivalence was confirmed with `cmp` on both JXL output files and dec
 
 **d=0.001 and d=0.01 are byte-identical.** Verified with `cmp` on both JXL and decoded PNG.
 
-```
+```text
 MD5 (original):  c4d5d5ddf606c998293a2fd68fe28ee3
 MD5 (d=0.1):     9ad931ea5e7124db1ebaf6ebeca13733
 MD5 (d=0.01):    8baa306d7b33c5c3dd136bc2e4d786cf
 MD5 (d=0.001):   8baa306d7b33c5c3dd136bc2e4d786cf  ← identical to d=0.01
-```
+```text
 
 ### 3.2 Equivalence Range Test (d=0.001 to d=0.020)
 
@@ -160,7 +160,7 @@ MD5 (d=0.001):   8baa306d7b33c5c3dd136bc2e4d786cf  ← identical to d=0.01
 | d=0.010000 + 3×10⁻¹⁰ | ❌          |
 | d=0.010002           | ❌          |
 
-**Exact upper boundary: d ≈ 0.0100000005**  
+**Exact upper boundary: d ≈ 0.0100000005**
 This is exactly where float32 representation first differs from 0.01 (ULP ≈ 1.19×10⁻⁷).
 
 ### 3.4 Extreme Precision Results
@@ -180,7 +180,7 @@ This is exactly where float32 representation first differs from 0.01 (ULP ≈ 1.
 | 99             | 1×10⁻⁹⁹     | 0.0 (underflow)     | Modular ⚠️     | 9,688,644 B     | —                       |
 | —              | 0.0         | 0.0                 | Modular        | 9,688,644 B     | —                       |
 
-> **Why 1×10⁻⁴⁵ survives but 1×10⁻⁴⁶ does not:**  
+> **Why 1×10⁻⁴⁵ survives but 1×10⁻⁴⁶ does not:**
 > IEEE 754 round-to-nearest: `1×10⁻⁴⁵` is closer to the float32 subnormal minimum `1.4013×10⁻⁴⁵` than to zero, so it rounds up to a non-zero value. `1×10⁻⁴⁶` is closer to zero and underflows.
 
 ### 3.5 Multi-Image Verification
@@ -214,30 +214,30 @@ Switching from VarDCT to Modular means **15× slower encoding, 3× slower decodi
 
 Two independent mechanisms converge to produce this equivalence:
 
-**Mechanism 1 — VarDCT quantization floor**  
+**Mechanism 1 — VarDCT quantization floor**
 VarDCT quantization step sizes cannot be reduced below a minimum threshold. Once `d ≤ ~0.01`, every DCT coefficient is already encoded at maximum precision; reducing d further has no representable effect on the output bitstream.
 
-**Mechanism 2 — Float32 precision ceiling**  
+**Mechanism 2 — Float32 precision ceiling**
 The distance parameter is stored as float32. At the scale of 0.001–0.01, the ULP is ~1.19×10⁻⁷, meaning values differing by less than ~10⁻⁷ map to the same internal representation. Since the quantization floor is already hit at d=0.01, any value smaller than 0.01 falls into the same plateau.
 
 These two mechanisms create a single, clean equivalence class:
 
-```
+```text
 0 < d ≤ 0.010   →   byte-exact identical VarDCT output
-```
+```text
 
 ### 4.2 Mode Selection Logic
 
 cjxl selects encoding mode based on the float32-clamped distance value:
 
-```
+```rust
 float32 d_clamped = (float32) d_input
 
 if d_clamped == 0.0:
     → Modular Lossless
 else:
     → VarDCT (lossy)
-```
+```text
 
 The only way `d_clamped` becomes 0.0 is either explicit `d=0.0` or float32 underflow for `d < 1.4×10⁻⁴⁵`. All other positive inputs, no matter how small, remain in VarDCT mode.
 
@@ -245,12 +245,12 @@ The only way `d_clamped` becomes 0.0 is either explicit `d=0.0` or float32 under
 
 Modular mode is a true pixel-level lossless codec — it does **not** use XYB color space conversion. Pixel values in a round-tripped Modular JXL are bit-exact with the input, as confirmed by PSNR = ∞ and SSIM = 0.
 
-**Why does MD5 still differ from the original PNG?**  
+**Why does MD5 still differ from the original PNG?**
 `djxl` reconstructs a fresh PNG container from the decoded pixel buffer. In doing so it omits or rewrites PNG ancillary chunks (ICC Profile tags, EXIF, tEXt metadata, etc.) present in the source file. The pixel data is identical; the container wrapping it differs. This is a PNG re-encoding artifact, not a quality loss.
 
 ### 4.4 Equivalence Zones — Complete Map
 
-```
+```text
  ← lower quality                                higher quality →
 
  d=10   d=3   d=1   d=0.5   d=0.1   d=0.01              d→0⁺    d=0
@@ -268,7 +268,7 @@ Modular mode is a true pixel-level lossless codec — it does **not** use XYB co
                               Lossless Trigger (underflow) ─┘       │
                               d < 1×10⁻⁴⁶ → same as explicit ───────┘
                               d=0.0 (Modular mode)
-```
+```text
 
 ---
 
@@ -334,7 +334,7 @@ cmp restored_d0.01.png restored_d0.001.png
 compare -metric PSNR input.png restored_d0.01.png null:
 compare -metric SSIM input.png restored_d0.01.png null:
 md5 input.png restored_d0.01.png restored_d0.001.png
-```
+```text
 
 ## Appendix B: Float32 Precision Table
 
@@ -346,11 +346,11 @@ for exp in range(38, 52):
     f32 = struct.unpack('f', struct.pack('f', val))[0]
     mode = 'Modular (underflow)' if f32 == 0.0 else 'VarDCT'
     print(f'1e-{exp:2d}  float32={f32:.2e}  →  {mode}')
-```
+```text
 
 Output:
 
-```
+```text
 1e-38  float32=1.00e-38  →  VarDCT
 1e-40  float32=1.00e-40  →  VarDCT
 1e-43  float32=9.95e-44  →  VarDCT
@@ -359,7 +359,7 @@ Output:
 1e-46  float32=0.00e+00  →  Modular (underflow)
 1e-50  float32=0.00e+00  →  Modular (underflow)
 1e-99  float32=0.00e+00  →  Modular (underflow)
-```
+```text
 
 ## Appendix C: Version History
 
@@ -372,4 +372,5 @@ Output:
 
 ---
 
-_Encoder: cjxl v0.11.2 · Platform: macOS ARM64 NEON · Project: modern_format_boost_
+### Encoder: cjxl v0.11.2 · Platform: macOS ARM64 NEON · Project: modern_format_boost
+````

@@ -361,6 +361,15 @@ pub fn u64_to_i64_sat(v: u64) -> i64 {
     i64::try_from(v).unwrap_or(i64::MAX)
 }
 
+/// Explicit no-op for `i64` → `i64`.
+///
+/// Used to explicitly mark a code path as audited for numeric safety.
+#[inline]
+#[must_use]
+pub const fn i64_to_i64_sat_no_op(v: i64) -> i64 {
+    v
+}
+
 /// Saturating cast: `u64` → `u32`.
 ///
 /// Values > `u32::MAX` → `u32::MAX`.
@@ -395,6 +404,15 @@ pub fn usize_to_i64_sat(v: usize) -> i64 {
 #[must_use]
 pub fn usize_to_u16_sat(v: usize) -> u16 {
     u16::try_from(v).unwrap_or(u16::MAX)
+}
+
+/// Saturating cast: `usize` → `u8`.
+///
+/// Values > `u8::MAX` → `u8::MAX`.
+#[inline]
+#[must_use]
+pub fn usize_to_u8_sat(v: usize) -> u8 {
+    u8::try_from(v).unwrap_or(u8::MAX)
 }
 
 /// Saturating cast: `u32` → `u8`.
@@ -440,6 +458,28 @@ pub fn i32_to_u64_sat(v: i32) -> u64 {
 #[must_use]
 pub fn i32_to_u8_sat(v: i32) -> u8 {
     u8::try_from(v.clamp(0, i32::from(u8::MAX))).unwrap_or(0)
+}
+
+// ---------------------------------------------------------------------------
+// u128 → Integer (saturating)
+// ---------------------------------------------------------------------------
+
+/// Saturating cast: `u128` → `i64`.
+///
+/// Values > `i64::MAX` → `i64::MAX`.
+#[inline]
+#[must_use]
+pub fn u128_to_i64_sat(v: u128) -> i64 {
+    i64::try_from(v).unwrap_or(i64::MAX)
+}
+
+/// Saturating cast: `u128` → `u64`.
+///
+/// Values > `u64::MAX` → `u64::MAX`.
+#[inline]
+#[must_use]
+pub fn u128_to_u64_sat(v: u128) -> u64 {
+    u64::try_from(v).unwrap_or(u64::MAX)
 }
 
 // ---------------------------------------------------------------------------

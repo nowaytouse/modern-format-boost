@@ -347,13 +347,13 @@ impl BatchResult {
         self.paused_remaining = remaining;
     }
 
-    #[must_use]
-    #[allow(clippy::cast_precision_loss)]
     pub fn success_rate(&self) -> f64 {
         if self.total == 0 {
             100.0
         } else {
-            (self.succeeded as f64 / self.total as f64) * 100.0
+            (crate::numeric_cast::usize_to_f64(self.succeeded)
+                / crate::numeric_cast::usize_to_f64(self.total))
+                * 100.0
         }
     }
 }
@@ -407,10 +407,9 @@ fn image_pixel_count(path: &Path) -> Option<u64> {
         .map(|(width, height)| u64::from(width).saturating_mul(u64::from(height)))
 }
 
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn float_ord_key(value: f64) -> u64 {
     if value.is_finite() && value >= 0.0 {
-        (value * 1000.0).round() as u64
+        crate::numeric_cast::f64_to_u64_sat((value * 1000.0).round())
     } else {
         u64::MAX
     }
@@ -667,7 +666,9 @@ fn video_probe_priority_data(path: &Path) -> (Option<u64>, Option<f64>, Option<f
     let frame_count = if probe.frame_count > 0 {
         Some(probe.frame_count)
     } else if let (Some(duration), Some(fps)) = (duration_secs, frame_rate) {
-        Some((duration * fps).round().max(1.0) as u64)
+        Some(crate::numeric_cast::f64_to_u64_sat(
+            (duration * fps).round().max(1.0),
+        ))
     } else {
         None
     };

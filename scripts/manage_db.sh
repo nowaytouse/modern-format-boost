@@ -54,7 +54,7 @@ start_service() {
 
 setup_db() {
     echo -e "${BLUE}🏗️  Setting up database: $DB_NAME${NC}"
-    
+
     # Check if DB exists
     if psql -lqt | cut -d \| -f 1 | grep -qw "$DB_NAME"; then
         echo -e "${GREEN}✅ Database '$DB_NAME' already exists.${NC}"
@@ -69,7 +69,7 @@ setup_db() {
         echo "Try: brew install pgvector (macOS) or refer to your Linux distribution's pgvector package."
         exit 1
     }
-    
+
     echo -e "${GREEN}✅ Database setup complete!${NC}"
 }
 
@@ -87,21 +87,21 @@ get_status() {
 }
 
 case "$1" in
-    start)
-        check_deps
-        start_service
-        get_status
-        ;;
-    setup)
-        check_deps
-        start_service
-        setup_db
-        ;;
-    status)
-        get_status
-        ;;
-    *)
-        echo "Usage: $0 {start|setup|status}"
-        exit 1
-        ;;
+start)
+    check_deps
+    start_service
+    get_status
+    ;;
+setup)
+    check_deps
+    start_service
+    setup_db
+    ;;
+status)
+    get_status
+    ;;
+*)
+    echo "Usage: $0 {start|setup|status}"
+    exit 1
+    ;;
 esac

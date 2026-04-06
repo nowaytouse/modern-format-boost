@@ -211,23 +211,37 @@ pub struct ExploreContext {
     pub log: Vec<String>,
 }
 
+pub struct ExploreContextArgs {
+    pub input_path: PathBuf,
+    pub output_path: PathBuf,
+    pub input_size: u64,
+    pub encoder: VideoEncoder,
+    pub vf_args: Vec<String>,
+    pub max_threads: usize,
+    pub use_gpu: bool,
+    pub preset: EncoderPreset,
+    pub config: ExploreConfig,
+    pub hdr_x265_params: Option<String>,
+    pub apple_compat: bool,
+}
+
 impl ExploreContext {
     /// Construct context for strategy-based explore. Consider a builder if adding more optional params.
     #[must_use]
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        input_path: PathBuf,
-        output_path: PathBuf,
-        input_size: u64,
-        encoder: VideoEncoder,
-        vf_args: Vec<String>,
-        max_threads: usize,
-        use_gpu: bool,
-        preset: EncoderPreset,
-        config: ExploreConfig,
-        hdr_x265_params: Option<String>,
-        apple_compat: bool,
-    ) -> Self {
+    pub fn new(args: ExploreContextArgs) -> Self {
+        let ExploreContextArgs {
+            input_path,
+            output_path,
+            input_size,
+            encoder,
+            vf_args,
+            max_threads,
+            use_gpu,
+            preset,
+            config,
+            hdr_x265_params,
+            apple_compat,
+        } = args;
         Self {
             input_path,
             output_path,

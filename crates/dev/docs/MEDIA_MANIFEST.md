@@ -6,6 +6,7 @@ This repository includes synthetic test media used by the test suite.
 - Testing parameters: CRF, SSIM, duration coverage
 
 Notes:
+
 - H.264
 - AV1
 - CRF

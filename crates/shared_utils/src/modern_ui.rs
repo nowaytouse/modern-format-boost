@@ -247,8 +247,7 @@ pub enum ProgressStyle {
 #[must_use]
 pub fn render_progress_bar(progress: f64, width: usize, style: ProgressStyle) -> String {
     let progress = progress.clamp(0.0, 1.0);
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let filled = (progress * width as f64).round() as usize;
+    let filled = crate::numeric_cast::f64_to_usize_sat((progress * width as f64).round());
     let empty = width.saturating_sub(filled);
 
     match style {
@@ -298,8 +297,7 @@ pub fn render_colored_progress(progress: f64, width: usize) -> String {
     use colors::{BRIGHT_CYAN, BRIGHT_GREEN, BRIGHT_RED, BRIGHT_YELLOW, RESET};
 
     let bar = render_progress_bar(progress, width, ProgressStyle::Modern);
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let pct = (progress * 100.0) as u32;
+    let pct = crate::numeric_cast::f64_to_u32_sat(progress * 100.0);
 
     let color = if pct >= 80 {
         BRIGHT_GREEN
@@ -597,18 +595,13 @@ pub fn format_size(bytes: u64) -> String {
 #[must_use]
 pub fn format_duration(secs: f64) -> String {
     if secs >= 3600.0 {
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let h = (secs / 3600.0).floor() as u32;
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let m = ((secs % 3600.0) / 60.0).floor() as u32;
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let s = (secs % 60.0).floor() as u32;
+        let h = crate::numeric_cast::f64_to_u32_sat((secs / 3600.0).floor());
+        let m = crate::numeric_cast::f64_to_u32_sat(((secs % 3600.0) / 60.0).floor());
+        let s = crate::numeric_cast::f64_to_u32_sat((secs % 60.0).floor());
         format!("{h}h {m:02}m {s:02}s")
     } else if secs >= 60.0 {
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let m = (secs / 60.0).floor() as u32;
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let s = (secs % 60.0).floor() as u32;
+        let m = crate::numeric_cast::f64_to_u32_sat((secs / 60.0).floor());
+        let s = crate::numeric_cast::f64_to_u32_sat((secs % 60.0).floor());
         format!("{m}m {s:02}s")
     } else {
         format!("{secs:.1}s")

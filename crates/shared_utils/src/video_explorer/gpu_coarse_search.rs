@@ -130,6 +130,72 @@ fn stream_size_change_pct(output_size: u64, input_size: u64) -> f64 {
     (crate::numeric_cast::u64_to_f64(output_size) / denom - 1.0) * 100.0
 }
 
+/// Arguments for GPU-accelerated CRF exploration.
+#[derive(Debug, Clone)]
+pub struct GpuSearchArgs<'a> {
+    pub input: &'a Path,
+    pub output: &'a Path,
+    pub encoder: VideoEncoder,
+    pub vf_args: Vec<String>,
+    pub initial_crf: f32,
+    pub max_crf: f32,
+    pub min_ssim: f64,
+    pub ultimate_mode: bool,
+    pub force_ms_ssim_long: bool,
+    pub allow_size_tolerance: bool,
+    pub max_threads: usize,
+    pub hdr_x265_params: Option<String>,
+    pub apple_compat: bool,
+    pub preset: EncoderPreset,
+}
+
+/// A request for a GPU-backed video quality exploration.
+#[derive(Debug, Clone)]
+pub struct GpuSearchRequest {
+    pub input: std::path::PathBuf,
+    pub output: std::path::PathBuf,
+    pub vf_args: Vec<String>,
+    pub baseline_crf: f32,
+    pub warm_start_crf: Option<f32>,
+    pub ultimate_mode: bool,
+    pub force_ms_ssim_long: bool,
+    pub allow_size_tolerance: bool,
+    pub min_ssim: f64,
+    pub max_threads: usize,
+    pub hdr_x265_params: Option<String>,
+    pub apple_compat: bool,
+    pub preset: EncoderPreset,
+}
+
+/// Arguments for CPU fine-tuning phase.
+struct FineTuneArgs<'a> {
+    input: &'a Path,
+    output: &'a Path,
+    encoder: VideoEncoder,
+    vf_args: Vec<String>,
+    gpu_boundary_crf: f32,
+    min_crf: f32,
+    max_crf: f32,
+    min_ssim: f64,
+    ultimate_mode: bool,
+    allow_size_tolerance: bool,
+    max_threads: usize,
+    duration: f32,
+    probe_info: Option<&'a crate::ffprobe::FFprobeResult>,
+    gpu_executed: bool,
+    is_gif_magic: bool,
+    hdr_x265_params: Option<String>,
+    apple_compat: bool,
+    preset: EncoderPreset,
+}
+
+/// Mutable tracking state during search.
+#[derive(Debug, Default, Clone)]
+struct TrackingState {
+    pub best_vmaf: Option<f64>,
+    pub best_psnr_uv: Option<(f64, f64)>,
+}
+
 /// Format the `QualityCheck` log line from result; used for logging and unit tests (regression: enhanced failure shows reason, not "total file not smaller").
 pub(crate) fn format_quality_check_line(
     result: &ExploreResult,
@@ -169,24 +235,25 @@ pub(crate) fn format_quality_check_line(
 ///
 /// # Errors
 /// Returns an error if exploration fails.
-#[allow(clippy::too_many_arguments)]
-pub fn explore_with_gpu_coarse_search(
-    input: &Path,
-    output: &Path,
-    encoder: VideoEncoder,
-    vf_args: Vec<String>,
-    initial_crf: f32,
-    max_crf: f32,
-    min_ssim: f64,
-    ultimate_mode: bool,
-    force_ms_ssim_long: bool,
-    allow_size_tolerance: bool,
-    max_threads: usize,
-    hdr_x265_params: Option<String>,
-    apple_compat: bool,
-    preset: EncoderPreset,
-) -> Result<ExploreResult> {
+pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<ExploreResult> {
     use crate::gpu_accel::{CrfMapping, GpuAccel, GpuCoarseConfig};
+    let GpuSearchArgs {
+        input,
+        output,
+        encoder,
+        vf_args,
+        initial_crf,
+        max_crf,
+        min_ssim,
+        ultimate_mode,
+        force_ms_ssim_long,
+        allow_size_tolerance,
+        max_threads,
+        hdr_x265_params,
+        apple_compat,
+        preset,
+    } = args;
+
     let precheck_info = precheck::run_precheck(input)?;
     let _compressibility = precheck_info.compressibility;
     crate::log_eprintln!();
@@ -194,9 +261,6 @@ pub fn explore_with_gpu_coarse_search(
     let input_size = fs::metadata(input)
         .context("Failed to read input file metadata")?
         .len();
-
-    let mut best_vmaf_tracked: Option<f64> = None;
-    let mut best_psnr_uv_tracked: Option<(f64, f64)> = None;
 
     let gpu = GpuAccel::detect();
     gpu.print_detection_info();
@@ -564,28 +628,32 @@ pub fn explore_with_gpu_coarse_search(
         crate::verbose_eprintln!("      Search will start from boundary instead of optimal point");
     }
 
-    let mut result = cpu_fine_tune_from_gpu_boundary(
+    let mut tracking = TrackingState {
+        best_vmaf: None,
+        best_psnr_uv: None,
+    };
+    let fine_tune_args = FineTuneArgs {
         input,
         output,
         encoder,
         vf_args,
-        clamped_cpu_center_crf,
-        cpu_min_crf,
-        cpu_max_crf,
+        gpu_boundary_crf: clamped_cpu_center_crf,
+        min_crf: cpu_min_crf,
+        max_crf: cpu_max_crf,
         min_ssim,
         ultimate_mode,
         allow_size_tolerance,
         max_threads,
         duration,
-        probe_result.as_ref(),
-        &mut best_vmaf_tracked,
-        &mut best_psnr_uv_tracked,
+        probe_info: probe_result.as_ref(),
         gpu_executed,
         is_gif_magic,
         hdr_x265_params,
         apple_compat,
         preset,
-    )?;
+    };
+
+    let mut result = cpu_fine_tune_from_gpu_boundary(fine_tune_args, &mut tracking)?;
 
     result.log.clear();
 
@@ -607,7 +675,7 @@ pub fn explore_with_gpu_coarse_search(
         );
 
         // Display quality metrics that triggered early insight
-        if let Some(vmaf) = best_vmaf_tracked {
+        if let Some(vmaf) = tracking.best_vmaf {
             let vmaf_pass = vmaf >= 92.0;
             crate::log_eprintln!(
                 "   VMAF-Y: {:.2} {} 92.0 {}",
@@ -616,7 +684,7 @@ pub fn explore_with_gpu_coarse_search(
                 if vmaf_pass { "✅" } else { "❌" }
             );
         }
-        if let Some((u, v)) = best_psnr_uv_tracked {
+        if let Some((u, v)) = tracking.best_psnr_uv {
             let u_pass = u >= 34.0;
             let v_pass = v >= 34.0;
             crate::log_eprintln!(
@@ -747,14 +815,14 @@ pub fn explore_with_gpu_coarse_search(
                 let sample_rate: usize = if duration_min <= 1.0 { 1 } else { 3 };
 
                 // Reuse metrics from search phase if available, otherwise calculate
-                let vmaf_y = if let Some(v) = best_vmaf_tracked {
+                let vmaf_y = if let Some(v) = tracking.best_vmaf {
                     crate::verbose_eprintln!("      ℹ️  Reusing VMAF from search phase: {:.2}", v);
                     Some(v)
                 } else {
                     super::ssim_calculator::calculate_vmaf_y(input, output, sample_rate)
                 };
 
-                let psnr_uv = if let Some(uv) = best_psnr_uv_tracked {
+                let psnr_uv = if let Some(uv) = tracking.best_psnr_uv {
                     crate::verbose_eprintln!(
                         "      ℹ️  Reusing PSNR-UV from search phase: {:.2}/{:.2}",
                         uv.0,
@@ -1223,29 +1291,30 @@ fn merge_vf_with_animated_exploration_prefix(vf_args: &[String], prefix: &str) -
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn cpu_fine_tune_from_gpu_boundary(
-    input: &Path,
-    output: &Path,
-    encoder: VideoEncoder,
-    vf_args: Vec<String>,
-    gpu_boundary_crf: f32,
-    min_crf: f32,
-    max_crf: f32,
-    min_ssim: f64,
-    ultimate_mode: bool,
-    allow_size_tolerance: bool,
-    max_threads: usize,
-    duration: f32,
-    probe_info: Option<&crate::ffprobe::FFprobeResult>,
-    best_vmaf_tracked: &mut Option<f64>,
-    best_psnr_uv_tracked: &mut Option<(f64, f64)>,
-    gpu_executed: bool,
-    is_gif_magic: bool,
-    hdr_x265_params: Option<String>,
-    apple_compat: bool,
-    preset: EncoderPreset,
+    args: FineTuneArgs<'_>,
+    tracking: &mut TrackingState,
 ) -> Result<ExploreResult> {
+    let FineTuneArgs {
+        input,
+        output,
+        encoder,
+        vf_args,
+        gpu_boundary_crf,
+        min_crf,
+        max_crf,
+        min_ssim,
+        ultimate_mode,
+        allow_size_tolerance,
+        max_threads,
+        duration,
+        probe_info,
+        gpu_executed,
+        is_gif_magic,
+        hdr_x265_params,
+        apple_compat,
+        preset,
+    } = args;
     let log = Vec::new();
     let mut early_insight_triggered = false;
 
@@ -1826,8 +1895,8 @@ fn cpu_fine_tune_from_gpu_boundary(
             if let (Some(v), Some((u, v_score))) = (vmaf, psnr_uv) {
                 let chroma_avg = f64::midpoint(u, v_score);
                 gpu_ultimate_metrics_str = format!("VMAF:{v:.2} UV:{chroma_avg:.2}");
-                *best_vmaf_tracked = Some(v);
-                *best_psnr_uv_tracked = Some((u, v_score));
+                tracking.best_vmaf = Some(v);
+                tracking.best_psnr_uv = Some((u, v_score));
             }
         }
 
@@ -2042,7 +2111,7 @@ fn cpu_fine_tune_from_gpu_boundary(
             if (test_crf - 0.0).abs() < 0.001 && duration > HEAVY_VIDEO_THRESHOLD_SECS {
                 // For heavy/long videos (> 30 min), only attempt CRF 0.00 if we have
                 // already achieved a credible high-quality success (< 5.0) to avoid wasting hours.
-                if best_crf.is_none_or(|c| c >= 5.0) {
+                if tracking.best_vmaf.is_none_or(|c| c >= 5.0) {
                     crate::log_eprintln!(
                         "   {}⏳ Heavy video ({:.1} min): skipping CRF 0.00 probe as no high-quality success (< 5.0) confirmed yet.{}",
                         BRIGHT_CYAN, duration / 60.0, RESET
@@ -2108,20 +2177,21 @@ fn cpu_fine_tune_from_gpu_boundary(
                             let chroma_avg = f64::midpoint(u, v_score);
 
                             // Check for integer-level improvement
-                            let prev_best_vmaf = best_vmaf_tracked.unwrap_or(0.0);
-                            let prev_best_psnr =
-                                best_psnr_uv_tracked.map_or(0.0, |(u, v)| f64::midpoint(u, v));
+                            let prev_best_vmaf = tracking.best_vmaf.unwrap_or(0.0);
+                            let prev_best_psnr = tracking
+                                .best_psnr_uv
+                                .map_or(0.0, |(u, v)| f64::midpoint(u, v));
                             let vmaf_improved = v.floor() > prev_best_vmaf.floor();
                             let psnr_improved = chroma_avg.floor() > prev_best_psnr.floor();
 
                             ultimate_metrics_str = format!("VMAF:{v:.2} UV:{chroma_avg:.2}");
 
                             // Update best tracked values
-                            if vmaf_improved || best_vmaf_tracked.is_none() {
-                                *best_vmaf_tracked = Some(v);
+                            if vmaf_improved || tracking.best_vmaf.is_none() {
+                                tracking.best_vmaf = Some(v);
                             }
-                            if psnr_improved || best_psnr_uv_tracked.is_none() {
-                                *best_psnr_uv_tracked = Some((u, v_score));
+                            if psnr_improved || tracking.best_psnr_uv.is_none() {
+                                tracking.best_psnr_uv = Some((u, v_score));
                             }
 
                             // Early insight: only trigger if quality fails threshold AND no improvement
@@ -2170,7 +2240,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                         // VMAF and PSNR thresholds defined at module level
                         const PSNR_UV_MIN: f64 = 34.0;
 
-                        let Some(vmaf_metric) = best_vmaf_tracked else {
+                        let Some(vmaf_metric) = tracking.best_vmaf else {
                             crate::log_eprintln!(
                                 "   {}⚠️  VMAF not measured at quality wall{}",
                                 BRIGHT_YELLOW,
@@ -2178,8 +2248,8 @@ fn cpu_fine_tune_from_gpu_boundary(
                             );
                             bail!("Quality wall hit but VMAF not measured");
                         };
-                        let psnr_uv_min_channel = if let Some((u, v)) = best_psnr_uv_tracked {
-                            (*u).min(*v)
+                        let psnr_uv_min_channel = if let Some((u, v)) = tracking.best_psnr_uv {
+                            u.min(v)
                         } else {
                             crate::log_eprintln!(
                                 "   {}⚠️  PSNR UV not measured at quality wall{}",
@@ -2189,7 +2259,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                             bail!("Quality wall hit but PSNR UV not measured");
                         };
 
-                        if *vmaf_metric < VMAF_Y_MIN || psnr_uv_min_channel < PSNR_UV_MIN {
+                        if vmaf_metric < VMAF_Y_MIN || psnr_uv_min_channel < PSNR_UV_MIN {
                             crate::log_eprintln!(
                                 "   \x1b[1;31m❌ QUALITY CEILING HIT (NOT CREDIBLE):\x1b[0m Saturated at VMAF:{:.2}, UV:{:.2}. Below mandatory gate. Aborting.",
                                 vmaf_metric, psnr_uv_min_channel
@@ -2677,9 +2747,10 @@ fn cpu_fine_tune_from_gpu_boundary(
                     let chroma_avg = f64::midpoint(u, v_score);
 
                     // Track best metrics to check for improvement
-                    let prev_best_vmaf = best_vmaf_tracked.unwrap_or(0.0);
-                    let prev_best_psnr =
-                        best_psnr_uv_tracked.map_or(0.0, |(u, v)| f64::midpoint(u, v));
+                    let prev_best_vmaf = tracking.best_vmaf.unwrap_or(0.0);
+                    let prev_best_psnr = tracking
+                        .best_psnr_uv
+                        .map_or(0.0, |(u, v)| f64::midpoint(u, v));
 
                     // Check for integer-level improvement (ignoring decimals)
                     let vmaf_improved = v.floor() > prev_best_vmaf.floor();
@@ -2696,11 +2767,11 @@ fn cpu_fine_tune_from_gpu_boundary(
                     );
 
                     // Cache for Phase III and tracking
-                    if vmaf_improved || best_vmaf_tracked.is_none() {
-                        *best_vmaf_tracked = Some(v);
+                    if vmaf_improved || tracking.best_vmaf.is_none() {
+                        tracking.best_vmaf = Some(v);
                     }
-                    if psnr_improved || best_psnr_uv_tracked.is_none() {
-                        *best_psnr_uv_tracked = Some((u, v_score));
+                    if psnr_improved || tracking.best_psnr_uv.is_none() {
+                        tracking.best_psnr_uv = Some((u, v_score));
                     }
 
                     // Early insight: only trigger if BOTH quality metrics fail threshold AND no improvement
@@ -2834,7 +2905,7 @@ fn cpu_fine_tune_from_gpu_boundary(
             let mut backtrack_count = 0u32;
             let mut failure_credibility = 0.0f64;
             let mut consecutive_failures = 0u32;
-            let mut consecutive_successes = 0u32;
+            let mut consecutive_successes = 0;
             let mut consecutive_compressions = 0u32;
             let mut prev_ssim_opt = calculate_ssim_quick();
             let search_floor = if ultimate_mode { 0.0 } else { min_crf };
@@ -2871,9 +2942,10 @@ fn cpu_fine_tune_from_gpu_boundary(
 
                     if let (Some(v), Some((u, v_score))) = (vmaf, psnr_uv) {
                         let chroma_avg = f64::midpoint(u, v_score);
-                        let prev_best_vmaf = best_vmaf_tracked.unwrap_or(0.0);
-                        let prev_best_psnr =
-                            best_psnr_uv_tracked.map_or(0.0, |(u, v)| f64::midpoint(u, v));
+                        let prev_best_vmaf = tracking.best_vmaf.unwrap_or(0.0);
+                        let prev_best_psnr = tracking
+                            .best_psnr_uv
+                            .map_or(0.0, |(u, v)| f64::midpoint(u, v));
 
                         vmaf_improved = v.floor() > prev_best_vmaf.floor();
                         psnr_improved = chroma_avg.floor() > prev_best_psnr.floor();
@@ -2897,11 +2969,11 @@ fn cpu_fine_tune_from_gpu_boundary(
                     best_size = Some(size);
 
                     if ultimate_mode {
-                        if vmaf_improved || best_vmaf_tracked.is_none() {
-                            *best_vmaf_tracked = current_vmaf_val;
+                        if vmaf_improved || tracking.best_vmaf.is_none() {
+                            tracking.best_vmaf = current_vmaf_val;
                         }
-                        if psnr_improved || best_psnr_uv_tracked.is_none() {
-                            *best_psnr_uv_tracked = current_psnr_val;
+                        if psnr_improved || tracking.best_psnr_uv.is_none() {
+                            tracking.best_psnr_uv = current_psnr_val;
                         }
                     }
 
@@ -2917,8 +2989,8 @@ fn cpu_fine_tune_from_gpu_boundary(
                     };
 
                     let metrics_str = if ultimate_mode {
-                        let vmaf_opt = *best_vmaf_tracked;
-                        let psnr_uv_opt = *best_psnr_uv_tracked;
+                        let vmaf_opt = tracking.best_vmaf;
+                        let psnr_uv_opt = tracking.best_psnr_uv;
                         if let (Some(v), Some((u, v_score))) = (vmaf_opt, psnr_uv_opt) {
                             let chroma_avg = f64::midpoint(u, v_score);
                             format!(
@@ -3041,8 +3113,8 @@ fn cpu_fine_tune_from_gpu_boundary(
                     consecutive_failures += 1;
 
                     let metrics_str = if ultimate_mode {
-                        let vmaf_opt = *best_vmaf_tracked;
-                        let psnr_uv_opt = *best_psnr_uv_tracked;
+                        let vmaf_opt = tracking.best_vmaf;
+                        let psnr_uv_opt = tracking.best_psnr_uv;
                         if let (Some(v), Some((u, v_score))) = (vmaf_opt, psnr_uv_opt) {
                             let chroma_avg = f64::midpoint(u, v_score);
                             format!(
@@ -3740,364 +3812,64 @@ fn cpu_fine_tune_from_gpu_boundary(
     })
 }
 
-/// Explore HEVC quality with GPU coarse search.
+/// Unified HEVC quality exploration with GPU acceleration.
 ///
 /// # Errors
 /// Returns an error if exploration fails.
-pub fn explore_hevc_with_gpu_coarse(
-    input: &Path,
-    output: &Path,
-    vf_args: Vec<String>,
-    initial_crf: f32,
-    allow_size_tolerance: bool,
-    max_threads: usize,
-    hdr_x265_params: Option<String>,
-    apple_compat: bool,
-) -> Result<ExploreResult> {
-    let (_, min_ssim) = calculate_smart_thresholds(initial_crf, VideoEncoder::Hevc);
-    explore_hevc_with_gpu_coarse_full(
-        input,
-        output,
-        vf_args,
-        initial_crf,
-        false,
-        false,
-        allow_size_tolerance,
-        min_ssim,
-        max_threads,
-        hdr_x265_params,
-        apple_compat,
-        EncoderPreset::default(),
-    )
-}
-
-/// Explore HEVC quality with GPU coarse search and ultimate warm start.
-///
-/// # Errors
-/// Returns an error if exploration fails.
-#[allow(clippy::too_many_arguments)]
-pub fn explore_hevc_with_gpu_coarse_ultimate_warm_start(
-    input: &Path,
-    output: &Path,
-    vf_args: Vec<String>,
-    baseline_crf: f32,
-    warm_start_crf: Option<f32>,
-    ultimate_mode: bool,
-    allow_size_tolerance: bool,
-    max_threads: usize,
-    hdr_x265_params: Option<String>,
-    apple_compat: bool,
-    preset: EncoderPreset,
-) -> Result<ExploreResult> {
-    let (_, min_ssim) = calculate_smart_thresholds(baseline_crf, VideoEncoder::Hevc);
-    explore_hevc_with_gpu_coarse_full_warm_start(
-        input,
-        output,
-        vf_args,
-        baseline_crf,
-        warm_start_crf,
-        ultimate_mode,
-        false,
-        allow_size_tolerance,
-        min_ssim,
-        max_threads,
-        hdr_x265_params,
-        apple_compat,
-        preset,
-    )
-}
-
-/// Explore HEVC quality with GPU coarse search and ultimate mode.
-///
-/// # Errors
-/// Returns an error if exploration fails.
-pub fn explore_hevc_with_gpu_coarse_ultimate(
-    input: &Path,
-    output: &Path,
-    vf_args: Vec<String>,
-    initial_crf: f32,
-    ultimate_mode: bool,
-    allow_size_tolerance: bool,
-    max_threads: usize,
-    hdr_x265_params: Option<String>,
-    apple_compat: bool,
-    preset: EncoderPreset,
-) -> Result<ExploreResult> {
-    let (_, min_ssim) = calculate_smart_thresholds(initial_crf, VideoEncoder::Hevc);
-    explore_hevc_with_gpu_coarse_full_warm_start(
-        input,
-        output,
-        vf_args,
-        initial_crf,
-        None,
-        ultimate_mode,
-        false,
-        allow_size_tolerance,
-        min_ssim,
-        max_threads,
-        hdr_x265_params,
-        apple_compat,
-        preset,
-    )
-}
-
-/// Explore HEVC quality with GPU coarse search and warm start.
-///
-/// # Errors
-/// Returns an error if exploration fails.
-#[allow(clippy::too_many_arguments)]
-pub fn explore_hevc_with_gpu_coarse_full_warm_start(
-    input: &Path,
-    output: &Path,
-    vf_args: Vec<String>,
-    baseline_crf: f32,
-    warm_start_crf: Option<f32>,
-    ultimate_mode: bool,
-    force_ms_ssim_long: bool,
-    allow_size_tolerance: bool,
-    min_ssim: f64,
-    max_threads: usize,
-    hdr_x265_params: Option<String>,
-    apple_compat: bool,
-    preset: EncoderPreset,
-) -> Result<ExploreResult> {
-    let (max_crf, _) = calculate_smart_thresholds(baseline_crf, VideoEncoder::Hevc);
-    let search_anchor_crf = if let Some(hint) = warm_start_crf {
-        // [Safety Margin] Don't just trust the cache blindly; explore a 2.0-unit neighborhood
-        // below the hint to see if better quality/compression is possible on this run.
+pub fn explore_hevc_with_gpu(req: GpuSearchRequest) -> Result<ExploreResult> {
+    let (max_crf, min_ssim) = calculate_smart_thresholds(req.baseline_crf, VideoEncoder::Hevc);
+    let search_anchor_crf = if let Some(hint) = req.warm_start_crf {
         (hint - 2.0).max(ABSOLUTE_MIN_CRF)
     } else {
-        baseline_crf
+        req.baseline_crf
     }
     .clamp(ABSOLUTE_MIN_CRF, max_crf);
-    explore_with_gpu_coarse_search(
-        input,
-        output,
-        VideoEncoder::Hevc,
-        vf_args,
-        search_anchor_crf,
+
+    explore_with_gpu_coarse_search(GpuSearchArgs {
+        input: &req.input,
+        output: &req.output,
+        encoder: VideoEncoder::Hevc,
+        vf_args: req.vf_args,
+        initial_crf: search_anchor_crf,
         max_crf,
         min_ssim,
-        ultimate_mode,
-        force_ms_ssim_long,
-        allow_size_tolerance,
-        max_threads,
-        hdr_x265_params,
-        apple_compat,
-        preset,
-    )
+        ultimate_mode: req.ultimate_mode,
+        force_ms_ssim_long: req.force_ms_ssim_long,
+        allow_size_tolerance: req.allow_size_tolerance,
+        max_threads: req.max_threads,
+        hdr_x265_params: req.hdr_x265_params,
+        apple_compat: req.apple_compat,
+        preset: req.preset,
+    })
 }
 
-/// Explore HEVC quality with GPU coarse search (full).
+/// Unified AV1 quality exploration with GPU acceleration.
 ///
 /// # Errors
 /// Returns an error if exploration fails.
-#[allow(clippy::too_many_arguments)]
-pub fn explore_hevc_with_gpu_coarse_full(
-    input: &Path,
-    output: &Path,
-    vf_args: Vec<String>,
-    initial_crf: f32,
-    ultimate_mode: bool,
-    force_ms_ssim_long: bool,
-    allow_size_tolerance: bool,
-    min_ssim: f64,
-    max_threads: usize,
-    hdr_x265_params: Option<String>,
-    apple_compat: bool,
-    preset: EncoderPreset,
-) -> Result<ExploreResult> {
-    explore_hevc_with_gpu_coarse_full_warm_start(
-        input,
-        output,
-        vf_args,
-        initial_crf,
-        None,
-        ultimate_mode,
-        force_ms_ssim_long,
-        allow_size_tolerance,
-        min_ssim,
-        max_threads,
-        hdr_x265_params,
-        apple_compat,
-        preset,
-    )
-}
-
-/// Explore AV1 quality with GPU coarse search and ultimate warm start.
-///
-/// # Errors
-/// Returns an error if exploration fails.
-pub fn explore_av1_with_gpu_coarse_ultimate_warm_start(
-    input: &Path,
-    output: &Path,
-    vf_args: Vec<String>,
-    baseline_crf: f32,
-    warm_start_crf: Option<f32>,
-    ultimate_mode: bool,
-    allow_size_tolerance: bool,
-    max_threads: usize,
-    apple_compat: bool,
-    preset: EncoderPreset,
-) -> Result<ExploreResult> {
-    let (_, min_ssim) = calculate_smart_thresholds(baseline_crf, VideoEncoder::Av1);
-    explore_av1_with_gpu_coarse_full_warm_start(
-        input,
-        output,
-        vf_args,
-        baseline_crf,
-        warm_start_crf,
-        ultimate_mode,
-        false,
-        allow_size_tolerance,
-        min_ssim,
-        max_threads,
-        apple_compat,
-        preset,
-    )
-}
-
-/// Explore AV1 quality with GPU coarse search.
-///
-/// # Errors
-/// Returns an error if exploration fails.
-pub fn explore_av1_with_gpu_coarse(
-    input: &Path,
-    output: &Path,
-    vf_args: Vec<String>,
-    initial_crf: f32,
-    allow_size_tolerance: bool,
-    max_threads: usize,
-    apple_compat: bool,
-    preset: EncoderPreset,
-) -> Result<ExploreResult> {
-    let (max_crf, min_ssim) = calculate_smart_thresholds(initial_crf, VideoEncoder::Av1);
-    explore_with_gpu_coarse_search(
-        input,
-        output,
-        VideoEncoder::Av1,
-        vf_args,
-        initial_crf,
-        max_crf,
-        min_ssim,
-        false,
-        false,
-        allow_size_tolerance,
-        max_threads,
-        None,
-        apple_compat,
-        preset,
-    )
-}
-
-/// Explore AV1 quality with GPU coarse search and ultimate mode.
-///
-/// # Errors
-/// Returns an error if exploration fails.
-pub fn explore_av1_with_gpu_coarse_ultimate(
-    input: &Path,
-    output: &Path,
-    vf_args: Vec<String>,
-    initial_crf: f32,
-    ultimate_mode: bool,
-    allow_size_tolerance: bool,
-    max_threads: usize,
-    apple_compat: bool,
-    preset: EncoderPreset,
-) -> Result<ExploreResult> {
-    let (_, min_ssim) = calculate_smart_thresholds(initial_crf, VideoEncoder::Av1);
-    explore_av1_with_gpu_coarse_full_warm_start(
-        input,
-        output,
-        vf_args,
-        initial_crf,
-        None,
-        ultimate_mode,
-        false,
-        allow_size_tolerance,
-        min_ssim,
-        max_threads,
-        apple_compat,
-        preset,
-    )
-}
-
-/// Explore AV1 quality with GPU coarse search and warm start.
-///
-/// # Errors
-/// Returns an error if exploration fails.
-#[allow(clippy::too_many_arguments)]
-pub fn explore_av1_with_gpu_coarse_full_warm_start(
-    input: &Path,
-    output: &Path,
-    vf_args: Vec<String>,
-    baseline_crf: f32,
-    warm_start_crf: Option<f32>,
-    ultimate_mode: bool,
-    force_ms_ssim_long: bool,
-    allow_size_tolerance: bool,
-    min_ssim: f64,
-    max_threads: usize,
-    apple_compat: bool,
-    preset: EncoderPreset,
-) -> Result<ExploreResult> {
-    let (max_crf, _) = calculate_smart_thresholds(baseline_crf, VideoEncoder::Av1);
-    let search_anchor_crf = if let Some(hint) = warm_start_crf {
-        // [Safety Margin] Don't just trust the cache blindly; explore a 2.0-unit neighborhood
-        // below the hint to see if better quality/compression is possible on this run.
+pub fn explore_av1_with_gpu(req: GpuSearchRequest) -> Result<ExploreResult> {
+    let (max_crf, min_ssim) = calculate_smart_thresholds(req.baseline_crf, VideoEncoder::Av1);
+    let search_anchor_crf = if let Some(hint) = req.warm_start_crf {
         (hint - 2.0).max(ABSOLUTE_MIN_CRF)
     } else {
-        baseline_crf
+        req.baseline_crf
     }
     .clamp(ABSOLUTE_MIN_CRF, max_crf);
-    explore_with_gpu_coarse_search(
-        input,
-        output,
-        VideoEncoder::Av1,
-        vf_args,
-        search_anchor_crf,
+
+    explore_with_gpu_coarse_search(GpuSearchArgs {
+        input: &req.input,
+        output: &req.output,
+        encoder: VideoEncoder::Av1,
+        vf_args: req.vf_args,
+        initial_crf: search_anchor_crf,
         max_crf,
         min_ssim,
-        ultimate_mode,
-        force_ms_ssim_long,
-        allow_size_tolerance,
-        max_threads,
-        None,
-        apple_compat,
-        preset,
-    )
-}
-
-/// Explore AV1 quality with GPU coarse search (full).
-///
-/// # Errors
-/// Returns an error if exploration fails.
-#[allow(clippy::too_many_arguments)]
-pub fn explore_av1_with_gpu_coarse_full(
-    input: &Path,
-    output: &Path,
-    vf_args: Vec<String>,
-    initial_crf: f32,
-    ultimate_mode: bool,
-    force_ms_ssim_long: bool,
-    allow_size_tolerance: bool,
-    min_ssim: f64,
-    max_threads: usize,
-    apple_compat: bool,
-    preset: EncoderPreset,
-) -> Result<ExploreResult> {
-    explore_av1_with_gpu_coarse_full_warm_start(
-        input,
-        output,
-        vf_args,
-        initial_crf,
-        None,
-        ultimate_mode,
-        force_ms_ssim_long,
-        allow_size_tolerance,
-        min_ssim,
-        max_threads,
-        apple_compat,
-        preset,
-    )
+        ultimate_mode: req.ultimate_mode,
+        force_ms_ssim_long: req.force_ms_ssim_long,
+        allow_size_tolerance: req.allow_size_tolerance,
+        max_threads: req.max_threads,
+        hdr_x265_params: None, // AV1 doesn't use x265 params
+        apple_compat: req.apple_compat,
+        preset: req.preset,
+    })
 }

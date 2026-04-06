@@ -1282,52 +1282,77 @@ pub fn convert_to_mp4_matched(
 
     let explore_result = if flag_mode.is_ultimate() {
         match options.codec {
-            SelectedCodec::Hevc => shared_utils::explore_hevc_with_gpu_coarse_ultimate(
-                &final_input,
-                &temp_output,
-                vf_args.clone(),
-                actual_initial_crf,
-                true,
-                options.allow_size_tolerance,
-                options.child_threads,
-                None,
-                options.apple_compat,
-                shared_utils::EncoderPreset::Slower,
-            ),
-            SelectedCodec::Av1 => shared_utils::explore_av1_with_gpu_coarse_ultimate(
-                &final_input,
-                &temp_output,
-                vf_args.clone(),
-                actual_initial_crf,
-                true,
-                options.allow_size_tolerance,
-                options.child_threads,
-                options.apple_compat,
-                shared_utils::EncoderPreset::Slower,
-            ),
+            SelectedCodec::Hevc => {
+                shared_utils::explore_hevc_with_gpu(shared_utils::GpuSearchRequest {
+                    input: final_input,
+                    output: temp_output.clone(),
+                    vf_args: vf_args.clone(),
+                    baseline_crf: actual_initial_crf,
+                    warm_start_crf: None,
+                    ultimate_mode: true,
+                    force_ms_ssim_long: false,
+                    allow_size_tolerance: options.allow_size_tolerance,
+                    min_ssim: 0.0, // calculated internally
+                    max_threads: options.child_threads,
+                    hdr_x265_params: None,
+                    apple_compat: options.apple_compat,
+                    preset: shared_utils::EncoderPreset::Slower,
+                })
+            }
+            SelectedCodec::Av1 => {
+                shared_utils::explore_av1_with_gpu(shared_utils::GpuSearchRequest {
+                    input: final_input,
+                    output: temp_output.clone(),
+                    vf_args: vf_args.clone(),
+                    baseline_crf: actual_initial_crf,
+                    warm_start_crf: None,
+                    ultimate_mode: true,
+                    force_ms_ssim_long: false,
+                    allow_size_tolerance: options.allow_size_tolerance,
+                    min_ssim: 0.0, // calculated internally
+                    max_threads: options.child_threads,
+                    hdr_x265_params: None,
+                    apple_compat: options.apple_compat,
+                    preset: shared_utils::EncoderPreset::Slower,
+                })
+            }
         }
     } else {
         match options.codec {
-            SelectedCodec::Hevc => shared_utils::explore_hevc_with_gpu_coarse(
-                &final_input,
-                &temp_output,
-                vf_args.clone(),
-                actual_initial_crf,
-                options.allow_size_tolerance,
-                options.child_threads,
-                None,
-                options.apple_compat,
-            ),
-            SelectedCodec::Av1 => shared_utils::explore_av1_with_gpu_coarse(
-                &final_input,
-                &temp_output,
-                vf_args.clone(),
-                actual_initial_crf,
-                options.allow_size_tolerance,
-                options.child_threads,
-                options.apple_compat,
-                shared_utils::EncoderPreset::Medium,
-            ),
+            SelectedCodec::Hevc => {
+                shared_utils::explore_hevc_with_gpu(shared_utils::GpuSearchRequest {
+                    input: final_input,
+                    output: temp_output.clone(),
+                    vf_args: vf_args.clone(),
+                    baseline_crf: actual_initial_crf,
+                    warm_start_crf: None,
+                    ultimate_mode: false,
+                    force_ms_ssim_long: false,
+                    allow_size_tolerance: options.allow_size_tolerance,
+                    min_ssim: 0.0, // calculated internally
+                    max_threads: options.child_threads,
+                    hdr_x265_params: None,
+                    apple_compat: options.apple_compat,
+                    preset: shared_utils::EncoderPreset::Medium,
+                })
+            }
+            SelectedCodec::Av1 => {
+                shared_utils::explore_av1_with_gpu(shared_utils::GpuSearchRequest {
+                    input: final_input,
+                    output: temp_output.clone(),
+                    vf_args: vf_args.clone(),
+                    baseline_crf: actual_initial_crf,
+                    warm_start_crf: None,
+                    ultimate_mode: false,
+                    force_ms_ssim_long: false,
+                    allow_size_tolerance: options.allow_size_tolerance,
+                    min_ssim: 0.0, // calculated internally
+                    max_threads: options.child_threads,
+                    hdr_x265_params: None,
+                    apple_compat: options.apple_compat,
+                    preset: shared_utils::EncoderPreset::Medium,
+                })
+            }
         }
     }
     .map_err(|e| VidQualityError::ConversionError(e.to_string()))?;

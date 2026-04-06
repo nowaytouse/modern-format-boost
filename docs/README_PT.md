@@ -58,6 +58,7 @@ Cada arquivo passa por um pipeline de decisão em vários estágios:
 - **Estágio 2 — Rota e Codificação**: JXL VarDCT para JPEG (bit-exact); modo Modular para fontes sem perdas (PNG, WebP/AVIF/HEIC/EXR/JP2 sem perdas).
 - **Estágio 3 — Detour**: Formatos como TIFF/WebP/BMP/HEIC são pré-processados em PNGs temporários de 16 bits ou **OpenEXR de 32 bits** para garantir compatibilidade com `cjxl` sem perda de qualidade.
 - **Estágio 4 — Síntese HDR HEIC**: Intercepta arquivos HEIC com Gainmaps (Apple/Google) e sintetiza buffers HDR de luz linear de 32 bits via um pipeline **OpenEXR** intermediário, entregando saída JXL HDR real.
+
 </details>
 
 ### 🖥️ Runtime

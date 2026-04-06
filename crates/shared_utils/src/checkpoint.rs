@@ -72,31 +72,33 @@ struct CheckpointEntry {
 }
 
 impl CheckpointEntry {
-    #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
     fn from_path(path: &Path) -> io::Result<Self> {
         let metadata = std::fs::metadata(path)?;
-        let size = metadata.len() as i64;
-        let mtime = metadata
-            .modified()?
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or(Duration::ZERO)
-            .as_nanos() as i64;
+        let size = crate::numeric_cast::u64_to_i64_sat(metadata.len());
+        let mtime = crate::numeric_cast::u128_to_i64_sat(
+            metadata
+                .modified()?
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or(Duration::ZERO)
+                .as_nanos(),
+        );
 
         #[cfg(unix)]
         let ctime = {
             use std::os::unix::fs::MetadataExt;
-            metadata.ctime_nsec()
+            crate::numeric_cast::i64_to_i64_sat_no_op(metadata.ctime_nsec())
         };
         #[cfg(windows)]
         use std::os::windows::fs::MetadataExt;
         #[cfg(windows)]
-        let ctime = metadata.last_write_time() as i64;
+        let ctime = crate::numeric_cast::u64_to_i64_sat(metadata.last_write_time());
         #[cfg(not(any(unix, windows)))]
         let ctime = mtime;
 
         let btime = metadata.created().map_or(ctime, |t| {
-            t.duration_since(UNIX_EPOCH)
-                .map_or(ctime, |d| d.as_nanos() as i64)
+            t.duration_since(UNIX_EPOCH).map_or(ctime, |d| {
+                crate::numeric_cast::u128_to_i64_sat(d.as_nanos())
+            })
         });
 
         Ok(Self {

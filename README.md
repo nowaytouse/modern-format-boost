@@ -282,11 +282,11 @@ They are already modern lossy formats. Re-encoding causes "generational loss," w
 
 ---
 
-# ⚖️ License
+## ⚖️ License
 
 Licensed under the **MIT License**.
 
-### Runtime Dependencies
+## Runtime Dependencies
 
 This project orchestrates several open-source giants. We thank their authors for their contributions:
 

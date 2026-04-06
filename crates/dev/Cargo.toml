@@ -19,10 +19,5 @@ chrono = { workspace = true }
 blake3 = { workspace = true }
 walkdir = { workspace = true }
 
-[dev-dependencies]
-shared_utils = { workspace = true }
-img = { workspace = true }
-tempfile = { workspace = true }
-
 [lints]
 workspace = true

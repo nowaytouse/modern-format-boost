@@ -318,11 +318,7 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
     let frame_count = video_stream["nb_frames"]
         .as_str()
         .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or_else(|| {
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let count = (duration * frame_rate) as u64;
-            count
-        });
+        .unwrap_or_else(|| crate::numeric_cast::f64_to_u64_sat(duration * frame_rate));
 
     let pix_fmt = video_stream["pix_fmt"]
         .as_str()
@@ -614,21 +610,18 @@ fn parse_rational_to_50k(s: &str) -> Option<u64> {
             return None;
         }
         // Normalise to denominator 50000
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let val = ((n / d) * 50000.0).round() as u64;
+        let val = crate::numeric_cast::f64_to_u64_sat((n / d) * 50000.0);
         Some(val)
     } else {
         // plain float
         let v: f64 = s.trim().parse().ok()?;
         // Already normalised value (some ffprobe versions give 0.265 style)
         if v <= 1.0 {
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let val = (v * 50000.0).round() as u64;
+            let val = crate::numeric_cast::f64_to_u64_sat(v * 50000.0);
             Some(val)
         } else {
             // raw integer-style already in 50k units
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let val = v.round() as u64;
+            let val = crate::numeric_cast::f64_to_u64_sat(v);
             Some(val)
         }
     }
@@ -642,18 +635,15 @@ fn parse_luminance_to_10k(s: &str) -> Option<u64> {
         if d == 0.0 {
             return None;
         }
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let val = ((n / d) * 10000.0).round() as u64;
+        let val = crate::numeric_cast::f64_to_u64_sat((n / d) * 10000.0);
         Some(val)
     } else {
         let v: f64 = s.trim().parse().ok()?;
         if v <= 10000.0 {
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let val = (v * 10000.0).round() as u64;
+            let val = crate::numeric_cast::f64_to_u64_sat(v * 10000.0);
             Some(val)
         } else {
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let val = v.round() as u64;
+            let val = crate::numeric_cast::f64_to_u64_sat(v);
             Some(val)
         }
     }
@@ -667,11 +657,9 @@ fn build_mastering_display_string(sd: &serde_json::Value) -> Option<String> {
             .as_str()
             .and_then(parse_rational_to_50k)
             .or_else(|| {
-                sd[field].as_f64().map(|v| {
-                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                    let val = (v * 50000.0).round() as u64;
-                    val
-                })
+                sd[field]
+                    .as_f64()
+                    .map(|v| crate::numeric_cast::f64_to_u64_sat(v * 50000.0))
             })
     };
     let get_lum = |field: &str| -> Option<u64> {
@@ -679,11 +667,9 @@ fn build_mastering_display_string(sd: &serde_json::Value) -> Option<String> {
             .as_str()
             .and_then(parse_luminance_to_10k)
             .or_else(|| {
-                sd[field].as_f64().map(|v| {
-                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                    let val = (v * 10000.0).round() as u64;
-                    val
-                })
+                sd[field]
+                    .as_f64()
+                    .map(|v| crate::numeric_cast::f64_to_u64_sat(v * 10000.0))
             })
     };
 

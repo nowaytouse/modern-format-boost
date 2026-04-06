@@ -165,6 +165,24 @@ pub enum CompressionLevel {
     LowQuality,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct VideoQualityInput<'a> {
+    pub codec: &'a str,
+    pub width: u32,
+    pub height: u32,
+    pub fps: f64,
+    pub duration_secs: f64,
+    pub total_bitrate: u64,
+    pub video_bitrate: Option<u64>,
+    pub pix_fmt: &'a str,
+    pub bit_depth: u8,
+    pub max_b_frames: u8,
+    pub encoder_params: Option<&'a str>,
+    pub gop_size: Option<u32>,
+    pub color_space: Option<&'a str>,
+    pub file_size: u64,
+}
+
 impl CompressionLevel {
     #[must_use]
     pub fn from_bpp(bpp: f64, codec_type: VideoCodecType) -> Self {
@@ -197,28 +215,26 @@ impl CompressionLevel {
 
 /// Analyze video quality (codec type, bpp, content type, compression level, etc.).
 ///
-/// Routing is handled by `video_detection` + `quality_matcher` in the main flow; this is for media info only.
-/// Consider using a struct (e.g. `VideoQualityInput`) when passing many arguments to avoid parameter order bugs.
-///
 /// # Errors
-/// Returns an error message if analysis fails.
-#[allow(clippy::too_many_arguments)]
-pub fn analyze_video_quality(
-    codec: &str,
-    width: u32,
-    height: u32,
-    fps: f64,
-    duration_secs: f64,
-    total_bitrate: u64,
-    video_bitrate: Option<u64>,
-    pix_fmt: &str,
-    bit_depth: u8,
-    max_b_frames: u8,
-    encoder_params: Option<&str>,
-    gop_size: Option<u32>,
-    color_space: Option<&str>,
-    file_size: u64,
-) -> Result<VideoQualityAnalysis, String> {
+/// Returns an error if video quality analysis fails due to invalid parameters.
+pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualityAnalysis, String> {
+    let VideoQualityInput {
+        codec,
+        width,
+        height,
+        fps,
+        duration_secs,
+        total_bitrate,
+        video_bitrate,
+        pix_fmt,
+        bit_depth,
+        max_b_frames,
+        encoder_params,
+        gop_size,
+        color_space,
+        file_size,
+    } = input;
+
     if width == 0 || height == 0 {
         return Err("❌ Invalid dimensions: width or height is 0".to_string());
     }
@@ -325,22 +341,22 @@ pub fn analyze_video_quality_from_detection(
     if detection.fps <= 0.0 {
         return Err("Invalid frame rate: fps must be > 0".to_string());
     }
-    analyze_video_quality(
-        detection.codec.as_str(),
-        detection.width,
-        detection.height,
-        detection.fps,
-        detection.duration_secs,
-        detection.bitrate,
-        detection.video_bitrate,
-        &detection.pix_fmt,
-        detection.bit_depth,
-        detection.max_b_frames,
-        detection.encoder_params.as_deref(),
-        None,
-        Some(detection.color_space.as_str()),
-        detection.file_size,
-    )
+    analyze_video_quality(VideoQualityInput {
+        codec: detection.codec.as_str(),
+        width: detection.width,
+        height: detection.height,
+        fps: detection.fps,
+        duration_secs: detection.duration_secs,
+        total_bitrate: detection.bitrate,
+        video_bitrate: detection.video_bitrate,
+        pix_fmt: &detection.pix_fmt,
+        bit_depth: detection.bit_depth,
+        max_b_frames: detection.max_b_frames,
+        encoder_params: detection.encoder_params.as_deref(),
+        gop_size: None,
+        color_space: Some(detection.color_space.as_str()),
+        file_size: detection.file_size,
+    })
 }
 
 fn extract_crf_from_params(params: &str) -> Option<u8> {
@@ -594,22 +610,22 @@ mod tests {
 
     #[test]
     fn test_analyze_h264_1080p() {
-        let result = analyze_video_quality(
-            "h264",
-            1920,
-            1080,
-            30.0,
-            60.0,
-            8_000_000,
-            Some(7_500_000),
-            "yuv420p",
-            8,
-            2,
-            None,
-            Some(60),
-            Some("bt709"),
-            60_000_000,
-        )
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "h264",
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 8_000_000,
+            video_bitrate: Some(7_500_000),
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: Some(60),
+            color_space: Some("bt709"),
+            file_size: 60_000_000,
+        })
         .unwrap();
 
         assert_eq!(result.width, 1920);
@@ -622,22 +638,22 @@ mod tests {
 
     #[test]
     fn test_analyze_hevc_4k() {
-        let result = analyze_video_quality(
-            "hevc",
-            3840,
-            2160,
-            30.0,
-            120.0,
-            20_000_000,
-            Some(19_000_000),
-            "yuv420p10le",
-            10,
-            2,
-            None,
-            Some(60),
-            Some("bt2020nc"),
-            300_000_000,
-        )
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "hevc",
+            width: 3840,
+            height: 2160,
+            fps: 30.0,
+            duration_secs: 120.0,
+            total_bitrate: 20_000_000,
+            video_bitrate: Some(19_000_000),
+            pix_fmt: "yuv420p10le",
+            bit_depth: 10,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: Some(60),
+            color_space: Some("bt2020nc"),
+            file_size: 300_000_000,
+        })
         .unwrap();
 
         assert_eq!(result.codec_type, VideoCodecType::ModernEfficient);
@@ -649,22 +665,22 @@ mod tests {
 
     #[test]
     fn test_analyze_av1() {
-        let result = analyze_video_quality(
-            "av1",
-            1920,
-            1080,
-            24.0,
-            90.0,
-            5_000_000,
-            Some(4_800_000),
-            "yuv420p",
-            8,
-            2,
-            None,
-            Some(120),
-            None,
-            56_000_000,
-        )
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "av1",
+            width: 1920,
+            height: 1080,
+            fps: 24.0,
+            duration_secs: 90.0,
+            total_bitrate: 5_000_000,
+            video_bitrate: Some(4_800_000),
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: Some(120),
+            color_space: None,
+            file_size: 56_000_000,
+        })
         .unwrap();
 
         assert_eq!(result.codec_type, VideoCodecType::ModernEfficient);
@@ -676,22 +692,22 @@ mod tests {
 
     #[test]
     fn test_analyze_prores() {
-        let result = analyze_video_quality(
-            "prores",
-            1920,
-            1080,
-            24.0,
-            60.0,
-            150_000_000,
-            Some(145_000_000),
-            "yuv422p10le",
-            10,
-            0,
-            None,
-            Some(1),
-            Some("bt709"),
-            1_125_000_000,
-        )
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "prores",
+            width: 1920,
+            height: 1080,
+            fps: 24.0,
+            duration_secs: 60.0,
+            total_bitrate: 150_000_000,
+            video_bitrate: Some(145_000_000),
+            pix_fmt: "yuv422p10le",
+            bit_depth: 10,
+            max_b_frames: 0,
+            encoder_params: None,
+            gop_size: Some(1),
+            color_space: Some("bt709"),
+            file_size: 1_125_000_000,
+        })
         .unwrap();
 
         assert_eq!(result.codec_type, VideoCodecType::Intermediate);
@@ -702,22 +718,22 @@ mod tests {
 
     #[test]
     fn test_analyze_ffv1_lossless() {
-        let result = analyze_video_quality(
-            "ffv1",
-            1920,
-            1080,
-            30.0,
-            30.0,
-            200_000_000,
-            Some(195_000_000),
-            "yuv444p",
-            8,
-            0,
-            None,
-            Some(1),
-            None,
-            750_000_000,
-        )
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "ffv1",
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            duration_secs: 30.0,
+            total_bitrate: 200_000_000,
+            video_bitrate: Some(195_000_000),
+            pix_fmt: "yuv444p",
+            bit_depth: 8,
+            max_b_frames: 0,
+            encoder_params: None,
+            gop_size: Some(1),
+            color_space: None,
+            file_size: 750_000_000,
+        })
         .unwrap();
 
         assert_eq!(result.codec_type, VideoCodecType::Lossless);
@@ -729,10 +745,22 @@ mod tests {
     #[test]
     fn test_skip_modern_codecs() {
         for codec in ["hevc", "av1", "vp9", "vvc"] {
-            let result = analyze_video_quality(
-                codec, 1920, 1080, 30.0, 60.0, 8_000_000, None, "yuv420p", 8, 2, None, None, None,
-                60_000_000,
-            )
+            let result = analyze_video_quality(VideoQualityInput {
+                codec,
+                width: 1920,
+                height: 1080,
+                fps: 30.0,
+                duration_secs: 60.0,
+                total_bitrate: 8_000_000,
+                video_bitrate: None,
+                pix_fmt: "yuv420p",
+                bit_depth: 8,
+                max_b_frames: 2,
+                encoder_params: None,
+                gop_size: None,
+                color_space: None,
+                file_size: 60_000_000,
+            })
             .unwrap();
             assert!(
                 result.should_skip,
@@ -743,48 +771,60 @@ mod tests {
 
     #[test]
     fn test_not_skip_legacy_codecs() {
-        let h264 = analyze_video_quality(
-            "h264", 1920, 1080, 30.0, 60.0, 8_000_000, None, "yuv420p", 8, 2, None, None, None,
-            60_000_000,
-        )
+        let h264 = analyze_video_quality(VideoQualityInput {
+            codec: "h264",
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 8_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 60_000_000,
+        })
         .unwrap();
         assert!(!h264.should_skip, "H.264 should NOT be skipped");
 
-        let mjpeg = analyze_video_quality(
-            "mjpeg",
-            1920,
-            1080,
-            30.0,
-            60.0,
-            50_000_000,
-            None,
-            "yuvj420p",
-            8,
-            0,
-            None,
-            None,
-            None,
-            375_000_000,
-        )
+        let mjpeg = analyze_video_quality(VideoQualityInput {
+            codec: "mjpeg",
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 50_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuvj420p",
+            bit_depth: 8,
+            max_b_frames: 0,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 375_000_000,
+        })
         .unwrap();
         assert!(!mjpeg.should_skip, "MJPEG should NOT be skipped");
 
-        let prores = analyze_video_quality(
-            "prores",
-            1920,
-            1080,
-            24.0,
-            60.0,
-            150_000_000,
-            None,
-            "yuv422p10le",
-            10,
-            0,
-            None,
-            None,
-            None,
-            1_125_000_000,
-        )
+        let prores = analyze_video_quality(VideoQualityInput {
+            codec: "prores",
+            width: 1920,
+            height: 1080,
+            fps: 24.0,
+            duration_secs: 60.0,
+            total_bitrate: 150_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv422p10le",
+            bit_depth: 10,
+            max_b_frames: 0,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 1_125_000_000,
+        })
         .unwrap();
         assert!(!prores.should_skip, "ProRes should NOT be skipped");
     }
@@ -843,22 +883,22 @@ mod tests {
 
     #[test]
     fn test_bpp_calculation_accuracy() {
-        let result = analyze_video_quality(
-            "h264",
-            1920,
-            1080,
-            30.0,
-            60.0,
-            8_000_000,
-            Some(8_000_000),
-            "yuv420p",
-            8,
-            2,
-            None,
-            None,
-            None,
-            60_000_000,
-        )
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "h264",
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 8_000_000,
+            video_bitrate: Some(8_000_000),
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 60_000_000,
+        })
         .unwrap();
 
         let expected_bpp = 8_000_000.0 / (1920.0 * 1080.0 * 30.0);
@@ -872,22 +912,22 @@ mod tests {
 
     #[test]
     fn test_bpp_uses_video_bitrate_when_available() {
-        let result = analyze_video_quality(
-            "h264",
-            1920,
-            1080,
-            30.0,
-            60.0,
-            10_000_000,
-            Some(8_000_000),
-            "yuv420p",
-            8,
-            2,
-            None,
-            None,
-            None,
-            75_000_000,
-        )
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "h264",
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 10_000_000,
+            video_bitrate: Some(8_000_000),
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 75_000_000,
+        })
         .unwrap();
 
         let expected_bpp = 8_000_000.0 / (1920.0 * 1080.0 * 30.0);
@@ -901,22 +941,22 @@ mod tests {
 
     #[test]
     fn test_compression_level_lossless() {
-        let result = analyze_video_quality(
-            "ffv1",
-            1920,
-            1080,
-            30.0,
-            60.0,
-            200_000_000,
-            None,
-            "yuv444p",
-            8,
-            0,
-            None,
-            None,
-            None,
-            1_500_000_000,
-        )
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "ffv1",
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 200_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv444p",
+            bit_depth: 8,
+            max_b_frames: 0,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 1_500_000_000,
+        })
         .unwrap();
 
         assert_eq!(result.compression_type, CompressionLevel::Lossless);
@@ -924,22 +964,22 @@ mod tests {
 
     #[test]
     fn test_compression_level_high_bpp() {
-        let result = analyze_video_quality(
-            "prores",
-            1920,
-            1080,
-            24.0,
-            60.0,
-            150_000_000,
-            None,
-            "yuv422p10le",
-            10,
-            0,
-            None,
-            None,
-            None,
-            1_125_000_000,
-        )
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "prores",
+            width: 1920,
+            height: 1080,
+            fps: 24.0,
+            duration_secs: 60.0,
+            total_bitrate: 150_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv422p10le",
+            bit_depth: 10,
+            max_b_frames: 0,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 1_125_000_000,
+        })
         .unwrap();
 
         assert_eq!(result.compression_type, CompressionLevel::VisuallyLossless);
@@ -947,10 +987,22 @@ mod tests {
 
     #[test]
     fn test_compression_level_standard() {
-        let result = analyze_video_quality(
-            "h264", 1920, 1080, 30.0, 60.0, 8_000_000, None, "yuv420p", 8, 2, None, None, None,
-            60_000_000,
-        )
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "h264",
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 8_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 60_000_000,
+        })
         .unwrap();
 
         assert!(
@@ -963,10 +1015,22 @@ mod tests {
 
     #[test]
     fn test_compression_level_low_quality() {
-        let result = analyze_video_quality(
-            "h264", 1920, 1080, 30.0, 60.0, 3_000_000, None, "yuv420p", 8, 2, None, None, None,
-            22_500_000,
-        )
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "h264",
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 3_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 22_500_000,
+        })
         .unwrap();
 
         assert_eq!(
@@ -979,22 +1043,22 @@ mod tests {
 
     #[test]
     fn test_crf_estimation_high_quality() {
-        let result = analyze_video_quality(
-            "h264",
-            1920,
-            1080,
-            30.0,
-            60.0,
-            20_000_000,
-            Some(19_000_000),
-            "yuv420p",
-            8,
-            2,
-            None,
-            None,
-            None,
-            150_000_000,
-        )
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "h264",
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 20_000_000,
+            video_bitrate: Some(19_000_000),
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 150_000_000,
+        })
         .unwrap();
 
         assert!(
@@ -1006,22 +1070,22 @@ mod tests {
 
     #[test]
     fn test_crf_estimation_low_quality() {
-        let result = analyze_video_quality(
-            "h264",
-            1920,
-            1080,
-            30.0,
-            60.0,
-            1_000_000,
-            Some(900_000),
-            "yuv420p",
-            8,
-            2,
-            None,
-            None,
-            None,
-            7_500_000,
-        )
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "h264",
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 1_000_000,
+            video_bitrate: Some(900_000),
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 7_500_000,
+        })
         .unwrap();
 
         assert!(
@@ -1033,22 +1097,22 @@ mod tests {
 
     #[test]
     fn test_crf_lossless_is_zero() {
-        let result = analyze_video_quality(
-            "ffv1",
-            1920,
-            1080,
-            30.0,
-            60.0,
-            200_000_000,
-            None,
-            "yuv444p",
-            8,
-            0,
-            None,
-            None,
-            None,
-            1_500_000_000,
-        )
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "ffv1",
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 200_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv444p",
+            bit_depth: 8,
+            max_b_frames: 0,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 1_500_000_000,
+        })
         .unwrap();
 
         assert_eq!(result.estimated_crf, 0, "Lossless should have CRF 0");
@@ -1056,22 +1120,22 @@ mod tests {
 
     #[test]
     fn test_hdr_detection_bt2020() {
-        let result = analyze_video_quality(
-            "hevc",
-            3840,
-            2160,
-            30.0,
-            60.0,
-            25_000_000,
-            None,
-            "yuv420p10le",
-            10,
-            2,
-            None,
-            None,
-            Some("bt2020nc"),
-            187_500_000,
-        )
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "hevc",
+            width: 3840,
+            height: 2160,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 25_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv420p10le",
+            bit_depth: 10,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: None,
+            color_space: Some("bt2020nc"),
+            file_size: 187_500_000,
+        })
         .unwrap();
 
         assert!(result.is_hdr, "BT.2020 should be detected as HDR");
@@ -1079,22 +1143,22 @@ mod tests {
 
     #[test]
     fn test_hdr_detection_bt709_not_hdr() {
-        let result = analyze_video_quality(
-            "h264",
-            1920,
-            1080,
-            30.0,
-            60.0,
-            8_000_000,
-            None,
-            "yuv420p",
-            8,
-            2,
-            None,
-            None,
-            Some("bt709"),
-            60_000_000,
-        )
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "h264",
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 8_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: None,
+            color_space: Some("bt709"),
+            file_size: 60_000_000,
+        })
         .unwrap();
 
         assert!(!result.is_hdr, "BT.709 should NOT be detected as HDR");
@@ -1102,10 +1166,22 @@ mod tests {
 
     #[test]
     fn test_hdr_detection_none_not_hdr() {
-        let result = analyze_video_quality(
-            "h264", 1920, 1080, 30.0, 60.0, 8_000_000, None, "yuv420p", 8, 2, None, None, None,
-            60_000_000,
-        )
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "h264",
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 8_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 60_000_000,
+        })
         .unwrap();
 
         assert!(
@@ -1116,10 +1192,22 @@ mod tests {
 
     #[test]
     fn test_skip_modern_codec() {
-        let result = analyze_video_quality(
-            "hevc", 1920, 1080, 30.0, 60.0, 8_000_000, None, "yuv420p", 8, 2, None, None, None,
-            60_000_000,
-        )
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "hevc",
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 8_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 60_000_000,
+        })
         .unwrap();
         assert!(
             result.should_skip,
@@ -1129,44 +1217,44 @@ mod tests {
 
     #[test]
     fn test_lossless_source_not_skipped() {
-        let result = analyze_video_quality(
-            "ffv1",
-            1920,
-            1080,
-            30.0,
-            60.0,
-            200_000_000,
-            None,
-            "yuv444p",
-            8,
-            0,
-            None,
-            None,
-            None,
-            1_500_000_000,
-        )
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "ffv1",
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 200_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv444p",
+            bit_depth: 8,
+            max_b_frames: 0,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 1_500_000_000,
+        })
         .unwrap();
         assert!(!result.should_skip);
     }
 
     #[test]
     fn test_prores_analysis() {
-        let result = analyze_video_quality(
-            "prores",
-            1920,
-            1080,
-            24.0,
-            60.0,
-            150_000_000,
-            None,
-            "yuv422p10le",
-            10,
-            0,
-            None,
-            None,
-            None,
-            1_125_000_000,
-        )
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "prores",
+            width: 1920,
+            height: 1080,
+            fps: 24.0,
+            duration_secs: 60.0,
+            total_bitrate: 150_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv422p10le",
+            bit_depth: 10,
+            max_b_frames: 0,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 1_125_000_000,
+        })
         .unwrap();
         assert!(!result.should_skip);
         assert_eq!(result.codec_type, VideoCodecType::Intermediate);
@@ -1174,20 +1262,44 @@ mod tests {
 
     #[test]
     fn test_h264_analysis() {
-        let result = analyze_video_quality(
-            "h264", 1920, 1080, 30.0, 60.0, 8_000_000, None, "yuv420p", 8, 2, None, None, None,
-            60_000_000,
-        )
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "h264",
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 8_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 60_000_000,
+        })
         .unwrap();
         assert!(!result.should_skip);
     }
 
     #[test]
     fn test_invalid_zero_width() {
-        let result = analyze_video_quality(
-            "h264", 0, 1080, 30.0, 60.0, 8_000_000, None, "yuv420p", 8, 2, None, None, None,
-            60_000_000,
-        );
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "h264",
+            width: 0,
+            height: 1080,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 8_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 60_000_000,
+        });
 
         assert!(result.is_err(), "Should fail on zero width");
         assert!(result.unwrap_err().contains("Invalid dimensions"));
@@ -1195,10 +1307,22 @@ mod tests {
 
     #[test]
     fn test_invalid_zero_height() {
-        let result = analyze_video_quality(
-            "h264", 1920, 0, 30.0, 60.0, 8_000_000, None, "yuv420p", 8, 2, None, None, None,
-            60_000_000,
-        );
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "h264",
+            width: 1920,
+            height: 0,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 8_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 60_000_000,
+        });
 
         assert!(result.is_err(), "Should fail on zero height");
         assert!(result.unwrap_err().contains("Invalid dimensions"));
@@ -1206,10 +1330,22 @@ mod tests {
 
     #[test]
     fn test_invalid_zero_fps() {
-        let result = analyze_video_quality(
-            "h264", 1920, 1080, 0.0, 60.0, 8_000_000, None, "yuv420p", 8, 2, None, None, None,
-            60_000_000,
-        );
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "h264",
+            width: 1920,
+            height: 1080,
+            fps: 0.0,
+            duration_secs: 60.0,
+            total_bitrate: 8_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 60_000_000,
+        });
 
         assert!(result.is_err(), "Should fail on zero fps");
         assert!(result.unwrap_err().contains("Invalid frame rate"));
@@ -1217,20 +1353,44 @@ mod tests {
 
     #[test]
     fn test_invalid_negative_fps() {
-        let result = analyze_video_quality(
-            "h264", 1920, 1080, -30.0, 60.0, 8_000_000, None, "yuv420p", 8, 2, None, None, None,
-            60_000_000,
-        );
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "h264",
+            width: 1920,
+            height: 1080,
+            fps: -30.0,
+            duration_secs: 60.0,
+            total_bitrate: 8_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 60_000_000,
+        });
 
         assert!(result.is_err(), "Should fail on negative fps");
     }
 
     #[test]
     fn test_invalid_zero_duration() {
-        let result = analyze_video_quality(
-            "h264", 1920, 1080, 30.0, 0.0, 8_000_000, None, "yuv420p", 8, 2, None, None, None,
-            60_000_000,
-        );
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "h264",
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            duration_secs: 0.0,
+            total_bitrate: 8_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 60_000_000,
+        });
 
         assert!(result.is_err(), "Should fail on zero duration");
         assert!(result.unwrap_err().contains("Invalid duration"));
@@ -1238,32 +1398,44 @@ mod tests {
 
     #[test]
     fn test_invalid_negative_duration() {
-        let result = analyze_video_quality(
-            "h264", 1920, 1080, 30.0, -60.0, 8_000_000, None, "yuv420p", 8, 2, None, None, None,
-            60_000_000,
-        );
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "h264",
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            duration_secs: -60.0,
+            total_bitrate: 8_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 60_000_000,
+        });
 
         assert!(result.is_err(), "Should fail on negative duration");
     }
 
     #[test]
     fn test_extreme_low_bitrate() {
-        let result = analyze_video_quality(
-            "h264",
-            1920,
-            1080,
-            30.0,
-            60.0,
-            100_000,
-            Some(90_000),
-            "yuv420p",
-            8,
-            2,
-            None,
-            None,
-            None,
-            750_000,
-        )
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "h264",
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 100_000,
+            video_bitrate: Some(90_000),
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 750_000,
+        })
         .unwrap();
 
         assert!(
@@ -1279,22 +1451,22 @@ mod tests {
 
     #[test]
     fn test_extreme_high_bitrate() {
-        let result = analyze_video_quality(
-            "h264",
-            1920,
-            1080,
-            30.0,
-            60.0,
-            500_000_000,
-            Some(490_000_000),
-            "yuv420p",
-            8,
-            2,
-            None,
-            None,
-            None,
-            3_750_000_000,
-        )
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "h264",
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 500_000_000,
+            video_bitrate: Some(490_000_000),
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 3_750_000_000,
+        })
         .unwrap();
 
         assert!(result.bpp > 5.0, "Very high bitrate should have high BPP");
@@ -1307,10 +1479,22 @@ mod tests {
 
     #[test]
     fn test_resolution_sd_480p() {
-        let result = analyze_video_quality(
-            "h264", 854, 480, 30.0, 60.0, 2_000_000, None, "yuv420p", 8, 2, None, None, None,
-            15_000_000,
-        )
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "h264",
+            width: 854,
+            height: 480,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 2_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 15_000_000,
+        })
         .unwrap();
 
         assert_eq!(result.width, 854);
@@ -1321,10 +1505,22 @@ mod tests {
 
     #[test]
     fn test_resolution_hd_720p() {
-        let result = analyze_video_quality(
-            "h264", 1280, 720, 30.0, 60.0, 5_000_000, None, "yuv420p", 8, 2, None, None, None,
-            37_500_000,
-        )
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "h264",
+            width: 1280,
+            height: 720,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 5_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 37_500_000,
+        })
         .unwrap();
 
         assert_eq!(result.width, 1280);
@@ -1333,22 +1529,22 @@ mod tests {
 
     #[test]
     fn test_resolution_4k_uhd() {
-        let result = analyze_video_quality(
-            "hevc",
-            3840,
-            2160,
-            30.0,
-            60.0,
-            25_000_000,
-            None,
-            "yuv420p10le",
-            10,
-            2,
-            None,
-            None,
-            None,
-            187_500_000,
-        )
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "hevc",
+            width: 3840,
+            height: 2160,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 25_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv420p10le",
+            bit_depth: 10,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 187_500_000,
+        })
         .unwrap();
 
         assert_eq!(result.width, 3840);
@@ -1358,22 +1554,22 @@ mod tests {
 
     #[test]
     fn test_resolution_8k() {
-        let result = analyze_video_quality(
-            "av1",
-            7680,
-            4320,
-            30.0,
-            60.0,
-            80_000_000,
-            None,
-            "yuv420p10le",
-            10,
-            2,
-            None,
-            None,
-            None,
-            600_000_000,
-        )
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "av1",
+            width: 7680,
+            height: 4320,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 80_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv420p10le",
+            bit_depth: 10,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 600_000_000,
+        })
         .unwrap();
 
         assert_eq!(result.width, 7680);
@@ -1383,10 +1579,22 @@ mod tests {
 
     #[test]
     fn test_resolution_vertical_video() {
-        let result = analyze_video_quality(
-            "h264", 1080, 1920, 30.0, 60.0, 8_000_000, None, "yuv420p", 8, 2, None, None, None,
-            60_000_000,
-        )
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "h264",
+            width: 1080,
+            height: 1920,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 8_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 60_000_000,
+        })
         .unwrap();
 
         assert_eq!(result.width, 1080);
@@ -1396,10 +1604,22 @@ mod tests {
 
     #[test]
     fn test_resolution_square() {
-        let result = analyze_video_quality(
-            "h264", 1080, 1080, 30.0, 60.0, 6_000_000, None, "yuv420p", 8, 2, None, None, None,
-            45_000_000,
-        )
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "h264",
+            width: 1080,
+            height: 1080,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 6_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 45_000_000,
+        })
         .unwrap();
 
         assert_eq!(result.width, 1080);
@@ -1408,10 +1628,22 @@ mod tests {
 
     #[test]
     fn test_fps_24_film() {
-        let result = analyze_video_quality(
-            "h264", 1920, 1080, 24.0, 60.0, 8_000_000, None, "yuv420p", 8, 2, None, None, None,
-            60_000_000,
-        )
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "h264",
+            width: 1920,
+            height: 1080,
+            fps: 24.0,
+            duration_secs: 60.0,
+            total_bitrate: 8_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 60_000_000,
+        })
         .unwrap();
 
         assert!((result.fps - 24.0).abs() < 0.01);
@@ -1420,22 +1652,22 @@ mod tests {
 
     #[test]
     fn test_fps_60_gaming() {
-        let result = analyze_video_quality(
-            "h264",
-            1920,
-            1080,
-            60.0,
-            60.0,
-            15_000_000,
-            None,
-            "yuv420p",
-            8,
-            2,
-            None,
-            None,
-            None,
-            112_500_000,
-        )
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "h264",
+            width: 1920,
+            height: 1080,
+            fps: 60.0,
+            duration_secs: 60.0,
+            total_bitrate: 15_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 112_500_000,
+        })
         .unwrap();
 
         assert!((result.fps - 60.0).abs() < 0.01);
@@ -1444,10 +1676,22 @@ mod tests {
 
     #[test]
     fn test_fps_120_high_refresh() {
-        let result = analyze_video_quality(
-            "h264", 1920, 1080, 120.0, 30.0, 25_000_000, None, "yuv420p", 8, 2, None, None, None,
-            93_750_000,
-        )
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "h264",
+            width: 1920,
+            height: 1080,
+            fps: 120.0,
+            duration_secs: 30.0,
+            total_bitrate: 25_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 93_750_000,
+        })
         .unwrap();
 
         assert!((result.fps - 120.0).abs() < 0.01);
@@ -1456,10 +1700,22 @@ mod tests {
 
     #[test]
     fn test_fps_fractional_ntsc() {
-        let result = analyze_video_quality(
-            "h264", 1920, 1080, 29.97, 60.0, 8_000_000, None, "yuv420p", 8, 2, None, None, None,
-            60_000_000,
-        )
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "h264",
+            width: 1920,
+            height: 1080,
+            fps: 29.97,
+            duration_secs: 60.0,
+            total_bitrate: 8_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 60_000_000,
+        })
         .unwrap();
 
         assert!((result.fps - 29.97).abs() < 0.01);
@@ -1467,60 +1723,60 @@ mod tests {
 
     #[test]
     fn test_codec_type_lossless() {
-        let ffv1 = analyze_video_quality(
-            "ffv1",
-            1920,
-            1080,
-            30.0,
-            60.0,
-            200_000_000,
-            None,
-            "yuv444p",
-            8,
-            0,
-            None,
-            None,
-            None,
-            1_500_000_000,
-        )
+        let ffv1 = analyze_video_quality(VideoQualityInput {
+            codec: "ffv1",
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 200_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv444p",
+            bit_depth: 8,
+            max_b_frames: 0,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 1_500_000_000,
+        })
         .unwrap();
         assert_eq!(ffv1.codec_type, VideoCodecType::Lossless);
 
-        let huffyuv = analyze_video_quality(
-            "huffyuv",
-            1920,
-            1080,
-            30.0,
-            60.0,
-            300_000_000,
-            None,
-            "yuv422p",
-            8,
-            0,
-            None,
-            None,
-            None,
-            2_250_000_000,
-        )
+        let huffyuv = analyze_video_quality(VideoQualityInput {
+            codec: "huffyuv",
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 300_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv422p",
+            bit_depth: 8,
+            max_b_frames: 0,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 2_250_000_000,
+        })
         .unwrap();
         assert_eq!(huffyuv.codec_type, VideoCodecType::Lossless);
 
-        let utvideo = analyze_video_quality(
-            "utvideo",
-            1920,
-            1080,
-            30.0,
-            60.0,
-            250_000_000,
-            None,
-            "yuv422p",
-            8,
-            0,
-            None,
-            None,
-            None,
-            1_875_000_000,
-        )
+        let utvideo = analyze_video_quality(VideoQualityInput {
+            codec: "utvideo",
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 250_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv422p",
+            bit_depth: 8,
+            max_b_frames: 0,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 1_875_000_000,
+        })
         .unwrap();
         assert_eq!(utvideo.codec_type, VideoCodecType::Lossless);
     }
@@ -1529,10 +1785,22 @@ mod tests {
     fn test_codec_type_modern() {
         let codecs = ["av1", "hevc", "h265", "vp9", "vvc"];
         for codec in codecs {
-            let result = analyze_video_quality(
-                codec, 1920, 1080, 30.0, 60.0, 8_000_000, None, "yuv420p", 8, 2, None, None, None,
-                60_000_000,
-            )
+            let result = analyze_video_quality(VideoQualityInput {
+                codec,
+                width: 1920,
+                height: 1080,
+                fps: 30.0,
+                duration_secs: 60.0,
+                total_bitrate: 8_000_000,
+                video_bitrate: None,
+                pix_fmt: "yuv420p",
+                bit_depth: 8,
+                max_b_frames: 2,
+                encoder_params: None,
+                gop_size: None,
+                color_space: None,
+                file_size: 60_000_000,
+            })
             .unwrap();
             assert_eq!(
                 result.codec_type,
@@ -1544,97 +1812,122 @@ mod tests {
 
     #[test]
     fn test_codec_type_intermediate() {
-        let prores = analyze_video_quality(
-            "prores",
-            1920,
-            1080,
-            24.0,
-            60.0,
-            150_000_000,
-            None,
-            "yuv422p10le",
-            10,
-            0,
-            None,
-            None,
-            None,
-            1_125_000_000,
-        )
+        let prores = analyze_video_quality(VideoQualityInput {
+            codec: "prores",
+            width: 1920,
+            height: 1080,
+            fps: 24.0,
+            duration_secs: 60.0,
+            total_bitrate: 150_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv422p10le",
+            bit_depth: 10,
+            max_b_frames: 0,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 1_125_000_000,
+        })
         .unwrap();
         assert_eq!(prores.codec_type, VideoCodecType::Intermediate);
 
-        let dnxhd = analyze_video_quality(
-            "dnxhd",
-            1920,
-            1080,
-            24.0,
-            60.0,
-            120_000_000,
-            None,
-            "yuv422p",
-            8,
-            0,
-            None,
-            None,
-            None,
-            900_000_000,
-        )
+        let dnxhd = analyze_video_quality(VideoQualityInput {
+            codec: "dnxhd",
+            width: 1920,
+            height: 1080,
+            fps: 24.0,
+            duration_secs: 60.0,
+            total_bitrate: 120_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv422p",
+            bit_depth: 8,
+            max_b_frames: 0,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 900_000_000,
+        })
         .unwrap();
         assert_eq!(dnxhd.codec_type, VideoCodecType::Intermediate);
     }
 
     #[test]
     fn test_codec_type_inefficient() {
-        let mjpeg = analyze_video_quality(
-            "mjpeg",
-            1920,
-            1080,
-            30.0,
-            60.0,
-            50_000_000,
-            None,
-            "yuvj420p",
-            8,
-            0,
-            None,
-            None,
-            None,
-            375_000_000,
-        )
+        let mjpeg = analyze_video_quality(VideoQualityInput {
+            codec: "mjpeg",
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 50_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuvj420p",
+            bit_depth: 8,
+            max_b_frames: 0,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 375_000_000,
+        })
         .unwrap();
         assert_eq!(mjpeg.codec_type, VideoCodecType::Inefficient);
 
-        let gif = analyze_video_quality(
-            "gif", 640, 480, 15.0, 10.0, 5_000_000, None, "rgb8", 8, 0, None, None, None, 6_250_000,
-        )
+        let gif = analyze_video_quality(VideoQualityInput {
+            codec: "gif",
+            width: 640,
+            height: 480,
+            fps: 15.0,
+            duration_secs: 10.0,
+            total_bitrate: 5_000_000,
+            video_bitrate: None,
+            pix_fmt: "rgb8",
+            bit_depth: 8,
+            max_b_frames: 0,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 6_250_000,
+        })
         .unwrap();
         assert_eq!(gif.codec_type, VideoCodecType::Inefficient);
     }
 
     #[test]
     fn test_confidence_with_video_bitrate() {
-        let with_vbr = analyze_video_quality(
-            "h264",
-            1920,
-            1080,
-            30.0,
-            60.0,
-            10_000_000,
-            Some(8_000_000),
-            "yuv420p",
-            8,
-            2,
-            None,
-            Some(60),
-            None,
-            75_000_000,
-        )
+        let with_vbr = analyze_video_quality(VideoQualityInput {
+            codec: "h264",
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 10_000_000,
+            video_bitrate: Some(8_000_000),
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: Some(60),
+            color_space: None,
+            file_size: 75_000_000,
+        })
         .unwrap();
 
-        let without_vbr = analyze_video_quality(
-            "h264", 1920, 1080, 30.0, 60.0, 10_000_000, None, "yuv420p", 8, 2, None, None, None,
-            75_000_000,
-        )
+        let without_vbr = analyze_video_quality(VideoQualityInput {
+            codec: "h264",
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 10_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 75_000_000,
+        })
         .unwrap();
 
         assert!(
@@ -1647,28 +1940,40 @@ mod tests {
 
     #[test]
     fn test_confidence_with_gop_size() {
-        let with_gop = analyze_video_quality(
-            "h264",
-            1920,
-            1080,
-            30.0,
-            60.0,
-            8_000_000,
-            None,
-            "yuv420p",
-            8,
-            2,
-            None,
-            Some(60),
-            None,
-            60_000_000,
-        )
+        let with_gop = analyze_video_quality(VideoQualityInput {
+            codec: "h264",
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 8_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: Some(60),
+            color_space: None,
+            file_size: 60_000_000,
+        })
         .unwrap();
 
-        let without_gop = analyze_video_quality(
-            "h264", 1920, 1080, 30.0, 60.0, 8_000_000, None, "yuv420p", 8, 2, None, None, None,
-            60_000_000,
-        )
+        let without_gop = analyze_video_quality(VideoQualityInput {
+            codec: "h264",
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 8_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 60_000_000,
+        })
         .unwrap();
 
         assert!(
@@ -1679,28 +1984,40 @@ mod tests {
 
     #[test]
     fn test_confidence_longer_duration() {
-        let long = analyze_video_quality(
-            "h264",
-            1920,
-            1080,
-            30.0,
-            120.0,
-            8_000_000,
-            None,
-            "yuv420p",
-            8,
-            2,
-            None,
-            None,
-            None,
-            120_000_000,
-        )
+        let long = analyze_video_quality(VideoQualityInput {
+            codec: "h264",
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            duration_secs: 120.0,
+            total_bitrate: 8_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 120_000_000,
+        })
         .unwrap();
 
-        let short = analyze_video_quality(
-            "h264", 1920, 1080, 30.0, 5.0, 8_000_000, None, "yuv420p", 8, 2, None, None, None,
-            5_000_000,
-        )
+        let short = analyze_video_quality(VideoQualityInput {
+            codec: "h264",
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            duration_secs: 5.0,
+            total_bitrate: 8_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: None,
+            color_space: None,
+            file_size: 5_000_000,
+        })
         .unwrap();
 
         assert!(
@@ -1711,22 +2028,22 @@ mod tests {
 
     #[test]
     fn test_to_quality_analysis_conversion() {
-        let analysis = analyze_video_quality(
-            "h264",
-            1920,
-            1080,
-            30.0,
-            60.0,
-            8_000_000,
-            Some(7_500_000),
-            "yuv420p",
-            8,
-            2,
-            None,
-            Some(60),
-            Some("bt709"),
-            60_000_000,
-        )
+        let analysis = analyze_video_quality(VideoQualityInput {
+            codec: "h264",
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 8_000_000,
+            video_bitrate: Some(7_500_000),
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: Some(60),
+            color_space: Some("bt709"),
+            file_size: 60_000_000,
+        })
         .unwrap();
 
         let qa = to_quality_analysis(&analysis);
@@ -1740,40 +2057,40 @@ mod tests {
 
     #[test]
     fn test_consistency_same_input() {
-        let result1 = analyze_video_quality(
-            "h264",
-            1920,
-            1080,
-            30.0,
-            60.0,
-            8_000_000,
-            Some(7_500_000),
-            "yuv420p",
-            8,
-            2,
-            None,
-            Some(60),
-            Some("bt709"),
-            60_000_000,
-        )
+        let result1 = analyze_video_quality(VideoQualityInput {
+            codec: "h264",
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 8_000_000,
+            video_bitrate: Some(7_500_000),
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: Some(60),
+            color_space: Some("bt709"),
+            file_size: 60_000_000,
+        })
         .unwrap();
 
-        let result2 = analyze_video_quality(
-            "h264",
-            1920,
-            1080,
-            30.0,
-            60.0,
-            8_000_000,
-            Some(7_500_000),
-            "yuv420p",
-            8,
-            2,
-            None,
-            Some(60),
-            Some("bt709"),
-            60_000_000,
-        )
+        let result2 = analyze_video_quality(VideoQualityInput {
+            codec: "h264",
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 8_000_000,
+            video_bitrate: Some(7_500_000),
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: None,
+            gop_size: Some(60),
+            color_space: Some("bt709"),
+            file_size: 60_000_000,
+        })
         .unwrap();
 
         assert!(
@@ -1795,22 +2112,22 @@ mod tests {
         ];
 
         for (w, h, fps, bitrate) in test_cases {
-            let result = analyze_video_quality(
-                "h264",
-                w,
-                h,
+            let result = analyze_video_quality(VideoQualityInput {
+                codec: "h264",
+                width: w,
+                height: h,
                 fps,
-                60.0,
-                bitrate,
-                Some(bitrate),
-                "yuv420p",
-                8,
-                2,
-                None,
-                None,
-                None,
-                bitrate * 60 / 8,
-            )
+                duration_secs: 60.0,
+                total_bitrate: bitrate,
+                video_bitrate: Some(bitrate),
+                pix_fmt: "yuv420p",
+                bit_depth: 8,
+                max_b_frames: 2,
+                encoder_params: None,
+                gop_size: None,
+                color_space: None,
+                file_size: bitrate * 60 / 8,
+            })
             .unwrap();
 
             let expected = f64::from(u32::try_from(bitrate).unwrap_or(u32::MAX))
@@ -1837,10 +2154,22 @@ mod tests {
         ];
 
         for (fps, duration, expected_frames) in test_cases {
-            let result = analyze_video_quality(
-                "h264", 1920, 1080, fps, duration, 8_000_000, None, "yuv420p", 8, 2, None, None,
-                None, 60_000_000,
-            )
+            let result = analyze_video_quality(VideoQualityInput {
+                codec: "hevc",
+                width: 1920,
+                height: 1080,
+                fps,
+                duration_secs: duration,
+                total_bitrate: 8_000_000,
+                video_bitrate: None,
+                pix_fmt: "yuv420p",
+                bit_depth: 8,
+                max_b_frames: 2,
+                encoder_params: None,
+                gop_size: None,
+                color_space: None,
+                file_size: 60_000_000,
+            })
             .unwrap();
 
             assert_eq!(
@@ -1864,10 +2193,22 @@ mod tests {
         ];
 
         for (codec, expected_skip) in modern_skip {
-            let result = analyze_video_quality(
-                codec, 1920, 1080, 30.0, 60.0, 8_000_000, None, "yuv420p", 8, 2, None, None, None,
-                60_000_000,
-            )
+            let result = analyze_video_quality(VideoQualityInput {
+                codec,
+                width: 1920,
+                height: 1080,
+                fps: 30.0,
+                duration_secs: 60.0,
+                total_bitrate: 8_000_000,
+                video_bitrate: None,
+                pix_fmt: "yuv420p",
+                bit_depth: 8,
+                max_b_frames: 2,
+                encoder_params: None,
+                gop_size: None,
+                color_space: None,
+                file_size: 60_000_000,
+            })
             .unwrap();
 
             assert_eq!(
@@ -1888,10 +2229,22 @@ mod tests {
         let non_modern_codecs = ["h264", "mpeg4", "mpeg2video", "mjpeg"];
 
         for codec in non_modern_codecs {
-            let result = analyze_video_quality(
-                codec, 1920, 1080, 30.0, 60.0, 8_000_000, None, "yuv420p", 8, 2, None, None, None,
-                60_000_000,
-            )
+            let result = analyze_video_quality(VideoQualityInput {
+                codec,
+                width: 1920,
+                height: 1080,
+                fps: 30.0,
+                duration_secs: 60.0,
+                total_bitrate: 8_000_000,
+                video_bitrate: None,
+                pix_fmt: "yuv420p",
+                bit_depth: 8,
+                max_b_frames: 2,
+                encoder_params: None,
+                gop_size: None,
+                color_space: None,
+                file_size: 60_000_000,
+            })
             .unwrap();
 
             assert!(
@@ -1911,22 +2264,22 @@ mod tests {
 
     #[test]
     fn test_analyze_video_quality_with_deterministic_crf() {
-        let result = analyze_video_quality(
-            "h264",
-            1920,
-            1080,
-            30.0,
-            60.0,
-            1_000_000,
-            None,
-            "yuv420p",
-            8,
-            2,
-            Some("rc=crf / crf=15.0 / preset=medium"),
-            None,
-            None,
-            7_500_000,
-        )
+        let result = analyze_video_quality(VideoQualityInput {
+            codec: "h264",
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            duration_secs: 60.0,
+            total_bitrate: 1_000_000,
+            video_bitrate: None,
+            pix_fmt: "yuv420p",
+            bit_depth: 8,
+            max_b_frames: 2,
+            encoder_params: Some("rc=crf / crf=15.0 / preset=medium"),
+            gop_size: None,
+            color_space: None,
+            file_size: 7_500_000,
+        })
         .unwrap();
 
         assert_eq!(

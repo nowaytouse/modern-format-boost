@@ -351,12 +351,8 @@ pub use gpu_accel::{
 };
 
 pub use video_explorer::{
-    explore_av1_with_gpu_coarse, explore_av1_with_gpu_coarse_full,
-    explore_av1_with_gpu_coarse_full_warm_start, explore_av1_with_gpu_coarse_ultimate,
-    explore_av1_with_gpu_coarse_ultimate_warm_start, explore_hevc_with_gpu_coarse,
-    explore_hevc_with_gpu_coarse_full, explore_hevc_with_gpu_coarse_full_warm_start,
-    explore_hevc_with_gpu_coarse_ultimate, explore_hevc_with_gpu_coarse_ultimate_warm_start,
-    explore_with_gpu_coarse_search, is_gif_magic,
+    explore_av1_with_gpu, explore_hevc_with_gpu, explore_with_gpu_coarse_search, is_gif_magic,
+    GpuSearchRequest,
 };
 
 pub use modern_ui::{

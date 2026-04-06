@@ -22,24 +22,24 @@ echo "📸 Generating test images..."
 
 # 1. Create a basic test image (PNG)
 ffmpeg -f lavfi -i color=c=blue:s=1920x1080:d=1 \
-  -f lavfi -i sine=f=1000:d=1 \
-  -c:v png -c:a pcm_s16le \
-  -y "$IMAGES_DIR/test_image_1080p.png" 2>/dev/null || true
+    -f lavfi -i sine=f=1000:d=1 \
+    -c:v png -c:a pcm_s16le \
+    -y "$IMAGES_DIR/test_image_1080p.png" 2>/dev/null || true
 
 # 2. Create a simple gradient image
 ffmpeg -f lavfi -i "color=red:s=800x600:d=1" \
-  -c:v png \
-  -y "$IMAGES_DIR/test_gradient_red.png" 2>/dev/null || true
+    -c:v png \
+    -y "$IMAGES_DIR/test_gradient_red.png" 2>/dev/null || true
 
 # 3. Create high quality image
 ffmpeg -f lavfi -i "color=green:s=3840x2160:d=1" \
-  -c:v png \
-  -y "$IMAGES_DIR/test_hd_4k.png" 2>/dev/null || true
+    -c:v png \
+    -y "$IMAGES_DIR/test_hd_4k.png" 2>/dev/null || true
 
 # 4. Create low quality image
 ffmpeg -f lavfi -i "color=yellow:s=640x480:d=1" \
-  -c:v png \
-  -y "$IMAGES_DIR/test_low_quality.png" 2>/dev/null || true
+    -c:v png \
+    -y "$IMAGES_DIR/test_low_quality.png" 2>/dev/null || true
 
 # ============================================================================
 # VIDEO GENERATION
@@ -49,52 +49,52 @@ echo "🎥 Generating test videos..."
 
 # 1. Create H.264 video (baseline - 10 seconds)
 ffmpeg -f lavfi -i "color=c=blue:s=1280x720:d=10" \
-  -f lavfi -i "sine=f=440:d=10" \
-  -c:v libx264 -preset ultrafast -crf 23 \
-  -c:a aac -b:a 128k \
-  -y "$VIDEOS_DIR/test_h264_10s.mp4" 2>/dev/null || true
+    -f lavfi -i "sine=f=440:d=10" \
+    -c:v libx264 -preset ultrafast -crf 23 \
+    -c:a aac -b:a 128k \
+    -y "$VIDEOS_DIR/test_h264_10s.mp4" 2>/dev/null || true
 
 # 2. Create VP9 video (for conversion testing)
 ffmpeg -f lavfi -i "color=c=green:s=1920x1080:d=5" \
-  -f lavfi -i "sine=f=880:d=5" \
-  -c:v libvpx-vp9 -preset fast -crf 28 \
-  -c:a libopus -b:a 128k \
-  -y "$VIDEOS_DIR/test_vp9_5s.webm" 2>/dev/null || true
+    -f lavfi -i "sine=f=880:d=5" \
+    -c:v libvpx-vp9 -preset fast -crf 28 \
+    -c:a libopus -b:a 128k \
+    -y "$VIDEOS_DIR/test_vp9_5s.webm" 2>/dev/null || true
 
 # 3. Create HEVC video (H.265)
 ffmpeg -f lavfi -i "color=c=red:s=1920x1080:d=8" \
-  -f lavfi -i "sine=f=660:d=8" \
-  -c:v libx265 -preset fast -crf 28 \
-  -c:a aac -b:a 128k \
-  -y "$VIDEOS_DIR/test_hevc_8s.mp4" 2>/dev/null || true
+    -f lavfi -i "sine=f=660:d=8" \
+    -c:v libx265 -preset fast -crf 28 \
+    -c:a aac -b:a 128k \
+    -y "$VIDEOS_DIR/test_hevc_8s.mp4" 2>/dev/null || true
 
 # 4. Create AV1 video (low bitrate for compression testing)
 ffmpeg -f lavfi -i "color=c=yellow:s=1920x1080:d=6" \
-  -f lavfi -i "sine=f=1000:d=6" \
-  -c:v libaom-av1 -preset 4 -crf 30 \
-  -c:a libopus -b:a 128k \
-  -y "$VIDEOS_DIR/test_av1_6s.mkv" 2>/dev/null || true
+    -f lavfi -i "sine=f=1000:d=6" \
+    -c:v libaom-av1 -preset 4 -crf 30 \
+    -c:a libopus -b:a 128k \
+    -y "$VIDEOS_DIR/test_av1_6s.mkv" 2>/dev/null || true
 
 # 5. Create high-quality source video
 ffmpeg -f lavfi -i "color=c=cyan:s=1920x1080:d=15" \
-  -f lavfi -i "sine=f=1200:d=15" \
-  -c:v libx264 -preset ultrafast -crf 18 \
-  -c:a aac -b:a 192k \
-  -y "$VIDEOS_DIR/test_hq_source_15s.mp4" 2>/dev/null || true
+    -f lavfi -i "sine=f=1200:d=15" \
+    -c:v libx264 -preset ultrafast -crf 18 \
+    -c:a aac -b:a 192k \
+    -y "$VIDEOS_DIR/test_hq_source_15s.mp4" 2>/dev/null || true
 
 # 6. Create low-quality source video
 ffmpeg -f lavfi -i "color=c=magenta:s=640x480:d=12" \
-  -f lavfi -i "sine=f=500:d=12" \
-  -c:v libx264 -preset ultrafast -crf 35 \
-  -c:a aac -b:a 64k \
-  -y "$VIDEOS_DIR/test_lq_source_12s.mp4" 2>/dev/null || true
+    -f lavfi -i "sine=f=500:d=12" \
+    -c:v libx264 -preset ultrafast -crf 35 \
+    -c:a aac -b:a 64k \
+    -y "$VIDEOS_DIR/test_lq_source_12s.mp4" 2>/dev/null || true
 
 # 7. Create a very short video for quick tests
 ffmpeg -f lavfi -i "color=c=white:s=1280x720:d=2" \
-  -f lavfi -i "sine=f=800:d=2" \
-  -c:v libx264 -preset ultrafast -crf 23 \
-  -c:a aac -b:a 128k \
-  -y "$VIDEOS_DIR/test_short_2s.mp4" 2>/dev/null || true
+    -f lavfi -i "sine=f=800:d=2" \
+    -c:v libx264 -preset ultrafast -crf 23 \
+    -c:a aac -b:a 128k \
+    -y "$VIDEOS_DIR/test_short_2s.mp4" 2>/dev/null || true
 
 # ============================================================================
 # GIF GENERATION
@@ -104,21 +104,21 @@ echo "🎬 Generating test GIFs..."
 
 # 1. Create animated GIF (simple)
 ffmpeg -f lavfi -i "color=c=red:s=640x480:d=2" \
-  -f lavfi -i "sine=f=440:d=2" \
-  -vf "fps=10,scale=640:480:flags=lanczos" \
-  -y "$GIFS_DIR/test_simple.gif" 2>/dev/null || true
+    -f lavfi -i "sine=f=440:d=2" \
+    -vf "fps=10,scale=640:480:flags=lanczos" \
+    -y "$GIFS_DIR/test_simple.gif" 2>/dev/null || true
 
 # 2. Create animated GIF (with pattern)
 ffmpeg -f lavfi -i "testsrc=s=320x240:d=3" \
-  -vf "fps=10" \
-  -y "$GIFS_DIR/test_pattern.gif" 2>/dev/null || true
+    -vf "fps=10" \
+    -y "$GIFS_DIR/test_pattern.gif" 2>/dev/null || true
 
 # ============================================================================
 # MEDIA SPECIFICATIONS
 # ============================================================================
 
 # Create a manifest file documenting test media specifications
-cat > "$TEST_DIR/MEDIA_MANIFEST.md" << 'EOF'
+cat >"$TEST_DIR/MEDIA_MANIFEST.md" <<'EOF'
 # Test Media Manifest
 
 This directory contains synthetic test media files for unit testing the video_explorer module.

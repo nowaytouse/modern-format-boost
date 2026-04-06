@@ -1200,19 +1200,19 @@ impl VideoExplorer {
     pub fn explore_with_strategy(&self) -> Result<ExploreResult> {
         use crate::explore_strategy::{create_strategy, ExploreContext};
 
-        let mut ctx = ExploreContext::new(
-            self.input_path.clone(),
-            self.output_path.clone(),
-            self.input_size,
-            self.encoder,
-            self.vf_args.clone(),
-            self.max_threads,
-            self.use_gpu,
-            self.preset,
-            self.config.clone(),
-            self.hdr_x265_params.clone(),
-            self.apple_compat,
-        );
+        let mut ctx = ExploreContext::new(crate::explore_strategy::ExploreContextArgs {
+            input_path: self.input_path.clone(),
+            output_path: self.output_path.clone(),
+            input_size: self.input_size,
+            encoder: self.encoder,
+            vf_args: self.vf_args.clone(),
+            max_threads: self.max_threads,
+            use_gpu: self.use_gpu,
+            preset: self.preset,
+            config: self.config.clone(),
+            hdr_x265_params: self.hdr_x265_params.clone(),
+            apple_compat: self.apple_compat,
+        });
 
         let strategy = create_strategy(self.config.mode);
         crate::log_eprintln!(
@@ -3841,12 +3841,7 @@ pub mod dynamic_mapping;
 /// GPU-accelerated coarse search implementations.
 pub mod gpu_coarse_search;
 pub use gpu_coarse_search::{
-    explore_av1_with_gpu_coarse, explore_av1_with_gpu_coarse_full,
-    explore_av1_with_gpu_coarse_full_warm_start, explore_av1_with_gpu_coarse_ultimate,
-    explore_av1_with_gpu_coarse_ultimate_warm_start, explore_hevc_with_gpu_coarse,
-    explore_hevc_with_gpu_coarse_full, explore_hevc_with_gpu_coarse_full_warm_start,
-    explore_hevc_with_gpu_coarse_ultimate, explore_hevc_with_gpu_coarse_ultimate_warm_start,
-    explore_with_gpu_coarse_search,
+    explore_av1_with_gpu, explore_hevc_with_gpu, explore_with_gpu_coarse_search, GpuSearchRequest,
 };
 
 #[cfg(test)]

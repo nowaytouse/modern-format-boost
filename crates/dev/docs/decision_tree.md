@@ -8,7 +8,7 @@
 
 ## Pre-routing: Format Signal Extraction (Extraction only, no judgment)
 
-```
+```text
 Input File
 ├── Telegram TGS / WebM-sticker → Inject loop_count=0, platform=TELEGRAM
 ├── APNG                        → Inject format_loop_semantic=true
@@ -77,9 +77,11 @@ At the same time, `WeightedScore` is initialized (initial value 0.0, range [-1.0
 ### Node 3-A: First-Last Frame Closure Ratio
 
 - Signal:
-  ```
-  closure_ratio = Visual distance between first and last frames / Average inter-frame visual distance
-  ```
+
+```text
+closure_ratio = Visual distance between first and last frames / Average inter-frame visual distance
+```
+
 - `closure_ratio ≈ 1.0` (First-last jump is comparable to normal inter-frame jumps)
   → `WeightedScore += 0.35` (Highest weight, self-referential without external constants)
 - `closure_ratio >> 1.0` (Sudden jump between first and last frames)
@@ -115,11 +117,12 @@ At the same time, `WeightedScore` is initialized (initial value 0.0, range [-1.0
 ### Node 4-B: Frame Content Compressibility (WebP Compression Ratio)
 
 - Signal: Perform lossy WebP compression on sampled frames, measure `raw_size / webp_size`
-  ```
-  Ratio > 15x → Synthetic content (Flat color areas, low entropy) → WeightedScore += 0.20
-  Ratio < 5x  → Natural content (Noisy, high entropy) → WeightedScore -= 0.25
-  Middle Area → WeightedScore unchanged
-  ```
+
+```text
+Ratio > 15x → Synthetic content (Flat color areas, low entropy) → WeightedScore += 0.20
+Ratio < 5x → Natural content (Noisy, high entropy) → WeightedScore -= 0.25
+Middle Area → WeightedScore unchanged
+```
 
 > This is the most direct proxy for judging "Synthetic vs Natural"—directly measuring how much benefit LZW compression of the GIF provides.
 
@@ -174,7 +177,7 @@ When reaching this layer, the `SignalBundle` already contains:
 - Duration (in frame count form)
 - Current accumulated `WeightedScore` (passed as an additional KNN feature dimension)
 
-```
+```text
 KNN Output: keep_probability, confidence
 Integrated Judgment Logic:
 
@@ -193,7 +196,7 @@ All other cases                           → UNCERTAIN, proceed to fallback
 
 ## Layer 7: Conservative Fallback
 
-```
+```text
 Input is a modern animated format (TGS / APNG / WebP anim) → Convert to GIF (Minimal loss)
 Input is already GIF                              → Keep as is, skip
 Input is already video                            → Keep as is, skip
@@ -208,14 +211,14 @@ allowing the blind spot to narrow naturally over time without needing a one-time
 
 ## Post-processing: Action Routing
 
-```
+```text
 Judgment Tree Output
 ├── LOOP_STRONG
 │   ├── Input is Video → Convert to GIF
 │   └── Input is GIF   → Keep
 └── LOOP_WEAK
-    ├── Input is GIF   → Convert to Video
-    └── Input is Video → Keep
+  ├── Input is GIF   → Convert to Video
+  └── Input is Video → Keep
 ```
 
 ---
@@ -223,7 +226,7 @@ Judgment Tree Output
 ## Design Principles Comparison by Layer
 
 | Layer                               | Trigger Mechanism                 | WeightedScore             | Reliability             | Computation Cost  |
-| ----------------------------------- | --------------------------------- | ------------------------- | ----------------------- | ----------------- |
+| :---------------------------------- | :-------------------------------- | :------------------------ | :---------------------- | :---------------- |
 | Layer 1: Physical Constraints       | Forced Exit                       | Not Involved              | 100%                    | Extremely Low     |
 | Layer 2: Explicit Declaration       | Forced Exit                       | Not Involved              | ~99%                    | Extremely Low     |
 | Layer 3: Self-Referential structure | End-of-Layer Check / Accumulation | Weight 0.35 / 0.20        | High, known edge cases  | Low               |

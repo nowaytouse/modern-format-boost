@@ -934,11 +934,9 @@ fn crf_to_estimated_bitrate(crf: f32, codec: &str) -> u32 {
         _ => 1.0,
     };
 
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let val = crate::numeric_cast::f32_to_u32_sat(
+    crate::numeric_cast::f32_to_u32_sat(
         crate::numeric_cast::f64_to_f32_lossy(f64::from(base_bitrate)) * crf_factor,
-    );
-    val
+    )
 }
 
 /// Result of a smart sampling strategy for selecting representative video segments.
@@ -1810,7 +1808,6 @@ fn gpu_coarse_search_with_log_impl(
         } else {
             30.0_f32
         };
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let display_limit = crate::numeric_cast::f32_to_u32_sat(limit);
         log_msg!(
             "   ⚠️ Very large file detected → Conservative mode ({}s sample)",
@@ -1823,7 +1820,6 @@ fn gpu_coarse_search_with_log_impl(
         } else {
             45.0_f32
         };
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let display_limit = crate::numeric_cast::f32_to_u32_sat(limit);
         log_msg!(
             "   📊 Large file detected → Sequential mode ({}s sample)",
@@ -1836,7 +1832,6 @@ fn gpu_coarse_search_with_log_impl(
         } else {
             GPU_SAMPLE_DURATION
         };
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let display_limit = crate::numeric_cast::f32_to_u32_sat(limit);
         log_msg!(
             "   ✅ Normal file → Parallel mode ({}s sample)",
@@ -2105,17 +2100,12 @@ fn gpu_coarse_search_with_log_impl(
                                         if pct > 0.1 && current_secs > 0.0 && elapsed_secs > 0.0 {
                                             let speed = current_secs / elapsed_secs;
                                             if speed > 0.0 {
-                                                #[allow(
-                                                    clippy::cast_possible_truncation,
-                                                    clippy::cast_sign_loss
-                                                )]
-                                                let val = crate::numeric_cast::f64_to_u64_sat(
+                                                crate::numeric_cast::f64_to_u64_sat(
                                                     ((f64::from(actual_sample_duration)
                                                         - current_secs)
                                                         / speed)
                                                         .max(0.0),
-                                                );
-                                                val
+                                                )
                                             } else {
                                                 0
                                             }
@@ -2132,17 +2122,12 @@ fn gpu_coarse_search_with_log_impl(
                                         if let Ok(metadata) = std::fs::metadata(output) {
                                             let current_size = metadata.len();
                                             fallback_logged = false;
-                                            #[allow(
-                                                clippy::cast_possible_truncation,
-                                                clippy::cast_sign_loss
-                                            )]
-                                            let val = crate::numeric_cast::f64_to_u64_sat(
+                                            crate::numeric_cast::f64_to_u64_sat(
                                                 f64::from(
                                                     u32::try_from(current_size).unwrap_or(u32::MAX),
                                                 ) / pct.max(1.0)
                                                     * 100.0,
-                                            );
-                                            val
+                                            )
                                         } else {
                                             if !fallback_logged {
                                                 crate::log_eprintln!(
@@ -2703,9 +2688,7 @@ fn gpu_coarse_search_with_log_impl(
     };
 
     if found_compress_point && !skip_stage2 && (boundary_high - boundary_low) > 1.0 {
-        #[allow(clippy::cast_possible_truncation)]
         let mut lo = crate::numeric_cast::f32_to_i32_sat(boundary_low.ceil());
-        #[allow(clippy::cast_possible_truncation)]
         let mut hi = crate::numeric_cast::f32_to_i32_sat(boundary_high.floor());
 
         let max_binary_iter = 5;

@@ -3,11 +3,11 @@
 Backfill `directory_meme_score` by recomputing it from `source_path`.
 Stops writing the legacy boolean `directory_meme_hint` (keeps DB column for now).
 """
+
 from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Optional
 
 import psycopg2
 
@@ -79,5 +79,5 @@ def main() -> None:
     print("Backfill complete.")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

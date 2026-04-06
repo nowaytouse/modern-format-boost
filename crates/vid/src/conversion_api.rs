@@ -1003,45 +1003,46 @@ pub fn auto_convert_with_cache(
 
                 let explore_result = match config.codec {
                     SelectedCodec::Hevc => {
-                        shared_utils::explore_hevc_with_gpu_coarse_full_warm_start(
-                            input_path,
-                            &temp_path,
-                            vf_args,
-                            predicted_crf,
+                        shared_utils::explore_hevc_with_gpu(shared_utils::GpuSearchRequest {
+                            input: input.to_path_buf(),
+                            output: temp_path.clone(),
+                            vf_args: vf_args.clone(),
+                            baseline_crf: predicted_crf,
                             warm_start_crf,
-                            ultimate,
-                            config.force_ms_ssim_long,
-                            config.allow_size_tolerance,
-                            config.min_ssim,
-                            config.child_threads,
-                            hdr_x265_params_opt,
-                            config.apple_compat,
-                            if ultimate {
+                            ultimate_mode: ultimate,
+                            force_ms_ssim_long: config.force_ms_ssim_long,
+                            allow_size_tolerance: config.allow_size_tolerance,
+                            min_ssim: config.min_ssim,
+                            max_threads: config.child_threads,
+                            hdr_x265_params: hdr_x265_params_opt,
+                            apple_compat: config.apple_compat,
+                            preset: if ultimate {
                                 shared_utils::EncoderPreset::Slower
                             } else {
                                 shared_utils::EncoderPreset::Medium
                             },
-                        )
+                        })
                     }
                     SelectedCodec::Av1 => {
-                        shared_utils::explore_av1_with_gpu_coarse_full_warm_start(
-                            input_path,
-                            &temp_path,
-                            vf_args,
-                            predicted_crf,
+                        shared_utils::explore_av1_with_gpu(shared_utils::GpuSearchRequest {
+                            input: input.to_path_buf(),
+                            output: temp_path.clone(),
+                            vf_args: vf_args.clone(),
+                            baseline_crf: predicted_crf,
                             warm_start_crf,
-                            ultimate,
-                            config.force_ms_ssim_long,
-                            config.allow_size_tolerance,
-                            config.min_ssim,
-                            config.child_threads,
-                            config.apple_compat,
-                            if ultimate {
+                            ultimate_mode: ultimate,
+                            force_ms_ssim_long: config.force_ms_ssim_long,
+                            allow_size_tolerance: config.allow_size_tolerance,
+                            min_ssim: config.min_ssim,
+                            max_threads: config.child_threads,
+                            hdr_x265_params: None,
+                            apple_compat: config.apple_compat,
+                            preset: if ultimate {
                                 shared_utils::EncoderPreset::Slower
                             } else {
                                 shared_utils::EncoderPreset::Medium
                             },
-                        )
+                        })
                     }
                 }
                 .map_err(|e| VidQualityError::ConversionError(e.to_string()))?;

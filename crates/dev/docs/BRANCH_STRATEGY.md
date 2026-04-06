@@ -42,14 +42,14 @@ This project uses a dual-branch strategy to balance production stability with bl
 
 ## When to Use Which Branch
 
-### Use Main Branch If:
+### Use Main Branch If
 
 - ✅ You need production-ready, stable code
 - ✅ You want predictable dependency versions
 - ✅ You're deploying to production environments
 - ✅ You prefer crates.io ecosystem compatibility
 
-### Use Nightly Branch If:
+### Use Nightly Branch If
 
 - ✅ You want the latest features and bug fixes
 - ✅ You're contributing to development

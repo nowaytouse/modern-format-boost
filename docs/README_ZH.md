@@ -64,6 +64,7 @@
 - **HDR 守护**：强制透传 bt2020 原色、PQ/HLG 传输特性及母带显示数据。
 - **杜比视界**：通过 `dovi_tool` 提取 RPU 并注入编码器；Profile 7 自动转 8.1 增强兼容性。
 - **macOS 特性**：利用 `copyfile` 和 `setattrlist` 完美保留 Finder 标签、添加日期及原始创建时间。
+
 </details>
 
 ### 🖥️ 运行演示 (Runtime)
@@ -190,7 +191,7 @@ cargo build --release
 img run /图片/路径
 vid run /视频/路径
 
-# 使用 AV1 策略:
+# 使用 AV1 策略
 vid run --codec av1 /视频/路径
 ```
 

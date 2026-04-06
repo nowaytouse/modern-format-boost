@@ -66,8 +66,7 @@ pub fn calculate_psnr(original: &DynamicImage, converted: &DynamicImage) -> Opti
         })
         .sum();
 
-    #[allow(clippy::cast_precision_loss)]
-    let pixel_count = f64::from(u32::try_from(orig_pixels.len()).unwrap_or(u32::MAX));
+    let pixel_count = crate::numeric_cast::usize_to_f64(orig_pixels.len());
     let mse = mse_sum / (3.0 * pixel_count);
 
     if mse < 1e-10 {
@@ -114,8 +113,7 @@ pub fn calculate_ssim(original: &DynamicImage, converted: &DynamicImage) -> Opti
     if positions.is_empty() {
         return None;
     }
-    #[allow(clippy::cast_precision_loss)]
-    let count = f64::from(u32::try_from(positions.len()).unwrap_or(u32::MAX));
+    let count = crate::numeric_cast::usize_to_f64(positions.len());
     Some(ssim_sum / count)
 }
 
@@ -305,10 +303,9 @@ mod tests {
     #[test]
     fn test_identical_images() {
         let img1 = DynamicImage::ImageRgb8(RgbImage::from_fn(100, 100, |x, y| {
-            #[allow(clippy::cast_possible_truncation)]
             image::Rgb([
-                u8::try_from(x % 256).unwrap_or(0),
-                u8::try_from(y % 256).unwrap_or(0),
+                crate::numeric_cast::u32_to_u8_sat(x % 256),
+                crate::numeric_cast::u32_to_u8_sat(y % 256),
                 128,
             ])
         }));
@@ -385,8 +382,11 @@ mod tests {
     #[test]
     fn test_ms_ssim_identical() {
         let img = DynamicImage::ImageRgb8(RgbImage::from_fn(64, 64, |x, y| {
-            #[allow(clippy::cast_possible_truncation)]
-            image::Rgb([u8::try_from(x.wrapping_add(y) % 256).unwrap_or(0), 128, 200])
+            image::Rgb([
+                crate::numeric_cast::u32_to_u8_sat(x.wrapping_add(y) % 256),
+                128,
+                200,
+            ])
         }));
         let result = calculate_ms_ssim(&img, &img);
         assert!(result.is_some());

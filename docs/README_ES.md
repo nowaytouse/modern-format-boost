@@ -81,6 +81,7 @@ Cada archivo pasa por un flujo de decisión de múltiples etapas:
 - **HDR**: Preserva primarios bt2020, PQ/HLG TRC y metadatos de Mastering Display.
 - **Dolby Vision**: Extrae RPU a través de `dovi_tool` e inyecta en x265 (conversión de Perfil 7 → 8.1).
 - **macOS xattrs**: Preserva etiquetas de Finder, fecha de adición y marcas de tiempo de creación mediante `copyfile` y `setattrlist`.
+
 </details>
 
 ### 🖥️ Tiempo de ejecución

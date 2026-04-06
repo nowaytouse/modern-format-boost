@@ -51,6 +51,21 @@ pub struct ImageContentType {
     pub name: String,
 }
 
+#[derive(Debug, Clone)]
+struct ClassifierInput {
+    pub complexity: f64,
+    pub edge_density: f64,
+    pub color_diversity: f64,
+    pub texture_variance: f64,
+    pub noise_level: f64,
+    pub sharpness: f64,
+    pub contrast: f64,
+    pub has_alpha: bool,
+    pub is_animated: bool,
+    pub width: u32,
+    pub height: u32,
+}
+
 #[derive(Debug, Deserialize)]
 struct ClassifierRule {
     name: String,
@@ -166,7 +181,7 @@ pub fn analyze_image_quality(
         calculate_overall_complexity(edge_density, color_diversity, texture_variance, noise_level);
 
     let is_animated = frame_count > 1;
-    let content_type = classify_content_type(
+    let content_type = classify_content_type(ClassifierInput {
         complexity,
         edge_density,
         color_diversity,
@@ -178,7 +193,7 @@ pub fn analyze_image_quality(
         is_animated,
         width,
         height,
-    );
+    });
 
     let confidence =
         calculate_analysis_confidence(pixels, file_size, edge_density, color_diversity);
@@ -517,20 +532,20 @@ fn calculate_overall_complexity(
         .clamp(0.0, 1.0)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn classify_content_type(
-    complexity: f64,
-    edge_density: f64,
-    color_diversity: f64,
-    texture_variance: f64,
-    noise_level: f64,
-    sharpness: f64,
-    contrast: f64,
-    has_alpha: bool,
-    is_animated: bool,
-    width: u32,
-    height: u32,
-) -> ImageContentType {
+fn classify_content_type(input: ClassifierInput) -> ImageContentType {
+    let ClassifierInput {
+        complexity,
+        edge_density,
+        color_diversity,
+        texture_variance,
+        noise_level,
+        sharpness,
+        contrast,
+        has_alpha,
+        is_animated,
+        width,
+        height,
+    } = input;
     let aspect_ratio = f64::from(width) / f64::from(height.max(1));
     let rules = get_classifier_rules();
 

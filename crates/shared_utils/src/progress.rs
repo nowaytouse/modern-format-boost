@@ -191,8 +191,9 @@ fn build_coarse_progress_line(
         line.push(' ');
 
         if variant.show_bar {
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let filled = ((percent / 100.0) * bar_width as f64).round() as usize;
+            let filled = crate::numeric_cast::f64_to_usize_sat(
+                ((percent / 100.0) * bar_width as f64).round(),
+            );
             let empty = bar_width.saturating_sub(filled);
             let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
             line.push_str(progress_style::BAR_LEFT);
@@ -230,8 +231,9 @@ fn build_coarse_progress_line(
         if variant.show_bar && bar_width > min_bar {
             while bar_width > min_bar {
                 bar_width -= 1;
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                let filled = ((percent / 100.0) * bar_width as f64).round() as usize;
+                let filled = crate::numeric_cast::f64_to_usize_sat(
+                    ((percent / 100.0) * bar_width as f64).round(),
+                );
                 let empty = bar_width.saturating_sub(filled);
                 let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
                 let mut shrunk = String::new();
@@ -413,8 +415,8 @@ impl CoarseProgressBar {
 
         let eta_str = if current > 0 && current < total {
             let avg_time = elapsed.as_secs_f64() / current as f64;
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let remaining_secs = ((total - current) as f64 * avg_time) as u64;
+            let remaining_secs =
+                crate::numeric_cast::f64_to_u64_sat(((total - current) as f64) * avg_time);
             format_eta_simple(remaining_secs)
         } else {
             "---".to_string()
@@ -562,8 +564,8 @@ impl DetailedCoarseProgressBar {
         let elapsed = self.start_time.elapsed();
 
         let bar_width: usize = progress_style::BAR_WIDTH;
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let filled = ((percent / 100.0) * bar_width as f64).round() as usize;
+        let filled =
+            crate::numeric_cast::f64_to_usize_sat(((percent / 100.0) * bar_width as f64).round());
         let empty = bar_width.saturating_sub(filled);
         let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
 
@@ -1279,8 +1281,7 @@ fn format_eta(seconds: f64) -> String {
         return "unknown".to_string();
     }
 
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let secs = seconds as u64;
+    let secs = crate::numeric_cast::f64_to_u64_sat(seconds);
 
     if secs > 86400 {
         return ">24h".to_string();
