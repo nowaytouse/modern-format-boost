@@ -145,13 +145,16 @@ pub fn is_grayscale_icc_cjxl_error(stderr: &str) -> bool {
     // Example: "libpng warning: iCCP: profile 'icc': 'RGB ': RGB color space not permitted on grayscale PNG"
     // Relaxed matching: check for libpng warning + grayscale + icc/color space issues
     let has_grayscale_issue = s.contains("grayscale") || s.contains("pixel data");
-    let has_icc_issue =
-        s.contains("iccp") || s.contains("color space") || s.contains("icc profile");
-    let has_libpng_warning = s.contains("libpng warning");
+    let has_icc_issue = s.contains("iccp")
+        || s.contains("color space")
+        || s.contains("icc profile")
+        || s.contains("icc");
+    let has_libpng_warning = s.contains("libpng warning") || s.contains("png warning");
 
     s.contains("rgb color space not permitted on grayscale")
         || (has_libpng_warning && has_grayscale_issue && has_icc_issue)
         || (s.contains("iccp") && s.contains("grayscale"))
+        || (s.contains("pixel data") && s.contains("color space"))
 }
 
 /// True when cjxl failed with decode/pixel errors that may be helped by a simpler pipeline.
@@ -361,6 +364,13 @@ pub fn run_imagemagick_cjxl_pipeline(
                 crate::log_upstream_error!("cjxl", "Failed with exit code: {:?}", exit_code);
                 if !cjxl_stderr.is_empty() {
                     crate::progress_mode::emit_stderr(&format!("   📋 cjxl stderr: {cjxl_stderr}"));
+                } else if let Some(code) = exit_code {
+                    // [HARDENING] Try to provide more context if stderr is empty
+                    if code == 1 {
+                        crate::progress_mode::emit_stderr(
+                            "   💡 Tip: Exit code 1 often indicates ICC mismatch or malformed metadata.",
+                        );
+                    }
                 }
             }
             false

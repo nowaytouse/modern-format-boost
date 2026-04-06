@@ -8,6 +8,7 @@ description = "Regression test suite and development tools for Modern Format Boo
 
 [dependencies]
 shared_utils = { workspace = true }
+img = { workspace = true }
 tempfile = { workspace = true }
 rusqlite = { workspace = true }
 anyhow = { workspace = true }
@@ -20,6 +21,7 @@ walkdir = { workspace = true }
 
 [dev-dependencies]
 shared_utils = { workspace = true }
+img = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

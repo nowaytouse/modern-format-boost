@@ -6,6 +6,21 @@ All notable changes to this project will be documented in this file.
 
 ## [0.11.2] — 2026-04-05
 
+#### 🛡️ UltraHDR & cjxl Pipeline Hardening (Updated 2026-04-07)
+
+- **UltraHDR Gainmap Resilience**:
+    - **Search Window Fallback**: Implemented a 4KB "sliding window" search for JPEG SOI markers (`0xFFD8`) to handle cases where mobile camera MPF metadata provides offsets with a constant bias.
+    - **Absolute Offset Support**: Added fallback detection for absolute file-start offsets vs. relative MPF-base offsets.
+    - **Truncation Recovery**: Added graceful recovery for files where the gainmap data is physically shorter than its metadata claims (common in truncated downloads), allowing partial extraction and successful HDR synthesis.
+    - **MPF Segment Hardening**: Improved MPF segment detection to support non-standard `XMPF` identifiers found in modern mobile devices.
+- **`cjxl` Upstream Robustness**:
+    - **Grayscale ICC Mismatch Detection**: Hardened the detection of `libpng` warnings and "Grayscale image + RGB ICC profile" mismatches that cause `cjxl` exit code 1.
+    - **Automated Fallback**: Triggered the ImageMagick fallback pipeline (`-strip`) specifically for these metadata-related failures, ensuring zero-touch conversion for problematic grayscale sources.
+    - **Diagnostic Tips**: Added actionable "💡 Tip" messages to logs when `cjxl` fails, identifying metadata inconsistencies and suggesting fixes.
+- **Testing Infrastructure**:
+    - **Real-World Regression Tests**: Added integration tests (`test_ultrahdr_real_file_final.rs`) that validate the pipeline against problematic real-world HDR samples.
+    - **Error Simulation**: Added `test_cjxl_errors.rs` to simulate grayscale ICC mismatches and verify the fallback recovery logic.
+
 #### 🧹 Codebase Cleanup & Clippy Hygiene (Updated 2026-04-06)
 
 - **Workspace-wide Clippy Compliance**: Resolved numerous `pedantic`, `nursery`, and `restriction` warnings (e.g., `doc_markdown`, `items_after_statements`, `collapsible_if`, `map_unwrap_or`, `missing_panics_doc`, `missing_errors_doc`, `uninlined_format_args`) across `shared_utils`, `vid`, `img`, and `dev` crates.

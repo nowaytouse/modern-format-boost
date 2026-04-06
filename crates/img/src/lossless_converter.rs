@@ -438,6 +438,8 @@ pub fn convert_to_jxl(
                 || stderr.contains("Decoding failed")
                 || stderr.contains("pixel data")
                 || stderr.contains("Error while decoding")
+                || stderr.contains("libpng warning")
+                || shared_utils::jxl_utils::is_grayscale_icc_cjxl_error(&stderr)
             {
                 // Check if this is a grayscale ICC profile mismatch error
                 // If so, use ImageMagick fallback which has proper retry logic with -strip

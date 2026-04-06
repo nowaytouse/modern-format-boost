@@ -958,31 +958,61 @@ fn extract_gainmap_from_mpf(jpeg_data: &[u8], mpf_data: &[u8]) -> Result<Vec<u8>
     // MPF offset is relative to the MPF base (position after "MPF\0")
     // We need to find the absolute position in the JPEG file
     let mpf_base_pos = find_mpf_base_position(jpeg_data)?;
-    let gainmap_abs_pos = mpf_base_pos + usize::try_from(gainmap_offset).unwrap_or(0);
+    let mut gainmap_abs_pos = mpf_base_pos + usize::try_from(gainmap_offset).unwrap_or(0);
+    let gainmap_len_usize = usize::try_from(gainmap_length).unwrap_or(0);
+    // [HARDENING] Check for absolute offset fallback (common in some non-standard mobile implementations)
+    let mut actual_abs_pos = gainmap_abs_pos;
+    let mut actual_len = gainmap_len_usize;
+    if gainmap_abs_pos + gainmap_len_usize > jpeg_data.len() {
+        // Option A: Check if the offset was actually absolute from file start
+        let abs_pos = usize::try_from(gainmap_offset).unwrap_or(0);
+        if abs_pos + gainmap_len_usize <= jpeg_data.len()
+            && jpeg_data.get(abs_pos..abs_pos + 2) == Some(&[0xFF, 0xD8])
+        {
+            actual_abs_pos = abs_pos;
+        } else {
+            // Option B: Search Fallback (scan for nearby SOI if offset has bias)
+            // Some cameras have a fixed offset bias. We'll look 4KB back/forward.
+            let search_start = gainmap_abs_pos.saturating_sub(4096);
+            let search_end = (gainmap_abs_pos + 4096).min(jpeg_data.len());
+            let mut found_soi = false;
 
-    if gainmap_abs_pos + usize::try_from(gainmap_length).unwrap_or(0) > jpeg_data.len() {
-        return Err(format!(
-            "Gainmap data at position {} with length {} exceeds JPEG file size {}",
-            gainmap_abs_pos,
-            gainmap_length,
-            jpeg_data.len()
-        ));
+            if search_start < jpeg_data.len() {
+                let range = &jpeg_data[search_start..search_end];
+                if let Some(offset) = range
+                    .windows(2)
+                    .position(|w| w == [0xFF, 0xD8])
+                {
+                    actual_abs_pos = search_start + offset;
+                    found_soi = true;
+                    // If it exceeds the length, truncate it
+                    if actual_abs_pos + gainmap_len_usize > jpeg_data.len() {
+                        actual_len = jpeg_data.len() - actual_abs_pos;
+                    }
+                }
+            }
+
+            if !found_soi {
+                return Err(format!(
+                    "Gainmap data at calculated position {} (offset {}, base {}) with length {} exceeds JPEG file size {}",
+                    gainmap_abs_pos, gainmap_offset, mpf_base_pos, gainmap_len_usize, jpeg_data.len()
+                ));
+            }
+        }
     }
 
     // Verify gainmap starts with JPEG SOI
-    if jpeg_data[gainmap_abs_pos] != 0xFF || jpeg_data[gainmap_abs_pos + 1] != 0xD8 {
+    if actual_abs_pos >= jpeg_data.len()
+        || jpeg_data.get(actual_abs_pos..actual_abs_pos + 2) != Some(&[0xFF, 0xD8])
+    {
         return Err(format!(
-            "Gainmap does not start with JPEG SOI (FFD8): found {:02X} {:02X} at position {}",
-            jpeg_data[gainmap_abs_pos],
-            jpeg_data[gainmap_abs_pos + 1],
-            gainmap_abs_pos
+            "Gainmap at position {} is not a valid JPEG (SOI missing)",
+            actual_abs_pos
         ));
     }
 
-    // Extract gainmap data
-    let gainmap_data = jpeg_data
-        [gainmap_abs_pos..gainmap_abs_pos + usize::try_from(gainmap_length).unwrap_or(0)]
-        .to_vec();
+    // Extract gainmap data (using the validated bounds)
+    let gainmap_data = jpeg_data[actual_abs_pos..actual_abs_pos + actual_len].to_vec();
 
     Ok(gainmap_data)
 }
@@ -1372,5 +1402,77 @@ mod tests {
 
         let result = extract_xmp_from_jpeg_data(&data);
         assert!(result.is_none()); // Should stop at SOS and not find the "fake" APP1 in scan data
+    }
+
+    #[test]
+    fn test_extract_gainmap_absolute_fallback() {
+        // [GIVEN] A JPEG with an MPF segment where the offset is absolute but not relative
+        let mut data = vec![0xFF, 0xD8]; // SOI
+        
+        // 1. APP1 XMP (simplified but must contain hdrgm:)
+        let xmp_content = b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF><rdf:Description hdrgm:GainMapMax=\"2.0\" xmlns:hdrgm=\"http://ns.adobe.com/hdr-gain-map/1.0/\"/></rdf:RDF></x:xmpmeta>";
+        let xmp_hdr = b"http://ns.adobe.com/xap/1.0/\0";
+        data.push(0xFF); data.push(0xE1); // APP1
+        let xmp_len = (xmp_hdr.len() + xmp_content.len() + 2) as u16;
+        data.extend_from_slice(&xmp_len.to_be_bytes());
+        data.extend_from_slice(xmp_hdr);
+        data.extend_from_slice(xmp_content);
+        
+        // 2. Identify where MPF payload starts
+        let mpf_id = b"MPF\0";
+        let tiff_hdr = b"MM\0*"; // Big Endian
+        let ifd_offset = 8u32;
+        
+        let mut mpf_payload = Vec::new();
+        mpf_payload.extend_from_slice(tiff_hdr);
+        mpf_payload.extend_from_slice(&ifd_offset.to_be_bytes());
+        mpf_payload.extend_from_slice(&2u16.to_be_bytes()); // 2 IFD entries
+        
+        // Entry 1: NumberOfImages (tag 0xB001)
+        mpf_payload.extend_from_slice(&0xB001u16.to_be_bytes());
+        mpf_payload.extend_from_slice(&4u16.to_be_bytes());     // LONG
+        mpf_payload.extend_from_slice(&1u32.to_be_bytes());
+        mpf_payload.extend_from_slice(&2u32.to_be_bytes());     // 2 images
+        
+        // Entry 2: MPEntry (tag 0xB002)
+        let mp_entry_val_offset = (mpf_payload.len() + 12 + 4) as u32;
+        mpf_payload.extend_from_slice(&0xB002u16.to_be_bytes());
+        mpf_payload.extend_from_slice(&7u16.to_be_bytes());     // UNDEFINED
+        mpf_payload.extend_from_slice(&32u32.to_be_bytes());    // 2 entries
+        mpf_payload.extend_from_slice(&mp_entry_val_offset.to_be_bytes());
+        
+        mpf_payload.extend_from_slice(&0u32.to_be_bytes()); // Next IFD offset
+        
+        // MP Entry 0 (Primary)
+        mpf_payload.extend_from_slice(&vec![0u8; 16]);
+        
+        // 3. MP Entry 1 (Gainmap) - ABSOLUTE OFFSET
+        // Calculate where the APP2 segment WILL end
+        let app2_segment_overhead = 2 + 2 + mpf_id.len();
+        let absolute_offset = (data.len() + app2_segment_overhead + mpf_payload.len() + 16) as u32; 
+        
+        let gainmap_size = 4u32;
+        mpf_payload.extend_from_slice(&0u32.to_be_bytes()); // Attributes
+        mpf_payload.extend_from_slice(&gainmap_size.to_be_bytes()); // Size
+        mpf_payload.extend_from_slice(&absolute_offset.to_be_bytes()); // Absolute offset!
+        mpf_payload.extend_from_slice(&0u32.to_be_bytes()); // Deps
+        
+        // Assemble APP2 segment
+        let app2_len = (mpf_id.len() + mpf_payload.len() + 2) as u16;
+        data.push(0xFF); data.push(0xE2); // APP2 marker
+        data.extend_from_slice(&app2_len.to_be_bytes());
+        data.extend_from_slice(mpf_id);
+        data.extend_from_slice(&mpf_payload);
+        
+        // 4. Place Gainmap at the end (absolute_offset)
+        assert_eq!(data.len(), absolute_offset as usize);
+        data.extend_from_slice(&[0xFF, 0xD8, 0xFF, 0xD9]); // Valid JPEG (SOI+EOI)
+        
+        // [WHEN] We search for MPF segment
+        let mpf_segment = find_mpf_segment(&data).expect("Should find MPF");
+        
+        // [THEN] Standard relative logic would fail, but fallback should work
+        let gainmap_extracted = extract_gainmap_from_mpf(&data, &mpf_segment).expect("Fallback failed");
+        assert_eq!(gainmap_extracted, vec![0xFF, 0xD8, 0xFF, 0xD9]);
     }
 }

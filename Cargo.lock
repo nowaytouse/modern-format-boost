@@ -704,6 +704,7 @@ dependencies = [
  "blake3",
  "chrono",
  "clap",
+ "img",
  "rusqlite",
  "serde",
  "serde_json",
@@ -1034,7 +1035,7 @@ dependencies = [
 [[package]]
 name = "hashbrown"
 version = "0.16.1"
-source = "git+https://github.com/rust-lang/hashbrown#e16b65ce5a57c62cca8ae3cbd008cdb4e2bd62fc"
+source = "git+https://github.com/rust-lang/hashbrown#b1c4403d573a8fd83ecc2f54c0f1b407f1b86d24"
 
 [[package]]
 name = "hashlink"
@@ -2625,7 +2626,7 @@ checksum = "756daf9b1013ebe47a8776667b466417e2d4c5679d441c26230efd9ef78692db"
 [[package]]
 name = "tracing"
 version = "0.1.44"
-source = "git+https://github.com/tokio-rs/tracing#df055168a10373f73ac2ba4111563f6f0a1c67e6"
+source = "git+https://github.com/tokio-rs/tracing#4fb9ca34f9abb1dc1aaf70203eccee5c74d63635"
 dependencies = [
  "pin-project-lite",
  "tracing-attributes",
@@ -2635,7 +2636,7 @@ dependencies = [
 [[package]]
 name = "tracing-appender"
 version = "0.2.4"
-source = "git+https://github.com/tokio-rs/tracing#df055168a10373f73ac2ba4111563f6f0a1c67e6"
+source = "git+https://github.com/tokio-rs/tracing#4fb9ca34f9abb1dc1aaf70203eccee5c74d63635"
 dependencies = [
  "crossbeam-channel",
  "symlink",
@@ -2647,7 +2648,7 @@ dependencies = [
 [[package]]
 name = "tracing-attributes"
 version = "0.1.31"
-source = "git+https://github.com/tokio-rs/tracing#df055168a10373f73ac2ba4111563f6f0a1c67e6"
+source = "git+https://github.com/tokio-rs/tracing#4fb9ca34f9abb1dc1aaf70203eccee5c74d63635"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2657,7 +2658,7 @@ dependencies = [
 [[package]]
 name = "tracing-core"
 version = "0.1.36"
-source = "git+https://github.com/tokio-rs/tracing#df055168a10373f73ac2ba4111563f6f0a1c67e6"
+source = "git+https://github.com/tokio-rs/tracing#4fb9ca34f9abb1dc1aaf70203eccee5c74d63635"
 dependencies = [
  "valuable",
 ]
@@ -2665,7 +2666,7 @@ dependencies = [
 [[package]]
 name = "tracing-log"
 version = "0.2.0"
-source = "git+https://github.com/tokio-rs/tracing#df055168a10373f73ac2ba4111563f6f0a1c67e6"
+source = "git+https://github.com/tokio-rs/tracing#4fb9ca34f9abb1dc1aaf70203eccee5c74d63635"
 dependencies = [
  "log",
  "once_cell",
@@ -2675,7 +2676,7 @@ dependencies = [
 [[package]]
 name = "tracing-serde"
 version = "0.2.0"
-source = "git+https://github.com/tokio-rs/tracing#df055168a10373f73ac2ba4111563f6f0a1c67e6"
+source = "git+https://github.com/tokio-rs/tracing#4fb9ca34f9abb1dc1aaf70203eccee5c74d63635"
 dependencies = [
  "serde",
  "tracing-core",
@@ -2684,7 +2685,7 @@ dependencies = [
 [[package]]
 name = "tracing-subscriber"
 version = "0.3.23"
-source = "git+https://github.com/tokio-rs/tracing#df055168a10373f73ac2ba4111563f6f0a1c67e6"
+source = "git+https://github.com/tokio-rs/tracing#4fb9ca34f9abb1dc1aaf70203eccee5c74d63635"
 dependencies = [
  "matchers",
  "nu-ansi-term",
