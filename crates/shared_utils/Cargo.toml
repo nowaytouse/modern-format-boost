@@ -13,6 +13,7 @@ workspace = true
 tempfile = { workspace = true }
 proptest = { workspace = true }
 insta    = { workspace = true }
+criterion = { workspace = true }
 
 [[bench]]
 name = "quality_benches"

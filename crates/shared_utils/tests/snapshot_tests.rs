@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use insta::assert_debug_snapshot;
-    use shared_utils::ffmpeg_builder::{FfmpegBuilder, VideoCodec, EncoderPreset};
+    use shared_utils::ffmpeg_builder::{EncoderPreset, FfmpegBuilder, VideoCodec};
     use shared_utils::jxl_builder::CjxlBuilder;
     use std::path::Path;
 
@@ -20,7 +20,7 @@ mod tests {
             .get_args()
             .map(|s| s.to_string_lossy().to_string())
             .collect();
-        
+
         assert_debug_snapshot!(args);
     }
 

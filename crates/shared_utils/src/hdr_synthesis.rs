@@ -14,11 +14,11 @@
 //! - Embeds depth as JXL Extra Channel via jpegxl-rs FFI
 
 use anyhow::{anyhow, Context, Result};
-use serde::{Deserialize, Serialize};
 use image::{DynamicImage, ImageBuffer};
 use libheif_rs::{ColorSpace, HeifContext, ImageHandle, ItemId, RgbChroma};
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
+use serde::{Deserialize, Serialize};
 use std::env;
 use std::path::Path;
 use tracing::{info, warn};

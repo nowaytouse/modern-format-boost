@@ -1,7 +1,7 @@
 use proptest::prelude::*;
+use serde_json;
 use shared_utils::float_compare::approx_eq_f64;
 use shared_utils::image_detection::PrecisionMetadata;
-use serde_json;
 
 proptest! {
     #[test]

@@ -1,20 +1,28 @@
 #![no_main]
 
+use arbitrary::{Arbitrary, Unstructured};
+use image::{DynamicImage, GrayImage, RgbImage};
 use libfuzzer_sys::fuzz_target;
 use shared_utils::hdr_synthesis::{synthesize_hdr, GainMapParams};
-use image::{DynamicImage, RgbImage, GrayImage};
-use arbitrary::{Arbitrary, Unstructured};
 
 fuzz_target!(|data: &[u8]| {
     let mut u = Unstructured::new(data);
 
     // 1. Generate mocking Parameters
-    let Ok(params) = GainMapParams::arbitrary(&mut u) else { return; };
-    
+    let Ok(params) = GainMapParams::arbitrary(&mut u) else {
+        return;
+    };
+
     // 2. Generate mocking dimensions (constrained to avoid OOM)
-    let Ok(width) = u.int_in_range(1..=128) else { return; };
-    let Ok(height) = u.int_in_range(1..=128) else { return; };
-    let Ok(needs_p3_conversion) = bool::arbitrary(&mut u) else { return; };
+    let Ok(width) = u.int_in_range(1..=128) else {
+        return;
+    };
+    let Ok(height) = u.int_in_range(1..=128) else {
+        return;
+    };
+    let Ok(needs_p3_conversion) = bool::arbitrary(&mut u) else {
+        return;
+    };
 
     // 3. Create mocking images
     // We use small images to keep the fuzzing loop tight
