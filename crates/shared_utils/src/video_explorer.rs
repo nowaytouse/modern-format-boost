@@ -1058,7 +1058,7 @@ impl VideoExplorer {
         let use_gpu = if let Some(b) = use_gpu {
             b
         } else {
-            let gpu = crate::gpu_accel::GpuAccel::detect();
+            let gpu = crate::gpu_accel::GpuAccel::detect_with_retry();
             gpu.is_available()
                 && match encoder {
                     VideoEncoder::Hevc => gpu.get_hevc_encoder().is_some(),
@@ -2483,7 +2483,7 @@ impl VideoExplorer {
             .preset(self.preset);
 
         let accel_type = if self.use_gpu {
-            let gpu = crate::gpu_accel::GpuAccel::detect();
+            let gpu = crate::gpu_accel::GpuAccel::detect_with_retry();
             format!("🚀 GPU ({})", gpu.gpu_type)
         } else {
             "CPU".to_string()

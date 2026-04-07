@@ -6,6 +6,27 @@ All notable changes to this project will be documented in this file.
 
 ## [0.11.2] — 2026-04-05
 
+### 🔄 GPU Detection Resilient Caching & Diagnostic Enhancements
+
+- **Soft Cache Mechanism**: Replaced the permanent singleton lock with a soft-cached + negative TTL strategy:
+  - Successful GPU detections remain cached permanently (preserving existing behavior)
+  - Failed probes are soft-cached for 5 seconds (`GPU_NEGATIVE_CACHE_TTL`) and automatically re-probed afterward
+  - Resolves transient startup failures (device-busy, permission errors) that previously latched CPU mode for the entire process lifetime
+- **New Public APIs**:
+  - `GpuAccel::detect_with_retry()` — forces an immediate re-probe when the cached state is currently unavailable
+  - `GpuAccel::last_probe_diagnostics()` — returns diagnostic messages from the last GPU probe attempt
+  - `GpuAccel::detect_fresh()` — bypasses the cache, performs a fresh detection, and updates the cache
+- **Encoder Probe Refactoring**:
+  - Introduced unified `probe_listed_encoder()` and `assemble()` methods, eliminating duplicated code across platform-specific detectors (NVENC/QSV/AMF/VAAPI)
+  - `test_encoder()` now returns `Result<(), String>` instead of `bool`, carrying failure reasons
+  - `get_available_encoders()` returns `Result<Vec<String>, String>` to surface detection errors explicitly
+- **FFmpeg Error Summarization**:
+  - Added `summarize_ffmpeg_failure_line()` and `summarize_ffmpeg_failure_output()` utility functions
+  - Intelligently extracts key diagnostic lines (permission issues, device unavailable, unsupported parameters) while filtering noise
+  - GPU detection info output now includes "Probe note" diagnostic lines to help users understand detection failures
+- **Call Site Updates**: Upgraded `detect()` → `detect_with_retry()` in `video_explorer.rs` (2 locations) and `gpu_coarse_search.rs` (1 location)
+- **Test Coverage**: Added `test_negative_gpu_cache_refresh_policy` and `test_summarize_ffmpeg_failure_line_prefers_specific_diagnostic` to verify cache refresh behavior and error summarization logic
+
 ### ⚙️ Phase 3: Configuration & Observability Hardening (Updated 2026-04-07)
 
 - **Configuration Globalization**:

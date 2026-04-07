@@ -256,7 +256,31 @@ pub const GPU_ABSOLUTE_MAX_ITERATIONS: u32 = 750;
 /// Maximum number of iterations for GPU coarse search (alias for `GPU_ABSOLUTE_MAX_ITERATIONS`).
 pub const GPU_MAX_ITERATIONS: u32 = GPU_ABSOLUTE_MAX_ITERATIONS;
 
-static GPU_ACCEL: OnceLock<GpuAccel> = OnceLock::new();
+const GPU_NEGATIVE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(5);
+
+#[derive(Debug, Clone)]
+struct CachedGpuAccel {
+    accel: GpuAccel,
+    diagnostics: Vec<String>,
+    last_probe: std::time::Instant,
+}
+
+impl CachedGpuAccel {
+    fn probe_now() -> Self {
+        let (accel, diagnostics) = GpuAccel::detect_internal();
+        Self {
+            accel,
+            diagnostics,
+            last_probe: std::time::Instant::now(),
+        }
+    }
+
+    fn should_refresh(&self) -> bool {
+        !self.accel.enabled && self.last_probe.elapsed() >= GPU_NEGATIVE_CACHE_TTL
+    }
+}
+
+static GPU_ACCEL: OnceLock<Mutex<CachedGpuAccel>> = OnceLock::new();
 
 /// Maximum concurrent GPU encode tasks (probe/encode). Read from env `MODERN_FORMAT_BOOST_GPU_CONCURRENCY` (default 4).
 fn gpu_concurrency_max() -> usize {
@@ -434,21 +458,49 @@ impl Default for GpuAccel {
 }
 
 impl GpuAccel {
-    /// Detects available GPU acceleration and returns a singleton reference.
+    /// Detects available GPU acceleration and returns a cached snapshot.
     ///
-    /// The result is cached for the lifetime of the program.
-    pub fn detect() -> &'static Self {
-        GPU_ACCEL.get_or_init(Self::detect_internal)
+    /// Successful probes stay cached. Failed probes are soft-cached and automatically retried
+    /// after a short TTL so transient startup or device-busy failures do not latch CPU mode for
+    /// the lifetime of the process.
+    pub fn detect() -> Self {
+        let cached = Self::cached_state();
+        if cached.should_refresh() {
+            return Self::detect_fresh();
+        }
+        cached.accel
+    }
+
+    /// Detects available GPU acceleration and forces an immediate re-probe if the cached state is
+    /// currently unavailable.
+    #[must_use]
+    pub fn detect_with_retry() -> Self {
+        let cached = Self::cached_state();
+        if cached.accel.enabled {
+            cached.accel
+        } else {
+            Self::detect_fresh()
+        }
     }
 
     /// Performs a fresh GPU detection, bypassing the singleton cache.
     #[must_use]
     pub fn detect_fresh() -> Self {
-        Self::detect_internal()
+        let probed = CachedGpuAccel::probe_now();
+        let accel = probed.accel.clone();
+        Self::store_cached_state(probed);
+        accel
+    }
+
+    /// Returns diagnostics from the last GPU probe attempt.
+    #[must_use]
+    pub fn last_probe_diagnostics() -> Vec<String> {
+        Self::cached_state().diagnostics
     }
 
     /// Prints GPU detection information to stderr.
     pub fn print_detection_info(&self) {
+        let diagnostics = Self::last_probe_diagnostics();
         if !crate::progress_mode::is_verbose_mode() {
             if self.enabled {
                 // Log to file only (stderr layer filters out target "gpu_detection" for less terminal noise).
@@ -470,370 +522,374 @@ impl GpuAccel {
             if let Some(enc) = &self.h264_encoder {
                 crate::log_eprintln!("      • H.264: {}", enc.name);
             }
+            for diagnostic in diagnostics.iter().take(3) {
+                crate::log_eprintln!("      • Probe note: {}", diagnostic);
+            }
         } else {
             crate::log_eprintln!("   ⚠️ No GPU acceleration available, using CPU encoding");
+            for diagnostic in diagnostics.iter().take(3) {
+                crate::log_eprintln!("      • {}", diagnostic);
+            }
         }
     }
 
-    fn detect_internal() -> Self {
-        let encoders = get_available_encoders();
+    fn cached_state() -> CachedGpuAccel {
+        GPU_ACCEL
+            .get_or_init(|| Mutex::new(CachedGpuAccel::probe_now()))
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    fn store_cached_state(state: CachedGpuAccel) {
+        let cache = GPU_ACCEL.get_or_init(|| Mutex::new(state.clone()));
+        *cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = state;
+    }
+
+    fn detect_internal() -> (Self, Vec<String>) {
+        let encoders = match get_available_encoders() {
+            Ok(encoders) => encoders,
+            Err(err) => return (Self::default(), vec![err]),
+        };
+        let mut diagnostics = Vec::new();
 
         #[cfg(target_os = "macos")]
         {
-            if let Some(accel) = Self::try_videotoolbox(&encoders) {
-                return accel;
+            if let Some(accel) = Self::try_videotoolbox(&encoders, &mut diagnostics) {
+                return (accel, diagnostics);
             }
         }
 
         #[cfg(not(target_os = "macos"))]
         {
-            if let Some(accel) = Self::try_nvenc(&encoders) {
-                return accel;
+            if let Some(accel) = Self::try_nvenc(&encoders, &mut diagnostics) {
+                return (accel, diagnostics);
             }
-            if let Some(accel) = Self::try_qsv(&encoders) {
-                return accel;
+            if let Some(accel) = Self::try_qsv(&encoders, &mut diagnostics) {
+                return (accel, diagnostics);
             }
         }
 
         #[cfg(target_os = "windows")]
-        if let Some(accel) = Self::try_amf(&encoders) {
-            return accel;
+        if let Some(accel) = Self::try_amf(&encoders, &mut diagnostics) {
+            return (accel, diagnostics);
         }
 
         #[cfg(target_os = "linux")]
-        if let Some(accel) = Self::try_vaapi(&encoders) {
-            return accel;
+        if let Some(accel) = Self::try_vaapi(&encoders, &mut diagnostics) {
+            return (accel, diagnostics);
         }
 
-        Self::default()
+        if diagnostics.is_empty() {
+            diagnostics.push(
+                "ffmpeg reported no supported hardware video encoders for this platform"
+                    .to_string(),
+            );
+        }
+
+        (Self::default(), diagnostics)
+    }
+
+    fn assemble(
+        gpu_type: GpuType,
+        hevc_encoder: Option<GpuEncoder>,
+        av1_encoder: Option<GpuEncoder>,
+        h264_encoder: Option<GpuEncoder>,
+    ) -> Option<Self> {
+        if hevc_encoder.is_none() && av1_encoder.is_none() && h264_encoder.is_none() {
+            None
+        } else {
+            Some(Self {
+                gpu_type,
+                hevc_encoder,
+                av1_encoder,
+                h264_encoder,
+                enabled: true,
+            })
+        }
+    }
+
+    fn probe_listed_encoder(
+        encoders: &[String],
+        encoder: GpuEncoder,
+        diagnostics: &mut Vec<String>,
+    ) -> Option<GpuEncoder> {
+        if !encoders.iter().any(|line| line.contains(encoder.name)) {
+            return None;
+        }
+
+        let name = encoder.name;
+        match test_encoder(&encoder) {
+            Ok(()) => Some(encoder),
+            Err(err) => {
+                diagnostics.push(format!("{name}: {err}"));
+                None
+            }
+        }
     }
 
     #[cfg(target_os = "macos")]
-    fn try_videotoolbox(encoders: &[String]) -> Option<Self> {
-        let has_hevc = encoders.iter().any(|e| e.contains("hevc_videotoolbox"));
-        let has_h264 = encoders.iter().any(|e| e.contains("h264_videotoolbox"));
+    fn try_videotoolbox(encoders: &[String], diagnostics: &mut Vec<String>) -> Option<Self> {
+        let hevc_encoder = Self::probe_listed_encoder(
+            encoders,
+            GpuEncoder {
+                gpu_type: GpuType::Apple,
+                name: "hevc_videotoolbox",
+                codec: "hevc",
+                supports_crf: true,
+                crf_param: "q:v",
+                crf_range: (0, 100),
+                extra_args: vec![
+                    crate::constants::FFMPEG_ARG_PROFILE_VIDEO,
+                    crate::constants::VAL_MAIN,
+                    crate::constants::FFMPEG_ARG_TAG_VIDEO,
+                    crate::constants::FFMPEG_TAG_HVC1,
+                ],
+            },
+            diagnostics,
+        );
+        let h264_encoder = Self::probe_listed_encoder(
+            encoders,
+            GpuEncoder {
+                gpu_type: GpuType::Apple,
+                name: "h264_videotoolbox",
+                codec: "h264",
+                supports_crf: true,
+                crf_param: "q:v",
+                crf_range: (0, 100),
+                extra_args: vec![
+                    crate::constants::FFMPEG_ARG_PROFILE_VIDEO,
+                    crate::constants::VAL_HIGH,
+                ],
+            },
+            diagnostics,
+        );
 
-        if !has_hevc && !has_h264 {
+        if hevc_encoder.is_none() && h264_encoder.is_none() {
             return None;
         }
 
-        if has_hevc && !test_encoder("hevc_videotoolbox") {
-            return None;
-        }
-
-        Some(Self {
-            gpu_type: GpuType::Apple,
-            hevc_encoder: if has_hevc {
-                Some(GpuEncoder {
-                    gpu_type: GpuType::Apple,
-                    name: "hevc_videotoolbox",
-                    codec: "hevc",
-                    supports_crf: true,
-                    crf_param: "q:v",
-                    crf_range: (0, 100),
-                    extra_args: vec![
-                        crate::constants::FFMPEG_ARG_PROFILE_VIDEO,
-                        crate::constants::VAL_MAIN,
-                        crate::constants::FFMPEG_ARG_TAG_VIDEO,
-                        crate::constants::FFMPEG_TAG_HVC1,
-                    ],
-                })
-            } else {
-                None
-            },
-            av1_encoder: None,
-            h264_encoder: if has_h264 {
-                Some(GpuEncoder {
-                    gpu_type: GpuType::Apple,
-                    name: "h264_videotoolbox",
-                    codec: "h264",
-                    supports_crf: true,
-                    crf_param: "q:v",
-                    crf_range: (0, 100),
-                    extra_args: vec![
-                        crate::constants::FFMPEG_ARG_PROFILE_VIDEO,
-                        crate::constants::VAL_HIGH,
-                    ],
-                })
-            } else {
-                None
-            },
-            enabled: true,
-        })
+        Self::assemble(GpuType::Apple, hevc_encoder, None, h264_encoder)
     }
 
     #[cfg(not(target_os = "macos"))]
-    fn try_nvenc(encoders: &[String]) -> Option<Self> {
-        let has_hevc = encoders.iter().any(|e| e.contains("hevc_nvenc"));
-        let has_av1 = encoders.iter().any(|e| e.contains("av1_nvenc"));
-        let has_h264 = encoders.iter().any(|e| e.contains("h264_nvenc"));
-
-        if !has_hevc && !has_av1 && !has_h264 {
-            return None;
-        }
-
-        if has_hevc && !test_encoder("hevc_nvenc") {
-            return None;
-        }
-
-        Some(Self {
-            gpu_type: GpuType::Nvidia,
-            hevc_encoder: if has_hevc {
-                Some(GpuEncoder {
-                    gpu_type: GpuType::Nvidia,
-                    name: "hevc_nvenc",
-                    codec: "hevc",
-                    supports_crf: true,
-                    crf_param: "cq",
-                    crf_range: (0, 51),
-                    extra_args: vec![
-                        crate::constants::FFMPEG_ARG_PRESET,
-                        crate::constants::VAL_P4,
-                        crate::constants::FFMPEG_ARG_TUNE,
-                        crate::constants::VAL_HQ,
-                        crate::constants::FFMPEG_ARG_RC,
-                        crate::constants::VAL_VBR,
-                        crate::constants::FFMPEG_ARG_PROFILE_VIDEO,
-                        crate::constants::VAL_MAIN,
-                    ],
-                })
-            } else {
-                None
+    fn try_nvenc(encoders: &[String], diagnostics: &mut Vec<String>) -> Option<Self> {
+        let hevc_encoder = Self::probe_listed_encoder(
+            encoders,
+            GpuEncoder {
+                gpu_type: GpuType::Nvidia,
+                name: "hevc_nvenc",
+                codec: "hevc",
+                supports_crf: true,
+                crf_param: "cq",
+                crf_range: (0, 51),
+                extra_args: vec![
+                    crate::constants::FFMPEG_ARG_PRESET,
+                    crate::constants::VAL_P4,
+                    crate::constants::FFMPEG_ARG_TUNE,
+                    crate::constants::VAL_HQ,
+                    crate::constants::FFMPEG_ARG_RC,
+                    crate::constants::VAL_VBR,
+                    crate::constants::FFMPEG_ARG_PROFILE_VIDEO,
+                    crate::constants::VAL_MAIN,
+                ],
             },
-            av1_encoder: if has_av1 {
-                Some(GpuEncoder {
-                    gpu_type: GpuType::Nvidia,
-                    name: "av1_nvenc",
-                    codec: "av1",
-                    supports_crf: true,
-                    crf_param: "cq",
-                    crf_range: (0, 63),
-                    extra_args: vec![
-                        crate::constants::FFMPEG_ARG_PRESET,
-                        crate::constants::VAL_P4,
-                        crate::constants::FFMPEG_ARG_TUNE,
-                        crate::constants::VAL_HQ,
-                        crate::constants::FFMPEG_ARG_RC,
-                        crate::constants::VAL_VBR,
-                    ],
-                })
-            } else {
-                None
+            diagnostics,
+        );
+        let av1_encoder = Self::probe_listed_encoder(
+            encoders,
+            GpuEncoder {
+                gpu_type: GpuType::Nvidia,
+                name: "av1_nvenc",
+                codec: "av1",
+                supports_crf: true,
+                crf_param: "cq",
+                crf_range: (0, 63),
+                extra_args: vec![
+                    crate::constants::FFMPEG_ARG_PRESET,
+                    crate::constants::VAL_P4,
+                    crate::constants::FFMPEG_ARG_TUNE,
+                    crate::constants::VAL_HQ,
+                    crate::constants::FFMPEG_ARG_RC,
+                    crate::constants::VAL_VBR,
+                ],
             },
-            h264_encoder: if has_h264 {
-                Some(GpuEncoder {
-                    gpu_type: GpuType::Nvidia,
-                    name: "h264_nvenc",
-                    codec: "h264",
-                    supports_crf: true,
-                    crf_param: "cq",
-                    crf_range: (0, 51),
-                    extra_args: vec![
-                        crate::constants::FFMPEG_ARG_PRESET,
-                        crate::constants::VAL_P4,
-                        crate::constants::FFMPEG_ARG_TUNE,
-                        crate::constants::VAL_HQ,
-                        crate::constants::FFMPEG_ARG_RC,
-                        crate::constants::VAL_VBR,
-                        crate::constants::FFMPEG_ARG_PROFILE_VIDEO,
-                        crate::constants::VAL_HIGH,
-                    ],
-                })
-            } else {
-                None
+            diagnostics,
+        );
+        let h264_encoder = Self::probe_listed_encoder(
+            encoders,
+            GpuEncoder {
+                gpu_type: GpuType::Nvidia,
+                name: "h264_nvenc",
+                codec: "h264",
+                supports_crf: true,
+                crf_param: "cq",
+                crf_range: (0, 51),
+                extra_args: vec![
+                    crate::constants::FFMPEG_ARG_PRESET,
+                    crate::constants::VAL_P4,
+                    crate::constants::FFMPEG_ARG_TUNE,
+                    crate::constants::VAL_HQ,
+                    crate::constants::FFMPEG_ARG_RC,
+                    crate::constants::VAL_VBR,
+                    crate::constants::FFMPEG_ARG_PROFILE_VIDEO,
+                    crate::constants::VAL_HIGH,
+                ],
             },
-            enabled: true,
-        })
+            diagnostics,
+        );
+
+        Self::assemble(GpuType::Nvidia, hevc_encoder, av1_encoder, h264_encoder)
     }
 
     #[cfg(not(target_os = "macos"))]
-    fn try_qsv(encoders: &[String]) -> Option<Self> {
-        let has_hevc = encoders.iter().any(|e| e.contains("hevc_qsv"));
-        let has_av1 = encoders.iter().any(|e| e.contains("av1_qsv"));
-        let has_h264 = encoders.iter().any(|e| e.contains("h264_qsv"));
-
-        if !has_hevc && !has_av1 && !has_h264 {
-            return None;
-        }
-
-        if has_hevc && !test_encoder("hevc_qsv") {
-            return None;
-        }
-
-        Some(Self {
-            gpu_type: GpuType::IntelQsv,
-            hevc_encoder: if has_hevc {
-                Some(GpuEncoder {
-                    gpu_type: GpuType::IntelQsv,
-                    name: "hevc_qsv",
-                    codec: "hevc",
-                    supports_crf: true,
-                    crf_param: "global_quality",
-                    crf_range: (1, 51),
-                    extra_args: vec![
-                        crate::constants::FFMPEG_ARG_PRESET,
-                        crate::constants::VAL_MEDIUM,
-                        crate::constants::FFMPEG_ARG_PROFILE_VIDEO,
-                        crate::constants::VAL_MAIN,
-                    ],
-                })
-            } else {
-                None
+    fn try_qsv(encoders: &[String], diagnostics: &mut Vec<String>) -> Option<Self> {
+        let hevc_encoder = Self::probe_listed_encoder(
+            encoders,
+            GpuEncoder {
+                gpu_type: GpuType::IntelQsv,
+                name: "hevc_qsv",
+                codec: "hevc",
+                supports_crf: true,
+                crf_param: "global_quality",
+                crf_range: (1, 51),
+                extra_args: vec![
+                    crate::constants::FFMPEG_ARG_PRESET,
+                    crate::constants::VAL_MEDIUM,
+                    crate::constants::FFMPEG_ARG_PROFILE_VIDEO,
+                    crate::constants::VAL_MAIN,
+                ],
             },
-            av1_encoder: if has_av1 {
-                Some(GpuEncoder {
-                    gpu_type: GpuType::IntelQsv,
-                    name: "av1_qsv",
-                    codec: "av1",
-                    supports_crf: true,
-                    crf_param: "global_quality",
-                    crf_range: (1, 63),
-                    extra_args: vec![
-                        crate::constants::FFMPEG_ARG_PRESET,
-                        crate::constants::VAL_MEDIUM,
-                    ],
-                })
-            } else {
-                None
+            diagnostics,
+        );
+        let av1_encoder = Self::probe_listed_encoder(
+            encoders,
+            GpuEncoder {
+                gpu_type: GpuType::IntelQsv,
+                name: "av1_qsv",
+                codec: "av1",
+                supports_crf: true,
+                crf_param: "global_quality",
+                crf_range: (1, 63),
+                extra_args: vec![
+                    crate::constants::FFMPEG_ARG_PRESET,
+                    crate::constants::VAL_MEDIUM,
+                ],
             },
-            h264_encoder: if has_h264 {
-                Some(GpuEncoder {
-                    gpu_type: GpuType::IntelQsv,
-                    name: "h264_qsv",
-                    codec: "h264",
-                    supports_crf: true,
-                    crf_param: "global_quality",
-                    crf_range: (1, 51),
-                    extra_args: vec![
-                        crate::constants::FFMPEG_ARG_PRESET,
-                        crate::constants::VAL_MEDIUM,
-                        crate::constants::FFMPEG_ARG_PROFILE_VIDEO,
-                        crate::constants::VAL_HIGH,
-                    ],
-                })
-            } else {
-                None
+            diagnostics,
+        );
+        let h264_encoder = Self::probe_listed_encoder(
+            encoders,
+            GpuEncoder {
+                gpu_type: GpuType::IntelQsv,
+                name: "h264_qsv",
+                codec: "h264",
+                supports_crf: true,
+                crf_param: "global_quality",
+                crf_range: (1, 51),
+                extra_args: vec![
+                    crate::constants::FFMPEG_ARG_PRESET,
+                    crate::constants::VAL_MEDIUM,
+                    crate::constants::FFMPEG_ARG_PROFILE_VIDEO,
+                    crate::constants::VAL_HIGH,
+                ],
             },
-            enabled: true,
-        })
+            diagnostics,
+        );
+
+        Self::assemble(GpuType::IntelQsv, hevc_encoder, av1_encoder, h264_encoder)
     }
 
     #[cfg(target_os = "windows")]
-    fn try_amf(encoders: &[String]) -> Option<GpuAccel> {
-        let has_hevc = encoders.iter().any(|e| e.contains("hevc_amf"));
-        let has_av1 = encoders.iter().any(|e| e.contains("av1_amf"));
-        let has_h264 = encoders.iter().any(|e| e.contains("h264_amf"));
-
-        if !has_hevc && !has_av1 && !has_h264 {
-            return None;
-        }
-
-        if has_hevc && !test_encoder("hevc_amf") {
-            return None;
-        }
-
-        Some(GpuAccel {
-            gpu_type: GpuType::AmdAmf,
-            hevc_encoder: if has_hevc {
-                Some(GpuEncoder {
-                    gpu_type: GpuType::AmdAmf,
-                    name: "hevc_amf",
-                    codec: "hevc",
-                    supports_crf: true,
-                    crf_param: "qp_i",
-                    crf_range: (0, 51),
-                    extra_args: vec!["-quality", "quality", "-profile:v", "main"],
-                })
-            } else {
-                None
+    fn try_amf(encoders: &[String], diagnostics: &mut Vec<String>) -> Option<GpuAccel> {
+        let hevc_encoder = Self::probe_listed_encoder(
+            encoders,
+            GpuEncoder {
+                gpu_type: GpuType::AmdAmf,
+                name: "hevc_amf",
+                codec: "hevc",
+                supports_crf: true,
+                crf_param: "qp_i",
+                crf_range: (0, 51),
+                extra_args: vec!["-quality", "quality", "-profile:v", "main"],
             },
-            av1_encoder: if has_av1 {
-                Some(GpuEncoder {
-                    gpu_type: GpuType::AmdAmf,
-                    name: "av1_amf",
-                    codec: "av1",
-                    supports_crf: true,
-                    crf_param: "qp_i",
-                    crf_range: (0, 63),
-                    extra_args: vec!["-quality", "quality"],
-                })
-            } else {
-                None
+            diagnostics,
+        );
+        let av1_encoder = Self::probe_listed_encoder(
+            encoders,
+            GpuEncoder {
+                gpu_type: GpuType::AmdAmf,
+                name: "av1_amf",
+                codec: "av1",
+                supports_crf: true,
+                crf_param: "qp_i",
+                crf_range: (0, 63),
+                extra_args: vec!["-quality", "quality"],
             },
-            h264_encoder: if has_h264 {
-                Some(GpuEncoder {
-                    gpu_type: GpuType::AmdAmf,
-                    name: "h264_amf",
-                    codec: "h264",
-                    supports_crf: true,
-                    crf_param: "qp_i",
-                    crf_range: (0, 51),
-                    extra_args: vec!["-quality", "quality", "-profile:v", "high"],
-                })
-            } else {
-                None
+            diagnostics,
+        );
+        let h264_encoder = Self::probe_listed_encoder(
+            encoders,
+            GpuEncoder {
+                gpu_type: GpuType::AmdAmf,
+                name: "h264_amf",
+                codec: "h264",
+                supports_crf: true,
+                crf_param: "qp_i",
+                crf_range: (0, 51),
+                extra_args: vec!["-quality", "quality", "-profile:v", "high"],
             },
-            enabled: true,
-        })
+            diagnostics,
+        );
+
+        Self::assemble(GpuType::AmdAmf, hevc_encoder, av1_encoder, h264_encoder)
     }
 
     #[cfg(target_os = "linux")]
-    fn try_vaapi(encoders: &[String]) -> Option<GpuAccel> {
-        let has_hevc = encoders.iter().any(|e| e.contains("hevc_vaapi"));
-        let has_av1 = encoders.iter().any(|e| e.contains("av1_vaapi"));
-        let has_h264 = encoders.iter().any(|e| e.contains("h264_vaapi"));
-
-        if !has_hevc && !has_av1 && !has_h264 {
-            return None;
-        }
-
-        if has_hevc && !test_encoder("hevc_vaapi") {
-            return None;
-        }
-
-        Some(GpuAccel {
-            gpu_type: GpuType::Vaapi,
-            hevc_encoder: if has_hevc {
-                Some(GpuEncoder {
-                    gpu_type: GpuType::Vaapi,
-                    name: "hevc_vaapi",
-                    codec: "hevc",
-                    supports_crf: true,
-                    crf_param: "qp",
-                    crf_range: (0, 52),
-                    extra_args: vec!["-vaapi_device", vaapi_device_path(), "-profile:v", "main"],
-                })
-            } else {
-                None
+    fn try_vaapi(encoders: &[String], diagnostics: &mut Vec<String>) -> Option<GpuAccel> {
+        let hevc_encoder = Self::probe_listed_encoder(
+            encoders,
+            GpuEncoder {
+                gpu_type: GpuType::Vaapi,
+                name: "hevc_vaapi",
+                codec: "hevc",
+                supports_crf: true,
+                crf_param: "qp",
+                crf_range: (0, 52),
+                extra_args: vec!["-vaapi_device", vaapi_device_path(), "-profile:v", "main"],
             },
-            av1_encoder: if has_av1 {
-                Some(GpuEncoder {
-                    gpu_type: GpuType::Vaapi,
-                    name: "av1_vaapi",
-                    codec: "av1",
-                    supports_crf: true,
-                    crf_param: "qp",
-                    crf_range: (0, 63),
-                    extra_args: vec!["-vaapi_device", vaapi_device_path()],
-                })
-            } else {
-                None
+            diagnostics,
+        );
+        let av1_encoder = Self::probe_listed_encoder(
+            encoders,
+            GpuEncoder {
+                gpu_type: GpuType::Vaapi,
+                name: "av1_vaapi",
+                codec: "av1",
+                supports_crf: true,
+                crf_param: "qp",
+                crf_range: (0, 63),
+                extra_args: vec!["-vaapi_device", vaapi_device_path()],
             },
-            h264_encoder: if has_h264 {
-                Some(GpuEncoder {
-                    gpu_type: GpuType::Vaapi,
-                    name: "h264_vaapi",
-                    codec: "h264",
-                    supports_crf: true,
-                    crf_param: "qp",
-                    crf_range: (0, 52),
-                    extra_args: vec!["-vaapi_device", vaapi_device_path(), "-profile:v", "high"],
-                })
-            } else {
-                None
+            diagnostics,
+        );
+        let h264_encoder = Self::probe_listed_encoder(
+            encoders,
+            GpuEncoder {
+                gpu_type: GpuType::Vaapi,
+                name: "h264_vaapi",
+                codec: "h264",
+                supports_crf: true,
+                crf_param: "qp",
+                crf_range: (0, 52),
+                extra_args: vec!["-vaapi_device", vaapi_device_path(), "-profile:v", "high"],
             },
-            enabled: true,
-        })
+            diagnostics,
+        );
+
+        Self::assemble(GpuType::Vaapi, hevc_encoder, av1_encoder, h264_encoder)
     }
 
     /// Returns the available HEVC encoder, or `None` if GPU is not enabled.
@@ -883,7 +939,7 @@ impl GpuAccel {
     }
 }
 
-fn get_available_encoders() -> Vec<String> {
+fn get_available_encoders() -> Result<Vec<String>, String> {
     let output = crate::tool_builders::FfmpegBuilder::new()
         .hide_banner()
         .arg("-encoders")
@@ -891,24 +947,92 @@ fn get_available_encoders() -> Vec<String> {
         .output();
 
     match output {
-        Ok(out) => {
+        Ok(out) if out.status.success() => {
             let stdout = String::from_utf8_lossy(&out.stdout);
-            stdout
+            Ok(stdout
                 .lines()
                 .filter(|line| line.starts_with(" V"))
                 .map(std::string::ToString::to_string)
-                .collect()
+                .collect())
         }
-        Err(_) => Vec::new(),
+        Ok(out) => Err(format!(
+            "ffmpeg -encoders failed: {}",
+            summarize_ffmpeg_failure_output(&out.stdout, &out.stderr)
+        )),
+        Err(err) => Err(format!("failed to run ffmpeg -encoders: {err}")),
     }
 }
 
-fn test_encoder(encoder: &str) -> bool {
-    let output = crate::tool_builders::FfmpegBuilder::new()
+fn summarize_ffmpeg_failure_line(text: &str) -> String {
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+
+    for line in &lines {
+        if line.contains("Cannot create compression session")
+            || line.contains("permission")
+            || line.contains("not supported")
+            || line.contains("Device")
+            || line.contains("No device")
+            || line.contains("Try -allow_sw 1")
+            || line.contains("Invalid argument")
+        {
+            return (*line).to_string();
+        }
+    }
+
+    for line in lines.iter().rev() {
+        if !matches!(
+            *line,
+            "Conversion failed!"
+                | "unknown"
+                | "Error initializing output stream 0:0 --"
+                | "At least one output file must be specified"
+        ) && !line.contains("Nothing was written into output file")
+            && !line.contains("Error while opening encoder")
+        {
+            return (*line).to_string();
+        }
+    }
+
+    lines.last().map_or_else(
+        || "unknown ffmpeg error".to_string(),
+        |line| (*line).to_string(),
+    )
+}
+
+fn summarize_ffmpeg_failure_output(stdout: &[u8], stderr: &[u8]) -> String {
+    let stderr = String::from_utf8_lossy(stderr);
+    let stdout = String::from_utf8_lossy(stdout);
+    let stderr_summary = summarize_ffmpeg_failure_line(&stderr);
+    if stderr_summary != "unknown ffmpeg error" {
+        stderr_summary
+    } else {
+        summarize_ffmpeg_failure_line(&stdout)
+    }
+}
+
+fn test_encoder(encoder: &GpuEncoder) -> Result<(), String> {
+    let mut builder = crate::tool_builders::FfmpegBuilder::new();
+    builder
         .hide_banner()
         .format("lavfi")
         .input("nullsrc=s=64x64:d=0.1")
-        .codec_video(encoder)
+        .codec_video(encoder.name);
+
+    for arg in encoder.get_crf_args(f32::midpoint(
+        f32::from(encoder.crf_range.0),
+        f32::from(encoder.crf_range.1),
+    )) {
+        builder.arg(arg);
+    }
+    for arg in encoder.extra_args() {
+        builder.arg(arg);
+    }
+
+    let output = builder
         .frames_v(1)
         .format("null")
         .output_null()
@@ -916,8 +1040,9 @@ fn test_encoder(encoder: &str) -> bool {
         .output();
 
     match output {
-        Ok(out) => out.status.success(),
-        Err(_) => false,
+        Ok(out) if out.status.success() => Ok(()),
+        Ok(out) => Err(summarize_ffmpeg_failure_output(&out.stdout, &out.stderr)),
+        Err(err) => Err(err.to_string()),
     }
 }
 
@@ -1688,7 +1813,7 @@ fn gpu_coarse_search_with_log_impl(
         }};
     }
 
-    let gpu = GpuAccel::detect();
+    let gpu = GpuAccel::detect_with_retry();
 
     if !gpu.is_available() {
         log_msg!("   ╔═══════════════════════════════════════════════════════════╗");
@@ -3217,6 +3342,56 @@ mod tests {
             assert!(qv >= 1.0, "q:v should be >= 1, got {qv} for CRF {crf}");
             assert!(qv <= 100.0, "q:v should be <= 100, got {qv} for CRF {crf}");
         }
+    }
+
+    #[test]
+    fn test_negative_gpu_cache_refresh_policy() {
+        let stale_negative = CachedGpuAccel {
+            accel: GpuAccel::default(),
+            diagnostics: vec![],
+            last_probe: std::time::Instant::now() - GPU_NEGATIVE_CACHE_TTL,
+        };
+        assert!(
+            stale_negative.should_refresh(),
+            "negative cache entries should refresh after the retry TTL"
+        );
+
+        let fresh_positive = CachedGpuAccel {
+            accel: GpuAccel {
+                gpu_type: GpuType::Apple,
+                hevc_encoder: None,
+                av1_encoder: None,
+                h264_encoder: Some(GpuEncoder {
+                    gpu_type: GpuType::Apple,
+                    name: "h264_videotoolbox",
+                    codec: "h264",
+                    supports_crf: true,
+                    crf_param: "q:v",
+                    crf_range: (0, 100),
+                    extra_args: vec![],
+                }),
+                enabled: true,
+            },
+            diagnostics: vec![],
+            last_probe: std::time::Instant::now() - GPU_NEGATIVE_CACHE_TTL,
+        };
+        assert!(
+            !fresh_positive.should_refresh(),
+            "successful detections should not be re-probed by the negative-cache policy"
+        );
+    }
+
+    #[test]
+    fn test_summarize_ffmpeg_failure_line_prefers_specific_diagnostic() {
+        let stderr = "\
+Error while opening encoder - maybe incorrect parameters\n\
+[hevc_videotoolbox @ 0x123] Cannot create compression session: -12908\n\
+Conversion failed!";
+
+        assert_eq!(
+            summarize_ffmpeg_failure_line(stderr),
+            "[hevc_videotoolbox @ 0x123] Cannot create compression session: -12908"
+        );
     }
 }
 

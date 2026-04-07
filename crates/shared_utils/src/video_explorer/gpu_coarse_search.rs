@@ -262,7 +262,7 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
         .context("Failed to read input file metadata")?
         .len();
 
-    let gpu = GpuAccel::detect();
+    let gpu = GpuAccel::detect_with_retry();
     gpu.print_detection_info();
     let encoder_name = match encoder {
         VideoEncoder::Hevc => "hevc",
