@@ -8,10 +8,24 @@ All notable changes to this project will be documented in this file.
 
 ### 🖼️ Image Processing
 
+- **Ultimate Mode (Effort 10) for JXL**: Added `--ultimate` flag to enable `cjxl` effort 10 (Glacier) for archival-quality encoding. Based on research showing effort 10 is consistently 15-56% faster and produces equal or smaller files than effort 9 (Tortoise), while effort 11 offers no advantage in VarDCT mode. Default remains effort 7 (Squirrel) for balanced performance.
 - **Near-Lossless JXL for Lossy Sources**: Changed lossy PNG/GIF/JPEG fallback conversion from `distance=0.1` to `distance=0.001`, resulting in mathematically near-lossless output recognized by the JXL encoder's lossless threshold.
 - **Animated/Live Photo Terminology**: Replaced `[SKIP]` with `[IGNORE]` in progress output for animated GIF/WebP and Live Photo detection, clarifying that these are intentionally excluded (handled by `vid`) rather than skipped due to quality/format constraints.
 
-### 🧪 Fuzzing Infrastructure
+### 🗄️ Cache Management
+
+- **PostgreSQL Support in Cache Cleaner**: Elevated cache_cleaner to v1.2 with PostgreSQL as the primary cache backend (analysis_records, quality_records, video_records, path_index). SQLite remains as fallback. Full purge and targeted path-based cleanup supported.
+- **Expanded Cleanup Coverage**: Now clears path-tree JSON cache, progress trackers (`~/.mfbprogress/`), temp/lock files in addition to SQLite databases and logs.
+
+### 🔧 Code Quality
+
+- **Simplified Workload Detection**: Unified image workload type detection, removing unnecessary directory-vs-file branching for conversion tasks.
+- **Streamlined Error Handling**: Reduced redundant error classification logic in batch conversion; simplified disk-full pause detection and read-error identification.
+
+### 📚 Documentation
+
+- **JPEG XL & HEVC Research Summary**: Added comprehensive bilingual (EN/ZH) document covering effort level analysis, HEVC preset tiers, and project engineering strategy.
+- **CJXL Effort Study Report**: Added detailed benchmark report with empirical data proving effort 9 inefficiency and effort 10 optimality across VarDCT and Modular modes.
 
 - **cargo-fuzz Integration**: Added a dedicated `fuzz` workspace crate with 5 fuzz targets powered by `libfuzzer-sys`:
   - `image_analyzer` — fuzzes the shared image analysis pipeline

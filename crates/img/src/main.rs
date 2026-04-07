@@ -309,11 +309,7 @@ fn main() -> anyhow::Result<()> {
                 codec: selected_codec,
             };
 
-            let workload = if input.is_dir() {
-                shared_utils::thread_manager::WorkloadType::Image
-            } else {
-                shared_utils::thread_manager::WorkloadType::Video
-            };
+            let workload = shared_utils::thread_manager::WorkloadType::Image;
             let thread_config = shared_utils::thread_manager::get_balanced_thread_config(workload);
             let mut config = config;
             config.child_threads = thread_config.child_threads;
@@ -1106,10 +1102,8 @@ fn auto_convert_directory(
                             }
                         }
                         Err(e) => {
-                            let msg = e.to_string();
-                            if msg.contains("Skipped") || msg.contains("skip") {
-                                skipped.fetch_add(1, Ordering::Relaxed);
-                            } else if let Some(reason) = disk_full_pause_reason(&msg) {
+                            let err_str = e.to_string();
+                            if let Some(reason) = disk_full_pause_reason(&err_str) {
                                 if pause_controller.request_pause(path, reason.clone()) {
                                     shared_utils::log_eprintln!(
                                         "⏸️ [Batch] Paused at {}: {}",
@@ -1119,13 +1113,9 @@ fn auto_convert_directory(
                                 }
                                 continue;
                             } else {
-                                let err_str = e.to_string();
-
-                                // Determine if this is a critical data loss risk
+                                // Classify as read/analysis failure only on unambiguous sentinel types
                                 let is_read_error = err_str.contains("Failed to open file")
-                                    || err_str.contains("ImageReadError")
-                                    || err_str.contains("format")
-                                    || err_str.contains("extension");
+                                    || err_str.contains("ImageReadError");
 
                                 if is_read_error {
                                     shared_utils::log_auto_error!(

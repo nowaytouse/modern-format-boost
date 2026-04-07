@@ -383,7 +383,7 @@ pub fn convert_to_jxl(
         .input(&actual_input)
         .output(&temp_output)
         .distance(distance)
-        .effort(7)
+        .effort(if options.ultimate { 10 } else { 7 })
         .threads(max_threads)
         .apple_compat(options.apple_compat);
 
@@ -403,8 +403,9 @@ pub fn convert_to_jxl(
 
     if options.verbose {
         eprintln!(
-            "   🔧 Executing: cjxl -d {:.2} -e 7 -j {} {} {}",
+            "   🔧 Executing: cjxl -d {:.2} -e {} -j {} {} {}",
             distance,
+            if options.ultimate { 10 } else { 7 },
             max_threads,
             actual_input.display(),
             temp_output.display()
@@ -432,7 +433,7 @@ pub fn convert_to_jxl(
                     .input(&actual_input)
                     .output(&temp_output)
                     .distance(distance)
-                    .effort(7)
+                    .effort(if options.ultimate { 10 } else { 7 })
                     .threads(max_threads)
                     .apple_compat(options.apple_compat);
 
@@ -556,7 +557,7 @@ pub fn convert_to_jxl(
                                 .use_stdin(true)
                                 .output(&temp_output)
                                 .distance(distance)
-                                .effort(7)
+                                .effort(if options.ultimate { 10 } else { 7 })
                                 .threads(max_threads)
                                 .apple_compat(options.apple_compat);
 
@@ -1436,7 +1437,7 @@ pub fn convert_to_jxl_matched(
         .input(input)
         .output(&temp_output)
         .distance(distance)
-        .effort(7)
+        .effort(if options.ultimate { 10 } else { 7 })
         .threads(max_threads)
         .apple_compat(options.apple_compat);
 

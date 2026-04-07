@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
-"""Modern Format Boost - Cache Cleaner v1.1 (Python Edition)
+"""Modern Format Boost - Cache Cleaner v1.2 (Python Edition)
 Cleans analysis and quality caches to free up space.
 Supports full purge and targeted path cleanup.
+
+Cache backends cleared:
+  1. PostgreSQL (primary): analysis_records, quality_records, video_records, path_index
+  2. SQLite (fallback): ~/.modern_format_boost/cache/image_analysis_v2.db
+  3. Path-tree JSON: ~/.modern_format_boost/cache/path_tree/
+  4. Progress trackers: ~/.mfb_progress/
+  5. Temp/lock files: ~/.modern_format_boost/tmp|locks/
 """
 
 import sys
@@ -29,6 +36,95 @@ else:
 
 def clear_screen():
     print("\033[2J\033[H", end="")
+
+
+# ---------------------------------------------------------------------------
+# PostgreSQL helpers (primary cache backend)
+# ---------------------------------------------------------------------------
+
+PG_DBNAME = "modern_format_boost"
+PG_TABLES = ["analysis_records", "quality_records", "video_records", "path_index"]
+
+
+def _pg_available() -> bool:
+    """Return True if psycopg2 is importable and the DB is reachable."""
+    try:
+        import psycopg2  # noqa: F401
+
+        conn = psycopg2.connect(dbname=PG_DBNAME, connect_timeout=3)
+        conn.close()
+        return True
+    except Exception:
+        return False
+
+
+def purge_postgres_full():
+    """TRUNCATE all MFB cache tables in PostgreSQL."""
+    try:
+        import psycopg2
+
+        conn = psycopg2.connect(dbname=PG_DBNAME)
+        conn.autocommit = True
+        cur = conn.cursor()
+        for table in PG_TABLES:
+            cur.execute(f"TRUNCATE TABLE {table} RESTART IDENTITY CASCADE")
+        cur.close()
+        conn.close()
+        print(f"   {GREEN}✅ PostgreSQL: all cache tables truncated{RESET}")
+        return True
+    except Exception as e:
+        print(f"   {RED}⚠️ PostgreSQL purge failed: {e}{RESET}")
+        return False
+
+
+def purge_postgres_for_path(target_path: Path):
+    """Delete rows matching target_path (or prefix) from PostgreSQL cache tables."""
+    try:
+        import psycopg2
+
+        conn = psycopg2.connect(dbname=PG_DBNAME)
+        conn.autocommit = False
+        cur = conn.cursor()
+        target_abs = str(target_path.absolute())
+        total = 0
+
+        if target_path.is_dir():
+            pattern = target_abs.rstrip("/") + "/%"
+            # path_index is the entry point — delete cascades to records via FK,
+            # but tables may not have FK constraints so delete all explicitly.
+            cur.execute(
+                "DELETE FROM path_index WHERE file_path = %s OR file_path LIKE %s",
+                (target_abs, pattern),
+            )
+            total += cur.rowcount
+            # content_hash orphan cleanup
+            for table in ("analysis_records", "quality_records", "video_records"):
+                cur.execute(
+                    f"""DELETE FROM {table}
+                        WHERE content_hash NOT IN (SELECT content_hash FROM path_index)"""
+                )
+                total += cur.rowcount
+        else:
+            cur.execute(
+                "DELETE FROM path_index WHERE file_path = %s", (target_abs,)
+            )
+            total += cur.rowcount
+            for table in ("analysis_records", "quality_records", "video_records"):
+                cur.execute(
+                    f"""DELETE FROM {table}
+                        WHERE content_hash NOT IN (SELECT content_hash FROM path_index)"""
+                )
+                total += cur.rowcount
+
+        conn.commit()
+        cur.close()
+        conn.close()
+        if total > 0:
+            print(f"   {GREEN}✅ PostgreSQL: removed {total} rows for {target_path.name}{RESET}")
+        return total
+    except Exception as e:
+        print(f"   {RED}⚠️ PostgreSQL targeted purge failed: {e}{RESET}")
+        return 0
 
 
 def draw_header(targeted=False):
@@ -198,7 +294,8 @@ def clean_sqlite_dbs(target_path: Path):
     """Cleans matching records from known SQLite databases"""
     cache_dir = Path.home() / ".modern_format_boost" / "cache"
     db_files = [
-        cache_dir / "image_analysis_v2_main.db",
+        cache_dir / "image_analysis_v2.db",          # SQLite fallback store
+        cache_dir / "image_analysis_v2_main.db",      # legacy name, kept for safety
         Path.home() / ".modern_format_boost" / "gif_value_samples_v2.db",
     ]
 
@@ -260,17 +357,24 @@ def perform_full_cleanup():
 
     cache_dir = Path.home() / ".modern_format_boost" / "cache"
     lock_dir = Path.home() / ".modern_format_boost" / "locks"
-    db_file = cache_dir / "image_analysis_v2_main.db"
+    db_file = cache_dir / "image_analysis_v2.db"
     log_dir = project_root / "logs"
     mfb_progress_dir = Path.home() / ".mfb_progress"
     mfb_tmp_dir = Path.home() / ".modern_format_boost" / "tmp"
+
+    pg_available = _pg_available()
 
     clear_screen()
     draw_header()
     show_stats(cache_dir, db_file, log_dir, mfb_progress_dir)
 
     print(f"{RED}⚠️  The following will be PERMANENTLY deleted:{RESET}")
-    print("   - Image Analysis Database (Verification cache)")
+    if pg_available:
+        print("   - PostgreSQL cache (analysis_records, quality_records, video_records, path_index)")
+    else:
+        print(f"   {YELLOW}- PostgreSQL: NOT REACHABLE — will be skipped{RESET}")
+    print("   - SQLite fallback database (image_analysis_v2.db)")
+    print("   - Path-tree JSON cache")
     print("   - All Session Logs & Tool Debug Records")
     print("   - All Task Progress Trackers (Resume Capability)")
     print("   - All Isolated Temporary Files (Ghost Mode artifacts)")
@@ -288,19 +392,25 @@ def perform_full_cleanup():
 
     print(f"\n{YELLOW}🚀 Executing full system cleanup...{RESET}\n")
 
-    # Vacuum database if sqlite3 is available
-    if db_file.is_file() and shutil.which("sqlite3"):
-        print(f"{DIM}   Vacuuming database...{RESET}")
-        subprocess.run(["sqlite3", str(db_file), "VACUUM;"], stderr=subprocess.DEVNULL)
-        print(f"   {GREEN}✅ Database vacuumed{RESET}")
+    # 1. PostgreSQL — primary cache backend (must be cleared first; SQLite is just a fallback)
+    if pg_available:
+        print(f"{DIM}   Purging PostgreSQL cache tables...{RESET}")
+        purge_postgres_full()
+    else:
+        print(f"   {YELLOW}⚠️  PostgreSQL unavailable — skipping (cache hits may still occur if DB comes back online){RESET}")
 
-    # Purge cache directory
+    # 2. SQLite fallback database
+    if db_file.is_file() and shutil.which("sqlite3"):
+        print(f"{DIM}   Vacuuming SQLite fallback database...{RESET}")
+        subprocess.run(["sqlite3", str(db_file), "VACUUM;"], stderr=subprocess.DEVNULL)
+
+    # Purge entire cache directory (covers SQLite db, path-tree JSON, etc.)
     if cache_dir.is_dir():
         print(f"{DIM}   Removing cache directory...{RESET}")
         shutil.rmtree(cache_dir, ignore_errors=True)
-        print(f"   {GREEN}✅ Cache purged{RESET}")
+        print(f"   {GREEN}✅ SQLite cache & path-tree JSON purged{RESET}")
 
-    # Clear logs (with strict safety check)
+    # 3. Clear logs (with strict safety check)
     if log_dir.is_dir() and log_dir.name == "logs" and log_dir.parent == project_root:
         print(f"{DIM}   Clearing logs in {log_dir.name}...{RESET}")
         for log_file in log_dir.glob("*.log"):
@@ -310,20 +420,20 @@ def perform_full_cleanup():
                 pass
         print(f"   {GREEN}✅ Logs cleared{RESET}")
 
-    # Purge MFB progress directory
+    # 4. Purge MFB progress directory
     if mfb_progress_dir.is_dir():
         print(f"{DIM}   Removing MFB progress directory...{RESET}")
         shutil.rmtree(mfb_progress_dir, ignore_errors=True)
         print(f"   {GREEN}✅ MFB progress purged{RESET}")
 
-    # Purge MFB temp directory
+    # 5. Purge MFB temp directory
     if mfb_tmp_dir.is_dir():
         print(f"{DIM}   Purging isolated temp directory...{RESET}")
         shutil.rmtree(mfb_tmp_dir, ignore_errors=True)
         mfb_tmp_dir.mkdir(parents=True, exist_ok=True)
         print(f"   {GREEN}✅ Isolated temp space cleared{RESET}")
 
-    # Purge stale session locks
+    # 6. Purge stale session locks
     if lock_dir.is_dir():
         print(f"{DIM}   Scanning for stale session locks...{RESET}")
         deleted_locks = 0
@@ -357,13 +467,19 @@ def perform_targeted_cleanup(target_path: Path):
     print(f"   {BOLD}Target:{RESET} {DIM}{target_path.absolute()}{RESET}")
     print(f"   {YELLOW}Scanning metadata associated with this path...{RESET}\n")
 
+    # 0. PostgreSQL — primary cache backend (must be cleared first)
+    if _pg_available():
+        purge_postgres_for_path(target_path)
+    else:
+        print(f"   {YELLOW}⚠️  PostgreSQL unavailable — skipping (cache hits may persist if DB comes back online){RESET}")
+
     # 1. Progress Tracker
     clean_mfb_progress(target_path)
 
     # 2. Path Tree Cache
     clean_path_tree(target_path)
 
-    # 3. Databases
+    # 3. SQLite fallback databases
     clean_sqlite_dbs(target_path)
 
     print(f"\n{GREEN}✅ Targeted Cleanup Complete{RESET}\n")
