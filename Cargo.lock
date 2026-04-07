@@ -1119,7 +1119,7 @@ dependencies = [
 [[package]]
 name = "hashbrown"
 version = "0.16.1"
-source = "git+https://github.com/rust-lang/hashbrown#b1c4403d573a8fd83ecc2f54c0f1b407f1b86d24"
+source = "git+https://github.com/rust-lang/hashbrown#3b6489a2c174e6625495bbf7e133d27fd443d317"
 
 [[package]]
 name = "hashlink"

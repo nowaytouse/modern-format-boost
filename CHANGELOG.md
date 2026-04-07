@@ -6,6 +6,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] — TBD
 
+### 🖼️ Image Processing
+
+- **Near-Lossless JXL for Lossy Sources**: Changed lossy PNG/GIF/JPEG fallback conversion from `distance=0.1` to `distance=0.001`, resulting in mathematically near-lossless output recognized by the JXL encoder's lossless threshold.
+- **Animated/Live Photo Terminology**: Replaced `[SKIP]` with `[IGNORE]` in progress output for animated GIF/WebP and Live Photo detection, clarifying that these are intentionally excluded (handled by `vid`) rather than skipped due to quality/format constraints.
+
 ### 🧪 Fuzzing Infrastructure
 
 - **cargo-fuzz Integration**: Added a dedicated `fuzz` workspace crate with 5 fuzz targets powered by `libfuzzer-sys`:

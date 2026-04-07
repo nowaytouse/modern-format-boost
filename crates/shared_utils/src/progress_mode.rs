@@ -713,6 +713,25 @@ pub fn image_skipped(reason: &str) {
     );
 }
 
+/// Call when an image is completely ignored (e.g. animated media in static-only tool).
+/// Logs a prominent message to stderr using [IGNORE] instead of [SKIP].
+pub fn image_ignored(reason: &str) {
+    let line = format!(
+        "{}⏭️  {}  {}{}{}",
+        colors::MFB_YELLOW,
+        "[IGNORE]",
+        colors::RESET,
+        colors::DIM,
+        reason
+    );
+    log_eprintln!("{}", line);
+    // Force a status line update
+    emit_combined_status_line(
+        IMAGE_SUCCESS_COUNT.load(Ordering::Relaxed),
+        IMAGE_FAIL_COUNT.load(Ordering::Relaxed),
+    );
+}
+
 pub fn video_processed_success() {
     VIDEO_SUCCESS_COUNT.fetch_add(1, Ordering::Relaxed);
 }

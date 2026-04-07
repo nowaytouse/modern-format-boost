@@ -251,7 +251,7 @@ fn main() -> anyhow::Result<()> {
                     flag_mode.description_en(),
                     selected_codec.as_str().to_uppercase()
                 ));
-                shared_utils::progress_mode::emit_stderr(&format!("{} Static: JPEG→JXL (reconstruct) │ Modern Lossless→JXL (d=0.0) │ PNG/Legacy→JXL (d=0.0/0.1)", symbols::IMAGE));
+                shared_utils::progress_mode::emit_stderr(&format!("{} Static: JPEG→JXL (reconstruct) │ Modern Lossless→JXL (d=0.0) │ PNG/Legacy→JXL (d=0.0/0.001)", symbols::IMAGE));
             }
             if apple_compat {
                 shared_utils::progress_mode::emit_stderr(&format!(
@@ -616,7 +616,7 @@ fn auto_convert_single_file(
     if shared_utils::is_live_photo(input) {
         let reason =
             "Live Photo detected - img strictly processes static images only (handled by vid)";
-        shared_utils::progress_mode::image_skipped(reason);
+        shared_utils::progress_mode::image_ignored(reason);
         let file_size = shared_utils::io_utils::metadata_with_retry(input).map_or(0, |m| m.len());
         // [FIX] Completely ignore: NO COPY, NO STATS
         return Ok(ConversionOutput {
@@ -639,7 +639,7 @@ fn auto_convert_single_file(
     if analysis.is_animated {
         let reason =
             "Animated media detected - img strictly processes static images only (handled by vid)";
-        shared_utils::progress_mode::image_skipped(reason);
+        shared_utils::progress_mode::image_ignored(reason);
         // [FIX] Completely ignore: NO COPY, NO STATS
         return Ok(ConversionOutput {
             original_path: input.display().to_string(),
@@ -655,48 +655,46 @@ fn auto_convert_single_file(
     }
 
     // Single source of truth for static skip: JXL + modern lossy (avoid generational loss).
-    if !analysis.is_animated {
-        // Always skip static JXL (already optimal format)
-        if analysis.format.to_uppercase() == "JXL" {
-            let reason =
-                "Source is static JPEG XL (already optimal) - skipping to avoid generational loss";
-            shared_utils::progress_mode::image_skipped(reason);
-            copy_original_if_adjacent_mode(input, config)?;
-            return Ok(ConversionOutput {
-                original_path: input.display().to_string(),
-                output_path: input.display().to_string(),
-                skipped: true,
-                ignored: false,
-                message: reason.to_string(),
-                original_size: analysis.file_size,
-                output_size: None,
-                size_reduction: None,
-                blake3: None,
-            });
-        }
+    // Always skip static JXL (already optimal format)
+    if analysis.format.to_uppercase() == "JXL" {
+        let reason =
+            "Source is static JPEG XL (already optimal) - skipping to avoid generational loss";
+        shared_utils::progress_mode::image_skipped(reason);
+        copy_original_if_adjacent_mode(input, config)?;
+        return Ok(ConversionOutput {
+            original_path: input.display().to_string(),
+            output_path: input.display().to_string(),
+            skipped: true,
+            ignored: false,
+            message: reason.to_string(),
+            original_size: analysis.file_size,
+            output_size: None,
+            size_reduction: None,
+            blake3: None,
+        });
+    }
 
-        let skip =
-            shared_utils::should_skip_image_format(analysis.format.as_str(), analysis.is_lossless);
-        if skip.should_skip {
-            let reason = if let Some(err) = &analysis.analysis_error {
-                format!("Analysis failed ({err}) - skipping to avoid generational loss")
-            } else {
-                skip.reason
-            };
-            shared_utils::progress_mode::image_skipped(&reason);
-            copy_original_if_adjacent_mode(input, config)?;
-            return Ok(ConversionOutput {
-                original_path: input.display().to_string(),
-                output_path: input.display().to_string(),
-                skipped: true,
-                ignored: false,
-                message: reason,
-                original_size: analysis.file_size,
-                output_size: None,
-                size_reduction: None,
-                blake3: None,
-            });
-        }
+    let skip =
+        shared_utils::should_skip_image_format(analysis.format.as_str(), analysis.is_lossless);
+    if skip.should_skip {
+        let reason = if let Some(err) = &analysis.analysis_error {
+            format!("Analysis failed ({err}) - skipping to avoid generational loss")
+        } else {
+            skip.reason
+        };
+        shared_utils::progress_mode::image_skipped(&reason);
+        copy_original_if_adjacent_mode(input, config)?;
+        return Ok(ConversionOutput {
+            original_path: input.display().to_string(),
+            output_path: input.display().to_string(),
+            skipped: true,
+            ignored: false,
+            message: reason,
+            original_size: analysis.file_size,
+            output_size: None,
+            size_reduction: None,
+            blake3: None,
+        });
     }
 
     let _pixel_analysis = if !analysis.is_animated && analysis.format != "JPEG" {
@@ -768,7 +766,7 @@ fn dispatch_static_conversion(
     // 🔬 Level 4 Feedback: KNN Static Quality Score
     // JPEG bypass: cjxl transcode is fast enough to skip DB lookup.
     // Returns a BPP heuristic (confidence=0.0) when DB is unavailable.
-    let quality = if format == "JPEG" || format == "jpg" {
+    let quality = if format == "JPEG" {
         None
     } else {
         shared_utils::lookup_image_quality(analysis)
@@ -833,7 +831,7 @@ fn dispatch_static_conversion(
         _ => {
             if config.verbose {
                 println!(
-                    "🔄 {} Lossy→JXL (Quality 100): {}",
+                    "🔄 {} Lossy→JXL (Near-Lossless): {}",
                     match format.to_uppercase().as_str() {
                         "PNG" => "Quantized PNG",
                         "GIF" => "Static GIF",
@@ -842,7 +840,7 @@ fn dispatch_static_conversion(
                     input.display()
                 );
             }
-            convert_to_jxl(input, options, 0.1_f32, analysis.hdr_info.as_ref())?
+            convert_to_jxl(input, options, 0.001_f32, analysis.hdr_info.as_ref())?
         }
     })
 }
