@@ -47,7 +47,10 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
     let hvcc_from_recursive = find_box_data_recursive(data, *b"hvcC");
     let hvcc_from_magic = find_box_payload_by_magic(data, *b"hvcC");
 
-    debug!("detect_heic_is_lossless for {}", path.display());
+    debug!(
+        path = %path.display(),
+        "Checking HEIC lossless status"
+    );
     debug!(
         "   hvcc_from_recursive: {}",
         if hvcc_from_recursive.is_some() {
@@ -514,6 +517,17 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
         has_gainmap,
         has_vendor_metadata,
     };
+
+    debug!(
+        file = %path.display(),
+        width = width,
+        height = height,
+        bit_depth = bit_depth,
+        is_lossless = is_lossless,
+        is_hdr = is_hdr,
+        is_dv = is_dolby_vision,
+        "HEIC analysis complete"
+    );
 
     Ok((img, analysis))
 }

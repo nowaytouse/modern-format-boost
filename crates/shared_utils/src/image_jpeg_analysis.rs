@@ -5,10 +5,11 @@
 //!
 //! Algorithm accuracy target: ±1 quality factor for standard tables
 
-use image::{DynamicImage, GenericImageView};
+use image::{DynamicImage, GenericImageView, ImageReader};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use tracing::{info, warn};
+use std::io::Cursor;
+use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JpegQualityAnalysis {
@@ -452,7 +453,7 @@ pub fn analyze_jpeg_quality(data: &[u8]) -> Result<JpegQualityAnalysis, String> 
     let is_high_quality_original = final_quality >= 90 && is_standard_table && confidence >= 0.95;
     let is_complete = is_jpeg_complete(data);
 
-    Ok(JpegQualityAnalysis {
+    let analysis = JpegQualityAnalysis {
         estimated_quality: final_quality,
         confidence,
         is_standard_table,
@@ -463,8 +464,19 @@ pub fn analyze_jpeg_quality(data: &[u8]) -> Result<JpegQualityAnalysis, String> 
         quality_description,
         is_high_quality_original,
         is_complete,
-        encoder_hint,
-    })
+        encoder_hint: encoder_hint.clone(),
+    };
+
+    debug!(
+        quality = final_quality,
+        confidence = confidence,
+        standard = is_standard_table,
+        luma_sse = luma_estimate.sse,
+        complete = is_complete,
+        "JPEG quality analysis complete"
+    );
+
+    Ok(analysis)
 }
 
 /// Analyze JPEG quality from a file path.
@@ -630,9 +642,14 @@ pub fn extract_xmp_from_jpeg_data(data: &[u8]) -> Option<Vec<String>> {
 /// - The extracted gainmap has invalid dimensions
 /// - Base image decoding fails
 /// - MPF parsing fails
+///
+/// Extract base image and gainmap from an `UltraHDR` JPEG byte stream.
+///
+/// # Errors
+///
+/// Returns an error if the JPEG is malformed, base image cannot be decoded, or MPF/GainMap is missing.
 pub fn extract_gainmap_from_jpeg(data: &[u8]) -> Result<(DynamicImage, DynamicImage), String> {
-    use image::ImageReader;
-    use std::io::Cursor;
+    tracing::debug!(size = data.len(), "Extracting gainmap from UltraHDR JPEG");
 
     // Validate JPEG signature
     if data.len() < 4 || data[0] != 0xFF || data[1] != 0xD8 {
@@ -668,16 +685,20 @@ pub fn extract_gainmap_from_jpeg(data: &[u8]) -> Result<(DynamicImage, DynamicIm
         ));
     }
 
-    info!("Base image decoded: {}x{} pixels", base_dims.0, base_dims.1);
+    tracing::debug!(
+        width = base_dims.0,
+        height = base_dims.1,
+        "Base image decoded successfully"
+    );
     let base_aspect = f64::from(base_dims.0) / f64::from(base_dims.1);
 
     // Find and parse MPF segment
     let mpf_segment = find_mpf_segment(data)?;
-    info!("MPF segment found: {} bytes", mpf_segment.len());
+    tracing::debug!(size = mpf_segment.len(), "MPF segment found");
 
     // Extract gainmap from MPF
     let gainmap_data = extract_gainmap_from_mpf(data, &mpf_segment, Some(base_aspect))?;
-    info!("Gainmap extracted: {} bytes", gainmap_data.len());
+    tracing::debug!(size = gainmap_data.len(), "Gainmap data extracted from MPF");
 
     // Decode gainmap image
     let gainmap_image = ImageReader::new(Cursor::new(&gainmap_data))

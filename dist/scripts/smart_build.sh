@@ -45,14 +45,12 @@ fi
 # ═══════════════════════════════════════════════════════════════
 # Format: "project_dir:binary_name"
 ALL_PROJECTS=(
-    "img_hevc:img-hevc"
-    "vid_hevc:vid-hevc"
-    "img_av1:img-av1"
-    "vid_av1:vid-av1"
+    "crates/img:img"
+    "crates/vid:vid"
 )
 
 # Default projects to build (HEVC tools)
-DEFAULT_PROJECTS=("img_hevc" "vid_hevc")
+DEFAULT_PROJECTS=("crates/img" "crates/vid")
 
 # Helper function: Get binary name from project directory
 get_binary_name() {
@@ -178,16 +176,16 @@ get_newest_source_mtime() {
     fi
 
     # shared_utils dependencies
-    if [[ -d "shared_utils/src" ]]; then
+    if [[ -d "crates/shared_utils/src" ]]; then
         while IFS= read -r -d '' file; do
             local mtime
             mtime=$(stat -f %m "$file" 2>/dev/null || stat -c %Y "$file" 2>/dev/null || echo 0)
             [[ $mtime -gt $newest ]] && newest=$mtime
-        done < <(find "shared_utils/src" -type f -name "*.rs" -print0 2>/dev/null)
+        done < <(find "crates/shared_utils/src" -type f -name "*.rs" -print0 2>/dev/null)
     fi
 
     # 🔥 v8.2.4: Also check shared_utils/Cargo.toml and workspace Cargo.lock
-    for dep_file in "shared_utils/Cargo.toml" "Cargo.lock"; do
+    for dep_file in "crates/shared_utils/Cargo.toml" "Cargo.lock"; do
         if [[ -f "$dep_file" ]]; then
             local mtime
             mtime=$(stat -f %m "$dep_file" 2>/dev/null || stat -c %Y "$dep_file" 2>/dev/null || echo 0)
@@ -350,20 +348,17 @@ parse_args() {
             BUILD_ALL=true
             shift
             ;;
-        --hevc)
-            SELECTED_PROJECTS+=("img_hevc" "vid_hevc")
-            shift
-            ;;
-        --av1)
-            SELECTED_PROJECTS+=("img_av1" "vid_av1")
+        --hevc | --av1)
+            # Unified crates now support both codecs via runtime flags
+            SELECTED_PROJECTS+=("crates/img" "crates/vid")
             shift
             ;;
         --img)
-            SELECTED_PROJECTS+=("img_hevc" "img_av1")
+            SELECTED_PROJECTS+=("crates/img")
             shift
             ;;
         --vid)
-            SELECTED_PROJECTS+=("vid_hevc" "vid_av1")
+            SELECTED_PROJECTS+=("crates/vid")
             shift
             ;;
         --no-verify-timestamps)

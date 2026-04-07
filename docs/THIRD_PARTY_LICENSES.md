@@ -25,7 +25,7 @@ _Used by the vast majority of core dependencies including: anyhow, chrono, clap,
 
 ### MIT
 
-- **img-hevc**, **vid-hevc**, **shared_utils** (This Project)
+- **img**, **vid**, **shared_utils** (This Project)
 - **built**, **console**, **indicatif**, **libheif-rs**, **tracing**, **which**, etc.
 
 ### BSD-2-Clause / BSD-3-Clause

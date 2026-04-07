@@ -188,7 +188,7 @@ impl Default for ImageAnalysis {
 /// Comprehensive image analysis: format, dimensions, quality, and compression.
 ///
 /// # Errors
-/// Returns an error if the file cannot be read or analysis fails.
+/// Returns an error if the file cannot be read, format is unsupported, or analysis fails.
 pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
     analyze_image_with_cache(path, None)
 }
@@ -250,6 +250,19 @@ pub fn analyze_image_with_cache(
             }
         }
     }
+
+    debug!(
+        file = %path.display(),
+        width = analysis.width,
+        height = analysis.height,
+        file_size = analysis.file_size,
+        format = %analysis.format,
+        color_depth = analysis.color_depth,
+        is_lossless = analysis.is_lossless,
+        has_alpha = analysis.has_alpha,
+        is_hdr = analysis.hdr_info.is_some(),
+        "Analysis complete"
+    );
 
     Ok(analysis)
 }
@@ -494,6 +507,8 @@ impl ImageAnalysis {
     }
 }
 
+/// # Errors
+/// Returns an error if HEIC analysis fails or file cannot be read.
 fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
     debug!("analyze_heic_image called for {}", path.display());
     let (

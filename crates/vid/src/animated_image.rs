@@ -147,6 +147,7 @@ fn extract_frames_for_gifski(
         .output(&frame_pattern);
 
     let output = builder.build().output().map_err(|e| {
+        tracing::warn!(?input, error = %e, "FFmpeg frame extraction failed");
         VidQualityError::ConversionError(format!("FFmpeg frame extraction failed: {e}"))
     })?;
 
@@ -459,6 +460,11 @@ fn skipped_static_animated(input: &Path, input_size: u64) -> ConversionResult {
 ///
 /// # Errors
 /// Returns an error if encoding fails.
+/// Convert an animated image (GIF, animated WebP, etc.) to a video container.
+///
+/// # Errors
+///
+/// Returns an error if the conversion fails or input is malformed.
 pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<ConversionResult> {
     use shared_utils::conversion_types::SelectedCodec;
     if !options.force && is_already_processed(input) {
@@ -512,6 +518,14 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
 
     let ext = if options.apple_compat { "MOV" } else { "MP4" };
     let output = get_output_path(input, ext, options)?;
+
+    tracing::debug!(
+        input = ?input.file_name().unwrap_or_default(),
+        input_ext,
+        apple_compat = options.apple_compat,
+        target_ext = %ext,
+        "Starting animated image to video conversion"
+    );
 
     if output.exists() && !options.force {
         return Ok(skipped_output_exists(input, &output, input_size));

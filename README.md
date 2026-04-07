@@ -1,3 +1,5 @@
+# Modern Format Boost
+
 <p align="center">
   <img src="https://img.shields.io/badge/version-0.11.2-0969DA?style=for-the-badge&logo=rust&logoColor=white" alt="Version">
   <img src="https://img.shields.io/badge/rust-2021_edition-E57324?style=for-the-badge&logo=rust&logoColor=white" alt="Rust">
@@ -5,7 +7,7 @@
   <img src="https://img.shields.io/badge/license-MIT-00B265?style=for-the-badge" alt="License">
 </p>
 
-<h1 align="center">Modern Format Boost</h1>
+<p align="center">
 
 <p align="center">
   <strong>Next-gen media optimization engine — zero quality loss, maximum compression.</strong><br>
@@ -26,7 +28,7 @@
 
 ---
 
-# 📖 English
+## 📖 English
 
 ## What is Modern Format Boost?
 

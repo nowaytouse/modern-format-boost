@@ -1,19 +1,19 @@
+# Modern Format Boost (French)
+
 <p align="center">
   <img src="https://img.shields.io/badge/version-0.11.2-0969DA?style=for-the-badge&logo=rust&logoColor=white" alt="Version">
-  <img src="https://img.shields.io/badge/rust-édition_2021-E57324?style=for-the-badge&logo=rust&logoColor=white" alt="Rust">
-  <img src="https://img.shields.io/badge/plateforme-macOS_%7C_Linux_%7C_Windows-8257E5?style=for-the-badge&logo=apple&logoColor=white" alt="Plateforme">
-  <img src="https://img.shields.io/badge/licence-MIT-00B265?style=for-the-badge" alt="Licence">
+  <img src="https://img.shields.io/badge/rust-2021_edition-E57324?style=for-the-badge&logo=rust&logoColor=white" alt="Rust">
+  <img src="https://img.shields.io/badge/platform-macOS_%7C_Linux_%7C_Windows-8257E5?style=for-the-badge&logo=apple&logoColor=white" alt="Plateforme">
+  <img src="https://img.shields.io/badge/license-MIT-00B265?style=for-the-badge" alt="Licence">
 </p>
 
-<h1 align="center">Modern Format Boost</h1>
-
 <p align="center">
-  <strong>Moteur d'optimisation multimédia de nouvelle génération — zéro perte de qualité, compression maximale.</strong><br>
+  <strong>Moteur d'optimisation de médias de nouvelle génération : qualité supérieure avec compression maximale.</strong><br>
 </p>
 
 ---
 
-# 📖 Français (French)
+## 📖 Français (French)
 
 ## Qu'est-ce que Modern Format Boost ?
 
@@ -35,7 +35,7 @@ Considérez-le comme un "compresseur intelligent" qui **ne dégrade jamais vos m
 1. **La sécurité des données avant tout** : Pour éviter toute perte potentielle de données, il est fortement recommandé d'exporter les fichiers traités vers un répertoire séparé (ex: via `-o /chemin/vers/output`) plutôt que d'utiliser la conversion sur place (`--in-place`), surtout pour les médias irremplaçables.
 2. **Logiciel en phase bêta** : Bien que ce programme ait été largement testé, débogué et optimisé pour éviter toute perte de qualité ou de données, il n'est pas garanti sans bug à 100 %. Veuillez signaler tout problème rencontré sur GitHub.
 3. **Aperçu des performances** : Bien qu'optimisé pour l'efficacité (particulièrement sur Apple Silicon série M), le traitement de lots massifs en mode `--ultimate` peut prendre du temps et occuper les ressources système pendant une période prolongée.
-4. **Maturité des outils** : Les outils basés sur HEVC (`img-hevc`, `vid-hevc`) sont actuellement plus matures et stables que les outils basés sur AV1 (`img-av1`, `vid-av1`). Pour les tâches de production haute fiabilité, les outils HEVC sont recommandés.
+4. **Maturité des outils** : Les outils unifiés (`img`, `vid`) utilisent par défaut la stratégie HEVC, qui est actuellement plus mature et stable que la stratégie AV1. Pour les tâches de production haute fiabilité, la stratégie HEVC (par défaut) est recommandée.
 
 ## 🔒 Confidentialité et Intégrité des Données
 
@@ -89,14 +89,12 @@ Chaque fichier passe par un pipeline de décision en plusieurs étapes :
 
 <p align="center">Interface</p>
 
-### Les quatre binaires
+### Les deux outils unifiés
 
-| Binaire        | Objectif             | Codec cible                     |
-| -------------- | -------------------- | ------------------------------- |
-| **`img-hevc`** | Optimisation d'image | → JXL (statique) / HEVC (animé) |
-| **`img-av1`**  | Optimización d'image | → JXL (statique) / AV1 (animé)  |
-| **`vid-hevc`** | Optimisation vidéo   | → HEVC / H.265                  |
-| **`vid-av1`**  | Optimisation vidéo   | → AV1 / SVT-AV1                 |
+| Outil     | Objectif             | Codec cible                           |
+| --------- | -------------------- | ------------------------------------- |
+| **`img`** | Optimisation d'image | → JXL (statique) / HEVC / AV1 (animé) |
+| **`vid`** | Optimización vidéo   | → HEVC / AV1                          |
 
 ### 📉 Exemples de compression réelle
 
@@ -120,6 +118,6 @@ tar -xzf modern-format-boost-aarch64-apple-darwin.tar.gz
 
 ---
 
-# ⚖️ Licence
+## ⚖️ Licence
 
 Sous **Licence MIT**.

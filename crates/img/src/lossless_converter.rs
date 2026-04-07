@@ -37,6 +37,9 @@ fn cleanup_temp_output(temp_output: &Path, _input: &Path) {
 /// Finalize conversion with size check and metadata preservation.
 /// Common pattern: commit temp → check size → finalize.
 /// Returns `ConversionResult` on success or error.
+/// # Errors
+///
+/// Returns an error if the temp file cannot be committed or metadata cannot be preserved.
 fn finalize_with_size_check(
     input: &Path,
     temp_output: &Path,
@@ -47,6 +50,23 @@ fn finalize_with_size_check(
     format_label: &str,
     extra_info: Option<String>,
 ) -> Result<ConversionResult> {
+    let ratio = if input_size > 0 {
+        output_size as f64 / input_size as f64
+    } else {
+        1.0
+    };
+    let benefit = input_size.saturating_sub(output_size);
+
+    tracing::debug!(
+        input = ?input.file_name().unwrap_or_default(),
+        input_size,
+        output_size,
+        ratio = %format!("{:.2}%", ratio * 100.0),
+        benefit_bytes = benefit,
+        format = %format_label,
+        extra = ?extra_info,
+        "Finalizing conversion"
+    );
     // Commit temp file to final output WITH METADATA PRESERVATION
     if !shared_utils::conversion::commit_temp_to_output_with_metadata(
         temp_output,
@@ -344,12 +364,19 @@ pub fn convert_to_jxl(
     let _icc_temp = shared_utils::jxl_utils::extract_icc_profile(input);
     let icc_path = _icc_temp.as_ref().map(tempfile::NamedTempFile::path);
 
-    // Cache thread count calculation (avoid repeated calls)
     let max_threads = if options.child_threads > 0 {
         options.child_threads
     } else {
         shared_utils::thread_manager::get_optimal_threads()
     };
+
+    tracing::debug!(
+        file = %input.display(),
+        threads = max_threads,
+        icc_preserved = icc_path.is_some(),
+        hdr = hdr_info.is_some(),
+        "Encoding JXL: calculating parameters"
+    );
 
     let mut builder = shared_utils::CjxlBuilder::new();
     builder
@@ -1412,6 +1439,13 @@ pub fn convert_to_jxl_matched(
         .effort(7)
         .threads(max_threads)
         .apple_compat(options.apple_compat);
+
+    tracing::debug!(
+        file = %input.display(),
+        distance = distance,
+        threads = max_threads,
+        "Encoding quality-matched JXL: starting cjxl"
+    );
 
     if distance > 0.0 {
         let is_jpeg = options

@@ -52,8 +52,8 @@ else:
 SCRIPT_DIR = Path(__file__).parent.resolve()
 PROJECT_ROOT = SCRIPT_DIR.parent
 
-IMGQUALITY_HEVC = PROJECT_ROOT / "target" / "release" / "img-hevc"
-VIDQUALITY_HEVC = PROJECT_ROOT / "target" / "release" / "vid-hevc"
+IMGQUALITY_HEVC = PROJECT_ROOT / "target" / "release" / "img"
+VIDQUALITY_HEVC = PROJECT_ROOT / "target" / "release" / "vid"
 
 # MFB Ghost Mode - Isolated Temporary Directory
 # This prevents folder mtime updates by redirecting all intermediate IO away from source folders
@@ -833,7 +833,7 @@ def process_images():
 
     # Existence check with auto-rebuild
     if not IMGQUALITY_HEVC.exists():
-        print(f"\n{RED}❌ Critical Error: img-hevc binary not found{RESET}")
+        print(f"\n{RED}❌ Critical Error: img binary not found{RESET}")
         print(f"{DIM}   Expected path: {IMGQUALITY_HEVC}{RESET}")
         print(f"{DIM}   The build may have failed or been cleaned.{RESET}")
 
@@ -878,7 +878,7 @@ def process_videos():
 
     # Existence check with auto-rebuild
     if not VIDQUALITY_HEVC.exists():
-        print(f"\n{RED}❌ Critical Error: vid-hevc binary not found{RESET}")
+        print(f"\n{RED}❌ Critical Error: vid binary not found{RESET}")
         print(f"{DIM}   Expected path: {VIDQUALITY_HEVC}{RESET}")
         print(f"{DIM}   The build may have failed or been cleaned.{RESET}")
 
@@ -1012,8 +1012,8 @@ def merge_run_logs():
             session_dt - datetime.timedelta(seconds=5)
         )
 
-    img_logs = [f for f in LOG_DIR.glob("img_hevc_*.log") if is_current_session(f)]
-    vid_logs = [f for f in LOG_DIR.glob("vid_hevc_*.log") if is_current_session(f)]
+    img_logs = [f for f in LOG_DIR.glob("img_*.log") if is_current_session(f)]
+    vid_logs = [f for f in LOG_DIR.glob("vid_*.log") if is_current_session(f)]
 
     if not img_logs and not vid_logs:
         return

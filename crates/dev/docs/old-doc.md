@@ -1,6 +1,8 @@
+# Old Documentation Translation
+
 **English Translation:**
 
-# Loop Intent Judgment System
+## Loop Intent Judgment System
 
 **Core Question**: Is the creation intent of this content to loop/play in a loop?  
 **Output**: `LOOP_STRONG` (keep GIF / convert to GIF) or `LOOP_WEAK` (convert to video / keep video) or `UNCERTAIN`  

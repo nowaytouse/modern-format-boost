@@ -1,19 +1,19 @@
+# Modern Format Boost (Portuguese)
+
 <p align="center">
-  <img src="https://img.shields.io/badge/versão-0.11.2-0969DA?style=for-the-badge&logo=rust&logoColor=white" alt="Versão">
-  <img src="https://img.shields.io/badge/rust-edição_2021-E57324?style=for-the-badge&logo=rust&logoColor=white" alt="Rust">
-  <img src="https://img.shields.io/badge/plataforma-macOS_%7C_Linux_%7C_Windows-8257E5?style=for-the-badge&logo=apple&logoColor=white" alt="Plataforma">
-  <img src="https://img.shields.io/badge/licença-MIT-00B265?style=for-the-badge" alt="Licença">
+  <img src="https://img.shields.io/badge/version-0.11.2-0969DA?style=for-the-badge&logo=rust&logoColor=white" alt="Versão">
+  <img src="https://img.shields.io/badge/rust-2021_edition-E57324?style=for-the-badge&logo=rust&logoColor=white" alt="Rust">
+  <img src="https://img.shields.io/badge/platform-macOS_%7C_Linux_%7C_Windows-8257E5?style=for-the-badge&logo=apple&logoColor=white" alt="Plataforma">
+  <img src="https://img.shields.io/badge/license-MIT-00B265?style=for-the-badge" alt="Licença">
 </p>
 
-<h1 align="center">Modern Format Boost</h1>
-
 <p align="center">
-  <strong>Motor de otimização de mídia de última geração — perda de qualidade zero, compressão máxima.</strong><br>
+  <strong>Mecanismo de otimização de mídia de última geração — qualidade superior com compressão máxima.</strong><br>
 </p>
 
 ---
 
-# 📖 Português (Portuguese)
+## 📖 Português (Portuguese)
 
 ## O que é o Modern Format Boost?
 
@@ -35,7 +35,7 @@ Pense nele como um "compressor inteligente" que **nunca degrada seus arquivos**:
 1. **Segurança de dados em primeiro lugar**: Para evitar qualquer perda potencial de dados, é altamente recomendável salvar os arquivos processados em um diretório separado (ex: usando `-o /caminho/para/output`) em vez de usar a conversão no local (`--in-place`), especialmente para mídias insubstituíveis.
 2. **Software Beta**: Embora este programa tenha sido extensivamente testado e otimizado para evitar perda de qualidade ou dados, não há garantia de que seja 100% livre de bugs. Por favor, reporte quaisquer problemas no GitHub.
 3. **Perspectiva de computação**: Embora otimizado para eficiência (especialmente em Apple Silicon série M), o processamento de lotes massivos no modo `--ultimate` ainda pode consumir tempo e recursos do sistema por um período prolongado.
-4. **Maturidade das ferramentas**: As ferramentas baseadas em HEVC (`img-hevc`, `vid-hevc`) são atualmente mais maduras e estáveis do que as baseadas em AV1 (`img-av1`, `vid-av1`). Para tarefas de produção de alta confiabilidade, recomendam-se as ferramentas HEVC.
+4. **Maturidade das ferramentas**: As ferramentas unificadas (`img`, `vid`) utilizam por padrão a estratégia HEVC, que é atualmente mais madura e estável do que a estratégia AV1. Para tarefas de produção de alta confiabilidade, recomenda-se a estratégia HEVC (o padrão).
 
 ## 🔒 Privacidade e Integridade dos Dados
 
@@ -65,14 +65,12 @@ Cada arquivo passa por um pipeline de decisão em vários estágios:
 
 ![Runtime](../assets/runtime.png)
 
-### Os quatro binários
+### As duas ferramentas unificadas
 
-| Binário        | Propósito            | Codec de Destino                  |
-| -------------- | -------------------- | --------------------------------- |
-| **`img-hevc`** | Otimização de imagem | → JXL (estático) / HEVC (animado) |
-| **`img-av1`**  | Otimização de imagem | → JXL (estático) / AV1 (animado)  |
-| **`vid-hevc`** | Otimização de vídeo  | → HEVC / H.265                    |
-| **`vid-av1`**  | Otimização de vídeo  | → AV1 / SVT-AV1                   |
+| Ferramenta | Propósito            | Codec de Destino                        |
+| ---------- | -------------------- | --------------------------------------- |
+| **`img`**  | Otimização de imagem | → JXL (estático) / HEVC / AV1 (animado) |
+| **`vid`**  | Otimização de vídeo  | → HEVC / AV1                            |
 
 ## 📉 Exemplos de compressão reais
 
@@ -96,6 +94,6 @@ tar -xzf modern-format-boost-aarch64-apple-darwin.tar.gz
 
 ---
 
-# ⚖️ Licença
+## ⚖️ Licença
 
 Licenciado sob a **MIT License**.

@@ -277,6 +277,13 @@ pub fn determine_strategy_with_apple_compat(
     force: bool,
     codec: SelectedCodec,
 ) -> ConversionStrategy {
+    tracing::debug!(
+        file = %result.file_path,
+        apple_compat = apple_compat,
+        force = force,
+        codec = %codec.as_str(),
+        "Determining conversion strategy"
+    );
     // Enforcement: AV1 strategy does NOT support Apple compatibility
     if codec == SelectedCodec::Av1 && apple_compat {
         return ConversionStrategy {
@@ -586,7 +593,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
 /// Automatically convert video with caching.
 ///
 /// # Errors
-/// Returns an error if analysis or conversion fails.
+/// Returns an error if video detection fails, strategy cannot be determined, or conversion execution fails.
 pub fn auto_convert_with_cache(
     input: &Path,
     config: &ConversionConfig,
@@ -702,6 +709,15 @@ pub fn auto_convert_with_cache(
         config.apple_compat,
         config.force,
         config.codec,
+    );
+
+    tracing::debug!(
+        file = %input.display(),
+        strategy = %strategy.target.extension(),
+        reason = %strategy.reason,
+        crf = strategy.crf,
+        lossless = strategy.lossless,
+        "Conversion strategy determined"
     );
 
     // Enforcement check: if strategy resulted in skip due to AV1/Apple-compat conflict
@@ -1746,6 +1762,18 @@ fn execute_conversion(
     apple_compat: bool,
     ultimate: bool,
 ) -> Result<u64> {
+    tracing::debug!(
+        file = %detection.file_path,
+        output = %output.display(),
+        crf = crf,
+        threads = max_threads,
+        codec = %codec.as_str(),
+        apple_compat = apple_compat,
+        ultimate = ultimate,
+        width = detection.width,
+        height = detection.height,
+        "Video conversion execution starting"
+    );
     // Attempt to extract DV RPU for injection (None = not DV or graceful fallback)
     let dv_rpu = prepare_dv_rpu(detection);
 

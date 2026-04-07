@@ -69,12 +69,20 @@ impl Default for GainMapParams {
 /// - `SDR` or Gainmap decoding fails.
 /// - `HDR` synthesis math fails.
 /// - Intermediate files cannot be written or the `cjxl` tool fails.
+/// # Errors
+///
+/// Returns an error if the HEIC file cannot be read, gainmap is missing, or synthesis fails.
 pub fn convert_heic_with_gainmap_to_jxl_hdr(
     input: &Path,
     output: &Path,
     _apple_compat: bool,
     intermediate_format: HdrIntermediateFormat,
 ) -> Result<()> {
+    tracing::debug!(
+        input = ?input.file_name().unwrap_or_default(),
+        ?intermediate_format,
+        "Starting HEIC to HDR JXL synthesis"
+    );
     let data = std::fs::read(input).context("Failed to read HEIC file")?;
     let ctx = HeifContext::read_from_bytes(&data).context("Failed to parse HEIC context")?;
     let handle = ctx
@@ -147,9 +155,14 @@ pub fn convert_heic_with_gainmap_to_jxl_hdr(
 
     // 4. Parse XMP parameters
     let params = parse_gainmap_params(&handle).unwrap_or_default();
-    info!("Gainmap parameters: {:?}", params);
 
     // 5. Perform Synthesis
+    tracing::debug!(
+        input = ?input.file_name().unwrap_or_default(),
+        ?params,
+        needs_p3_conversion,
+        "Performing HDR GainMap synthesis"
+    );
     let hdr_pixels = synthesize_hdr(&sdr, &gain, &params, needs_p3_conversion)
         .context("☢️ HDR synthesis math failure")?;
 
@@ -239,6 +252,9 @@ pub fn convert_heic_with_gainmap_to_jxl_hdr(
 /// - Gainmap extraction from the `JPEG` fails.
 /// - `HDR` synthesis math fails.
 /// - Intermediate files cannot be written or the `cjxl` tool fails.
+/// # Errors
+///
+/// Returns an error if the JPEG cannot be read, gainmap cannot be extracted, or synthesis fails.
 pub fn convert_ultrahdr_jpeg_to_jxl_hdr(
     input: &Path,
     output: &Path,

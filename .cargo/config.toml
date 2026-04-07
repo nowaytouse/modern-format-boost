@@ -1,130 +1,126 @@
 # =============================================================================
-# Modern Format Boost - Cargo 编译优化配置
+# Modern Format Boost - Cargo Compilation & Optimization Configuration
 # =============================================================================
-# 文档：https://doc.rust-lang.org/cargo/reference/config.html
+# Documentation: https://doc.rust-lang.org/cargo/reference/config.html
 # =============================================================================
 
 # -----------------------------------------------------------------------------
-# 构建配置
+# Build Configuration
 # -----------------------------------------------------------------------------
 [build]
-# 启用更精确的溢出检查（debug 模式默认开启，此处显式声明）
+# Enable overflow checks by default for all targets
 rustflags = [
     "-C", "overflow-checks=on",
 ]
 
-# macOS 特定配置
+# macOS-specific optimizations
 [target.'cfg(target_os = "macos")']
 rustflags = [
-    # 启用更精确的溢出检查
     "-C", "overflow-checks=on",
+    # Enable Faster Linker (system default is usually fine on Sonoma+, 
+    # but -C link-arg=-fuse-ld=lld can be added if lld is installed)
 ]
 
-
 # -----------------------------------------------------------------------------
-# 增量编译优化
+# Incremental Compilation Optimizations
 # -----------------------------------------------------------------------------
-# Cargo 1.24+ 默认开启增量编译，但可显式配置
 [profile.dev]
-# 增量编译（默认 true，显式声明以确保）
-# 注：使用 sccache 时建议关闭增量编译，因为两者机制冲突
+# Incremental compilation enabled by default for fast iteration
+# Note: If using sccache, incremental compilation should be disabled (conflicts)
 # incremental = false
 
-# 优化级别：
-# 0 = 最快编译，最慢运行
-# 1 = 平衡（推荐）
-# 2 = 较慢编译，较快运行
-# 3 = 最慢编译，最快运行
-# "s" = 优化代码大小
-# "z" = 极致优化代码大小
+# Optimization Level:
+# 0 = No optimizations (fastest build)
+# 1 = Basic optimizations (recommended for balanced dev)
+# 2 = High optimizations
+# 3 = Maximal optimizations
+# "s" = Optimize for size
+# "z" = Aggressive size optimization
 opt-level = 1
 
-# 调试信息：
-# 0/none = 无调试信息
-# 1/limited = 有限调试信息（更快编译）
-# 2/full = 完整调试信息（默认）
+# Debug Information:
+# 0/none = No debug info
+# 1/limited = Line tables only (faster build)
+# 2/full = Full debug symbols (default)
 debug = 2
 
-# 行表信息（分离调试信息，加快编译）
+# Enable runtime assertions for development
 debug-assertions = true
 
 # -----------------------------------------------------------------------------
-# 开发环境快速编译配置
+# Development Environment - Fast Compilation Profile
 # -----------------------------------------------------------------------------
 [profile.dev-fast]
-# 继承 dev 配置
 inherits = "dev"
 
-# 进一步优化：完全禁用优化以获得最快编译
+# Completely disable optimizations for minimum wait time
 opt-level = 0
 
-# 减少调试信息
+# Strip debug info to speed up linking
 debug = 0
 
-# 禁用增量编译（在某些情况下更快）
-# incremental = false
-
 # -----------------------------------------------------------------------------
-# 测试配置 - 平衡编译速度和测试执行速度
+# Test Configuration - Balanced speed for testing
 # -----------------------------------------------------------------------------
 [profile.test]
-# 测试需要一定优化以反映真实性能
+# Tests benefit from moderate optimization to reflect real-world performance
 opt-level = 2
-
-# 完整调试信息便于定位问题
 debug = true
 
 # -----------------------------------------------------------------------------
-# Release 配置 - 生产环境极致优化
+# Release Configuration - Production Grade Optimization
 # -----------------------------------------------------------------------------
 [profile.release]
-# 链接时优化（Link-Time Optimization）
-# 允许跨 crate 优化，生成更高效的代码
-lto = true
+# Link-Time Optimization (LTO)
+# Thin LTO provides similar benefits to 'fat' LTO with significantly faster build times.
+lto = "thin"
 
-# 极致优化级别
+# Maximal optimization level
 opt-level = 3
 
-# 单一代码生成单元（最大化优化，但编译更慢）
+# Single codegen unit allows for maximal cross-function optimization but slows down build
 codegen-units = 1
 
-# 剥离调试符号（减小二进制大小）
+# Abort on panic (reduces binary size and improves performance where unwinding isn't needed)
+panic = "abort"
+
+# Strip all symbols to minimize binary footprint (essential for CLI distribution)
 strip = "symbols"
 
-# 溢出检查（生产环境可禁用以提升性能）
-# overflow-checks = false
-
 # -----------------------------------------------------------------------------
-# 性能分析配置 - 用于性能调优
+# Profiling Configuration - Used for performance tuning
 # -----------------------------------------------------------------------------
 [profile.profiling]
-# 继承 release 配置
 inherits = "release"
 
-# 但保留调试信息用于性能分析
+# Retain debug info for meaningful flamegraphs/profiler output
 debug = true
 
-# 禁用 LTO 以加快编译
+# Disable LTO to speed up iterative profiling builds
 lto = false
 
-# 更多代码生成单元（更快编译）
+# Multiple codegen units for faster compilation
 codegen-units = 16
 
 # -----------------------------------------------------------------------------
-# 依赖项单独优化
+# Per-Package Optimizations
 # -----------------------------------------------------------------------------
-# 对特定依赖使用不同优化级别（Rust 1.41+）
-# 示例：总是优化关键依赖，即使是在 debug 模式
-# [profile.dev.package.serde]
-# opt-level = 3
-#
-# [profile.dev.package.image]
-# opt-level = 2
+# Always optimize heavy math/compression dependencies even in dev mode
+[profile.dev.package.image]
+opt-level = 2
+
+[profile.dev.package.num-rational]
+opt-level = 3
 
 # -----------------------------------------------------------------------------
-# 环境变量配置
+# Environment & Parallelism
 # -----------------------------------------------------------------------------
-# 设置最大并行编译数（默认是 CPU 核心数）
-# 如果内存不足，可以减少这个值
-# jobs = 8
+[term]
+# Ensure colorful output
+verbose = false
+color = "always"
 
+[net]
+# Optimize network requests for registry updates
+retry = 3
+git-fetch-with-cli = true
