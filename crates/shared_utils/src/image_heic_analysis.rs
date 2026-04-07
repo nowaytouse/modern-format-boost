@@ -567,7 +567,7 @@ pub fn is_heic_file(path: &Path) -> bool {
 /// in the raw bytes (they are always UTF-8 / ASCII-compatible).
 ///
 /// Returns `None` if no XMP data is found.
-fn extract_xmp_from_heic_data(data: &[u8]) -> Option<String> {
+pub fn extract_xmp_from_heic_data(data: &[u8]) -> Option<String> {
     // XMP packet starts with <?xpacket begin or <x:xmpmeta or <rdf:RDF
     let markers: &[&[u8]] = &[b"<?xpacket begin", b"<x:xmpmeta", b"<rdf:RDF"];
     for marker in markers {

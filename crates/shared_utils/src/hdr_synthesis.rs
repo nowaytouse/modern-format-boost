@@ -14,6 +14,7 @@
 //! - Embeds depth as JXL Extra Channel via jpegxl-rs FFI
 
 use anyhow::{anyhow, Context, Result};
+use serde::{Deserialize, Serialize};
 use image::{DynamicImage, ImageBuffer};
 use libheif_rs::{ColorSpace, HeifContext, ImageHandle, ItemId, RgbChroma};
 use quick_xml::events::Event;
@@ -32,7 +33,8 @@ pub enum HdrIntermediateFormat {
     Png16,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "fuzzing", derive(arbitrary::Arbitrary))]
 pub struct GainMapParams {
     pub gain_map_max: f32,
     pub gain_map_min: f32,
@@ -683,7 +685,12 @@ fn parse_gainmap_from_xmp(xmp_str: &str) -> Option<GainMapParams> {
     }
 }
 
-fn synthesize_hdr(
+/// Performs the HDR synthesis calculation using the provided `GainMap`.
+///
+/// # Errors
+///
+/// Returns an error if the images have incompatible dimensions or if memory allocation fails.
+pub fn synthesize_hdr(
     sdr: &DynamicImage,
     gain: &DynamicImage,
     params: &GainMapParams,

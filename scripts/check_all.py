@@ -538,7 +538,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--no-expensive",
         action="store_true",
-        help="Skip slow checks (bloat, hack, llvm-cov)",
+        help="Skip slow checks (bloat, hack, llvm-cov, mutants)",
     )
     parser.add_argument("--fix", action="store_true", help="Auto-fix formatting issues")
     parser.add_argument("--build", action="store_true", help="Run full release build")
@@ -554,6 +554,31 @@ def parse_args() -> argparse.Namespace:
             "Run library tests under Miri (UB / memory-safety checker)."
             " Requires nightly + miri + rust-src components."
             " Very slow — expect 10-100× test runtime."
+        ),
+    )
+    parser.add_argument(
+        "--sanitizers",
+        action="store_true",
+        help=(
+            "Run library tests with AddressSanitizer (nightly only)."
+            " Catches heap/stack/global buffer overflows and use-after-free in"
+            " unsafe code and FFI boundaries. Complements Miri for code Miri cannot reach."
+        ),
+    )
+    parser.add_argument(
+        "--mutants",
+        action="store_true",
+        help=(
+            "Run cargo-mutants: mutation testing to gauge test suite quality."
+            " Very slow (minutes–hours). Requires: cargo install cargo-mutants."
+        ),
+    )
+    parser.add_argument(
+        "--fuzz-list",
+        action="store_true",
+        help=(
+            "Discover and list available fuzz targets via cargo-fuzz."
+            " Fast (no actual fuzzing). Requires: cargo install cargo-fuzz + nightly."
         ),
     )
     parser.add_argument(
@@ -923,6 +948,56 @@ def main() -> None:
                     f"missing: {', '.join(missing)} — run --install-nightly",
                 )
 
+        # ── AddressSanitizer: heap/stack/FFI memory errors (opt-in via --sanitizers)
+        # Catches buffer overflows and use-after-free that Miri cannot reach
+        # because Miri refuses to run FFI (libheif-rs, etc.).
+        # aarch64-apple-darwin: ASAN works on nightly; TSAN has OS-level limitations.
+        # Note: ASAN cannot run under Rosetta — requires native Apple Silicon shell.
+        if args.sanitizers:
+            if nc.toolchain and nc.rust_src:
+                # Detect build target; default to host triple reported by rustc.
+                try:
+                    host_triple = subprocess.check_output(
+                        ["rustc", "-vV"], text=True
+                    )
+                    m = re.search(r"host:\s*(\S+)", host_triple)
+                    build_target = m.group(1) if m else "aarch64-apple-darwin"
+                except Exception:
+                    build_target = "aarch64-apple-darwin"
+
+                run_step(
+                    tracker,
+                    "optional",
+                    f"cargo +nightly test --lib (AddressSanitizer, {build_target})",
+                    [
+                        "cargo",
+                        "+nightly",
+                        "test",
+                        "--workspace",
+                        "--lib",
+                        "--target",
+                        build_target,
+                    ],
+                    env_vars={
+                        "RUSTFLAGS": "-Z sanitizer=address",
+                        # Suppress known-benign leak in jemalloc/system allocator
+                        # on macOS; set ASAN_OPTIONS explicitly to suppress false
+                        # positives from Apple frameworks loaded at dyld time.
+                        "ASAN_OPTIONS": "detect_leaks=0",
+                    },
+                )
+            else:
+                missing = []
+                if not nc.toolchain:
+                    missing.append("nightly toolchain")
+                if not nc.rust_src:
+                    missing.append("rust-src")
+                skip_step(
+                    tracker,
+                    "AddressSanitizer",
+                    f"missing: {', '.join(missing)} — run --install-nightly",
+                )
+
         # ── llvm-cov coverage (optional, expensive) ───────────────────────────────
         # Requires: nightly llvm-tools component + cargo-llvm-cov installed.
         # Shows per-crate line coverage summary without writing HTML report.
@@ -1007,7 +1082,7 @@ def main() -> None:
                 ["cargo", "taplo", "fmt", "--check"],
             )
 
-        # ── cargo doc ─────────────────────────────────────────────────────────────
+        # ── cargo doc (stable) ────────────────────────────────────────────────────
         run_step(
             tracker,
             "optional",
@@ -1015,9 +1090,99 @@ def main() -> None:
             ["cargo", "doc", "--workspace", "--no-deps"],
         )
 
+        # ── cargo +nightly doc -D warnings ───────────────────────────────────────
+        # Nightly rustdoc enables extra lints (e.g. broken intra-doc links,
+        # missing_docs, private_intra_doc_links) not gated on stable.
+        # Runs as a second pass after the stable doc build so nightly-only
+        # warning noise doesn't block the required path.
+        if nc.toolchain:
+            run_step(
+                tracker,
+                "optional",
+                "cargo +nightly doc -D warnings (rustdoc lints)",
+                ["cargo", "+nightly", "doc", "--workspace", "--no-deps"],
+                env_vars={"RUSTDOCFLAGS": "-D warnings"},
+            )
+        else:
+            skip_step(
+                tracker,
+                "nightly rustdoc -D warnings",
+                "nightly toolchain not installed",
+            )
+
         # ── Security audit ────────────────────────────────────────────────────────
         if has_cargo_subcommand("audit", verbose=args.verbose):
             run_step(tracker, "optional", "cargo audit", ["cargo", "audit"])
+
+        # ── cargo deny: license + advisory + duplicate crate check ───────────────
+        # More thorough than cargo-audit: also enforces license allowlists and
+        # catches duplicate transitive dependency versions that bloat binary size.
+        # Config: deny.toml at workspace root (create with `cargo deny init`).
+        if has_cargo_subcommand("deny", verbose=args.verbose):
+            run_step(
+                tracker,
+                "optional",
+                "cargo deny check (licenses + advisories + bans)",
+                ["cargo", "deny", "check"],
+            )
+
+        # ── Snapshot tests: insta ─────────────────────────────────────────────────
+        # cargo-insta runs tests and fails if any snapshot has changed but not
+        # been reviewed. Use `cargo insta review` to accept/reject diffs.
+        # --unreferenced=reject fails if orphaned snapshots accumulate on disk.
+        if has_cargo_subcommand("insta", verbose=args.verbose):
+            run_step(
+                tracker,
+                "optional",
+                "cargo insta test (snapshot regression check)",
+                [
+                    "cargo",
+                    "insta",
+                    "test",
+                    "--workspace",
+                    "--unreferenced=reject",
+                ],
+            )
+
+        # ── Benchmark compile check ───────────────────────────────────────────────
+        # Compiles all criterion benchmarks without running them.
+        # Catches benchmark bitrot (benchmark code that no longer compiles after
+        # internal API changes) without paying the full benchmark execution cost.
+        # Only meaningful if the workspace actually has bench targets.
+        bench_files = [f for f in git_files if "benches/" in f and f.endswith(".rs")]
+        if bench_files:
+            run_step(
+                tracker,
+                "optional",
+                f"cargo bench --no-run (compile check, {len(bench_files)} bench file(s))",
+                ["cargo", "bench", "--workspace", "--no-run"],
+            )
+        else:
+            skip_step(tracker, "bench compile check", "no bench targets found")
+
+        # ── Fuzz target discovery (fast, no actual fuzzing) ───────────────────────
+        # Lists declared fuzz targets so regressions in the fuzz harness setup
+        # surface in CI without the cost of running fuzzing at all.
+        # Actual fuzzing is intentionally left as a local/scheduled workflow.
+        if args.fuzz_list:
+            if nc.toolchain and has_cargo_subcommand("fuzz", verbose=args.verbose):
+                run_step(
+                    tracker,
+                    "optional",
+                    "cargo fuzz list (fuzz target discovery)",
+                    ["cargo", "+nightly", "fuzz", "list"],
+                )
+            else:
+                missing_parts = []
+                if not nc.toolchain:
+                    missing_parts.append("nightly toolchain")
+                if not _has_cargo_sub("fuzz"):
+                    missing_parts.append("cargo-fuzz (cargo install cargo-fuzz)")
+                skip_step(
+                    tracker,
+                    "cargo fuzz list",
+                    f"missing: {', '.join(missing_parts)}",
+                )
 
         # ── Expensive checks ──────────────────────────────────────────────────────
         if not args.no_expensive:
@@ -1042,6 +1207,39 @@ def main() -> None:
                         "--no-dev-deps",
                     ],
                 )
+
+            # ── Mutation testing: cargo-mutants ───────────────────────────────────
+            # Modifies source code one mutation at a time (flips operators, removes
+            # return values, etc.) and checks whether the test suite catches it.
+            # Measures test suite *quality* — complementary to coverage metrics.
+            # Very slow: budget ~30-120 min for a medium workspace.
+            # Opt-in via --mutants; also skipped by --no-expensive.
+            if args.mutants:
+                if has_cargo_subcommand("mutants", verbose=args.verbose):
+                    run_step(
+                        tracker,
+                        "optional",
+                        "cargo mutants (mutation testing, timeout 60s/mutant)",
+                        [
+                            "cargo",
+                            "mutants",
+                            "--workspace",
+                            # Per-mutant timeout — prevents infinite-loop mutants
+                            # from stalling the whole run.
+                            "--timeout",
+                            "60",
+                            # Cap parallel workers to avoid starving the system
+                            # when Antigravity IDE or other heavy tools are open.
+                            "--jobs",
+                            "2",
+                        ],
+                    )
+                else:
+                    skip_step(
+                        tracker,
+                        "cargo mutants",
+                        "not installed — cargo install cargo-mutants",
+                    )
 
         # ── AI smell ──────────────────────────────────────────────────────────────
         if args.ai_smell:

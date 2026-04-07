@@ -4,6 +4,49 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [Unreleased] — TBD
+
+### 🧪 Fuzzing Infrastructure
+
+- **cargo-fuzz Integration**: Added a dedicated `fuzz` workspace crate with 5 fuzz targets powered by `libfuzzer-sys`:
+  - `image_analyzer` — fuzzes the shared image analysis pipeline
+  - `jpeg_extractor` — fuzzes JPEG/XMP segment extraction logic
+  - `heic_parser` — fuzzes HEIC/HEIF metadata parsing (`extract_xmp_from_heic_data`)
+  - `hdr_synthesis` — fuzzes the HDR synthesis (`synthesize_hdr`) with derived `GainMapParams`
+  - `jxl_utils` — fuzzes JXL utility functions
+- **Arbitrary Derive**: Added `arbitrary::Arbitrary` derive to `GainMapParams` under the `fuzzing` feature flag for structured fuzzing input generation.
+- **CI Ready**: ClusterFuzzLite workflow (`.github/workflows/clusterfuzzlite.yml`) and oss-fuzz integration scaffolding added for continuous fuzzing.
+
+### 📐 Testing Infrastructure
+
+- **Property Tests**: Added `crates/shared_utils/tests/property_tests.rs` with proptest-based property tests for float approximation (identity, symmetry) and precision metadata roundtrip.
+- **Snapshot Tests**: Added `crates/shared_utils/tests/snapshot_tests.rs` using `insta` for regression-safe snapshot testing of FFmpeg and cjxl builder output.
+- **Benchmarks**: Added `crates/shared_utils/benches/quality_benches.rs` (criterion) for micro-benchmarking quality-critical hot paths.
+- **New Dev Dependencies**: `insta` (snapshot testing), `criterion` (benchmarking), `arbitrary` (fuzz input generation), `proptest` (property tests), `tempfile` (test fixtures).
+
+### 🛡️ Code Hardening
+
+- **`gpu_accel.rs`**: Replaced unchecked `Instant::now() - duration` subtraction with `checked_sub().expect(...)` to prevent panic on monotonic clock anomalies. Simplified `summarize_ffmpeg_failure_output` logic (prefer stderr summary, fall through to stdout only when needed).
+- **`hdr_synthesis.rs`**: Made `synthesize_hdr` public with proper `# Errors` documentation; added `Serialize`/`Deserialize` to `GainMapParams` for cross-format serialization.
+- **`image_heic_analysis.rs`**: Promoted `extract_xmp_from_heic_data` from private to `pub` for use by fuzz targets and downstream consumers.
+
+### 🐍 Check Script Enhancements (`scripts/check_all.py`)
+
+- **AddressSanitizer (`--sanitizers`)**: Runs workspace library tests with `-Z sanitizer=address` on nightly. Catches heap/stack/global buffer overflows and use-after-free in unsafe code and FFI boundaries (complements Miri for code Miri cannot reach). Auto-detects host target triple.
+- **Mutation Testing (`--mutants`)**: Optional `cargo mutants` integration with 60s per-mutant timeout and `--jobs 2` cap to avoid system starvation. Measures test suite *quality* — complementary to coverage metrics.
+- **Fuzz Target Listing (`--fuzz-list`)**: Discovers and lists available fuzz targets via `cargo fuzz list` for CI visibility without actual fuzzing cost.
+- **Nightly Rustdoc Lints**: Added `cargo +nightly doc -D warnings` pass to catch broken intra-doc links and missing docs gated on nightly rustdoc.
+- **Cargo Deny**: Added `cargo deny check` for license allowlists, advisory scanning, and duplicate crate detection.
+- **Snapshot Tests**: Added `cargo insta test --unreferenced=reject` to catch snapshot regressions and prevent orphaned snapshot accumulation.
+- **Benchmark Compile Check**: Added `cargo bench --no-run` to catch benchmark bitrot without full execution cost.
+- **Help Text Update**: `--no-expensive` now mentions mutants alongside bloat, hack, llvm-cov.
+
+### 📦 Dependency Updates
+
+- **Cargo.toml**: Added `insta` and `criterion` from GitHub sources to workspace dev dependencies.
+- **Workspace Members**: Added `fuzz` crate to workspace members list.
+- **shared_utils**: Added `arbitrary` (optional, feature-gated), `insta`, `proptest`, `tempfile` as dev dependencies; added `[[bench]]` section for `quality_benches`.
+
 ## [0.11.2] — 2026-04-05
 
 ### 🔄 GPU Detection Resilient Caching & Diagnostic Enhancements

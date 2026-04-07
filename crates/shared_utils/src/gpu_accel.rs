@@ -1007,10 +1007,10 @@ fn summarize_ffmpeg_failure_output(stdout: &[u8], stderr: &[u8]) -> String {
     let stderr = String::from_utf8_lossy(stderr);
     let stdout = String::from_utf8_lossy(stdout);
     let stderr_summary = summarize_ffmpeg_failure_line(&stderr);
-    if stderr_summary != "unknown ffmpeg error" {
-        stderr_summary
-    } else {
+    if stderr_summary == "unknown ffmpeg error" {
         summarize_ffmpeg_failure_line(&stdout)
+    } else {
+        stderr_summary
     }
 }
 
@@ -3349,7 +3349,9 @@ mod tests {
         let stale_negative = CachedGpuAccel {
             accel: GpuAccel::default(),
             diagnostics: vec![],
-            last_probe: std::time::Instant::now() - GPU_NEGATIVE_CACHE_TTL,
+            last_probe: std::time::Instant::now()
+                .checked_sub(GPU_NEGATIVE_CACHE_TTL)
+                .expect("Time went backwards"),
         };
         assert!(
             stale_negative.should_refresh(),
@@ -3373,7 +3375,9 @@ mod tests {
                 enabled: true,
             },
             diagnostics: vec![],
-            last_probe: std::time::Instant::now() - GPU_NEGATIVE_CACHE_TTL,
+            last_probe: std::time::Instant::now()
+                .checked_sub(GPU_NEGATIVE_CACHE_TTL)
+                .expect("Time went backwards"),
         };
         assert!(
             !fresh_positive.should_refresh(),

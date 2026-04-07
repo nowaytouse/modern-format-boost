@@ -122,6 +122,9 @@ name = "arbitrary"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"
+dependencies = [
+ "derive_arbitrary",
+]
 
 [[package]]
 name = "arg_enum_proc_macro"
@@ -697,6 +700,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "derive_arbitrary"
+version = "1.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e567bd82dcff979e4b03460c307b3cdc9e96fde3d73bed1496d2bc75d9dd62a"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "dev"
 version = "0.11.2"
 dependencies = [
@@ -1198,6 +1212,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "insta"
+version = "1.47.2"
+source = "git+https://github.com/mitsuhiko/insta#0ddf1e829337fe2a4cbb4b801d9fd78426a10fe0"
+dependencies = [
+ "console",
+ "once_cell",
+ "similar",
+ "tempfile",
+]
+
+[[package]]
 name = "interpolate_name"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1468,6 +1493,19 @@ dependencies = [
  "libc 0.2.184",
  "wasi 0.11.1+wasi-snapshot-preview1",
  "windows-sys",
+]
+
+[[package]]
+name = "modern-format-boost-fuzz"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "arbitrary",
+ "image",
+ "libfuzzer-sys",
+ "shared_utils",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -2283,6 +2321,7 @@ name = "shared_utils"
 version = "0.11.2"
 dependencies = [
  "anyhow",
+ "arbitrary",
  "blake3",
  "chrono",
  "clap",
@@ -2295,6 +2334,7 @@ dependencies = [
  "image",
  "indicatif",
  "infer",
+ "insta",
  "jpegxl-rs",
  "jpegxl-sys",
  "libc 1.0.0-alpha.3",
@@ -2339,6 +2379,12 @@ checksum = "95890f873bec569a0362c235787f3aca6e1e887302ba4840839bcc6459c42da6"
 dependencies = [
  "quote",
 ]
+
+[[package]]
+name = "similar"
+version = "2.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbbb5d9659141646ae647b42fe094daf6c6192d1620870b449d9557f748b2daa"
 
 [[package]]
 name = "siphasher"

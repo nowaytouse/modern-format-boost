@@ -9,6 +9,15 @@ description = "Shared utilities for modern_format_boost tools"
 [lints]
 workspace = true
 
+[dev-dependencies]
+tempfile = { workspace = true }
+proptest = { workspace = true }
+insta    = { workspace = true }
+
+[[bench]]
+name = "quality_benches"
+harness = false
+
 [dependencies]
 anyhow = { workspace = true }
 thiserror = { workspace = true }
@@ -45,6 +54,7 @@ exr = { workspace = true }
 proptest = { workspace = true }
 serial_test = "3.1.1"
 jpegxl-sys = "0.12.1"
+arbitrary = { version = "1.3", features = ["derive"], optional = true }
 
 [[bin]]
 name = "train_knn"
@@ -61,3 +71,4 @@ path = "src/bin/train_quality.rs"
 [features]
 default = ["v1_21"]
 v1_21 = ["libheif-rs/v1_21"]
+fuzzing = ["dep:arbitrary"]

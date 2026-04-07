@@ -3,7 +3,8 @@ members = [
     "crates/vid",
     "crates/img",
     "crates/shared_utils",
-    "crates/dev"
+    "crates/dev",
+    "fuzz"
 ]
 resolver = "2"
 
@@ -200,6 +201,8 @@ mp4parse    = { git = "https://github.com/mozilla/mp4parse-rust" }
 # Testing and compression - NIGHTLY: Using GitHub sources
 tempfile = { git = "https://github.com/Stebalien/tempfile" }
 proptest = { git = "https://github.com/proptest-rs/proptest" }
+insta    = { git = "https://github.com/mitsuhiko/insta" }
+criterion = { git = "https://github.com/bheisler/criterion.rs" }
 flate2   = { git = "https://github.com/rust-lang/flate2-rs" }
 
 # Signal handling - NIGHTLY: Using GitHub sources
