@@ -230,7 +230,9 @@ fn calculate_edge_density(rgba: &[u8], width: u32, height: u32) -> f64 {
         * crate::numeric_cast::u32_to_usize_sat(height);
     let step = if pixels > 4_000_000 {
         4
-    } else if pixels > 1_000_000 {
+    } else if crate::numeric_cast::usize_to_u64(pixels)
+        > crate::constants::IMAGE_CONFIDENCE_PIXELS_LARGE_THRESHOLD
+    {
         2
     } else {
         1
@@ -248,14 +250,17 @@ fn calculate_edge_density(rgba: &[u8], width: u32, height: u32) -> f64 {
                 let r = i32::from(rgba[idx]);
                 let g = i32::from(rgba[idx + 1]);
                 let b = i32::from(rgba[idx + 2]);
-                (r * 299 + g * 587 + b * 114) / 1000
+                (r * crate::constants::LUMA_COEFF_R
+                    + g * crate::constants::LUMA_COEFF_G
+                    + b * crate::constants::LUMA_COEFF_B)
+                    / crate::constants::LUMA_DIVISOR
             };
 
             let gx = get_gray(x + 1, y) - get_gray(x - 1, y);
             let gy = get_gray(x, y + 1) - get_gray(x, y - 1);
             let gradient = f64::from(gx * gx + gy * gy).sqrt();
 
-            if gradient > 25.0 {
+            if gradient > crate::constants::IMAGE_EDGE_DENSITY_THRESHOLD {
                 edge_count += 1;
             }
             sample_count += 1;
@@ -268,7 +273,7 @@ fn calculate_edge_density(rgba: &[u8], width: u32, height: u32) -> f64 {
 
     let raw_density = crate::numeric_cast::usize_to_f64(edge_count)
         / crate::numeric_cast::usize_to_f64(sample_count);
-    (raw_density * 3.0).min(1.0)
+    (raw_density * crate::constants::IMAGE_EDGE_DENSITY_MULTIPLIER).min(1.0)
 }
 
 fn calculate_color_diversity(rgba: &[u8], width: u32, height: u32) -> f64 {
@@ -276,7 +281,9 @@ fn calculate_color_diversity(rgba: &[u8], width: u32, height: u32) -> f64 {
 
     let pixels = crate::numeric_cast::u32_to_usize_sat(width)
         * crate::numeric_cast::u32_to_usize_sat(height);
-    let step = if pixels > 1_000_000 {
+    let step = if crate::numeric_cast::usize_to_u64(pixels)
+        > crate::constants::IMAGE_CONFIDENCE_PIXELS_LARGE_THRESHOLD
+    {
         20
     } else if pixels > 100_000 {
         10
@@ -314,7 +321,9 @@ fn calculate_texture_variance(rgba: &[u8], width: u32, height: u32) -> f64 {
 
     let pixels = crate::numeric_cast::u32_to_usize_sat(width)
         * crate::numeric_cast::u32_to_usize_sat(height);
-    let step = if pixels > 1_000_000 {
+    let step = if crate::numeric_cast::usize_to_u64(pixels)
+        > crate::constants::IMAGE_CONFIDENCE_PIXELS_LARGE_THRESHOLD
+    {
         10
     } else if pixels > 100_000 {
         5
@@ -363,7 +372,7 @@ fn calculate_texture_variance(rgba: &[u8], width: u32, height: u32) -> f64 {
     }
 
     let avg_std = variance_sum / crate::numeric_cast::usize_to_f64(sample_count);
-    (avg_std / 80.0).min(1.0)
+    (avg_std / crate::constants::IMAGE_TEXTURE_VAR_NORMALIZATION).min(1.0)
 }
 
 fn calculate_noise_level(rgba: &[u8], width: u32, height: u32) -> f64 {
@@ -373,7 +382,9 @@ fn calculate_noise_level(rgba: &[u8], width: u32, height: u32) -> f64 {
 
     let pixels = crate::numeric_cast::u32_to_usize_sat(width)
         * crate::numeric_cast::u32_to_usize_sat(height);
-    let step = if pixels > 1_000_000 {
+    let step = if crate::numeric_cast::usize_to_u64(pixels)
+        > crate::constants::IMAGE_CONFIDENCE_PIXELS_LARGE_THRESHOLD
+    {
         10
     } else if pixels > 100_000 {
         5
@@ -415,7 +426,7 @@ fn calculate_noise_level(rgba: &[u8], width: u32, height: u32) -> f64 {
     }
 
     let avg_diff = diff_sum / crate::numeric_cast::usize_to_f64(sample_count);
-    (avg_diff / 30.0).min(1.0)
+    (avg_diff / crate::constants::IMAGE_NOISE_NORMALIZATION).min(1.0)
 }
 
 fn calculate_sharpness(rgba: &[u8], width: u32, height: u32) -> f64 {
@@ -425,7 +436,9 @@ fn calculate_sharpness(rgba: &[u8], width: u32, height: u32) -> f64 {
 
     let pixels = crate::numeric_cast::u32_to_usize_sat(width)
         * crate::numeric_cast::u32_to_usize_sat(height);
-    let step = if pixels > 1_000_000 {
+    let step = if crate::numeric_cast::usize_to_u64(pixels)
+        > crate::constants::IMAGE_CONFIDENCE_PIXELS_LARGE_THRESHOLD
+    {
         10
     } else if pixels > 100_000 {
         5
@@ -438,10 +451,10 @@ fn calculate_sharpness(rgba: &[u8], width: u32, height: u32) -> f64 {
 
     let get_gray = |x: usize, y: usize| -> i32 {
         let idx = (y * crate::numeric_cast::u32_to_usize_sat(width) + x) * 4;
-        (i32::from(rgba[idx]) * 299
-            + i32::from(rgba[idx + 1]) * 587
-            + i32::from(rgba[idx + 2]) * 114)
-            / 1000
+        (i32::from(rgba[idx]) * crate::constants::LUMA_COEFF_R
+            + i32::from(rgba[idx + 1]) * crate::constants::LUMA_COEFF_G
+            + i32::from(rgba[idx + 2]) * crate::constants::LUMA_COEFF_B)
+            / crate::constants::LUMA_DIVISOR
     };
 
     for y in (1..(height - 1) as usize).step_by(step) {
@@ -452,7 +465,9 @@ fn calculate_sharpness(rgba: &[u8], width: u32, height: u32) -> f64 {
             let left = get_gray(x - 1, y);
             let right = get_gray(x + 1, y);
 
-            let laplacian = (4 * center - top - bottom - left - right).abs();
+            let laplacian =
+                (crate::constants::IMAGE_LAPLACIAN_CENTER * center - top - bottom - left - right)
+                    .abs();
             laplacian_sum += f64::from(laplacian);
             sample_count += 1;
         }
@@ -463,13 +478,15 @@ fn calculate_sharpness(rgba: &[u8], width: u32, height: u32) -> f64 {
     }
 
     let avg_laplacian = laplacian_sum / crate::numeric_cast::usize_to_f64(sample_count);
-    (avg_laplacian / 100.0).min(1.0)
+    (avg_laplacian / crate::constants::IMAGE_SHARPNESS_NORMALIZATION).min(1.0)
 }
 
 fn calculate_contrast(rgba: &[u8], width: u32, height: u32) -> f64 {
     let pixels = crate::numeric_cast::u32_to_usize_sat(width)
         * crate::numeric_cast::u32_to_usize_sat(height);
-    let step = if pixels > 1_000_000 {
+    let step = if crate::numeric_cast::usize_to_u64(pixels)
+        > crate::constants::IMAGE_CONFIDENCE_PIXELS_LARGE_THRESHOLD
+    {
         20
     } else if pixels > 100_000 {
         10
@@ -484,10 +501,13 @@ fn calculate_contrast(rgba: &[u8], width: u32, height: u32) -> f64 {
     for i in (0..pixels).step_by(step) {
         let idx = i * 4;
         if idx + 2 < rgba.len() {
-            let gray = (u64::from(rgba[idx]) * 299
-                + u64::from(rgba[idx + 1]) * 587
-                + u64::from(rgba[idx + 2]) * 114)
-                / 1000;
+            let gray = (u64::from(rgba[idx])
+                * crate::numeric_cast::i32_to_u64_sat(crate::constants::LUMA_COEFF_R)
+                + u64::from(rgba[idx + 1])
+                    * crate::numeric_cast::i32_to_u64_sat(crate::constants::LUMA_COEFF_G)
+                + u64::from(rgba[idx + 2])
+                    * crate::numeric_cast::i32_to_u64_sat(crate::constants::LUMA_COEFF_B))
+                / crate::numeric_cast::i32_to_u64_sat(crate::constants::LUMA_DIVISOR);
             sum += gray;
             sq_sum += gray * gray;
             sample_count += 1;
@@ -505,11 +525,11 @@ fn calculate_contrast(rgba: &[u8], width: u32, height: u32) -> f64 {
     let variance = mean.mul_add(-mean, mean_sq);
     let std_dev = variance.sqrt();
 
-    (std_dev / 80.0).min(1.0)
+    (std_dev / crate::constants::IMAGE_CONTRAST_NORMALIZATION).min(1.0)
 }
 
 fn detect_alpha_usage(rgba: &[u8]) -> bool {
-    for i in (0..rgba.len()).step_by(400) {
+    for i in (0..rgba.len()).step_by(crate::constants::IMAGE_ALPHA_SAMPLING_STEP) {
         let alpha_idx = i + 3;
         if alpha_idx < rgba.len() && rgba[alpha_idx] < 255 {
             return true;
@@ -518,16 +538,33 @@ fn detect_alpha_usage(rgba: &[u8]) -> bool {
     false
 }
 
-fn calculate_overall_complexity(
+pub(crate) fn calculate_overall_complexity(
     edge_density: f64,
     color_diversity: f64,
     texture_variance: f64,
     noise_level: f64,
 ) -> f64 {
+    debug_assert!(
+        (crate::constants::IMAGE_COMPLEXITY_WEIGHT_NOISE
+            + crate::constants::IMAGE_COMPLEXITY_WEIGHT_TEXTURE
+            + crate::constants::IMAGE_COMPLEXITY_WEIGHT_EDGE
+            + crate::constants::IMAGE_COMPLEXITY_WEIGHT_COLOR
+            - 1.0)
+            .abs()
+            < 1e-6,
+        "Image complexity weights must sum to 1.0"
+    );
+
     noise_level
         .mul_add(
-            0.15,
-            texture_variance.mul_add(0.25, edge_density.mul_add(0.35, color_diversity * 0.25)),
+            crate::constants::IMAGE_COMPLEXITY_WEIGHT_NOISE,
+            texture_variance.mul_add(
+                crate::constants::IMAGE_COMPLEXITY_WEIGHT_TEXTURE,
+                edge_density.mul_add(
+                    crate::constants::IMAGE_COMPLEXITY_WEIGHT_EDGE,
+                    color_diversity * crate::constants::IMAGE_COMPLEXITY_WEIGHT_COLOR,
+                ),
+            ),
         )
         .clamp(0.0, 1.0)
 }
@@ -632,27 +669,29 @@ fn classify_content_type(input: ClassifierInput) -> ImageContentType {
     }
 }
 
-fn calculate_analysis_confidence(
+pub(crate) fn calculate_analysis_confidence(
     pixels: u64,
     file_size: u64,
     edge_density: f64,
     color_diversity: f64,
 ) -> f64 {
-    let mut confidence: f64 = 0.7;
+    let mut confidence: f64 = crate::constants::IMAGE_CONFIDENCE_BASE;
 
-    if pixels > 1_000_000 {
-        confidence += 0.1;
-    } else if pixels < 100_000 {
-        confidence -= 0.1;
+    if pixels > crate::constants::IMAGE_CONFIDENCE_PIXELS_LARGE_THRESHOLD {
+        confidence += crate::constants::IMAGE_CONFIDENCE_PIXELS_LARGE_BONUS;
+    } else if pixels < crate::constants::IMAGE_CONFIDENCE_PIXELS_SMALL_THRESHOLD {
+        confidence -= crate::constants::IMAGE_CONFIDENCE_PIXELS_LARGE_BONUS;
     }
-    if file_size > 10_000 && file_size < 100_000_000 {
-        confidence += 0.05;
+    if file_size > crate::constants::IMAGE_CONFIDENCE_SIZE_MIN
+        && file_size < crate::constants::IMAGE_CONFIDENCE_SIZE_MAX
+    {
+        confidence += crate::constants::IMAGE_CONFIDENCE_INCREMENT;
     }
     if edge_density > 0.01 && edge_density < 0.9 {
-        confidence += 0.05;
+        confidence += crate::constants::IMAGE_CONFIDENCE_INCREMENT;
     }
     if color_diversity > 0.01 && color_diversity < 0.99 {
-        confidence += 0.05;
+        confidence += crate::constants::IMAGE_CONFIDENCE_INCREMENT;
     }
 
     confidence.clamp(0.0, 1.0)
@@ -748,4 +787,34 @@ pub fn log_media_info_for_image_quality(analysis: &ImageQualityAnalysis, input_p
     );
     write_to_log_at_level(Level::DEBUG, &format!("  color_diversity={:.4} texture_variance={:.4} noise={:.4} sharpness={:.4} contrast={:.4} confidence={:.4}", analysis.color_diversity, analysis.texture_variance, analysis.noise_level, analysis.sharpness, analysis.contrast, analysis.confidence));
     write_to_log_at_level(Level::DEBUG, "");
+}
+
+#[cfg(test)]
+mod property_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn test_complexity_range(
+            edge in 0.0..2.0f64,
+            div in 0.0..2.0f64,
+            tex in 0.0..2.0f64,
+            noise in 0.0..2.0f64
+        ) {
+            let score = calculate_overall_complexity(edge, div, tex, noise);
+            prop_assert!(score >= 0.0 && score <= 1.0, "Complexity score must be in [0, 1] (got {})", score);
+        }
+
+        #[test]
+        fn test_confidence_range(
+            pixels in 0..10_000_000u64,
+            size in 0..500_000_000u64,
+            edge in 0.0..1.5f64,
+            div in 0.0..1.5f64
+        ) {
+            let conf = calculate_analysis_confidence(pixels, size, edge, div);
+            prop_assert!(conf >= 0.0 && conf <= 1.0, "Confidence must be in [0, 1] (got {})", conf);
+        }
+    }
 }

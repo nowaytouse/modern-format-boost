@@ -9,7 +9,7 @@ NC='\033[0m'
 echo -e "${BLUE}🛡️ Running Modern Format Boost Hardened Test Suite${NC}\n"
 
 # 1. Check for cargo-llvm-cov
-if ! command -v cargo-llvm-cov &> /dev/null; then
+if ! command -v cargo-llvm-cov &>/dev/null; then
     echo "⚠️ cargo-llvm-cov not found. Installing..."
     cargo install cargo-llvm-cov
 fi
@@ -28,7 +28,7 @@ echo -e "\n${GREEN}🧭 Running Miri (Logic & UB Check)...${NC}"
 cargo +nightly miri test -p shared_utils --lib float_compare || echo "⚠️ Miri check skipped or failed (common for FFI projects)."
 
 # 4. Mutation Testing (Optional)
-if command -v cargo-mutants &> /dev/null; then
+if command -v cargo-mutants &>/dev/null; then
     echo -e "\n${GREEN}🦠 Running Mutation Testing (Test Quality)...${NC}"
     cargo mutants -d crates/shared_utils --timeout 30
 else

@@ -957,9 +957,7 @@ def main() -> None:
             if nc.toolchain and nc.rust_src:
                 # Detect build target; default to host triple reported by rustc.
                 try:
-                    host_triple = subprocess.check_output(
-                        ["rustc", "-vV"], text=True
-                    )
+                    host_triple = subprocess.check_output(["rustc", "-vV"], text=True)
                     m = re.search(r"host:\s*(\S+)", host_triple)
                     build_target = m.group(1) if m else "aarch64-apple-darwin"
                 except Exception:

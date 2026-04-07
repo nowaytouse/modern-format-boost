@@ -714,7 +714,7 @@ pub fn image_skipped(reason: &str) {
 }
 
 /// Call when an image is completely ignored (e.g. animated media in static-only tool).
-/// Logs a prominent message to stderr using [IGNORE] instead of [SKIP].
+/// Logs a prominent message to stderr using \[IGNORE\] instead of \[SKIP\].
 pub fn image_ignored(reason: &str) {
     let line = format!(
         "{}⏭️  {}  {}{}{}",

@@ -68,6 +68,34 @@ pub fn f64_to_usize_sat(v: f64) -> usize {
     result
 }
 
+/// Checked cast: `f64` → `u8`.
+///
+/// Returns `None` if `v` is `NaN` or outside of `[0, 255]`.
+#[inline]
+#[must_use]
+pub fn f64_to_u8_checked(v: f64) -> Option<u8> {
+    if v.is_nan() || v < 0.0 || v > f64::from(u8::MAX) {
+        None
+    } else {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        Some(v as u8)
+    }
+}
+
+/// Checked cast: `f64` → `u32`.
+///
+/// Returns `None` if `v` is `NaN` or outside of `[0, u32::MAX]`.
+#[inline]
+#[must_use]
+pub fn f64_to_u32_checked(v: f64) -> Option<u32> {
+    if v.is_nan() || v < 0.0 || v > f64::from(u32::MAX) {
+        None
+    } else {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        Some(v as u32)
+    }
+}
+
 /// Saturating cast: `f64` → `u16`.
 ///
 /// - `NaN` or negative → `0`
@@ -449,6 +477,16 @@ pub fn i32_to_u32_sat(v: i32) -> u32 {
 #[must_use]
 pub fn i32_to_u64_sat(v: i32) -> u64 {
     u64::try_from(v).unwrap_or(0)
+}
+
+/// Lossless promotion: `usize` → `u64`.
+///
+/// Audited: On 32-bit and 64-bit systems, `usize` fits into `u64`.
+#[inline]
+#[must_use]
+#[allow(clippy::cast_lossless)]
+pub fn usize_to_u64(v: usize) -> u64 {
+    v as u64
 }
 
 /// Saturating cast: `i32` → `u8`.

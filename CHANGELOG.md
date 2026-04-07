@@ -52,7 +52,7 @@ All notable changes to this project will be documented in this file.
 ### 🐍 Check Script Enhancements (`scripts/check_all.py`)
 
 - **AddressSanitizer (`--sanitizers`)**: Runs workspace library tests with `-Z sanitizer=address` on nightly. Catches heap/stack/global buffer overflows and use-after-free in unsafe code and FFI boundaries (complements Miri for code Miri cannot reach). Auto-detects host target triple.
-- **Mutation Testing (`--mutants`)**: Optional `cargo mutants` integration with 60s per-mutant timeout and `--jobs 2` cap to avoid system starvation. Measures test suite *quality* — complementary to coverage metrics.
+- **Mutation Testing (`--mutants`)**: Optional `cargo mutants` integration with 60s per-mutant timeout and `--jobs 2` cap to avoid system starvation. Measures test suite _quality_ — complementary to coverage metrics.
 - **Fuzz Target Listing (`--fuzz-list`)**: Discovers and lists available fuzz targets via `cargo fuzz list` for CI visibility without actual fuzzing cost.
 - **Nightly Rustdoc Lints**: Added `cargo +nightly doc -D warnings` pass to catch broken intra-doc links and missing docs gated on nightly rustdoc.
 - **Cargo Deny**: Added `cargo deny check` for license allowlists, advisory scanning, and duplicate crate detection.
@@ -88,6 +88,22 @@ All notable changes to this project will be documented in this file.
   - GPU detection info output now includes "Probe note" diagnostic lines to help users understand detection failures
 - **Call Site Updates**: Upgraded `detect()` → `detect_with_retry()` in `video_explorer.rs` (2 locations) and `gpu_coarse_search.rs` (1 location)
 - **Test Coverage**: Added `test_negative_gpu_cache_refresh_policy` and `test_summarize_ffmpeg_failure_line_prefers_specific_diagnostic` to verify cache refresh behavior and error summarization logic
+
+### 🛡️ Deep Hardening of Algorithmic Media Reliability (Phases 1-3)
+
+- **Empirically Verified Architecture**: Transitioned the media pipeline from "vibe-driven" heuristics to a mathematically robust and verifiable framework.
+- **Algorithmic Regression Snapshots**: Established a "Golden Standard" for media classification results using [classification_snapshots.rs](file:///crates/shared_utils/tests/classification_snapshots.rs) and `insta`. Any heuristic drift is now detectable and reviewable.
+- **Centralized Constant Provenance**: Migrated all magic numbers and heuristic thresholds to [constants.rs](file:///crates/shared_utils/src/constants.rs) with documented **Rationales** explaining their empirical origins.
+- **Numeric Safety Hardening**:
+  - Systematically eliminated silent saturating casts in critical quality paths.
+  - Implemented `checked` cast helpers (`f64_to_u8_checked`, etc.) in `numeric_cast.rs` to replace high-risk `as` conversions.
+  - Hardened quality score calculations to log anomalies (NaN/Inf) instead of silent masking.
+- **Defensive Mathematics**:
+  - Implemented epsilon guards and zero-variance protection for statistical functions (Coefficient of Variation, Gini Coefficient, Z-Score).
+  - Hardened `psnr_to_ssim_estimate` against `NaN` and range violations.
+- **Panic-Free Logic Audit**: Systematically audited `loop_intent.rs` and quality detectors to replace `unwrap()` with safe error handling and `anyhow::Context` propagation.
+- **Contractual Robustness**: Added `debug_assert!` checks to ensure algorithmic invariants (e.g., complexity weights must sum to 1.0).
+- **Boundary Centralization**: Extracted the hardcoded `25.0` gradient threshold to `IMAGE_EDGE_DENSITY_THRESHOLD` in `constants.rs`.
 
 ### ⚙️ Phase 3: Configuration & Observability Hardening (Updated 2026-04-07)
 

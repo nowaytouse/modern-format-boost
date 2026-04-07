@@ -137,7 +137,7 @@ else
     # Double-click mode: folder selection with 30-minute timeout
     TIMEOUT_SEC=1800
     TMPOUT=$(mktemp 2>/dev/null || echo "/tmp/mfb_choose_$$.txt")
-    osascript -e 'POSIX path of (choose folder with prompt "Select folder to process (30-minute timeout):")' > "$TMPOUT" 2>/dev/null &
+    osascript -e 'POSIX path of (choose folder with prompt "Select folder to process (30-minute timeout):")' >"$TMPOUT" 2>/dev/null &
     OPID=$!
     for ((i = 0; i < TIMEOUT_SEC; i++)); do
         if ! kill -0 "$OPID" 2>/dev/null; then

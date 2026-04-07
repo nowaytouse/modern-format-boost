@@ -1,5 +1,4 @@
 use proptest::prelude::*;
-use serde_json;
 use shared_utils::float_compare::approx_eq_f64;
 use shared_utils::image_detection::PrecisionMetadata;
 
@@ -29,7 +28,7 @@ proptest! {
             color_type,
             is_lossless_deterministic: is_lossless,
             quality_estimate,
-            chroma_subsampling: chroma_subsampling.map(|s| s.to_string()),
+            chroma_subsampling,
         };
 
         let serialized = serde_json::to_string(&meta).unwrap();

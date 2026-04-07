@@ -9,7 +9,10 @@ use serde::{Deserialize, Serialize};
 #[inline]
 #[must_use]
 pub fn psnr_to_ssim_estimate(psnr_db: f64) -> f64 {
-    (1.0 - 10_f64.powf(-psnr_db / 20.0)).min(0.9999)
+    if psnr_db.is_nan() {
+        return 0.0;
+    }
+    (1.0 - 10_f64.powf(-psnr_db / 20.0)).clamp(0.0, 0.9999)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

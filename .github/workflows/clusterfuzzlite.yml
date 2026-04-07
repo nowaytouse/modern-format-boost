@@ -1,11 +1,11 @@
 name: ClusterFuzzLite
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
   schedule:
-    - cron: '0 0 * * *'  # Daily
+    - cron: "0 0 * * *" # Daily
 
 permissions: read-all
 
@@ -21,13 +21,13 @@ jobs:
       - name: Build Fuzzers
         uses: google/clusterfuzzlite/actions/build_fuzzers@v1
         with:
-            language: rust
+          language: rust
       - name: Run Fuzzers
         uses: google/clusterfuzzlite/actions/run_fuzzers@v1
         with:
-            github-token: ${{ secrets.GITHUB_TOKEN }}
-            fuzzing-seconds: 600
-            mode: 'pr'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          fuzzing-seconds: 600
+          mode: "pr"
 
   Batch:
     if: github.event_name == 'push' || github.event_name == 'schedule'
@@ -38,10 +38,10 @@ jobs:
       - name: Build Fuzzers
         uses: google/clusterfuzzlite/actions/build_fuzzers@v1
         with:
-            language: rust
+          language: rust
       - name: Run Fuzzers
         uses: google/clusterfuzzlite/actions/run_fuzzers@v1
         with:
-            github-token: ${{ secrets.GITHUB_TOKEN }}
-            fuzzing-seconds: 3600
-            mode: 'batch'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          fuzzing-seconds: 3600
+          mode: "batch"

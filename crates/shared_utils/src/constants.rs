@@ -179,6 +179,76 @@ pub const MODERN_MASTER_NEGATIVE_LOG_ODDS: f64 = 0.35;
 pub const SHORT_CLIP_PRIOR_LOG_ODDS: f64 = 0.42;
 pub const EXTENDED_SHORT_ASSET_PRIOR_LOG_ODDS: f64 = 0.20;
 pub const LONG_SILENT_PRIOR_NEGATIVE_LOG_ODDS: f64 = 0.26;
+
+/// Empirical: 16:9 aspect ratio target.
+pub const ASPECT_RATIO_WIDESCREEN: f64 = 16.0 / 9.0;
+/// Empirical: tolerance for near-16:9 check.
+pub const ASPECT_RATIO_TOLERANCE_NEAR: f64 = 0.05;
+
+/// Layer 4 soft-priors and weights.
+pub const LOOP_COUNT_ZERO_BONUS_MAX: f64 = 0.18;
+pub const LOOP_COUNT_ZERO_BONUS_MIN: f64 = 0.06;
+pub const LOOP_COUNT_ZERO_BONUS_DECAY_MAX: f64 = 0.12;
+
+pub const COMPACTNESS_SIGNAL_SIZE_WEIGHT: f64 = 0.70;
+pub const COMPACTNESS_SIGNAL_PIXELS_WEIGHT: f64 = 0.45;
+pub const COMPACTNESS_SIGNAL_BIAS: f64 = 0.20;
+pub const COMPACTNESS_SIGNAL_MAX: f64 = 1.6;
+
+pub const LARGE_MEDIA_SIGNAL_SIZE_WEIGHT: f64 = 0.75;
+pub const LARGE_MEDIA_SIGNAL_PIXELS_WEIGHT: f64 = 0.35;
+pub const LARGE_MEDIA_SIGNAL_MAX: f64 = 1.8;
+pub const LARGE_MEDIA_AUDIO_MULTIPLIER: f64 = 0.65;
+
+pub const SHORT_CLIP_FORMAT_BONUS_IMAGE: f64 = 0.10;
+pub const SHORT_CLIP_FORMAT_BONUS_VIDEO: f64 = 0.04;
+pub const SHORT_CLIP_CADENCE_BONUS: f64 = 0.06;
+pub const SHORT_CLIP_MIN_BIAS: f64 = 0.18;
+pub const SHORT_CLIP_HEADROOM_MAX: f64 = 0.26;
+
+pub const EXTENDED_SHORT_ASSET_MIN_BIAS: f64 = 0.10;
+pub const EXTENDED_SHORT_ASSET_HEADROOM_MAX: f64 = 0.10;
+pub const EXTENDED_SHORT_ASSET_SQUARE_BONUS: f64 = 0.04;
+pub const EXTENDED_SHORT_ASSET_IMAGE_BONUS: f64 = 0.05;
+pub const EXTENDED_SHORT_ASSET_COMPACT_BONUS: f64 = 0.05;
+
+pub const FEATURE_WEIGHT_DELAY_VAR: f64 = 0.18;
+pub const FEATURE_WEIGHT_WEBP_RATIO: f64 = 0.16;
+pub const FEATURE_WEIGHT_MOTION_GINI: f64 = 0.14;
+pub const FEATURE_WEIGHT_PALETTE_DEPTH: f64 = 0.12;
+pub const FEATURE_WEIGHT_TEMPORAL_FLATNESS: f64 = 0.10;
+
+pub const FRAME_COUNT_SHORT_BONUS: f64 = 0.05;
+pub const FRAME_COUNT_LONG_PENALTY: f64 = 0.10;
+
+pub const SQUARE_ASPECT_BONUS: f64 = 0.08;
+pub const WIDESCREEN_ASPECT_PENALTY: f64 = 0.10;
+
+pub const FPS_ANOMALY_BONUS: f64 = 0.04;
+
+pub const LONG_SILENT_PENALTY_BASE: f64 = 0.22;
+pub const LONG_SILENT_PENALTY_OVERFLOW_MAX: f64 = 0.18;
+pub const LONG_SILENT_PENALTY_VIDEO_ADD: f64 = 0.18;
+pub const LONG_SILENT_PENALTY_IMAGE_ADD: f64 = 0.08;
+pub const LONG_SILENT_TRANSPARENCY_RELIEF: f64 = 0.06;
+pub const LONG_SILENT_MIN_PENALTY: f64 = 0.08;
+
+pub const IMAGE_PRIOR_BONUS: f64 = 0.04;
+pub const VIDEO_PRIOR_PENALTY: f64 = 0.04;
+
+/// Layer 6 KNN & Fusion thresholds.
+pub const LAYER6_CONFIDENCE_HIGH: f64 = 0.75;
+pub const LAYER6_FINAL_SCORE_HIGH: f64 = 0.60;
+pub const LAYER6_KEEP_PROB_MIN: f64 = 0.70;
+pub const LAYER6_FUSION_SCORE_UNCERTAIN_LOW: f64 = 0.40;
+pub const LAYER6_FUSION_SCORE_UNCERTAIN_HIGH: f64 = 0.60;
+
+pub const LETTERBOXING_NUDGE: f64 = 0.05;
+pub const HIGH_TEXT_DENSITY_NUDGE: f64 = 0.08;
+pub const AUXILIARY_NUDGE_CAP: f64 = 0.15;
+
+pub const LOSSLESS_DURATION_LIMIT_LOW_PROB: f64 = 0.3;
+pub const LOSSLESS_DURATION_LIMIT_HIGH_PROB: f64 = 0.7;
 pub const LAYER6_HIGH_SCORE_THRESHOLD: f64 = 0.70;
 pub const LAYER6_RELAXED_CONFIDENCE_THRESHOLD: f64 = 0.68;
 pub const LAYER6_MIN_KNN_WEIGHT: f64 = 0.25;
@@ -190,8 +260,49 @@ pub const LAYER6_LR_W_TREE: f64 = 2.5;
 pub const LAYER6_LR_W_DENSITY: f64 = 0.18;
 pub const LAYER6_LR_BIAS: f64 = -3.2;
 
+// --- Image Quality & Complexity Thresholds ---
+
+/// Empirical gradient threshold (25.0) for edge detection in luminance space.
+pub const IMAGE_EDGE_DENSITY_THRESHOLD: f64 = 25.0;
+
+/// Complexity weights must sum to 1.0. Rationale:
+/// - Texture (0.35) and Edges (0.25) are primary visual markers.
+pub const IMAGE_COMPLEXITY_WEIGHT_NOISE: f64 = 0.15;
+pub const IMAGE_COMPLEXITY_WEIGHT_TEXTURE: f64 = 0.35;
+pub const IMAGE_COMPLEXITY_WEIGHT_EDGE: f64 = 0.25;
+pub const IMAGE_COMPLEXITY_WEIGHT_COLOR: f64 = 0.25;
+
+pub const IMAGE_ALPHA_SAMPLING_STEP: usize = 16;
+pub const IMAGE_CONTRAST_NORMALIZATION: f64 = 80.0;
+
 // --- Video Quality & Compression Boundaries ---
 
+/// Empirical: base confidence for video quality analysis.
+pub const VIDEO_CONFIDENCE_BASE: f64 = 0.7;
+pub const VIDEO_CONFIDENCE_BITRATE_BONUS: f64 = 0.1;
+pub const VIDEO_CONFIDENCE_GOP_BONUS: f64 = 0.05;
+pub const VIDEO_CONFIDENCE_DURATION_BONUS: f64 = 0.05;
+pub const VIDEO_CONFIDENCE_FRAMES_BONUS: f64 = 0.05;
+pub const VIDEO_CONFIDENCE_DURATION_THRESHOLD: f64 = 10.0;
+pub const VIDEO_CONFIDENCE_FRAMES_THRESHOLD: u64 = 100;
+
+/// Empirical: codec efficiency factors for CRF estimation.
+pub const MODERN_EFFICIENT_CODEC_FACTOR: f64 = 0.5;
+pub const INTERMEDIATE_CODEC_FACTOR: f64 = 0.7;
+pub const INEFFICIENT_CODEC_FACTOR: f64 = 2.0;
+
+/// Empirical: BPP to CRF lookup table for initial estimation.
+/// format: (`bpp_threshold`, `crf_value`)
+pub const DENSITY_TO_CRF_LUT: &[(f64, u8)] = &[
+    (5.0, 14),
+    (1.0, 18),
+    (0.5, 22),
+    (0.3, 25),
+    (0.15, 28),
+    (0.08, 32),
+];
+
+/// CRF threshold for "Visually Lossless" classification.
 /// CRF threshold for "Visually Lossless" classification.
 pub const CRF_THRESHOLD_VISUALLY_LOSSLESS: f32 = 15.0;
 /// CRF threshold for "High Quality" classification.
@@ -210,6 +321,31 @@ pub const BPP_THRESHOLD_STANDARD: f64 = 0.1;
 pub const HEIGHT_UHD_4K: u32 = 2160;
 /// Resolution threshold for 4K UHD width.
 pub const WIDTH_UHD_4K: u32 = 3840;
+
+// --- Image Detection & Content Analysis ---
+
+/// Empirical: base confidence for image analysis.
+pub const IMAGE_CONFIDENCE_BASE: f64 = 0.7;
+pub const IMAGE_CONFIDENCE_PIXELS_LARGE_THRESHOLD: u64 = 1_000_000;
+pub const IMAGE_CONFIDENCE_PIXELS_SMALL_THRESHOLD: u64 = 100_000;
+pub const IMAGE_CONFIDENCE_PIXELS_LARGE_BONUS: f64 = 0.1;
+pub const IMAGE_CONFIDENCE_SIZE_MIN: u64 = 10_000;
+pub const IMAGE_CONFIDENCE_SIZE_MAX: u64 = 100_000_000;
+pub const IMAGE_CONFIDENCE_INCREMENT: f64 = 0.05;
+
+/// Rec. 601 Luma coefficients.
+pub const LUMA_COEFF_R: i32 = 299;
+pub const LUMA_COEFF_G: i32 = 587;
+pub const LUMA_COEFF_B: i32 = 114;
+pub const LUMA_DIVISOR: i32 = 1000;
+
+/// Detection and normalization parameters.
+pub const IMAGE_EDGE_THRESHOLD: f64 = 25.0;
+pub const IMAGE_EDGE_DENSITY_MULTIPLIER: f64 = 3.0;
+pub const IMAGE_TEXTURE_VAR_NORMALIZATION: f64 = 80.0;
+pub const IMAGE_NOISE_NORMALIZATION: f64 = 30.0;
+pub const IMAGE_LAPLACIAN_CENTER: i32 = 4;
+pub const IMAGE_SHARPNESS_NORMALIZATION: f64 = 100.0;
 
 // --- Image Detection & Safety Limits ---
 

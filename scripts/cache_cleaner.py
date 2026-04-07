@@ -105,9 +105,7 @@ def purge_postgres_for_path(target_path: Path):
                 )
                 total += cur.rowcount
         else:
-            cur.execute(
-                "DELETE FROM path_index WHERE file_path = %s", (target_abs,)
-            )
+            cur.execute("DELETE FROM path_index WHERE file_path = %s", (target_abs,))
             total += cur.rowcount
             for table in ("analysis_records", "quality_records", "video_records"):
                 cur.execute(
@@ -120,7 +118,9 @@ def purge_postgres_for_path(target_path: Path):
         cur.close()
         conn.close()
         if total > 0:
-            print(f"   {GREEN}✅ PostgreSQL: removed {total} rows for {target_path.name}{RESET}")
+            print(
+                f"   {GREEN}✅ PostgreSQL: removed {total} rows for {target_path.name}{RESET}"
+            )
         return total
     except Exception as e:
         print(f"   {RED}⚠️ PostgreSQL targeted purge failed: {e}{RESET}")
@@ -294,8 +294,8 @@ def clean_sqlite_dbs(target_path: Path):
     """Cleans matching records from known SQLite databases"""
     cache_dir = Path.home() / ".modern_format_boost" / "cache"
     db_files = [
-        cache_dir / "image_analysis_v2.db",          # SQLite fallback store
-        cache_dir / "image_analysis_v2_main.db",      # legacy name, kept for safety
+        cache_dir / "image_analysis_v2.db",  # SQLite fallback store
+        cache_dir / "image_analysis_v2_main.db",  # legacy name, kept for safety
         Path.home() / ".modern_format_boost" / "gif_value_samples_v2.db",
     ]
 
@@ -370,7 +370,9 @@ def perform_full_cleanup():
 
     print(f"{RED}⚠️  The following will be PERMANENTLY deleted:{RESET}")
     if pg_available:
-        print("   - PostgreSQL cache (analysis_records, quality_records, video_records, path_index)")
+        print(
+            "   - PostgreSQL cache (analysis_records, quality_records, video_records, path_index)"
+        )
     else:
         print(f"   {YELLOW}- PostgreSQL: NOT REACHABLE — will be skipped{RESET}")
     print("   - SQLite fallback database (image_analysis_v2.db)")
@@ -397,7 +399,9 @@ def perform_full_cleanup():
         print(f"{DIM}   Purging PostgreSQL cache tables...{RESET}")
         purge_postgres_full()
     else:
-        print(f"   {YELLOW}⚠️  PostgreSQL unavailable — skipping (cache hits may still occur if DB comes back online){RESET}")
+        print(
+            f"   {YELLOW}⚠️  PostgreSQL unavailable — skipping (cache hits may still occur if DB comes back online){RESET}"
+        )
 
     # 2. SQLite fallback database
     if db_file.is_file() and shutil.which("sqlite3"):
@@ -471,7 +475,9 @@ def perform_targeted_cleanup(target_path: Path):
     if _pg_available():
         purge_postgres_for_path(target_path)
     else:
-        print(f"   {YELLOW}⚠️  PostgreSQL unavailable — skipping (cache hits may persist if DB comes back online){RESET}")
+        print(
+            f"   {YELLOW}⚠️  PostgreSQL unavailable — skipping (cache hits may persist if DB comes back online){RESET}"
+        )
 
     # 1. Progress Tracker
     clean_mfb_progress(target_path)

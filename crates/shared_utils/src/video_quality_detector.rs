@@ -529,9 +529,14 @@ fn calculate_quality_score(
 
     let bpp_tweak = match compression {
         CompressionLevel::Standard => {
-            let t = crate::numeric_cast::f64_to_u32_sat(
-                ((bpp - 0.1).clamp(0.0, 0.2) / 0.2 * 5.0).round(),
-            );
+            let val = ((bpp - 0.1).clamp(0.0, 0.2) / 0.2 * 5.0).round();
+            let t = crate::numeric_cast::f64_to_u32_checked(val).unwrap_or_else(|| {
+                tracing::warn!(
+                    "Quality calculation anomaly: bpp_tweak NaN/Inf for bpp={}",
+                    bpp
+                );
+                0
+            });
             u8::try_from(t.clamp(0, 5)).unwrap_or(0)
         }
         CompressionLevel::HighQuality => {
@@ -552,29 +557,20 @@ fn estimate_crf_from_bpp(bpp: f64, codec_type: VideoCodecType) -> u8 {
     }
 
     let efficiency = match codec_type {
-        VideoCodecType::ModernEfficient => 0.5,
-        VideoCodecType::Intermediate => 0.7,
-        VideoCodecType::Inefficient => 2.0,
+        VideoCodecType::ModernEfficient => crate::constants::MODERN_EFFICIENT_CODEC_FACTOR,
+        VideoCodecType::Intermediate => crate::constants::INTERMEDIATE_CODEC_FACTOR,
+        VideoCodecType::Inefficient => crate::constants::INEFFICIENT_CODEC_FACTOR,
         _ => 1.0,
     };
 
     let adjusted_bpp = bpp / efficiency;
 
-    if adjusted_bpp > 5.0 {
-        14
-    } else if adjusted_bpp > 1.0 {
-        18
-    } else if adjusted_bpp > 0.5 {
-        22
-    } else if adjusted_bpp > 0.3 {
-        25
-    } else if adjusted_bpp > 0.15 {
-        28
-    } else if adjusted_bpp > 0.08 {
-        32
-    } else {
-        35
+    for &(threshold, crf) in crate::constants::DENSITY_TO_CRF_LUT {
+        if adjusted_bpp > threshold {
+            return crf;
+        }
     }
+    35 // Fallback to safe standard
 }
 
 fn calculate_video_confidence(
@@ -583,22 +579,22 @@ fn calculate_video_confidence(
     duration: f64,
     frame_count: u64,
 ) -> f64 {
-    let mut confidence: f64 = 0.7;
+    let mut confidence: f64 = crate::constants::VIDEO_CONFIDENCE_BASE;
 
     if has_video_bitrate {
-        confidence += 0.1;
+        confidence += crate::constants::VIDEO_CONFIDENCE_BITRATE_BONUS;
     }
 
     if has_gop_size {
-        confidence += 0.05;
+        confidence += crate::constants::VIDEO_CONFIDENCE_GOP_BONUS;
     }
 
-    if duration > 10.0 {
-        confidence += 0.05;
+    if duration > crate::constants::VIDEO_CONFIDENCE_DURATION_THRESHOLD {
+        confidence += crate::constants::VIDEO_CONFIDENCE_DURATION_BONUS;
     }
 
-    if frame_count > 100 {
-        confidence += 0.05;
+    if frame_count > crate::constants::VIDEO_CONFIDENCE_FRAMES_THRESHOLD {
+        confidence += crate::constants::VIDEO_CONFIDENCE_FRAMES_BONUS;
     }
 
     confidence.clamp(0.0, 1.0)
@@ -607,6 +603,21 @@ fn calculate_video_confidence(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_crf_estimation_boundaries() {
+        // Test strict > logic for ModernEfficient (factor 0.5)
+        // bpp 1.0 => adjusted_bpp 2.0. In original logic:
+        // if bpp > 5.0 (14) else if bpp > 1.0 (18) else if bpp > 0.5 (22)
+        // So 2.0 > 1.0 => 18.
+        // Let's test the threshold 0.5 (factor 1.0 for simplicity)
+        assert_eq!(estimate_crf_from_bpp(5.0, VideoCodecType::Unknown), 18); // 5.0 is not > 5.0, hits next
+        assert_eq!(estimate_crf_from_bpp(5.0001, VideoCodecType::Unknown), 14);
+        assert_eq!(estimate_crf_from_bpp(1.0, VideoCodecType::Unknown), 22); // 1.0 is not > 1.0, hits 0.5 threshold
+        assert_eq!(estimate_crf_from_bpp(1.0001, VideoCodecType::Unknown), 18);
+        assert_eq!(estimate_crf_from_bpp(0.08, VideoCodecType::Unknown), 35); // Original fallback
+        assert_eq!(estimate_crf_from_bpp(0.0001, VideoCodecType::Unknown), 35);
+    }
 
     #[test]
     fn test_analyze_h264_1080p() {
@@ -2286,5 +2297,25 @@ mod tests {
             result.estimated_crf, 15,
             "Should use CRF from encoder_params"
         );
+    }
+}
+
+#[cfg(test)]
+mod property_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn test_crf_monotonicity(bpp1 in 0.01..10.0f64, bpp2 in 0.01..10.0f64) {
+            let crf1 = estimate_crf_from_bpp(bpp1, VideoCodecType::ModernEfficient);
+            let crf2 = estimate_crf_from_bpp(bpp2, VideoCodecType::ModernEfficient);
+
+            if bpp1 > bpp2 {
+                prop_assert!(crf1 <= crf2, "Higher BPP must result in lower or equal CRF (bpp1={}, bpp2={}, crf1={}, crf2={})", bpp1, bpp2, crf1, crf2);
+            } else if bpp1 < bpp2 {
+                prop_assert!(crf1 >= crf2, "Lower BPP must result in higher or equal CRF (bpp1={}, bpp2={}, crf1={}, crf2={})", bpp1, bpp2, crf1, crf2);
+            }
+        }
     }
 }

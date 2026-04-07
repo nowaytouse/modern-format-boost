@@ -2,11 +2,17 @@
   "config": {
     "MD013": false,
     "MD024": {
-      "siblings_only": true
+      "siblings_only": true,
     },
     "MD033": false,
     "MD041": true,
-    "MD060": true
+    "MD060": true,
   },
-  "ignores": ["target/", ".gemini/", ".venv/", ".venv_training/", "docs/README_AR.md"]
+  "ignores": [
+    "target/",
+    ".gemini/",
+    ".venv/",
+    ".venv_training/",
+    "docs/README_AR.md",
+  ],
 }

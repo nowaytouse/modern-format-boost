@@ -13,9 +13,8 @@
 
 use crate::constants::{
     DIRECTORY_CONTEXT_POSITIVE_LOG_ODDS, FILENAME_CONTEXT_POSITIVE_LOG_ODDS,
-    LAYER6_HIGH_SCORE_THRESHOLD, LAYER6_RELAXED_CONFIDENCE_THRESHOLD,
-    LOCALIZED_MOTION_POSITIVE_LOG_ODDS, LONG_SILENT_PRIOR_NEGATIVE_LOG_ODDS,
-    MODERN_MASTER_NEGATIVE_LOG_ODDS, PLAY_ONCE_NEGATIVE_LOG_ODDS,
+    LOCALIZED_MOTION_POSITIVE_LOG_ODDS, MODERN_MASTER_NEGATIVE_LOG_ODDS,
+    PLAY_ONCE_NEGATIVE_LOG_ODDS,
 };
 use crate::database::LoopReferenceProfile;
 use crate::file_copier::{SUPPORTED_IMAGE_EXTENSIONS, SUPPORTED_VIDEO_EXTENSIONS};
@@ -670,7 +669,8 @@ fn is_near_16_by_9(width: u32, height: u32) -> bool {
     if width == 0 || height == 0 {
         return false;
     }
-    ((f64::from(width) / f64::from(height)) - (16.0 / 9.0)).abs() < 0.05
+    ((f64::from(width) / f64::from(height)) - crate::constants::ASPECT_RATIO_WIDESCREEN).abs()
+        < crate::constants::ASPECT_RATIO_TOLERANCE_NEAR
 }
 
 fn loop_count_zero_bonus(duration_secs: f64, thresholds: &LoopThresholds) -> f64 {
@@ -678,12 +678,13 @@ fn loop_count_zero_bonus(duration_secs: f64, thresholds: &LoopThresholds) -> f64
     let long_window = (thresholds.modern_bias_duration_secs * 2.0).max(short_window + 1.0);
 
     if duration_secs <= short_window {
-        0.18
+        crate::constants::LOOP_COUNT_ZERO_BONUS_MAX
     } else if duration_secs <= long_window {
         let decay = (duration_secs - short_window) / (long_window - short_window);
-        0.18 - (0.12 * decay)
+        crate::constants::LOOP_COUNT_ZERO_BONUS_MAX
+            - (crate::constants::LOOP_COUNT_ZERO_BONUS_DECAY_MAX * decay)
     } else {
-        0.06
+        crate::constants::LOOP_COUNT_ZERO_BONUS_MIN
     }
 }
 
@@ -701,12 +702,18 @@ fn evaluate_kinetics_and_physics(
 
     if duration_positive > 0.0 {
         let short_fast = duration_positive * (1.0 + fps_positive * 0.5);
-        log_odds.add(short_fast.min(2.0) * crate::constants::SHORT_FAST_POSITIVE_LOG_ODDS);
+        log_odds.add(
+            short_fast.min(crate::constants::TREE_Z_SCORE_CAP)
+                * crate::constants::SHORT_FAST_POSITIVE_LOG_ODDS,
+        );
     }
 
     if duration_negative > 0.0 {
         let long_slow = duration_negative * (1.0 + fps_negative * 0.5);
-        log_odds.add(-long_slow.min(2.0) * crate::constants::LONG_SLOW_NEGATIVE_LOG_ODDS);
+        log_odds.add(
+            -long_slow.min(crate::constants::TREE_Z_SCORE_CAP)
+                * crate::constants::LONG_SLOW_NEGATIVE_LOG_ODDS,
+        );
     }
 
     if derived.scene_cut {
@@ -717,11 +724,13 @@ fn evaluate_kinetics_and_physics(
         u32::try_from(meta.file_size_bytes).unwrap_or(u32::MAX),
     )))
     .max(0.0)
-        * 0.70
-        + (-thresholds.pixels_z(total_pixels)).max(0.0) * 0.45;
+        * crate::constants::COMPACTNESS_SIGNAL_SIZE_WEIGHT
+        + (-thresholds.pixels_z(total_pixels)).max(0.0)
+            * crate::constants::COMPACTNESS_SIGNAL_PIXELS_WEIGHT;
     if !meta.has_audio && compactness_signal > 0.0 {
         log_odds.add(
-            (compactness_signal + 0.20).min(1.6)
+            (compactness_signal + crate::constants::COMPACTNESS_SIGNAL_BIAS)
+                .min(crate::constants::COMPACTNESS_SIGNAL_MAX)
                 * crate::constants::COMPACT_SILENT_POSITIVE_LOG_ODDS,
         );
     }
@@ -731,12 +740,17 @@ fn evaluate_kinetics_and_physics(
             u32::try_from(meta.file_size_bytes).unwrap_or(u32::MAX),
         ))
         .max(0.0)
-        * 0.75
-        + thresholds.pixels_z(total_pixels).max(0.0) * 0.35;
+        * crate::constants::LARGE_MEDIA_SIGNAL_SIZE_WEIGHT
+        + thresholds.pixels_z(total_pixels).max(0.0)
+            * crate::constants::LARGE_MEDIA_SIGNAL_PIXELS_WEIGHT;
     if large_media_signal > 0.0 {
-        let audio_multiplier = if meta.has_audio { 1.0 } else { 0.65 };
+        let audio_multiplier = if meta.has_audio {
+            1.0
+        } else {
+            crate::constants::LARGE_MEDIA_AUDIO_MULTIPLIER
+        };
         log_odds.add(
-            -large_media_signal.min(1.8)
+            -large_media_signal.min(crate::constants::LARGE_MEDIA_SIGNAL_MAX)
                 * audio_multiplier
                 * crate::constants::LARGE_MEDIA_NEGATIVE_LOG_ODDS
                 * thresholds.get_feature_weight("file_size_bytes").sqrt(),
@@ -773,7 +787,7 @@ fn apply_weak_heuristics(
         log_odds.add(crate::constants::PLATFORM_MARKER_POSITIVE_LOG_ODDS);
     }
     if is_webm && !meta.has_audio {
-        log_odds.add(0.18);
+        log_odds.add(crate::constants::SHORT_CLIP_MIN_BIAS);
     }
     if meta.has_transparency {
         log_odds.add(crate::constants::TRANSPARENCY_POSITIVE_LOG_ODDS);
@@ -782,10 +796,21 @@ fn apply_weak_heuristics(
         let range = (thresholds.short_clip_secs - thresholds.duration_override_secs).max(0.5);
         let headroom = 1.0
             - ((meta.duration_secs - thresholds.duration_override_secs) / range).clamp(0.0, 1.0);
-        let format_bonus = if is_image { 0.10 } else { 0.04 };
-        let cadence_bonus = if meta.frame_count > 1 { 0.06 } else { 0.0 };
+        let format_bonus = if is_image {
+            crate::constants::SHORT_CLIP_FORMAT_BONUS_IMAGE
+        } else {
+            crate::constants::SHORT_CLIP_FORMAT_BONUS_VIDEO
+        };
+        let cadence_bonus = if meta.frame_count > 1 {
+            crate::constants::SHORT_CLIP_CADENCE_BONUS
+        } else {
+            0.0
+        };
         log_odds.add(
-            (0.18 + headroom * 0.26 + format_bonus + cadence_bonus)
+            (crate::constants::SHORT_CLIP_MIN_BIAS
+                + headroom * crate::constants::SHORT_CLIP_HEADROOM_MAX
+                + format_bonus
+                + cadence_bonus)
                 * crate::constants::SHORT_CLIP_PRIOR_LOG_ODDS,
         );
     }
@@ -794,18 +819,26 @@ fn apply_weak_heuristics(
         let tail_headroom =
             1.0 - ((meta.duration_secs - thresholds.short_clip_secs) / range).clamp(0.0, 1.0);
         let square_bonus = if meta.width > 0 && meta.width == meta.height {
-            0.04
+            crate::constants::EXTENDED_SHORT_ASSET_SQUARE_BONUS
         } else {
             0.0
         };
-        let image_bonus = if is_image { 0.05 } else { 0.0 };
+        let image_bonus = if is_image {
+            crate::constants::EXTENDED_SHORT_ASSET_IMAGE_BONUS
+        } else {
+            0.0
+        };
         let compact_bonus = if meta.file_size_bytes <= crate::constants::STICKER_MAX_SIZE_BYTES {
-            0.05
+            crate::constants::EXTENDED_SHORT_ASSET_COMPACT_BONUS
         } else {
             0.0
         };
         log_odds.add(
-            (0.10 + tail_headroom * 0.10 + square_bonus + image_bonus + compact_bonus)
+            (crate::constants::EXTENDED_SHORT_ASSET_MIN_BIAS
+                + tail_headroom * crate::constants::EXTENDED_SHORT_ASSET_HEADROOM_MAX
+                + square_bonus
+                + image_bonus
+                + compact_bonus)
                 * crate::constants::EXTENDED_SHORT_ASSET_PRIOR_LOG_ODDS,
         );
     }
@@ -818,33 +851,35 @@ fn apply_weak_heuristics(
     if let Some(delay_variation) = meta.frame_delay_variation {
         log_odds.add(
             -thresholds.delay_variation_z(delay_variation)
-                * 0.18
+                * crate::constants::FEATURE_WEIGHT_DELAY_VAR
                 * thresholds.get_feature_weight("delay_var"),
         );
     }
     if let Some(webp_ratio) = meta.webp_compression_ratio {
         log_odds.add(
             thresholds.webp_ratio_z(webp_ratio)
-                * 0.16
+                * crate::constants::FEATURE_WEIGHT_WEBP_RATIO
                 * thresholds.get_feature_weight("webp_ratio"),
         );
     }
     if let Some(motion_gini) = meta.motion_gini {
         log_odds.add(
-            thresholds.motion_gini_z(motion_gini) * 0.14 * thresholds.get_feature_weight("m_gini"),
+            thresholds.motion_gini_z(motion_gini)
+                * crate::constants::FEATURE_WEIGHT_MOTION_GINI
+                * thresholds.get_feature_weight("m_gini"),
         );
     }
     if let Some(palette_depth) = meta.palette_depth {
         log_odds.add(
             thresholds.palette_depth_z(palette_depth)
-                * 0.12
+                * crate::constants::FEATURE_WEIGHT_PALETTE_DEPTH
                 * thresholds.get_feature_weight("p_depth"),
         );
     }
     if let Some(temporal_flatness) = meta.temporal_flatness {
         log_odds.add(
             thresholds.temporal_flatness_z(temporal_flatness)
-                * 0.10
+                * crate::constants::FEATURE_WEIGHT_TEMPORAL_FLATNESS
                 * thresholds.get_feature_weight("t_flat"),
         );
     }
@@ -862,22 +897,22 @@ fn apply_weak_heuristics(
 
     if meta.frame_count > 0 {
         if meta.frame_count <= 8 {
-            log_odds.add(0.05);
+            log_odds.add(crate::constants::FRAME_COUNT_SHORT_BONUS);
         } else if meta.frame_count > 500 {
-            log_odds.add(-0.10);
+            log_odds.add(-crate::constants::FRAME_COUNT_LONG_PENALTY);
         }
     }
 
     if meta.width > 0 && meta.height > 0 {
         if meta.width == meta.height {
-            log_odds.add(0.08);
+            log_odds.add(crate::constants::SQUARE_ASPECT_BONUS);
         } else if is_near_16_by_9(meta.width, meta.height) {
-            log_odds.add(-0.10);
+            log_odds.add(-crate::constants::WIDESCREEN_ASPECT_PENALTY);
         }
     }
 
     if fps_anomaly_score(meta.fps) > 0.6 {
-        log_odds.add(0.04);
+        log_odds.add(crate::constants::FPS_ANOMALY_BONUS);
     }
 
     if !meta.has_audio && meta.duration_secs > thresholds.modern_bias_duration_secs {
@@ -885,21 +920,29 @@ fn apply_weak_heuristics(
             / thresholds.modern_bias_duration_secs.max(1.0))
         .clamp(0.0, 1.0);
         let container_penalty = if is_video {
-            0.18
+            crate::constants::LONG_SILENT_PENALTY_VIDEO_ADD
         } else if is_image {
-            0.08
+            crate::constants::LONG_SILENT_PENALTY_IMAGE_ADD
         } else {
             0.0
         };
-        let transparency_relief = if meta.has_transparency { 0.06 } else { 0.0 };
-        let penalty = (0.22 + overflow * 0.18 + container_penalty - transparency_relief).max(0.08);
-        log_odds.add(-penalty * LONG_SILENT_PRIOR_NEGATIVE_LOG_ODDS);
+        let transparency_relief = if meta.has_transparency {
+            crate::constants::LONG_SILENT_TRANSPARENCY_RELIEF
+        } else {
+            0.0
+        };
+        let penalty = (crate::constants::LONG_SILENT_PENALTY_BASE
+            + overflow * crate::constants::LONG_SILENT_PENALTY_OVERFLOW_MAX
+            + container_penalty
+            - transparency_relief)
+            .max(crate::constants::LONG_SILENT_MIN_PENALTY);
+        log_odds.add(-penalty * crate::constants::LONG_SILENT_PRIOR_NEGATIVE_LOG_ODDS);
     }
 
     if is_image {
-        log_odds.add(0.04);
+        log_odds.add(crate::constants::IMAGE_PRIOR_BONUS);
     } else if is_video {
-        log_odds.add(-0.04);
+        log_odds.add(-crate::constants::VIDEO_PRIOR_PENALTY);
     }
 
     let bias_enabled = std::env::var(crate::constants::ENV_MODERN_FORMAT_CONVERT_BIAS)
@@ -1094,7 +1137,9 @@ fn should_accept_layer6_loopstrong(
     final_score: f64,
     confidence: f64,
 ) -> bool {
-    if confidence >= 0.75 && final_score > 0.60 {
+    if confidence >= crate::constants::LAYER6_CONFIDENCE_HIGH
+        && final_score > crate::constants::LAYER6_FINAL_SCORE_HIGH
+    {
         return true;
     }
 
@@ -1110,9 +1155,9 @@ fn should_accept_layer6_loopstrong(
         && meta.duration_secs > 0.0
         && meta.duration_secs <= thresholds.short_asset_window_secs;
 
-    final_score >= LAYER6_HIGH_SCORE_THRESHOLD
-        && keep_prob >= 0.70
-        && confidence >= LAYER6_RELAXED_CONFIDENCE_THRESHOLD
+    final_score >= crate::constants::LAYER6_HIGH_SCORE_THRESHOLD
+        && keep_prob >= crate::constants::LAYER6_KEEP_PROB_MIN
+        && confidence >= crate::constants::LAYER6_RELAXED_CONFIDENCE_THRESHOLD
         && (short_clip_like || is_image || is_gif_family)
 }
 
@@ -1307,7 +1352,10 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
                     ));
                 }
 
-                if final_score > 0.40 && final_score < 0.60 && confidence < 0.75 {
+                if final_score > crate::constants::LAYER6_FUSION_SCORE_UNCERTAIN_LOW
+                    && final_score < crate::constants::LAYER6_FUSION_SCORE_UNCERTAIN_HIGH
+                    && confidence < crate::constants::LAYER6_CONFIDENCE_HIGH
+                {
                     if let Some(p) = path {
                         emit_stderr(
                             "   🔍 Triggering high-cost visual heuristics (extreme uncertainty)...",
@@ -1330,10 +1378,16 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
 
                         if let Some(ref img) = img_opt {
                             if detect_heavy_letterboxing_from_image(img) {
-                                tier3_nudge.apply(0.05, "Letterboxing detected");
+                                tier3_nudge.apply(
+                                    crate::constants::LETTERBOXING_NUDGE,
+                                    "Letterboxing detected",
+                                );
                             }
                             if detect_high_text_density_from_image(img) {
-                                tier3_nudge.apply(0.08, "High text density");
+                                tier3_nudge.apply(
+                                    crate::constants::HIGH_TEXT_DENSITY_NUDGE,
+                                    "High text density",
+                                );
                             }
                         }
 
@@ -1343,7 +1397,10 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
                                 tier3_nudge.score,
                                 tier3_nudge.trace.join(" | ")
                             ));
-                            final_score += tier3_nudge.score.clamp(-0.15, 0.15);
+                            final_score += tier3_nudge.score.clamp(
+                                -crate::constants::AUXILIARY_NUDGE_CAP,
+                                crate::constants::AUXILIARY_NUDGE_CAP,
+                            );
                         }
                     }
                 }
@@ -1368,7 +1425,9 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
                     ));
                     emit_stderr(&format!("✅ KNN Fusion Success: {}", v.reason()));
                     v
-                } else if confidence >= 0.75 && final_score <= 0.4 {
+                } else if confidence >= crate::constants::LAYER6_CONFIDENCE_HIGH
+                    && final_score <= crate::constants::LAYER6_FUSION_SCORE_UNCERTAIN_LOW
+                {
                     let v = LoopIntentVerdict::LoopWeak(format!(
                         "Layer 6: KNN+Nudges score={:.2} (knn={:.2}×{:.2}, tree={:.2}×{:.2}, nudge={:+.2}, conf={:.2}, n={})",
                         final_score,
