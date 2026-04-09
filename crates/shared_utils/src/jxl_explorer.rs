@@ -4,12 +4,82 @@ use crate::constants::{
 };
 use std::collections::HashSet;
 
+const JXL_FINALIST_LIMIT: usize = 8;
+const JXL_NEAR_BEST_MARGIN_RATIO: f64 = 0.01;
+const JXL_BOUNDARY_LOW_RATIO: f64 = 0.95;
+const JXL_BOUNDARY_HIGH_RATIO: f64 = 1.05;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JxlPromotionReason {
+    Baseline,
+    BetterThanCurrentBest,
+    NearCurrentBest,
+    BoundaryRegion,
+    NewRegion,
+    AdjacentToBest,
+}
+
+impl JxlPromotionReason {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Baseline => "baseline",
+            Self::BetterThanCurrentBest => "better-than-best",
+            Self::NearCurrentBest => "near-best",
+            Self::BoundaryRegion => "boundary",
+            Self::NewRegion => "new-region",
+            Self::AdjacentToBest => "adjacent",
+        }
+    }
+
+    fn weight(self) -> u32 {
+        match self {
+            Self::Baseline => 1,
+            Self::NewRegion => 2,
+            Self::BoundaryRegion => 3,
+            Self::AdjacentToBest => 4,
+            Self::NearCurrentBest => 5,
+            Self::BetterThanCurrentBest => 6,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct JxlScreenedCandidate {
+    pub distance: f32,
+    pub output_size: u64,
+    pub ladder_phase: bool,
+    pub reasons: Vec<JxlPromotionReason>,
+}
+
+impl JxlScreenedCandidate {
+    fn has_reason(&self, reason: JxlPromotionReason) -> bool {
+        self.reasons.contains(&reason)
+    }
+
+    fn promotion_score(&self) -> u32 {
+        self.reasons.iter().map(|reason| reason.weight()).sum()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct JxlScreeningResult {
+    pub best_distance: f32,
+    pub best_output_size: u64,
+    pub iterations: u32,
+    pub screened_candidates: Vec<JxlScreenedCandidate>,
+    pub finalists: Vec<JxlScreenedCandidate>,
+    pub log: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct JxlExploreResult {
     pub accepted_distance: f32,
     pub output_size: u64,
     pub iterations: u32,
     pub ladder_phase: bool,
+    pub screened_best_distance: f32,
+    pub screened_best_size: u64,
+    pub promoted_distances: Vec<f32>,
     pub log: Vec<String>,
 }
 
@@ -74,27 +144,150 @@ fn next_phase_two_candidate(
     None
 }
 
-fn finish_result(
-    accepted_distance: f32,
-    output_size: u64,
+fn candidate_region_key(distance: f32) -> i32 {
+    if distance <= 0.01 + f32::EPSILON {
+        0
+    } else if distance <= 0.1 + f32::EPSILON {
+        1
+    } else if distance <= 0.25 + f32::EPSILON {
+        2
+    } else if distance <= 0.5 + f32::EPSILON {
+        3
+    } else if distance <= 0.75 + f32::EPSILON {
+        4
+    } else {
+        5
+    }
+}
+
+fn near_best_margin(input_size: u64) -> u64 {
+    crate::numeric_cast::f64_to_u64_sat(
+        crate::numeric_cast::u64_to_f64(input_size) * JXL_NEAR_BEST_MARGIN_RATIO,
+    )
+    .max(1)
+}
+
+fn near_best(size: u64, best_size: u64, input_size: u64) -> bool {
+    size <= best_size.saturating_add(near_best_margin(input_size))
+}
+
+fn near_boundary(size: u64, input_size: u64) -> bool {
+    let ratio = size_ratio(size, input_size);
+    (JXL_BOUNDARY_LOW_RATIO..=JXL_BOUNDARY_HIGH_RATIO).contains(&ratio)
+}
+
+fn add_reason(
+    candidates: &mut [JxlScreenedCandidate],
+    idx: usize,
+    reason: JxlPromotionReason,
+    log: &mut Vec<String>,
+) {
+    if candidates[idx].has_reason(reason) {
+        return;
+    }
+
+    candidates[idx].reasons.push(reason);
+    log.push(format!(
+        "Promoted d={:.3} for e10 finalization ({})",
+        candidates[idx].distance,
+        reason.label()
+    ));
+}
+
+fn shortlist_finalists(
+    candidates: &[JxlScreenedCandidate],
+    best_idx: usize,
+) -> Vec<JxlScreenedCandidate> {
+    let mut finalists = Vec::new();
+    let mut selected = HashSet::new();
+    include_finalist(&mut finalists, &mut selected, &candidates[best_idx]);
+    include_finalist(&mut finalists, &mut selected, &candidates[0]);
+
+    let mut mandatory: Vec<_> = candidates
+        .iter()
+        .filter(|candidate| {
+            candidate.has_reason(JxlPromotionReason::BoundaryRegion)
+                || candidate.has_reason(JxlPromotionReason::AdjacentToBest)
+        })
+        .collect();
+    mandatory.sort_by(|left, right| {
+        left.output_size
+            .cmp(&right.output_size)
+            .then_with(|| left.distance.total_cmp(&right.distance))
+    });
+    for candidate in mandatory {
+        include_finalist(&mut finalists, &mut selected, candidate);
+    }
+
+    let mut ranked: Vec<_> = candidates
+        .iter()
+        .filter(|candidate| !candidate.reasons.is_empty())
+        .collect();
+    ranked.sort_by(|left, right| {
+        right
+            .promotion_score()
+            .cmp(&left.promotion_score())
+            .then_with(|| left.output_size.cmp(&right.output_size))
+            .then_with(|| left.distance.total_cmp(&right.distance))
+    });
+
+    for candidate in ranked {
+        if finalists.len() >= JXL_FINALIST_LIMIT {
+            break;
+        }
+        include_finalist(&mut finalists, &mut selected, candidate);
+    }
+
+    finalists.sort_by(|left, right| {
+        left.output_size
+            .cmp(&right.output_size)
+            .then_with(|| left.distance.total_cmp(&right.distance))
+    });
+    finalists
+}
+
+fn include_finalist(
+    finalists: &mut Vec<JxlScreenedCandidate>,
+    selected: &mut HashSet<i32>,
+    candidate: &JxlScreenedCandidate,
+) {
+    if selected.insert(distance_key(candidate.distance)) {
+        finalists.push(candidate.clone());
+    }
+}
+
+fn finalize_screening_result(
+    candidates: Vec<JxlScreenedCandidate>,
+    best_idx: usize,
     iterations: u32,
-    ladder_phase: bool,
-    log: Vec<String>,
-) -> JxlExploreResult {
-    JxlExploreResult {
-        accepted_distance,
-        output_size,
+    mut log: Vec<String>,
+) -> JxlScreeningResult {
+    let finalists = shortlist_finalists(&candidates, best_idx);
+    let finalist_summary = finalists
+        .iter()
+        .map(|candidate| format!("d={:.3}", candidate.distance))
+        .collect::<Vec<_>>()
+        .join(", ");
+    log.push(format!(
+        "e10 finalist shortlist ({}): {finalist_summary}",
+        finalists.len()
+    ));
+
+    JxlScreeningResult {
+        best_distance: candidates[best_idx].distance,
+        best_output_size: candidates[best_idx].output_size,
         iterations,
-        ladder_phase,
+        screened_candidates: candidates,
+        finalists,
         log,
     }
 }
 
-pub fn explore_jxl_distance<F>(
+pub fn screen_jxl_candidates<F>(
     input_size: u64,
     initial_size: u64,
     mut try_candidate: F,
-) -> Result<Option<JxlExploreResult>, String>
+) -> Result<Option<JxlScreeningResult>, String>
 where
     F: FnMut(f32) -> Result<u64, String>,
 {
@@ -108,56 +301,129 @@ where
     let mut tested = HashSet::new();
     tested.insert(distance_key(initial_distance));
 
+    let mut candidates = vec![JxlScreenedCandidate {
+        distance: initial_distance,
+        output_size: initial_size,
+        ladder_phase: true,
+        reasons: Vec::new(),
+    }];
+    add_reason(&mut candidates, 0, JxlPromotionReason::Baseline, &mut log);
+    add_reason(&mut candidates, 0, JxlPromotionReason::NewRegion, &mut log);
+
     log.push(format!(
         "Phase 1 ladder: d={initial_distance:.3} -> {:.1}% of input",
         size_ratio_pct(initial_size, input_size)
     ));
 
-    if initial_size < input_size {
-        return Ok(Some(finish_result(
-            initial_distance,
-            initial_size,
-            iterations,
-            true,
-            log,
-        )));
+    let mut best_idx = 0usize;
+    let mut region_keys = HashSet::new();
+    region_keys.insert(candidate_region_key(initial_distance));
+    if near_boundary(initial_size, input_size) {
+        add_reason(
+            &mut candidates,
+            0,
+            JxlPromotionReason::BoundaryRegion,
+            &mut log,
+        );
     }
 
-    let mut last_size = initial_size;
     let mut phase_two_baseline = None;
+    let mut pending_adjacent_promotion = false;
 
-    for &candidate in JXL_EXPLORE_LADDER.iter().skip(1) {
+    for &candidate_distance in JXL_EXPLORE_LADDER.iter().skip(1) {
         if iterations >= JXL_EXPLORE_MAX_ITERATIONS {
             break;
         }
 
-        let candidate = clamp_explore_distance(candidate);
-        if !tested.insert(distance_key(candidate)) {
+        let candidate_distance = clamp_explore_distance(candidate_distance);
+        if !tested.insert(distance_key(candidate_distance)) {
             continue;
         }
 
-        let size = try_candidate(candidate)?;
+        let previous_size = candidates
+            .last()
+            .map_or(initial_size, |candidate| candidate.output_size);
+        let size = try_candidate(candidate_distance)?;
         iterations += 1;
-        let delta_pct = improvement_ratio(last_size, size, input_size) * 100.0;
-        let trend = if size < last_size { "↓" } else { "→" };
+        let delta_pct = improvement_ratio(previous_size, size, input_size) * 100.0;
+        let trend = if size < previous_size { "↓" } else { "→" };
 
         log.push(format!(
-            "Phase 1 ladder: d={candidate:.3} -> {:.1}% of input ({trend} {delta_pct:.1}%)",
+            "Phase 1 ladder: d={candidate_distance:.3} -> {:.1}% of input ({trend} {delta_pct:.1}%)",
             size_ratio_pct(size, input_size)
         ));
 
-        if size < input_size {
-            return Ok(Some(finish_result(candidate, size, iterations, true, log)));
+        candidates.push(JxlScreenedCandidate {
+            distance: candidate_distance,
+            output_size: size,
+            ladder_phase: true,
+            reasons: Vec::new(),
+        });
+        let current_idx = candidates.len() - 1;
+
+        if pending_adjacent_promotion {
+            add_reason(
+                &mut candidates,
+                current_idx,
+                JxlPromotionReason::AdjacentToBest,
+                &mut log,
+            );
+            pending_adjacent_promotion = false;
         }
 
-        if candidate >= 0.1 - f32::EPSILON {
-            phase_two_baseline = Some((candidate, size));
+        if region_keys.insert(candidate_region_key(candidate_distance)) {
+            add_reason(
+                &mut candidates,
+                current_idx,
+                JxlPromotionReason::NewRegion,
+                &mut log,
+            );
         }
-        last_size = size;
+
+        if near_boundary(size, input_size) {
+            add_reason(
+                &mut candidates,
+                current_idx,
+                JxlPromotionReason::BoundaryRegion,
+                &mut log,
+            );
+        }
+
+        if size < candidates[best_idx].output_size {
+            if current_idx > 0 {
+                add_reason(
+                    &mut candidates,
+                    current_idx - 1,
+                    JxlPromotionReason::AdjacentToBest,
+                    &mut log,
+                );
+            }
+            add_reason(
+                &mut candidates,
+                current_idx,
+                JxlPromotionReason::BetterThanCurrentBest,
+                &mut log,
+            );
+            pending_adjacent_promotion = true;
+            best_idx = current_idx;
+        } else if near_best(size, candidates[best_idx].output_size, input_size) {
+            add_reason(
+                &mut candidates,
+                current_idx,
+                JxlPromotionReason::NearCurrentBest,
+                &mut log,
+            );
+        }
+
+        if candidate_distance >= 0.1 - f32::EPSILON {
+            phase_two_baseline = Some(current_idx);
+        }
     }
 
-    let Some((mut current_distance, mut current_size)) = phase_two_baseline else {
-        return Ok(None);
+    let Some(mut current_idx) = phase_two_baseline else {
+        return Ok(Some(finalize_screening_result(
+            candidates, best_idx, iterations, log,
+        )));
     };
 
     let precision = JXL_EXPLORE_BINARY_SEARCH_PRECISION.max(0.001);
@@ -165,7 +431,8 @@ where
     let mut cadence = UpwardSearchCadence::Adaptive;
 
     while iterations < JXL_EXPLORE_MAX_ITERATIONS {
-        let Some(next_distance) = next_phase_two_candidate(current_distance, current_step, &tested)
+        let Some(next_distance) =
+            next_phase_two_candidate(candidates[current_idx].distance, current_step, &tested)
         else {
             break;
         };
@@ -180,21 +447,71 @@ where
             current_step
         ));
 
-        if size < input_size {
-            return Ok(Some(finish_result(
-                next_distance,
-                size,
-                iterations,
-                false,
-                log,
-            )));
+        candidates.push(JxlScreenedCandidate {
+            distance: next_distance,
+            output_size: size,
+            ladder_phase: false,
+            reasons: Vec::new(),
+        });
+        let probe_idx = candidates.len() - 1;
+
+        if pending_adjacent_promotion {
+            add_reason(
+                &mut candidates,
+                probe_idx,
+                JxlPromotionReason::AdjacentToBest,
+                &mut log,
+            );
+            pending_adjacent_promotion = false;
+        }
+
+        if region_keys.insert(candidate_region_key(next_distance)) {
+            add_reason(
+                &mut candidates,
+                probe_idx,
+                JxlPromotionReason::NewRegion,
+                &mut log,
+            );
+        }
+
+        if near_boundary(size, input_size) {
+            add_reason(
+                &mut candidates,
+                probe_idx,
+                JxlPromotionReason::BoundaryRegion,
+                &mut log,
+            );
+        }
+
+        if size < candidates[best_idx].output_size {
+            add_reason(
+                &mut candidates,
+                current_idx,
+                JxlPromotionReason::AdjacentToBest,
+                &mut log,
+            );
+            add_reason(
+                &mut candidates,
+                probe_idx,
+                JxlPromotionReason::BetterThanCurrentBest,
+                &mut log,
+            );
+            pending_adjacent_promotion = true;
+            best_idx = probe_idx;
+        } else if near_best(size, candidates[best_idx].output_size, input_size) {
+            add_reason(
+                &mut candidates,
+                probe_idx,
+                JxlPromotionReason::NearCurrentBest,
+                &mut log,
+            );
         }
 
         let current_ratio = size_ratio(size, input_size);
-        let previous_ratio = size_ratio(current_size, input_size);
+        let previous_ratio = size_ratio(candidates[current_idx].output_size, input_size);
         let ratio_drop_pct = (previous_ratio - current_ratio).abs() * 100.0;
-        let improvement = improvement_ratio(current_size, size, input_size);
-        let near_break_even = (0.95..=1.05).contains(&current_ratio);
+        let improvement = improvement_ratio(candidates[current_idx].output_size, size, input_size);
+        let near_break_even = near_boundary(size, input_size);
 
         if near_break_even && current_step > precision + f32::EPSILON {
             let old_step = current_step;
@@ -205,7 +522,7 @@ where
                 UpwardSearchCadence::Paused
             };
             log.push(format!(
-                "   💧 Search Decelerating (ratio {:.1}%, step: {:.3} -> {:.3}, near break-even)",
+                "   Search Decelerating (ratio {:.1}%, step: {:.3} -> {:.3}, near break-even)",
                 current_ratio * 100.0,
                 old_step,
                 current_step
@@ -218,7 +535,7 @@ where
             if current_step > old_step + f32::EPSILON {
                 cadence = UpwardSearchCadence::Adaptive;
                 log.push(format!(
-                    "   ⚡ Search Accelerated (drop Δ{ratio_drop_pct:.1}%, step: {old_step:.3} -> {current_step:.3})"
+                    "   Search Accelerated (drop Δ{ratio_drop_pct:.1}%, step: {old_step:.3} -> {current_step:.3})"
                 ));
             }
         } else {
@@ -226,14 +543,14 @@ where
                 UpwardSearchCadence::Jogging => {
                     cadence = UpwardSearchCadence::Paused;
                     log.push(format!(
-                        "   🐢 Search Jogging complete at step {:.3}; pausing adaptive changes",
+                        "   Search Jogging complete at step {:.3}; pausing adaptive changes",
                         current_step
                     ));
                 }
                 UpwardSearchCadence::Paused => {
                     cadence = UpwardSearchCadence::Normal;
                     log.push(format!(
-                        "   ⏸️ Search Paused at boundary pace ({:.3}); resuming next probe",
+                        "   Search Paused at boundary pace ({:.3}); resuming next probe",
                         current_step
                     ));
                 }
@@ -241,71 +558,84 @@ where
             }
         }
 
-        current_distance = next_distance;
-        current_size = size;
+        current_idx = probe_idx;
     }
 
-    Ok(None)
+    Ok(Some(finalize_screening_result(
+        candidates, best_idx, iterations, log,
+    )))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn finalist_distances(result: &JxlScreeningResult) -> Vec<i32> {
+        result
+            .finalists
+            .iter()
+            .map(|candidate| distance_key(candidate.distance))
+            .collect()
+    }
+
     #[test]
-    fn test_explorer_accepts_ladder_success() {
-        let result = explore_jxl_distance(100, 120, |distance| match distance_key(distance) {
+    fn test_screening_keeps_best_ladder_candidate() {
+        let result = screen_jxl_candidates(100, 120, |distance| match distance_key(distance) {
             10 => Ok(90),
             _ => Ok(110),
         })
         .expect("exploration should succeed")
-        .expect("0.01 should compress");
+        .expect("screening result should exist");
 
-        assert_eq!(result.accepted_distance, 0.01);
-        assert!(result.ladder_phase);
-        assert_eq!(result.output_size, 90);
-        assert_eq!(result.iterations, 2);
+        assert_eq!(result.best_distance, 0.01);
+        assert_eq!(result.best_output_size, 90);
+        assert!(result.iterations >= 3);
+        assert!(finalist_distances(&result).contains(&distance_key(0.01)));
+        assert!(finalist_distances(&result).contains(&distance_key(0.001)));
     }
 
     #[test]
-    fn test_explorer_never_reaches_one() {
-        let mut seen = Vec::new();
-        let result = explore_jxl_distance(100, 140, |distance| {
-            seen.push(distance);
-            Ok(130)
-        })
-        .expect("exploration should not fail");
+    fn test_screening_never_reaches_one() {
+        let result = screen_jxl_candidates(100, 140, |_distance| Ok(130))
+            .expect("exploration should not fail")
+            .expect("screening result should exist");
 
-        assert!(result.is_none());
-        assert!(!seen.is_empty());
-        assert!(seen.iter().all(|distance| *distance < 1.0));
-        assert!(seen
+        assert!(!result.screened_candidates.is_empty());
+        assert!(result
+            .screened_candidates
             .iter()
-            .any(|distance| (*distance - 0.999).abs() < 0.000_5));
+            .all(|candidate| candidate.distance < 1.0));
+        assert!(result
+            .screened_candidates
+            .iter()
+            .any(|candidate| (candidate.distance - 0.999).abs() < 0.000_5));
     }
 
     #[test]
-    fn test_explorer_can_accept_phase_two_probe() {
-        let result = explore_jxl_distance(100, 140, |distance| {
+    fn test_screening_promotes_adjacent_and_boundary_candidates() {
+        let result = screen_jxl_candidates(100, 104, |distance| {
             let size = match distance_key(distance) {
-                10 => 125,
-                100 => 110,
-                200 => 95,
-                _ => 130,
+                10 => 99,
+                100 => 100,
+                200 => 98,
+                250 => 101,
+                _ => 110,
             };
             Ok(size)
         })
         .expect("exploration should succeed")
-        .expect("phase two should compress");
+        .expect("screening result should exist");
 
-        assert!(!result.ladder_phase);
-        assert_eq!(result.accepted_distance, 0.2);
-        assert_eq!(result.output_size, 95);
+        let finalists = finalist_distances(&result);
+        assert!(finalists.contains(&distance_key(0.01)));
+        assert!(finalists.contains(&distance_key(0.1)));
+        assert!(finalists.contains(&distance_key(0.2)));
+        assert!(finalists.contains(&distance_key(0.25)));
     }
 
     #[test]
-    fn test_explorer_logs_acceleration_and_deceleration() {
-        let result = explore_jxl_distance(100, 150, |distance| {
+    fn test_screening_logs_acceleration_and_deceleration() {
+        let result = screen_jxl_candidates(100, 150, |distance| {
             let size = match distance_key(distance) {
                 10 => 130,
                 100 => 120,
@@ -317,7 +647,7 @@ mod tests {
             Ok(size)
         })
         .expect("exploration should succeed")
-        .expect("phase two should eventually compress");
+        .expect("screening result should exist");
 
         assert!(
             result
@@ -335,6 +665,6 @@ mod tests {
             "expected deceleration log, got {:?}",
             result.log
         );
-        assert!(result.accepted_distance < 1.0);
+        assert!(result.best_distance < 1.0);
     }
 }

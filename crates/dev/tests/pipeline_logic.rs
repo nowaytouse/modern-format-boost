@@ -19,7 +19,7 @@ mod tests {
         let output = output_file.path();
 
         let result =
-            run_imagemagick_cjxl_pipeline(&input, output, 1.0, 1, false, 8, false, false, 7, false);
+            run_imagemagick_cjxl_pipeline(&input, output, 1.0, 1, false, 8, false, false, false);
 
         assert!(result.is_ok(), "Grayscale fallback failed!");
     }
@@ -33,7 +33,7 @@ mod tests {
 
         // Test pipeline handles compositing and premultiply issues
         let result =
-            run_imagemagick_cjxl_pipeline(&input, output, 1.0, 1, false, 8, false, false, 7, false);
+            run_imagemagick_cjxl_pipeline(&input, output, 1.0, 1, false, 8, false, false, false);
 
         assert!(result.is_ok(), "Alpha bleed prevention pipeline failed!");
     }
@@ -53,7 +53,6 @@ mod tests {
             8,
             false,
             false,
-            7,
             false,
         );
 
@@ -83,7 +82,6 @@ mod tests {
             8,
             false,
             false,
-            7,
             false,
         );
 
@@ -111,7 +109,6 @@ mod tests {
             8,
             false,
             false,
-            7,
             false,
         );
 
@@ -136,7 +133,6 @@ mod tests {
             8,
             false,
             false,
-            7,
             false,
         );
         assert!(result.is_ok() || result.is_err());
@@ -156,7 +152,6 @@ mod tests {
             8,
             false,
             false,
-            7,
             false,
         );
 

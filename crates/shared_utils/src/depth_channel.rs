@@ -306,6 +306,7 @@ pub fn encode_jxl_depth_fallback(
     output: &Path,
     distance: f32,
     _effort: u8,
+    apple_compat: bool,
     ultimate: bool,
 ) -> Result<(std::path::PathBuf, std::path::PathBuf)> {
     let actual_dist = crate::constants::jxl_distance_for_mode(distance, ultimate);
@@ -333,6 +334,7 @@ pub fn encode_jxl_depth_fallback(
         .output(output)
         .distance(actual_dist)
         .effort(actual_eff)
+        .apple_compat(apple_compat)
         .build()
         .status()
         .map_err(|e| anyhow!("Failed to run cjxl: {e}"))?;

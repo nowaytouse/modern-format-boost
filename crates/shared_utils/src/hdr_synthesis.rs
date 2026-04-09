@@ -77,7 +77,7 @@ impl Default for GainMapParams {
 pub fn convert_heic_with_gainmap_to_jxl_hdr(
     input: &Path,
     output: &Path,
-    _apple_compat: bool,
+    apple_compat: bool,
     intermediate_format: HdrIntermediateFormat,
     ultimate: bool,
 ) -> Result<()> {
@@ -196,6 +196,7 @@ pub fn convert_heic_with_gainmap_to_jxl_hdr(
         .output(output)
         .distance(actual_distance)
         .effort(actual_effort)
+        .apple_compat(apple_compat)
         .arg("-x")
         .arg("color_space=RGB_D65_SRG_Rel_PeQ");
 
@@ -264,6 +265,7 @@ pub fn convert_heic_with_gainmap_to_jxl_hdr(
 pub fn convert_ultrahdr_jpeg_to_jxl_hdr(
     input: &Path,
     output: &Path,
+    apple_compat: bool,
     intermediate_format: HdrIntermediateFormat,
     ultimate: bool,
 ) -> Result<()> {
@@ -336,6 +338,7 @@ pub fn convert_ultrahdr_jpeg_to_jxl_hdr(
         .output(output)
         .distance(actual_distance)
         .effort(actual_effort)
+        .apple_compat(apple_compat)
         .arg("-x")
         .arg("color_space=RGB_D65_SRG_Rel_PeQ");
 
@@ -392,6 +395,7 @@ pub fn convert_ultrahdr_jpeg_to_jxl_migration(
     output: &Path,
     distance: f32,
     _effort: u8,
+    apple_compat: bool,
     ultimate: bool,
 ) -> Result<()> {
     let actual_distance = crate::constants::jxl_distance_for_mode(distance, ultimate);
@@ -423,6 +427,7 @@ pub fn convert_ultrahdr_jpeg_to_jxl_migration(
         .lossless_jpeg(true)
         .distance(actual_distance)
         .effort(actual_effort)
+        .apple_compat(apple_compat)
         .build()
         .status()
         .context("Failed to spawn cjxl for UltraHDR migration")?;

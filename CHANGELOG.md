@@ -8,8 +8,9 @@ All notable changes to this project will be documented in this file.
 
 ### 🖼️ Image Processing
 
+- **JXL Explore Two-Stage Screening + Finalization**: The JXL distance explorer now runs a fast e7 screening pass (`screen_jxl_candidates`) across the distance ladder and Phase 2 adaptive search, collecting candidates with promotion reasons (better-than-best, near-best, boundary, adjacent, new-region). The top ≤ 8 candidates form an e10 finalist shortlist, each re-encoded at ultimate effort. The smallest valid finalist wins. `JxlExploreResult` gains `screened_best_distance`, `screened_best_size`, and `promoted_distances` fields.
+- **HEVC GPU Exploration Two-Stage Mode**: When Ultimate Mode requests `slower` preset, the GPU search now screens with `slow` first, then builds a CRF shortlist (`best ± [0.0, 0.5, 1.0]` plus baseline and warm-start anchors) for final `slower` evaluation. The winner is selected by smallest output size (quality-passing first, then overall fallback). New helper functions: `search_anchor_crf`, `shortlist_hevc_slower_finalists`, `run_hevc_gpu_search`.
 - **JXL Parameter Standardization via Constants**: Centralized JXL encoding parameters into `constants.rs` — `JXL_DEFAULT_EFFORT` (e7), `JXL_ULTIMATE_EFFORT` (e10), and `JXL_ULTIMATE_DISTANCE` (0.001). All hardcoded effort/distance values across the codebase replaced with `jxl_effort_for_mode()` and `jxl_distance_for_mode()` policy functions.
-- **JXL Distance Exploration Engine**: New `jxl_explorer.rs` module adds a two-phase distance search for Ultimate Mode: Phase 1 ladder scan (`d=0.001 → 0.01 → 0.1`) followed by adaptive Phase 2 binary search (with acceleration/deceleration cadence). Automatically probes higher distances when baseline Ultimate encode produces oversized output, selecting the smallest valid distance that still compresses below input size.
 - **HEVC/x265 Preset Policy Window**: Introduced `sanitize_hevc()` and `sanitize_hevc_preset_name()` to clamp all HEVC encoder presets into a safe `medium`/`slow`/`slower` window. Fast presets (`ultrafast`–`fast`) are promoted to `medium`; `veryslow`/`placebo` are clamped to `slower`. Applied across `FfmpegBuilder`, `X265Builder`, `VideoEncoder`, and `quick_calibrate`.
 - **Ultimate Mode (Effort 10) for JXL**: Added `--ultimate` flag to enable `cjxl` effort 10 (Glacier) for archival-quality encoding. Based on research showing effort 10 is consistently 15-56% faster and produces equal or smaller files than effort 9 (Tortoise), while effort 11 offers no advantage in VarDCT mode. Default remains effort 7 (Squirrel) for balanced performance.
 - **Near-Lossless JXL for Lossy Sources**: Changed lossy PNG/GIF/JPEG fallback conversion from `distance=0.1` to `distance=0.001`, resulting in mathematically near-lossless output recognized by the JXL encoder's lossless threshold.
@@ -17,6 +18,7 @@ All notable changes to this project will be documented in this file.
 
 ### 🔧 Code Quality
 
+- **JXL Utils Inner-Layer Refactor**: `run_imagemagick_cjxl_pipeline` and `try_imagemagick_fallback` are now public wrappers that resolve mode-locked distance/effort and delegate to `run_imagemagick_cjxl_pipeline_with_effort` / `try_imagemagick_fallback_with_effort`. The inner functions accept raw `distance` + `effort` directly, enabling screening callers to pass arbitrary effort values (e.g. e7 screening → e10 finalization) without bypassing policy assertions.
 - **Pipeline API Signature Refactor**: `run_imagemagick_cjxl_pipeline` and `try_imagemagick_fallback` now accept `ultimate: bool` instead of a raw `effort: u8` parameter, enforcing mode-locked distance/effort selection at the call-site level. All callers across `lossless_converter.rs`, `depth_channel.rs`, `hdr_synthesis.rs`, and `conversion_api.rs` updated.
 - **JXL Builder Debug Assertion**: `CjxlBuilder::effort()` now includes a `debug_assert!` via `is_supported_jxl_effort()` to catch unsupported effort values at development time (policy permits only e7 and e10).
 - **Command Indicator Consistency**: All `JxlIndicator` generated commands in `image_analyzer.rs` and `image_recommender.rs` now emit `-e {JXL_DEFAULT_EFFORT}` instead of hardcoded `-e 9`, keeping recommendation output in sync with runtime policy.
@@ -39,6 +41,9 @@ All notable changes to this project will be documented in this file.
 
 ### 📐 Testing Infrastructure
 
+- **JXL Screening Tests**: Added `test_screening_keeps_best_ladder_candidate`, `test_screening_never_reaches_one`, `test_screening_promotes_adjacent_and_boundary_candidates`, `test_screening_logs_acceleration_and_deceleration` in `jxl_explorer.rs`.
+- **JXL Screening Effort Test**: Added `test_jxl_screening_effort_only_drops_to_e7_for_ultimate_explore` in `lossless_converter.rs`.
+- **HEVC GPU Search Tests**: Added `test_hevc_slower_shortlist_keeps_neighbors_and_distinct_anchors` and `test_search_anchor_crf_uses_warm_start_backoff_and_clamp` in `gpu_coarse_search.rs`.
 - **JXL Exploration Probe Tests**: Added `test_jxl_exploration_probe_uses_imagemagick_fallback` and `test_jxl_exploration_probe_skips_fallback_after_direct_success` in `lossless_converter.rs` to verify the two-path probe logic (direct cjxl → ImageMagick fallback).
 - **HEVC Preset Sanitizer Tests**: Added `test_hevc_preset_sanitizer_clamps_to_allowed_window` and `test_hevc_preset_name_sanitizer_handles_raw_strings` in `preset.rs`, plus `test_ffmpeg_hevc_preset_is_sanitized` and `test_x265_preset_is_sanitized` in `parity_tests.rs`.
 - **JXL Policy Constant Tests**: Added `test_jxl_effort_policy_is_mode_locked` and `test_jxl_distance_policy_pins_ultimate_mode` in `constants.rs` to validate effort/distance policy functions.
@@ -49,6 +54,8 @@ All notable changes to this project will be documented in this file.
 
 ### 🛡️ Code Hardening
 
+- **HDR Synthesis `apple_compat` Passthrough Fix**: `convert_heic_with_gainmap_to_jxl_hdr`, `convert_ultrahdr_jpeg_to_jxl_hdr`, and `convert_ultrahdr_jpeg_to_jxl_migration` now correctly thread the `apple_compat` flag into `CjxlBuilder`. Previously it was accepted as a parameter but never applied, producing non-Apple-compatible JXL output on macOS even when requested.
+- **Depth Channel `apple_compat` Passthrough Fix**: `encode_jxl_depth_fallback` now passes `apple_compat` to `CjxlBuilder` instead of ignoring it.
 - **`gpu_accel.rs`**: Replaced unchecked `Instant::now() - duration` subtraction with `checked_sub().expect(...)` to prevent panic on monotonic clock anomalies. Simplified `summarize_ffmpeg_failure_output` logic (prefer stderr summary, fall through to stdout only when needed).
 - **`hdr_synthesis.rs`**: Made `synthesize_hdr` public with proper `# Errors` documentation; added `Serialize`/`Deserialize` to `GainMapParams` for cross-format serialization.
 - **`image_heic_analysis.rs`**: Promoted `extract_xmp_from_heic_data` from private to `pub` for use by fuzz targets and downstream consumers.

@@ -19,7 +19,7 @@ mod tests {
         let output = output_file.path();
 
         let result =
-            run_imagemagick_cjxl_pipeline(&input, output, 1.0, 1, false, 8, false, false, 7, false);
+            run_imagemagick_cjxl_pipeline(&input, output, 1.0, 1, false, 8, false, false, false);
 
         // This should gracefully fail because ImageMagick cannot read a 0-byte JPG
         assert!(
@@ -45,7 +45,7 @@ mod tests {
 
         // This test ensures the pipeline can at least attempt to call magick on a file with spaces
         let result =
-            run_imagemagick_cjxl_pipeline(&input, output, 1.0, 1, false, 8, false, false, 7, false);
+            run_imagemagick_cjxl_pipeline(&input, output, 1.0, 1, false, 8, false, false, false);
 
         // On many systems this might still fail if the file doesn't exist, but it must not be a shell injection or hang
         assert!(
@@ -68,7 +68,6 @@ mod tests {
             8,
             false,
             false,
-            7,
             false,
         );
 

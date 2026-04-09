@@ -200,21 +200,19 @@ pub fn get_png_bit_depth(path: &Path) -> Option<u8> {
 ///
 /// # Errors
 /// Returns an error if the pipeline fails.
-pub fn run_imagemagick_cjxl_pipeline(
+fn run_imagemagick_cjxl_pipeline_with_effort(
     input: &Path,
     output: &Path,
     distance: f32,
+    effort: u8,
     max_threads: usize,
     strip: bool,
     depth: u8,
     normalize_icc: bool,
     apple_compat: bool,
-    ultimate: bool,
 ) -> std::result::Result<(), (bool, bool, String)> {
     use std::process::Stdio;
-
-    let actual_distance = crate::constants::jxl_distance_for_mode(distance, ultimate);
-    let actual_effort = crate::constants::jxl_effort_for_mode(ultimate);
+    debug_assert!(crate::constants::is_supported_jxl_effort(effort));
 
     let mut magick_builder = crate::image_builders::MagickBuilder::new();
     magick_builder.input(input).strip(strip).use_stdout(true);
@@ -261,8 +259,8 @@ pub fn run_imagemagick_cjxl_pipeline(
     cjxl_builder
         .use_stdin(true)
         .output(output)
-        .distance(actual_distance)
-        .effort(actual_effort)
+        .distance(distance)
+        .effort(effort)
         .threads(max_threads)
         .apple_compat(apple_compat);
 
@@ -391,6 +389,34 @@ pub fn run_imagemagick_cjxl_pipeline(
     }
 }
 
+/// Run the `ImageMagick` -> `cjxl` pipeline using the mode-locked JXL policy.
+///
+/// # Errors
+/// Returns an error if the pipeline fails.
+pub fn run_imagemagick_cjxl_pipeline(
+    input: &Path,
+    output: &Path,
+    distance: f32,
+    max_threads: usize,
+    strip: bool,
+    depth: u8,
+    normalize_icc: bool,
+    apple_compat: bool,
+    ultimate: bool,
+) -> std::result::Result<(), (bool, bool, String)> {
+    run_imagemagick_cjxl_pipeline_with_effort(
+        input,
+        output,
+        crate::constants::jxl_distance_for_mode(distance, ultimate),
+        crate::constants::jxl_effort_for_mode(ultimate),
+        max_threads,
+        strip,
+        depth,
+        normalize_icc,
+        apple_compat,
+    )
+}
+
 /// `ImageMagick` → cjxl fallback pipeline for when direct cjxl encoding fails.
 ///
 /// Fallback priority:
@@ -408,31 +434,32 @@ pub fn run_imagemagick_cjxl_pipeline(
 ///
 /// # Errors
 /// Returns an I/O error if conversion fails.
-pub fn try_imagemagick_fallback(
+pub fn try_imagemagick_fallback_with_effort(
     input: &Path,
     output: &Path,
     distance: f32,
+    effort: u8,
     max_threads: usize,
     apple_compat: bool,
-    ultimate: bool,
 ) -> std::result::Result<(), std::io::Error> {
     use console::style;
+    debug_assert!(crate::constants::is_supported_jxl_effort(effort));
 
     // Attempt 1: no -strip, depth 16, preserve metadata
     crate::progress_mode::emit_stderr(&format!(
         "   🔄 Attempt 1: Default (16-bit, preserve metadata) - {}",
         input.display()
     ));
-    match run_imagemagick_cjxl_pipeline(
+    match run_imagemagick_cjxl_pipeline_with_effort(
         input,
         output,
         distance,
+        effort,
         max_threads,
         false,
         16,
         false,
         apple_compat,
-        ultimate,
     ) {
         Ok(()) => {
             crate::progress_mode::emit_stderr(&format!(
@@ -463,16 +490,16 @@ pub fn try_imagemagick_fallback(
                 crate::progress_mode::emit_stderr(
                     "   🔄 Attempt 2: Grayscale ICC fix (-strip, 16-bit)",
                 );
-                match run_imagemagick_cjxl_pipeline(
+                match run_imagemagick_cjxl_pipeline_with_effort(
                     input,
                     output,
                     distance,
+                    effort,
                     max_threads,
                     true,
                     16,
                     false,
                     apple_compat,
-                    ultimate,
                 ) {
                     Ok(()) => {
                         crate::progress_mode::emit_stderr(&format!(
@@ -506,16 +533,16 @@ pub fn try_imagemagick_fallback(
                                 crate::progress_mode::emit_stderr(
                                     "   🔄 Attempt 3: 8-bit depth (-depth 8 -strip, 8-bit source confirmed)",
                                 );
-                                match run_imagemagick_cjxl_pipeline(
+                                match run_imagemagick_cjxl_pipeline_with_effort(
                                     input,
                                     output,
                                     distance,
+                                    effort,
                                     max_threads,
                                     true,
                                     8,
                                     false,
                                     apple_compat,
-                                    ultimate,
                                 ) {
                                     Ok(()) => {
                                         crate::progress_mode::emit_stderr(&format!(
@@ -537,16 +564,16 @@ pub fn try_imagemagick_fallback(
                                 crate::progress_mode::emit_stderr(
                                     "   🔄 Attempt 3: ICC normalization (sRGB, 16-bit source)",
                                 );
-                                if run_imagemagick_cjxl_pipeline(
+                                if run_imagemagick_cjxl_pipeline_with_effort(
                                     input,
                                     output,
                                     distance,
+                                    effort,
                                     max_threads,
                                     false,
                                     16,
                                     true,
                                     apple_compat,
-                                    ultimate,
                                 ) == Ok(())
                                 {
                                     crate::progress_mode::emit_stderr(&format!(
@@ -574,16 +601,16 @@ pub fn try_imagemagick_fallback(
                     crate::progress_mode::emit_stderr(
                         "   🔄 Attempt 2: 8-bit depth (-depth 8 -strip, 8-bit source confirmed)",
                     );
-                    match run_imagemagick_cjxl_pipeline(
+                    match run_imagemagick_cjxl_pipeline_with_effort(
                         input,
                         output,
                         distance,
+                        effort,
                         max_threads,
                         true,
                         8,
                         false,
                         apple_compat,
-                        ultimate,
                     ) {
                         Ok(()) => {
                             crate::progress_mode::emit_stderr(&format!(
@@ -605,16 +632,16 @@ pub fn try_imagemagick_fallback(
                     crate::progress_mode::emit_stderr(
                         "   🔄 Attempt 2: ICC normalization (sRGB, 16-bit source)",
                     );
-                    if run_imagemagick_cjxl_pipeline(
+                    if run_imagemagick_cjxl_pipeline_with_effort(
                         input,
                         output,
                         distance,
+                        effort,
                         max_threads,
                         false,
                         16,
                         true,
                         apple_compat,
-                        ultimate,
                     ) == Ok(())
                     {
                         crate::progress_mode::emit_stderr(&format!(
@@ -637,16 +664,16 @@ pub fn try_imagemagick_fallback(
             // Final fallback: if nothing worked and we haven't tried -strip yet, try it as last resort
             if magick_ok && !cjxl_ok && !stderr.contains("-strip") {
                 crate::progress_mode::emit_stderr("   🔄 Attempt (final): Last resort -strip");
-                match run_imagemagick_cjxl_pipeline(
+                match run_imagemagick_cjxl_pipeline_with_effort(
                     input,
                     output,
                     distance,
+                    effort,
                     max_threads,
                     true,
                     16,
                     false,
                     apple_compat,
-                    ultimate,
                 ) {
                     Ok(()) => {
                         crate::progress_mode::emit_stderr(&format!(
@@ -665,29 +692,30 @@ pub fn try_imagemagick_fallback(
                 }
             }
 
-            // Signal-kill retry: cjxl crashed (OOM/SIGSEGV) — retry once at the mode-locked effort.
+            // Signal-kill retry: cjxl crashed (OOM/SIGSEGV) — retry once at the configured
+            // effort.
             if magick_ok && !cjxl_ok && is_cjxl_signal_killed(&stderr) {
                 crate::progress_mode::emit_stderr(&format!(
-                    "   {} Attempt (signal-kill retry): cjxl crash detected, retrying at mode effort {}",
+                    "   {} Attempt (signal-kill retry): cjxl crash detected, retrying at effort {}",
                     style("🔄").yellow(),
-                    crate::constants::jxl_effort_for_mode(ultimate)
+                    effort
                 ));
-                match run_imagemagick_cjxl_pipeline(
+                match run_imagemagick_cjxl_pipeline_with_effort(
                     input,
                     output,
                     distance,
+                    effort,
                     max_threads,
                     true,
                     16,
                     false,
                     apple_compat,
-                    ultimate,
                 ) {
                     Ok(()) => {
                         crate::progress_mode::emit_stderr(&format!(
                             "   {} Signal-kill retry succeeded (effort {})",
                             style("✅").green(),
-                            crate::constants::jxl_effort_for_mode(ultimate)
+                            effort
                         ));
                         crate::progress_mode::fallback_success();
                         return Ok(());
@@ -715,6 +743,29 @@ pub fn try_imagemagick_fallback(
     Err(std::io::Error::other(
         "ImageMagick fallback pipeline failed",
     ))
+}
+
+/// Fallback to `ImageMagick` for conversion if native tools fail, using the mode-locked JXL
+/// policy.
+///
+/// # Errors
+/// Returns an I/O error if conversion fails.
+pub fn try_imagemagick_fallback(
+    input: &Path,
+    output: &Path,
+    distance: f32,
+    max_threads: usize,
+    apple_compat: bool,
+    ultimate: bool,
+) -> std::result::Result<(), std::io::Error> {
+    try_imagemagick_fallback_with_effort(
+        input,
+        output,
+        crate::constants::jxl_distance_for_mode(distance, ultimate),
+        crate::constants::jxl_effort_for_mode(ultimate),
+        max_threads,
+        apple_compat,
+    )
 }
 
 /// Losslessly strip trailing data after JPEG EOI (0xFF 0xD9) so cjxl can use bitstream reconstruction.

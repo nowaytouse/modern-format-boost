@@ -236,6 +236,7 @@ pub fn convert_ultrahdr_jpeg_to_jxl(
     shared_utils::hdr_synthesis::convert_ultrahdr_jpeg_to_jxl_hdr(
         input,
         &temp_output,
+        options.apple_compat,
         shared_utils::hdr_synthesis::HdrIntermediateFormat::Png16,
         options.ultimate,
     )
@@ -381,7 +382,8 @@ pub fn convert_to_jxl(
     );
 
     let actual_dist = shared_utils::constants::jxl_distance_for_mode(distance, options.ultimate);
-    let actual_eff = shared_utils::constants::jxl_effort_for_mode(options.ultimate);
+    let is_extreme_explore = options.ultimate && options.explore;
+    let actual_eff = jxl_screening_effort(options.ultimate, options.explore);
 
     let mut builder = shared_utils::CjxlBuilder::new();
     builder
@@ -485,13 +487,13 @@ pub fn convert_to_jxl(
                         "Grayscale ICC profile mismatch detected — using ImageMagick fallback"
                     );
 
-                    if shared_utils::jxl_utils::try_imagemagick_fallback(
+                    if try_imagemagick_fallback_with_effort(
                         input,
                         &temp_output,
-                        distance,
+                        actual_dist,
                         max_threads,
                         options.apple_compat,
-                        options.ultimate,
+                        actual_eff,
                     )
                     .is_ok()
                     {
@@ -728,13 +730,13 @@ pub fn convert_to_jxl(
                                         );
                                         shared_utils::progress_mode::emit_stderr(&line);
                                         shared_utils::progress_mode::emit_stderr("   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline...");
-                                        if try_imagemagick_fallback(
+                                        if try_imagemagick_fallback_with_effort(
                                             input,
                                             &temp_output,
-                                            distance,
+                                            actual_dist,
                                             max_threads,
                                             options.apple_compat,
-                                            options.ultimate,
+                                            actual_eff,
                                         )
                                         .is_ok()
                                         {
@@ -762,13 +764,13 @@ pub fn convert_to_jxl(
                                     shared_utils::progress_mode::emit_stderr(
                                         "   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline...",
                                     );
-                                    if try_imagemagick_fallback(
+                                    if try_imagemagick_fallback_with_effort(
                                         input,
                                         &temp_output,
-                                        distance,
+                                        actual_dist,
                                         max_threads,
                                         options.apple_compat,
-                                        options.ultimate,
+                                        actual_eff,
                                     )
                                     .is_ok()
                                     {
@@ -797,13 +799,13 @@ pub fn convert_to_jxl(
                             shared_utils::progress_mode::emit_stderr(
                                 "   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline...",
                             );
-                            if try_imagemagick_fallback(
+                            if try_imagemagick_fallback_with_effort(
                                 input,
                                 &temp_output,
-                                distance,
+                                actual_dist,
                                 max_threads,
                                 options.apple_compat,
-                                options.ultimate,
+                                actual_eff,
                             )
                             .is_ok()
                             {
@@ -828,13 +830,13 @@ pub fn convert_to_jxl(
                         shared_utils::progress_mode::emit_stderr(
                             "   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline...",
                         );
-                        if try_imagemagick_fallback(
+                        if try_imagemagick_fallback_with_effort(
                             input,
                             &temp_output,
-                            distance,
+                            actual_dist,
                             max_threads,
                             options.apple_compat,
-                            options.ultimate,
+                            actual_eff,
                         )
                         .is_ok()
                         {
@@ -869,7 +871,7 @@ pub fn convert_to_jxl(
             let mut final_output_size = output_size;
             let mut extra_info = None;
 
-            if options.explore && options.ultimate && output_size >= input_size {
+            if is_extreme_explore {
                 if let Some(explore_result) = try_explore_ultimate_jxl_distance(
                     input,
                     &actual_input,
@@ -883,7 +885,7 @@ pub fn convert_to_jxl(
                 )? {
                     final_output_size = explore_result.output_size;
                     extra_info = Some(format!(
-                        "(explored d={:.3})",
+                        "(screened e7, finalized e10 d={:.3})",
                         explore_result.accepted_distance
                     ));
                 }
@@ -1536,29 +1538,37 @@ pub fn convert_to_jxl_matched(
     }
 }
 
-fn try_imagemagick_fallback(
+fn jxl_screening_effort(ultimate: bool, explore: bool) -> u8 {
+    if ultimate && explore {
+        shared_utils::constants::JXL_DEFAULT_EFFORT
+    } else {
+        shared_utils::constants::jxl_effort_for_mode(ultimate)
+    }
+}
+
+fn try_imagemagick_fallback_with_effort(
     input: &Path,
     output: &Path,
     distance: f32,
     max_threads: usize,
     apple_compat: bool,
-    ultimate: bool,
+    effort: u8,
 ) -> std::result::Result<(), std::io::Error> {
-    shared_utils::jxl_utils::try_imagemagick_fallback(
+    shared_utils::jxl_utils::try_imagemagick_fallback_with_effort(
         input,
         output,
         distance,
+        effort,
         max_threads,
         apple_compat,
-        ultimate,
     )
 }
 
-fn encode_direct_jxl_probe(
+fn encode_direct_jxl_probe_with_effort(
     input: &Path,
     output: &Path,
     distance: f32,
-    ultimate: bool,
+    effort: u8,
     max_threads: usize,
     apple_compat: bool,
     icc_path: Option<&Path>,
@@ -1569,7 +1579,7 @@ fn encode_direct_jxl_probe(
         .input(input)
         .output(output)
         .distance(distance)
-        .effort(shared_utils::constants::jxl_effort_for_mode(ultimate))
+        .effort(effort)
         .threads(max_threads)
         .apple_compat(apple_compat);
 
@@ -1598,6 +1608,63 @@ fn encode_direct_jxl_probe(
             Err(stderr)
         }
     }
+}
+
+fn encode_jxl_probe_to_output(
+    input: &Path,
+    actual_input: &Path,
+    output: &Path,
+    distance: f32,
+    effort: u8,
+    max_threads: usize,
+    apple_compat: bool,
+    icc_path: Option<&Path>,
+    hdr_info: Option<&shared_utils::ColorInfo>,
+    stage_label: &str,
+) -> std::result::Result<u64, String> {
+    let _ = shared_utils::io_utils::safe_remove_file(output);
+
+    let mut direct_encode = |candidate_distance| {
+        encode_direct_jxl_probe_with_effort(
+            actual_input,
+            output,
+            candidate_distance,
+            effort,
+            max_threads,
+            apple_compat,
+            icc_path,
+            hdr_info,
+        )?;
+        verify_jxl_health(output)
+            .map_err(|err| format!("Health check failed after direct cjxl probe: {err}"))?;
+        fs::metadata(output)
+            .map(|meta| meta.len())
+            .map_err(|e| e.to_string())
+    };
+
+    let mut fallback_encode = |candidate_distance| {
+        let _ = shared_utils::io_utils::safe_remove_file(output);
+        shared_utils::progress_mode::emit_stderr(&format!(
+            "   🔄 {stage_label} d={candidate_distance:.3}: cjxl failed, trying ImageMagick fallback at e{effort}"
+        ));
+        try_imagemagick_fallback_with_effort(
+            input,
+            output,
+            candidate_distance,
+            max_threads,
+            apple_compat,
+            effort,
+        )
+        .map_err(|e| e.to_string())?;
+        verify_jxl_health(output).map_err(|err| {
+            format!("Health check failed after ImageMagick exploration probe: {err}")
+        })?;
+        fs::metadata(output)
+            .map(|meta| meta.len())
+            .map_err(|e| e.to_string())
+    };
+
+    run_jxl_exploration_probe_with(distance, &mut direct_encode, &mut fallback_encode)
 }
 
 fn run_jxl_exploration_probe_with<Direct, Fallback>(
@@ -1631,105 +1698,150 @@ fn try_explore_ultimate_jxl_distance(
     hdr_info: Option<&shared_utils::ColorInfo>,
 ) -> Result<Option<shared_utils::jxl_explorer::JxlExploreResult>> {
     shared_utils::progress_mode::emit_stderr(
-        "   🔬 Ultimate JXL exploration: baseline oversized, probing higher d values below 1.0",
+        "   🔬 Ultimate JXL exploration: screening with e7, promoting a shortlist, finalizing with e10",
     );
 
-    let exploration = shared_utils::jxl_explorer::explore_jxl_distance(
+    let screening_effort = jxl_screening_effort(true, true);
+    let final_effort = shared_utils::constants::jxl_effort_for_mode(true);
+    let screening = shared_utils::jxl_explorer::screen_jxl_candidates(
         input_size,
         initial_output_size,
         |distance| {
             let candidate_output =
                 shared_utils::path_safety::isolated_temp_path_for_search(temp_output)
                     .map_err(|e| e.to_string())?;
-
-            let mut direct_encode = |candidate_distance| {
-                encode_direct_jxl_probe(
-                    actual_input,
-                    &candidate_output,
-                    candidate_distance,
-                    true,
-                    max_threads,
-                    options.apple_compat,
-                    icc_path,
-                    hdr_info,
-                )?;
-                verify_jxl_health(&candidate_output)
-                    .map_err(|err| format!("Health check failed after direct cjxl probe: {err}"))?;
-                fs::metadata(&candidate_output)
-                    .map(|meta| meta.len())
-                    .map_err(|e| e.to_string())
-            };
-
-            let mut fallback_encode = |candidate_distance| {
-                let _ = shared_utils::io_utils::safe_remove_file(&candidate_output);
-                shared_utils::progress_mode::emit_stderr(&format!(
-                    "   🔄 Exploration probe d={candidate_distance:.3}: cjxl failed, trying ImageMagick fallback"
-                ));
-                try_imagemagick_fallback(
-                    input,
-                    &candidate_output,
-                    candidate_distance,
-                    max_threads,
-                    options.apple_compat,
-                    true,
-                )
-                .map_err(|e| e.to_string())?;
-                verify_jxl_health(&candidate_output).map_err(|err| {
-                    format!("Health check failed after ImageMagick exploration probe: {err}")
-                })?;
-                fs::metadata(&candidate_output)
-                    .map(|meta| meta.len())
-                    .map_err(|e| e.to_string())
-            };
-
-            let size = match run_jxl_exploration_probe_with(
+            let result = encode_jxl_probe_to_output(
+                input,
+                actual_input,
+                &candidate_output,
                 distance,
-                &mut direct_encode,
-                &mut fallback_encode,
-            ) {
-                Ok(size) => size,
-                Err(err) => {
-                    let _ = shared_utils::io_utils::safe_remove_file(&candidate_output);
-                    return Err(err);
-                }
-            };
-
-            if size < input_size {
-                let _ = shared_utils::io_utils::safe_remove_file(temp_output);
-                shared_utils::io_utils::robust_move(&candidate_output, temp_output)
-                    .map_err(|e| e.to_string())?;
-            } else {
-                let _ = shared_utils::io_utils::safe_remove_file(&candidate_output);
-            }
-
-            Ok(size)
+                screening_effort,
+                max_threads,
+                options.apple_compat,
+                icc_path,
+                hdr_info,
+                "Screening probe",
+            );
+            let _ = shared_utils::io_utils::safe_remove_file(&candidate_output);
+            result
         },
     );
 
-    match exploration {
-        Ok(Some(result)) => {
-            for line in &result.log {
-                shared_utils::progress_mode::emit_stderr(&format!("   {line}"));
-            }
-            shared_utils::progress_mode::emit_stderr(&format!(
-                "   ✅ Ultimate JXL exploration accepted d={:.3} ({:.1}% of input)",
-                result.accepted_distance,
-                if input_size == 0 {
-                    100.0
-                } else {
-                    (result.output_size as f64 / input_size as f64) * 100.0
-                }
-            ));
-            Ok(Some(result))
-        }
-        Ok(None) => Ok(None),
+    let Some(screening) = (match screening {
+        Ok(result) => result,
         Err(err) => {
             shared_utils::progress_mode::emit_stderr(&format!(
-                "   ⚠️ Ultimate JXL exploration aborted; keeping baseline encode: {err}"
+                "   ⚠️ Ultimate JXL exploration aborted during e7 screening; keeping baseline encode: {err}"
             ));
-            Ok(None)
+            return Ok(None);
+        }
+    }) else {
+        return Ok(None);
+    };
+
+    for line in &screening.log {
+        shared_utils::progress_mode::emit_stderr(&format!("   {line}"));
+    }
+
+    let mut best_final: Option<(usize, u64, std::path::PathBuf)> = None;
+
+    for (finalist_idx, finalist) in screening.finalists.iter().enumerate() {
+        shared_utils::progress_mode::emit_stderr(&format!(
+            "   🧪 Finalizing shortlist candidate d={:.3} with e{}",
+            finalist.distance, final_effort
+        ));
+
+        let candidate_output =
+            shared_utils::path_safety::isolated_temp_path_for_search(temp_output)
+                .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
+
+        match encode_jxl_probe_to_output(
+            input,
+            actual_input,
+            &candidate_output,
+            finalist.distance,
+            final_effort,
+            max_threads,
+            options.apple_compat,
+            icc_path,
+            hdr_info,
+            "Finalist encode",
+        ) {
+            Ok(size) => {
+                let replace_best = best_final.as_ref().is_none_or(|(best_idx, best_size, _)| {
+                    size < *best_size
+                        || (size == *best_size
+                            && finalist.distance < screening.finalists[*best_idx].distance)
+                });
+
+                if replace_best {
+                    if let Some((_, _, old_path)) =
+                        best_final.replace((finalist_idx, size, candidate_output.clone()))
+                    {
+                        let _ = shared_utils::io_utils::safe_remove_file(&old_path);
+                    }
+                } else {
+                    let _ = shared_utils::io_utils::safe_remove_file(&candidate_output);
+                }
+            }
+            Err(err) => {
+                let _ = shared_utils::io_utils::safe_remove_file(&candidate_output);
+                shared_utils::progress_mode::emit_stderr(&format!(
+                    "   ⚠️ Finalist d={:.3} failed at e{}: {err}",
+                    finalist.distance, final_effort
+                ));
+            }
         }
     }
+
+    let Some((best_idx, best_size, best_path)) = best_final else {
+        shared_utils::progress_mode::emit_stderr(
+            "   ⚠️ No e10 finalist succeeded; keeping the e7 screening baseline",
+        );
+        return Ok(None);
+    };
+
+    let best_candidate = &screening.finalists[best_idx];
+    let _ = shared_utils::io_utils::safe_remove_file(temp_output);
+    shared_utils::io_utils::robust_move(&best_path, temp_output)
+        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
+
+    let mut log = screening.log.clone();
+    log.push(format!(
+        "Accepted e10 finalist d={:.3} -> {:.1}% of input",
+        best_candidate.distance,
+        if input_size == 0 {
+            100.0
+        } else {
+            (best_size as f64 / input_size as f64) * 100.0
+        }
+    ));
+
+    let result = shared_utils::jxl_explorer::JxlExploreResult {
+        accepted_distance: best_candidate.distance,
+        output_size: best_size,
+        iterations: screening.iterations,
+        ladder_phase: best_candidate.ladder_phase,
+        screened_best_distance: screening.best_distance,
+        screened_best_size: screening.best_output_size,
+        promoted_distances: screening
+            .finalists
+            .iter()
+            .map(|candidate| candidate.distance)
+            .collect(),
+        log,
+    };
+
+    shared_utils::progress_mode::emit_stderr(&format!(
+        "   ✅ Ultimate JXL exploration accepted d={:.3} after e7 screening / e10 finalization ({:.1}% of input)",
+        result.accepted_distance,
+        if input_size == 0 {
+            100.0
+        } else {
+            (result.output_size as f64 / input_size as f64) * 100.0
+        }
+    ));
+    Ok(Some(result))
 }
 
 fn prepare_input_for_cjxl(
@@ -2384,5 +2496,13 @@ mod tests {
         assert_eq!(size, 77);
         assert_eq!(direct_calls.get(), 1);
         assert_eq!(fallback_calls.get(), 0);
+    }
+
+    #[test]
+    fn test_jxl_screening_effort_only_drops_to_e7_for_ultimate_explore() {
+        assert_eq!(jxl_screening_effort(true, true), 7);
+        assert_eq!(jxl_screening_effort(true, false), 10);
+        assert_eq!(jxl_screening_effort(false, true), 7);
+        assert_eq!(jxl_screening_effort(false, false), 7);
     }
 }

@@ -43,6 +43,7 @@ const PHASE3_DOWNWARD_STEP: f32 = 0.1;
 const UPWARD_JOG_MIN_STEP: f32 = 0.5;
 const UPWARD_SIZE_STAGNATION_THRESHOLD: u32 = 4;
 const UPWARD_DIRECTION_SWITCH_LIMIT: u32 = 15;
+const HEVC_SLOWER_FINALIST_OFFSETS: &[f32] = &[0.0, -0.5, 0.5, -1.0, 1.0];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum UpwardSearchCadence {
@@ -3812,35 +3813,181 @@ fn cpu_fine_tune_from_gpu_boundary(
     })
 }
 
-/// Unified HEVC quality exploration with GPU acceleration.
-///
-/// # Errors
-/// Returns an error if exploration fails.
-pub fn explore_hevc_with_gpu(req: GpuSearchRequest) -> Result<ExploreResult> {
-    let (max_crf, min_ssim) = calculate_smart_thresholds(req.baseline_crf, VideoEncoder::Hevc);
-    let search_anchor_crf = if let Some(hint) = req.warm_start_crf {
+fn search_anchor_crf(baseline_crf: f32, warm_start_crf: Option<f32>, max_crf: f32) -> f32 {
+    if let Some(hint) = warm_start_crf {
         (hint - 2.0).max(ABSOLUTE_MIN_CRF)
     } else {
-        req.baseline_crf
+        baseline_crf
     }
-    .clamp(ABSOLUTE_MIN_CRF, max_crf);
+    .clamp(ABSOLUTE_MIN_CRF, max_crf)
+}
 
+fn round_half_step(crf: f32) -> f32 {
+    (crf * 2.0).round() / 2.0
+}
+
+fn shortlist_hevc_slower_finalists(
+    screened_best_crf: f32,
+    baseline_crf: f32,
+    warm_start_crf: Option<f32>,
+    max_crf: f32,
+) -> Vec<f32> {
+    let mut finalists = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    let mut push = |candidate: f32| {
+        let quantized = round_half_step(candidate.clamp(ABSOLUTE_MIN_CRF, max_crf));
+        let key = (quantized * 10.0).round() as i32;
+        if seen.insert(key) {
+            finalists.push(quantized);
+        }
+    };
+
+    for offset in HEVC_SLOWER_FINALIST_OFFSETS {
+        push(screened_best_crf + offset);
+    }
+
+    if (baseline_crf - screened_best_crf).abs() >= 1.0 {
+        push(baseline_crf);
+    }
+
+    if let Some(warm_start) = warm_start_crf {
+        if (warm_start - screened_best_crf).abs() >= 1.0 {
+            push(warm_start);
+        }
+    }
+
+    finalists
+}
+
+fn run_hevc_gpu_search(
+    req: &GpuSearchRequest,
+    preset: EncoderPreset,
+    initial_crf: f32,
+) -> Result<ExploreResult> {
+    let (max_crf, min_ssim) = calculate_smart_thresholds(req.baseline_crf, VideoEncoder::Hevc);
     explore_with_gpu_coarse_search(GpuSearchArgs {
         input: &req.input,
         output: &req.output,
         encoder: VideoEncoder::Hevc,
-        vf_args: req.vf_args,
-        initial_crf: search_anchor_crf,
+        vf_args: req.vf_args.clone(),
+        initial_crf: initial_crf.clamp(ABSOLUTE_MIN_CRF, max_crf),
         max_crf,
         min_ssim,
         ultimate_mode: req.ultimate_mode,
         force_ms_ssim_long: req.force_ms_ssim_long,
         allow_size_tolerance: req.allow_size_tolerance,
         max_threads: req.max_threads,
-        hdr_x265_params: req.hdr_x265_params,
+        hdr_x265_params: req.hdr_x265_params.clone(),
         apple_compat: req.apple_compat,
-        preset: req.preset,
+        preset: preset.sanitize_hevc(),
     })
+}
+
+/// Unified HEVC quality exploration with GPU acceleration.
+///
+/// # Errors
+/// Returns an error if exploration fails.
+pub fn explore_hevc_with_gpu(req: GpuSearchRequest) -> Result<ExploreResult> {
+    let final_preset = req.preset.sanitize_hevc();
+    let (max_crf, _) = calculate_smart_thresholds(req.baseline_crf, VideoEncoder::Hevc);
+    let screening_anchor = search_anchor_crf(req.baseline_crf, req.warm_start_crf, max_crf);
+
+    if req.ultimate_mode && final_preset == EncoderPreset::Slower {
+        let screening_preset = EncoderPreset::Slow;
+        let screening_result = run_hevc_gpu_search(&req, screening_preset, screening_anchor)?;
+        let finalist_crfs = shortlist_hevc_slower_finalists(
+            screening_result.optimal_crf,
+            req.baseline_crf,
+            req.warm_start_crf,
+            max_crf,
+        );
+
+        let mut finalist_results = Vec::new();
+        for finalist_crf in &finalist_crfs {
+            finalist_results.push(run_hevc_gpu_search(&req, final_preset, *finalist_crf)?);
+        }
+
+        let total_iterations = screening_result.iterations
+            + finalist_results
+                .iter()
+                .map(|result| result.iterations)
+                .sum::<u32>();
+
+        let winner_idx = finalist_results
+            .iter()
+            .enumerate()
+            .filter(|(_, result)| result.quality_passed.is_ok())
+            .min_by(|(_, left), (_, right)| {
+                left.output_size
+                    .cmp(&right.output_size)
+                    .then_with(|| left.optimal_crf.total_cmp(&right.optimal_crf))
+            })
+            .or_else(|| {
+                finalist_results
+                    .iter()
+                    .enumerate()
+                    .min_by(|(_, left), (_, right)| {
+                        left.output_size
+                            .cmp(&right.output_size)
+                            .then_with(|| left.optimal_crf.total_cmp(&right.optimal_crf))
+                    })
+            })
+            .map(|(idx, _)| idx)
+            .unwrap_or_default();
+
+        let mut winner = finalist_results.swap_remove(winner_idx);
+        let shortlist_summary = finalist_crfs
+            .iter()
+            .map(|crf| format!("{crf:.1}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let finalist_summary = finalist_results
+            .iter()
+            .map(|result| {
+                format!(
+                    "CRF {:.1} -> {:.2}% / {}",
+                    result.optimal_crf,
+                    result.size_change_pct,
+                    if result.quality_passed.is_ok() {
+                        "quality ok"
+                    } else {
+                        "quality failed"
+                    }
+                )
+            })
+            .chain(std::iter::once(format!(
+                "CRF {:.1} -> {:.2}% / {}",
+                winner.optimal_crf,
+                winner.size_change_pct,
+                if winner.quality_passed.is_ok() {
+                    "quality ok"
+                } else {
+                    "quality failed"
+                }
+            )))
+            .collect::<Vec<_>>()
+            .join(" | ");
+
+        let mut merged_log = vec![
+            format!(
+                "Stage 1 HEVC screening preset: {}",
+                screening_preset.hevc_name()
+            ),
+            format!(
+                "Stage 1 screening winner: CRF {:.1}",
+                screening_result.optimal_crf
+            ),
+            format!("Stage 2 slower shortlist: {shortlist_summary}"),
+            format!("Stage 2 slower outcomes: {finalist_summary}"),
+        ];
+        merged_log.extend(winner.log.clone());
+        winner.log = merged_log;
+        winner.iterations = total_iterations;
+        return Ok(winner);
+    }
+
+    run_hevc_gpu_search(&req, final_preset, screening_anchor)
 }
 
 /// Unified AV1 quality exploration with GPU acceleration.
@@ -3872,4 +4019,29 @@ pub fn explore_av1_with_gpu(req: GpuSearchRequest) -> Result<ExploreResult> {
         apple_compat: req.apple_compat,
         preset: req.preset,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{search_anchor_crf, shortlist_hevc_slower_finalists, ABSOLUTE_MIN_CRF};
+
+    #[test]
+    fn test_hevc_slower_shortlist_keeps_neighbors_and_distinct_anchors() {
+        let finalists = shortlist_hevc_slower_finalists(18.5, 24.0, Some(20.5), 30.0);
+
+        assert_eq!(finalists[0], 18.5);
+        assert!(finalists.contains(&18.0));
+        assert!(finalists.contains(&19.0));
+        assert!(finalists.contains(&17.5));
+        assert!(finalists.contains(&19.5));
+        assert!(finalists.contains(&24.0));
+        assert!(finalists.contains(&20.5));
+    }
+
+    #[test]
+    fn test_search_anchor_crf_uses_warm_start_backoff_and_clamp() {
+        assert_eq!(search_anchor_crf(24.0, Some(20.0), 30.0), 18.0);
+        assert_eq!(search_anchor_crf(4.0, Some(1.0), 30.0), ABSOLUTE_MIN_CRF);
+        assert_eq!(search_anchor_crf(12.0, None, 10.0), 10.0);
+    }
 }
