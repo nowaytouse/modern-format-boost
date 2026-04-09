@@ -1,3 +1,25 @@
+//! JXL Distance Explorer for Ultimate Mode
+//!
+//! Two-phase screening algorithm to identify distance candidates for JXL e10 finalization:
+//!
+//! **Phase 1 (Ladder)**: Test predefined distances, promote candidates based on quality/region.
+//! **Phase 2 (Binary Search)**: Refine promising regions with adaptive step sizing.
+//!
+//! ## Unified Selection Philosophy
+//!
+//! Finalist promotion uses consistent priorities (see `candidate_comparator` for theory):
+//!
+//! 1. **Quality Gates**: Output must compress (size < input)
+//! 2. **Quality Metrics**: Best compression (lowest size) preferred
+//! 3. **Boundary Detection**: Candidates near 95–105% of input size promoted
+//! 4. **Region Coverage**: Promotes one candidate per distance region for diversity
+//! 5. **Score-based Ranking**: Finalists ranked by promotion score, then size, then distance
+//!
+//! Terminology (unified with HEVC/VideoExplorer):
+//! - **Screening**: Phase 1 ladder + Phase 2 binary search exploration
+//! - **Candidate**: A specific distance value with its output size
+//! - **Finalist shortlist**: Curated subset promoted for e10 finalization
+
 use crate::constants::{
     JXL_EXPLORE_BINARY_SEARCH_PRECISION, JXL_EXPLORE_CEILING, JXL_EXPLORE_LADDER,
     JXL_EXPLORE_MAX_ITERATIONS,
@@ -96,7 +118,10 @@ fn clamp_explore_distance(distance: f32) -> f32 {
 }
 
 fn distance_key(distance: f32) -> i32 {
-    (clamp_explore_distance(distance) * 1000.0).round() as i32
+    // SAFETY: Clamped distance is in range [0.001, 0.999], so * 1000.0 yields [1, 999].
+    // After rounding, always fits safely in i32 without truncation. Used as HashSet key only.
+    let rounded = (clamp_explore_distance(distance) * 1000.0).round();
+    rounded as i32
 }
 
 fn size_ratio(size: u64, input_size: u64) -> f64 {
@@ -256,6 +281,14 @@ fn include_finalist(
     }
 }
 
+/// Finalizes screening results by shortlisting top finalist candidates.
+///
+/// Uses promotion scoring, boundary detection, and quality considerations to select finalists.
+/// The finalists are then re-evaluated with e10 parameters for ultimate mode.
+///
+/// Term definitions (see `candidate_comparator` for terminology):
+/// - **Finalists**: Selected subset from screened candidates for final evaluation
+/// - **Promotion**: Reason(s) a candidate was included in finalist set
 fn finalize_screening_result(
     candidates: Vec<JxlScreenedCandidate>,
     best_idx: usize,
@@ -283,6 +316,18 @@ fn finalize_screening_result(
     }
 }
 
+/// Screens JXL distance candidates to identify finalists for e10 ultimate finalization.
+///
+/// ## Terminology (unified with HEVC/other explorers)
+/// - **Screening phase**: Initial exploration of distance values (Phase 1 ladder, Phase 2 binary)
+/// - **Candidate**: A specific distance value with its output size
+/// - **Finalist shortlist**: Curated subset of candidates promoted for ultimate finalization
+/// - **Winner**: Chosen by the caller based on finalists (not this function's responsibility)
+///
+/// See `candidate_comparator` module for unified ranking terminology and philosophy.
+///
+/// # Errors
+/// Returns `Err` if the `try_candidate` closure fails for any tested distance.
 pub fn screen_jxl_candidates<F>(
     input_size: u64,
     initial_size: u64,
@@ -543,15 +588,13 @@ where
                 UpwardSearchCadence::Jogging => {
                     cadence = UpwardSearchCadence::Paused;
                     log.push(format!(
-                        "   Search Jogging complete at step {:.3}; pausing adaptive changes",
-                        current_step
+                        "   Search Jogging complete at step {current_step:.3}; pausing adaptive changes"
                     ));
                 }
                 UpwardSearchCadence::Paused => {
                     cadence = UpwardSearchCadence::Normal;
                     log.push(format!(
-                        "   Search Paused at boundary pace ({:.3}); resuming next probe",
-                        current_step
+                        "   Search Paused at boundary pace ({current_step:.3}); resuming next probe"
                     ));
                 }
                 UpwardSearchCadence::Adaptive | UpwardSearchCadence::Normal => {}

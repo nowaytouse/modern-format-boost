@@ -12,6 +12,17 @@
 //! Added `build_result()`, `binary_search_compress()`, `log_final_result()`, etc.,
 //! reducing boilerplate in 6 Strategy implementations by ~40%.
 //!
+//! ## Unified Selection Philosophy
+//!
+//! All candidate/finalist ranking across strategies uses consistent priorities
+//! (see `candidate_comparator` for implementation):
+//!
+//! 1. **Gating**: Pass status (size gate, quality_passed, ms_ssim_passed)
+//! 2. **Quality**: VMAF > CAMBI > PSNR_UV > MS-SSIM > SSIM > PSNR
+//! 3. **Size**: Output file size (prefer smaller)
+//! 4. **Parameter**: CRF (prefer lower/more aggressive as tiebreaker)
+//! 5. **Preset**: Rank (prefer higher/slower)
+//!
 //! ## Usage Example
 //! ```ignore
 //! use shared_utils::explore_strategy::{create_strategy, ExploreContext};

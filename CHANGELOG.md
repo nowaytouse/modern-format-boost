@@ -19,6 +19,9 @@ All notable changes to this project will be documented in this file.
 
 ### 🔧 Code Quality
 
+- **Unified Candidate Comparator Module**: Extracted shared comparison logic from `gpu_coarse_search.rs` into new `candidate_comparator.rs` — `compare_pass_gate`, `compare_quality_desc/asc`, `compare_quality_pair_desc`, `compare_size_asc`, `compare_crf_asc`, `compare_distance_desc`. Used by both HEVC ultimate selection and available for JXL/future explorers. Eliminates ~40 lines of duplicated comparator code.
+- **Unified Selection Philosophy Documentation**: Added consistent ranking terminology across `explore_strategy.rs`, `video_explorer.rs`, `jxl_explorer.rs`, and `gpu_coarse_search.rs` module docs: (1) Gating → (2) Quality Metrics → (3) Size → (4) Parameter → (5) Preset. Standardized terms: "screening", "candidate", "finalist shortlist", "winner".
+- **GPU Coarse Search Constant Fixes**: Replaced hardcoded `92.0` VMAF and `34.0` PSNR-UV thresholds with module-level `VMAF_Y_MIN` and `PSNR_UV_MIN` constants, improving maintainability and auditability.
 - **JXL Utils Inner-Layer Refactor**: `run_imagemagick_cjxl_pipeline` and `try_imagemagick_fallback` are now public wrappers that resolve mode-locked distance/effort and delegate to `run_imagemagick_cjxl_pipeline_with_effort` / `try_imagemagick_fallback_with_effort`. The inner functions accept raw `distance` + `effort` directly, enabling screening callers to pass arbitrary effort values (e.g. e7 screening → e10 finalization) without bypassing policy assertions.
 - **Pipeline API Signature Refactor**: `run_imagemagick_cjxl_pipeline` and `try_imagemagick_fallback` now accept `ultimate: bool` instead of a raw `effort: u8` parameter, enforcing mode-locked distance/effort selection at the call-site level. All callers across `lossless_converter.rs`, `depth_channel.rs`, `hdr_synthesis.rs`, and `conversion_api.rs` updated.
 - **JXL Builder Debug Assertion**: `CjxlBuilder::effort()` now includes a `debug_assert!` via `is_supported_jxl_effort()` to catch unsupported effort values at development time (policy permits only e7 and e10).
@@ -42,7 +45,7 @@ All notable changes to this project will be documented in this file.
 
 ### 📐 Testing Infrastructure
 
-- **JXL Final Round Selection Tests**: Added `test_jxl_final_round_prefers_lower_distance_once_size_beats_source` and `test_jxl_final_round_requires_beating_source_before_quality_preference` in `lossless_converter.rs`.
+- **Candidate Comparator Tests**: Added 8 tests in new `candidate_comparator.rs`: quality desc/asc, pair desc, pass gate (bool + Result), size, CRF, distance.
 - **HEVC Ultimate Selection Tests**: Added 5 tests in `gpu_coarse_search.rs`: `test_hevc_ultimate_selection_keeps_passing_screening_candidate`, `test_hevc_ultimate_selection_applies_strict_input_size_gate`, `test_hevc_ultimate_selection_prefers_quality_before_crf_and_size`, `test_hevc_ultimate_selection_prefers_lower_crf_before_file_size`, `test_hevc_ultimate_selection_uses_preset_after_quality_crf_and_size`.
 - **JXL Screening Tests**: Added `test_screening_keeps_best_ladder_candidate`, `test_screening_never_reaches_one`, `test_screening_promotes_adjacent_and_boundary_candidates`, `test_screening_logs_acceleration_and_deceleration` in `jxl_explorer.rs`.
 - **JXL Screening Effort Test**: Added `test_jxl_screening_effort_only_drops_to_e7_for_ultimate_explore` in `lossless_converter.rs`.

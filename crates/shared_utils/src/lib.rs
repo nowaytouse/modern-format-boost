@@ -53,6 +53,8 @@ pub mod ffprobe;
 pub mod flag_validator;
 /// Robust floating-point comparison utilities.
 pub mod float_compare;
+/// Unified candidate ranking and quality comparators.
+pub mod candidate_comparator;
 /// `GPU` acceleration detection and calibration.
 pub mod gpu_accel;
 /// High-level builders for image processing tools.

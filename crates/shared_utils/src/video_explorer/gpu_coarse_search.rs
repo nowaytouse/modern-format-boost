@@ -1,4 +1,28 @@
 //! GPU coarse search and CPU fine-tuning for CRF exploration
+//!
+//! HEVC/AV1 ultimate mode: Two-stage screening + final preset ranking.
+//!
+//! **Stage 1**: Fast screening with baseline preset, identifies best CRF.
+//! **Stage 2**: Slower preset finalists around Stage 1 best CRF.
+//! **Selection**: Ranked by quality gates, then quality metrics, then size, CRF, and preset.
+//!
+//! ## Unified Selection Philosophy
+//!
+//! HEVC ultimate candidate ranking follows the same priorities as JXL and VideoExplorer
+//! (see `candidate_comparator` for implementation):
+//!
+//! 1. **Size Gate**: Output must be smaller than input
+//! 2. **Quality Gates**: quality_passed and ms_ssim_passed checks
+//! 3. **Quality Metrics**: VMAF > CAMBI > PSNR_UV > MS-SSIM > SSIM > PSNR
+//! 4. **Size**: Prefer smaller output (tiebreaker)
+//! 5. **CRF**: Prefer lower/more aggressive (tiebreaker)
+//! 6. **Preset**: Prefer higher rank = slower/better quality (tiebreaker)
+//!
+//! Terminology (unified with VideoExplorer, explore_strategy, jxl_explorer):
+//! - **Stage 1 screening**: Fast preset phase
+//! - **Stage 2 finalist shortlist**: Slower preset candidates
+//! - **candidate pool**: All Stage 2 encoded results
+//! - **winner**: Final selected candidate
 
 use anyhow::{Context, Result};
 use std::fs;
@@ -216,6 +240,14 @@ struct FineTuneArgs<'a> {
 }
 
 /// Mutable tracking state during search.
+///
+/// Maintains best-found quality metrics across search phases.
+///
+/// **Invariants**:
+/// - `best_vmaf`: Updated when a new lower CRF yields VMAF ≥ 92.0 (or any first success)
+/// - `best_psnr_uv`: Updated when both U and V channels meet minimum thresholds
+/// - Both fields are monotonically non-decreasing (once set to a value, never set to worse)
+/// - Used only during ultimate mode for gating decisions; not in normal mode
 #[derive(Debug, Default, Clone)]
 struct TrackingState {
     pub best_vmaf: Option<f64>,
@@ -702,23 +734,25 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
 
         // Display quality metrics that triggered early insight
         if let Some(vmaf) = tracking.best_vmaf {
-            let vmaf_pass = vmaf >= 92.0;
+            let vmaf_pass = vmaf >= VMAF_Y_MIN;
             crate::log_eprintln!(
-                "   VMAF-Y: {:.2} {} 92.0 {}",
+                "   VMAF-Y: {:.2} {} {:.1} {}",
                 vmaf,
                 if vmaf_pass { "≥" } else { "<" },
+                VMAF_Y_MIN,
                 if vmaf_pass { "✅" } else { "❌" }
             );
         }
         if let Some((u, v)) = tracking.best_psnr_uv {
-            let u_pass = u >= 34.0;
-            let v_pass = v >= 34.0;
+            let u_pass = u >= PSNR_UV_MIN;
+            let v_pass = v >= PSNR_UV_MIN;
             crate::log_eprintln!(
-                "   PSNR-UV: U={:.2} dB {}, V={:.2} dB {} (min ≥ 34.0 dB)",
+                "   PSNR-UV: U={:.2} dB {}, V={:.2} dB {} (min ≥ {:.1} dB)",
                 u,
                 if u_pass { "✅" } else { "❌" },
                 v,
-                if v_pass { "✅" } else { "❌" }
+                if v_pass { "✅" } else { "❌" },
+                PSNR_UV_MIN
             );
         }
 
@@ -1321,6 +1355,20 @@ fn cpu_fine_tune_from_gpu_boundary(
     args: FineTuneArgs<'_>,
     tracking: &mut TrackingState,
 ) -> Result<ExploreResult> {
+    // PHASE OVERVIEW (2519 lines total):
+    // This function implements CPU-based CRF refinement after GPU screening.
+    // It is intentionally large to maintain phase-related state coherence and avoid excessive
+    // function parameter passing. Future refactoring should decompose by phase:
+    //
+    // 1. INIT (~200 lines): Prepare encoders, detect input properties, set stage parameters
+    // 2. PHASE A (downward): Find lowest CRF that still compresses below input size
+    // 3. PHASE B (upward): Find highest CRF yielding lowest quality for target SSIM
+    // 4. PHASE C (quality validation): Check VMAF, PSNR-UV gates (ultimate mode only)
+    // 5. FINALIZE: Validate and package result
+    //
+    // **Important**: State mutations in TrackingState should only grow (never shrink quality values).
+    // See TrackingState struct for invariants.
+
     let FineTuneArgs {
         input,
         output,
@@ -2263,8 +2311,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                     // HIGH CONFIDENCE GATE: If we hit the wall but quality is still garbage,
                     // this encode is not credible. Abort immediately.
                     if ultimate_mode && quality_wall_triggered {
-                        // VMAF and PSNR thresholds defined at module level
-                        const PSNR_UV_MIN: f64 = 34.0;
+                        // VMAF and PSNR thresholds defined at module level (lines 56-57)
 
                         let Some(vmaf_metric) = tracking.best_vmaf else {
                             crate::log_eprintln!(
@@ -3058,7 +3105,7 @@ fn cpu_fine_tune_from_gpu_boundary(
 
                     // Early termination logic: based on insight evaluation
                     if ultimate_mode {
-                        const PSNR_UV_MIN: f64 = 34.0;
+                        // PSNR_UV_MIN threshold defined at module level (line 57)
                         let any_metric_fails =
                             if let (Some(v), Some(uv)) = (current_vmaf_val, current_psnr_val) {
                                 v < VMAF_Y_MIN || uv.0.min(uv.1) < PSNR_UV_MIN
@@ -3864,82 +3911,42 @@ fn passes_hevc_ultimate_size_gate(result: &ExploreResult, input_size: u64) -> bo
     result.output_size < input_size
 }
 
-fn compare_optional_quality_desc(
-    left: Option<f64>,
-    right: Option<f64>,
-    epsilon: f64,
-) -> std::cmp::Ordering {
-    match (left, right) {
-        (Some(left), Some(right)) if (left - right).abs() > epsilon => right.total_cmp(&left),
-        _ => std::cmp::Ordering::Equal,
-    }
-}
-
-fn compare_optional_quality_asc(
-    left: Option<f64>,
-    right: Option<f64>,
-    epsilon: f64,
-) -> std::cmp::Ordering {
-    match (left, right) {
-        (Some(left), Some(right)) if (left - right).abs() > epsilon => left.total_cmp(&right),
-        _ => std::cmp::Ordering::Equal,
-    }
-}
-
-fn compare_optional_quality_pair_desc(
-    left: Option<(f64, f64)>,
-    right: Option<(f64, f64)>,
-    epsilon: f64,
-) -> std::cmp::Ordering {
-    match (left, right) {
-        (Some((left_a, left_b)), Some((right_a, right_b))) => {
-            let left_floor = left_a.min(left_b);
-            let right_floor = right_a.min(right_b);
-            compare_optional_quality_desc(Some(left_floor), Some(right_floor), epsilon)
-                .then_with(|| compare_optional_quality_desc(Some(left_a), Some(right_a), epsilon))
-                .then_with(|| compare_optional_quality_desc(Some(left_b), Some(right_b), epsilon))
-        }
-        _ => std::cmp::Ordering::Equal,
-    }
-}
-
 fn compare_hevc_ultimate_quality(
     left: &ExploreResult,
     right: &ExploreResult,
 ) -> std::cmp::Ordering {
-    match (left.quality_passed.is_ok(), right.quality_passed.is_ok()) {
-        (true, false) => return std::cmp::Ordering::Less,
-        (false, true) => return std::cmp::Ordering::Greater,
-        _ => {}
-    }
+    use crate::candidate_comparator::{compare_pass_gate, compare_quality_asc, compare_quality_desc, compare_quality_pair_desc};
 
-    match (left.ms_ssim_passed.is_ok(), right.ms_ssim_passed.is_ok()) {
-        (true, false) => return std::cmp::Ordering::Less,
-        (false, true) => return std::cmp::Ordering::Greater,
-        _ => {}
-    }
-
-    compare_optional_quality_desc(left.vmaf_y_score, right.vmaf_y_score, 0.01)
-        .then_with(|| compare_optional_quality_asc(left.cambi_score, right.cambi_score, 0.01))
+    // Gate 1: Quality pass (quality_passed)
+    compare_pass_gate(left.quality_passed.is_ok(), right.quality_passed.is_ok())
         .then_with(|| {
-            compare_optional_quality_pair_desc(
+            // Gate 2: MS-SSIM pass (ms_ssim_passed)
+            compare_pass_gate(left.ms_ssim_passed.is_ok(), right.ms_ssim_passed.is_ok())
+        })
+        .then_with(|| {
+            // Quality chain (priority order): VMAF > CAMBI > PSNR_UV > MS-SSIM > SSIM > PSNR
+            compare_quality_desc(left.vmaf_y_score, right.vmaf_y_score, 0.01)
+        })
+        .then_with(|| compare_quality_asc(left.cambi_score, right.cambi_score, 0.01))
+        .then_with(|| {
+            compare_quality_pair_desc(
                 left.psnr_uv_score,
                 right.psnr_uv_score,
                 crate::float_compare::PSNR_EPSILON,
             )
         })
         .then_with(|| {
-            compare_optional_quality_desc(
+            compare_quality_desc(
                 left.ms_ssim_score.or(left.ms_ssim),
                 right.ms_ssim_score.or(right.ms_ssim),
                 crate::float_compare::SSIM_EPSILON,
             )
         })
         .then_with(|| {
-            compare_optional_quality_desc(left.ssim, right.ssim, crate::float_compare::SSIM_EPSILON)
+            compare_quality_desc(left.ssim, right.ssim, crate::float_compare::SSIM_EPSILON)
         })
         .then_with(|| {
-            compare_optional_quality_desc(left.psnr, right.psnr, crate::float_compare::PSNR_EPSILON)
+            compare_quality_desc(left.psnr, right.psnr, crate::float_compare::PSNR_EPSILON)
         })
 }
 
@@ -3948,19 +3955,29 @@ fn compare_hevc_ultimate_candidates(
     left: &HevcUltimateCandidate,
     right: &HevcUltimateCandidate,
 ) -> std::cmp::Ordering {
-    match (
+    use crate::candidate_comparator::{compare_crf_asc, compare_pass_gate, compare_size_asc};
+
+    // Gate 1: Size gate (must be smaller than input)
+    compare_pass_gate(
         passes_hevc_ultimate_size_gate(&left.result, input_size),
         passes_hevc_ultimate_size_gate(&right.result, input_size),
-    ) {
-        (true, false) => return std::cmp::Ordering::Less,
-        (false, true) => return std::cmp::Ordering::Greater,
-        _ => {}
-    }
-
-    compare_hevc_ultimate_quality(&left.result, &right.result)
-        .then_with(|| left.result.optimal_crf.total_cmp(&right.result.optimal_crf))
-        .then_with(|| left.result.output_size.cmp(&right.result.output_size))
-        .then_with(|| hevc_preset_rank(right.preset).cmp(&hevc_preset_rank(left.preset)))
+    )
+    .then_with(|| {
+        // Gate 2: Quality (VMAF, SSIM, etc.)
+        compare_hevc_ultimate_quality(&left.result, &right.result)
+    })
+    .then_with(|| {
+        // Tiebreaker 1: CRF (prefer lower/more aggressive)
+        compare_crf_asc(left.result.optimal_crf, right.result.optimal_crf)
+    })
+    .then_with(|| {
+        // Tiebreaker 2: Output size (prefer smaller)
+        compare_size_asc(left.result.output_size, right.result.output_size)
+    })
+    .then_with(|| {
+        // Tiebreaker 3: Preset rank (prefer higher preset number = slower/better)
+        hevc_preset_rank(right.preset).cmp(&hevc_preset_rank(left.preset))
+    })
 }
 
 fn select_hevc_ultimate_winner(candidates: &[HevcUltimateCandidate], input_size: u64) -> usize {
@@ -3989,6 +4006,8 @@ fn shortlist_hevc_slower_finalists(
 
     let mut push = |candidate: f32| {
         let quantized = round_half_step(candidate.clamp(ABSOLUTE_MIN_CRF, max_crf));
+        // SAFETY: CRF is clamped to [0.0, ~51.0], so * 10.0 yields max ~510.0.
+        // Rounds to [0, 510] which fits safely in i32. Used as HashSet key only.
         let key = (quantized * 10.0).round() as i32;
         if seen.insert(key) {
             finalists.push(quantized);
@@ -4140,9 +4159,11 @@ pub fn explore_hevc_with_gpu(req: GpuSearchRequest) -> Result<ExploreResult> {
             .map(|crf| format!("{crf:.1}"))
             .collect::<Vec<_>>()
             .join(", ");
+        // Log messages use unified terminology: "screening" → "shortlist" → "candidate pool" → "winner"
+        // (see candidate_comparator module for terminology guide)
         let mut merged_log = vec![
             format!(
-                "Stage 1 HEVC screening preset: {}",
+                "Stage 1 screening: preset {}",
                 screening_preset.hevc_name()
             ),
             format!(
@@ -4150,7 +4171,7 @@ pub fn explore_hevc_with_gpu(req: GpuSearchRequest) -> Result<ExploreResult> {
                 crate::format_bytes(input_size)
             ),
             format!("Stage 1 screening result: {stage1_summary}"),
-            format!("Stage 2 slower shortlist: {shortlist_summary}"),
+            format!("Stage 2 finalist shortlist: {shortlist_summary}"),
             format!("HEVC ultimate candidate pool: {candidate_summary}"),
             format!(
                 "Selected HEVC ultimate winner: {} [{}]",

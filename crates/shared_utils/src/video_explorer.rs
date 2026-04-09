@@ -7,6 +7,19 @@
 //!
 //! All exploration logic is centralized in this module; other modules (`img_hevc`, `vid_hevc`)
 //! only need to call this module's helper functions, avoiding redundant implementations.
+//!
+//! ## Unified Selection Philosophy
+//!
+//! All candidate/finalist selection across direct VideoExplorer APIs and strategy implementations
+//! follows the same ranking priorities, ensuring consistency:
+//!
+//! 1. **Gating/Pass Status**: Size gates, quality checks (quality_passed, ms_ssim_passed)
+//! 2. **Quality Metrics**: VMAF > CAMBI > PSNR_UV > MS-SSIM > SSIM > PSNR
+//! 3. **Size Efficiency**: Output file size (prefer smaller)
+//! 4. **Parameter**: CRF value (prefer lower/more aggressive as tiebreaker)
+//! 5. **Preset**: Encoder preset rank (prefer slower/higher quality)
+//!
+//! For terminology and comparator utilities, see the `candidate_comparator` module.
 
 use anyhow::{bail, Context, Result};
 use std::fmt::Write as _;
