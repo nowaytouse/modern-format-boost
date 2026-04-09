@@ -922,13 +922,17 @@ fn calculate_raw_bpp(analysis: &QualityAnalysis, pixels: u64) -> Result<f64, Str
         return Ok(analysis.bpp);
     }
 
+    // Explicit zero check to prevent division by zero
+    if pixels == 0 {
+        return Err("❌ Cannot calculate bpp: pixels is 0 (invalid dimensions)".to_string());
+    }
+
     if let Some(video_bitrate) = analysis.video_bitrate {
         if video_bitrate > 0 {
             if let Some(fps) = analysis.fps {
                 if fps > 0.0 {
-                    let bits_per_frame =
-                        crate::numeric_cast::u64_to_f64(video_bitrate) / fps;
-                    return Ok(bits_per_frame / crate::numeric_cast::u64_to_f64(pixels.max(1)));
+                    let bits_per_frame = crate::numeric_cast::u64_to_f64(video_bitrate) / fps;
+                    return Ok(bits_per_frame / crate::numeric_cast::u64_to_f64(pixels));
                 }
             }
         }
@@ -940,18 +944,21 @@ fn calculate_raw_bpp(analysis: &QualityAnalysis, pixels: u64) -> Result<f64, Str
                 let fps = analysis
                     .fps
                     .ok_or_else(|| "Missing FPS for BPP calculation".to_string())?;
+                if fps <= 0.0 {
+                    return Err("❌ Cannot calculate bpp: FPS is 0 or negative".to_string());
+                }
                 let total_frames = crate::numeric_cast::f64_to_u64_sat(duration * fps);
-                let bits_per_frame =
-                    crate::numeric_cast::u64_to_f64(analysis.file_size) * 8.0
-                        / crate::numeric_cast::u64_to_f64(total_frames.max(1));
-                return Ok(bits_per_frame / crate::numeric_cast::u64_to_f64(pixels.max(1)));
+                if total_frames == 0 {
+                    return Err("❌ Cannot calculate bpp: total_frames is 0".to_string());
+                }
+                let bits_per_frame = crate::numeric_cast::u64_to_f64(analysis.file_size) * 8.0
+                    / crate::numeric_cast::u64_to_f64(total_frames);
+                return Ok(bits_per_frame / crate::numeric_cast::u64_to_f64(pixels));
             }
         }
         // BPP = bits per pixel; file_size is in bytes so multiply by 8
-        return Ok(
-            crate::numeric_cast::u64_to_f64(analysis.file_size) * 8.0
-                / crate::numeric_cast::u64_to_f64(pixels.max(1)),
-        );
+        return Ok(crate::numeric_cast::u64_to_f64(analysis.file_size) * 8.0
+            / crate::numeric_cast::u64_to_f64(pixels));
     }
 
     Err("❌ Cannot calculate bpp: no video_bitrate, file_size, or bpp provided".to_string())
@@ -1085,7 +1092,7 @@ fn calculate_complexity_factor(si: Option<f64>, ti: Option<f64>, raw_bpp: f64, p
         let spatial_factor = if si_ratio > 1.3 {
             1.15
         } else if si_ratio < 0.7 {
-            0.90
+            0.85
         } else {
             1.0
         };
@@ -1093,7 +1100,7 @@ fn calculate_complexity_factor(si: Option<f64>, ti: Option<f64>, raw_bpp: f64, p
         let temporal_factor = if ti_ratio > 1.5 {
             1.10
         } else if ti_ratio < 0.5 {
-            0.95
+            0.90
         } else {
             1.0
         };
@@ -1212,9 +1219,10 @@ fn calculate_confidence_v3(analysis: &QualityAnalysis) -> f64 {
 
     if let (Some(video_bitrate), Some(fps)) = (analysis.video_bitrate, analysis.fps) {
         let pixels = u64::from(analysis.width) * u64::from(analysis.height);
-        if pixels > 0 && video_bitrate > 0 {
-            let bpp_estimate = f64::from(u32::try_from(video_bitrate).unwrap_or(u32::MAX))
-                / (f64::from(u32::try_from(pixels).unwrap_or(1)) * fps);
+        if pixels > 0 && video_bitrate > 0 && fps > 0.0 {
+            // Use u64 throughout to prevent saturation at 4 Gbps (u32::MAX = ~4.3 Gbps)
+            let bpp_estimate = crate::numeric_cast::u64_to_f64(video_bitrate)
+                / (crate::numeric_cast::u64_to_f64(pixels) * fps);
             if (0.01..=5.0).contains(&bpp_estimate) {
                 score += 2.0;
                 max_score += 2.0;

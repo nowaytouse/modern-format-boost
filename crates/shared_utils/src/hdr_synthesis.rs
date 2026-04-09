@@ -23,6 +23,10 @@ use std::env;
 use std::path::Path;
 use tracing::{info, warn};
 
+use crate::image_builders::ExiftoolBuilder;
+use crate::image_jpeg_analysis::extract_gainmap_from_jpeg;
+use crate::jxl_builder::CjxlBuilder;
+
 /// HDR intermediate format selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HdrIntermediateFormat {
@@ -271,7 +275,6 @@ pub fn convert_ultrahdr_jpeg_to_jxl_hdr(
 ) -> Result<()> {
     let actual_distance = crate::constants::jxl_distance_for_mode(1.0, ultimate);
     let actual_effort = crate::constants::jxl_effort_for_mode(ultimate);
-    use crate::image_jpeg_analysis::extract_gainmap_from_jpeg;
 
     info!(
         "🌈 UltraHDR JPEG HDR synthesis started for: {}",
@@ -400,9 +403,6 @@ pub fn convert_ultrahdr_jpeg_to_jxl_migration(
 ) -> Result<()> {
     let actual_distance = crate::constants::jxl_distance_for_mode(distance, ultimate);
     let actual_effort = crate::constants::jxl_effort_for_mode(ultimate);
-    use crate::image_builders::ExiftoolBuilder;
-    use crate::image_jpeg_analysis::extract_gainmap_from_jpeg;
-    use crate::jxl_builder::CjxlBuilder;
 
     info!(
         "📤 UltraHDR JPEG Gainmap migration started (Sidecar Path): {}",

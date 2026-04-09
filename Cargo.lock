@@ -1078,9 +1078,9 @@ dependencies = [
 
 [[package]]
 name = "gif"
-version = "0.14.1"
+version = "0.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5df2ba84018d80c213569363bdcd0c64e6933c67fe4c1d60ecf822971a3c35e"
+checksum = "ee8cfcc411d9adbbaba82fb72661cc1bcca13e8bba98b364e62b2dba8f960159"
 dependencies = [
  "color_quant",
  "weezl",
@@ -1118,8 +1118,8 @@ dependencies = [
 
 [[package]]
 name = "hashbrown"
-version = "0.16.1"
-source = "git+https://github.com/rust-lang/hashbrown#3b6489a2c174e6625495bbf7e133d27fd443d317"
+version = "0.17.0"
+source = "git+https://github.com/rust-lang/hashbrown#435eaf5db5f0840a4086b3a64856040b48d2a219"
 
 [[package]]
 name = "hashlink"
@@ -1252,10 +1252,10 @@ checksum = "e7c5cedc30da3a610cac6b4ba17597bdf7152cf974e8aab3afb3d54455e371c8"
 [[package]]
 name = "indexmap"
 version = "2.14.0"
-source = "git+https://github.com/indexmap-rs/indexmap#4b62776c3f7dec98a5b89f907c3add5c603343b0"
+source = "git+https://github.com/indexmap-rs/indexmap#5c7e7cb6e0d54c4397c08f1d8f95fd153f97c9d0"
 dependencies = [
  "equivalent",
- "hashbrown 0.16.1",
+ "hashbrown 0.17.0",
  "serde",
  "serde_core",
 ]
@@ -1263,7 +1263,7 @@ dependencies = [
 [[package]]
 name = "indicatif"
 version = "0.18.4"
-source = "git+https://github.com/console-rs/indicatif#ce922c9eebe65c4a990ab7b65be520e3b5c36164"
+source = "git+https://github.com/console-rs/indicatif#e7a958a7b12ced9be442eb5a394e4264a4b6f13f"
 dependencies = [
  "console",
  "portable-atomic",
@@ -1419,7 +1419,7 @@ checksum = "48f5d2a454e16a5ea0f4ced81bd44e4cfc7bd3a507b61887c99fd3538b28e4af"
 [[package]]
 name = "libc"
 version = "1.0.0-alpha.3"
-source = "git+https://github.com/rust-lang/libc#b6ab1fbc3946975593d3b3ef3b733ed97ae64146"
+source = "git+https://github.com/rust-lang/libc#ff0e6164f209073c3856e3709c4dcae1e59c6a11"
 
 [[package]]
 name = "libfuzzer-sys"
@@ -1600,7 +1600,7 @@ dependencies = [
 [[package]]
 name = "mp4parse"
 version = "0.17.0"
-source = "git+https://github.com/mozilla/mp4parse-rust#f2d96807b8becf7485f035b393575fcfc76cec4c"
+source = "git+https://github.com/mozilla/mp4parse-rust#c3e34a59838d0377a4572120943552a5c0271b22"
 dependencies = [
  "bitreader",
  "byteorder",
@@ -2715,9 +2715,9 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokio"
-version = "1.51.0"
+version = "1.51.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2bd1c4c0fc4a7ab90fc15ef6daaa3ec3b893f004f915f2392557ed23237820cd"
+checksum = "f66bf9585cda4b724d3e78ab34b73fb2bbaba9011b9bfdf69dc836382ea13b8c"
 dependencies = [
  "bytes",
  "libc 0.2.184",

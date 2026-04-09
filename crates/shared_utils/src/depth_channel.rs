@@ -19,10 +19,13 @@
 
 use anyhow::{anyhow, Context, Result};
 use image::{DynamicImage, GenericImageView, ImageBuffer, Luma};
+use jpegxl_rs::encode::EncoderSpeed;
+use jpegxl_rs::encoder_builder;
 use libheif_rs::{ColorSpace, HeifContext, ImageHandle};
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 use std::path::Path;
+use tempfile::NamedTempFile;
 
 /// Depth map data extracted from HEIC
 #[derive(Debug, Clone)]
@@ -242,9 +245,6 @@ pub fn encode_jxl_with_depth(
     let actual_dist = crate::constants::jxl_distance_for_mode(distance, ultimate);
     let actual_eff = crate::constants::jxl_effort_for_mode(ultimate);
 
-    use jpegxl_rs::encode::EncoderSpeed;
-    use jpegxl_rs::encoder_builder;
-
     // Convert main image to RGBA16 for encoding
     let rgba_image = main_image.to_rgba16();
     let (width, height) = rgba_image.dimensions();
@@ -311,7 +311,6 @@ pub fn encode_jxl_depth_fallback(
 ) -> Result<(std::path::PathBuf, std::path::PathBuf)> {
     let actual_dist = crate::constants::jxl_distance_for_mode(distance, ultimate);
     let actual_eff = crate::constants::jxl_effort_for_mode(ultimate);
-    use tempfile::NamedTempFile;
 
     // Write main image to temp PNG
     let temp_main = NamedTempFile::new().context("Failed to create temp file")?;

@@ -6,6 +6,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] — TBD
 
+### 🐛 Bug Fixes
+
+- **Temporal Complexity Factor Asymmetry**: Fixed `calculate_complexity_factor` to use symmetric adjustments — spatial: 15%/15% (1.15/0.85), temporal: 10%/10% (1.10/0.90). Previously used asymmetric values (spatial: +15%/-10%, temporal: +10%/-5%) which could bias quality calculations.
+- **Unsigned Saturation Arithmetic**: Fixed `calculate_confidence_v3` to use `u64` throughout instead of `u32::try_from()`, preventing saturation at 4 Gbps bitrates (u32::MAX ≈ 4.3 Gbps).
+- **Division by Zero Risk**: Added explicit zero checks in `calculate_raw_bpp()` for `pixels`, `fps`, and `total_frames` parameters, replacing `.max(1)` workarounds with proper error messages.
+- **MS-SSIM Fallback Logic Inconsistency**: Added `used_fallback: bool` field to `ExploreResult` to distinguish MS-SSIM results from SSIM fallback results, preventing conflation of measurement types.
+- **Candidate Comparison Transitivity Violation**: Fixed `compare_quality_desc` and `compare_quality_asc` to treat `None` as the worst case (0.0/infinity) rather than equal to any value, ensuring proper transitivity: if A > B and B > None, then A > None. This prevents incorrect candidate selection when quality metrics are missing.
+
 ### 🔧 Code Quality
 
 - **BPP Calculation Overflow Fix**: Replaced `f64::from(u32::try_from(...))` patterns in `calculate_raw_bpp` and `calculate_resolution_factor` with `crate::numeric_cast::u64_to_f64()` to avoid silent saturation on large values. Fixed BPP formula to correctly multiply `file_size * 8` (bytes to bits); previously used raw byte count, underestimating BPP by 8×.

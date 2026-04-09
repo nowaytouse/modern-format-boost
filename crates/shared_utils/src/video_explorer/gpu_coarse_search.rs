@@ -3864,6 +3864,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         ms_ssim: None,
         ms_ssim_passed: CheckResult::NotChecked,
         ms_ssim_score: None,
+        used_fallback: false,
         iterations,
         quality_passed: if quality_passed {
             CheckResult::Passed
@@ -3915,7 +3916,9 @@ fn compare_hevc_ultimate_quality(
     left: &ExploreResult,
     right: &ExploreResult,
 ) -> std::cmp::Ordering {
-    use crate::candidate_comparator::{compare_pass_gate, compare_quality_asc, compare_quality_desc, compare_quality_pair_desc};
+    use crate::candidate_comparator::{
+        compare_pass_gate, compare_quality_asc, compare_quality_desc, compare_quality_pair_desc,
+    };
 
     // Gate 1: Quality pass (quality_passed)
     compare_pass_gate(left.quality_passed.is_ok(), right.quality_passed.is_ok())
@@ -4008,6 +4011,7 @@ fn shortlist_hevc_slower_finalists(
         let quantized = round_half_step(candidate.clamp(ABSOLUTE_MIN_CRF, max_crf));
         // SAFETY: CRF is clamped to [0.0, ~51.0], so * 10.0 yields max ~510.0.
         // Rounds to [0, 510] which fits safely in i32. Used as HashSet key only.
+        #[allow(clippy::cast_possible_truncation)]
         let key = (quantized * 10.0).round() as i32;
         if seen.insert(key) {
             finalists.push(quantized);
@@ -4162,10 +4166,7 @@ pub fn explore_hevc_with_gpu(req: GpuSearchRequest) -> Result<ExploreResult> {
         // Log messages use unified terminology: "screening" → "shortlist" → "candidate pool" → "winner"
         // (see candidate_comparator module for terminology guide)
         let mut merged_log = vec![
-            format!(
-                "Stage 1 screening: preset {}",
-                screening_preset.hevc_name()
-            ),
+            format!("Stage 1 screening: preset {}", screening_preset.hevc_name()),
             format!(
                 "HEVC ultimate gate: output must be smaller than input ({})",
                 crate::format_bytes(input_size)

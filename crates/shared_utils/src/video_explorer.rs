@@ -466,6 +466,8 @@ pub struct ExploreResult {
     pub ms_ssim_passed: CheckResult,
     /// The actual MS-SSIM score achieved (may differ from `ms_ssim` in some modes).
     pub ms_ssim_score: Option<f64>,
+    /// Whether SSIM fallback was used instead of MS-SSIM (distinguishes MS-SSIM from SSIM fallback results).
+    pub used_fallback: bool,
     /// Number of encode iterations performed during exploration.
     pub iterations: u32,
     /// Whether the overall quality check passed.
@@ -508,6 +510,7 @@ impl Default for ExploreResult {
             ms_ssim: None,
             ms_ssim_passed: CheckResult::NotChecked,
             ms_ssim_score: None,
+            used_fallback: false,
             iterations: 0,
             quality_passed: CheckResult::NotChecked,
             enhanced_verify_fail_reason: None,
@@ -1309,6 +1312,7 @@ impl VideoExplorer {
             ms_ssim: None,
             ms_ssim_passed: CheckResult::NotChecked,
             ms_ssim_score: None,
+            used_fallback: false,
             iterations,
             quality_passed: if quality_passed {
                 CheckResult::Passed
@@ -1434,6 +1438,7 @@ impl VideoExplorer {
                 ms_ssim: None,
                 ms_ssim_passed: CheckResult::NotChecked,
                 ms_ssim_score: None,
+                used_fallback: false,
                 iterations,
                 quality_passed: CheckResult::Passed,
                 log,
@@ -1509,6 +1514,7 @@ impl VideoExplorer {
             ms_ssim: None,
             ms_ssim_passed: CheckResult::NotChecked,
             ms_ssim_score: None,
+            used_fallback: false,
             iterations,
             quality_passed: if compressed {
                 CheckResult::Passed
@@ -1657,6 +1663,7 @@ impl VideoExplorer {
             ms_ssim: None,
             ms_ssim_passed: CheckResult::NotChecked,
             ms_ssim_score: None,
+            used_fallback: false,
             iterations,
             quality_passed: if passed {
                 CheckResult::Passed

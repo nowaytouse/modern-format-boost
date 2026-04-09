@@ -121,7 +121,9 @@ fn distance_key(distance: f32) -> i32 {
     // SAFETY: Clamped distance is in range [0.001, 0.999], so * 1000.0 yields [1, 999].
     // After rounding, always fits safely in i32 without truncation. Used as HashSet key only.
     let rounded = (clamp_explore_distance(distance) * 1000.0).round();
-    rounded as i32
+    #[allow(clippy::cast_possible_truncation)]
+    let key = rounded as i32;
+    key
 }
 
 fn size_ratio(size: u64, input_size: u64) -> f64 {
