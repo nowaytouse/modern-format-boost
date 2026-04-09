@@ -1686,6 +1686,27 @@ where
     }
 }
 
+fn compare_jxl_finalists(
+    input_size: u64,
+    left_distance: f32,
+    left_size: u64,
+    right_distance: f32,
+    right_size: u64,
+) -> std::cmp::Ordering {
+    let left_smaller_than_input = left_size < input_size;
+    let right_smaller_than_input = right_size < input_size;
+
+    match (left_smaller_than_input, right_smaller_than_input) {
+        (true, false) => return std::cmp::Ordering::Less,
+        (false, true) => return std::cmp::Ordering::Greater,
+        _ => {}
+    }
+
+    left_distance
+        .total_cmp(&right_distance)
+        .then_with(|| left_size.cmp(&right_size))
+}
+
 fn try_explore_ultimate_jxl_distance(
     input: &Path,
     actual_input: &Path,
@@ -1769,9 +1790,13 @@ fn try_explore_ultimate_jxl_distance(
         ) {
             Ok(size) => {
                 let replace_best = best_final.as_ref().is_none_or(|(best_idx, best_size, _)| {
-                    size < *best_size
-                        || (size == *best_size
-                            && finalist.distance < screening.finalists[*best_idx].distance)
+                    compare_jxl_finalists(
+                        input_size,
+                        finalist.distance,
+                        size,
+                        screening.finalists[*best_idx].distance,
+                        *best_size,
+                    ) == std::cmp::Ordering::Less
                 });
 
                 if replace_best {
@@ -2504,5 +2529,21 @@ mod tests {
         assert_eq!(jxl_screening_effort(true, false), 10);
         assert_eq!(jxl_screening_effort(false, true), 7);
         assert_eq!(jxl_screening_effort(false, false), 7);
+    }
+
+    #[test]
+    fn test_jxl_final_round_prefers_lower_distance_once_size_beats_source() {
+        assert_eq!(
+            compare_jxl_finalists(9_000_000, 0.01, 8_800_000, 0.1, 7_500_000),
+            std::cmp::Ordering::Less
+        );
+    }
+
+    #[test]
+    fn test_jxl_final_round_requires_beating_source_before_quality_preference() {
+        assert_eq!(
+            compare_jxl_finalists(9_000_000, 0.01, 9_200_000, 0.1, 8_900_000),
+            std::cmp::Ordering::Greater
+        );
     }
 }

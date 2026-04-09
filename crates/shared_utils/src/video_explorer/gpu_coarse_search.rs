@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use super::calibration;
@@ -44,6 +44,31 @@ const UPWARD_JOG_MIN_STEP: f32 = 0.5;
 const UPWARD_SIZE_STAGNATION_THRESHOLD: u32 = 4;
 const UPWARD_DIRECTION_SWITCH_LIMIT: u32 = 15;
 const HEVC_SLOWER_FINALIST_OFFSETS: &[f32] = &[0.0, -0.5, 0.5, -1.0, 1.0];
+
+#[derive(Debug, Clone)]
+struct HevcUltimateCandidate {
+    stage_label: &'static str,
+    preset: EncoderPreset,
+    output_path: PathBuf,
+    result: ExploreResult,
+}
+
+impl HevcUltimateCandidate {
+    fn summary(&self) -> String {
+        format!(
+            "{} [{}] CRF {:.1} -> {:.2}% / {}",
+            self.stage_label,
+            self.preset.hevc_name(),
+            self.result.optimal_crf,
+            self.result.size_change_pct,
+            if self.result.quality_passed.is_ok() {
+                "quality ok"
+            } else {
+                "quality failed"
+            }
+        )
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum UpwardSearchCadence {
@@ -3826,6 +3851,133 @@ fn round_half_step(crf: f32) -> f32 {
     (crf * 2.0).round() / 2.0
 }
 
+fn hevc_preset_rank(preset: EncoderPreset) -> u8 {
+    match preset.sanitize_hevc() {
+        EncoderPreset::Medium => 0,
+        EncoderPreset::Slow => 1,
+        EncoderPreset::Slower => 2,
+        EncoderPreset::Ultrafast | EncoderPreset::Fast | EncoderPreset::Veryslow => 0,
+    }
+}
+
+fn passes_hevc_ultimate_size_gate(result: &ExploreResult, input_size: u64) -> bool {
+    result.output_size < input_size
+}
+
+fn compare_optional_quality_desc(
+    left: Option<f64>,
+    right: Option<f64>,
+    epsilon: f64,
+) -> std::cmp::Ordering {
+    match (left, right) {
+        (Some(left), Some(right)) if (left - right).abs() > epsilon => right.total_cmp(&left),
+        _ => std::cmp::Ordering::Equal,
+    }
+}
+
+fn compare_optional_quality_asc(
+    left: Option<f64>,
+    right: Option<f64>,
+    epsilon: f64,
+) -> std::cmp::Ordering {
+    match (left, right) {
+        (Some(left), Some(right)) if (left - right).abs() > epsilon => left.total_cmp(&right),
+        _ => std::cmp::Ordering::Equal,
+    }
+}
+
+fn compare_optional_quality_pair_desc(
+    left: Option<(f64, f64)>,
+    right: Option<(f64, f64)>,
+    epsilon: f64,
+) -> std::cmp::Ordering {
+    match (left, right) {
+        (Some((left_a, left_b)), Some((right_a, right_b))) => {
+            let left_floor = left_a.min(left_b);
+            let right_floor = right_a.min(right_b);
+            compare_optional_quality_desc(Some(left_floor), Some(right_floor), epsilon)
+                .then_with(|| compare_optional_quality_desc(Some(left_a), Some(right_a), epsilon))
+                .then_with(|| compare_optional_quality_desc(Some(left_b), Some(right_b), epsilon))
+        }
+        _ => std::cmp::Ordering::Equal,
+    }
+}
+
+fn compare_hevc_ultimate_quality(
+    left: &ExploreResult,
+    right: &ExploreResult,
+) -> std::cmp::Ordering {
+    match (left.quality_passed.is_ok(), right.quality_passed.is_ok()) {
+        (true, false) => return std::cmp::Ordering::Less,
+        (false, true) => return std::cmp::Ordering::Greater,
+        _ => {}
+    }
+
+    match (left.ms_ssim_passed.is_ok(), right.ms_ssim_passed.is_ok()) {
+        (true, false) => return std::cmp::Ordering::Less,
+        (false, true) => return std::cmp::Ordering::Greater,
+        _ => {}
+    }
+
+    compare_optional_quality_desc(left.vmaf_y_score, right.vmaf_y_score, 0.01)
+        .then_with(|| compare_optional_quality_asc(left.cambi_score, right.cambi_score, 0.01))
+        .then_with(|| {
+            compare_optional_quality_pair_desc(
+                left.psnr_uv_score,
+                right.psnr_uv_score,
+                crate::float_compare::PSNR_EPSILON,
+            )
+        })
+        .then_with(|| {
+            compare_optional_quality_desc(
+                left.ms_ssim_score.or(left.ms_ssim),
+                right.ms_ssim_score.or(right.ms_ssim),
+                crate::float_compare::SSIM_EPSILON,
+            )
+        })
+        .then_with(|| {
+            compare_optional_quality_desc(left.ssim, right.ssim, crate::float_compare::SSIM_EPSILON)
+        })
+        .then_with(|| {
+            compare_optional_quality_desc(left.psnr, right.psnr, crate::float_compare::PSNR_EPSILON)
+        })
+}
+
+fn compare_hevc_ultimate_candidates(
+    input_size: u64,
+    left: &HevcUltimateCandidate,
+    right: &HevcUltimateCandidate,
+) -> std::cmp::Ordering {
+    match (
+        passes_hevc_ultimate_size_gate(&left.result, input_size),
+        passes_hevc_ultimate_size_gate(&right.result, input_size),
+    ) {
+        (true, false) => return std::cmp::Ordering::Less,
+        (false, true) => return std::cmp::Ordering::Greater,
+        _ => {}
+    }
+
+    compare_hevc_ultimate_quality(&left.result, &right.result)
+        .then_with(|| left.result.optimal_crf.total_cmp(&right.result.optimal_crf))
+        .then_with(|| left.result.output_size.cmp(&right.result.output_size))
+        .then_with(|| hevc_preset_rank(right.preset).cmp(&hevc_preset_rank(left.preset)))
+}
+
+fn select_hevc_ultimate_winner(candidates: &[HevcUltimateCandidate], input_size: u64) -> usize {
+    candidates
+        .iter()
+        .enumerate()
+        .min_by(|(_, left), (_, right)| compare_hevc_ultimate_candidates(input_size, left, right))
+        .map(|(idx, _)| idx)
+        .unwrap_or_default()
+}
+
+fn cleanup_hevc_ultimate_outputs(candidates: &[HevcUltimateCandidate]) {
+    for candidate in candidates {
+        let _ = crate::io_utils::safe_remove_file(&candidate.output_path);
+    }
+}
+
 fn shortlist_hevc_slower_finalists(
     screened_best_crf: f32,
     baseline_crf: f32,
@@ -3865,10 +4017,19 @@ fn run_hevc_gpu_search(
     preset: EncoderPreset,
     initial_crf: f32,
 ) -> Result<ExploreResult> {
+    run_hevc_gpu_search_to_output(req, preset, initial_crf, &req.output)
+}
+
+fn run_hevc_gpu_search_to_output(
+    req: &GpuSearchRequest,
+    preset: EncoderPreset,
+    initial_crf: f32,
+    output_path: &Path,
+) -> Result<ExploreResult> {
     let (max_crf, min_ssim) = calculate_smart_thresholds(req.baseline_crf, VideoEncoder::Hevc);
     explore_with_gpu_coarse_search(GpuSearchArgs {
         input: &req.input,
-        output: &req.output,
+        output: output_path,
         encoder: VideoEncoder::Hevc,
         vf_args: req.vf_args.clone(),
         initial_crf: initial_crf.clamp(ABSOLUTE_MIN_CRF, max_crf),
@@ -3889,13 +4050,28 @@ fn run_hevc_gpu_search(
 /// # Errors
 /// Returns an error if exploration fails.
 pub fn explore_hevc_with_gpu(req: GpuSearchRequest) -> Result<ExploreResult> {
+    let input_size = fs::metadata(&req.input)
+        .context("Failed to stat HEVC exploration input")?
+        .len();
     let final_preset = req.preset.sanitize_hevc();
     let (max_crf, _) = calculate_smart_thresholds(req.baseline_crf, VideoEncoder::Hevc);
     let screening_anchor = search_anchor_crf(req.baseline_crf, req.warm_start_crf, max_crf);
 
     if req.ultimate_mode && final_preset == EncoderPreset::Slower {
         let screening_preset = EncoderPreset::Slow;
-        let screening_result = run_hevc_gpu_search(&req, screening_preset, screening_anchor)?;
+        let screening_output = crate::path_safety::isolated_temp_path_for_search(&req.output)?;
+        let screening_result = match run_hevc_gpu_search_to_output(
+            &req,
+            screening_preset,
+            screening_anchor,
+            &screening_output,
+        ) {
+            Ok(result) => result,
+            Err(err) => {
+                let _ = crate::io_utils::safe_remove_file(&screening_output);
+                return Err(err);
+            }
+        };
         let finalist_crfs = shortlist_hevc_slower_finalists(
             screening_result.optimal_crf,
             req.baseline_crf,
@@ -3903,88 +4079,89 @@ pub fn explore_hevc_with_gpu(req: GpuSearchRequest) -> Result<ExploreResult> {
             max_crf,
         );
 
-        let mut finalist_results = Vec::new();
+        let mut candidates = vec![HevcUltimateCandidate {
+            stage_label: "Stage 1 screening",
+            preset: screening_preset,
+            output_path: screening_output,
+            result: screening_result,
+        }];
         for finalist_crf in &finalist_crfs {
-            finalist_results.push(run_hevc_gpu_search(&req, final_preset, *finalist_crf)?);
+            let candidate_output =
+                match crate::path_safety::isolated_temp_path_for_search(&req.output) {
+                    Ok(path) => path,
+                    Err(err) => {
+                        cleanup_hevc_ultimate_outputs(&candidates);
+                        return Err(err);
+                    }
+                };
+
+            let result = match run_hevc_gpu_search_to_output(
+                &req,
+                final_preset,
+                *finalist_crf,
+                &candidate_output,
+            ) {
+                Ok(result) => result,
+                Err(err) => {
+                    let _ = crate::io_utils::safe_remove_file(&candidate_output);
+                    cleanup_hevc_ultimate_outputs(&candidates);
+                    return Err(err);
+                }
+            };
+
+            candidates.push(HevcUltimateCandidate {
+                stage_label: "Stage 2 finalist",
+                preset: final_preset,
+                output_path: candidate_output,
+                result,
+            });
         }
 
-        let total_iterations = screening_result.iterations
-            + finalist_results
-                .iter()
-                .map(|result| result.iterations)
-                .sum::<u32>();
-
-        let winner_idx = finalist_results
+        let total_iterations = candidates
             .iter()
-            .enumerate()
-            .filter(|(_, result)| result.quality_passed.is_ok())
-            .min_by(|(_, left), (_, right)| {
-                left.output_size
-                    .cmp(&right.output_size)
-                    .then_with(|| left.optimal_crf.total_cmp(&right.optimal_crf))
-            })
-            .or_else(|| {
-                finalist_results
-                    .iter()
-                    .enumerate()
-                    .min_by(|(_, left), (_, right)| {
-                        left.output_size
-                            .cmp(&right.output_size)
-                            .then_with(|| left.optimal_crf.total_cmp(&right.optimal_crf))
-                    })
-            })
-            .map(|(idx, _)| idx)
-            .unwrap_or_default();
+            .map(|candidate| candidate.result.iterations)
+            .sum::<u32>();
+        let winner_idx = select_hevc_ultimate_winner(&candidates, input_size);
+        let stage1_summary = candidates
+            .first()
+            .map_or_else(|| "unavailable".to_string(), HevcUltimateCandidate::summary);
+        let candidate_summary = candidates
+            .iter()
+            .map(HevcUltimateCandidate::summary)
+            .collect::<Vec<_>>()
+            .join(" | ");
+        let mut winner = candidates.swap_remove(winner_idx);
+        cleanup_hevc_ultimate_outputs(&candidates);
+        crate::io_utils::robust_move(&winner.output_path, &req.output)
+            .context("Failed to promote selected HEVC ultimate candidate")?;
 
-        let mut winner = finalist_results.swap_remove(winner_idx);
         let shortlist_summary = finalist_crfs
             .iter()
             .map(|crf| format!("{crf:.1}"))
             .collect::<Vec<_>>()
             .join(", ");
-        let finalist_summary = finalist_results
-            .iter()
-            .map(|result| {
-                format!(
-                    "CRF {:.1} -> {:.2}% / {}",
-                    result.optimal_crf,
-                    result.size_change_pct,
-                    if result.quality_passed.is_ok() {
-                        "quality ok"
-                    } else {
-                        "quality failed"
-                    }
-                )
-            })
-            .chain(std::iter::once(format!(
-                "CRF {:.1} -> {:.2}% / {}",
-                winner.optimal_crf,
-                winner.size_change_pct,
-                if winner.quality_passed.is_ok() {
-                    "quality ok"
-                } else {
-                    "quality failed"
-                }
-            )))
-            .collect::<Vec<_>>()
-            .join(" | ");
-
         let mut merged_log = vec![
             format!(
                 "Stage 1 HEVC screening preset: {}",
                 screening_preset.hevc_name()
             ),
             format!(
-                "Stage 1 screening winner: CRF {:.1}",
-                screening_result.optimal_crf
+                "HEVC ultimate gate: output must be smaller than input ({})",
+                crate::format_bytes(input_size)
             ),
+            format!("Stage 1 screening result: {stage1_summary}"),
             format!("Stage 2 slower shortlist: {shortlist_summary}"),
-            format!("Stage 2 slower outcomes: {finalist_summary}"),
+            format!("HEVC ultimate candidate pool: {candidate_summary}"),
+            format!(
+                "Selected HEVC ultimate winner: {} [{}]",
+                winner.stage_label,
+                winner.preset.hevc_name()
+            ),
         ];
-        merged_log.extend(winner.log.clone());
-        winner.log = merged_log;
-        winner.iterations = total_iterations;
-        return Ok(winner);
+        merged_log.extend(winner.result.log.clone());
+        winner.result.log = merged_log;
+        winner.result.iterations = total_iterations;
+        return Ok(winner.result);
     }
 
     run_hevc_gpu_search(&req, final_preset, screening_anchor)
@@ -4023,7 +4200,36 @@ pub fn explore_av1_with_gpu(req: GpuSearchRequest) -> Result<ExploreResult> {
 
 #[cfg(test)]
 mod tests {
-    use super::{search_anchor_crf, shortlist_hevc_slower_finalists, ABSOLUTE_MIN_CRF};
+    use super::{
+        search_anchor_crf, select_hevc_ultimate_winner, shortlist_hevc_slower_finalists,
+        CheckResult, ExploreResult, HevcUltimateCandidate, ABSOLUTE_MIN_CRF,
+    };
+    use crate::types::EncoderPreset;
+    use std::path::PathBuf;
+
+    fn candidate(
+        stage_label: &'static str,
+        preset: EncoderPreset,
+        output_size: u64,
+        optimal_crf: f32,
+        quality_passed: CheckResult,
+    ) -> HevcUltimateCandidate {
+        HevcUltimateCandidate {
+            stage_label,
+            preset,
+            output_path: PathBuf::from(format!(
+                "{}-{}-{optimal_crf:.1}.mp4",
+                stage_label.replace(' ', "-"),
+                preset.hevc_name()
+            )),
+            result: ExploreResult {
+                optimal_crf,
+                output_size,
+                quality_passed,
+                ..ExploreResult::default()
+            },
+        }
+    }
 
     #[test]
     fn test_hevc_slower_shortlist_keeps_neighbors_and_distinct_anchors() {
@@ -4043,5 +4249,130 @@ mod tests {
         assert_eq!(search_anchor_crf(24.0, Some(20.0), 30.0), 18.0);
         assert_eq!(search_anchor_crf(4.0, Some(1.0), 30.0), ABSOLUTE_MIN_CRF);
         assert_eq!(search_anchor_crf(12.0, None, 10.0), 10.0);
+    }
+
+    #[test]
+    fn test_hevc_ultimate_selection_keeps_passing_screening_candidate() {
+        let candidates = vec![
+            candidate(
+                "Stage 1 screening",
+                EncoderPreset::Slow,
+                1_000,
+                22.0,
+                CheckResult::Passed,
+            ),
+            candidate(
+                "Stage 2 finalist",
+                EncoderPreset::Slower,
+                900,
+                20.0,
+                CheckResult::Failed("quality failed".into()),
+            ),
+        ];
+
+        assert_eq!(select_hevc_ultimate_winner(&candidates, 1_100), 0);
+    }
+
+    #[test]
+    fn test_hevc_ultimate_selection_applies_strict_input_size_gate() {
+        let mut candidates = vec![
+            candidate(
+                "Stage 1 screening",
+                EncoderPreset::Slow,
+                1_020,
+                20.0,
+                CheckResult::Passed,
+            ),
+            candidate(
+                "Stage 2 finalist",
+                EncoderPreset::Slower,
+                980,
+                22.0,
+                CheckResult::Passed,
+            ),
+        ];
+
+        candidates[0].result.ssim = Some(0.999);
+        candidates[1].result.ssim = Some(0.980);
+
+        assert_eq!(select_hevc_ultimate_winner(&candidates, 1_000), 1);
+    }
+
+    #[test]
+    fn test_hevc_ultimate_selection_prefers_quality_before_crf_and_size() {
+        let candidates = vec![
+            candidate(
+                "Stage 1 screening",
+                EncoderPreset::Slow,
+                980,
+                21.0,
+                CheckResult::Passed,
+            ),
+            candidate(
+                "Stage 2 finalist",
+                EncoderPreset::Slower,
+                940,
+                19.0,
+                CheckResult::Passed,
+            ),
+        ];
+
+        let mut candidates = candidates;
+        candidates[0].result.ssim = Some(0.998);
+        candidates[1].result.ssim = Some(0.992);
+
+        assert_eq!(select_hevc_ultimate_winner(&candidates, 1_100), 0);
+    }
+
+    #[test]
+    fn test_hevc_ultimate_selection_prefers_lower_crf_before_file_size() {
+        let candidates = vec![
+            candidate(
+                "Stage 1 screening",
+                EncoderPreset::Slow,
+                990,
+                19.0,
+                CheckResult::Passed,
+            ),
+            candidate(
+                "Stage 2 finalist",
+                EncoderPreset::Slower,
+                940,
+                20.0,
+                CheckResult::Passed,
+            ),
+        ];
+
+        let mut candidates = candidates;
+        candidates[0].result.ssim = Some(0.997);
+        candidates[1].result.ssim = Some(0.997);
+
+        assert_eq!(select_hevc_ultimate_winner(&candidates, 1_100), 0);
+    }
+
+    #[test]
+    fn test_hevc_ultimate_selection_uses_preset_after_quality_crf_and_size() {
+        let candidates = vec![
+            candidate(
+                "Stage 1 screening",
+                EncoderPreset::Slow,
+                990,
+                20.0,
+                CheckResult::Passed,
+            ),
+            candidate(
+                "Stage 2 finalist",
+                EncoderPreset::Slower,
+                990,
+                20.0,
+                CheckResult::Passed,
+            ),
+        ];
+
+        let mut candidates = candidates;
+        candidates[0].result.ssim = Some(0.997);
+        candidates[1].result.ssim = Some(0.997);
+
+        assert_eq!(select_hevc_ultimate_winner(&candidates, 1_100), 1);
     }
 }
