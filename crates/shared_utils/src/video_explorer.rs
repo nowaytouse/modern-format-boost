@@ -828,7 +828,7 @@ impl VideoEncoder {
                 }
                 let mut args = vec![
                     crate::constants::FFMPEG_ARG_PRESET.to_string(),
-                    preset.x26x_name().to_string(),
+                    preset.hevc_name().to_string(),
                 ];
                 if apple_compat {
                     args.extend([

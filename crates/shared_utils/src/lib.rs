@@ -61,6 +61,8 @@ pub mod image_builders;
 pub mod image_quality_detector;
 /// High-level builder for `cjxl` and `djxl` commands.
 pub mod jxl_builder;
+/// JXL distance exploration engine for Ultimate Mode.
+pub mod jxl_explorer;
 /// Thread-safe `LRU` cache implementation.
 pub mod lru_cache;
 /// Universal metadata preservation (EXIF, IPTC, xattr, etc.).

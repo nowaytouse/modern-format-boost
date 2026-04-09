@@ -69,24 +69,31 @@ fn format_recommendation(
 fn mock_jxl_indicator_from_features(features: &DetectionResult, rel_path: &str) -> JxlIndicator {
     let output_path = format!("{rel_path}.jxl");
     let is_lossless = features.compression == CompressionType::Lossless;
+    let default_effort = crate::constants::JXL_DEFAULT_EFFORT;
 
     match features.format {
         DetectedFormat::PNG | DetectedFormat::GIF | DetectedFormat::TIFF => JxlIndicator {
             should_convert: true,
             reason: "Lossless image; strongly recommend converting to JXL".to_string(),
-            command: format!("cjxl '{rel_path}' '{output_path}' -d 0.0 --modular=1 -e 9"),
+            command: format!(
+                "cjxl '{rel_path}' '{output_path}' -d 0.0 --modular=1 -e {default_effort}"
+            ),
             benefit: "30-60% size reduction while preserving full quality".to_string(),
         },
         DetectedFormat::JPEG => JxlIndicator {
             should_convert: true,
             reason: "JPEG can be losslessly transcoded to JXL".to_string(),
-            command: format!("cjxl '{rel_path}' '{output_path}' --lossless_jpeg=1"),
+            command: format!(
+                "cjxl '{rel_path}' '{output_path}' --lossless_jpeg=1 -e {default_effort}"
+            ),
             benefit: "Keeps original JPEG DCT coefficients, reversible".to_string(),
         },
         DetectedFormat::WebP if is_lossless => JxlIndicator {
             should_convert: true,
             reason: "Lossless WebP; recommend converting to JXL".to_string(),
-            command: format!("cjxl '{rel_path}' '{output_path}' -d 0.0 --modular=1 -e 9"),
+            command: format!(
+                "cjxl '{rel_path}' '{output_path}' -d 0.0 --modular=1 -e {default_effort}"
+            ),
             benefit: "JXL is typically more efficient than lossless WebP".to_string(),
         },
         _ => JxlIndicator {
@@ -129,7 +136,7 @@ mod tests {
             jxl_indicator: JxlIndicator {
                 should_convert: true,
                 reason: "Lossless image; strongly recommend converting to JXL".to_string(),
-                command: "cjxl 'test.png' 'test.jxl' -d 0.0 -e 8".to_string(),
+                command: "cjxl 'test.png' 'test.jxl' -d 0.0 -e 7".to_string(),
                 benefit: "May reduce size by 30–60%".to_string(),
             },
             psnr: None,

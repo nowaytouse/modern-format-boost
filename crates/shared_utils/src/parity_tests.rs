@@ -310,6 +310,44 @@ fn test_x265_flag_order_parity() {
 }
 
 #[test]
+fn test_ffmpeg_hevc_preset_is_sanitized() {
+    let cmd = FfmpegBuilder::new()
+        .input(Path::new("in.mp4"))
+        .vcodec(VideoCodec::Hevc)
+        .preset(EncoderPreset::Fast)
+        .output(Path::new("out.mp4"))
+        .build();
+    let args: Vec<String> = cmd
+        .get_args()
+        .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
+        .collect();
+    let preset_idx = args
+        .iter()
+        .position(|arg| arg == "-preset")
+        .expect("preset arg should exist");
+    assert_eq!(args[preset_idx + 1], "medium");
+}
+
+#[test]
+fn test_x265_preset_is_sanitized() {
+    let cmd = X265Builder::new()
+        .crf(18.0)
+        .preset("veryslow")
+        .input(Path::new("in.y4m"))
+        .output(Path::new("out.hevc"))
+        .build();
+    let args: Vec<String> = cmd
+        .get_args()
+        .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
+        .collect();
+    let preset_idx = args
+        .iter()
+        .position(|arg| arg == "--preset")
+        .expect("preset arg should exist");
+    assert_eq!(args[preset_idx + 1], "slower");
+}
+
+#[test]
 fn test_dovi_flag_order_parity() {
     let cmd = DoviBuilder::new()
         .mode("demux")

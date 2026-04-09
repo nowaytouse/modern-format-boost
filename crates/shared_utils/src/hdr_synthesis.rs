@@ -79,7 +79,10 @@ pub fn convert_heic_with_gainmap_to_jxl_hdr(
     output: &Path,
     _apple_compat: bool,
     intermediate_format: HdrIntermediateFormat,
+    ultimate: bool,
 ) -> Result<()> {
+    let actual_distance = crate::constants::jxl_distance_for_mode(1.0, ultimate);
+    let actual_effort = crate::constants::jxl_effort_for_mode(ultimate);
     tracing::debug!(
         input = ?input.file_name().unwrap_or_default(),
         ?intermediate_format,
@@ -191,7 +194,8 @@ pub fn convert_heic_with_gainmap_to_jxl_hdr(
     builder
         .input(&tmp_file)
         .output(output)
-        .distance(1.0)
+        .distance(actual_distance)
+        .effort(actual_effort)
         .arg("-x")
         .arg("color_space=RGB_D65_SRG_Rel_PeQ");
 
@@ -261,7 +265,10 @@ pub fn convert_ultrahdr_jpeg_to_jxl_hdr(
     input: &Path,
     output: &Path,
     intermediate_format: HdrIntermediateFormat,
+    ultimate: bool,
 ) -> Result<()> {
+    let actual_distance = crate::constants::jxl_distance_for_mode(1.0, ultimate);
+    let actual_effort = crate::constants::jxl_effort_for_mode(ultimate);
     use crate::image_jpeg_analysis::extract_gainmap_from_jpeg;
 
     info!(
@@ -327,7 +334,8 @@ pub fn convert_ultrahdr_jpeg_to_jxl_hdr(
     builder
         .input(&tmp_file)
         .output(output)
-        .distance(1.0)
+        .distance(actual_distance)
+        .effort(actual_effort)
         .arg("-x")
         .arg("color_space=RGB_D65_SRG_Rel_PeQ");
 
@@ -382,9 +390,12 @@ pub fn convert_ultrahdr_jpeg_to_jxl_hdr(
 pub fn convert_ultrahdr_jpeg_to_jxl_migration(
     input: &Path,
     output: &Path,
-    _distance: f32,
-    effort: u8,
+    distance: f32,
+    _effort: u8,
+    ultimate: bool,
 ) -> Result<()> {
+    let actual_distance = crate::constants::jxl_distance_for_mode(distance, ultimate);
+    let actual_effort = crate::constants::jxl_effort_for_mode(ultimate);
     use crate::image_builders::ExiftoolBuilder;
     use crate::image_jpeg_analysis::extract_gainmap_from_jpeg;
     use crate::jxl_builder::CjxlBuilder;
@@ -410,7 +421,8 @@ pub fn convert_ultrahdr_jpeg_to_jxl_migration(
         .input(input)
         .output(output)
         .lossless_jpeg(true)
-        .effort(effort)
+        .distance(actual_distance)
+        .effort(actual_effort)
         .build()
         .status()
         .context("Failed to spawn cjxl for UltraHDR migration")?;

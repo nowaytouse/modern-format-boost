@@ -19,7 +19,7 @@ mod tests {
         let output = output_file.path();
 
         let result =
-            run_imagemagick_cjxl_pipeline(&input, output, 1.0, 1, false, 8, false, false, 7);
+            run_imagemagick_cjxl_pipeline(&input, output, 1.0, 1, false, 8, false, false, 7, false);
 
         assert!(result.is_ok(), "Grayscale fallback failed!");
     }
@@ -33,7 +33,7 @@ mod tests {
 
         // Test pipeline handles compositing and premultiply issues
         let result =
-            run_imagemagick_cjxl_pipeline(&input, output, 1.0, 1, false, 8, false, false, 7);
+            run_imagemagick_cjxl_pipeline(&input, output, 1.0, 1, false, 8, false, false, 7, false);
 
         assert!(result.is_ok(), "Alpha bleed prevention pipeline failed!");
     }
@@ -54,6 +54,7 @@ mod tests {
             false,
             false,
             7,
+            false,
         );
 
         // The result should indicate success or a clean handled failure if it's not a real multi-frame
@@ -83,6 +84,7 @@ mod tests {
             false,
             false,
             7,
+            false,
         );
 
         assert!(
@@ -110,6 +112,7 @@ mod tests {
             false,
             false,
             7,
+            false,
         );
 
         assert!(
@@ -134,6 +137,7 @@ mod tests {
             false,
             false,
             7,
+            false,
         );
         assert!(result.is_ok() || result.is_err());
     }
@@ -153,6 +157,7 @@ mod tests {
             false,
             false,
             7,
+            false,
         );
 
         // This validates the FPS logic handles or rejects invalid timing

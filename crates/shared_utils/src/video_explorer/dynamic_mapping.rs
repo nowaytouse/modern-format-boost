@@ -261,7 +261,7 @@ pub fn quick_calibrate(
 
             let config = X265Config {
                 crf: *anchor_crf,
-                preset: "medium".to_string(),
+                preset: crate::types::EncoderPreset::Medium.hevc_name().to_string(),
                 threads: max_threads,
                 container: "mp4".to_string(),
                 preserve_audio: true,

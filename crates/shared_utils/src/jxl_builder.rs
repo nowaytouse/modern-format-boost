@@ -44,6 +44,10 @@ impl CjxlBuilder {
     }
 
     pub fn effort(&mut self, effort: u8) -> &mut Self {
+        debug_assert!(
+            constants::is_supported_jxl_effort(effort),
+            "unsupported cjxl effort {effort}; runtime policy permits only e7 and e10"
+        );
         self.effort = Some(effort);
         self
     }

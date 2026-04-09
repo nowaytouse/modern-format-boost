@@ -235,9 +235,13 @@ pub fn encode_jxl_with_depth(
     _depth_map: &DepthMap,
     output: &Path,
     distance: f32,
-    effort: u8,
+    _effort: u8,
+    ultimate: bool,
     _intensity_target: Option<f32>,
 ) -> Result<()> {
+    let actual_dist = crate::constants::jxl_distance_for_mode(distance, ultimate);
+    let actual_eff = crate::constants::jxl_effort_for_mode(ultimate);
+
     use jpegxl_rs::encode::EncoderSpeed;
     use jpegxl_rs::encoder_builder;
 
@@ -251,14 +255,14 @@ pub fn encode_jxl_with_depth(
         .map_err(|e| anyhow!("Failed to create JXL encoder: {e:?}"))?;
 
     // Set lossless mode based on distance
-    encoder.lossless = Some(distance <= 0.001);
+    encoder.lossless = Some(actual_dist <= 0.001);
 
     // Set quality (0-100 scale, convert from distance)
     // distance 0 = quality 100, distance 1 = quality ~70
-    encoder.quality = distance.mul_add(-30.0, 100.0).clamp(0.0, 100.0);
+    encoder.quality = actual_dist.mul_add(-30.0, 100.0).clamp(0.0, 100.0);
 
     // Set encoding speed
-    let speed = match effort {
+    let speed = match actual_eff {
         0..=2 => EncoderSpeed::Falcon,
         3..=5 => EncoderSpeed::Squirrel,
         _ => EncoderSpeed::Kitten, // Default to high quality
@@ -300,9 +304,12 @@ pub fn encode_jxl_depth_fallback(
     main_image: &DynamicImage,
     depth_map: &DepthMap,
     output: &Path,
-    _distance: f32,
-    effort: u8,
+    distance: f32,
+    _effort: u8,
+    ultimate: bool,
 ) -> Result<(std::path::PathBuf, std::path::PathBuf)> {
+    let actual_dist = crate::constants::jxl_distance_for_mode(distance, ultimate);
+    let actual_eff = crate::constants::jxl_effort_for_mode(ultimate);
     use tempfile::NamedTempFile;
 
     // Write main image to temp PNG
@@ -324,8 +331,8 @@ pub fn encode_jxl_depth_fallback(
     let status = crate::tool_builders::CjxlBuilder::new()
         .input(temp_main.path())
         .output(output)
-        .distance(0.0)
-        .effort(effort)
+        .distance(actual_dist)
+        .effort(actual_eff)
         .build()
         .status()
         .map_err(|e| anyhow!("Failed to run cjxl: {e}"))?;

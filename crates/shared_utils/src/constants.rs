@@ -474,6 +474,50 @@ pub const JXL_ARG_COMPRESS_BOXES: &str = "--compress_boxes=0";
 pub const JXL_ARG_ALLOW_JPEG_RECON: &str = "--allow_jpeg_reconstruction";
 pub const JXL_ARG_ICC_PATHNAME: &str = "icc_pathname";
 
+// --- JXL Standardized Parameters ---
+/// Quality distance for ultimate mode (Limit Mode)
+pub const JXL_ULTIMATE_DISTANCE: f32 = 0.001;
+/// Effort level for ultimate mode (Limit Mode)
+pub const JXL_ULTIMATE_EFFORT: u8 = 10;
+/// Default effort level for standard mode
+pub const JXL_DEFAULT_EFFORT: u8 = 7;
+
+/// Runtime JXL policy: default mode always emits `e7`, ultimate mode always emits `e10`.
+#[must_use]
+pub const fn jxl_effort_for_mode(ultimate: bool) -> u8 {
+    if ultimate {
+        JXL_ULTIMATE_EFFORT
+    } else {
+        JXL_DEFAULT_EFFORT
+    }
+}
+
+/// Runtime JXL policy: only `e7` and `e10` are supported.
+#[must_use]
+pub const fn is_supported_jxl_effort(effort: u8) -> bool {
+    effort == JXL_DEFAULT_EFFORT || effort == JXL_ULTIMATE_EFFORT
+}
+
+/// Runtime JXL policy: ultimate mode pins the distance to [`JXL_ULTIMATE_DISTANCE`].
+#[must_use]
+pub const fn jxl_distance_for_mode(requested_distance: f32, ultimate: bool) -> f32 {
+    if ultimate {
+        JXL_ULTIMATE_DISTANCE
+    } else {
+        requested_distance
+    }
+}
+
+// --- JXL Distance Exploration (Ultimate Explore Mode) ---
+/// Fixed distance ladder for Phase 1 fast scan.
+pub const JXL_EXPLORE_LADDER: &[f32] = &[0.001, 0.01, 0.1];
+/// Hard ceiling — exploration MUST stay strictly below this value.
+pub const JXL_EXPLORE_CEILING: f32 = 0.999;
+/// Minimum step size for Phase 2 binary search.
+pub const JXL_EXPLORE_BINARY_SEARCH_PRECISION: f32 = 0.01;
+/// Maximum total exploration iterations across both phases.
+pub const JXL_EXPLORE_MAX_ITERATIONS: u32 = 12;
+
 // --- ImageMagick Argument Constants ---
 pub const MAGICK_ARG_STRIP: &str = "-strip";
 pub const MAGICK_ARG_DEPTH: &str = "-depth";
@@ -547,3 +591,29 @@ pub const NORMAL_MIN_GAINS: u32 = 3;
 
 /// Default SSIM fallback value when measurement fails (0.0 = Minimum).
 pub const DEFAULT_SSIM_PRIOR: f64 = 0.0;
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        is_supported_jxl_effort, jxl_distance_for_mode, jxl_effort_for_mode, JXL_DEFAULT_EFFORT,
+        JXL_ULTIMATE_DISTANCE, JXL_ULTIMATE_EFFORT,
+    };
+
+    #[test]
+    fn test_jxl_effort_policy_is_mode_locked() {
+        assert_eq!(jxl_effort_for_mode(false), JXL_DEFAULT_EFFORT);
+        assert_eq!(jxl_effort_for_mode(true), JXL_ULTIMATE_EFFORT);
+        assert!(is_supported_jxl_effort(JXL_DEFAULT_EFFORT));
+        assert!(is_supported_jxl_effort(JXL_ULTIMATE_EFFORT));
+        assert!(!is_supported_jxl_effort(6));
+        assert!(!is_supported_jxl_effort(8));
+        assert!(!is_supported_jxl_effort(9));
+        assert!(!is_supported_jxl_effort(11));
+    }
+
+    #[test]
+    fn test_jxl_distance_policy_pins_ultimate_mode() {
+        assert_eq!(jxl_distance_for_mode(0.4, false), 0.4);
+        assert_eq!(jxl_distance_for_mode(0.4, true), JXL_ULTIMATE_DISTANCE);
+    }
+}

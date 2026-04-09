@@ -408,7 +408,8 @@ impl X265Builder {
     }
 
     pub fn preset<S: AsRef<str>>(&mut self, preset: S) -> &mut Self {
-        self.preset = Some(preset.as_ref().to_string());
+        self.preset =
+            Some(crate::types::preset::sanitize_hevc_preset_name(preset.as_ref()).to_string());
         self
     }
 

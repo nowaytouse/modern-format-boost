@@ -116,9 +116,10 @@ pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrat
                 target: TargetFormat::JXL,
                 reason: "Static lossless image, recommend JXL for better compression".to_string(),
                 command: format!(
-                    "cjxl '{}' '{}' -d 0.0 -e 8",
+                    "cjxl '{}' '{}' -d 0.0 -e {}",
                     input_path,
-                    output_path.display()
+                    output_path.display(),
+                    shared_utils::constants::JXL_DEFAULT_EFFORT
                 ),
                 expected_reduction: 45.0,
             })
@@ -381,12 +382,13 @@ fn convert_to_jxl(
     builder
         .input(&input_abs)
         .output(&output_abs)
+        .effort(shared_utils::constants::jxl_effort_for_mode(false))
         .threads(max_threads as usize);
 
     if *format == DetectedFormat::JPEG {
         builder.lossless_jpeg(true);
     } else {
-        builder.distance(0.0).effort(7);
+        builder.distance(0.0);
     }
 
     if config.apple_compat {

@@ -56,7 +56,7 @@ impl Default for X265Config {
     fn default() -> Self {
         Self {
             crf: 23.0,
-            preset: "medium".to_string(),
+            preset: crate::types::EncoderPreset::Medium.hevc_name().to_string(),
             threads: crate::thread_manager::get_optimal_threads(),
             container: "mp4".to_string(),
             preserve_audio: true,

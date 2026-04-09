@@ -764,12 +764,15 @@ fn generate_jxl_indicator(
 ) -> JxlIndicator {
     let file_path = path.display().to_string();
     let output_path = path.with_extension("jxl").display().to_string();
+    let default_effort = crate::constants::JXL_DEFAULT_EFFORT;
 
     match format {
         ImageFormat::Png | ImageFormat::Gif | ImageFormat::Tiff => JxlIndicator {
             should_convert: true,
             reason: "Lossless image; strongly recommend converting to JXL".to_string(),
-            command: format!("cjxl '{file_path}' '{output_path}' -d 0.0 --modular=1 -e 9"),
+            command: format!(
+                "cjxl '{file_path}' '{output_path}' -d 0.0 --modular=1 -e {default_effort}"
+            ),
             benefit: "30-60% size reduction while preserving full quality".to_string(),
         },
         ImageFormat::Jpeg => {
@@ -782,7 +785,9 @@ fn generate_jxl_indicator(
                     return JxlIndicator {
                         should_convert: true,
                         reason: format!("Ultra HDR JPEG detected ({quality_info}); recommend high-fidelity HDR synthesis"),
-                        command: format!("cjxl '{file_path}' '{output_path}' --lossless_jpeg=1"),
+                        command: format!(
+                            "cjxl '{file_path}' '{output_path}' --lossless_jpeg=1 -e {default_effort}"
+                        ),
                         benefit: "Produces a single, true 32-bit HDR JXL file (OpenEXR via Gainmap mathematics)".to_string(),
                     };
                 }
@@ -790,7 +795,9 @@ fn generate_jxl_indicator(
                 JxlIndicator {
                     should_convert: true,
                     reason: format!("JPEG ({quality_info}), lossless transcode to JXL"),
-                    command: format!("cjxl '{file_path}' '{output_path}' --lossless_jpeg=1"),
+                    command: format!(
+                        "cjxl '{file_path}' '{output_path}' --lossless_jpeg=1 -e {default_effort}"
+                    ),
                     benefit:
                         "Keeps original JPEG DCT coefficients, reversible, ~20% size reduction"
                             .to_string(),
@@ -799,7 +806,9 @@ fn generate_jxl_indicator(
                 JxlIndicator {
                     should_convert: true,
                     reason: "JPEG can be losslessly transcoded to JXL".to_string(),
-                    command: format!("cjxl '{file_path}' '{output_path}' --lossless_jpeg=1"),
+                    command: format!(
+                        "cjxl '{file_path}' '{output_path}' --lossless_jpeg=1 -e {default_effort}"
+                    ),
                     benefit: "Keeps original JPEG DCT coefficients, reversible".to_string(),
                 }
             }
@@ -809,7 +818,9 @@ fn generate_jxl_indicator(
                 JxlIndicator {
                     should_convert: true,
                     reason: "Lossless WebP; recommend converting to JXL".to_string(),
-                    command: format!("cjxl '{file_path}' '{output_path}' -d 0.0 --modular=1 -e 9"),
+                    command: format!(
+                        "cjxl '{file_path}' '{output_path}' -d 0.0 --modular=1 -e {default_effort}"
+                    ),
                     benefit: "JXL is typically more efficient than lossless WebP".to_string(),
                 }
             } else {
@@ -826,7 +837,9 @@ fn generate_jxl_indicator(
                 JxlIndicator {
                     should_convert: true,
                     reason: "Lossless AVIF; recommend converting to JXL".to_string(),
-                    command: format!("cjxl '{file_path}' '{output_path}' -d 0.0 --modular=1 -e 9"),
+                    command: format!(
+                        "cjxl '{file_path}' '{output_path}' -d 0.0 --modular=1 -e {default_effort}"
+                    ),
                     benefit: "JXL modular mode is typically more efficient than AVIF lossless"
                         .to_string(),
                 }

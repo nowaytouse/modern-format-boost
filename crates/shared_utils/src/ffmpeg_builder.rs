@@ -441,6 +441,8 @@ impl FfmpegBuilder {
             cmd.arg(constants::FFMPEG_ARG_PRESET);
             if matches!(self.vcodec, Some(VideoCodec::Av1)) {
                 cmd.arg(preset.svtav1_preset().to_string());
+            } else if matches!(self.vcodec, Some(VideoCodec::Hevc)) {
+                cmd.arg(preset.hevc_name());
             } else {
                 cmd.arg(preset.x26x_name());
             }

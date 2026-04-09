@@ -8,17 +8,18 @@ All notable changes to this project will be documented in this file.
 
 ### 🖼️ Image Processing
 
+- **JXL Parameter Standardization via Constants**: Centralized JXL encoding parameters into `constants.rs` — `JXL_DEFAULT_EFFORT` (e7), `JXL_ULTIMATE_EFFORT` (e10), and `JXL_ULTIMATE_DISTANCE` (0.001). All hardcoded effort/distance values across the codebase replaced with `jxl_effort_for_mode()` and `jxl_distance_for_mode()` policy functions.
+- **JXL Distance Exploration Engine**: New `jxl_explorer.rs` module adds a two-phase distance search for Ultimate Mode: Phase 1 ladder scan (`d=0.001 → 0.01 → 0.1`) followed by adaptive Phase 2 binary search (with acceleration/deceleration cadence). Automatically probes higher distances when baseline Ultimate encode produces oversized output, selecting the smallest valid distance that still compresses below input size.
+- **HEVC/x265 Preset Policy Window**: Introduced `sanitize_hevc()` and `sanitize_hevc_preset_name()` to clamp all HEVC encoder presets into a safe `medium`/`slow`/`slower` window. Fast presets (`ultrafast`–`fast`) are promoted to `medium`; `veryslow`/`placebo` are clamped to `slower`. Applied across `FfmpegBuilder`, `X265Builder`, `VideoEncoder`, and `quick_calibrate`.
 - **Ultimate Mode (Effort 10) for JXL**: Added `--ultimate` flag to enable `cjxl` effort 10 (Glacier) for archival-quality encoding. Based on research showing effort 10 is consistently 15-56% faster and produces equal or smaller files than effort 9 (Tortoise), while effort 11 offers no advantage in VarDCT mode. Default remains effort 7 (Squirrel) for balanced performance.
 - **Near-Lossless JXL for Lossy Sources**: Changed lossy PNG/GIF/JPEG fallback conversion from `distance=0.1` to `distance=0.001`, resulting in mathematically near-lossless output recognized by the JXL encoder's lossless threshold.
 - **Animated/Live Photo Terminology**: Replaced `[SKIP]` with `[IGNORE]` in progress output for animated GIF/WebP and Live Photo detection, clarifying that these are intentionally excluded (handled by `vid`) rather than skipped due to quality/format constraints.
 
-### 🗄️ Cache Management
-
-- **PostgreSQL Support in Cache Cleaner**: Elevated cache_cleaner to v1.2 with PostgreSQL as the primary cache backend (analysis_records, quality_records, video_records, path_index). SQLite remains as fallback. Full purge and targeted path-based cleanup supported.
-- **Expanded Cleanup Coverage**: Now clears path-tree JSON cache, progress trackers (`~/.mfbprogress/`), temp/lock files in addition to SQLite databases and logs.
-
 ### 🔧 Code Quality
 
+- **Pipeline API Signature Refactor**: `run_imagemagick_cjxl_pipeline` and `try_imagemagick_fallback` now accept `ultimate: bool` instead of a raw `effort: u8` parameter, enforcing mode-locked distance/effort selection at the call-site level. All callers across `lossless_converter.rs`, `depth_channel.rs`, `hdr_synthesis.rs`, and `conversion_api.rs` updated.
+- **JXL Builder Debug Assertion**: `CjxlBuilder::effort()` now includes a `debug_assert!` via `is_supported_jxl_effort()` to catch unsupported effort values at development time (policy permits only e7 and e10).
+- **Command Indicator Consistency**: All `JxlIndicator` generated commands in `image_analyzer.rs` and `image_recommender.rs` now emit `-e {JXL_DEFAULT_EFFORT}` instead of hardcoded `-e 9`, keeping recommendation output in sync with runtime policy.
 - **Simplified Workload Detection**: Unified image workload type detection, removing unnecessary directory-vs-file branching for conversion tasks.
 - **Streamlined Error Handling**: Reduced redundant error classification logic in batch conversion; simplified disk-full pause detection and read-error identification.
 
@@ -38,6 +39,9 @@ All notable changes to this project will be documented in this file.
 
 ### 📐 Testing Infrastructure
 
+- **JXL Exploration Probe Tests**: Added `test_jxl_exploration_probe_uses_imagemagick_fallback` and `test_jxl_exploration_probe_skips_fallback_after_direct_success` in `lossless_converter.rs` to verify the two-path probe logic (direct cjxl → ImageMagick fallback).
+- **HEVC Preset Sanitizer Tests**: Added `test_hevc_preset_sanitizer_clamps_to_allowed_window` and `test_hevc_preset_name_sanitizer_handles_raw_strings` in `preset.rs`, plus `test_ffmpeg_hevc_preset_is_sanitized` and `test_x265_preset_is_sanitized` in `parity_tests.rs`.
+- **JXL Policy Constant Tests**: Added `test_jxl_effort_policy_is_mode_locked` and `test_jxl_distance_policy_pins_ultimate_mode` in `constants.rs` to validate effort/distance policy functions.
 - **Property Tests**: Added `crates/shared_utils/tests/property_tests.rs` with proptest-based property tests for float approximation (identity, symmetry) and precision metadata roundtrip.
 - **Snapshot Tests**: Added `crates/shared_utils/tests/snapshot_tests.rs` using `insta` for regression-safe snapshot testing of FFmpeg and cjxl builder output.
 - **Benchmarks**: Added `crates/shared_utils/benches/quality_benches.rs` (criterion) for micro-benchmarking quality-critical hot paths.
