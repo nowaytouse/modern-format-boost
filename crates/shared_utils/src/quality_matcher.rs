@@ -927,8 +927,8 @@ fn calculate_raw_bpp(analysis: &QualityAnalysis, pixels: u64) -> Result<f64, Str
             if let Some(fps) = analysis.fps {
                 if fps > 0.0 {
                     let bits_per_frame =
-                        f64::from(u32::try_from(video_bitrate).unwrap_or(u32::MAX)) / fps;
-                    return Ok(bits_per_frame / f64::from(u32::try_from(pixels).unwrap_or(1)));
+                        crate::numeric_cast::u64_to_f64(video_bitrate) / fps;
+                    return Ok(bits_per_frame / crate::numeric_cast::u64_to_f64(pixels.max(1)));
                 }
             }
         }
@@ -942,14 +942,15 @@ fn calculate_raw_bpp(analysis: &QualityAnalysis, pixels: u64) -> Result<f64, Str
                     .ok_or_else(|| "Missing FPS for BPP calculation".to_string())?;
                 let total_frames = crate::numeric_cast::f64_to_u64_sat(duration * fps);
                 let bits_per_frame =
-                    f64::from(u32::try_from(analysis.file_size * 8).unwrap_or(u32::MAX))
-                        / f64::from(u32::try_from(total_frames.max(1)).unwrap_or(1));
-                return Ok(bits_per_frame / f64::from(u32::try_from(pixels).unwrap_or(1)));
+                    crate::numeric_cast::u64_to_f64(analysis.file_size) * 8.0
+                        / crate::numeric_cast::u64_to_f64(total_frames.max(1));
+                return Ok(bits_per_frame / crate::numeric_cast::u64_to_f64(pixels.max(1)));
             }
         }
+        // BPP = bits per pixel; file_size is in bytes so multiply by 8
         return Ok(
-            f64::from(u32::try_from(analysis.file_size).unwrap_or(u32::MAX))
-                / f64::from(u32::try_from(pixels).unwrap_or(1)),
+            crate::numeric_cast::u64_to_f64(analysis.file_size) * 8.0
+                / crate::numeric_cast::u64_to_f64(pixels.max(1)),
         );
     }
 
@@ -1041,7 +1042,7 @@ fn calculate_codec_efficiency(codec: SourceCodec, preset: Option<&str>) -> f64 {
 }
 
 fn calculate_resolution_factor(pixels: u64) -> f64 {
-    let megapixels = f64::from(u32::try_from(pixels).unwrap_or(1)) / 1_000_000.0;
+    let megapixels = crate::numeric_cast::u64_to_f64(pixels) / 1_000_000.0;
     if megapixels > 8.0 {
         0.05f64.mul_add((8.0 / megapixels).min(1.0), 0.80)
     } else if megapixels > 2.0 {

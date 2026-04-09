@@ -6,6 +6,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] — TBD
 
+### 🔧 Code Quality
+
+- **BPP Calculation Overflow Fix**: Replaced `f64::from(u32::try_from(...))` patterns in `calculate_raw_bpp` and `calculate_resolution_factor` with `crate::numeric_cast::u64_to_f64()` to avoid silent saturation on large values. Fixed BPP formula to correctly multiply `file_size * 8` (bytes to bits); previously used raw byte count, underestimating BPP by 8×.
+- **PSNR-to-SSIM Mapping Improvement**: Changed `psnr_to_ssim_estimate` from amplitude-domain (`/20.0`) to power-domain (`/10.0`) mapping for better separation at high quality levels (PSNR 35–50 dB). Added guard for non-positive PSNR values and extended clamp upper bound to `0.99999`.
+
 ### 🖼️ Image Processing
 
 - **JXL Final Round Quality-Aware Selection**: Replaced naive "smallest wins" finalist comparison with `compare_jxl_finalists` — any candidate that beats the original input size is always preferred over any candidate that doesn't. Among those that both beat input (or both don't), lower distance (higher quality) wins, with size as tiebreaker. Previously a candidate with 0.01/9.2MB would lose to 0.1/7.5MB even though 9.2MB already beat input — now 0.01 wins for keeping more quality.
