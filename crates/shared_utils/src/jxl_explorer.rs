@@ -365,6 +365,20 @@ where
     let mut best_idx = 0usize;
     let mut region_keys = HashSet::new();
     region_keys.insert(candidate_region_key(initial_distance));
+
+    // Condition A (Hard Constraint): If d=0.001 is already safe (<= 100% size), stop exploring.
+    // Quality is already safe and beneficial, so further exploration cost is not worth it.
+    let ratio = size_ratio(initial_size, input_size);
+    if ratio <= 1.0 {
+        log.push(format!(
+            "   Early exit: d={initial_distance:.3} is already safe and beneficial ({:.1}% ≤ 100%)",
+            ratio * 100.0
+        ));
+        return Ok(Some(finalize_screening_result(
+            candidates, 0, iterations, log,
+        )));
+    }
+
     if near_boundary(initial_size, input_size) {
         add_reason(
             &mut candidates,
@@ -711,5 +725,26 @@ mod tests {
             result.log
         );
         assert!(result.best_distance < 1.0);
+    }
+
+    #[test]
+    fn test_screening_early_exit_on_safe_initial_result() {
+        // Condition A: d=0.001 is safe (90 <= 100), should exit immediately
+        let mut calls = 0;
+        let result = screen_jxl_candidates(100, 90, |_distance| {
+            calls += 1;
+            Ok(50) // Should never be called
+        })
+        .expect("exploration should succeed")
+        .expect("screening result should exist");
+
+        assert_eq!(result.best_distance, 0.001);
+        assert_eq!(result.best_output_size, 90);
+        assert_eq!(result.iterations, 1);
+        assert_eq!(calls, 0); // No further probes
+        assert!(result
+            .log
+            .iter()
+            .any(|line| line.contains("Early exit")));
     }
 }
