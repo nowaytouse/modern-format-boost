@@ -79,6 +79,44 @@ pub fn fix_extension_if_mismatch(path: &std::path::Path) -> Result<PathBuf> {
     Ok(path.to_path_buf())
 }
 
+/// Check if a file's extension mismatches its content, but do NOT rename.
+/// Returns the path unchanged. Logs the mismatch for downstream awareness.
+///
+/// Use this variant when the source directory must remain immutable
+/// (e.g., when an output directory is configured).
+///
+/// # Errors
+/// Returns an error if content analysis fails.
+pub fn check_extension_mismatch_readonly(path: &std::path::Path) -> Result<PathBuf> {
+    use crate::quality_matcher::SourceCodec;
+
+    let current_ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_lowercase)
+        .unwrap_or_default();
+
+    if let Some(codec) = SourceCodec::identify_by_content(path) {
+        if !codec.is_extension_compatible(&current_ext) {
+            let content_format = codec.default_extension();
+            tracing::warn!(
+                path = %path.display(),
+                current_ext,
+                detected_format = content_format,
+                "Extension mismatch detected (source immutable, not renaming)"
+            );
+            eprintln!(
+                "⚠️  [Extension Check] {} has .{} extension but content is .{} (source directory immutable, not renaming)",
+                path.display(),
+                current_ext,
+                content_format
+            );
+        }
+    }
+
+    Ok(path.to_path_buf())
+}
+
 /// Copy a file to the output directory while preserving structure.
 ///
 /// # Errors

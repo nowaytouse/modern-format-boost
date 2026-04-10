@@ -233,7 +233,13 @@ where
         progress_bar.set_message(&file.file_name().unwrap_or_default().to_string_lossy());
 
         // Fix extension by content first; after fix, only treat as video if extension still in list (avoids disguised-extension panic).
-        let fixed = match fix_extension_if_mismatch(&file) {
+        // When an output directory is configured the source tree must remain immutable:
+        // use the readonly variant that logs mismatches without renaming source files.
+        let fixed = match if config.output.is_some() {
+            crate::smart_file_copier::check_extension_mismatch_readonly(&file)
+        } else {
+            fix_extension_if_mismatch(&file)
+        } {
             Ok(p) => p,
             Err(e) => {
                 error!("❌ Extension fix failed for {}: {}", file.display(), e);
@@ -521,7 +527,13 @@ where
     }
 
     // Fix extension by content first so all downstream checks see the real format (avoids disguised-extension panic).
-    let fixed_input = fix_extension_if_mismatch(&config.input)?;
+    // When an output directory is configured the source tree must remain immutable:
+    // use the readonly variant that logs mismatches without renaming source files.
+    let fixed_input = if config.output.is_some() {
+        crate::smart_file_copier::check_extension_mismatch_readonly(&config.input)?
+    } else {
+        fix_extension_if_mismatch(&config.input)?
+    };
     let input = fixed_input.as_path();
 
     if !has_extension(input, SUPPORTED_VIDEO_EXTENSIONS) {

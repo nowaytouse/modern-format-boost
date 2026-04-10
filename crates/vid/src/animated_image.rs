@@ -1831,14 +1831,22 @@ pub fn convert_to_gif_apple_compat(
 
     if input_ext == "gif" {
         eprintln!("   ⏭️  Input is already GIF, skipping re-encode (would likely increase size)");
+        let copied_dest = copy_original_on_skip(input, options);
         mark_as_processed(input);
         return Ok(ConversionResult {
             ignored: false,
             success: true,
             input_path: input.display().to_string(),
-            output_path: Some(input.display().to_string()),
+            output_path: copied_dest
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .or_else(|| Some(input.display().to_string())),
             input_size,
-            output_size: Some(input_size),
+            output_size: copied_dest
+                .as_ref()
+                .and_then(|p| fs::metadata(p).ok())
+                .map(|m| m.len())
+                .or(Some(input_size)),
             size_reduction: Some(0.0),
             message: "Skipped: Already GIF (re-encoding would increase size)".to_string(),
             skipped: true,

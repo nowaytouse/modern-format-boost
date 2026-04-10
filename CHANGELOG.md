@@ -8,6 +8,9 @@ All notable changes to this project will be documented in this file.
 
 ### 🐛 Bug Fixes
 
+- **GIF Pipeline Integrity**: Fixed a critical data-loss bug where GIF files "skipped" during conversion (due to size constraints) were not copied to the output directory.
+- **Output Path Accuracy**: Corrected `ConversionResult.output_path` to point to the actual destination path instead of incorrectly returning the source path, ensuring logs correctly reflect file locations.
+- **Source Directory Immutability**: Hardened the extension-fix logic to prevent `fix_extension_if_mismatch` from renaming files in the source directory when an output directory is configured. Added `check_extension_mismatch_readonly` for safe content-based extension validation.
 - **Temporal Complexity Factor Asymmetry**: Fixed `calculate_complexity_factor` to use symmetric adjustments — spatial: 15%/15% (1.15/0.85), temporal: 10%/10% (1.10/0.90). Previously used asymmetric values (spatial: +15%/-10%, temporal: +10%/-5%) which could bias quality calculations.
 - **Unsigned Saturation Arithmetic**: Fixed `calculate_confidence_v3` to use `u64` throughout instead of `u32::try_from()`, preventing saturation at 4 Gbps bitrates (u32::MAX ≈ 4.3 Gbps).
 - **Division by Zero Risk**: Added explicit zero checks in `calculate_raw_bpp()` for `pixels`, `fps`, and `total_frames` parameters, replacing `.max(1)` workarounds with proper error messages.

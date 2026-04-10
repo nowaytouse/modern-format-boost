@@ -440,7 +440,8 @@ pub use file_copier::{
     SIDECAR_EXTENSIONS, SUPPORTED_IMAGE_EXTENSIONS, SUPPORTED_VIDEO_EXTENSIONS,
 };
 pub use smart_file_copier::{
-    copy_on_skip_or_fail, fix_extension_if_mismatch, smart_copy_with_structure,
+    check_extension_mismatch_readonly, copy_on_skip_or_fail, fix_extension_if_mismatch,
+    smart_copy_with_structure,
 };
 
 pub use live_photo::is_live_photo;
