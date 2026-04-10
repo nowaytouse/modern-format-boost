@@ -172,10 +172,12 @@ pub fn calculate_ms_ssim_yuv(
     let end_time = Local::now().format("%Y-%m-%d %H:%M:%S");
     eprintln!("   ⏱️  Completed in {elapsed}s (End: {end_time})");
 
-    // If chroma channels are available, use BT.601 weighted average
-    // If not, use Y-only (still perceptually dominant and meaningful)
+    // If chroma channels are available, weight by 4:2:0 sample counts (Y:U:V = 4:1:1).
+    // In YUV 4:2:0, each 2x2 luma block has 4 Y samples but only 1 U and 1 V sample,
+    // so Y contributes 4/6 of the signal and each chroma plane contributes 1/6.
+    // If not, use Y-only (still perceptually dominant and meaningful).
     let (u_val, v_val, weighted_avg) = if let (Some(u), Some(v)) = (u_ms_ssim, v_ms_ssim) {
-        let avg = (y_ms_ssim.mul_add(6.0, u) + v) / 8.0;
+        let avg = (y_ms_ssim.mul_add(4.0, u) + v) / 6.0;
         (u, v, avg)
     } else {
         eprintln!("      ℹ️  Using Y-only MS-SSIM (chroma channels unavailable)");

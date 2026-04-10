@@ -509,14 +509,15 @@ pub const fn jxl_distance_for_mode(requested_distance: f32, ultimate: bool) -> f
 }
 
 // --- JXL Distance Exploration (Ultimate Explore Mode) ---
-/// Fixed distance ladder for Phase 1 fast scan.
-pub const JXL_EXPLORE_LADDER: &[f32] = &[0.001, 0.01, 0.1];
+/// Smallest allowed distance for extreme JXL exploration.
+pub const JXL_EXPLORE_FLOOR: f32 = JXL_ULTIMATE_DISTANCE;
 /// Hard ceiling — exploration MUST stay strictly below this value.
-pub const JXL_EXPLORE_CEILING: f32 = 0.999;
-/// Minimum step size for Phase 2 binary search.
-pub const JXL_EXPLORE_BINARY_SEARCH_PRECISION: f32 = 0.01;
+pub const JXL_EXPLORE_CEILING: f32 = f32::from_bits(1.0f32.to_bits() - 1);
+/// Binary search convergence threshold: stop when hi − lo < this value.
+/// Set to floor/10 so that the narrowest bracket still resolves a meaningful distance delta.
+pub const JXL_EXPLORE_BINARY_SEARCH_PRECISION: f32 = JXL_EXPLORE_FLOOR / 10.0;
 /// Maximum total exploration iterations across both phases.
-pub const JXL_EXPLORE_MAX_ITERATIONS: u32 = 12;
+pub const JXL_EXPLORE_MAX_ITERATIONS: u32 = 50;
 
 // --- ImageMagick Argument Constants ---
 pub const MAGICK_ARG_STRIP: &str = "-strip";

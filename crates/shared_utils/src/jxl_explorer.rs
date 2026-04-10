@@ -21,7 +21,7 @@
 //! - **Finalist shortlist**: Curated subset promoted for e10 finalization
 
 use crate::constants::{
-    JXL_EXPLORE_BINARY_SEARCH_PRECISION, JXL_EXPLORE_CEILING, JXL_EXPLORE_LADDER,
+    JXL_EXPLORE_BINARY_SEARCH_PRECISION, JXL_EXPLORE_CEILING, JXL_EXPLORE_FLOOR,
     JXL_EXPLORE_MAX_ITERATIONS,
 };
 use std::collections::HashSet;
@@ -30,6 +30,47 @@ const JXL_FINALIST_LIMIT: usize = 8;
 const JXL_NEAR_BEST_MARGIN_RATIO: f64 = 0.01;
 const JXL_BOUNDARY_LOW_RATIO: f64 = 0.95;
 const JXL_BOUNDARY_HIGH_RATIO: f64 = 1.05;
+const JXL_REGION_BUCKET_COUNT: f64 = 6.0;
+
+// --- Perceptual Band Boundaries ---
+//
+// These boundaries partition the JXL distance space into perceptual quality tiers.
+// They are empirical constants derived from the JXL specification's distance semantics:
+//
+//   d ≤ 0.01  → "plateau" — mathematically lossless or indistinguishable from it
+//   d ≤ 0.1   → "visually lossless" — no visible artifacts at normal viewing
+//   d ≤ 0.3   → "balanced" — quality/size sweet spot for archival
+//   d > 0.3   → "ceiling sweep" — aggressive compression, visible trade-offs
+//
+// The interpolation strategy differs per tier:
+//   - MicroAdjust (plateau):  log10 interpolation + smoothstep — distances are so small
+//     that linear steps would collapse to a single float; log-space preserves resolution.
+//   - BoundaryPush/WidePush:  linear interpolation + smoothstep — in the perceptual
+//     range, equal ΔDistance ≈ equal ΔJND, so linear spacing tracks perception.
+//   - CeilingSweep:           linear interpolation with diminishing returns via
+//     normalized excess pressure — prevents runaway distance growth.
+//
+// NOTE: These are manually calibrated partitions, not natural constants. If dataset
+// distribution changes significantly, recalibrate via telemetry-driven analysis of
+// (initial_ratio, pressure_stops, chosen_profile, target_distance, outcome_quality)
+// tuples logged by the screening pass.
+const JXL_DISTANCE_CEILING_PLATEAU_MAX: f64 = 0.01;
+const JXL_DISTANCE_VISUAL_LOSSLESS_MAX: f64 = 0.1;
+const JXL_DISTANCE_BALANCED_MAX: f64 = 0.3;
+
+// --- Pressure-Stop Boundaries ---
+//
+// Pressure stops = log2(initial_ratio) — how many doublings the initial JXL output
+// exceeds the input. Each boundary maps to a profile that governs search intensity
+// and distance range. Values are log2 of the ratio thresholds:
+//
+//   ≤ 0.0704 stops (~1.05×) → MicroAdjust:   file nearly fits; fine-tune near d=0
+//   ≤ 0.5850 stops (~1.50×) → BoundaryPush:  moderate oversize; push to visual lossless
+//   ≤ 1.3219 stops (~2.50×) → WidePush:      significant oversize; explore balanced range
+//   > 1.3219 stops           → CeilingSweep:  extreme oversize; sweep toward ceiling
+const JXL_MICRO_PRESSURE_STOPS_MAX: f64 = 0.070_389_327_9; // log2(1.05)
+const JXL_BOUNDARY_PRESSURE_STOPS_MAX: f64 = 0.584_962_500_7; // log2(1.50)
+const JXL_WIDE_PRESSURE_STOPS_MAX: f64 = 1.321_928_094_9; // log2(2.50)
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JxlPromotionReason {
@@ -91,6 +132,14 @@ pub struct JxlScreeningResult {
     pub screened_candidates: Vec<JxlScreenedCandidate>,
     pub finalists: Vec<JxlScreenedCandidate>,
     pub log: Vec<String>,
+    /// Telemetry: ratio of initial JXL output to input (≥1.0 when oversize).
+    pub initial_ratio: f64,
+    /// Telemetry: log2(initial_ratio) — oversize severity in doublings.
+    pub pressure_stops: f64,
+    /// Telemetry: exploration profile selected for this file.
+    pub profile_label: &'static str,
+    /// Telemetry: target distance the adaptive plan aimed for.
+    pub target_distance: f32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -103,27 +152,90 @@ pub struct JxlExploreResult {
     pub screened_best_size: u64,
     pub promoted_distances: Vec<f32>,
     pub log: Vec<String>,
+    /// Telemetry: ratio of initial JXL output to input.
+    pub initial_ratio: f64,
+    /// Telemetry: log2(initial_ratio) — oversize severity in doublings.
+    pub pressure_stops: f64,
+    /// Telemetry: exploration profile selected for this file.
+    pub profile_label: &'static str,
+    /// Telemetry: target distance the adaptive plan aimed for.
+    pub target_distance: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum UpwardSearchCadence {
-    Adaptive,
-    Jogging,
-    Paused,
-    Normal,
+enum JxlExplorationProfile {
+    MicroAdjust,
+    BoundaryPush,
+    WidePush,
+    CeilingSweep,
 }
+
+impl JxlExplorationProfile {
+    fn label(self) -> &'static str {
+        match self {
+            Self::MicroAdjust => "micro-adjust",
+            Self::BoundaryPush => "boundary-push",
+            Self::WidePush => "wide-push",
+            Self::CeilingSweep => "ceiling-sweep",
+        }
+    }
+}
+
+fn oversize_pressure_stops(initial_ratio: f64) -> f64 {
+    initial_ratio.max(1.0).log2()
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct JxlExplorationPlan {
+    profile: JxlExplorationProfile,
+    target_distance: f32,
+    ladder: Vec<f32>,
+}
+
+type DistanceKey = u32;
 
 fn clamp_explore_distance(distance: f32) -> f32 {
-    distance.clamp(JXL_EXPLORE_LADDER[0], JXL_EXPLORE_CEILING)
+    if !distance.is_finite() {
+        return JXL_EXPLORE_FLOOR;
+    }
+
+    distance.clamp(JXL_EXPLORE_FLOOR, JXL_EXPLORE_CEILING)
 }
 
-fn distance_key(distance: f32) -> i32 {
-    // SAFETY: Clamped distance is in range [0.001, 0.999], so * 1000.0 yields [1, 999].
-    // After rounding, always fits safely in i32 without truncation. Used as HashSet key only.
-    let rounded = (clamp_explore_distance(distance) * 1000.0).round();
-    #[allow(clippy::cast_possible_truncation)]
-    let key = rounded as i32;
-    key
+fn distance_key(distance: f32) -> DistanceKey {
+    clamp_explore_distance(distance).to_bits()
+}
+
+fn trim_decimal_string(mut raw: String) -> String {
+    if raw.contains('.') {
+        while raw.ends_with('0') {
+            raw.pop();
+        }
+        if raw.ends_with('.') {
+            raw.pop();
+        }
+    }
+    raw
+}
+
+fn format_scalar_for_log(value: f32) -> String {
+    let normalized = f64::from(value.max(0.0));
+    let raw = if normalized >= 0.99 {
+        format!("{normalized:.8}")
+    } else if normalized < 0.01 {
+        format!("{normalized:.6}")
+    } else if normalized < 0.1 {
+        format!("{normalized:.4}")
+    } else {
+        format!("{normalized:.3}")
+    };
+
+    trim_decimal_string(raw)
+}
+
+#[must_use]
+pub fn format_distance_for_log(distance: f32) -> String {
+    format_scalar_for_log(clamp_explore_distance(distance))
 }
 
 fn size_ratio(size: u64, input_size: u64) -> f64 {
@@ -147,44 +259,269 @@ fn improvement_ratio(previous_size: u64, current_size: u64, input_size: u64) -> 
     }
 }
 
-fn round_phase_two_distance(distance: f32) -> f32 {
-    let precision = JXL_EXPLORE_BINARY_SEARCH_PRECISION.max(0.001);
-    let rounded = (distance / precision).ceil() * precision;
-    clamp_explore_distance((rounded * 1000.0).round() / 1000.0)
-}
+fn exploration_profile(initial_ratio: f64) -> JxlExplorationProfile {
+    let pressure_stops = oversize_pressure_stops(initial_ratio);
 
-fn next_phase_two_candidate(
-    current_distance: f32,
-    current_step: f32,
-    tested: &HashSet<i32>,
-) -> Option<f32> {
-    let rounded = round_phase_two_distance(current_distance + current_step);
-    if rounded > current_distance + f32::EPSILON && !tested.contains(&distance_key(rounded)) {
-        return Some(rounded);
+    if pressure_stops <= JXL_MICRO_PRESSURE_STOPS_MAX {
+        JxlExplorationProfile::MicroAdjust
+    } else if pressure_stops <= JXL_BOUNDARY_PRESSURE_STOPS_MAX {
+        JxlExplorationProfile::BoundaryPush
+    } else if pressure_stops <= JXL_WIDE_PRESSURE_STOPS_MAX {
+        JxlExplorationProfile::WidePush
+    } else {
+        JxlExplorationProfile::CeilingSweep
     }
-
-    let ceiling = clamp_explore_distance(JXL_EXPLORE_CEILING);
-    if ceiling > current_distance + f32::EPSILON && !tested.contains(&distance_key(ceiling)) {
-        return Some(ceiling);
-    }
-
-    None
 }
 
 fn candidate_region_key(distance: f32) -> i32 {
-    if distance <= 0.01 + f32::EPSILON {
-        0
-    } else if distance <= 0.1 + f32::EPSILON {
-        1
-    } else if distance <= 0.25 + f32::EPSILON {
-        2
-    } else if distance <= 0.5 + f32::EPSILON {
-        3
-    } else if distance <= 0.75 + f32::EPSILON {
-        4
-    } else {
-        5
+    let floor_log = f64::from(JXL_EXPLORE_FLOOR).log10();
+    let ceiling_log = f64::from(JXL_EXPLORE_CEILING).log10();
+    let distance_log = f64::from(clamp_explore_distance(distance)).log10();
+    let span = (ceiling_log - floor_log).max(f64::EPSILON);
+    let normalized = ((distance_log - floor_log) / span).clamp(0.0, 0.999_999);
+
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let bucket = (normalized * JXL_REGION_BUCKET_COUNT).floor() as i32;
+    bucket
+}
+
+fn canonicalize_generated_distance(distance: f64) -> Result<f32, String> {
+    if !distance.is_finite() {
+        return Err("adaptive JXL exploration generated a non-finite distance".to_string());
     }
+
+    let floor = f64::from(JXL_EXPLORE_FLOOR);
+    if distance + f64::EPSILON < floor {
+        return Err(format!(
+            "adaptive JXL exploration generated d={distance:.9} below the floor d={}",
+            format_distance_for_log(JXL_EXPLORE_FLOOR)
+        ));
+    }
+
+    let clamped = distance.clamp(floor, f64::from(JXL_EXPLORE_CEILING));
+    #[allow(clippy::cast_possible_truncation)]
+    let mut as_f32 = clamped as f32;
+    if as_f32 < JXL_EXPLORE_FLOOR {
+        as_f32 = JXL_EXPLORE_FLOOR;
+    }
+    if as_f32 >= 1.0 {
+        as_f32 = JXL_EXPLORE_CEILING;
+    }
+
+    Ok(as_f32)
+}
+
+fn normalize_ratio_band(value: f64, start: f64, end: f64) -> f64 {
+    let span = (end - start).max(f64::EPSILON);
+    ((value - start) / span).clamp(0.0, 1.0)
+}
+
+fn smoothstep01(value: f64) -> f64 {
+    let clamped = value.clamp(0.0, 1.0);
+    clamped * clamped * (3.0 - 2.0 * clamped)
+}
+
+/// Interpolate in **log10-distance space** (plateau tier only).
+///
+/// Used for the MicroAdjust profile where distances are sub-0.01. In this range,
+/// linear steps would collapse to identical f32 values, so log-space preserves
+/// resolution across the near-lossless plateau. Smoothstep easing prevents
+/// clustering at band edges.
+fn interpolate_plateau_distance(
+    min_distance: f64,
+    max_distance: f64,
+    normalized: f64,
+) -> Result<f32, String> {
+    let t = smoothstep01(normalized);
+    let min_log = min_distance.log10();
+    let max_log = max_distance.log10();
+    canonicalize_generated_distance(10f64.powf(min_log + (max_log - min_log) * t))
+}
+
+/// Interpolate in **linear distance space** (perceptual tiers).
+///
+/// Used for BoundaryPush, WidePush, and CeilingSweep profiles. In the d=0.01..1.0
+/// range, equal Δdistance ≈ equal ΔJND, so linear spacing tracks perceptual
+/// quality steps. Smoothstep easing concentrates probes near the band center
+/// where the quality/size trade-off is steepest.
+fn interpolate_perceptual_distance(
+    min_distance: f64,
+    max_distance: f64,
+    normalized: f64,
+) -> Result<f32, String> {
+    let t = smoothstep01(normalized);
+    canonicalize_generated_distance(min_distance + (max_distance - min_distance) * t)
+}
+
+fn profile_distance_range(profile: JxlExplorationProfile) -> (f64, f64) {
+    match profile {
+        JxlExplorationProfile::MicroAdjust => (
+            f64::from(JXL_EXPLORE_FLOOR),
+            JXL_DISTANCE_CEILING_PLATEAU_MAX,
+        ),
+        JxlExplorationProfile::BoundaryPush => (
+            JXL_DISTANCE_CEILING_PLATEAU_MAX,
+            JXL_DISTANCE_VISUAL_LOSSLESS_MAX,
+        ),
+        JxlExplorationProfile::WidePush => {
+            (JXL_DISTANCE_VISUAL_LOSSLESS_MAX, JXL_DISTANCE_BALANCED_MAX)
+        }
+        JxlExplorationProfile::CeilingSweep => {
+            (JXL_DISTANCE_BALANCED_MAX, f64::from(JXL_EXPLORE_CEILING))
+        }
+    }
+}
+
+/// Fixed anchor distances for each profile tier.
+///
+/// These are mandatory probe points during Phase 1 ladder construction. They ensure
+/// the search always samples at known perceptual boundaries, regardless of the
+/// adaptive interpolation budget.
+///
+/// **Overfitting risk**: The anchors are hand-picked for typical photographic content.
+/// Image distributions that cluster heavily around specific compression ratios may
+/// "get stuck" in dense anchor regions. Monitor the telemetry fields (`initial_ratio`,
+/// `pressure_stops`, `profile`, `target_distance`) logged by the screening pass to
+/// detect anchor regions that consistently fail to produce break-even candidates.
+fn profile_anchor_distances(profile: JxlExplorationProfile) -> &'static [f64] {
+    match profile {
+        JxlExplorationProfile::MicroAdjust => &[JXL_DISTANCE_CEILING_PLATEAU_MAX],
+        JxlExplorationProfile::BoundaryPush => &[
+            JXL_DISTANCE_CEILING_PLATEAU_MAX,
+            0.03,
+            0.06,
+            JXL_DISTANCE_VISUAL_LOSSLESS_MAX,
+        ],
+        JxlExplorationProfile::WidePush => &[
+            JXL_DISTANCE_CEILING_PLATEAU_MAX,
+            JXL_DISTANCE_VISUAL_LOSSLESS_MAX,
+            0.15,
+            0.2,
+            JXL_DISTANCE_BALANCED_MAX,
+        ],
+        JxlExplorationProfile::CeilingSweep => &[
+            JXL_DISTANCE_CEILING_PLATEAU_MAX,
+            JXL_DISTANCE_VISUAL_LOSSLESS_MAX,
+            JXL_DISTANCE_BALANCED_MAX,
+            0.5,
+            0.75,
+        ],
+    }
+}
+
+fn target_distance_for_ratio(
+    initial_ratio: f64,
+    profile: JxlExplorationProfile,
+) -> Result<f32, String> {
+    let pressure_stops = oversize_pressure_stops(initial_ratio);
+    match profile {
+        JxlExplorationProfile::MicroAdjust => interpolate_plateau_distance(
+            f64::from(JXL_EXPLORE_FLOOR),
+            JXL_DISTANCE_CEILING_PLATEAU_MAX,
+            normalize_ratio_band(pressure_stops, 0.0, JXL_MICRO_PRESSURE_STOPS_MAX),
+        ),
+        JxlExplorationProfile::BoundaryPush => interpolate_perceptual_distance(
+            JXL_DISTANCE_CEILING_PLATEAU_MAX,
+            JXL_DISTANCE_VISUAL_LOSSLESS_MAX,
+            normalize_ratio_band(
+                pressure_stops,
+                JXL_MICRO_PRESSURE_STOPS_MAX,
+                JXL_BOUNDARY_PRESSURE_STOPS_MAX,
+            ),
+        ),
+        JxlExplorationProfile::WidePush => interpolate_perceptual_distance(
+            JXL_DISTANCE_VISUAL_LOSSLESS_MAX,
+            JXL_DISTANCE_BALANCED_MAX,
+            normalize_ratio_band(
+                pressure_stops,
+                JXL_BOUNDARY_PRESSURE_STOPS_MAX,
+                JXL_WIDE_PRESSURE_STOPS_MAX,
+            ),
+        ),
+        JxlExplorationProfile::CeilingSweep => {
+            let excess_pressure = (pressure_stops - JXL_WIDE_PRESSURE_STOPS_MAX).max(0.0);
+            let normalized = excess_pressure / (excess_pressure + 1.0);
+            interpolate_perceptual_distance(
+                JXL_DISTANCE_BALANCED_MAX,
+                f64::from(JXL_EXPLORE_CEILING),
+                normalized,
+            )
+        }
+    }
+}
+
+fn build_adaptive_ladder(
+    profile: JxlExplorationProfile,
+    target_distance: f32,
+    probe_count: usize,
+) -> Result<Vec<f32>, String> {
+    if target_distance <= JXL_EXPLORE_FLOOR + f32::EPSILON {
+        return Ok(Vec::new());
+    }
+
+    let mut ladder = Vec::new();
+    let mut seen = HashSet::new();
+    let target_distance_f64 = f64::from(target_distance);
+
+    for &anchor in profile_anchor_distances(profile) {
+        if anchor <= f64::from(JXL_EXPLORE_FLOOR) {
+            continue;
+        }
+        if anchor > target_distance_f64 + f64::EPSILON {
+            continue;
+        }
+
+        let candidate = canonicalize_generated_distance(anchor)?;
+        if candidate > JXL_EXPLORE_FLOOR + f32::EPSILON && seen.insert(distance_key(candidate)) {
+            ladder.push(candidate);
+        }
+    }
+
+    let interpolation_budget = probe_count.saturating_sub(ladder.len()).max(1);
+    let (band_min, _) = profile_distance_range(profile);
+    let interpolation_start = band_min.min(target_distance_f64);
+
+    for probe_idx in 1..=interpolation_budget {
+        let progress = probe_idx as f64 / interpolation_budget as f64;
+        let candidate = if profile == JxlExplorationProfile::MicroAdjust {
+            interpolate_plateau_distance(interpolation_start, target_distance_f64, progress)?
+        } else {
+            interpolate_perceptual_distance(interpolation_start, target_distance_f64, progress)?
+        };
+        if candidate > JXL_EXPLORE_FLOOR + f32::EPSILON && seen.insert(distance_key(candidate)) {
+            ladder.push(candidate);
+        }
+    }
+
+    ladder.sort_by(|left, right| left.total_cmp(right));
+    Ok(ladder)
+}
+
+fn build_exploration_plan(
+    input_size: u64,
+    initial_size: u64,
+) -> Result<JxlExplorationPlan, String> {
+    let initial_ratio = size_ratio(initial_size, input_size);
+    let profile = exploration_profile(initial_ratio);
+    let target_distance = target_distance_for_ratio(initial_ratio, profile)?;
+    let distance_span = (f64::from(target_distance) / f64::from(JXL_EXPLORE_FLOOR))
+        .max(1.0)
+        .log2();
+    let (min_probes, max_probes) = match profile {
+        JxlExplorationProfile::MicroAdjust => (4usize, 6usize),
+        JxlExplorationProfile::BoundaryPush => (5usize, 8usize),
+        JxlExplorationProfile::WidePush => (6usize, 10usize),
+        JxlExplorationProfile::CeilingSweep => (8usize, 14usize),
+    };
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let probe_count = (distance_span.ceil() as usize + 3).clamp(min_probes, max_probes);
+    let ladder = build_adaptive_ladder(profile, target_distance, probe_count)?;
+
+    Ok(JxlExplorationPlan {
+        profile,
+        target_distance,
+        ladder,
+    })
 }
 
 fn near_best_margin(input_size: u64) -> u64 {
@@ -215,8 +552,8 @@ fn add_reason(
 
     candidates[idx].reasons.push(reason);
     log.push(format!(
-        "Promoted d={:.3} for e10 finalization ({})",
-        candidates[idx].distance,
+        "Shortlist keeps d={} ({})",
+        format_distance_for_log(candidates[idx].distance),
         reason.label()
     ));
 }
@@ -224,63 +561,104 @@ fn add_reason(
 fn shortlist_finalists(
     candidates: &[JxlScreenedCandidate],
     best_idx: usize,
+    input_size: u64,
 ) -> Vec<JxlScreenedCandidate> {
-    let mut finalists = Vec::new();
-    let mut selected = HashSet::new();
-    include_finalist(&mut finalists, &mut selected, &candidates[best_idx]);
-    include_finalist(&mut finalists, &mut selected, &candidates[0]);
-
-    let mut mandatory: Vec<_> = candidates
+    // Tier 1: below-source candidates (output < input), sorted by ascending d.
+    // These are the only candidates that can produce a net saving. Highest quality
+    // (lowest d) first so e10 has the best chance of confirming a valid winner.
+    let mut below_source: Vec<_> = candidates
         .iter()
-        .filter(|candidate| {
-            candidate.has_reason(JxlPromotionReason::BoundaryRegion)
-                || candidate.has_reason(JxlPromotionReason::AdjacentToBest)
+        .filter(|c| c.output_size < input_size)
+        .collect();
+    below_source.sort_by(|a, b| {
+        a.distance
+            .total_cmp(&b.distance)
+            .then_with(|| a.output_size.cmp(&b.output_size))
+    });
+
+    // Tier 2: near-boundary oversize candidates (100–105% of input), sorted by ascending d.
+    // These sit just above break-even and may compress under e10 even if e7 called them oversize.
+    let mut near_boundary_cands: Vec<_> = candidates
+        .iter()
+        .filter(|c| c.output_size >= input_size && near_boundary(c.output_size, input_size))
+        .collect();
+    near_boundary_cands.sort_by(|a, b| {
+        a.distance
+            .total_cmp(&b.distance)
+            .then_with(|| a.output_size.cmp(&b.output_size))
+    });
+
+    // Tier 3: everything else with a promotion reason (oversize but promoted),
+    // sorted by promotion score descending then ascending d.
+    let mut promoted_oversize: Vec<_> = candidates
+        .iter()
+        .filter(|c| {
+            c.output_size >= input_size
+                && !near_boundary(c.output_size, input_size)
+                && !c.reasons.is_empty()
         })
         .collect();
-    mandatory.sort_by(|left, right| {
-        left.output_size
-            .cmp(&right.output_size)
-            .then_with(|| left.distance.total_cmp(&right.distance))
-    });
-    for candidate in mandatory {
-        include_finalist(&mut finalists, &mut selected, candidate);
-    }
-
-    let mut ranked: Vec<_> = candidates
-        .iter()
-        .filter(|candidate| !candidate.reasons.is_empty())
-        .collect();
-    ranked.sort_by(|left, right| {
-        right
-            .promotion_score()
-            .cmp(&left.promotion_score())
-            .then_with(|| left.output_size.cmp(&right.output_size))
-            .then_with(|| left.distance.total_cmp(&right.distance))
+    promoted_oversize.sort_by(|a, b| {
+        b.promotion_score()
+            .cmp(&a.promotion_score())
+            .then_with(|| a.distance.total_cmp(&b.distance))
     });
 
-    for candidate in ranked {
+    let mut finalists = Vec::new();
+    let mut selected = HashSet::new();
+
+    // Always include the best known below-source candidate first (guaranteed slot).
+    include_finalist(&mut finalists, &mut selected, &candidates[best_idx]);
+
+    // Fill remaining slots: tier 1 → tier 2 → tier 3.
+    for tier in [&below_source[..], &near_boundary_cands[..], &promoted_oversize[..]] {
+        for candidate in tier {
+            if finalists.len() >= JXL_FINALIST_LIMIT {
+                break;
+            }
+            include_finalist(&mut finalists, &mut selected, candidate);
+        }
         if finalists.len() >= JXL_FINALIST_LIMIT {
             break;
         }
-        include_finalist(&mut finalists, &mut selected, candidate);
     }
 
-    finalists.sort_by(|left, right| {
-        left.output_size
-            .cmp(&right.output_size)
-            .then_with(|| left.distance.total_cmp(&right.distance))
+    // Final order: ascending d (lowest = highest quality first).
+    finalists.sort_by(|a, b| {
+        a.distance
+            .total_cmp(&b.distance)
+            .then_with(|| a.output_size.cmp(&b.output_size))
     });
     finalists
 }
 
 fn include_finalist(
     finalists: &mut Vec<JxlScreenedCandidate>,
-    selected: &mut HashSet<i32>,
+    selected: &mut HashSet<DistanceKey>,
     candidate: &JxlScreenedCandidate,
 ) {
     if selected.insert(distance_key(candidate.distance)) {
         finalists.push(candidate.clone());
     }
+}
+
+fn candidate_reason_summary(candidate: &JxlScreenedCandidate, input_size: u64) -> String {
+    let reasons = candidate
+        .reasons
+        .iter()
+        .map(|reason| reason.label())
+        .collect::<Vec<_>>()
+        .join("+");
+    let stage = if candidate.ladder_phase {
+        "screen"
+    } else {
+        "refine"
+    };
+    format!(
+        "d={} ({stage}, {:.1}% of input, {reasons})",
+        format_distance_for_log(candidate.distance),
+        size_ratio_pct(candidate.output_size, input_size)
+    )
 }
 
 /// Finalizes screening results by shortlisting top finalist candidates.
@@ -292,19 +670,34 @@ fn include_finalist(
 /// - **Finalists**: Selected subset from screened candidates for final evaluation
 /// - **Promotion**: Reason(s) a candidate was included in finalist set
 fn finalize_screening_result(
+    input_size: u64,
     candidates: Vec<JxlScreenedCandidate>,
     best_idx: usize,
     iterations: u32,
     mut log: Vec<String>,
+    initial_ratio: f64,
+    pressure_stops: f64,
+    profile_label: &'static str,
+    target_distance: f32,
 ) -> JxlScreeningResult {
-    let finalists = shortlist_finalists(&candidates, best_idx);
+    let finalists = shortlist_finalists(&candidates, best_idx, input_size);
     let finalist_summary = finalists
         .iter()
-        .map(|candidate| format!("d={:.3}", candidate.distance))
+        .map(|candidate| candidate_reason_summary(candidate, input_size))
         .collect::<Vec<_>>()
         .join(", ");
     log.push(format!(
-        "e10 finalist shortlist ({}): {finalist_summary}",
+        "Tailored e10 shortlist ({}): {finalist_summary}",
+        finalists.len()
+    ));
+
+    // Structured telemetry for data-driven calibration.
+    // Collect these lines to fit band boundaries statistically rather than manually.
+    log.push(format!(
+        "TELEMETRY: initial_ratio={initial_ratio:.6} pressure_stops={pressure_stops:.4} profile={profile_label} target_distance={} best_distance={} best_pct={:.1} iterations={iterations} finalists={}",
+        format_distance_for_log(target_distance),
+        format_distance_for_log(candidates[best_idx].distance),
+        size_ratio_pct(candidates[best_idx].output_size, input_size),
         finalists.len()
     ));
 
@@ -315,6 +708,10 @@ fn finalize_screening_result(
         screened_candidates: candidates,
         finalists,
         log,
+        initial_ratio,
+        pressure_stops,
+        profile_label,
+        target_distance,
     }
 }
 
@@ -343,7 +740,7 @@ where
     }
 
     let mut log = Vec::new();
-    let initial_distance = clamp_explore_distance(JXL_EXPLORE_LADDER[0]);
+    let initial_distance = clamp_explore_distance(JXL_EXPLORE_FLOOR);
     let mut iterations = 1u32;
     let mut tested = HashSet::new();
     tested.insert(distance_key(initial_distance));
@@ -357,12 +754,10 @@ where
     add_reason(&mut candidates, 0, JxlPromotionReason::Baseline, &mut log);
     add_reason(&mut candidates, 0, JxlPromotionReason::NewRegion, &mut log);
 
-    log.push(format!(
-        "Phase 1 ladder: d={initial_distance:.3} -> {:.1}% of input",
-        size_ratio_pct(initial_size, input_size)
-    ));
-
-    let mut best_idx = 0usize;
+    // Tracks the index of the oversize candidate with the smallest output_size seen so far
+    // in Phase 1. Used only for NearCurrentBest/AdjacentToBest promotion heuristics.
+    // Not the final winner — that is determined by best_below_idx / final_best_idx below.
+    let mut oversize_best_idx = 0usize;
     let mut region_keys = HashSet::new();
     region_keys.insert(candidate_region_key(initial_distance));
 
@@ -371,13 +766,37 @@ where
     let ratio = size_ratio(initial_size, input_size);
     if ratio <= 1.0 {
         log.push(format!(
-            "   Early exit: d={initial_distance:.3} is already safe and beneficial ({:.1}% ≤ 100%)",
+            "Early exit: the required floor d={} is already safe ({:.1}% of input)",
+            format_distance_for_log(initial_distance),
             ratio * 100.0
         ));
         return Ok(Some(finalize_screening_result(
-            candidates, 0, iterations, log,
+            input_size, candidates, 0, iterations, log,
+            ratio,
+            0.0,
+            "early-exit",
+            JXL_EXPLORE_FLOOR,
         )));
     }
+
+    let plan = build_exploration_plan(input_size, initial_size)?;
+    let pressure_stops = oversize_pressure_stops(ratio);
+    let (band_min, band_max) = profile_distance_range(plan.profile);
+    log.push(format!(
+        "Adaptive plan ({}, +{pressure_stops:.2} stops) for this file: baseline d={} is {:.1}% of input, phase 1 will probe {} perceptual-band distances in d={}..{} up to d={}",
+        plan.profile.label(),
+        format_distance_for_log(initial_distance),
+        size_ratio_pct(initial_size, input_size),
+        plan.ladder.len(),
+        format_scalar_for_log(band_min as f32),
+        format_scalar_for_log(band_max as f32),
+        format_distance_for_log(plan.target_distance)
+    ));
+    log.push(format!(
+        "Phase 0 baseline: d={} -> {:.1}% of input",
+        format_distance_for_log(initial_distance),
+        size_ratio_pct(initial_size, input_size)
+    ));
 
     if near_boundary(initial_size, input_size) {
         add_reason(
@@ -388,15 +807,29 @@ where
         );
     }
 
-    let mut phase_two_baseline = None;
     let mut pending_adjacent_promotion = false;
+    // d_over: highest d seen that is still oversize (output >= input).
+    // Initialized from the baseline (d=0.001) which is always oversize at this code path
+    // (we only reach here when ratio > 1.0).
+    let mut d_over: Option<f32> = Some(initial_distance);
+    // d_under: lowest d seen that beats the source (output < input)
+    let mut d_under: Option<f32> = None;
+    // best_below_idx: index of candidate with lowest d where output < input
+    let mut best_below_idx: Option<usize> = None;
 
-    for &candidate_distance in JXL_EXPLORE_LADDER.iter().skip(1) {
+    for (probe_idx, &candidate_distance) in plan.ladder.iter().enumerate() {
         if iterations >= JXL_EXPLORE_MAX_ITERATIONS {
             break;
         }
 
         let candidate_distance = clamp_explore_distance(candidate_distance);
+        if candidate_distance + f32::EPSILON < JXL_EXPLORE_FLOOR {
+            return Err(format!(
+                "adaptive JXL exploration produced d={} below the floor d={}",
+                format_distance_for_log(candidate_distance),
+                format_distance_for_log(JXL_EXPLORE_FLOOR)
+            ));
+        }
         if !tested.insert(distance_key(candidate_distance)) {
             continue;
         }
@@ -408,9 +841,19 @@ where
         iterations += 1;
         let delta_pct = improvement_ratio(previous_size, size, input_size) * 100.0;
         let trend = if size < previous_size { "↓" } else { "→" };
+        let status = if near_boundary(size, input_size) {
+            "near break-even"
+        } else if size < input_size {
+            "below source"
+        } else {
+            "still oversize"
+        };
 
         log.push(format!(
-            "Phase 1 ladder: d={candidate_distance:.3} -> {:.1}% of input ({trend} {delta_pct:.1}%)",
+            "Phase 1 adaptive probe {}/{}: d={} -> {:.1}% of input ({trend} {delta_pct:.1}%, {status})",
+            probe_idx + 1,
+            plan.ladder.len(),
+            format_distance_for_log(candidate_distance),
             size_ratio_pct(size, input_size)
         ));
 
@@ -450,178 +893,253 @@ where
             );
         }
 
-        if size < candidates[best_idx].output_size {
-            if current_idx > 0 {
+        if size < input_size {
+            // This candidate beats the source — track d_under (lowest such d)
+            if d_under.is_none() {
+                d_under = Some(candidate_distance);
+            }
+            // best_below_idx = lowest d where output < input (first encountered in ladder order)
+            if best_below_idx.is_none() {
+                best_below_idx = Some(current_idx);
                 add_reason(
                     &mut candidates,
-                    current_idx - 1,
-                    JxlPromotionReason::AdjacentToBest,
+                    current_idx,
+                    JxlPromotionReason::BetterThanCurrentBest,
+                    &mut log,
+                );
+                pending_adjacent_promotion = true;
+            }
+        } else {
+            // Still oversize — update d_over only if this probe is tighter than the current
+            // bracket (i.e., it's the highest oversize d that is still below d_under).
+            // Probes above d_under are not useful for binary search.
+            let tighter_than_current = d_over.map_or(true, |lo| candidate_distance > lo);
+            let below_d_under = d_under.map_or(true, |hi| candidate_distance < hi);
+            if tighter_than_current && below_d_under {
+                d_over = Some(candidate_distance);
+            }
+            if size < candidates[oversize_best_idx].output_size {
+                if current_idx > 0 {
+                    add_reason(
+                        &mut candidates,
+                        current_idx - 1,
+                        JxlPromotionReason::AdjacentToBest,
+                        &mut log,
+                    );
+                }
+                add_reason(
+                    &mut candidates,
+                    current_idx,
+                    JxlPromotionReason::BetterThanCurrentBest,
+                    &mut log,
+                );
+                pending_adjacent_promotion = true;
+                oversize_best_idx = current_idx;
+            } else if near_best(size, candidates[oversize_best_idx].output_size, input_size) {
+                add_reason(
+                    &mut candidates,
+                    current_idx,
+                    JxlPromotionReason::NearCurrentBest,
                     &mut log,
                 );
             }
-            add_reason(
-                &mut candidates,
-                current_idx,
-                JxlPromotionReason::BetterThanCurrentBest,
-                &mut log,
-            );
-            pending_adjacent_promotion = true;
-            best_idx = current_idx;
-        } else if near_best(size, candidates[best_idx].output_size, input_size) {
-            add_reason(
-                &mut candidates,
-                current_idx,
-                JxlPromotionReason::NearCurrentBest,
-                &mut log,
-            );
-        }
-
-        if candidate_distance >= 0.1 - f32::EPSILON {
-            phase_two_baseline = Some(current_idx);
         }
     }
 
-    let Some(mut current_idx) = phase_two_baseline else {
-        return Ok(Some(finalize_screening_result(
-            candidates, best_idx, iterations, log,
-        )));
-    };
+    // --- Phase 2: Find break-even bracket, then binary search ---
+    //
+    // Objective: find the lowest d where output < input (highest quality that still compresses).
+    //
+    // If Phase 1 left d_under unset (break-even is beyond target_distance), probe upward
+    // from d_over toward JXL_EXPLORE_CEILING until d_under is discovered, consuming budget.
+    // Once [lo=d_over, hi=d_under] is established, binary search narrows it to precision.
+    //
+    // If no d_under is ever found, return None (skip JXL — nothing compresses below source).
+    if d_under.is_none() {
+        if let Some(start) = d_over {
+            // Discovery: probe upward with exponentially growing steps until d_under found
+            let precision = JXL_EXPLORE_BINARY_SEARCH_PRECISION.max(f32::EPSILON);
+            let mut probe = start;
+            let mut step = (plan.target_distance - start).max(precision);
 
-    let precision = JXL_EXPLORE_BINARY_SEARCH_PRECISION.max(0.001);
-    let mut current_step = 0.1_f32;
-    let mut cadence = UpwardSearchCadence::Adaptive;
+            log.push(format!(
+                "Phase 2 discovery: extending from d={} toward ceiling (no d_under in Phase 1)",
+                format_distance_for_log(start)
+            ));
 
-    while iterations < JXL_EXPLORE_MAX_ITERATIONS {
-        let Some(next_distance) =
-            next_phase_two_candidate(candidates[current_idx].distance, current_step, &tested)
-        else {
-            break;
-        };
+            while iterations < JXL_EXPLORE_MAX_ITERATIONS {
+                let next = canonicalize_generated_distance(f64::from(probe) + f64::from(step))?;
+                if next >= JXL_EXPLORE_CEILING || next <= probe + f32::EPSILON {
+                    break;
+                }
+                if tested.contains(&distance_key(next)) {
+                    probe = next;
+                    step = (step * 2.0).min(JXL_EXPLORE_CEILING - next);
+                    continue;
+                }
+                tested.insert(distance_key(next));
 
-        tested.insert(distance_key(next_distance));
-        let size = try_candidate(next_distance)?;
-        iterations += 1;
+                let size = try_candidate(next)?;
+                iterations += 1;
+
+                let status = if near_boundary(size, input_size) {
+                    "near break-even"
+                } else if size < input_size {
+                    "below source"
+                } else {
+                    "still oversize"
+                };
+
+                log.push(format!(
+                    "Phase 2 discovery: d={} -> {:.1}% of input ({status})",
+                    format_distance_for_log(next),
+                    size_ratio_pct(size, input_size)
+                ));
+
+                candidates.push(JxlScreenedCandidate {
+                    distance: next,
+                    output_size: size,
+                    ladder_phase: false,
+                    reasons: Vec::new(),
+                });
+                let probe_idx = candidates.len() - 1;
+
+                if region_keys.insert(candidate_region_key(next)) {
+                    add_reason(
+                        &mut candidates,
+                        probe_idx,
+                        JxlPromotionReason::NewRegion,
+                        &mut log,
+                    );
+                }
+
+                if near_boundary(size, input_size) {
+                    add_reason(
+                        &mut candidates,
+                        probe_idx,
+                        JxlPromotionReason::BoundaryRegion,
+                        &mut log,
+                    );
+                }
+
+                if size < input_size {
+                    d_under = Some(next);
+                    best_below_idx = Some(probe_idx);
+                    add_reason(
+                        &mut candidates,
+                        probe_idx,
+                        JxlPromotionReason::BetterThanCurrentBest,
+                        &mut log,
+                    );
+                    break; // hand off to binary search
+                } else {
+                    d_over = Some(next);
+                    probe = next;
+                    step = (step * 2.0).min(f32::from(JXL_EXPLORE_CEILING) - next);
+                }
+            }
+        }
+    }
+
+    if let (Some(mut lo), Some(mut hi)) = (d_over, d_under) {
+        let precision = JXL_EXPLORE_BINARY_SEARCH_PRECISION.max(f32::EPSILON);
 
         log.push(format!(
-            "Phase 2 probe: d={next_distance:.3} -> {:.1}% of input (step {:.3})",
-            size_ratio_pct(size, input_size),
-            current_step
+            "Phase 2 binary search: lo=d={} (oversize), hi=d={} (below source), precision={}",
+            format_distance_for_log(lo),
+            format_distance_for_log(hi),
+            format_scalar_for_log(precision)
         ));
 
-        candidates.push(JxlScreenedCandidate {
-            distance: next_distance,
-            output_size: size,
-            ladder_phase: false,
-            reasons: Vec::new(),
-        });
-        let probe_idx = candidates.len() - 1;
+        while iterations < JXL_EXPLORE_MAX_ITERATIONS && hi - lo >= precision {
+            #[allow(clippy::cast_possible_truncation)]
+            let mid = canonicalize_generated_distance((f64::from(lo) + f64::from(hi)) / 2.0)?;
 
-        if pending_adjacent_promotion {
-            add_reason(
-                &mut candidates,
-                probe_idx,
-                JxlPromotionReason::AdjacentToBest,
-                &mut log,
-            );
-            pending_adjacent_promotion = false;
-        }
+            if tested.contains(&distance_key(mid)) || mid <= lo + f32::EPSILON || mid >= hi - f32::EPSILON {
+                break;
+            }
+            tested.insert(distance_key(mid));
 
-        if region_keys.insert(candidate_region_key(next_distance)) {
-            add_reason(
-                &mut candidates,
-                probe_idx,
-                JxlPromotionReason::NewRegion,
-                &mut log,
-            );
-        }
+            let size = try_candidate(mid)?;
+            iterations += 1;
 
-        if near_boundary(size, input_size) {
-            add_reason(
-                &mut candidates,
-                probe_idx,
-                JxlPromotionReason::BoundaryRegion,
-                &mut log,
-            );
-        }
-
-        if size < candidates[best_idx].output_size {
-            add_reason(
-                &mut candidates,
-                current_idx,
-                JxlPromotionReason::AdjacentToBest,
-                &mut log,
-            );
-            add_reason(
-                &mut candidates,
-                probe_idx,
-                JxlPromotionReason::BetterThanCurrentBest,
-                &mut log,
-            );
-            pending_adjacent_promotion = true;
-            best_idx = probe_idx;
-        } else if near_best(size, candidates[best_idx].output_size, input_size) {
-            add_reason(
-                &mut candidates,
-                probe_idx,
-                JxlPromotionReason::NearCurrentBest,
-                &mut log,
-            );
-        }
-
-        let current_ratio = size_ratio(size, input_size);
-        let previous_ratio = size_ratio(candidates[current_idx].output_size, input_size);
-        let ratio_drop_pct = (previous_ratio - current_ratio).abs() * 100.0;
-        let improvement = improvement_ratio(candidates[current_idx].output_size, size, input_size);
-        let near_break_even = near_boundary(size, input_size);
-
-        if near_break_even && current_step > precision + f32::EPSILON {
-            let old_step = current_step;
-            current_step = (current_step / 2.0).max(precision);
-            cadence = if current_step > precision + f32::EPSILON {
-                UpwardSearchCadence::Jogging
+            let status = if near_boundary(size, input_size) {
+                "near break-even"
+            } else if size < input_size {
+                "below source"
             } else {
-                UpwardSearchCadence::Paused
+                "still oversize"
             };
+
             log.push(format!(
-                "   Search Decelerating (ratio {:.1}%, step: {:.3} -> {:.3}, near break-even)",
-                current_ratio * 100.0,
-                old_step,
-                current_step
+                "Phase 2 binary search: d={} -> {:.1}% of input ({status})",
+                format_distance_for_log(mid),
+                size_ratio_pct(size, input_size)
             ));
-        } else if improvement > 0.10 && current_step < 0.4 {
-            let old_step = current_step;
-            current_step = (current_step * 2.0)
-                .min(0.4)
-                .min((JXL_EXPLORE_CEILING - next_distance).max(precision));
-            if current_step > old_step + f32::EPSILON {
-                cadence = UpwardSearchCadence::Adaptive;
-                log.push(format!(
-                    "   Search Accelerated (drop Δ{ratio_drop_pct:.1}%, step: {old_step:.3} -> {current_step:.3})"
-                ));
+
+            candidates.push(JxlScreenedCandidate {
+                distance: mid,
+                output_size: size,
+                ladder_phase: false,
+                reasons: Vec::new(),
+            });
+            let probe_idx = candidates.len() - 1;
+
+            if region_keys.insert(candidate_region_key(mid)) {
+                add_reason(
+                    &mut candidates,
+                    probe_idx,
+                    JxlPromotionReason::NewRegion,
+                    &mut log,
+                );
             }
-        } else {
-            match cadence {
-                UpwardSearchCadence::Jogging => {
-                    cadence = UpwardSearchCadence::Paused;
-                    log.push(format!(
-                        "   Search Jogging complete at step {current_step:.3}; pausing adaptive changes"
-                    ));
+
+            if near_boundary(size, input_size) {
+                add_reason(
+                    &mut candidates,
+                    probe_idx,
+                    JxlPromotionReason::BoundaryRegion,
+                    &mut log,
+                );
+            }
+
+            if size < input_size {
+                // New best: lower d that still beats source
+                hi = mid;
+                if best_below_idx.map_or(true, |idx| mid < candidates[idx].distance) {
+                    best_below_idx = Some(probe_idx);
+                    add_reason(
+                        &mut candidates,
+                        probe_idx,
+                        JxlPromotionReason::BetterThanCurrentBest,
+                        &mut log,
+                    );
                 }
-                UpwardSearchCadence::Paused => {
-                    cadence = UpwardSearchCadence::Normal;
-                    log.push(format!(
-                        "   Search Paused at boundary pace ({current_step:.3}); resuming next probe"
-                    ));
-                }
-                UpwardSearchCadence::Adaptive | UpwardSearchCadence::Normal => {}
+            } else {
+                lo = mid;
             }
         }
-
-        current_idx = probe_idx;
     }
 
+    // Determine the best candidate index.
+    // Priority: lowest d where output < input (best_below_idx).
+    // If nothing ever beat the source, skip JXL entirely.
+    let final_best_idx = if let Some(idx) = best_below_idx {
+        idx
+    } else {
+        log.push(format!(
+            "No candidate beat source size ({}B); skipping JXL",
+            input_size
+        ));
+        return Ok(None);
+    };
+
     Ok(Some(finalize_screening_result(
-        candidates, best_idx, iterations, log,
+        input_size, candidates, final_best_idx, iterations, log,
+        ratio,
+        pressure_stops,
+        plan.profile.label(),
+        plan.target_distance,
     )))
 }
 
@@ -629,102 +1147,113 @@ where
 mod tests {
     use super::*;
 
-    fn finalist_distances(result: &JxlScreeningResult) -> Vec<i32> {
-        result
-            .finalists
-            .iter()
-            .map(|candidate| distance_key(candidate.distance))
-            .collect()
-    }
-
     #[test]
     fn test_screening_keeps_best_ladder_candidate() {
-        let result = screen_jxl_candidates(100, 120, |distance| match distance_key(distance) {
-            10 => Ok(90),
-            _ => Ok(110),
-        })
-        .expect("exploration should succeed")
-        .expect("screening result should exist");
+        let result =
+            screen_jxl_candidates(
+                100,
+                120,
+                |distance| {
+                    if distance <= 0.01 {
+                        Ok(90)
+                    } else {
+                        Ok(110)
+                    }
+                },
+            )
+            .expect("exploration should succeed")
+            .expect("screening result should exist");
 
-        assert!((result.best_distance - 0.01).abs() < f32::EPSILON);
         assert_eq!(result.best_output_size, 90);
-        assert!(result.iterations >= 3);
-        assert!(finalist_distances(&result).contains(&distance_key(0.01)));
-        assert!(finalist_distances(&result).contains(&distance_key(0.001)));
+        assert!(result.best_distance > JXL_EXPLORE_FLOOR);
+        assert!(result.iterations >= 2);
+        // Shortlist must contain at least one below-source candidate (output_size=90)
+        assert!(result
+            .finalists
+            .iter()
+            .any(|candidate| candidate.output_size == 90));
+        // All finalists must be below source (no oversize candidates when below-source ones fill slots)
+        let all_below = result
+            .finalists
+            .iter()
+            .all(|candidate| candidate.output_size < 100);
+        assert!(
+            all_below,
+            "expected all finalists to be below source when enough qualify, got {:?}",
+            result
+                .finalists
+                .iter()
+                .map(|c| (c.distance, c.output_size))
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
-    fn test_screening_never_reaches_one() {
+    fn test_screening_stays_bounded_below_ceiling() {
+        // All probes always return 130 > input(100). No candidate beats the source.
+        // With binary search, Phase 2 is skipped (no d_under). Result should be None.
         let result = screen_jxl_candidates(100, 140, |_distance| Ok(130))
-            .expect("exploration should not fail")
-            .expect("screening result should exist");
+            .expect("exploration should not fail");
 
-        assert!(!result.screened_candidates.is_empty());
-        assert!(result
-            .screened_candidates
-            .iter()
-            .all(|candidate| candidate.distance < 1.0));
-        assert!(result
-            .screened_candidates
-            .iter()
-            .any(|candidate| (candidate.distance - 0.999).abs() < 0.000_5));
+        assert!(
+            result.is_none(),
+            "expected None when all candidates are oversize, but got Some"
+        );
     }
 
     #[test]
     fn test_screening_promotes_adjacent_and_boundary_candidates() {
         let result = screen_jxl_candidates(100, 104, |distance| {
-            let size = match distance_key(distance) {
-                10 => 99,
-                100 => 100,
-                200 => 98,
-                250 => 101,
-                _ => 110,
+            let size = if distance <= 0.002 {
+                99
+            } else if distance <= 0.01 {
+                100
+            } else if distance <= 0.03 {
+                98
+            } else {
+                101
             };
             Ok(size)
         })
         .expect("exploration should succeed")
         .expect("screening result should exist");
 
-        let finalists = finalist_distances(&result);
-        assert!(finalists.contains(&distance_key(0.01)));
-        assert!(finalists.contains(&distance_key(0.1)));
-        assert!(finalists.contains(&distance_key(0.2)));
-        assert!(finalists.contains(&distance_key(0.25)));
+        assert!(result.finalists.iter().any(|candidate| {
+            candidate
+                .reasons
+                .contains(&JxlPromotionReason::BoundaryRegion)
+        }));
+        assert!(result.finalists.iter().any(|candidate| {
+            candidate
+                .reasons
+                .contains(&JxlPromotionReason::AdjacentToBest)
+        }));
     }
 
     #[test]
-    fn test_screening_logs_acceleration_and_deceleration() {
+    fn test_screening_logs_deceleration_near_break_even() {
+        // File at 1.5x oversize; break-even occurs at d > 0.1.
+        // Phase 2 binary search should find a qualifying candidate below source.
         let result = screen_jxl_candidates(100, 150, |distance| {
-            let size = match distance_key(distance) {
-                10 => 130,
-                100 => 120,
-                200 => 108,
-                400 => 104,
-                500 => 99,
-                _ => 140,
+            let size = if distance <= 0.1 {
+                105 // oversize: 105%
+            } else {
+                98  // below source
             };
             Ok(size)
         })
         .expect("exploration should succeed")
         .expect("screening result should exist");
 
-        assert!(
-            result
-                .log
-                .iter()
-                .any(|line| line.contains("Search Accelerated")),
-            "expected acceleration log, got {:?}",
-            result.log
-        );
-        assert!(
-            result
-                .log
-                .iter()
-                .any(|line| line.contains("Search Decelerating")),
-            "expected deceleration log, got {:?}",
-            result.log
-        );
+        // best_distance must be a below-source d
+        assert!(result.best_output_size < 100);
         assert!(result.best_distance < 1.0);
+        // Phase 2 binary search log should appear
+        assert!(
+            result.log.iter().any(|line| line.contains("Phase 2 binary search")),
+            "expected Phase 2 binary search log, got {:?}",
+            result.log
+        );
     }
 
     #[test]
@@ -738,10 +1267,220 @@ mod tests {
         .expect("exploration should succeed")
         .expect("screening result should exist");
 
-        assert!((result.best_distance - 0.001).abs() < f32::EPSILON);
+        assert!((result.best_distance - JXL_EXPLORE_FLOOR).abs() < f32::EPSILON);
         assert_eq!(result.best_output_size, 90);
         assert_eq!(result.iterations, 1);
         assert_eq!(calls, 0); // No further probes
         assert!(result.log.iter().any(|line| line.contains("Early exit")));
+    }
+
+    #[test]
+    fn test_screening_never_retests_the_floor_distance() {
+        let mut probed = Vec::new();
+
+        let _result = screen_jxl_candidates(100, 130, |distance| {
+            probed.push(distance);
+            Ok(if distance < 0.02 { 120 } else { 95 })
+        })
+        .expect("exploration should succeed")
+        .expect("screening result should exist");
+
+        assert!(!probed.is_empty());
+        assert!(probed
+            .iter()
+            .all(|distance| *distance > JXL_EXPLORE_FLOOR + f32::EPSILON));
+    }
+
+    #[test]
+    fn test_screening_rejects_distances_below_the_floor() {
+        let err = canonicalize_generated_distance(0.0009).expect_err("sub-floor values must fail");
+        assert!(err.contains("below the floor"));
+    }
+
+    #[test]
+    fn test_target_distance_growth_is_bounded_by_profile_band() {
+        let micro_ratio = 1.02;
+        let boundary_ratio = 1.35;
+        let wide_ratio = 2.0;
+        let ceiling_ratio = 10.0;
+
+        let micro_target =
+            target_distance_for_ratio(micro_ratio, exploration_profile(micro_ratio)).unwrap();
+        let boundary_target =
+            target_distance_for_ratio(boundary_ratio, exploration_profile(boundary_ratio)).unwrap();
+        let wide_target =
+            target_distance_for_ratio(wide_ratio, exploration_profile(wide_ratio)).unwrap();
+        let ceiling_target =
+            target_distance_for_ratio(ceiling_ratio, exploration_profile(ceiling_ratio)).unwrap();
+
+        assert!(micro_target > JXL_EXPLORE_FLOOR);
+        assert!(micro_target <= JXL_DISTANCE_CEILING_PLATEAU_MAX as f32 + f32::EPSILON);
+        assert!(boundary_target > micro_target);
+        assert!(boundary_target <= JXL_DISTANCE_VISUAL_LOSSLESS_MAX as f32 + f32::EPSILON);
+        assert!(wide_target > boundary_target);
+        assert!(wide_target <= JXL_DISTANCE_BALANCED_MAX as f32 + f32::EPSILON);
+        assert!(ceiling_target > wide_target);
+        assert!(ceiling_target < JXL_EXPLORE_CEILING);
+    }
+
+    #[test]
+    fn test_ceiling_sweep_uses_denser_phase_one_ladder() {
+        let micro_plan = build_exploration_plan(100, 102).expect("micro plan should build");
+        let ceiling_plan = build_exploration_plan(100, 600).expect("ceiling plan should build");
+
+        assert!(ceiling_plan.ladder.len() > micro_plan.ladder.len());
+        assert!(ceiling_plan.target_distance > micro_plan.target_distance);
+        assert!(ceiling_plan.ladder.last().is_some());
+    }
+
+    #[test]
+    fn test_profile_boundaries_follow_oversize_pressure_calibration() {
+        assert_eq!(
+            exploration_profile(1.04),
+            JxlExplorationProfile::MicroAdjust
+        );
+        assert_eq!(
+            exploration_profile(1.10),
+            JxlExplorationProfile::BoundaryPush
+        );
+        assert_eq!(exploration_profile(1.90), JxlExplorationProfile::WidePush);
+        assert_eq!(
+            exploration_profile(3.0),
+            JxlExplorationProfile::CeilingSweep
+        );
+    }
+
+    #[test]
+    fn test_boundary_push_interpolates_in_perceptual_distance_space() {
+        let midpoint_stops = (JXL_MICRO_PRESSURE_STOPS_MAX + JXL_BOUNDARY_PRESSURE_STOPS_MAX) / 2.0;
+        let midpoint_ratio = 2f64.powf(midpoint_stops);
+        let target =
+            target_distance_for_ratio(midpoint_ratio, exploration_profile(midpoint_ratio)).unwrap();
+
+        assert!(
+            (target - 0.055).abs() < 0.01,
+            "mid-band perceptual target should stay near linear JND midpoint, got {}",
+            target
+        );
+        assert!(
+            target > 0.03,
+            "target should no longer follow log-distance interpolation"
+        );
+    }
+
+    #[test]
+    fn test_phase_two_respects_target_ceiling() {
+        // Scenario: 1.19x oversize, every probe always oversize.
+        // No d_under is ever found, so Phase 2 is skipped and result is None.
+        let mut probed = Vec::new();
+        let result = screen_jxl_candidates(1000, 1190, |distance| {
+            probed.push(distance);
+            Ok(1100) // always oversize
+        })
+        .expect("exploration should succeed");
+
+        assert!(
+            result.is_none(),
+            "expected None when no candidate beats source, but got Some"
+        );
+        // All probed distances must be < 1.0 (never reaches the hard ceiling)
+        for &d in &probed {
+            assert!(d < 1.0, "probed d={d} must be below d=1.0");
+        }
+    }
+
+    #[test]
+    fn test_phase_two_converges_early_on_break_even() {
+        // Scenario: file starts oversize, break-even occurs around d=0.005.
+        // Binary search should narrow the bracket and converge well below budget.
+        let result = screen_jxl_candidates(1000, 1200, |distance| {
+            let size = if distance <= 0.005 {
+                1050 // oversize
+            } else {
+                950  // below source
+            };
+            Ok(size)
+        })
+        .expect("exploration should succeed")
+        .expect("screening result should exist");
+
+        // Should NOT exhaust the full 50-iteration budget
+        assert!(
+            result.iterations < JXL_EXPLORE_MAX_ITERATIONS,
+            "expected early convergence but used {}/{} iterations",
+            result.iterations, JXL_EXPLORE_MAX_ITERATIONS
+        );
+        // Binary search log should be present
+        assert!(
+            result.log.iter().any(|line| line.contains("Phase 2 binary search")),
+            "expected Phase 2 binary search log, got {:?}",
+            result.log
+        );
+        // Result must be below source
+        assert!(result.best_output_size < 1000);
+    }
+
+    #[test]
+    fn test_phase_two_does_not_exhaust_budget_on_monotonic_improvement() {
+        // Size decreases monotonically as d increases; break-even near d=0.1.
+        // Binary search should converge without exhausting the 50-iteration budget.
+        let result = screen_jxl_candidates(1000, 1192, |distance| {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let size = (1200.0 - f64::from(distance) * 2000.0).max(800.0) as u64;
+            Ok(size)
+        })
+        .expect("exploration should succeed")
+        .expect("screening result should exist");
+
+        // Must NOT exhaust the full budget
+        assert!(
+            result.iterations < JXL_EXPLORE_MAX_ITERATIONS,
+            "should not exhaust budget but used {}/{} iterations",
+            result.iterations, JXL_EXPLORE_MAX_ITERATIONS
+        );
+        // best_distance must be a below-source candidate
+        assert!(
+            result.best_output_size < 1000,
+            "best_output_size={} should be below source (1000)",
+            result.best_output_size
+        );
+        // best_distance must be the lowest qualifying d
+        assert!(result.best_distance < 1.0);
+    }
+
+    #[test]
+    fn test_no_winner_skips_jxl() {
+        // All probes return oversize — no candidate ever beats the source.
+        // Expected result is None, not a fallback to d=0.001.
+        let result = screen_jxl_candidates(100, 200, |_distance| Ok(150))
+            .expect("exploration should not error");
+
+        assert!(
+            result.is_none(),
+            "expected None when all probes are oversize, got Some"
+        );
+    }
+
+    #[test]
+    fn test_phase_two_returns_lowest_qualifying_d() {
+        // Known break-even: d <= 0.04 is oversize, d > 0.04 is below source.
+        // Binary search should converge best_distance to <= 0.04 + precision.
+        let result = screen_jxl_candidates(1000, 1300, |distance| {
+            if distance <= 0.04 {
+                Ok(1100) // oversize
+            } else {
+                Ok(990)  // below source
+            }
+        })
+        .expect("exploration should succeed")
+        .expect("screening result should exist");
+
+        let precision = f64::from(JXL_EXPLORE_BINARY_SEARCH_PRECISION) * 2.0;
+        assert!(
+            f64::from(result.best_distance) <= 0.04 + precision,
+            "best_distance={} should converge to <= 0.04 + precision ({})",
+            result.best_distance, 0.04 + precision
+        );
+        assert!(result.best_output_size < 1000);
     }
 }

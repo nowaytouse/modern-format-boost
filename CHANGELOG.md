@@ -6,7 +6,67 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] — TBD
 
-### 🛡️ Quality Hardening & Workspace Hygiene
+### 🖼️ JXL Exploration Algorithm Overhaul
+
+- **Adaptive Distance Planning**: Replaced the fixed 3-step ladder (`d=0.001, 0.01, 0.1`) with a profile-driven adaptive plan that tailors probe count and distance selection to each file's oversize severity. The new `build_exploration_plan()` analyzes `initial_ratio` and selects one of four exploration profiles:
+  - **MicroAdjust** (≤1.05× oversize): Log10-space interpolation in the near-lossless plateau, 4–6 probes
+  - **BoundaryPush** (1.05–1.50×): Linear perceptual interpolation targeting visual lossless range, 5–8 probes
+  - **WidePush** (1.50–2.50×): Balanced quality/size exploration, 6–10 probes
+  - **CeilingSweep** (>2.50×): Aggressive compression sweep toward the distance ceiling, 8–14 probes
+- **Perceptual Distance Interpolation**: Introduced tiered interpolation strategies aligned with JXL distance semantics:
+  - **Plateau tier** (d≤0.01): Log10 interpolation + smoothstep — preserves float resolution where linear steps would collapse
+  - **Perceptual tiers** (d=0.01..1.0): Linear interpolation + smoothstep — equal Δdistance ≈ equal ΔJND in this range
+  - Profile anchor distances ensure mandatory sampling at known perceptual boundaries regardless of adaptive budget
+- **Phase 2 Binary Search Convergence**: Replaced the heuristic step-halving "jogging" algorithm with a proper binary search over the `[d_over, d_under]` break-even bracket. Phase 2 now:
+  - Discovers `d_under` via exponential step growth if Phase 1 didn't find a below-source candidate
+  - Binary-searches the bracket to `JXL_EXPLORE_BINARY_SEARCH_PRECISION` (floor/10 = 0.0001)
+  - Tracks `best_below_idx` — the lowest d where output < input — as the definitive winner
+  - Returns `None` if no candidate ever beats the source (skips JXL instead of falling back to d=0.001)
+- **Distance Floor/Ceiling Semantics**: `JXL_EXPLORE_FLOOR` (0.001) is now a hard invariant — no probe or adaptive generation may produce a distance below it. `JXL_EXPLORE_CEILING` uses `f32::max_subnormal` below 1.0 for maximum representable distance. `canonicalize_generated_distance()` enforces these bounds with detailed error messages.
+- **Finalist Shortlist Restructuring**: `shortlist_finalists()` now uses a tiered selection strategy:
+  - **Tier 1**: Below-source candidates (output < input), sorted ascending d — guaranteed net savings
+  - **Tier 2**: Near-boundary oversize candidates (100–105% of input) — may compress under e10 even if e7 called them oversize
+  - **Tier 3**: Promoted oversize candidates with reasons — sorted by promotion score
+  - Final order: ascending d (highest quality first) for e10 finalization
+- **Enhanced Logging & Telemetry**: All distance values in logs now use `format_distance_for_log()` which trims trailing zeros and adapts precision to the distance range (sub-0.01 gets 6 decimals, 0.01–0.1 gets 4, 0.1–0.9 gets 3, ≥0.99 gets 8). New telemetry fields in `JxlScreeningResult` and `JxlExploreResult`:
+  - `initial_ratio`: ratio of initial JXL output to input
+  - `pressure_stops`: log2(initial_ratio) — oversize severity in doublings
+  - `profile_label`: which exploration profile was selected
+  - `target_distance`: the adaptive plan's target distance
+  - Telemetry line emitted to stderr: `TELEMETRY: outcome_distance=... outcome_pct=... profile=... pressure_stops=...`
+- **Describe Finalist Pass**: New `describe_jxl_finalist_pass()` function generates human-readable finalist descriptions for stderr output, including role (rechecking floor, verifying break-even, sampling branch), origin (screened vs refined), and size ratio.
+
+### 🛡️ Quality & Correctness
+
+- **MS-SSIM 4:2:0 Weight Correction**: Fixed `calculate_ms_ssim_yuv()` to use correct YUV 4:2:0 sample count weighting (Y:U:V = 4:1:1, denominator 6) instead of the previous BT.601-derived weights (denominator 8). In YUV 4:2:0, each 2×2 luma block has 4 Y samples but only 1 U and 1 V sample, so Y contributes 4/6 of the signal and each chroma plane contributes 1/6.
+- **Binary Search Precision**: `JXL_EXPLORE_BINARY_SEARCH_PRECISION` changed from fixed `0.01` to `JXL_EXPLORE_FLOOR / 10.0` (0.0001), ensuring the narrowest bracket still resolves a meaningful distance delta.
+- **Max Iterations Budget**: `JXL_EXPLORE_MAX_ITERATIONS` increased from `12` to `50` to accommodate the adaptive ladder + binary search strategy without premature termination.
+- **No-Winner Skip Logic**: When no candidate ever produces output smaller than the input, screening now returns `None` (skip JXL) instead of falling back to the floor distance. Prevents wasteful encoding of files that cannot benefit from JXL compression.
+
+### 📐 Test Coverage Expansion
+
+- **12 new unit tests** for JXL exploration algorithm covering:
+  - Floor distance invariance (`test_screening_never_retests_the_floor_distance`)
+  - Sub-floor rejection (`test_screening_rejects_distances_below_the_floor`)
+  - Profile boundary calibration (`test_profile_boundaries_follow_oversize_pressure_calibration`)
+  - Perceptual interpolation accuracy (`test_boundary_push_interpolates_in_perceptual_distance_space`)
+  - Phase 2 ceiling respect (`test_phase_two_respects_target_ceiling`)
+  - Early convergence (`test_phase_two_converges_early_on_break_even`)
+  - Budget non-exhaustion on monotonic improvement (`test_phase_two_does_not_exhaust_budget_on_monotonic_improvement`)
+  - No-winner skip behavior (`test_no_winner_skips_jxl`)
+  - Lowest qualifying d convergence (`test_phase_two_returns_lowest_qualifying_d`)
+  - Profile band boundary validation (`test_target_distance_growth_is_bounded_by_profile_band`)
+  - CeilingSweep ladder density (`test_ceiling_sweep_uses_denser_phase_one_ladder`)
+  - Updated existing tests to reflect new algorithm behavior (binary search vs step-halving, `best_distance > JXL_EXPLORE_FLOOR` guarantee)
+
+### 🔄 Code Quality
+
+- **Distance Key Hash**: `distance_key()` now uses `f32::to_bits()` instead of scaled integer rounding, eliminating collision risk for distinct float values.
+- **UpwardSearchCadence Removed**: Replaced heuristic cadence state machine with clean binary search bracket tracking (`d_over`, `d_under`).
+- **Profile Anchor Distances**: Per-profile anchor arrays ensure mandatory probe points at perceptual boundaries, independent of adaptive interpolation.
+- **Scalar Log Formatting**: `format_scalar_for_log()` and `trim_decimal_string()` utilities provide clean, zero-trimmed distance strings for all log output.
+
+### 📦 Dependency Updates
 
 - **Refactored `ConversionResult` API**: Grouped video exploration metrics into a structured `VideoExplorationMetrics` object to eliminate the "too many arguments" code smell and decoupled complex message formatting logic from the result container.
 - **Zero-Warning Workspace Enforcement**: Resolved persistent `clippy::float_cmp` violations across the video/JXL exploration logic and global constants, achieving a 100% warning-free state under strict `-D warnings`.

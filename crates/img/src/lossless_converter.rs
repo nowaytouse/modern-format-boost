@@ -885,8 +885,10 @@ pub fn convert_to_jxl(
                 )? {
                     final_output_size = explore_result.output_size;
                     extra_info = Some(format!(
-                        "(screened e7, finalized e10 d={:.3})",
-                        explore_result.accepted_distance
+                        "(screened e7, finalized e10 d={})",
+                        shared_utils::jxl_explorer::format_distance_for_log(
+                            explore_result.accepted_distance
+                        )
                     ));
                 }
             }
@@ -1645,7 +1647,8 @@ fn encode_jxl_probe_to_output(
     let mut fallback_encode = |candidate_distance| {
         let _ = shared_utils::io_utils::safe_remove_file(output);
         shared_utils::progress_mode::emit_stderr(&format!(
-            "   🔄 {stage_label} d={candidate_distance:.3}: cjxl failed, trying ImageMagick fallback at e{effort}"
+            "   🔄 {stage_label} d={}: cjxl failed, trying ImageMagick fallback at e{effort}",
+            shared_utils::jxl_explorer::format_distance_for_log(candidate_distance)
         ));
         try_imagemagick_fallback_with_effort(
             input,
@@ -1680,7 +1683,8 @@ where
         Ok(size) => Ok(size),
         Err(direct_err) => fallback_encode(distance).map_err(|fallback_err| {
             format!(
-                "JXL exploration probe failed at d={distance:.3}: direct cjxl: {direct_err}; ImageMagick fallback: {fallback_err}"
+                "JXL exploration probe failed at d={}: direct cjxl: {direct_err}; ImageMagick fallback: {fallback_err}",
+                shared_utils::jxl_explorer::format_distance_for_log(distance)
             )
         }),
     }
@@ -1705,6 +1709,35 @@ fn compare_jxl_finalists(
     left_distance
         .total_cmp(&right_distance)
         .then_with(|| left_size.cmp(&right_size))
+}
+
+fn describe_jxl_finalist_pass(
+    finalist: &shared_utils::jxl_explorer::JxlScreenedCandidate,
+    screening: &shared_utils::jxl_explorer::JxlScreeningResult,
+    input_size: u64,
+) -> String {
+    let distance = shared_utils::jxl_explorer::format_distance_for_log(finalist.distance);
+    let ratio_pct = if input_size == 0 {
+        100.0
+    } else {
+        (finalist.output_size as f64 / input_size as f64) * 100.0
+    };
+    let origin = if finalist.ladder_phase {
+        "screened"
+    } else {
+        "refined"
+    };
+    let role = if finalist.distance <= shared_utils::constants::JXL_EXPLORE_FLOOR + f32::EPSILON {
+        "rechecking the required floor"
+    } else if (finalist.distance - screening.best_distance).abs() < f32::EPSILON {
+        "rechecking the screened leader"
+    } else if ratio_pct <= 105.0 {
+        "verifying a break-even candidate"
+    } else {
+        "sampling a shortlist branch"
+    };
+
+    format!("{role}: d={distance} from the {origin} pass ({ratio_pct:.1}% of input at e7)")
 }
 
 fn try_explore_ultimate_jxl_distance(
@@ -1768,8 +1801,11 @@ fn try_explore_ultimate_jxl_distance(
 
     for (finalist_idx, finalist) in screening.finalists.iter().enumerate() {
         shared_utils::progress_mode::emit_stderr(&format!(
-            "   🧪 Finalizing shortlist candidate d={:.3} with e{}",
-            finalist.distance, final_effort
+            "   🧪 e{} pass {}/{}: {}",
+            final_effort,
+            finalist_idx + 1,
+            screening.finalists.len(),
+            describe_jxl_finalist_pass(finalist, &screening, input_size)
         ));
 
         let candidate_output =
@@ -1789,6 +1825,15 @@ fn try_explore_ultimate_jxl_distance(
             "Finalist encode",
         ) {
             Ok(size) => {
+                shared_utils::progress_mode::emit_stderr(&format!(
+                    "      ↳ e{} result: {:.1}% of input",
+                    final_effort,
+                    if input_size == 0 {
+                        100.0
+                    } else {
+                        (size as f64 / input_size as f64) * 100.0
+                    }
+                ));
                 let replace_best = best_final.as_ref().is_none_or(|(best_idx, best_size, _)| {
                     compare_jxl_finalists(
                         input_size,
@@ -1812,8 +1857,9 @@ fn try_explore_ultimate_jxl_distance(
             Err(err) => {
                 let _ = shared_utils::io_utils::safe_remove_file(&candidate_output);
                 shared_utils::progress_mode::emit_stderr(&format!(
-                    "   ⚠️ Finalist d={:.3} failed at e{}: {err}",
-                    finalist.distance, final_effort
+                    "   ⚠️ e{} pass failed for d={}: {err}",
+                    final_effort,
+                    shared_utils::jxl_explorer::format_distance_for_log(finalist.distance)
                 ));
             }
         }
@@ -1826,6 +1872,19 @@ fn try_explore_ultimate_jxl_distance(
         return Ok(None);
     };
 
+    if best_size >= input_size {
+        let _ = shared_utils::io_utils::safe_remove_file(&best_path);
+        shared_utils::progress_mode::emit_stderr(&format!(
+            "   ⚠️ All e10 finalists exceed input size (best={:.1}% of input); skipping JXL",
+            if input_size == 0 {
+                100.0
+            } else {
+                (best_size as f64 / input_size as f64) * 100.0
+            }
+        ));
+        return Ok(None);
+    }
+
     let best_candidate = &screening.finalists[best_idx];
     let _ = shared_utils::io_utils::safe_remove_file(temp_output);
     shared_utils::io_utils::robust_move(&best_path, temp_output)
@@ -1833,8 +1892,8 @@ fn try_explore_ultimate_jxl_distance(
 
     let mut log = screening.log.clone();
     log.push(format!(
-        "Accepted e10 finalist d={:.3} -> {:.1}% of input",
-        best_candidate.distance,
+        "Accepted e10 finalist d={} -> {:.1}% of input",
+        shared_utils::jxl_explorer::format_distance_for_log(best_candidate.distance),
         if input_size == 0 {
             100.0
         } else {
@@ -1855,16 +1914,31 @@ fn try_explore_ultimate_jxl_distance(
             .map(|candidate| candidate.distance)
             .collect(),
         log,
+        initial_ratio: screening.initial_ratio,
+        pressure_stops: screening.pressure_stops,
+        profile_label: screening.profile_label,
+        target_distance: screening.target_distance,
     };
 
     shared_utils::progress_mode::emit_stderr(&format!(
-        "   ✅ Ultimate JXL exploration accepted d={:.3} after e7 screening / e10 finalization ({:.1}% of input)",
-        result.accepted_distance,
+        "   ✅ Ultimate JXL exploration accepted d={} after e7 screening / e10 finalization ({:.1}% of input)",
+        shared_utils::jxl_explorer::format_distance_for_log(result.accepted_distance),
         if input_size == 0 {
             100.0
         } else {
             (result.output_size as f64 / input_size as f64) * 100.0
         }
+    ));
+    shared_utils::progress_mode::emit_stderr(&format!(
+        "   TELEMETRY: outcome_distance={} outcome_pct={:.1} profile={} pressure_stops={:.4}",
+        shared_utils::jxl_explorer::format_distance_for_log(result.accepted_distance),
+        if input_size == 0 {
+            100.0
+        } else {
+            (result.output_size as f64 / input_size as f64) * 100.0
+        },
+        result.profile_label,
+        result.pressure_stops
     ));
     Ok(Some(result))
 }
