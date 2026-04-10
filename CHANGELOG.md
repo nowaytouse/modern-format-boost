@@ -6,6 +6,21 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] — TBD
 
+### 🐍 Script Improvements
+
+- **collect_optimized.py v13**: Major refactor of the optimized file collection script with improved reliability and structure mirroring:
+  - Replaced marker-based file detection (Finder comments/xattr) with direct file type scanning (`.jxl` images, HEVC `.mov`/`.mp4` videos)
+  - Added ffprobe-based video codec detection with comprehensive error handling and failure preview (up to 10 failures logged)
+  - Implemented full directory tree mirroring: destination structure now matches source layout exactly
+  - Added symlink exclusion for both files and directories during scan and directory walk
+  - Introduced directory timestamp snapshot and restoration for both source and destination trees
+  - Added automatic pruning of empty source directories after file relocation
+  - Refactored into modular functions: `scan_candidates()`, `ensure_destination_layout()`, `restore_directory_times()`, `prune_empty_source_directories()`
+  - Enhanced dry-run mode to preview directory mirroring and candidate breakdown (JXL count, HEVC count)
+  - Improved candidate reporting with separate counts for JXL images and HEVC videos
+  - Removed dependency on macOS-specific metadata (mdls/xattr) for cross-platform compatibility
+  - Added comprehensive unit tests in `test_collect_optimized.py` covering dry-run, symlink handling, probe failures, and directory mirroring
+
 ### 🖼️ JXL Exploration Algorithm Overhaul
 
 - **Adaptive Distance Planning**: Replaced the fixed 3-step ladder (`d=0.001, 0.01, 0.1`) with a profile-driven adaptive plan that tailors probe count and distance selection to each file's oversize severity. The new `build_exploration_plan()` analyzes `initial_ratio` and selects one of four exploration profiles:
