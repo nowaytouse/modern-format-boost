@@ -597,7 +597,14 @@ fn auto_convert_single_file(
         std::process::exit(1);
     }
 
-    let fixed_input = shared_utils::fix_extension_if_mismatch(input)?;
+    // Fix extension by content first so all downstream checks see the real format (avoids disguised-extension panic).
+    // When an output directory is configured the source tree must remain immutable:
+    // use the readonly variant that logs mismatches without renaming source files.
+    let fixed_input = if config.output_dir.is_some() {
+        shared_utils::check_extension_mismatch_readonly(input)?
+    } else {
+        shared_utils::fix_extension_if_mismatch(input)?
+    };
     let input = fixed_input.as_path();
 
     let _label = input
