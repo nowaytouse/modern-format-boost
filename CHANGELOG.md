@@ -6,6 +6,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] — TBD
 
+### 🔄 Success Reporting Standardization (ConversionResult)
+
+- **Declarative Progress Architecture**: Completed the migration of the success-path result assembly to a fully declarative API. Procedural `ConversionResult` struct literals have been eliminated from `animated_image.rs` and `shared_utils` (test suites), ensuring consistent metadata handling (colors, size reduction) and reducing logic duplication.
+- **Enhanced Video Exploration Results**: Introduced `ConversionResult::success_video_explored`, a high-fidelity constructor for complex video optimization paths (HEVC/AV1) that correctly tracks and formats iteration counts, SSIM quality metrics, and CRF values.
+- **Python 3.9 Workspace Compatibility**: Hardened the `check_all.py` auditor script with `from __future__ import annotations` to support Python 3.9 (system default), enabling reliable quality checks on older macOS environments without the `|` type union syntax.
+- **Formatting Hygiene**: Resolved formatting regressions in the `vid` crate through workspace-wide `cargo fmt` alignment.
+
 ### 🔄 Conversion Result State Machine & Fallback System
 
 - **`ConversionOutcome` Enum**: Introduced a new `ConversionOutcome` enum (`Converted`, `Skipped`, `FallbackPreserved`, `Ignored`, `Failed`) to provide explicit, semantic state representation for conversion results. Replaces ambiguous boolean combinations (`success` + `skipped`) with a single authoritative state via `ConversionResult::outcome()`.

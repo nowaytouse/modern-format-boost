@@ -742,9 +742,6 @@ mod tests {
         assert_eq!(result.best_output_size, 90);
         assert_eq!(result.iterations, 1);
         assert_eq!(calls, 0); // No further probes
-        assert!(result
-            .log
-            .iter()
-            .any(|line| line.contains("Early exit")));
+        assert!(result.log.iter().any(|line| line.contains("Early exit")));
     }
 }

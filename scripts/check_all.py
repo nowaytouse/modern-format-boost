@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """check_all.py — Modern Format Boost workspace auditor."""
 
 import os
@@ -11,6 +12,7 @@ import argparse
 import plistlib
 from pathlib import Path
 from dataclasses import dataclass, field
+from typing import Optional, Union, List, Dict
 from functools import lru_cache
 
 try:
@@ -55,7 +57,7 @@ def _has_cargo_sub(sub: str) -> bool:
         return False
 
 
-def has_command(cmd: str, hint_pkg: str | None = None, verbose: bool = False) -> bool:
+def has_command(cmd: str, hint_pkg: Optional[str] = None, verbose: bool = False) -> bool:
     found = _has_command(cmd)
     if not found and verbose:
         cprint(
@@ -181,7 +183,7 @@ def probe_nightly() -> NightlyComponents:
     return nc
 
 
-def install_nightly(components: list[str] | None = None) -> bool:
+def install_nightly(components: Optional[list[str]] = None) -> bool:
     """
     Run `rustup toolchain install nightly --component ...`.
     If *components* is None, installs the full recommended set.

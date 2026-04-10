@@ -636,6 +636,84 @@ impl ConversionResult {
             blake3: None,
         }
     }
+
+    #[must_use]
+    pub fn success_video_explored(
+        input: &Path,
+        output: &Path,
+        input_size: u64,
+        output_size: u64,
+        codec_name: &str,
+        crf: f32,
+        is_lossless: bool,
+        iterations: u32,
+        ssim: Option<f64>,
+        explored_from_crf: Option<f32>,
+        quality_label: Option<&str>,
+    ) -> Self {
+        let reduction = if input_size == 0 {
+            0.0
+        } else {
+            1.0 - (output_size as f64 / input_size as f64)
+        };
+        let reduction_pct = reduction * 100.0;
+
+        let size_tag = if reduction >= 0.0 {
+            format!("\x1b[1;32m-{reduction_pct:.1}%\x1b[0m")
+        } else {
+            let diff_bytes = i128::from(output_size) - i128::from(input_size);
+            let diff_bytes_i64 = i64::try_from(diff_bytes).unwrap_or(i64::MAX);
+            let size_diff = crate::modern_ui::format_size_diff(diff_bytes_i64);
+            format!("\x1b[1;33m{size_diff}\x1b[0m")
+        };
+
+        let crf_display = if is_lossless {
+            format!("{crf:.2} (Lossless)")
+        } else {
+            format!("{crf:.2}")
+        };
+
+        let explored_msg = match explored_from_crf {
+            Some(from) if (crf - from).abs() > 0.1 => format!(" (explored from CRF {from:.1})"),
+            _ => String::new(),
+        };
+
+        let ssim_msg = ssim.map(|s| format!(", SSIM: {s:.4}")).unwrap_or_default();
+
+        let core_msg = format!(
+            "{} (CRF {}{}, {} iter{}): {}",
+            codec_name.to_uppercase(),
+            crf_display,
+            explored_msg,
+            iterations,
+            ssim_msg,
+            size_tag
+        );
+
+        let message = if let Some(q) = quality_label {
+            if q.is_empty() {
+                format!("✅ {core_msg}")
+            } else {
+                format!("✅ {q} | {core_msg}")
+            }
+        } else {
+            format!("✅ {core_msg}")
+        };
+
+        Self {
+            success: true,
+            input_path: input.display().to_string(),
+            output_path: Some(output.display().to_string()),
+            input_size,
+            output_size: Some(output_size),
+            size_reduction: Some(reduction_pct),
+            message,
+            skipped: false,
+            ignored: false,
+            skip_reason: None,
+            blake3: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1911,19 +1989,14 @@ mod tests {
 
     #[test]
     fn test_conversion_result_outcome_fallback_preserved() {
-        let result = ConversionResult {
-            success: false,
-            input_path: "/test/input.webp".to_string(),
-            output_path: Some("/test/input.webp".to_string()),
-            input_size: 1234,
-            output_size: Some(1234),
-            size_reduction: None,
-            message: "fallback preserved".to_string(),
-            skipped: true,
-            ignored: false,
-            skip_reason: Some("encode_failed".to_string()),
-            blake3: None,
-        };
+        let input = Path::new("input.webp");
+        let options = ConvertOptions::default();
+        let result = ConversionResult::failed_with_fallback(
+            input,
+            &options,
+            "fallback preserved",
+            "encode_failed",
+        );
 
         assert_eq!(result.outcome(), ConversionOutcome::FallbackPreserved);
     }
@@ -2098,5 +2171,35 @@ mod tests {
             opts.explore_mode(),
             crate::video_explorer::ExploreMode::PreciseQualityMatchWithCompression,
         );
+    }
+
+    #[test]
+    fn test_success_video_explored_formatting() {
+        let input = Path::new("input.mov");
+        let output = Path::new("output.mp4");
+        let result = ConversionResult::success_video_explored(
+            input,
+            output,
+            1000,
+            800,
+            "HEVC",
+            23.5,
+            false,
+            3,
+            Some(0.9985),
+            Some(21.0),
+            Some("Medium"),
+        );
+
+        assert!(result.success);
+        assert!(result.message.contains("HEVC"));
+        assert!(result.message.contains("CRF 23.50"));
+        assert!(result.message.contains("explored from CRF 21.0"));
+        assert!(result.message.contains("3 iter"));
+        assert!(result.message.contains("SSIM: 0.9985"));
+        assert!(result.message.contains("-20.0%"));
+        assert!(result.message.contains("Medium"));
+        // Colors are present
+        assert!(result.message.contains("\x1b[1;32m"));
     }
 }

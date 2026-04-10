@@ -725,8 +725,6 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
                 return Ok(skipped_output_exists(input, &output, input_size));
             }
 
-            let reduction = 1.0 - (output_size as f64 / input_size as f64);
-
             shared_utils::copy_metadata(input, &output);
             mark_as_processed(input);
 
@@ -740,26 +738,15 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
                 }
             }
 
-            let reduction_pct = reduction * 100.0;
             let codec_name = options.codec.as_str().to_uppercase();
-            let message = if reduction >= 0.0 {
-                format!(
-                    "{codec_name} conversion successful: size reduced \x1b[1;32m{reduction_pct:.1}%\x1b[0m"
-                )
-            } else {
-                let diff_bytes = output_size as i64 - input_size as i64;
-                let size_diff = shared_utils::modern_ui::format_size_diff(diff_bytes);
-                format!(
-                    "{codec_name} conversion successful: size increased \x1b[1;33m{size_diff}\x1b[0m"
-                )
-            };
-
-            Ok(ConversionResult::converted_with_message_owned(
+            Ok(ConversionResult::success(
                 input,
                 &output,
                 input_size,
                 output_size,
-                message,
+                &codec_name,
+                None,
+                options.quality_label.as_deref(),
             ))
         }
         Ok(output_cmd) => {
@@ -1318,6 +1305,21 @@ pub fn convert_to_mp4_matched(
         ));
     }
 
+    if explore_result.quality_passed.is_ok() && explore_result.optimal_crf > 0.0 {
+        match options.codec {
+            shared_utils::conversion_types::SelectedCodec::Hevc => {
+                shared_utils::crf_constants::update_global_last_hit_crf_hevc(
+                    explore_result.optimal_crf,
+                )
+            }
+            shared_utils::conversion_types::SelectedCodec::Av1 => {
+                shared_utils::crf_constants::update_global_last_hit_crf_av1(
+                    explore_result.optimal_crf,
+                )
+            }
+        }
+    }
+
     if !shared_utils::conversion::commit_temp_to_output_with_metadata(
         &temp_output,
         &output,
@@ -1341,48 +1343,18 @@ pub fn convert_to_mp4_matched(
         }
     }
 
-    let reduction_pct = -explore_result.size_change_pct;
-    let explored_msg = if (explore_result.optimal_crf - actual_initial_crf).abs() > 0.1 {
-        format!(" (explored from CRF {actual_initial_crf:.1})")
-    } else {
-        String::new()
-    };
-
-    if explore_result.quality_passed.is_ok() && explore_result.optimal_crf > 0.0 {
-        match options.codec {
-            SelectedCodec::Hevc => shared_utils::crf_constants::update_global_last_hit_crf_hevc(
-                explore_result.optimal_crf,
-            ),
-            SelectedCodec::Av1 => shared_utils::crf_constants::update_global_last_hit_crf_av1(
-                explore_result.optimal_crf,
-            ),
-        }
-    }
-
-    let ssim_msg = explore_result
-        .ssim
-        .map(|s| format!(", SSIM: {s:.4}"))
-        .unwrap_or_default();
-
-    let crf_display =
-        if explore_result.optimal_crf < shared_utils::constants::NEGLIGIBLE_DURATION_SECS as f32 {
-            format!("{:.2} (Lossless)", explore_result.optimal_crf)
-        } else {
-            format!("{:.2}", explore_result.optimal_crf)
-        };
-
-    let codec_name = options.codec.as_str().to_uppercase();
-    let message = format!(
-        "{} (CRF {}{}, {} iter{}): -{:.1}%",
-        codec_name, crf_display, explored_msg, explore_result.iterations, ssim_msg, reduction_pct
-    );
-
-    Ok(ConversionResult::converted_with_message_owned(
+    Ok(ConversionResult::success_video_explored(
         input,
         &output,
         input_size,
         explore_result.output_size,
-        message,
+        options.codec.as_str(),
+        explore_result.optimal_crf,
+        explore_result.optimal_crf < shared_utils::constants::NEGLIGIBLE_DURATION_SECS as f32,
+        explore_result.iterations,
+        explore_result.ssim,
+        Some(actual_initial_crf),
+        options.quality_label.as_deref(),
     ))
 }
 
@@ -1457,8 +1429,6 @@ pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result
                 return Ok(skipped_output_exists(input, &output, input_size));
             }
 
-            let reduction = 1.0 - (output_size as f64 / input_size as f64);
-
             shared_utils::copy_metadata(input, &output);
             mark_as_processed(input);
 
@@ -1472,21 +1442,14 @@ pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result
                 }
             }
 
-            let reduction_pct = reduction * 100.0;
-            let message = if reduction >= 0.0 {
-                format!("Lossless: size reduced \x1b[1;32m{reduction_pct:.1}%\x1b[0m")
-            } else {
-                let diff_bytes = output_size as i64 - input_size as i64;
-                let size_diff = shared_utils::modern_ui::format_size_diff(diff_bytes);
-                format!("Lossless: size increased \x1b[1;33m{size_diff}\x1b[0m")
-            };
-
-            Ok(ConversionResult::converted_with_message_owned(
+            Ok(ConversionResult::success(
                 input,
                 &output,
                 input_size,
                 output_size,
-                message,
+                "Lossless",
+                None,
+                options.quality_label.as_deref(),
             ))
         }
         Ok(output_cmd) => {
@@ -1841,8 +1804,6 @@ pub fn convert_to_gif_apple_compat(
         ));
     }
 
-    let reduction = 1.0 - (output_size as f64 / input_size as f64);
-
     let tolerance_ratio = if options.allow_size_tolerance {
         1.01
     } else {
@@ -1904,21 +1865,14 @@ pub fn convert_to_gif_apple_compat(
         }
     }
 
-    let reduction_pct = reduction * 100.0;
-    let message = if reduction >= 0.0 {
-        format!("GIF (Apple Compat): size reduced \x1b[1;32m{reduction_pct:.1}%\x1b[0m")
-    } else {
-        let diff_bytes = output_size as i64 - input_size as i64;
-        let size_diff = shared_utils::modern_ui::format_size_diff(diff_bytes);
-        format!("GIF (Apple Compat): size increased \x1b[1;33m{size_diff}\x1b[0m")
-    };
-
-    Ok(ConversionResult::converted_with_message_owned(
+    Ok(ConversionResult::success(
         input,
         &output,
         input_size,
         output_size,
-        message,
+        "GIF",
+        Some("Apple Compat"),
+        options.quality_label.as_deref(),
     ))
 }
 
