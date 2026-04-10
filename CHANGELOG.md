@@ -10,6 +10,7 @@ All notable changes to this project will be documented in this file.
 
 - **Refactored `ConversionResult` API**: Grouped video exploration metrics into a structured `VideoExplorationMetrics` object to eliminate the "too many arguments" code smell and decoupled complex message formatting logic from the result container.
 - **Zero-Warning Workspace Enforcement**: Resolved persistent `clippy::float_cmp` violations across the video/JXL exploration logic and global constants, achieving a 100% warning-free state under strict `-D warnings`.
+- **Python Hardening & Modernization**: Resolved `ruff` linting violations (E402) in `check_all.py` and modernized the `analysis.py` test script by replacing deprecated `Image.ANTIALIAS` with `Image.Resampling.LANCZOS`.
 - **Systematic Quality Audit**: Executed the `check_all.py` suite with automated `cargo fmt`, `clippy --fix`, and `prettier` formatting, ensuring compliance with production-grade standards.
 - **Improved Float Robustness**: Replaced strict equality checks for floating-point values in unit tests with epsilon-based comparisons to ensure deterministic behavior across platforms.
 

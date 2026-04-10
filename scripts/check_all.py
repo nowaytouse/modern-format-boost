@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-from __future__ import annotations
-
 """check_all.py — Modern Format Boost workspace auditor."""
+
+from __future__ import annotations
 
 import os
 import re

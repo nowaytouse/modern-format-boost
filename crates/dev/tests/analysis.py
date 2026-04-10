@@ -72,7 +72,7 @@ def find_duplicates(res=32):
 
 def ahash(frame, res=64):
     i = Image.fromarray(frame)
-    i = i.resize((res, res), Image.ANTIALIAS).convert("L")
+    i = i.resize((res, res), Image.Resampling.LANCZOS).convert("L")
     pixels = list(i.getdata())
     avg = sum(pixels) / len(pixels)
     bits = "".join(map(lambda pixel: "1" if pixel < avg else "0", pixels))
