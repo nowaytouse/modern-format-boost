@@ -4257,7 +4257,7 @@ mod tests {
     fn test_hevc_slower_shortlist_keeps_neighbors_and_distinct_anchors() {
         let finalists = shortlist_hevc_slower_finalists(18.5, 24.0, Some(20.5), 30.0);
 
-        assert_eq!(finalists[0], 18.5);
+        assert!((finalists[0] - 18.5).abs() < f32::EPSILON);
         assert!(finalists.contains(&18.0));
         assert!(finalists.contains(&19.0));
         assert!(finalists.contains(&17.5));
@@ -4268,9 +4268,14 @@ mod tests {
 
     #[test]
     fn test_search_anchor_crf_uses_warm_start_backoff_and_clamp() {
-        assert_eq!(search_anchor_crf(24.0, Some(20.0), 30.0), 18.0);
-        assert_eq!(search_anchor_crf(4.0, Some(1.0), 30.0), ABSOLUTE_MIN_CRF);
-        assert_eq!(search_anchor_crf(12.0, None, 10.0), 10.0);
+        let result1 = search_anchor_crf(24.0, Some(20.0), 30.0);
+        assert!((result1 - 18.0).abs() < f32::EPSILON);
+
+        let result2 = search_anchor_crf(4.0, Some(1.0), 30.0);
+        assert!((result2 - ABSOLUTE_MIN_CRF).abs() < f32::EPSILON);
+
+        let result3 = search_anchor_crf(12.0, None, 10.0);
+        assert!((result3 - 10.0).abs() < f32::EPSILON);
     }
 
     #[test]

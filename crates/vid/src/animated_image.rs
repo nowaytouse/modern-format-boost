@@ -1346,15 +1346,18 @@ pub fn convert_to_mp4_matched(
     Ok(ConversionResult::success_video_explored(
         input,
         &output,
-        input_size,
-        explore_result.output_size,
-        options.codec.as_str(),
-        explore_result.optimal_crf,
-        explore_result.optimal_crf < shared_utils::constants::NEGLIGIBLE_DURATION_SECS as f32,
-        explore_result.iterations,
-        explore_result.ssim,
-        Some(actual_initial_crf),
-        options.quality_label.as_deref(),
+        shared_utils::conversion::VideoExplorationMetrics {
+            input_size,
+            output_size: explore_result.output_size,
+            codec_name: options.codec.as_str(),
+            crf: explore_result.optimal_crf,
+            is_lossless: explore_result.optimal_crf
+                < shared_utils::constants::NEGLIGIBLE_DURATION_SECS as f32,
+            iterations: explore_result.iterations,
+            ssim: explore_result.ssim,
+            explored_from_crf: Some(actual_initial_crf),
+            quality_label: options.quality_label.as_deref(),
+        },
     ))
 }
 

@@ -11,7 +11,7 @@ vid = imageio.get_reader(filename, "ffmpeg")
 def show_frame(frame):
     image = vid.get_data(frame)
     fig = pylab.figure()
-    fig.suptitle("frame #{}".format(frame), fontsize=20)
+    fig.suptitle(f"frame #{frame}", fontsize=20)
     pylab.imshow(image)
     pylab.show()
 

@@ -273,6 +273,70 @@ pub enum ConversionOutcome {
     Failed,
 }
 
+/// Metrics for a video exploration outcome, used to populate `ConversionResult`.
+#[derive(Debug, Clone, Default)]
+pub struct VideoExplorationMetrics<'a> {
+    pub input_size: u64,
+    pub output_size: u64,
+    pub codec_name: &'a str,
+    pub crf: f32,
+    pub is_lossless: bool,
+    pub iterations: u32,
+    pub ssim: Option<f64>,
+    pub explored_from_crf: Option<f32>,
+    pub quality_label: Option<&'a str>,
+}
+
+impl<'a> VideoExplorationMetrics<'a> {
+    #[must_use]
+    pub fn format_message(&self, reduction_pct: f64) -> String {
+        let reduction = reduction_pct / 100.0;
+        let size_tag = if reduction >= 0.0 {
+            format!("\x1b[1;32m-{reduction_pct:.1}%\x1b[0m")
+        } else {
+            let diff_bytes = i128::from(self.output_size) - i128::from(self.input_size);
+            let diff_bytes_i64 = i64::try_from(diff_bytes).unwrap_or(i64::MAX);
+            let size_diff = crate::modern_ui::format_size_diff(diff_bytes_i64);
+            format!("\x1b[1;33m{size_diff}\x1b[0m")
+        };
+
+        let crf_display = if self.is_lossless {
+            format!("{:.2} (Lossless)", self.crf)
+        } else {
+            format!("{:.2}", self.crf)
+        };
+
+        let explored_msg = match self.explored_from_crf {
+            Some(from) if (self.crf - from).abs() > 0.1 => {
+                format!(" (explored from CRF {from:.1})")
+            }
+            _ => String::new(),
+        };
+
+        let ssim_msg = self.ssim.map(|s| format!(", SSIM: {s:.4}")).unwrap_or_default();
+
+        let core_msg = format!(
+            "{} (CRF {}{}, {} iter{}): {}",
+            self.codec_name.to_uppercase(),
+            crf_display,
+            explored_msg,
+            self.iterations,
+            ssim_msg,
+            size_tag
+        );
+
+        if let Some(q) = self.quality_label {
+            if q.is_empty() {
+                format!("✅ {core_msg}")
+            } else {
+                format!("✅ {q} | {core_msg}")
+            }
+        } else {
+            format!("✅ {core_msg}")
+        }
+    }
+}
+
 impl ConversionResult {
     fn copy_original_for_fallback(
         input: &Path,
@@ -641,71 +705,22 @@ impl ConversionResult {
     pub fn success_video_explored(
         input: &Path,
         output: &Path,
-        input_size: u64,
-        output_size: u64,
-        codec_name: &str,
-        crf: f32,
-        is_lossless: bool,
-        iterations: u32,
-        ssim: Option<f64>,
-        explored_from_crf: Option<f32>,
-        quality_label: Option<&str>,
+        metrics: VideoExplorationMetrics<'_>,
     ) -> Self {
-        let reduction = if input_size == 0 {
+        let reduction_pct = if metrics.input_size == 0 {
             0.0
         } else {
-            1.0 - (output_size as f64 / input_size as f64)
-        };
-        let reduction_pct = reduction * 100.0;
-
-        let size_tag = if reduction >= 0.0 {
-            format!("\x1b[1;32m-{reduction_pct:.1}%\x1b[0m")
-        } else {
-            let diff_bytes = i128::from(output_size) - i128::from(input_size);
-            let diff_bytes_i64 = i64::try_from(diff_bytes).unwrap_or(i64::MAX);
-            let size_diff = crate::modern_ui::format_size_diff(diff_bytes_i64);
-            format!("\x1b[1;33m{size_diff}\x1b[0m")
+            (1.0 - (metrics.output_size as f64 / metrics.input_size as f64)) * 100.0
         };
 
-        let crf_display = if is_lossless {
-            format!("{crf:.2} (Lossless)")
-        } else {
-            format!("{crf:.2}")
-        };
-
-        let explored_msg = match explored_from_crf {
-            Some(from) if (crf - from).abs() > 0.1 => format!(" (explored from CRF {from:.1})"),
-            _ => String::new(),
-        };
-
-        let ssim_msg = ssim.map(|s| format!(", SSIM: {s:.4}")).unwrap_or_default();
-
-        let core_msg = format!(
-            "{} (CRF {}{}, {} iter{}): {}",
-            codec_name.to_uppercase(),
-            crf_display,
-            explored_msg,
-            iterations,
-            ssim_msg,
-            size_tag
-        );
-
-        let message = if let Some(q) = quality_label {
-            if q.is_empty() {
-                format!("✅ {core_msg}")
-            } else {
-                format!("✅ {q} | {core_msg}")
-            }
-        } else {
-            format!("✅ {core_msg}")
-        };
+        let message = metrics.format_message(reduction_pct);
 
         Self {
             success: true,
             input_path: input.display().to_string(),
             output_path: Some(output.display().to_string()),
-            input_size,
-            output_size: Some(output_size),
+            input_size: metrics.input_size,
+            output_size: Some(metrics.output_size),
             size_reduction: Some(reduction_pct),
             message,
             skipped: false,
@@ -2180,15 +2195,17 @@ mod tests {
         let result = ConversionResult::success_video_explored(
             input,
             output,
-            1000,
-            800,
-            "HEVC",
-            23.5,
-            false,
-            3,
-            Some(0.9985),
-            Some(21.0),
-            Some("Medium"),
+            VideoExplorationMetrics {
+                input_size: 1000,
+                output_size: 800,
+                codec_name: "HEVC",
+                crf: 23.5,
+                is_lossless: false,
+                iterations: 3,
+                ssim: Some(0.9985),
+                explored_from_crf: Some(21.0),
+                quality_label: Some("Medium"),
+            },
         );
 
         assert!(result.success);

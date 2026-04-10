@@ -646,7 +646,7 @@ mod tests {
         .expect("exploration should succeed")
         .expect("screening result should exist");
 
-        assert_eq!(result.best_distance, 0.01);
+        assert!((result.best_distance - 0.01).abs() < f32::EPSILON);
         assert_eq!(result.best_output_size, 90);
         assert!(result.iterations >= 3);
         assert!(finalist_distances(&result).contains(&distance_key(0.01)));
@@ -738,7 +738,7 @@ mod tests {
         .expect("exploration should succeed")
         .expect("screening result should exist");
 
-        assert_eq!(result.best_distance, 0.001);
+        assert!((result.best_distance - 0.001).abs() < f32::EPSILON);
         assert_eq!(result.best_output_size, 90);
         assert_eq!(result.iterations, 1);
         assert_eq!(calls, 0); // No further probes

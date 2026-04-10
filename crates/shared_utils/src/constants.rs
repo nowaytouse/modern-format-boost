@@ -613,7 +613,7 @@ mod tests {
 
     #[test]
     fn test_jxl_distance_policy_pins_ultimate_mode() {
-        assert_eq!(jxl_distance_for_mode(0.4, false), 0.4);
-        assert_eq!(jxl_distance_for_mode(0.4, true), JXL_ULTIMATE_DISTANCE);
+        assert!((jxl_distance_for_mode(0.4, false) - 0.4).abs() < f32::EPSILON);
+        assert!((jxl_distance_for_mode(0.4, true) - JXL_ULTIMATE_DISTANCE).abs() < f32::EPSILON);
     }
 }
