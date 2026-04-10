@@ -6,6 +6,21 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] — TBD
 
+### 🔄 Conversion Result State Machine & Fallback System
+
+- **`ConversionOutcome` Enum**: Introduced a new `ConversionOutcome` enum (`Converted`, `Skipped`, `FallbackPreserved`, `Ignored`, `Failed`) to provide explicit, semantic state representation for conversion results. Replaces ambiguous boolean combinations (`success` + `skipped`) with a single authoritative state via `ConversionResult::outcome()`.
+- **Factory Methods for ConversionResult**: Added ergonomic constructor methods to eliminate repetitive struct literal construction:
+  - `converted_with_message()` / `converted_with_message_owned()` — for successful conversions with automatic size-reduction calculation
+  - `skipped_with_fallback()` / `skipped_with_fallback_owned()` — for skipped conversions that copy the original as fallback
+  - `failed_with_fallback()` / `failed_with_fallback_owned()` — for failed conversions that copy the original as fallback
+  - `skipped_exists()` — for when output file already exists
+- **Unified Fallback Logic**: Centralized `copy_original_for_fallback` logic into `ConversionResult`, replacing scattered `copy_original_on_skip` calls across `animated_image.rs` and `conversion.rs`. The fallback system now:
+  - Respects `apple_compat` mode: only copies Apple-native formats (HEIC, HEIF) when Apple compatibility is enabled
+  - Uses `should_copy_original_on_skip()` method on `ConvertOptions` (moved from `animated_image.rs` to `conversion.rs`)
+  - Properly tracks copied destination path in `output_path` for accurate logging
+- **`CliProcessingResult` Trait Update**: Updated `is_skipped()` and `is_success()` implementations for `ConversionResult` to use the new `outcome()` method, ensuring consistent behavior across CLI output. `is_skipped()` now returns true for both `Skipped` and `FallbackPreserved` outcomes.
+- **`ConversionOutput` Outcome Support**: Added `outcome()` method to `ConversionOutput` (in `conversion_types.rs`) to map video pipeline results to the shared `ConversionOutcome` enum. Updated `CliProcessingResult` implementation accordingly.
+
 ### 🐛 Bug Fixes
 
 - **GIF Pipeline Integrity**: Fixed a critical data-loss bug where GIF files "skipped" during conversion (due to size constraints) were not copied to the output directory.
@@ -37,6 +52,10 @@ All notable changes to this project will be documented in this file.
 ### 🔧 Code Quality
 
 - **Unified Candidate Comparator Module**: Extracted shared comparison logic from `gpu_coarse_search.rs` into new `candidate_comparator.rs` — `compare_pass_gate`, `compare_quality_desc/asc`, `compare_quality_pair_desc`, `compare_size_asc`, `compare_crf_asc`, `compare_distance_desc`. Used by both HEVC ultimate selection and available for JXL/future explorers. Eliminates ~40 lines of duplicated comparator code.
+- **Eliminated Repetitive ConversionResult Construction**: Replaced ~60+ instances of verbose `ConversionResult { ignored: false, success: ..., ... }` struct literals across `animated_image.rs` and `conversion.rs` with concise factory method calls. Reduced per-call-site lines from ~15-20 to ~5-8, improving readability and reducing error surface.
+- **Removed Dead Code**: Eliminated unused `should_copy_original_on_skip` and `copy_original_on_skip` functions from `animated_image.rs` (consolidated into `ConversionResult::copy_original_for_fallback`).
+- **Unused Parameter Cleanup**: `skipped_output_exists` no longer takes unused `input_size` parameter (renamed to `_input_size`).
+- **Message Consistency**: Fixed log message in `is_static_animated_image` detection from "skipping GIF conversion" to "skipping video conversion" in `convert_to_gif_apple_compat` for accuracy.
 - **Unified Selection Philosophy Documentation**: Added consistent ranking terminology across `explore_strategy.rs`, `video_explorer.rs`, `jxl_explorer.rs`, and `gpu_coarse_search.rs` module docs: (1) Gating → (2) Quality Metrics → (3) Size → (4) Parameter → (5) Preset. Standardized terms: "screening", "candidate", "finalist shortlist", "winner".
 - **GPU Coarse Search Constant Fixes**: Replaced hardcoded `92.0` VMAF and `34.0` PSNR-UV thresholds with module-level `VMAF_Y_MIN` and `PSNR_UV_MIN` constants, improving maintainability and auditability.
 - **JXL Utils Inner-Layer Refactor**: `run_imagemagick_cjxl_pipeline` and `try_imagemagick_fallback` are now public wrappers that resolve mode-locked distance/effort and delegate to `run_imagemagick_cjxl_pipeline_with_effort` / `try_imagemagick_fallback_with_effort`. The inner functions accept raw `distance` + `effort` directly, enabling screening callers to pass arbitrary effort values (e.g. e7 screening → e10 finalization) without bypassing policy assertions.
@@ -62,6 +81,7 @@ All notable changes to this project will be documented in this file.
 
 ### 📐 Testing Infrastructure
 
+- **Conversion Outcome Tests**: Added tests for `ConversionResult::outcome()` covering all enum variants (`Converted`, `Skipped`, `FallbackPreserved`, `Ignored`, `Failed`) and factory methods (`converted_with_message`, `skipped_with_fallback`, `failed_with_fallback`).
 - **Candidate Comparator Tests**: Added 8 tests in new `candidate_comparator.rs`: quality desc/asc, pair desc, pass gate (bool + Result), size, CRF, distance.
 - **HEVC Ultimate Selection Tests**: Added 5 tests in `gpu_coarse_search.rs`: `test_hevc_ultimate_selection_keeps_passing_screening_candidate`, `test_hevc_ultimate_selection_applies_strict_input_size_gate`, `test_hevc_ultimate_selection_prefers_quality_before_crf_and_size`, `test_hevc_ultimate_selection_prefers_lower_crf_before_file_size`, `test_hevc_ultimate_selection_uses_preset_after_quality_crf_and_size`.
 - **JXL Screening Tests**: Added `test_screening_keeps_best_ladder_candidate`, `test_screening_never_reaches_one`, `test_screening_promotes_adjacent_and_boundary_candidates`, `test_screening_logs_acceleration_and_deceleration` in `jxl_explorer.rs`.

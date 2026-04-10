@@ -134,13 +134,31 @@ pub struct ConversionOutput {
     pub blake3: Option<String>,
 }
 
+impl ConversionOutput {
+    #[must_use]
+    pub fn outcome(&self) -> crate::conversion::ConversionOutcome {
+        if !self.success {
+            return crate::conversion::ConversionOutcome::Failed;
+        }
+
+        if self.strategy.target == TargetVideoFormat::Skip
+            || self.output_path.is_empty()
+            || self.output_size == 0
+        {
+            return crate::conversion::ConversionOutcome::Skipped;
+        }
+
+        crate::conversion::ConversionOutcome::Converted
+    }
+}
+
 impl crate::cli_runner::CliProcessingResult for ConversionOutput {
     fn is_skipped(&self) -> bool {
-        self.success && (self.output_size == 0 && self.output_path.is_empty())
+        self.outcome() == crate::conversion::ConversionOutcome::Skipped
     }
 
     fn is_success(&self) -> bool {
-        self.success && !(self.output_size == 0 && self.output_path.is_empty())
+        self.outcome() == crate::conversion::ConversionOutcome::Converted
     }
 
     fn skip_reason(&self) -> Option<&str> {

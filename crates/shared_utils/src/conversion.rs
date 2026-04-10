@@ -264,7 +264,60 @@ pub struct ConversionResult {
     pub blake3: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ConversionOutcome {
+    Converted,
+    Skipped,
+    FallbackPreserved,
+    Ignored,
+    Failed,
+}
+
 impl ConversionResult {
+    fn copy_original_for_fallback(
+        input: &Path,
+        options: &ConvertOptions,
+        phase: &str,
+    ) -> Option<PathBuf> {
+        if options.should_copy_original_on_skip(input) {
+            crate::smart_file_copier::copy_on_skip_or_fail(
+                input,
+                options.output_dir.as_deref(),
+                options.base_dir.as_deref(),
+                options.verbose,
+            )
+            .ok()
+            .flatten()
+        } else {
+            tracing::warn!(
+                input = %input.display(),
+                phase,
+                "Apple-compat fallback: not copying incompatible original"
+            );
+            if options.verbose {
+                eprintln!("   ⚠️  Apple compatibility mode: not copying incompatible original");
+            }
+            None
+        }
+    }
+
+    #[must_use]
+    pub const fn outcome(&self) -> ConversionOutcome {
+        if self.ignored {
+            ConversionOutcome::Ignored
+        } else if self.skipped {
+            if self.success {
+                ConversionOutcome::Skipped
+            } else {
+                ConversionOutcome::FallbackPreserved
+            }
+        } else if self.success {
+            ConversionOutcome::Converted
+        } else {
+            ConversionOutcome::Failed
+        }
+    }
+
     #[must_use]
     pub fn with_blake3(mut self, hash: String) -> Self {
         self.blake3 = Some(hash);
@@ -364,6 +417,146 @@ impl ConversionResult {
             skipped: true,
             ignored: false,
             skip_reason: Some("size_unchanged".to_string()),
+            blake3: None,
+        }
+    }
+
+    #[must_use]
+    pub fn skipped_with_fallback(
+        input: &Path,
+        options: &ConvertOptions,
+        reason: &str,
+        skip_reason_id: &str,
+    ) -> Self {
+        Self::skipped_with_fallback_owned(
+            input,
+            options,
+            reason.to_string(),
+            skip_reason_id.to_string(),
+        )
+    }
+
+    #[must_use]
+    pub fn skipped_with_fallback_owned(
+        input: &Path,
+        options: &ConvertOptions,
+        reason: String,
+        skip_reason_id: String,
+    ) -> Self {
+        let input_size = fs::metadata(input).map_or(0, |m| m.len());
+        let copied_dest = Self::copy_original_for_fallback(input, options, "skip");
+        crate::conversion::mark_as_processed(input);
+
+        Self {
+            success: true,
+            input_path: input.display().to_string(),
+            output_path: copied_dest
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .or_else(|| Some(input.display().to_string())),
+            input_size,
+            output_size: copied_dest
+                .as_ref()
+                .and_then(|p| fs::metadata(p).ok())
+                .map(|m| m.len()),
+            size_reduction: None,
+            message: reason,
+            skipped: true,
+            ignored: false,
+            skip_reason: Some(skip_reason_id),
+            blake3: None,
+        }
+    }
+
+    #[must_use]
+    pub fn failed_with_fallback(
+        input: &Path,
+        options: &ConvertOptions,
+        reason: &str,
+        skip_reason_id: &str,
+    ) -> Self {
+        Self::failed_with_fallback_owned(
+            input,
+            options,
+            reason.to_string(),
+            skip_reason_id.to_string(),
+        )
+    }
+
+    #[must_use]
+    pub fn failed_with_fallback_owned(
+        input: &Path,
+        options: &ConvertOptions,
+        reason: String,
+        skip_reason_id: String,
+    ) -> Self {
+        let input_size = fs::metadata(input).map_or(0, |m| m.len());
+        let copied_dest = Self::copy_original_for_fallback(input, options, "failure");
+        crate::conversion::mark_as_processed(input);
+
+        Self {
+            success: false,
+            input_path: input.display().to_string(),
+            output_path: copied_dest
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .or_else(|| Some(input.display().to_string())),
+            input_size,
+            output_size: copied_dest
+                .as_ref()
+                .and_then(|p| fs::metadata(p).ok())
+                .map(|m| m.len()),
+            size_reduction: None,
+            message: reason,
+            skipped: true,
+            ignored: false,
+            skip_reason: Some(skip_reason_id),
+            blake3: None,
+        }
+    }
+
+    #[must_use]
+    pub fn converted_with_message(
+        input: &Path,
+        output: &Path,
+        input_size: u64,
+        output_size: u64,
+        message: &str,
+    ) -> Self {
+        Self::converted_with_message_owned(
+            input,
+            output,
+            input_size,
+            output_size,
+            message.to_string(),
+        )
+    }
+
+    #[must_use]
+    pub fn converted_with_message_owned(
+        input: &Path,
+        output: &Path,
+        input_size: u64,
+        output_size: u64,
+        message: String,
+    ) -> Self {
+        let size_reduction = if input_size == 0 {
+            0.0
+        } else {
+            (1.0 - (output_size as f64 / input_size as f64)) * 100.0
+        };
+
+        Self {
+            success: true,
+            input_path: input.display().to_string(),
+            output_path: Some(output.display().to_string()),
+            input_size,
+            output_size: Some(output_size),
+            size_reduction: Some(size_reduction),
+            message,
+            skipped: false,
+            ignored: false,
+            skip_reason: None,
             blake3: None,
         }
     }
@@ -492,6 +685,18 @@ impl Default for ConvertOptions {
 
 impl ConvertOptions {
     #[must_use]
+    pub fn should_copy_original_on_skip(&self, input: &Path) -> bool {
+        if !self.apple_compat {
+            return true;
+        }
+        let input_ext = input
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(str::to_lowercase)
+            .unwrap_or_default();
+        crate::is_apple_native_format(&input_ext)
+    }
+
     pub const fn should_delete_original(&self) -> bool {
         self.delete_original || self.in_place
     }
@@ -1674,6 +1879,7 @@ mod tests {
             "expected '-50.0%' in: {}",
             result.message
         );
+        assert_eq!(result.outcome(), ConversionOutcome::Converted);
     }
 
     #[test]
@@ -1686,6 +1892,7 @@ mod tests {
         assert!(result.skipped);
         assert_eq!(result.skip_reason, Some("size_increase".to_string()));
         assert!(result.message.contains("larger"));
+        assert_eq!(result.outcome(), ConversionOutcome::Skipped);
     }
 
     #[test]
@@ -1699,6 +1906,45 @@ mod tests {
         assert_eq!(result.skip_reason, Some("size_unchanged".to_string()));
         assert!(result.message.contains("unchanged"));
         assert!(result.message.contains("compression goal not achieved"));
+        assert_eq!(result.outcome(), ConversionOutcome::Skipped);
+    }
+
+    #[test]
+    fn test_conversion_result_outcome_fallback_preserved() {
+        let result = ConversionResult {
+            success: false,
+            input_path: "/test/input.webp".to_string(),
+            output_path: Some("/test/input.webp".to_string()),
+            input_size: 1234,
+            output_size: Some(1234),
+            size_reduction: None,
+            message: "fallback preserved".to_string(),
+            skipped: true,
+            ignored: false,
+            skip_reason: Some("encode_failed".to_string()),
+            blake3: None,
+        };
+
+        assert_eq!(result.outcome(), ConversionOutcome::FallbackPreserved);
+    }
+
+    #[test]
+    fn test_conversion_result_converted_with_message() {
+        let input = Path::new("/test/input.mov");
+        let output = Path::new("/test/output.mp4");
+        let result = ConversionResult::converted_with_message(
+            input,
+            output,
+            2_000,
+            1_000,
+            "HEVC conversion successful: -50.0%",
+        );
+
+        assert!(result.success);
+        assert!(!result.skipped);
+        assert_eq!(result.output_path.as_deref(), Some("/test/output.mp4"));
+        assert_eq!(result.size_reduction, Some(50.0));
+        assert_eq!(result.outcome(), ConversionOutcome::Converted);
     }
 
     #[test]

@@ -24,10 +24,14 @@ pub trait CliProcessingResult {
 
 impl CliProcessingResult for crate::conversion::ConversionResult {
     fn is_skipped(&self) -> bool {
-        self.skipped
+        matches!(
+            self.outcome(),
+            crate::conversion::ConversionOutcome::Skipped
+                | crate::conversion::ConversionOutcome::FallbackPreserved
+        )
     }
     fn is_success(&self) -> bool {
-        self.success && !self.skipped
+        self.outcome() == crate::conversion::ConversionOutcome::Converted
     }
     fn skip_reason(&self) -> Option<&str> {
         self.skip_reason.as_deref()
