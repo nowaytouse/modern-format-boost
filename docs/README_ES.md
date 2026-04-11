@@ -157,17 +157,17 @@ tar -xzf modern-format-boost-aarch64-apple-darwin.tar.gz
 
 ### Requisitos previos
 
-| Herramienta        | ¿Requerida? | Propósito                  | Comando de instalación                                     |
-| ------------------ | :---------: | -------------------------- | ---------------------------------------------------------- | --- |
-| **Rust** (1.75+)   |     ✅      | Compilación e instalación  | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh` |
-| **FFmpeg** (5.0+)  |     ✅      | Procesamiento de video     | `brew install ffmpeg`                                      |
-| **libjxl**         |     ✅      | Núcleo de codificación JXL | `brew install jpeg-xl`                                     |
-| **ExifTool**       |     ✅      | Preservación de metadatos  | `brew install exiftool`                                    |
-| **ImageMagick**    |     ✅      | Conversión de formatos     | `brew install imagemagick`                                 |
-| **libwebp**        |     ✅      | Decodificación WebP        | `brew install webp`                                        |
-| **dovi_tool**      |     ✅      | Extracción de Dolby Vision | `cargo install dovi_tool`                                  |
-| **libheif**        |     ✅      | Decodificación HEIC/HEIF   | `brew install libheif`                                     |
-| **hdr10plus_tool** |     ✅      | Extracción de HDR10+       | `cargo install hdr10plus_tool`                             |
+| Herramienta | ¿Requerida? | Propósito | Comando de instalación |
+| :--- | :---: | :--- | :--- |
+| **Rust** (1.75+) | ✅ | Compilación e instalación | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
+| **FFmpeg** (5.0+) | ✅ | Procesamiento de video | `brew install ffmpeg` / `apt install ffmpeg` |
+| **libjxl** | ✅ | Núcleo de codificación JXL | `brew install jpeg-xl` |
+| **ExifTool** | ✅ | Preservación de metadatos | `brew install exiftool` |
+| **ImageMagick** | ✅ | Conversión de formatos | `brew install imagemagick` |
+| **libwebp** | ✅ | Decodificación WebP | `brew install webp` |
+| **dovi_tool** | ✅ | Extracción de Dolby Vision | `cargo install dovi_tool` |
+| **libheif** | ✅ | Decodificación HEIC/HEIF | `brew install libheif` |
+| **hdr10plus_tool** | ✅ | Extracción de HDR10+ | `cargo install hdr10plus_tool` |
 
 ## 🚀 Uso
 
