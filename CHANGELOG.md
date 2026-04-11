@@ -6,6 +6,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] — TBD
 
+### 🎬 HEVC Ultimate Pipeline Simplification
+
+- **Two-Stage Multi-Candidate Search Removed**: Replaced the previous "Stage 1 screening → Stage 2 finalist shortlist → multi-candidate ranking" flow with a streamlined single-path pipeline: search with an efficient preset (`slow`), then do one final render at the requested delivery preset (`slower`) using the settled CRF
+- **`HevcPresetPlan` Struct**: New data structure (`search_preset` + `final_output_preset`) that encapsulates the preset strategy decision in one place. For ultimate `slower`, the plan is `search=slow` → `final=slower`; all other cases use a single preset
+- **Eliminated ~360 Lines of Candidate Comparison Logic**: Removed `HevcUltimateCandidate` struct, `compare_hevc_ultimate_candidates()`, `select_hevc_ultimate_winner()`, `cleanup_hevc_ultimate_outputs()`, `shortlist_hevc_slower_finalists()`, `compare_hevc_ultimate_quality()`, `passes_hevc_ultimate_size_gate()`, `hevc_preset_rank()`, `round_half_step()` — all replaced by a simple two-step encode
+- **`final_output_preset` Threaded Through Call Chain**: Added to `GpuSearchArgs`, `FineTuneArgs`, and all internal encode functions so the final render step knows which preset to use
+- **Phase 4 Final Render Logic**: When Phase 4 settles on a CRF and `needs_final_preset_render` is true, the pipeline now does a single full-timeline encode at the delivery preset instead of returning the search-preset result
+- **Logging Updates**: Module docs updated to reflect the new two-step model ("search with efficient preset, then render once with delivery preset"). New log message: `"HEVC Ultimate pipeline: search preset slow → final preset slower at settled CRF"`
+- **Test Simplification**: Removed 5 multi-candidate selection tests that tested the old ranking/comparison logic. Added 2 focused tests for `hevc_preset_plan()` covering the ultimate slower case and the normal case
+
 ### 🎬 Phase 4 CPU Fine-Tune Refinement
 
 - **Attempt Cap for Phase 4 Loop**: Added `PHASE4_MAX_ATTEMPTS` (32) hard cap on Phase 4 fine-tune iterations, preventing runaway loops on pathological sources that keep oscillating at CRF boundaries
