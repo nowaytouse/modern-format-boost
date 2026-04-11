@@ -1,0 +1,792 @@
+//! Metadata Preservation Module
+//!
+//! Layered preservation: Internal (`ExifTool`) / Network / System (ACL, xattr, timestamps).
+//! Unified entry point for timestamps: single files via `apply_file_timestamps(src, dst)`, directory trees via
+//! `save_directory_timestamps` → `apply_saved_timestamps_to_dst` / `restore_directory_timestamps`,
+//! Avoids redundant implementations. `ExifTool` rewrites files, so timestamps are always set after write operations.
+
+use std::io;
+use std::path::Path;
+
+mod exif;
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "macos")]
+mod macos;
+mod network;
+#[cfg(target_os = "windows")]
+mod windows;
+
+pub use exif::preserve_internal_metadata;
+#[cfg(target_os = "macos")]
+pub use macos::append_mfb_branding;
+
+pub fn apply_file_timestamps(src: &Path, dst: &Path) {
+    use tracing::debug;
+
+    debug!(
+        "apply_file_timestamps: {} → {}",
+        src.display(),
+        dst.display()
+    );
+    let Ok(m) = std::fs::metadata(src) else {
+        debug!("Failed to read source metadata");
+        return;
+    };
+
+    // Platform-specific creation time preservation FIRST (before atime/mtime)
+    // This is critical because filetime::set_file_times may reset creation time on some systems
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(created) = m.created() {
+            debug!("Original creation time: {:?}", created);
+            if let Err(e) = macos::set_creation_time(dst, created) {
+                eprintln!("⚠️ [metadata] Failed to set creation time: {e}");
+                debug!("Creation time error details: {:?}", e);
+            } else {
+                debug!("Set creation time successfully");
+            }
+        } else {
+            debug!("Failed to read original creation time");
+        }
+        if let Ok(added) = macos::get_added_time(src) {
+            if let Err(e) = macos::set_added_time(dst, added) {
+                debug!("Failed to set added time: {}", e);
+            } else {
+                debug!("Set added time successfully");
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // Windows: Use filetime crate's set_file_times which preserves creation time
+        if let Ok(created) = m.created() {
+            let ctime = filetime::FileTime::from_system_time(created);
+            let atime = filetime::FileTime::from_last_access_time(&m);
+            // On Windows, filetime::set_file_times also sets creation time
+            if let Err(e) = filetime::set_file_times(dst, atime, ctime) {
+                eprintln!("⚠️ [metadata] Failed to set Windows creation time: {}", e);
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // Linux: Try to preserve birth time if available (requires statx on newer kernels)
+        // Note: Most Linux filesystems don't support setting birth time, so this is best-effort
+        if let Ok(created) = m.created() {
+            // Linux typically doesn't allow setting birth time, but we try anyway
+            // This often fails on Linux filesystems, but when it does we should still make it visible.
+            if let Err(e) = linux::try_set_birth_time(dst, created) {
+                eprintln!("⚠️ [metadata] Failed to preserve Linux birth time: {}", e);
+            }
+        }
+    }
+
+    // Set atime/mtime AFTER creation time
+    let atime = filetime::FileTime::from_last_access_time(&m);
+    let mtime = filetime::FileTime::from_last_modification_time(&m);
+    if let Err(e) = filetime::set_file_times(dst, atime, mtime) {
+        eprintln!("⚠️ [metadata] Failed to set file times: {e}");
+    } else {
+        debug!("Set atime/mtime successfully");
+    }
+
+    // RE-APPLY creation time on macOS after setting atime/mtime
+    // This is necessary because filetime::set_file_times may reset creation time
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(created) = m.created() {
+            debug!("Re-applying creation time after atime/mtime: {:?}", created);
+            if let Err(e) = macos::set_creation_time(dst, created) {
+                eprintln!("⚠️ [metadata] Failed to re-set creation time: {e}");
+            }
+        }
+    }
+
+    // Verify creation time was preserved (macOS only)
+    #[cfg(target_os = "macos")]
+    {
+        if let (Ok(expected_created), Ok(dst_meta)) = (m.created(), std::fs::metadata(dst)) {
+            if let Ok(actual_created) = dst_meta.created() {
+                debug!("Verified creation time: {:?}", actual_created);
+                // Check if it matches (allow 1 second tolerance for filesystem precision)
+                let diff = if actual_created > expected_created {
+                    actual_created
+                        .duration_since(expected_created)
+                        .unwrap_or_default()
+                } else {
+                    expected_created
+                        .duration_since(actual_created)
+                        .unwrap_or_default()
+                };
+                if diff.as_secs() > 1 {
+                    eprintln!("⚠️ [metadata] Creation time mismatch after setting!");
+                    eprintln!("   Expected: {expected_created:?}");
+                    eprintln!("   Got:      {actual_created:?}");
+                    eprintln!("   Diff:     {diff:?}");
+                }
+            }
+        }
+    }
+}
+
+/// Preserve "Pro" metadata (XMP, ICC, etc.).
+///
+/// # Errors
+/// Returns an `io::Result` if preservation fails.
+pub fn preserve_pro(src: &Path, dst: &Path) -> io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        // copyfile: copies ACL + STAT + xattr in one syscall
+        if let Err(e) = macos::copy_native_metadata(src, dst) {
+            eprintln!("⚠️ [metadata] macOS native copy failed: {e}");
+            // Fallback: manual xattr copy if copyfile failed
+            copy_xattrs_manual(src, dst);
+        }
+        // ExifTool: EXIF/IPTC/XMP internal tags
+        if let Err(e) = exif::preserve_internal_metadata(src, dst) {
+            eprintln!("⚠️ [metadata] Internal metadata failed: {e}");
+        }
+        // Network xattrs (WhereFroms, UserTags) — copy + verify
+        if let Err(e) = network::preserve_network_metadata(src, dst) {
+            eprintln!("⚠️ [metadata] Network metadata preservation failed: {e}");
+        }
+
+        // Unix permission bits (copyfile covers STAT but be explicit)
+        if let Ok(meta) = std::fs::metadata(src) {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = meta.permissions().mode();
+            if let Err(e) = std::fs::set_permissions(dst, std::fs::Permissions::from_mode(mode)) {
+                eprintln!("⚠️ [metadata] Failed to preserve macOS permission bits: {e}");
+            }
+        }
+        // Timestamps last (ExifTool rewrites file, so must come after)
+        apply_file_timestamps(src, dst);
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        // ExifTool: EXIF/IPTC/XMP internal tags
+        if let Err(e) = exif::preserve_internal_metadata(src, dst) {
+            eprintln!("⚠️ [metadata] Internal metadata failed: {}", e);
+        }
+        // Network xattrs — copy + verify
+        if let Err(e) = network::preserve_network_metadata(src, dst) {
+            eprintln!("⚠️ [metadata] Network metadata preservation failed: {}", e);
+        }
+        // Platform-specific attributes
+        #[cfg(target_os = "linux")]
+        if let Err(e) = linux::preserve_linux_attributes(src, dst) {
+            eprintln!("⚠️ [metadata] Linux attribute preservation failed: {}", e);
+        }
+        #[cfg(target_os = "windows")]
+        if let Err(e) = windows::preserve_windows_attributes(src, dst) {
+            eprintln!("⚠️ [metadata] Windows attribute preservation failed: {}", e);
+        }
+        // Generic xattr copy (covers any remaining xattrs not handled above)
+        copy_xattrs_manual(src, dst);
+        // Unix permission bits
+        #[cfg(unix)]
+        if let Ok(meta) = std::fs::metadata(src) {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = meta.permissions().mode();
+            if let Err(e) = std::fs::set_permissions(dst, std::fs::Permissions::from_mode(mode)) {
+                eprintln!(
+                    "⚠️ [metadata] Failed to preserve Unix permission bits: {}",
+                    e
+                );
+            }
+        }
+        // Timestamps last
+        apply_file_timestamps(src, dst);
+        Ok(())
+    }
+}
+
+/// Preserve all metadata from source to destination.
+///
+/// # Errors
+/// Returns an `io::Result` if preservation fails.
+pub fn preserve_metadata(src: &Path, dst: &Path) -> io::Result<()> {
+    preserve_pro(src, dst)
+}
+
+/// Merge source's XMP sidecar into destination (for conversion output). Idempotent if no sidecar.
+pub fn merge_xmp_sidecar_into_dest(src: &Path, dst: &Path) {
+    merge_xmp_sidecar(src, dst);
+}
+
+pub fn copy_metadata(src: &Path, dst: &Path) {
+    if let Err(e) = preserve_metadata(src, dst) {
+        eprintln!("⚠️ Failed to preserve metadata: {e}");
+    }
+    merge_xmp_sidecar(src, dst);
+    apply_file_timestamps(src, dst);
+}
+
+/// Preserve directory metadata (timestamps, etc.).
+///
+/// # Errors
+/// Returns an `io::Result` if preservation fails.
+pub fn preserve_directory_metadata(src_dir: &Path, dst_dir: &Path) -> io::Result<()> {
+    use std::collections::HashMap;
+
+    let mut dir_metadata: HashMap<std::path::PathBuf, std::fs::Metadata> = HashMap::new();
+
+    if src_dir.is_dir() {
+        if let Ok(meta) = std::fs::metadata(src_dir) {
+            dir_metadata.insert(src_dir.to_path_buf(), meta);
+        }
+
+        collect_dir_metadata(src_dir, &mut dir_metadata)?;
+    }
+
+    for (src_path, metadata) in &dir_metadata {
+        let rel_path = src_path.strip_prefix(src_dir).unwrap_or(src_path);
+        let dst_path = dst_dir.join(rel_path);
+
+        if !dst_path.exists() {
+            if let Err(e) = std::fs::create_dir_all(&dst_path) {
+                eprintln!(
+                    "⚠️ Failed to create directory {}: {}",
+                    dst_path.display(),
+                    e
+                );
+                continue;
+            }
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = metadata.permissions().mode();
+            if let Err(e) =
+                std::fs::set_permissions(&dst_path, std::fs::Permissions::from_mode(mode))
+            {
+                eprintln!(
+                    "⚠️ Failed to set permissions for {}: {}",
+                    dst_path.display(),
+                    e
+                );
+            }
+        }
+
+        // macOS: set creation time BEFORE atime/mtime (will re-apply after)
+        #[cfg(target_os = "macos")]
+        {
+            if let Ok(created) = metadata.created() {
+                if let Err(e) = macos::set_creation_time(&dst_path, created) {
+                    eprintln!(
+                        "⚠️ Failed to set creation time for {}: {}",
+                        dst_path.display(),
+                        e
+                    );
+                }
+            }
+        }
+
+        let atime = filetime::FileTime::from_last_access_time(metadata);
+        let mtime = filetime::FileTime::from_last_modification_time(metadata);
+        if let Err(e) = filetime::set_file_times(&dst_path, atime, mtime) {
+            eprintln!(
+                "⚠️ Failed to set timestamps for {}: {}",
+                dst_path.display(),
+                e
+            );
+        }
+
+        // macOS: re-apply creation time AFTER atime/mtime (filetime may reset it)
+        #[cfg(target_os = "macos")]
+        {
+            if let Ok(created) = metadata.created() {
+                if let Err(e) = macos::set_creation_time(&dst_path, created) {
+                    eprintln!(
+                        "⚠️ Failed to set creation time for {}: {}",
+                        dst_path.display(),
+                        e
+                    );
+                }
+            }
+            // Also preserve added time for directories
+            if let Ok(added) = macos::get_added_time(src_path) {
+                if let Err(e) = macos::set_added_time(&dst_path, added) {
+                    eprintln!(
+                        "⚠️ Failed to set added time for {}: {}",
+                        dst_path.display(),
+                        e
+                    );
+                }
+            }
+        }
+
+        copy_dir_xattrs(src_path, &dst_path);
+    }
+
+    Ok(())
+}
+
+pub fn preserve_directory_metadata_with_log(base_dir: &Path, output_dir: &Path) {
+    println!("\n📁 Preserving directory metadata...");
+    if let Err(e) = preserve_directory_metadata(base_dir, output_dir) {
+        eprintln!("⚠️ Failed to preserve directory metadata: {e}");
+    } else {
+        println!("✅ Directory metadata preserved");
+    }
+}
+
+/// Save directory timestamps to a map.
+///
+/// # Errors
+/// Returns an `io::Result` if saving fails.
+pub fn save_directory_timestamps(
+    dir: &Path,
+) -> io::Result<
+    std::collections::HashMap<std::path::PathBuf, (filetime::FileTime, filetime::FileTime)>,
+> {
+    use std::collections::HashMap;
+    let mut saved = HashMap::new();
+    if dir.is_dir() {
+        if let Ok(meta) = std::fs::metadata(dir) {
+            let atime = filetime::FileTime::from_last_access_time(&meta);
+            let mtime = filetime::FileTime::from_last_modification_time(&meta);
+            saved.insert(dir.to_path_buf(), (atime, mtime));
+        }
+        collect_dir_timestamps(dir, &mut saved)?;
+    }
+    Ok(saved)
+}
+
+pub fn restore_directory_timestamps<S>(
+    saved: &std::collections::HashMap<
+        std::path::PathBuf,
+        (filetime::FileTime, filetime::FileTime),
+        S,
+    >,
+) where
+    S: std::hash::BuildHasher,
+{
+    let mut failed_count = 0;
+    let mut total_count = 0;
+
+    for (path, (atime, mtime)) in saved {
+        if path.exists() && path.is_dir() {
+            total_count += 1;
+            if let Err(e) = filetime::set_file_times(path, *atime, *mtime) {
+                failed_count += 1;
+                eprintln!(
+                    "⚠️  Failed to restore directory timestamp for {}: {}",
+                    path.display(),
+                    e
+                );
+            }
+        }
+    }
+
+    if failed_count > 0 {
+        eprintln!(
+            "⚠️  TIMESTAMP VERIFICATION: {failed_count}/{total_count} directories failed (possible filesystem protection or network mount)"
+        );
+    }
+}
+
+pub fn apply_saved_timestamps_to_dst<S>(
+    saved: &std::collections::HashMap<
+        std::path::PathBuf,
+        (filetime::FileTime, filetime::FileTime),
+        S,
+    >,
+    src_root: &Path,
+    dst_root: &Path,
+) where
+    S: std::hash::BuildHasher,
+{
+    let mut failed_count = 0;
+    let mut total_count = 0;
+
+    for (src_path, (atime, mtime)) in saved {
+        if let Ok(rel_path) = src_path.strip_prefix(src_root) {
+            let dst_path = dst_root.join(rel_path);
+            if dst_path.exists() && dst_path.is_dir() {
+                total_count += 1;
+                if let Err(e) = filetime::set_file_times(&dst_path, *atime, *mtime) {
+                    failed_count += 1;
+                    eprintln!(
+                        "⚠️  Failed to apply directory timestamp to {}: {}",
+                        dst_path.display(),
+                        e
+                    );
+                }
+            }
+        }
+    }
+
+    if failed_count > 0 {
+        eprintln!(
+            "⚠️  TIMESTAMP VERIFICATION: {failed_count}/{total_count} destination directories failed (possible filesystem protection or network mount)"
+        );
+    }
+}
+
+fn copy_file_timestamps_only(src: &Path, dst: &Path) {
+    apply_file_timestamps(src, dst);
+}
+
+fn copy_file_timestamps_from_source_tree(src_root: &Path, dst_root: &Path) {
+    const SOURCE_EXTENSIONS: &[&str] = &[
+        "jpg", "jpeg", "png", "webp", "heic", "heif", "avif", "gif", "tiff", "tif", "bmp", "jxl",
+    ];
+    for entry in walkdir::WalkDir::new(dst_root).follow_links(false) {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                tracing::warn!(
+                    dir = %dst_root.display(),
+                    error = %err,
+                    "Failed to inspect destination file while restoring timestamps from source tree"
+                );
+                continue;
+            }
+        };
+        let dst_path = entry.path();
+        if !dst_path.is_file() {
+            continue;
+        }
+        let Ok(rel) = dst_path.strip_prefix(dst_root) else {
+            continue;
+        };
+        let parent = rel.parent().unwrap_or(rel);
+        let stem = dst_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        if stem.is_empty() {
+            continue;
+        }
+        let src_parent = src_root.join(parent);
+        for ext in SOURCE_EXTENSIONS {
+            let src_file = src_parent.join(format!("{stem}.{ext}"));
+            if src_file.exists() && src_file.is_file() {
+                copy_file_timestamps_only(&src_file, dst_path);
+                break;
+            }
+        }
+    }
+}
+
+/// Restore timestamps from source directory to output directory.
+///
+/// # Errors
+/// Returns an `io::Result` if restoration fails.
+pub fn restore_timestamps_from_source_to_output(src_dir: &Path, dst_dir: &Path) -> io::Result<()> {
+    let saved = save_directory_timestamps(src_dir)?;
+    apply_saved_timestamps_to_dst(&saved, src_dir, dst_dir);
+    copy_file_timestamps_from_source_tree(src_dir, dst_dir);
+    restore_directory_timestamps(&saved);
+    Ok(())
+}
+
+fn collect_dir_timestamps<S>(
+    dir: &Path,
+    map: &mut std::collections::HashMap<
+        std::path::PathBuf,
+        (filetime::FileTime, filetime::FileTime),
+        S,
+    >,
+) -> io::Result<()>
+where
+    S: std::hash::BuildHasher,
+{
+    let entries = std::fs::read_dir(dir)?;
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            let meta = std::fs::metadata(&path)?;
+            let atime = filetime::FileTime::from_last_access_time(&meta);
+            let mtime = filetime::FileTime::from_last_modification_time(&meta);
+            map.insert(path.clone(), (atime, mtime));
+            collect_dir_timestamps(&path, map)?;
+        }
+    }
+    Ok(())
+}
+
+fn collect_dir_metadata<S>(
+    dir: &Path,
+    map: &mut std::collections::HashMap<std::path::PathBuf, std::fs::Metadata, S>,
+) -> io::Result<()>
+where
+    S: std::hash::BuildHasher,
+{
+    let entries = std::fs::read_dir(dir)?;
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            let meta = std::fs::metadata(&path)?;
+            map.insert(path.clone(), meta);
+            collect_dir_metadata(&path, map)?;
+        }
+    }
+    Ok(())
+}
+
+fn copy_dir_xattrs(src: &Path, dst: &Path) {
+    match xattr::list(src) {
+        Ok(iter) => {
+            for name in iter {
+                let Some(name_str) = name.to_str() else {
+                    continue;
+                };
+                match xattr::get(src, name_str) {
+                    Ok(Some(value)) => {
+                        if let Err(e) = xattr::set(dst, name_str, &value) {
+                            eprintln!(
+                                "⚠️ [metadata] Failed to copy directory xattr '{}' to {}: {}",
+                                name_str,
+                                dst.display(),
+                                e
+                            );
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        eprintln!(
+                            "⚠️ [metadata] Failed to read directory xattr '{}' from {}: {}",
+                            name_str,
+                            src.display(),
+                            e
+                        );
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!(
+                "⚠️ [metadata] Failed to list directory xattrs for {}: {}",
+                src.display(),
+                e
+            );
+        }
+    }
+}
+
+/// Fallback: try exiv2 to merge XMP into the destination (exiv2 -i expects sidecar named <stem>.xmp beside image).
+/// Returns true if exiv2 merge succeeded. No fake success; only when exiv2 actually succeeds do we return true.
+fn try_merge_xmp_exiv2(xmp_path: &Path, dst: &Path) -> bool {
+    let Some(parent) = dst.parent() else {
+        return false;
+    };
+    let stem = dst
+        .file_stem()
+        .map(|s| s.to_string_lossy())
+        .unwrap_or_default();
+    let sidecar_for_exiv2 = parent.join(format!("{stem}.xmp"));
+    if sidecar_for_exiv2 == *xmp_path {
+        return false;
+    }
+    if let Err(e) = std::fs::copy(xmp_path, &sidecar_for_exiv2) {
+        tracing::warn!(
+            xmp = %xmp_path.display(),
+            dst = %dst.display(),
+            error = %e,
+            "Failed to prepare temporary XMP sidecar for exiv2 fallback"
+        );
+        return false;
+    }
+    let out = crate::tool_builders::Exiv2Builder::new()
+        .arg("-ix")
+        .input(dst)
+        .build()
+        .output();
+    let ok = out.as_ref().is_ok_and(|o| o.status.success());
+    if let Ok(out) = &out {
+        if !out.status.success() {
+            tracing::warn!(
+                dst = %dst.display(),
+                stderr = %String::from_utf8_lossy(&out.stderr).trim(),
+                "exiv2 XMP fallback returned non-zero status"
+            );
+        }
+    } else if let Err(err) = &out {
+        tracing::warn!(
+            dst = %dst.display(),
+            error = %err,
+            "Failed to launch exiv2 for XMP fallback"
+        );
+    }
+    if let Err(e) = std::fs::remove_file(&sidecar_for_exiv2) {
+        eprintln!(
+            "⚠️ [metadata] Failed to remove temporary exiv2 sidecar {}: {}",
+            sidecar_for_exiv2.display(),
+            e
+        );
+    }
+    ok
+}
+
+fn merge_xmp_sidecar(src: &Path, dst: &Path) {
+    let xmp_path = find_xmp_sidecar(src);
+
+    if let Some(xmp) = xmp_path {
+        if crate::progress_mode::is_verbose_mode() {
+            eprintln!("📋 Found XMP sidecar: {}", xmp.display());
+        }
+
+        let config = crate::xmp_merger::XmpMergerConfig {
+            delete_xmp_after_merge: false,
+            overwrite_original: true,
+            preserve_timestamps: true,
+            verbose: false,
+        };
+
+        let merger = crate::xmp_merger::XmpMerger::new(config);
+
+        crate::progress_mode::xmp_merge_attempt();
+        match merger.merge_xmp(&xmp, dst) {
+            Ok(()) => {
+                crate::progress_mode::xmp_merge_success();
+            }
+            Err(e) => {
+                let err_str = e.to_string();
+                let format_unsupported = err_str.to_lowercase().contains("format error in file");
+                if format_unsupported {
+                    let line = crate::progress_mode::format_status_line(
+                        "   ⚠️  XMP merge skipped (ExifTool does not support writing to this file format)",
+                    );
+                    crate::progress_mode::emit_stderr(&line);
+                } else {
+                    crate::progress_mode::xmp_merge_failure(&err_str);
+                }
+                let fallback_ok = try_merge_xmp_exiv2(&xmp, dst);
+                if fallback_ok {
+                    crate::progress_mode::xmp_merge_success();
+                    if crate::progress_mode::has_log_file() {
+                        crate::progress_mode::write_to_log_at_level(
+                            tracing::Level::INFO,
+                            "   → Fallback: exiv2 merge succeeded (ExifTool had failed).",
+                        );
+                    }
+                } else if crate::progress_mode::has_log_file() && !format_unsupported {
+                    crate::progress_mode::write_to_log_at_level(
+                        tracing::Level::INFO,
+                        "   → Fallback: exiv2 merge failed or exiv2 not available; no fake success.",
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn find_xmp_sidecar(src: &Path) -> Option<std::path::PathBuf> {
+    if let Some(ext) = src.extension() {
+        let xmp_full = src.with_extension(format!("{}.xmp", ext.to_str()?));
+        if xmp_full.exists() {
+            return Some(xmp_full);
+        }
+    }
+
+    let xmp_stem = src.with_extension("xmp");
+    if xmp_stem.exists() {
+        return Some(xmp_stem);
+    }
+
+    if let Some(parent) = src.parent() {
+        if let Some(src_stem_raw) = src.file_stem() {
+            let src_stem = src_stem_raw.to_string_lossy().to_lowercase();
+            let src_root_stem = src_stem.split('.').next().unwrap_or(&src_stem);
+
+            match std::fs::read_dir(parent) {
+                Ok(entries) => {
+                    for entry in entries {
+                        let entry = match entry {
+                            Ok(entry) => entry,
+                            Err(err) => {
+                                tracing::warn!(
+                                    dir = %parent.display(),
+                                    error = %err,
+                                    "Failed to inspect sibling file while searching for XMP sidecar"
+                                );
+                                continue;
+                            }
+                        };
+                        let path = entry.path();
+
+                        if !path
+                            .extension()
+                            .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("xmp"))
+                        {
+                            continue;
+                        }
+
+                        if let Some(xmp_stem_raw) = path.file_stem() {
+                            let xmp_stem = xmp_stem_raw.to_string_lossy().to_lowercase();
+                            let xmp_root_stem = xmp_stem.split('.').next().unwrap_or(&xmp_stem);
+
+                            if xmp_stem == src_stem
+                                || xmp_stem
+                                    == format!(
+                                        "{}.{}",
+                                        src_stem,
+                                        src.extension().and_then(|e| e.to_str()).unwrap_or("")
+                                    )
+                                || xmp_root_stem == src_root_stem
+                            {
+                                return Some(path);
+                            }
+                        }
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        dir = %parent.display(),
+                        error = %err,
+                        "Failed to read parent directory while searching for XMP sidecar"
+                    );
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn copy_xattrs_manual(src: &Path, dst: &Path) {
+    match xattr::list(src) {
+        Ok(iter) => {
+            for name in iter {
+                let Some(name_str) = name.to_str() else {
+                    continue;
+                };
+                match xattr::get(src, name_str) {
+                    Ok(Some(value)) => {
+                        if let Err(e) = xattr::set(dst, name_str, &value) {
+                            eprintln!(
+                                "⚠️ [metadata] Failed to copy xattr '{}' to {}: {}",
+                                name_str,
+                                dst.display(),
+                                e
+                            );
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        eprintln!(
+                            "⚠️ [metadata] Failed to read xattr '{}' from {}: {}",
+                            name_str,
+                            src.display(),
+                            e
+                        );
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!(
+                "⚠️ [metadata] Failed to list xattrs for {}: {}",
+                src.display(),
+                e
+            );
+        }
+    }
+}

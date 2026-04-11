@@ -1,0 +1,126 @@
+# =============================================================================
+# Modern Format Boost - Cargo Compilation & Optimization Configuration
+# =============================================================================
+# Documentation: https://doc.rust-lang.org/cargo/reference/config.html
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Build Configuration
+# -----------------------------------------------------------------------------
+[build]
+# Enable overflow checks by default for all targets
+rustflags = [
+    "-C", "overflow-checks=on",
+]
+
+# macOS-specific optimizations
+[target.'cfg(target_os = "macos")']
+rustflags = [
+    "-C", "overflow-checks=on",
+    # Enable Faster Linker (system default is usually fine on Sonoma+, 
+    # but -C link-arg=-fuse-ld=lld can be added if lld is installed)
+]
+
+# -----------------------------------------------------------------------------
+# Incremental Compilation Optimizations
+# -----------------------------------------------------------------------------
+[profile.dev]
+# Incremental compilation enabled by default for fast iteration
+# Note: If using sccache, incremental compilation should be disabled (conflicts)
+# incremental = false
+
+# Optimization Level:
+# 0 = No optimizations (fastest build)
+# 1 = Basic optimizations (recommended for balanced dev)
+# 2 = High optimizations
+# 3 = Maximal optimizations
+# "s" = Optimize for size
+# "z" = Aggressive size optimization
+opt-level = 1
+
+# Debug Information:
+# 0/none = No debug info
+# 1/limited = Line tables only (faster build)
+# 2/full = Full debug symbols (default)
+debug = 2
+
+# Enable runtime assertions for development
+debug-assertions = true
+
+# -----------------------------------------------------------------------------
+# Development Environment - Fast Compilation Profile
+# -----------------------------------------------------------------------------
+[profile.dev-fast]
+inherits = "dev"
+
+# Completely disable optimizations for minimum wait time
+opt-level = 0
+
+# Strip debug info to speed up linking
+debug = 0
+
+# -----------------------------------------------------------------------------
+# Test Configuration - Balanced speed for testing
+# -----------------------------------------------------------------------------
+[profile.test]
+# Tests benefit from moderate optimization to reflect real-world performance
+opt-level = 2
+debug = true
+
+# -----------------------------------------------------------------------------
+# Release Configuration - Production Grade Optimization
+# -----------------------------------------------------------------------------
+[profile.release]
+# Link-Time Optimization (LTO)
+# Thin LTO provides similar benefits to 'fat' LTO with significantly faster build times.
+lto = "thin"
+
+# Maximal optimization level
+opt-level = 3
+
+# Single codegen unit allows for maximal cross-function optimization but slows down build
+codegen-units = 1
+
+# Abort on panic (reduces binary size and improves performance where unwinding isn't needed)
+panic = "abort"
+
+# Strip all symbols to minimize binary footprint (essential for CLI distribution)
+strip = "symbols"
+
+# -----------------------------------------------------------------------------
+# Profiling Configuration - Used for performance tuning
+# -----------------------------------------------------------------------------
+[profile.profiling]
+inherits = "release"
+
+# Retain debug info for meaningful flamegraphs/profiler output
+debug = true
+
+# Disable LTO to speed up iterative profiling builds
+lto = false
+
+# Multiple codegen units for faster compilation
+codegen-units = 16
+
+# -----------------------------------------------------------------------------
+# Per-Package Optimizations
+# -----------------------------------------------------------------------------
+# Always optimize heavy math/compression dependencies even in dev mode
+[profile.dev.package.image]
+opt-level = 2
+
+[profile.dev.package.num-rational]
+opt-level = 3
+
+# -----------------------------------------------------------------------------
+# Environment & Parallelism
+# -----------------------------------------------------------------------------
+[term]
+# Ensure colorful output
+verbose = false
+color = "always"
+
+[net]
+# Optimize network requests for registry updates
+retry = 3
+git-fetch-with-cli = true

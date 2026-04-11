@@ -1,0 +1,102 @@
+    Checking shared_utils v0.11.2 (/Users/nyamiiko/Downloads/GitHub/modern_format_boost/crates/shared_utils)
+    Checking dev v0.11.2 (/Users/nyamiiko/Downloads/GitHub/modern_format_boost/crates/dev)
+error: item in documentation is missing backticks
+ --> crates/dev/src/media_index.rs:1:29
+  |
+1 | //! 🗄️ Media Index System - SQLite Backend (Dev-only)
+  |                            ^^^^^^
+  |
+  = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+  = note: `-D clippy::doc-markdown` implied by `-D warnings`
+  = help: to override `-D warnings` add `#[allow(clippy::doc_markdown)]`
+help: try
+  |
+1 - //! 🗄️ Media Index System - SQLite Backend (Dev-only)
+1 + //! 🗄️ Media Index System - `SQLite` Backend (Dev-only)
+  |
+
+error: item in documentation is missing backticks
+ --> crates/shared_utils/src/bin/verify_db_logging.rs:3:48
+  |
+3 | ... to verify that the PostgreSQL feedback loop 
+  |                        ^^^^^^^^^^
+  |
+  = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+  = note: `-D clippy::doc-markdown` implied by `-D warnings`
+  = help: to override `-D warnings` add `#[allow(clippy::doc_markdown)]`
+help: try
+  |
+3 - //! Minimal functional test to verify that the PostgreSQL feedback loop 
+3 + //! Minimal functional test to verify that the `PostgreSQL` feedback loop 
+  |
+
+error: item in documentation is missing backticks
+ --> crates/shared_utils/src/bin/verify_db_logging.rs:6:28
+  |
+6 | //! Usage: cargo run --bin verify_db_logging
+  |                            ^^^^^^^^^^^^^^^^^
+  |
+  = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+  |
+6 - //! Usage: cargo run --bin verify_db_logging
+6 + //! Usage: cargo run --bin `verify_db_logging`
+  |
+
+error: item in documentation is missing backticks
+ --> crates/shared_utils/src/bin/db_diagnostics.rs:6:28
+  |
+6 | //! Usage: cargo run --bin db_diagnostics
+  |                            ^^^^^^^^^^^^^^
+  |
+  = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+  = note: `-D clippy::doc-markdown` implied by `-D warnings`
+  = help: to override `-D warnings` add `#[allow(clippy::doc_markdown)]`
+help: try
+  |
+6 - //! Usage: cargo run --bin db_diagnostics
+6 + //! Usage: cargo run --bin `db_diagnostics`
+  |
+
+error: `to_string` applied to a type that implements `Display` in `println!` args
+  --> crates/shared_utils/src/bin/verify_db_logging.rs:78:51
+   |
+78 | ... snapshot.to_string());
+   |             ^^^^^^^^^^^^ help: remove this
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#to_string_in_format_args
+   = note: `-D clippy::to-string-in-format-args` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::to_string_in_format_args)]`
+
+error: variables can be used directly in the `format!` string
+  --> crates/shared_utils/src/bin/verify_db_logging.rs:83:17
+   |
+83 | ...   println!("   - ⚠️ Snapshot data integrity: Mismatch or missing 'width' (snapshot: {:?})", snapshot);
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#uninlined_format_args
+   = note: `-D clippy::uninlined-format-args` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::uninlined_format_args)]`
+help: change this to
+   |
+83 -                 println!("   - ⚠️ Snapshot data integrity: Mismatch or missing 'width' (snapshot: {:?})", snapshot);
+83 +                 println!("   - ⚠️ Snapshot data integrity: Mismatch or missing 'width' (snapshot: {snapshot:?})");
+   |
+
+error: docs for function returning `Result` missing `# Errors` section
+   --> crates/dev/src/media_index.rs:198:5
+    |
+198 |     pub fn conn_prepare(&self, sql: &str) -> std::result::Result<rusqlite::Statement<'_>, rusqlite::Error> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#missing_errors_doc
+    = note: `-D clippy::missing-errors-doc` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::missing_errors_doc)]`
+
+error: could not compile `shared_utils` (bin "db_diagnostics" test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `shared_utils` (bin "db_diagnostics") due to 1 previous error
+error: could not compile `shared_utils` (bin "verify_db_logging") due to 4 previous errors
+error: could not compile `shared_utils` (bin "verify_db_logging" test) due to 4 previous errors
+error: could not compile `dev` (lib) due to 2 previous errors
+error: could not compile `dev` (lib test) due to 2 previous errors

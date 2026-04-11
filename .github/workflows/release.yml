@@ -3,7 +3,7 @@ name: Release Build
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 permissions:
   contents: write
@@ -147,7 +147,7 @@ jobs:
         shell: bash
         run: |
           cargo build --release --target ${{ matrix.target }} \
-            -p vid-hevc -p vid-av1 -p img-hevc -p img-av1
+            -p vid -p img
 
       # ── Package ────────────────────────────────────────────────────────────
       - name: Package artifacts
@@ -159,7 +159,7 @@ jobs:
           EXT=""
           [[ "${{ matrix.os }}" == windows-* ]] && EXT=".exe"
 
-          for bin in vid-hevc vid-av1 img-hevc img-av1; do
+          for bin in vid img; do
             cp "target/${{ matrix.target }}/release/${bin}${EXT}" dist/
           done
           cp -r scripts dist/
@@ -204,7 +204,7 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           VERSION="${TAG#v}"
-          
+
           # Try to use RELEASE_NOTES file first
           if [ -f "RELEASE_NOTES_${TAG}.md" ]; then
             echo "Using RELEASE_NOTES_${TAG}.md"

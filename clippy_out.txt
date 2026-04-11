@@ -1,0 +1,267 @@
+[1m[92m    Checking[0m shared_utils v0.11.2 (/Users/nyamiiko/Downloads/GitHub/modern_format_boost/crates/shared_utils)
+[1m[91merror[0m[1m: the following explicit lifetimes could be elided: 'a[0m
+   [1m[94m--> [0mcrates/shared_utils/src/conversion.rs:290:6
+    [1m[94m|[0m
+[1m[94m290[0m [1m[94m|[0m impl<'a> VideoExplorationMetrics<'a> {
+    [1m[94m|[0m      [1m[91m^^[0m                          [1m[91m^^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#elidable_lifetime_names
+    [1m[94m= [0m[1mnote[0m: `-D clippy::elidable-lifetime-names` implied by `-D warnings`
+    [1m[94m= [0m[1mhelp[0m: to override `-D warnings` add `#[allow(clippy::elidable_lifetime_names)]`
+[1m[96mhelp[0m: elide the lifetimes
+    [1m[94m|[0m
+[1m[94m290[0m [91m- [0mimpl[91m<'a>[0m VideoExplorationMetrics<[91m'a[0m> {
+[1m[94m290[0m [92m+ [0mimpl VideoExplorationMetrics<[92m'_[0m> {
+    [1m[94m|[0m
+
+[1m[91merror[0m[1m: item in documentation is missing backticks[0m
+   [1m[94m--> [0mcrates/shared_utils/src/jxl_explorer.rs:137:20
+    [1m[94m|[0m
+[1m[94m137[0m [1m[94m|[0m     /// Telemetry: log2(initial_ratio) — oversize severity in doublings.
+    [1m[94m|[0m                    [1m[91m^^^^^^^^^^^^^^^^^^^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+    [1m[94m= [0m[1mnote[0m: `-D clippy::doc-markdown` implied by `-D warnings`
+    [1m[94m= [0m[1mhelp[0m: to override `-D warnings` add `#[allow(clippy::doc_markdown)]`
+[1m[96mhelp[0m: try
+    [1m[94m|[0m
+[1m[94m137[0m [91m- [0m    /// Telemetry: [91mlog2(initial_ratio)[0m — oversize severity in doublings.
+[1m[94m137[0m [92m+ [0m    /// Telemetry: [92m`log2(initial_ratio)`[0m — oversize severity in doublings.
+    [1m[94m|[0m
+
+[1m[91merror[0m[1m: item in documentation is missing backticks[0m
+   [1m[94m--> [0mcrates/shared_utils/src/jxl_explorer.rs:157:20
+    [1m[94m|[0m
+[1m[94m157[0m [1m[94m|[0m     /// Telemetry: log2(initial_ratio) — oversize severity in doublings.
+    [1m[94m|[0m                    [1m[91m^^^^^^^^^^^^^^^^^^^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+[1m[96mhelp[0m: try
+    [1m[94m|[0m
+[1m[94m157[0m [91m- [0m    /// Telemetry: [91mlog2(initial_ratio)[0m — oversize severity in doublings.
+[1m[94m157[0m [92m+ [0m    /// Telemetry: [92m`log2(initial_ratio)`[0m — oversize severity in doublings.
+    [1m[94m|[0m
+
+[1m[91merror[0m[1m: item in documentation is missing backticks[0m
+   [1m[94m--> [0mcrates/shared_utils/src/jxl_explorer.rs:329:18
+    [1m[94m|[0m
+[1m[94m329[0m [1m[94m|[0m /// Used for the MicroAdjust profile where distances are sub-0.01. In this range,
+    [1m[94m|[0m                  [1m[91m^^^^^^^^^^^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+[1m[96mhelp[0m: try
+    [1m[94m|[0m
+[1m[94m329[0m [91m- [0m/// Used for the [91mMicroAdjust[0m profile where distances are sub-0.01. In this range,
+[1m[94m329[0m [92m+ [0m/// Used for the [92m`MicroAdjust`[0m profile where distances are sub-0.01. In this range,
+    [1m[94m|[0m
+
+[1m[91merror[0m[1m: item in documentation is missing backticks[0m
+   [1m[94m--> [0mcrates/shared_utils/src/jxl_explorer.rs:346:14
+    [1m[94m|[0m
+[1m[94m346[0m [1m[94m|[0m /// Used for BoundaryPush, WidePush, and CeilingSweep profiles. In the d=0.01..1.0
+    [1m[94m|[0m              [1m[91m^^^^^^^^^^^^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+[1m[96mhelp[0m: try
+    [1m[94m|[0m
+[1m[94m346[0m [91m- [0m/// Used for [91mBoundaryPush[0m, WidePush, and CeilingSweep profiles. In the d=0.01..1.0
+[1m[94m346[0m [92m+ [0m/// Used for [92m`BoundaryPush`[0m, WidePush, and CeilingSweep profiles. In the d=0.01..1.0
+    [1m[94m|[0m
+
+[1m[91merror[0m[1m: item in documentation is missing backticks[0m
+   [1m[94m--> [0mcrates/shared_utils/src/jxl_explorer.rs:346:28
+    [1m[94m|[0m
+[1m[94m346[0m [1m[94m|[0m /// Used for BoundaryPush, WidePush, and CeilingSweep profiles. In the d=0.01..1.0
+    [1m[94m|[0m                            [1m[91m^^^^^^^^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+[1m[96mhelp[0m: try
+    [1m[94m|[0m
+[1m[94m346[0m [91m- [0m/// Used for BoundaryPush, [91mWidePush[0m, and CeilingSweep profiles. In the d=0.01..1.0
+[1m[94m346[0m [92m+ [0m/// Used for BoundaryPush, [92m`WidePush`[0m, and CeilingSweep profiles. In the d=0.01..1.0
+    [1m[94m|[0m
+
+[1m[91merror[0m[1m: item in documentation is missing backticks[0m
+   [1m[94m--> [0mcrates/shared_utils/src/jxl_explorer.rs:346:42
+    [1m[94m|[0m
+[1m[94m346[0m [1m[94m|[0m /// Used for BoundaryPush, WidePush, and CeilingSweep profiles. In the d=0.01..1.0
+    [1m[94m|[0m                                          [1m[91m^^^^^^^^^^^^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+[1m[96mhelp[0m: try
+    [1m[94m|[0m
+[1m[94m346[0m [91m- [0m/// Used for BoundaryPush, WidePush, and [91mCeilingSweep[0m profiles. In the d=0.01..1.0
+[1m[94m346[0m [92m+ [0m/// Used for BoundaryPush, WidePush, and [92m`CeilingSweep`[0m profiles. In the d=0.01..1.0
+    [1m[94m|[0m
+
+[1m[91merror[0m[1m: casting `f64` to `f32` may truncate the value[0m
+   [1m[94m--> [0mcrates/shared_utils/src/jxl_explorer.rs:802:31
+    [1m[94m|[0m
+[1m[94m802[0m [1m[94m|[0m         format_scalar_for_log(band_min as f32),
+    [1m[94m|[0m                               [1m[91m^^^^^^^^^^^^^^^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: if this is intentional allow the lint with `#[allow(clippy::cast_possible_truncation)]` ...
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+    [1m[94m= [0m[1mnote[0m: `-D clippy::cast-possible-truncation` implied by `-D warnings`
+    [1m[94m= [0m[1mhelp[0m: to override `-D warnings` add `#[allow(clippy::cast_possible_truncation)]`
+
+[1m[91merror[0m[1m: casting `f64` to `f32` may truncate the value[0m
+   [1m[94m--> [0mcrates/shared_utils/src/jxl_explorer.rs:803:31
+    [1m[94m|[0m
+[1m[94m803[0m [1m[94m|[0m         format_scalar_for_log(band_max as f32),
+    [1m[94m|[0m                               [1m[91m^^^^^^^^^^^^^^^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: if this is intentional allow the lint with `#[allow(clippy::cast_possible_truncation)]` ...
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+[1m[91merror[0m[1m: this `map_or` can be simplified[0m
+   [1m[94m--> [0mcrates/shared_utils/src/jxl_explorer.rs:927:40
+    [1m[94m|[0m
+[1m[94m927[0m [1m[94m|[0m             let tighter_than_current = d_over.map_or(true, |lo| candidate_distance > lo);
+    [1m[94m|[0m                                        [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#unnecessary_map_or
+    [1m[94m= [0m[1mnote[0m: `-D clippy::unnecessary-map-or` implied by `-D warnings`
+    [1m[94m= [0m[1mhelp[0m: to override `-D warnings` add `#[allow(clippy::unnecessary_map_or)]`
+[1m[96mhelp[0m: use is_none_or instead
+    [1m[94m|[0m
+[1m[94m927[0m [91m- [0m            let tighter_than_current = d_over.[91mmap_or[0m([91mtrue, [0m|lo| candidate_distance > lo);
+[1m[94m927[0m [92m+ [0m            let tighter_than_current = d_over.[92mis_none_or[0m(|lo| candidate_distance > lo);
+    [1m[94m|[0m
+
+[1m[91merror[0m[1m: this `map_or` can be simplified[0m
+   [1m[94m--> [0mcrates/shared_utils/src/jxl_explorer.rs:928:33
+    [1m[94m|[0m
+[1m[94m928[0m [1m[94m|[0m             let below_d_under = d_under.map_or(true, |hi| candidate_distance < hi);
+    [1m[94m|[0m                                 [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#unnecessary_map_or
+[1m[96mhelp[0m: use is_none_or instead
+    [1m[94m|[0m
+[1m[94m928[0m [91m- [0m            let below_d_under = d_under.[91mmap_or[0m([91mtrue, [0m|hi| candidate_distance < hi);
+[1m[94m928[0m [92m+ [0m            let below_d_under = d_under.[92mis_none_or[0m(|hi| candidate_distance < hi);
+    [1m[94m|[0m
+
+[1m[91merror[0m[1m: manual implementation of `midpoint` which can overflow[0m
+    [1m[94m--> [0mcrates/shared_utils/src/jxl_explorer.rs:1067:55
+     [1m[94m|[0m
+[1m[94m1067[0m [1m[94m|[0m             let mid = canonicalize_generated_distance((f64::from(lo) + f64::from(hi)) / 2.0)?;
+     [1m[94m|[0m                                                       [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m [1m[91mhelp: use `f64::midpoint` instead: `f64::midpoint(f64::from(lo), f64::from(hi))`[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#manual_midpoint
+     [1m[94m= [0m[1mnote[0m: `-D clippy::manual-midpoint` implied by `-D warnings`
+     [1m[94m= [0m[1mhelp[0m: to override `-D warnings` add `#[allow(clippy::manual_midpoint)]`
+
+[1m[91merror[0m[1m: this `map_or` can be simplified[0m
+    [1m[94m--> [0mcrates/shared_utils/src/jxl_explorer.rs:1123:20
+     [1m[94m|[0m
+[1m[94m1123[0m [1m[94m|[0m                 if best_below_idx.map_or(true, |idx| mid < candidates[idx].distance) {
+     [1m[94m|[0m                    [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#unnecessary_map_or
+[1m[96mhelp[0m: use is_none_or instead
+     [1m[94m|[0m
+[1m[94m1123[0m [91m- [0m                if best_below_idx.[91mmap_or[0m([91mtrue, [0m|idx| mid < candidates[idx].distance) {
+[1m[94m1123[0m [92m+ [0m                if best_below_idx.[92mis_none_or[0m(|idx| mid < candidates[idx].distance) {
+     [1m[94m|[0m
+
+[1m[91merror[0m[1m: this could be rewritten as `let...else`[0m
+    [1m[94m--> [0mcrates/shared_utils/src/jxl_explorer.rs:1141:5
+     [1m[94m|[0m
+[1m[94m1141[0m [1m[94m|[0m [1m[91m/[0m     let final_best_idx = if let Some(idx) = best_below_idx {
+[1m[94m1142[0m [1m[94m|[0m [1m[91m|[0m         idx
+[1m[94m1143[0m [1m[94m|[0m [1m[91m|[0m     } else {
+[1m[94m1144[0m [1m[94m|[0m [1m[91m|[0m         log.push(format!(
+[1m[94m...[0m    [1m[91m|[0m
+[1m[94m1148[0m [1m[94m|[0m [1m[91m|[0m         return Ok(None);
+[1m[94m1149[0m [1m[94m|[0m [1m[91m|[0m     };
+     [1m[94m|[0m [1m[91m|______^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#manual_let_else
+     [1m[94m= [0m[1mnote[0m: `-D clippy::manual-let-else` implied by `-D warnings`
+     [1m[94m= [0m[1mhelp[0m: to override `-D warnings` add `#[allow(clippy::manual_let_else)]`
+[1m[96mhelp[0m: consider writing
+     [1m[94m|[0m
+[1m[94m1141[0m [92m~ [0m    [92mlet Some(final_best_idx) = best_below_idx else {[0m
+[1m[94m1142[0m [92m+         log.push(format!([0m
+[1m[94m1143[0m [92m+             "No candidate beat source size ({}B); skipping JXL",[0m
+[1m[94m1144[0m [92m+             input_size[0m
+[1m[94m1145[0m [92m+         ));[0m
+[1m[94m1146[0m [92m+         return Ok(None);[0m
+[1m[94m1147[0m [92m+     };[0m
+     [1m[94m|[0m
+
+[1m[91merror[0m[1m: variables can be used directly in the `format!` string[0m
+    [1m[94m--> [0mcrates/shared_utils/src/jxl_explorer.rs:1144:18
+     [1m[94m|[0m
+[1m[94m1144[0m [1m[94m|[0m           log.push(format!(
+     [1m[94m|[0m [1m[91m __________________^[0m
+[1m[94m1145[0m [1m[94m|[0m [1m[91m|[0m             "No candidate beat source size ({}B); skipping JXL",
+[1m[94m1146[0m [1m[94m|[0m [1m[91m|[0m             input_size
+[1m[94m1147[0m [1m[94m|[0m [1m[91m|[0m         ));
+     [1m[94m|[0m [1m[91m|_________^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#uninlined_format_args
+     [1m[94m= [0m[1mnote[0m: `-D clippy::uninlined-format-args` implied by `-D warnings`
+     [1m[94m= [0m[1mhelp[0m: to override `-D warnings` add `#[allow(clippy::uninlined_format_args)]`
+
+[1m[91merror[0m[1m: while condition comparing floats[0m
+    [1m[94m--> [0mcrates/shared_utils/src/video_explorer/gpu_coarse_search.rs:3986:15
+     [1m[94m|[0m
+[1m[94m3986[0m [1m[94m|[0m         while test_crf >= 0.0 {
+     [1m[94m|[0m               [1m[91m^^^^^^^^^^^^^^^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#while_float
+     [1m[94m= [0m[1mnote[0m: `-D clippy::while-float` implied by `-D warnings`
+     [1m[94m= [0m[1mhelp[0m: to override `-D warnings` add `#[allow(clippy::while_float)]`
+
+[1m[91merror[0m[1m: casting `f64` to `f32` may truncate the value[0m
+    [1m[94m--> [0mcrates/shared_utils/src/jxl_explorer.rs:1338:33
+     [1m[94m|[0m
+[1m[94m1338[0m [1m[94m|[0m         assert!(micro_target <= JXL_DISTANCE_CEILING_PLATEAU_MAX as f32 + f32::EPSILON);
+     [1m[94m|[0m                                 [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: if this is intentional allow the lint with `#[allow(clippy::cast_possible_truncation)]` ...
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+[1m[91merror[0m[1m: casting `f64` to `f32` may truncate the value[0m
+    [1m[94m--> [0mcrates/shared_utils/src/jxl_explorer.rs:1340:36
+     [1m[94m|[0m
+[1m[94m1340[0m [1m[94m|[0m         assert!(boundary_target <= JXL_DISTANCE_VISUAL_LOSSLESS_MAX as f32 + f32::EPSILON);
+     [1m[94m|[0m                                    [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: if this is intentional allow the lint with `#[allow(clippy::cast_possible_truncation)]` ...
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+[1m[91merror[0m[1m: casting `f64` to `f32` may truncate the value[0m
+    [1m[94m--> [0mcrates/shared_utils/src/jxl_explorer.rs:1342:32
+     [1m[94m|[0m
+[1m[94m1342[0m [1m[94m|[0m         assert!(wide_target <= JXL_DISTANCE_BALANCED_MAX as f32 + f32::EPSILON);
+     [1m[94m|[0m                                [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: if this is intentional allow the lint with `#[allow(clippy::cast_possible_truncation)]` ...
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#cast_possible_truncation
+
+[1m[91merror[0m[1m: manual implementation of `midpoint` which can overflow[0m
+    [1m[94m--> [0mcrates/shared_utils/src/jxl_explorer.rs:1376:30
+     [1m[94m|[0m
+[1m[94m1376[0m [1m[94m|[0m         let midpoint_stops = (JXL_MICRO_PRESSURE_STOPS_MAX + JXL_BOUNDARY_PRESSURE_STOPS_MAX) / 2.0;
+     [1m[94m|[0m                              [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m [1m[91mhelp: use `f64::midpoint` instead: `f64::midpoint(JXL_MICRO_PRESSURE_STOPS_MAX, JXL_BOUNDARY_PRESSURE_STOPS_MAX)`[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#manual_midpoint
+
+[1m[91merror[0m[1m: variables can be used directly in the `format!` string[0m
+    [1m[94m--> [0mcrates/shared_utils/src/jxl_explorer.rs:1381:9
+     [1m[94m|[0m
+[1m[94m1381[0m [1m[94m|[0m [1m[91m/[0m         assert!(
+[1m[94m1382[0m [1m[94m|[0m [1m[91m|[0m             (target - 0.055).abs() < 0.01,
+[1m[94m1383[0m [1m[94m|[0m [1m[91m|[0m             "mid-band perceptual target should stay near linear JND midpoint, got {}",
+[1m[94m1384[0m [1m[94m|[0m [1m[91m|[0m             target
+[1m[94m1385[0m [1m[94m|[0m [1m[91m|[0m         );
+     [1m[94m|[0m [1m[91m|_________^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#uninlined_format_args
+
+[1m[91merror[0m: could not compile `shared_utils` (lib) due to 16 previous errors
+[1m[33mwarning[0m: build failed, waiting for other jobs to finish...
+[1m[91merror[0m: could not compile `shared_utils` (lib test) due to 21 previous errors
