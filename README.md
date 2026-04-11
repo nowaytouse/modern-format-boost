@@ -80,7 +80,7 @@ Every file goes through a multi-stage decision pipeline:
 - **Stage 2 — Route & Encode**: JXL VarDCT for JPEG (bit-exact); Modular mode for lossless sources (PNG, lossless WebP/AVIF/HEIC/EXR/JP2).
 - **Stage 3 — Detour Pathway**: Formats like TIFF/WebP/BMP/HEIC are pre-processed into temporary 16-bit PNGs or **32-bit OpenEXR** to ensure `cjxl` compatibility without quality loss (8/16/32-bit matched pipeline).
 - **Stage 4 — HEIC HDR Synthesis**: Intercepts HEIC files with Gainmaps (Apple/Google) and synthesizes 32-bit linear-light HDR buffers via an intermediate **OpenEXR** escort pipeline, delivering true HDR JXL output.
-- **Stage 5 — Meme Score v3**: Evaluates animated GIFs (Sharpness 40%, Resolution 18%, Duration 20%) to decide between video conversion or keeping as GIF.
+- **Stage 5 — Loop Intent v3**: A 7-layer hierarchical decision tree. Evaluates **Loop Closure**, **Motion Gini (variation)**, **Periodicity**, and **KNN-weighted fusion** to identify looping intent (memes, stickers, loops).
 
 ### Video Pipeline: Three-Phase Saturation Search
 
@@ -134,7 +134,7 @@ Plus a **double-click macOS app** (`Modern Format Boost.app`) for drag-and-drop 
 | PNG (indexed) |    ❌     |    No     | **Quality-matched**      | `.jxl`        | d=0.001                                |
 | WebP          |    ✅     |    No     | **Detour → lossless**    | `.jxl`        | dwebp → JXL d=0.0                      |
 | WebP          |    ❌     |    No     | **Skip**                 | (keep)        | Avoid generational loss                |
-| WebP          |     —     |    ✅     | **Meme Score**           | `.mov`/`.gif` | HEVC/AV1 or keep GIF                   |
+| WebP          |     —     |    ✅     | **Loop Intent**         | `.mov`/`.gif` | HEVC/AV1 or keep GIF                   |
 | AVIF          |    ✅     |    No     | **Lossless convert**     | `.jxl`        | d=0.0                                  |
 | AVIF          |    ❌     |    No     | **Skip**                 | (keep)        | Avoid generational loss                |
 | HEIC/HEIF     |    ✅     |    No     | **Detour → lossless**    | `.jxl`        | `sips`/`magick` → PNG → d=0.0          |
@@ -143,7 +143,7 @@ Plus a **double-click macOS app** (`Modern Format Boost.app`) for drag-and-drop 
 | TIFF          |    ✅     |    No     | **Detour → lossless**    | `.jxl`        | `magick -depth 16` → PNG → d=0.0       |
 | TIFF          |    ❌     |    No     | **Quality-matched**      | `.jxl`        | magick → JXL d=0.001                   |
 | BMP           |    ✅     |    No     | **Detour → lossless**    | `.jxl`        | `magick` → PNG → d=0.0                 |
-| GIF           |     —     |    ✅     | **Meme Score**           | `.mov`/`.gif` | HEVC/AV1 or keep GIF                   |
+| GIF           |     —     |    ✅     | **Loop Intent**         | `.mov`/`.gif` | HEVC/AV1 or keep GIF                   |
 | GIF           |     —     |    No     | **Frame extract**        | `.jxl`        | ffmpeg → JXL                           |
 | JXL           |     —     |    No     | **Skip**                 | (keep)        | Already optimal                        |
 
@@ -249,7 +249,7 @@ vid run --codec av1 /path/to/media
 - `-o /dir`: Safe output directory. (Recommended)
 - `--verbose`: Show detailed processing logs.
 - `--no-recursive`: Do not descend into subdirectories.
-- `--force-video`: Force treat animated images as video regardless of Meme Score.
+- `--force-video`: Force treat animated images as video regardless of Loop Intent.
 
 ### Advanced Subcommands
 
@@ -284,7 +284,7 @@ Fully supported. We use `hdr10plus_tool` to extract SMPTE 2094-40 dynamic metada
 
 **3. Why skip WebP/AVIF/HEIC?**  
 These formats are already modern and highly compressed. Re-encoding them would cause "generational loss" (quality degradation) with minimal size benefits.  
-**Exceptions**: The tool *will* process these if it detects high-fidelity **HDR Gainmaps** for synthesis into JXL, or if an animated file requires optimization via the **Meme Score** engine.
+**Exceptions**: The tool *will* process these if it detects high-fidelity **HDR Gainmaps** for synthesis into JXL, or if an animated file requires optimization via the **Loop Intent** engine.
 
 ---
 

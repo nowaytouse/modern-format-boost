@@ -58,6 +58,8 @@
 - **1단계 — 스마트 감지**: JPEG DQT 테이블(UltraHDR 게인맵 감지), WebP VP8L 청크, AVIF `av1C` 박스를 바이너리 레벨에서 분석합니다.
 - **2단계 — 경로 및 인코딩**: JPEG는 JXL VarDCT(비트 일치), 무손실 소스(PNG 등)는 Modular 모드를 사용합니다.
 - **3단계 — 우회 경로**: TIFF/BMP/HEIC 등은 화질 손실 방지를 위해 임시로 16비트 PNG 또는 32비트 OpenEXR로 변환되어 처리됩니다.
+- **4단계 — HEIC HDR 합성**: 게인맵(Apple/Google)이 포함된 HEIC 파일을 가로채어 중간 **OpenEXR** 파이프라인을 통해 32비트 선형광 HDR 버퍼를 합성하여 진정한 HDR JXL 출력을 제공합니다.
+- **5단계 — 루프 의도 (Loop Intent v3)**: 최신 7계층 계층적 의사결정 나무 모델을 채택했습니다. **Loop Closure (루프 폐쇄도)**, **Motion Gini (운동 변동성)**, **주기성 분석** 및 **KNN 가중치 융합**을 종합적으로 평가하여 이미지나 비디오의 루프 의도(밈, 스티커, 루프 소재)를 지능적으로 식별합니다.
 
 ### 비디오 파이프라인: 3단계 포화 탐색
 
@@ -99,6 +101,37 @@ Rust 환경 구축을 원치 않는 사용자는 **[Releases](https://github.com
 curl -LO https://github.com/nowaytouse/modern-format-boost/releases/latest/download/modern-format-boost-aarch64-apple-darwin.tar.gz
 tar -xzf modern-format-boost-aarch64-apple-darwin.tar.gz
 ```
+
+### 필수 조건
+
+| 도구 | 필수? | 용도 | 설치 명령 |
+| :--- | :---: | :--- | :--- |
+| **Rust** (1.75+) | ✅ | 빌드 및 설치 | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
+| **FFmpeg** (5.0+) | ✅ | 비디오 처리 및 메트릭 | `brew install ffmpeg` / `apt install ffmpeg` |
+| **libjxl** | ✅ | JXL 인코딩 코어 | `brew install jpeg-xl` |
+| **ExifTool** | ✅ | 메타데이터 보존 | `brew install exiftool` |
+| **ImageMagick** | ✅ | 이미지 우회 경로 | `brew install imagemagick` |
+| **libwebp** | ✅ | WebP 네이티브 디코딩 | `brew install webp` |
+| **dovi_tool** | ✅ | Dolby Vision RPU 추출 | `cargo install dovi_tool` |
+| **libheif** | ✅ | HEIC/HEIF 디코드 | `brew install libheif` |
+| **hdr10plus_tool** | ✅ | HDR10+ 메타데이터 추출 | `cargo install hdr10plus_tool` |
+
+---
+
+## ❓ FAQ
+
+**1. JXL 형식의 현재 호환성은 어떻습니까?**  
+macOS 14 (Sonoma) / iOS 17+, Chrome 91+, Firefox 128+에서 네이티브 지원을 제공합니다. 하지만 Apple 생태계에는 알려진 제한 사항이 있습니다:
+- **애니메이션 미리보기**: JXL/AV1/HEIF와 같은 최신 애니메이션 형식은 macOS/iOS 기본 사진 앱이나 Finder에서 애니메이션으로 재생되지 않고 정지화면으로 표시되는 경우가 많으며, 특히 iCloud 동기화 후에 두드러집니다. 미리보기에는 명령줄 도구나 최신 브라우저를 사용하는 권장합니다.
+- **썸네일 검은 화면**: JXL 파일이 **그레이스케일(Grayscale) ICC 프로필**을 사용하는 경우 Finder/iCloud 썸네일이 검게 표시될 수 있으나, 이는 파일 자체의 문제는 아니며 브라우저 등에서 열면 정상적으로 표시됩니다.
+JXL은 비트 정확도의 무손실 아카이빙 및 고충실도 HDR 저장에 있어 여전히 최상의 선택입니다.
+
+**2. HDR10+ 동적 메타데이터는 어떻게 처리됩니까?**  
+완벽하게 지원됩니다. `hdr10plus_tool`을 사용하여 SMPTE 2094-40 동적 메타데이터를 추출하고 `libx265`의 `--dhdr10-info` 파라미터를 통해 HEVC 스트림에 주입합니다. 이 기능을 사용하려면 도구가 설치되어 있는지 확인하십시오.
+
+**3. 왜 WebP / AVIF / HEIC 등의 최신 형식은 건너뛰나요?**  
+이러한 형식은 이미 현대적인 손실 압축이 적용되어 있습니다. 다시 인코딩하면 화질의 세대 손실(Generational Loss)이 발생하므로 프로그램은 품질 보호를 위해 기본적으로 이를 건너뜁니다.
+**예외**: Apple/Google의 고충실도 **HDR Gainmap**이 감지되면 JXL로 합성 출력됩니다. 또한 애니메이션 파일이 **루프 의도 (Loop Intent)** 최적화 메커니즘을 트리거하는 경우에도 적절히 처리됩니다.
 
 ---
 

@@ -60,7 +60,7 @@
 - **階段 2 — 路徑與編碼**：JPEG 使用 JXL VarDCT（位元精確）；無損來源（PNG、無損 WebP/AVIF/HEIC/EXR/JP2）使用 Modular 模式。
 - **階段 3 — 繞道處理**：TIFF/WebP/BMP/HEIC 等格式會預先處理為臨時 16 位元 PNG 或 **32 位元 OpenEXR**，以確保 `cjxl` 相容性且無品質損失。
 - **階段 4 — HEIC HDR 合成**：攔截帶有增益圖（Apple/Google）的 HEIC 檔案，並透過中間的 **OpenEXR** 陪同流水線合成 32 位元線性光 HDR 緩衝區，輸出真正的 HDR JXL。
-- **階段 5 — Meme Score v3**：評估動態 GIF，決定是轉換為影片還是保留為 GIF。
+- **階段 5 — 循環意圖 (Loop Intent v3)**：採用全新的 7 層分層決策樹模型。綜合評估 **Loop Closure (循環閉合度)**、**Motion Gini (運動不均勻度)**、**週期性分析** 以及 **KNN 語義融合**，智能識別圖像或影片的循環意圖。
 
 ### 影片流水線：三階段飽和搜尋
 
@@ -101,6 +101,37 @@
 curl -LO https://github.com/nowaytouse/modern-format-boost/releases/latest/download/modern-format-boost-aarch64-apple-darwin.tar.gz
 tar -xzf modern-format-boost-aarch64-apple-darwin.tar.gz
 ```
+
+### 先決條件
+
+| 工具 | 需要嗎？ | 目的 | 安裝命令 |
+| :--- | :---: | :--- | :--- |
+| **Rust** (1.75+) | ✅ | 構建與安裝 | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
+| **FFmpeg** (5.0+) | ✅ | 影片處理與指標 | `brew install ffmpeg` / `apt install ffmpeg` |
+| **libjxl** | ✅ | JXL 編碼核心 | `brew install jpeg-xl` |
+| **ExifTool** | ✅ | 元數據保存 | `brew install exiftool` |
+| **ImageMagick** | ✅ | 圖像繞道處理 | `brew install imagemagick` |
+| **libwebp** | ✅ | WebP 原生解碼 | `brew install webp` |
+| **dovi_tool** | ✅ | 杜比視界 RPU 提取 | `cargo install dovi_tool` |
+| **libheif** | ✅ | HEIC/HEIF 解碼 | `brew install libheif` |
+| **hdr10plus_tool** | ✅ | HDR10+ 元數據提取 | `cargo install hdr10plus_tool` |
+
+---
+
+## ❓ FAQ
+
+**1. JXL 格式目前的相容性如何？**  
+macOS 14 (Sonoma) / iOS 17+、Chrome 91+ 以及 Firefox 128+ 已提供了原生支援。但目前 Apple 生態仍存在已知缺陷：
+- **動圖預覽**：現代動圖格式（JXL/AV1/HEIF）在 macOS/iOS 原生相冊或 Finder 中往往無法直接播放動圖（顯示為靜態圖），尤其是 iCloud 同步後的文件。建議透過命令行工具或現代瀏覽器進行預覽。
+- **縮略圖黑屏**：當 JXL 文件使用 **灰色 (Grayscale) ICC 配置文件** 時，Finder/iCloud 的縮略圖可能會顯示為純黑，但这並不影響文件本身，在瀏覽器中打開可正常顯示。
+JXL 依然是目前進行位精確無損歸檔及高保真 HDR 儲存的最佳選擇。
+
+**2. 為什麼 HDR10+ 動態影片會失效？**  
+現已完美支援。我們透過 `hdr10plus_tool` 提取 SMPTE 2094-40 動態元數據並將其注入 `libx265` 的 `--dhdr10-info` 參數中。請確保已安裝該工具。
+
+**3. 為什麼程式會自動跳過我的 WebP / AVIF / HEIC 圖像？**  
+這些格式本身已屬於現代有損編碼。二次編碼會導致畫質代際損傷 (Generational Loss)，程式預設會跳過以保護品質。
+**例外情況**：如果偵測到文件中包含 Apple/Google 高保真 **HDR Gainmap**，程式會將其合成輸出為 JXL；或者當動圖觸發了 **循環意圖** 優化機制時，也會進行相應處理。
 
 ---
 

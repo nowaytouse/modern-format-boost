@@ -65,7 +65,7 @@ Cada archivo pasa por un flujo de decisión de múltiples etapas:
 - **Etapa 2 — Ruta y codificación**: JXL VarDCT para JPEG (exacto a nivel de bits); modo modular para fuentes sin pérdida (PNG, WebP/AVIF/HEIC/EXR/JP2 sin pérdida).
 - **Etapa 3 — Desvío**: Los formatos como TIFF/WebP/BMP/HEIC se preprocesan en PNG temporales de 16 bits o **OpenEXR de 32 bits** para asegurar la compatibilidad con `cjxl` sin pérdida de calidad.
 - **Etapa 4 — Síntesis HDR de HEIC**: Intercepta archivos HEIC con Gainmaps (Apple/Google) y sintetiza búferes HDR de luz lineal de 32 bits a través de un flujo intermedio de **OpenEXR**, entregando una salida HDR JXL real.
-- **Etapa 5 — Meme Score v3**: Evalúa GIFs animados (Nitidez 40%, Resolución 18%, Duración 20%) para decidir entre la conversión a video o mantenerlo como GIF.
+- **Fase 5 — Loop Intent v3**: Utiliza un nuevo modelo de árbol de decisión jerárquico de 7 capas. Evalúa de forma integral el **Loop Closure (cierre de bucle)**, **Motion Gini (variación del movimiento)**, el **análisis de periodicidad** y la **fusión semántica KNN** para identificar de forma inteligente la intención de bucle en imágenes o videos.
 
 ### Flujo de video: Búsqueda de saturación en tres fases
 
@@ -119,7 +119,7 @@ Además de una **aplicación macOS de doble clic** (`Modern Format Boost.app`) p
 | PNG (indexado)     |      ❌       |    No     | **Calidad igualada**           | `.jxl`        | d=0.001                                    |
 | WebP               |      ✅       |    No     | **Desvío → sin pérdida**       | `.jxl`        | dwebp → JXL d=0.0                          |
 | WebP               |      ❌       |    No     | **Omitir**                     | (mantener)    | Evitar pérdida generacional                |
-| WebP               |       —       |    ✅     | **Meme Score**                 | `.mov`/`.gif` | HEVC/AV1 o mantener GIF                    |
+| WebP               |       —       |    ✅     | **Loop Intent (v3)**| `.mov`/`.gif` | HEVC/AV1 o mantener GIF                    |
 | AVIF               |      ✅       |    No     | **Conversión sin pérdida**     | `.jxl`        | d=0.0                                      |
 | AVIF               |      ❌       |    No     | **Omitir**                     | (mantener)    | Evitar pérdida generacional                |
 | HEIC/HEIF          |      ✅       |    No     | **Desvío → sin pérdida**       | `.jxl`        | `sips`/`magick` → PNG → d=0.0              |
@@ -128,7 +128,7 @@ Además de una **aplicación macOS de doble clic** (`Modern Format Boost.app`) p
 | TIFF               |      ✅       |    No     | **Desvío → sin pérdida**       | `.jxl`        | `magick -depth 16` → PNG → d=0.0           |
 | TIFF               |      ❌       |    No     | **Calidad igualada**           | `.jxl`        | magick → JXL d=0.001                       |
 | BMP                |      ✅       |    No     | **Desvío → sin pérdida**       | `.jxl`        | `magick` → PNG → d=0.0                     |
-| GIF                |       —       |    ✅     | **Meme Score**                 | `.mov`/`.gif` | HEVC/AV1 o mantener GIF                    |
+| GIF                |       —       |    ✅     | **Loop Intent (v3)**| `.mov`/`.gif` | HEVC/AV1 o mantener GIF                    |
 | GIF                |       —       |    No     | **Extracción de fotogramas**   | `.jxl`        | ffmpeg → JXL                               |
 | JXL                |       —       |    No     | **Omitir**                     | (mantener)    | Ya es óptimo                               |
 
@@ -179,6 +179,23 @@ img run /ruta/a/los/medios
 # Conversión de ruta de videos
 vid run /ruta/a/los/medios
 ```
+
+---
+
+## ❓ FAQ (Preguntas frecuentes)
+
+**1. ¿Es la compatibilidad de JXL amplia?**  
+Existe soporte nativo en macOS 14 (Sonoma) / iOS 17+, Chrome 91+ y Firefox 128+. Sin embargo, hay problemas conocidos en el ecosistema:  
+- **Animaciones**: Los formatos animados modernos (JXL/AV1/HEIF) a menudo no se previsualizan como animaciones en la aplicación Fotos nativa de macOS/iOS o en el Finder (solo estáticos), especialmente cuando se sincronizan a través de iCloud. Se recomienda previsualizarlos en herramientas de línea de comandos o navegadores modernos.  
+- **Miniaturas**: Los archivos JXL que utilizan **perfiles ICC en escala de grises** pueden aparecer como **miniaturas negras** en Finder/iCloud, aunque se renderizan perfectamente al abrirlos.  
+JXL sigue siendo el formato superior para el archivo con precisión de bits y el almacenamiento HDR de alta fidelidad.
+
+**2. ¿Cómo se maneja HDR10+?**  
+¡Totalmente compatible! Utilizamos `hdr10plus_tool` para extraer los metadatos dinámicos SMPTE 2094-40 e inyectarlos de nuevo en el flujo HEVC a través del parámetro `--dhdr10-info` de `libx265`. Asegúrese de que la herramienta esté instalada para esta función.
+
+**3. ¿Por qué omitir WebP/AVIF/HEIC?**  
+Estos formatos ya son modernos y están altamente comprimidos. Volver a codificarlos causaría una "pérdida generacional" (degradación de calidad) con beneficios mínimos de tamaño.  
+**Excepciones**: La herramienta *procesará* estos archivos si detecta **HDR Gainmaps** de alta fidelidad para su síntesis en JXL, o si un archivo animado requiere optimización a través del motor **Intención de Bucle (Loop Intent v3)** (que utiliza un árbol de decisión jerárquico de 7 capas para identificar memes, stickers y bucles).
 
 ---
 
