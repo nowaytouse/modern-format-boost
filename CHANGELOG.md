@@ -6,6 +6,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] — TBD
 
+### 🎬 Phase 4 CPU Fine-Tune Refinement
+
+- **Attempt Cap for Phase 4 Loop**: Added `PHASE4_MAX_ATTEMPTS` (32) hard cap on Phase 4 fine-tune iterations, preventing runaway loops on pathological sources that keep oscillating at CRF boundaries
+- **Configurable Failure Budget**: Replaced hardcoded `max_fine_failures = 20` (ultimate mode) / `3` (normal mode) with unified `PHASE4_ULTIMATE_MAX_FINE_FAILURES` (8) — Phase 4 is a local 0.01 refinement, not an open-ended walk, so 20 was wasteful
+- **CRF=0 Probe Scope Narrowed**: `should_probe_crf_zero_from_phase4()` now only probes CRF 0.0 when best CRF converged within 1.0 of the floor (was previously up to 20.0). Prevents pointless lossless probes on content that clearly benefits from non-zero CRF
+- **CRF=0 Skip Logging**: When CRF 0.0 probe is skipped, a dim-level log explains why (`"Skipping CRF 0.00 probe: best CRF 26.75 is not near the floor."`)
+- **Backtrack Retry Logging**: Backtrack retry limit now uses `PHASE4_MAX_BACKTRACK_RETRIES` (3) constant with dynamic label in log output
+- **HEVC Ultimate Two-Stage Logging**: Added explicit stage progress markers — "Stage 1/2: screening preset slow" and "Stage 2/2: finalist preset slower" — for visibility into the two-pass HEVC ultimate workflow
+- **Unit Test**: `test_phase4_crf0_probe_requires_near_floor` verifies the probe boundary behavior (passes at 0.25 and 1.0, rejects at 0.0, 1.01, and 26.75)
+
 ### 🎬 Video Quality Gate Overhaul
 
 - **Baseline-Aware Ultimate Mode Quality Gate**: Replaced fixed absolute thresholds (VMAF-Y ≥ 92.0, PSNR-UV ≥ 34.0, CAMBI ≤ 6.0) with per-file adaptive baselines derived from search-phase results and source video analysis:

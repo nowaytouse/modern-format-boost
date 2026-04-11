@@ -71,6 +71,10 @@ const SSIM_ALL_WEIGHT: f64 = 0.4;
 const NORMAL_FUSION_SANITY_FLOOR: f64 = 0.88;
 const NORMAL_ALLOWED_DROP_FROM_BASELINE: f64 = 0.04;
 const PHASE3_DOWNWARD_STEP: f32 = 0.1;
+const PHASE4_ULTIMATE_MAX_FINE_FAILURES: u32 = 8;
+const PHASE4_MAX_BACKTRACK_RETRIES: u32 = 3;
+const PHASE4_MAX_ATTEMPTS: u32 = 32;
+const PHASE4_CRF0_PROBE_MAX_DISTANCE: f32 = 1.0;
 const UPWARD_JOG_MIN_STEP: f32 = 0.5;
 const UPWARD_SIZE_STAGNATION_THRESHOLD: u32 = 4;
 const UPWARD_DIRECTION_SWITCH_LIMIT: u32 = 15;
@@ -185,6 +189,10 @@ fn adaptive_cambi_ceiling(source_baseline: Option<f64>) -> f64 {
     }
 }
 
+fn should_probe_crf_zero_from_phase4(best_crf: f32) -> bool {
+    best_crf > 0.0 && best_crf <= PHASE4_CRF0_PROBE_MAX_DISTANCE
+}
+
 fn metrics_below_ultimate_sanity_floor(vmaf_y: f64, psnr_uv: (f64, f64)) -> bool {
     vmaf_y < VMAF_Y_SANITY_FLOOR || psnr_uv.0.min(psnr_uv.1) < PSNR_UV_SANITY_FLOOR
 }
@@ -261,11 +269,7 @@ fn build_normal_quality_evaluation(
     // Use the explore-phase SSIM as the reference: allow a fixed drop below it,
     // but never go below the config floor or the hard sanity floor.
     let fusion_floor = baseline.explore_ssim.map_or_else(
-        || {
-            baseline
-                .min_ssim_config
-                .max(NORMAL_FUSION_SANITY_FLOOR)
-        },
+        || baseline.min_ssim_config.max(NORMAL_FUSION_SANITY_FLOOR),
         |ref_ssim| {
             (ref_ssim - NORMAL_ALLOWED_DROP_FROM_BASELINE)
                 .max(baseline.min_ssim_config)
@@ -281,7 +285,6 @@ fn build_normal_quality_evaluation(
         passed,
     }
 }
-
 
 #[derive(Debug, Clone)]
 enum AudioTranscodeStrategy {
@@ -1273,7 +1276,10 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
                     explore_ssim: result.ssim,
                     min_ssim_config: result.actual_min_ssim,
                 };
-                let measurement = NormalQualityMeasurement { ms_ssim_avg, ssim_all: ssim_all_val };
+                let measurement = NormalQualityMeasurement {
+                    ms_ssim_avg,
+                    ssim_all: ssim_all_val,
+                };
                 let evaluation = build_normal_quality_evaluation(baseline, measurement);
 
                 match (ms_ssim_avg, ssim_all_val) {
@@ -1376,7 +1382,10 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
                     explore_ssim: result.ssim,
                     min_ssim_config: result.actual_min_ssim,
                 };
-                let measurement = NormalQualityMeasurement { ms_ssim_avg: None, ssim_all: Some(all) };
+                let measurement = NormalQualityMeasurement {
+                    ms_ssim_avg: None,
+                    ssim_all: Some(all),
+                };
                 let evaluation = build_normal_quality_evaluation(baseline, measurement);
                 let baseline_note = baseline
                     .explore_ssim
@@ -1423,7 +1432,10 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
                 explore_ssim: result.ssim,
                 min_ssim_config: result.actual_min_ssim,
             };
-            let measurement = NormalQualityMeasurement { ms_ssim_avg: None, ssim_all: Some(all) };
+            let measurement = NormalQualityMeasurement {
+                ms_ssim_avg: None,
+                ssim_all: Some(all),
+            };
             let evaluation = build_normal_quality_evaluation(baseline, measurement);
             let baseline_note = baseline
                 .explore_ssim
@@ -3589,9 +3601,8 @@ fn cpu_fine_tune_from_gpu_boundary(
                 let mut current_step = base_step;
                 let max_sprint_step = 1.28;
 
-                // In ultimate mode allow many more fine-tune failures before giving up:
-                // size-wall explosions are expected near CRF=0 for GIF/complex sources.
-                let max_fine_failures = if ultimate_mode { 20 } else { 3 };
+                // Phase 4 is a local 0.01 refinement, not an open-ended walk.
+                let max_fine_failures = PHASE4_ULTIMATE_MAX_FINE_FAILURES;
 
                 crate::log_eprintln!(
                     "   {}Starting from 0.1 optimum (CRF {:.2}) with adaptive step (0.01 → {:.2} sprint){}",
@@ -3613,8 +3624,16 @@ fn cpu_fine_tune_from_gpu_boundary(
                 let mut backtrack_count = 0u32;
                 let search_floor = 0.0_f32;
                 let mut consecutive_successes = 0;
+                let mut phase4_attempts = 0u32;
+                let mut phase4_attempt_cap_hit = false;
 
                 while test_crf >= search_floor && iterations < 500 {
+                    if phase4_attempts >= PHASE4_MAX_ATTEMPTS {
+                        phase4_attempt_cap_hit = true;
+                        break;
+                    }
+                    phase4_attempts += 1;
+
                     // Round to 0.01 precision to avoid float drift accumulating past 0.0
                     test_crf = (test_crf * 100.0).round() / 100.0;
                     // Clamp: never go negative due to floating-point underflow
@@ -3751,25 +3770,29 @@ fn cpu_fine_tune_from_gpu_boundary(
                         );
 
                         // Unified Anti-Oscillation Backtrack (Safety limit: 3 retries for Phase 4)
-                        if current_step > base_step + 0.001 && backtrack_count < 3 {
+                        if current_step > base_step + 0.001
+                            && backtrack_count < PHASE4_MAX_BACKTRACK_RETRIES
+                        {
                             let old_step = current_step;
                             current_step = (current_step / 2.0).max(base_step);
                             backtrack_count += 1;
                             consecutive_successes = 0;
                             test_crf = current_best - current_step;
                             crate::log_eprintln!(
-                                "   {}⏪ Backtracking for extreme precision (retry {}/3): {:.3} → {:.3}{}",
-                                BRIGHT_YELLOW, backtrack_count, old_step, current_step, RESET
+                                "   {}⏪ Backtracking for extreme precision (retry {}/{}): {:.3} → {:.3}{}",
+                                BRIGHT_YELLOW,
+                                backtrack_count,
+                                PHASE4_MAX_BACKTRACK_RETRIES,
+                                old_step,
+                                current_step,
+                                RESET
                             );
                             // Stability Fix: Do NOT update last_size_pct here.
                             continue;
                         }
 
                         if fine_failures >= max_fine_failures {
-                            // In ultimate mode, if we were very close to CRF 0.0, force one last check at CRF 0.0
-                            if ultimate_mode
-                                && current_best > 0.0
-                                && current_best <= 20.0
+                            if should_probe_crf_zero_from_phase4(current_best)
                                 && !size_cache.contains_key(0.0)
                             {
                                 crate::log_eprintln!(
@@ -3795,11 +3818,18 @@ fn cpu_fine_tune_from_gpu_boundary(
                     }
                 }
 
+                if phase4_attempt_cap_hit {
+                    crate::log_eprintln!(
+                        "   {}Phase 4 attempt cap ({}) reached. Stopping.{}",
+                        BRIGHT_YELLOW,
+                        PHASE4_MAX_ATTEMPTS,
+                        RESET
+                    );
+                }
+
                 // ── Mandatory CRF=0 probe (ultimate mode only) ─────────────────
-                // If we never successfully encoded at CRF=0, test it explicitly.
-                // This guarantees no float-drift skipping causes us to miss the
-                // true lossless floor even after all backtrack/sprint logic above.
-                if ultimate_mode && current_best > 0.0 && iterations < 200 {
+                // Only perform the floor probe when the search actually converged near CRF 0.
+                if should_probe_crf_zero_from_phase4(current_best) && iterations < 200 {
                     let crf0_untested = !size_cache.contains_key(0.0_f32);
                     if crf0_untested {
                         crate::log_eprintln!(
@@ -3847,6 +3877,13 @@ fn cpu_fine_tune_from_gpu_boundary(
                             }
                         }
                     }
+                } else if current_best > PHASE4_CRF0_PROBE_MAX_DISTANCE {
+                    crate::log_eprintln!(
+                        "   {}Skipping CRF 0.00 probe: best CRF {:.2} is not near the floor.{}",
+                        DIM,
+                        current_best,
+                        RESET
+                    );
                 }
 
                 best_crf = Some(current_best);
@@ -4349,6 +4386,11 @@ pub fn explore_hevc_with_gpu(req: GpuSearchRequest) -> Result<ExploreResult> {
     if req.ultimate_mode && final_preset == EncoderPreset::Slower {
         let screening_preset = EncoderPreset::Slow;
         let screening_output = crate::path_safety::isolated_temp_path_for_search(&req.output)?;
+        crate::log_eprintln!(
+            "   HEVC Ultimate Stage 1/2: screening preset {} at anchor CRF {:.1}",
+            screening_preset.hevc_name(),
+            screening_anchor
+        );
         let screening_result = match run_hevc_gpu_search_to_output(
             &req,
             screening_preset,
@@ -4384,6 +4426,11 @@ pub fn explore_hevc_with_gpu(req: GpuSearchRequest) -> Result<ExploreResult> {
                     }
                 };
 
+            crate::log_eprintln!(
+                "   HEVC Ultimate Stage 2/2: finalist preset {} at anchor CRF {:.1}",
+                final_preset.hevc_name(),
+                finalist_crf
+            );
             let result = match run_hevc_gpu_search_to_output(
                 &req,
                 final_preset,
@@ -4491,9 +4538,9 @@ mod tests {
     use super::{
         adaptive_cambi_ceiling, adaptive_psnr_uv_floor, adaptive_vmaf_floor,
         evaluate_ultimate_quality_gate, search_anchor_crf, select_hevc_ultimate_winner,
-        shortlist_hevc_slower_finalists, CheckResult, ExploreResult, HevcUltimateCandidate,
-        UltimateQualityBaselines, UltimateQualityMetrics, ABSOLUTE_MIN_CRF, CAMBI_MAX,
-        PSNR_UV_SANITY_FLOOR, VMAF_Y_SANITY_FLOOR,
+        shortlist_hevc_slower_finalists, should_probe_crf_zero_from_phase4, CheckResult,
+        ExploreResult, HevcUltimateCandidate, UltimateQualityBaselines, UltimateQualityMetrics,
+        ABSOLUTE_MIN_CRF, CAMBI_MAX, PSNR_UV_SANITY_FLOOR, VMAF_Y_SANITY_FLOOR,
     };
     use crate::types::EncoderPreset;
     use std::path::PathBuf;
@@ -4545,6 +4592,15 @@ mod tests {
 
         let result3 = search_anchor_crf(12.0, None, 10.0);
         assert!((result3 - 10.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_phase4_crf0_probe_requires_near_floor() {
+        assert!(should_probe_crf_zero_from_phase4(0.25));
+        assert!(should_probe_crf_zero_from_phase4(1.0));
+        assert!(!should_probe_crf_zero_from_phase4(0.0));
+        assert!(!should_probe_crf_zero_from_phase4(1.01));
+        assert!(!should_probe_crf_zero_from_phase4(26.75));
     }
 
     #[test]
