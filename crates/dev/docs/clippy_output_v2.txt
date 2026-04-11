@@ -1,0 +1,918 @@
+    Checking shared_utils v0.11.2 (/Users/nyamiiko/Downloads/GitHub/modern_format_boost/crates/shared_utils)
+error: unused attribute
+    --> crates/shared_utils/src/progress.rs:1213:5
+     |
+1213 |     #[must_use]
+     |     ^^^^^^^^^^^ help: remove this attribute
+     |
+note: attribute also specified here
+    --> crates/shared_utils/src/progress.rs:1208:5
+     |
+1208 |     #[must_use]
+     |     ^^^^^^^^^^^
+     = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+     = note: `-D unused-attributes` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(unused_attributes)]`
+
+error: adding items after statements is confusing, since items exist from the start of the scope
+   --> crates/shared_utils/src/progress.rs:277:5
+    |
+277 |     use std::fmt::Write;
+    |     ^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#items_after_statements
+    = note: `-D clippy::items-after-statements` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::items_after_statements)]`
+
+error: docs for function which may panic missing `# Panics` section
+   --> crates/shared_utils/src/video_explorer/dynamic_mapping.rs:126:1
+    |
+126 | / pub fn quick_calibrate(
+127 | |     input: &Path,
+128 | |     input_size: u64,
+129 | |     encoder: super::VideoEncoder,
+...   |
+134 | |     apple_compat: bool,
+135 | | ) -> Result<DynamicCrfMapper> {
+    | |_____________________________^
+    |
+note: first possible panic found here
+   --> crates/shared_utils/src/video_explorer/dynamic_mapping.rs:278:28
+    |
+278 | ...emp_y4m = temp_input.to_str().unwrap();
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#missing_panics_doc
+    = note: `-D clippy::missing-panics-doc` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::missing_panics_doc)]`
+
+error: item in documentation is missing backticks
+    --> crates/shared_utils/src/video_explorer/gpu_coarse_search.rs:1191:5
+     |
+1191 | /// FFmpeg `-vf` prefix: keep frames in three wind...
+     |     ^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+     = note: `-D clippy::doc-markdown` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::doc_markdown)]`
+help: try
+     |
+1191 - /// FFmpeg `-vf` prefix: keep frames in three windows (start / mid / end) and reset PTS for encode.
+1191 + /// `FFmpeg` `-vf` prefix: keep frames in three windows (start / mid / end) and reset PTS for encode.
+     |
+
+error: item in documentation is missing backticks
+   --> crates/shared_utils/src/metadata/exif.rs:551:9
+    |
+551 |     /// ExifTool format codes (`%d%f%e`), and suspi...
+    |         ^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+    = note: `-D clippy::doc-markdown` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::doc_markdown)]`
+help: try
+    |
+551 -     /// ExifTool format codes (`%d%f%e`), and suspicious command-line prefixes (`-@`).
+551 +     /// `ExifTool` format codes (`%d%f%e`), and suspicious command-line prefixes (`-@`).
+    |
+
+error: item in documentation is missing backticks
+    --> crates/shared_utils/src/video_explorer/gpu_coarse_search.rs:1191:5
+     |
+1191 | /// FFmpeg `-vf` prefix: keep frames in three wind...
+     |     ^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+     |
+1191 - /// FFmpeg `-vf` prefix: keep frames in three windows (start / mid / end) and reset PTS for encode.
+1191 + /// `FFmpeg` `-vf` prefix: keep frames in three windows (start / mid / end) and reset PTS for encode.
+     |
+
+error: item in documentation is missing backticks
+   --> crates/shared_utils/src/database.rs:132:50
+    |
+132 | ..._dev_distance` / mean_distance), clamped to [0, 1].
+    |                     ^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+    |
+132 -     /// confidence = 1.0 - (`std_dev_distance` / mean_distance), clamped to [0, 1].
+132 +     /// confidence = 1.0 - (`std_dev_distance` / `mean_distance`), clamped to [0, 1].
+    |
+
+error: item in documentation is missing backticks
+   --> crates/shared_utils/src/database.rs:133:80
+    |
+133 | ...; safe to trust keep_probability.
+    |                    ^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+    |
+133 -     /// High confidence (>0.75) means neighbors are homogeneous; safe to trust keep_probability.
+133 +     /// High confidence (>0.75) means neighbors are homogeneous; safe to trust `keep_probability`.
+    |
+
+error: item in documentation is missing backticks
+   --> crates/shared_utils/src/database.rs:151:45
+    |
+151 | ...lt logged to the inference_log table for feedbac...
+    |                     ^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+    |
+151 - /// A single inference result logged to the inference_log table for feedback analysis.
+151 + /// A single inference result logged to the `inference_log` table for feedback analysis.
+    |
+
+error: item in documentation is missing backticks
+   --> crates/shared_utils/src/database.rs:164:42
+    |
+164 | ...ict string (e.g., "LoopStrong", "LoopWeak").
+    |                       ^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+    |
+164 -     /// The final verdict string (e.g., "LoopStrong", "LoopWeak").
+164 +     /// The final verdict string (e.g., "`LoopStrong`", "LoopWeak").
+    |
+
+error: item in documentation is missing backticks
+   --> crates/shared_utils/src/database.rs:164:56
+    |
+164 | ....g., "LoopStrong", "LoopWeak").
+    |                        ^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+    |
+164 -     /// The final verdict string (e.g., "LoopStrong", "LoopWeak").
+164 +     /// The final verdict string (e.g., "LoopStrong", "`LoopWeak`").
+    |
+
+error: item in documentation is missing backticks
+   --> crates/shared_utils/src/database.rs:172:50
+    |
+172 | ... feature separates LoopStrong from LoopWeak samp...
+    |                       ^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+    |
+172 - /// Measures how well a single feature separates LoopStrong from LoopWeak samples.
+172 + /// Measures how well a single feature separates `LoopStrong` from LoopWeak samples.
+    |
+
+error: item in documentation is missing backticks
+   --> crates/shared_utils/src/database.rs:172:66
+    |
+172 | ...tes LoopStrong from LoopWeak samples.
+    |                        ^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+    |
+172 - /// Measures how well a single feature separates LoopStrong from LoopWeak samples.
+172 + /// Measures how well a single feature separates LoopStrong from `LoopWeak` samples.
+    |
+
+error: item in documentation is missing backticks
+   --> crates/shared_utils/src/database.rs:177:34
+    |
+177 |     /// Mean feature value among LoopStrong samples.
+    |                                  ^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+    |
+177 -     /// Mean feature value among LoopStrong samples.
+177 +     /// Mean feature value among `LoopStrong` samples.
+    |
+
+error: item in documentation is missing backticks
+   --> crates/shared_utils/src/database.rs:179:34
+    |
+179 |     /// Mean feature value among LoopWeak samples.
+    |                                  ^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+    |
+179 -     /// Mean feature value among LoopWeak samples.
+179 +     /// Mean feature value among `LoopWeak` samples.
+    |
+
+error: item in documentation is missing backticks
+   --> crates/shared_utils/src/database.rs:181:33
+    |
+181 |     /// Discriminative power = (mean_loop_strong - ...
+    |                                 ^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+    |
+181 -     /// Discriminative power = (mean_loop_strong - mean_loop_weak) / stddev.
+181 +     /// Discriminative power = (`mean_loop_strong` - mean_loop_weak) / stddev.
+    |
+
+error: item in documentation is missing backticks
+   --> crates/shared_utils/src/database.rs:181:52
+    |
+181 | ...an_loop_strong - mean_loop_weak) / stddev.
+    |                     ^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+    |
+181 -     /// Discriminative power = (mean_loop_strong - mean_loop_weak) / stddev.
+181 +     /// Discriminative power = (mean_loop_strong - `mean_loop_weak`) / stddev.
+    |
+
+error: item in documentation is missing backticks
+   --> crates/shared_utils/src/database.rs:254:37
+    |
+254 |     /// Top keywords extracted from LoopStrong file...
+    |                                     ^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+    |
+254 -     /// Top keywords extracted from LoopStrong filenames.
+254 +     /// Top keywords extracted from `LoopStrong` filenames.
+    |
+
+error: item in documentation is missing backticks
+   --> crates/shared_utils/src/database.rs:574:30
+    |
+574 | /// Open a connection to the PostgreSQL database.
+    |                              ^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+    |
+574 - /// Open a connection to the PostgreSQL database.
+574 + /// Open a connection to the `PostgreSQL` database.
+    |
+
+error: docs for function returning `Result` missing `# Errors` section
+   --> crates/shared_utils/src/database.rs:579:1
+    |
+579 | pub fn open_pg_client() -> Result<Client> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#missing_errors_doc
+    = note: `-D clippy::missing-errors-doc` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::missing_errors_doc)]`
+
+error: docs for function returning `Result` missing `# Errors` section
+   --> crates/shared_utils/src/database.rs:618:1
+    |
+618 | pub fn fetch_global_collection_stats(conn: &mut Client) -> Result<GlobalCollectionStats> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#missing_errors_doc
+
+error: docs for function returning `Result` missing `# Errors` section
+   --> crates/shared_utils/src/database.rs:634:1
+    |
+634 | pub fn fetch_loop_reference_profile(conn: &mut Client) -> Result<LoopReferenceProfile> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#missing_errors_doc
+
+error: docs for function returning `Result` missing `# Errors` section
+    --> crates/shared_utils/src/database.rs:1080:1
+     |
+1080 | pub fn init_schema(conn: &mut Client) -> Result<()> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#missing_errors_doc
+
+error: item in documentation is missing backticks
+    --> crates/shared_utils/src/database.rs:1310:49
+     |
+1310 | ...is sample (e.g., "cli_ingest", "integrity_refre...
+     |                      ^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+     |
+1310 -     /// Who or what labeled this sample (e.g., "cli_ingest", "integrity_refresh").
+1310 +     /// Who or what labeled this sample (e.g., "`cli_ingest`", "integrity_refresh").
+     |
+
+error: item in documentation is missing backticks
+    --> crates/shared_utils/src/database.rs:1310:63
+     |
+1310 | ..."cli_ingest", "integrity_refresh").
+     |                   ^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+     |
+1310 -     /// Who or what labeled this sample (e.g., "cli_ingest", "integrity_refresh").
+1310 +     /// Who or what labeled this sample (e.g., "cli_ingest", "`integrity_refresh`").
+     |
+
+error: item in documentation is missing backticks
+    --> crates/shared_utils/src/database.rs:1340:38
+     |
+1340 |     /// Loop intent classification ("LoopStrong", ...
+     |                                      ^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+     |
+1340 -     /// Loop intent classification ("LoopStrong", "LoopWeak", or "Uncertain").
+1340 +     /// Loop intent classification ("`LoopStrong`", "LoopWeak", or "Uncertain").
+     |
+
+error: item in documentation is missing backticks
+    --> crates/shared_utils/src/database.rs:1340:52
+     |
+1340 | ...on ("LoopStrong", "LoopWeak", or "Uncertain").
+     |                       ^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+     |
+1340 -     /// Loop intent classification ("LoopStrong", "LoopWeak", or "Uncertain").
+1340 +     /// Loop intent classification ("LoopStrong", "`LoopWeak`", or "Uncertain").
+     |
+
+error: docs for function returning `Result` missing `# Errors` section
+    --> crates/shared_utils/src/database.rs:1542:1
+     |
+1542 | pub fn calculate_blake3_hex(path: &Path) -> Result<String> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#missing_errors_doc
+
+error: item in documentation is missing backticks
+    --> crates/shared_utils/src/database.rs:1558:44
+     |
+1558 | ... vector, allowing PostgreSQL's HNSW index to do...
+     |                      ^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+     |
+1558 - /// into an L2-compatible vector, allowing PostgreSQL's HNSW index to do the heavy lifting!
+1558 + /// into an L2-compatible vector, allowing `PostgreSQL`'s HNSW index to do the heavy lifting!
+     |
+
+error: item in documentation is missing backticks
+    --> crates/shared_utils/src/database.rs:1871:20
+     |
+1871 | /// Static images (frame_count <= 1) are excluded....
+     |                    ^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+     |
+1871 - /// Static images (frame_count <= 1) are excluded. Returns the number of
+1871 + /// Static images (`frame_count` <= 1) are excluded. Returns the number of
+     |
+
+error: docs for function which may panic missing `# Panics` section
+    --> crates/shared_utils/src/database.rs:1873:1
+     |
+1873 | pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -> Result<usize> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+note: first possible panic found here
+    --> crates/shared_utils/src/database.rs:1909:9
+     |
+1909 | / ...   ProgressStyle::default_bar()
+1910 | | ...       .template("{spinner:.green} [{elapsed_...
+1911 | | ...       .expect("Valid template")
+     | |___________________________________^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#missing_panics_doc
+
+error: docs for function returning `Result` missing `# Errors` section
+    --> crates/shared_utils/src/database.rs:1873:1
+     |
+1873 | pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -> Result<usize> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#missing_errors_doc
+
+error: item in documentation is missing backticks
+    --> crates/shared_utils/src/database.rs:2066:5
+     |
+2066 | /// std_dev, percentiles), extracts dynamic keywor...
+     |     ^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+     |
+2066 - /// std_dev, percentiles), extracts dynamic keywords from LoopStrong
+2066 + /// `std_dev`, percentiles), extracts dynamic keywords from LoopStrong
+     |
+
+error: item in documentation is missing backticks
+    --> crates/shared_utils/src/database.rs:2066:59
+     |
+2066 | ...mic keywords from LoopStrong
+     |                      ^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+     |
+2066 - /// std_dev, percentiles), extracts dynamic keywords from LoopStrong
+2066 + /// std_dev, percentiles), extracts dynamic keywords from `LoopStrong`
+     |
+
+error: docs for function returning `Result` missing `# Errors` section
+    --> crates/shared_utils/src/database.rs:2070:1
+     |
+2070 | pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#missing_errors_doc
+
+error: docs for function returning `Result` missing `# Errors` section
+    --> crates/shared_utils/src/database.rs:2370:1
+     |
+2370 | pub fn recompute_all_features(conn: &mut Client) -> Result<()> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#missing_errors_doc
+
+error: item in documentation is missing backticks
+    --> crates/shared_utils/src/database.rs:2449:34
+     |
+2449 | /// Build a JSON snapshot of key LoopMeta fields f...
+     |                                  ^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+     |
+2449 - /// Build a JSON snapshot of key LoopMeta fields for the inference log.
+2449 + /// Build a JSON snapshot of key `LoopMeta` fields for the inference log.
+     |
+
+error: docs for function returning `Result` missing `# Errors` section
+  --> crates/shared_utils/src/image_quality_db.rs:51:1
+   |
+51 | pub fn init_quality_schema(conn: &mut Client) -> Result<()> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#missing_errors_doc
+
+error: docs for function returning `Result` missing `# Errors` section
+   --> crates/shared_utils/src/image_quality_db.rs:521:1
+    |
+521 | / pub fn ingest_quality_sample(
+522 | |     conn: &mut Client,
+523 | |     path: &Path,
+524 | |     label: &str,
+525 | |     labeled_by: &str,
+526 | | ) -> Result<()> {
+    | |_______________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#missing_errors_doc
+
+error: item in documentation is missing backticks
+  --> crates/shared_utils/src/image_recommender.rs:22:38
+   |
+22 | ...nt: Subscribes to MediaIndexRow (Database-driven ...
+   |                      ^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+   |
+22 - /// 🚀 New Entry Point: Subscribes to MediaIndexRow (Database-driven decision)
+22 + /// 🚀 New Entry Point: Subscribes to `MediaIndexRow` (Database-driven decision)
+   |
+
+error: docs for function returning `Result` missing `# Errors` section
+  --> crates/shared_utils/src/image_recommender.rs:24:1
+   |
+24 | pub fn get_recommendation_from_row(row: &MediaIndexRow) -> Result<UpgradeRecommendation, serde_json::Error> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#missing_errors_doc
+
+error: this function has a `#[must_use]` attribute with no message, but returns a type already marked as `#[must_use]`
+  --> crates/shared_utils/src/image_recommender.rs:24:1
+   |
+24 | pub fn get_recommendation_from_row(row: &MediaIndexRow) -> Result<UpgradeRecommendation, serde_json::Error> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: either add some descriptive message or remove the attribute
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#double_must_use
+   = note: `-D clippy::double-must-use` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::double_must_use)]`
+
+error: item in documentation is missing backticks
+  --> crates/shared_utils/src/image_recommender.rs:60:32
+   |
+60 | ...r of image_analyzer::generate_jxl_indicator using...
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+   |
+60 - /// 🔬 Logic Replica: Mirror of image_analyzer::generate_jxl_indicator using DB features.
+60 + /// 🔬 Logic Replica: Mirror of `image_analyzer::generate_jxl_indicator` using DB features.
+   |
+
+error: variables can be used directly in the `format!` string
+  --> crates/shared_utils/src/image_recommender.rs:62:23
+   |
+62 |     let output_path = format!("{}.jxl", rel_path);
+   |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#uninlined_format_args
+   = note: `-D clippy::uninlined-format-args` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::uninlined_format_args)]`
+help: change this to
+   |
+62 -     let output_path = format!("{}.jxl", rel_path);
+62 +     let output_path = format!("{rel_path}.jxl");
+   |
+
+error: item in documentation is missing backticks
+  --> crates/shared_utils/src/video_recommender.rs:14:38
+   |
+14 | ...nt: Subscribes to MediaIndexRow (Database-driven ...
+   |                      ^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+   |
+14 - /// 🚀 New Entry Point: Subscribes to MediaIndexRow (Database-driven decision)
+14 + /// 🚀 New Entry Point: Subscribes to `MediaIndexRow` (Database-driven decision)
+   |
+
+error: docs for function returning `Result` missing `# Errors` section
+  --> crates/shared_utils/src/video_recommender.rs:16:1
+   |
+16 | pub fn get_vi...ion, serde_json::Error> {
+   | ^^^^^^^^^^^^^...^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#missing_errors_doc
+
+error: this function has a `#[must_use]` attribute with no message, but returns a type already marked as `#[must_use]`
+  --> crates/shared_utils/src/video_recommender.rs:16:1
+   |
+16 | pub fn get_vi...ion, serde_json::Error> {
+   | ^^^^^^^^^^^^^...^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: either add some descriptive message or remove the attribute
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#double_must_use
+
+error: item in documentation is missing backticks
+  --> crates/shared_utils/src/loop_intent.rs:88:32
+   |
+88 | ...constructors (from_video_detection, from_ffprobe_...
+   |                  ^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+   |
+88 - /// Populated by constructors (from_video_detection, from_ffprobe_result, from_gif_path).
+88 + /// Populated by constructors (`from_video_detection`, from_ffprobe_result, from_gif_path).
+   |
+
+error: item in documentation is missing backticks
+  --> crates/shared_utils/src/loop_intent.rs:88:54
+   |
+88 | ...deo_detection, from_ffprobe_result, from_gif_path).
+   |                   ^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+   |
+88 - /// Populated by constructors (from_video_detection, from_ffprobe_result, from_gif_path).
+88 + /// Populated by constructors (from_video_detection, `from_ffprobe_result`, from_gif_path).
+   |
+
+error: item in documentation is missing backticks
+  --> crates/shared_utils/src/loop_intent.rs:88:75
+   |
+88 | ...m_ffprobe_result, from_gif_path).
+   |                      ^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+   |
+88 - /// Populated by constructors (from_video_detection, from_ffprobe_result, from_gif_path).
+88 + /// Populated by constructors (from_video_detection, from_ffprobe_result, `from_gif_path`).
+   |
+
+error: item in documentation is missing backticks
+   --> crates/shared_utils/src/loop_intent.rs:120:9
+    |
+120 |     /// frame_payload_variation: coefficient of var...
+    |         ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+    |
+120 -     /// frame_payload_variation: coefficient of variation of frame packet sizes (pkt_sizes CV)
+120 +     /// `frame_payload_variation`: coefficient of variation of frame packet sizes (pkt_sizes CV)
+    |
+
+error: item in documentation is missing backticks
+   --> crates/shared_utils/src/loop_intent.rs:120:82
+    |
+120 | ...rame packet sizes (pkt_sizes CV)
+    |                       ^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+    |
+120 -     /// frame_payload_variation: coefficient of variation of frame packet sizes (pkt_sizes CV)
+120 +     /// frame_payload_variation: coefficient of variation of frame packet sizes (`pkt_sizes` CV)
+    |
+
+error: item in documentation is missing backticks
+   --> crates/shared_utils/src/loop_intent.rs:122:9
+    |
+122 |     /// frame_delay_variation: CV of presentation t...
+    |         ^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+    |
+122 -     /// frame_delay_variation: CV of presentation timestamps deltas
+122 +     /// `frame_delay_variation`: CV of presentation timestamps deltas
+    |
+
+error: item in documentation is missing backticks
+   --> crates/shared_utils/src/loop_intent.rs:124:50
+    |
+124 | ... used to compute closure_ratio
+    |                     ^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+    |
+124 -     /// Raw frame packet sizes — used to compute closure_ratio
+124 +     /// Raw frame packet sizes — used to compute `closure_ratio`
+    |
+
+error: item in documentation is missing backticks
+   --> crates/shared_utils/src/loop_intent.rs:131:39
+    |
+131 |     /// WebP compression ratio proxy: raw_size / we...
+    |                                       ^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+    |
+131 -     /// WebP compression ratio proxy: raw_size / webp_size for a sampled frame.
+131 +     /// WebP compression ratio proxy: `raw_size` / webp_size for a sampled frame.
+    |
+
+error: item in documentation is missing backticks
+   --> crates/shared_utils/src/loop_intent.rs:131:50
+    |
+131 | ... proxy: raw_size / webp_size for a sampled frame.
+    |                       ^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+    |
+131 -     /// WebP compression ratio proxy: raw_size / webp_size for a sampled frame.
+131 +     /// WebP compression ratio proxy: raw_size / `webp_size` for a sampled frame.
+    |
+
+error: item in documentation is missing backticks
+   --> crates/shared_utils/src/loop_intent.rs:158:15
+    |
+158 |     /// Build LoopMeta from a full VideoDetectionRe...
+    |               ^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+    |
+158 -     /// Build LoopMeta from a full VideoDetectionResult.
+158 +     /// Build `LoopMeta` from a full VideoDetectionResult.
+    |
+
+error: item in documentation is missing backticks
+   --> crates/shared_utils/src/loop_intent.rs:158:36
+    |
+158 | ...a from a full VideoDetectionResult.
+    |                  ^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+    |
+158 -     /// Build LoopMeta from a full VideoDetectionResult.
+158 +     /// Build LoopMeta from a full `VideoDetectionResult`.
+    |
+
+error: item in documentation is missing backticks
+   --> crates/shared_utils/src/loop_intent.rs:248:15
+    |
+248 |     /// Build LoopMeta from an FFprobeResult (used ...
+    |               ^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+    |
+248 -     /// Build LoopMeta from an FFprobeResult (used in pipelines without full detection).
+248 +     /// Build `LoopMeta` from an FFprobeResult (used in pipelines without full detection).
+    |
+
+error: item in documentation is missing backticks
+   --> crates/shared_utils/src/loop_intent.rs:248:32
+    |
+248 |     /// Build LoopMeta from an FFprobeResult (used ...
+    |                                ^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+    |
+248 -     /// Build LoopMeta from an FFprobeResult (used in pipelines without full detection).
+248 +     /// Build LoopMeta from an `FFprobeResult` (used in pipelines without full detection).
+    |
+
+error: item in documentation is missing backticks
+   --> crates/shared_utils/src/loop_intent.rs:337:15
+    |
+337 |     /// Build LoopMeta from a GIF file using header...
+    |               ^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+    |
+337 -     /// Build LoopMeta from a GIF file using header-level scanning (fast, no ffprobe).
+337 +     /// Build `LoopMeta` from a GIF file using header-level scanning (fast, no ffprobe).
+    |
+
+error: item in documentation is missing backticks
+    --> crates/shared_utils/src/loop_intent.rs:1108:24
+     |
+1108 | /// Formula: P(keep) = sigmoid(w_knn*knn + w_tree*...
+     |                        ^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+     |
+1108 - /// Formula: P(keep) = sigmoid(w_knn*knn + w_tree*tree + w_density*log(n) + bias)
+1108 + /// Formula: P(keep) = `sigmoid(w_knn`*knn + w_tree*tree + w_density*log(n) + bias)
+     |
+
+error: item in documentation is missing backticks
+    --> crates/shared_utils/src/loop_intent.rs:1108:44
+     |
+1108 | ...sigmoid(w_knn*knn + w_tree*tree + w_density*log...
+     |                        ^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+     |
+1108 - /// Formula: P(keep) = sigmoid(w_knn*knn + w_tree*tree + w_density*log(n) + bias)
+1108 + /// Formula: P(keep) = sigmoid(w_knn*knn + `w_tree`*tree + w_density*log(n) + bias)
+     |
+
+error: item in documentation is missing backticks
+    --> crates/shared_utils/src/loop_intent.rs:1108:58
+     |
+1108 | ...nn + w_tree*tree + w_density*log(n) + bias)
+     |                       ^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+     |
+1108 - /// Formula: P(keep) = sigmoid(w_knn*knn + w_tree*tree + w_density*log(n) + bias)
+1108 + /// Formula: P(keep) = sigmoid(w_knn*knn + w_tree*tree + `w_density`*log(n) + bias)
+     |
+
+error: item in documentation is missing backticks
+    --> crates/shared_utils/src/loop_intent.rs:1953:56
+     |
+1953 | ...e GIF fast-path (from_gif_path) instead of ffpr...
+     |                     ^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+     |
+1953 - /// Check if a file path should use the GIF fast-path (from_gif_path) instead of ffprobe.
+1953 + /// Check if a file path should use the GIF fast-path (`from_gif_path`) instead of ffprobe.
+     |
+
+error: docs for function returning `Result` missing `# Errors` section
+    --> crates/shared_utils/src/loop_intent.rs:1965:1
+     |
+1965 | pub fn deep_refine_meta(meta: &mut LoopMeta, path: &std::path::Path) -> anyhow::Result<()> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#missing_errors_doc
+
+error: item in documentation is missing backticks
+  --> crates/shared_utils/src/media_meta_utils.rs:11:15
+   |
+11 | /// Returns: (palette_size, app_extensions, has_tran...
+   |               ^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+   |
+11 - /// Returns: (palette_size, app_extensions, has_transparency, payload_var, delay_var, loop_count, duration_secs)
+11 + /// Returns: (`palette_size`, app_extensions, has_transparency, payload_var, delay_var, loop_count, duration_secs)
+   |
+
+error: item in documentation is missing backticks
+  --> crates/shared_utils/src/media_meta_utils.rs:11:29
+   |
+11 | /// Returns: (palette_size, app_extensions, has_tran...
+   |                             ^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+   |
+11 - /// Returns: (palette_size, app_extensions, has_transparency, payload_var, delay_var, loop_count, duration_secs)
+11 + /// Returns: (palette_size, `app_extensions`, has_transparency, payload_var, delay_var, loop_count, duration_secs)
+   |
+
+error: item in documentation is missing backticks
+  --> crates/shared_utils/src/media_meta_utils.rs:11:45
+   |
+11 | ...app_extensions, has_transparency, payload_var, de...
+   |                    ^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+   |
+11 - /// Returns: (palette_size, app_extensions, has_transparency, payload_var, delay_var, loop_count, duration_secs)
+11 + /// Returns: (palette_size, app_extensions, `has_transparency`, payload_var, delay_var, loop_count, duration_secs)
+   |
+
+error: item in documentation is missing backticks
+  --> crates/shared_utils/src/media_meta_utils.rs:11:63
+   |
+11 | ... has_transparency, payload_var, delay_var, loop_c...
+   |                       ^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+   |
+11 - /// Returns: (palette_size, app_extensions, has_transparency, payload_var, delay_var, loop_count, duration_secs)
+11 + /// Returns: (palette_size, app_extensions, has_transparency, `payload_var`, delay_var, loop_count, duration_secs)
+   |
+
+error: item in documentation is missing backticks
+  --> crates/shared_utils/src/media_meta_utils.rs:11:76
+   |
+11 | ...rency, payload_var, delay_var, loop_count, durati...
+   |                        ^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+   |
+11 - /// Returns: (palette_size, app_extensions, has_transparency, payload_var, delay_var, loop_count, duration_secs)
+11 + /// Returns: (palette_size, app_extensions, has_transparency, payload_var, `delay_var`, loop_count, duration_secs)
+   |
+
+error: item in documentation is missing backticks
+  --> crates/shared_utils/src/media_meta_utils.rs:11:87
+   |
+11 | ...ad_var, delay_var, loop_count, duration_secs)
+   |                       ^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+   |
+11 - /// Returns: (palette_size, app_extensions, has_transparency, payload_var, delay_var, loop_count, duration_secs)
+11 + /// Returns: (palette_size, app_extensions, has_transparency, payload_var, delay_var, `loop_count`, duration_secs)
+   |
+
+error: item in documentation is missing backticks
+  --> crates/shared_utils/src/media_meta_utils.rs:11:99
+   |
+11 | ..._var, loop_count, duration_secs)
+   |                      ^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#doc_markdown
+help: try
+   |
+11 - /// Returns: (palette_size, app_extensions, has_transparency, payload_var, delay_var, loop_count, duration_secs)
+11 + /// Returns: (palette_size, app_extensions, has_transparency, payload_var, delay_var, loop_count, `duration_secs`)
+   |
+
+error: docs for function returning `Result` missing `# Errors` section
+  --> crates/shared_utils/src/media_meta_utils.rs:12:1
+   |
+12 | / pub fn scan_gif_headers(
+13 | |     path: &Path,
+14 | | ) -> std::io::Result<(
+15 | |     Option<u32>,
+...  |
+21 | |     Option<f64>,
+22 | | )> {
+   | |__^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#missing_errors_doc
+
+error: could not compile `shared_utils` (lib) due to 72 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `shared_utils` (lib test) due to 73 previous errors

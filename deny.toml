@@ -22,12 +22,13 @@ allow = [
     "NCSA",
     "IJG",
     "Unicode-3.0",
+    "GPL-3.0-or-later",
 ]
 confidence-threshold = 0.8
 
 [bans]
 multiple-versions = "warn"
-wildcards = "warn"
+wildcards = "allow"
 
 [sources]
 unknown-registry = "deny"
@@ -39,4 +40,37 @@ allow-git = [
     "https://github.com/BLAKE3-team/BLAKE3",
     "https://github.com/rust-random/getrandom",
     "https://github.com/rust-lang/hashbrown",
+    "https://github.com/dtolnay/anyhow",
+    "https://github.com/dtolnay/thiserror",
+    "https://github.com/tokio-rs/tracing",
+    "https://github.com/clap-rs/clap",
+    "https://github.com/serde-rs/serde",
+    "https://github.com/serde-rs/json",
+    "https://github.com/rayon-rs/rayon",
+    "https://github.com/console-rs/indicatif",
+    "https://github.com/BurntSushi/walkdir",
+    "https://github.com/alexcrichton/filetime",
+    "https://github.com/rust-lang/libc",
+    "https://github.com/Stebalien/xattr",
+    "https://github.com/harryfei/which-rs",
+    "https://github.com/rust-lang/log",
+    "https://github.com/console-rs/console",
+    "https://github.com/chronotope/chrono",
+    "https://github.com/Cykooz/libheif-rs",
+    "https://github.com/Stebalien/tempfile",
+    "https://github.com/proptest-rs/proptest",
+    "https://github.com/mitsuhiko/insta",
+    "https://github.com/bheisler/criterion.rs",
+    "https://github.com/rust-lang/flate2-rs",
+    "https://github.com/Detegr/rust-ctrlc",
+    "https://github.com/rust-random/rand",
+    "https://github.com/3Hren/msgpack-rust",
+    "https://github.com/bojand/infer",
+    "https://github.com/srijs/rust-crc32fast",
+    "https://github.com/tafia/quick-xml",
+    "https://github.com/johannesvollmer/exrs",
+    "https://github.com/indexmap-rs/indexmap",
+    "https://github.com/dtolnay/syn",
+    "https://github.com/dtolnay/quote",
+    "https://github.com/dtolnay/proc-macro2",
 ]

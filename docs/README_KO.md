@@ -1,3 +1,5 @@
+# Modern Format Boost (Korean)
+
 <p align="center">
   <img src="https://img.shields.io/badge/version-0.11.2-0969DA?style=for-the-badge&logo=rust&logoColor=white" alt="버전">
   <img src="https://img.shields.io/badge/rust-2021_edition-E57324?style=for-the-badge&logo=rust&logoColor=white" alt="Rust">
@@ -5,15 +7,13 @@
   <img src="https://img.shields.io/badge/license-MIT-00B265?style=for-the-badge" alt="라이선스">
 </p>
 
-<h1 align="center">Modern Format Boost</h1>
-
 <p align="center">
-  <strong>차세대 미디어 최적화 엔진 — 화질 손상 제로, 최대 압축 실현.</strong><br>
+  <strong>차세대 미디어 최적화 엔진 — 화질 저하 없는 최대 압축 구현.</strong><br>
 </p>
 
 ---
 
-# 📖 한국어 (Korean)
+## 📖 한국어 (Korean)
 
 ## Modern Format Boost란 무엇인가요?
 
@@ -35,7 +35,7 @@
 1. **데이터 안전 우선**: 데이터 손실을 방지하기 위해, 특히 소중한 미디어의 경우 덮어쓰기 변환(`--in-place`)보다는 별도의 디렉토리에 출력(`-o /path/to/output`)하는 것을 강력히 권장합니다.
 2. **베타 소프트웨어**: 본 프로그램은 화질이나 데이터 손실을 방지하기 위해 광범위하게 테스트되고 최적화되었지만, 100% 버그가 없음을 보장하지는 않습니다. 문제가 발생하면 GitHub에 보고해 주세요.
 3. **컴퓨팅 자원 안내**: Apple Silicon M 시리즈 등에서 효율화되었지만, `--ultimate` 모드에서의 대규모 배치 작업은 시간이 오래 걸리고 시스템 자원을 장기간 점유할 수 있습니다. 계획적으로 실행해 주세요.
-4. **도구 성숙도**: 현재 HEVC 기반 도구(`img-hevc`, `vid-hevc`)가 AV1 기반 도구(`img-av1`, `vid-av1`)보다 더 성숙하고 안정적입니다. 높은 신뢰성이 요구되는 작업에는 HEVC 도구를 권장합니다.
+4. **도구 성숙도**: 통합된 도구(`img`, `vid`)는 기본적으로 HEVC 전략을 사용하며, 이는 현재 AV1 전략보다 더 성숙하고 안정적입니다. 높은 신뢰성이 요구되는 작업에는 HEVC 전략(기본값)을 권장합니다.
 
 ## 🔒 개인정보 및 데이터 무결성
 
@@ -69,16 +69,14 @@
 
 ### 🖥️ 실행 화면
 
-![Runtime](assets/runtime.png)
+![Runtime](../assets/runtime.png)
 
-### 4개의 바이너리
+### 2개의 통합 도구
 
-| 바이너리       | 용도          | 타겟 코덱                            |
-| -------------- | ------------- | ------------------------------------ |
-| **`img-hevc`** | 이미지 최적화 | → JXL (정지화상) / HEVC (애니메이션) |
-| **`img-av1`**  | 이미지 최적화 | → JXL (정지화상) / AV1 (애니메이션)  |
-| **`vid-hevc`** | 비디오 최적화 | → HEVC / H.265                       |
-| **`vid-av1`**  | 비디오 최적화 | → AV1 / SVT-AV1                      |
+| 도구      | 용도          | 타겟 코덱                                  |
+| --------- | ------------- | ------------------------------------------ |
+| **`img`** | 이미지 최적화 | → JXL (정지화상) / HEVC / AV1 (애니메이션) |
+| **`vid`** | 비디오 최적화 | → HEVC / AV1                               |
 
 또한 드래그 앤 드롭으로 배치 처리가 가능한 **macOS 앱**(`Modern Format Boost.app`)이 제공됩니다.
 
@@ -104,6 +102,6 @@ tar -xzf modern-format-boost-aarch64-apple-darwin.tar.gz
 
 ---
 
-# ⚖️ 라이선스
+## ⚖️ 라이선스
 
 **MIT 라이선스** 하에 제공됩니다.

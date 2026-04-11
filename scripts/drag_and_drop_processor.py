@@ -14,6 +14,13 @@ import datetime
 import pty
 from pathlib import Path
 
+
+class ReturnToHomeException(Exception):
+    """Custom exception to trigger a return to the main selection menu."""
+
+    pass
+
+
 try:
     import psutil
     from rich.console import Console
@@ -52,13 +59,25 @@ else:
 SCRIPT_DIR = Path(__file__).parent.resolve()
 PROJECT_ROOT = SCRIPT_DIR.parent
 
-IMGQUALITY_HEVC = PROJECT_ROOT / "target" / "release" / "img-hevc"
-VIDQUALITY_HEVC = PROJECT_ROOT / "target" / "release" / "vid-hevc"
+IMGQUALITY_HEVC = PROJECT_ROOT / "target" / "release" / "img"
+VIDQUALITY_HEVC = PROJECT_ROOT / "target" / "release" / "vid"
+
+
+def get_mfb_state_root() -> Path:
+    env_root = os.environ.get("MFB_HOME_ROOT")
+    if env_root:
+        return Path(env_root).expanduser()
+    if os.environ.get("FROM_APP"):
+        return PROJECT_ROOT / ".cache" / "mfb_runtime"
+    return Path.home() / ".modern_format_boost"
+
 
 # MFB Ghost Mode - Isolated Temporary Directory
 # This prevents folder mtime updates by redirecting all intermediate IO away from source folders
-MFB_TMP_ROOT = Path.home() / ".modern_format_boost" / "tmp"
+MFB_STATE_ROOT = get_mfb_state_root()
+MFB_TMP_ROOT = MFB_STATE_ROOT / "tmp"
 MFB_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+os.environ["MFB_HOME_ROOT"] = str(MFB_STATE_ROOT)
 os.environ["TMPDIR"] = str(MFB_TMP_ROOT)
 
 OUTPUT_MODE = "adjacent"
@@ -159,7 +178,7 @@ def spinner_run():
     while not spinner_event.is_set():
         elapsed = int(time.time() - start)
         if sys.stdout.isatty():
-            sys.stdout.write(f"\033]0;⏱ {_fmt_elapsed(elapsed)}\007")
+            sys.stdout.write(f"\033]0;{_fmt_elapsed(elapsed)}\007")
             sys.stdout.flush()
         time.sleep(0.15)
 
@@ -244,14 +263,14 @@ def draw_header():
     except Exception:
         pass
 
-    title = f"🚀 MODERN FORMAT BOOST v{version}"
+    title = f"MODERN FORMAT BOOST v{version}"
 
     if "Panel" in globals():
         console.print(
             Panel(
                 f"[bold #ffffff]{title}[/bold #ffffff]{tag}\n"
                 f"[#888888]PREMIUM MEDIA OPTIMIZER[/#888888]\n"
-                f"[#00ff00]●[/#00ff00] [#aaaaaa]No Data Loss[/#aaaaaa]   [#00ff00]●[/#00ff00] [#aaaaaa]Smart Conversion[/#aaaaaa]   [#00ff00]●[/#00ff00] [#aaaaaa]Auto-Repair[/#aaaaaa]",
+                f"[#00ff00]- [/#00ff00] [#aaaaaa]No Data Loss[/#aaaaaa]   [#00ff00]- [/#00ff00] [#aaaaaa]Smart Conversion[/#aaaaaa]   [#00ff00]- [/#00ff00] [#aaaaaa]Auto-Repair[/#aaaaaa]",
                 title="[bold #00aaff]Modern Format Boost[/bold #00aaff]",
                 subtitle="[dim]Secure & High-Precision Pipeline[/dim]",
                 expand=False,
@@ -270,11 +289,11 @@ def draw_header():
             f"{BLUE}│{RESET}  {DIM}PREMIUM MEDIA OPTIMIZER{RESET}{' ' * (69 - 25)}{BLUE}│{RESET}"
         )
         print(
-            f"{BLUE}│{RESET}  {GREEN}●{RESET} {DIM}No Data Loss{RESET}   {GREEN}●{RESET} {DIM}Smart Conversion{RESET}   {GREEN}●{RESET} {DIM}Auto-Repair{' ' * (69 - 58)}{BLUE}│{RESET}"
+            f"{BLUE}│{RESET}  {GREEN}-{RESET} {DIM}No Data Loss{RESET}   {GREEN}-{RESET} {DIM}Smart Conversion{RESET}   {GREEN}-{RESET} {DIM}Auto-Repair{' ' * (69 - 58)}{BLUE}│{RESET}"
         )
         print(f"{BLUE}╰{'─' * 70}╯{RESET}")
     print(
-        f"   {RED}⚠️  WARNING: Always keep a backup of your original media before optimization.{RESET}\n"
+        f"   {RED}WARNING: Always keep a backup of your original media before optimization.{RESET}\n"
     )
 
 
@@ -285,10 +304,20 @@ def check_tools():
         print(f"{DIM}   Please ensure you are running from the repository root.{RESET}")
         sys.exit(1)
 
-    res = subprocess.run([str(build_script)])
+    cmd = [str(build_script)]
+    if PROCESSING_MODE == "images_only":
+        cmd.append("--img")
+    elif PROCESSING_MODE == "videos_only":
+        cmd.append("--vid")
+
+    res = subprocess.run(cmd)
     if res.returncode != 0:
-        print(f"{RED}❌ Build failed. Please check the logs.{RESET}")
-        input("Press Enter to exit...")
+        print(f"{RED}ERROR: Build failed. Please check the logs.{RESET}")
+        if sys.stdin.isatty():
+            try:
+                input("Press Enter to exit...")
+            except EOFError:
+                pass
         sys.exit(1)
 
 
@@ -299,37 +328,43 @@ def rebuild_tools():
         print(f"{RED}❌ Build script not found: {build_script}{RESET}")
         return False
 
-    print(f"\n{YELLOW}🔧 Attempting automatic rebuild...{RESET}")
-    res = subprocess.run([str(build_script)])
+    print(f"\n{YELLOW}Attempting automatic rebuild...{RESET}")
+    cmd = [str(build_script)]
+    if PROCESSING_MODE == "images_only":
+        cmd.append("--img")
+    elif PROCESSING_MODE == "videos_only":
+        cmd.append("--vid")
+
+    res = subprocess.run(cmd)
     if res.returncode != 0:
-        print(f"{RED}❌ Automatic rebuild failed. Please check the logs.{RESET}")
+        print(f"{RED}ERROR: Automatic rebuild failed. Please check the logs.{RESET}")
         return False
 
-    print(f"{GREEN}✅ Rebuild completed successfully.{RESET}\n")
+    print(f"{GREEN}OK: Rebuild completed successfully.{RESET}\n")
     return True
 
 
 def draw_separator(title):
-    print(f"{DIM}── {BOLD}{WHITE}{title}{RESET} {DIM}{'─' * 50}{RESET}\n")
+    print(f"{DIM}# {BOLD}{WHITE}{title}{RESET} {DIM}{'#' * 50}{RESET}\n")
 
 
 def get_target_directory():
     global TARGET_DIR
     if not TARGET_DIR and not os.environ.get("FROM_APP"):
         draw_header()
-        print(f"{CYAN}📂 Waiting for input...{RESET}")
+        print(f"{CYAN}Waiting for input...{RESET}")
         print(f"{DIM}   Please drag and drop a folder here, then press Enter.{RESET}")
         drain_stdin()
         TARGET_DIR = input(f"   {BOLD}> {RESET}").strip()
         TARGET_DIR = TARGET_DIR.strip("\"'")
 
     if "\n" in TARGET_DIR or "\r" in TARGET_DIR:
-        print(f"\n{RED}❌ Error: Path contains unsupported control characters.{RESET}")
+        print(f"\n{RED}ERROR: Path contains unsupported control characters.{RESET}")
         sys.exit(1)
 
     p = Path(TARGET_DIR)
     if not p.is_dir():
-        print(f"\n{RED}❌ Error: Directory not found.{RESET}")
+        print(f"\n{RED}ERROR: Directory not found.{RESET}")
         print(f"{DIM}   Path: {TARGET_DIR}{RESET}")
         sys.exit(1)
 
@@ -372,7 +407,7 @@ def acquire_global_lock(dir_path: str):
         lock_hash = result.stdout.strip()
 
         # 2. Prepare lock directory
-        lock_dir = Path.home() / ".modern_format_boost" / "locks"
+        lock_dir = MFB_STATE_ROOT / "locks"
         lock_dir.mkdir(parents=True, exist_ok=True)
 
         lock_file_path = lock_dir / f"{lock_hash}.lock"
@@ -386,7 +421,7 @@ def acquire_global_lock(dir_path: str):
             fcntl.flock(_GLOBAL_LOCK_FILE, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             # Lock is already held
-            print(f"\n{RED}❌ ERROR: Directory Already In Use!{RESET}")
+            print(f"\n{RED}ERROR: Directory Already In Use!{RESET}")
             print(f"   Target: {DIM}{dir_path}{RESET}")
             print(
                 f"   {YELLOW}Another instance of Modern Format Boost is currently processing this folder.{RESET}"
@@ -470,7 +505,7 @@ def select_mode():
     # Internal state for the "Mode" item (0: adjacent, 1: inplace)
     mode_sub_state = 0 if OUTPUT_MODE == "adjacent" else 1
 
-    options = ["📂 Optimization Mode", "🧹 Cleanup Cache & Logs"]
+    options = ["Optimization Mode", "Cleanup Cache & Logs"]
 
     while True:
         clear_screen()
@@ -482,9 +517,9 @@ def select_mode():
 
             if i == 0:  # Combined Mode Item
                 display_text = (
-                    "📂 Mode: Output to Adjacent Folder [Tab to Switch]"
+                    "Mode: Output to Adjacent Folder [Tab to Switch]"
                     if mode_sub_state == 0
-                    else "🚀 Mode: In-Place Optimization [Tab to Switch]"
+                    else "Mode: In-Place Optimization [Tab to Switch]"
                 )
                 description = (
                     "Safe mode. Keeps originals untouched."
@@ -506,7 +541,7 @@ def select_mode():
                         console.print(f"     [dim]○ {display_text}[/dim]")
                         console.print(f"     [dim]{description}[/dim]\n")
                     else:
-                        print(f"    {DIM}○ {display_text}{RESET}")
+                        print(f"    {DIM}- {display_text}{RESET}")
                         print(f"    {DIM}{description}{RESET}\n")
             else:  # Other items
                 if is_selected:
@@ -558,7 +593,7 @@ def select_mode():
                                 tdir.parent / (tdir.name + "_optimized")
                             )
                         )
-                        print(f"\n{GREEN}✅ ADJACENT MODE SELECTED{RESET}")
+                        print(f"\n{GREEN}ADJACENT MODE SELECTED{RESET}")
                         print(f"   Output: {DIM}{OUTPUT_DIR}{RESET}")
                         print(f"   {DIM}Creating directory structure...{RESET}")
                         create_directory_structure(TARGET_DIR, OUTPUT_DIR)
@@ -566,9 +601,7 @@ def select_mode():
                         break  # Exit select_mode and start processing
                     else:
                         OUTPUT_MODE = "inplace"
-                        print(
-                            f"\n{RED}⚠️  DANGER: IN-PLACE OPTIMIZATION SELECTED{RESET}"
-                        )
+                        print(f"\n{RED}WARNING: IN-PLACE OPTIMIZATION SELECTED{RESET}")
                         print(
                             f"{BOLD}{WHITE}   Original files will be replaced after successful conversion.{RESET}"
                         )
@@ -581,7 +614,7 @@ def select_mode():
                         )
                         if confirm != "yes":
                             print(
-                                f"\n{RED}❌ Error: In-place optimization cancelled. Incorrect confirmation.{RESET}"
+                                f"\n{RED}ERROR: In-place optimization cancelled. Incorrect confirmation.{RESET}"
                             )
                             print(
                                 f"{DIM}   Returning to main menu in 3 seconds...{RESET}"
@@ -594,7 +627,7 @@ def select_mode():
                             break  # Confirmed, start processing
                 elif selected == 1:
                     OUTPUT_MODE = "cache_clean"
-                    print(f"\n{RED}🧹 CACHE & LOG CLEANUP MODE{RESET}")
+                    print(f"\n{RED}CACHE & LOG CLEANUP MODE{RESET}")
                     print(
                         f"{DIM}   Analysis cache and ALL task progress will be permanently deleted.{RESET}\n"
                     )
@@ -644,7 +677,7 @@ def count_files():
     draw_separator("Scanning Content")
     print(f"{DIM}   Analyzing directory structure...{RESET}")
 
-    total, img, vid, xmp, media_size = 0, 0, 0, 0, 0
+    total, img, vid, xmp, other, media_size = 0, 0, 0, 0, 0, 0
     img_exts = {
         ".jpg",
         ".jpeg",
@@ -655,12 +688,23 @@ def count_files():
         ".heic",
         ".heif",
         ".avif",
-        ".gif",
         ".tiff",
         ".tif",
         ".bmp",
     }
-    vid_exts = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".wmv", ".flv"}
+    # GIFs need the video pipeline in full/video mode, but the image pipeline may still
+    # touch them in image-only runs to preserve/copy skipped originals.
+    vid_exts = {
+        ".gif",
+        ".mp4",
+        ".mov",
+        ".mkv",
+        ".avi",
+        ".webm",
+        ".m4v",
+        ".wmv",
+        ".flv",
+    }
     media_exts = img_exts | vid_exts
 
     for root, _, files in os.walk(TARGET_DIR):
@@ -670,19 +714,24 @@ def count_files():
             total += 1
             p = Path(root) / file
             ext = p.suffix.lower()
-            if ext in img_exts:
+
+            is_img = ext in img_exts or ext == ".gif"
+            is_vid = ext in vid_exts
+
+            if is_img:
                 img += 1
-            elif ext in vid_exts:
+            if is_vid:
                 vid += 1
-            elif ext == ".xmp":
+            if ext == ".xmp":
                 xmp += 1
+            elif not is_img and not is_vid:
+                other += 1
+
             if ext in media_exts:
                 try:
                     media_size += p.stat().st_size
                 except OSError:
                     pass
-
-    other = total - img - vid - xmp
 
     # Apply filtering based on PROCESSING_MODE
     if PROCESSING_MODE == "images_only":
@@ -717,7 +766,9 @@ def check_system_resources(check_dir):
                 console.print(
                     f"   Available: {free_gb:.2f} GB, Required: {required_gb:.2f} GB"
                 )
-                sys.exit(1)
+                print(f"\n{YELLOW}   Returning to home menu in 5 seconds...{RESET}")
+                time.sleep(5)
+                raise ReturnToHomeException()
 
             # Memory Check
             mem = psutil.virtual_memory()
@@ -738,7 +789,9 @@ def check_system_resources(check_dir):
             required = MEDIA_TOTAL_SIZE + 1024**3
             if free < required:
                 print(f"{RED}❌ Insufficient disk space{RESET}")
-                sys.exit(1)
+                print(f"\n{YELLOW}   Returning to home menu in 5 seconds...{RESET}")
+                time.sleep(5)
+                raise ReturnToHomeException()
 
         os.environ["MFB_SKIP_DISK_PRECHECK"] = "1"
     except Exception:
@@ -833,7 +886,7 @@ def process_images():
 
     # Existence check with auto-rebuild
     if not IMGQUALITY_HEVC.exists():
-        print(f"\n{RED}❌ Critical Error: img-hevc binary not found{RESET}")
+        print(f"\n{RED}❌ Critical Error: img binary not found{RESET}")
         print(f"{DIM}   Expected path: {IMGQUALITY_HEVC}{RESET}")
         print(f"{DIM}   The build may have failed or been cleaned.{RESET}")
 
@@ -852,7 +905,14 @@ def process_images():
             sys.exit(1)
 
     draw_separator(f"Processing Images ({IMG_COUNT})")
-    cmd = [str(IMGQUALITY_HEVC), "run", "--recursive", "--allow-size-tolerance"]
+    cmd = [
+        str(IMGQUALITY_HEVC),
+        "run",
+        "--codec",
+        "hevc",
+        "--recursive",
+        "--allow-size-tolerance",
+    ]
     if RESUME_MODE:
         cmd.append("--resume")
         print(
@@ -878,7 +938,7 @@ def process_videos():
 
     # Existence check with auto-rebuild
     if not VIDQUALITY_HEVC.exists():
-        print(f"\n{RED}❌ Critical Error: vid-hevc binary not found{RESET}")
+        print(f"\n{RED}❌ Critical Error: vid binary not found{RESET}")
         print(f"{DIM}   Expected path: {VIDQUALITY_HEVC}{RESET}")
         print(f"{DIM}   The build may have failed or been cleaned.{RESET}")
 
@@ -897,7 +957,14 @@ def process_videos():
             sys.exit(1)
 
     draw_separator(f"Processing Videos ({VID_COUNT})")
-    cmd = [str(VIDQUALITY_HEVC), "run", "--recursive", "--allow-size-tolerance"]
+    cmd = [
+        str(VIDQUALITY_HEVC),
+        "run",
+        "--codec",
+        "hevc",
+        "--recursive",
+        "--allow-size-tolerance",
+    ]
     if RESUME_MODE:
         cmd.append("--resume")
         print(
@@ -1012,8 +1079,8 @@ def merge_run_logs():
             session_dt - datetime.timedelta(seconds=5)
         )
 
-    img_logs = [f for f in LOG_DIR.glob("img_hevc_*.log") if is_current_session(f)]
-    vid_logs = [f for f in LOG_DIR.glob("vid_hevc_*.log") if is_current_session(f)]
+    img_logs = [f for f in LOG_DIR.glob("img_*.log") if is_current_session(f)]
+    vid_logs = [f for f in LOG_DIR.glob("vid_*.log") if is_current_session(f)]
 
     if not img_logs and not vid_logs:
         return
@@ -1155,17 +1222,25 @@ def main():
 
     safety_check()
 
-    select_mode()
+    while True:
+        try:
+            select_mode()
 
-    # Mutex logic: Only enforce exclusive locking if we are modifying original files (In-Place)
-    if OUTPUT_MODE == "in_place":
-        acquire_global_lock(str(TARGET_DIR))
+            # Mutex logic: Only enforce exclusive locking if we are modifying original files (In-Place)
+            if OUTPUT_MODE == "in_place":
+                acquire_global_lock(str(TARGET_DIR))
 
-    count_files()
+            count_files()
 
-    if IMG_COUNT > 0 or VID_COUNT > 0:
-        check_path = OUTPUT_DIR if OUTPUT_MODE == "adjacent" else TARGET_DIR
-        check_system_resources(check_path)
+            if IMG_COUNT > 0 or VID_COUNT > 0:
+                check_path = OUTPUT_DIR if OUTPUT_MODE == "adjacent" else TARGET_DIR
+                check_system_resources(check_path)
+
+            # If we reach here, we proceed to process
+            break
+        except ReturnToHomeException:
+            # Clear any partial state if necessary and loop back to menu
+            continue
 
     if WATCH_MODE:
         draw_separator("Watch Mode Enabled")
@@ -1198,6 +1273,7 @@ def main():
                         ".jpg",
                         ".jpeg",
                         ".png",
+                        ".gif",
                         ".heic",
                         ".mp4",
                         ".mov",
@@ -1222,6 +1298,7 @@ def main():
                         ".jpg",
                         ".jpeg",
                         ".png",
+                        ".gif",
                         ".heic",
                         ".mp4",
                         ".mov",

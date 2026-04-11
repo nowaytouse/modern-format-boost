@@ -25,7 +25,7 @@ _Used by the vast majority of core dependencies including: anyhow, chrono, clap,
 
 ### MIT
 
-- **img-hevc**, **vid-hevc**, **shared_utils** (This Project)
+- **img**, **vid**, **shared_utils** (This Project)
 - **built**, **console**, **indicatif**, **libheif-rs**, **tracing**, **which**, etc.
 
 ### BSD-2-Clause / BSD-3-Clause
@@ -51,6 +51,4 @@ _Used by the vast majority of core dependencies including: anyhow, chrono, clap,
 
 - **Permissive Use**: Most dependencies are under MIT, Apache 2.0, or BSD, which are highly permissive.
 - **Copyleft**: We do not use any GPL/LGPL dependencies that would require this project to change its license, ensuring it remains compatible with the MIT license.
-- **Attribution**: This document serves as attribution for the authors listed in the dependency tree.
-
-_Generated on: 2026-03-08_
+  Generated on: 2026-03-08

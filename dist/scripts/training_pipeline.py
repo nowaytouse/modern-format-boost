@@ -19,11 +19,9 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
 import sys
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -58,7 +56,7 @@ FEATURE_COLUMNS = [
     "aspect_ratio",
     "loop_frequency",
     "cadence_score",
-    "directory_meme_score",
+    "directory_loop_intent_score",
     "palette_depth",
     "motion_gini",
     "block_skew",
@@ -107,7 +105,7 @@ def load_samples(conn: psycopg2.extensions.connection) -> pd.DataFrame:
             palette_size, frame_payload_variation, frame_delay_variation,
             temporal_bpp, spatial_bpp, aspect_ratio, total_pixels,
             loop_frequency, is_meme_platform, is_human_semantic_name,
-            cadence_score, directory_meme_score, is_high_value_source,
+            cadence_score, directory_loop_intent_score, is_high_value_source,
             is_native_gif, palette_depth, motion_gini, block_skew,
             temporal_flatness
         FROM samples
@@ -202,7 +200,9 @@ def train_model(X: np.ndarray, y: np.ndarray) -> TrainingResult:
         best_metric=best.metric,
         best_weights=best.weights,
         best_score=grid.best_score_,
-        cv_scores=cross_val_score(best, X_scaled, y, cv=cv, scoring="f1_weighted").tolist(),
+        cv_scores=cross_val_score(
+            best, X_scaled, y, cv=cv, scoring="f1_weighted"
+        ).tolist(),
         feature_names=FEATURE_COLUMNS + BOOL_COLUMNS,
         scaler=scaler,
         model=best,
@@ -254,11 +254,7 @@ def evaluate_model(
     print(tabulate(cm_table, headers=[""] + labels, tablefmt="simple_grid"))
 
     print("\n   Classification Report:")
-    print(
-        classification_report(
-            y, y_pred, target_names=labels, zero_division=0
-        )
-    )
+    print(classification_report(y, y_pred, target_names=labels, zero_division=0))
 
     return {
         "accuracy": accuracy,
@@ -281,7 +277,9 @@ def feature_importance_analysis(
     print("=" * 60)
 
     X_scaled = scaler.transform(X)
-    baseline_score = f1_score(y, model.predict(X_scaled), average="weighted", zero_division=0)
+    baseline_score = f1_score(
+        y, model.predict(X_scaled), average="weighted", zero_division=0
+    )
 
     importances = []
     rng = np.random.RandomState(42)
@@ -302,7 +300,11 @@ def feature_importance_analysis(
     importances.sort(key=lambda x: x[1], reverse=True)
 
     table = [(name, f"{imp:.4f}", f"±{std:.4f}") for name, imp, std in importances]
-    print(tabulate(table, headers=["Feature", "Importance", "Std"], tablefmt="simple_grid"))
+    print(
+        tabulate(
+            table, headers=["Feature", "Importance", "Std"], tablefmt="simple_grid"
+        )
+    )
 
 
 # ── Stats Export ──────────────────────────────────────────────────────────────
@@ -356,10 +358,11 @@ def compute_and_export_stats(conn: psycopg2.extensions.connection) -> None:
     conn.commit()
 
     table = [
-        (name, f"{s['mean']:.4f}", f"{s['std_dev']:.4f}")
-        for name, s in stats.items()
+        (name, f"{s['mean']:.4f}", f"{s['std_dev']:.4f}") for name, s in stats.items()
     ]
-    print(tabulate(table, headers=["Feature", "Mean", "Std Dev"], tablefmt="simple_grid"))
+    print(
+        tabulate(table, headers=["Feature", "Mean", "Std Dev"], tablefmt="simple_grid")
+    )
     print(f"\n   ✅ Exported {len(stats)} feature statistics to PostgreSQL")
 
 
@@ -378,14 +381,14 @@ def generate_report(conn: psycopg2.extensions.connection) -> None:
 
     # Dataset overview
     print(f"\n   Total samples: {len(df)}")
-    print(f"   Labeled by:")
+    print("   Labeled by:")
     for lb, count in df["labeled_by"].value_counts().items():
         print(f"     {lb}: {count}")
 
     # Class balance
-    print(f"\n   Class distribution:")
+    print("\n   Class distribution:")
     for tol, count in df["loss_tolerance"].value_counts().items():
-        print(f"     {tol}: {count} ({100*count/len(df):.1f}%)")
+        print(f"     {tol}: {count} ({100 * count / len(df):.1f}%)")
 
     # Feature summary
     df["total_pixels"] = df["width"].astype(float) * df["height"].astype(float)
@@ -395,14 +398,22 @@ def generate_report(conn: psycopg2.extensions.connection) -> None:
         if col in df.columns:
             s = df[col].dropna()
             if len(s) > 0:
-                stats_table.append([
-                    col,
-                    f"{s.min():.4f}",
-                    f"{s.max():.4f}",
-                    f"{s.mean():.4f}",
-                    f"{s.std():.4f}",
-                ])
-    print(tabulate(stats_table, headers=["Feature", "Min", "Max", "Mean", "Std"], tablefmt="simple_grid"))
+                stats_table.append(
+                    [
+                        col,
+                        f"{s.min():.4f}",
+                        f"{s.max():.4f}",
+                        f"{s.mean():.4f}",
+                        f"{s.std():.4f}",
+                    ]
+                )
+    print(
+        tabulate(
+            stats_table,
+            headers=["Feature", "Min", "Max", "Mean", "Std"],
+            tablefmt="simple_grid",
+        )
+    )
 
     # Boolean feature distribution
     print("\n   Boolean Features:")
@@ -411,7 +422,11 @@ def generate_report(conn: psycopg2.extensions.connection) -> None:
         if col in df.columns:
             true_count = df[col].sum()
             bool_table.append([col, int(true_count), len(df) - int(true_count)])
-    print(tabulate(bool_table, headers=["Feature", "True", "False"], tablefmt="simple_grid"))
+    print(
+        tabulate(
+            bool_table, headers=["Feature", "True", "False"], tablefmt="simple_grid"
+        )
+    )
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -425,7 +440,9 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # Train
-    train_parser = subparsers.add_parser("train", help="Train KNN model with grid search")
+    train_parser = subparsers.add_parser(
+        "train", help="Train KNN model with grid search"
+    )
     train_parser.add_argument(
         "--connstr", default=None, help="PostgreSQL connection string"
     )
@@ -465,7 +482,7 @@ def main() -> None:
     if args.command == "ingest":
         print(
             "ℹ️  Ingestion is handled by the Rust binary: "
-            "`vid-hevc --ingest-samples /path/to/dataset`"
+            "`vid --ingest-samples /path/to/dataset`"
         )
         print(f"   Requested path: {args.path}")
         sys.exit(0)

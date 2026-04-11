@@ -1,11 +1,13 @@
+# Modern Format Boost
+
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.11.1-0969DA?style=for-the-badge&logo=rust&logoColor=white" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.11.2-0969DA?style=for-the-badge&logo=rust&logoColor=white" alt="Version">
   <img src="https://img.shields.io/badge/rust-2021_edition-E57324?style=for-the-badge&logo=rust&logoColor=white" alt="Rust">
   <img src="https://img.shields.io/badge/platform-macOS_%7C_Linux_%7C_Windows-8257E5?style=for-the-badge&logo=apple&logoColor=white" alt="Platform">
   <img src="https://img.shields.io/badge/license-MIT-00B265?style=for-the-badge" alt="License">
 </p>
 
-<h1 align="center">Modern Format Boost</h1>
+<p align="center">
 
 <p align="center">
   <strong>Next-gen media optimization engine — zero quality loss, maximum compression.</strong><br>
@@ -26,7 +28,7 @@
 
 ---
 
-# 📖 English
+## 📖 English
 
 ## What is Modern Format Boost?
 
@@ -48,7 +50,7 @@ Think of it as a "smart compressor" that **never degrades your media**:
 1. **Data Safety First**: To avoid any potential data loss, it is highly recommended to output processed files to a separate directory (e.g., using `-o /path/to/output`) rather than using in-place conversion (`--in-place`), especially for irreplaceable media.
 2. **Beta Software**: While this program has been extensively tested, debugged, and optimized to prevent quality or data loss (as seen in the changelog), it is not guaranteed to be 100% bug-free. Please report any issues you encounter on GitHub.
 3. **Computation Insight**: While optimized for efficiency (especially on Apple Silicon M-series), processing massive batches in `--ultimate` mode can still be time-consuming. It will occupy system resources for an extended period; please plan your task accordingly.
-4. **Tool Maturity**: The HEVC-based tools (`img-hevc`, `vid-hevc`) are currently more mature and stable than the AV1-based tools (`img-av1`, `vid-av1`). For high-reliability production tasks, HEVC tools are recommended.
+4. **Tool Maturity**: The unified tools (`img`, `vid`) defaults to HEVC, which is more mature and stable than the AV1 strategy. For high-reliability production tasks, HEVC (the default) is recommended.
 
 ## 🔒 Privacy & Data Integrity
 
@@ -105,12 +107,10 @@ Every file goes through a multi-stage decision pipeline:
 
 ### The Four Binaries
 
-| Binary         | Purpose            | Target Codec                     |
-| -------------- | ------------------ | -------------------------------- |
-| **`img-hevc`** | Image optimization | → JXL (static) / HEVC (animated) |
-| **`img-av1`**  | Image optimization | → JXL (static) / AV1 (animated)  |
-| **`vid-hevc`** | Video optimization | → HEVC / H.265                   |
-| **`vid-av1`**  | Video optimization | → AV1 / SVT-AV1                  |
+| Binary    | Purpose            | Target Codec                           |
+| --------- | ------------------ | -------------------------------------- |
+| **`img`** | Image optimization | → JXL (static) / HEVC / AV1 (animated) |
+| **`vid`** | Video optimization | → HEVC / AV1                           |
 
 Plus a **double-click macOS app** (`Modern Format Boost.app`) for drag-and-drop batch processing.
 
@@ -233,9 +233,12 @@ cargo build --release
 
 ```bash
 # Image path conversion
-img-hevc run /path/to/media
+img run /path/to/media
 # Video path conversion
-vid-hevc run /path/to/media
+vid run /path/to/media
+
+# To use AV1 strategy:
+vid run --codec av1 /path/to/media
 ```
 
 ### Detailed Options
@@ -263,9 +266,9 @@ vid-hevc run /path/to/media
 
 ## 🏗️ Architecture
 
-- `img_hevc/`: Image → JXL/HEVC tool
-- `vid_hevc/`: Video → HEVC tool
-- `shared_utils/`: Core brain (GPU/CPU hybrid engine, HDR mapping, metadata)
+- `crates/img/`: Image → JXL/HEVC/AV1 tool
+- `crates/vid/`: Video → HEVC/AV1 tool
+- `crates/shared_utils/`: Core brain (GPU/CPU hybrid engine, HDR mapping, metadata)
 - `Modern Format Boost.app/`: macOS drag-and-drop UI
 
 ## ❓ FAQ
@@ -281,11 +284,11 @@ They are already modern lossy formats. Re-encoding causes "generational loss," w
 
 ---
 
-# ⚖️ License
+## ⚖️ License
 
 Licensed under the **MIT License**.
 
-### Runtime Dependencies
+## Runtime Dependencies
 
 This project orchestrates several open-source giants. We thank their authors for their contributions:
 

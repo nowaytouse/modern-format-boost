@@ -1,19 +1,19 @@
+# Modern Format Boost (Spanish)
+
 <p align="center">
-  <img src="https://img.shields.io/badge/versión-0.11.2-0969DA?style=for-the-badge&logo=rust&logoColor=white" alt="Versión">
-  <img src="https://img.shields.io/badge/rust-edición_2021-E57324?style=for-the-badge&logo=rust&logoColor=white" alt="Rust">
-  <img src="https://img.shields.io/badge/plataforma-macOS_%7C_Linux_%7C_Windows-8257E5?style=for-the-badge&logo=apple&logoColor=white" alt="Plataforma">
-  <img src="https://img.shields.io/badge/licencia-MIT-00B265?style=for-the-badge" alt="Licencia">
+  <img src="https://img.shields.io/badge/version-0.11.2-0969DA?style=for-the-badge&logo=rust&logoColor=white" alt="Versión">
+  <img src="https://img.shields.io/badge/rust-2021_edition-E57324?style=for-the-badge&logo=rust&logoColor=white" alt="Rust">
+  <img src="https://img.shields.io/badge/platform-macOS_%7C_Linux_%7C_Windows-8257E5?style=for-the-badge&logo=apple&logoColor=white" alt="Plataforma">
+  <img src="https://img.shields.io/badge/license-MIT-00B265?style=for-the-badge" alt="Licencia">
 </p>
 
-<h1 align="center">Modern Format Boost</h1>
-
 <p align="center">
-  <strong>Motor de optimización de medios de próxima generación: cero pérdida de calidad, máxima compresión.</strong><br>
+  <strong>Motor de optimización de medios de próxima generación: calidad superior con máxima compresión.</strong><br>
 </p>
 
 ---
 
-# 📖 Español (Spanish)
+## 📖 Español (Spanish)
 
 ## ¿Qué es Modern Format Boost?
 
@@ -35,7 +35,7 @@ Piénselo como un "compresor inteligente" que **nunca degrada sus archivos**:
 1. **La seguridad de los datos es lo primero**: Para evitar cualquier posible pérdida de datos, se recomienda encarecidamente guardar los archivos procesados en un directorio separado (por ejemplo, usando `-o /ruta/al/output`) en lugar de usar la conversión en el lugar (`--in-place`), especialmente para medios irremplazables.
 2. **Software Beta**: Aunque este programa ha sido probado, depurado y optimizado extensamente para evitar pérdidas de calidad o datos (como se ve en el historial de cambios), no se garantiza que esté 100% libre de errores. Informe cualquier problema que encuentre en GitHub.
 3. **Perspectiva de computación**: Aunque está optimizado para la eficiencia (especialmente en Apple Silicon serie M), procesar lotes masivos en modo `--ultimate` puede llevar mucho tiempo y ocupar recursos del sistema por un período prolongado; planifique su tarea en consecuencia.
-4. **Madurez de las herramientas**: Las herramientas basadas en HEVC (`img-hevc`, `vid-hevc`) son actualmente más maduras y estables que las basadas en AV1 (`img-av1`, `vid-av1`). Para tareas de producción de alta fiabilidad, se recomiendan las herramientas HEVC.
+4. **Madurez de las herramientas**: Las herramientas unificadas (`img`, `vid`) utilizan por defecto la estrategia HEVC, que es actualmente más madura y estable que la estrategia AV1. Para tareas de producción de alta fiabilidad, se recomienda la estrategia HEVC (la predeterminada).
 
 ## 🔒 Privacidad e integridad de los datos
 
@@ -81,22 +81,21 @@ Cada archivo pasa por un flujo de decisión de múltiples etapas:
 - **HDR**: Preserva primarios bt2020, PQ/HLG TRC y metadatos de Mastering Display.
 - **Dolby Vision**: Extrae RPU a través de `dovi_tool` e inyecta en x265 (conversión de Perfil 7 → 8.1).
 - **macOS xattrs**: Preserva etiquetas de Finder, fecha de adición y marcas de tiempo de creación mediante `copyfile` y `setattrlist`.
+
 </details>
 
 ### 🖥️ Tiempo de ejecución
 
-![Tiempo de ejecución](assets/runtime.png)
+![Tiempo de ejecución](../assets/runtime.png)
 
 <p align="center">Tiempo de ejecución</p>
 
-### Los cuatro binarios
+### Las dos herramientas unificadas
 
-| Binario        | Propósito                | Códec de destino                  |
-| -------------- | ------------------------ | --------------------------------- |
-| **`img-hevc`** | Optimización de imágenes | → JXL (estático) / HEVC (animado) |
-| **`img-av1`**  | Optimización de imágenes | → JXL (estático) / AV1 (animado)  |
-| **`vid-hevc`** | Optimización de video    | → HEVC / H.265                    |
-| **`vid-av1`**  | Optimización de video    | → AV1 / SVT-AV1                   |
+| Herramienta | Propósito                | Códec de destino                        |
+| ----------- | ------------------------ | --------------------------------------- |
+| **`img`**   | Optimización de imágenes | → JXL (estático) / HEVC / AV1 (animado) |
+| **`vid`**   | Optimización de video    | → HEVC / AV1                            |
 
 Además de una **aplicación macOS de doble clic** (`Modern Format Boost.app`) para el procesamiento por lotes mediante arrastrar y soltar.
 
@@ -176,13 +175,13 @@ tar -xzf modern-format-boost-aarch64-apple-darwin.tar.gz
 
 ```bash
 # Conversión de ruta de imágenes
-img-hevc run /ruta/a/los/medios
+img run /ruta/a/los/medios
 # Conversión de ruta de videos
-vid-hevc run /ruta/a/los/medios
+vid run /ruta/a/los/medios
 ```
 
 ---
 
-# ⚖️ Licencia
+## ⚖️ Licencia
 
 Licenciado bajo la **Licencia MIT**.

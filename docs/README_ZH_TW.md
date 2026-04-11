@@ -1,20 +1,19 @@
+# Modern Format Boost (Traditional Chinese)
+
 <p align="center">
   <img src="https://img.shields.io/badge/version-0.11.2-0969DA?style=for-the-badge&logo=rust&logoColor=white" alt="版本">
   <img src="https://img.shields.io/badge/rust-2021_edition-E57324?style=for-the-badge&logo=rust&logoColor=white" alt="Rust">
   <img src="https://img.shields.io/badge/platform-macOS_%7C_Linux_%7C_Windows-8257E5?style=for-the-badge&logo=apple&logoColor=white" alt="平台">
-  <img src="https://img.shields.io/badge/license-MIT-00B265?style=for-the-badge" alt="授權">
+  <img src="https://img.shields.io/badge/license-MIT-00B265?style=for-the-badge" alt="授權術語">
 </p>
 
-<h1 align="center">Modern Format Boost</h1>
-
 <p align="center">
-  <strong>下一代媒體優化引擎 — 畫質零損失，體積最大壓縮。</strong><br>
-  <em>Next-gen media optimization engine — zero quality loss, maximum compression.</em>
+  <strong>次世代媒體優化引擎 — 畫質零損耗，實現最大壓縮。</strong><br>
 </p>
 
 ---
 
-# 📖 繁體中文 (Traditional Chinese)
+## 📖 繁體中文 (Traditional Chinese)
 
 ## 什麼是 Modern Format Boost？
 
@@ -36,7 +35,7 @@
 1. **數據安全第一**：為了避免任何潛在的數據丟失，強烈建議將處理後的檔案輸出到單獨的目錄（例如使用 `-o /path/to/output`），而非使用原地轉換（`--in-place`），對於不可替代的媒體檔案尤應如此。
 2. **測試版軟體**：雖然本程式已經過廣泛測試、除錯和優化，以防止品質或數據丟失（詳見更新日誌），但不能保證 100% 無誤。請在 GitHub 上回報您遇到的任何問題。
 3. **計算資源說明**：雖然已針對效率進行優化（特別是 Apple Silicon M 系列），但在 `--ultimate` 模式下處理大規模批次任務仍可能耗時較長，並會長時間佔用系統資源；請妥善規劃您的任務。
-4. **工具成熟度**：目前基於 HEVC 的工具（`img-hevc`, `vid-hevc`）比基於 AV1 的工具（`img-av1`, `vid-av1`）更成熟穩定。對於高可靠性的生產任務，建議使用 HEVC 工具。
+4. **工具成熟度**：統一後的工具（`img`, `vid`）預設使用 HEVC 策略，這比目前的 AV1 策略更成熟穩定。對於高可靠性的生產任務，建議使用 HEVC 策略（預設）。
 
 ## 🔒 隱私與數據完整性
 
@@ -69,20 +68,19 @@
 2. **階段 2：CPU 精細調整**：將 GPU CRF 映射到 `x265` 刻度。使用 **Sprint & Backtrack**（成功則加倍步進，超標則重置回 0.1）。
 3. **階段 3：終極 3D 品質關卡**：要求同時通過 VMAF-Y ≥ 92.0, CAMBI ≤ 6.0 (條帶) 和 PSNR-UV ≥ 34.0 dB。
    - **融合評分**：結合 MS-SSIM + SSIM_All 進行穩健的結構分析。
+
    </details>
 
 ### 🖥️ 運行截圖
 
-![Runtime](assets/runtime.png)
+![Runtime](../assets/runtime.png)
 
-### 四個執行檔
+### 兩個統一工具
 
-| 執行檔         | 用途     | 目標編碼                   |
-| -------------- | -------- | -------------------------- |
-| **`img-hevc`** | 圖像優化 | → JXL (靜態) / HEVC (動態) |
-| **`img-av1`**  | 圖像優化 | → JXL (靜態) / AV1 (動態)  |
-| **`vid-hevc`** | 影片優化 | → HEVC / H.265             |
-| **`vid-av1`**  | 影片優化 | → AV1 / SVT-AV1            |
+| 工具      | 用途     | 目標編碼                         |
+| --------- | -------- | -------------------------------- |
+| **`img`** | 圖像優化 | → JXL (靜態) / HEVC / AV1 (動態) |
+| **`vid`** | 影片優化 | → HEVC / AV1                     |
 
 ## 📉 真實壓縮案例
 
@@ -106,6 +104,6 @@ tar -xzf modern-format-boost-aarch64-apple-darwin.tar.gz
 
 ---
 
-# ⚖️ 授權
+## ⚖️ 授權
 
 本專案採用 **MIT 授權**。

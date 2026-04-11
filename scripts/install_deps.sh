@@ -8,7 +8,7 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m' # No Color
 
-echo -e "${BLUE}🚀 Modern Format Boost - Dependency Installer v0.11.1${NC}"
+echo -e "${BLUE}🚀 Modern Format Boost - Dependency Installer v0.11.2${NC}"
 echo "--------------------------------------------------------"
 
 # --- OS Detection ---
@@ -32,7 +32,7 @@ if [[ "$OS_TYPE" == "darwin" ]]; then
     echo "Checking and installing system dependencies via Homebrew..."
     # Core dependencies
     deps=("jpeg-xl" "exiftool" "imagemagick" "webp" "libheif" "coreutils" "node" "shellcheck" "shfmt" "postgresql@14" "pgvector")
-    
+
     # Special check for ffmpeg to avoid tap conflicts
     if ! command_exists ffmpeg; then
         echo "Installing ffmpeg..."
@@ -46,7 +46,7 @@ if [[ "$OS_TYPE" == "darwin" ]]; then
         binary=$dep
         [[ "$dep" == "postgresql@14" ]] && binary="psql"
         [[ "$dep" == "jpeg-xl" ]] && binary="cjxl"
-        
+
         if ! command_exists "$binary"; then
             echo "Installing $dep..."
             brew install "$dep"

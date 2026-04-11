@@ -1,0 +1,5 @@
+---
+source: crates/shared_utils/tests/classification_snapshots.rs
+expression: verdict.reason()
+---
+"Layer 7: Fallback [Layer 4: log-odds 0.15 within ±0.95; defer to KNN fusion] → standard video processing (no loop intent)"

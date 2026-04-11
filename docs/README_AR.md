@@ -1,19 +1,19 @@
+# Modern Format Boost (Arabic)
+
 <p align="center">
   <img src="https://img.shields.io/badge/version-0.11.2-0969DA?style=for-the-badge&logo=rust&logoColor=white" alt="الإصدار">
-  <img src="https://img.shields.io/badge/rust-2021_edition-E57324?style=for-the-badge&logo=rust&logoColor=white" alt="رست">
+  <img src="https://img.shields.io/badge/rust-2021_edition-E57324?style=for-the-badge&logo=rust&logoColor=white" alt="الصدأ">
   <img src="https://img.shields.io/badge/platform-macOS_%7C_Linux_%7C_Windows-8257E5?style=for-the-badge&logo=apple&logoColor=white" alt="المنصة">
   <img src="https://img.shields.io/badge/license-MIT-00B265?style=for-the-badge" alt="الترخيص">
 </p>
 
-<h1 align="center">Modern Format Boost</h1>
-
 <p align="center">
-  <strong>محرك تحسين الوسائط من الجيل التالي — فقدان جودة صفري، أقصى ضغط.</strong><br>
+  <strong>محرك تحسين الوسائط من الجيل التالي - جودة فائقة بأقصى ضغط.</strong><br>
 </p>
 
 ---
 
-# 📖 العربية (Arabic)
+## 📖 العربية (Arabic)
 
 ## ما هو Modern Format Boost؟
 
@@ -34,8 +34,8 @@
 
 1. **سلامة البيانات أولاً**: لتجنب أي فقدان محتمل للبيانات، يوصى بشدة بإخراج الملفات المعالجة إلى دليل منفصل (على سبيل المثال، باستخدام `-o /path/to/output`) بدلاً من استخدام التحويل المباشر في نفس المكان (`--in-place`)، خاصة للوسائط التي لا يمكن استبدالها.
 2. **برنامج تجريبي (Beta)**: على الرغم من أن هذا البرنامج قد تم اختباره وتصحيحه وتحسينه على نطاق واسع لمنع فقدان الجودة أو البيانات (كما هو موضح في سجل التغييرات)، إلا أنه لا يضمن خلوه من الأخطاء بنسبة 100%. يرجى الإبلاغ عن أي مشكلات تواجهها على GitHub.
-3. **نظرة ثاقبة على الحوسبة**: بينما تم تحسينه من أجل الكفاءة (خاصة على سلسلة Apple Silicon M)، فإن معالجة الدفعات الضخمة في وضع `--ultimate` قد تظل تستغرق وقتاً طويلاً وتستهلك موارد النظام لفترة ممتدة؛ يرجى تخطيط مهامك وفقاً لذلك.
-4. **نضج الأدوات**: الأدوات المستندة إلى HEVC (`img-hevc` و `vid-hevc`) حالياً أكثر نضجاً واستقراراً من الأدوات المستندة إلى AV1 (`img-av1` و `vid-av1`). لمهام الإنتاج عالية الموثوقية، يوصى باستخدام أدوات HEVC.
+3. **نظرة ثاقبة على الحوسبة**: بينما تم تحسينه من أجل الكفاءة (خاصة على سلسلة Apple Silicon M)، فإن معالجة الدفعات الضخمة في وضع `--ultimate` قد تظل تستغرق وقتاً طويلاً وتستهلك موارد النظام لفترة ممددة؛ يرجى تخطيط مهامك وفقاً لذلك.
+4. **نضج الأدوات**: الأدوات الموحدة (`img` و `vid`) تستخدم افتراضياً استراتيجية HEVC، وهي حالياً أكثر نضجاً واستقراراً من استراتيجية AV1. لمهام الإنتاج عالية الموثوقية، يوصى باستخدام استراتيجية HEVC (الافتراضية).
 
 ## 🔒 الخصوصية وسلامة البيانات
 
@@ -81,22 +81,21 @@
 - **HDR**: يحافظ على أساسيات bt2020، و PQ/HLG TRC، والبيانات الوصفية لشاشة العرض الرئيسية.
 - **Dolby Vision**: يستخرج RPU عبر `dovi_tool` ويحقنه في x265 (تحويل من Profile 7 إلى 8.1).
 - **macOS xattrs**: يحافظ على وسوم Finder، وتاريخ الإضافة، وطوابع وقت الإنشاء عبر `copyfile` و `setattrlist`.
+
 </details>
 
 ### 🖥️ وقت التشغيل
 
-![وقت التشغيل](assets/runtime.png)
+![وقت التشغيل](../assets/runtime.png)
 
 <p align="center">وقت التشغيل</p>
 
-### الثنائيات الأربعة
+### الأداتان الموحدتان
 
-| الثنائي        | الغرض         | ترميز الهدف                 |
-| -------------- | ------------- | --------------------------- |
-| **`img-hevc`** | تحسين الصور   | ← JXL (ثابت) / HEVC (متحرك) |
-| **`img-av1`**  | تحسين الصور   | ← JXL (ثابت) / AV1 (متحرك)  |
-| **`vid-hevc`** | تحسين الفيديو | ← HEVC / H.265              |
-| **`vid-av1`**  | تحسين الفيديو | ← AV1 / SVT-AV1             |
+| الأداة    | الغرض         | ترميز الهدف                       |
+| :-------- | :------------ | :-------------------------------- |
+| **`img`** | تحسين الصور   | ← JXL (ثابت) / HEVC / AV1 (متحرك) |
+| **`vid`** | تحسين الفيديو | ← HEVC / AV1                      |
 
 بالإضافة إلى **تطبيق macOS بنقرة مزدوجة** (`Modern Format Boost.app`) للمعالجة الدفعية عن طريق السحب والإفلات.
 
@@ -158,17 +157,17 @@ tar -xzf modern-format-boost-aarch64-apple-darwin.tar.gz
 
 ### المتطلبات المسبقة
 
-| الأداة             | مطلوبة؟ | الغرض                        | أمر التثبيت                                                |
-| ------------------ | :-----: | ---------------------------- | ---------------------------------------------------------- | --- |
-| **Rust** (1.75+)   |   ✅    | البناء والتثبيت              | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh` |
-| **FFmpeg** (5.0+)  |   ✅    | معالجة الفيديو وتقييم الجودة | `brew install ffmpeg` / `apt install ffmpeg`               |
-| **libjxl**         |   ✅    | نواة ترميز JXL               | `brew install jpeg-xl`                                     |
-| **ExifTool**       |   ✅    | الحفاظ على البيانات الوصفية  | `brew install exiftool`                                    |
-| **ImageMagick**    |   ✅    | تحويل الصور الوسيط           | `brew install imagemagick`                                 |
-| **libwebp**        |   ✅    | فك تشفير WebP الأصلي         | `brew install webp`                                        |
-| **dovi_tool**      |   ✅    | استخراج Dolby Vision RPU     | `cargo install dovi_tool`                                  |
-| **libheif**        |   ✅    | فك تشفير HEIC/HEIF           | `brew install libheif`                                     |
-| **hdr10plus_tool** |   ✅    | استخراج بيانات HDR10+        | `cargo install hdr10plus_tool`                             |
+| الأداة             | مطلوبة؟ | الغرض                        | أمر التثبيت                                                       |
+| :----------------- | :-----: | :--------------------------- | :---------------------------------------------------------------- |
+| **Rust** (1.75+)   |   ✅    | البناء والتثبيت              | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
+| **FFmpeg** (5.0+)  |   ✅    | معالجة الفيديو وتقييم الجودة | `brew install ffmpeg` / `apt install ffmpeg`                      |
+| **libjxl**         |   ✅    | نواة ترميز JXL               | `brew install jpeg-xl`                                            |
+| **ExifTool**       |   ✅    | الحفاظ على البيانات الوصفية  | `brew install exiftool`                                           |
+| **ImageMagick**    |   ✅    | تحويل الصور الوسيط           | `brew install imagemagick`                                        |
+| **libwebp**        |   ✅    | فك تشفير WebP الأصلي         | `brew install webp`                                               |
+| **dovi_tool**      |   ✅    | استخراج Dolby Vision RPU     | `cargo install dovi_tool`                                         |
+| **libheif**        |   ✅    | فك تشفير HEIC/HEIF           | `brew install libheif`                                            |
+| **hdr10plus_tool** |   ✅    | استخراج بيانات HDR10+        | `cargo install hdr10plus_tool`                                    |
 
 ## 🚀 الاستخدام / Usage
 
@@ -176,13 +175,13 @@ tar -xzf modern-format-boost-aarch64-apple-darwin.tar.gz
 
 ```bash
 # تحويل مسار الصور
-img-hevc run /path/to/media
+img run /path/to/media
 # تحويل مسار الفيديو
-vid-hevc run /path/to/media
+vid run /path/to/media
 ```
 
 ---
 
-# ⚖️ الترخيص
+## ⚖️ الترخيص
 
 مرخص بموجب **MIT License**.

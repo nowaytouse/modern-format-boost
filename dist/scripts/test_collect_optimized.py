@@ -1,125 +1,107 @@
 #!/usr/bin/env python3
+import tempfile
 import unittest
-from unittest.mock import patch, MagicMock, call
+from pathlib import Path
 
-# Import the code to test
 import collect_optimized
 
 
 class TestCollectOptimized(unittest.TestCase):
-    @patch("subprocess.run")
-    def test_get_finder_comment_mdls_success(self, mock_run):
-        # Mock mdls finding the marker
-        mock_run.return_value = MagicMock(
-            returncode=0,
-            stdout='kMDItemFinderComment = "[Optimized by Modern Format Boost]"',
-        )
-        self.assertTrue(collect_optimized.get_finder_comment("/path/to/file.jxl"))
-        mock_run.assert_called_once()
-
-    @patch("subprocess.run")
-    @patch("subprocess.check_output")
-    def test_get_finder_comment_xattr_fallback(self, mock_xattr, mock_mdls):
-        # Mock mdls failure, but xattr success
-        mock_mdls.return_value = MagicMock(returncode=1, stdout="")
-        mock_xattr.return_value = b"[Optimized by Modern Format Boost]"
-
-        self.assertTrue(collect_optimized.get_finder_comment("/path/to/file.jxl"))
-        mock_mdls.assert_called_once()
-        mock_xattr.assert_called_once()
-
-    @patch("subprocess.run")
-    @patch("subprocess.check_output")
-    def test_get_finder_comment_fail(self, mock_xattr, mock_mdls):
-        # Mock both failing
-        mock_mdls.return_value = MagicMock(returncode=1, stdout="")
-        mock_xattr.side_effect = Exception("No xattr")
-
-        self.assertFalse(collect_optimized.get_finder_comment("/path/to/file.jxl"))
-
-    @patch("os.path.isdir")
-    @patch("os.path.abspath")
-    def test_run_collection_invalid_source(self, mock_abs, mock_isdir):
-        mock_abs.side_effect = lambda x: x
-        mock_isdir.return_value = False
-
-        # Should return False if source is not a directory
-        result = collect_optimized.run_collection("/src", "/dest")
+    def test_run_collection_invalid_source(self):
+        with tempfile.TemporaryDirectory() as dest:
+            result = collect_optimized.run_collection("/path/that/does/not/exist", dest)
         self.assertFalse(result)
 
-    @patch("os.path.isdir")
-    @patch("os.path.abspath")
-    @patch("os.path.exists")
-    def test_run_collection_path_conflict(self, mock_exists, mock_abs, mock_isdir):
-        mock_abs.side_effect = lambda x: x
-        mock_isdir.return_value = True
-
-        # Test destination inside source
-        result = collect_optimized.run_collection("/src", "/src/nested")
+    def test_run_collection_path_conflict(self):
+        with tempfile.TemporaryDirectory() as src:
+            result = collect_optimized.run_collection(src, str(Path(src) / "nested"))
         self.assertFalse(result)
 
-    @patch("collect_optimized.get_finder_comment")
-    @patch("os.walk")
-    @patch("os.path.isdir")
-    @patch("os.path.exists")
-    @patch("os.makedirs")
-    @patch("shutil.move")
-    @patch("os.utime")
-    @patch("os.stat")
-    def test_full_collection_flow(
-        self,
-        mock_stat,
-        mock_utime,
-        mock_move,
-        mock_mkdir,
-        mock_exists,
-        mock_isdir,
-        mock_walk,
-        mock_comment,
-    ):
-        # Setup mocks
-        mock_isdir.return_value = True
-        # Return True for source dir, but False for target files
-        mock_exists.side_effect = lambda p: p == "/src" or p == "/dest"
-        mock_walk.return_value = [
-            ("/src", ["subdir"], ["file1.jxl", "file2.jpg"]),
-            ("/src/subdir", [], ["file3.mov"]),
-        ]
-        mock_comment.side_effect = lambda p: "file1" in p or "file3" in p
-        mock_stat.return_value = MagicMock(st_atime=123, st_mtime=456)
+    def test_prunes_empty_dirs_even_when_no_candidates_are_found(self):
+        with tempfile.TemporaryDirectory() as src, tempfile.TemporaryDirectory() as dest:
+            src_root = Path(src)
 
-        # Run collection
-        result = collect_optimized.run_collection("/src", "/dest")
+            (src_root / "empty" / "child").mkdir(parents=True)
+            (src_root / "legacy").mkdir()
+            (src_root / "legacy" / "keep.png").write_bytes(b"png")
 
-        self.assertTrue(result)
-        # Should move file1 and file3, but not file2
-        self.assertEqual(mock_move.call_count, 2)
+            result = collect_optimized.run_collection(src, dest)
 
-        # Check specific moves
-        expected_calls = [
-            call("/src/file1.jxl", "/dest/file1.jxl"),
-            call("/src/subdir/file3.mov", "/dest/subdir/file3.mov"),
-        ]
-        mock_move.assert_has_calls(expected_calls, any_order=True)
+            self.assertTrue(result)
+            self.assertFalse((src_root / "empty").exists())
+            self.assertTrue((src_root / "legacy").is_dir())
+            self.assertTrue((src_root / "legacy" / "keep.png").exists())
 
-    @patch("collect_optimized.get_finder_comment")
-    @patch("os.walk")
-    @patch("os.path.isdir")
-    @patch("os.path.exists")
-    @patch("shutil.move")
-    def test_dry_run_no_moves(
-        self, mock_move, mock_exists, mock_isdir, mock_walk, mock_comment
-    ):
-        mock_isdir.return_value = True
-        mock_exists.return_value = True
-        mock_walk.return_value = [("/src", [], ["optimized.jxl"])]
-        mock_comment.return_value = True
+    def test_moves_only_optimized_and_mirrors_structure(self):
+        with tempfile.TemporaryDirectory() as src, tempfile.TemporaryDirectory() as dest:
+            src_root = Path(src)
+            dest_root = Path(dest)
 
-        # Run with dry_run=True
-        result = collect_optimized.run_collection("/src", "/dest", dry_run=True)
+            (src_root / "images").mkdir()
+            (src_root / "images" / "photo.jxl").write_bytes(b"jxl")
+            (src_root / "images" / "legacy.png").write_bytes(b"png")
+            (src_root / "empty" / "child").mkdir(parents=True)
 
-        self.assertTrue(result)
-        mock_move.assert_not_called()
+            result = collect_optimized.run_collection(src, dest)
+
+            self.assertTrue(result)
+            self.assertFalse((src_root / "images" / "photo.jxl").exists())
+            self.assertTrue((src_root / "images" / "legacy.png").exists())
+            self.assertTrue((src_root / "images").is_dir())
+            self.assertFalse((src_root / "empty").exists())
+            self.assertTrue((dest_root / "images" / "photo.jxl").exists())
+            self.assertFalse((dest_root / "images" / "legacy.png").exists())
+            self.assertTrue((dest_root / "empty" / "child").is_dir())
+
+    def test_removes_source_root_when_everything_was_relocated(self):
+        with tempfile.TemporaryDirectory() as src_parent, tempfile.TemporaryDirectory() as dest:
+            src_root = Path(src_parent) / "source"
+            src_root.mkdir()
+            dest_root = Path(dest)
+
+            (src_root / "only.jxl").write_bytes(b"jxl")
+
+            result = collect_optimized.run_collection(str(src_root), str(dest_root))
+
+            self.assertTrue(result)
+            self.assertFalse(src_root.exists())
+            self.assertTrue((dest_root / "only.jxl").exists())
+
+    def test_collects_hevc_mp4_and_skips_non_hevc_video(self):
+        with tempfile.TemporaryDirectory() as src, tempfile.TemporaryDirectory() as dest:
+            src_root = Path(src)
+            dest_root = Path(dest)
+
+            (src_root / "videos").mkdir()
+            (src_root / "videos" / "clip.mp4").write_bytes(b"mp4")
+            (src_root / "videos" / "old.mov").write_bytes(b"mov")
+
+            def codec_probe(path):
+                if path.endswith("clip.mp4"):
+                    return "hevc", None
+                return "h264", None
+
+            result = collect_optimized.run_collection(src, dest, codec_probe=codec_probe)
+
+            self.assertTrue(result)
+            self.assertTrue((dest_root / "videos" / "clip.mp4").exists())
+            self.assertFalse((src_root / "videos" / "clip.mp4").exists())
+            self.assertFalse((dest_root / "videos" / "old.mov").exists())
+            self.assertTrue((src_root / "videos" / "old.mov").exists())
+
+    def test_dry_run_makes_no_changes(self):
+        with tempfile.TemporaryDirectory() as src, tempfile.TemporaryDirectory() as parent:
+            src_root = Path(src)
+            dest_root = Path(parent) / "collected"
+
+            (src_root / "gallery").mkdir()
+            (src_root / "gallery" / "preview.jxl").write_bytes(b"jxl")
+
+            result = collect_optimized.run_collection(src, str(dest_root), dry_run=True)
+
+            self.assertTrue(result)
+            self.assertTrue((src_root / "gallery" / "preview.jxl").exists())
+            self.assertFalse(dest_root.exists())
 
 
 if __name__ == "__main__":

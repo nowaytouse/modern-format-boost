@@ -1,10 +1,10 @@
 [workspace]
 members = [
-    "vid_av1",
-    "vid_hevc",
-    "img_hevc",
-    "img_av1",
-    "shared_utils"
+    "crates/vid",
+    "crates/img",
+    "crates/shared_utils",
+    "crates/dev",
+    "fuzz"
 ]
 resolver = "2"
 
@@ -22,9 +22,9 @@ cast_precision_loss = "allow"
 cast_possible_truncation = "allow"
 cast_sign_loss = "allow"
 cast_possible_wrap = "allow"
-missing_errors_doc = "allow"
-missing_panics_doc = "allow"
-doc_markdown = "allow"
+missing_errors_doc = "warn"
+missing_panics_doc = "warn"
+doc_markdown = "warn"
 items_after_statements = "allow"
 bool_to_int_with_if = "allow"
 must_use_candidate = "allow"
@@ -151,7 +151,7 @@ zero_prefixed_literal = "allow"
 zero_ptr = "allow"
 
 [workspace.package]
-version = "0.11.1"
+version = "0.11.2"
 edition = "2021"
 license = "MIT"
 authors = ["Modern Format Boost Contributors"]
@@ -201,6 +201,8 @@ mp4parse    = "0.14.0"
 # Testing and compression
 tempfile = "3.16.0"
 proptest = "1.10.0"
+insta    = "1.8.0"
+criterion = "0.5.1"
 flate2   = "1.1.9"
 
 # Signal handling
@@ -223,7 +225,11 @@ quick-xml = "0.31.0"
 exr = "1.7.2"
 jpegxl-rs = { version = "0.12", features = ["vendored"] }
 
-shared_utils = { path = "shared_utils" }
+shared_utils = { path = "crates/shared_utils" }
+img = { path = "crates/img" }
+vid = { path = "crates/vid" }
+
+
 
 [profile.release]
 lto            = true
