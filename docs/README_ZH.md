@@ -139,17 +139,17 @@
 
 ### 前置要求
 
-| 工具               | 必须? | 用途               | 安装命令                                                   |
-| ------------------ | :---: | ------------------ | ---------------------------------------------------------- | --- |
-| **Rust** (1.75+)   |  ✅   | 编译安装           | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh` |
-| **FFmpeg** (5.0+)  |  ✅   | 视频处理与质量检测 | `brew install ffmpeg`                                      |
-| **libjxl**         |  ✅   | JXL 编码核心       | `brew install jpeg-xl`                                     |
-| **ExifTool**       |  ✅   | 元数据保留         | `brew install exiftool`                                    |
-| **ImageMagick**    |  ✅   | 图片格式中转       | `brew install imagemagick`                                 |
-| **libwebp**        |  ✅   | WebP 原生解码      | `brew install webp`                                        |
-| **dovi_tool**      |  ✅   | 杜比视界 RPU 提取  | `cargo install dovi_tool`                                  |
-| **libheif**        |  ✅   | HEIC/HEIF 解码     | `brew install libheif`                                     |
-| **hdr10plus_tool** |  ✅   | HDR10+ 元数据提取  | `cargo install hdr10plus_tool`                             |
+| 工具 | 必须? | 用途 | 安装命令 |
+| :--- | :---: | :--- | :--- |
+| **Rust** (1.75+) | ✅ | 编译安装 | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
+| **FFmpeg** (5.0+) | ✅ | 视频处理与质量检测 | `brew install ffmpeg` / `apt install ffmpeg` |
+| **libjxl** | ✅ | JXL 编码核心 | `brew install jpeg-xl` |
+| **ExifTool** | ✅ | 元数据保留 | `brew install exiftool` |
+| **ImageMagick** | ✅ | 图片格式中转 | `brew install imagemagick` |
+| **libwebp** | ✅ | WebP 原生解码 | `brew install webp` |
+| **dovi_tool** | ✅ | 杜比视界 RPU 提取 | `cargo install dovi_tool` |
+| **libheif** | ✅ | HEIC/HEIF 解码 | `brew install libheif` |
+| **hdr10plus_tool** | ✅ | HDR10+ 元数据提取 | `cargo install hdr10plus_tool` |
 
 ### macOS (Homebrew)
 

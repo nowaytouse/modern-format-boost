@@ -184,17 +184,17 @@ tar -xzf modern-format-boost-aarch64-apple-darwin.tar.gz
 
 ### Prerequisites
 
-| Tool               | Required? | Purpose                     | Install Command                                            |
-| ------------------ | :-------: | --------------------------- | ---------------------------------------------------------- | --- |
-| **Rust** (1.75+)   |    ✅     | Build & Install             | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh` |
-| **FFmpeg** (5.0+)  |    ✅     | Video processing & Metrics  | `brew install ffmpeg` / `apt install ffmpeg`               |
-| **libjxl**         |    ✅     | JXL encoding core           | `brew install jpeg-xl`                                     |
-| **ExifTool**       |    ✅     | Metadata preservation       | `brew install exiftool`                                    |
-| **ImageMagick**    |    ✅     | Image detour pathway        | `brew install imagemagick`                                 |
-| **libwebp**        |    ✅     | WebP native decoding        | `brew install webp`                                        |
-| **dovi_tool**      |    ✅     | Dolby Vision RPU extraction | `cargo install dovi_tool`                                  |
-| **libheif**        |    ✅     | HEIC/HEIF decode            | `brew install libheif`                                     |
-| **hdr10plus_tool** |    ✅     | HDR10+ metadata extraction  | `cargo install hdr10plus_tool`                             |
+| Tool | Required? | Purpose | Install Command |
+| :--- | :---: | :--- | :--- |
+| **Rust** (1.75+) | ✅ | Build & Install | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
+| **FFmpeg** (5.0+) | ✅ | Video processing & Metrics | `brew install ffmpeg` / `apt install ffmpeg` |
+| **libjxl** | ✅ | JXL encoding core | `brew install jpeg-xl` |
+| **ExifTool** | ✅ | Metadata preservation | `brew install exiftool` |
+| **ImageMagick** | ✅ | Image detour pathway | `brew install imagemagick` |
+| **libwebp** | ✅ | WebP native decoding | `brew install webp` |
+| **dovi_tool** | ✅ | Dolby Vision RPU extraction | `cargo install dovi_tool` |
+| **libheif** | ✅ | HEIC/HEIF decode | `brew install libheif` |
+| **hdr10plus_tool** | ✅ | HDR10+ metadata extraction | `cargo install hdr10plus_tool` |
 
 #### macOS (Homebrew)
 
