@@ -6,6 +6,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] — TBD
 
+### ✨ User-Facing Highlights
+
+- **Higher Quality Output at No Extra Cost**: Both video (HEVC/AV1 ultimate mode) and JXL images now employ a "Stage 5 downward exploration" strategy — after finding the optimal compression settings, the system continues testing higher quality variants until file size starts increasing. Users get the best possible visual quality without manual tuning or wasted computation.
+- **Faster HEVC `slower` Preset Processing**: The ultimate pipeline was simplified from a complex multi-candidate comparison system to a streamlined two-step encode (screen with `slow` → finalize with `slower`). Processing is faster and more predictable while maintaining identical output quality.
+- **More Responsive Edge Cases**: Pathological video sources that previously caused long encoding loops now complete faster thanks to iteration caps and smarter failure budgets in the CPU fine-tune phase.
+
 ### 🎬 HEVC Ultimate Pipeline Simplification
 
 - **Two-Stage Multi-Candidate Search Removed**: Replaced the previous "Stage 1 screening → Stage 2 finalist shortlist → multi-candidate ranking" flow with a streamlined single-path pipeline: search with an efficient preset (`slow`), then do one final render at the requested delivery preset (`slower`) using the settled CRF
@@ -26,6 +32,7 @@ All notable changes to this project will be documented in this file.
 - **HEVC Ultimate Two-Stage Logging**: Added explicit stage progress markers — "Stage 1/2: screening preset slow" and "Stage 2/2: finalist preset slower" — for visibility into the two-pass HEVC ultimate workflow
 - **Unit Test**: `test_phase4_crf0_probe_requires_near_floor` verifies the probe boundary behavior (passes at 0.25 and 1.0, rejects at 0.0, 1.01, and 26.75)
 - **Phase 5 Continuous Quality Downward Sweep**: After settling on the best CRF in Phase 4 (with `search` preset), Phase 5 employs the `final` ultimate preset to step CRF downward towards higher quality (0.01 at a time). It strictly stops immediately upon any file size regression, ensuring no computation is wasted and the maximal possible quality is extracted while staying below the Phase 4 bounds.
+- **JXL Finalization Downward Continuous Exploration**: After `e10` processing determines the definitive finalist, a new continuous exploration phase dynamically steps downward to explore higher visual fidelities (`d` < settled) at `e10` effort. It instantly terminates on the very first output size regression, yielding the highest possible quality for the matched space without wasting encoder cycles or budget. This mirrors the Phase 5 video logic for JXL image finalization.
 
 ### 🎬 Video Quality Gate Overhaul
 
