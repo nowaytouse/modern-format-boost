@@ -1291,7 +1291,7 @@ pub fn check_size_tolerance(
         crate::quality_matcher::is_size_guard_active(input_ext, options.apple_compat);
 
     let max_allowed_size = if options.allow_size_tolerance && is_guard_active {
-        input_size.saturating_add(tolerance_bytes - 1) // up to tolerance_bytes - 1 bytes
+        input_size.saturating_add(tolerance_bytes)
     } else if is_guard_active {
         input_size
     } else {
@@ -1299,8 +1299,8 @@ pub fn check_size_tolerance(
         u64::MAX
     };
 
-    // Over tolerance: output larger than allowed (e.g. > input or increase ≥ 1MB)
-    if output_size > max_allowed_size {
+    // Over tolerance: output larger than or equal to allowed (e.g. >= input or increase >= 1MB)
+    if output_size >= max_allowed_size {
         let size_increase_bytes = output_size.saturating_sub(input_size);
         let size_increase_kb = size_increase_bytes as f64 / 1024.0;
         let size_increase_mb = size_increase_bytes as f64 / (1024.0 * 1024.0);

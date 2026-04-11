@@ -12,6 +12,13 @@ All notable changes to this project will be documented in this file.
 - **Faster HEVC `slower` Preset Processing**: The ultimate pipeline was simplified from a complex multi-candidate comparison system to a streamlined two-step encode (screen with `slow` → finalize with `slower`). Processing is faster and more predictable while maintaining identical output quality.
 - **More Responsive Edge Cases**: Pathological video sources that previously caused long encoding loops now complete faster thanks to iteration caps and smarter failure budgets in the CPU fine-tune phase.
 
+### 🛡️ Size Comparison Hardening (Strictly Smaller Selection)
+
+- **Unified Size Check Logic**: Standardized all efficiency metrics across Video, JXL, and PNG/GIF pipelines to use **strictly less than (`<`)** instead of "less than or equal".
+- **Semantic Alignment**: In "strict" mode (no tolerance), a result is only considered successful if the output is strictly smaller than the input. If the sizes are identical, the output is now discarded as it offers no compression benefit.
+- **Tolerance Standardization**: In tolerance-enabled modes (e.g., 1MB budget), the logic now consistently allows results where `output < input + tolerance`.
+- **Refactored `check_size_tolerance`**: Eliminated confusing "minus one" offsets in `conversion.rs`, ensuring the boundary between success and failure is mathematically clean and consistent across all modules.
+
 ### 🎬 HEVC Ultimate Pipeline Simplification
 
 - **Two-Stage Multi-Candidate Search Removed**: Replaced the previous "Stage 1 screening → Stage 2 finalist shortlist → multi-candidate ranking" flow with a streamlined single-path pipeline: search with an efficient preset (`slow`), then do one final render at the requested delivery preset (`slower`) using the settled CRF
