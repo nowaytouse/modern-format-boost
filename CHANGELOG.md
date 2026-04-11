@@ -59,11 +59,10 @@ All notable changes to this project will be documented in this file.
 - **Deferred GPU Detection Log**: `print_detection_info()` now only called when GPU is actually needed, avoiding misleading "no GPU" messages for files that skip GPU exploration anyway
 - **Probe Resolution Increased**: Test pattern resolution bumped from 64×64 to 128×128 for more reliable encoder detection
 
-### 🧠 CPU Fine-Tune Stability
+### 🧠 Exploration Oscillation Hardening
 
-- **Consecutive Min-Step Wall Hit Tracking**: Added `consecutive_min_step_walls` counter to prevent infinite oscillation in ultimate mode CPU fine-tune loop
-- **3-Strike Break Rule**: After 3 consecutive min-step wall hits, the loop breaks and hands off to Phase 4 — prevents spinning at the same boundary
-- **Counter Reset on Progress**: `consecutive_min_step_walls` resets to 0 when a wall hit does not occur, ensuring only consecutive oscillations trigger the break
+- **Phase 1 Minimum Step Lockdown**: Removed the previous "3-strike" tolerance rule for Phase 1 `consecutive_min_step_walls`. The loop now instantly breaks upon the very first failure to compress when stepping down at the minimum granularity (0.01). Since file size increases strictly monotonically as CRF drops, this totally eliminates the downward looping gap that blindly wasted iterations against the size boundary.
+- **Phase 4 Capacity Wall Lockdown**: Stripped the downward 0.01 granularity `fine_failures` fallback loop that previously burned 8 pointless encodes marching into oversize territory after failing. Phase 4 now strictly terminates upon its first boundary hit at `min_step`.
 
 ### 🧪 Test Coverage
 

@@ -2317,11 +2317,6 @@ fn cpu_fine_tune_from_gpu_boundary(
             initial_step
         };
         let mut wall_hits: u32 = 0;
-        // Tracks how many consecutive wall hits occurred while already at the minimum step.
-        // In ultimate mode the loop defers to Phase 4 instead of breaking on a single
-        // min-step wall hit, but if it keeps oscillating at the same boundary we must
-        // stop rather than spin forever.
-        let mut consecutive_min_step_walls: u32 = 0;
 
         // If it's a GIF starting at 0.0, ensure we test 0.0 itself as the first anchor.
         // cpu_fine_tune_from_gpu_boundary Phase 1 actually already does this via gpu_size = encode_cached(gpu_boundary_crf, ...).
@@ -2705,39 +2700,26 @@ fn cpu_fine_tune_from_gpu_boundary(
                 );
 
                 if current_step <= MIN_STEP + 0.01 && new_step <= MIN_STEP + 0.01 {
-                    // In ultimate mode, even at minimum step a size-wall does NOT mean
-                    // we reached the physical quality floor — size might expand yet quality
-                    // might still improve.  Let Phase 4 handle the 0.01-granularity walk.
-                    // `ExifTool` format codes (`%d%f%e`), and suspicious command-line prefixes (`-@`).
+                    // We hit a physical capacity boundary at the minimum step size.
+                    // Since CRF vs File Size is strictly monotonic, stepping downward further
+                    // will only yield even larger files, guaranteeing consecutive failures.
+                    // Therefore, we lock down the oscillation and break immediately, handing
+                    // off the exact boundary to Phase 4 (if in ultimate mode).
                     if ultimate_mode {
-                        consecutive_min_step_walls += 1;
-                        crate::verbose_eprintln!(
-                            "   {} [CPU] At minimum step in ultimate mode — deferring to Phase 4 fine-tune. ({}/3){}",
+                        crate::log_eprintln!(
+                            "   {} [CPU] 🧱 Size wall hit at 0.01 minimum granularity. Oscillation locked down, handing off to Phase 4.{}",
                             BRIGHT_YELLOW,
-                            consecutive_min_step_walls,
                             RESET
                         );
-                        // After 3 consecutive min-step wall hits the search is oscillating
-                        // at the same boundary.  Break and let Phase 4 finish the job.
-                        if consecutive_min_step_walls >= 3 {
-                            crate::log_eprintln!(
-                                "   {} [CPU] Min-step wall hit 3× in a row — handing off to Phase 4.{}",
-                                BRIGHT_YELLOW,
-                                RESET
-                            );
-                            break;
-                        }
-                        // Don't break; keep last_good_crf so Phase 4 starts from there.
+                        break;
                     } else {
                         crate::log_eprintln!(
-                            "   {} [CPU] 🧱 Minimum step reached and hit wall. Stopping.{}",
+                            "   {} [CPU] 🧱 Minimum step reached and hit capacity wall. Stopping exploration.{}",
                             BRIGHT_YELLOW,
                             RESET
                         );
                         break;
                     }
-                } else {
-                    consecutive_min_step_walls = 0;
                 }
 
                 if wall_hits >= max_wall_hits {
@@ -3770,30 +3752,30 @@ fn cpu_fine_tune_from_gpu_boundary(
                             continue;
                         }
 
-                        if fine_failures >= max_fine_failures {
-                            if should_probe_crf_zero_from_phase4(current_best)
-                                && !size_cache.contains_key(0.0)
-                            {
+                        if current_step <= base_step + 0.001 {
+                            // Hit a physical capacity boundary at the minimum precision.
+                            // Squeezing further downward will strictly increase the size, causing oscillation.
+                            crate::log_eprintln!(
+                                "   {}🎯 Convergence achieved! Lower CRF sizes exceed limits. Stopping Phase 4.{}",
+                                BRIGHT_MAGENTA, RESET
+                            );
+                            
+                            // Check if a mandatory floor test is required
+                            if should_probe_crf_zero_from_phase4(current_best) && !size_cache.contains_key(0.0) {
                                 crate::log_eprintln!(
                                     "   {}Ultimate fallback: forcing final check at CRF 0.00 (lossless floor){}",
                                     BRIGHT_CYAN, RESET
                                 );
                                 test_crf = 0.0;
-                                fine_failures = 0; // Reset once to allow floor test
                                 continue;
                             }
-                            crate::log_eprintln!(
-                                "   {}Max 0.01-granularity failures ({}) reached. Stopping.{}",
-                                BRIGHT_YELLOW,
-                                max_fine_failures,
-                                RESET
-                            );
                             break;
                         }
 
-                        // Step still at base: just skip this CRF and advance
-                        last_size_pct = total_size_pct;
-                        test_crf -= current_step;
+                        // We shouldn't gracefully fall down to this point unless 
+                        // backtracking conditions failed, but just in case, clamp and try again:
+                        current_step = (current_step / 2.0).max(base_step);
+                        test_crf = current_best - current_step;
                     }
                 }
 
