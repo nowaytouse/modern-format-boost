@@ -630,7 +630,7 @@ fn parse_gainmap_from_xmp(xmp_str: &str) -> Option<GainMapParams> {
                     if let Ok(val) = reader.read_text(e.name()) {
                         let text = reader
                             .decoder()
-                            .decode(val.as_ref())
+                            .decode(val.as_bytes())
                             .unwrap_or_default()
                             .to_string();
                         if let Ok(f) = text.parse::<f32>() {
@@ -642,7 +642,7 @@ fn parse_gainmap_from_xmp(xmp_str: &str) -> Option<GainMapParams> {
                     if let Ok(val) = reader.read_text(e.name()) {
                         let text = reader
                             .decoder()
-                            .decode(val.as_ref())
+                            .decode(val.as_bytes())
                             .unwrap_or_default()
                             .to_string();
                         if let Ok(f) = text.parse::<f32>() {
@@ -654,7 +654,7 @@ fn parse_gainmap_from_xmp(xmp_str: &str) -> Option<GainMapParams> {
                     if let Ok(val) = reader.read_text(e.name()) {
                         let text = reader
                             .decoder()
-                            .decode(val.as_ref())
+                            .decode(val.as_bytes())
                             .unwrap_or_default()
                             .to_string();
                         if let Ok(f) = text.parse::<f32>() {
@@ -666,7 +666,7 @@ fn parse_gainmap_from_xmp(xmp_str: &str) -> Option<GainMapParams> {
                     if let Ok(val) = reader.read_text(e.name()) {
                         let text = reader
                             .decoder()
-                            .decode(val.as_ref())
+                            .decode(val.as_bytes())
                             .unwrap_or_default()
                             .to_string();
                         if let Ok(f) = text.parse::<f32>() {
@@ -678,7 +678,7 @@ fn parse_gainmap_from_xmp(xmp_str: &str) -> Option<GainMapParams> {
                     if let Ok(val) = reader.read_text(e.name()) {
                         let text = reader
                             .decoder()
-                            .decode(val.as_ref())
+                            .decode(val.as_bytes())
                             .unwrap_or_default()
                             .to_string();
                         if let Ok(f) = text.parse::<f32>() {
@@ -719,9 +719,7 @@ pub fn synthesize_hdr(
     let gain_resized: DynamicImage = if gain.dimensions() == (width, height) {
         gain.clone()
     } else {
-        let mut g = gain.clone();
-        g.resize_exact(width, height, image::imageops::FilterType::Triangle);
-        g
+        gain.resize_exact(width, height, image::imageops::FilterType::Triangle)
     };
 
     let mut hdr_pixels = Vec::with_capacity(usize::try_from(width * height * 3).unwrap_or(0));

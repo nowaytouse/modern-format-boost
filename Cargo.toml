@@ -157,123 +157,78 @@ license = "MIT"
 authors = ["Modern Format Boost Contributors"]
 
 [workspace.dependencies]
-# Core error handling - NIGHTLY: Using GitHub sources
-anyhow    = { git = "https://github.com/dtolnay/anyhow" }
-thiserror = { git = "https://github.com/dtolnay/thiserror" }
+# Core error handling
+anyhow    = "1.0.95"
+thiserror = "2.0.11"
 
-# Logging and tracing - NIGHTLY: Using GitHub sources
-tracing            = { git = "https://github.com/tokio-rs/tracing" }
-tracing-subscriber = { git = "https://github.com/tokio-rs/tracing", features = ["fmt", "env-filter", "json"] }
-tracing-appender   = { git = "https://github.com/tokio-rs/tracing" }
+# Logging and tracing
+tracing            = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["fmt", "env-filter", "json"] }
+tracing-appender   = "0.2.3"
 
-# CLI - NIGHTLY: Using GitHub sources
-clap = { git = "https://github.com/clap-rs/clap", features = ["derive", "cargo"] }
+# CLI
+clap = { version = "4.5.23", features = ["derive", "cargo"] }
 
-# Serialization - NIGHTLY: Using GitHub sources
-serde      = { git = "https://github.com/serde-rs/serde", features = ["derive"] }
-serde_json = { git = "https://github.com/serde-rs/json" }
+# Serialization
+serde      = { version = "1.0.217", features = ["derive"] }
+serde_json = "1.0.134"
 
-# Parallelism - NIGHTLY: Using GitHub sources
-rayon = { git = "https://github.com/rayon-rs/rayon" }
+# Parallelism
+rayon = "1.10.0"
 
-# Progress indicators - NIGHTLY: Using GitHub sources
-indicatif = { git = "https://github.com/console-rs/indicatif", features = ["rayon"] }
+# Progress indicators
+indicatif = { version = "0.18.4", features = ["rayon"] }
 
-# File system utilities - NIGHTLY: Using GitHub sources
-walkdir  = { git = "https://github.com/BurntSushi/walkdir" }
-filetime = { git = "https://github.com/alexcrichton/filetime" }
-libc     = { git = "https://github.com/rust-lang/libc" }
-xattr    = { git = "https://github.com/Stebalien/xattr" }
+# File system utilities
+walkdir  = "2.5.0"
+filetime = "0.2.27"
+libc     = "0.2.169"
+xattr    = "1.6.1"
 
-# System utilities - NIGHTLY: Using GitHub sources
-which = { git = "https://github.com/harryfei/which-rs" }
-log   = { git = "https://github.com/rust-lang/log" }
+# System utilities
+which = "8.0.2"
+log   = "0.4.29"
 
-# Terminal - NIGHTLY: Using GitHub sources
-console = { git = "https://github.com/console-rs/console" }
-chrono  = { git = "https://github.com/chronotope/chrono", features = ["serde"] }
+# Terminal
+console = "0.16.2"
+chrono  = { version = "0.4.44", features = ["serde"] }
 
-# Image processing - NIGHTLY: Using GitHub sources for latest iterations
-image       = { git = "https://github.com/image-rs/image", features = ["png", "jpeg", "webp", "gif", "tiff", "avif", "avif-native"] }
-libheif-rs  = { git = "https://github.com/Cykooz/libheif-rs", features = ["v1_21"] }
-mp4parse    = { git = "https://github.com/mozilla/mp4parse-rust" }
+# Image processing
+image       = { version = "0.25.5", features = ["png", "jpeg", "webp", "gif", "tiff", "avif", "avif-native"] }
+libheif-rs  = { version = "2.7.0", features = ["v1_21"] }
+mp4parse    = "0.14.0"
 
-# Testing and compression - NIGHTLY: Using GitHub sources
-tempfile = { git = "https://github.com/Stebalien/tempfile" }
-proptest = { git = "https://github.com/proptest-rs/proptest" }
-insta    = { git = "https://github.com/mitsuhiko/insta" }
-criterion = { git = "https://github.com/bheisler/criterion.rs" }
-flate2   = { git = "https://github.com/rust-lang/flate2-rs" }
+# Testing and compression
+tempfile = "3.16.0"
+proptest = "1.10.0"
+insta    = "1.8.0"
+criterion = "0.5.1"
+flate2   = "1.1.9"
 
-# Signal handling - NIGHTLY: Using GitHub sources
-ctrlc = { git = "https://github.com/Detegr/rust-ctrlc" }
+# Signal handling
+ctrlc = "3.4.5"
 
-# Randomization - NIGHTLY: Using GitHub sources
-rand = { git = "https://github.com/rust-random/rand" }
+# Randomization
+rand = "0.10"
 
-# Database and Caching - NIGHTLY: Using GitHub sources for latest iterations
-blake3   = { git = "https://github.com/BLAKE3-team/BLAKE3" }
-rmp-serde = { git = "https://github.com/3Hren/msgpack-rust" }
+# Database and Caching
+rusqlite = { version = "0.33.0", features = ["bundled"] }
+blake3   = "1.6.0"
+rmp-serde = "1.3.0"
 postgres = { version = "0.19", features = ["with-serde_json-1"] }
 pgvector = { version = "0.4", features = ["postgres"] }
-rusqlite = { version = "0.31.0", features = ["bundled"] }
 
-# File type detection - NIGHTLY: Using GitHub sources
-infer = { git = "https://github.com/bojand/infer" }
-crc32fast = { git = "https://github.com/srijs/rust-crc32fast" }
-quick-xml = { git = "https://github.com/tafia/quick-xml" }
-exr = { git = "https://github.com/johannesvollmer/exrs" }
+# File type detection
+infer = "0.16"
+crc32fast = "1.4.2"
+quick-xml = "0.31.0"
+exr = "1.7.2"
+jpegxl-rs = { version = "0.12", features = ["vendored"] }
 
 shared_utils = { path = "crates/shared_utils" }
 img = { path = "crates/img" }
+vid = { path = "crates/vid" }
 
-# NIGHTLY ONLY: Patch section to unify duplicate dependencies and use GitHub nightly sources
-[patch.crates-io]
-# Core dependencies from GitHub for latest iterations
-anyhow = { git = "https://github.com/dtolnay/anyhow" }
-thiserror = { git = "https://github.com/dtolnay/thiserror" }
-serde = { git = "https://github.com/serde-rs/serde" }
-serde_json = { git = "https://github.com/serde-rs/json" }
-image = { git = "https://github.com/image-rs/image" }
-mp4parse = { git = "https://github.com/mozilla/mp4parse-rust" }
-blake3 = { git = "https://github.com/BLAKE3-team/BLAKE3" }
-rayon = { git = "https://github.com/rayon-rs/rayon" }
-clap = { git = "https://github.com/clap-rs/clap" }
-tracing = { git = "https://github.com/tokio-rs/tracing" }
-tracing-subscriber = { git = "https://github.com/tokio-rs/tracing" }
-tracing-appender = { git = "https://github.com/tokio-rs/tracing" }
-indicatif = { git = "https://github.com/console-rs/indicatif" }
-console = { git = "https://github.com/console-rs/console" }
-chrono = { git = "https://github.com/chronotope/chrono" }
-walkdir = { git = "https://github.com/BurntSushi/walkdir" }
-filetime = { git = "https://github.com/alexcrichton/filetime" }
-libc = { git = "https://github.com/rust-lang/libc" }
-which = { git = "https://github.com/harryfei/which-rs" }
-log = { git = "https://github.com/rust-lang/log" }
-tempfile = { git = "https://github.com/Stebalien/tempfile" }
-proptest = { git = "https://github.com/proptest-rs/proptest" }
-flate2 = { git = "https://github.com/rust-lang/flate2-rs" }
-ctrlc = { git = "https://github.com/Detegr/rust-ctrlc" }
-rmp-serde = { git = "https://github.com/3Hren/msgpack-rust" }
-infer = { git = "https://github.com/bojand/infer" }
-xattr = { git = "https://github.com/Stebalien/xattr" }
-libheif-rs = { git = "https://github.com/Cykooz/libheif-rs" }
-crc32fast = { git = "https://github.com/srijs/rust-crc32fast" }
-quick-xml = { git = "https://github.com/tafia/quick-xml" }
-exr = { git = "https://github.com/johannesvollmer/exrs" }
-rayon-core = { git = "https://github.com/rayon-rs/rayon" }
-tracing-core = { git = "https://github.com/tokio-rs/tracing" }
-serde_core = { git = "https://github.com/serde-rs/serde" }
-serde_derive = { git = "https://github.com/serde-rs/serde" }
-thiserror-impl = { git = "https://github.com/dtolnay/thiserror" }
-
-# Force all transitive dependencies to use GitHub nightly (eliminate duplicates)
-getrandom = { git = "https://github.com/rust-random/getrandom" }
-hashbrown = { git = "https://github.com/rust-lang/hashbrown" }
-indexmap = { git = "https://github.com/indexmap-rs/indexmap" }
-syn = { git = "https://github.com/dtolnay/syn" }
-quote = { git = "https://github.com/dtolnay/quote" }
-proc-macro2 = { git = "https://github.com/dtolnay/proc-macro2" }
 
 
 [profile.release]
