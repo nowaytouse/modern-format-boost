@@ -3860,7 +3860,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     };
     let (mut final_crf, mut final_full_size) = match (best_crf, best_size) {
         (Some(crf), Some(size)) if crf < max_crf => {
-            if size <= input_size + size_tolerance {
+            if size < input_size + size_tolerance {
                 crate::log_eprintln!(
                     "{}✅ Best CRF {:.2} settled from search (output on disk){}",
                     BRIGHT_GREEN,
@@ -4077,7 +4077,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     };
 
     // User-relevant success: total file smaller (with 1MB tolerance if allowed) and quality met
-    let total_file_compressed = final_full_size <= input_size + size_tolerance;
+    let total_file_compressed = final_full_size < input_size + size_tolerance;
     let _video_stream_compressed =
         crate::stream_size::can_compress_pure_video(output, input_video_stream_size, true);
     let ssim_ok = match ssim {
