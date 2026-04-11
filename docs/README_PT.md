@@ -57,7 +57,8 @@ Cada arquivo passa por um pipeline de decisão em vários estágios:
 - **Estágio 1 — Detecção inteligente**: Analisa tabelas JPEG DQT (detecção de gainmap UltraHDR), pedaços WebP VP8L e caixas AVIF `av1C` em nível binário.
 - **Estágio 2 — Rota e Codificação**: JXL VarDCT para JPEG (bit-exact); modo Modular para fontes sem perdas (PNG, WebP/AVIF/HEIC/EXR/JP2 sem perdas).
 - **Estágio 3 — Detour**: Formatos como TIFF/WebP/BMP/HEIC são pré-processados em PNGs temporários de 16 bits ou **OpenEXR de 32 bits** para garantir compatibilidade com `cjxl` sem perda de qualidade.
-- **Estágio 4 — Síntese HDR HEIC**: Intercepta arquivos HEIC com Gainmaps (Apple/Google) e sintetiza buffers HDR de luz linear de 32 bits via um pipeline **OpenEXR** intermediário, entregando saída JXL HDR real.
+- **Estágio 4 — Síntese HDR HEIC**: Intercepta arquivos HEIC com Gainmaps (Apple/Google) e sintetiza buffers HDR de luz linear de 32 bits através de um fluxo intermédio **OpenEXR**, entregando saída JXL HDR real.
+- **Estágio 5 — Loop Intent (v3)**: Mecanismo de árvore de decisão hierárquica de 7 camadas. Avalia o **Loop Closure**, **Motion Gini**, a **periodicidade** e a **fusão KNN** para identificar a intenção de loop (memes, stickers, loops).
 
 </details>
 
@@ -80,17 +81,49 @@ Cada arquivo passa por um pipeline de decisão em vários estágios:
 | Screenshot PNG     | 2.5 MB           | **JXL**          | 1.1 MB           | **~56%** | Modular d=0.0           |
 | Action Cam H.264   | 1.2 GB           | **HEVC**         | 480 MB           | **~60%** | Busca CRF GPU/CPU       |
 
-## ⬇️ Instalação
+### Pré-requisitos
 
-### Binários pré-compilados
+| Ferramenta | Necessário? | Propósito | Comando de Instalação |
+| :--- | :---: | :--- | :--- |
+| **Rust** (1.75+) | ✅ | Construção e Instalação | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
+| **FFmpeg** (5.0+) | ✅ | Processamento de vídeo e métricas | `brew install ffmpeg` / `apt install ffmpeg` |
+| **libjxl** | ✅ | Núcleo de codificação JXL | `brew install jpeg-xl` |
+| **ExifTool** | ✅ | Preservação de metadatos | `brew install exiftool` |
+| **ImageMagick** | ✅ | Caminho de desvio de imagem | `brew install imagemagick` |
+| **libwebp** | ✅ | Decodificação nativa de WebP | `brew install webp` |
+| **dovi_tool** | ✅ | Extração de Dolby Vision RPU | `cargo install dovi_tool` |
+| **libheif** | ✅ | Decodificação de HEIC/HEIF | `brew install libheif` |
+| **hdr10plus_tool** | ✅ | Extração de metadatos HDR10+ | `cargo install hdr10plus_tool` |
 
-Para usuários que não desejam instalar o Rust, baixe os binários pré-compilados na página de **[Releases](https://github.com/nowaytouse/modern-format-boost/releases)**.
+---
+
+## 🚀 Uso
+
+### Início Rápido
 
 ```bash
-# macOS/Linux (exemplo para macOS ARM64)
-curl -LO https://github.com/nowaytouse/modern-format-boost/releases/latest/download/modern-format-boost-aarch64-apple-darwin.tar.gz
-tar -xzf modern-format-boost-aarch64-apple-darwin.tar.gz
+# Conversão de caminho de imagens
+img run /caminho/para/midia
+# Conversão de caminho de vídeos
+vid run /caminho/para/midia
 ```
+
+---
+
+## ❓ FAQ (Perguntas Frequentes)
+
+**1. A compatibilidade do formato JXL é ampla?**  
+O suporte nativo existe no macOS 14 (Sonoma) / iOS 17+, Chrome 91+ e Firefox 128+. No entanto, existem problemas conhecidos no ecossistema:  
+- **Animações**: Formatos animados modernos (JXL/AV1/HEIF) muitas vezes falham na pré-visualização como animações no aplicativo nativo Fotos do macOS/iOS ou no Finder (apenas estáticos), especialmente quando sincronizados via iCloud. Recomenda-se a pré-visualização através de ferramentas de linha de comando ou navegadores modernos.  
+- **Miniaturas**: Arquivos JXL que usam **perfis ICC em escala de cinza** podem aparecer como **miniaturas pretas** no Finder/iCloud, embora sejam renderizados perfeitamente quando abertos.  
+O JXL continua sendo o formato superior para arquivamento bit-exact e armazenamento HDR de alta fidelidade.
+
+**2. Como o HDR10+ é tratado?**  
+Totalmente suportado! Usamos o `hdr10plus_tool` para extrair os metadatos dinâmicos SMPTE 2094-40 e injetá-los de volta no fluxo HEVC via parâmetro `--dhdr10-info` do `libx265`. Certifique-se de que a ferramenta esteja instalada para este recurso.
+
+**3. Por que pular WebP/AVIF/HEIC?**  
+Esses formatos já são modernos e altamente comprimidos. A re-codificação causaria "perda geracional" (degradação da qualidade) com benefícios mínimos de tamanho.  
+**Exceções**: A ferramenta *processará* esses arquivos se detectar **HDR Gainmaps** de alta fidelidade para síntese no JXL, ou se um arquivo animado exigir otimização através do motor **Loop Intent (v3)** (que usa uma árvore de decisão hierárquica de 7 camadas para identificar memes, stickers e loops).
 
 ---
 

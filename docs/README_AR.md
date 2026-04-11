@@ -65,7 +65,7 @@
 - **المرحلة 2 — التوجيه والترميز**: JXL VarDCT لملفات JPEG (مطابق تماماً للبت)؛ الوضع النموذجي (Modular) للمصادر التي لا تفقد البيانات (PNG, WebP/AVIF/HEIC/EXR/JP2 بدون فقدان).
 - **المرحلة 3 — مسار الالتفاف**: تنسيقات مثل TIFF/WebP/BMP/HEIC تتم معالجتها مسبقاً إلى ملفات PNG مؤقتة 16 بت أو **32-bit OpenEXR** لضمان التوافق مع `cjxl` دون فقدان الجودة.
 - **المرحلة 4 — توليف HEIC HDR**: يعترض ملفات HEIC التي تحتوي على خرائط تباين (Apple/Google) ويقوم بتوليف مخازن HDR خطية 32 بت عبر خط مرافق **OpenEXR**، مما يوفر مخرجات HDR JXL حقيقية.
-- **المرحلة 5 — Meme Score v3**: يقيم ملفات GIF المتحركة (الحدة 40%، الدقة 18%، المدة 20%) لاتخاذ قرار بين تحويلها إلى فيديو أو الاحتفاظ بها كملف GIF.
+- **المرحلة 5 — تحليل نية التكرار (Loop Intent v3)**: محرك شجرة قرار هرمي مكون من 7 طبقات. يقيم **إغلاق الحلقة (Loop Closure)**، و **تباين الحركة (Motion Gini)**، و **الدورية (Periodicity)**، و **دمج KNN** لتحديد نية التكرار (الميمات، الملصقات، الحلقات).
 
 ### خط معالجة الفيديو: بحث التشبع ثلاثي المراحل
 
@@ -119,7 +119,7 @@
 | PNG (مفهرس)   |     ❌      |   لا   | **مطابقة الجودة**         | `.jxl`        | d=0.001                                   |
 | WebP          |     ✅      |   لا   | **التفاف ← بدون فقدان**   | `.jxl`        | dwebp → JXL d=0.0                         |
 | WebP          |     ❌      |   لا   | **تخطي**                  | (احتفاظ)      | تجنب فقدان الأجيال                        |
-| WebP          |      —      |   ✅   | **Meme Score**            | `.mov`/`.gif` | HEVC/AV1 أو احتفاظ بـ GIF                 |
+| WebP          |      —      |   ✅   | **Loop Intent**            | `.mov`/`.gif` | HEVC/AV1 أو احتفاظ بـ GIF                 |
 | AVIF          |     ✅      |   لا   | **تحويل بدون فقدان**      | `.jxl`        | d=0.0                                     |
 | AVIF          |     ❌      |   لا   | **تخطي**                  | (احتفاظ)      | تجنب فقدان الأجيال                        |
 | HEIC/HEIF     |     ✅      |   لا   | **التفاف ← بدون فقدان**   | `.jxl`        | `sips`/`magick` → PNG → d=0.0             |
@@ -128,7 +128,7 @@
 | TIFF          |     ✅      |   لا   | **التفاف ← بدون فقدان**   | `.jxl`        | `magick -depth 16` → PNG → d=0.0          |
 | TIFF          |     ❌      |   لا   | **مطابقة الجودة**         | `.jxl`        | magick → JXL d=0.001                      |
 | BMP           |     ✅      |   لا   | **التفاف ← بدون فقدان**   | `.jxl`        | `magick` → PNG → d=0.0                    |
-| GIF           |      —      |   ✅   | **Meme Score**            | `.mov`/`.gif` | HEVC/AV1 أو احتفاظ بـ GIF                 |
+| GIF           |      —      |   ✅   | **Loop Intent**            | `.mov`/`.gif` | HEVC/AV1 أو احتفاظ بـ GIF                 |
 | GIF           |      —      |   لا   | **استخراج الإطارات**      | `.jxl`        | ffmpeg → JXL                              |
 | JXL           |      —      |   لا   | **تخطي**                  | (احتفاظ)      | مثالي بالفعل                              |
 
@@ -179,6 +179,23 @@ img run /path/to/media
 # تحويل مسار الفيديو
 vid run /path/to/media
 ```
+
+---
+
+## ❓ FAQ (الأسئلة الشائعة)
+
+**1. Is JXL formats compatibility broad?**  
+Native support exists in macOS 14+ / iOS 17+, Chrome 91+, and Firefox 128+. However, there are known ecosystem issues:  
+- **Animations**: Modern animated formats (JXL/AV1/HEIF) often fail to preview as animations in the native macOS/iOS Photos app or Finder (static only), especially when synchronized via iCloud.  
+- **Thumbnails**: JXL files using **grayscale ICC profiles** may appear as **black thumbnails** in Finder/iCloud, even though they render perfectly when opened.  
+JXL remains the superior format for bit-exact archival and high-fidelity HDR storage.
+
+**2. How is HDR10+ handled?**  
+Fully supported. We use `hdr10plus_tool` to extract SMPTE 2094-40 dynamic metadata and inject it back into the HEVC stream via `libx265`.
+
+**3. Why skip WebP/AVIF/HEIC?**  
+These formats are already modern and highly compressed. Re-encoding them would cause "generational loss" (quality degradation).  
+**Exceptions**: The tool *will* process these if it detects high-fidelity **HDR Gainmaps** for synthesis into JXL, or if an animated file requires optimization via the **Loop Intent (v3)** engine (which uses a 7-layer decision tree to identify memes, stickers, and loops).
 
 ---
 
