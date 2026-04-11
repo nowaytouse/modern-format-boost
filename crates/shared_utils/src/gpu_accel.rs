@@ -506,7 +506,9 @@ impl GpuAccel {
                 // Log to file only (stderr layer filters out target "gpu_detection" for less terminal noise).
                 tracing::info!(target: "gpu_detection", "  GPU: {}", self.gpu_type);
             } else {
-                crate::log_eprintln!("⚠️ No GPU acceleration, using CPU encoding");
+                // Surface why detection failed so the user has context without needing --verbose.
+                let reason = diagnostics.first().map_or("no supported encoder found", String::as_str);
+                crate::log_eprintln!("⚠️ GPU probe failed ({}), using CPU encoding", reason);
             }
             return;
         }
@@ -1015,35 +1017,61 @@ fn summarize_ffmpeg_failure_output(stdout: &[u8], stderr: &[u8]) -> String {
 }
 
 fn test_encoder(encoder: &GpuEncoder) -> Result<(), String> {
-    let mut builder = crate::tool_builders::FfmpegBuilder::new();
-    builder
-        .hide_banner()
-        .format("lavfi")
-        .input("nullsrc=s=64x64:d=0.1")
-        .codec_video(encoder.name);
-
-    for arg in encoder.get_crf_args(f32::midpoint(
+    let mid_crf = f32::midpoint(
         f32::from(encoder.crf_range.0),
         f32::from(encoder.crf_range.1),
-    )) {
-        builder.arg(arg);
-    }
-    for arg in encoder.extra_args() {
-        builder.arg(arg);
+    );
+
+    // Run a single-frame null encode to confirm the encoder is functional.
+    // On macOS, VideoToolbox may reject the first probe with "Cannot create
+    // compression session" when the GPU is briefly contended.  We therefore
+    // try once without software fallback, and on failure retry with
+    // `-allow_sw 1` before giving up.
+    let mut attempts: &[bool] = &[false];
+    #[cfg(target_os = "macos")]
+    {
+        if encoder.gpu_type == GpuType::Apple {
+            attempts = &[false, true];
+        }
     }
 
-    let output = builder
-        .frames_v(1)
-        .format("null")
-        .output_null()
-        .build()
-        .output();
+    let mut last_err = String::new();
+    for &allow_sw in attempts {
+        let mut builder = crate::tool_builders::FfmpegBuilder::new();
+        builder
+            .hide_banner()
+            .format("lavfi")
+            .input("nullsrc=s=128x128:d=0.1")
+            .codec_video(encoder.name);
 
-    match output {
-        Ok(out) if out.status.success() => Ok(()),
-        Ok(out) => Err(summarize_ffmpeg_failure_output(&out.stdout, &out.stderr)),
-        Err(err) => Err(err.to_string()),
+        for arg in encoder.get_crf_args(mid_crf) {
+            builder.arg(arg);
+        }
+        for arg in encoder.extra_args() {
+            builder.arg(arg);
+        }
+        if allow_sw {
+            builder.arg("-allow_sw").arg("1");
+        }
+
+        let output = builder
+            .frames_v(1)
+            .format("null")
+            .output_null()
+            .build()
+            .output();
+
+        match output {
+            Ok(out) if out.status.success() => return Ok(()),
+            Ok(out) => {
+                last_err = summarize_ffmpeg_failure_output(&out.stdout, &out.stderr);
+            }
+            Err(err) => {
+                last_err = err.to_string();
+            }
+        }
     }
+    Err(last_err)
 }
 
 fn crf_to_estimated_bitrate(crf: f32, codec: &str) -> u32 {

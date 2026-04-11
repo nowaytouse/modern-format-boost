@@ -53,16 +53,23 @@ use crate::modern_ui::colors::{
 };
 use crate::types::EncoderPreset;
 
-const VMAF_Y_MIN: f64 = 92.0;
-const PSNR_UV_MIN: f64 = 34.0;
+const VMAF_Y_SANITY_FLOOR: f64 = 86.0;
+const PSNR_UV_SANITY_FLOOR: f64 = 30.0;
 const MAX_CONSECUTIVE_COMPRESSIONS: u32 = 3;
 const MAX_CONSECUTIVE_FAILURES: u32 = 3;
 const ZERO_GAIN_THRESHOLD: f64 = 0.00005;
 const DECAY_FACTOR: f32 = 0.4;
 const MIN_STEP: f32 = 0.1;
 const CAMBI_MAX: f64 = 6.0;
+const VMAF_Y_ALLOWED_DROP_FROM_BASELINE: f64 = 4.0;
+const PSNR_UV_ALLOWED_DROP_FROM_BASELINE: f64 = 4.0;
+const CAMBI_CLEAN_ALLOWED_RISE: f64 = 2.0;
+const CAMBI_BANDED_ALLOWED_RISE: f64 = 3.0;
+const CAMBI_BANDED_ALLOWED_GROWTH_RATIO: f64 = 0.25;
 const MS_SSIM_WEIGHT: f64 = 0.6;
 const SSIM_ALL_WEIGHT: f64 = 0.4;
+const NORMAL_FUSION_SANITY_FLOOR: f64 = 0.88;
+const NORMAL_ALLOWED_DROP_FROM_BASELINE: f64 = 0.04;
 const PHASE3_DOWNWARD_STEP: f32 = 0.1;
 const UPWARD_JOG_MIN_STEP: f32 = 0.5;
 const UPWARD_SIZE_STAGNATION_THRESHOLD: u32 = 4;
@@ -107,6 +114,174 @@ struct UpwardSearchFeedback {
     size_stagnation_count: u32,
     upward_iteration_count: u32,
 }
+
+#[derive(Debug, Clone, Copy, Default)]
+struct UltimateQualityBaselines {
+    search_vmaf_y: Option<f64>,
+    search_psnr_uv: Option<(f64, f64)>,
+    source_cambi: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct UltimateQualityMetrics {
+    vmaf_y: Option<f64>,
+    psnr_uv: Option<(f64, f64)>,
+    cambi: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct UltimateQualityEvaluation {
+    vmaf_floor: f64,
+    psnr_uv_floor: (f64, f64),
+    cambi_ceiling: f64,
+    vmaf_ok: bool,
+    chroma_ok: bool,
+    cambi_ok: bool,
+}
+
+impl UltimateQualityEvaluation {
+    const fn all_passed(self) -> bool {
+        self.vmaf_ok && self.chroma_ok && self.cambi_ok
+    }
+}
+
+fn ultimate_final_sample_rate(duration_secs: f64) -> usize {
+    let duration_min = duration_secs / 60.0;
+    if duration_min <= 1.0 {
+        1
+    } else {
+        3
+    }
+}
+
+fn adaptive_vmaf_floor(search_baseline: Option<f64>) -> f64 {
+    search_baseline.map_or(VMAF_Y_SANITY_FLOOR, |baseline| {
+        (baseline - VMAF_Y_ALLOWED_DROP_FROM_BASELINE).max(VMAF_Y_SANITY_FLOOR)
+    })
+}
+
+fn adaptive_psnr_uv_floor(search_baseline: Option<(f64, f64)>) -> (f64, f64) {
+    search_baseline.map_or((PSNR_UV_SANITY_FLOOR, PSNR_UV_SANITY_FLOOR), |(u, v)| {
+        (
+            (u - PSNR_UV_ALLOWED_DROP_FROM_BASELINE).max(PSNR_UV_SANITY_FLOOR),
+            (v - PSNR_UV_ALLOWED_DROP_FROM_BASELINE).max(PSNR_UV_SANITY_FLOOR),
+        )
+    })
+}
+
+fn adaptive_cambi_ceiling(source_baseline: Option<f64>) -> f64 {
+    match source_baseline {
+        None => CAMBI_MAX,
+        Some(baseline) if baseline <= CAMBI_MAX => {
+            (baseline + CAMBI_CLEAN_ALLOWED_RISE).max(CAMBI_MAX)
+        }
+        Some(baseline) => {
+            baseline
+                + f64::max(
+                    CAMBI_BANDED_ALLOWED_RISE,
+                    baseline * CAMBI_BANDED_ALLOWED_GROWTH_RATIO,
+                )
+        }
+    }
+}
+
+fn metrics_below_ultimate_sanity_floor(vmaf_y: f64, psnr_uv: (f64, f64)) -> bool {
+    vmaf_y < VMAF_Y_SANITY_FLOOR || psnr_uv.0.min(psnr_uv.1) < PSNR_UV_SANITY_FLOOR
+}
+
+fn both_metrics_below_ultimate_sanity_floor(vmaf_y: f64, psnr_uv: (f64, f64)) -> bool {
+    vmaf_y < VMAF_Y_SANITY_FLOOR && psnr_uv.0.min(psnr_uv.1) < PSNR_UV_SANITY_FLOOR
+}
+
+fn evaluate_ultimate_quality_gate(
+    metrics: UltimateQualityMetrics,
+    baselines: UltimateQualityBaselines,
+) -> UltimateQualityEvaluation {
+    let vmaf_floor = adaptive_vmaf_floor(baselines.search_vmaf_y);
+    let psnr_uv_floor = adaptive_psnr_uv_floor(baselines.search_psnr_uv);
+    let cambi_ceiling = adaptive_cambi_ceiling(baselines.source_cambi);
+
+    let vmaf_ok = metrics.vmaf_y.is_some_and(|v| v >= vmaf_floor);
+    let cambi_ok = metrics.cambi.is_some_and(|c| c <= cambi_ceiling);
+    let chroma_ok = metrics
+        .psnr_uv
+        .is_some_and(|(u, v)| u >= psnr_uv_floor.0 && v >= psnr_uv_floor.1);
+
+    UltimateQualityEvaluation {
+        vmaf_floor,
+        psnr_uv_floor,
+        cambi_ceiling,
+        vmaf_ok,
+        chroma_ok,
+        cambi_ok,
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct NormalQualityBaseline {
+    /// Search-phase SSIM from GPU/CPU exploration (pre-processing reference).
+    explore_ssim: Option<f64>,
+    /// Caller-configured minimum SSIM floor (from `actual_min_ssim`).
+    min_ssim_config: f64,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct NormalQualityMeasurement {
+    /// Weighted average of Y/U/V MS-SSIM channels.
+    ms_ssim_avg: Option<f64>,
+    /// SSIM-All composite (includes chroma).
+    ssim_all: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct NormalQualityEvaluation {
+    /// Weighted fusion of available measurements; `None` when both are missing.
+    fusion_score: Option<f64>,
+    /// The pass threshold: baseline-relative drop tolerance, bounded by config and sanity floors.
+    fusion_floor: f64,
+    passed: bool,
+}
+
+/// Construct a [`NormalQualityEvaluation`] from pre- and post-processing data.
+///
+/// The pass threshold is derived from the search-phase SSIM baseline so the gate
+/// is "tailor-made" per file rather than relying solely on a global absolute floor.
+/// When no baseline is available the config floor (or sanity floor) is used instead.
+fn build_normal_quality_evaluation(
+    baseline: NormalQualityBaseline,
+    measurement: NormalQualityMeasurement,
+) -> NormalQualityEvaluation {
+    let fusion_score = match (measurement.ms_ssim_avg, measurement.ssim_all) {
+        (Some(ms), Some(ss)) => Some(MS_SSIM_WEIGHT.mul_add(ms, SSIM_ALL_WEIGHT * ss)),
+        (Some(ms), None) => Some(ms),
+        (None, Some(ss)) => Some(ss),
+        (None, None) => None,
+    };
+
+    // Use the explore-phase SSIM as the reference: allow a fixed drop below it,
+    // but never go below the config floor or the hard sanity floor.
+    let fusion_floor = baseline.explore_ssim.map_or_else(
+        || {
+            baseline
+                .min_ssim_config
+                .max(NORMAL_FUSION_SANITY_FLOOR)
+        },
+        |ref_ssim| {
+            (ref_ssim - NORMAL_ALLOWED_DROP_FROM_BASELINE)
+                .max(baseline.min_ssim_config)
+                .max(NORMAL_FUSION_SANITY_FLOOR)
+        },
+    );
+
+    let passed = fusion_score.is_some_and(|s| s >= fusion_floor);
+
+    NormalQualityEvaluation {
+        fusion_score,
+        fusion_floor,
+        passed,
+    }
+}
+
 
 #[derive(Debug, Clone)]
 enum AudioTranscodeStrategy {
@@ -244,10 +419,10 @@ struct FineTuneArgs<'a> {
 /// Maintains best-found quality metrics across search phases.
 ///
 /// **Invariants**:
-/// - `best_vmaf`: Updated when a new lower CRF yields VMAF ≥ 92.0 (or any first success)
-/// - `best_psnr_uv`: Updated when both U and V channels meet minimum thresholds
+/// - `best_vmaf`: Updated when a new lower CRF improves the search-time VMAF reference
+/// - `best_psnr_uv`: Updated when a new lower CRF improves the search-time chroma reference
 /// - Both fields are monotonically non-decreasing (once set to a value, never set to worse)
-/// - Used only during ultimate mode for gating decisions; not in normal mode
+/// - Used only during ultimate mode for baseline-aware gating decisions; not in normal mode
 #[derive(Debug, Default, Clone)]
 struct TrackingState {
     pub best_vmaf: Option<f64>,
@@ -321,7 +496,9 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
         .len();
 
     let gpu = GpuAccel::detect_with_retry();
-    gpu.print_detection_info();
+    // Defer logging GPU state until we know whether this file actually needs GPU.
+    // Printing "no GPU" for a low-bitrate file that would have skipped GPU anyway
+    // is misleading; the detection info is only surfaced when GPU is relevant.
     let encoder_name = match encoder {
         VideoEncoder::Hevc => "hevc",
         VideoEncoder::Av1 => "av1",
@@ -333,6 +510,12 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
         VideoEncoder::Av1 => gpu.get_av1_encoder().is_some(),
         VideoEncoder::H264 => gpu.get_h264_encoder().is_some(),
     };
+
+    // In verbose mode always show detection details; in normal mode the call-site
+    // log is deferred to where the GPU is actually needed (or its absence matters).
+    if crate::progress_mode::is_verbose_mode() {
+        gpu.print_detection_info();
+    }
 
     crate::verbose_eprintln!("Smart GPU+CPU Explore v5.1 ({:?})", encoder);
     crate::verbose_eprintln!(
@@ -652,6 +835,8 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
                 "   Skipping GPU coarse search (CPU is faster for low-bitrate animation/PPT)"
             );
         } else if !gpu.is_available() {
+            // GPU was needed but the probe failed — now is the right time to surface why.
+            gpu.print_detection_info();
             crate::log_eprintln!("⚠️  FALLBACK: No GPU available (skipping GPU coarse phase)");
         } else {
             crate::log_eprintln!(
@@ -734,25 +919,25 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
 
         // Display quality metrics that triggered early insight
         if let Some(vmaf) = tracking.best_vmaf {
-            let vmaf_pass = vmaf >= VMAF_Y_MIN;
+            let vmaf_pass = vmaf >= VMAF_Y_SANITY_FLOOR;
             crate::log_eprintln!(
-                "   VMAF-Y: {:.2} {} {:.1} {}",
+                "   VMAF-Y: {:.2} {} {:.1} {} (sanity floor)",
                 vmaf,
                 if vmaf_pass { "≥" } else { "<" },
-                VMAF_Y_MIN,
+                VMAF_Y_SANITY_FLOOR,
                 if vmaf_pass { "✅" } else { "❌" }
             );
         }
         if let Some((u, v)) = tracking.best_psnr_uv {
-            let u_pass = u >= PSNR_UV_MIN;
-            let v_pass = v >= PSNR_UV_MIN;
+            let u_pass = u >= PSNR_UV_SANITY_FLOOR;
+            let v_pass = v >= PSNR_UV_SANITY_FLOOR;
             crate::log_eprintln!(
-                "   PSNR-UV: U={:.2} dB {}, V={:.2} dB {} (min ≥ {:.1} dB)",
+                "   PSNR-UV: U={:.2} dB {}, V={:.2} dB {} (sanity floor ≥ {:.1} dB)",
                 u,
                 if u_pass { "✅" } else { "❌" },
                 v,
                 if v_pass { "✅" } else { "❌" },
-                PSNR_UV_MIN
+                PSNR_UV_SANITY_FLOOR
             );
         }
 
@@ -863,16 +1048,15 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
             crate::log_eprintln!("   Video within limit (≤{:.0}min)", threshold_min);
 
             if ultimate_mode {
-                // ── Ultimate Mode: 3D Quality Gate ────────────────────────────
-                // Three independent dimensions must ALL pass:
-                //   1. VMAF-Y   ≥ 92.0   (perceptual quality, Netflix standard)
-                //   2. CAMBI    ≤ 6.0    (banding detection, lower = better, Netflix standard)
-                //   3. PSNR-UV  ≥ 34.0 dB (chroma fidelity)
-                crate::log_eprintln!("   Enabling precision quality gate (Ultimate Mode)...");
+                // ── Ultimate Mode: Baseline-Aware 3D Quality Gate ─────────────
+                // The final candidate must stay close to this file's own baseline:
+                //   1. VMAF-Y   stays near the best search-phase result
+                //   2. CAMBI    stays near the source video's original banding level
+                //   3. PSNR-UV  stays near the best search-phase chroma fidelity
+                // We still keep catastrophic sanity floors so obviously bad outputs fail loudly.
+                crate::log_eprintln!("   Enabling baseline-aware quality gate (Ultimate Mode)...");
 
-                // Determine sample rate from duration (mirrors calculate_ms_ssim_yuv logic)
-                let duration_min = probe_result.duration / 60.0;
-                let sample_rate: usize = if duration_min <= 1.0 { 1 } else { 3 };
+                let sample_rate = ultimate_final_sample_rate(probe_result.duration);
 
                 // Reuse metrics from search phase if available, otherwise calculate
                 let vmaf_y = if let Some(v) = tracking.best_vmaf {
@@ -893,23 +1077,36 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
                     super::ssim_calculator::calculate_psnr_uv(input, output, sample_rate)
                 };
 
-                // CAMBI is only measured in Phase III as the final banding check
+                crate::log_eprintln!("   Measuring source CAMBI baseline...");
+                let source_cambi = super::ssim_calculator::calculate_cambi(input, sample_rate);
+
                 crate::log_eprintln!("   Running final CAMBI banding check...");
                 let cambi = super::ssim_calculator::calculate_cambi(output, sample_rate);
 
-                let vmaf_ok = vmaf_y.is_some_and(|v| v >= VMAF_Y_MIN);
-                let cambi_ok = cambi.is_some_and(|c| c <= CAMBI_MAX);
-                let chroma_ok = psnr_uv.is_some_and(|(u, v): (f64, f64)| u.min(v) >= PSNR_UV_MIN);
+                let baselines = UltimateQualityBaselines {
+                    search_vmaf_y: tracking.best_vmaf,
+                    search_psnr_uv: tracking.best_psnr_uv,
+                    source_cambi,
+                };
+                let metrics = UltimateQualityMetrics {
+                    vmaf_y,
+                    psnr_uv,
+                    cambi,
+                };
+                let evaluation = evaluate_ultimate_quality_gate(metrics, baselines);
 
                 crate::log_eprintln!("   ═══════════════════════════════════════════════════");
-                crate::log_eprintln!("   Quality Verification (Ultimate Mode):");
+                crate::log_eprintln!("   Quality Verification (Ultimate Mode, baseline-aware):");
 
                 if let Some(v) = vmaf_y {
                     crate::log_eprintln!(
-                        "      VMAF-Y: {:6.2} ≥ {:.1} {}",
+                        "      VMAF-Y: {:6.2} ≥ {:.1} {} (search baseline: {})",
                         v,
-                        VMAF_Y_MIN,
-                        if vmaf_ok { "✅" } else { "❌" }
+                        evaluation.vmaf_floor,
+                        if evaluation.vmaf_ok { "✅" } else { "❌" },
+                        baselines
+                            .search_vmaf_y
+                            .map_or_else(|| "N/A".to_string(), |x| format!("{x:.2}"))
                     );
                 } else {
                     crate::log_eprintln!("      VMAF-Y: N/A (calculation failed) ❌");
@@ -917,25 +1114,33 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
 
                 if let Some(c) = cambi {
                     crate::log_eprintln!(
-                        "      CAMBI:  {:6.2} ≤ {:.1} {} (lower=better)",
+                        "      CAMBI:  {:6.2} ≤ {:.1} {} (source baseline: {}, lower=better)",
                         c,
-                        CAMBI_MAX,
-                        if cambi_ok { "✅" } else { "❌" }
+                        evaluation.cambi_ceiling,
+                        if evaluation.cambi_ok { "✅" } else { "❌" },
+                        baselines
+                            .source_cambi
+                            .map_or_else(|| "N/A".to_string(), |x| format!("{x:.2}"))
                     );
                 } else {
                     crate::log_eprintln!("      CAMBI: N/A (calculation failed) ❌");
                 }
 
                 if let Some((pu, pv)) = psnr_uv {
-                    let u_pass = pu >= PSNR_UV_MIN;
-                    let v_pass = pv >= PSNR_UV_MIN;
+                    let u_pass = pu >= evaluation.psnr_uv_floor.0;
+                    let v_pass = pv >= evaluation.psnr_uv_floor.1;
                     crate::log_eprintln!(
-                        "      PSNR-UV: U={:.2} dB {}, V={:.2} dB {} (min ≥ {:.1} dB)",
+                        "      PSNR-UV: U={:.2} dB {}, V={:.2} dB {} (floors ≥ {:.1}/{:.1} dB, search baseline: {})",
                         pu,
                         if u_pass { "✅" } else { "❌" },
                         pv,
                         if v_pass { "✅" } else { "❌" },
-                        PSNR_UV_MIN
+                        evaluation.psnr_uv_floor.0,
+                        evaluation.psnr_uv_floor.1,
+                        baselines.search_psnr_uv.map_or_else(
+                            || "N/A".to_string(),
+                            |(u, v)| format!("{u:.2}/{v:.2}")
+                        )
                     );
                 } else {
                     crate::log_eprintln!("      PSNR-UV: N/A (calculation failed) ❌");
@@ -943,7 +1148,7 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
 
                 crate::log_eprintln!("   ───────────────────────────────────────────────────");
 
-                let all_passed = vmaf_ok && cambi_ok && chroma_ok;
+                let all_passed = evaluation.all_passed();
 
                 if all_passed {
                     crate::log_eprintln!("   ✅ QUALITY GATE: PASSED");
@@ -955,28 +1160,28 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
                     result.psnr_uv_score = psnr_uv;
                 } else {
                     crate::log_eprintln!("   ❌ QUALITY GATE: FAILED");
-                    if !vmaf_ok {
+                    if !evaluation.vmaf_ok {
                         let v_str = vmaf_y.map_or_else(|| "N/A".to_string(), |v| format!("{v:.2}"));
                         crate::log_eprintln!(
-                            "      FAILED VMAF-Y {} < {:.1} (perceptual quality too low)",
+                            "      FAILED VMAF-Y {} < {:.1} (fell too far below this file's baseline)",
                             v_str,
-                            VMAF_Y_MIN
+                            evaluation.vmaf_floor
                         );
                     }
-                    if !cambi_ok {
+                    if !evaluation.cambi_ok {
                         let c_str = cambi.map_or_else(|| "N/A".to_string(), |c| format!("{c:.2}"));
                         crate::log_eprintln!(
-                            "      FAILED CAMBI {} > {:.1} (banding detected)",
+                            "      FAILED CAMBI {} > {:.1} (banding rose too far above source baseline)",
                             c_str,
-                            CAMBI_MAX
+                            evaluation.cambi_ceiling
                         );
                     }
-                    if !chroma_ok {
+                    if !evaluation.chroma_ok {
                         let uv_str = psnr_uv.map_or_else(
                             || "N/A".to_string(),
                             |(u, v): (f64, f64)| {
-                                let u_pass = u >= PSNR_UV_MIN;
-                                let v_pass = v >= PSNR_UV_MIN;
+                                let u_pass = u >= evaluation.psnr_uv_floor.0;
+                                let v_pass = v >= evaluation.psnr_uv_floor.1;
                                 format!(
                                     "U={:.2} dB {}, V={:.2} dB {}",
                                     u,
@@ -987,20 +1192,25 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
                             },
                         );
                         crate::log_eprintln!(
-                            "      FAILED PSNR-UV {} < {:.1} dB (chroma quality too low)",
+                            "      FAILED PSNR-UV {} < {:.1}/{:.1} dB (chroma fell too far below this file's baseline)",
                             uv_str,
-                            PSNR_UV_MIN
+                            evaluation.psnr_uv_floor.0,
+                            evaluation.psnr_uv_floor.1
                         );
                     }
                     crate::log_eprintln!("      Suggestion: Lower CRF or disable --compress");
-                    result.ms_ssim_passed = CheckResult::Failed("SSIM below target".into());
+                    result.ms_ssim_passed =
+                        CheckResult::Failed("Baseline-aware ultimate gate failed".into());
                     result.ms_ssim_score = vmaf_y.map(|v| v / 100.0);
                     result.vmaf_y_score = vmaf_y;
                     result.cambi_score = cambi;
                     result.psnr_uv_score = psnr_uv;
                 }
             } else {
-                // ── Normal Mode: Fusion (MS-SSIM + SSIM-All) ─────────────────
+                // ── Normal Mode: Baseline-Relative Fusion (MS-SSIM + SSIM-All) ──────────
+                // Pre-processing reference: explore-phase SSIM (`result.ssim`) captured during
+                // GPU/CPU search.  Post-processing measurements are compared against a floor
+                // derived from that reference so the gate is tailored to the source file.
                 crate::log_eprintln!("   Enabling fusion quality verification (MS-SSIM + SSIM)...");
 
                 let max_duration_min = ms_ssim_duration_threshold_secs / 60.0;
@@ -1012,11 +1222,8 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
                 let ssim_str = result
                     .ssim
                     .map_or_else(|| "N/A".to_string(), |s| format!("{s:.6}"));
-                crate::log_eprintln!("      SSIM (explore): {}", ssim_str);
+                crate::log_eprintln!("      SSIM (explore / pre-processing ref): {}", ssim_str);
 
-                let quality_target = result.actual_min_ssim.max(0.90);
-
-                let mut final_score: Option<f64> = None;
                 let mut ms_ssim_avg: Option<f64> = None;
                 let mut ssim_all_val: Option<f64> = None;
 
@@ -1061,69 +1268,84 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
                 }
 
                 crate::log_eprintln!("   ───────────────────────────────────────────────────");
-                if let (Some(ms), Some(ss)) = (ms_ssim_avg, ssim_all_val) {
-                    let fusion = MS_SSIM_WEIGHT.mul_add(ms, SSIM_ALL_WEIGHT * ss);
-                    final_score = Some(fusion);
-                    crate::log_eprintln!("   FUSION SCORE: {:.4}", fusion);
-                    crate::log_eprintln!(
-                        "      Formula: {:.1}×MS-SSIM + {:.1}×SSIM_All",
-                        MS_SSIM_WEIGHT,
-                        SSIM_ALL_WEIGHT
-                    );
-                    crate::log_eprintln!(
-                        "      = {:.1}×{:.4} + {:.1}×{:.4}",
-                        MS_SSIM_WEIGHT,
-                        ms,
-                        SSIM_ALL_WEIGHT,
-                        ss
-                    );
-                } else if let Some(ms) = ms_ssim_avg {
-                    final_score = Some(ms);
-                    crate::log_eprintln!("   SCORE (MS-SSIM only): {:.4}", ms);
-                    crate::log_eprintln!("      ⚠️  SSIM All unavailable, using MS-SSIM alone");
-                } else if let Some(ss) = ssim_all_val {
-                    final_score = Some(ss);
-                    crate::log_eprintln!("   SCORE (SSIM All only): {:.4}", ss);
-                    crate::log_eprintln!("      ⚠️  MS-SSIM unavailable, using SSIM All alone");
+
+                let baseline = NormalQualityBaseline {
+                    explore_ssim: result.ssim,
+                    min_ssim_config: result.actual_min_ssim,
+                };
+                let measurement = NormalQualityMeasurement { ms_ssim_avg, ssim_all: ssim_all_val };
+                let evaluation = build_normal_quality_evaluation(baseline, measurement);
+
+                match (ms_ssim_avg, ssim_all_val) {
+                    (Some(ms), Some(ss)) => {
+                        crate::log_eprintln!(
+                            "   FUSION SCORE: {:.4}",
+                            evaluation.fusion_score.unwrap_or(0.0)
+                        );
+                        crate::log_eprintln!(
+                            "      Formula: {:.1}×MS-SSIM + {:.1}×SSIM_All",
+                            MS_SSIM_WEIGHT,
+                            SSIM_ALL_WEIGHT
+                        );
+                        crate::log_eprintln!(
+                            "      = {:.1}×{:.4} + {:.1}×{:.4}",
+                            MS_SSIM_WEIGHT,
+                            ms,
+                            SSIM_ALL_WEIGHT,
+                            ss
+                        );
+                    }
+                    (Some(ms), None) => {
+                        crate::log_eprintln!("   SCORE (MS-SSIM only): {:.4}", ms);
+                        crate::log_eprintln!("      ⚠️  SSIM All unavailable, using MS-SSIM alone");
+                    }
+                    (None, Some(ss)) => {
+                        crate::log_eprintln!("   SCORE (SSIM All only): {:.4}", ss);
+                        crate::log_eprintln!("      ⚠️  MS-SSIM unavailable, using SSIM All alone");
+                    }
+                    (None, None) => {}
                 }
 
-                if let Some(score) = final_score {
+                if let Some(score) = evaluation.fusion_score {
                     let quality_grade = if score >= 0.98 {
                         "Excellent"
                     } else if score >= 0.95 {
                         "Very Good"
-                    } else if score >= quality_target {
+                    } else if score >= evaluation.fusion_floor {
                         "Good (meets target)"
                     } else if score >= 0.85 {
                         "Below Target"
                     } else {
                         "FAILED"
                     };
+                    let baseline_note = baseline
+                        .explore_ssim
+                        .map_or_else(|| "none".to_string(), |v| format!("{v:.6}"));
                     crate::log_eprintln!(
-                        "      Grade: {} (target: ≥{:.2})",
+                        "      Grade: {} (floor: ≥{:.4}, pre-processing ref: {})",
                         quality_grade,
-                        quality_target
+                        evaluation.fusion_floor,
+                        baseline_note
                     );
 
-                    if score < quality_target {
+                    if evaluation.passed {
                         crate::log_eprintln!(
-                            "   ❌ FUSION SCORE BELOW TARGET! {:.4} < {:.2}",
+                            "   ✅ FUSION SCORE TARGET MET: {:.4} ≥ {:.4}",
                             score,
-                            quality_target
+                            evaluation.fusion_floor
+                        );
+                        result.ms_ssim_passed = CheckResult::Passed;
+                    } else {
+                        crate::log_eprintln!(
+                            "   ❌ FUSION SCORE BELOW TARGET! {:.4} < {:.4}",
+                            score,
+                            evaluation.fusion_floor
                         );
                         crate::log_eprintln!("      ⚠️  Quality does not meet threshold!");
                         crate::log_eprintln!("      Suggestion: Lower CRF or disable --compress");
                         result.ms_ssim_passed = CheckResult::Failed("SSIM below target".into());
-                        result.ms_ssim_score = Some(score);
-                    } else {
-                        crate::log_eprintln!(
-                            "   ✅ FUSION SCORE TARGET MET: {:.4} ≥ {:.2}",
-                            score,
-                            quality_target
-                        );
-                        result.ms_ssim_passed = CheckResult::Passed;
-                        result.ms_ssim_score = Some(score);
                     }
+                    result.ms_ssim_score = Some(score);
                 } else {
                     let err_lines = [
                         "   ════════════════════════════════════════════════════",
@@ -1150,21 +1372,32 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
             if let Some((y, u, v, all)) = calculate_ssim_all(input, output) {
                 crate::log_eprintln!("   SSIM Y/U/V/All: {:.4}/{:.4}/{:.4}/{:.4}", y, u, v, all);
 
-                let long_threshold = result.actual_min_ssim.max(0.92);
-                if all < long_threshold {
+                let baseline = NormalQualityBaseline {
+                    explore_ssim: result.ssim,
+                    min_ssim_config: result.actual_min_ssim,
+                };
+                let measurement = NormalQualityMeasurement { ms_ssim_avg: None, ssim_all: Some(all) };
+                let evaluation = build_normal_quality_evaluation(baseline, measurement);
+                let baseline_note = baseline
+                    .explore_ssim
+                    .map_or_else(|| "none".to_string(), |v| format!("{v:.6}"));
+
+                if evaluation.passed {
                     crate::log_eprintln!(
-                        "   ❌ SSIM ALL BELOW TARGET! {:.4} < {:.2}",
+                        "   ✅ SSIM ALL TARGET MET: {:.4} ≥ {:.4} (pre-processing ref: {})",
                         all,
-                        long_threshold
-                    );
-                    result.ms_ssim_passed = CheckResult::Failed("SSIM below target".into());
-                } else {
-                    crate::log_eprintln!(
-                        "   ✅ SSIM ALL TARGET MET: {:.4} ≥ {:.2}",
-                        all,
-                        long_threshold
+                        evaluation.fusion_floor,
+                        baseline_note
                     );
                     result.ms_ssim_passed = CheckResult::Passed;
+                } else {
+                    crate::log_eprintln!(
+                        "   ❌ SSIM ALL BELOW TARGET! {:.4} < {:.4} (pre-processing ref: {})",
+                        all,
+                        evaluation.fusion_floor,
+                        baseline_note
+                    );
+                    result.ms_ssim_passed = CheckResult::Failed("SSIM below target".into());
                 }
                 result.ms_ssim_score = Some(all);
             } else {
@@ -1186,21 +1419,32 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
         if let Some((y, u, v, all)) = calculate_ssim_all(input, output) {
             crate::log_eprintln!("   SSIM Y/U/V/All: {:.4}/{:.4}/{:.4}/{:.4}", y, u, v, all);
 
-            let no_duration_threshold = result.actual_min_ssim.max(0.92);
-            if all < no_duration_threshold {
+            let baseline = NormalQualityBaseline {
+                explore_ssim: result.ssim,
+                min_ssim_config: result.actual_min_ssim,
+            };
+            let measurement = NormalQualityMeasurement { ms_ssim_avg: None, ssim_all: Some(all) };
+            let evaluation = build_normal_quality_evaluation(baseline, measurement);
+            let baseline_note = baseline
+                .explore_ssim
+                .map_or_else(|| "none".to_string(), |v| format!("{v:.6}"));
+
+            if evaluation.passed {
                 crate::log_eprintln!(
-                    "   ❌ SSIM ALL BELOW TARGET! {:.4} < {:.2}",
+                    "   ✅ SSIM ALL TARGET MET: {:.4} ≥ {:.4} (pre-processing ref: {})",
                     all,
-                    no_duration_threshold
-                );
-                result.ms_ssim_passed = CheckResult::Failed("SSIM below target".into());
-            } else {
-                crate::log_eprintln!(
-                    "   ✅ SSIM ALL TARGET MET: {:.4} ≥ {:.2}",
-                    all,
-                    no_duration_threshold
+                    evaluation.fusion_floor,
+                    baseline_note
                 );
                 result.ms_ssim_passed = CheckResult::Passed;
+            } else {
+                crate::log_eprintln!(
+                    "   ❌ SSIM ALL BELOW TARGET! {:.4} < {:.4} (pre-processing ref: {})",
+                    all,
+                    evaluation.fusion_floor,
+                    baseline_note
+                );
+                result.ms_ssim_passed = CheckResult::Failed("SSIM below target".into());
             }
             result.ms_ssim_score = Some(all);
         } else {
@@ -2082,6 +2326,11 @@ fn cpu_fine_tune_from_gpu_boundary(
             initial_step
         };
         let mut wall_hits: u32 = 0;
+        // Tracks how many consecutive wall hits occurred while already at the minimum step.
+        // In ultimate mode the loop defers to Phase 4 instead of breaking on a single
+        // min-step wall hit, but if it keeps oscillating at the same boundary we must
+        // stop rather than spin forever.
+        let mut consecutive_min_step_walls: u32 = 0;
 
         // If it's a GIF starting at 0.0, ensure we test 0.0 itself as the first anchor.
         // cpu_fine_tune_from_gpu_boundary Phase 1 actually already does this via gpu_size = encode_cached(gpu_boundary_crf, ...).
@@ -2270,7 +2519,8 @@ fn cpu_fine_tune_from_gpu_boundary(
 
                             // Early insight: only trigger if quality fails threshold AND no improvement
                             // VMAF and PSNR thresholds defined at module level
-                            let any_metric_fails = v < VMAF_Y_MIN || u.min(v_score) < PSNR_UV_MIN;
+                            let any_metric_fails =
+                                metrics_below_ultimate_sanity_floor(v, (u, v_score));
 
                             if !vmaf_improved && !psnr_improved && any_metric_fails {
                                 failure_credibility += 1.0;
@@ -2332,9 +2582,11 @@ fn cpu_fine_tune_from_gpu_boundary(
                             bail!("Quality wall hit but PSNR UV not measured");
                         };
 
-                        if vmaf_metric < VMAF_Y_MIN || psnr_uv_min_channel < PSNR_UV_MIN {
+                        if vmaf_metric < VMAF_Y_SANITY_FLOOR
+                            || psnr_uv_min_channel < PSNR_UV_SANITY_FLOOR
+                        {
                             crate::log_eprintln!(
-                                "   \x1b[1;31m❌ QUALITY CEILING HIT (NOT CREDIBLE):\x1b[0m Saturated at VMAF:{:.2}, UV:{:.2}. Below mandatory gate. Aborting.",
+                                "   \x1b[1;31m❌ QUALITY CEILING HIT (NOT CREDIBLE):\x1b[0m Saturated at VMAF:{:.2}, UV:{:.2}. Below sanity floor. Aborting.",
                                 vmaf_metric, psnr_uv_min_channel
                             );
                             quality_wall_hit = true;
@@ -2467,11 +2719,23 @@ fn cpu_fine_tune_from_gpu_boundary(
                     // might still improve.  Let Phase 4 handle the 0.01-granularity walk.
                     // `ExifTool` format codes (`%d%f%e`), and suspicious command-line prefixes (`-@`).
                     if ultimate_mode {
+                        consecutive_min_step_walls += 1;
                         crate::verbose_eprintln!(
-                            "   {} [CPU] At minimum step in ultimate mode — deferring to Phase 4 fine-tune.{}",
+                            "   {} [CPU] At minimum step in ultimate mode — deferring to Phase 4 fine-tune. ({}/3){}",
                             BRIGHT_YELLOW,
+                            consecutive_min_step_walls,
                             RESET
                         );
+                        // After 3 consecutive min-step wall hits the search is oscillating
+                        // at the same boundary.  Break and let Phase 4 finish the job.
+                        if consecutive_min_step_walls >= 3 {
+                            crate::log_eprintln!(
+                                "   {} [CPU] Min-step wall hit 3× in a row — handing off to Phase 4.{}",
+                                BRIGHT_YELLOW,
+                                RESET
+                            );
+                            break;
+                        }
                         // Don't break; keep last_good_crf so Phase 4 starts from there.
                     } else {
                         crate::log_eprintln!(
@@ -2481,6 +2745,8 @@ fn cpu_fine_tune_from_gpu_boundary(
                         );
                         break;
                     }
+                } else {
+                    consecutive_min_step_walls = 0;
                 }
 
                 if wall_hits >= max_wall_hits {
@@ -2848,7 +3114,8 @@ fn cpu_fine_tune_from_gpu_boundary(
                     }
 
                     // Early insight: only trigger if BOTH quality metrics fail threshold AND no improvement
-                    let both_metrics_fail = v < VMAF_Y_MIN && u.min(v_score) < PSNR_UV_MIN;
+                    let both_metrics_fail =
+                        both_metrics_below_ultimate_sanity_floor(v, (u, v_score));
 
                     if !vmaf_improved && !psnr_improved && both_metrics_fail {
                         failure_credibility += 1.0;
@@ -3105,10 +3372,9 @@ fn cpu_fine_tune_from_gpu_boundary(
 
                     // Early termination logic: based on insight evaluation
                     if ultimate_mode {
-                        // PSNR_UV_MIN threshold defined at module level (line 57)
                         let any_metric_fails =
                             if let (Some(v), Some(uv)) = (current_vmaf_val, current_psnr_val) {
-                                v < VMAF_Y_MIN || uv.0.min(uv.1) < PSNR_UV_MIN
+                                metrics_below_ultimate_sanity_floor(v, uv)
                             } else {
                                 false
                             };
@@ -3257,7 +3523,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                         let quality_degraded = if let (Some(v), Some((u, v_score))) =
                             (current_vmaf_val, current_psnr_val)
                         {
-                            v < VMAF_Y_MIN && u.min(v_score) < PSNR_UV_MIN
+                            both_metrics_below_ultimate_sanity_floor(v, (u, v_score))
                         } else {
                             false
                         };
@@ -4223,8 +4489,11 @@ pub fn explore_av1_with_gpu(req: GpuSearchRequest) -> Result<ExploreResult> {
 #[cfg(test)]
 mod tests {
     use super::{
-        search_anchor_crf, select_hevc_ultimate_winner, shortlist_hevc_slower_finalists,
-        CheckResult, ExploreResult, HevcUltimateCandidate, ABSOLUTE_MIN_CRF,
+        adaptive_cambi_ceiling, adaptive_psnr_uv_floor, adaptive_vmaf_floor,
+        evaluate_ultimate_quality_gate, search_anchor_crf, select_hevc_ultimate_winner,
+        shortlist_hevc_slower_finalists, CheckResult, ExploreResult, HevcUltimateCandidate,
+        UltimateQualityBaselines, UltimateQualityMetrics, ABSOLUTE_MIN_CRF, CAMBI_MAX,
+        PSNR_UV_SANITY_FLOOR, VMAF_Y_SANITY_FLOOR,
     };
     use crate::types::EncoderPreset;
     use std::path::PathBuf;
@@ -4401,5 +4670,68 @@ mod tests {
         candidates[1].result.ssim = Some(0.997);
 
         assert_eq!(select_hevc_ultimate_winner(&candidates, 1_100), 1);
+    }
+
+    #[test]
+    fn test_adaptive_quality_floors_follow_search_baseline() {
+        assert_eq!(adaptive_vmaf_floor(Some(95.0)), 91.0);
+        assert_eq!(adaptive_vmaf_floor(None), VMAF_Y_SANITY_FLOOR);
+
+        assert_eq!(adaptive_psnr_uv_floor(Some((36.5, 35.0))), (32.5, 31.0));
+        assert_eq!(
+            adaptive_psnr_uv_floor(None),
+            (PSNR_UV_SANITY_FLOOR, PSNR_UV_SANITY_FLOOR)
+        );
+    }
+
+    #[test]
+    fn test_adaptive_cambi_ceiling_respects_source_banding_level() {
+        assert_eq!(adaptive_cambi_ceiling(None), CAMBI_MAX);
+        assert_eq!(adaptive_cambi_ceiling(Some(2.5)), CAMBI_MAX);
+        assert_eq!(adaptive_cambi_ceiling(Some(5.5)), 7.5);
+        assert_eq!(adaptive_cambi_ceiling(Some(10.0)), 13.0);
+        assert_eq!(adaptive_cambi_ceiling(Some(20.0)), 25.0);
+    }
+
+    #[test]
+    fn test_baseline_aware_gate_passes_when_output_stays_close_to_source_profile() {
+        let evaluation = evaluate_ultimate_quality_gate(
+            UltimateQualityMetrics {
+                vmaf_y: Some(90.5),
+                psnr_uv: Some((31.5, 31.2)),
+                cambi: Some(11.5),
+            },
+            UltimateQualityBaselines {
+                search_vmaf_y: Some(94.0),
+                search_psnr_uv: Some((35.0, 35.0)),
+                source_cambi: Some(9.0),
+            },
+        );
+
+        assert!(evaluation.vmaf_ok);
+        assert!(evaluation.chroma_ok);
+        assert!(evaluation.cambi_ok);
+        assert!(evaluation.all_passed());
+    }
+
+    #[test]
+    fn test_baseline_aware_gate_rejects_outputs_far_below_baseline() {
+        let evaluation = evaluate_ultimate_quality_gate(
+            UltimateQualityMetrics {
+                vmaf_y: Some(84.0),
+                psnr_uv: Some((28.5, 29.0)),
+                cambi: Some(9.5),
+            },
+            UltimateQualityBaselines {
+                search_vmaf_y: Some(94.0),
+                search_psnr_uv: Some((35.0, 35.0)),
+                source_cambi: Some(5.0),
+            },
+        );
+
+        assert!(!evaluation.vmaf_ok);
+        assert!(!evaluation.chroma_ok);
+        assert!(!evaluation.cambi_ok);
+        assert!(!evaluation.all_passed());
     }
 }

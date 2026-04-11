@@ -611,7 +611,11 @@ fn shortlist_finalists(
     include_finalist(&mut finalists, &mut selected, &candidates[best_idx]);
 
     // Fill remaining slots: tier 1 → tier 2 → tier 3.
-    for tier in [&below_source[..], &near_boundary_cands[..], &promoted_oversize[..]] {
+    for tier in [
+        &below_source[..],
+        &near_boundary_cands[..],
+        &promoted_oversize[..],
+    ] {
         for candidate in tier {
             if finalists.len() >= JXL_FINALIST_LIMIT {
                 break;
@@ -771,7 +775,11 @@ where
             ratio * 100.0
         ));
         return Ok(Some(finalize_screening_result(
-            input_size, candidates, 0, iterations, log,
+            input_size,
+            candidates,
+            0,
+            iterations,
+            log,
             ratio,
             0.0,
             "early-exit",
@@ -1055,7 +1063,10 @@ where
             #[allow(clippy::cast_possible_truncation)]
             let mid = canonicalize_generated_distance((f64::from(lo) + f64::from(hi)) / 2.0)?;
 
-            if tested.contains(&distance_key(mid)) || mid <= lo + f32::EPSILON || mid >= hi - f32::EPSILON {
+            if tested.contains(&distance_key(mid))
+                || mid <= lo + f32::EPSILON
+                || mid >= hi - f32::EPSILON
+            {
                 break;
             }
             tested.insert(distance_key(mid));
@@ -1135,7 +1146,11 @@ where
     };
 
     Ok(Some(finalize_screening_result(
-        input_size, candidates, final_best_idx, iterations, log,
+        input_size,
+        candidates,
+        final_best_idx,
+        iterations,
+        log,
         ratio,
         pressure_stops,
         plan.profile.label(),
@@ -1238,7 +1253,7 @@ mod tests {
             let size = if distance <= 0.1 {
                 105 // oversize: 105%
             } else {
-                98  // below source
+                98 // below source
             };
             Ok(size)
         })
@@ -1250,7 +1265,10 @@ mod tests {
         assert!(result.best_distance < 1.0);
         // Phase 2 binary search log should appear
         assert!(
-            result.log.iter().any(|line| line.contains("Phase 2 binary search")),
+            result
+                .log
+                .iter()
+                .any(|line| line.contains("Phase 2 binary search")),
             "expected Phase 2 binary search log, got {:?}",
             result.log
         );
@@ -1397,7 +1415,7 @@ mod tests {
             let size = if distance <= 0.005 {
                 1050 // oversize
             } else {
-                950  // below source
+                950 // below source
             };
             Ok(size)
         })
@@ -1408,11 +1426,15 @@ mod tests {
         assert!(
             result.iterations < JXL_EXPLORE_MAX_ITERATIONS,
             "expected early convergence but used {}/{} iterations",
-            result.iterations, JXL_EXPLORE_MAX_ITERATIONS
+            result.iterations,
+            JXL_EXPLORE_MAX_ITERATIONS
         );
         // Binary search log should be present
         assert!(
-            result.log.iter().any(|line| line.contains("Phase 2 binary search")),
+            result
+                .log
+                .iter()
+                .any(|line| line.contains("Phase 2 binary search")),
             "expected Phase 2 binary search log, got {:?}",
             result.log
         );
@@ -1436,7 +1458,8 @@ mod tests {
         assert!(
             result.iterations < JXL_EXPLORE_MAX_ITERATIONS,
             "should not exhaust budget but used {}/{} iterations",
-            result.iterations, JXL_EXPLORE_MAX_ITERATIONS
+            result.iterations,
+            JXL_EXPLORE_MAX_ITERATIONS
         );
         // best_distance must be a below-source candidate
         assert!(
@@ -1469,7 +1492,7 @@ mod tests {
             if distance <= 0.04 {
                 Ok(1100) // oversize
             } else {
-                Ok(990)  // below source
+                Ok(990) // below source
             }
         })
         .expect("exploration should succeed")
@@ -1479,7 +1502,8 @@ mod tests {
         assert!(
             f64::from(result.best_distance) <= 0.04 + precision,
             "best_distance={} should converge to <= 0.04 + precision ({})",
-            result.best_distance, 0.04 + precision
+            result.best_distance,
+            0.04 + precision
         );
         assert!(result.best_output_size < 1000);
     }

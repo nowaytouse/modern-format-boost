@@ -6,6 +6,44 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] — TBD
 
+### 🎬 Video Quality Gate Overhaul
+
+- **Baseline-Aware Ultimate Mode Quality Gate**: Replaced fixed absolute thresholds (VMAF-Y ≥ 92.0, PSNR-UV ≥ 34.0, CAMBI ≤ 6.0) with per-file adaptive baselines derived from search-phase results and source video analysis:
+  - **VMAF-Y floor**: `max(search_baseline - 4.0, 86.0)` — allows a controlled drop from the best search result while keeping a hard sanity floor
+  - **PSNR-UV floor**: `max(search_baseline - 4.0, 30.0)` per channel — same adaptive logic for chroma fidelity
+  - **CAMBI ceiling**: For clean sources (`≤6.0`), allows `+2.0` rise above source; for already-banded sources (`>6.0`), allows `max(+3.0, +25%)` growth — prevents penalizing files that already had banding
+  - New data structures: `UltimateQualityBaselines`, `UltimateQualityMetrics`, `UltimateQualityEvaluation`
+  - New evaluation function: `evaluate_ultimate_quality_gate()` checks all three dimensions independently with `all_passed()` summary
+- **Baseline-Aware Normal Mode Fusion Gate**: SSIM quality verification now uses the explore-phase SSIM as a pre-processing reference instead of relying solely on a global floor:
+  - Fusion floor: `max(explore_ssim - 0.04, config_min_ssim, 0.88)` — tailored to each file's baseline
+  - New structures: `NormalQualityBaseline`, `NormalQualityMeasurement`, `NormalQualityEvaluation`
+  - Build function: `build_normal_quality_evaluation()` constructs adaptive pass threshold from baseline + config
+  - Logging now shows "pre-processing ref" alongside fusion score for traceability
+- **Adaptive Quality Floor Functions**: `adaptive_vmaf_floor()`, `adaptive_psnr_uv_floor()`, `adaptive_cambi_ceiling()` — all accept optional search/source baselines and return adaptive bounds bounded by hard sanity floors
+- **Sanity Floor Constants**: `VMAF_Y_SANITY_FLOOR` (86.0), `PSNR_UV_SANITY_FLOOR` (30.0) — lowered from previous 92.0/34.0 to act as catastrophic-failure guards rather than primary gates
+- **Ultimate Quality Gate Logging Enhancement**: All quality metrics now show search baseline values alongside pass/fail status (e.g., "VMAF-Y: 90.50 ≥ 90.00 ✅ (search baseline: 94.00)")
+- **CAMBI Source Baseline Measurement**: Ultimate mode now measures source video CAMBI before final output check, enabling relative banding comparison
+
+### 🔧 GPU Acceleration Improvements
+
+- **VideoToolbox Retry with Software Fallback**: On macOS, GPU encoder probe now retries with `-allow_sw 1` if the first attempt fails with "Cannot create compression session" — handles transient GPU contention gracefully
+- **Improved GPU Detection Logging**: GPU failure reason now surfaced in fallback message (e.g., "GPU probe failed (no supported encoder found), using CPU encoding") instead of generic "No GPU acceleration"
+- **Deferred GPU Detection Log**: `print_detection_info()` now only called when GPU is actually needed, avoiding misleading "no GPU" messages for files that skip GPU exploration anyway
+- **Probe Resolution Increased**: Test pattern resolution bumped from 64×64 to 128×128 for more reliable encoder detection
+
+### 🧠 CPU Fine-Tune Stability
+
+- **Consecutive Min-Step Wall Hit Tracking**: Added `consecutive_min_step_walls` counter to prevent infinite oscillation in ultimate mode CPU fine-tune loop
+- **3-Strike Break Rule**: After 3 consecutive min-step wall hits, the loop breaks and hands off to Phase 4 — prevents spinning at the same boundary
+- **Counter Reset on Progress**: `consecutive_min_step_walls` resets to 0 when a wall hit does not occur, ensuring only consecutive oscillations trigger the break
+
+### 🧪 Test Coverage
+
+- **Adaptive Quality Floor Tests**: `test_adaptive_quality_floors_follow_search_baseline` — verifies VMAF and PSNR-UV adaptive floor calculations with and without baselines
+- **CAMBI Ceiling Tests**: `test_adaptive_cambi_ceiling_respects_source_banding_level` — validates ceiling logic for both clean and banded source videos
+- **Baseline-Aware Gate Pass Test**: `test_baseline_aware_gate_passes_when_output_stays_close_to_source_profile` — confirms gate passes when output metrics stay near baselines
+- **Baseline-Aware Gate Reject Test**: `test_baseline_aware_gate_rejects_outputs_far_below_baseline` — confirms gate rejects outputs that deviate too far from baselines
+
 ### 🐍 Script Improvements
 
 - **collect_optimized.py v13**: Major refactor of the optimized file collection script with improved reliability and structure mirroring:

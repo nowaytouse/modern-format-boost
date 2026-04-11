@@ -313,7 +313,10 @@ impl<'a> VideoExplorationMetrics<'a> {
             _ => String::new(),
         };
 
-        let ssim_msg = self.ssim.map(|s| format!(", SSIM: {s:.4}")).unwrap_or_default();
+        let ssim_msg = self
+            .ssim
+            .map(|s| format!(", SSIM: {s:.4}"))
+            .unwrap_or_default();
 
         let core_msg = format!(
             "{} (CRF {}{}, {} iter{}): {}",
