@@ -25,7 +25,7 @@ All notable changes to this project will be documented in this file.
 ### 🎬 Phase 4 CPU Fine-Tune Refinement
 
 - **Attempt Cap for Phase 4 Loop**: Added `PHASE4_MAX_ATTEMPTS` (32) hard cap on Phase 4 fine-tune iterations, preventing runaway loops on pathological sources that keep oscillating at CRF boundaries
-- **Configurable Failure Budget**: Replaced hardcoded `max_fine_failures = 20` (ultimate mode) / `3` (normal mode) with unified `PHASE4_ULTIMATE_MAX_FINE_FAILURES` (8) — Phase 4 is a local 0.01 refinement, not an open-ended walk, so 20 was wasteful
+- **Configurable Failure Budget**: Replaced hardcoded `max_fine_failures = 20` (ultimate mode) / `3` (normal mode) with unified `PHASE4_ULTIMATE_MAX_FINE_FAILURES` (2) — Phase 4 is a local 0.01 refinement, not an open-ended walk, so 8-20 was wasteful and caused blind oscillation gaps. Phase 3 downward exploration failure cap `MAX_CONSECUTIVE_FAILURES` was also tightened to (2) to harden against boundless oscillations while still allowing a tiny window (2 encode tolerance) for anomalous compression bumps.
 - **CRF=0 Probe Scope Narrowed**: `should_probe_crf_zero_from_phase4()` now only probes CRF 0.0 when best CRF converged within 1.0 of the floor (was previously up to 20.0). Prevents pointless lossless probes on content that clearly benefits from non-zero CRF
 - **CRF=0 Skip Logging**: When CRF 0.0 probe is skipped, a dim-level log explains why (`"Skipping CRF 0.00 probe: best CRF 26.75 is not near the floor."`)
 - **Backtrack Retry Logging**: Backtrack retry limit now uses `PHASE4_MAX_BACKTRACK_RETRIES` (3) constant with dynamic label in log output
@@ -59,10 +59,11 @@ All notable changes to this project will be documented in this file.
 - **Deferred GPU Detection Log**: `print_detection_info()` now only called when GPU is actually needed, avoiding misleading "no GPU" messages for files that skip GPU exploration anyway
 - **Probe Resolution Increased**: Test pattern resolution bumped from 64×64 to 128×128 for more reliable encoder detection
 
-### 🧠 Exploration Oscillation Hardening
+### 🧠 CPU Fine-Tune Stability
 
-- **Phase 1 Minimum Step Lockdown**: Removed the previous "3-strike" tolerance rule for Phase 1 `consecutive_min_step_walls`. The loop now instantly breaks upon the very first failure to compress when stepping down at the minimum granularity (0.01). Since file size increases strictly monotonically as CRF drops, this totally eliminates the downward looping gap that blindly wasted iterations against the size boundary.
-- **Phase 4 Capacity Wall Lockdown**: Stripped the downward 0.01 granularity `fine_failures` fallback loop that previously burned 8 pointless encodes marching into oversize territory after failing. Phase 4 now strictly terminates upon its first boundary hit at `min_step`.
+- **Consecutive Min-Step Wall Hit Tracking**: Added `consecutive_min_step_walls` counter to prevent infinite oscillation in ultimate mode CPU fine-tune loop
+- **3-Strike Break Rule**: After 3 consecutive min-step wall hits, the loop breaks and hands off to Phase 4 — prevents spinning at the same boundary
+- **Counter Reset on Progress**: `consecutive_min_step_walls` resets to 0 when a wall hit does not occur, ensuring only consecutive oscillations trigger the break
 
 ### 🧪 Test Coverage
 
