@@ -274,13 +274,17 @@ vid run --codec av1 /path/to/media
 ## ❓ FAQ
 
 **1. Is JXL broadly supported?**  
-Partially native on macOS Sonoma (14) + iOS 17+. Also supported in Chrome 91+ and Firefox 128+. Note: Animated JXL is currently broken on macOS (static only). JXL remains the best for bit-exact archival.
+Native support exists in macOS 14+ / iOS 17+, Chrome 91+, and Firefox 128+. However, there are known ecosystem issues:  
+- **Animations**: Modern animated formats (JXL/AV1/HEIF) often fail to preview as animations in the native macOS/iOS Photos app or Finder (static only), especially when synchronized via iCloud. They play correctly in modern browsers or specialized tools.  
+- **Thumbnails**: JXL files using **grayscale ICC profiles** may appear as **black thumbnails** in Finder/iCloud, even though they render perfectly when opened.  
+JXL remains the superior format for bit-exact archival and high-fidelity HDR storage.
 
-**2. What happens to HDR10+?**  
-Fully supported! We use `hdr10plus_tool` to extract the dynamic metadata and inject it back into `libx265` via `--dhdr10-info`. Ensure the tool is installed for this feature.
+**2. How is HDR10+ handled?**  
+Fully supported. We use `hdr10plus_tool` to extract SMPTE 2094-40 dynamic metadata and inject it back into the HEVC stream via `libx265`'s `--dhdr10-info` parameter. Ensure the tool is installed to enable this feature.
 
 **3. Why skip WebP/AVIF/HEIC?**  
-They are already modern lossy formats. Re-encoding causes "generational loss," which we strictly avoid.
+These formats are already modern and highly compressed. Re-encoding them would cause "generational loss" (quality degradation) with minimal size benefits.  
+**Exceptions**: The tool *will* process these if it detects high-fidelity **HDR Gainmaps** for synthesis into JXL, or if an animated file requires optimization via the **Meme Score** engine.
 
 ---
 
