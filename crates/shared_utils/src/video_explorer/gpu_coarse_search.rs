@@ -3876,7 +3876,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     } else {
         0
     };
-    let (final_crf, mut final_full_size) = match (best_crf, best_size) {
+    let (mut final_crf, mut final_full_size) = match (best_crf, best_size) {
         (Some(crf), Some(size)) if crf < max_crf => {
             if size <= input_size + size_tolerance {
                 crate::log_eprintln!(
@@ -3930,6 +3930,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     };
 
     let needs_final_preset_render = final_output_preset != preset;
+    let mut needs_phase_5 = false;
 
     if use_animated_exploration_sampling && !early_insight_triggered {
         crate::log_eprintln!(
@@ -3945,6 +3946,9 @@ fn cpu_fine_tune_from_gpu_boundary(
             final_output_preset,
         )?;
         iterations += 1;
+        if needs_final_preset_render && final_crf < max_crf {
+            needs_phase_5 = true;
+        }
     } else if needs_final_preset_render && !early_insight_triggered && final_crf < max_crf {
         crate::log_eprintln!(
             "{}🎯 Final render: preset {} → {} at settled CRF {:.2}{}",
@@ -3960,6 +3964,83 @@ fn cpu_fine_tune_from_gpu_boundary(
             final_output_preset,
         )?;
         iterations += 1;
+        needs_phase_5 = true;
+    }
+
+    if needs_phase_5 {
+        crate::log_eprintln!();
+        crate::log_eprintln!(
+            "{}Phase 5: [CPU] Downward Exploration with Ultimate Preset ({}){}",
+            BRIGHT_MAGENTA,
+            final_output_preset.hevc_name(),
+            RESET
+        );
+        crate::log_eprintln!(
+            "   {}Starting from Phase 4 bound (CRF {:.2}). Stopping immediately on size increase.{}",
+            DIM, final_crf, RESET
+        );
+
+        let backup_path = output.with_extension(format!("{}.bak", output.extension().and_then(|s| s.to_str()).unwrap_or("tmp")));
+        let mut test_crf = final_crf - 0.01;
+        
+        #[allow(clippy::while_float)]
+        while test_crf >= 0.0 {
+            // Re-align to prevent float precision drift
+            test_crf = (test_crf * 100.0).round() / 100.0;
+            if test_crf < 0.0 { test_crf = 0.0; }
+
+            // Back up the current best size file before overwriting
+            let _ = std::fs::rename(output, &backup_path);
+
+            crate::log_eprintln!(
+                "   {}🔬 Probing ultimate preset at CRF {:.2}...{}",
+                BRIGHT_CYAN, test_crf, RESET
+            );
+
+            match encode_full(test_crf, AnimatedExplorationEncodeMode::FullTimeline, final_output_preset) {
+                Ok(test_size) => {
+                    iterations += 1;
+                    if test_size < final_full_size {
+                        let pct_gain = (1.0 - (crate::numeric_cast::u64_to_f64(test_size) / crate::numeric_cast::u64_to_f64(final_full_size.max(1)))) * 100.0;
+                        crate::log_eprintln!(
+                            "      {}✓ CRF {:.2} -> {} bytes (decreased by {:.2}%, keeping){}",
+                            BRIGHT_GREEN, test_crf, test_size, pct_gain, RESET
+                        );
+                        final_crf = test_crf;
+                        final_full_size = test_size;
+                        // Throw away the backup (we have a new best)
+                        let _ = std::fs::remove_file(&backup_path);
+                        
+                        if test_crf == 0.0 {
+                            break; // hit the floor
+                        }
+                        test_crf -= 0.01;
+                    } else {
+                        crate::log_eprintln!(
+                            "      {}✗ CRF {:.2} -> {} bytes (increased past {}, stopping){}",
+                            BRIGHT_RED, test_crf, test_size, final_full_size, RESET
+                        );
+                        let _ = std::fs::remove_file(output); // remove the oversized one
+                        let _ = std::fs::rename(&backup_path, output); // restore best
+                        break;
+                    }
+                }
+                Err(e) => {
+                    crate::log_eprintln!(
+                        "      {}⚠️ Probe failed at CRF {:.2}: {}{}",
+                        BRIGHT_YELLOW, test_crf, e, RESET
+                    );
+                    let _ = std::fs::remove_file(output);
+                    let _ = std::fs::rename(&backup_path, output);
+                    break;
+                }
+            }
+        }
+        
+        crate::log_eprintln!(
+            "   {}🎯 Phase 5 completed. Final CRF: {:.2}{}",
+            BRIGHT_GREEN, final_crf, RESET
+        );
     }
 
     crate::verbose_eprintln!(
@@ -4370,23 +4451,25 @@ mod tests {
 
     #[test]
     fn test_adaptive_quality_floors_follow_search_baseline() {
-        assert_eq!(adaptive_vmaf_floor(Some(95.0)), 91.0);
-        assert_eq!(adaptive_vmaf_floor(None), VMAF_Y_SANITY_FLOOR);
+        assert!((adaptive_vmaf_floor(Some(95.0)) - 91.0).abs() < f64::EPSILON);
+        assert!((adaptive_vmaf_floor(None) - VMAF_Y_SANITY_FLOOR).abs() < f64::EPSILON);
 
-        assert_eq!(adaptive_psnr_uv_floor(Some((36.5, 35.0))), (32.5, 31.0));
-        assert_eq!(
-            adaptive_psnr_uv_floor(None),
-            (PSNR_UV_SANITY_FLOOR, PSNR_UV_SANITY_FLOOR)
-        );
+        let psnr = adaptive_psnr_uv_floor(Some((36.5, 35.0)));
+        assert!((psnr.0 - 32.5).abs() < f64::EPSILON);
+        assert!((psnr.1 - 31.0).abs() < f64::EPSILON);
+        
+        let null_psnr = adaptive_psnr_uv_floor(None);
+        assert!((null_psnr.0 - PSNR_UV_SANITY_FLOOR).abs() < f64::EPSILON);
+        assert!((null_psnr.1 - PSNR_UV_SANITY_FLOOR).abs() < f64::EPSILON);
     }
 
     #[test]
     fn test_adaptive_cambi_ceiling_respects_source_banding_level() {
-        assert_eq!(adaptive_cambi_ceiling(None), CAMBI_MAX);
-        assert_eq!(adaptive_cambi_ceiling(Some(2.5)), CAMBI_MAX);
-        assert_eq!(adaptive_cambi_ceiling(Some(5.5)), 7.5);
-        assert_eq!(adaptive_cambi_ceiling(Some(10.0)), 13.0);
-        assert_eq!(adaptive_cambi_ceiling(Some(20.0)), 25.0);
+        assert!((adaptive_cambi_ceiling(None) - CAMBI_MAX).abs() < f64::EPSILON);
+        assert!((adaptive_cambi_ceiling(Some(2.5)) - CAMBI_MAX).abs() < f64::EPSILON);
+        assert!((adaptive_cambi_ceiling(Some(5.5)) - 7.5).abs() < f64::EPSILON);
+        assert!((adaptive_cambi_ceiling(Some(10.0)) - 13.0).abs() < f64::EPSILON);
+        assert!((adaptive_cambi_ceiling(Some(20.0)) - 25.0).abs() < f64::EPSILON);
     }
 
     #[test]

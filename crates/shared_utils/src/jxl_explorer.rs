@@ -134,7 +134,7 @@ pub struct JxlScreeningResult {
     pub log: Vec<String>,
     /// Telemetry: ratio of initial JXL output to input (≥1.0 when oversize).
     pub initial_ratio: f64,
-    /// Telemetry: log2(initial_ratio) — oversize severity in doublings.
+    /// Telemetry: `log2(initial_ratio)` — oversize severity in doublings.
     pub pressure_stops: f64,
     /// Telemetry: exploration profile selected for this file.
     pub profile_label: &'static str,
@@ -154,7 +154,7 @@ pub struct JxlExploreResult {
     pub log: Vec<String>,
     /// Telemetry: ratio of initial JXL output to input.
     pub initial_ratio: f64,
-    /// Telemetry: log2(initial_ratio) — oversize severity in doublings.
+    /// Telemetry: `log2(initial_ratio)` — oversize severity in doublings.
     pub pressure_stops: f64,
     /// Telemetry: exploration profile selected for this file.
     pub profile_label: &'static str,
@@ -194,7 +194,10 @@ struct JxlExplorationPlan {
 
 type DistanceKey = u32;
 
-fn clamp_explore_distance(distance: f32) -> f32 {
+/// Clamps a distance value to the valid exploration range `[FLOOR, CEILING]`.
+#[inline]
+#[must_use]
+pub fn clamp_explore_distance(distance: f32) -> f32 {
     if !distance.is_finite() {
         return JXL_EXPLORE_FLOOR;
     }
@@ -323,7 +326,7 @@ fn smoothstep01(value: f64) -> f64 {
 
 /// Interpolate in **log10-distance space** (plateau tier only).
 ///
-/// Used for the MicroAdjust profile where distances are sub-0.01. In this range,
+/// Used for the `MicroAdjust` profile where distances are sub-0.01. In this range,
 /// linear steps would collapse to identical f32 values, so log-space preserves
 /// resolution across the near-lossless plateau. Smoothstep easing prevents
 /// clustering at band edges.
@@ -340,7 +343,7 @@ fn interpolate_plateau_distance(
 
 /// Interpolate in **linear distance space** (perceptual tiers).
 ///
-/// Used for BoundaryPush, WidePush, and CeilingSweep profiles. In the d=0.01..1.0
+/// Used for `BoundaryPush`, `WidePush`, and `CeilingSweep` profiles. In the d=0.01..1.0
 /// range, equal Δdistance ≈ equal ΔJND, so linear spacing tracks perceptual
 /// quality steps. Smoothstep easing concentrates probes near the band center
 /// where the quality/size trade-off is steepest.
@@ -796,8 +799,8 @@ where
         format_distance_for_log(initial_distance),
         size_ratio_pct(initial_size, input_size),
         plan.ladder.len(),
-        format_scalar_for_log(band_min as f32),
-        format_scalar_for_log(band_max as f32),
+        format_scalar_for_log(#[allow(clippy::cast_possible_truncation)] { band_min as f32 }),
+        format_scalar_for_log(#[allow(clippy::cast_possible_truncation)] { band_max as f32 }),
         format_distance_for_log(plan.target_distance)
     ));
     log.push(format!(
@@ -921,8 +924,8 @@ where
             // Still oversize — update d_over only if this probe is tighter than the current
             // bracket (i.e., it's the highest oversize d that is still below d_under).
             // Probes above d_under are not useful for binary search.
-            let tighter_than_current = d_over.map_or(true, |lo| candidate_distance > lo);
-            let below_d_under = d_under.map_or(true, |hi| candidate_distance < hi);
+            let tighter_than_current = d_over.is_none_or(|lo| candidate_distance > lo);
+            let below_d_under = d_under.is_none_or(|hi| candidate_distance < hi);
             if tighter_than_current && below_d_under {
                 d_over = Some(candidate_distance);
             }
@@ -1061,7 +1064,7 @@ where
 
         while iterations < JXL_EXPLORE_MAX_ITERATIONS && hi - lo >= precision {
             #[allow(clippy::cast_possible_truncation)]
-            let mid = canonicalize_generated_distance((f64::from(lo) + f64::from(hi)) / 2.0)?;
+            let mid = canonicalize_generated_distance(f64::midpoint(f64::from(lo), f64::from(hi)))?;
 
             if tested.contains(&distance_key(mid))
                 || mid <= lo + f32::EPSILON
@@ -1117,7 +1120,7 @@ where
             if size < input_size {
                 // New best: lower d that still beats source
                 hi = mid;
-                if best_below_idx.map_or(true, |idx| mid < candidates[idx].distance) {
+                if best_below_idx.is_none_or(|idx| mid < candidates[idx].distance) {
                     best_below_idx = Some(probe_idx);
                     add_reason(
                         &mut candidates,
@@ -1135,12 +1138,9 @@ where
     // Determine the best candidate index.
     // Priority: lowest d where output < input (best_below_idx).
     // If nothing ever beat the source, skip JXL entirely.
-    let final_best_idx = if let Some(idx) = best_below_idx {
-        idx
-    } else {
+    let Some(final_best_idx) = best_below_idx else {
         log.push(format!(
-            "No candidate beat source size ({}B); skipping JXL",
-            input_size
+            "No candidate beat source size ({input_size}B); skipping JXL"
         ));
         return Ok(None);
     };
@@ -1332,11 +1332,14 @@ mod tests {
             target_distance_for_ratio(ceiling_ratio, exploration_profile(ceiling_ratio)).unwrap();
 
         assert!(micro_target > JXL_EXPLORE_FLOOR);
-        assert!(micro_target <= JXL_DISTANCE_CEILING_PLATEAU_MAX as f32 + f32::EPSILON);
-        assert!(boundary_target > micro_target);
-        assert!(boundary_target <= JXL_DISTANCE_VISUAL_LOSSLESS_MAX as f32 + f32::EPSILON);
-        assert!(wide_target > boundary_target);
-        assert!(wide_target <= JXL_DISTANCE_BALANCED_MAX as f32 + f32::EPSILON);
+        #[allow(clippy::cast_possible_truncation)]
+        {
+            assert!(micro_target <= JXL_DISTANCE_CEILING_PLATEAU_MAX as f32 + f32::EPSILON);
+            assert!(boundary_target > micro_target);
+            assert!(boundary_target <= JXL_DISTANCE_VISUAL_LOSSLESS_MAX as f32 + f32::EPSILON);
+            assert!(wide_target > boundary_target);
+            assert!(wide_target <= JXL_DISTANCE_BALANCED_MAX as f32 + f32::EPSILON);
+        }
         assert!(ceiling_target > wide_target);
         assert!(ceiling_target < JXL_EXPLORE_CEILING);
     }
@@ -1370,15 +1373,14 @@ mod tests {
 
     #[test]
     fn test_boundary_push_interpolates_in_perceptual_distance_space() {
-        let midpoint_stops = (JXL_MICRO_PRESSURE_STOPS_MAX + JXL_BOUNDARY_PRESSURE_STOPS_MAX) / 2.0;
+        let midpoint_stops = f64::midpoint(JXL_MICRO_PRESSURE_STOPS_MAX, JXL_BOUNDARY_PRESSURE_STOPS_MAX);
         let midpoint_ratio = 2f64.powf(midpoint_stops);
         let target =
             target_distance_for_ratio(midpoint_ratio, exploration_profile(midpoint_ratio)).unwrap();
 
         assert!(
             (target - 0.055).abs() < 0.01,
-            "mid-band perceptual target should stay near linear JND midpoint, got {}",
-            target
+            "mid-band perceptual target should stay near linear JND midpoint, got {target}"
         );
         assert!(
             target > 0.03,

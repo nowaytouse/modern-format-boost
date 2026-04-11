@@ -1890,20 +1890,121 @@ fn try_explore_ultimate_jxl_distance(
     shared_utils::io_utils::robust_move(&best_path, temp_output)
         .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
 
+    // ── Phase: Continued Downward Exploration at e10 ────────────────────
+    // e10 has greater compression potential than e7. After finalists settle,
+    // continue stepping distance downward (higher quality) to see if e10
+    // can produce even smaller files at lower distances.
+    // STRICT RULE: stop immediately on first size increase.
+    let mut accepted_distance = best_candidate.distance;
+    let mut accepted_size = best_size;
+    {
+        let floor = shared_utils::constants::JXL_EXPLORE_FLOOR;
+        // Adaptive step: use 1/10th of current distance, clamped to sane bounds
+        let step = (accepted_distance / 10.0).clamp(
+            shared_utils::constants::JXL_EXPLORE_BINARY_SEARCH_PRECISION,
+            0.01,
+        );
+        let mut test_distance = accepted_distance - step;
+        let mut continued_iterations = 0u32;
+        const MAX_CONTINUED_ITERATIONS: u32 = 20;
+
+        if test_distance >= floor {
+            shared_utils::progress_mode::emit_stderr(&format!(
+                "   🔬 Continued e{} exploration: stepping down from d={} (step={})",
+                final_effort,
+                shared_utils::jxl_explorer::format_distance_for_log(accepted_distance),
+                shared_utils::jxl_explorer::format_distance_for_log(step),
+            ));
+        }
+
+        while test_distance >= floor && continued_iterations < MAX_CONTINUED_ITERATIONS {
+            // Canonicalize to avoid float drift
+            let candidate_distance = shared_utils::jxl_explorer::clamp_explore_distance(test_distance);
+
+            let candidate_output =
+                shared_utils::path_safety::isolated_temp_path_for_search(temp_output)
+                    .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
+
+            match encode_jxl_probe_to_output(
+                input,
+                actual_input,
+                &candidate_output,
+                candidate_distance,
+                final_effort,
+                max_threads,
+                options.apple_compat,
+                icc_path,
+                hdr_info,
+                "Continued exploration",
+            ) {
+                Ok(size) => {
+                    continued_iterations += 1;
+                    let pct = if input_size == 0 {
+                        100.0
+                    } else {
+                        (size as f64 / input_size as f64) * 100.0
+                    };
+
+                    if size < accepted_size {
+                        // Progress: smaller file at lower distance
+                        shared_utils::progress_mode::emit_stderr(&format!(
+                            "      ✓ d={} -> {:.1}% of input (gain)",
+                            shared_utils::jxl_explorer::format_distance_for_log(candidate_distance),
+                            pct
+                        ));
+                        accepted_distance = candidate_distance;
+                        accepted_size = size;
+                        // Move the new best to temp_output
+                        let _ = shared_utils::io_utils::safe_remove_file(temp_output);
+                        shared_utils::io_utils::robust_move(&candidate_output, temp_output)
+                            .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
+                        test_distance -= step;
+                    } else {
+                        // Size increased or stayed the same — stop immediately
+                        shared_utils::progress_mode::emit_stderr(&format!(
+                            "      ✗ d={} -> {:.1}% of input (size increased, stopping)",
+                            shared_utils::jxl_explorer::format_distance_for_log(candidate_distance),
+                            pct
+                        ));
+                        let _ = shared_utils::io_utils::safe_remove_file(&candidate_output);
+                        break;
+                    }
+                }
+                Err(err) => {
+                    let _ = shared_utils::io_utils::safe_remove_file(&candidate_output);
+                    shared_utils::progress_mode::emit_stderr(&format!(
+                        "      ⚠️ Continued exploration probe failed at d={}: {err}",
+                        shared_utils::jxl_explorer::format_distance_for_log(candidate_distance)
+                    ));
+                    break;
+                }
+            }
+        }
+
+        if continued_iterations > 0 && accepted_distance < best_candidate.distance {
+            shared_utils::progress_mode::emit_stderr(&format!(
+                "   🎯 Continued exploration improved: d={} -> d={} ({} probes)",
+                shared_utils::jxl_explorer::format_distance_for_log(best_candidate.distance),
+                shared_utils::jxl_explorer::format_distance_for_log(accepted_distance),
+                continued_iterations
+            ));
+        }
+    }
+
     let mut log = screening.log.clone();
     log.push(format!(
         "Accepted e10 finalist d={} -> {:.1}% of input",
-        shared_utils::jxl_explorer::format_distance_for_log(best_candidate.distance),
+        shared_utils::jxl_explorer::format_distance_for_log(accepted_distance),
         if input_size == 0 {
             100.0
         } else {
-            (best_size as f64 / input_size as f64) * 100.0
+            (accepted_size as f64 / input_size as f64) * 100.0
         }
     ));
 
     let result = shared_utils::jxl_explorer::JxlExploreResult {
-        accepted_distance: best_candidate.distance,
-        output_size: best_size,
+        accepted_distance,
+        output_size: accepted_size,
         iterations: screening.iterations,
         ladder_phase: best_candidate.ladder_phase,
         screened_best_distance: screening.best_distance,

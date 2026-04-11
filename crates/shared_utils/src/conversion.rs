@@ -287,7 +287,7 @@ pub struct VideoExplorationMetrics<'a> {
     pub quality_label: Option<&'a str>,
 }
 
-impl<'a> VideoExplorationMetrics<'a> {
+impl VideoExplorationMetrics<'_> {
     #[must_use]
     pub fn format_message(&self, reduction_pct: f64) -> String {
         let reduction = reduction_pct / 100.0;

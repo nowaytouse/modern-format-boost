@@ -25,6 +25,7 @@ All notable changes to this project will be documented in this file.
 - **Backtrack Retry Logging**: Backtrack retry limit now uses `PHASE4_MAX_BACKTRACK_RETRIES` (3) constant with dynamic label in log output
 - **HEVC Ultimate Two-Stage Logging**: Added explicit stage progress markers — "Stage 1/2: screening preset slow" and "Stage 2/2: finalist preset slower" — for visibility into the two-pass HEVC ultimate workflow
 - **Unit Test**: `test_phase4_crf0_probe_requires_near_floor` verifies the probe boundary behavior (passes at 0.25 and 1.0, rejects at 0.0, 1.01, and 26.75)
+- **Phase 5 Continuous Quality Downward Sweep**: After settling on the best CRF in Phase 4 (with `search` preset), Phase 5 employs the `final` ultimate preset to step CRF downward towards higher quality (0.01 at a time). It strictly stops immediately upon any file size regression, ensuring no computation is wasted and the maximal possible quality is extracted while staying below the Phase 4 bounds.
 
 ### 🎬 Video Quality Gate Overhaul
 
@@ -108,6 +109,7 @@ All notable changes to this project will be documented in this file.
   - `target_distance`: the adaptive plan's target distance
   - Telemetry line emitted to stderr: `TELEMETRY: outcome_distance=... outcome_pct=... profile=... pressure_stops=...`
 - **Describe Finalist Pass**: New `describe_jxl_finalist_pass()` function generates human-readable finalist descriptions for stderr output, including role (rechecking floor, verifying break-even, sampling branch), origin (screened vs refined), and size ratio.
+- **Post-Finalization Quality Sweep**: After `e10` processing determines the definitive finalist, a new continuous exploration phase dynamically steps downwards to explore higher visual fidelities (`d` < settled) at `e10` effort. It instantly terminates on the very first output size regression, yielding the highest possible quality for the matched space without wasting encoder cycles or budget.
 
 ### 🛡️ Quality & Correctness
 
