@@ -641,6 +641,17 @@ def select_mode():
                 show_cursor()
                 sys.exit(0)
         else:
+            # Non-interactive mode: Default to adjacent if not set
+            if OUTPUT_MODE == "adjacent" and not OUTPUT_DIR:
+                tdir = Path(TARGET_DIR).resolve()
+                OUTPUT_DIR = str(
+                    get_unique_output_path(
+                        tdir.parent / (tdir.name + "_optimized")
+                    )
+                )
+                print(f"\n{GREEN}NON-INTERACTIVE MODE: ADJACENT SELECTED{RESET}")
+                print(f"   Output: {DIM}{OUTPUT_DIR}{RESET}")
+                create_directory_structure(TARGET_DIR, OUTPUT_DIR)
             show_cursor()
             break
 
