@@ -414,3 +414,101 @@ pub fn check_lossless_integrity(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── is_valid_ssim_value ───────────────────────────────────────────────
+
+    #[test]
+    fn test_valid_ssim_normal_range() {
+        assert!(is_valid_ssim_value(0.95));
+        assert!(is_valid_ssim_value(1.0));
+        assert!(is_valid_ssim_value(0.0));
+    }
+
+    #[test]
+    fn test_valid_ssim_rejects_out_of_range() {
+        assert!(!is_valid_ssim_value(1.01));
+        assert!(!is_valid_ssim_value(-0.01));
+        assert!(!is_valid_ssim_value(f64::NAN));
+    }
+
+    // ── extract_ssim_value ────────────────────────────────────────────────
+
+    #[test]
+    fn test_extract_ssim_value_typical() {
+        let line = "SSIM Y:0.9876 U:0.9821 V:0.9790 All:0.9829";
+        assert!((extract_ssim_value(line, "Y:").unwrap() - 0.9876).abs() < 1e-4);
+        assert!((extract_ssim_value(line, "U:").unwrap() - 0.9821).abs() < 1e-4);
+        assert!((extract_ssim_value(line, "V:").unwrap() - 0.9790).abs() < 1e-4);
+        assert!((extract_ssim_value(line, "All:").unwrap() - 0.9829).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_extract_ssim_value_inf() {
+        let line = "SSIM Y:inf U:inf V:inf All:inf";
+        assert_eq!(extract_ssim_value(line, "Y:").unwrap(), 1.0);
+        assert_eq!(extract_ssim_value(line, "All:").unwrap(), 1.0);
+    }
+
+    #[test]
+    fn test_extract_ssim_value_missing_prefix() {
+        let line = "SSIM Y:0.98 All:0.97";
+        assert!(extract_ssim_value(line, "Z:").is_none());
+    }
+
+    #[test]
+    fn test_extract_ssim_value_perfect() {
+        let line = "SSIM Y:1.000000 All:1.000000";
+        assert!((extract_ssim_value(line, "Y:").unwrap() - 1.0).abs() < 1e-6);
+    }
+
+    // ── parse_ssim_from_output ────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_ssim_from_output_typical() {
+        let stderr =
+            "[Parsed_ssim_0 @ 0x1234] SSIM Y:0.9876 U:0.9821 V:0.9790 All:0.9829 (21.667260)\n";
+        let result = parse_ssim_from_output(stderr);
+        assert!(result.is_some());
+        assert!((result.unwrap() - 0.9829).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_parse_ssim_from_output_perfect_identical() {
+        let stderr = "SSIM Y:inf U:inf V:inf All:inf\n";
+        let result = parse_ssim_from_output(stderr);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), 1.0);
+    }
+
+    #[test]
+    fn test_parse_ssim_from_output_multiline() {
+        let stderr = concat!(
+            "frame=100 fps=25\n",
+            "[Parsed_ssim_0 @ 0xabc] SSIM Y:0.9500 U:0.9400 V:0.9300 All:0.9400 (12.34)\n",
+            "video:0kB audio:0kB\n",
+        );
+        let result = parse_ssim_from_output(stderr);
+        assert!(result.is_some());
+        assert!((result.unwrap() - 0.94).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_parse_ssim_from_output_no_match() {
+        assert!(parse_ssim_from_output("frame=100 fps=25\n").is_none());
+    }
+
+    #[test]
+    fn test_parse_ssim_from_output_empty() {
+        assert!(parse_ssim_from_output("").is_none());
+    }
+
+    #[test]
+    fn test_parse_ssim_from_output_ssim_without_all() {
+        // Has "SSIM" keyword but no "All:" field
+        assert!(parse_ssim_from_output("SSIM Y:0.98 U:0.97 V:0.96\n").is_none());
+    }
+}

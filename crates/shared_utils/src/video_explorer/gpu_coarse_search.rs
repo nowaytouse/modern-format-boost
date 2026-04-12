@@ -3764,9 +3764,11 @@ fn cpu_fine_tune_from_gpu_boundary(
                                 "   {}🎯 Convergence achieved! Lower CRF sizes exceed limits. Stopping Phase 4.{}",
                                 BRIGHT_MAGENTA, RESET
                             );
-                            
+
                             // Check if a mandatory floor test is required
-                            if should_probe_crf_zero_from_phase4(current_best) && !size_cache.contains_key(0.0) {
+                            if should_probe_crf_zero_from_phase4(current_best)
+                                && !size_cache.contains_key(0.0)
+                            {
                                 crate::log_eprintln!(
                                     "   {}Ultimate fallback: forcing final check at CRF 0.00 (lossless floor){}",
                                     BRIGHT_CYAN, RESET
@@ -3777,7 +3779,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                             break;
                         }
 
-                        // We shouldn't gracefully fall down to this point unless 
+                        // We shouldn't gracefully fall down to this point unless
                         // backtracking conditions failed, but just in case, clamp and try again:
                         current_step = (current_step / 2.0).max(base_step);
                         test_crf = current_best - current_step;
@@ -3967,7 +3969,10 @@ fn cpu_fine_tune_from_gpu_boundary(
             DIM, final_crf, PHASE5_MAX_CONSECUTIVE_FAILURES, RESET
         );
 
-        let backup_path = output.with_extension(format!("{}.bak", output.extension().and_then(|s| s.to_str()).unwrap_or("tmp")));
+        let backup_path = output.with_extension(format!(
+            "{}.bak",
+            output.extension().and_then(|s| s.to_str()).unwrap_or("tmp")
+        ));
         let mut test_crf = final_crf - 0.01;
         let mut consecutive_failures = 0u32;
         let mut total_attempts = 0u32;
@@ -3984,7 +3989,9 @@ fn cpu_fine_tune_from_gpu_boundary(
             if total_attempts >= PHASE5_MAX_TOTAL_ATTEMPTS {
                 crate::log_eprintln!(
                     "   {}Absolute Phase 5 safety cap ({} total attempts) reached. Stopping.{}",
-                    BRIGHT_YELLOW, PHASE5_MAX_TOTAL_ATTEMPTS, RESET
+                    BRIGHT_YELLOW,
+                    PHASE5_MAX_TOTAL_ATTEMPTS,
+                    RESET
                 );
                 break;
             }
@@ -3992,51 +3999,73 @@ fn cpu_fine_tune_from_gpu_boundary(
 
             // Re-align to prevent float precision drift
             test_crf = (test_crf * 100.0).round() / 100.0;
-            if test_crf < 0.0 { test_crf = 0.0; }
+            if test_crf < 0.0 {
+                test_crf = 0.0;
+            }
 
             // Back up the current best size file before overwriting
             let _ = std::fs::rename(output, &backup_path);
 
             crate::log_eprintln!(
                 "   {}🔬 Probing ultimate preset at CRF {:.2}...{}",
-                BRIGHT_CYAN, test_crf, RESET
+                BRIGHT_CYAN,
+                test_crf,
+                RESET
             );
 
-            match encode_full(test_crf, AnimatedExplorationEncodeMode::FullTimeline, final_output_preset) {
+            match encode_full(
+                test_crf,
+                AnimatedExplorationEncodeMode::FullTimeline,
+                final_output_preset,
+            ) {
                 Ok(test_size) => {
                     iterations += 1;
                     if test_size < final_full_size {
-                        let pct_gain = (1.0 - (crate::numeric_cast::u64_to_f64(test_size) / crate::numeric_cast::u64_to_f64(final_full_size.max(1)))) * 100.0;
+                        let pct_gain = (1.0
+                            - (crate::numeric_cast::u64_to_f64(test_size)
+                                / crate::numeric_cast::u64_to_f64(final_full_size.max(1))))
+                            * 100.0;
                         crate::log_eprintln!(
                             "      {}✓ CRF {:.2} -> {} bytes (decreased by {:.2}%, keeping){}",
-                            BRIGHT_GREEN, test_crf, test_size, pct_gain, RESET
+                            BRIGHT_GREEN,
+                            test_crf,
+                            test_size,
+                            pct_gain,
+                            RESET
                         );
                         final_crf = test_crf;
                         final_full_size = test_size;
                         // Throw away the backup (we have a new best)
                         let _ = std::fs::remove_file(&backup_path);
                         consecutive_failures = 0; // Reset patience
-                        
+
                         if test_crf == 0.0 {
                             break; // hit the floor
                         }
                         test_crf -= 0.01;
                     } else {
                         consecutive_failures += 1;
-                        let attempts_left = PHASE5_MAX_CONSECUTIVE_FAILURES.saturating_sub(consecutive_failures);
+                        let attempts_left =
+                            PHASE5_MAX_CONSECUTIVE_FAILURES.saturating_sub(consecutive_failures);
                         crate::log_eprintln!(
                             "      {}✗ CRF {:.2} -> {} bytes (increased past {}, discarding){}",
-                            BRIGHT_RED, test_crf, test_size, final_full_size, RESET
+                            BRIGHT_RED,
+                            test_crf,
+                            test_size,
+                            final_full_size,
+                            RESET
                         );
                         if attempts_left > 0 && total_attempts < PHASE5_MAX_TOTAL_ATTEMPTS {
                             crate::log_eprintln!(
                                 "      {}... exploring further ({} lookahead attempts remaining){}",
-                                DIM, attempts_left, RESET
+                                DIM,
+                                attempts_left,
+                                RESET
                             );
                         }
                         let _ = std::fs::remove_file(output); // remove the oversized one
                         let _ = std::fs::rename(&backup_path, output); // restore best
-                        
+
                         if test_crf == 0.0 {
                             break; // hit the floor, cannot probe downwards
                         }
@@ -4046,7 +4075,10 @@ fn cpu_fine_tune_from_gpu_boundary(
                 Err(e) => {
                     crate::log_eprintln!(
                         "      {}⚠️ Probe failed at CRF {:.2}: {}{}",
-                        BRIGHT_YELLOW, test_crf, e, RESET
+                        BRIGHT_YELLOW,
+                        test_crf,
+                        e,
+                        RESET
                     );
                     let _ = std::fs::remove_file(output);
                     let _ = std::fs::rename(&backup_path, output);
@@ -4054,10 +4086,12 @@ fn cpu_fine_tune_from_gpu_boundary(
                 }
             }
         }
-        
+
         crate::log_eprintln!(
             "   {}🎯 Phase 5 completed. Final CRF: {:.2}{}",
-            BRIGHT_GREEN, final_crf, RESET
+            BRIGHT_GREEN,
+            final_crf,
+            RESET
         );
     }
 
@@ -4475,7 +4509,7 @@ mod tests {
         let psnr = adaptive_psnr_uv_floor(Some((36.5, 35.0)));
         assert!((psnr.0 - 32.5).abs() < f64::EPSILON);
         assert!((psnr.1 - 31.0).abs() < f64::EPSILON);
-        
+
         let null_psnr = adaptive_psnr_uv_floor(None);
         assert!((null_psnr.0 - PSNR_UV_SANITY_FLOOR).abs() < f64::EPSILON);
         assert!((null_psnr.1 - PSNR_UV_SANITY_FLOOR).abs() < f64::EPSILON);
@@ -4530,5 +4564,270 @@ mod tests {
         assert!(!evaluation.chroma_ok);
         assert!(!evaluation.cambi_ok);
         assert!(!evaluation.all_passed());
+    }
+
+    // ── CRITICAL: None-metrics gate (the exact production failure) ─────────
+
+    #[test]
+    fn test_gate_rejects_when_psnr_uv_is_none() {
+        // This is the EXACT scenario that caused production failures:
+        // VMAF and CAMBI pass, but PSNR-UV returns None (calculation failed).
+        let evaluation = evaluate_ultimate_quality_gate(
+            UltimateQualityMetrics {
+                vmaf_y: Some(99.96),
+                psnr_uv: None, // ← calculation failed
+                cambi: Some(0.01),
+            },
+            UltimateQualityBaselines {
+                search_vmaf_y: None,
+                search_psnr_uv: None,
+                source_cambi: Some(0.01),
+            },
+        );
+
+        assert!(evaluation.vmaf_ok);
+        assert!(evaluation.cambi_ok);
+        assert!(!evaluation.chroma_ok, "None PSNR-UV must fail chroma gate");
+        assert!(
+            !evaluation.all_passed(),
+            "Gate must fail when any metric is None"
+        );
+    }
+
+    #[test]
+    fn test_gate_rejects_when_vmaf_is_none() {
+        let evaluation = evaluate_ultimate_quality_gate(
+            UltimateQualityMetrics {
+                vmaf_y: None,
+                psnr_uv: Some((50.0, 48.0)),
+                cambi: Some(1.0),
+            },
+            UltimateQualityBaselines {
+                search_vmaf_y: Some(99.0),
+                search_psnr_uv: Some((50.0, 48.0)),
+                source_cambi: Some(1.0),
+            },
+        );
+
+        assert!(!evaluation.vmaf_ok, "None VMAF must fail");
+        assert!(!evaluation.all_passed());
+    }
+
+    #[test]
+    fn test_gate_rejects_when_cambi_is_none() {
+        let evaluation = evaluate_ultimate_quality_gate(
+            UltimateQualityMetrics {
+                vmaf_y: Some(98.0),
+                psnr_uv: Some((50.0, 48.0)),
+                cambi: None,
+            },
+            UltimateQualityBaselines {
+                search_vmaf_y: Some(99.0),
+                search_psnr_uv: Some((50.0, 48.0)),
+                source_cambi: Some(1.0),
+            },
+        );
+
+        assert!(!evaluation.cambi_ok, "None CAMBI must fail");
+        assert!(!evaluation.all_passed());
+    }
+
+    #[test]
+    fn test_gate_all_none_metrics_fails() {
+        let evaluation = evaluate_ultimate_quality_gate(
+            UltimateQualityMetrics {
+                vmaf_y: None,
+                psnr_uv: None,
+                cambi: None,
+            },
+            UltimateQualityBaselines::default(),
+        );
+        assert!(!evaluation.vmaf_ok);
+        assert!(!evaluation.chroma_ok);
+        assert!(!evaluation.cambi_ok);
+        assert!(!evaluation.all_passed());
+    }
+
+    // ── metrics_below_ultimate_sanity_floor ────────────────────────────────
+
+    #[test]
+    fn test_metrics_below_floor_both_below() {
+        assert!(super::metrics_below_ultimate_sanity_floor(
+            80.0,
+            (25.0, 25.0)
+        ));
+    }
+
+    #[test]
+    fn test_metrics_below_floor_vmaf_only_below() {
+        assert!(super::metrics_below_ultimate_sanity_floor(
+            80.0,
+            (40.0, 40.0)
+        ));
+    }
+
+    #[test]
+    fn test_metrics_below_floor_psnr_only_below() {
+        assert!(super::metrics_below_ultimate_sanity_floor(
+            95.0,
+            (25.0, 25.0)
+        ));
+    }
+
+    #[test]
+    fn test_metrics_below_floor_neither_below() {
+        assert!(!super::metrics_below_ultimate_sanity_floor(
+            95.0,
+            (40.0, 40.0)
+        ));
+    }
+
+    #[test]
+    fn test_both_metrics_below_floor_true() {
+        assert!(super::both_metrics_below_ultimate_sanity_floor(
+            80.0,
+            (25.0, 25.0)
+        ));
+    }
+
+    #[test]
+    fn test_both_metrics_below_floor_only_one() {
+        assert!(!super::both_metrics_below_ultimate_sanity_floor(
+            80.0,
+            (40.0, 40.0)
+        ));
+        assert!(!super::both_metrics_below_ultimate_sanity_floor(
+            95.0,
+            (25.0, 25.0)
+        ));
+    }
+
+    // ── build_normal_quality_evaluation ────────────────────────────────────
+
+    #[test]
+    fn test_normal_eval_passes_with_good_scores() {
+        let eval = super::build_normal_quality_evaluation(
+            super::NormalQualityBaseline {
+                explore_ssim: Some(0.98),
+                min_ssim_config: 0.90,
+            },
+            super::NormalQualityMeasurement {
+                ms_ssim_avg: Some(0.97),
+                ssim_all: Some(0.96),
+            },
+        );
+        assert!(eval.passed);
+        assert!(eval.fusion_score.is_some());
+    }
+
+    #[test]
+    fn test_normal_eval_fails_with_low_scores() {
+        let eval = super::build_normal_quality_evaluation(
+            super::NormalQualityBaseline {
+                explore_ssim: Some(0.98),
+                min_ssim_config: 0.90,
+            },
+            super::NormalQualityMeasurement {
+                ms_ssim_avg: Some(0.80),
+                ssim_all: Some(0.82),
+            },
+        );
+        assert!(!eval.passed);
+    }
+
+    #[test]
+    fn test_normal_eval_none_measurements_fails() {
+        let eval = super::build_normal_quality_evaluation(
+            super::NormalQualityBaseline {
+                explore_ssim: Some(0.98),
+                min_ssim_config: 0.90,
+            },
+            super::NormalQualityMeasurement {
+                ms_ssim_avg: None,
+                ssim_all: None,
+            },
+        );
+        assert!(!eval.passed);
+        assert!(eval.fusion_score.is_none());
+    }
+
+    #[test]
+    fn test_normal_eval_ms_ssim_only() {
+        let eval = super::build_normal_quality_evaluation(
+            super::NormalQualityBaseline {
+                explore_ssim: Some(0.96),
+                min_ssim_config: 0.90,
+            },
+            super::NormalQualityMeasurement {
+                ms_ssim_avg: Some(0.95),
+                ssim_all: None,
+            },
+        );
+        assert!(eval.fusion_score.is_some());
+        assert!((eval.fusion_score.unwrap() - 0.95).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_normal_eval_ssim_all_only() {
+        let eval = super::build_normal_quality_evaluation(
+            super::NormalQualityBaseline {
+                explore_ssim: Some(0.96),
+                min_ssim_config: 0.90,
+            },
+            super::NormalQualityMeasurement {
+                ms_ssim_avg: None,
+                ssim_all: Some(0.95),
+            },
+        );
+        assert!(eval.fusion_score.is_some());
+        assert!((eval.fusion_score.unwrap() - 0.95).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_normal_eval_no_baseline_uses_config_floor() {
+        let eval = super::build_normal_quality_evaluation(
+            super::NormalQualityBaseline {
+                explore_ssim: None,
+                min_ssim_config: 0.92,
+            },
+            super::NormalQualityMeasurement {
+                ms_ssim_avg: Some(0.93),
+                ssim_all: Some(0.93),
+            },
+        );
+        assert!(eval.passed);
+        // Floor should be max(0.92, 0.88) = 0.92
+        assert!((eval.fusion_floor - 0.92).abs() < 1e-6);
+    }
+
+    // ── adaptive floor / ceiling boundary tests ───────────────────────────
+
+    #[test]
+    fn test_adaptive_vmaf_floor_clamps_to_sanity() {
+        // baseline 88.0 - 4.0 = 84.0, but sanity floor is 86.0
+        assert!((adaptive_vmaf_floor(Some(88.0)) - VMAF_Y_SANITY_FLOOR).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_adaptive_psnr_floor_clamps_to_sanity() {
+        // baseline 32.0 - 4.0 = 28.0, but sanity floor is 30.0
+        let psnr = adaptive_psnr_uv_floor(Some((32.0, 33.0)));
+        assert!((psnr.0 - PSNR_UV_SANITY_FLOOR).abs() < f64::EPSILON);
+        assert!((psnr.1 - PSNR_UV_SANITY_FLOOR).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_adaptive_cambi_ceiling_borderline_clean() {
+        // Source CAMBI exactly at CAMBI_MAX boundary
+        let ceil = adaptive_cambi_ceiling(Some(CAMBI_MAX));
+        assert!(ceil >= CAMBI_MAX);
+    }
+
+    #[test]
+    fn test_adaptive_cambi_ceiling_heavily_banded() {
+        // Source has high banding — ceiling should use ratio
+        let ceil = adaptive_cambi_ceiling(Some(40.0));
+        // max(3.0, 40.0 * 0.25) = 10.0, so ceiling = 50.0
+        assert!((ceil - 50.0).abs() < 1e-6);
     }
 }

@@ -675,7 +675,10 @@ fn parse_psnr_average_y_from_stderr(stderr: &str) -> Option<f64> {
         if line.contains("PSNR") && line.contains("average:") {
             // Try "y:" field first (for single-plane extraction output)
             if let Some(pos) = line.find("y:") {
-                let after = &line[pos + 2..];
+                let after = line[pos + 2..].trim_start();
+                if after.starts_with("inf") || after.starts_with("-inf") {
+                    return Some(100.0);
+                }
                 let end = after
                     .find(|c: char| !c.is_numeric() && c != '.')
                     .unwrap_or(after.len());
@@ -689,7 +692,10 @@ fn parse_psnr_average_y_from_stderr(stderr: &str) -> Option<f64> {
             }
             // Fallback: "average:" field
             if let Some(pos) = line.find("average:") {
-                let after = &line[pos + 8..];
+                let after = line[pos + 8..].trim_start();
+                if after.starts_with("inf") || after.starts_with("-inf") {
+                    return Some(100.0);
+                }
                 let end = after
                     .find(|c: char| !c.is_numeric() && c != '.')
                     .unwrap_or(after.len());
@@ -923,6 +929,19 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_psnr_identical_infinity() {
+        let stderr = "PSNR y:inf u:inf v:inf average:inf min:inf max:inf\n";
+        let result = parse_psnr_average_y_from_stderr(stderr);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), 100.0);
+
+        let stderr_avg = "PSNR average:inf min:inf max:inf\n";
+        let result_avg = parse_psnr_average_y_from_stderr(stderr_avg);
+        assert!(result_avg.is_some());
+        assert_eq!(result_avg.unwrap(), 100.0);
+    }
+
+    #[test]
     fn test_common_even_metric_dimensions_uses_shared_even_minimum() {
         let dims = common_even_metric_dimensions(29571, 1833, 29570, 1834);
         assert_eq!(dims, Some((29570, 1832)));
@@ -947,5 +966,170 @@ mod tests {
     fn test_num_cpus_capped_is_deterministic() {
         // Calling twice should return the same value
         assert_eq!(num_cpus_capped(), num_cpus_capped());
+    }
+
+    // ── parse_ms_ssim_from_json ───────────────────────────────────────────
+
+    #[test]
+    fn test_parse_ms_ssim_json_typical() {
+        let json =
+            r#"{"pooled_metrics": {"float_ms_ssim": {"min": 0.95, "max": 0.99, "mean": 0.9712}}}"#;
+        let r = parse_ms_ssim_from_json(json);
+        assert!(r.is_some());
+        assert!((r.unwrap() - 0.9712).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_parse_ms_ssim_json_perfect() {
+        let json = r#"{"pooled_metrics": {"float_ms_ssim": {"mean": 1.0}}}"#;
+        assert!((parse_ms_ssim_from_json(json).unwrap() - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_parse_ms_ssim_json_integer() {
+        let json = r#"{"pooled_metrics": {"float_ms_ssim": {"mean": 1}}}"#;
+        assert!((parse_ms_ssim_from_json(json).unwrap() - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_parse_ms_ssim_json_missing_key() {
+        assert!(
+            parse_ms_ssim_from_json(r#"{"pooled_metrics": {"vmaf": {"mean": 95.0}}}"#).is_none()
+        );
+    }
+
+    #[test]
+    fn test_parse_ms_ssim_json_empty() {
+        assert!(parse_ms_ssim_from_json("").is_none());
+    }
+
+    #[test]
+    fn test_parse_ms_ssim_json_no_pooled() {
+        assert!(parse_ms_ssim_from_json(r#"{"float_ms_ssim": {"mean": 0.98}}"#).is_none());
+    }
+
+    // ── parse_ms_ssim_from_legacy ─────────────────────────────────────────
+
+    #[test]
+    fn test_parse_ms_ssim_legacy_typical() {
+        let s = "[libvmaf] MS-SSIM score: 0.9856\n";
+        assert!((parse_ms_ssim_from_legacy(s).unwrap() - 0.9856).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_parse_ms_ssim_legacy_ms_ssim_variant() {
+        let s = "ms_ssim score: 0.9732\n";
+        assert!((parse_ms_ssim_from_legacy(s).unwrap() - 0.9732).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_parse_ms_ssim_legacy_float_variant() {
+        let s = "float_ms_ssim score: 0.9900\n";
+        assert!((parse_ms_ssim_from_legacy(s).unwrap() - 0.99).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_parse_ms_ssim_legacy_no_match() {
+        assert!(parse_ms_ssim_from_legacy("frame=100 fps=25\n").is_none());
+    }
+
+    #[test]
+    fn test_parse_ms_ssim_legacy_empty() {
+        assert!(parse_ms_ssim_from_legacy("").is_none());
+    }
+
+    #[test]
+    fn test_parse_ms_ssim_legacy_missing_score_keyword() {
+        assert!(parse_ms_ssim_from_legacy("MS-SSIM mean: 0.97\n").is_none());
+    }
+
+    // ── PSNR edge-case hardening ──────────────────────────────────────────
+
+    #[test]
+    fn test_parse_psnr_inf_with_spaces() {
+        let s = "PSNR y: inf u: inf v: inf average: inf min: inf max: inf\n";
+        let r = parse_psnr_average_y_from_stderr(s);
+        assert!(r.is_some(), "inf with leading spaces");
+        assert_eq!(r.unwrap(), 100.0);
+    }
+
+    #[test]
+    fn test_parse_psnr_very_high_value() {
+        let s = "PSNR y:99.999 average:99.999 min:95.0 max:99.999\n";
+        assert!((parse_psnr_average_y_from_stderr(s).unwrap() - 99.999).abs() < 1e-3);
+    }
+
+    #[test]
+    fn test_parse_psnr_low_value() {
+        let s = "PSNR y:25.5 average:24.0 min:20.0 max:30.0\n";
+        assert!((parse_psnr_average_y_from_stderr(s).unwrap() - 25.5).abs() < 1e-3);
+    }
+
+    #[test]
+    fn test_parse_psnr_negative_inf() {
+        let s = "PSNR y:-inf average:-inf min:-inf max:-inf\n";
+        assert_eq!(parse_psnr_average_y_from_stderr(s).unwrap(), 100.0);
+    }
+
+    #[test]
+    fn test_parse_psnr_no_average_keyword() {
+        // Contains PSNR but no "average:" — should return None
+        assert!(parse_psnr_average_y_from_stderr("PSNR y:45.0 u:42.0 v:43.0\n").is_none());
+    }
+
+    // ── VMAF parser hardening ─────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_vmaf_mean_with_whitespace() {
+        let json = r#"{  "pooled_metrics" :  {  "vmaf" :  {  "mean" :  96.5  }  }  }"#;
+        let r = parse_vmaf_mean_from_json(json);
+        assert!(r.is_some());
+        assert!((r.unwrap() - 96.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_parse_vmaf_mean_perfect_100() {
+        let json = r#"{"pooled_metrics": {"vmaf": {"mean": 100.0}}}"#;
+        assert!((parse_vmaf_mean_from_json(json).unwrap() - 100.0).abs() < 1e-6);
+    }
+
+    // ── CAMBI parser hardening ────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_cambi_mean_very_small() {
+        let json = r#"{"pooled_metrics": {"cambi": {"mean": 0.01}}}"#;
+        let r = parse_cambi_mean_from_json(json);
+        assert!(r.is_some());
+        assert!((r.unwrap() - 0.01).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_parse_cambi_mean_empty() {
+        assert!(parse_cambi_mean_from_json("").is_none());
+    }
+
+    #[test]
+    fn test_parse_cambi_mean_no_pooled() {
+        assert!(parse_cambi_mean_from_json(r#"{"cambi": {"mean": 5.0}}"#).is_none());
+    }
+
+    // ── common_even_metric_dimensions additional ──────────────────────────
+
+    #[test]
+    fn test_common_even_dimensions_identical() {
+        let dims = common_even_metric_dimensions(1920, 1080, 1920, 1080);
+        assert_eq!(dims, Some((1920, 1080)));
+    }
+
+    #[test]
+    fn test_common_even_dimensions_output_smaller() {
+        let dims = common_even_metric_dimensions(1920, 1080, 1280, 720);
+        assert_eq!(dims, Some((1280, 720)));
+    }
+
+    #[test]
+    fn test_common_even_dimensions_odd_values() {
+        let dims = common_even_metric_dimensions(1921, 1081, 1921, 1081);
+        assert_eq!(dims, Some((1920, 1080)));
     }
 }
