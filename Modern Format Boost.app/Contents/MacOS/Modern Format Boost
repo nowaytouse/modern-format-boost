@@ -41,8 +41,8 @@ EOF
 }
 
 shell_quote() {
-    # Safer quoting for Chinese paths: wrap in single quotes and escape any single quotes within the path
-    echo "'${1//\'/\'\\\'\'}'"
+    # Native zsh rigorous quoting, safely handles single quotes, spaces, and all special characters
+    echo "${(q)1}"
 }
 
 escape_applescript_string() {
