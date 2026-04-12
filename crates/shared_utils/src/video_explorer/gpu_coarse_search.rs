@@ -69,6 +69,11 @@ const PHASE4_ULTIMATE_MAX_FINE_FAILURES: u32 = 2;
 const PHASE4_MAX_BACKTRACK_RETRIES: u32 = 3;
 const PHASE4_MAX_ATTEMPTS: u32 = 32;
 const PHASE4_CRF0_PROBE_MAX_DISTANCE: f32 = 1.0;
+/// Maximum number of consecutive non-improving encodes Phase 5 may perform.
+/// This acts as a patience counter (lookahead) to find local minima.
+const PHASE5_MAX_CONSECUTIVE_FAILURES: u32 = 3;
+/// Absolute cap to prevent an infinite march to CRF 0.0 for monotonically decreasing files.
+const PHASE5_MAX_TOTAL_ATTEMPTS: u32 = 10;
 const UPWARD_JOG_MIN_STEP: f32 = 0.5;
 const UPWARD_SIZE_STAGNATION_THRESHOLD: u32 = 4;
 const UPWARD_DIRECTION_SWITCH_LIMIT: u32 = 15;
@@ -3958,15 +3963,33 @@ fn cpu_fine_tune_from_gpu_boundary(
             RESET
         );
         crate::log_eprintln!(
-            "   {}Starting from Phase 4 bound (CRF {:.2}). Stopping immediately on size increase.{}",
-            DIM, final_crf, RESET
+            "   {}Starting from Phase 4 bound (CRF {:.2}). Stopping after {} non-improving attempts.{}",
+            DIM, final_crf, PHASE5_MAX_CONSECUTIVE_FAILURES, RESET
         );
 
         let backup_path = output.with_extension(format!("{}.bak", output.extension().and_then(|s| s.to_str()).unwrap_or("tmp")));
         let mut test_crf = final_crf - 0.01;
-        
+        let mut consecutive_failures = 0u32;
+        let mut total_attempts = 0u32;
+
         #[allow(clippy::while_float)]
         while test_crf >= 0.0 {
+            if consecutive_failures >= PHASE5_MAX_CONSECUTIVE_FAILURES {
+                crate::log_eprintln!(
+                    "   {}Adaptive lookahead cap ({} non-improvements) reached. Stopping Phase 5.{}",
+                    BRIGHT_YELLOW, PHASE5_MAX_CONSECUTIVE_FAILURES, RESET
+                );
+                break;
+            }
+            if total_attempts >= PHASE5_MAX_TOTAL_ATTEMPTS {
+                crate::log_eprintln!(
+                    "   {}Absolute Phase 5 safety cap ({} total attempts) reached. Stopping.{}",
+                    BRIGHT_YELLOW, PHASE5_MAX_TOTAL_ATTEMPTS, RESET
+                );
+                break;
+            }
+            total_attempts += 1;
+
             // Re-align to prevent float precision drift
             test_crf = (test_crf * 100.0).round() / 100.0;
             if test_crf < 0.0 { test_crf = 0.0; }
@@ -3992,19 +4015,32 @@ fn cpu_fine_tune_from_gpu_boundary(
                         final_full_size = test_size;
                         // Throw away the backup (we have a new best)
                         let _ = std::fs::remove_file(&backup_path);
+                        consecutive_failures = 0; // Reset patience
                         
                         if test_crf == 0.0 {
                             break; // hit the floor
                         }
                         test_crf -= 0.01;
                     } else {
+                        consecutive_failures += 1;
+                        let attempts_left = PHASE5_MAX_CONSECUTIVE_FAILURES.saturating_sub(consecutive_failures);
                         crate::log_eprintln!(
-                            "      {}✗ CRF {:.2} -> {} bytes (increased past {}, stopping){}",
+                            "      {}✗ CRF {:.2} -> {} bytes (increased past {}, discarding){}",
                             BRIGHT_RED, test_crf, test_size, final_full_size, RESET
                         );
+                        if attempts_left > 0 && total_attempts < PHASE5_MAX_TOTAL_ATTEMPTS {
+                            crate::log_eprintln!(
+                                "      {}... exploring further ({} lookahead attempts remaining){}",
+                                DIM, attempts_left, RESET
+                            );
+                        }
                         let _ = std::fs::remove_file(output); // remove the oversized one
                         let _ = std::fs::rename(&backup_path, output); // restore best
-                        break;
+                        
+                        if test_crf == 0.0 {
+                            break; // hit the floor, cannot probe downwards
+                        }
+                        test_crf -= 0.01; // Keep probing downwards
                     }
                 }
                 Err(e) => {
