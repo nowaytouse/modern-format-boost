@@ -505,7 +505,7 @@ def select_mode():
     # Internal state for the "Mode" item (0: adjacent, 1: inplace)
     mode_sub_state = 0 if OUTPUT_MODE == "adjacent" else 1
 
-    options = ["Optimization Mode", "Cleanup Cache & Logs"]
+    options = ["Optimization Mode", "Cleanup Cache & Logs", "Collect Optimized Media"]
 
     while True:
         clear_screen()
@@ -544,29 +544,34 @@ def select_mode():
                         print(f"    {DIM}- {display_text}{RESET}")
                         print(f"    {DIM}{description}{RESET}\n")
             else:  # Other items
+                desc = (
+                    "Clear analysis cache, session logs, and ALL task progress."
+                    if i == 1
+                    else "Move optimized outputs into a mirrored directory tree."
+                )
                 if is_selected:
                     if "Console" in globals():
                         console.print(
                             f"  [bold #00aaff]➜[/bold #00aaff] [reverse #00aaff] {opt} [/reverse #00aaff]"
                         )
                         console.print(
-                            "     [#00ccff]Clear analysis cache, session logs, and ALL task progress.[/#00ccff]\n"
+                            f"     [#00ccff]{desc}[/#00ccff]\n"
                         )
                     else:
                         print(f"  {CYAN}➜ {BOLD}{opt}{RESET}")
                         print(
-                            f"    {CYAN}{DIM}Clear analysis cache, session logs, and ALL task progress.{RESET}\n"
+                            f"    {CYAN}{DIM}{desc}{RESET}\n"
                         )
                 else:
                     if "Console" in globals():
                         console.print(f"     [dim]○ {opt}[/dim]")
                         console.print(
-                            "     [dim]Clear analysis cache, session logs, and ALL task progress.[/dim]\n"
+                            f"     [dim]{desc}[/dim]\n"
                         )
                     else:
                         print(f"    {DIM}○ {opt}{RESET}")
                         print(
-                            f"    {DIM}Clear analysis cache, session logs, and ALL task progress.{RESET}\n"
+                            f"    {DIM}{desc}{RESET}\n"
                         )
 
         print(
@@ -636,6 +641,23 @@ def select_mode():
                     subprocess.run([sys.executable, str(cache_script)])
                     print(f"\n{DIM}   Returning to menu...{RESET}")
                     time.sleep(2)
+                    continue
+                elif selected == 2:
+                    OUTPUT_MODE = "collect"
+                    tdir = Path(TARGET_DIR).resolve()
+                    OUTPUT_DIR = str(
+                        get_unique_output_path(
+                            tdir.parent / (tdir.name + "_collected")
+                        )
+                    )
+                    print(f"\n{GREEN}COLLECT OPTIMIZED MEDIA SELECTED{RESET}")
+                    print(f"   Source: {DIM}{TARGET_DIR}{RESET}")
+                    print(f"   Output: {DIM}{OUTPUT_DIR}{RESET}\n")
+                    collect_script = SCRIPT_DIR / "collect_optimized.py"
+                    drain_stdin()
+                    subprocess.run([sys.executable, str(collect_script), str(TARGET_DIR), OUTPUT_DIR])
+                    print(f"\n{DIM}   Returning to menu...{RESET}")
+                    time.sleep(3)
                     continue
             elif key.lower() == "q":
                 show_cursor()
