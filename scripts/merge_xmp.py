@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Merge XMP sidecar files into media files using exiftool.
-References the Rust implementation in crates/shared_utils/src/xmp_merger.rs
+References the complete Rust implementation in crates/shared_utils/src/xmp_merger.rs
 """
 
 import sys
@@ -9,7 +9,7 @@ import os
 import subprocess
 from pathlib import Path
 import shutil
-from typing import Optional
+from typing import Optional, Tuple, Dict, List
 
 # Console Output Colors
 if sys.stdout.isatty():
@@ -30,9 +30,15 @@ EXCLUDED_EXTENSIONS = {
     ".xz", ".7z", ".rar", ".ds_store", ".thumbs.db", ".desktop.ini"
 }
 
+class XmpInfo:
+    def __init__(self, doc_id: str = "", derived: str = "", source: str = ""):
+        self.doc_id = doc_id
+        self.derived = derived
+        self.source = source
+
 def print_header():
     print()
-    print(f"{CYAN}{BOLD}Modern Format Boost - XMP Merger Tool{RESET}")
+    print(f"{CYAN}{BOLD}Modern Format Boost - XMP Merger Tool (Deep Search Edition){RESET}")
     print(f"{DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{RESET}\n")
 
 def check_exiftool():
@@ -43,51 +49,159 @@ def check_exiftool():
 def is_potential_media(ext: str) -> bool:
     return ext.lower() not in EXCLUDED_EXTENSIONS and bool(ext)
 
-def find_media_match(xmp_path: Path) -> Optional[Path]:
+def extract_xmp_metadata(xmp_path: Path) -> XmpInfo:
+    """Strategy 3 & 4 helper: extracts DocumentID, DerivedFrom, Source from XMP using exiftool."""
+    cmd = [
+        "exiftool", "-charset", "filename=utf8", "-api", "windowsunicode=1",
+        "-api", "LargeFileSupport=1", "-s3",
+        "-DocumentID", "-DerivedFrom", "-Source", "-OriginalDocumentID",
+        str(xmp_path)
+    ]
+    try:
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if res.returncode != 0:
+            return XmpInfo()
+        
+        lines = [line.strip() for line in res.stdout.split('\n') if line.strip()]
+        doc_id = lines[0] if len(lines) > 0 else ""
+        derived = lines[1] if len(lines) > 1 else ""
+        source = lines[2] if len(lines) > 2 else ""
+        
+        return XmpInfo(doc_id=doc_id, derived=derived, source=source)
+    except Exception:
+        return XmpInfo()
+
+def is_uuid_format(name: str) -> bool:
+    parts = name.split('-')
+    if len(parts) != 5:
+        return False
+    expected = [8, 4, 4, 4, 12]
+    return all(len(p) == expected[i] and all(c in "0123456789abcdefABCDEF" for c in p) 
+               for i, p in enumerate(parts))
+
+def generate_candidates(parent: Path) -> List[Path]:
+    if not parent.exists() or not parent.is_dir():
+        return []
+    return [p for p in parent.iterdir() if p.is_file() and is_potential_media(p.suffix)]
+
+def normalize_filename(name: str) -> str:
+    return "".join(c for c in name if c.isalnum()).lower()
+
+def extract_media_doc_id(media_path: Path) -> str:
+    cmd = ["exiftool", "-s3", "-DocumentID", str(media_path)]
+    try:
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        return res.stdout.strip()
+    except Exception:
+        return ""
+
+def scan_xmp_ref(media_path: Path, target_xmp: str) -> bool:
+    cmd = ["exiftool", "-s3", "-SidecarForExtension", "-XMPFileRef", str(media_path)]
+    try:
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if res.returncode == 0 and target_xmp in res.stdout:
+            return True
+        return False
+    except Exception:
+        return False
+
+def find_media_match(xmp_path: Path) -> Tuple[Optional[Path], str]:
     parent = xmp_path.parent
     xmp_name = xmp_path.name
     xmp_stem = xmp_path.stem
+    xmp_ext = xmp_path.suffix.lower()
+    
+    candidates = generate_candidates(parent)
 
     # Strategy 1: Direct match (e.g. image.jpg.xmp -> image.jpg)
     if xmp_name.lower().endswith('.xmp'):
         base_name = xmp_name[:-4]
         direct_candidate = parent / base_name
         if direct_candidate.is_file() and is_potential_media(direct_candidate.suffix):
-            return direct_candidate
+            return direct_candidate, "Direct match"
 
-    # Strategy 2: Same stem, different extension (e.g. image.xmp -> image.jpg)
-    if not parent.exists() or not parent.is_dir():
-        return None
-        
-    for p in parent.iterdir():
-        if not p.is_file():
-            continue
-        ext = p.suffix.lower()
-        if not is_potential_media(ext):
-            continue
-            
-        file_stem = p.stem
-        # Match "image" from "image.xmp" to "image" from "image.jpg"
-        if file_stem == xmp_stem:
-            return p
-            
-        # Match "image" from "image.xmp" to "image" from "image.jpg.heic"
-        file_root_stem = file_stem.split('.')[0]
-        xmp_root_stem = xmp_stem.split('.')[0]
-        if file_root_stem == xmp_root_stem and file_root_stem:
-            return p
-            
-    return None
+    # Strategy 2: Same name different ext
+    xmp_root_stem = xmp_stem.split('.')[0].lower()
+    for p in candidates:
+        file_stem_lower = p.stem.lower()
+        file_root_stem = file_stem_lower.split('.')[0]
+        if file_stem_lower == xmp_stem.lower() or file_root_stem == xmp_root_stem:
+            return p, "Same name, diff ext"
 
-def merge_xmp(xmp_path: Path, media_path: Path) -> bool:
-    print(f"  {DIM}Merging:{RESET} {xmp_path.name} {CYAN}➜{RESET} {media_path.name}")
+    # Strategy 2.5: Case insensitive
+    xmp_stem_lower = xmp_stem.lower()
+    for p in candidates:
+        if p.stem.lower() == xmp_stem_lower:
+            return p, "Case insensitive match"
+
+    # Extract XMP structured data
+    xmp_info = extract_xmp_metadata(xmp_path)
+
+    # Strategy 3: XMP Metadata references
+    if xmp_info.derived and not "uuid:" in xmp_info.derived:
+        candidate = parent / xmp_info.derived
+        if candidate.is_file():
+            return candidate, "DerivedFrom match"
+            
+    if xmp_info.source:
+        candidate = parent / xmp_info.source
+        if candidate.is_file():
+            return candidate, "Source meta match"
+            
+    # Strategy 4: DocumentID
+    if xmp_info.doc_id and is_uuid_format(xmp_stem):
+        print(f"  🔍 Searching by DocumentID: {xmp_info.doc_id}")
+        for p in candidates:
+            if extract_media_doc_id(p) == xmp_info.doc_id:
+                return p, "DocumentID match"
+
+    # Strategy 5: Fuzzy match (alphanumeric only)
+    norm_xmp = normalize_filename(xmp_stem)
+    norm_xmp_root = normalize_filename(xmp_root_stem)
+    if norm_xmp:
+        for p in candidates:
+            file_stem = p.stem
+            norm_file = normalize_filename(file_stem)
+            norm_file_root = normalize_filename(file_stem.split('.')[0])
+            if norm_file == norm_xmp or norm_file_root == norm_xmp_root:
+                return p, "Fuzzy match"
+
+    # Strategy 6: XMP Reference scan (scan media files)
+    for p in candidates:
+        if scan_xmp_ref(p, xmp_name):
+            return p, "XMP ref scan match"
+            
+    # Strategy 7: Partial containment match
+    if len(xmp_stem) >= 4:
+        for p in candidates:
+            file_stem = p.stem
+            if file_stem in xmp_stem or xmp_stem in file_stem:
+                shorter = min(len(xmp_stem), len(file_stem))
+                longer = max(len(xmp_stem), len(file_stem))
+                if (shorter * 100) / longer >= 70:
+                    return p, "Partial string match"
+
+    # Strategy 8: Subdirectory check (depth 2)
+    for p in parent.rglob("*"):
+        if not p.is_file() or p == xmp_path:
+            continue
+        # Max depth 2 approx
+        try:
+            rel = p.relative_to(parent)
+            if len(rel.parts) > 2:
+                continue
+        except Exception:
+            continue
+            
+        if is_potential_media(p.suffix) and p.stem.lower() == xmp_stem_lower:
+            return p, "Subdirectory match"
+
+    return None, "No match"
+
+def merge_xmp(xmp_path: Path, media_path: Path, strategy: str) -> bool:
+    print(f"  {DIM}Merge [{strategy}]:{RESET} {xmp_path.name} {CYAN}➜{RESET} {media_path.name}")
     
-    # Safe merge command modeled after Rust logic
-    # -tagsfromfile: copy all tags
-    # -all:all: copy namespace tags
-    # -unsafe: copy unsafe tags
-    # -FileModifyDate<FileModifyDate: preserve file time
-    # -overwrite_original: don't create _original backup
+    # Safe merge command modeled strictly after Rust xmp_merger.rs
     cmd = [
         "exiftool",
         "-charset", "filename=utf8",
@@ -106,7 +220,7 @@ def merge_xmp(xmp_path: Path, media_path: Path) -> bool:
         res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         if res.returncode != 0:
             stderr = res.stderr.strip()
-            # Minor warnings are acceptable, check for real errors
+            # Hardware/File system errors check
             is_real_error = ("Error:" in stderr or "Error opening" in stderr or 
                              "File not found" in stderr or "not writing image" in stderr)
             if is_real_error and not "[minor]" in stderr.lower():
@@ -134,7 +248,7 @@ def main():
         print(f"{RED}❌ Directory not found: {target_dir}{RESET}")
         sys.exit(1)
 
-    print(f"{BOLD}Scanning for XMP files in:{RESET} {target_dir}\n")
+    print(f"{BOLD}Deep Scanning for XMP files in:{RESET} {target_dir}\n")
     
     xmp_files = []
     for root, _, files in os.walk(target_dir):
@@ -146,21 +260,21 @@ def main():
         print(f"{YELLOW}No .xmp files found in the target directory.{RESET}")
         sys.exit(0)
         
-    print(f"Found {len(xmp_files)} XMP file(s). Looking for media matches...\n")
+    print(f"Found {len(xmp_files)} XMP file(s). Searching via Deep 8-Strategy Pipeline...\n")
     
     success_count = 0
     fail_count = 0
     skip_count = 0
     
     for xmp_path in xmp_files:
-        media_path = find_media_match(xmp_path)
+        media_path, strategy = find_media_match(xmp_path)
         if media_path:
-            if merge_xmp(xmp_path, media_path):
+            if merge_xmp(xmp_path, media_path, strategy):
                 success_count += 1
             else:
                 fail_count += 1
         else:
-            print(f"  {YELLOW}⚠️  Skipped (No match):{RESET} {xmp_path.name}")
+            print(f"  {YELLOW}⚠️  Skipped ({strategy}):{RESET} {xmp_path.name}")
             skip_count += 1
 
     print(f"\n{DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{RESET}")
