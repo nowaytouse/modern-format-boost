@@ -199,29 +199,136 @@ def find_media_match(xmp_path: Path) -> Tuple[Optional[Path], str]:
 
     return None, "No match"
 
-def get_timestamps(path: Path) -> Optional[Tuple[float, float]]:
+import ctypes
+from ctypes import c_char_p, c_uint32, c_int32, c_void_p, c_size_t, Structure, c_uint16, c_int64, POINTER, byref
+
+# Define libc for macOS
+try:
+    libc = ctypes.CDLL("libc.dylib")
+    libc.getattrlist.argtypes = [c_char_p, c_void_p, c_void_p, c_size_t, c_uint32]
+    libc.getattrlist.restype = c_int32
+    libc.setattrlist.argtypes = [c_char_p, c_void_p, c_void_p, c_size_t, c_uint32]
+    libc.setattrlist.restype = c_int32
+except BaseException:
+    libc = None
+
+ATTR_CMN_CRTIME = 0x00000200
+ATTR_CMN_ADDEDTIME = 0x10000000
+ATTR_BIT_MAP_COUNT = 5
+
+class AttrList(Structure):
+    _fields_ = [
+        ("bitmapcount", c_uint16),
+        ("reserved", c_uint16),
+        ("commonattr", c_uint32),
+        ("volattr", c_uint32),
+        ("dirattr", c_uint32),
+        ("fileattr", c_uint32),
+        ("forkattr", c_uint32)
+    ]
+
+# The struct used to pass time TO setattrlist
+class TimeSpec(Structure):
+    _fields_ = [
+        ("tv_sec", c_int64),
+        ("tv_nsec", c_int64)
+    ]
+
+# The struct used to receive time FROM getattrlist
+class AttrBufTime(Structure):
+    _fields_ = [
+        ("length", c_uint32),
+        ("time", TimeSpec)
+    ]
+
+def get_mac_time_attr(path: str, attr_flag: int) -> Optional[TimeSpec]:
+    if sys.platform != "darwin" or not libc:
+        return None
     try:
-        stat = path.stat()
-        return (stat.st_atime, stat.st_mtime)
+        attr_list = AttrList(ATTR_BIT_MAP_COUNT, 0, attr_flag, 0, 0, 0, 0)
+        buf = AttrBufTime()
+        buf.length = 0
+        buf.time.tv_sec = 0
+        buf.time.tv_nsec = 0
+        
+        path_bytes = path.encode('utf-8')
+        ret = libc.getattrlist(
+            path_bytes,
+            byref(attr_list),
+            byref(buf),
+            ctypes.sizeof(buf),
+            0
+        )
+        if ret == 0:
+            return buf.time
+        return None
     except Exception:
         return None
 
-def restore_timestamps(path: Path, times: Optional[Tuple[float, float]]):
-    if times:
-        try:
-            os.utime(path, times)
-        except Exception as e:
-            print(f"  {YELLOW}⚠️  Failed to restore timestamps for {path.name}: {e}{RESET}")
+def set_mac_time_attr(path: str, attr_flag: int, timespec: TimeSpec):
+    if sys.platform != "darwin" or not libc or timespec is None:
+        return
+    try:
+        attr_list = AttrList(ATTR_BIT_MAP_COUNT, 0, attr_flag, 0, 0, 0, 0)
+        path_bytes = path.encode('utf-8')
+        libc.setattrlist(
+            path_bytes,
+            byref(attr_list),
+            byref(timespec), # Pass TimeSpec directly to setattrlist
+            ctypes.sizeof(timespec),
+            0
+        )
+    except Exception:
+        pass
+
+class FileTimestamps:
+    def __init__(self, stat_result):
+        self.atime = stat_result.st_atime
+        self.mtime = stat_result.st_mtime
+        self.mac_crtime = None
+        self.mac_addedtime = None
+
+def get_timestamps(path: Path) -> Optional[FileTimestamps]:
+    try:
+        stat = path.stat()
+        ts = FileTimestamps(stat)
+        if sys.platform == "darwin":
+            ts.mac_crtime = get_mac_time_attr(str(path), ATTR_CMN_CRTIME)
+            ts.mac_addedtime = get_mac_time_attr(str(path), ATTR_CMN_ADDEDTIME)
+        return ts
+    except Exception:
+        return None
+
+def restore_timestamps(path: Path, ts: Optional[FileTimestamps]):
+    if not ts:
+        return
+    try:
+        # 1. macOS specific: set creation time BEFORE atime/mtime
+        if sys.platform == "darwin" and ts.mac_crtime:
+            set_mac_time_attr(str(path), ATTR_CMN_CRTIME, ts.mac_crtime)
+            
+        # 2. Set atime and mtime
+        os.utime(path, (ts.atime, ts.mtime))
+        
+        # 3. macOS specific: re-apply creation time and added time
+        # (Needed because utime may reset creation time in macOS)
+        if sys.platform == "darwin":
+            if ts.mac_crtime:
+                set_mac_time_attr(str(path), ATTR_CMN_CRTIME, ts.mac_crtime)
+            if ts.mac_addedtime:
+                set_mac_time_attr(str(path), ATTR_CMN_ADDEDTIME, ts.mac_addedtime)
+                
+    except Exception as e:
+        print(f"  {YELLOW}⚠️  Failed to restore timestamps for {path.name}: {e}{RESET}")
 
 def merge_xmp(xmp_path: Path, media_path: Path, strategy: str) -> bool:
     print(f"  {DIM}Merge [{strategy}]:{RESET} {xmp_path.name} {CYAN}➜{RESET} {media_path.name}")
     
-    # 1. Snapshot timestamps (File & Parent Folder)
+    # 1. Snapshot ALL deep timestamps (File & Parent Folder)
     original_file_times = get_timestamps(media_path)
     parent_dir = media_path.parent
     original_parent_times = get_timestamps(parent_dir)
     
-    # 2. Read XMP data into memory (matching Rust's stdin approach)
     try:
         with open(xmp_path, 'rb') as f:
             xmp_data = f.read()
@@ -229,44 +336,36 @@ def merge_xmp(xmp_path: Path, media_path: Path, strategy: str) -> bool:
         print(f"  {RED}❌ Failed to read XMP file: {e}{RESET}")
         return False
 
-    # 3. Environment Checks
     apple_compat = os.environ.get("MODERN_FORMAT_BOOST_APPLE_COMPAT") is not None
     is_jxl = media_path.suffix.lower() == ".jxl"
 
-    # 4. Build exact command parity with Rust xmp_merger.rs
-    # builder.use_stdin().preserve_date().quiet().quiet().ignore_minor()
     cmd = [
         "exiftool",
         "-charset", "filename=utf8",
         "-api", "windowsunicode=1",
         "-api", "LargeFileSupport=1",
         "-q", "-q",
-        "-m", # ignore minor errors
-        "-tagsfromfile", "-", # pipe from stdin
+        "-m",
+        "-tagsfromfile", "-",
         "-all:all",
         "-unsafe"
     ]
     
     if is_jxl and apple_compat:
-        # Special JXL Apple-compat logic from Rust:
-        # .strip_all().tags_from_file("@").arg("-all:all").unsafe_tags().arg("-icc_profile")
         cmd.extend([
-            "-all=", # strip_all
+            "-all=",
             "-tagsfromfile", "@",
             "-all:all",
             "-unsafe",
             "-icc_profile"
         ])
 
-    # Final args: preserve FileModifyDate and set target
     cmd.extend([
-        "-P",
         "-FileModifyDate<FileModifyDate",
-        "-overwrite_original_in_place",
+        "-overwrite_original", # Explicitly back to normal behavior, our ctypes logic protects us
         str(media_path)
     ])
     
-    # 5. Run the command with stdin pipe
     try:
         process = subprocess.Popen(
             cmd,
@@ -278,22 +377,23 @@ def merge_xmp(xmp_path: Path, media_path: Path, strategy: str) -> bool:
         
         if process.returncode != 0:
             err_msg = stderr.decode('utf-8', errors='replace').strip()
-            # Rust check logic for real errors vs minor noise
             is_real_error = ("Error:" in err_msg or "Error opening" in err_msg or 
                              "File not found" in err_msg or "not writing image" in err_msg)
             if is_real_error and not "[minor]" in err_msg.lower():
                 print(f"  {RED}❌ Failed: {err_msg}{RESET}")
                 return False
                 
-        # 6. Restore File Timestamps (Deep Parity)
+        # Deep macOS native parity timestamp restoration
         restore_timestamps(media_path, original_file_times)
-        
-        # 7. Restore Parent Directory Timestamps (Enhanced Hardening)
-        # This prevents the parent folder's modification time from "refreshing" 
-        # due to ExifTool's temp-file swap (overwrite_original).
         restore_timestamps(parent_dir, original_parent_times)
+        
+        # Finally, delete the XMP sidecar now that merge is verified and successful
+        try:
+            xmp_path.unlink()
+        except Exception as e:
+            print(f"  {YELLOW}⚠️  XMP merge succeeded but sidecar delete failed: {e}{RESET}")
 
-        print(f"  {GREEN}✅ Success{RESET}")
+        print(f"  {GREEN}✅ Success (XMP deleted){RESET}")
         return True
     except Exception as e:
         print(f"  {RED}❌ Error executing exiftool: {e}{RESET}")
