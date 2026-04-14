@@ -507,7 +507,9 @@ impl GpuAccel {
                 tracing::info!(target: "gpu_detection", "  GPU: {}", self.gpu_type);
             } else {
                 // Surface why detection failed so the user has context without needing --verbose.
-                let reason = diagnostics.first().map_or("no supported encoder found", String::as_str);
+                let reason = diagnostics
+                    .first()
+                    .map_or("no supported encoder found", String::as_str);
                 crate::log_eprintln!("⚠️ GPU probe failed ({}), using CPU encoding", reason);
             }
             return;

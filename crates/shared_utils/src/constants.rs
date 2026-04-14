@@ -153,6 +153,16 @@ pub const FFMPEG_PRESET_VERYSLOW: &str = "veryslow";
 pub const FFMPEG_ENCODER_X264: &str = "libx264";
 pub const FFMPEG_ENCODER_X265: &str = "libx265";
 pub const FFMPEG_ENCODER_SVTAV1: &str = "libsvtav1";
+/// Above this source size, enable the low-memory x265 profile even when the codec is unknown.
+pub const X265_LOW_MEMORY_SOURCE_SIZE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+/// Low-memory x265 profile: serialize frame encoding to cap peak RAM.
+pub const X265_LOW_MEMORY_FRAME_THREADS: usize = 1;
+/// Low-memory x265 profile: keep lookahead worker fan-out minimal.
+pub const X265_LOW_MEMORY_LOOKAHEAD_THREADS: usize = 1;
+/// Low-memory x265 profile: avoid per-slice lookahead fan-out on huge masters.
+pub const X265_LOW_MEMORY_LOOKAHEAD_SLICES: usize = 1;
+/// Low-memory x265 profile: shorten the lookahead queue to reduce buffered frames.
+pub const X265_LOW_MEMORY_RC_LOOKAHEAD: usize = 10;
 
 // 4. Default Search Parameters
 /// Starting CRF for quality-matched exploration.

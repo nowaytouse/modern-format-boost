@@ -510,6 +510,7 @@ impl ExploreContext {
             self.preset,
             self.hdr_x265_params.clone(),
             self.apple_compat,
+            crate::x265_params::memory_profile_for_source(None, self.input_size),
         ) {
             builder.arg(arg);
         }

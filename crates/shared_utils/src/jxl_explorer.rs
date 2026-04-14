@@ -1373,7 +1373,10 @@ mod tests {
 
     #[test]
     fn test_boundary_push_interpolates_in_perceptual_distance_space() {
-        let midpoint_stops = f64::midpoint(JXL_MICRO_PRESSURE_STOPS_MAX, JXL_BOUNDARY_PRESSURE_STOPS_MAX);
+        let midpoint_stops = f64::midpoint(
+            JXL_MICRO_PRESSURE_STOPS_MAX,
+            JXL_BOUNDARY_PRESSURE_STOPS_MAX,
+        );
         let midpoint_ratio = 2f64.powf(midpoint_stops);
         let target =
             target_distance_for_ratio(midpoint_ratio, exploration_profile(midpoint_ratio)).unwrap();

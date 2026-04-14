@@ -1790,6 +1790,10 @@ fn cpu_fine_tune_from_gpu_boundary(
         // 2. Animated images with VFR/unknown frame rate (prevents PTS reordering)
         let should_disable_bframes =
             is_gif_magic || (input_is_animated_image_like && vfr_or_unknown);
+        let x265_memory_profile = crate::x265_params::memory_profile_for_source(
+            probe_info.map(|probe| probe.video_codec.as_str()),
+            input_size,
+        );
 
         if should_disable_bframes && encoder == crate::video_explorer::VideoEncoder::Hevc {
             let existing = adjusted_x265_params.as_deref().unwrap_or("");
@@ -1805,6 +1809,7 @@ fn cpu_fine_tune_from_gpu_boundary(
             encode_preset,
             adjusted_x265_params,
             apple_compat,
+            x265_memory_profile,
         ) {
             builder.arg(arg);
         }

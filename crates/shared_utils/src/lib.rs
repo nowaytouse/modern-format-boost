@@ -184,6 +184,8 @@ pub mod jxl_utils;
 
 /// Generic `x265` encoder interface.
 pub mod x265_encoder;
+/// Shared x265 parameter policy helpers.
+pub mod x265_params;
 
 /// Standalone `VMAF` calculation wrapper.
 pub mod vmaf_standalone;

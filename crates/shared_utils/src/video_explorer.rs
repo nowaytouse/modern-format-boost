@@ -822,7 +822,13 @@ impl VideoEncoder {
     /// Returns extra `FFmpeg` arguments for this encoder with default preset.
     #[must_use]
     pub fn extra_args(&self, max_threads: usize, apple_compat: bool) -> Vec<String> {
-        self.extra_args_with_preset(max_threads, EncoderPreset::default(), None, apple_compat)
+        self.extra_args_with_preset(
+            max_threads,
+            EncoderPreset::default(),
+            None,
+            apple_compat,
+            crate::x265_params::X265MemoryProfile::Default,
+        )
     }
 
     /// Returns extra `FFmpeg` arguments for this encoder with a specific preset and optional
@@ -834,14 +840,15 @@ impl VideoEncoder {
         preset: EncoderPreset,
         hdr_x265_params: Option<String>,
         apple_compat: bool,
+        x265_memory_profile: crate::x265_params::X265MemoryProfile,
     ) -> Vec<String> {
         match self {
             Self::Hevc => {
-                let mut x265_params = format!("log-level=error:pools={max_threads}");
-                if let Some(params) = hdr_x265_params {
-                    x265_params.push(':');
-                    x265_params.push_str(&params);
-                }
+                let x265_params = crate::x265_params::format_x265_params(
+                    max_threads,
+                    hdr_x265_params.as_deref(),
+                    x265_memory_profile,
+                );
                 let mut args = vec![
                     crate::constants::FFMPEG_ARG_PRESET.to_string(),
                     preset.hevc_name().to_string(),
@@ -2527,11 +2534,11 @@ impl VideoExplorer {
 
         // Add extra encoder-specific args
         if self.encoder == VideoEncoder::Hevc {
-            let mut x265_params = format!("log-level=error:pools={}", self.max_threads);
-            if let Some(params) = &self.hdr_x265_params {
-                x265_params.push(':');
-                x265_params.push_str(params);
-            }
+            let x265_params = crate::x265_params::format_x265_params(
+                self.max_threads,
+                self.hdr_x265_params.as_deref(),
+                crate::x265_params::memory_profile_for_source(None, self.input_size),
+            );
             builder
                 .arg(crate::constants::FFMPEG_ARG_X265_PARAMS)
                 .arg(x265_params);
@@ -2599,6 +2606,7 @@ impl VideoExplorer {
                 self.preset,
                 self.hdr_x265_params.clone(),
                 self.apple_compat,
+                crate::x265_params::memory_profile_for_source(None, self.input_size),
             );
 
             if self.encoder == VideoEncoder::Hevc && is_animated {

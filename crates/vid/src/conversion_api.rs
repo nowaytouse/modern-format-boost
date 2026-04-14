@@ -1792,26 +1792,45 @@ fn execute_conversion(
             Some("smpte2084" | "arib-std-b67")
         );
 
-    let mut x265_params = if is_hdr_content {
-        format!("log-level=error:pools={max_threads}:hdr-opt=1:repeat-headers=1")
-    } else {
-        format!("log-level=error:pools={max_threads}")
-    };
+    let x265_memory_profile = shared_utils::x265_params::memory_profile_for_detection(detection);
+    if x265_memory_profile.is_low_memory() {
+        info!(
+            file = %detection.file_path,
+            codec = %detection.codec.as_str(),
+            file_size_gb = detection.file_size as f64 / (1024.0 * 1024.0 * 1024.0),
+            "Applying low-memory x265 profile for large/high-fidelity source"
+        );
+    }
+    let mut extra_x265_params = String::new();
+    if is_hdr_content {
+        shared_utils::x265_params::push_param(&mut extra_x265_params, "hdr-opt=1");
+        shared_utils::x265_params::push_param(&mut extra_x265_params, "repeat-headers=1");
+    }
 
     // Inject DV RPU path and profile into x265 params when available
     if let Some(ref dv) = dv_rpu {
-        let _ = write!(
-            x265_params,
-            ":dolby-vision-rpu={}:dolby-vision-profile={}",
-            dv.rpu_path.display(),
-            dv.profile_str
+        shared_utils::x265_params::push_param(
+            &mut extra_x265_params,
+            &format!(
+                "dolby-vision-rpu={}:dolby-vision-profile={}",
+                dv.rpu_path.display(),
+                dv.profile_str
+            ),
         );
     }
 
     // Inject HDR10+ metadata into x265 params
     if let Some(ref hdr) = hdr10plus {
-        let _ = write!(x265_params, ":dhdr10-info={}", hdr.json_path.display());
+        shared_utils::x265_params::push_param(
+            &mut extra_x265_params,
+            &format!("dhdr10-info={}", hdr.json_path.display()),
+        );
     }
+    let x265_params = shared_utils::x265_params::format_x265_params(
+        max_threads,
+        Some(&extra_x265_params),
+        x265_memory_profile,
+    );
 
     let vf_args = shared_utils::get_ffmpeg_dimension_args(detection.width, detection.height, false);
     let mut builder = shared_utils::FfmpegBuilder::new();
@@ -1921,26 +1940,45 @@ fn execute_lossless(
         );
 
     // hdr-opt=1 + repeat-headers=1 ensure HDR SEI metadata is written into the bitstream.
-    let mut x265_params = if is_hdr_content {
-        format!("lossless=1:log-level=error:pools={max_threads}:hdr-opt=1:repeat-headers=1")
-    } else {
-        format!("lossless=1:log-level=error:pools={max_threads}")
-    };
+    let x265_memory_profile = shared_utils::x265_params::memory_profile_for_detection(detection);
+    if x265_memory_profile.is_low_memory() {
+        info!(
+            file = %detection.file_path,
+            codec = %detection.codec.as_str(),
+            file_size_gb = detection.file_size as f64 / (1024.0 * 1024.0 * 1024.0),
+            "Applying low-memory x265 profile for large/high-fidelity source"
+        );
+    }
+    let mut extra_x265_params = String::new();
+    if is_hdr_content {
+        shared_utils::x265_params::push_param(&mut extra_x265_params, "hdr-opt=1");
+        shared_utils::x265_params::push_param(&mut extra_x265_params, "repeat-headers=1");
+    }
 
     // Inject DV RPU path and profile into x265 params when available
     if let Some(ref dv) = dv_rpu {
-        let _ = write!(
-            x265_params,
-            ":dolby-vision-rpu={}:dolby-vision-profile={}",
-            dv.rpu_path.display(),
-            dv.profile_str
+        shared_utils::x265_params::push_param(
+            &mut extra_x265_params,
+            &format!(
+                "dolby-vision-rpu={}:dolby-vision-profile={}",
+                dv.rpu_path.display(),
+                dv.profile_str
+            ),
         );
     }
 
     // Inject HDR10+ metadata into x265 params
     if let Some(ref hdr) = hdr10plus {
-        let _ = write!(x265_params, ":dhdr10-info={}", hdr.json_path.display());
+        shared_utils::x265_params::push_param(
+            &mut extra_x265_params,
+            &format!("dhdr10-info={}", hdr.json_path.display()),
+        );
     }
+    let x265_params = shared_utils::x265_params::format_x265_lossless_params(
+        max_threads,
+        Some(&extra_x265_params),
+        x265_memory_profile,
+    );
 
     let pix_fmt = hdr_pix_fmt(detection);
     let vf_args = shared_utils::get_ffmpeg_dimension_args(detection.width, detection.height, false);

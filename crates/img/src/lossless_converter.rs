@@ -1919,7 +1919,8 @@ fn try_explore_ultimate_jxl_distance(
 
         while test_distance >= floor && continued_iterations < MAX_CONTINUED_ITERATIONS {
             // Canonicalize to avoid float drift
-            let candidate_distance = shared_utils::jxl_explorer::clamp_explore_distance(test_distance);
+            let candidate_distance =
+                shared_utils::jxl_explorer::clamp_explore_distance(test_distance);
 
             let candidate_output =
                 shared_utils::path_safety::isolated_temp_path_for_search(temp_output)
