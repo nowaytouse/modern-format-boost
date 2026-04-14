@@ -9,6 +9,7 @@ import os
 import subprocess
 from pathlib import Path
 import shutil
+import time
 from typing import Optional, Tuple, Dict, List
 
 # Console Output Colors
@@ -198,35 +199,99 @@ def find_media_match(xmp_path: Path) -> Tuple[Optional[Path], str]:
 
     return None, "No match"
 
+def get_timestamps(path: Path) -> Optional[Tuple[float, float]]:
+    try:
+        stat = path.stat()
+        return (stat.st_atime, stat.st_mtime)
+    except Exception:
+        return None
+
+def restore_timestamps(path: Path, times: Optional[Tuple[float, float]]):
+    if times:
+        try:
+            os.utime(path, times)
+        except Exception as e:
+            print(f"  {YELLOW}⚠️  Failed to restore timestamps for {path.name}: {e}{RESET}")
+
 def merge_xmp(xmp_path: Path, media_path: Path, strategy: str) -> bool:
     print(f"  {DIM}Merge [{strategy}]:{RESET} {xmp_path.name} {CYAN}➜{RESET} {media_path.name}")
     
-    # Safe merge command modeled strictly after Rust xmp_merger.rs
+    # 1. Snapshot timestamps (File & Parent Folder)
+    original_file_times = get_timestamps(media_path)
+    parent_dir = media_path.parent
+    original_parent_times = get_timestamps(parent_dir)
+    
+    # 2. Read XMP data into memory (matching Rust's stdin approach)
+    try:
+        with open(xmp_path, 'rb') as f:
+            xmp_data = f.read()
+    except Exception as e:
+        print(f"  {RED}❌ Failed to read XMP file: {e}{RESET}")
+        return False
+
+    # 3. Environment Checks
+    apple_compat = os.environ.get("MODERN_FORMAT_BOOST_APPLE_COMPAT") is not None
+    is_jxl = media_path.suffix.lower() == ".jxl"
+
+    # 4. Build exact command parity with Rust xmp_merger.rs
+    # builder.use_stdin().preserve_date().quiet().quiet().ignore_minor()
     cmd = [
         "exiftool",
         "-charset", "filename=utf8",
         "-api", "windowsunicode=1",
         "-api", "LargeFileSupport=1",
-        "-tagsfromfile", str(xmp_path),
+        "-q", "-q",
+        "-m", # ignore minor errors
+        "-tagsfromfile", "-", # pipe from stdin
         "-all:all",
-        "-unsafe",
+        "-unsafe"
+    ]
+    
+    if is_jxl and apple_compat:
+        # Special JXL Apple-compat logic from Rust:
+        # .strip_all().tags_from_file("@").arg("-all:all").unsafe_tags().arg("-icc_profile")
+        cmd.extend([
+            "-all=", # strip_all
+            "-tagsfromfile", "@",
+            "-all:all",
+            "-unsafe",
+            "-icc_profile"
+        ])
+
+    # Final args: preserve FileModifyDate and set target
+    cmd.extend([
         "-FileModifyDate<FileModifyDate",
         "-overwrite_original",
         str(media_path)
-    ]
+    ])
     
-    # Run the command
+    # 5. Run the command with stdin pipe
     try:
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        if res.returncode != 0:
-            stderr = res.stderr.strip()
-            # Hardware/File system errors check
-            is_real_error = ("Error:" in stderr or "Error opening" in stderr or 
-                             "File not found" in stderr or "not writing image" in stderr)
-            if is_real_error and not "[minor]" in stderr.lower():
-                print(f"  {RED}❌ Failed: {stderr}{RESET}")
+        process = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        stdout, stderr = process.communicate(input=xmp_data)
+        
+        if process.returncode != 0:
+            err_msg = stderr.decode('utf-8', errors='replace').strip()
+            # Rust check logic for real errors vs minor noise
+            is_real_error = ("Error:" in err_msg or "Error opening" in err_msg or 
+                             "File not found" in err_msg or "not writing image" in err_msg)
+            if is_real_error and not "[minor]" in err_msg.lower():
+                print(f"  {RED}❌ Failed: {err_msg}{RESET}")
                 return False
                 
+        # 6. Restore File Timestamps (Deep Parity)
+        restore_timestamps(media_path, original_file_times)
+        
+        # 7. Restore Parent Directory Timestamps (Enhanced Hardening)
+        # This prevents the parent folder's modification time from "refreshing" 
+        # due to ExifTool's temp-file swap (overwrite_original).
+        restore_timestamps(parent_dir, original_parent_times)
+
         print(f"  {GREEN}✅ Success{RESET}")
         return True
     except Exception as e:
