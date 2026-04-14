@@ -298,7 +298,7 @@ def draw_header():
 
 
 def check_tools():
-    build_script = SCRIPT_DIR / "smart_build.sh"
+    build_script = SCRIPT_DIR / "smart_build.py"
     if not build_script.exists():
         print(f"{RED}❌ Build script not found: {build_script}{RESET}")
         print(f"{DIM}   Please ensure you are running from the repository root.{RESET}")
@@ -323,7 +323,7 @@ def check_tools():
 
 def rebuild_tools():
     """Attempt to rebuild tools automatically"""
-    build_script = SCRIPT_DIR / "smart_build.sh"
+    build_script = SCRIPT_DIR / "smart_build.py"
     if not build_script.exists():
         print(f"{RED}❌ Build script not found: {build_script}{RESET}")
         return False
@@ -961,7 +961,7 @@ def process_images():
 
         if not rebuild_tools():
             print(
-                f"{YELLOW}   Manual rebuild required: bash scripts/smart_build.sh{RESET}"
+                f"{YELLOW}   Manual rebuild required: python3 scripts/smart_build.py{RESET}"
             )
             print(f"{DIM}   Or drag/drop again after build completes.{RESET}\n")
             sys.exit(1)
@@ -1013,7 +1013,7 @@ def process_videos():
 
         if not rebuild_tools():
             print(
-                f"{YELLOW}   Manual rebuild required: bash scripts/smart_build.sh{RESET}"
+                f"{YELLOW}   Manual rebuild required: python3 scripts/smart_build.py{RESET}"
             )
             print(f"{DIM}   Or drag/drop again after build completes.{RESET}\n")
             sys.exit(1)
