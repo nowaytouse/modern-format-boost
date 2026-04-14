@@ -260,8 +260,9 @@ def merge_xmp(xmp_path: Path, media_path: Path, strategy: str) -> bool:
 
     # Final args: preserve FileModifyDate and set target
     cmd.extend([
+        "-P",
         "-FileModifyDate<FileModifyDate",
-        "-overwrite_original",
+        "-overwrite_original_in_place",
         str(media_path)
     ])
     
