@@ -10,7 +10,8 @@ All notable changes to this project will be documented in this file.
 
 - **Memory & Resource Optimization**: Resolved memory exhaustion and terminal buffer crashes when processing extremely large files by optimizing the PTY relay and logging logic in `drag_and_drop_processor.py`.
 - **Full Python Migration**: Ported all core maintenance scripts (`install_deps`, `manage_db`, `test_hardened`, `smart_build`) from Bash to Python 3 to ensure cross-platform stability and easier maintainability across macOS and Linux.
-- **Integrated Media Collection**: Added a new "Collect Optimized Media" option to the processor menu, allowing for automated mirroring and selective extraction of optimized files into an adjacent directory with one click.
+- **Deep-Search XMP Merger**: Introduced `merge_xmp.py`, a high-fidelity Python replica of the Rust 8-strategy metadata matching pipeline. Safely embeds XMP sidecars into media files without metadata format pollution.
+- **Consolidated Workspace UI**: Refactored the `drag_and_drop_processor.py` main menu to group all secondary utility tools (Cleanup, Collect, Merge XMP) into a single, Tab-switchable "Workspace Tools" item for a cleaner and more efficient interface.
 
 ### ✨ User-Facing Highlights (Archive)
 
