@@ -828,6 +828,7 @@ def stream_and_log_process(cmd, parse_type):
     # Set master PTY to non-blocking for ultra-smooth capture
     os.set_blocking(master_fd, False)
 
+    log_buffer = ""
     try:
         while True:
             try:
@@ -855,15 +856,50 @@ def stream_and_log_process(cmd, parse_type):
             try:
                 s = chunk.decode("utf-8", errors="ignore")
                 tmp_out += s
+                # Prevent Memory Leak for long processes
+                if len(tmp_out) > 50000:
+                    tmp_out = tmp_out[-50000:]
+                
+                if lf:
+                    log_buffer += s
+                    if "\n" in log_buffer:
+                        lines = log_buffer.split("\n")
+                        log_buffer = lines.pop()
+                        for line in lines:
+                            if "\r" in line:
+                                line = line.rsplit("\r", 1)[-1]
+                            
+                            # Remove ANSI escape sequences
+                            clean_line = re.sub(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])', '', line)
+                            
+                            if not clean_line.strip():
+                                continue
+                                
+                            # Filter out common progress bar characters
+                            progress_chars = ["█", "▓", "▒", "░", "▏", "▕", "⏱️", "ETA"]
+                            if any(c in clean_line for c in progress_chars):
+                                continue
+                                
+                            lf.write((clean_line + "\n").encode("utf-8"))
+                            lf.flush()
             except Exception:
                 pass
-
-            if lf:
-                lf.write(chunk)
-                lf.flush()
     finally:
         if lf:
-            lf.close()
+            try:
+                if log_buffer.strip():
+                    if "\r" in log_buffer:
+                        log_buffer = log_buffer.rsplit("\r", 1)[-1]
+                    clean_line = re.sub(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])', '', log_buffer)
+                    if clean_line.strip():
+                        progress_chars = ["█", "▓", "▒", "░", "▏", "▕", "⏱️", "ETA"]
+                        if not any(c in clean_line for c in progress_chars):
+                            lf.write((clean_line + "\n").encode("utf-8"))
+                            lf.flush()
+            except Exception:
+                pass
+            finally:
+                lf.close()
         try:
             os.close(master_fd)
         except Exception:
