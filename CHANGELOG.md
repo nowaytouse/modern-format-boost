@@ -4,9 +4,15 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
-## [0.11.2] — 2026-04-11
+## [0.11.2] — 2026-04-15
 
-### ✨ User-Facing Highlights
+### ✨ Recent Highlights
+
+- **Memory & Resource Optimization**: Resolved memory exhaustion and terminal buffer crashes when processing extremely large files by optimizing the PTY relay and logging logic in `drag_and_drop_processor.py`.
+- **Full Python Migration**: Ported all core maintenance scripts (`install_deps`, `manage_db`, `test_hardened`, `smart_build`) from Bash to Python 3 to ensure cross-platform stability and easier maintainability across macOS and Linux.
+- **Integrated Media Collection**: Added a new "Collect Optimized Media" option to the processor menu, allowing for automated mirroring and selective extraction of optimized files into an adjacent directory with one click.
+
+### ✨ User-Facing Highlights (Archive)
 
 - **Higher Quality Output at No Extra Cost**: Both video (HEVC/AV1 ultimate mode) and JXL images now employ a "Stage 5 downward exploration" strategy — after finding the optimal compression settings, the system continues testing higher quality variants until file size starts increasing. Users get the best possible visual quality without manual tuning or wasted computation.
 - **Faster HEVC `slower` Preset Processing**: The ultimate pipeline was simplified from a complex multi-candidate comparison system to a streamlined two-step encode (screen with `slow` → finalize with `slower`). Processing is faster and more predictable while maintaining identical output quality.
