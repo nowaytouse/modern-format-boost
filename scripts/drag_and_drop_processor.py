@@ -503,9 +503,12 @@ def select_mode():
 
     # We merge the first two modes into one dynamic display item
     # Internal state for the "Mode" item (0: adjacent, 1: inplace)
+    # Internal state for the "Mode" item (0: adjacent, 1: inplace)
     mode_sub_state = 0 if OUTPUT_MODE == "adjacent" else 1
+    # Internal state for the "Tools" item (0: Cleanup, 1: Collect, 2: Merge XMP)
+    tools_sub_state = 0
 
-    options = ["Optimization Mode", "Cleanup Cache & Logs", "Collect Optimized Media"]
+    options = ["Optimization Mode", "Workspace Tools"]
 
     while True:
         clear_screen()
@@ -543,33 +546,38 @@ def select_mode():
                     else:
                         print(f"    {DIM}- {display_text}{RESET}")
                         print(f"    {DIM}{description}{RESET}\n")
-            else:  # Other items
-                desc = (
-                    "Clear analysis cache, session logs, and ALL task progress."
-                    if i == 1
-                    else "Move optimized outputs into a mirrored directory tree."
-                )
+            else:  # Tools item
+                if tools_sub_state == 0:
+                    display_text = "Tool: Cleanup Cache & Logs [Tab to Switch]"
+                    desc = "Clear analysis cache, session logs, and ALL task progress."
+                elif tools_sub_state == 1:
+                    display_text = "Tool: Collect Optimized Media [Tab to Switch]"
+                    desc = "Move optimized outputs into a mirrored directory tree."
+                else:
+                    display_text = "Tool: Merge XMP Attachments [Tab to Switch]"
+                    desc = "Automatically embed XMP sidecars into source media files safely."
+
                 if is_selected:
                     if "Console" in globals():
                         console.print(
-                            f"  [bold #00aaff]➜[/bold #00aaff] [reverse #00aaff] {opt} [/reverse #00aaff]"
+                            f"  [bold #00aaff]➜[/bold #00aaff] [reverse #00aaff] {display_text} [/reverse #00aaff]"
                         )
                         console.print(
                             f"     [#00ccff]{desc}[/#00ccff]\n"
                         )
                     else:
-                        print(f"  {CYAN}➜ {BOLD}{opt}{RESET}")
+                        print(f"  {CYAN}➜ {BOLD}{display_text}{RESET}")
                         print(
                             f"    {CYAN}{DIM}{desc}{RESET}\n"
                         )
                 else:
                     if "Console" in globals():
-                        console.print(f"     [dim]○ {opt}[/dim]")
+                        console.print(f"     [dim]○ {display_text}[/dim]")
                         console.print(
                             f"     [dim]{desc}[/dim]\n"
                         )
                     else:
-                        print(f"    {DIM}○ {opt}{RESET}")
+                        print(f"    {DIM}○ {display_text}{RESET}")
                         print(
                             f"    {DIM}{desc}{RESET}\n"
                         )
@@ -587,6 +595,8 @@ def select_mode():
             elif key == "\t":  # Tab
                 if selected == 0:
                     mode_sub_state = 1 - mode_sub_state
+                elif selected == 1:
+                    tools_sub_state = (tools_sub_state + 1) % 3
             elif key in ("\r", "\n"):
                 # Action based on selection
                 if selected == 0:
@@ -631,33 +641,45 @@ def select_mode():
                             show_cursor()
                             break  # Confirmed, start processing
                 elif selected == 1:
-                    OUTPUT_MODE = "cache_clean"
-                    print(f"\n{RED}CACHE & LOG CLEANUP MODE{RESET}")
-                    print(
-                        f"{DIM}   Analysis cache and ALL task progress will be permanently deleted.{RESET}\n"
-                    )
-                    cache_script = SCRIPT_DIR / "cache_cleaner.py"
-                    drain_stdin()
-                    subprocess.run([sys.executable, str(cache_script)])
-                    print(f"\n{DIM}   Returning to menu...{RESET}")
-                    time.sleep(2)
-                    continue
-                elif selected == 2:
-                    OUTPUT_MODE = "collect"
-                    tdir = Path(TARGET_DIR).resolve()
-                    OUTPUT_DIR = str(
-                        get_unique_output_path(
-                            tdir.parent / (tdir.name + "_collected")
+                    if tools_sub_state == 0:
+                        OUTPUT_MODE = "cache_clean"
+                        print(f"\n{RED}CACHE & LOG CLEANUP MODE{RESET}")
+                        print(
+                            f"{DIM}   Analysis cache and ALL task progress will be permanently deleted.{RESET}\n"
                         )
-                    )
-                    print(f"\n{GREEN}COLLECT OPTIMIZED MEDIA SELECTED{RESET}")
-                    print(f"   Source: {DIM}{TARGET_DIR}{RESET}")
-                    print(f"   Output: {DIM}{OUTPUT_DIR}{RESET}\n")
-                    collect_script = SCRIPT_DIR / "collect_optimized.py"
-                    drain_stdin()
-                    subprocess.run([sys.executable, str(collect_script), str(TARGET_DIR), OUTPUT_DIR])
-                    print(f"\n{DIM}   Returning to menu...{RESET}")
-                    time.sleep(3)
+                        cache_script = SCRIPT_DIR / "cache_cleaner.py"
+                        drain_stdin()
+                        subprocess.run([sys.executable, str(cache_script)])
+                        print(f"\n{DIM}   Returning to menu...{RESET}")
+                        time.sleep(2)
+                        continue
+                    elif tools_sub_state == 1:
+                        OUTPUT_MODE = "collect"
+                        tdir = Path(TARGET_DIR).resolve()
+                        OUTPUT_DIR = str(
+                            get_unique_output_path(
+                                tdir.parent / (tdir.name + "_collected")
+                            )
+                        )
+                        print(f"\n{GREEN}COLLECT OPTIMIZED MEDIA SELECTED{RESET}")
+                        print(f"   Source: {DIM}{TARGET_DIR}{RESET}")
+                        print(f"   Output: {DIM}{OUTPUT_DIR}{RESET}\n")
+                        collect_script = SCRIPT_DIR / "collect_optimized.py"
+                        drain_stdin()
+                        subprocess.run([sys.executable, str(collect_script), str(TARGET_DIR), OUTPUT_DIR])
+                        print(f"\n{DIM}   Returning to menu...{RESET}")
+                        time.sleep(3)
+                        continue
+                    elif tools_sub_state == 2:
+                        OUTPUT_MODE = "merge_xmp"
+                        print(f"\n{GREEN}MERGE XMP ATTACHMENTS SELECTED{RESET}")
+                        print(f"   Source: {DIM}{TARGET_DIR}{RESET}\n")
+                        xmp_script = SCRIPT_DIR / "merge_xmp.py"
+                        drain_stdin()
+                        subprocess.run([sys.executable, str(xmp_script), str(TARGET_DIR)])
+                        print(f"\n{DIM}   Returning to menu...{RESET}")
+                        time.sleep(3)
+                        continue
                     continue
             elif key.lower() == "q":
                 show_cursor()
