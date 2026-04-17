@@ -193,7 +193,7 @@ fn build_coarse_progress_line(
                 }
             }
             // 📏 Unify Width: Cap filename to 24 chars for layout stability
-            let width_limit = available.min(24).max(6);
+            let width_limit = available.clamp(6, 24);
             truncate_progress_message(message, width_limit)
         } else {
             String::new()

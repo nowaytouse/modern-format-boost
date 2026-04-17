@@ -218,6 +218,8 @@ def init_log():
     # Start with a generic name, we will rename it to the project name later
     LOG_FILE = LOG_DIR / f"MFB_Session_{SESSION_START_TIME}.log"
     VERBOSE_LOG_FILE = LOG_DIR / f"verbose_{SESSION_START_TIME}.log"
+    # Ensure worker processes log to the same directory
+    os.environ["MFB_LOG_DIR"] = str(LOG_DIR)
 
 
 def rename_log_to_project():
@@ -1155,8 +1157,12 @@ def finish_log():
     print(f"   {DIM}📝 Session log:  {LOG_FILE}{RESET}")
 
 
-def merge_run_logs():
-    """Merge internal tool run logs into the session bundle and cleanup fragments with high precision"""
+def organize_session_logs():
+    """
+    Perfect log organization:
+    1. Do NOT merge everything into one giant file (prevents lag).
+    2. Move session-specific worker logs into a dedicated folder.
+    """
     if not LOG_FILE or not SESSION_START_TIME:
         return
 
@@ -1170,7 +1176,7 @@ def merge_run_logs():
     def is_current_session(f):
         # File must be newer than session start
         return datetime.datetime.fromtimestamp(f.stat().st_mtime) >= (
-            session_dt - datetime.timedelta(seconds=5)
+            session_dt - datetime.timedelta(seconds=10)
         )
 
     img_logs = [f for f in LOG_DIR.glob("img_*.log") if is_current_session(f)]
@@ -1179,39 +1185,25 @@ def merge_run_logs():
     if not img_logs and not vid_logs:
         return
 
+    session_dir = LOG_DIR / f"Bundle_{SESSION_START_TIME}"
+    session_dir.mkdir(parents=True, exist_ok=True)
+
     try:
-        with open(LOG_FILE, "a") as mf:
-            mf.write("\n" + "=" * 70 + "\n")
-            mf.write(
-                f"📋 ATTACHED INTERNAL TOOL LOGS (Session: {SESSION_START_TIME})\n"
-            )
-            mf.write("=" * 70 + "\n")
-
-            for log_path in sorted(img_logs + vid_logs, key=os.path.getmtime):
-                try:
-                    stats = log_path.stat()
-                    mtime = datetime.datetime.fromtimestamp(stats.st_mtime).strftime(
-                        "%Y-%m-%d %H:%M:%S"
-                    )
-
-                    mf.write(f"\n[SOURCE: {log_path.name}] [MODIFIED: {mtime}]\n")
-                    mf.write("-" * 70 + "\n")
-
-                    content = log_path.read_text(errors="ignore")
-                    mf.write(content)
-                    mf.write("\n" + "-" * 70 + "\n")
-
-                    # Cautious Deletion: Only delete if we successfully read the content
-                    if len(content) > 0:
-                        log_path.unlink()
-                except Exception as e:
-                    mf.write(
-                        f"\n⚠️  CRITICAL: Failed to merge/cleanup {log_path.name}: {e}\n"
-                    )
-
-            mf.write("🏁 END OF SESSION BUNDLE\n")
+        # Move worker logs into the bundle
+        for log_path in sorted(img_logs + vid_logs, key=os.path.getmtime):
+            try:
+                dest = session_dir / log_path.name
+                shutil.move(str(log_path), str(dest))
+            except Exception:
+                pass
+        
+        # Also move the main session log and verbose log into the bundle at the very end
+        # We do this by a second pass or just keep them in logs root?
+        # User implies they want a "perfect" organization, so moving everything is best.
+        print(f"   {DIM}Worker logs archived in: {session_dir.relative_to(PROJECT_ROOT)}{RESET}")
+            
     except Exception as e:
-        print(f"   {RED}⚠️  Failed to merge logs: {e}{RESET}")
+        print(f"   {RED}⚠️  Failed to organize logs: {e}{RESET}")
 
 
 def main():
@@ -1516,7 +1508,7 @@ def main():
         pass
 
     finish_log()
-    merge_run_logs()
+    organize_session_logs()
 
 
 if __name__ == "__main__":

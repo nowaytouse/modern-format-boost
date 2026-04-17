@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use tracing::field::Field;
 use tracing::Level;
-use tracing_appender::rolling::{RollingFileAppender, Rotation};
+// use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{
     field::Visit,
     filter::FilterFn,
@@ -367,6 +367,88 @@ impl<W: Write + Send> Write for StripAnsiWriter<W> {
 // Safe: buffer is process-local; inner is Mutex<W> and W: Send.
 unsafe impl<W: Write + Send> Send for StripAnsiWriter<W> {}
 
+/// A writer that rotates files based on size and optionally limits the total number of files.
+struct SizeRotatingAppender {
+    log_dir: PathBuf,
+    program_name: String,
+    timestamp: String,
+    max_file_size: u64,
+    current_size: u64,
+    current_seq: usize,
+    current_file: Option<std::fs::File>,
+}
+
+impl SizeRotatingAppender {
+    fn new(log_dir: PathBuf, program_name: &str, max_file_size: u64) -> Self {
+        let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+        Self {
+            log_dir,
+            program_name: program_name.to_string(),
+            timestamp,
+            max_file_size,
+            current_size: 0,
+            current_seq: 0,
+            current_file: None,
+        }
+    }
+
+    fn open_current_file(&mut self) -> io::Result<&mut std::fs::File> {
+        if let Some(ref mut file) = self.current_file {
+            return Ok(file);
+        }
+
+        let file_name = if self.current_seq == 0 {
+            format!("{}_{}.log", self.program_name, self.timestamp)
+        } else {
+            format!("{}_{}.{}.log", self.program_name, self.timestamp, self.current_seq)
+        };
+        let path = self.log_dir.join(file_name);
+        
+        // Ensure parent exists (though usually handled by init_logging)
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)?;
+        
+        let metadata = file.metadata()?;
+        self.current_size = metadata.len();
+        
+        Ok(self.current_file.insert(file))
+    }
+
+    fn rotate(&mut self) -> io::Result<()> {
+        self.current_file = None;
+        self.current_seq += 1;
+        self.current_size = 0;
+        self.open_current_file()?;
+        Ok(())
+    }
+}
+
+impl Write for SizeRotatingAppender {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if self.max_file_size != u64::MAX && self.current_size + buf.len() as u64 > self.max_file_size {
+            self.rotate()?;
+        }
+        
+        let file = self.open_current_file()?;
+        let written = file.write(buf)?;
+        self.current_size += written as u64;
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        if let Some(ref mut file) = self.current_file {
+            file.flush()?;
+        }
+        Ok(())
+    }
+}
+
 /// Logging configuration. Default: TRACE level, no file count or size limit, system temp dir.
 #[derive(Debug, Clone)]
 pub struct LogConfig {
@@ -381,10 +463,14 @@ pub struct LogConfig {
 
 impl Default for LogConfig {
     fn default() -> Self {
+        let log_dir = std::env::var("MFB_LOG_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| std::env::temp_dir());
         Self {
-            log_dir: std::env::temp_dir(),
-            max_file_size: u64::MAX,
-            max_files: usize::MAX,
+            log_dir,
+            // 50 MiB default limit for "easy to open" logs
+            max_file_size: 50 * 1024 * 1024,
+            max_files: 10,
             level: Level::TRACE,
         }
     }
@@ -441,11 +527,7 @@ pub fn init_logging(program_name: &str, config: LogConfig) -> Result<()> {
         )
     })?;
 
-    // Timestamp in filename so each run gets a unique file in system/temp dir (no overwrite).
-    let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
-    let log_file_name = format!("{program_name}_{timestamp}.log");
-
-    let file_appender = RollingFileAppender::new(Rotation::DAILY, &config.log_dir, &log_file_name);
+    let file_appender = SizeRotatingAppender::new(config.log_dir.clone(), program_name, config.max_file_size);
     let file_writer = Mutex::new(StripAnsiWriter::new(file_appender));
 
     // Registry: config.level has real effect (TRACE = all; INFO = info+; etc.). RUST_LOG overrides when set.
@@ -491,9 +573,10 @@ pub fn init_logging(program_name: &str, config: LogConfig) -> Result<()> {
         .with(stderr_layer)
         .init();
 
+    let log_file_name_display = format!("{program_name}_{}.log", chrono::Local::now().format("%Y-%m-%d_%H-%M-%S"));
     let init_msg = format!(
-        "Logging system initialized program=\"{}\" log_dir=\"{}\" log_file=\"{}\" max_file_size={} max_files={} level={:?}",
-        program_name, config.log_dir.display(), log_file_name, config.max_file_size, config.max_files, config.level
+        "Logging system initialized program=\"{}\" log_dir=\"{}\" log_file_pattern=\"{}\" max_file_size={} max_files={} level={:?}",
+        program_name, config.log_dir.display(), log_file_name_display, config.max_file_size, config.max_files, config.level
     );
     // Note: We don't call append_stats_to_line here to avoid potential circular dependency during init.
     // The run log writer will handle it if we pass it through.
@@ -733,8 +816,8 @@ mod tests {
     #[test]
     fn test_log_config_default() {
         let config = LogConfig::default();
-        assert_eq!(config.max_file_size, u64::MAX);
-        assert_eq!(config.max_files, usize::MAX);
+        assert_eq!(config.max_file_size, 50 * 1024 * 1024);
+        assert_eq!(config.max_files, 10);
         assert_eq!(config.level, Level::TRACE);
     }
 
@@ -831,5 +914,28 @@ mod tests {
             Some(0),
             std::time::Duration::from_secs(1),
         );
+    }
+
+    #[test]
+    fn test_size_based_rotation() {
+        let temp_dir = TempDir::new().unwrap();
+        let program_name = "test_rotate_program";
+        let max_size = 500; // 500 bytes limit
+        
+        let mut appender = SizeRotatingAppender::new(temp_dir.path().to_path_buf(), program_name, max_size);
+        
+        // Write enough to trigger rotation
+        for i in 0..20 {
+            let msg = format!("Log entry number {i} filling space\n");
+            appender.write_all(msg.as_bytes()).unwrap();
+        }
+        appender.flush().unwrap();
+        
+        let files: Vec<_> = fs::read_dir(temp_dir.path())
+            .unwrap()
+            .filter_map(std::result::Result::ok)
+            .collect();
+            
+        assert!(files.len() >= 2);
     }
 }

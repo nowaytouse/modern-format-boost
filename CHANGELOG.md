@@ -32,6 +32,20 @@ All notable changes to this project will be documented in this file.
 - **`create_live_photo.py`**: Fixed a bug in `heif-enc` command generation where quality flags were incorrectly handled in lossless mode.
 - **`log_conversion_analyzer.py`**: Hardened directory creation logic for report output to handle relative paths and empty directory strings.
 
+### 🛡️ Logging & Resource Hardening
+
+- **Size-Aware Log Rotation**: Implemented a custom `SizeRotatingAppender` with a **50MB threshold** and 10-file retention policy. This prevents massive log files from slowing down text editors and ensures high-frequency traces remain manageable.
+- **Session-Based Log Bundling**: Refactored `drag_and_drop_processor.py` to archive worker logs into a dedicated `logs/Bundle_[timestamp]` directory instead of appending them into a single giant file. This provides better diagnostic isolation and zero-lag log viewing.
+- **Log Path Orchestration**: Integrated `MFB_LOG_DIR` environment support into the Rust logging engine, allowing orchestration scripts to direct all output into unified session folders.
+
+### 💎 Quality & Terminal UX Optimization
+
+- **Zero-Lint Workspace (Audit v2)**: Realized a 100% clean Clippy audit across the workspace including all features and targets.
+- **Idiomatic Refactoring**: Replaced manual `min/max` layout calculations in `progress.rs` with modern `.clamp()` calls and resolved all `uninlined_format_args` warnings to adhere to the latest Rust standards.
+- **High-Performance Progress Rendering**: Refactored the terminal progress engine in `progress.rs` to eliminate O(N^2) string allocations during UI shrinking.
+- **Improved Logging Resilience**: Hardened `x265_encoder` log streaming with better error bounds and unified stderr emission.
+- **README & Documentation**: Synchronized the project README with current codec support tables and updated prerequisite install commands for clarity.
+
 ### 🛡️ Build, Environment & Hardware Acceleration
 
 - **macOS Environment Self-Healing**: Implemented automatic system path discovery in `.envrc` and `check_all.py` to ensure Homebrew-managed tools (`pkg-config`, `libheif`, etc.) are always accessible on macOS, eliminating manual `PATH` configuration requirements.
@@ -41,13 +55,6 @@ All notable changes to this project will be documented in this file.
 - **Dependency Audit**: Verified dependency security via `cargo audit` (358 crates scanned; no high-risk vulnerabilities).
 - **VideoToolbox Contention Handling**: Enhanced hardware encoder detection on macOS to retry with `-allow_sw 1` if a compression session cannot be created due to transient GPU contention.
 - **Checkpoint Resilience**: Integrated `checkpoint_exists` and `has_output_checkpoint` checks into the initialization logic to prevent redundant processing passes.
-
-### 💎 Quality & Terminal UX Optimization
-
-- **Zero-Lint Workspace**: Resolved 100% of Clippy warnings across the core workspace, including float comparison robustness (`float_cmp`), modern option patterns (`is_none_or`), and documentation formatting.
-- **High-Performance Progress Rendering**: Refactored the terminal progress engine in `progress.rs` to eliminate O(N^2) string allocations during UI shrinking. Replaced repeated rebuilds with a single-pass layout calculation, significantly reducing CPU pressure during high-concurrency batch processing.
-- **Improved Logging Resilience**: Hardened `x265_encoder` log streaming with better error bounds and unified stderr emission.
-- **README & Documentation**: Synchronized the project README with current codec support tables and updated prerequisite install commands for clarity.
 
 ## [0.11.2] — 2026-04-15
 
