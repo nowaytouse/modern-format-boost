@@ -193,30 +193,54 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
 
     let info_str = String::from_utf8_lossy(&webpmux_info.stdout);
 
-    // Parse frame count and duration
-    let frame_count = info_str
-        .lines()
-        .find(|l| l.contains("Number of frames:"))
-        .and_then(|l| l.split(':').nth(1))
-        .and_then(|s| s.trim().parse::<u32>().ok())
-        .ok_or_else(|| {
-            VidQualityError::ConversionError("Failed to parse frame count".to_string())
-        })?;
+    // Parse frame count and durations
+    let mut frame_count = 0;
+    let mut frame_durations_ms = Vec::new();
+    let mut parsing_frames = false;
+    
+    for line in info_str.lines() {
+        if line.contains("Number of frames:") {
+            if let Some(count_str) = line.split(':').nth(1) {
+                frame_count = count_str.trim().parse::<u32>().unwrap_or(0);
+            }
+        } else if line.contains("No.: width height") {
+            parsing_frames = true;
+        } else if parsing_frames {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 7 && parts[0].ends_with(':') {
+                if let Ok(duration) = parts[6].parse::<u32>() {
+                    frame_durations_ms.push(duration);
+                }
+            }
+        }
+    }
 
-    // Parse duration from first frame (assuming all frames have same duration)
-    let frame_duration_ms = info_str
-        .lines()
-        .find(|l| l.contains("duration"))
-        .and_then(|l| l.split_whitespace().find_map(|s| s.parse::<u32>().ok()))
-        .ok_or_else(|| {
-            VidQualityError::ConversionError("Failed to parse frame duration from WebP".to_string())
-        })?;
+    if frame_count == 0 || frame_durations_ms.is_empty() {
+        return Err(VidQualityError::ConversionError(
+            "Failed to parse WebP frame metadata".to_string(),
+        ));
+    }
 
-    let fps = 1000.0 / f64::from(frame_duration_ms);
+    // Fallback if mismatch
+    if frame_durations_ms.len() as u32 != frame_count {
+        frame_durations_ms.resize(frame_count as usize, *frame_durations_ms.first().unwrap_or(&100));
+    }
+
+    // Guard against degenerate 0-duration WebPs: replace any zero delays with a
+    // sane 100ms default so ffmpeg's concat demuxer doesn't produce a 0-length clip.
+    for d in &mut frame_durations_ms {
+        if *d == 0 {
+            *d = 100;
+        }
+    }
 
     if verbose {
-        eprintln!("   📊 WebP: {frame_count} frames, {frame_duration_ms}ms/frame, {fps:.2}fps");
+        let avg_dur = frame_durations_ms.iter().sum::<u32>() as f64 / frame_durations_ms.len() as f64;
+        eprintln!("   📊 WebP: {frame_count} frames, ~{avg_dur:.1}ms/frame");
     }
+
+    let concat_list_path = temp_dir_path.join("concat.txt");
+    let mut concat_content = String::new();
 
     // Extract each frame using webpmux and convert to PNG
     for i in 1..=frame_count {
@@ -256,17 +280,41 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
                 "Failed to convert frame {i} to PNG: {stderr}"
             )));
         }
+
+        // Add to concat list
+        use std::fmt::Write;
+        let duration_sec = frame_durations_ms[(i - 1) as usize] as f64 / 1000.0;
+        let _ = writeln!(concat_content, "file '{}'", frame_png_path.file_name().unwrap_or_default().to_string_lossy());
+        let _ = writeln!(concat_content, "duration {duration_sec}");
     }
 
-    // Create APNG from PNG sequence using FFmpeg
-    let pattern = temp_dir_path.join("frame_%04d.png");
+    // Concat demuxer quirk: the last `duration` directive is ignored, so we repeat
+    // the final `file 'X.png'` entry (without a new duration) to force ffmpeg to
+    // honour the final frame's delay. Skip this for single-frame WebPs, where adding
+    // a duplicate line would create a spurious second frame.
+    if frame_durations_ms.len() >= 2 {
+        if let Some(last_i) = frame_durations_ms.len().checked_sub(1) {
+            use std::fmt::Write;
+            let _ = writeln!(concat_content, "file 'frame_{:04}.png'", last_i + 1);
+        }
+    }
+
+    if let Err(e) = std::fs::write(&concat_list_path, concat_content) {
+        return Err(VidQualityError::ConversionError(format!(
+            "Failed to write FFmpeg concat list: {e}"
+        )));
+    }
+
+    // Create APNG from PNG sequence using FFmpeg concat demuxer
     let mut builder = shared_utils::FfmpegBuilder::new();
     builder
         .overwrite()
         .with_odd_dim_correction()
-        .input_arg("-r") // Use -r for input frame rate
-        .input_arg(fps.to_string())
-        .input(&pattern)
+        .input_arg("-f")
+        .input_arg("concat")
+        .input_arg("-safe")
+        .input_arg("0")
+        .input(&concat_list_path)
         .pix_fmt(shared_utils::PixFmt::Rgba)
         .vcodec(shared_utils::VideoCodec::Apng)
         .format("apng")
@@ -287,7 +335,7 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
 
     if verbose {
         shared_utils::progress_mode::emit_stderr(&format!(
-            "   ✅ WebP → APNG conversion successful ({frame_count} frames, {fps:.2}fps)"
+            "   ✅ WebP → APNG conversion successful ({frame_count} frames, variable delay)"
         ));
     }
 

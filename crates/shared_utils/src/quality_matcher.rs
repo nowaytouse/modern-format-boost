@@ -1818,16 +1818,16 @@ pub fn from_image_analysis(
     let bpp = if let (Some(duration), Some(frame_rate)) = (duration_secs, fps) {
         if duration > 0.0 && frame_rate > 0.0 {
             let total_frames = crate::numeric_cast::f64_to_u64_sat(duration * frame_rate);
-            let bits_per_frame = f64::from(u32::try_from(file_size * 8).unwrap_or(u32::MAX))
-                / f64::from(u32::try_from(total_frames.max(1)).unwrap_or(1));
-            bits_per_frame / f64::from(u32::try_from(pixels).unwrap_or(1))
+            let bits_per_frame = crate::numeric_cast::u64_to_f64(file_size) * 8.0
+                / crate::numeric_cast::u64_to_f64(total_frames.max(1));
+            bits_per_frame / crate::numeric_cast::u64_to_f64(pixels.max(1))
         } else {
-            f64::from(u32::try_from(file_size).unwrap_or(u32::MAX))
-                / f64::from(u32::try_from(pixels).unwrap_or(1))
+            crate::numeric_cast::u64_to_f64(file_size)
+                / crate::numeric_cast::u64_to_f64(pixels.max(1))
         }
     } else {
-        f64::from(u32::try_from(file_size).unwrap_or(u32::MAX))
-            / f64::from(u32::try_from(pixels).unwrap_or(1))
+        crate::numeric_cast::u64_to_f64(file_size)
+            / crate::numeric_cast::u64_to_f64(pixels.max(1))
     };
 
     QualityAnalysis {

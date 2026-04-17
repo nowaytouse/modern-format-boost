@@ -968,7 +968,19 @@ pub fn safe_delete_original(input: &Path, output: &Path, min_output_size: u64) -
         ));
     }
 
+    let companion_xmp = crate::metadata::find_xmp_sidecar(input);
+
     fs::remove_file(input)?;
+
+    if let Some(xmp) = companion_xmp {
+        if let Err(e) = fs::remove_file(&xmp) {
+            eprintln!(
+                "⚠️  XMP sidecar cleanup failed for {}: {}",
+                xmp.display(),
+                e
+            );
+        }
+    }
     Ok(())
 }
 

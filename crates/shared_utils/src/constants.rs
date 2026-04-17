@@ -163,6 +163,18 @@ pub const X265_LOW_MEMORY_LOOKAHEAD_THREADS: usize = 1;
 pub const X265_LOW_MEMORY_LOOKAHEAD_SLICES: usize = 1;
 /// Low-memory x265 profile: shorten the lookahead queue to reduce buffered frames.
 pub const X265_LOW_MEMORY_RC_LOOKAHEAD: usize = 10;
+/// Moderate-memory x265 profile: allow limited parallelism for systems with adequate RAM.
+pub const X265_MODERATE_MEMORY_FRAME_THREADS: usize = 2;
+/// Moderate-memory x265 profile: allow limited lookahead parallelism.
+pub const X265_MODERATE_MEMORY_LOOKAHEAD_THREADS: usize = 2;
+/// Moderate-memory x265 profile: moderate lookahead slice fan-out.
+pub const X265_MODERATE_MEMORY_LOOKAHEAD_SLICES: usize = 2;
+/// Moderate-memory x265 profile: moderate lookahead queue depth.
+pub const X265_MODERATE_MEMORY_RC_LOOKAHEAD: usize = 20;
+/// RAM threshold (MB) below which the LowMemory profile is forced.
+pub const X265_LOW_MEMORY_RAM_THRESHOLD_MB: u64 = 8192;
+/// RAM threshold (MB) above which the Default (uncapped) profile is used.
+pub const X265_DEFAULT_RAM_THRESHOLD_MB: u64 = 16384;
 
 // 4. Default Search Parameters
 /// Starting CRF for quality-matched exploration.

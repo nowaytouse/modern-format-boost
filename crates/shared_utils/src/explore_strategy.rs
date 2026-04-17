@@ -213,6 +213,9 @@ pub struct ExploreContext {
     pub config: ExploreConfig,
     pub hdr_x265_params: Option<String>,
     pub apple_compat: bool,
+    /// Source codec name (e.g. "prores", "h264"), probed once at construction time.
+    /// Used to pick the x265 memory profile for archival codecs under the size threshold.
+    source_codec_name: Option<String>,
 
     size_cache: CrfCache<u64>,
     ssim_cache: CrfCache<SsimResult>,
@@ -253,6 +256,9 @@ impl ExploreContext {
             hdr_x265_params,
             apple_compat,
         } = args;
+        let source_codec_name = crate::ffprobe::probe_video(&input_path)
+            .ok()
+            .map(|probe| probe.video_codec);
         Self {
             input_path,
             output_path,
@@ -265,6 +271,7 @@ impl ExploreContext {
             config,
             hdr_x265_params,
             apple_compat,
+            source_codec_name,
             size_cache: CrfCache::new(),
             ssim_cache: CrfCache::new(),
             progress: None,
@@ -510,7 +517,10 @@ impl ExploreContext {
             self.preset,
             self.hdr_x265_params.clone(),
             self.apple_compat,
-            crate::x265_params::memory_profile_for_source(None, self.input_size),
+            crate::x265_params::memory_profile_for_source(
+                self.source_codec_name.as_deref(),
+                self.input_size,
+            ),
         ) {
             builder.arg(arg);
         }

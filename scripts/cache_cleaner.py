@@ -235,7 +235,9 @@ def clean_mfb_progress(target_path: Path):
                 continue
 
             # Case 2: Target is a file inside this tracker
-            if not is_dir and target_abs.startswith(target_dir):
+            if not is_dir and (
+                target_abs == target_dir or target_abs.startswith(target_dir + "/")
+            ):
                 new_lines = [lines[0]]  # Keep header
                 found = False
                 for line in lines[1:]:
@@ -281,7 +283,7 @@ def clean_path_tree(target_path: Path):
                 data = json.load(f)
 
             root = data.get("root", "")
-            if root == target_abs or root.startswith(target_abs + "/"):
+            if root == target_abs or root.startswith(target_abs.rstrip("/") + "/"):
                 cfile.unlink()
                 deleted_count += 1
                 print(f"   {GREEN}✅ Removed path-tree cache for: {DIM}{root}{RESET}")

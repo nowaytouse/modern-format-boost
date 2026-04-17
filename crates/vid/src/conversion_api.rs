@@ -94,21 +94,11 @@ fn build_hdr_ffmpeg_args(detection: &VideoDetectionResult) -> Vec<String> {
         }
     }
 
-    // -master_display (HDR10 mastering display metadata)
-    if let Some(ref md) = detection.mastering_display {
-        if !md.is_empty() {
-            args.push("-master_display".to_string());
-            args.push(md.clone());
-        }
-    }
-
-    // -max_cll MaxCLL,MaxFALL (HDR10 content light level)
-    if let Some(ref cll) = detection.max_cll {
-        if !cll.is_empty() {
-            args.push("-max_cll".to_string());
-            args.push(cll.clone());
-        }
-    }
+    // NOTE: -master_display and -max_cll are NOT valid top-level ffmpeg CLI options
+    // (they're not recognized and cause "Unrecognized option" errors). HDR10 static
+    // mastering-display and content-light-level metadata must be injected via
+    // `-x265-params` as `master-display=...:max-cll=...`, which is handled in the
+    // x265 params construction in execute_video_conversion / auto_convert_with_cache.
 
     args
 }
@@ -1011,6 +1001,17 @@ pub fn auto_convert_with_cache(
                     hdr_x265_params.insert_str(0, ":hdr-opt=1:repeat-headers=1");
                 }
 
+                if let Some(ref md) = detection.mastering_display {
+                    if !md.is_empty() {
+                        let _ = write!(hdr_x265_params, ":master-display={md}");
+                    }
+                }
+                if let Some(ref cll) = detection.max_cll {
+                    if !cll.is_empty() {
+                        let _ = write!(hdr_x265_params, ":max-cll={cll}");
+                    }
+                }
+
                 let hdr_x265_params_opt = if hdr_x265_params.is_empty() {
                     None
                 } else {
@@ -1806,6 +1807,22 @@ fn execute_conversion(
         shared_utils::x265_params::push_param(&mut extra_x265_params, "hdr-opt=1");
         shared_utils::x265_params::push_param(&mut extra_x265_params, "repeat-headers=1");
     }
+    if let Some(ref md) = detection.mastering_display {
+        if !md.is_empty() {
+            shared_utils::x265_params::push_param(
+                &mut extra_x265_params,
+                &format!("master-display={md}"),
+            );
+        }
+    }
+    if let Some(ref cll) = detection.max_cll {
+        if !cll.is_empty() {
+            shared_utils::x265_params::push_param(
+                &mut extra_x265_params,
+                &format!("max-cll={cll}"),
+            );
+        }
+    }
 
     // Inject DV RPU path and profile into x265 params when available
     if let Some(ref dv) = dv_rpu {
@@ -1953,6 +1970,22 @@ fn execute_lossless(
     if is_hdr_content {
         shared_utils::x265_params::push_param(&mut extra_x265_params, "hdr-opt=1");
         shared_utils::x265_params::push_param(&mut extra_x265_params, "repeat-headers=1");
+    }
+    if let Some(ref md) = detection.mastering_display {
+        if !md.is_empty() {
+            shared_utils::x265_params::push_param(
+                &mut extra_x265_params,
+                &format!("master-display={md}"),
+            );
+        }
+    }
+    if let Some(ref cll) = detection.max_cll {
+        if !cll.is_empty() {
+            shared_utils::x265_params::push_param(
+                &mut extra_x265_params,
+                &format!("max-cll={cll}"),
+            );
+        }
     }
 
     // Inject DV RPU path and profile into x265 params when available

@@ -219,7 +219,7 @@ impl LoopMeta {
                 let sizes: Vec<f64> = detection
                     .pkt_sizes
                     .iter()
-                    .map(|&s| f64::from(u32::try_from(s).unwrap_or(u32::MAX)))
+                    .map(|&s| crate::numeric_cast::u64_to_f64(s))
                     .collect();
                 calculate_gini_f64(&sizes)
             },
@@ -308,7 +308,7 @@ impl LoopMeta {
                 let sizes: Vec<f64> = probe
                     .pkt_sizes
                     .iter()
-                    .map(|&s| f64::from(u32::try_from(s).unwrap_or(u32::MAX)))
+                    .map(|&s| crate::numeric_cast::u64_to_f64(s))
                     .collect();
                 calculate_gini_f64(&sizes)
             },
@@ -661,8 +661,7 @@ fn zero_motion_ratio(mvs: &[f64]) -> f64 {
         return 0.0;
     }
     let zero_count = mvs.iter().filter(|&&value| value.abs() < 0.1).count();
-    f64::from(u32::try_from(zero_count).unwrap_or(u32::MAX))
-        / f64::from(u32::try_from(mvs.len()).unwrap_or(1))
+    crate::numeric_cast::usize_to_f64(zero_count) / crate::numeric_cast::usize_to_f64(mvs.len())
 }
 
 fn is_near_16_by_9(width: u32, height: u32) -> bool {
@@ -720,8 +719,8 @@ fn evaluate_kinetics_and_physics(
         log_odds.add(-crate::constants::SCENE_CUT_NEGATIVE_LOG_ODDS);
     }
 
-    let compactness_signal = (-thresholds.file_size_z(f64::from(
-        u32::try_from(meta.file_size_bytes).unwrap_or(u32::MAX),
+    let compactness_signal = (-thresholds.file_size_z(crate::numeric_cast::u64_to_f64(
+        meta.file_size_bytes,
     )))
     .max(0.0)
         * crate::constants::COMPACTNESS_SIGNAL_SIZE_WEIGHT
@@ -736,9 +735,7 @@ fn evaluate_kinetics_and_physics(
     }
 
     let large_media_signal = thresholds
-        .file_size_z(f64::from(
-            u32::try_from(meta.file_size_bytes).unwrap_or(u32::MAX),
-        ))
+        .file_size_z(crate::numeric_cast::u64_to_f64(meta.file_size_bytes))
         .max(0.0)
         * crate::constants::LARGE_MEDIA_SIGNAL_SIZE_WEIGHT
         + thresholds.pixels_z(total_pixels).max(0.0)
@@ -1182,7 +1179,7 @@ fn logistic_regression_fusion(
     };
 
     // neighbor_count is log-scaled to normalized density signal
-    let density_signal = f64::from(u32::try_from(neighbor_count).unwrap_or(u32::MAX)).ln_1p();
+    let density_signal = crate::numeric_cast::usize_to_f64(neighbor_count).ln_1p();
 
     let score = (knn_prob * LAYER6_LR_W_KNN)
         + (tree_prob * LAYER6_LR_W_TREE)
@@ -1619,10 +1616,10 @@ fn calculate_cv(values: &[u64]) -> Option<f64> {
     if values.is_empty() {
         return None;
     }
-    let n = f64::from(u32::try_from(values.len()).unwrap_or(1));
+    let n = crate::numeric_cast::usize_to_f64(values.len());
     let mean = values
         .iter()
-        .map(|&v| f64::from(u32::try_from(v).unwrap_or(u32::MAX)))
+        .map(|&v| crate::numeric_cast::u64_to_f64(v))
         .sum::<f64>()
         / n;
     if mean <= 0.0 {
@@ -1630,7 +1627,7 @@ fn calculate_cv(values: &[u64]) -> Option<f64> {
     }
     let var = values
         .iter()
-        .map(|&v| (f64::from(u32::try_from(v).unwrap_or(u32::MAX)) - mean).powi(2))
+        .map(|&v| (crate::numeric_cast::u64_to_f64(v) - mean).powi(2))
         .sum::<f64>()
         / n;
     Some(var.sqrt() / mean)
@@ -1640,7 +1637,7 @@ fn calculate_cv_f64(values: &[f64]) -> Option<f64> {
     if values.is_empty() {
         return None;
     }
-    let n = f64::from(u32::try_from(values.len()).unwrap_or(1));
+    let n = crate::numeric_cast::usize_to_f64(values.len());
     let mean = values.iter().sum::<f64>() / n;
     if mean <= 0.0 {
         return Some(0.0);
@@ -1655,7 +1652,7 @@ fn calculate_gini_f64(values: &[f64]) -> Option<f64> {
     }
     let mut sorted = values.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let n = f64::from(u32::try_from(sorted.len()).unwrap_or(1));
+    let n = crate::numeric_cast::usize_to_f64(sorted.len());
     let sum: f64 = sorted.iter().sum();
     if sum.abs() < 1e-9 {
         return Some(0.0);
@@ -1663,7 +1660,7 @@ fn calculate_gini_f64(values: &[f64]) -> Option<f64> {
     let weighted_sum: f64 = sorted
         .iter()
         .enumerate()
-        .map(|(i, &v)| f64::from(u32::try_from(2 * (i + 1)).unwrap_or(1)) * v)
+        .map(|(i, &v)| crate::numeric_cast::usize_to_f64(2 * (i + 1)) * v)
         .sum();
     Some((weighted_sum / (n * sum)) - (n + 1.0) / n)
 }
@@ -1773,7 +1770,7 @@ pub fn score_loop_frequency(duration_secs: f64, frame_count: u64) -> f64 {
         return 0.5;
     }
     let loops_per_minute = 60.0 / duration_secs;
-    let frame_density = f64::from(u32::try_from(frame_count).unwrap_or(u32::MAX)) / duration_secs;
+    let frame_density = crate::numeric_cast::u64_to_f64(frame_count) / duration_secs;
 
     let loop_score = if loops_per_minute >= 20.0 {
         1.0
@@ -1806,8 +1803,8 @@ pub fn score_sparse_cadence(duration_secs: f64, frame_count: u64) -> f64 {
         return 0.5;
     }
     let frame_density =
-        f64::from(u32::try_from(frame_count).unwrap_or(u32::MAX)) / duration_secs.max(0.01);
-    let avg_gap = duration_secs / f64::from(u32::try_from(frame_count).unwrap_or(u32::MAX));
+        crate::numeric_cast::u64_to_f64(frame_count) / duration_secs.max(0.01);
+    let avg_gap = duration_secs / crate::numeric_cast::u64_to_f64(frame_count);
 
     if duration_secs <= 1.5 && frame_density >= 12.0 {
         return 0.98;
@@ -1880,7 +1877,7 @@ fn detect_scene_cut(pkt_sizes: &[u64]) -> bool {
     let inner = &pkt_sizes[1..pkt_sizes.len() - 1];
     let mut baseline = inner.to_vec();
     baseline.sort_unstable();
-    let median = f64::from(u32::try_from(baseline[baseline.len() / 2]).unwrap_or(u32::MAX));
+    let median = crate::numeric_cast::u64_to_f64(baseline[baseline.len() / 2]);
 
     if median <= 0.0 {
         return false;
@@ -1888,7 +1885,7 @@ fn detect_scene_cut(pkt_sizes: &[u64]) -> bool {
 
     inner
         .iter()
-        .any(|&size| (f64::from(u32::try_from(size).unwrap_or(u32::MAX))) > median * 5.0)
+        .any(|&size| crate::numeric_cast::u64_to_f64(size) > median * 5.0)
 }
 
 /// Detect localized motion (high concentration of motion in small area).
@@ -1959,9 +1956,9 @@ fn calculate_band_variance(img: &image::DynamicImage, y_start: u32, y_end: u32) 
     if values.is_empty() {
         return 0.0;
     }
-    let mean = values.iter().sum::<f64>() / f64::from(u32::try_from(values.len()).unwrap_or(1));
+    let mean = values.iter().sum::<f64>() / crate::numeric_cast::usize_to_f64(values.len());
     values.iter().map(|v| (v - mean).powi(2)).sum::<f64>()
-        / f64::from(u32::try_from(values.len()).unwrap_or(1))
+        / crate::numeric_cast::usize_to_f64(values.len())
 }
 
 fn detect_high_text_density_from_image(img: &image::DynamicImage) -> bool {
@@ -1987,7 +1984,7 @@ fn detect_high_text_density_from_image(img: &image::DynamicImage) -> bool {
         }
     }
 
-    let edge_ratio = f64::from(u32::try_from(edge_count).unwrap_or(u32::MAX)) / total_pixels;
+    let edge_ratio = crate::numeric_cast::usize_to_f64(edge_count) / total_pixels;
     edge_ratio > 0.15
 }
 
@@ -2045,7 +2042,7 @@ fn sampled_webp_compression_ratio_from_image(img: &image::DynamicImage) -> Optio
         )
         .ok()?;
 
-    let webp_size = f64::from(u32::try_from(buffer.get_ref().len()).unwrap_or(u32::MAX));
+    let webp_size = crate::numeric_cast::usize_to_f64(buffer.get_ref().len());
 
     if webp_size <= 0.0 {
         return None;
@@ -2126,7 +2123,7 @@ fn temporal_flatness_score(ydif_values: &[f64]) -> f64 {
     if ydif_values.is_empty() {
         return 0.5;
     }
-    let n = f64::from(u32::try_from(ydif_values.len()).unwrap_or(1));
+    let n = crate::numeric_cast::usize_to_f64(ydif_values.len());
     let mean = ydif_values.iter().sum::<f64>() / n;
     if mean < 1e-6 {
         return 1.0;
@@ -2140,7 +2137,7 @@ fn palette_depth_score(quantized_unique_colors: usize) -> f64 {
     if quantized_unique_colors == 0 {
         return 0.5;
     }
-    let count = f64::from(u32::try_from(quantized_unique_colors).unwrap_or(u32::MAX));
+    let count = crate::numeric_cast::usize_to_f64(quantized_unique_colors);
     let max_possible = 32_f64.powi(3);
     let score = 1.0 - (count.ln() / max_possible.ln()).min(1.0);
     score.clamp(0.0, 1.0)
@@ -2153,12 +2150,12 @@ fn loop_closure_score(pkt_sizes: &[u64]) -> Option<f64> {
 
     let vals: Vec<f64> = pkt_sizes
         .iter()
-        .map(|&v| f64::from(u32::try_from(v).unwrap_or(u32::MAX)))
+        .map(|&v| crate::numeric_cast::u64_to_f64(v))
         .collect();
     let n = vals.len();
-    let mean = vals.iter().sum::<f64>() / f64::from(u32::try_from(n).unwrap_or(1));
+    let mean = vals.iter().sum::<f64>() / crate::numeric_cast::usize_to_f64(n);
     let variance = vals.iter().map(|&v| (v - mean).powi(2)).sum::<f64>()
-        / f64::from(u32::try_from(n).unwrap_or(1));
+        / crate::numeric_cast::usize_to_f64(n);
     if variance < 1e-6 {
         // All frames identical — perfect loop structure
         return Some(1.0);
@@ -2170,7 +2167,7 @@ fn loop_closure_score(pkt_sizes: &[u64]) -> Option<f64> {
     let autocorr: f64 = (0..n - lag)
         .map(|i| (vals[i] - mean) * (vals[i + lag] - mean))
         .sum::<f64>()
-        / (f64::from(u32::try_from(n - lag).unwrap_or(1)) * variance);
+        / (crate::numeric_cast::usize_to_f64(n.saturating_sub(lag).max(1)) * variance);
 
     // Map [-1, 1] → [0, 1]; high positive autocorrelation = strong loop closure
     Some(f64::midpoint(autocorr, 1.0).clamp(0.0, 1.0))
@@ -2182,12 +2179,12 @@ fn motion_periodicity_score(mv_magnitudes: &[f64]) -> Option<f64> {
         return None;
     }
 
-    let mean = mv_magnitudes.iter().sum::<f64>() / f64::from(u32::try_from(n).unwrap_or(1));
+    let mean = mv_magnitudes.iter().sum::<f64>() / crate::numeric_cast::usize_to_f64(n);
     let variance = mv_magnitudes
         .iter()
         .map(|&v| (v - mean).powi(2))
         .sum::<f64>()
-        / f64::from(u32::try_from(n).unwrap_or(1));
+        / crate::numeric_cast::usize_to_f64(n);
     if variance < 1e-6 {
         return Some(1.0); // Perfectly static — synthetic/sticker content
     }
@@ -2202,7 +2199,7 @@ fn motion_periodicity_score(mv_magnitudes: &[f64]) -> Option<f64> {
             let r: f64 = (0..n - lag)
                 .map(|i| (mv_magnitudes[i] - mean) * (mv_magnitudes[i + lag] - mean))
                 .sum::<f64>()
-                / (f64::from(u32::try_from(n - lag).unwrap_or(1)) * variance);
+                / (crate::numeric_cast::usize_to_f64(n.saturating_sub(lag).max(1)) * variance);
             r.clamp(-1.0, 1.0)
         })
         .sum();
@@ -2210,7 +2207,7 @@ fn motion_periodicity_score(mv_magnitudes: &[f64]) -> Option<f64> {
 
     Some(
         f64::midpoint(
-            autocorr_sum / f64::from(u32::try_from(valid_lags).unwrap_or(1)),
+            autocorr_sum / crate::numeric_cast::usize_to_f64(valid_lags.max(1)),
             1.0,
         )
         .clamp(0.0, 1.0),
@@ -2223,9 +2220,9 @@ fn temporal_jitter_score(pts_deltas: &[f64]) -> Option<f64> {
         return None;
     }
 
-    let mean = pts_deltas.iter().sum::<f64>() / f64::from(u32::try_from(n).unwrap_or(1));
+    let mean = pts_deltas.iter().sum::<f64>() / crate::numeric_cast::usize_to_f64(n);
     let variance = pts_deltas.iter().map(|&v| (v - mean).powi(2)).sum::<f64>()
-        / f64::from(u32::try_from(n).unwrap_or(1));
+        / crate::numeric_cast::usize_to_f64(n);
     if variance < 1e-12 {
         return Some(1.0); // Perfectly uniform frame timing
     }
@@ -2235,7 +2232,7 @@ fn temporal_jitter_score(pts_deltas: &[f64]) -> Option<f64> {
     let lag1: f64 = (0..n - 1)
         .map(|i| (pts_deltas[i] - mean) * (pts_deltas[i + 1] - mean))
         .sum::<f64>()
-        / (f64::from(u32::try_from(n - 1).unwrap_or(1)) * variance);
+        / (crate::numeric_cast::usize_to_f64(n.saturating_sub(1).max(1)) * variance);
 
     Some(f64::midpoint(lag1.clamp(-1.0, 1.0), 1.0))
 }

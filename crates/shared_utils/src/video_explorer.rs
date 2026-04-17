@@ -1055,6 +1055,8 @@ pub struct VideoExplorer {
     hdr_x265_params: Option<String>,
     /// Whether to use Apple-compatible container tags.
     apple_compat: bool,
+    /// The codec name of the input video (e.g., "prores", "h264").
+    source_codec_name: Option<String>,
 }
 
 impl VideoExplorer {
@@ -1070,6 +1072,7 @@ impl VideoExplorer {
         max_threads: usize,
         hdr_x265_params: Option<String>,
         apple_compat: bool,
+        source_codec_name: Option<String>,
     ) -> Result<Self> {
         crate::path_validator::validate_path(input).map_err(|e| anyhow::anyhow!("{e}"))?;
         crate::path_validator::validate_path(output).map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -1097,6 +1100,15 @@ impl VideoExplorer {
             input_size
         };
 
+        // Auto-probe the source codec when the caller didn't supply one, so that the
+        // x265 memory profile can account for archival sources (ProRes/DNxHD) even
+        // when they are well under the size threshold.
+        let source_codec_name = source_codec_name.or_else(|| {
+            crate::ffprobe::probe_video(input)
+                .ok()
+                .map(|probe| probe.video_codec)
+        });
+
         Ok(Self {
             config,
             encoder,
@@ -1110,6 +1122,7 @@ impl VideoExplorer {
             input_video_stream_size,
             hdr_x265_params,
             apple_compat,
+            source_codec_name,
         })
     }
 
@@ -1126,6 +1139,7 @@ impl VideoExplorer {
         max_threads: usize,
         hdr_x265_params: Option<String>,
         apple_compat: bool,
+        source_codec_name: Option<String>,
     ) -> Result<Self> {
         Self::build(
             input,
@@ -1138,6 +1152,7 @@ impl VideoExplorer {
             max_threads,
             hdr_x265_params,
             apple_compat,
+            source_codec_name,
         )
     }
 
@@ -1155,6 +1170,7 @@ impl VideoExplorer {
         max_threads: usize,
         hdr_x265_params: Option<String>,
         apple_compat: bool,
+        source_codec_name: Option<String>,
     ) -> Result<Self> {
         Self::build(
             input,
@@ -1167,6 +1183,7 @@ impl VideoExplorer {
             max_threads,
             hdr_x265_params,
             apple_compat,
+            source_codec_name,
         )
     }
 
@@ -1184,6 +1201,7 @@ impl VideoExplorer {
         max_threads: usize,
         hdr_x265_params: Option<String>,
         apple_compat: bool,
+        source_codec_name: Option<String>,
     ) -> Result<Self> {
         Self::build(
             input,
@@ -1196,6 +1214,7 @@ impl VideoExplorer {
             max_threads,
             hdr_x265_params,
             apple_compat,
+            source_codec_name,
         )
     }
 
@@ -2483,6 +2502,7 @@ impl VideoExplorer {
                 input_video_stream_size: self.input_video_stream_size,
                 hdr_x265_params: self.hdr_x265_params.clone(),
                 apple_compat: self.apple_compat,
+                source_codec_name: self.source_codec_name.clone(),
             };
             return cpu_fallback.encode_with_ffmpeg(crf);
         }
@@ -2532,17 +2552,12 @@ impl VideoExplorer {
                 .arg(crate::constants::FFMPEG_TAG_HVC1);
         }
 
-        // Add extra encoder-specific args
-        if self.encoder == VideoEncoder::Hevc {
-            let x265_params = crate::x265_params::format_x265_params(
-                self.max_threads,
-                self.hdr_x265_params.as_deref(),
-                crate::x265_params::memory_profile_for_source(None, self.input_size),
-            );
-            builder
-                .arg(crate::constants::FFMPEG_ARG_X265_PARAMS)
-                .arg(x265_params);
-        } else if self.encoder == VideoEncoder::Av1 {
+        // Add extra encoder-specific args.
+        // Note: for HEVC we deliberately skip -x265-params here because the CPU branch
+        // below emits them via `extra_args_with_preset`; duplicating -x265-params causes
+        // ffmpeg to keep only the last copy (silently dropping the first), and on the
+        // GPU path the encoder is hevc_videotoolbox which rejects -x265-params entirely.
+        if self.encoder == VideoEncoder::Av1 {
             builder.arg("-svtav1-params").arg(format!(
                 "tune=0:film-grain=0:preset={}:lp={}",
                 self.preset.svtav1_preset(),
@@ -2606,7 +2621,7 @@ impl VideoExplorer {
                 self.preset,
                 self.hdr_x265_params.clone(),
                 self.apple_compat,
-                crate::x265_params::memory_profile_for_source(None, self.input_size),
+                crate::x265_params::memory_profile_for_source(self.source_codec_name.as_deref(), self.input_size),
             );
 
             if self.encoder == VideoEncoder::Hevc && is_animated {
@@ -3243,6 +3258,7 @@ pub fn explore_size_only(
         max_threads,
         None,
         apple_compat,
+        None,
     )?
     .explore()
 }
@@ -3270,6 +3286,7 @@ pub fn explore_quality_match(
         max_threads,
         None,
         apple_compat,
+        None,
     )?
     .explore()
 }
@@ -3299,6 +3316,7 @@ pub fn explore_precise_quality_match(
         max_threads,
         None,
         apple_compat,
+        None,
     )?
     .explore()
 }
@@ -3329,6 +3347,7 @@ pub fn explore_precise_quality_match_with_compression(
         max_threads,
         None,
         apple_compat,
+        None,
     )?
     .explore()
 }
@@ -3357,6 +3376,7 @@ pub fn explore_compress_only(
         max_threads,
         None,
         apple_compat,
+        None,
     )?
     .explore()
 }
@@ -3385,6 +3405,7 @@ pub fn explore_compress_with_quality(
         max_threads,
         None,
         apple_compat,
+        None,
     )?
     .explore()
 }
@@ -3417,6 +3438,7 @@ pub fn explore_precise_quality_match_with_compression_gpu(
         max_threads,
         None,
         apple_compat,
+        None,
     )?
     .explore()
 }
@@ -3448,6 +3470,7 @@ pub fn explore_precise_quality_match_gpu(
         max_threads,
         None,
         apple_compat,
+        None,
     )?
     .explore()
 }
@@ -3478,6 +3501,7 @@ pub fn explore_compress_only_gpu(
         max_threads,
         None,
         apple_compat,
+        None,
     )?
     .explore()
 }
@@ -3508,6 +3532,7 @@ pub fn explore_compress_with_quality_gpu(
         max_threads,
         None,
         apple_compat,
+        None,
     )?
     .explore()
 }
@@ -3538,6 +3563,7 @@ pub fn explore_size_only_gpu(
         max_threads,
         None,
         apple_compat,
+        None,
     )?
     .explore()
 }
@@ -3567,6 +3593,7 @@ pub fn explore_quality_match_gpu(
         max_threads,
         None,
         apple_compat,
+        None,
     )?
     .explore()
 }

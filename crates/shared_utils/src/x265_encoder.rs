@@ -231,12 +231,18 @@ fn encode_to_hevc(
     }
 
     // HDR-specific x265 options: enabled when the source is 10-bit or has explicit HDR metadata.
+    // Also covers BT.2020 primaries without a matching PQ/HLG transfer (some pipelines drop
+    // the transfer tag even though the source is wide-gamut HDR).
     let is_hdr_content = config.pix_fmt.contains("10")
         || config.mastering_display.is_some()
         || config.max_cll.is_some()
         || matches!(
             config.color_trc.as_deref(),
             Some("smpte2084" | "arib-std-b67")
+        )
+        || matches!(
+            config.color_primaries.as_deref(),
+            Some("bt2020")
         );
     if is_hdr_content {
         x265_builder.hdr10_opt(true).repeat_headers(true);

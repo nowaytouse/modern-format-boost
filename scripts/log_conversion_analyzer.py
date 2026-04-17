@@ -148,6 +148,8 @@ if __name__ == "__main__":
     )
 
     # Ensure logs dir exists
-    os.makedirs(os.path.dirname(output_report), exist_ok=True)
+    report_dir = os.path.dirname(output_report)
+    if report_dir:
+        os.makedirs(report_dir, exist_ok=True)
 
     parse_logs(args.logs, output_report)

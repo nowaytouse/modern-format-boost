@@ -172,18 +172,24 @@ pub fn quick_calibrate(
         let gpu_path = gpu_test_file.path().to_path_buf();
         let cpu_path = cpu_test_file.path().to_path_buf();
 
-        let gpu_result = crate::ffmpeg_builder::FfmpegBuilder::new()
-            .overwrite()
-            .input(input)
-            .arg("-vf")
-            .arg("zscale=t=linear:npl=100,format=gbrpf32le,tonemap=tonemap=hable:desat=0,zscale=p=bt709:t=bt709:m=bt709,format=yuv420p")
+        let mut gpu_builder = crate::ffmpeg_builder::FfmpegBuilder::new();
+        gpu_builder.overwrite().input(input).codec_video(gpu_encoder);
+        if apple_compat && encoder == super::VideoEncoder::Hevc {
+            gpu_builder
+                .arg(crate::constants::FFMPEG_ARG_TAG_VIDEO)
+                .arg(crate::constants::FFMPEG_TAG_HVC1);
+        }
+        for arg in vf_args {
+            gpu_builder.arg(arg);
+        }
+        gpu_builder
+            .arg("-q:v")
+            .arg(format!("{anchor_crf:.1}"))
             .arg("-t")
-            .arg("1")
-            .arg("-f")
-            .arg("null")
-            .output("-")
-            .build()
-            .output();
+            .arg(sample_duration.to_string())
+            .output(&gpu_path);
+
+        let gpu_result = gpu_builder.build().output();
 
         let gpu_size = match gpu_result {
             Ok(out) if out.status.success() => fs::metadata(&gpu_path).map_or(0, |m| m.len()),
@@ -259,12 +265,21 @@ pub fn quick_calibrate(
         } else if encoder == super::VideoEncoder::Hevc {
             use crate::x265_encoder::{encode_with_x265, X265Config};
 
+            // Probe the input to decide HDR-aware pix_fmt so the CPU calibration
+            // encode doesn't silently downshift a 10-bit HDR source to 8-bit SDR.
+            let probe = crate::ffprobe::probe_video(input).ok();
+            let is_ten_bit = probe
+                .as_ref()
+                .is_some_and(|p| p.bit_depth >= 10);
+            let pix_fmt = if is_ten_bit { "yuv420p10le" } else { "yuv420p" };
+
             let config = X265Config {
                 crf: *anchor_crf,
                 preset: crate::types::EncoderPreset::Medium.hevc_name().to_string(),
                 threads: max_threads,
                 container: "mp4".to_string(),
                 preserve_audio: true,
+                pix_fmt: pix_fmt.to_string(),
                 ..Default::default()
             };
 
@@ -279,6 +294,8 @@ pub fn quick_calibrate(
                 .input(input)
                 .arg("-vf")
                 .arg("select=eq(n\\,0)")
+                .arg("-pix_fmt")
+                .arg(pix_fmt)
                 .arg("-frames:v")
                 .arg("1")
                 .output(temp_y4m)
@@ -335,44 +352,45 @@ pub fn quick_calibrate(
                 }
             }
         } else {
+            // Non-HEVC CPU branch (AV1, H.264). Previously this path force-tonemapped
+            // HDR→BT.709 via a `-vf zscale=p=bt709:t=bt709:m=bt709` on input that was
+            // then silently shadowed by `-vf vf_joined` below (FFmpeg keeps only the
+            // last `-vf`), and also routed to `-f null -`. Both bugs made the
+            // cpu_size measurement either 0 bytes (null muxer) or an apples-to-oranges
+            // comparison with the HDR GPU output, biasing the calibration ratio.
+            //
+            // Build a single proper CPU encode with the same filter chain the GPU
+            // side used, writing to cpu_path so fs::metadata() can read its size.
             let mut cpu_builder = crate::ffmpeg_builder::FfmpegBuilder::new();
             cpu_builder
                 .overwrite()
                 .input(input)
-                .arg("-vf")
-                .arg("zscale=p=bt709:t=bt709:m=bt709")
                 .arg("-t")
-                .arg("1")
-                .arg("-f")
-                .arg("null")
-                .output("-");
-            let mut cpu_cmd = cpu_builder.build();
-            cpu_cmd
-                .arg("-c:v")
-                .arg(encoder.ffmpeg_name())
-                .arg("-crf")
-                .arg(format!("{anchor_crf:.0}"));
-
-            for arg in encoder.extra_args(max_threads, apple_compat) {
-                cpu_cmd.arg(arg);
-            }
+                .arg(sample_duration.to_string());
 
             let vf_joined: String = vf_args
                 .iter()
-                .filter(|s| !s.is_empty())
+                .filter(|s| !s.is_empty() && s.as_str() != "-vf")
                 .cloned()
                 .collect::<Vec<_>>()
-                .join(";");
+                .join(",");
             if !vf_joined.is_empty() {
-                cpu_cmd.arg("-vf").arg(vf_joined);
+                cpu_builder.arg("-vf").arg(vf_joined);
             }
 
-            cpu_cmd
-                .arg("-c:a")
-                .arg("copy")
-                .arg(crate::safe_path_arg(cpu_path.as_path()).as_ref());
+            cpu_builder
+                .codec_video(encoder.ffmpeg_name())
+                .arg("-crf")
+                .arg(format!("{anchor_crf:.1}"));
 
-            let cpu_result = cpu_cmd.output();
+            for arg in encoder.extra_args(max_threads, apple_compat) {
+                cpu_builder.arg(arg);
+            }
+
+            cpu_builder.codec_audio("none");
+            cpu_builder.output(&cpu_path);
+
+            let cpu_result = cpu_builder.build().output();
 
             match cpu_result {
                 Ok(out) if out.status.success() => fs::metadata(&cpu_path).map_or(0, |m| m.len()),

@@ -138,15 +138,14 @@ def create_live_photo(
             capture_output=True,
         )
 
+        heif_cmd = ["heif-enc"]
+        if hq:
+            heif_cmd.append("--lossless")
+        else:
+            heif_cmd.extend(["-q", "85"])
+        heif_cmd.extend(["-o", str(img_path), str(temp_png)])
         subprocess.run(
-            [
-                "heif-enc",
-                "--lossless" if hq else "-q",
-                "85",
-                "-o",
-                str(img_path),
-                str(temp_png),
-            ],
+            heif_cmd,
             check=True,
             capture_output=True,
         )

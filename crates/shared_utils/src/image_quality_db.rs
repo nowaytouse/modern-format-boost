@@ -189,7 +189,7 @@ pub fn init_quality_schema(conn: &mut Client) -> Result<()> {
 fn get_quality_features(analysis: &ImageAnalysis) -> pgvector::Vector {
     let total_pixels = f64::from(analysis.width) * f64::from(analysis.height);
     let spatial_bpp =
-        f64::from(u32::try_from(analysis.file_size).unwrap_or(u32::MAX)) / total_pixels.max(1.0);
+        crate::numeric_cast::u64_to_f64(analysis.file_size) / total_pixels.max(1.0);
     let aspect_ratio = if analysis.height > 0 {
         f64::from(analysis.width) / f64::from(analysis.height)
     } else {
@@ -219,7 +219,7 @@ fn get_quality_features(analysis: &ImageAnalysis) -> pgvector::Vector {
 fn bpp_heuristic_score(analysis: &ImageAnalysis) -> f64 {
     let total_pixels = f64::from(analysis.width) * f64::from(analysis.height);
     let spatial_bpp =
-        f64::from(u32::try_from(analysis.file_size).unwrap_or(u32::MAX)) / total_pixels.max(1.0);
+        crate::numeric_cast::u64_to_f64(analysis.file_size) / total_pixels.max(1.0);
 
     // High entropy + low BPP (efficient encoding) → high quality signal.
     // Scale: entropy [0, 8 bits max], spatial_bpp typical range [0.05, 20.0].
@@ -389,14 +389,14 @@ pub fn lookup_image_quality(analysis: &ImageAnalysis) -> Option<QualityScore> {
 
     // Factor = Total / (NumClasses * ClassCount)
     let high_factor = if high_total > 0 {
-        f64::from(u32::try_from(total_db_samples).unwrap_or(u32::MAX))
-            / (2.0 * f64::from(u32::try_from(high_total).unwrap_or(1)))
+        crate::numeric_cast::i64_to_f64(total_db_samples)
+            / (2.0 * crate::numeric_cast::i64_to_f64(high_total))
     } else {
         1.0
     };
     let low_factor = if low_total > 0 {
-        f64::from(u32::try_from(total_db_samples).unwrap_or(u32::MAX))
-            / (2.0 * f64::from(u32::try_from(low_total).unwrap_or(1)))
+        crate::numeric_cast::i64_to_f64(total_db_samples)
+            / (2.0 * crate::numeric_cast::i64_to_f64(low_total))
     } else {
         1.0
     };
@@ -434,8 +434,8 @@ pub fn lookup_image_quality(analysis: &ImageAnalysis) -> Option<QualityScore> {
     }
 
     let knn_score = high_weight / total_weight;
-    let knn_confidence = (f64::from(u32::try_from(total_count).unwrap_or(u32::MAX))
-        / f64::from(u32::try_from(target_k).unwrap_or(1)))
+    let knn_confidence = (crate::numeric_cast::usize_to_f64(total_count)
+        / crate::numeric_cast::i64_to_f64(target_k.max(1)))
     .min(1.0);
     let bpp_score = bpp_heuristic_score(analysis);
 
@@ -472,7 +472,7 @@ pub fn log_quality_inference_record(
 ) {
     let total_pixels = f64::from(analysis.width) * f64::from(analysis.height);
     let spatial_bpp =
-        f64::from(u32::try_from(analysis.file_size).unwrap_or(u32::MAX)) / total_pixels.max(1.0);
+        crate::numeric_cast::u64_to_f64(analysis.file_size) / total_pixels.max(1.0);
     let log_pixels = total_pixels.log10();
     let aspect_ratio = if analysis.height > 0 {
         f64::from(analysis.width) / f64::from(analysis.height)
@@ -555,8 +555,8 @@ pub fn ingest_quality_sample(
 
     let file_hash = crate::common_utils::calculate_blake3_hash(path)?;
     let total_pixels = i64::from(analysis.width) * i64::from(analysis.height);
-    let spatial_bpp = f64::from(u32::try_from(analysis.file_size).unwrap_or(u32::MAX))
-        / (f64::from(u32::try_from(total_pixels).unwrap_or(1))).max(1.0);
+    let spatial_bpp = crate::numeric_cast::u64_to_f64(analysis.file_size)
+        / crate::numeric_cast::i64_to_f64(total_pixels).max(1.0);
     let features = get_quality_features(&analysis);
 
     conn.execute(

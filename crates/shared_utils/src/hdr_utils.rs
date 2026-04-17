@@ -103,6 +103,10 @@ pub fn color_info_to_ffmpeg_args(info: &ColorInfo) -> Vec<String> {
 
 /// Infers missing color information for modern or high-definition content.
 /// BT.709 is the correct standard for HD/modern content, while legacy SD content may expect BT.601.
+///
+/// Skips inference when any HDR signal is already present so a modern HDR HEIC/AVIF/HEIF
+/// with a partially-populated color tag (e.g. `color_space=bt2020nc` but no transfer)
+/// is not silently downgraded to SDR/sRGB.
 #[must_use]
 pub fn infer_bt709_if_modern(mut info: ColorInfo, width: u32, height: u32, ext: &str) -> ColorInfo {
     let is_hd = width >= 1280 || height >= 720;
@@ -110,6 +114,26 @@ pub fn infer_bt709_if_modern(mut info: ColorInfo, width: u32, height: u32, ext: 
         ext.to_lowercase().as_str(),
         "avif" | "webp" | "jxl" | "heic" | "heif" | "apng"
     );
+
+    // Never override explicit HDR tags with sRGB/BT.709 defaults.
+    let looks_hdr = info.bit_depth.is_some_and(|d| d > 8)
+        || info.mastering_display.is_some()
+        || info.max_cll.is_some()
+        || matches!(
+            info.color_transfer.as_deref(),
+            Some("smpte2084" | "arib-std-b67")
+        )
+        || matches!(
+            info.color_primaries.as_deref(),
+            Some("bt2020")
+        )
+        || matches!(
+            info.color_space.as_deref(),
+            Some("bt2020nc" | "bt2020c" | "bt2020_ncl" | "bt2020ncl")
+        );
+    if looks_hdr {
+        return info;
+    }
 
     if is_hd || is_modern_format {
         if info.color_space.is_none() {

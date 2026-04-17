@@ -299,18 +299,11 @@ fn build_color_args_from_probe(probe: &crate::ffprobe::FFprobeResult) -> Vec<Str
             args.push(normalised.to_string());
         }
     }
-    if let Some(ref md) = probe.mastering_display {
-        if !md.is_empty() {
-            args.push("-master_display".to_string());
-            args.push(md.clone());
-        }
-    }
-    if let Some(ref cll) = probe.max_cll {
-        if !cll.is_empty() {
-            args.push("-max_cll".to_string());
-            args.push(cll.clone());
-        }
-    }
+    // NOTE: -master_display and -max_cll are NOT valid top-level ffmpeg CLI options.
+    // HDR10 static mastering-display / max-CLL metadata must be injected via
+    // `-x265-params` (master-display=...:max-cll=...), which is handled in the
+    // x265 params construction on the encode path. Only the CICP triple is emitted
+    // here so that the container signals the correct primaries/TRC/matrix.
     args
 }
 
@@ -1802,6 +1795,35 @@ fn cpu_fine_tune_from_gpu_boundary(
             } else {
                 format!("{existing}:bframes=0")
             });
+        }
+
+        // Defensive HDR10 metadata injection: if probe has mastering-display / max-cll
+        // but the caller didn't fold them into hdr_x265_params, add them here so that
+        // HDR10 signaling survives through libx265.
+        if encoder == crate::video_explorer::VideoEncoder::Hevc {
+            if let Some(probe) = probe_info {
+                let existing = adjusted_x265_params.clone().unwrap_or_default();
+                let mut updated = existing.clone();
+                if let Some(ref md) = probe.mastering_display {
+                    if !md.is_empty() && !updated.contains("master-display=") {
+                        if !updated.is_empty() {
+                            updated.push(':');
+                        }
+                        updated.push_str(&format!("master-display={md}"));
+                    }
+                }
+                if let Some(ref cll) = probe.max_cll {
+                    if !cll.is_empty() && !updated.contains("max-cll=") {
+                        if !updated.is_empty() {
+                            updated.push(':');
+                        }
+                        updated.push_str(&format!("max-cll={cll}"));
+                    }
+                }
+                if updated != existing {
+                    adjusted_x265_params = Some(updated);
+                }
+            }
         }
 
         for arg in encoder.extra_args_with_preset(

@@ -4,6 +4,41 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.11.2] — 2026-04-17
+
+### 🚀 ProRes & HEVC Performance Optimization
+
+- **RAM-Aware Tiered Encoding**: Replaced the binary x265 memory profile system with a 3-tier RAM-aware system (`Default`, `Moderate`, `LowMemory`).
+  - **Logic**: Dynamically queries system memory; uses `Moderate` profile (frame-threads=2) for 8-16GB RAM and `Default` for ≥16GB, preventing single-threaded bottlenecks on capable hardware during ProRes/DNxHD processing.
+- **Codec Information Propagation**: Fixed 3 call sites in `video_explorer.rs` and `explore_strategy.rs` where the actual source codec name was lost, ensuring ProRes and other archival formats correctly trigger RAM-aware optimized memory profiles throughout the entire search and fine-tune pipeline.
+
+### 🎬 Animated Image Pipeline & HDR Hardening
+
+- **WebP Variable-Delay Timing**: Resolved a frame timing bug where variable-delay WebP animations were rendered at a fixed frame rate.
+  - **Fix**: Implemented per-frame duration parsing logic and transitioned to the FFmpeg concat demuxer to ensure bit-perfect timing preservation in output sequences.
+- **HDR10 Metadata Correctness**: Fixed a critical regression where HDR10 static metadata (`-master-display`, `-max_cll`) caused "Unrecognized option" errors in modern FFmpeg.
+  - **Fix**: Re-routed metadata injection through `-x265-params` as `master-display=...:max-cll=...` across all video conversion and fine-tune paths.
+- **HDR Signal Protection**: Hardened `infer_bt709_if_modern` to skip BT.709 inference when any HDR signal (BT.2020, SMPTE 2084, or >8-bit depth) is detected, preventing silent downgrades of HDR assets to SDR.
+
+### 🛡️ Numeric Safety & Integrity
+
+- **Global Numeric Hardening**: Systematically replaced saturating `as` numeric casts with checked `numeric_cast` helpers across all media analysis and quality hot-paths (`loop_intent.rs`, `gpu_accel.rs`, `gpu_coarse_search.rs`).
+- **XMP Sidecar cleanup**: Updated `safe_delete_original` to automatically identify and remove companion `.xmp` sidecar files after successful processing.
+- **GPU Mapping Correctness**: Fixed a bug in `dynamic_mapping.rs` where the GPU-to-CPU CRF calibration incorrectly redirected test output to `/dev/null`, and ensured CPU calibration probes for 10-bit HDR to prevent apples-to-oranges size comparisons.
+
+### 🔧 Scripts & Maintenance
+
+- **`cache_cleaner.py`**: Fixed path matching logic for directory-based progress and path-tree cache cleanup to prevent accidental omissions.
+- **`create_live_photo.py`**: Fixed a bug in `heif-enc` command generation where quality flags were incorrectly handled in lossless mode.
+- **`log_conversion_analyzer.py`**: Hardened directory creation logic for report output to handle relative paths and empty directory strings.
+
+### 🛡️ Build & Hardware Acceleration
+
+- **Dependency Rationalization**: Removed the `avif-native` feature from the `image` crate in `Cargo.toml`. This eliminates the problematic `dav1d-sys` dependency and its `pkg-config` system requirement, hardening the build system for environments without native library development tools.
+- **VideoToolbox Contention Handling**: Enhanced hardware encoder detection on macOS to retry with `-allow_sw 1` if a compression session cannot be created due to transient GPU contention.
+- **Checkpoint Resilience**: Integrated `checkpoint_exists` and `has_output_checkpoint` checks into the initialization logic to prevent redundant processing passes.
+
+
 ## [0.11.2] — 2026-04-15
 
 ### ✨ Recent Highlights

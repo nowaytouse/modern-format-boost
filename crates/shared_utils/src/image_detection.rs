@@ -2198,8 +2198,8 @@ fn estimate_lossy_quality_fallback(
     }
 
     // Heuristic v2: Multi-factor quality estimation
-    let raw_bpp = f64::from(u32::try_from(file_size * 8).unwrap_or(u32::MAX))
-        / f64::from(u32::try_from(pixels).unwrap_or(u32::MAX))
+    let raw_bpp = crate::numeric_cast::u64_to_f64(file_size) * 8.0
+        / crate::numeric_cast::u64_to_f64(pixels.max(1))
         / f64::from(frame_count.max(1));
 
     // Format efficiency multiplier (relative to JPEG)

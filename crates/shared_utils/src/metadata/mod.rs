@@ -678,7 +678,7 @@ fn merge_xmp_sidecar(src: &Path, dst: &Path) {
     }
 }
 
-fn find_xmp_sidecar(src: &Path) -> Option<std::path::PathBuf> {
+pub(crate) fn find_xmp_sidecar(src: &Path) -> Option<std::path::PathBuf> {
     if let Some(ext) = src.extension() {
         let xmp_full = src.with_extension(format!("{}.xmp", ext.to_str()?));
         if xmp_full.exists() {
@@ -694,7 +694,15 @@ fn find_xmp_sidecar(src: &Path) -> Option<std::path::PathBuf> {
     if let Some(parent) = src.parent() {
         if let Some(src_stem_raw) = src.file_stem() {
             let src_stem = src_stem_raw.to_string_lossy().to_lowercase();
-            let src_root_stem = src_stem.split('.').next().unwrap_or(&src_stem);
+            let src_ext = src
+                .extension()
+                .map(|e| e.to_string_lossy().to_lowercase())
+                .unwrap_or_default();
+            let src_compound = if src_ext.is_empty() {
+                src_stem.clone()
+            } else {
+                format!("{src_stem}.{src_ext}")
+            };
 
             match std::fs::read_dir(parent) {
                 Ok(entries) => {
@@ -712,6 +720,10 @@ fn find_xmp_sidecar(src: &Path) -> Option<std::path::PathBuf> {
                         };
                         let path = entry.path();
 
+                        if !path.is_file() {
+                            continue;
+                        }
+
                         if !path
                             .extension()
                             .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("xmp"))
@@ -721,17 +733,8 @@ fn find_xmp_sidecar(src: &Path) -> Option<std::path::PathBuf> {
 
                         if let Some(xmp_stem_raw) = path.file_stem() {
                             let xmp_stem = xmp_stem_raw.to_string_lossy().to_lowercase();
-                            let xmp_root_stem = xmp_stem.split('.').next().unwrap_or(&xmp_stem);
 
-                            if xmp_stem == src_stem
-                                || xmp_stem
-                                    == format!(
-                                        "{}.{}",
-                                        src_stem,
-                                        src.extension().and_then(|e| e.to_str()).unwrap_or("")
-                                    )
-                                || xmp_root_stem == src_root_stem
-                            {
+                            if xmp_stem == src_stem || xmp_stem == src_compound {
                                 return Some(path);
                             }
                         }
