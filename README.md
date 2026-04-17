@@ -134,7 +134,7 @@ Plus a **double-click macOS app** (`Modern Format Boost.app`) for drag-and-drop 
 | PNG (indexed) |    ❌     |    No     | **Quality-matched**      | `.jxl`        | d=0.001                                |
 | WebP          |    ✅     |    No     | **Detour → lossless**    | `.jxl`        | dwebp → JXL d=0.0                      |
 | WebP          |    ❌     |    No     | **Skip**                 | (keep)        | Avoid generational loss                |
-| WebP          |     —     |    ✅     | **Loop Intent**         | `.mov`/`.gif` | HEVC/AV1 or keep GIF                   |
+| WebP          |     —     |    ✅     | **Loop Intent**          | `.mov`/`.gif` | HEVC/AV1 or keep GIF                   |
 | AVIF          |    ✅     |    No     | **Lossless convert**     | `.jxl`        | d=0.0                                  |
 | AVIF          |    ❌     |    No     | **Skip**                 | (keep)        | Avoid generational loss                |
 | HEIC/HEIF     |    ✅     |    No     | **Detour → lossless**    | `.jxl`        | `sips`/`magick` → PNG → d=0.0          |
@@ -143,7 +143,7 @@ Plus a **double-click macOS app** (`Modern Format Boost.app`) for drag-and-drop 
 | TIFF          |    ✅     |    No     | **Detour → lossless**    | `.jxl`        | `magick -depth 16` → PNG → d=0.0       |
 | TIFF          |    ❌     |    No     | **Quality-matched**      | `.jxl`        | magick → JXL d=0.001                   |
 | BMP           |    ✅     |    No     | **Detour → lossless**    | `.jxl`        | `magick` → PNG → d=0.0                 |
-| GIF           |     —     |    ✅     | **Loop Intent**         | `.mov`/`.gif` | HEVC/AV1 or keep GIF                   |
+| GIF           |     —     |    ✅     | **Loop Intent**          | `.mov`/`.gif` | HEVC/AV1 or keep GIF                   |
 | GIF           |     —     |    No     | **Frame extract**        | `.jxl`        | ffmpeg → JXL                           |
 | JXL           |     —     |    No     | **Skip**                 | (keep)        | Already optimal                        |
 
@@ -184,17 +184,17 @@ tar -xzf modern-format-boost-aarch64-apple-darwin.tar.gz
 
 ### Prerequisites
 
-| Tool | Required? | Purpose | Install Command |
-| :--- | :---: | :--- | :--- |
-| **Rust** (1.75+) | ✅ | Build & Install | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
-| **FFmpeg** (5.0+) | ✅ | Video processing & Metrics | `brew install ffmpeg` / `apt install ffmpeg` |
-| **libjxl** | ✅ | JXL encoding core | `brew install jpeg-xl` |
-| **ExifTool** | ✅ | Metadata preservation | `brew install exiftool` |
-| **ImageMagick** | ✅ | Image detour pathway | `brew install imagemagick` |
-| **libwebp** | ✅ | WebP native decoding | `brew install webp` |
-| **dovi_tool** | ✅ | Dolby Vision RPU extraction | `cargo install dovi_tool` |
-| **libheif** | ✅ | HEIC/HEIF decode | `brew install libheif` |
-| **hdr10plus_tool** | ✅ | HDR10+ metadata extraction | `cargo install hdr10plus_tool` |
+| Tool               | Required? | Purpose                     | Install Command                                                   |
+| :----------------- | :-------: | :-------------------------- | :---------------------------------------------------------------- |
+| **Rust** (1.75+)   |    ✅     | Build & Install             | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
+| **FFmpeg** (5.0+)  |    ✅     | Video processing & Metrics  | `brew install ffmpeg` / `apt install ffmpeg`                      |
+| **libjxl**         |    ✅     | JXL encoding core           | `brew install jpeg-xl`                                            |
+| **ExifTool**       |    ✅     | Metadata preservation       | `brew install exiftool`                                           |
+| **ImageMagick**    |    ✅     | Image detour pathway        | `brew install imagemagick`                                        |
+| **libwebp**        |    ✅     | WebP native decoding        | `brew install webp`                                               |
+| **dovi_tool**      |    ✅     | Dolby Vision RPU extraction | `cargo install dovi_tool`                                         |
+| **libheif**        |    ✅     | HEIC/HEIF decode            | `brew install libheif`                                            |
+| **hdr10plus_tool** |    ✅     | HDR10+ metadata extraction  | `cargo install hdr10plus_tool`                                    |
 
 #### macOS (Homebrew)
 
@@ -274,17 +274,18 @@ vid run --codec av1 /path/to/media
 ## ❓ FAQ
 
 **1. Is JXL broadly supported?**  
-Native support exists in macOS 14+ / iOS 17+, Chrome 91+, and Firefox 128+. However, there are known ecosystem issues:  
-- **Animations**: Modern animated formats (JXL/AV1/HEIF) often fail to preview as animations in the native macOS/iOS Photos app or Finder (static only), especially when synchronized via iCloud. They play correctly in modern browsers or specialized tools.  
+Native support exists in macOS 14+ / iOS 17+, Chrome 91+, and Firefox 128+. However, there are known ecosystem issues:
+
+- **Animations**: Modern animated formats (JXL/AV1/HEIF) often fail to preview as animations in the native macOS/iOS Photos app or Finder (static only), especially when synchronized via iCloud. They play correctly in modern browsers or specialized tools.
 - **Thumbnails**: JXL files using **grayscale ICC profiles** may appear as **black thumbnails** in Finder/iCloud, even though they render perfectly when opened.  
-JXL remains the superior format for bit-exact archival and high-fidelity HDR storage.
+  JXL remains the superior format for bit-exact archival and high-fidelity HDR storage.
 
 **2. How is HDR10+ handled?**  
 Fully supported. We use `hdr10plus_tool` to extract SMPTE 2094-40 dynamic metadata and inject it back into the HEVC stream via `libx265`'s `--dhdr10-info` parameter. Ensure the tool is installed to enable this feature.
 
 **3. Why skip WebP/AVIF/HEIC?**  
 These formats are already modern and highly compressed. Re-encoding them would cause "generational loss" (quality degradation) with minimal size benefits.  
-**Exceptions**: The tool *will* process these if it detects high-fidelity **HDR Gainmaps** for synthesis into JXL, or if an animated file requires optimization via the **Loop Intent** engine.
+**Exceptions**: The tool _will_ process these if it detects high-fidelity **HDR Gainmaps** for synthesis into JXL, or if an animated file requires optimization via the **Loop Intent** engine.
 
 ---
 

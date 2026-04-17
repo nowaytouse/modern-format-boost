@@ -95,24 +95,24 @@
 
 ### 图片格式决策矩阵
 
-| 输入格式     | 无损? | 动图? | 处理                | 输出          | 算法与方式                       |
-| :----------- | :---: | :---: | :------------------ | :------------ | :------------------------------- |
-| JPEG         |   —   |  否   | **无损成分重建**    | `.jxl`        | VarDCT (位一致)                  |
-| PNG          |  ✅   |  否   | **无损转换**        | `.jxl`        | Modular d=0.0                    |
-| PNG (索引色) |  ❌   |  否   | **画质匹配**        | `.jxl`        | d=0.001                          |
-| WebP         |  ✅   |  否   | **无损(绕路)**      | `.jxl`        | dwebp → JXL d=0.0                |
-| WebP         |  ❌   |  否   | **跳过**            | (保留)        | 避免代际损伤                     |
+| 输入格式     | 无损? | 动图? | 处理             | 输出          | 算法与方式                       |
+| :----------- | :---: | :---: | :--------------- | :------------ | :------------------------------- |
+| JPEG         |   —   |  否   | **无损成分重建** | `.jxl`        | VarDCT (位一致)                  |
+| PNG          |  ✅   |  否   | **无损转换**     | `.jxl`        | Modular d=0.0                    |
+| PNG (索引色) |  ❌   |  否   | **画质匹配**     | `.jxl`        | d=0.001                          |
+| WebP         |  ✅   |  否   | **无损(绕路)**   | `.jxl`        | dwebp → JXL d=0.0                |
+| WebP         |  ❌   |  否   | **跳过**         | (保留)        | 避免代际损伤                     |
 | WebP         |   —   |  是   | **循环意图判定** | `.mov`/`.gif` | 转视频或保留 GIF                 |
-| AVIF         |  ✅   |  否   | **无损转换**        | `.jxl`        | d=0.0                            |
-| AVIF         |  ❌   |  否   | **跳过**            | (保留)        | 避免代际损伤                     |
-| HEIC/HEIF    |  ✅   |  否   | **无损(绕路)**      | `.jxl`        | `sips`/`magick` → PNG → d=0.0    |
-| HEIC/HEIF    |  ❌   |  否   | **跳过**            | (保留)        | 避免代际损伤                     |
-| TIFF         |  ✅   |  否   | **无损(绕路)**      | `.jxl`        | `magick -depth 16` → PNG → d=0.0 |
-| TIFF         |  ❌   |  否   | **画质匹配**        | `.jxl`        | magick → JXL d=0.001             |
-| BMP          |  ✅   |  否   | **无损(绕路)**      | `.jxl`        | `magick` → PNG → d=0.0           |
+| AVIF         |  ✅   |  否   | **无损转换**     | `.jxl`        | d=0.0                            |
+| AVIF         |  ❌   |  否   | **跳过**         | (保留)        | 避免代际损伤                     |
+| HEIC/HEIF    |  ✅   |  否   | **无损(绕路)**   | `.jxl`        | `sips`/`magick` → PNG → d=0.0    |
+| HEIC/HEIF    |  ❌   |  否   | **跳过**         | (保留)        | 避免代际损伤                     |
+| TIFF         |  ✅   |  否   | **无损(绕路)**   | `.jxl`        | `magick -depth 16` → PNG → d=0.0 |
+| TIFF         |  ❌   |  否   | **画质匹配**     | `.jxl`        | magick → JXL d=0.001             |
+| BMP          |  ✅   |  否   | **无损(绕路)**   | `.jxl`        | `magick` → PNG → d=0.0           |
 | GIF          |   —   |  是   | **循环意图判定** | `.mov`/`.gif` | 转视频或保留 GIF                 |
-| GIF          |   —   |  否   | **单帧提取**        | `.jxl`        | ffmpeg → JXL                     |
-| JXL          |   —   |  否   | **跳过**            | (保留)        | 最优格式                         |
+| GIF          |   —   |  否   | **单帧提取**     | `.jxl`        | ffmpeg → JXL                     |
+| JXL          |   —   |  否   | **跳过**         | (保留)        | 最优格式                         |
 
 ### 视频编码决策矩阵
 
@@ -139,17 +139,17 @@
 
 ### 前置要求
 
-| 工具 | 必须? | 用途 | 安装命令 |
-| :--- | :---: | :--- | :--- |
-| **Rust** (1.75+) | ✅ | 编译安装 | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
-| **FFmpeg** (5.0+) | ✅ | 视频处理与质量检测 | `brew install ffmpeg` / `apt install ffmpeg` |
-| **libjxl** | ✅ | JXL 编码核心 | `brew install jpeg-xl` |
-| **ExifTool** | ✅ | 元数据保留 | `brew install exiftool` |
-| **ImageMagick** | ✅ | 图片格式中转 | `brew install imagemagick` |
-| **libwebp** | ✅ | WebP 原生解码 | `brew install webp` |
-| **dovi_tool** | ✅ | 杜比视界 RPU 提取 | `cargo install dovi_tool` |
-| **libheif** | ✅ | HEIC/HEIF 解码 | `brew install libheif` |
-| **hdr10plus_tool** | ✅ | HDR10+ 元数据提取 | `cargo install hdr10plus_tool` |
+| 工具               | 必须? | 用途               | 安装命令                                                          |
+| :----------------- | :---: | :----------------- | :---------------------------------------------------------------- |
+| **Rust** (1.75+)   |  ✅   | 编译安装           | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
+| **FFmpeg** (5.0+)  |  ✅   | 视频处理与质量检测 | `brew install ffmpeg` / `apt install ffmpeg`                      |
+| **libjxl**         |  ✅   | JXL 编码核心       | `brew install jpeg-xl`                                            |
+| **ExifTool**       |  ✅   | 元数据保留         | `brew install exiftool`                                           |
+| **ImageMagick**    |  ✅   | 图片格式中转       | `brew install imagemagick`                                        |
+| **libwebp**        |  ✅   | WebP 原生解码      | `brew install webp`                                               |
+| **dovi_tool**      |  ✅   | 杜比视界 RPU 提取  | `cargo install dovi_tool`                                         |
+| **libheif**        |  ✅   | HEIC/HEIF 解码     | `brew install libheif`                                            |
+| **hdr10plus_tool** |  ✅   | HDR10+ 元数据提取  | `cargo install hdr10plus_tool`                                    |
 
 ### macOS (Homebrew)
 
@@ -229,9 +229,10 @@ vid run --codec av1 /视频/路径
 
 **1. JXL 格式目前的兼容性如何？**  
 macOS 14 (Sonoma) / iOS 17+、Chrome 91+ 以及 Firefox 128+ 已提供了原生支持。但目前 Apple 生态仍存在已知缺陷：
+
 - **动图预览**：现代动图格式（JXL/AV1/HEIF）在 macOS/iOS 原生相册或 Finder 中往往无法直接播放动图（显示为静态图），尤其是 iCloud 同步后的文件。建议通过命令行工具或现代浏览器进行预览。
 - **缩略图黑屏**：当 JXL 文件使用 **灰色 (Grayscale) ICC 配置文件** 时，Finder/iCloud 的缩略图可能会显示为纯黑，但这并不影响文件本身，在浏览器中打开可正常显示。
-JXL 依然是目前进行位一致无损归档及高保真 HDR 存储的最佳选择。
+  JXL 依然是目前进行位一致无损归档及高保真 HDR 存储的最佳选择。
 
 **2. 为什么 HDR10+ 动态视频会失效？**  
 现已完美支持。我们通过 `hdr10plus_tool` 提取 SMPTE 2094-40 动态元数据并将其注入 `libx265` 的 `--dhdr10-info` 参数中。请确保已安装该工具。

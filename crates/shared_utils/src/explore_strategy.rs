@@ -123,14 +123,13 @@ impl Default for ProgressConfig {
 }
 
 use crate::crf_constants::{CRF_CACHE_KEY_MULTIPLIER, CRF_CACHE_MAX_VALID};
-
-const CRF_CACHE_SIZE: usize = 6400;
+use std::collections::HashMap;
 
 const CRF_CACHE_MULTIPLIER: f32 = CRF_CACHE_KEY_MULTIPLIER;
 
 #[derive(Clone)]
 pub struct CrfCache<T> {
-    data: Box<[Option<T>; CRF_CACHE_SIZE]>,
+    data: HashMap<u32, T>,
 }
 
 impl<T> Default for CrfCache<T> {
@@ -144,13 +143,13 @@ impl<T> CrfCache<T> {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            data: Box::new(std::array::from_fn(|_| None)),
+            data: HashMap::with_capacity(16),
         }
     }
 
     #[inline]
     #[must_use]
-    pub fn key(crf: f32) -> Option<usize> {
+    pub fn key(crf: f32) -> Option<u32> {
         if crf < 0.0 {
             eprintln!("⚠️ CRF_CACHE: Negative CRF {crf} rejected");
             return None;
@@ -163,33 +162,29 @@ impl<T> CrfCache<T> {
             eprintln!("⚠️ CRF_CACHE: CRF {crf} exceeds max valid {CRF_CACHE_MAX_VALID} - rejected");
             return None;
         }
-        #[allow(clippy::cast_possible_truncation)]
         #[allow(clippy::cast_sign_loss)]
-        let idx = crate::numeric_cast::f32_to_usize_sat((crf * CRF_CACHE_MULTIPLIER).round());
-        if idx < CRF_CACHE_SIZE {
-            Some(idx)
-        } else {
-            None
-        }
+        Some(crate::numeric_cast::f32_to_u32_sat(
+            (crf * CRF_CACHE_MULTIPLIER).round(),
+        ))
     }
 
     #[inline]
     #[must_use]
     pub fn get(&self, crf: f32) -> Option<&T> {
-        Self::key(crf).and_then(|idx| self.data[idx].as_ref())
+        Self::key(crf).and_then(|idx| self.data.get(&idx))
     }
 
     #[inline]
     pub fn insert(&mut self, crf: f32, value: T) {
         if let Some(idx) = Self::key(crf) {
-            self.data[idx] = Some(value);
+            self.data.insert(idx, value);
         }
     }
 
     #[inline]
     #[must_use]
     pub fn contains_key(&self, crf: f32) -> bool {
-        Self::key(crf).is_some_and(|idx| self.data[idx].is_some())
+        Self::key(crf).is_some_and(|idx| self.data.contains_key(&idx))
     }
 }
 
@@ -535,9 +530,14 @@ impl ExploreContext {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
+            let tail = crate::io_utils::tail_error_lines(&stderr, 5);
             bail!(
                 "ffmpeg encoding failed: {}",
-                stderr.lines().last().unwrap_or("unknown error")
+                if tail.is_empty() {
+                    "unknown error"
+                } else {
+                    &tail
+                }
             );
         }
 

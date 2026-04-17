@@ -4,7 +4,8 @@ import os
 import shutil
 import subprocess
 import sys
-from typing import Callable, Optional, Tuple
+from typing import Optional, Tuple
+from collections.abc import Callable
 
 # collect_optimized.py v13
 # Moves only optimized outputs into a mirrored directory tree.
@@ -20,10 +21,10 @@ VIDEO_EXTENSIONS = {".mov", ".mp4"}
 TARGET_VIDEO_CODECS = {"hevc"}
 PROBE_FAILURE_PREVIEW = 10
 
-CodecProbe = Callable[[str], Tuple[Optional[str], Optional[str]]]
+CodecProbe = Callable[[str], tuple[Optional[str], Optional[str]]]
 
 
-def probe_video_codec(path: str) -> Tuple[Optional[str], Optional[str]]:
+def probe_video_codec(path: str) -> tuple[str | None, str | None]:
     """Returns the primary video codec name, or an error string."""
     cmd = [
         "ffprobe",

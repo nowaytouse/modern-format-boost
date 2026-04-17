@@ -447,10 +447,11 @@ pub fn emit_stderr(line: &str) {
     // Pause output if the Ctrl+C confirmation prompt is currently waiting for input
     crate::ctrlc_guard::wait_if_prompt_active();
 
+    // ── Pre-process All Lines ──
+    let mut processed_lines = Vec::new();
     let mut active_ansi = String::new();
     let mut is_first = true;
 
-    // Process each line separately to ensure milestone stats are appended correctly
     for subline in line.lines() {
         if subline.trim().is_empty() {
             continue;
@@ -502,20 +503,51 @@ pub fn emit_stderr(line: &str) {
                 crate::logging::strip_ansi_str(&line_with_stats)
             )
         };
-        let wrapped = if stderr_is_tty() {
-            crate::progress::wrap_output_for_active_progress(&out)
+        processed_lines.push(out);
+    }
+
+    if processed_lines.is_empty() {
+        return;
+    }
+
+    // ── Unified Output Block ──
+    // Clear once, print all, restore once.
+    if stderr_is_tty() {
+        if let Some(progress_line) = crate::progress::active_progress_line() {
+            // Clear progress line, print all lines, then re-show progress
+            let mut output = String::from("\r\x1b[2K");
+            for p_line in processed_lines {
+                output.push_str(&p_line);
+                output.push('\n');
+            }
+            output.push('\r');
+            output.push_str(&progress_line);
+
+            if let Err(err) = write!(std::io::stderr(), "{output}") {
+                tracing::warn!(error = %err, "Failed to write progress output to stderr");
+            }
         } else {
-            format!("{out}\n")
-        };
-        if let Err(err) = write!(std::io::stderr(), "{wrapped}") {
-            tracing::warn!(
-                error = %err,
-                "Failed to write progress output to stderr"
-            );
-        } else {
-            let _ = std::io::stderr().flush();
+            let mut output = String::new();
+            for p_line in processed_lines {
+                output.push_str(&p_line);
+                output.push('\n');
+            }
+            if let Err(err) = write!(std::io::stderr(), "{output}") {
+                tracing::warn!(error = %err, "Failed to write progress output to stderr");
+            }
+        }
+    } else {
+        // Non-TTY: just print with newlines
+        let mut output = String::new();
+        for p_line in processed_lines {
+            output.push_str(&p_line);
+            output.push('\n');
+        }
+        if let Err(err) = write!(std::io::stderr(), "{output}") {
+            tracing::warn!(error = %err, "Failed to write progress output to stderr");
         }
     }
+    let _ = std::io::stderr().flush();
 }
 
 /// Flush the log file buffer. Call at program exit.

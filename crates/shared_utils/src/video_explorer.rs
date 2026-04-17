@@ -1061,6 +1061,7 @@ pub struct VideoExplorer {
 
 impl VideoExplorer {
     /// Internal builder that validates paths, detects GPU availability, and initializes state.
+    #[allow(clippy::too_many_arguments)]
     fn build(
         input: &Path,
         output: &Path,
@@ -2621,7 +2622,10 @@ impl VideoExplorer {
                 self.preset,
                 self.hdr_x265_params.clone(),
                 self.apple_compat,
-                crate::x265_params::memory_profile_for_source(self.source_codec_name.as_deref(), self.input_size),
+                crate::x265_params::memory_profile_for_source(
+                    self.source_codec_name.as_deref(),
+                    self.input_size,
+                ),
             );
 
             if self.encoder == VideoEncoder::Hevc && is_animated {

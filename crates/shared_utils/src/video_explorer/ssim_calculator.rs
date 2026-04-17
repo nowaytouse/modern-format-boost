@@ -933,12 +933,15 @@ mod tests {
         let stderr = "PSNR y:inf u:inf v:inf average:inf min:inf max:inf\n";
         let result = parse_psnr_average_y_from_stderr(stderr);
         assert!(result.is_some());
-        assert_eq!(result.unwrap(), 100.0);
+        assert!(crate::float_compare::approx_eq_f64(result.unwrap(), 100.0));
 
         let stderr_avg = "PSNR average:inf min:inf max:inf\n";
         let result_avg = parse_psnr_average_y_from_stderr(stderr_avg);
         assert!(result_avg.is_some());
-        assert_eq!(result_avg.unwrap(), 100.0);
+        assert!(crate::float_compare::approx_eq_f64(
+            result_avg.unwrap(),
+            100.0
+        ));
     }
 
     #[test]
@@ -1050,7 +1053,7 @@ mod tests {
         let s = "PSNR y: inf u: inf v: inf average: inf min: inf max: inf\n";
         let r = parse_psnr_average_y_from_stderr(s);
         assert!(r.is_some(), "inf with leading spaces");
-        assert_eq!(r.unwrap(), 100.0);
+        assert!(crate::float_compare::approx_eq_f64(r.unwrap(), 100.0));
     }
 
     #[test]
@@ -1068,7 +1071,10 @@ mod tests {
     #[test]
     fn test_parse_psnr_negative_inf() {
         let s = "PSNR y:-inf average:-inf min:-inf max:-inf\n";
-        assert_eq!(parse_psnr_average_y_from_stderr(s).unwrap(), 100.0);
+        assert!(crate::float_compare::approx_eq_f64(
+            parse_psnr_average_y_from_stderr(s).unwrap(),
+            100.0
+        ));
     }
 
     #[test]

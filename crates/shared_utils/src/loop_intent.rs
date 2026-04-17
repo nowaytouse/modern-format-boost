@@ -719,13 +719,11 @@ fn evaluate_kinetics_and_physics(
         log_odds.add(-crate::constants::SCENE_CUT_NEGATIVE_LOG_ODDS);
     }
 
-    let compactness_signal = (-thresholds.file_size_z(crate::numeric_cast::u64_to_f64(
-        meta.file_size_bytes,
-    )))
-    .max(0.0)
-        * crate::constants::COMPACTNESS_SIGNAL_SIZE_WEIGHT
-        + (-thresholds.pixels_z(total_pixels)).max(0.0)
-            * crate::constants::COMPACTNESS_SIGNAL_PIXELS_WEIGHT;
+    let compactness_signal =
+        (-thresholds.file_size_z(crate::numeric_cast::u64_to_f64(meta.file_size_bytes))).max(0.0)
+            * crate::constants::COMPACTNESS_SIGNAL_SIZE_WEIGHT
+            + (-thresholds.pixels_z(total_pixels)).max(0.0)
+                * crate::constants::COMPACTNESS_SIGNAL_PIXELS_WEIGHT;
     if !meta.has_audio && compactness_signal > 0.0 {
         log_odds.add(
             (compactness_signal + crate::constants::COMPACTNESS_SIGNAL_BIAS)
@@ -1802,8 +1800,7 @@ pub fn score_sparse_cadence(duration_secs: f64, frame_count: u64) -> f64 {
     if duration_secs <= 0.01 || frame_count <= 1 {
         return 0.5;
     }
-    let frame_density =
-        crate::numeric_cast::u64_to_f64(frame_count) / duration_secs.max(0.01);
+    let frame_density = crate::numeric_cast::u64_to_f64(frame_count) / duration_secs.max(0.01);
     let avg_gap = duration_secs / crate::numeric_cast::u64_to_f64(frame_count);
 
     if duration_secs <= 1.5 && frame_density >= 12.0 {

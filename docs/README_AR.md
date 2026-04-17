@@ -119,7 +119,7 @@
 | PNG (مفهرس)   |     ❌      |   لا   | **مطابقة الجودة**         | `.jxl`        | d=0.001                                   |
 | WebP          |     ✅      |   لا   | **التفاف ← بدون فقدان**   | `.jxl`        | dwebp → JXL d=0.0                         |
 | WebP          |     ❌      |   لا   | **تخطي**                  | (احتفاظ)      | تجنب فقدان الأجيال                        |
-| WebP          |      —      |   ✅   | **Loop Intent**            | `.mov`/`.gif` | HEVC/AV1 أو احتفاظ بـ GIF                 |
+| WebP          |      —      |   ✅   | **Loop Intent**           | `.mov`/`.gif` | HEVC/AV1 أو احتفاظ بـ GIF                 |
 | AVIF          |     ✅      |   لا   | **تحويل بدون فقدان**      | `.jxl`        | d=0.0                                     |
 | AVIF          |     ❌      |   لا   | **تخطي**                  | (احتفاظ)      | تجنب فقدان الأجيال                        |
 | HEIC/HEIF     |     ✅      |   لا   | **التفاف ← بدون فقدان**   | `.jxl`        | `sips`/`magick` → PNG → d=0.0             |
@@ -128,7 +128,7 @@
 | TIFF          |     ✅      |   لا   | **التفاف ← بدون فقدان**   | `.jxl`        | `magick -depth 16` → PNG → d=0.0          |
 | TIFF          |     ❌      |   لا   | **مطابقة الجودة**         | `.jxl`        | magick → JXL d=0.001                      |
 | BMP           |     ✅      |   لا   | **التفاف ← بدون فقدان**   | `.jxl`        | `magick` → PNG → d=0.0                    |
-| GIF           |      —      |   ✅   | **Loop Intent**            | `.mov`/`.gif` | HEVC/AV1 أو احتفاظ بـ GIF                 |
+| GIF           |      —      |   ✅   | **Loop Intent**           | `.mov`/`.gif` | HEVC/AV1 أو احتفاظ بـ GIF                 |
 | GIF           |      —      |   لا   | **استخراج الإطارات**      | `.jxl`        | ffmpeg → JXL                              |
 | JXL           |      —      |   لا   | **تخطي**                  | (احتفاظ)      | مثالي بالفعل                              |
 
@@ -185,17 +185,18 @@ vid run /path/to/media
 ## ❓ FAQ (الأسئلة الشائعة)
 
 **1. Is JXL formats compatibility broad?**  
-Native support exists in macOS 14+ / iOS 17+, Chrome 91+, and Firefox 128+. However, there are known ecosystem issues:  
-- **Animations**: Modern animated formats (JXL/AV1/HEIF) often fail to preview as animations in the native macOS/iOS Photos app or Finder (static only), especially when synchronized via iCloud.  
+Native support exists in macOS 14+ / iOS 17+, Chrome 91+, and Firefox 128+. However, there are known ecosystem issues:
+
+- **Animations**: Modern animated formats (JXL/AV1/HEIF) often fail to preview as animations in the native macOS/iOS Photos app or Finder (static only), especially when synchronized via iCloud.
 - **Thumbnails**: JXL files using **grayscale ICC profiles** may appear as **black thumbnails** in Finder/iCloud, even though they render perfectly when opened.  
-JXL remains the superior format for bit-exact archival and high-fidelity HDR storage.
+  JXL remains the superior format for bit-exact archival and high-fidelity HDR storage.
 
 **2. How is HDR10+ handled?**  
 Fully supported. We use `hdr10plus_tool` to extract SMPTE 2094-40 dynamic metadata and inject it back into the HEVC stream via `libx265`.
 
 **3. Why skip WebP/AVIF/HEIC?**  
 These formats are already modern and highly compressed. Re-encoding them would cause "generational loss" (quality degradation).  
-**Exceptions**: The tool *will* process these if it detects high-fidelity **HDR Gainmaps** for synthesis into JXL, or if an animated file requires optimization via the **Loop Intent (v3)** engine (which uses a 7-layer decision tree to identify memes, stickers, and loops).
+**Exceptions**: The tool _will_ process these if it detects high-fidelity **HDR Gainmaps** for synthesis into JXL, or if an animated file requires optimization via the **Loop Intent (v3)** engine (which uses a 7-layer decision tree to identify memes, stickers, and loops).
 
 ---
 

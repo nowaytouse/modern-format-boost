@@ -136,28 +136,34 @@ fn build_coarse_progress_line(
         },
     ];
 
+    let prefix_width = measure_text_width(prefix);
+    let percent_width = measure_text_width(&percent_str);
+    let counts_width = measure_text_width(&counts_str);
+    let elapsed_width = measure_text_width(&elapsed_str);
+    let eta_val_width = measure_text_width(eta_str);
+    let stats_width = measure_text_width(stats);
+    let bar_left_width = measure_text_width(progress_style::BAR_LEFT);
+    let bar_right_width = measure_text_width(progress_style::BAR_RIGHT);
+
     for variant in variants {
-        let mut fixed_width = measure_text_width(prefix) + 1;
+        let mut fixed_width = prefix_width + 1;
         if !variant.show_bar {
-            fixed_width += measure_text_width(&percent_str) + 3;
+            fixed_width += percent_width + 3;
         }
-        fixed_width += measure_text_width(&counts_str);
+        fixed_width += counts_width;
 
         if variant.show_elapsed {
-            fixed_width += 3 + measure_text_width("⏱️ ") + measure_text_width(&elapsed_str);
+            fixed_width += 3 + measure_text_width("⏱️ ") + elapsed_width;
         }
         if variant.show_eta {
-            fixed_width += 3 + measure_text_width("ETA ") + measure_text_width(eta_str);
+            fixed_width += 3 + measure_text_width("ETA ") + eta_val_width;
         }
         if !stats.is_empty() {
-            fixed_width += measure_text_width(stats);
+            fixed_width += stats_width;
         }
 
         if variant.show_bar {
-            fixed_width += 1
-                + measure_text_width(progress_style::BAR_LEFT)
-                + measure_text_width(progress_style::BAR_RIGHT)
-                + 1;
+            fixed_width += 1 + bar_left_width + bar_right_width + 1;
         }
 
         let min_bar = if variant.show_bar { 6 } else { 0 };
@@ -171,21 +177,38 @@ fn build_coarse_progress_line(
             continue;
         }
 
-        fixed_width += bar_width;
-
         let message_text = if variant.show_message {
-            let available = terminal_width.saturating_sub(fixed_width + 3);
+            let available = terminal_width.saturating_sub(fixed_width + bar_width + 3);
             if available < 6 {
-                continue;
+                if variant.show_bar && bar_width > min_bar {
+                    // Try shrinking bar once to find space for message
+                    let needed = 6_usize.saturating_sub(available);
+                    if bar_width.saturating_sub(needed) >= min_bar {
+                        bar_width -= needed;
+                    } else {
+                        continue;
+                    }
+                } else {
+                    continue;
+                }
             }
             // 📏 Unify Width: Cap filename to 24 chars for layout stability
-            let width_limit = available.min(24);
+            let width_limit = available.min(24).max(6);
             truncate_progress_message(message, width_limit)
         } else {
             String::new()
         };
 
-        let mut line = String::new();
+        // Re-check final width with chosen bar and message
+        let final_fixed = fixed_width + message_text.len() + (if message_text.is_empty() { 0 } else { 3 });
+        if variant.show_bar && bar_width + final_fixed > terminal_width {
+            bar_width = terminal_width.saturating_sub(final_fixed + 1).max(min_bar);
+            if bar_width < min_bar {
+                continue;
+            }
+        }
+
+        let mut line = String::with_capacity(terminal_width + 32);
         line.push_str(color);
         line.push_str(prefix);
         line.push(' ');
@@ -195,9 +218,9 @@ fn build_coarse_progress_line(
                 ((percent / 100.0) * bar_width as f64).round(),
             );
             let empty = bar_width.saturating_sub(filled);
-            let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
             line.push_str(progress_style::BAR_LEFT);
-            line.push_str(&bar);
+            for _ in 0..filled { line.push('█'); }
+            for _ in 0..empty { line.push('░'); }
             line.push_str(progress_style::BAR_RIGHT);
             line.push(' ');
         }
@@ -226,48 +249,6 @@ fn build_coarse_progress_line(
 
         if measure_text_width(&line) <= terminal_width.saturating_sub(1).max(32) {
             return line;
-        }
-
-        if variant.show_bar && bar_width > min_bar {
-            while bar_width > min_bar {
-                bar_width -= 1;
-                let filled = crate::numeric_cast::f64_to_usize_sat(
-                    ((percent / 100.0) * bar_width as f64).round(),
-                );
-                let empty = bar_width.saturating_sub(filled);
-                let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
-                let mut shrunk = String::new();
-                shrunk.push_str(color);
-                shrunk.push_str(prefix);
-                shrunk.push(' ');
-                shrunk.push_str(progress_style::BAR_LEFT);
-                shrunk.push_str(&bar);
-                shrunk.push_str(progress_style::BAR_RIGHT);
-                shrunk.push(' ');
-                if !variant.show_bar {
-                    shrunk.push_str(&percent_str);
-                    shrunk.push_str(" • ");
-                }
-                shrunk.push_str(&counts_str);
-                if variant.show_elapsed {
-                    shrunk.push_str(" • ⏱️ ");
-                    shrunk.push_str(&elapsed_str);
-                }
-                if variant.show_eta {
-                    shrunk.push_str(" • ETA ");
-                    shrunk.push_str(eta_str);
-                }
-                if !message_text.is_empty() {
-                    shrunk.push_str(" • ");
-                    shrunk.push_str(&message_text);
-                }
-                shrunk.push_str("\x1b[0m");
-                shrunk.push_str(stats);
-
-                if measure_text_width(&shrunk) <= terminal_width.saturating_sub(1).max(32) {
-                    return shrunk;
-                }
-            }
         }
     }
 
@@ -563,12 +544,6 @@ impl DetailedCoarseProgressBar {
         let percent = (iter as f64 / total as f64 * 100.0).min(100.0);
         let elapsed = self.start_time.elapsed();
 
-        let bar_width: usize = progress_style::BAR_WIDTH;
-        let filled =
-            crate::numeric_cast::f64_to_usize_sat(((percent / 100.0) * bar_width as f64).round());
-        let empty = bar_width.saturating_sub(filled);
-        let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
-
         let size_pct = if self.input_size > 0 {
             ((size as f64 / self.input_size as f64) - 1.0) * 100.0
         } else {
@@ -595,11 +570,23 @@ impl DetailedCoarseProgressBar {
             String::new()
         };
 
+        let terminal_width = terminal_columns().max(48);
+        let prefix_width = measure_text_width(&self.prefix);
+        let reserved = if ssim_str.is_empty() { 65 } else { 78 };
+
+        let bar_width = dynamic_bar_width(terminal_width, reserved + prefix_width);
+        // Ensure we don't overflow the subtraction
+        let available_for_prefix = terminal_width.saturating_sub(reserved + bar_width);
+        let filled =
+            crate::numeric_cast::f64_to_usize_sat(((percent / 100.0) * bar_width as f64).round());
+        let empty = bar_width.saturating_sub(filled);
+        let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
+
         let color = "\x1b[32m";
-        eprint!(
-            "\r\x1b[K{color}{prefix} {bar_left}{color}{bar}{color}▏ CRF {crf:.1} • {size:+.1}% {icon} • {ssim} • {best} • {iter}/{total} • ⏱️ {elapsed:.1}s\x1b[0m",
+        let line = format!(
+            "{color}{prefix} {bar_left}{color}{bar}{color}▏ CRF {crf:.1} • {size:+.1}% {icon} • {ssim} • {best} • {iter}/{total} • ⏱️ {elapsed:.1}s\x1b[0m",
             color = color,
-            prefix = self.prefix,
+            prefix = truncate_progress_message(&self.prefix, available_for_prefix),
             bar_left = progress_style::BAR_LEFT,
             bar = bar,
             crf = crf,
@@ -611,7 +598,13 @@ impl DetailedCoarseProgressBar {
             total = total,
             elapsed = elapsed.as_secs_f64()
         );
-        let _ = io::stderr().flush();
+
+        if let Ok(_guard) = PROGRESS_STDERR_LOCK.lock() {
+            set_active_progress_line(None);
+            eprint!("\r\x1b[K{line}");
+            set_active_progress_line(Some(line));
+            let _ = io::stderr().flush();
+        }
     }
 
     /// Print a message to the terminal without interfering with the progress bar.
@@ -624,8 +617,11 @@ impl DetailedCoarseProgressBar {
             return;
         }
 
-        eprint!("\r\x1b[K");
-        let _ = io::stderr().flush();
+        if let Ok(_guard) = PROGRESS_STDERR_LOCK.lock() {
+            set_active_progress_line(None);
+            eprint!("\r\x1b[K");
+            let _ = io::stderr().flush();
+        }
 
         eprintln!("{msg}");
 
@@ -959,12 +955,17 @@ impl ExploreProgress {
         let ssim_str = ssim.map_or_else(|| "---".to_string(), |s| format!("{s:.4}"));
         let compress_icon = if size < self.input_size { "✅" } else { "❌" };
 
-        eprint!("\r\x1b[K");
-        eprint!(
+        let line = format!(
             "🔍 Explore: {} • CRF {:.1} • SSIM {} • Size {:+.1}% {} • Iter {} • Best: CRF {:.1} / SSIM {:.4} • ⏱️ {:.1}s",
             stage, crf, ssim_str, size_change, compress_icon, iter, best_crf, best_ssim, elapsed.as_secs_f64()
         );
-        let _ = io::stderr().flush();
+
+        if let Ok(_guard) = PROGRESS_STDERR_LOCK.lock() {
+            set_active_progress_line(None);
+            eprint!("\r\x1b[K{line}");
+            set_active_progress_line(Some(line));
+            let _ = io::stderr().flush();
+        }
     }
 
     pub fn finish(&self, result_crf: f32, result_ssim: f64, result_size: u64) {
@@ -976,15 +977,19 @@ impl ExploreProgress {
         let elapsed = self.start_time.elapsed();
         let iter = self.iterations.load(Ordering::Relaxed);
 
-        eprintln!("\r\x1b[K");
-        eprintln!(
-            "✅ Explore Done: CRF {:.1} • SSIM {:.4} • Size {:+.1}% • {} iter in {:.1}s",
-            result_crf,
-            result_ssim,
-            size_change,
-            iter,
-            elapsed.as_secs_f64()
-        );
+        if let Ok(_guard) = PROGRESS_STDERR_LOCK.lock() {
+            set_active_progress_line(None);
+            eprint!("\r\x1b[K");
+            eprintln!(
+                "✅ Explore Done: CRF {:.1} • SSIM {:.4} • Size {:+.1}% • {} iter in {:.1}s",
+                result_crf,
+                result_ssim,
+                size_change,
+                iter,
+                elapsed.as_secs_f64()
+            );
+            let _ = io::stderr().flush();
+        }
     }
 }
 

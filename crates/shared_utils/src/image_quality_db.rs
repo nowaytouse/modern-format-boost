@@ -188,8 +188,7 @@ pub fn init_quality_schema(conn: &mut Client) -> Result<()> {
 /// - Lossless -> [0, 2.0]: Very strong anchor to prioritize format fidelity.
 fn get_quality_features(analysis: &ImageAnalysis) -> pgvector::Vector {
     let total_pixels = f64::from(analysis.width) * f64::from(analysis.height);
-    let spatial_bpp =
-        crate::numeric_cast::u64_to_f64(analysis.file_size) / total_pixels.max(1.0);
+    let spatial_bpp = crate::numeric_cast::u64_to_f64(analysis.file_size) / total_pixels.max(1.0);
     let aspect_ratio = if analysis.height > 0 {
         f64::from(analysis.width) / f64::from(analysis.height)
     } else {
@@ -218,8 +217,7 @@ fn get_quality_features(analysis: &ImageAnalysis) -> pgvector::Vector {
 /// Returns `confidence = 0.0` to clearly signal this is heuristic-only.
 fn bpp_heuristic_score(analysis: &ImageAnalysis) -> f64 {
     let total_pixels = f64::from(analysis.width) * f64::from(analysis.height);
-    let spatial_bpp =
-        crate::numeric_cast::u64_to_f64(analysis.file_size) / total_pixels.max(1.0);
+    let spatial_bpp = crate::numeric_cast::u64_to_f64(analysis.file_size) / total_pixels.max(1.0);
 
     // High entropy + low BPP (efficient encoding) → high quality signal.
     // Scale: entropy [0, 8 bits max], spatial_bpp typical range [0.05, 20.0].
@@ -471,8 +469,7 @@ pub fn log_quality_inference_record(
     record: &QualityInferenceRecord,
 ) {
     let total_pixels = f64::from(analysis.width) * f64::from(analysis.height);
-    let spatial_bpp =
-        crate::numeric_cast::u64_to_f64(analysis.file_size) / total_pixels.max(1.0);
+    let spatial_bpp = crate::numeric_cast::u64_to_f64(analysis.file_size) / total_pixels.max(1.0);
     let log_pixels = total_pixels.log10();
     let aspect_ratio = if analysis.height > 0 {
         f64::from(analysis.width) / f64::from(analysis.height)

@@ -63,7 +63,7 @@ pub fn memory_profile_for_source(codec_name: Option<&str>, input_size: u64) -> X
 }
 
 /// Query actual available system RAM and return the appropriate tier.
-/// Falls back to LowMemory if RAM detection fails (safe default).
+/// Falls back to `LowMemory` if RAM detection fails (safe default).
 fn ram_aware_profile() -> X265MemoryProfile {
     if crate::system_memory::is_low_memory_env() {
         return X265MemoryProfile::LowMemory;
@@ -151,10 +151,7 @@ fn apply_memory_profile(params: &mut String, profile: X265MemoryProfile) {
         X265MemoryProfile::LowMemory => {
             push_param(
                 params,
-                &format!(
-                    "frame-threads={}",
-                    constants::X265_LOW_MEMORY_FRAME_THREADS
-                ),
+                &format!("frame-threads={}", constants::X265_LOW_MEMORY_FRAME_THREADS),
             );
             push_param(
                 params,
@@ -172,10 +169,7 @@ fn apply_memory_profile(params: &mut String, profile: X265MemoryProfile) {
             );
             push_param(
                 params,
-                &format!(
-                    "rc-lookahead={}",
-                    constants::X265_LOW_MEMORY_RC_LOOKAHEAD
-                ),
+                &format!("rc-lookahead={}", constants::X265_LOW_MEMORY_RC_LOOKAHEAD),
             );
         }
     }

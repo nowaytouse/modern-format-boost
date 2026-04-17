@@ -104,17 +104,17 @@ tar -xzf modern-format-boost-aarch64-apple-darwin.tar.gz
 
 ### 必要条件
 
-| ツール | 必須？ | 目的 | インストールコマンド |
-| :--- | :---: | :--- | :--- |
-| **Rust** (1.75+) | ✅ | ビルドとインストール | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
-| **FFmpeg** (5.0+) | ✅ | 動画処理とメトリクス | `brew install ffmpeg` / `apt install ffmpeg` |
-| **libjxl** | ✅ | JXL エンコーディングコア | `brew install jpeg-xl` |
-| **ExifTool** | ✅ | メタデータ保持 | `brew install exiftool` |
-| **ImageMagick** | ✅ | 画像デトアパス | `brew install imagemagick` |
-| **libwebp** | ✅ | WebP ネイティブデコード | `brew install webp` |
-| **dovi_tool** | ✅ | Dolby Vision RPU 抽出 | `cargo install dovi_tool` |
-| **libheif** | ✅ | HEIC/HEIF デコード | `brew install libheif` |
-| **hdr10plus_tool** | ✅ | HDR10+ メタデータ抽出 | `cargo install hdr10plus_tool` |
+| ツール             | 必須？ | 目的                     | インストールコマンド                                              |
+| :----------------- | :----: | :----------------------- | :---------------------------------------------------------------- |
+| **Rust** (1.75+)   |   ✅   | ビルドとインストール     | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
+| **FFmpeg** (5.0+)  |   ✅   | 動画処理とメトリクス     | `brew install ffmpeg` / `apt install ffmpeg`                      |
+| **libjxl**         |   ✅   | JXL エンコーディングコア | `brew install jpeg-xl`                                            |
+| **ExifTool**       |   ✅   | メタデータ保持           | `brew install exiftool`                                           |
+| **ImageMagick**    |   ✅   | 画像デトアパス           | `brew install imagemagick`                                        |
+| **libwebp**        |   ✅   | WebP ネイティブデコード  | `brew install webp`                                               |
+| **dovi_tool**      |   ✅   | Dolby Vision RPU 抽出    | `cargo install dovi_tool`                                         |
+| **libheif**        |   ✅   | HEIC/HEIF デコード       | `brew install libheif`                                            |
+| **hdr10plus_tool** |   ✅   | HDR10+ メタデータ抽出    | `cargo install hdr10plus_tool`                                    |
 
 ---
 
@@ -122,9 +122,10 @@ tar -xzf modern-format-boost-aarch64-apple-darwin.tar.gz
 
 **1. JXL フォーマットの現在の互換性は？**  
 macOS 14 (Sonoma) / iOS 17+、Chrome 91+、Firefox 128+ ではネイティブサポートされています。ただし、Apple エコシステムには既知の制限があります：
+
 - **アニメーションプレビュー**：JXL/AV1/HEIF などの最新のアニメーション形式は、macOS/iOS の標準写真アプリや Finder ではアニメーションとして再生されない（静止画として表示される）ことが多く、特に iCloud 同期後のファイルで顕著です。プレビューにはコマンドラインツールや最新のブラウザの使用を推奨します。
 - **サムネイルの黒画面**：JXL ファイルが **グレースケール (Grayscale) ICC プロファイル** を使用している場合、Finder/iCloud のサムネイルが真っ黒に表示されることがありますが、ファイル自体には影響せず、ブラウザ等で開くと正常に表示されます。
-JXL は、ビット精度の無損アーカイブおよび高忠実度 HDR ストレージにとって、依然として最適な選択肢です。
+  JXL は、ビット精度の無損アーカイブおよび高忠実度 HDR ストレージにとって、依然として最適な選択肢です。
 
 **2. HDR10+ 動的メタデータはどうなりますか？**  
 完全にサポートされています。`hdr10plus_tool` を使用して SMPTE 2094-40 動적メタデータを抽出し、`libx265` の `--dhdr10-info` パラメータを介して HEVC ストリームに注入します。この機能を使用するには、ツールがインストールされていることを確認してください。

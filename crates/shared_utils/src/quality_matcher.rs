@@ -1826,8 +1826,7 @@ pub fn from_image_analysis(
                 / crate::numeric_cast::u64_to_f64(pixels.max(1))
         }
     } else {
-        crate::numeric_cast::u64_to_f64(file_size)
-            / crate::numeric_cast::u64_to_f64(pixels.max(1))
+        crate::numeric_cast::u64_to_f64(file_size) / crate::numeric_cast::u64_to_f64(pixels.max(1))
     };
 
     QualityAnalysis {

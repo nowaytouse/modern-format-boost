@@ -123,10 +123,7 @@ pub fn infer_bt709_if_modern(mut info: ColorInfo, width: u32, height: u32, ext: 
             info.color_transfer.as_deref(),
             Some("smpte2084" | "arib-std-b67")
         )
-        || matches!(
-            info.color_primaries.as_deref(),
-            Some("bt2020")
-        )
+        || matches!(info.color_primaries.as_deref(), Some("bt2020"))
         || matches!(
             info.color_space.as_deref(),
             Some("bt2020nc" | "bt2020c" | "bt2020_ncl" | "bt2020ncl")

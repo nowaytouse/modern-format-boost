@@ -197,7 +197,7 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
     let mut frame_count = 0;
     let mut frame_durations_ms = Vec::new();
     let mut parsing_frames = false;
-    
+
     for line in info_str.lines() {
         if line.contains("Number of frames:") {
             if let Some(count_str) = line.split(':').nth(1) {
@@ -221,9 +221,12 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
         ));
     }
 
-    // Fallback if mismatch
+    // Fallback if mismatch: pad missing frames with the last parsed delay so
+    // the animation keeps local continuity near the tail, rather than copying
+    // the first frame's delay across every unparsed frame.
     if frame_durations_ms.len() as u32 != frame_count {
-        frame_durations_ms.resize(frame_count as usize, *frame_durations_ms.first().unwrap_or(&100));
+        let pad = *frame_durations_ms.last().unwrap_or(&100);
+        frame_durations_ms.resize(frame_count as usize, pad);
     }
 
     // Guard against degenerate 0-duration WebPs: replace any zero delays with a
@@ -235,7 +238,8 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
     }
 
     if verbose {
-        let avg_dur = frame_durations_ms.iter().sum::<u32>() as f64 / frame_durations_ms.len() as f64;
+        let avg_dur =
+            f64::from(frame_durations_ms.iter().sum::<u32>()) / frame_durations_ms.len() as f64;
         eprintln!("   📊 WebP: {frame_count} frames, ~{avg_dur:.1}ms/frame");
     }
 
@@ -283,8 +287,15 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
 
         // Add to concat list
         use std::fmt::Write;
-        let duration_sec = frame_durations_ms[(i - 1) as usize] as f64 / 1000.0;
-        let _ = writeln!(concat_content, "file '{}'", frame_png_path.file_name().unwrap_or_default().to_string_lossy());
+        let duration_sec = f64::from(frame_durations_ms[(i - 1) as usize]) / 1000.0;
+        let _ = writeln!(
+            concat_content,
+            "file '{}'",
+            frame_png_path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+        );
         let _ = writeln!(concat_content, "duration {duration_sec}");
     }
 
@@ -808,7 +819,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
                 format!(
                     "{} encode failed; original copied (ffmpeg: {})",
                     codec_name,
-                    stderr.lines().last().unwrap_or("")
+                    shared_utils::io_utils::tail_error_lines(&stderr, 5)
                 ),
                 format!("{}_encode_failed", options.codec.as_str()),
             ))
@@ -1512,7 +1523,7 @@ pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result
                 options,
                 format!(
                     "Lossless failed; original copied ({})",
-                    stderr.lines().last().unwrap_or("")
+                    shared_utils::io_utils::tail_error_lines(&stderr, 5)
                 ),
                 "lossless_failed".to_string(),
             ))

@@ -178,6 +178,48 @@ fn encode_y4m_direct(
     Ok(true)
 }
 
+fn spawn_log_thread(
+    stderr: std::process::ChildStderr,
+    label: &'static str,
+    filters: Option<&'static [&'static str]>,
+) -> std::thread::JoinHandle<String> {
+    std::thread::spawn(move || {
+        use std::io::{BufRead, BufReader, Read as _Read};
+        const MAX_TOTAL_LOG_SIZE: usize = 1_048_576; // 1MB
+        const MAX_LINES: usize = 100_000;
+        const STREAM_LIMIT: u64 = 10 * 1024 * 1024; // 10MB limit to prevent run-away logging
+
+        let reader = BufReader::with_capacity(8192, stderr.take(STREAM_LIMIT));
+        let mut output = String::with_capacity(64 * 1024);
+
+        for line in reader.lines().take(MAX_LINES) {
+            match line {
+                Ok(line) => {
+                    if crate::progress_mode::is_verbose_mode() {
+                        let should_emit =
+                            filters.is_none_or(|f| f.iter().any(|&s| line.contains(s)));
+                        if should_emit {
+                            crate::progress_mode::emit_stderr(&format!("   [{label}] {line}"));
+                        }
+                    }
+
+                    if output.len() + line.len() + 1 > MAX_TOTAL_LOG_SIZE {
+                        break;
+                    }
+                    output.push_str(&line);
+                    output.push('\n');
+                }
+                Err(err) => {
+                    warn!("Failed to read {label} stderr: {err}");
+                    let _ = writeln!(output, "[stderr read error: {err}]");
+                    break;
+                }
+            }
+        }
+        output
+    })
+}
+
 fn encode_to_hevc(
     input: &Path,
     hevc_output: &Path,
@@ -209,6 +251,12 @@ fn encode_to_hevc(
     let mut ffmpeg_cmd = ffmpeg_builder.build();
     ffmpeg_cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
+    let log_level = if crate::progress_mode::is_verbose_mode() {
+        "info"
+    } else {
+        "error"
+    };
+
     let mut x265_builder = crate::tool_builders::X265Builder::new();
     x265_builder
         .y4m(true)
@@ -217,7 +265,7 @@ fn encode_to_hevc(
         .crf(config.crf)
         .preset(&config.preset)
         .pools(config.threads.to_string())
-        .log_level("error")
+        .log_level(log_level)
         .arg("--repeat-headers");
 
     if config.crf == 0.0 {
@@ -240,10 +288,7 @@ fn encode_to_hevc(
             config.color_trc.as_deref(),
             Some("smpte2084" | "arib-std-b67")
         )
-        || matches!(
-            config.color_primaries.as_deref(),
-            Some("bt2020")
-        );
+        || matches!(config.color_primaries.as_deref(), Some("bt2020"));
     if is_hdr_content {
         x265_builder.hdr10_opt(true).repeat_headers(true);
 
@@ -279,55 +324,15 @@ fn encode_to_hevc(
         .spawn()
         .context("Failed to spawn x265 encode process")?;
 
-    let ffmpeg_stderr_thread = ffmpeg_child.stderr.take().map(|stderr| {
-        std::thread::spawn(move || {
-            use std::io::{BufRead, BufReader, Read as _Read};
-            let reader = BufReader::with_capacity(8192, stderr.take((10 * 1024 * 1024) as u64));
-            let mut output = String::with_capacity(64 * 1024);
-            for line in reader.lines().take(100_000) {
-                match line {
-                    Ok(line) => {
-                        if output.len() + line.len() + 1 > 1_048_576_usize {
-                            break;
-                        }
-                        output.push_str(&line);
-                        output.push('\n');
-                    }
-                    Err(err) => {
-                        warn!("Failed to read ffmpeg decode stderr: {}", err);
-                        let _ = writeln!(output, "[stderr read error: {err}]");
-                        break;
-                    }
-                }
-            }
-            output
-        })
-    });
+    let ffmpeg_stderr_thread = ffmpeg_child
+        .stderr
+        .take()
+        .map(|stderr| spawn_log_thread(stderr, "ffmpeg-decode", None));
 
-    let x265_stderr_thread = x265_child.stderr.take().map(|stderr| {
-        std::thread::spawn(move || {
-            use std::io::{BufRead, BufReader, Read as _Read};
-            let reader = BufReader::with_capacity(8192, stderr.take((10 * 1024 * 1024) as u64));
-            let mut output = String::with_capacity(64 * 1024);
-            for line in reader.lines().take(100_000) {
-                match line {
-                    Ok(line) => {
-                        if output.len() + line.len() + 1 > 1_048_576_usize {
-                            break;
-                        }
-                        output.push_str(&line);
-                        output.push('\n');
-                    }
-                    Err(err) => {
-                        warn!("Failed to read x265 stderr: {}", err);
-                        let _ = writeln!(output, "[stderr read error: {err}]");
-                        break;
-                    }
-                }
-            }
-            output
-        })
-    });
+    let x265_stderr_thread = x265_child
+        .stderr
+        .take()
+        .map(|stderr| spawn_log_thread(stderr, "x265-encode", Some(&["[info]", "frame"])));
 
     if let (Some(mut ffmpeg_out), Some(mut x265_in)) =
         (ffmpeg_child.stdout.take(), x265_child.stdin.take())

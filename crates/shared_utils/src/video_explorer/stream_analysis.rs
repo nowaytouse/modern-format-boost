@@ -449,8 +449,8 @@ mod tests {
     #[test]
     fn test_extract_ssim_value_inf() {
         let line = "SSIM Y:inf U:inf V:inf All:inf";
-        assert_eq!(extract_ssim_value(line, "Y:").unwrap(), 1.0);
-        assert_eq!(extract_ssim_value(line, "All:").unwrap(), 1.0);
+        assert!((extract_ssim_value(line, "Y:").unwrap() - 1.0).abs() < f64::EPSILON);
+        assert!((extract_ssim_value(line, "All:").unwrap() - 1.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -481,7 +481,7 @@ mod tests {
         let stderr = "SSIM Y:inf U:inf V:inf All:inf\n";
         let result = parse_ssim_from_output(stderr);
         assert!(result.is_some());
-        assert_eq!(result.unwrap(), 1.0);
+        assert!((result.unwrap() - 1.0).abs() < f64::EPSILON);
     }
 
     #[test]

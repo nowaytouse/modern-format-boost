@@ -173,7 +173,10 @@ pub fn quick_calibrate(
         let cpu_path = cpu_test_file.path().to_path_buf();
 
         let mut gpu_builder = crate::ffmpeg_builder::FfmpegBuilder::new();
-        gpu_builder.overwrite().input(input).codec_video(gpu_encoder);
+        gpu_builder
+            .overwrite()
+            .input(input)
+            .codec_video(gpu_encoder);
         if apple_compat && encoder == super::VideoEncoder::Hevc {
             gpu_builder
                 .arg(crate::constants::FFMPEG_ARG_TAG_VIDEO)
@@ -268,9 +271,7 @@ pub fn quick_calibrate(
             // Probe the input to decide HDR-aware pix_fmt so the CPU calibration
             // encode doesn't silently downshift a 10-bit HDR source to 8-bit SDR.
             let probe = crate::ffprobe::probe_video(input).ok();
-            let is_ten_bit = probe
-                .as_ref()
-                .is_some_and(|p| p.bit_depth >= 10);
+            let is_ten_bit = probe.as_ref().is_some_and(|p| p.bit_depth >= 10);
             let pix_fmt = if is_ten_bit { "yuv420p10le" } else { "yuv420p" };
 
             let config = X265Config {

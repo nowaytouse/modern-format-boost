@@ -11,64 +11,82 @@ import os
 import sys
 import subprocess
 import shutil
-import glob
 from pathlib import Path
 
 # ANSI Colors
 if sys.stdout.isatty():
-    RED = '\033[0;31m'
-    GREEN = '\033[0;32m'
-    YELLOW = '\033[1;33m'
-    BLUE = '\033[0;34m'
-    BOLD = '\033[1m'
-    DIM = '\033[2m'
-    RESET = '\033[0m'
+    RED = "\033[0;31m"
+    GREEN = "\033[0;32m"
+    YELLOW = "\033[1;33m"
+    BLUE = "\033[0;34m"
+    BOLD = "\033[1m"
+    DIM = "\033[2m"
+    RESET = "\033[0m"
 else:
-    RED = GREEN = YELLOW = BLUE = BOLD = DIM = RESET = ''
+    RED = GREEN = YELLOW = BLUE = BOLD = DIM = RESET = ""
+
 
 def check_dependencies():
     if not shutil.which("exiftool"):
-        print(f"❌ Error: exiftool is required. Please install it (brew install exiftool).")
+        print(
+            "❌ Error: exiftool is required. Please install it (brew install exiftool)."
+        )
         sys.exit(1)
+
 
 def get_real_extension(filepath):
     try:
-        res = subprocess.run(["exiftool", "-s", "-S", "-FileTypeExtension", str(filepath)], capture_output=True, text=True)
+        res = subprocess.run(
+            ["exiftool", "-s", "-S", "-FileTypeExtension", str(filepath)],
+            capture_output=True,
+            text=True,
+        )
         if res.returncode == 0:
             return res.stdout.strip().lower()
     except Exception:
         pass
     return ""
 
+
 def get_macos_xattr(filepath, attr_name):
     try:
-        res = subprocess.run(["xattr", "-px", attr_name, str(filepath)], capture_output=True, text=True)
+        res = subprocess.run(
+            ["xattr", "-px", attr_name, str(filepath)], capture_output=True, text=True
+        )
         if res.returncode == 0:
             return res.stdout.strip()
     except Exception:
         pass
     return ""
 
+
 def set_macos_xattr(filepath, attr_name, val_hex):
     try:
-        subprocess.run(["xattr", "-wx", attr_name, val_hex, str(filepath)], stderr=subprocess.DEVNULL)
+        subprocess.run(
+            ["xattr", "-wx", attr_name, val_hex, str(filepath)],
+            stderr=subprocess.DEVNULL,
+        )
     except Exception:
         pass
+
 
 def get_mac_times(filepath):
     try:
         mtime = os.stat(filepath).st_mtime
     except Exception:
         mtime = 0.0
-    
+
     btime = 0.0
     try:
-        res = subprocess.run(["stat", "-f%B", str(filepath)], capture_output=True, text=True)
+        res = subprocess.run(
+            ["stat", "-f%B", str(filepath)], capture_output=True, text=True
+        )
         if res.returncode == 0:
             btime = float(res.stdout.strip())
     except Exception:
         pass
     return mtime, btime
+
 
 def set_mac_times(filepath, mtime, btime):
     # Set mtime
@@ -80,28 +98,55 @@ def set_mac_times(filepath, mtime, btime):
     # Set btime (birth time) via SetFile
     if btime > 0 and shutil.which("SetFile"):
         import datetime
+
         bdate = datetime.datetime.fromtimestamp(btime).strftime("%m/%d/%Y %H:%M:%S")
-        subprocess.run(["SetFile", "-d", bdate, str(filepath)], stderr=subprocess.DEVNULL)
+        subprocess.run(
+            ["SetFile", "-d", bdate, str(filepath)], stderr=subprocess.DEVNULL
+        )
+
 
 def get_exiftool_warnings(filepath):
     try:
-        res = subprocess.run(["exiftool", "-validate", "-warning", str(filepath)], capture_output=True, text=True)
+        res = subprocess.run(
+            ["exiftool", "-validate", "-warning", str(filepath)],
+            capture_output=True,
+            text=True,
+        )
         return res.stdout + res.stderr
     except Exception:
         return ""
 
+
 def rebuild_metadata(filepath):
     try:
-        res = subprocess.run(["exiftool", "-quiet", "-all=", "-tagsfromfile", "@", "-all:all", "-unsafe", "-icc_profile", "-overwrite_original", str(filepath)], stderr=subprocess.DEVNULL)
+        res = subprocess.run(
+            [
+                "exiftool",
+                "-quiet",
+                "-all=",
+                "-tagsfromfile",
+                "@",
+                "-all:all",
+                "-unsafe",
+                "-icc_profile",
+                "-overwrite_original",
+                str(filepath),
+            ],
+            stderr=subprocess.DEVNULL,
+        )
         return res.returncode == 0
     except Exception:
         return False
 
+
 def force_magick_repair(filepath):
     if shutil.which("magick"):
-        subprocess.run(["magick", str(filepath), str(filepath)], stderr=subprocess.DEVNULL)
+        subprocess.run(
+            ["magick", str(filepath), str(filepath)], stderr=subprocess.DEVNULL
+        )
         return True
     return False
+
 
 def main():
     check_dependencies()
@@ -144,7 +189,7 @@ def main():
         file = Path(filepath_str)
         filename = file.name
         rel_path = file.relative_to(target_dir)
-        
+
         ext = file.suffix.lstrip(".").lower()
         real_ext = get_real_extension(file)
 
@@ -158,7 +203,9 @@ def main():
         check_meta = False
 
         if ext != real_ext:
-            if (ext == "jpg" and real_ext == "jpeg") or (ext == "jpeg" and real_ext == "jpg"):
+            if (ext == "jpg" and real_ext == "jpeg") or (
+                ext == "jpeg" and real_ext == "jpg"
+            ):
                 is_mismatch = False
             else:
                 is_mismatch = True
@@ -168,29 +215,36 @@ def main():
         if real_ext in ["jxl", "webp", "jpg", "jpeg"]:
             check_meta = True
             needs_repair = True
-            
+
             warnings = get_exiftool_warnings(file)
-            if any(x in warnings for x in ["JPEG EOI marker not found", "JPEG format error", "Corrupted Brotli"]):
+            if any(
+                x in warnings
+                for x in [
+                    "JPEG EOI marker not found",
+                    "JPEG format error",
+                    "Corrupted Brotli",
+                ]
+            ):
                 reason += "[Structure/Format Error] "
             else:
                 reason += "[Deep Clean] "
 
             if is_mismatch:
                 reason += "[Extension Mismatch] "
-                
+
         if needs_repair:
             print(f"🔧 Fixing: {filename}")
             print(f"   Reason: {reason}")
-            
+
             backup_subdir = backup_dir / rel_path.parent
             backup_subdir.mkdir(parents=True, exist_ok=True)
             backup_file = backup_subdir / filename
-            
+
             shutil.copy2(file, backup_file)
             mtime, btime = get_mac_times(file)
-            
+
             current_file = file
-            
+
             if is_mismatch:
                 new_filename = f"{file.stem}.{real_ext}"
                 new_file_path = file.parent / new_filename
@@ -198,18 +252,23 @@ def main():
                 current_file = new_file_path
                 print(f"   📝 Renamed to: {new_filename}")
                 fixed_ext += 1
-                
+
             if check_meta:
-                if real_ext in ["jpg", "jpeg"] and any(x in warnings for x in ["JPEG EOI marker not found", "JPEG format error"]):
+                if real_ext in ["jpg", "jpeg"] and any(
+                    x in warnings
+                    for x in ["JPEG EOI marker not found", "JPEG format error"]
+                ):
                     print("   🧱 Structure broken, rebuilding with ImageMagick...")
                     force_magick_repair(current_file)
-                    
+
                 if rebuild_metadata(current_file):
                     print("   ✨ Metadata Rebuilt")
                     fixed_meta += 1
                 else:
                     if real_ext in ["jpg", "jpeg"]:
-                        print("   ⚠️ ExifTool failed. Attempting forced structural repair with ImageMagick...")
+                        print(
+                            "   ⚠️ ExifTool failed. Attempting forced structural repair with ImageMagick..."
+                        )
                         force_magick_repair(current_file)
                         if rebuild_metadata(current_file):
                             print("   ✨ Metadata Rebuilt (after structural repair)")
@@ -221,11 +280,16 @@ def main():
                         print("   ❌ ExifTool failed (check backup)")
                         failed += 1
 
-            for attr in ["com.apple.metadata:kMDItemWhereFroms", "com.apple.metadata:_kMDItemUserTags", "com.apple.FinderInfo", "com.apple.metadata:kMDItemDateAdded"]:
+            for attr in [
+                "com.apple.metadata:kMDItemWhereFroms",
+                "com.apple.metadata:_kMDItemUserTags",
+                "com.apple.FinderInfo",
+                "com.apple.metadata:kMDItemDateAdded",
+            ]:
                 val = get_macos_xattr(backup_file, attr)
                 if val:
                     set_macos_xattr(current_file, attr, val)
-                    
+
             set_mac_times(current_file, mtime, btime)
             print("   ✅ Done\n")
 
@@ -249,6 +313,7 @@ def main():
         input()
     except (EOFError, KeyboardInterrupt):
         pass
+
 
 if __name__ == "__main__":
     main()

@@ -562,25 +562,17 @@ def select_mode():
                         console.print(
                             f"  [bold #00aaff]➜[/bold #00aaff] [reverse #00aaff] {display_text} [/reverse #00aaff]"
                         )
-                        console.print(
-                            f"     [#00ccff]{desc}[/#00ccff]\n"
-                        )
+                        console.print(f"     [#00ccff]{desc}[/#00ccff]\n")
                     else:
                         print(f"  {CYAN}➜ {BOLD}{display_text}{RESET}")
-                        print(
-                            f"    {CYAN}{DIM}{desc}{RESET}\n"
-                        )
+                        print(f"    {CYAN}{DIM}{desc}{RESET}\n")
                 else:
                     if "Console" in globals():
                         console.print(f"     [dim]○ {display_text}[/dim]")
-                        console.print(
-                            f"     [dim]{desc}[/dim]\n"
-                        )
+                        console.print(f"     [dim]{desc}[/dim]\n")
                     else:
                         print(f"    {DIM}○ {display_text}{RESET}")
-                        print(
-                            f"    {DIM}{desc}{RESET}\n"
-                        )
+                        print(f"    {DIM}{desc}{RESET}\n")
 
         print(
             f"{DIM}(Use ↑/↓ to navigate, Tab to toggle mode, Enter to select, q to quit){RESET}"
@@ -666,7 +658,14 @@ def select_mode():
                         print(f"   Output: {DIM}{OUTPUT_DIR}{RESET}\n")
                         collect_script = SCRIPT_DIR / "collect_optimized.py"
                         drain_stdin()
-                        subprocess.run([sys.executable, str(collect_script), str(TARGET_DIR), OUTPUT_DIR])
+                        subprocess.run(
+                            [
+                                sys.executable,
+                                str(collect_script),
+                                str(TARGET_DIR),
+                                OUTPUT_DIR,
+                            ]
+                        )
                         print(f"\n{DIM}   Returning to menu...{RESET}")
                         time.sleep(3)
                         continue
@@ -676,7 +675,9 @@ def select_mode():
                         print(f"   Source: {DIM}{TARGET_DIR}{RESET}\n")
                         xmp_script = SCRIPT_DIR / "merge_xmp.py"
                         drain_stdin()
-                        subprocess.run([sys.executable, str(xmp_script), str(TARGET_DIR)])
+                        subprocess.run(
+                            [sys.executable, str(xmp_script), str(TARGET_DIR)]
+                        )
                         print(f"\n{DIM}   Returning to menu...{RESET}")
                         time.sleep(3)
                         continue
@@ -689,9 +690,7 @@ def select_mode():
             if OUTPUT_MODE == "adjacent" and not OUTPUT_DIR:
                 tdir = Path(TARGET_DIR).resolve()
                 OUTPUT_DIR = str(
-                    get_unique_output_path(
-                        tdir.parent / (tdir.name + "_optimized")
-                    )
+                    get_unique_output_path(tdir.parent / (tdir.name + "_optimized"))
                 )
                 print(f"\n{GREEN}NON-INTERACTIVE MODE: ADJACENT SELECTED{RESET}")
                 print(f"   Output: {DIM}{OUTPUT_DIR}{RESET}")
@@ -903,7 +902,7 @@ def stream_and_log_process(cmd, parse_type):
                 # Prevent Memory Leak for long processes
                 if len(tmp_out) > 50000:
                     tmp_out = tmp_out[-50000:]
-                
+
                 if lf:
                     log_buffer += s
                     if "\n" in log_buffer:
@@ -912,18 +911,20 @@ def stream_and_log_process(cmd, parse_type):
                         for line in lines:
                             if "\r" in line:
                                 line = line.rsplit("\r", 1)[-1]
-                            
+
                             # Remove ANSI escape sequences
-                            clean_line = re.sub(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])', '', line)
-                            
+                            clean_line = re.sub(
+                                r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])", "", line
+                            )
+
                             if not clean_line.strip():
                                 continue
-                                
+
                             # Filter out common progress bar characters
                             progress_chars = ["█", "▓", "▒", "░", "▏", "▕", "⏱️", "ETA"]
                             if any(c in clean_line for c in progress_chars):
                                 continue
-                                
+
                             lf.write((clean_line + "\n").encode("utf-8"))
                             lf.flush()
             except Exception:
@@ -934,7 +935,9 @@ def stream_and_log_process(cmd, parse_type):
                 if log_buffer.strip():
                     if "\r" in log_buffer:
                         log_buffer = log_buffer.rsplit("\r", 1)[-1]
-                    clean_line = re.sub(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])', '', log_buffer)
+                    clean_line = re.sub(
+                        r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])", "", log_buffer
+                    )
                     if clean_line.strip():
                         progress_chars = ["█", "▓", "▒", "░", "▏", "▕", "⏱️", "ETA"]
                         if not any(c in clean_line for c in progress_chars):

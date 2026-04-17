@@ -71,6 +71,9 @@ impl FfmpegProcess {
             for line in reader.lines() {
                 match line {
                     Ok(line) => {
+                        if crate::progress_mode::is_verbose_mode() {
+                            crate::progress_mode::emit_stderr(&format!("   [ffmpeg] {line}"));
+                        }
                         buf.push_str(&line);
                         buf.push('\n');
                     }

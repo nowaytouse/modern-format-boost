@@ -2090,16 +2090,16 @@ fn execute_lossless(
 
     args.push(output_arg);
 
-    let result = shared_utils::FfmpegBuilder::new()
+    let (status, stderr) = shared_utils::FfmpegBuilder::new()
         .args(args)
-        .build()
-        .output()?;
+        .spawn()?
+        .wait_with_output()?;
 
-    if !result.status.success() {
+    if !status.success() {
         return Err(VidQualityError::FFmpegError {
             message: "FFmpeg command failed".to_string(),
-            stderr: String::from_utf8_lossy(&result.stderr).to_string(),
-            exit_code: result.status.code(),
+            stderr,
+            exit_code: status.code(),
             command: None,
             file_path: None,
         });

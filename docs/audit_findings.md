@@ -10,6 +10,7 @@ Items are grouped by severity and subsystem.
 ## Critical (Fixed)
 
 ### 1. ProRes HEVC Single-Thread Bottleneck
+
 **Files:** `x265_params.rs`, `constants.rs`
 **Status:** ✅ Fixed
 
@@ -23,7 +24,9 @@ available system RAM via `system_memory::get_available_memory_mb()`.
 ## High Priority
 
 ### 2. `memory_profile_for_source()` Receives `None` Codec in 3 Call Sites
+
 **Files:**
+
 - `video_explorer.rs:2540` — `memory_profile_for_source(None, self.input_size)`
 - `video_explorer.rs:2609` — `memory_profile_for_source(None, self.input_size)`
 - `explore_strategy.rs:513` — `memory_profile_for_source(None, self.input_size)`
@@ -34,6 +37,7 @@ profile even though it warrants care. These should pass the actual codec name
 from probe/detection data.
 
 ### 3. GPU Calibration File Size Bug
+
 **File:** `dynamic_mapping.rs:175-189`
 
 The GPU calibration test encodes to `/dev/null` via `-f null` output but then
@@ -47,6 +51,7 @@ but the first iteration is always wasted.
 ## Medium Priority
 
 ### 4. Animated Image CRF 0 (Lossless) Overuse
+
 **File:** `animated_image.rs:676`
 
 `convert_to_mp4()` uses CRF 0 for ALL animated→video conversions. For GIF
@@ -55,6 +60,7 @@ A CRF of 18-20 would be more appropriate for typical animated content, with
 CRF 0 reserved for high-quality animated sources.
 
 ### 5. WebP Variable-Delay Frame Timing
+
 **File:** `animated_image.rs:207-213`
 
 `extract_webp_to_apng()` parses duration from the first frame only and assumes
@@ -63,6 +69,7 @@ chat stickers) get incorrect timing in the intermediate APNG, which propagates
 to the final video output.
 
 ### 6. `gpu_coarse_search.rs` Monolith Function
+
 **File:** `gpu_coarse_search.rs` (4839 lines total)
 
 `cpu_fine_tune_from_gpu_boundary()` is ~2500 lines with inline comments
@@ -74,6 +81,7 @@ maintain, test, or debug. Should be decomposed into per-phase functions.
 ## Low Priority
 
 ### 7. CRF Cache Unbounded Allocation
+
 **File:** `explore_strategy.rs:127-134`
 
 `CrfCache` allocates a fixed `Box<[Option<T>; 6400]>` array regardless of
@@ -81,6 +89,7 @@ actual usage. For short encodes testing 3-5 CRF values, this wastes memory.
 Consider using a `HashMap` or smaller array with dynamic growth.
 
 ### 8. Spinner Thread Title Overflow
+
 **File:** `drag_and_drop_processor.py:176-189`
 
 The elapsed-time spinner writes to terminal title every 150ms. On very long

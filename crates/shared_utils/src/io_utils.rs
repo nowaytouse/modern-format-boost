@@ -113,11 +113,68 @@ pub fn robust_move(src: &Path, dst: &Path) -> std::io::Result<()> {
             || e.raw_os_error() == Some(18)
             || e.to_string().to_lowercase().contains("crosses devices")
         {
-            std::fs::copy(src, dst)?;
+            let staging = match dst.extension().and_then(|e| e.to_str()) {
+                Some(ext) => dst.with_extension(format!("{ext}.mfb-tmp")),
+                None => dst.with_extension("mfb-tmp"),
+            };
+            if staging.exists() {
+                let _ = std::fs::remove_file(&staging);
+            }
+            if let Err(copy_err) = std::fs::copy(src, &staging) {
+                let _ = std::fs::remove_file(&staging);
+                return Err(copy_err);
+            }
+            if let Err(rename_err) = std::fs::rename(&staging, dst) {
+                let _ = std::fs::remove_file(&staging);
+                return Err(rename_err);
+            }
             std::fs::remove_file(src)?;
         } else {
             return Err(e);
         }
     }
     Ok(())
+}
+
+/// Extract the last `n` non-empty lines from a stderr buffer, joined by `" | "`.
+///
+/// `stderr.lines().last()` on ffmpeg/exiftool output typically returns an empty
+/// string (trailing newline) or a meaningless summary line. This helper returns
+/// the tail of the actually-informative lines so error messages include the
+/// root-cause diagnostic.
+#[must_use]
+pub fn tail_error_lines(stderr: &str, n: usize) -> String {
+    let lines: Vec<&str> = stderr
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    if lines.is_empty() {
+        return String::new();
+    }
+    let start = lines.len().saturating_sub(n);
+    lines[start..].join(" | ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tail_error_lines_skips_blank_trailing_lines() {
+        let stderr = "first\n[libx265] error: out of memory\nexit\n\n\n";
+        let got = tail_error_lines(stderr, 2);
+        assert_eq!(got, "[libx265] error: out of memory | exit");
+    }
+
+    #[test]
+    fn tail_error_lines_empty_input() {
+        assert_eq!(tail_error_lines("", 5), "");
+        assert_eq!(tail_error_lines("\n\n\n", 5), "");
+    }
+
+    #[test]
+    fn tail_error_lines_caps_at_available() {
+        assert_eq!(tail_error_lines("only line", 5), "only line");
+    }
 }

@@ -1230,8 +1230,7 @@ pub fn calculate_quality_score(
     let compression_ratio = if input_size == 0 {
         1.0
     } else {
-        crate::numeric_cast::u64_to_f64(output_size)
-            / crate::numeric_cast::u64_to_f64(input_size)
+        crate::numeric_cast::u64_to_f64(output_size) / crate::numeric_cast::u64_to_f64(input_size)
     };
 
     let (ssim_weight, size_weight): (f64, f64) = match phase {
@@ -1550,7 +1549,7 @@ fn calculate_psnr_fast(input: &str, output: &str) -> Result<f64, String> {
         let stderr = String::from_utf8_lossy(&psnr_output.stderr);
         return Err(format!(
             "ffmpeg psnr failed: {}",
-            stderr.lines().last().unwrap_or("unknown error")
+            crate::io_utils::tail_error_lines(&stderr, 5)
         ));
     }
 
@@ -1587,8 +1586,8 @@ fn calculate_psnr_fast(input: &str, output: &str) -> Result<f64, String> {
     }
 
     Err(format!(
-        "Failed to parse PSNR from ffmpeg output. Last line: {}",
-        stderr.lines().last().unwrap_or("(empty)")
+        "Failed to parse PSNR from ffmpeg output. Tail: {}",
+        crate::io_utils::tail_error_lines(&stderr, 5)
     ))
 }
 
@@ -2245,8 +2244,7 @@ fn gpu_coarse_search_with_log_impl(
                             if let Ok(time_us) = val.parse::<u64>() {
                                 if last_progress_time.elapsed().as_secs_f64() >= 1.0 {
                                     let current_secs =
-                                        crate::numeric_cast::u64_to_f64(time_us)
-                                            / 1_000_000.0;
+                                        crate::numeric_cast::u64_to_f64(time_us) / 1_000_000.0;
                                     let pct = (current_secs / f64::from(actual_sample_duration)
                                         * 100.0)
                                         .min(100.0);
@@ -2273,28 +2271,32 @@ fn gpu_coarse_search_with_log_impl(
                                         0.0
                                     };
 
-                                    let estimated_final_size =
-                                        if let Ok(metadata) = std::fs::metadata(output) {
-                                            let current_size = metadata.len();
-                                            fallback_logged = false;
-                                            crate::numeric_cast::f64_to_u64_sat(
-                                                crate::numeric_cast::u64_to_f64(current_size) / pct.max(1.0)
-                                                    * 100.0,
-                                            )
-                                        } else {
-                                            if !fallback_logged {
-                                                crate::log_eprintln!(
+                                    let estimated_final_size = if let Ok(metadata) =
+                                        std::fs::metadata(output)
+                                    {
+                                        let current_size = metadata.len();
+                                        fallback_logged = false;
+                                        crate::numeric_cast::f64_to_u64_sat(
+                                            crate::numeric_cast::u64_to_f64(current_size)
+                                                / pct.max(1.0)
+                                                * 100.0,
+                                        )
+                                    } else {
+                                        if !fallback_logged {
+                                            crate::log_eprintln!(
                                                 "Using linear estimation (metadata unavailable)"
                                             );
-                                                fallback_logged = true;
-                                            }
-                                            crate::numeric_cast::f64_to_u64_sat(
-                                                (crate::numeric_cast::u64_to_f64(sample_input_size) * (1.0 / pct.max(0.1)))
-                                                .min(
-                                                    crate::numeric_cast::u64_to_f64(sample_input_size) * 10.0,
-                                                ),
-                                            )
-                                        };
+                                            fallback_logged = true;
+                                        }
+                                        crate::numeric_cast::f64_to_u64_sat(
+                                            (crate::numeric_cast::u64_to_f64(sample_input_size)
+                                                * (1.0 / pct.max(0.1)))
+                                            .min(
+                                                crate::numeric_cast::u64_to_f64(sample_input_size)
+                                                    * 10.0,
+                                            ),
+                                        )
+                                    };
 
                                     crate::log_eprintln!("⏳ Progress: {:.1}% ({:.1}s / {:.1}s) - ETA: {}s - Speed: {:.2}x",
                                         pct, current_secs, actual_sample_duration, eta, speed);
@@ -2403,7 +2405,7 @@ fn gpu_coarse_search_with_log_impl(
                             let stderr = String::from_utf8_lossy(&out.stderr);
                             Err(anyhow::anyhow!(
                                 "GPU encoding failed: {}",
-                                stderr.lines().last().unwrap_or("unknown")
+                                crate::io_utils::tail_error_lines(&stderr, 5)
                             ))
                         }
                         Err(e) => Err(anyhow::anyhow!("{e}")),
@@ -2448,8 +2450,7 @@ fn gpu_coarse_search_with_log_impl(
         if prev == 0 {
             return f64::MAX;
         }
-        ((crate::numeric_cast::u64_to_f64(curr)
-            - crate::numeric_cast::u64_to_f64(prev))
+        ((crate::numeric_cast::u64_to_f64(curr) - crate::numeric_cast::u64_to_f64(prev))
             / crate::numeric_cast::u64_to_f64(prev.max(1)))
         .abs()
     };

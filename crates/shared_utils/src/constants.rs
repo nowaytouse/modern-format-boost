@@ -171,7 +171,7 @@ pub const X265_MODERATE_MEMORY_LOOKAHEAD_THREADS: usize = 2;
 pub const X265_MODERATE_MEMORY_LOOKAHEAD_SLICES: usize = 2;
 /// Moderate-memory x265 profile: moderate lookahead queue depth.
 pub const X265_MODERATE_MEMORY_RC_LOOKAHEAD: usize = 20;
-/// RAM threshold (MB) below which the LowMemory profile is forced.
+/// RAM threshold (MB) below which the `LowMemory` profile is forced.
 pub const X265_LOW_MEMORY_RAM_THRESHOLD_MB: u64 = 8192;
 /// RAM threshold (MB) above which the Default (uncapped) profile is used.
 pub const X265_DEFAULT_RAM_THRESHOLD_MB: u64 = 16384;

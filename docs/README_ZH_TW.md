@@ -104,17 +104,17 @@ tar -xzf modern-format-boost-aarch64-apple-darwin.tar.gz
 
 ### 先決條件
 
-| 工具 | 需要嗎？ | 目的 | 安裝命令 |
-| :--- | :---: | :--- | :--- |
-| **Rust** (1.75+) | ✅ | 構建與安裝 | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
-| **FFmpeg** (5.0+) | ✅ | 影片處理與指標 | `brew install ffmpeg` / `apt install ffmpeg` |
-| **libjxl** | ✅ | JXL 編碼核心 | `brew install jpeg-xl` |
-| **ExifTool** | ✅ | 元數據保存 | `brew install exiftool` |
-| **ImageMagick** | ✅ | 圖像繞道處理 | `brew install imagemagick` |
-| **libwebp** | ✅ | WebP 原生解碼 | `brew install webp` |
-| **dovi_tool** | ✅ | 杜比視界 RPU 提取 | `cargo install dovi_tool` |
-| **libheif** | ✅ | HEIC/HEIF 解碼 | `brew install libheif` |
-| **hdr10plus_tool** | ✅ | HDR10+ 元數據提取 | `cargo install hdr10plus_tool` |
+| 工具               | 需要嗎？ | 目的              | 安裝命令                                                          |
+| :----------------- | :------: | :---------------- | :---------------------------------------------------------------- |
+| **Rust** (1.75+)   |    ✅    | 構建與安裝        | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
+| **FFmpeg** (5.0+)  |    ✅    | 影片處理與指標    | `brew install ffmpeg` / `apt install ffmpeg`                      |
+| **libjxl**         |    ✅    | JXL 編碼核心      | `brew install jpeg-xl`                                            |
+| **ExifTool**       |    ✅    | 元數據保存        | `brew install exiftool`                                           |
+| **ImageMagick**    |    ✅    | 圖像繞道處理      | `brew install imagemagick`                                        |
+| **libwebp**        |    ✅    | WebP 原生解碼     | `brew install webp`                                               |
+| **dovi_tool**      |    ✅    | 杜比視界 RPU 提取 | `cargo install dovi_tool`                                         |
+| **libheif**        |    ✅    | HEIC/HEIF 解碼    | `brew install libheif`                                            |
+| **hdr10plus_tool** |    ✅    | HDR10+ 元數據提取 | `cargo install hdr10plus_tool`                                    |
 
 ---
 
@@ -122,9 +122,10 @@ tar -xzf modern-format-boost-aarch64-apple-darwin.tar.gz
 
 **1. JXL 格式目前的相容性如何？**  
 macOS 14 (Sonoma) / iOS 17+、Chrome 91+ 以及 Firefox 128+ 已提供了原生支援。但目前 Apple 生態仍存在已知缺陷：
+
 - **動圖預覽**：現代動圖格式（JXL/AV1/HEIF）在 macOS/iOS 原生相冊或 Finder 中往往無法直接播放動圖（顯示為靜態圖），尤其是 iCloud 同步後的文件。建議透過命令行工具或現代瀏覽器進行預覽。
 - **縮略圖黑屏**：當 JXL 文件使用 **灰色 (Grayscale) ICC 配置文件** 時，Finder/iCloud 的縮略圖可能會顯示為純黑，但这並不影響文件本身，在瀏覽器中打開可正常顯示。
-JXL 依然是目前進行位精確無損歸檔及高保真 HDR 儲存的最佳選擇。
+  JXL 依然是目前進行位精確無損歸檔及高保真 HDR 儲存的最佳選擇。
 
 **2. 為什麼 HDR10+ 動態影片會失效？**  
 現已完美支援。我們透過 `hdr10plus_tool` 提取 SMPTE 2094-40 動態元數據並將其注入 `libx265` 的 `--dhdr10-info` 參數中。請確保已安裝該工具。

@@ -5,20 +5,24 @@ import shutil
 import platform
 import os
 
-GREEN = '\033[0;32m'
-BLUE = '\033[0;34m'
-YELLOW = '\033[1;33m'
-RED = '\033[0;31m'
-NC = '\033[0m'
+GREEN = "\033[0;32m"
+BLUE = "\033[0;34m"
+YELLOW = "\033[1;33m"
+RED = "\033[0;31m"
+NC = "\033[0m"
 
-def print_c(color, text, end='\n'):
+
+def print_c(color, text, end="\n"):
     print(f"{color}{text}{NC}", end=end)
+
 
 def command_exists(cmd):
     return shutil.which(cmd) is not None
 
+
 def run_cmd(cmd, check=True):
     return subprocess.run(cmd, shell=True, check=check)
+
 
 def main():
     print_c(BLUE, "🚀 Modern Format Boost - Dependency Installer v0.11.2")
@@ -30,38 +34,61 @@ def main():
         print_c(YELLOW, "🍎 Detected macOS")
         if not command_exists("brew"):
             print("Installing Homebrew...")
-            run_cmd('/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"')
+            run_cmd(
+                '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+            )
         print("Updating Homebrew...")
         run_cmd("brew update")
         print("Checking and installing system dependencies via Homebrew...")
-        
-        deps = ["jpeg-xl", "exiftool", "imagemagick", "webp", "libheif", "coreutils", "node", "shellcheck", "shfmt", "postgresql@14", "pgvector"]
-        
+
+        deps = [
+            "jpeg-xl",
+            "exiftool",
+            "imagemagick",
+            "webp",
+            "libheif",
+            "coreutils",
+            "node",
+            "shellcheck",
+            "shfmt",
+            "postgresql@14",
+            "pgvector",
+        ]
+
         if not command_exists("ffmpeg"):
             print("Installing ffmpeg...")
             run_cmd("brew install ffmpeg")
         else:
-            print_c(GREEN, "✅ ffmpeg already installed (skipping to avoid tap conflicts).")
-            
+            print_c(
+                GREEN, "✅ ffmpeg already installed (skipping to avoid tap conflicts)."
+            )
+
         for dep in deps:
             binary = dep
-            if dep == "postgresql@14": binary = "psql"
-            if dep == "jpeg-xl": binary = "cjxl"
-            
+            if dep == "postgresql@14":
+                binary = "psql"
+            if dep == "jpeg-xl":
+                binary = "cjxl"
+
             if not command_exists(binary):
                 print(f"Installing {dep}...")
                 run_cmd(f"brew install {dep}")
             else:
                 print_c(GREEN, f"✅ {dep} already installed.")
-                
+
     elif OS_TYPE == "linux":
         print_c(YELLOW, "🐧 Detected Linux")
         if command_exists("apt-get"):
             print("Installing system dependencies via apt...")
             run_cmd("sudo apt-get update")
-            run_cmd("sudo apt-get install -y ffmpeg libimage-exiftool-perl imagemagick webp libheif-dev coreutils nodejs npm shellcheck shfmt curl git build-essential postgresql postgresql-contrib")
+            run_cmd(
+                "sudo apt-get install -y ffmpeg libimage-exiftool-perl imagemagick webp libheif-dev coreutils nodejs npm shellcheck shfmt curl git build-essential postgresql postgresql-contrib"
+            )
         else:
-            print_c(RED, "❌ Unsupported Linux distribution (apt not found). Please install dependencies manually.")
+            print_c(
+                RED,
+                "❌ Unsupported Linux distribution (apt not found). Please install dependencies manually.",
+            )
             sys.exit(1)
     else:
         print_c(RED, f"❌ Unsupported OS: {OS_TYPE}")
@@ -69,11 +96,15 @@ def main():
 
     if not command_exists("rustup"):
         print_c(YELLOW, "🦀 Rust not found. Installing via rustup...")
-        run_cmd("curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y")
-        os.environ["PATH"] = f"{os.environ.get('HOME')}/.cargo/bin:{os.environ.get('PATH')}"
+        run_cmd(
+            "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y"
+        )
+        os.environ["PATH"] = (
+            f"{os.environ.get('HOME')}/.cargo/bin:{os.environ.get('PATH')}"
+        )
     else:
         print_c(GREEN, "✅ Rust found.")
-        
+
     print("Updating Rust and adding components...")
     run_cmd("rustup update")
     run_cmd("rustup component add clippy rustfmt")
@@ -89,7 +120,7 @@ def main():
         "hdr10plus_tool": "hdr10plus_tool",
         "kondo": "kondo",
     }
-    
+
     for package, binary in cargo_tools.items():
         if not command_exists(binary):
             print(f"Installing {package}...")
@@ -111,11 +142,14 @@ def main():
         else:
             run_cmd("npm install -g prettier markdownlint-cli2", check=False)
     else:
-        print_c(RED, "⚠️  npm not found. Skipping Node tools (prettier, markdownlint-cli2).")
+        print_c(
+            RED, "⚠️  npm not found. Skipping Node tools (prettier, markdownlint-cli2)."
+        )
 
     print("--------------------------------------------------------")
     print_c(GREEN, "🌟 All dependencies installed successfully!")
     print("You can now run 'python3 scripts/check_all.py' to verify the workspace.")
+
 
 if __name__ == "__main__":
     main()

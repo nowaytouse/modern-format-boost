@@ -602,10 +602,35 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-# ── Main ───────────────────────────────────────────────────────────────────────
+def bootstrap_macos_path() -> None:
+    """Ensure Homebrew and common tool paths are in os.environ['PATH'] on macOS."""
+    if sys.platform != "darwin":
+        return
+
+    extra_paths = [
+        "/opt/homebrew/bin",
+        "/opt/homebrew/sbin",
+        "/usr/local/bin",
+        "/usr/local/sbin",
+    ]
+    path_parts = os.environ.get("PATH", "").split(os.pathsep)
+    added = []
+
+    for p in extra_paths:
+        if os.path.isdir(p) and p not in path_parts:
+            path_parts.insert(0, p)
+            added.append(p)
+
+    if added:
+        os.environ["PATH"] = os.pathsep.join(path_parts)
+        # Also clean up duplicate separators
+        os.environ["PATH"] = os.environ["PATH"].replace(
+            f"{os.pathsep}{os.pathsep}", os.pathsep
+        )
 
 
 def main() -> None:
+    bootstrap_macos_path()
     args = parse_args()
     repo_root = get_repo_root()
     os.chdir(repo_root)

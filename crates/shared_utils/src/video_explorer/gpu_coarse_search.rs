@@ -1801,6 +1801,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         // but the caller didn't fold them into hdr_x265_params, add them here so that
         // HDR10 signaling survives through libx265.
         if encoder == crate::video_explorer::VideoEncoder::Hevc {
+            use std::fmt::Write as _;
             if let Some(probe) = probe_info {
                 let existing = adjusted_x265_params.clone().unwrap_or_default();
                 let mut updated = existing.clone();
@@ -1809,7 +1810,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                         if !updated.is_empty() {
                             updated.push(':');
                         }
-                        updated.push_str(&format!("master-display={md}"));
+                        let _ = write!(updated, "master-display={md}");
                     }
                 }
                 if let Some(ref cll) = probe.max_cll {
@@ -1817,7 +1818,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                         if !updated.is_empty() {
                             updated.push(':');
                         }
-                        updated.push_str(&format!("max-cll={cll}"));
+                        let _ = write!(updated, "max-cll={cll}");
                     }
                 }
                 if updated != existing {
