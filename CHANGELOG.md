@@ -11,6 +11,7 @@ All notable changes to this project will be documented in this file.
 - **RAM-Aware Memory Profile (Uprade v2)**: Replaced the absolute memory thresholding with a **free-ratio aware system**.
   - **Dynamic Scaling**: The system now monitors the percentage of available RAM (`free_ratio`). Even on high-RAM systems (e.g., 64GB), it will proactively switch to `Moderate` or `LowMemory` profiles if current consumption is high, preventing OOM-kill in dense processing workloads.
   - **Thread-Capped Pool Allocation**: Introduced `capped_pool_threads` to physically limit x265's `pools` based on the memory profile, ensuring frame-threads and lookahead buffers stay within the safe resident set size (RSS) envelope.
+- **x265 Parameters Stability**: Fixed a startup crash in `LowMemory` mode where `rc-lookahead` (previously 8) was too low for the `slower` preset; boosted to 9 to satisfy x265's strict `rc-lookahead > max-bframes` constraint.
 - **FFmpeg Builder Hardening**: Implemented `input_format` capability in `FfmpegBuilder` and corrected the parameter ordering for `lavfi` sources. This ensures a bit-perfect command structure (`-f lavfi -i nullsrc...`) for encoder self-probes and archival analysis.
 - **Codec Information Propagation**: Fixed 3 call sites in `video_explorer.rs` and `explore_strategy.rs` where the actual source codec name was lost, ensuring ProRes and other archival formats correctly trigger RAM-aware optimized memory profiles throughout the entire search and fine-tune pipeline.
 
@@ -75,6 +76,11 @@ All notable changes to this project will be documented in this file.
 - **Dependency Audit**: Verified dependency security via `cargo audit` (358 crates scanned; no high-risk vulnerabilities).
 - **VideoToolbox Contention Handling**: Enhanced hardware encoder detection on macOS to retry with `-allow_sw 1` if a compression session cannot be created due to transient GPU contention.
 - **Checkpoint Resilience**: Integrated `checkpoint_exists` and `has_output_checkpoint` checks into the initialization logic to prevent redundant processing passes.
+
+### 🔧 Scripts & Maintenance
+
+- **Test Standardization**: Migrated diagnostic tools to `scripts/` and verified WebP/JXL duration parsing logic for animated media extraction.
+- **`log_conversion_analyzer.py`**: Hardened directory creation logic for report output to handle relative paths and empty directory strings.
 
 ## [0.11.2] — 2026-04-15
 

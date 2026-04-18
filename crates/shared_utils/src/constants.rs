@@ -163,8 +163,13 @@ pub const X265_LOW_MEMORY_LOOKAHEAD_THREADS: usize = 1;
 pub const X265_LOW_MEMORY_LOOKAHEAD_SLICES: usize = 1;
 /// Low-memory x265 profile: cap worker pools aggressively to keep RAM spikes in check.
 pub const X265_LOW_MEMORY_MAX_POOLS: usize = 2;
-/// Low-memory x265 profile: shorten the lookahead queue to reduce buffered frames.
-pub const X265_LOW_MEMORY_RC_LOOKAHEAD: usize = 8;
+/// Current HEVC preset policy (`medium`/`slow`/`slower`) must tolerate x265's `slower`
+/// preset, which can use up to 8 consecutive B-frames. `rc-lookahead` must stay strictly
+/// above that count or x265 rejects the encode at startup.
+pub const X265_ALLOWED_HEVC_MAX_CONSECUTIVE_BFRAMES: usize = 8;
+/// Low-memory x265 profile: shorten the lookahead queue to reduce buffered frames, while
+/// still satisfying x265's strict `rc-lookahead > bframes` requirement.
+pub const X265_LOW_MEMORY_RC_LOOKAHEAD: usize = X265_ALLOWED_HEVC_MAX_CONSECUTIVE_BFRAMES + 1;
 /// Moderate-memory x265 profile: cap worker pools but still leave room to scale on healthy systems.
 pub const X265_MODERATE_MEMORY_MAX_POOLS: usize = 6;
 /// Moderate-memory x265 profile: allow limited parallelism for systems with adequate RAM.

@@ -252,7 +252,7 @@ mod tests {
         assert!(params.contains("frame-threads=1"));
         assert!(params.contains("lookahead-threads=1"));
         assert!(params.contains("lookahead-slices=1"));
-        assert!(params.contains("rc-lookahead=8"));
+        assert!(params.contains("rc-lookahead=9"));
         assert!(params.ends_with("hdr-opt=1"));
     }
 
@@ -291,6 +291,14 @@ mod tests {
         assert!(params.starts_with("lossless=1:"));
         assert!(params.contains("frame-threads=1"));
         assert!(params.contains("pools=2"));
+    }
+
+    #[test]
+    fn low_memory_lookahead_stays_above_allowed_bframes() {
+        assert!(
+            constants::X265_LOW_MEMORY_RC_LOOKAHEAD
+                > constants::X265_ALLOWED_HEVC_MAX_CONSECUTIVE_BFRAMES
+        );
     }
 
     #[test]
