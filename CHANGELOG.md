@@ -8,8 +8,10 @@ All notable changes to this project will be documented in this file.
 
 ### 🚀 ProRes & HEVC Performance Optimization
 
-- **RAM-Aware Tiered Encoding**: Replaced the binary x265 memory profile system with a 3-tier RAM-aware system (`Default`, `Moderate`, `LowMemory`).
-  - **Logic**: Dynamically queries system memory; uses `Moderate` profile (frame-threads=2) for 8-16GB RAM and `Default` for ≥16GB, preventing single-threaded bottlenecks on capable hardware during ProRes/DNxHD processing.
+- **RAM-Aware Memory Profile (Uprade v2)**: Replaced the absolute memory thresholding with a **free-ratio aware system**.
+  - **Dynamic Scaling**: The system now monitors the percentage of available RAM (`free_ratio`). Even on high-RAM systems (e.g., 64GB), it will proactively switch to `Moderate` or `LowMemory` profiles if current consumption is high, preventing OOM-kill in dense processing workloads.
+  - **Thread-Capped Pool Allocation**: Introduced `capped_pool_threads` to physically limit x265's `pools` based on the memory profile, ensuring frame-threads and lookahead buffers stay within the safe resident set size (RSS) envelope.
+- **FFmpeg Builder Hardening**: Implemented `input_format` capability in `FfmpegBuilder` and corrected the parameter ordering for `lavfi` sources. This ensures a bit-perfect command structure (`-f lavfi -i nullsrc...`) for encoder self-probes and archival analysis.
 - **Codec Information Propagation**: Fixed 3 call sites in `video_explorer.rs` and `explore_strategy.rs` where the actual source codec name was lost, ensuring ProRes and other archival formats correctly trigger RAM-aware optimized memory profiles throughout the entire search and fine-tune pipeline.
 
 ### 🎬 Animated Image Pipeline & HDR Hardening
