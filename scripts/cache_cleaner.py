@@ -10,6 +10,7 @@ Cache backends cleared:
   4. Progress trackers: ~/.mfb_progress/
   5. Temp/lock files: ~/.modern_format_boost/tmp|locks/
   6. Rust build artifacts: project_root/target/
+  7. Runtime cache: project_root/.cache/
 """
 
 import sys
@@ -183,6 +184,11 @@ def show_stats(cache_dir, db_file, log_dir, mfb_progress_dir):
     if target_dir.is_dir():
         target_size = get_dir_size(target_dir)
         print(f"   🦀 Rust Build: {BOLD}{YELLOW}{target_size}{RESET}")
+
+    local_cache = project_root / ".cache"
+    if local_cache.is_dir():
+        local_cache_size = get_dir_size(local_cache)
+        print(f"   ⚡ Runtime:    {BOLD}{YELLOW}{local_cache_size}{RESET}")
 
     lock_dir = Path.home() / ".modern_format_boost" / "locks"
     if lock_dir.is_dir():
@@ -387,6 +393,7 @@ def perform_full_cleanup():
         print(f"   {YELLOW}- PostgreSQL: NOT REACHABLE — will be skipped{RESET}")
     print("   - SQLite fallback database (image_analysis_v2.db)")
     print("   - Path-tree JSON cache")
+    print("   - Project-local Runtime Cache (.cache/mfb_runtime)")
     print("   - All Session Logs & Tool Debug Records")
     print("   - All Task Progress Trackers (Resume Capability)")
     print("   - All Isolated Temporary Files (Ghost Mode artifacts)")
@@ -457,6 +464,13 @@ def perform_full_cleanup():
             print(f"   {GREEN}✅ Rust build artifacts purged{RESET}")
         except Exception as e:
             print(f"   {RED}⚠️ Cargo clean failed: {e}{RESET}")
+
+    # 7. Project-local .cache (mfb_runtime)
+    local_cache = project_root / ".cache"
+    if local_cache.is_dir():
+        print(f"{DIM}   Purging project-local runtime cache...{RESET}")
+        shutil.rmtree(local_cache, ignore_errors=True)
+        print(f"   {GREEN}✅ Runtime cache cleared{RESET}")
 
     # 6. Purge stale session locks
     if lock_dir.is_dir():
