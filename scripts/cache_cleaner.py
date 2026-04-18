@@ -9,6 +9,7 @@ Cache backends cleared:
   3. Path-tree JSON: ~/.modern_format_boost/cache/path_tree/
   4. Progress trackers: ~/.mfb_progress/
   5. Temp/lock files: ~/.modern_format_boost/tmp|locks/
+  6. Rust build artifacts: project_root/target/
 """
 
 import sys
@@ -175,6 +176,13 @@ def show_stats(cache_dir, db_file, log_dir, mfb_progress_dir):
     if mfb_progress_dir.is_dir():
         prog_size = get_dir_size(mfb_progress_dir)
         print(f"   🔄 Progress:  {DIM}{prog_size}{RESET}")
+
+    script_dir = Path(__file__).parent.resolve()
+    project_root = script_dir.parent
+    target_dir = project_root / "target"
+    if target_dir.is_dir():
+        target_size = get_dir_size(target_dir)
+        print(f"   🦀 Rust Build: {BOLD}{YELLOW}{target_size}{RESET}")
 
     lock_dir = Path.home() / ".modern_format_boost" / "locks"
     if lock_dir.is_dir():
@@ -382,6 +390,7 @@ def perform_full_cleanup():
     print("   - All Session Logs & Tool Debug Records")
     print("   - All Task Progress Trackers (Resume Capability)")
     print("   - All Isolated Temporary Files (Ghost Mode artifacts)")
+    print("   - All Rust Build Artifacts (cargo clean - will free GBs of space)")
     print("   - All STALE directory locks (Active locks will be skipped)")
     print("")
 
@@ -438,6 +447,16 @@ def perform_full_cleanup():
         shutil.rmtree(mfb_tmp_dir, ignore_errors=True)
         mfb_tmp_dir.mkdir(parents=True, exist_ok=True)
         print(f"   {GREEN}✅ Isolated temp space cleared{RESET}")
+    
+    # 6. Cargo clean — mandatory for build artifact cleanup
+    target_dir = project_root / "target"
+    if target_dir.is_dir():
+        print(f"{DIM}   Running cargo clean in {project_root.name}...{RESET}")
+        try:
+            subprocess.run(["cargo", "clean"], cwd=project_root, check=True, capture_output=True)
+            print(f"   {GREEN}✅ Rust build artifacts purged{RESET}")
+        except Exception as e:
+            print(f"   {RED}⚠️ Cargo clean failed: {e}{RESET}")
 
     # 6. Purge stale session locks
     if lock_dir.is_dir():

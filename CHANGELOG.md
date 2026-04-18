@@ -30,7 +30,7 @@ All notable changes to this project will be documented in this file.
 
 ### 🔧 Scripts & Maintenance
 
-- **`cache_cleaner.py`**: Fixed path matching logic for directory-based progress and path-tree cache cleanup to prevent accidental omissions.
+- **`cache_cleaner.py`**: Integrated mandatory **`cargo clean`** into the full purge workflow. The tool now automatically identifies and clears Rust build artifacts (`target/` folder), provides real-time size statistics for build products, and ensures a cleaner workspace for long-term storage or fresh builds.
 - **`create_live_photo.py`**: Fixed a bug in `heif-enc` command generation where quality flags were incorrectly handled in lossless mode.
 - **`log_conversion_analyzer.py`**: Hardened directory creation logic for report output to handle relative paths and empty directory strings.
 
