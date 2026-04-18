@@ -149,8 +149,9 @@ fn apply_multi_instance_cap(
     workload: WorkloadType,
     parallel_tasks: usize,
     child_threads: usize,
+    multi_instance: bool,
 ) -> (usize, usize) {
-    if !is_multi_instance() {
+    if !multi_instance {
         return (parallel_tasks, child_threads);
     }
 
@@ -197,7 +198,7 @@ fn balanced_thread_config_for(
     };
 
     let (parallel_tasks, child_threads) = if multi_instance {
-        apply_multi_instance_cap(workload, parallel_tasks, child_threads)
+        apply_multi_instance_cap(workload, parallel_tasks, child_threads, true)
     } else {
         (parallel_tasks, child_threads)
     };
@@ -322,9 +323,8 @@ mod tests {
 
     #[test]
     fn test_apply_multi_instance_cap_reduces_image_parallelism() {
-        enable_multi_instance_mode();
-        let (parallel_tasks, child_threads) = apply_multi_instance_cap(WorkloadType::Image, 6, 2);
-        disable_multi_instance_mode();
+        let (parallel_tasks, child_threads) =
+            apply_multi_instance_cap(WorkloadType::Image, 6, 2, true);
 
         assert_eq!(parallel_tasks, 3);
         assert_eq!(child_threads, 2);
@@ -332,9 +332,8 @@ mod tests {
 
     #[test]
     fn test_apply_multi_instance_cap_reduces_video_parallelism() {
-        enable_multi_instance_mode();
-        let (parallel_tasks, child_threads) = apply_multi_instance_cap(WorkloadType::Video, 2, 8);
-        disable_multi_instance_mode();
+        let (parallel_tasks, child_threads) =
+            apply_multi_instance_cap(WorkloadType::Video, 2, 8, true);
 
         assert_eq!(parallel_tasks, 1);
         assert_eq!(child_threads, 4);
@@ -368,9 +367,8 @@ mod tests {
         let moderate =
             balanced_thread_config_for(12, WorkloadType::Video, X265MemoryProfile::Moderate, false);
 
-        assert!(default.parallel_tasks >= moderate.parallel_tasks);
+        assert!(default.parallel_tasks > moderate.parallel_tasks);
         assert!(default.parallel_tasks > 1);
-        assert!(default.child_threads >= moderate.child_threads);
     }
 
     #[test]

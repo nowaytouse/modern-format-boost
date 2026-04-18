@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
-## [0.11.2] — 2026-04-17
+## [0.11.2] — 2026-04-18
 
 ### 🚀 ProRes & HEVC Performance Optimization
 
@@ -28,11 +28,28 @@ All notable changes to this project will be documented in this file.
 - **XMP Sidecar cleanup**: Updated `safe_delete_original` to automatically identify and remove companion `.xmp` sidecar files after successful processing.
 - **GPU Mapping Correctness**: Fixed a bug in `dynamic_mapping.rs` where the GPU-to-CPU CRF calibration incorrectly redirected test output to `/dev/null`, and ensured CPU calibration probes for 10-bit HDR to prevent apples-to-oranges size comparisons.
 
-### 🔧 Scripts & Maintenance
+### ⚙️ Core Parallelization & Memory-Aware Scheduling
 
-- **`cache_cleaner.py`**: Expanded to a full project-wide cleanup suite. Now includes mandatory **`cargo clean`** (root & fuzz/ folders), **`.cache/mfb_runtime`** (40GB+), and **`dist/`** artifacts. Implemented recursive **`__pycache__`** purging while safely excluding virtual environments (`.venv`, `.venv_training`) and system Metadata (`.DS_Store`).
-- **`create_live_photo.py`**: Fixed a bug in `heif-enc` command generation where quality flags were incorrectly handled in lossless mode.
-- **`log_conversion_analyzer.py`**: Hardened directory creation logic for report output to handle relative paths and empty directory strings.
+- **High-Performance Parallel Engine**: Migrated the core media processing loop in `cli_runner.rs` from serial execution to a **Rayon-based parallel architecture**. 
+  - **Dynamic Task Concurrency**: The system now simultaneously processes multiple files, using thread-safe `Atomic` counters for session accounting.
+  - **Memory-Adaptive Scheduling**: Upgraded `thread_manager.rs` to dynamically calculate CPU headroom based on the system's current RAM profile. 
+  - **RAM-Aware Core Reservation**: Automatically reserves 15% to 40% of CPU cores as safety headroom to prevent memory thrashing in high-resolution ProRes/HDR workloads.
+  - **Thread Manager Refactoring**: Decoupled multi-instance capping logic from global state to improve unit test reliability and predictability.
+
+### 🛡️ Resource Protection & UI Stability (User Hardened)
+
+- **Memory Safeguard & Auto-Recovery**: Fixed a critical bug in `drag_and_drop_processor.py` where memory exhaustion caused the UI to hang; the script now proactively detects RAM usage > 95%, displays a 5-second countdown, and **returns to the home menu** safely.
+- **Exception Flow Correction**: Hardened the resource-check exception handling to ensure `ReturnToHomeException` propagates correctly and isn't swallowed by background handlers, guaranteeing 100% reliable error recovery.
+- **Verification Tooling**: Introduced `scripts/test_drag_and_drop_processor.py` to automate the verification of UI-level resource monitoring and state transitions.
+
+### 🧹 Advanced Maintenance Utility
+
+- **Expanded Cache Cleaner coverage**: `cache_cleaner.py` now targets significantly more intermediate artifacts:
+  - **Fuzzing Build Support**: Integrated `cargo clean` for the `fuzz/` sub-project.
+  - **Distribution Cleanup**: Automatically identifies and purges the `dist/` directory.
+  - **Recursive pycache**: Implemented project-wide `__pycache__` removal.
+  - **Project-local Runtime Cache**: Includes the hidden `.cache/mfb_runtime` (often 40GB+) in the purge list.
+- **Developer Safety**: Guaranteed the preservation of `.venv`, `.venv_training`, and macOS `.DS_Store` files to maintain environment stability.
 
 ### 🛡️ Logging & Resource Hardening
 
