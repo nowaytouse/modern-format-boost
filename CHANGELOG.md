@@ -34,7 +34,8 @@ All notable changes to this project will be documented in this file.
   - **Dynamic Task Concurrency**: The system now simultaneously processes multiple files, using thread-safe `Atomic` counters for session accounting.
   - **Memory-Adaptive Scheduling**: Upgraded `thread_manager.rs` to dynamically calculate CPU headroom based on the system's current RAM profile. 
   - **RAM-Aware Core Reservation**: Automatically reserves 15% to 40% of CPU cores as safety headroom to prevent memory thrashing in high-resolution ProRes/HDR workloads.
-  - **Thread Manager Refactoring**: Decoupled multi-instance capping logic from global state to improve unit test reliability and predictability.
+  - **Unified Concurrency Policy**: Aligned Static Image, Animated Image, and Video processing paths under the same memory-aware scaling logic, ensuring consistent resource usage across the entire workspace.
+  - **Internal Refactoring**: Decoupled multi-instance capping logic from global state and removed legacy internal wrappers to improve unit test reliability and codebase maintenance.
 
 ### 🛡️ Resource Protection & UI Stability (User Hardened)
 
