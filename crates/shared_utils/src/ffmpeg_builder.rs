@@ -184,6 +184,7 @@ pub struct FfmpegBuilder {
     output: Option<PathBuf>,
     output_is_null: bool,
     vcodec: Option<VideoCodec>,
+    input_format: Option<String>,
     format: Option<String>,
     frames_v: Option<u32>,
     crf: Option<f32>,
@@ -252,6 +253,11 @@ impl FfmpegBuilder {
     pub fn codec_audio<S: AsRef<str>>(&mut self, codec: S) -> &mut Self {
         self.extra_args.push("-c:a".to_string());
         self.extra_args.push(codec.as_ref().to_string());
+        self
+    }
+
+    pub fn input_format<S: AsRef<str>>(&mut self, format: S) -> &mut Self {
+        self.input_format = Some(format.as_ref().to_string());
         self
     }
 
@@ -409,6 +415,10 @@ impl FfmpegBuilder {
 
         for i_arg in &self.input_args {
             cmd.arg(i_arg);
+        }
+
+        if let Some(fmt) = &self.input_format {
+            cmd.arg("-f").arg(fmt);
         }
 
         for input in &self.inputs {
@@ -678,5 +688,44 @@ impl FfmpegBuilder {
             .arg("-encoders")
             .output()?;
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FfmpegBuilder;
+
+    #[test]
+    fn input_format_is_emitted_before_input_paths() {
+        let mut builder = FfmpegBuilder::new();
+        builder
+            .hide_banner()
+            .input_format("lavfi")
+            .input("nullsrc=s=128x128:d=0.1")
+            .frames_v(1)
+            .format("null")
+            .output_null();
+
+        let args: Vec<String> = builder
+            .build()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+
+        assert_eq!(args[0], "-hide_banner");
+        assert_eq!(args[1], "-f");
+        assert_eq!(args[2], "lavfi");
+        assert_eq!(args[3], "-i");
+        assert_eq!(args[4], "nullsrc=s=128x128:d=0.1");
+
+        let output_format_pos = args
+            .iter()
+            .rposition(|arg| arg == "-f")
+            .expect("output format flag should be present");
+        assert!(
+            output_format_pos > 3,
+            "output format should stay after the input"
+        );
+        assert_eq!(args[output_format_pos + 1], "null");
     }
 }

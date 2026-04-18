@@ -400,10 +400,13 @@ impl SizeRotatingAppender {
         let file_name = if self.current_seq == 0 {
             format!("{}_{}.log", self.program_name, self.timestamp)
         } else {
-            format!("{}_{}.{}.log", self.program_name, self.timestamp, self.current_seq)
+            format!(
+                "{}_{}.{}.log",
+                self.program_name, self.timestamp, self.current_seq
+            )
         };
         let path = self.log_dir.join(file_name);
-        
+
         // Ensure parent exists (though usually handled by init_logging)
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -413,10 +416,10 @@ impl SizeRotatingAppender {
             .create(true)
             .append(true)
             .open(&path)?;
-        
+
         let metadata = file.metadata()?;
         self.current_size = metadata.len();
-        
+
         Ok(self.current_file.insert(file))
     }
 
@@ -431,10 +434,12 @@ impl SizeRotatingAppender {
 
 impl Write for SizeRotatingAppender {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        if self.max_file_size != u64::MAX && self.current_size + buf.len() as u64 > self.max_file_size {
+        if self.max_file_size != u64::MAX
+            && self.current_size + buf.len() as u64 > self.max_file_size
+        {
             self.rotate()?;
         }
-        
+
         let file = self.open_current_file()?;
         let written = file.write(buf)?;
         self.current_size += written as u64;
@@ -527,7 +532,8 @@ pub fn init_logging(program_name: &str, config: LogConfig) -> Result<()> {
         )
     })?;
 
-    let file_appender = SizeRotatingAppender::new(config.log_dir.clone(), program_name, config.max_file_size);
+    let file_appender =
+        SizeRotatingAppender::new(config.log_dir.clone(), program_name, config.max_file_size);
     let file_writer = Mutex::new(StripAnsiWriter::new(file_appender));
 
     // Registry: config.level has real effect (TRACE = all; INFO = info+; etc.). RUST_LOG overrides when set.
@@ -573,7 +579,10 @@ pub fn init_logging(program_name: &str, config: LogConfig) -> Result<()> {
         .with(stderr_layer)
         .init();
 
-    let log_file_name_display = format!("{program_name}_{}.log", chrono::Local::now().format("%Y-%m-%d_%H-%M-%S"));
+    let log_file_name_display = format!(
+        "{program_name}_{}.log",
+        chrono::Local::now().format("%Y-%m-%d_%H-%M-%S")
+    );
     let init_msg = format!(
         "Logging system initialized program=\"{}\" log_dir=\"{}\" log_file_pattern=\"{}\" max_file_size={} max_files={} level={:?}",
         program_name, config.log_dir.display(), log_file_name_display, config.max_file_size, config.max_files, config.level
@@ -921,21 +930,22 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let program_name = "test_rotate_program";
         let max_size = 500; // 500 bytes limit
-        
-        let mut appender = SizeRotatingAppender::new(temp_dir.path().to_path_buf(), program_name, max_size);
-        
+
+        let mut appender =
+            SizeRotatingAppender::new(temp_dir.path().to_path_buf(), program_name, max_size);
+
         // Write enough to trigger rotation
         for i in 0..20 {
             let msg = format!("Log entry number {i} filling space\n");
             appender.write_all(msg.as_bytes()).unwrap();
         }
         appender.flush().unwrap();
-        
+
         let files: Vec<_> = fs::read_dir(temp_dir.path())
             .unwrap()
             .filter_map(std::result::Result::ok)
             .collect();
-            
+
         assert!(files.len() >= 2);
     }
 }

@@ -1042,7 +1042,7 @@ fn test_encoder(encoder: &GpuEncoder) -> Result<(), String> {
         let mut builder = crate::tool_builders::FfmpegBuilder::new();
         builder
             .hide_banner()
-            .format("lavfi")
+            .input_format("lavfi")
             .input("nullsrc=s=128x128:d=0.1")
             .codec_video(encoder.name);
 

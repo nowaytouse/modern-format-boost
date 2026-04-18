@@ -200,7 +200,8 @@ fn build_coarse_progress_line(
         };
 
         // Re-check final width with chosen bar and message
-        let final_fixed = fixed_width + message_text.len() + (if message_text.is_empty() { 0 } else { 3 });
+        let final_fixed =
+            fixed_width + message_text.len() + (if message_text.is_empty() { 0 } else { 3 });
         if variant.show_bar && bar_width + final_fixed > terminal_width {
             bar_width = terminal_width.saturating_sub(final_fixed + 1).max(min_bar);
             if bar_width < min_bar {
@@ -219,8 +220,12 @@ fn build_coarse_progress_line(
             );
             let empty = bar_width.saturating_sub(filled);
             line.push_str(progress_style::BAR_LEFT);
-            for _ in 0..filled { line.push('█'); }
-            for _ in 0..empty { line.push('░'); }
+            for _ in 0..filled {
+                line.push('█');
+            }
+            for _ in 0..empty {
+                line.push('░');
+            }
             line.push_str(progress_style::BAR_RIGHT);
             line.push(' ');
         }
