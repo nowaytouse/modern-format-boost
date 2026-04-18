@@ -9,7 +9,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
-use crate::system_memory::{self, MemoryPressure};
+use crate::x265_params::X265MemoryProfile;
 
 static MULTI_INSTANCE_MODE: AtomicBool = AtomicBool::new(false);
 
@@ -77,12 +77,9 @@ pub fn calculate_optimal_threads(config: &ThreadConfig) -> usize {
     let mut calculated = (cpu_count * effective_percentage / 100).max(1);
     calculated = calculated.clamp(config.min_threads, config.max_threads);
 
-    let memory_cap = match (
-        system_memory::memory_pressure_level(),
-        system_memory::is_low_memory_env(),
-    ) {
-        (_, true) | (Some(MemoryPressure::High), _) => 2,
-        (Some(MemoryPressure::Normal), _) => 4,
+    let memory_cap = match current_memory_profile() {
+        X265MemoryProfile::LowMemory => 2,
+        X265MemoryProfile::Moderate => 4,
         _ => calculated,
     };
     calculated.min(memory_cap).max(1)
@@ -100,26 +97,52 @@ pub enum WorkloadType {
     Video,
 }
 
-/// Apply memory-pressure caps so we don't spawn too many heavy workers and trigger OOM.
-/// Enhanced to be more aggressive in preventing OOM kills during image processing.
-fn apply_memory_cap(parallel_tasks: usize, child_threads: usize) -> (usize, usize) {
-    let pressure = system_memory::memory_pressure_level();
-    let low_mem_env = system_memory::is_low_memory_env();
+fn current_memory_profile() -> X265MemoryProfile {
+    crate::x265_params::current_memory_profile()
+}
 
-    // More aggressive caps to prevent cjxl/ImageMagick OOM kills
-    if low_mem_env || pressure == Some(MemoryPressure::High) {
-        return (1, 1);
+fn reserve_headroom_cores(total_cores: usize, profile: X265MemoryProfile) -> usize {
+    let upper = total_cores.saturating_sub(1).max(1);
+    let (fraction, min_reserved, max_reserved) = match profile {
+        X265MemoryProfile::Default => (0.15, 1, 2),
+        X265MemoryProfile::Moderate => (0.25, 2, 4),
+        X265MemoryProfile::LowMemory => (0.40, 3, 6),
+    };
+    let calculated = crate::numeric_cast::f64_to_usize_sat(
+        (crate::numeric_cast::usize_to_f64(total_cores) * fraction).ceil(),
+    );
+    let lower = min_reserved.min(upper);
+    let upper = max_reserved.min(upper).max(lower);
+    calculated.clamp(lower, upper)
+}
+
+fn clamp_child_threads(
+    per_task: usize,
+    available_cores: usize,
+    min_threads: usize,
+    max_threads: usize,
+) -> usize {
+    let upper = max_threads.min(available_cores).max(1);
+    let lower = min_threads.min(upper);
+    per_task.clamp(lower, upper)
+}
+
+/// Apply the x265-aligned RAM tier to file-level parallelism so low-memory mode
+/// degrades to single-file processing with extra headroom instead of thrashing.
+fn apply_memory_cap(
+    workload: WorkloadType,
+    parallel_tasks: usize,
+    child_threads: usize,
+    profile: X265MemoryProfile,
+) -> (usize, usize) {
+    match profile {
+        X265MemoryProfile::Default => (parallel_tasks, child_threads),
+        X265MemoryProfile::Moderate => match workload {
+            WorkloadType::Image => (parallel_tasks.min(4), child_threads.min(2)),
+            WorkloadType::Video => (parallel_tasks.min(2), child_threads.min(4)),
+        },
+        X265MemoryProfile::LowMemory => (1, 1),
     }
-    if pressure == Some(MemoryPressure::Normal) {
-        // Reduce parallelism more aggressively for memory-intensive operations
-        let pt = parallel_tasks.min(2);
-        let ct = child_threads.min(2);
-        return (pt, ct);
-    }
-    // Even with low pressure, cap parallel tasks to avoid sudden memory spikes
-    let pt = parallel_tasks.min(6);
-    let ct = child_threads.min(4);
-    (pt, ct)
 }
 
 fn apply_multi_instance_cap(
@@ -137,38 +160,61 @@ fn apply_multi_instance_cap(
     }
 }
 
-#[must_use]
-pub fn get_balanced_thread_config(workload: WorkloadType) -> ThreadAllocation {
-    let total_cores = std::thread::available_parallelism().map_or(4, std::num::NonZero::get);
-
-    let reserved = crate::numeric_cast::f64_to_usize_sat(
-        (crate::numeric_cast::usize_to_f64(total_cores) * 0.2).ceil(),
-    );
-    let reserved = reserved.clamp(1, 2);
-
+fn balanced_thread_config_for(
+    total_cores: usize,
+    workload: WorkloadType,
+    profile: X265MemoryProfile,
+    multi_instance: bool,
+) -> ThreadAllocation {
+    let reserved = reserve_headroom_cores(total_cores, profile);
     let available_cores = total_cores.saturating_sub(reserved).max(1);
 
     let (parallel_tasks, child_threads) = match workload {
         WorkloadType::Image => {
-            let child_threads = 2;
-            let parallel_tasks = (available_cores / child_threads).max(1);
-            let parallel_tasks = parallel_tasks.clamp(1, 8);
+            let child_threads = if matches!(profile, X265MemoryProfile::LowMemory) {
+                1
+            } else {
+                2.min(available_cores).max(1)
+            };
+            let parallel_tasks = available_cores.div_ceil(child_threads).clamp(1, 12);
             (parallel_tasks, child_threads)
         }
-        WorkloadType::Video => {
-            let parallel_tasks = if available_cores >= 8 { 2 } else { 1 };
-            let child_threads = (available_cores / parallel_tasks).max(1);
-            (parallel_tasks, child_threads)
-        }
+        WorkloadType::Video => match profile {
+            X265MemoryProfile::Default => {
+                let parallel_tasks = (available_cores / 2).max(1).clamp(1, 4);
+                let per_task = (available_cores / parallel_tasks).max(1);
+                let child_threads = clamp_child_threads(per_task, available_cores, 2, 4);
+                (parallel_tasks, child_threads)
+            }
+            X265MemoryProfile::Moderate => {
+                let parallel_tasks = (available_cores / 3).max(1).clamp(1, 2);
+                let per_task = (available_cores / parallel_tasks).max(1);
+                let child_threads = clamp_child_threads(per_task, available_cores, 2, 4);
+                (parallel_tasks, child_threads)
+            }
+            X265MemoryProfile::LowMemory => (1, 1),
+        },
+    };
+
+    let (parallel_tasks, child_threads) = if multi_instance {
+        apply_multi_instance_cap(workload, parallel_tasks, child_threads)
+    } else {
+        (parallel_tasks, child_threads)
     };
     let (parallel_tasks, child_threads) =
-        apply_multi_instance_cap(workload, parallel_tasks, child_threads);
-    let (parallel_tasks, child_threads) = apply_memory_cap(parallel_tasks, child_threads);
+        apply_memory_cap(workload, parallel_tasks, child_threads, profile);
 
     ThreadAllocation {
         parallel_tasks: parallel_tasks.max(1),
         child_threads: child_threads.max(1),
     }
+}
+
+#[must_use]
+pub fn get_balanced_thread_config(workload: WorkloadType) -> ThreadAllocation {
+    let total_cores = std::thread::available_parallelism().map_or(4, std::num::NonZero::get);
+    let profile = current_memory_profile();
+    balanced_thread_config_for(total_cores, workload, profile, is_multi_instance())
 }
 
 #[must_use]
@@ -179,12 +225,13 @@ pub fn get_optimal_threads() -> usize {
 /// Optional hint for logging when parallelism was reduced due to memory (e.g. "low memory: reduced parallelism").
 #[must_use]
 pub fn memory_cap_hint() -> Option<&'static str> {
-    if system_memory::is_low_memory_env() {
-        return Some("MFB_LOW_MEMORY=1: reduced parallelism");
-    }
-    match system_memory::memory_pressure_level() {
-        Some(MemoryPressure::High) => Some("low available RAM: parallelism reduced to avoid OOM"),
-        Some(MemoryPressure::Normal) => Some("moderate RAM: slightly reduced parallelism"),
+    match current_memory_profile() {
+        X265MemoryProfile::LowMemory => {
+            Some("low available RAM: single-file mode enabled to preserve responsiveness")
+        }
+        X265MemoryProfile::Moderate => {
+            Some("moderate RAM: parallelism trimmed to preserve headroom")
+        }
         _ => None,
     }
 }
@@ -291,5 +338,47 @@ mod tests {
 
         assert_eq!(parallel_tasks, 1);
         assert_eq!(child_threads, 4);
+    }
+
+    #[test]
+    fn test_low_memory_disables_parallel_batch_processing() {
+        let image = balanced_thread_config_for(
+            10,
+            WorkloadType::Image,
+            X265MemoryProfile::LowMemory,
+            false,
+        );
+        let video = balanced_thread_config_for(
+            10,
+            WorkloadType::Video,
+            X265MemoryProfile::LowMemory,
+            false,
+        );
+
+        assert_eq!(image.parallel_tasks, 1);
+        assert_eq!(image.child_threads, 1);
+        assert_eq!(video.parallel_tasks, 1);
+        assert_eq!(video.child_threads, 1);
+    }
+
+    #[test]
+    fn test_default_profile_enables_more_video_parallelism_than_moderate() {
+        let default =
+            balanced_thread_config_for(12, WorkloadType::Video, X265MemoryProfile::Default, false);
+        let moderate =
+            balanced_thread_config_for(12, WorkloadType::Video, X265MemoryProfile::Moderate, false);
+
+        assert!(default.parallel_tasks >= moderate.parallel_tasks);
+        assert!(default.parallel_tasks > 1);
+        assert!(default.child_threads >= moderate.child_threads);
+    }
+
+    #[test]
+    fn test_default_profile_scales_image_parallelism() {
+        let allocation =
+            balanced_thread_config_for(20, WorkloadType::Image, X265MemoryProfile::Default, false);
+
+        assert!(allocation.parallel_tasks >= 8);
+        assert_eq!(allocation.child_threads, 2);
     }
 }

@@ -832,6 +832,9 @@ def check_system_resources(check_dir):
                 console.print(
                     f"[bold yellow]⚠️  Caution: System memory is very low ({mem.percent}% used).[/bold yellow]"
                 )
+                print(f"\n{YELLOW}   Returning to home menu in 5 seconds...{RESET}")
+                time.sleep(5)
+                raise ReturnToHomeException()
 
             # CPU Check
             cpu = psutil.cpu_percent(interval=0.1)
@@ -850,6 +853,8 @@ def check_system_resources(check_dir):
                 raise ReturnToHomeException()
 
         os.environ["MFB_SKIP_DISK_PRECHECK"] = "1"
+    except ReturnToHomeException:
+        raise
     except Exception:
         pass
 

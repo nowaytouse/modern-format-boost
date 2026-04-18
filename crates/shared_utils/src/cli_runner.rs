@@ -7,7 +7,10 @@ use crate::report::print_summary_report;
 use crate::smart_file_copier::fix_extension_if_mismatch;
 use anyhow::Result;
 use log::{error, info, warn};
+use rayon::prelude::*;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 pub trait CliProcessingResult {
@@ -88,7 +91,7 @@ pub fn resolve_video_run_base_dir(
 /// Returns an error if command execution or file processing fails.
 pub fn run_auto_command<F, R>(config: CliRunnerConfig, converter: F) -> Result<()>
 where
-    F: Fn(&Path) -> Result<R>,
+    F: Fn(&Path) -> Result<R> + Sync,
     R: CliProcessingResult,
 {
     if config.input.is_dir() {
@@ -100,7 +103,7 @@ where
 
 fn process_directory<F, R>(config: &CliRunnerConfig, converter: F) -> Result<()>
 where
-    F: Fn(&Path) -> Result<R>,
+    F: Fn(&Path) -> Result<R> + Sync,
     R: CliProcessingResult,
 {
     let input = &config.input;
@@ -138,7 +141,7 @@ where
     // This catches "No space left on device" before encoding starts rather than mid-encode.
     // Skip if MFB_SKIP_DISK_PRECHECK=1 (script has already done the check).
     // Initialize checkpoint manager if resume is enabled
-    let mut checkpoint = if config.resume {
+    let checkpoint = if config.resume {
         match crate::checkpoint::CheckpointManager::new_with_context(
             input,
             config.output.as_deref(),
@@ -205,17 +208,24 @@ where
             );
         }
     }
+    let checkpoint = checkpoint.map(Arc::new);
 
     let start_time = Instant::now();
-    let mut batch_result = BatchResult::new();
-    let mut total_input_bytes: u64 = 0;
-    let mut total_output_bytes: u64 = 0;
-    let pause_controller = BatchPauseController::new();
     let total_files = files.len();
-    let progress_bar = crate::CoarseProgressBar::new(total_files as u64, "Running");
-    let mut pending_files = files;
-    let mut recent_success_ext: Option<String> = None;
-    let mut recent_success_parent: Option<PathBuf> = None;
+    let pause_controller = Arc::new(BatchPauseController::new());
+    let fatal_stop = AtomicBool::new(false);
+    let progress_bar = Arc::new(crate::CoarseProgressBar::new(total_files as u64, "Running"));
+    let thread_config = crate::thread_manager::get_balanced_thread_config(
+        crate::thread_manager::WorkloadType::Video,
+    );
+    let parallel_tasks = thread_config.parallel_tasks.max(1);
+    let succeeded = AtomicUsize::new(0);
+    let skipped = AtomicUsize::new(0);
+    let failed = AtomicUsize::new(0);
+    let processed = AtomicUsize::new(0);
+    let total_input_bytes = AtomicU64::new(0);
+    let total_output_bytes = AtomicU64::new(0);
+    let errors: Mutex<Vec<(PathBuf, String)>> = Mutex::new(Vec::new());
 
     // 📡 Optional: Initialize audit log directory
     let debug_dir = Path::new("debug");
@@ -223,199 +233,257 @@ where
         let _ = std::fs::create_dir_all(debug_dir);
     }
 
-    while !pending_files.is_empty() {
-        if pause_controller.is_paused() {
-            break;
+    info!(
+        "🔧 Thread Strategy: {} parallel tasks x {} threads/task (CPU cores: {})",
+        parallel_tasks,
+        thread_config.child_threads,
+        std::thread::available_parallelism().map_or(4, std::num::NonZero::get)
+    );
+    if let Some(hint) = crate::thread_manager::memory_cap_hint() {
+        info!("   💡 {}", hint);
+    }
+
+    let pool = match rayon::ThreadPoolBuilder::new()
+        .num_threads(parallel_tasks)
+        .build()
+    {
+        Ok(pool) => pool,
+        Err(err) => {
+            warn!(
+                "⚠️ Failed to create {}-thread video pool: {}. Falling back to 1 thread.",
+                parallel_tasks, err
+            );
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(1)
+                .build()
+                .map_err(|fallback_err| {
+                    anyhow::anyhow!("Failed to create fallback video thread pool: {fallback_err}")
+                })?
         }
+    };
 
-        let next_index = select_hot_start_file_index(
-            &pending_files,
-            recent_success_ext.as_deref(),
-            recent_success_parent.as_deref(),
-        );
-        let file = pending_files.remove(next_index);
-        progress_bar.set_message(&file.file_name().unwrap_or_default().to_string_lossy());
-
-        // Fix extension by content first; after fix, only treat as video if extension still in list (avoids disguised-extension panic).
-        // When an output directory is configured the source tree must remain immutable:
-        // use the readonly variant that logs mismatches without renaming source files.
-        let fixed = match if config.output.is_some() {
-            crate::smart_file_copier::check_extension_mismatch_readonly(&file)
-        } else {
-            fix_extension_if_mismatch(&file)
-        } {
-            Ok(p) => p,
-            Err(e) => {
-                error!("❌ Extension fix failed for {}: {}", file.display(), e);
-                if let Some(reason) = disk_full_pause_reason(&e.to_string()) {
-                    if pause_controller.request_pause(&file, reason.clone()) {
-                        warn!("⏸️ Batch paused at {}: {}", file.display(), reason);
-                    }
-                    batch_result.pause(file.clone(), reason, pending_files.len().saturating_add(1));
-                    break;
-                }
-                batch_result.fail(file.clone(), e.to_string());
-                progress_bar.set(batch_result.total as u64);
-                continue;
+    pool.install(|| {
+        files.par_iter().for_each(|file| {
+            if pause_controller.is_paused() || fatal_stop.load(Ordering::Relaxed) {
+                return;
             }
-        };
-        if !has_extension(&fixed, SUPPORTED_VIDEO_EXTENSIONS) {
-            if let Some(ref out) = config.output {
-                if let Err(copy_err) = crate::smart_file_copier::copy_on_skip_or_fail(
-                    &fixed,
-                    Some(out),
-                    config.base_dir.as_deref(),
-                    true,
-                ) {
-                    error!("❌ Failed to copy {}: {}", fixed.display(), copy_err);
-                } else {
-                    info!(
-                        "📋 Copied (content not video after fix): {}",
-                        fixed.display()
-                    );
-                }
-            }
-            batch_result.skip();
-            progress_bar.set(batch_result.total as u64);
-            continue;
-        }
 
-        // Skip if already processed
-        if let Some(ref cp) = checkpoint {
-            if cp.is_completed(&fixed) {
-                if crate::progress_mode::is_verbose_mode() {
-                    info!(
-                        "   SKIP: {} (Already recorded as completed in checkpoint)",
-                        fixed.file_name().unwrap_or_default().to_string_lossy()
-                    );
-                }
-                batch_result.skip();
-                progress_bar.set(batch_result.total as u64);
-                continue;
-            }
-        }
+            let display_name = file.file_name().unwrap_or_default().to_string_lossy();
+            progress_bar.set_message(&display_name);
 
-        match converter(fixed.as_path()) {
-            Ok(result) => {
-                if result.is_skipped() {
-                    info!(
-                        "⏭️ {} → SKIP ({})",
-                        fixed.file_name().unwrap_or_default().to_string_lossy(),
-                        result.skip_reason().unwrap_or("unknown")
-                    );
-                    batch_result.skip();
-                } else if result.is_success() {
-                    info!(
-                        "{} → {} ({}) ✅",
-                        fixed.file_name().unwrap_or_default().to_string_lossy(),
-                        result.output_path().unwrap_or("?"),
-                        result.message()
-                    );
-                    batch_result.success();
-                    crate::progress_mode::video_processed_success();
-                    total_input_bytes += result.input_size();
-                    total_output_bytes += result.output_size().unwrap_or(result.input_size());
-                    recent_success_ext = extension_lower(&fixed);
-                    recent_success_parent = fixed.parent().map(Path::to_path_buf);
-
-                    // 📡 Audit: Log live decision to JSONL if debug/ exists
-                    log_live_audit_to_jsonl(
-                        result.blake3(),
-                        &config.label,
-                        result.output_path().unwrap_or("original"),
-                        result.message(),
-                    );
-
-                    // Mark as completed
-                    if let Some(ref mut cp) = checkpoint {
-                        if let Err(err) = cp.mark_completed(&fixed) {
-                            warn!(
-                                "⚠️ Failed to mark checkpoint complete for {}: {}",
-                                fixed.display(),
-                                err
-                            );
+            // Fix extension by content first; after fix, only treat as video if extension still
+            // matches. When writing to a separate output tree, keep the source immutable.
+            let fixed = match if config.output.is_some() {
+                crate::smart_file_copier::check_extension_mismatch_readonly(file)
+            } else {
+                fix_extension_if_mismatch(file)
+            } {
+                Ok(path) => path,
+                Err(err) => {
+                    error!("❌ Extension fix failed for {}: {}", file.display(), err);
+                    if let Some(reason) = disk_full_pause_reason(&err.to_string()) {
+                        if pause_controller.request_pause(file, reason.clone()) {
+                            warn!("⏸️ Batch paused at {}: {}", file.display(), reason);
                         }
+                        return;
                     }
-                } else {
-                    if let Some(reason) = disk_full_pause_reason(result.message()) {
-                        if pause_controller.request_pause(&fixed, reason.clone()) {
-                            warn!("⏸️ Batch paused at {}: {}", fixed.display(), reason);
-                        }
-                        batch_result.pause(
-                            fixed.clone(),
-                            reason,
-                            pending_files.len().saturating_add(1),
-                        );
-                        break;
-                    }
-                    info!(
-                        "{} → FAILED ({}) ❌",
-                        fixed.file_name().unwrap_or_default().to_string_lossy(),
-                        result.message()
-                    );
-                    batch_result.fail(fixed.clone(), result.message().to_string());
-                    crate::progress_mode::video_processed_failure();
+                    failed.fetch_add(1, Ordering::Relaxed);
+                    errors
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .push((file.to_path_buf(), err.to_string()));
+                    let current = processed.fetch_add(1, Ordering::Relaxed) + 1;
+                    progress_bar.set(current as u64);
+                    return;
                 }
-            }
-            Err(e) => {
-                let error_msg = e.to_string();
-                let maybe_ue = e.downcast_ref::<crate::unified_error::UnifiedError>();
-                let is_skip = maybe_ue.is_some_and(super::unified_error::UnifiedError::is_skip);
-                let category = maybe_ue
-                    .map_or(crate::unified_error::ErrorCategory::Recoverable, |ue| {
-                        ue.category()
-                    });
+            };
 
-                if is_skip {
-                    info!(
-                        "⏭️ {} → SKIP ({})",
-                        fixed.file_name().unwrap_or_default().to_string_lossy(),
-                        error_msg
-                    );
-                    batch_result.skip();
-                } else if let Some(reason) = disk_full_pause_reason(&error_msg) {
-                    if pause_controller.request_pause(&fixed, reason.clone()) {
-                        warn!("⏸️ Batch paused at {}: {}", fixed.display(), reason);
-                    }
-                    batch_result.pause(
-                        fixed.clone(),
-                        reason,
-                        pending_files.len().saturating_add(1),
-                    );
-                    break;
-                } else {
-                    error!(
-                        "❌ {} failed: {}",
-                        fixed.file_name().unwrap_or_default().to_string_lossy(),
-                        e
-                    );
-                    batch_result.fail(fixed.clone(), error_msg);
-
+            if !has_extension(&fixed, SUPPORTED_VIDEO_EXTENSIONS) {
+                if let Some(ref out) = config.output {
                     if let Err(copy_err) = crate::smart_file_copier::copy_on_skip_or_fail(
                         &fixed,
-                        config.output.as_deref(),
+                        Some(out),
                         config.base_dir.as_deref(),
                         true,
                     ) {
-                        error!("❌ Failed to copy original: {copy_err}");
+                        error!("❌ Failed to copy {}: {}", fixed.display(), copy_err);
                     } else {
                         info!(
-                            "📋 Copied original (conversion failed): {}",
+                            "📋 Copied (content not video after fix): {}",
                             fixed.display()
                         );
                     }
+                }
+                skipped.fetch_add(1, Ordering::Relaxed);
+                let current = processed.fetch_add(1, Ordering::Relaxed) + 1;
+                progress_bar.set(current as u64);
+                return;
+            }
 
-                    if category == crate::unified_error::ErrorCategory::Fatal {
-                        error!("🛑 Fatal error encountered, stopping batch processing.");
-                        break;
+            if let Some(cp) = checkpoint.as_ref() {
+                if cp.is_completed(&fixed) {
+                    if crate::progress_mode::is_verbose_mode() {
+                        info!(
+                            "   SKIP: {} (Already recorded as completed in checkpoint)",
+                            fixed.file_name().unwrap_or_default().to_string_lossy()
+                        );
                     }
-
-                    crate::progress_mode::video_processed_failure();
+                    skipped.fetch_add(1, Ordering::Relaxed);
+                    let current = processed.fetch_add(1, Ordering::Relaxed) + 1;
+                    crate::progress_mode::write_progress_line_to_run_log(
+                        start_time.elapsed().as_secs(),
+                        current as u64,
+                        total_files as u64,
+                        &fixed.file_name().unwrap_or_default().to_string_lossy(),
+                    );
+                    progress_bar.set(current as u64);
+                    return;
                 }
             }
-        }
 
-        progress_bar.set(batch_result.total as u64);
+            match converter(fixed.as_path()) {
+                Ok(result) => {
+                    if result.is_skipped() {
+                        info!(
+                            "⏭️ {} → SKIP ({})",
+                            fixed.file_name().unwrap_or_default().to_string_lossy(),
+                            result.skip_reason().unwrap_or("unknown")
+                        );
+                        skipped.fetch_add(1, Ordering::Relaxed);
+                    } else if result.is_success() {
+                        info!(
+                            "{} → {} ({}) ✅",
+                            fixed.file_name().unwrap_or_default().to_string_lossy(),
+                            result.output_path().unwrap_or("?"),
+                            result.message()
+                        );
+                        succeeded.fetch_add(1, Ordering::Relaxed);
+                        crate::progress_mode::video_processed_success();
+                        total_input_bytes.fetch_add(result.input_size(), Ordering::Relaxed);
+                        total_output_bytes.fetch_add(
+                            result.output_size().unwrap_or(result.input_size()),
+                            Ordering::Relaxed,
+                        );
+
+                        log_live_audit_to_jsonl(
+                            result.blake3(),
+                            &config.label,
+                            result.output_path().unwrap_or("original"),
+                            result.message(),
+                        );
+
+                        if let Some(cp) = checkpoint.as_ref() {
+                            if let Err(err) = cp.mark_completed(&fixed) {
+                                warn!(
+                                    "⚠️ Failed to mark checkpoint complete for {}: {}",
+                                    fixed.display(),
+                                    err
+                                );
+                            }
+                        }
+                    } else {
+                        if let Some(reason) = disk_full_pause_reason(result.message()) {
+                            if pause_controller.request_pause(&fixed, reason.clone()) {
+                                warn!("⏸️ Batch paused at {}: {}", fixed.display(), reason);
+                            }
+                            return;
+                        }
+                        info!(
+                            "{} → FAILED ({}) ❌",
+                            fixed.file_name().unwrap_or_default().to_string_lossy(),
+                            result.message()
+                        );
+                        failed.fetch_add(1, Ordering::Relaxed);
+                        errors
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .push((fixed.clone(), result.message().to_string()));
+                        crate::progress_mode::video_processed_failure();
+                    }
+                }
+                Err(err) => {
+                    let error_msg = err.to_string();
+                    let maybe_ue = err.downcast_ref::<crate::unified_error::UnifiedError>();
+                    let is_skip = maybe_ue.is_some_and(super::unified_error::UnifiedError::is_skip);
+                    let category = maybe_ue.map_or(
+                        crate::unified_error::ErrorCategory::Recoverable,
+                        crate::unified_error::UnifiedError::category,
+                    );
+
+                    if is_skip {
+                        info!(
+                            "⏭️ {} → SKIP ({})",
+                            fixed.file_name().unwrap_or_default().to_string_lossy(),
+                            error_msg
+                        );
+                        skipped.fetch_add(1, Ordering::Relaxed);
+                    } else if let Some(reason) = disk_full_pause_reason(&error_msg) {
+                        if pause_controller.request_pause(&fixed, reason.clone()) {
+                            warn!("⏸️ Batch paused at {}: {}", fixed.display(), reason);
+                        }
+                        return;
+                    } else {
+                        error!(
+                            "❌ {} failed: {}",
+                            fixed.file_name().unwrap_or_default().to_string_lossy(),
+                            err
+                        );
+                        failed.fetch_add(1, Ordering::Relaxed);
+                        errors
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .push((fixed.clone(), error_msg));
+
+                        if let Err(copy_err) = crate::smart_file_copier::copy_on_skip_or_fail(
+                            &fixed,
+                            config.output.as_deref(),
+                            config.base_dir.as_deref(),
+                            true,
+                        ) {
+                            error!("❌ Failed to copy original: {copy_err}");
+                        } else {
+                            info!(
+                                "📋 Copied original (conversion failed): {}",
+                                fixed.display()
+                            );
+                        }
+
+                        if category == crate::unified_error::ErrorCategory::Fatal {
+                            fatal_stop.store(true, Ordering::SeqCst);
+                            error!("🛑 Fatal error encountered, stopping batch processing.");
+                        }
+
+                        crate::progress_mode::video_processed_failure();
+                    }
+                }
+            }
+
+            let current = processed.fetch_add(1, Ordering::Relaxed) + 1;
+            crate::progress_mode::write_progress_line_to_run_log(
+                start_time.elapsed().as_secs(),
+                current as u64,
+                total_files as u64,
+                &fixed.file_name().unwrap_or_default().to_string_lossy(),
+            );
+            progress_bar.set(current as u64);
+        });
+    });
+
+    let mut batch_result = BatchResult::new();
+    batch_result.succeeded = succeeded.load(Ordering::Relaxed);
+    batch_result.failed = failed.load(Ordering::Relaxed);
+    batch_result.skipped = skipped.load(Ordering::Relaxed);
+    batch_result.total = processed.load(Ordering::Relaxed);
+    batch_result.errors = errors
+        .into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    if let Some(pause) = pause_controller.pause_info() {
+        batch_result.pause(
+            pause.path,
+            pause.reason,
+            total_files.saturating_sub(batch_result.total),
+        );
     }
 
     if batch_result.paused {
@@ -442,8 +510,8 @@ where
     print_summary_report(
         &batch_result,
         start_time.elapsed(),
-        total_input_bytes,
-        total_output_bytes,
+        total_input_bytes.load(Ordering::Relaxed),
+        total_output_bytes.load(Ordering::Relaxed),
         &config.label,
     );
 
@@ -480,49 +548,9 @@ where
 
     Ok(())
 }
-
-fn extension_lower(path: &Path) -> Option<String> {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .map(str::to_ascii_lowercase)
-}
-
-fn select_hot_start_file_index(
-    pending_files: &[PathBuf],
-    recent_success_ext: Option<&str>,
-    recent_success_parent: Option<&Path>,
-) -> usize {
-    if pending_files.is_empty() {
-        return 0;
-    }
-
-    let window = pending_files.len().min(48);
-    let mut best_index = 0usize;
-    let mut best_score = (i32::MIN, i32::MIN);
-
-    for (index, path) in pending_files.iter().take(window).enumerate() {
-        let ext_match = recent_success_ext
-            .and_then(|ext| extension_lower(path).map(|current| current == ext))
-            .unwrap_or(false);
-        let parent_match =
-            recent_success_parent.is_some_and(|parent| path.parent() == Some(parent));
-
-        let hot_start_score = i32::from(ext_match) * 4 + i32::from(parent_match) * 2;
-        let proximity_score = crate::numeric_cast::usize_to_i32_sat(window - index);
-        let score = (hot_start_score, proximity_score);
-
-        if score > best_score {
-            best_score = score;
-            best_index = index;
-        }
-    }
-
-    best_index
-}
-
 fn process_single_file<F, R>(config: &CliRunnerConfig, converter: F) -> Result<()>
 where
-    F: Fn(&Path) -> Result<R>,
+    F: Fn(&Path) -> Result<R> + Sync,
     R: CliProcessingResult,
 {
     // Check for Apple Photos library before processing
@@ -659,35 +687,5 @@ fn log_live_audit_to_jsonl(
         {
             let _ = writeln!(file, "{json}");
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn hot_start_prefers_same_extension_within_front_window() {
-        let pending = vec![
-            PathBuf::from("a/clip-01.mov"),
-            PathBuf::from("b/clip-02.mp4"),
-            PathBuf::from("c/clip-03.mov"),
-            PathBuf::from("d/clip-04.mp4"),
-        ];
-
-        let next = select_hot_start_file_index(&pending, Some("mp4"), None);
-        assert_eq!(next, 1);
-    }
-
-    #[test]
-    fn hot_start_prefers_same_parent_when_extension_ties() {
-        let pending = vec![
-            PathBuf::from("alpha/one.mov"),
-            PathBuf::from("beta/two.mov"),
-            PathBuf::from("alpha/three.mp4"),
-        ];
-
-        let next = select_hot_start_file_index(&pending, Some("mov"), Some(Path::new("beta")));
-        assert_eq!(next, 1);
     }
 }

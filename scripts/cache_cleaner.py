@@ -11,6 +11,9 @@ Cache backends cleared:
   5. Temp/lock files: ~/.modern_format_boost/tmp|locks/
   6. Rust build artifacts: project_root/target/
   7. Runtime cache: project_root/.cache/
+  8. Fuzzing targets: project_root/fuzz/target/
+  9. Distribution artifacts: project_root/dist/
+  10. Python bytecode: project_root/**/__pycache__/
 """
 
 import sys
@@ -189,6 +192,16 @@ def show_stats(cache_dir, db_file, log_dir, mfb_progress_dir):
     if local_cache.is_dir():
         local_cache_size = get_dir_size(local_cache)
         print(f"   ⚡ Runtime:    {BOLD}{YELLOW}{local_cache_size}{RESET}")
+
+    fuzz_target = project_root / "fuzz" / "target"
+    if fuzz_target.is_dir():
+        fuzz_size = get_dir_size(fuzz_target)
+        print(f"   🧪 Fuzz Build: {BOLD}{YELLOW}{fuzz_size}{RESET}")
+    
+    dist_dir = project_root / "dist"
+    if dist_dir.is_dir():
+        dist_size = get_dir_size(dist_dir)
+        print(f"   📦 Dist:       {BOLD}{BLUE}{dist_size}{RESET}")
 
     lock_dir = Path.home() / ".modern_format_boost" / "locks"
     if lock_dir.is_dir():
@@ -395,6 +408,9 @@ def perform_full_cleanup():
     print("   - Path-tree JSON cache")
     print("   - Project-local Runtime Cache (.cache/mfb_runtime)")
     print("   - All Session Logs & Tool Debug Records")
+    print("   - Fuzzing Build Artifacts (fuzz/target)")
+    print("   - Distribution Artifacts (dist/)")
+    print("   - All Python bytecode (__pycache__ - recursive)")
     print("   - All Task Progress Trackers (Resume Capability)")
     print("   - All Isolated Temporary Files (Ghost Mode artifacts)")
     print("   - All Rust Build Artifacts (cargo clean - will free GBs of space)")
@@ -471,6 +487,41 @@ def perform_full_cleanup():
         print(f"{DIM}   Purging project-local runtime cache...{RESET}")
         shutil.rmtree(local_cache, ignore_errors=True)
         print(f"   {GREEN}✅ Runtime cache cleared{RESET}")
+
+    # 8. Fuzzing targets (fuzz/target)
+    fuzz_dir = project_root / "fuzz"
+    if (fuzz_dir / "target").is_dir():
+        print(f"{DIM}   Running cargo clean in {fuzz_dir.name}...{RESET}")
+        try:
+            subprocess.run(["cargo", "clean"], cwd=fuzz_dir, check=True, capture_output=True)
+            print(f"   {GREEN}✅ Fuzzing artifacts purged{RESET}")
+        except Exception:
+            # Fallback if cargo clean fails
+            shutil.rmtree(fuzz_dir / "target", ignore_errors=True)
+            print(f"   {GREEN}✅ Fuzzing artifacts purged (manual){RESET}")
+
+    # 9. Dist folder
+    dist_dir = project_root / "dist"
+    if dist_dir.is_dir():
+        print(f"{DIM}   Removing dist directory...{RESET}")
+        shutil.rmtree(dist_dir, ignore_errors=True)
+        print(f"   {GREEN}✅ Distribution artifacts purged{RESET}")
+
+    # 10. Recursive __pycache__ removal (Safe cleanup)
+    print(f"{DIM}   Searching for __pycache__ directories...{RESET}")
+    pycache_count = 0
+    # Search project-wide, but be careful not to enter hidden dirs like .git or .venv
+    for p in project_root.rglob("__pycache__"):
+        # Skip virtualenvs and git to avoid touching installed deps or history
+        if ".venv" in p.parts or ".git" in (p.parts):
+            continue
+        try:
+            shutil.rmtree(p, ignore_errors=True)
+            pycache_count += 1
+        except Exception:
+            pass
+    if pycache_count > 0:
+        print(f"   {GREEN}✅ Removed {pycache_count} __pycache__ directories{RESET}")
 
     # 6. Purge stale session locks
     if lock_dir.is_dir():

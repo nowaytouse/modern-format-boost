@@ -73,6 +73,15 @@ fn ram_aware_profile() -> X265MemoryProfile {
     profile_for_available_memory(available_mb, total_mb)
 }
 
+/// Query the current system RAM tier using the same thresholds that shape x265 behavior.
+///
+/// This is shared with batch/thread scheduling so file-level parallelism follows the
+/// same `Default` / `Moderate` / `LowMemory` policy as x265 itself.
+#[must_use]
+pub fn current_memory_profile() -> X265MemoryProfile {
+    ram_aware_profile()
+}
+
 #[must_use]
 pub fn format_x265_params(
     max_threads: usize,

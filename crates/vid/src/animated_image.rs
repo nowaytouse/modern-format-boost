@@ -415,7 +415,10 @@ fn get_max_threads(options: &ConvertOptions) -> usize {
     if options.child_threads > 0 {
         options.child_threads
     } else {
-        (std::thread::available_parallelism().map_or(4, std::num::NonZero::get) / 2).clamp(1, 4)
+        shared_utils::thread_manager::get_balanced_thread_config(
+            shared_utils::thread_manager::WorkloadType::Video,
+        )
+        .child_threads
     }
 }
 

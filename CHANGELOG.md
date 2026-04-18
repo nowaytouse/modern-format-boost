@@ -30,7 +30,7 @@ All notable changes to this project will be documented in this file.
 
 ### 🔧 Scripts & Maintenance
 
-- **`cache_cleaner.py`**: Integrated mandatory **`cargo clean`** and **`.cache/mfb_runtime`** cleanup into the full purge workflow. The tool now automatically identifies and clears Rust build artifacts and hidden runtime caches (often 40GB+), provides real-time size statistics, and ensures a cleaner workspace.
+- **`cache_cleaner.py`**: Expanded to a full project-wide cleanup suite. Now includes mandatory **`cargo clean`** (root & fuzz/ folders), **`.cache/mfb_runtime`** (40GB+), and **`dist/`** artifacts. Implemented recursive **`__pycache__`** purging while safely excluding virtual environments (`.venv`, `.venv_training`) and system Metadata (`.DS_Store`).
 - **`create_live_photo.py`**: Fixed a bug in `heif-enc` command generation where quality flags were incorrectly handled in lossless mode.
 - **`log_conversion_analyzer.py`**: Hardened directory creation logic for report output to handle relative paths and empty directory strings.
 
