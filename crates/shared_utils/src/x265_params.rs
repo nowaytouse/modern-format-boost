@@ -69,15 +69,8 @@ fn ram_aware_profile() -> X265MemoryProfile {
         return X265MemoryProfile::LowMemory;
     }
 
-    let available_mb = crate::system_memory::get_available_memory_mb().unwrap_or(0);
-
-    if available_mb >= constants::X265_DEFAULT_RAM_THRESHOLD_MB {
-        X265MemoryProfile::Default
-    } else if available_mb >= constants::X265_LOW_MEMORY_RAM_THRESHOLD_MB {
-        X265MemoryProfile::Moderate
-    } else {
-        X265MemoryProfile::LowMemory
-    }
+    let (available_mb, total_mb) = crate::system_memory::get_memory_mb().unwrap_or((0, 0));
+    profile_for_available_memory(available_mb, total_mb)
 }
 
 #[must_use]
@@ -86,8 +79,9 @@ pub fn format_x265_params(
     extra_params: Option<&str>,
     profile: X265MemoryProfile,
 ) -> String {
-    let mut params = format!("log-level=error:pools={}", max_threads.max(1));
-    apply_memory_profile(&mut params, profile);
+    let pool_threads = capped_pool_threads(max_threads, profile);
+    let mut params = format!("log-level=error:pools={pool_threads}");
+    apply_memory_profile(&mut params, profile, pool_threads);
     append_extra_params(&mut params, extra_params);
     params
 }
@@ -98,8 +92,9 @@ pub fn format_x265_lossless_params(
     extra_params: Option<&str>,
     profile: X265MemoryProfile,
 ) -> String {
-    let mut params = format!("lossless=1:log-level=error:pools={}", max_threads.max(1));
-    apply_memory_profile(&mut params, profile);
+    let pool_threads = capped_pool_threads(max_threads, profile);
+    let mut params = format!("lossless=1:log-level=error:pools={pool_threads}");
+    apply_memory_profile(&mut params, profile, pool_threads);
     append_extra_params(&mut params, extra_params);
     params
 }
@@ -115,31 +110,52 @@ pub fn push_param(params: &mut String, param: &str) {
     params.push_str(trimmed);
 }
 
-fn apply_memory_profile(params: &mut String, profile: X265MemoryProfile) {
+fn profile_for_available_memory(available_mb: u64, total_mb: u64) -> X265MemoryProfile {
+    if available_mb == 0 || total_mb == 0 {
+        return X265MemoryProfile::LowMemory;
+    }
+
+    let free_ratio = available_mb as f64 / total_mb as f64;
+
+    if available_mb >= constants::X265_DEFAULT_RAM_THRESHOLD_MB
+        || (available_mb >= constants::X265_RELAXED_DEFAULT_RAM_THRESHOLD_MB
+            && free_ratio >= constants::X265_DEFAULT_RAM_RATIO_THRESHOLD)
+    {
+        X265MemoryProfile::Default
+    } else if available_mb >= constants::X265_MODERATE_RAM_THRESHOLD_MB
+        && free_ratio >= constants::X265_MODERATE_RAM_RATIO_THRESHOLD
+    {
+        X265MemoryProfile::Moderate
+    } else {
+        X265MemoryProfile::LowMemory
+    }
+}
+
+fn capped_pool_threads(max_threads: usize, profile: X265MemoryProfile) -> usize {
+    let max_threads = max_threads.max(1);
+    match profile {
+        X265MemoryProfile::Default => max_threads,
+        X265MemoryProfile::Moderate => max_threads.min(constants::X265_MODERATE_MEMORY_MAX_POOLS),
+        X265MemoryProfile::LowMemory => max_threads.min(constants::X265_LOW_MEMORY_MAX_POOLS),
+    }
+}
+
+fn apply_memory_profile(params: &mut String, profile: X265MemoryProfile, pool_threads: usize) {
     match profile {
         X265MemoryProfile::Default => {}
         X265MemoryProfile::Moderate => {
-            push_param(
-                params,
-                &format!(
-                    "frame-threads={}",
-                    constants::X265_MODERATE_MEMORY_FRAME_THREADS
-                ),
-            );
-            push_param(
-                params,
-                &format!(
-                    "lookahead-threads={}",
-                    constants::X265_MODERATE_MEMORY_LOOKAHEAD_THREADS
-                ),
-            );
-            push_param(
-                params,
-                &format!(
-                    "lookahead-slices={}",
-                    constants::X265_MODERATE_MEMORY_LOOKAHEAD_SLICES
-                ),
-            );
+            let frame_threads = pool_threads
+                .min(constants::X265_MODERATE_MEMORY_FRAME_THREADS)
+                .max(1);
+            let lookahead_threads = pool_threads
+                .min(constants::X265_MODERATE_MEMORY_LOOKAHEAD_THREADS)
+                .max(1);
+            let lookahead_slices = pool_threads
+                .min(constants::X265_MODERATE_MEMORY_LOOKAHEAD_SLICES)
+                .max(1);
+            push_param(params, &format!("frame-threads={frame_threads}"));
+            push_param(params, &format!("lookahead-threads={lookahead_threads}"));
+            push_param(params, &format!("lookahead-slices={lookahead_slices}"));
             push_param(
                 params,
                 &format!(
@@ -200,8 +216,8 @@ mod tests {
     fn archival_codec_enables_constrained_profile() {
         let detection = sample_detection(DetectedCodec::ProRes, 512 * 1024 * 1024);
         let profile = memory_profile_for_detection(&detection);
-        // On systems with ≥16GB RAM this may be Default or Moderate; on low-RAM it's LowMemory.
-        // The key invariant: it should NOT unconditionally be LowMemory on high-RAM systems.
+        // The exact profile depends on the current machine, but archival sources should always
+        // resolve to one of the supported tiers without panicking.
         assert!(
             profile == X265MemoryProfile::Default
                 || profile == X265MemoryProfile::Moderate
@@ -223,18 +239,28 @@ mod tests {
     #[test]
     fn low_memory_profile_injects_buffer_controls() {
         let params = format_x265_params(4, Some("hdr-opt=1"), X265MemoryProfile::LowMemory);
-        assert!(params.contains("pools=4"));
+        assert!(params.contains("pools=2"));
         assert!(params.contains("frame-threads=1"));
         assert!(params.contains("lookahead-threads=1"));
         assert!(params.contains("lookahead-slices=1"));
-        assert!(params.contains("rc-lookahead=10"));
+        assert!(params.contains("rc-lookahead=8"));
         assert!(params.ends_with("hdr-opt=1"));
     }
 
     #[test]
     fn moderate_profile_injects_moderate_controls() {
-        let params = format_x265_params(4, None, X265MemoryProfile::Moderate);
-        assert!(params.contains("pools=4"));
+        let params = format_x265_params(12, None, X265MemoryProfile::Moderate);
+        assert!(params.contains("pools=6"));
+        assert!(params.contains("frame-threads=3"));
+        assert!(params.contains("lookahead-threads=3"));
+        assert!(params.contains("lookahead-slices=3"));
+        assert!(params.contains("rc-lookahead=20"));
+    }
+
+    #[test]
+    fn moderate_profile_scales_down_when_threads_are_already_low() {
+        let params = format_x265_params(2, None, X265MemoryProfile::Moderate);
+        assert!(params.contains("pools=2"));
         assert!(params.contains("frame-threads=2"));
         assert!(params.contains("lookahead-threads=2"));
         assert!(params.contains("lookahead-slices=2"));
@@ -255,11 +281,36 @@ mod tests {
         let params = format_x265_lossless_params(2, None, X265MemoryProfile::LowMemory);
         assert!(params.starts_with("lossless=1:"));
         assert!(params.contains("frame-threads=1"));
+        assert!(params.contains("pools=2"));
     }
 
     #[test]
     fn small_normal_codec_gets_default() {
         let profile = memory_profile_for_source(Some("h264"), 100 * 1024 * 1024);
         assert_eq!(profile, X265MemoryProfile::Default);
+    }
+
+    #[test]
+    fn healthy_free_ratio_keeps_default_profile() {
+        assert_eq!(
+            profile_for_available_memory(8 * 1024, 16 * 1024),
+            X265MemoryProfile::Default
+        );
+        assert_eq!(
+            profile_for_available_memory(10 * 1024, 32 * 1024),
+            X265MemoryProfile::Default
+        );
+    }
+
+    #[test]
+    fn tight_free_ratio_drops_to_more_aggressive_profiles() {
+        assert_eq!(
+            profile_for_available_memory(8 * 1024, 64 * 1024),
+            X265MemoryProfile::LowMemory
+        );
+        assert_eq!(
+            profile_for_available_memory(12 * 1024, 64 * 1024),
+            X265MemoryProfile::Moderate
+        );
     }
 }

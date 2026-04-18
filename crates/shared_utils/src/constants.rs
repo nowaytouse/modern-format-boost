@@ -161,20 +161,30 @@ pub const X265_LOW_MEMORY_FRAME_THREADS: usize = 1;
 pub const X265_LOW_MEMORY_LOOKAHEAD_THREADS: usize = 1;
 /// Low-memory x265 profile: avoid per-slice lookahead fan-out on huge masters.
 pub const X265_LOW_MEMORY_LOOKAHEAD_SLICES: usize = 1;
+/// Low-memory x265 profile: cap worker pools aggressively to keep RAM spikes in check.
+pub const X265_LOW_MEMORY_MAX_POOLS: usize = 2;
 /// Low-memory x265 profile: shorten the lookahead queue to reduce buffered frames.
-pub const X265_LOW_MEMORY_RC_LOOKAHEAD: usize = 10;
+pub const X265_LOW_MEMORY_RC_LOOKAHEAD: usize = 8;
+/// Moderate-memory x265 profile: cap worker pools but still leave room to scale on healthy systems.
+pub const X265_MODERATE_MEMORY_MAX_POOLS: usize = 6;
 /// Moderate-memory x265 profile: allow limited parallelism for systems with adequate RAM.
-pub const X265_MODERATE_MEMORY_FRAME_THREADS: usize = 2;
+pub const X265_MODERATE_MEMORY_FRAME_THREADS: usize = 3;
 /// Moderate-memory x265 profile: allow limited lookahead parallelism.
-pub const X265_MODERATE_MEMORY_LOOKAHEAD_THREADS: usize = 2;
+pub const X265_MODERATE_MEMORY_LOOKAHEAD_THREADS: usize = 3;
 /// Moderate-memory x265 profile: moderate lookahead slice fan-out.
-pub const X265_MODERATE_MEMORY_LOOKAHEAD_SLICES: usize = 2;
+pub const X265_MODERATE_MEMORY_LOOKAHEAD_SLICES: usize = 3;
 /// Moderate-memory x265 profile: moderate lookahead queue depth.
 pub const X265_MODERATE_MEMORY_RC_LOOKAHEAD: usize = 20;
-/// RAM threshold (MB) below which the `LowMemory` profile is forced.
-pub const X265_LOW_MEMORY_RAM_THRESHOLD_MB: u64 = 8192;
 /// RAM threshold (MB) above which the Default (uncapped) profile is used.
 pub const X265_DEFAULT_RAM_THRESHOLD_MB: u64 = 16384;
+/// Relaxed RAM threshold (MB) that still permits the default profile when free-memory ratio is healthy.
+pub const X265_RELAXED_DEFAULT_RAM_THRESHOLD_MB: u64 = 8192;
+/// Minimum free-memory ratio required to stay on the default x265 profile below the hard 16 GB cutoff.
+pub const X265_DEFAULT_RAM_RATIO_THRESHOLD: f64 = 0.30;
+/// Minimum RAM (MB) required to avoid the aggressive low-memory profile.
+pub const X265_MODERATE_RAM_THRESHOLD_MB: u64 = 6144;
+/// Minimum free-memory ratio required to stay above the aggressive low-memory profile.
+pub const X265_MODERATE_RAM_RATIO_THRESHOLD: f64 = 0.18;
 
 // 4. Default Search Parameters
 /// Starting CRF for quality-matched exploration.
