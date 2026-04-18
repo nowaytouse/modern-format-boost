@@ -51,6 +51,7 @@ All notable changes to this project will be documented in this file.
   - **Distribution Cleanup**: Automatically identifies and purges the `dist/` directory.
   - **Recursive pycache**: Implemented project-wide `__pycache__` removal.
   - **Project-local Runtime Cache**: Includes the hidden `.cache/mfb_runtime` (often 40GB+) in the purge list.
+- **Auto-Rebuild UX Flow**: Integrated `smart_build.py` into the cleanup completion handler; the project now automatically re-optimizes its binaries after a full purge to prevent processing "target not found" errors.
 - **Developer Safety**: Guaranteed the preservation of `.venv`, `.venv_training`, and macOS `.DS_Store` files to maintain environment stability.
 
 ### 🛡️ Logging & Resource Hardening

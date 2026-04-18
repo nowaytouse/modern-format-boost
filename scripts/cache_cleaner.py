@@ -588,11 +588,19 @@ def main():
         perform_targeted_cleanup(Path(args.path))
     else:
         perform_full_cleanup()
-        print(f"{DIM}Press Enter to exit...{RESET}")
+        print(f"{DIM}Press Enter to return and trigger project rebuild...{RESET}")
         try:
             input()
+            print(f"{BOLD}\n📦 Initializing Optimized Rebuild...{RESET}")
+            print(f"{DIM}Build artifacts were purged. Synchronizing project state...{RESET}\n")
+            
+            # Use same python executable to maintain environment consistency
+            subprocess.run([sys.executable, str(project_root / "scripts" / "smart_build.py")], check=True)
+            print(f"\n{GREEN}✅ Project Rebuilt Successfully{RESET}")
         except (EOFError, KeyboardInterrupt):
             pass
+        except subprocess.CalledProcessError:
+            print(f"\n{RED}❌ Error: Rebuild failed. Please run 'scripts/smart_build.py' manually.{RESET}")
 
 
 if __name__ == "__main__":
