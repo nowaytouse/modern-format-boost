@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
-## [0.11.3] — 2026-04-19
+## [0.11.2] — 2026-04-18
 
 ### 🎬 Video Filter & Sampling Hardening
 
@@ -14,8 +14,6 @@ All notable changes to this project will be documented in this file.
 - **x265 Encoder Enhancements**: Added `sample_duration` support to `X265Config`, allowing for precise duration-limited encodes with proper stream mapping (`-map 0:v:0 -an`).
 - **Dynamic Mapping Logic Cleanup**: Refactored `dynamic_mapping.rs` to utilize the new centralized filter building helpers, reducing code duplication and improving maintainability.
 - **Expanded Test Coverage**: Added 7 new unit tests covering multi-segment filter generation, filter chain construction, and boundary cases for short/long videos.
-
-## [0.11.2] — 2026-04-18
 
 ### 🚀 ProRes & HEVC Performance Optimization
 
