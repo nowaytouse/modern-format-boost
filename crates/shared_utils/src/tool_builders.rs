@@ -376,6 +376,16 @@ pub struct X265Builder {
     extra_args: Vec<String>,
 }
 
+fn x265_io_arg(path: &Path) -> std::borrow::Cow<'_, str> {
+    // x265 uses a bare "-" to mean stdin/stdout. Do not armor it into "./-",
+    // otherwise x265 tries to open a literal file named "-" and the pipe path breaks.
+    if path == Path::new("-") {
+        std::borrow::Cow::Borrowed("-")
+    } else {
+        crate::safe_path_arg(path)
+    }
+}
+
 impl X265Builder {
     #[must_use]
     pub fn new() -> Self {
@@ -524,12 +534,11 @@ impl X265Builder {
         }
 
         if let Some(input) = &self.input {
-            cmd.arg("--input").arg(crate::safe_path_arg(input).as_ref());
+            cmd.arg("--input").arg(x265_io_arg(input).as_ref());
         }
 
         if let Some(output) = &self.output {
-            cmd.arg("--output")
-                .arg(crate::safe_path_arg(output).as_ref());
+            cmd.arg("--output").arg(x265_io_arg(output).as_ref());
         }
 
         cmd
@@ -541,6 +550,46 @@ impl X265Builder {
             .arg("--version")
             .output()
             .is_ok_and(|o| o.status.success())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::X265Builder;
+    use std::path::Path;
+
+    #[test]
+    fn x265_builder_preserves_stdio_dash_input() {
+        let args: Vec<String> = X265Builder::new()
+            .input(Path::new("-"))
+            .output(Path::new("out.hevc"))
+            .build()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+
+        let input_idx = args
+            .iter()
+            .position(|arg| arg == "--input")
+            .expect("x265 input arg should exist");
+        assert_eq!(args[input_idx + 1], "-");
+    }
+
+    #[test]
+    fn x265_builder_still_arms_dash_prefixed_real_paths() {
+        let args: Vec<String> = X265Builder::new()
+            .input(Path::new("-clip.y4m"))
+            .output(Path::new("out.hevc"))
+            .build()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+
+        let input_idx = args
+            .iter()
+            .position(|arg| arg == "--input")
+            .expect("x265 input arg should exist");
+        assert_eq!(args[input_idx + 1], "./-clip.y4m");
     }
 }
 

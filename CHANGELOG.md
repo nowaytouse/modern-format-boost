@@ -14,6 +14,12 @@ All notable changes to this project will be documented in this file.
   - **PSNR-UV**: Allowed drop from baseline reduced from `4.0` to `1.5`.
 - **Dynamic Mapping Calibration**: Enhanced the GPU-to-CPU CRF mapping logic to more accurately project search boundaries across different hardware vendors.
 
+- **Loop Intent Detection 2.0**: Major overhaul of the 7-layer decision tree in `shared_utils`.
+  - **Layer 6-B Arbitration**: Introduced directional arbitration to resolve inconclusive KNN results based on high-signal metadata (e.g., loop closure scores).
+  - **Explicit Early Exit**: Hardened Layers 1-5 to resolve common media profiles (Stickers, Memes) earlier, reducing reliance on Layer 7 fallbacks.
+  - **Diagnostic Transparency**: Improved reasoning strings in `LoopIntentVerdict` for better auditability of the classification logic.
+- **X265Builder Path Hardening**: Fixed a critical issue where standalone `x265` would fail to recognize stdin/stdout pipes (`-`) due to path armoring. Implemented `x265_io_arg` to ensure bare dashes are preserved for standard I/O.
+
 ### 🛡️ Media Integrity & Apple Compatibility (MOV Transition)
 
 - **Apple Compatibility (MOV)**: Transitioned from `.mp4` to **`.mov`** (HEVC) when `--apple-compat` is enabled. This ensures 100% native compatibility with the Apple ecosystem (QuickTime, Photos, TV) while enabling better metadata and tag preservation.

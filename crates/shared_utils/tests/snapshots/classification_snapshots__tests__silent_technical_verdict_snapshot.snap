@@ -2,4 +2,4 @@
 source: crates/shared_utils/tests/classification_snapshots.rs
 expression: verdict.reason()
 ---
-"Layer 7: Fallback [Layer 4: log-odds 0.54 within ±0.95; defer to KNN fusion] → standard video processing (no loop intent)"
+"Layer 3: log-odds -1.36 <= -0.55 (self-referential structure points away from looping)"

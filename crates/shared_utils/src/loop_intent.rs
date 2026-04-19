@@ -644,6 +644,7 @@ impl LoopThresholds {
 pub struct TreeEvaluation {
     pub verdict: LoopIntentVerdict,
     pub tree_probability: f64,
+    pub log_odds_value: f64,
 }
 
 fn has_platform_marker(app_extensions: Option<&[String]>) -> bool {
@@ -656,6 +657,49 @@ fn has_platform_marker(app_extensions: Option<&[String]>) -> bool {
             .iter()
             .any(|marker| normalized.contains(marker))
     })
+}
+
+fn has_explicit_loop_platform_marker(meta: &LoopMeta) -> bool {
+    has_platform_marker(meta.app_extensions.as_deref()) || meta.is_meme_platform
+}
+
+fn is_silent_webm(meta: &LoopMeta, ext_lower: &str) -> bool {
+    (meta
+        .container
+        .as_deref()
+        .is_some_and(|container| container.eq_ignore_ascii_case("webm"))
+        || ext_lower == "webm")
+        && !meta.has_audio
+}
+
+fn is_short_silent_asset(meta: &LoopMeta, thresholds: &LoopThresholds) -> bool {
+    !meta.has_audio
+        && meta.duration_secs > 0.0
+        && meta.duration_secs <= thresholds.short_asset_window_secs
+}
+
+fn checkpoint_verdict(
+    log_odds: LogOdds,
+    threshold: f64,
+    layer_tag: &str,
+    strong_label: &str,
+    weak_label: &str,
+) -> Option<LoopIntentVerdict> {
+    if log_odds.value() >= threshold {
+        Some(LoopIntentVerdict::LoopStrong(format!(
+            "{layer_tag}: log-odds {:.2} >= {:.2} ({strong_label})",
+            log_odds.value(),
+            threshold
+        )))
+    } else if log_odds.value() <= -threshold {
+        Some(LoopIntentVerdict::LoopWeak(format!(
+            "{layer_tag}: log-odds {:.2} <= -{:.2} ({weak_label})",
+            log_odds.value(),
+            threshold
+        )))
+    } else {
+        None
+    }
 }
 
 fn zero_motion_ratio(mvs: &[f64]) -> f64 {
@@ -755,6 +799,81 @@ fn evaluate_kinetics_and_physics(
     }
 }
 
+fn apply_structural_signals(
+    meta: &LoopMeta,
+    derived: &DerivedLoopSignals,
+    thresholds: &LoopThresholds,
+    log_odds: &mut LogOdds,
+    is_image: bool,
+    is_video: bool,
+) {
+    let short_silent_asset = is_short_silent_asset(meta, thresholds);
+
+    if let Some(closure) = meta.loop_closure_score {
+        if closure >= 0.82 {
+            let strength = ((closure - 0.82) / 0.18).clamp(0.25, 1.0);
+            log_odds.add(strength * crate::constants::FEATURE_WEIGHT_LOOP_CLOSURE);
+        } else if closure <= 0.35 {
+            let strength = ((0.35 - closure) / 0.35).clamp(0.25, 1.0);
+            log_odds.add(-strength * crate::constants::FEATURE_WEIGHT_LOOP_CLOSURE);
+        }
+    }
+
+    if let Some(periodicity) = meta.motion_periodicity {
+        if periodicity >= 0.72 {
+            let strength = ((periodicity - 0.72) / 0.28).clamp(0.25, 1.0);
+            let envelope_multiplier = if short_silent_asset || is_image || derived.localized_motion
+            {
+                1.0
+            } else {
+                0.70
+            };
+            log_odds.add(
+                strength
+                    * crate::constants::FEATURE_WEIGHT_MOTION_PERIODICITY
+                    * envelope_multiplier,
+            );
+        } else if periodicity <= 0.32 {
+            let strength = ((0.32 - periodicity) / 0.32).clamp(0.25, 1.0);
+            log_odds.add(-strength * crate::constants::FEATURE_WEIGHT_MOTION_PERIODICITY);
+        }
+    }
+
+    let loop_frequency = score_loop_frequency(meta.duration_secs, meta.frame_count);
+    if loop_frequency >= 0.75 {
+        let strength = ((loop_frequency - 0.75) / 0.25).clamp(0.25, 1.0);
+        log_odds.add(strength * crate::constants::FEATURE_WEIGHT_LOOP_FREQUENCY);
+    } else if loop_frequency <= 0.25 {
+        let strength = ((0.25 - loop_frequency) / 0.25).clamp(0.25, 1.0);
+        log_odds.add(-strength * crate::constants::FEATURE_WEIGHT_LOOP_FREQUENCY);
+    }
+
+    let sparse_cadence = score_sparse_cadence(meta.duration_secs, meta.frame_count);
+    if sparse_cadence >= 0.90 && (short_silent_asset || is_image) {
+        let strength = ((sparse_cadence - 0.90) / 0.10).clamp(0.25, 1.0);
+        log_odds.add(strength * crate::constants::FEATURE_WEIGHT_SPARSE_CADENCE);
+    }
+
+    if let Some(jitter) = meta.temporal_jitter {
+        if jitter >= 0.82 && (short_silent_asset || is_image) {
+            let strength = ((jitter - 0.82) / 0.18).clamp(0.25, 1.0);
+            log_odds.add(strength * crate::constants::FEATURE_WEIGHT_TEMPORAL_JITTER);
+        } else if jitter <= 0.25 {
+            let strength = ((0.25 - jitter) / 0.25).clamp(0.25, 1.0);
+            log_odds.add(-strength * crate::constants::FEATURE_WEIGHT_TEMPORAL_JITTER);
+        }
+    }
+
+    if is_video
+        && !short_silent_asset
+        && !meta.has_transparency
+        && meta.loop_closure_score.unwrap_or(0.5) < 0.45
+        && meta.motion_periodicity.unwrap_or(0.5) < 0.45
+    {
+        log_odds.add(-0.08);
+    }
+}
+
 fn apply_weak_heuristics(
     meta: &LoopMeta,
     derived: &DerivedLoopSignals,
@@ -768,19 +887,16 @@ fn apply_weak_heuristics(
         .as_deref()
         .unwrap_or("")
         .to_lowercase();
-    let is_webm = meta
-        .container
-        .as_deref()
-        .is_some_and(|container| container.eq_ignore_ascii_case("webm"))
-        || ext_lower == "webm";
-    let is_short_clip = !meta.has_audio
+    let is_webm = is_silent_webm(meta, &ext_lower);
+    let short_silent_asset = is_short_silent_asset(meta, thresholds);
+    let is_short_clip = short_silent_asset
         && meta.duration_secs > thresholds.duration_override_secs
         && meta.duration_secs <= thresholds.short_clip_secs;
-    let is_extended_short_asset = !meta.has_audio
+    let is_extended_short_asset = short_silent_asset
         && meta.duration_secs > thresholds.short_clip_secs
         && meta.duration_secs <= thresholds.short_asset_window_secs;
 
-    if has_platform_marker(meta.app_extensions.as_deref()) || meta.is_meme_platform {
+    if has_explicit_loop_platform_marker(meta) {
         log_odds.add(crate::constants::PLATFORM_MARKER_POSITIVE_LOG_ODDS);
     }
     if is_webm && !meta.has_audio {
@@ -860,9 +976,25 @@ fn apply_weak_heuristics(
         );
     }
     if let Some(motion_gini) = meta.motion_gini {
+        let z = thresholds.motion_gini_z(motion_gini);
+        let loop_support = meta
+            .loop_closure_score
+            .unwrap_or(0.5)
+            .max(meta.motion_periodicity.unwrap_or(0.5));
+        let support_relief = if z.is_sign_negative() && loop_support >= 0.80 {
+            0.35
+        } else if z.is_sign_negative() && short_silent_asset {
+            0.55
+        } else if z.is_sign_positive()
+            && !(short_silent_asset || is_image || derived.localized_motion)
+        {
+            0.55
+        } else {
+            1.0
+        };
         log_odds.add(
-            thresholds.motion_gini_z(motion_gini)
-                * crate::constants::FEATURE_WEIGHT_MOTION_GINI
+            z * crate::constants::FEATURE_WEIGHT_MOTION_GINI
+                * support_relief
                 * thresholds.get_feature_weight("m_gini"),
         );
     }
@@ -996,6 +1128,7 @@ pub fn evaluate_loop_tree(
             LoopIntentVerdict::LoopWeak(_) => 0.0,
             LoopIntentVerdict::Uncertain(_) => log_odds.probability(),
         },
+        log_odds_value: log_odds.value(),
         verdict,
     };
 
@@ -1011,6 +1144,54 @@ pub fn evaluate_loop_tree(
     if meta.frame_count <= 1 {
         return finalize(
             LoopIntentVerdict::LoopWeak("Layer 1-A: single frame media (cannot loop)".to_string()),
+            log_odds,
+        );
+    }
+
+    if !meta.has_audio && meta.has_transparency {
+        return finalize(
+            LoopIntentVerdict::LoopStrong(
+                "Layer 1-B: silent asset with transparency strongly implies loop/sticker intent"
+                    .to_string(),
+            ),
+            log_odds,
+        );
+    }
+
+    if meta.loop_count == Some(0) {
+        return finalize(
+            LoopIntentVerdict::LoopStrong(
+                "Layer 2-A: explicit infinite-loop declaration (`loop_count=0`)".to_string(),
+            ),
+            log_odds,
+        );
+    }
+
+    if meta.loop_count == Some(1) {
+        return finalize(
+            LoopIntentVerdict::LoopWeak(
+                "Layer 2-B: explicit play-once declaration (`loop_count=1`)".to_string(),
+            ),
+            log_odds,
+        );
+    }
+
+    if has_explicit_loop_platform_marker(meta) {
+        return finalize(
+            LoopIntentVerdict::LoopStrong(
+                "Layer 2-C: platform / application marker declares looping asset semantics"
+                    .to_string(),
+            ),
+            log_odds,
+        );
+    }
+
+    if !meta.has_audio && is_silent_webm(meta, &ext_lower) {
+        return finalize(
+            LoopIntentVerdict::LoopStrong(
+                "Layer 2-D: silent WebM container strongly implies animation / loop intent"
+                    .to_string(),
+            ),
             log_odds,
         );
     }
@@ -1086,6 +1267,25 @@ pub fn evaluate_loop_tree(
     }
 
     evaluate_kinetics_and_physics(meta, &derived, &thresholds, &mut log_odds);
+    apply_structural_signals(
+        meta,
+        &derived,
+        &thresholds,
+        &mut log_odds,
+        is_image,
+        is_video,
+    );
+
+    if let Some(verdict) = checkpoint_verdict(
+        log_odds,
+        crate::constants::TREE_STRUCTURAL_CHECKPOINT_LOG_ODDS_THRESHOLD,
+        "Layer 3",
+        "self-referential loop structure",
+        "self-referential structure points away from looping",
+    ) {
+        return finalize(verdict, log_odds);
+    }
+
     apply_weak_heuristics(
         meta,
         &derived,
@@ -1095,10 +1295,20 @@ pub fn evaluate_loop_tree(
         is_video,
     );
 
+    if let Some(verdict) = checkpoint_verdict(
+        log_odds,
+        crate::constants::TREE_CONTENT_CHECKPOINT_LOG_ODDS_THRESHOLD,
+        "Layer 4",
+        "content and envelope strongly favor a looping asset",
+        "content and envelope strongly favor standard video processing",
+    ) {
+        return finalize(verdict, log_odds);
+    }
+
     if log_odds.value() >= thresholds.decision_threshold {
         return finalize(
             LoopIntentVerdict::LoopStrong(format!(
-                "Layer 4: log-odds {:.2} >= {:.2} (short/fast/abrupt profile)",
+                "Layer 5: log-odds {:.2} >= {:.2} (context reinforced looping profile)",
                 log_odds.value(),
                 thresholds.decision_threshold
             )),
@@ -1109,7 +1319,7 @@ pub fn evaluate_loop_tree(
     if log_odds.value() <= -thresholds.decision_threshold {
         return finalize(
             LoopIntentVerdict::LoopWeak(format!(
-                "Layer 4: log-odds {:.2} <= -{:.2} (long/slow/smooth profile)",
+                "Layer 5: log-odds {:.2} <= -{:.2} (context reinforced video profile)",
                 log_odds.value(),
                 thresholds.decision_threshold
             )),
@@ -1119,7 +1329,7 @@ pub fn evaluate_loop_tree(
 
     finalize(
         LoopIntentVerdict::Uncertain(format!(
-            "Layer 4: log-odds {:.2} within ±{:.2}; defer to KNN fusion",
+            "Layer 5: log-odds {:.2} within ±{:.2}; defer to KNN fusion / arbitration",
             log_odds.value(),
             thresholds.decision_threshold
         )),
@@ -1208,6 +1418,193 @@ fn compute_layer6_fusion(
     }
 }
 
+#[derive(Debug, Default)]
+struct DirectionalArbitration {
+    keep_score: f64,
+    convert_score: f64,
+    keep_trace: Vec<String>,
+    convert_trace: Vec<String>,
+}
+
+impl DirectionalArbitration {
+    fn add_keep(&mut self, delta: f64, reason: impl Into<String>) {
+        self.keep_score += delta;
+        self.keep_trace.push(reason.into());
+    }
+
+    fn add_convert(&mut self, delta: f64, reason: impl Into<String>) {
+        self.convert_score += delta;
+        self.convert_trace.push(reason.into());
+    }
+
+    fn winner_trace(&self, keep_wins: bool) -> &[String] {
+        if keep_wins {
+            &self.keep_trace
+        } else {
+            &self.convert_trace
+        }
+    }
+}
+
+fn layer6_directional_arbitration(
+    meta: &LoopMeta,
+    thresholds: &LoopThresholds,
+    tree: &TreeEvaluation,
+    keep_prob: Option<f64>,
+    confidence: Option<f64>,
+    fusion_score: Option<f64>,
+    neighbor_count: Option<usize>,
+    upstream_reason: &str,
+) -> Option<LoopIntentVerdict> {
+    let ext = meta
+        .source_extension
+        .as_deref()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let is_image = SUPPORTED_IMAGE_EXTENSIONS.contains(&ext.as_str());
+    let is_video = !is_image && SUPPORTED_VIDEO_EXTENSIONS.contains(&ext.as_str());
+    let short_silent_asset = is_short_silent_asset(meta, thresholds);
+    let platform_marker = has_explicit_loop_platform_marker(meta);
+    let mut arbitration = DirectionalArbitration::default();
+
+    if tree.tree_probability >= crate::constants::LAYER6_DIRECTIONAL_KEEP_MIN {
+        let delta = ((tree.tree_probability - 0.5) * 0.45).clamp(0.05, 0.22);
+        arbitration.add_keep(delta, format!("tree lean {:.2}", tree.tree_probability));
+    } else if tree.tree_probability <= crate::constants::LAYER6_DIRECTIONAL_WEAK_MAX {
+        let delta = ((0.5 - tree.tree_probability) * 0.45).clamp(0.05, 0.22);
+        arbitration.add_convert(delta, format!("tree lean {:.2}", tree.tree_probability));
+    }
+
+    if let Some(knn_keep) = keep_prob {
+        let conf = confidence.unwrap_or(0.55).clamp(0.35, 1.0);
+        if knn_keep >= 0.65 {
+            let delta = (((knn_keep - 0.5) * 0.90) * conf).clamp(0.08, 0.28);
+            arbitration.add_keep(
+                delta,
+                format!("KNN keep {:.2} @ conf {:.2}", knn_keep, conf),
+            );
+        } else if knn_keep <= 0.35 {
+            let delta = (((0.5 - knn_keep) * 0.90) * conf).clamp(0.08, 0.28);
+            arbitration.add_convert(
+                delta,
+                format!("KNN keep {:.2} @ conf {:.2}", knn_keep, conf),
+            );
+        }
+    }
+
+    if let Some(score) = fusion_score {
+        let conf = confidence.unwrap_or(0.55).clamp(0.35, 1.0);
+        if score >= 0.55 {
+            let delta = (((score - 0.5) * 0.95) * conf).clamp(0.06, 0.24);
+            arbitration.add_keep(delta, format!("fusion score {:.2}", score));
+        } else if score <= 0.45 {
+            let delta = (((0.5 - score) * 0.95) * conf).clamp(0.06, 0.24);
+            arbitration.add_convert(delta, format!("fusion score {:.2}", score));
+        }
+    }
+
+    if platform_marker {
+        arbitration.add_keep(0.24, "platform/app marker");
+    }
+    if meta.has_transparency {
+        arbitration.add_keep(0.22, "transparency");
+    }
+    if short_silent_asset {
+        let delta = if meta.duration_secs <= thresholds.short_clip_secs {
+            0.14
+        } else {
+            0.10
+        };
+        arbitration.add_keep(
+            delta,
+            format!("short silent asset {:.2}s", meta.duration_secs),
+        );
+    }
+    if meta.width > 0 && meta.width == meta.height {
+        arbitration.add_keep(0.08, "square canvas");
+    }
+    if is_image {
+        arbitration.add_keep(0.06, "image-family container");
+    }
+
+    if let Some(closure) = meta.loop_closure_score {
+        if closure >= 0.80 {
+            let delta = (((closure - 0.80) / 0.20) * 0.22).clamp(0.08, 0.22);
+            arbitration.add_keep(delta, format!("loop closure {:.2}", closure));
+        } else if closure <= 0.35 {
+            let delta = (((0.35 - closure) / 0.35) * 0.20).clamp(0.08, 0.20);
+            arbitration.add_convert(delta, format!("loop closure {:.2}", closure));
+        }
+    }
+
+    if let Some(periodicity) = meta.motion_periodicity {
+        if periodicity >= 0.72 {
+            let delta = (((periodicity - 0.72) / 0.28) * 0.16).clamp(0.06, 0.16);
+            arbitration.add_keep(delta, format!("motion periodicity {:.2}", periodicity));
+        } else if periodicity <= 0.32 {
+            let delta = (((0.32 - periodicity) / 0.32) * 0.12).clamp(0.05, 0.12);
+            arbitration.add_convert(delta, format!("motion periodicity {:.2}", periodicity));
+        }
+    }
+
+    let loop_frequency = score_loop_frequency(meta.duration_secs, meta.frame_count);
+    if loop_frequency >= 0.75 {
+        let delta = (((loop_frequency - 0.75) / 0.25) * 0.12).clamp(0.05, 0.12);
+        arbitration.add_keep(delta, format!("loop frequency {:.2}", loop_frequency));
+    } else if loop_frequency <= 0.25 {
+        let delta = (((0.25 - loop_frequency) / 0.25) * 0.10).clamp(0.04, 0.10);
+        arbitration.add_convert(delta, format!("loop frequency {:.2}", loop_frequency));
+    }
+
+    if is_video {
+        let delta = if short_silent_asset { 0.04 } else { 0.08 };
+        arbitration.add_convert(delta, "video container");
+    }
+    if meta.width > 0 && meta.height > 0 && is_near_16_by_9(meta.width, meta.height) {
+        arbitration.add_convert(0.10, "widescreen framing");
+    }
+    if detect_scene_cut(&meta.pkt_sizes) {
+        arbitration.add_convert(0.20, "scene cut");
+    }
+    if !meta.has_audio && meta.duration_secs > thresholds.modern_bias_duration_secs {
+        arbitration.add_convert(0.14, format!("long silent clip {:.1}s", meta.duration_secs));
+    }
+    if is_video
+        && !short_silent_asset
+        && meta.file_size_bytes > crate::constants::STICKER_MAX_SIZE_BYTES
+    {
+        arbitration.add_convert(0.12, "large video envelope");
+    }
+
+    let margin = arbitration.keep_score - arbitration.convert_score;
+    if margin.abs() < crate::constants::LAYER6_DIRECTIONAL_MARGIN_MIN {
+        return None;
+    }
+
+    let keep_wins = margin.is_sign_positive();
+    let trace = arbitration
+        .winner_trace(keep_wins)
+        .iter()
+        .take(3)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" | ");
+    let upstream_layer = extract_layer_tag(upstream_reason);
+    let neighbor_suffix = neighbor_count.map_or_else(String::new, |count| format!(", n={count}"));
+
+    if keep_wins {
+        Some(LoopIntentVerdict::LoopStrong(format!(
+            "Layer 6-B: arbitration resolved KEEP (from {upstream_layer}; keep={:.2}, convert={:.2}{neighbor_suffix}; {trace})",
+            arbitration.keep_score, arbitration.convert_score
+        )))
+    } else {
+        Some(LoopIntentVerdict::LoopWeak(format!(
+            "Layer 6-B: arbitration resolved CONVERT (from {upstream_layer}; keep={:.2}, convert={:.2}{neighbor_suffix}; {trace})",
+            arbitration.keep_score, arbitration.convert_score
+        )))
+    }
+}
+
 /// Execute the loop intent identification for a given detection result.
 ///
 /// # Errors
@@ -1276,8 +1673,24 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
             }
             LoopIntentVerdict::Uncertain(reason) => {
                 emit_stderr(&format!(
-                    "⚠️  Tree-only result remained uncertain ({reason}) — using Layer 7 fallback"
+                    "⚠️  Tree-only result remained uncertain ({reason}) — attempting Layer 6-B arbitration"
                 ));
+                if let Some(arbitrated) = layer6_directional_arbitration(
+                    &mutable_meta,
+                    &thresholds,
+                    &tree_only,
+                    None,
+                    None,
+                    None,
+                    None,
+                    reason,
+                ) {
+                    emit_stderr(&format!(
+                        "⚖️  Tree-only Arbitration: {}",
+                        arbitrated.reason()
+                    ));
+                    return arbitrated;
+                }
                 let fallback =
                     layer7_fallback(&mutable_meta, "Layer 0: DB unavailable / KNN disabled");
                 emit_stderr(&format!("💡 Fallback Result: {}", fallback.reason()));
@@ -1313,10 +1726,24 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
             if let Some(m) = sample_match {
                 let Some(keep_prob) = m.keep_probability else {
                     emit_stderr(&format!(
-                        "   ⚠️  KNN match missing keep-probability (conf={:.2}, n={}) — treating as unknown and deferring to Layer 7",
+                        "   ⚠️  KNN match missing keep-probability (conf={:.2}, n={}) — attempting Layer 6-B arbitration",
                         m.confidence, m.neighbor_count
                     ));
-                    let final_v = layer7_fallback(meta, "Layer 6: KNN match missing probability");
+                    if let Some(arbitrated) = layer6_directional_arbitration(
+                        &mutable_meta,
+                        &thresholds,
+                        &tree,
+                        None,
+                        Some(m.confidence),
+                        None,
+                        Some(m.neighbor_count),
+                        reason,
+                    ) {
+                        emit_stderr(&format!("⚖️  Arbitration Result: {}", arbitrated.reason()));
+                        return arbitrated;
+                    }
+                    let final_v =
+                        layer7_fallback(&mutable_meta, "Layer 6: KNN match missing probability");
                     if final_v.is_keep_gif() {
                         emit_stderr(&format!("✅ Fallback Result: {}", final_v.reason()));
                     } else {
@@ -1440,9 +1867,22 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
                     v
                 } else {
                     emit_stderr(&format!(
-                        "   ℹ️  KNN data inconclusive (conf={confidence:.2}, score={final_score:.2}) — deferring to Layer 7"
+                        "   ℹ️  KNN data inconclusive (conf={confidence:.2}, score={final_score:.2}) — attempting Layer 6-B arbitration"
                     ));
-                    let final_v = layer7_fallback(meta, reason);
+                    if let Some(arbitrated) = layer6_directional_arbitration(
+                        &mutable_meta,
+                        &thresholds,
+                        &tree,
+                        Some(keep_prob),
+                        Some(confidence),
+                        Some(final_score),
+                        Some(m.neighbor_count),
+                        reason,
+                    ) {
+                        emit_stderr(&format!("⚖️  Arbitration Result: {}", arbitrated.reason()));
+                        return arbitrated;
+                    }
+                    let final_v = layer7_fallback(&mutable_meta, reason);
                     if final_v.is_keep_gif() {
                         emit_stderr(&format!("✅ Fallback Result: {}", final_v.reason()));
                     } else {
@@ -1452,9 +1892,22 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
                 }
             } else {
                 emit_stderr(&format!(
-                    "   ℹ️  KNN similarity match unavailable (tree_prob={tree_probability:.2}) — using Layer 7 fallback"
+                    "   ℹ️  KNN similarity match unavailable (tree_prob={tree_probability:.2}) — attempting Layer 6-B arbitration"
                 ));
-                let final_v = layer7_fallback(meta, reason);
+                if let Some(arbitrated) = layer6_directional_arbitration(
+                    &mutable_meta,
+                    &thresholds,
+                    &tree,
+                    None,
+                    None,
+                    None,
+                    None,
+                    reason,
+                ) {
+                    emit_stderr(&format!("⚖️  Arbitration Result: {}", arbitrated.reason()));
+                    return arbitrated;
+                }
+                let final_v = layer7_fallback(&mutable_meta, reason);
                 if final_v.is_keep_gif() {
                     emit_stderr(&format!("✅ Fallback Result: {}", final_v.reason()));
                 } else {
@@ -2403,6 +2856,30 @@ mod tests {
     }
 
     #[test]
+    fn explicit_loop_count_zero_exits_tree_strong() {
+        let profile = base_profile();
+        let mut meta = base_meta();
+        meta.loop_count = Some(0);
+        meta.duration_secs = 12.0;
+
+        let verdict = verdict_with_profile(&meta, &profile);
+        assert!(matches!(verdict, LoopIntentVerdict::LoopStrong(_)));
+        assert!(verdict.reason().contains("Layer 2-A"));
+    }
+
+    #[test]
+    fn platform_marker_exits_tree_strong() {
+        let profile = base_profile();
+        let mut meta = base_meta();
+        meta.app_extensions = Some(vec!["TENOR".to_string()]);
+        meta.duration_secs = 14.0;
+
+        let verdict = verdict_with_profile(&meta, &profile);
+        assert!(matches!(verdict, LoopIntentVerdict::LoopStrong(_)));
+        assert!(verdict.reason().contains("Layer 2-C"));
+    }
+
+    #[test]
     fn short_fast_silent_media_scores_loopstrong() {
         let profile = base_profile();
         let mut meta = base_meta();
@@ -2418,7 +2895,11 @@ mod tests {
             matches!(verdict, LoopIntentVerdict::LoopStrong(_)),
             "expected loop-strong, got {verdict:?}"
         );
-        assert!(verdict.reason().contains("Layer 4"));
+        assert!(
+            verdict.reason().contains("Layer 3")
+                || verdict.reason().contains("Layer 4")
+                || verdict.reason().contains("Layer 5")
+        );
     }
 
     #[test]
@@ -2442,7 +2923,11 @@ mod tests {
             matches!(verdict, LoopIntentVerdict::LoopWeak(_)),
             "expected loop-weak, got {verdict:?}"
         );
-        assert!(verdict.reason().contains("Layer 4"));
+        assert!(
+            verdict.reason().contains("Layer 3")
+                || verdict.reason().contains("Layer 4")
+                || verdict.reason().contains("Layer 5")
+        );
     }
 
     #[test]
@@ -2503,6 +2988,56 @@ mod tests {
             "expected uncertain, got {verdict:?}"
         );
         assert!(verdict.reason().contains("defer to KNN"));
+    }
+
+    #[test]
+    fn legacy_meme_profile_resolves_without_layer7_fallback() {
+        let meta = LoopMeta {
+            duration_secs: 3.5,
+            width: 640,
+            height: 360,
+            fps: 24.0,
+            frame_count: 84,
+            file_size_bytes: 2_000_000,
+            has_audio: false,
+            source_extension: Some("mp4".to_string()),
+            container: Some("mp4".to_string()),
+            loop_closure_score: Some(0.95),
+            ..Default::default()
+        };
+
+        let verdict = assess_loop_intent_from_meta(&meta, None);
+        assert!(matches!(verdict, LoopIntentVerdict::LoopStrong(_)));
+        assert!(
+            !verdict.reason().contains("Layer 7"),
+            "legacy meme profile should resolve explicitly: {}",
+            verdict.reason()
+        );
+    }
+
+    #[test]
+    fn legacy_silent_technical_profile_resolves_without_layer7_fallback() {
+        let meta = LoopMeta {
+            duration_secs: 8.5,
+            width: 1280,
+            height: 720,
+            fps: 30.0,
+            frame_count: 255,
+            file_size_bytes: 8_000_000,
+            has_audio: false,
+            source_extension: Some("mp4".to_string()),
+            container: Some("mp4".to_string()),
+            motion_gini: Some(0.85),
+            ..Default::default()
+        };
+
+        let verdict = assess_loop_intent_from_meta(&meta, None);
+        assert!(matches!(verdict, LoopIntentVerdict::LoopWeak(_)));
+        assert!(
+            !verdict.reason().contains("Layer 7"),
+            "legacy technical profile should resolve explicitly: {}",
+            verdict.reason()
+        );
     }
 
     #[test]

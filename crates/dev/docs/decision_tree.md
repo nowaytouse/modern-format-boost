@@ -185,7 +185,7 @@ final_score = keep_probability * 0.6 + normalize(WeightedScore) * 0.4
 
 confidence > 0.75 AND final_score > 0.6  → LOOP_STRONG
 confidence > 0.75 AND final_score ≤ 0.4  → LOOP_WEAK
-All other cases                           → UNCERTAIN, proceed to fallback
+All other cases                           → Proceed to Layer 6-B directional arbitration
 ```
 
 > `WeightedScore` is not an independent judge here, but a weighted correction term for KNN.
@@ -194,12 +194,28 @@ All other cases                           → UNCERTAIN, proceed to fallback
 
 ---
 
+## Layer 6-B: Directional Arbitration
+
+- Purpose: convert borderline-but-readable cases into an explicit retain/convert decision instead of overusing Layer 7.
+- Evidence sources:
+  - Tree direction (`log_odds`, `tree_probability`)
+  - KNN direction (`keep_probability`, `confidence`, fused score) when available
+  - Envelope priors (short silent asset, transparency, square canvas, widescreen, large-video shape)
+  - Structural anchors (`loop_closure`, `motion_periodicity`, `loop_frequency`)
+- Exit rule:
+  - If one side has a clear evidence margin → **Direct Exit: LOOP_STRONG / LOOP_WEAK**
+  - Otherwise → Proceed to Layer 7
+
+---
+
 ## Layer 7: Conservative Fallback
 
 ```text
+Only reached when Tree + Layer 6 + Layer 6-B still cannot establish a dominant direction
+
 Input is a modern animated format (TGS / APNG / WebP anim) → Convert to GIF (Minimal loss)
-Input is already GIF                              → Keep as is, skip
-Input is already video                            → Keep as is, skip
+Input is already GIF                                       → Keep as is, skip
+Input is already video                                     → Keep as is, skip
 
 All fallback cases → Write low_confidence flag to the database
 ```
@@ -233,4 +249,5 @@ Judgment Tree Output
 | Layer 4: Content Features           | End-of-Layer Check / Accumulation | Weight 0.25 / 0.20 / 0.15 | Medium                  | Medium (sampling) |
 | Layer 5: Contextual Semantics       | Accumulation Only                 | Weight ≤ 0.10             | Weak                    | Low               |
 | Layer 6: KNN + Score Fusion         | Probabilistic Exit                | As feature + Correction   | Depends on Training set | High              |
+| Layer 6-B: Directional Arbitration  | Explicit tie-break / final route  | Consumes accumulated bias | Medium-High             | Low               |
 | Layer 7: Conservative Fallback      | Conservative Default              | Not Involved              | Minimal loss            | Zero              |

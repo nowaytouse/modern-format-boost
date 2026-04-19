@@ -2,4 +2,4 @@
 source: crates/shared_utils/tests/classification_snapshots.rs
 expression: verdict.reason()
 ---
-"Layer 1-B2: sticker-class native GIF (400x400, 1.50s, 160000 px; strong loop/sticker prior)"
+"Layer 1-B: silent asset with transparency strongly implies loop/sticker intent"
