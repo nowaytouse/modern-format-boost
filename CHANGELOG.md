@@ -6,19 +6,37 @@ All notable changes to this project will be documented in this file.
 
 ## [0.11.2] — 2026-04-20
 
-### ⚙️ Heartbeat System Decommission (Clean-up Phase)
+### 🎬 GPU Coarse Search & Quality Gate Hardening (Major Rewrite)
 
-- **Legacy Heartbeat Removal**: Deleted `heartbeat_manager.rs`, `msssim_heartbeat.rs`, and `universal_heartbeat.rs`. The repository has transitioned to a more direct process-level monitoring model, eliminating redundant status signaling files.
-- **Shared Utils Consolidation**: Performed a large-scale refactoring of the `shared_utils` crate to improve auditability and align internal APIs with the new heartbeat-free architecture.
+- **Strict Quality Thresholds**: Significant tightening of Ultimate mode quality bounds in `gpu_coarse_search.rs`.
+  - **VMAF-Y**: Allowed drop from baseline reduced from `4.0` to `2.0`.
+  - **PSNR-UV**: Allowed drop from baseline reduced from `4.0` to `1.5`.
+  - **CAMBI**: Reduced allowed banding growth from `2.0/3.0` to `1.0/1.5`.
+- **Refactored Decision Engine**: Rewrote the quality status reporting logic to utilize a semantic tri-state (`PASSED`, `FAILED`, `N/A`), providing clearer diagnostics for complex fallback scenarios.
+- **Dynamic Mapping Calibration**: Enhanced the GPU-to-CPU CRF mapping logic to more accurately project search boundaries across different hardware vendors.
 
-### 🧹 Maintenance & UX Improvements
+### 🛡️ Media Integrity & Stream-Level Validation
 
-- **Intelligent Cache Cleaner**: Upgraded `cache_cleaner.py` with:
-  - **Standardized Path Discovery**: Implemented `PROJECT_ROOT` discovery to ensure reliable operation regardless of the working directory.
-  - **Automation Friendly**: Added non-interactive detection to automatically trigger `smart_build.py` after purging build artifacts, keeping the binary optimized without user intervention.
-  - **Smart Rebuild Logic**: The post-cleanup rebuild now only triggers if Rust build artifacts were actually removed, saving unnecessary compilation cycles.
-- **GIF Scanning Refinement**: Refactored `scan_gif_headers` from a tuple-based return to a structured result in `database.rs`, improving readability and type safety in the active learning ingestion pipeline.
-- **Clippy Hygiene**: Continued the quest for a 100% warning-free workspace by refining numeric casting logic and removing obsolete lint suppressions in the analysis engine.
+- **Stream Compression Guard**: Introduced `ExploreQualityFailureDecision` in `conversion_api.rs`. The system now explicitly validates that the **video stream itself** is compressed, preventing false-positive successes where size reduction was purely due to container overhead (e.g., MOV -> MP4) while the video payload grew.
+- **Granular Fail Reporting**: Detailed logging now surfaces percentage changes in individual streams, protecting original files if the output fails the "strictly smaller payload" invariant even if the total file size passed.
+- **Animated Pipeline Resilience**: Refactored `animated_image.rs` to handle codec-specific failures (VP8/VP9/Alpha) more gracefully, ensuring fallback logic correctly preserves original assets.
+
+### ⚖️ Global Numerical Safety Audit (Workspace-wide)
+
+- **Audited Cast Hub**: Massive expansion of `numeric_cast.rs` with safe `raw` casting helpers.
+- **Systematic `as` Removal**: Replaced hundreds of unchecked saturating `as` casts with audited saturating/checked variants across `shared_utils`, `vid`, and `img` crates. This eliminates risk of silent overflows and logic drift in high-bitrate/high-resolution processing paths.
+- **Floating-Point Precision**: Hardened `f32/f64` comparison and conversion logic to handle edge cases like `NaN`, `Inf`, and near-zero values more predictably.
+
+### ⚙️ Heartbeat System Decommission & Architecture Cleanup
+
+- **Legacy Subsystem Removal**: Deleted the entire heartbeat engine (`heartbeat_manager.rs`, `msssim_heartbeat.rs`, `universal_heartbeat.rs`), transitioning to more reliable filesystem-based locking and direct process monitoring.
+- **FFprobe Logic Refactor**: Comprehensive cleanup of the media probing layer in `ffprobe.rs`, implementing better error propagation and metadata extraction for archival formats.
+- **Shared Utils Consolidation**: Performed a large-scale structural refactoring of `lib.rs` and core utility modules to reduce technical debt and improve auditability.
+
+### 🧹 Maintenance & Automation UX
+
+- **Intelligent Cache Cleaner**: Implemented `PROJECT_ROOT` discovery and automation-aware rebuilds in `cache_cleaner.py`.
+- **Documentation Hygiene**: Workspace-wide audit using `prettier` and `ruff` to resolve formatting and linting warnings in the documentation and maintenance scripts.
 
 ## [0.11.2] — 2026-04-18
 
