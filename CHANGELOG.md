@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.11.3] — 2026-04-19
+
+### 🎬 Video Filter & Sampling Hardening
+
+- **Unified Filter Construction**: Introduced a centralized logic in `gpu_accel.rs` (`collect_vf_filters`, `build_multi_segment_sampling_filter`, `build_sampling_vf_args`) to unify how video filters are collected and combined.
+- **Robust Multi-Segment Sampling**: Implemented a more reliable sampling mechanism using the FFmpeg `select` filter for long videos, ensuring consistent behavior across GPU and CPU exploration paths.
+- **GPU Coarse Search Refinement**: Updated the GPU search engine to correctly propagate user-provided filter arguments (`vf_args`) and combine them with internal sampling filters.
+- **x265 Encoder Enhancements**: Added `sample_duration` support to `X265Config`, allowing for precise duration-limited encodes with proper stream mapping (`-map 0:v:0 -an`).
+- **Dynamic Mapping Logic Cleanup**: Refactored `dynamic_mapping.rs` to utilize the new centralized filter building helpers, reducing code duplication and improving maintainability.
+- **Expanded Test Coverage**: Added 7 new unit tests covering multi-segment filter generation, filter chain construction, and boundary cases for short/long videos.
+
 ## [0.11.2] — 2026-04-18
 
 ### 🚀 ProRes & HEVC Performance Optimization
