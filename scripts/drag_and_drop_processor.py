@@ -1201,12 +1201,14 @@ def organize_session_logs():
                 shutil.move(str(log_path), str(dest))
             except Exception:
                 pass
-        
+
         # Also move the main session log and verbose log into the bundle at the very end
         # We do this by a second pass or just keep them in logs root?
         # User implies they want a "perfect" organization, so moving everything is best.
-        print(f"   {DIM}Worker logs archived in: {session_dir.relative_to(PROJECT_ROOT)}{RESET}")
-            
+        print(
+            f"   {DIM}Worker logs archived in: {session_dir.relative_to(PROJECT_ROOT)}{RESET}"
+        )
+
     except Exception as e:
         print(f"   {RED}⚠️  Failed to organize logs: {e}{RESET}")
 

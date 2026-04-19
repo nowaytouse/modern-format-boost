@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.11.2] — 2026-04-20
+
+### ⚙️ Heartbeat System Decommission (Clean-up Phase)
+
+- **Legacy Heartbeat Removal**: Deleted `heartbeat_manager.rs`, `msssim_heartbeat.rs`, and `universal_heartbeat.rs`. The repository has transitioned to a more direct process-level monitoring model, eliminating redundant status signaling files.
+- **Shared Utils Consolidation**: Performed a large-scale refactoring of the `shared_utils` crate to improve auditability and align internal APIs with the new heartbeat-free architecture.
+
+### 🧹 Maintenance & UX Improvements
+
+- **Intelligent Cache Cleaner**: Upgraded `cache_cleaner.py` with:
+  - **Standardized Path Discovery**: Implemented `PROJECT_ROOT` discovery to ensure reliable operation regardless of the working directory.
+  - **Automation Friendly**: Added non-interactive detection to automatically trigger `smart_build.py` after purging build artifacts, keeping the binary optimized without user intervention.
+  - **Smart Rebuild Logic**: The post-cleanup rebuild now only triggers if Rust build artifacts were actually removed, saving unnecessary compilation cycles.
+- **GIF Scanning Refinement**: Refactored `scan_gif_headers` from a tuple-based return to a structured result in `database.rs`, improving readability and type safety in the active learning ingestion pipeline.
+- **Clippy Hygiene**: Continued the quest for a 100% warning-free workspace by refining numeric casting logic and removing obsolete lint suppressions in the analysis engine.
+
 ## [0.11.2] — 2026-04-18
 
 ### 🎬 Video Filter & Sampling Hardening
@@ -41,9 +57,9 @@ All notable changes to this project will be documented in this file.
 
 ### ⚙️ Core Parallelization & Memory-Aware Scheduling
 
-- **High-Performance Parallel Engine**: Migrated the core media processing loop in `cli_runner.rs` from serial execution to a **Rayon-based parallel architecture**. 
+- **High-Performance Parallel Engine**: Migrated the core media processing loop in `cli_runner.rs` from serial execution to a **Rayon-based parallel architecture**.
   - **Dynamic Task Concurrency**: The system now simultaneously processes multiple files, using thread-safe `Atomic` counters for session accounting.
-  - **Memory-Adaptive Scheduling**: Upgraded `thread_manager.rs` to dynamically calculate CPU headroom based on the system's current RAM profile. 
+  - **Memory-Adaptive Scheduling**: Upgraded `thread_manager.rs` to dynamically calculate CPU headroom based on the system's current RAM profile.
   - **RAM-Aware Core Reservation**: Automatically reserves 15% to 40% of CPU cores as safety headroom to prevent memory thrashing in high-resolution ProRes/HDR workloads.
   - **Unified Concurrency Policy**: Aligned Static Image, Animated Image, and Video processing paths under the same memory-aware scaling logic, ensuring consistent resource usage across the entire workspace.
   - **Internal Refactoring**: Decoupled multi-instance capping logic from global state and removed legacy internal wrappers to improve unit test reliability and codebase maintenance.

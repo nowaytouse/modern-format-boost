@@ -51,7 +51,7 @@ def can_prompt_user() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
-def resolve_python_executable() -> Optional[str]:
+def resolve_python_executable() -> str | None:
     if sys.executable:
         return sys.executable
     return shutil.which("python3") or shutil.which("python")
@@ -60,22 +60,16 @@ def resolve_python_executable() -> Optional[str]:
 def run_post_cleanup_rebuild(project_root: Path) -> bool:
     smart_build = project_root / "scripts" / "smart_build.py"
     if not smart_build.is_file():
-        print(
-            f"{RED}❌ Error: rebuild script not found: {smart_build}{RESET}"
-        )
+        print(f"{RED}❌ Error: rebuild script not found: {smart_build}{RESET}")
         return False
 
     python_exe = resolve_python_executable()
     if not python_exe:
-        print(
-            f"{RED}❌ Error: no Python interpreter found for rebuild step.{RESET}"
-        )
+        print(f"{RED}❌ Error: no Python interpreter found for rebuild step.{RESET}")
         return False
 
     if not shutil.which("cargo"):
-        print(
-            f"{RED}❌ Error: cargo not found in PATH; cannot rebuild project.{RESET}"
-        )
+        print(f"{RED}❌ Error: cargo not found in PATH; cannot rebuild project.{RESET}")
         return False
 
     print(f"{BOLD}\n📦 Initializing Optimized Rebuild...{RESET}")
@@ -98,9 +92,7 @@ def run_post_cleanup_rebuild(project_root: Path) -> bool:
     except FileNotFoundError as exc:
         print(f"\n{RED}❌ Error: Rebuild failed to start: {exc}{RESET}")
 
-    print(
-        f"{YELLOW}Please run '{python_exe} {smart_build} --force' manually.{RESET}"
-    )
+    print(f"{YELLOW}Please run '{python_exe} {smart_build} --force' manually.{RESET}")
     return False
 
 
@@ -256,7 +248,7 @@ def show_stats(cache_dir, db_file, log_dir, mfb_progress_dir):
     if fuzz_target.is_dir():
         fuzz_size = get_dir_size(fuzz_target)
         print(f"   🧪 Fuzz Build: {BOLD}{YELLOW}{fuzz_size}{RESET}")
-    
+
     dist_dir = PROJECT_ROOT / "dist"
     if dist_dir.is_dir():
         dist_size = get_dir_size(dist_dir)
@@ -527,7 +519,7 @@ def perform_full_cleanup():
         shutil.rmtree(mfb_tmp_dir, ignore_errors=True)
         mfb_tmp_dir.mkdir(parents=True, exist_ok=True)
         print(f"   {GREEN}✅ Isolated temp space cleared{RESET}")
-    
+
     # 6. Cargo clean — mandatory for build artifact cleanup
     target_dir = PROJECT_ROOT / "target"
     if target_dir.is_dir():
@@ -555,7 +547,9 @@ def perform_full_cleanup():
     if (fuzz_dir / "target").is_dir():
         print(f"{DIM}   Running cargo clean in {fuzz_dir.name}...{RESET}")
         try:
-            subprocess.run(["cargo", "clean"], cwd=fuzz_dir, check=True, capture_output=True)
+            subprocess.run(
+                ["cargo", "clean"], cwd=fuzz_dir, check=True, capture_output=True
+            )
             print(f"   {GREEN}✅ Fuzzing artifacts purged{RESET}")
         except Exception:
             # Fallback if cargo clean fails

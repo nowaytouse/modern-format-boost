@@ -9,7 +9,6 @@ import os
 import subprocess
 from pathlib import Path
 import shutil
-from typing import Optional, Tuple, List
 
 # Console Output Colors
 if sys.stdout.isatty():
@@ -108,9 +107,7 @@ def extract_xmp_metadata(xmp_path: Path) -> XmpInfo:
         str(xmp_path),
     ]
     try:
-        res = subprocess.run(
-            cmd, capture_output=True, text=True
-        )
+        res = subprocess.run(cmd, capture_output=True, text=True)
         if res.returncode != 0:
             return XmpInfo()
 
@@ -148,9 +145,7 @@ def normalize_filename(name: str) -> str:
 def extract_media_doc_id(media_path: Path) -> str:
     cmd = ["exiftool", "-s3", "-DocumentID", str(media_path)]
     try:
-        res = subprocess.run(
-            cmd, capture_output=True, text=True
-        )
+        res = subprocess.run(cmd, capture_output=True, text=True)
         return res.stdout.strip()
     except Exception:
         return ""
@@ -159,9 +154,7 @@ def extract_media_doc_id(media_path: Path) -> str:
 def scan_xmp_ref(media_path: Path, target_xmp: str) -> bool:
     cmd = ["exiftool", "-s3", "-SidecarForExtension", "-XMPFileRef", str(media_path)]
     try:
-        res = subprocess.run(
-            cmd, capture_output=True, text=True
-        )
+        res = subprocess.run(cmd, capture_output=True, text=True)
         if res.returncode == 0 and target_xmp in res.stdout:
             return True
         return False
