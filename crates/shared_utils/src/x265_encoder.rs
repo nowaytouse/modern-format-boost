@@ -27,6 +27,7 @@ pub struct X265Config {
     pub preset: String,
     pub threads: usize,
     pub container: String,
+    pub sample_duration: Option<f32>,
     pub preserve_audio: bool,
     /// Pixel format to use for the YUV pipe. Set to "yuv420p10le" for 10-bit HDR content.
     pub pix_fmt: String,
@@ -59,6 +60,7 @@ impl Default for X265Config {
             preset: crate::types::EncoderPreset::Medium.hevc_name().to_string(),
             threads: crate::thread_manager::get_optimal_threads(),
             container: "mp4".to_string(),
+            sample_duration: None,
             preserve_audio: true,
             pix_fmt: "yuv420p".to_string(),
             color_primaries: None,
@@ -241,8 +243,15 @@ fn encode_to_hevc(
     ffmpeg_builder
         .overwrite()
         .input(input)
+        .arg("-map")
+        .arg("0:v:0")
+        .arg("-an")
         .format("yuv4mpegpipe")
         .pix_fmt_str(&config.pix_fmt);
+
+    if let Some(sample_duration) = config.sample_duration {
+        ffmpeg_builder.arg("-t").arg(sample_duration.to_string());
+    }
 
     for arg in vf_args {
         ffmpeg_builder.arg(arg);

@@ -247,6 +247,68 @@ pub const GPU_SEGMENT_DURATION_ULTIMATE: f32 = 13.0;
 /// Number of segments to sample in multi-segment GPU probing.
 pub const GPU_SAMPLE_SEGMENTS: usize = 5;
 
+fn collect_vf_filters(vf_args: &[String]) -> Vec<String> {
+    let mut filters = Vec::new();
+    let mut idx = 0;
+
+    while idx + 1 < vf_args.len() {
+        if vf_args[idx] == "-vf" && !vf_args[idx + 1].is_empty() {
+            filters.push(vf_args[idx + 1].clone());
+            idx += 2;
+        } else {
+            idx += 1;
+        }
+    }
+
+    filters
+}
+
+#[must_use]
+pub(crate) fn build_multi_segment_sampling_filter(
+    duration: f64,
+    ultimate_mode: bool,
+) -> Option<String> {
+    if duration < 60.0 {
+        return None;
+    }
+
+    let seg_dur = if ultimate_mode {
+        GPU_SEGMENT_DURATION_ULTIMATE
+    } else {
+        GPU_SEGMENT_DURATION
+    };
+    let positions = [
+        0.0,
+        duration * 0.25,
+        duration * 0.50,
+        duration * 0.75,
+        (duration * 0.90).max(duration - f64::from(seg_dur)),
+    ];
+
+    Some(format!(
+        "select='{}',setpts=N/FRAME_RATE/TB",
+        positions
+            .iter()
+            .map(|&pos| format!("between(t,{:.1},{:.1})", pos, pos + f64::from(seg_dur)))
+            .collect::<Vec<_>>()
+            .join("+")
+    ))
+}
+
+fn build_sampling_vf_args(vf_args: &[String], duration: f64, ultimate_mode: bool) -> Vec<String> {
+    let mut filters = Vec::new();
+    if let Some(prefix) = build_multi_segment_sampling_filter(duration, ultimate_mode) {
+        filters.push(prefix);
+    }
+    filters.extend(collect_vf_filters(vf_args));
+
+    if filters.is_empty() {
+        Vec::new()
+    } else {
+        vec!["-vf".to_string(), filters.join(",")]
+    }
+}
+
 /// Step size for CRF adjustments during GPU coarse search.
 pub const GPU_COARSE_STEP: f32 = 1.0;
 
@@ -1757,6 +1819,7 @@ pub fn gpu_coarse_search(
     encoder: &str,
     input_size: u64,
     config: &GpuCoarseConfig,
+    vf_args: &[String],
     progress_cb: Option<&dyn Fn(f32, u64)>,
 ) -> anyhow::Result<GpuCoarseResult> {
     gpu_coarse_search_with_log(
@@ -1765,6 +1828,7 @@ pub fn gpu_coarse_search(
         encoder,
         input_size,
         config,
+        vf_args,
         progress_cb,
         None,
     )
@@ -1780,6 +1844,7 @@ pub fn gpu_coarse_search_with_log(
     encoder: &str,
     input_size: u64,
     config: &GpuCoarseConfig,
+    vf_args: &[String],
     progress_cb: Option<&dyn Fn(f32, u64)>,
     log_cb: Option<&dyn Fn(&str)>,
 ) -> anyhow::Result<GpuCoarseResult> {
@@ -1789,6 +1854,7 @@ pub fn gpu_coarse_search_with_log(
         encoder,
         input_size,
         config,
+        vf_args,
         progress_cb,
         log_cb,
     );
@@ -1811,6 +1877,7 @@ fn gpu_coarse_search_with_log_impl(
     encoder: &str,
     input_size: u64,
     config: &GpuCoarseConfig,
+    vf_args: &[String],
     progress_cb: Option<&dyn Fn(f32, u64)>,
     log_cb: Option<&dyn Fn(&str)>,
 ) -> anyhow::Result<GpuCoarseResult> {
@@ -2144,37 +2211,20 @@ fn gpu_coarse_search_with_log_impl(
         builder.overwrite();
 
         let use_multi_segment = duration >= 60.0;
+        let sampling_vf_args =
+            build_sampling_vf_args(vf_args, f64::from(duration), config.ultimate_mode);
+
+        builder
+            .input(input)
+            .arg("-map")
+            .arg("0:v:0")
+            .vcodec_str(gpu_encoder.name);
 
         if !use_multi_segment {
             builder.arg("-t").arg(format!("{actual_sample_duration}"));
         }
-
-        builder.input(input).vcodec_str(gpu_encoder.name);
-
-        if use_multi_segment {
-            let seg_dur = if config.ultimate_mode {
-                GPU_SEGMENT_DURATION_ULTIMATE
-            } else {
-                GPU_SEGMENT_DURATION
-            };
-            let positions = [
-                0.0,
-                duration * 0.25,
-                duration * 0.50,
-                duration * 0.75,
-                (duration * 0.90).max(duration - seg_dur),
-            ];
-
-            let select_filter = format!(
-                "select='{}',setpts=N/FRAME_RATE/TB",
-                positions
-                    .iter()
-                    .map(|&pos| format!("between(t,{:.1},{:.1})", pos, pos + seg_dur))
-                    .collect::<Vec<_>>()
-                    .join("+")
-            );
-
-            builder.arg("-vf").arg(&select_filter);
+        for arg in &sampling_vf_args {
+            builder.arg(arg);
         }
 
         for arg in &crf_args {
@@ -3357,6 +3407,22 @@ mod tests {
             assert!(qv >= 1.0, "q:v should be >= 1, got {qv} for CRF {crf}");
             assert!(qv <= 100.0, "q:v should be <= 100, got {qv} for CRF {crf}");
         }
+    }
+
+    #[test]
+    fn test_build_multi_segment_sampling_filter_for_long_videos() {
+        let filter = build_multi_segment_sampling_filter(120.0, false)
+            .expect("long videos should use multi-segment sampling");
+        assert!(filter.contains("between(t,0.0,15.0)"));
+        assert!(filter.contains("between(t,30.0,45.0)"));
+        assert!(filter.contains("between(t,60.0,75.0)"));
+        assert!(filter.contains("between(t,90.0,105.0)"));
+        assert!(filter.contains("between(t,108.0,123.0)"));
+    }
+
+    #[test]
+    fn test_build_multi_segment_sampling_filter_skips_short_videos() {
+        assert!(build_multi_segment_sampling_filter(59.9, true).is_none());
     }
 
     #[test]

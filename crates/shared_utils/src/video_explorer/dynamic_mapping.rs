@@ -119,6 +119,56 @@ impl DynamicCrfMapper {
     }
 }
 
+fn collect_vf_filters(vf_args: &[String]) -> Vec<String> {
+    let mut filters = Vec::new();
+    let mut idx = 0;
+
+    while idx + 1 < vf_args.len() {
+        if vf_args[idx] == "-vf" && !vf_args[idx + 1].is_empty() {
+            filters.push(vf_args[idx + 1].clone());
+            idx += 2;
+        } else {
+            idx += 1;
+        }
+    }
+
+    filters
+}
+
+fn build_hevc_calibration_sample_filter(vf_args: &[String], pix_fmt: &str) -> String {
+    build_calibration_filter_chain(
+        vf_args,
+        None,
+        false,
+        &[
+            "pad=ceil(iw/2)*2:ceil(ih/2)*2:0:0".to_string(),
+            format!("format={pix_fmt}"),
+        ],
+    )
+}
+
+fn build_calibration_filter_chain(
+    vf_args: &[String],
+    input_duration: Option<f64>,
+    ultimate_mode: bool,
+    tail_filters: &[String],
+) -> String {
+    let mut filters = Vec::new();
+
+    if let Some(duration) = input_duration {
+        if let Some(sampling_filter) =
+            crate::gpu_accel::build_multi_segment_sampling_filter(duration, ultimate_mode)
+        {
+            filters.push(sampling_filter);
+        }
+    }
+
+    filters.extend(collect_vf_filters(vf_args));
+    filters.extend(tail_filters.iter().cloned());
+
+    filters.join(",")
+}
+
 /// Quickly calibrate a CRF value using a GPU-accelerated coarse search.
 ///
 /// # Errors
@@ -131,7 +181,7 @@ pub fn quick_calibrate(
     input_size: u64,
     encoder: super::VideoEncoder,
     vf_args: &[String],
-    gpu_encoder: &str,
+    gpu_encoder: &crate::gpu_accel::GpuEncoder,
     sample_duration: f32,
     ultimate_mode: bool,
     apple_compat: bool,
@@ -139,9 +189,13 @@ pub fn quick_calibrate(
     use std::fs;
 
     let mut mapper = DynamicCrfMapper::new(input_size);
-
-    let is_gif_input =
-        crate::ffprobe::probe_video(input).is_ok_and(|p| p.format_name.eq_ignore_ascii_case("gif"));
+    let probe = crate::ffprobe::probe_video(input).ok();
+    let is_gif_input = probe
+        .as_ref()
+        .is_some_and(|p| p.format_name.eq_ignore_ascii_case("gif"));
+    let input_duration = probe
+        .as_ref()
+        .map_or(f64::from(sample_duration), |p| p.duration);
     if is_gif_input {
         crate::verbose_eprintln!(
             "   GIF detected: using FFmpeg libx265 path for calibration (no Y4M pipeline)"
@@ -150,8 +204,11 @@ pub fn quick_calibrate(
 
     let calibration_crfs = vec![20.0_f32, 18.0, 22.0];
     let mut calibration_success = false;
-
-    let cpu_sample_cap = if ultimate_mode { 30.0 } else { 15.0 };
+    let use_multi_segment =
+        crate::gpu_accel::build_multi_segment_sampling_filter(input_duration, ultimate_mode)
+            .is_some();
+    let base_calibration_filter =
+        build_calibration_filter_chain(vf_args, Some(input_duration), ultimate_mode, &[]);
 
     for (attempt, anchor_crf) in calibration_crfs.iter().enumerate() {
         crate::verbose_eprintln!(
@@ -176,21 +233,28 @@ pub fn quick_calibrate(
         gpu_builder
             .overwrite()
             .input(input)
-            .codec_video(gpu_encoder);
+            .arg("-map")
+            .arg("0:v:0")
+            .arg("-an")
+            .codec_video(gpu_encoder.ffmpeg_name());
         if apple_compat && encoder == super::VideoEncoder::Hevc {
             gpu_builder
                 .arg(crate::constants::FFMPEG_ARG_TAG_VIDEO)
                 .arg(crate::constants::FFMPEG_TAG_HVC1);
         }
-        for arg in vf_args {
+        for arg in gpu_encoder.get_crf_args(*anchor_crf) {
             gpu_builder.arg(arg);
         }
-        gpu_builder
-            .arg("-q:v")
-            .arg(format!("{anchor_crf:.1}"))
-            .arg("-t")
-            .arg(sample_duration.to_string())
-            .output(&gpu_path);
+        for arg in gpu_encoder.extra_args() {
+            gpu_builder.arg(arg);
+        }
+        if !base_calibration_filter.is_empty() {
+            gpu_builder.arg("-vf").arg(&base_calibration_filter);
+        }
+        if !use_multi_segment {
+            gpu_builder.arg("-t").arg(sample_duration.to_string());
+        }
+        gpu_builder.output(&gpu_path);
 
         let gpu_result = gpu_builder.build().output();
 
@@ -200,7 +264,10 @@ pub fn quick_calibrate(
                 let stderr = String::from_utf8_lossy(&out.stderr);
                 eprintln!("   ❌ GPU calibration failed for CRF {anchor_crf:.1}");
                 if stderr.contains("No such encoder") {
-                    eprintln!("      Cause: GPU encoder '{gpu_encoder}' not available");
+                    eprintln!(
+                        "      Cause: GPU encoder '{}' not available",
+                        gpu_encoder.ffmpeg_name()
+                    );
                 } else if stderr.contains("Invalid") {
                     eprintln!("      Cause: Invalid parameters");
                 }
@@ -223,15 +290,25 @@ pub fn quick_calibrate(
             let mut cpu_builder = crate::ffmpeg_builder::FfmpegBuilder::new();
             cpu_builder
                 .overwrite()
-                .arg("-t")
-                .arg(format!("{}", sample_duration.min(cpu_sample_cap)))
                 .input(input)
+                .arg("-map")
+                .arg("0:v:0")
                 .codec_audio("none")
-                .arg("-vf")
-                .arg("scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=lanczos,format=yuv420p")
                 .codec_video("libx265")
                 .arg("-crf")
                 .arg(format!("{anchor_crf:.0}"));
+            let gif_filter = build_calibration_filter_chain(
+                vf_args,
+                Some(input_duration),
+                ultimate_mode,
+                &["scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=lanczos,format=yuv420p".to_string()],
+            );
+            if !gif_filter.is_empty() {
+                cpu_builder.arg("-vf").arg(gif_filter);
+            }
+            if !use_multi_segment {
+                cpu_builder.arg("-t").arg(sample_duration.to_string());
+            }
 
             for arg in encoder.extra_args(max_threads, apple_compat) {
                 cpu_builder.arg(arg);
@@ -270,82 +347,38 @@ pub fn quick_calibrate(
 
             // Probe the input to decide HDR-aware pix_fmt so the CPU calibration
             // encode doesn't silently downshift a 10-bit HDR source to 8-bit SDR.
-            let probe = crate::ffprobe::probe_video(input).ok();
             let is_ten_bit = probe.as_ref().is_some_and(|p| p.bit_depth >= 10);
             let pix_fmt = if is_ten_bit { "yuv420p10le" } else { "yuv420p" };
+            let cpu_vf_args = vec![
+                "-vf".to_string(),
+                build_calibration_filter_chain(
+                    vf_args,
+                    Some(input_duration),
+                    ultimate_mode,
+                    &[
+                        "pad=ceil(iw/2)*2:ceil(ih/2)*2:0:0".to_string(),
+                        format!("format={pix_fmt}"),
+                    ],
+                ),
+            ];
 
             let config = X265Config {
                 crf: *anchor_crf,
                 preset: crate::types::EncoderPreset::Medium.hevc_name().to_string(),
                 threads: max_threads,
                 container: "mp4".to_string(),
-                preserve_audio: true,
+                sample_duration: (!use_multi_segment).then_some(sample_duration),
+                preserve_audio: false,
                 pix_fmt: pix_fmt.to_string(),
+                color_primaries: probe.as_ref().and_then(|p| p.color_primaries.clone()),
+                color_trc: probe.as_ref().and_then(|p| p.color_transfer.clone()),
+                colorspace: probe.as_ref().and_then(|p| p.color_space.clone()),
+                mastering_display: probe.as_ref().and_then(|p| p.mastering_display.clone()),
+                max_cll: probe.as_ref().and_then(|p| p.max_cll.clone()),
                 ..Default::default()
             };
 
-            let temp_input_file = tempfile::Builder::new()
-                .suffix(".y4m")
-                .tempfile()
-                .context("Failed to create temp file")?;
-            let temp_input = temp_input_file.path().to_path_buf();
-            let temp_y4m = temp_input.to_str().unwrap();
-            let extract_result = crate::ffmpeg_builder::FfmpegBuilder::new()
-                .overwrite()
-                .input(input)
-                .arg("-vf")
-                .arg("select=eq(n\\,0)")
-                .arg("-pix_fmt")
-                .arg(pix_fmt)
-                .arg("-frames:v")
-                .arg("1")
-                .output(temp_y4m)
-                .build()
-                .output();
-
-            match extract_result {
-                Ok(out) if out.status.success() => {}
-                Ok(out) => {
-                    let stderr = String::from_utf8_lossy(&out.stderr);
-                    eprintln!("   ❌ Failed to extract input sample for CRF {anchor_crf:.1}");
-                    let error_lines: Vec<&str> = stderr
-                        .lines()
-                        .filter(|l| {
-                            l.contains("Error")
-                                || l.contains("error")
-                                || l.contains("Invalid")
-                                || l.contains("failed")
-                                || l.contains("No such")
-                                || l.contains("cannot")
-                        })
-                        .take(2)
-                        .collect();
-                    if !error_lines.is_empty() {
-                        eprintln!("      Cause: {}", error_lines.join(" | "));
-                    }
-                    continue;
-                }
-                Err(e) => {
-                    eprintln!("   ❌ Extract command failed: {e}");
-                    continue;
-                }
-            }
-
-            // Guard: verify the y4m file was actually written with content.
-            // ffmpeg can exit 0 on certain inputs (e.g. zero-duration sample, codec
-            // mismatch) while producing an empty file.  x265 then reports
-            // "unable to open input file" which looks like a file-not-found error
-            // but is really a race/empty-file issue.  Skip this CRF attempt and
-            // try the next one rather than propagating a misleading x265 error.
-            let y4m_size = fs::metadata(&temp_input).map_or(0, |m| m.len());
-            if y4m_size == 0 {
-                eprintln!(
-                    "   ❌ Extracted y4m sample is empty for CRF {anchor_crf:.1} (ffmpeg exited 0 but wrote nothing); skipping"
-                );
-                continue;
-            }
-
-            match encode_with_x265(&temp_input, &cpu_path, &config, vf_args) {
+            match encode_with_x265(input, &cpu_path, &config, &cpu_vf_args) {
                 Ok(_) => fs::metadata(&cpu_path).map_or(0, |m| m.len()),
                 Err(e) => {
                     eprintln!("   ❌ CPU x265 encoding failed for CRF {anchor_crf:.1}: {e}");
@@ -366,17 +399,16 @@ pub fn quick_calibrate(
             cpu_builder
                 .overwrite()
                 .input(input)
-                .arg("-t")
-                .arg(sample_duration.to_string());
+                .arg("-map")
+                .arg("0:v:0");
 
-            let vf_joined: String = vf_args
-                .iter()
-                .filter(|s| !s.is_empty() && s.as_str() != "-vf")
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(",");
+            let vf_joined =
+                build_calibration_filter_chain(vf_args, Some(input_duration), ultimate_mode, &[]);
             if !vf_joined.is_empty() {
                 cpu_builder.arg("-vf").arg(vf_joined);
+            }
+            if !use_multi_segment {
+                cpu_builder.arg("-t").arg(sample_duration.to_string());
             }
 
             cpu_builder
@@ -449,4 +481,71 @@ pub fn quick_calibrate(
     }
 
     Ok(mapper)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        build_calibration_filter_chain, build_hevc_calibration_sample_filter, collect_vf_filters,
+    };
+
+    #[test]
+    fn test_collect_vf_filters_merges_multiple_pairs() {
+        let vf_args = vec![
+            "-vf".to_string(),
+            "scale=1280:720".to_string(),
+            "-crf".to_string(),
+            "20".to_string(),
+            "-vf".to_string(),
+            "fps=30".to_string(),
+        ];
+
+        assert_eq!(
+            collect_vf_filters(&vf_args),
+            vec!["scale=1280:720".to_string(), "fps=30".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_build_hevc_calibration_sample_filter_appends_y4m_guards() {
+        let vf_args = vec!["-vf".to_string(), "zscale=t=bt709".to_string()];
+
+        assert_eq!(
+            build_hevc_calibration_sample_filter(&vf_args, "yuv420p10le"),
+            "zscale=t=bt709,pad=ceil(iw/2)*2:ceil(ih/2)*2:0:0,format=yuv420p10le"
+        );
+    }
+
+    #[test]
+    fn test_build_hevc_calibration_sample_filter_without_input_filters() {
+        assert_eq!(
+            build_hevc_calibration_sample_filter(&[], "yuv420p"),
+            "pad=ceil(iw/2)*2:ceil(ih/2)*2:0:0,format=yuv420p"
+        );
+    }
+
+    #[test]
+    fn test_build_calibration_filter_chain_adds_sampling_prefix_for_long_videos() {
+        let vf_args = vec!["-vf".to_string(), "format=yuv420p".to_string()];
+
+        let filter = build_calibration_filter_chain(
+            &vf_args,
+            Some(120.0),
+            false,
+            &["pad=ceil(iw/2)*2:ceil(ih/2)*2:0:0".to_string()],
+        );
+
+        assert!(filter.starts_with("select='between(t,0.0,15.0)"));
+        assert!(filter.contains(",format=yuv420p,pad=ceil(iw/2)*2:ceil(ih/2)*2:0:0"));
+    }
+
+    #[test]
+    fn test_build_calibration_filter_chain_omits_sampling_prefix_for_short_videos() {
+        let vf_args = vec!["-vf".to_string(), "scale=1280:720".to_string()];
+
+        assert_eq!(
+            build_calibration_filter_chain(&vf_args, Some(10.0), false, &[]),
+            "scale=1280:720"
+        );
+    }
 }

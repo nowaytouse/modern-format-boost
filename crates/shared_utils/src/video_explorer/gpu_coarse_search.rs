@@ -561,18 +561,10 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
         let temp_output =
             output.with_extension(crate::gpu_accel::derive_gpu_temp_extension(output));
 
-        let gpu_encoder_name = match encoder {
-            VideoEncoder::Hevc => gpu.get_hevc_encoder().map_or(
-                "hevc_videotoolbox",
-                super::super::gpu_accel::GpuEncoder::ffmpeg_name,
-            ),
-            VideoEncoder::Av1 => gpu
-                .get_av1_encoder()
-                .map_or("av1", super::super::gpu_accel::GpuEncoder::ffmpeg_name),
-            VideoEncoder::H264 => gpu.get_h264_encoder().map_or(
-                "h264_videotoolbox",
-                super::super::gpu_accel::GpuEncoder::ffmpeg_name,
-            ),
+        let gpu_encoder = match encoder {
+            VideoEncoder::Hevc => gpu.get_hevc_encoder(),
+            VideoEncoder::Av1 => gpu.get_av1_encoder(),
+            VideoEncoder::H264 => gpu.get_h264_encoder(),
         };
 
         let sample_dur = if ultimate_mode {
@@ -620,6 +612,7 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
             encoder_name,
             input_size,
             &gpu_config,
+            &vf_args,
             Some(&progress_callback),
             Some(&log_callback),
         );
@@ -643,7 +636,7 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
                         input_size,
                         encoder,
                         &vf_args,
-                        gpu_encoder_name,
+                        gpu_encoder.expect("GPU encoder presence already validated"),
                         sample_dur,
                         ultimate_mode,
                         apple_compat,
