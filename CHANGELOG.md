@@ -13,7 +13,8 @@ All notable changes to this project will be documented in this file.
 - **GPU Coarse Search Refinement**: Updated the GPU search engine to correctly propagate user-provided filter arguments (`vf_args`) and combine them with internal sampling filters.
 - **x265 Encoder Enhancements**: Added `sample_duration` support to `X265Config`, allowing for precise duration-limited encodes with proper stream mapping (`-map 0:v:0 -an`).
 - **Dynamic Mapping Logic Cleanup**: Refactored `dynamic_mapping.rs` to utilize the new centralized filter building helpers, reducing code duplication and improving maintainability.
-- **Expanded Test Coverage**: Added 7 new unit tests covering multi-segment filter generation, filter chain construction, and boundary cases for short/long videos.
+- **Dead Code Elimination**: Removed the unused `build_hevc_calibration_sample_filter` helper to resolve compilation warnings and streamlined the unit test suite.
+- **Expanded Test Coverage**: Updated unit tests covering multi-segment filter generation, filter chain construction, and boundary cases for short/long videos.
 
 ### 🚀 ProRes & HEVC Performance Optimization
 

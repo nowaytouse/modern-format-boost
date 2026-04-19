@@ -135,18 +135,6 @@ fn collect_vf_filters(vf_args: &[String]) -> Vec<String> {
     filters
 }
 
-fn build_hevc_calibration_sample_filter(vf_args: &[String], pix_fmt: &str) -> String {
-    build_calibration_filter_chain(
-        vf_args,
-        None,
-        false,
-        &[
-            "pad=ceil(iw/2)*2:ceil(ih/2)*2:0:0".to_string(),
-            format!("format={pix_fmt}"),
-        ],
-    )
-}
-
 fn build_calibration_filter_chain(
     vf_args: &[String],
     input_duration: Option<f64>,
@@ -485,9 +473,7 @@ pub fn quick_calibrate(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        build_calibration_filter_chain, build_hevc_calibration_sample_filter, collect_vf_filters,
-    };
+    use super::{build_calibration_filter_chain, collect_vf_filters};
 
     #[test]
     fn test_collect_vf_filters_merges_multiple_pairs() {
@@ -507,19 +493,35 @@ mod tests {
     }
 
     #[test]
-    fn test_build_hevc_calibration_sample_filter_appends_y4m_guards() {
+    fn test_build_calibration_filter_chain_appends_y4m_guards() {
         let vf_args = vec!["-vf".to_string(), "zscale=t=bt709".to_string()];
 
         assert_eq!(
-            build_hevc_calibration_sample_filter(&vf_args, "yuv420p10le"),
+            build_calibration_filter_chain(
+                &vf_args,
+                None,
+                false,
+                &[
+                    "pad=ceil(iw/2)*2:ceil(ih/2)*2:0:0".to_string(),
+                    "format=yuv420p10le".to_string(),
+                ],
+            ),
             "zscale=t=bt709,pad=ceil(iw/2)*2:ceil(ih/2)*2:0:0,format=yuv420p10le"
         );
     }
 
     #[test]
-    fn test_build_hevc_calibration_sample_filter_without_input_filters() {
+    fn test_build_calibration_filter_chain_without_input_filters() {
         assert_eq!(
-            build_hevc_calibration_sample_filter(&[], "yuv420p"),
+            build_calibration_filter_chain(
+                &[],
+                None,
+                false,
+                &[
+                    "pad=ceil(iw/2)*2:ceil(ih/2)*2:0:0".to_string(),
+                    "format=yuv420p".to_string(),
+                ],
+            ),
             "pad=ceil(iw/2)*2:ceil(ih/2)*2:0:0,format=yuv420p"
         );
     }
