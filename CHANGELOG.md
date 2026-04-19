@@ -26,6 +26,8 @@ All notable changes to this project will be documented in this file.
 - **API Streamlining**: Cleaned up public exports in `vid/src/lib.rs` and `img/src/lib.rs`, removing obsolete helper functions in favor of the structured exploration API.
 - **Animated Pipeline Resilience**: Refactored `animated_image.rs` and `conversion_api.rs` to handle codec-specific failures (VP8/VP9/Alpha) more gracefully.
 
+- **FFmpeg 8.1 Compatibility**: Resolved a critical issue where FFmpeg 8.1 would fail to write `yuv4mpegpipe` headers for 10-bit pixel formats (e.g., `yuv420p10le`). Implemented automatic `-strict -1` injection for non-legacy Y4M formats to ensure stable high-bit-depth CPU encoding paths.
+
 ### ⚙️ Subsystem Decommission & Architecture Cleanup
 
 - **Heartbeat System Decommission**: Removed the legacy heartbeat signaling engine in favor of filesystem-based locking and direct process monitoring.

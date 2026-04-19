@@ -18,7 +18,7 @@
 use anyhow::{bail, Context, Result};
 use std::fmt::Write as FmtWrite;
 use std::path::Path;
-use std::process::Stdio;
+use std::process::{Command, Stdio};
 use tracing::{debug, error, warn};
 
 #[derive(Debug, Clone)]
@@ -229,25 +229,7 @@ fn encode_to_hevc(
         return encode_y4m_direct(input, hevc_output, config, start_time);
     }
 
-    let mut ffmpeg_builder = crate::ffmpeg_builder::FfmpegBuilder::new();
-    ffmpeg_builder
-        .overwrite()
-        .input(input)
-        .arg("-map")
-        .arg("0:v:0")
-        .arg("-an")
-        .format("yuv4mpegpipe")
-        .pix_fmt_str(&config.pix_fmt);
-
-    if let Some(sample_duration) = config.sample_duration {
-        ffmpeg_builder.arg("-t").arg(sample_duration.to_string());
-    }
-
-    for arg in vf_args {
-        ffmpeg_builder.arg(arg);
-    }
-
-    let mut ffmpeg_cmd = ffmpeg_builder.output_pipe().build();
+    let mut ffmpeg_cmd = build_ffmpeg_y4m_decode_command(input, config, vf_args);
     ffmpeg_cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
     let log_level = if crate::progress_mode::is_verbose_mode() {
@@ -429,6 +411,42 @@ fn encode_to_hevc(
     }
 }
 
+fn build_ffmpeg_y4m_decode_command(
+    input: &Path,
+    config: &X265Config,
+    vf_args: &[String],
+) -> Command {
+    let mut ffmpeg_builder = crate::ffmpeg_builder::FfmpegBuilder::new();
+    ffmpeg_builder
+        .overwrite()
+        .input(input)
+        .arg("-map")
+        .arg("0:v:0")
+        .arg("-an")
+        .format("yuv4mpegpipe")
+        .pix_fmt_str(&config.pix_fmt);
+
+    if y4m_pipe_requires_relaxed_strictness(&config.pix_fmt) {
+        // FFmpeg 8.1 rejects extended Y4M pixel formats such as yuv420p10le unless
+        // strictness is lowered. x265 accepts these headers, so enable them here.
+        ffmpeg_builder.arg("-strict").arg("-1");
+    }
+
+    if let Some(sample_duration) = config.sample_duration {
+        ffmpeg_builder.arg("-t").arg(sample_duration.to_string());
+    }
+
+    for arg in vf_args {
+        ffmpeg_builder.arg(arg);
+    }
+
+    ffmpeg_builder.output_pipe().build()
+}
+
+fn y4m_pipe_requires_relaxed_strictness(pix_fmt: &str) -> bool {
+    !matches!(pix_fmt, "yuv420p" | "yuv422p" | "yuv444p" | "gray")
+}
+
 fn is_image_container(path: &Path) -> bool {
     let ext = path
         .extension()
@@ -542,6 +560,7 @@ pub fn is_x265_available() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     #[test]
     fn test_x265_available() {
@@ -550,5 +569,36 @@ mod tests {
         } else {
             println!("⚠️  x265 not found - install with: brew install x265");
         }
+    }
+
+    #[test]
+    fn ffmpeg_y4m_decode_relaxes_strictness_for_10bit_pipe_formats() {
+        let config = X265Config {
+            pix_fmt: "yuv420p10le".to_string(),
+            ..Default::default()
+        };
+        let args: Vec<String> =
+            build_ffmpeg_y4m_decode_command(Path::new("input.mov"), &config, &[])
+                .get_args()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect();
+
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["-pix_fmt", "yuv420p10le"]));
+        assert!(args.windows(2).any(|pair| pair == ["-strict", "-1"]));
+    }
+
+    #[test]
+    fn ffmpeg_y4m_decode_keeps_standard_pipe_formats_strict() {
+        let config = X265Config::default();
+        let args: Vec<String> =
+            build_ffmpeg_y4m_decode_command(Path::new("input.mov"), &config, &[])
+                .get_args()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect();
+
+        assert!(args.windows(2).any(|pair| pair == ["-pix_fmt", "yuv420p"]));
+        assert!(!args.windows(2).any(|pair| pair == ["-strict", "-1"]));
     }
 }
