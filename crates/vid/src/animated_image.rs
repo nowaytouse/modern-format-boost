@@ -48,34 +48,6 @@ impl AnimatedQualityFailureDecision {
     ) -> Self {
         let actual_ssim = explore_result.ssim;
         let threshold = explore_result.actual_min_ssim;
-        let video_stream_compressed =
-            explore_result.output_video_stream_size < explore_result.input_video_stream_size;
-
-        if !video_stream_compressed {
-            let input_stream_kb = explore_result.input_video_stream_size as f64 / 1024.0;
-            let output_stream_kb = explore_result.output_video_stream_size as f64 / 1024.0;
-            let stream_change_pct = if explore_result.input_video_stream_size > 0 {
-                (output_stream_kb / input_stream_kb - 1.0) * 100.0
-            } else {
-                0.0
-            };
-            tracing::warn!(
-                input = %input.display(),
-                "Video stream compression failed: {:.1}KB → {:.1}KB",
-                input_stream_kb,
-                output_stream_kb
-            );
-            eprintln!(
-                "   ⚠️  VIDEO STREAM COMPRESSION FAILED: {input_stream_kb:.1} KB → {output_stream_kb:.1} KB ({stream_change_pct:+.1}%) │ File may already be highly optimized"
-            );
-            return Self {
-                label: "VIDEO STREAM COMPRESSION FAILED",
-                protect_msg: "Original file PROTECTED (output did not compress)".to_string(),
-                delete_msg: "Output discarded (video stream larger than original)".to_string(),
-                skip_message: format!("Skipped: video stream larger ({stream_change_pct:+.1}%)"),
-                skip_code: "quality_failed",
-            };
-        }
 
         if ultimate_mode {
             let reason = explore_result
@@ -138,8 +110,9 @@ impl AnimatedQualityFailureDecision {
         }
 
         let reason = explore_result
-            .enhanced_verify_fail_reason
-            .as_deref()
+            .quality_passed
+            .failure_reason()
+            .or(explore_result.enhanced_verify_fail_reason.as_deref())
             .unwrap_or("quality/size check failed");
         tracing::warn!(input = %input.display(), reason, "Quality validation failed");
         eprintln!("   ⚠️  Quality validation FAILED: {reason}");
@@ -2121,5 +2094,30 @@ mod tests {
         assert!(!options.should_copy_original_on_skip(Path::new("/tmp/test.webp")));
         assert!(options.should_copy_original_on_skip(Path::new("/tmp/test.gif")));
         assert!(options.should_copy_original_on_skip(Path::new("/tmp/test.heic")));
+    }
+
+    #[test]
+    fn test_animated_quality_failure_prefers_total_size_reason_over_stream_growth() {
+        let decision = AnimatedQualityFailureDecision::inspect_and_log(
+            Path::new("/tmp/test.gif"),
+            &shared_utils::ExploreResult {
+                quality_passed: shared_utils::types::CheckResult::Failed(
+                    "Total file not smaller than input".to_string(),
+                ),
+                ssim: Some(0.99),
+                actual_min_ssim: 0.95,
+                input_video_stream_size: 1_000_000,
+                output_video_stream_size: 1_100_000,
+                ..Default::default()
+            },
+            false,
+        );
+
+        assert_eq!(
+            decision.skip_message,
+            "Skipped: Total file not smaller than input"
+        );
+        assert_eq!(decision.label, "QUALITY VALIDATION FAILED");
+        assert!(!decision.skip_message.contains("video stream"));
     }
 }

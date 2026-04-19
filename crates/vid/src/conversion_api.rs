@@ -4,7 +4,6 @@ use crate::detection_api::VideoDetectionResult;
 use crate::{Result, VidQualityError};
 
 use shared_utils::analysis_cache::AnalysisCache;
-use shared_utils::constants::DEFAULT_SIZE_TOLERANCE_BYTES;
 use shared_utils::conversion_types::{
     ConversionConfig, ConversionOutput, ConversionStrategy, SelectedCodec, TargetVideoFormat,
 };
@@ -58,73 +57,10 @@ struct ExploreQualityFailureDecision {
 }
 
 impl ExploreQualityFailureDecision {
-    fn inspect_and_log(
-        config: &ConversionConfig,
-        explore_result: &shared_utils::ExploreResult,
-        total_file_compressed: bool,
-        total_size_ratio: f64,
-    ) -> Self {
+    fn inspect_and_log(explore_result: &shared_utils::ExploreResult, ultimate_mode: bool) -> Self {
         let actual_ssim = explore_result.ssim;
         let threshold = explore_result.actual_min_ssim;
-        let video_stream_compressed = explore_result.output_video_stream_size
-            < explore_result.input_video_stream_size
-            || (config.allow_size_tolerance
-                && (explore_result.output_video_stream_size as i64
-                    - explore_result.input_video_stream_size as i64)
-                    < DEFAULT_SIZE_TOLERANCE_BYTES as i64);
-
-        tracing::debug!(
-            "stream_size: input={} output={} compressed={}",
-            explore_result.input_video_stream_size,
-            explore_result.output_video_stream_size,
-            video_stream_compressed
-        );
-
-        if !video_stream_compressed {
-            let input_b = explore_result.input_video_stream_size as f64;
-            let output_b = explore_result.output_video_stream_size as f64;
-            let stream_change_pct = if input_b > 0.0 {
-                (output_b / input_b - 1.0) * 100.0
-            } else {
-                0.0
-            };
-
-            let base_msg = if input_b < 1024.0 * 1024.0 {
-                format!(
-                    "⚠️  VIDEO STREAM COMPRESSION FAILED: {:.1} KB → {:.1} KB ({:+.1}%)",
-                    input_b / 1024.0,
-                    output_b / 1024.0,
-                    stream_change_pct
-                )
-            } else {
-                format!(
-                    "⚠️  VIDEO STREAM COMPRESSION FAILED: {:.3} MB → {:.3} MB ({:+.1}%)",
-                    input_b / 1024.0 / 1024.0,
-                    output_b / 1024.0 / 1024.0,
-                    stream_change_pct
-                )
-            };
-
-            let additional_info = if total_file_compressed {
-                "│ Total file smaller but video stream larger"
-            } else if total_size_ratio > 1.0 {
-                "│ Total file and video stream both larger"
-            } else {
-                "│ Video stream larger despite container overhead savings"
-            };
-
-            let final_msg =
-                format!("{base_msg} {additional_info} │ File may already be highly optimized");
-            tracing::debug!("   {final_msg}");
-            return Self {
-                fail_reason: format!("Video stream compression failed: {stream_change_pct:+.1}%"),
-                fail_message: format!("Skipped: video stream larger ({stream_change_pct:+.1}%)"),
-                protect_msg: "Original file PROTECTED (output did not compress)".to_string(),
-                delete_msg: "Output discarded (video stream larger than original)".to_string(),
-            };
-        }
-
-        if config.ultimate_mode {
+        if ultimate_mode {
             let reason = explore_result
                 .quality_passed
                 .failure_reason()
@@ -170,8 +106,9 @@ impl ExploreQualityFailureDecision {
         }
 
         let reason = explore_result
-            .enhanced_verify_fail_reason
-            .as_deref()
+            .quality_passed
+            .failure_reason()
+            .or(explore_result.enhanced_verify_fail_reason.as_deref())
             .unwrap_or("quality/size check failed");
         warn!("   ⚠️  Quality validation FAILED: {reason}");
         Self {
@@ -1317,10 +1254,8 @@ pub fn auto_convert_with_cache(
                         1.0
                     };
                     let decision = ExploreQualityFailureDecision::inspect_and_log(
-                        config,
                         &explore_result,
-                        total_file_compressed,
-                        total_size_ratio,
+                        config.ultimate_mode,
                     );
                     decision.emit();
 
@@ -1568,14 +1503,6 @@ pub fn auto_convert_with_cache(
         );
     }
 
-    info!(
-        "   🎬 Video stream: {} → {} ({:+.1}%)",
-        shared_utils::format_bytes(input_stream_info.video_stream_size),
-        shared_utils::format_bytes(output_stream_info.video_stream_size),
-        verify_result.video_size_change_percent()
-    );
-
-    let video_smaller = verify_result.video_compressed;
     let total_file_compressed = actual_output_size < detection.file_size;
     let total_size_ratio = if detection.file_size > 0 {
         actual_output_size as f64 / detection.file_size as f64
@@ -1592,7 +1519,7 @@ pub fn auto_convert_with_cache(
         total_file_compressed
     };
 
-    // --- require_compression phase: primary decision by total file size, with video stream as diagnostic. ---
+    // --- require_compression phase: primary decision by total file size. ---
     if config.require_compression && !total_within_tolerance {
         warn!("   ⚠️  COMPRESSION FAILED (total file comparison):");
         warn!(
@@ -1601,17 +1528,13 @@ pub fn auto_convert_with_cache(
             shared_utils::format_bytes(output_stream_info.total_file_size),
             verify_result.total_size_change_percent()
         );
-        if video_smaller {
-            warn!(
-                "   ⚠️  Note: video stream compressed ({:+.1}%) but container/metadata overhead erased the gain",
-                verify_result.video_size_change_percent()
-            );
-        } else {
-            warn!(
-                "   ⚠️  Video stream not compressed ({:+.1}%)",
-                verify_result.video_size_change_percent()
-            );
-        }
+        tracing::debug!(
+            "video stream diagnostic: {} -> {} ({:+.1}%), container_overhead={}B",
+            shared_utils::format_bytes(input_stream_info.video_stream_size),
+            shared_utils::format_bytes(output_stream_info.video_stream_size),
+            verify_result.video_size_change_percent(),
+            output_stream_info.container_overhead
+        );
         warn!("   🛡️  Original file PROTECTED");
 
         // Apple-compat fallback: still decided purely by total file behavior (video stream is internal detail).
@@ -1680,11 +1603,10 @@ pub fn auto_convert_with_cache(
             strategy: ConversionStrategy {
                 target: TargetVideoFormat::Skip,
                 reason: format!(
-                    "Compression failed: total file {} → {} (video stream {} → {})",
+                    "Compression failed: total file {} → {} ({:+.1}%)",
                     shared_utils::format_bytes(input_stream_info.total_file_size),
                     shared_utils::format_bytes(output_stream_info.total_file_size),
-                    shared_utils::format_bytes(input_stream_info.video_stream_size),
-                    shared_utils::format_bytes(output_stream_info.video_stream_size),
+                    verify_result.total_size_change_percent(),
                 ),
                 command: String::new(),
                 preserve_audio: detection.has_audio,
@@ -1696,10 +1618,9 @@ pub fn auto_convert_with_cache(
             size_ratio: 1.0,
             success: false,
             message: format!(
-                "Skipped: total file not smaller (video stream {} → {}, container overhead: {})",
-                shared_utils::format_bytes(input_stream_info.video_stream_size),
-                shared_utils::format_bytes(output_stream_info.video_stream_size),
-                output_stream_info.container_overhead
+                "Skipped: total file not smaller ({} → {})",
+                shared_utils::format_bytes(input_stream_info.total_file_size),
+                shared_utils::format_bytes(output_stream_info.total_file_size),
             ),
             final_crf,
             exploration_attempts: attempts,
@@ -1708,13 +1629,10 @@ pub fn auto_convert_with_cache(
     }
 
     if verify_result.video_compressed && verify_result.total_compression_ratio >= 1.0 {
-        warn!(
-            "   ⚠️  Video stream compressed ({:+.1}%) but total file larger ({:+.1}%)",
+        tracing::debug!(
+            "video stream shrank ({:+.1}%) but total file grew ({:+.1}%) due to container overhead diff {:+}B",
             verify_result.video_size_change_percent(),
-            verify_result.total_size_change_percent()
-        );
-        warn!(
-            "   ⚠️  Cause: Container overhead (+{} bytes)",
+            verify_result.total_size_change_percent(),
             verify_result.container_overhead_diff
         );
     }
@@ -2993,5 +2911,31 @@ mod tests {
             "unexpected reason: {}",
             strategy.reason
         );
+    }
+
+    #[test]
+    fn test_explore_quality_failure_prefers_total_size_reason_over_stream_growth() {
+        let decision = ExploreQualityFailureDecision::inspect_and_log(
+            &shared_utils::ExploreResult {
+                quality_passed: shared_utils::types::CheckResult::Failed(
+                    "Total file not smaller than input".to_string(),
+                ),
+                ssim: Some(0.99),
+                actual_min_ssim: 0.95,
+                input_video_stream_size: 1_000_000,
+                output_video_stream_size: 1_100_000,
+                ..Default::default()
+            },
+            false,
+        );
+
+        assert_eq!(
+            decision.fail_message,
+            "Skipped: Total file not smaller than input"
+        );
+        assert!(decision
+            .fail_reason
+            .contains("Total file not smaller than input"));
+        assert!(!decision.fail_message.contains("video stream"));
     }
 }

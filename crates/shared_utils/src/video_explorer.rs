@@ -121,17 +121,16 @@ pub fn can_compress_with_metadata(output_size: u64, input_size: u64) -> bool {
 
 /// Strategy used to verify whether compression actually reduced file size.
 ///
-/// - `PureVideo`: compare only the video stream size (excludes container/metadata).
-/// - `TotalSize`: compare the total output file size against the input.
+/// Current conversion decisions are based on total output file size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompressionVerifyStrategy {
-    /// Compare only the pure video stream size, ignoring container overhead.
+    /// Legacy stream-only comparison mode. Retained for API compatibility.
     PureVideo,
     /// Compare the total output file size (including container/metadata).
     TotalSize,
 }
 
-/// Verifies compression using a strategy-aware comparison (pure video vs total size).
+/// Verifies compression using total output file size.
 ///
 /// Returns `(can_compress, compare_size, strategy_used)`.
 #[inline]
@@ -139,22 +138,13 @@ pub enum CompressionVerifyStrategy {
 pub const fn verify_compression_precise(
     output_size: u64,
     input_size: u64,
-    actual_metadata_size: u64,
+    _actual_metadata_size: u64,
 ) -> (bool, u64, CompressionVerifyStrategy) {
-    if input_size < SMALL_FILE_THRESHOLD {
-        let pure_output = pure_video_size(output_size, actual_metadata_size);
-        (
-            pure_output < input_size,
-            pure_output,
-            CompressionVerifyStrategy::PureVideo,
-        )
-    } else {
-        (
-            output_size < input_size,
-            output_size,
-            CompressionVerifyStrategy::TotalSize,
-        )
-    }
+    (
+        output_size < input_size,
+        output_size,
+        CompressionVerifyStrategy::TotalSize,
+    )
 }
 
 /// Simplified compression verification: returns `(can_compress, compare_size)`.
@@ -636,7 +626,8 @@ pub struct ExploreConfig {
     pub max_iterations: u32,
     /// Whether to use ultimate mode (stricter quality gates, more thorough search).
     pub ultimate_mode: bool,
-    /// Whether to compare pure video stream sizes instead of total file sizes.
+    /// Legacy toggle retained for API compatibility.
+    /// Compression success is determined by total output file size.
     pub use_pure_media_comparison: bool,
 }
 
@@ -651,7 +642,7 @@ impl Default for ExploreConfig {
             quality_thresholds: QualityThresholds::default(),
             max_iterations: EXPLORE_DEFAULT_MAX_ITERATIONS,
             ultimate_mode: false,
-            use_pure_media_comparison: true,
+            use_pure_media_comparison: false,
         }
     }
 }
@@ -1110,8 +1101,7 @@ impl VideoExplorer {
             .context("Failed to read input file metadata")?
             .len();
         let use_gpu = Self::resolve_gpu_usage(args.use_gpu, args.encoder);
-        let input_video_stream_size =
-            Self::resolve_input_video_stream_size(args.input, &args.config, input_size);
+        let input_video_stream_size = Self::resolve_input_video_stream_size(args.input);
         let source_codec_name = Self::resolve_source_codec_name(args.input, args.source_codec_name);
 
         Ok(Self {
@@ -1151,17 +1141,9 @@ impl VideoExplorer {
             }
     }
 
-    fn resolve_input_video_stream_size(
-        input: &Path,
-        config: &ExploreConfig,
-        input_size: u64,
-    ) -> u64 {
-        if config.use_pure_media_comparison {
-            let stream_info = crate::stream_size::extract_stream_sizes(input);
-            stream_info.video_stream_size
-        } else {
-            input_size
-        }
+    fn resolve_input_video_stream_size(input: &Path) -> u64 {
+        let stream_info = crate::stream_size::extract_stream_sizes(input);
+        stream_info.video_stream_size
     }
 
     fn resolve_source_codec_name(
@@ -2843,21 +2825,12 @@ impl VideoExplorer {
 
     #[inline]
     fn can_compress_with_margin(&self, output_size: u64) -> bool {
-        if self.config.use_pure_media_comparison {
-            let output_stream_info = crate::stream_size::extract_stream_sizes(&self.output_path);
-            output_stream_info.video_stream_size < self.input_video_stream_size
-        } else {
-            can_compress_with_metadata(output_size, self.input_size)
-        }
+        can_compress_with_metadata(output_size, self.input_size)
     }
 
     #[inline]
     fn get_compression_target(&self) -> u64 {
-        if self.config.use_pure_media_comparison {
-            self.input_video_stream_size
-        } else {
-            compression_target_size(self.input_size)
-        }
+        compression_target_size(self.input_size)
     }
 
     fn validate_quality(&self) -> Result<(Option<f64>, Option<f64>, Option<f64>)> {
@@ -5029,6 +5002,28 @@ mod tests {
             calculate_zero_gains_for_duration_and_range(300.0, 41.0, false),
             LONG_VIDEO_REQUIRED_ZERO_GAINS
         );
+    }
+
+    #[test]
+    fn test_explore_config_defaults_to_total_size_comparison() {
+        assert!(
+            !ExploreConfig::default().use_pure_media_comparison,
+            "compression decisions should default to total file size"
+        );
+    }
+
+    #[test]
+    fn test_verify_compression_precise_uses_total_size_for_small_files() {
+        let input_size = SMALL_FILE_THRESHOLD.saturating_sub(1);
+        let output_size = input_size.saturating_add(10_000);
+        let metadata_size = 50_000;
+
+        let (can_compress, compare_size, strategy) =
+            verify_compression_precise(output_size, input_size, metadata_size);
+
+        assert!(!can_compress, "larger total file should fail compression");
+        assert_eq!(compare_size, output_size);
+        assert_eq!(strategy, CompressionVerifyStrategy::TotalSize);
     }
 }
 

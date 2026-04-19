@@ -15,10 +15,10 @@ All notable changes to this project will be documented in this file.
 - **Refactored Decision Engine**: Rewrote the quality status reporting logic to utilize a semantic tri-state (`PASSED`, `FAILED`, `N/A`), providing clearer diagnostics for complex fallback scenarios.
 - **Dynamic Mapping Calibration**: Enhanced the GPU-to-CPU CRF mapping logic to more accurately project search boundaries across different hardware vendors.
 
-### 🛡️ Media Integrity & Stream-Level Validation
+### 🛡️ Media Integrity & Size Validation
 
-- **Stream Compression Guard**: Introduced `ExploreQualityFailureDecision` in `conversion_api.rs`. The system now explicitly validates that the **video stream itself** is compressed, preventing false-positive successes where size reduction was purely due to container overhead (e.g., MOV -> MP4) while the video payload grew.
-- **Granular Fail Reporting**: Detailed logging now surfaces percentage changes in individual streams, protecting original files if the output fails the "strictly smaller payload" invariant even if the total file size passed.
+- **Total File Size Gate**: Compression accept/reject decisions remain anchored to the final output file size rather than internal stream deltas. This matches what users actually care about: whether the produced file is smaller overall.
+- **Fail Reporting Cleanup**: Skip reasons and protection logs now report total file size regressions directly. Stream-level size data is retained only as an internal diagnostic signal.
 - **Animated Pipeline Resilience**: Refactored `animated_image.rs` to handle codec-specific failures (VP8/VP9/Alpha) more gracefully, ensuring fallback logic correctly preserves original assets.
 
 ### ⚖️ Global Numerical Safety Audit (Workspace-wide)
