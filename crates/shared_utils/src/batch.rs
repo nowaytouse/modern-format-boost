@@ -639,7 +639,6 @@ fn scan_image_tree_snapshot(
     }
 }
 
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn video_probe_priority_data(path: &Path) -> (Option<u64>, Option<f64>, Option<f64>, Option<u64>) {
     let Ok(probe) = crate::probe_video(path) else {
         return (None, None, None, None);

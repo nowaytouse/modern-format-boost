@@ -21,7 +21,6 @@
     clippy::manual_let_else,
     clippy::items_after_statements
 )]
-#![allow(clippy::fn_params_excessive_bools)]
 
 /// Cache system for analysis results.
 pub mod analysis_cache;
@@ -153,19 +152,11 @@ pub mod file_sorter;
 /// `MS-SSIM` temporal sampling strategies.
 pub mod msssim_sampling;
 
-/// Temporal progress heartbeat for long-running encodes.
-pub mod msssim_heartbeat;
-
 /// `MS-SSIM` specific progress reporting.
 pub mod msssim_progress;
 
 /// Parallelized `MS-SSIM` calculation engine.
 pub mod msssim_parallel;
-
-/// Process-wide heartbeat lifecycle management.
-pub mod heartbeat_manager;
-/// Universal heartbeat signal for background tasks.
-pub mod universal_heartbeat;
 
 /// Asynchronous and robust error logging system.
 pub mod error_logging;
@@ -287,8 +278,9 @@ pub use quality_matcher::{
     from_image_analysis, from_video_detection, is_apple_incompatible_video_codec,
     is_apple_native_format, is_size_guard_active, log_quality_analysis, parse_source_codec,
     should_keep_apple_fallback_hevc_output, should_skip_image_format, should_skip_video_codec,
-    should_skip_video_codec_apple_compat, AnalysisDetails, ContentType, EncoderType, MatchMode,
-    MatchedQuality, QualityAnalysis, QualityBias, SkipDecision, SourceCodec, VideoAnalysisBuilder,
+    should_skip_video_codec_apple_compat, AnalysisDetails, AppleFallbackKeepRequest, ContentType,
+    EncoderType, MatchMode, MatchedQuality, QualityAnalysis, QualityBias, SkipDecision,
+    SourceCodec, VideoAnalysisBuilder,
 };
 pub use report::*;
 pub use safety::*;
@@ -342,7 +334,7 @@ pub use xmp_merger::{
 
 pub use flag_validator::{
     print_flag_help, validate_flags, validate_flags_result, validate_flags_result_with_ultimate,
-    validate_flags_with_ultimate, FlagMode, FlagValidation,
+    validate_flags_with_ultimate, FlagMode, FlagRequest, FlagValidation,
 };
 
 pub use gpu_accel::{
@@ -456,14 +448,9 @@ pub use file_sorter::{
 
 pub use msssim_sampling::{SamplingConfig, SamplingStrategy};
 
-pub use msssim_heartbeat::Heartbeat;
-
 pub use msssim_progress::MsssimProgressMonitor;
 
 pub use msssim_parallel::{MsssimResult, ParallelMsssimCalculator};
-
-pub use heartbeat_manager::{HeartbeatManager, ProgressBarGuard};
-pub use universal_heartbeat::{HeartbeatConfig, HeartbeatGuard, UniversalHeartbeat};
 
 pub use logging::{
     flush_logs, init_logging, log_external_tool, log_operation_end, log_operation_start, LogConfig,

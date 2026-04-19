@@ -4,12 +4,12 @@
 //!
 //! ## Features
 //! - Parallel calculation of MS-SSIM for Y/U/V channels
-//! - Integrated heartbeat detection and progress monitoring
+//! - Integrated progress monitoring
 //! - Thread-safe error handling
 //! - Fallback strategy support
 
 use crate::app_error::AppError;
-use crate::msssim_heartbeat::Heartbeat;
+
 use crate::msssim_progress::MsssimProgressMonitor;
 use crate::msssim_sampling::{SamplingConfig, SamplingStrategy};
 use std::path::{Path, PathBuf};
@@ -108,9 +108,7 @@ impl ParallelMsssimCalculator {
             }
         }
 
-        eprintln!("🔄 Calculating MS-SSIM (heartbeat active)");
-
-        let heartbeat = Heartbeat::start(30);
+        eprintln!("🔄 Calculating MS-SSIM");
 
         let y_monitor = Arc::clone(&self.progress_monitor);
         let u_monitor = Arc::clone(&self.progress_monitor);
@@ -153,13 +151,11 @@ impl ParallelMsssimCalculator {
             AppError::Other(anyhow::anyhow!("V channel thread panicked"))
         })?;
 
-        heartbeat.stop();
-
         let y_score = y_result?;
         let u_score = u_result?;
         let v_score = v_result?;
 
-        eprintln!("✅ MS-SSIM complete, heartbeat stopped");
+        eprintln!("✅ MS-SSIM complete");
         eprintln!("✅ MS-SSIM (parallel): Y={y_score:.4} U={u_score:.4} V={v_score:.4}");
 
         Ok(MsssimResult {
@@ -201,7 +197,6 @@ impl ParallelMsssimCalculator {
         args.push(&lavfi_str);
         args.push("-f");
         args.push("null");
-        args.push("-");
 
         let ms_ssim_result = progress_monitor
             .monitor_ffmpeg_process(&args, channel)
@@ -234,7 +229,6 @@ impl ParallelMsssimCalculator {
             ssim_args.push(&ssim_lavfi_str);
             ssim_args.push("-f");
             ssim_args.push("null");
-            ssim_args.push("-");
 
             progress_monitor
                 .monitor_ffmpeg_process(&ssim_args, channel)

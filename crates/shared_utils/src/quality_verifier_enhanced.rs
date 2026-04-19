@@ -83,7 +83,7 @@ impl EnhancedVerifyResult {
     /// True only when file is OK and no required check explicitly failed.
     #[must_use]
     pub fn passed(&self) -> bool {
-        self.file_ok && self.duration_match.is_ok() && self.has_video_stream.is_ok()
+        self.file_ok && !self.duration_match.is_failed() && !self.has_video_stream.is_failed()
     }
 
     #[must_use]
@@ -205,13 +205,13 @@ pub fn verify_after_encode(
         }
     }
 
-    let failed = !duration_match.is_ok() || !has_video_stream.is_ok();
+    let failed = duration_match.is_failed() || has_video_stream.is_failed();
     let message = if failed {
         if probe_failed {
             "Probe failed; duration/stream not verified".to_string()
-        } else if !duration_match.is_ok() {
+        } else if duration_match.is_failed() {
             "Duration mismatch (input vs output beyond tolerance)".to_string()
-        } else if !has_video_stream.is_ok() {
+        } else if has_video_stream.is_failed() {
             "Output has no valid video stream".to_string()
         } else {
             "Verification failed".to_string()

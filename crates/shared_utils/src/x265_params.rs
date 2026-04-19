@@ -153,15 +153,12 @@ fn apply_memory_profile(params: &mut String, profile: X265MemoryProfile, pool_th
     match profile {
         X265MemoryProfile::Default => {}
         X265MemoryProfile::Moderate => {
-            let frame_threads = pool_threads
-                .min(constants::X265_MODERATE_MEMORY_FRAME_THREADS)
-                .max(1);
-            let lookahead_threads = pool_threads
-                .min(constants::X265_MODERATE_MEMORY_LOOKAHEAD_THREADS)
-                .max(1);
-            let lookahead_slices = pool_threads
-                .min(constants::X265_MODERATE_MEMORY_LOOKAHEAD_SLICES)
-                .max(1);
+            let frame_threads =
+                pool_threads.clamp(1, constants::X265_MODERATE_MEMORY_FRAME_THREADS);
+            let lookahead_threads =
+                pool_threads.clamp(1, constants::X265_MODERATE_MEMORY_LOOKAHEAD_THREADS);
+            let lookahead_slices =
+                pool_threads.clamp(1, constants::X265_MODERATE_MEMORY_LOOKAHEAD_SLICES);
             push_param(params, &format!("frame-threads={frame_threads}"));
             push_param(params, &format!("lookahead-threads={lookahead_threads}"));
             push_param(params, &format!("lookahead-slices={lookahead_slices}"));
@@ -210,6 +207,11 @@ fn append_extra_params(params: &mut String, extra_params: Option<&str>) {
 mod tests {
     use super::*;
     use crate::video_detection::{CompressionType, VideoPrecisionMetadata};
+
+    const _: () = assert!(
+        constants::X265_LOW_MEMORY_RC_LOOKAHEAD
+            > constants::X265_ALLOWED_HEVC_MAX_CONSECUTIVE_BFRAMES
+    );
 
     fn sample_detection(codec: DetectedCodec, file_size: u64) -> VideoDetectionResult {
         VideoDetectionResult {
@@ -291,14 +293,6 @@ mod tests {
         assert!(params.starts_with("lossless=1:"));
         assert!(params.contains("frame-threads=1"));
         assert!(params.contains("pools=2"));
-    }
-
-    #[test]
-    fn low_memory_lookahead_stays_above_allowed_bframes() {
-        assert!(
-            constants::X265_LOW_MEMORY_RC_LOOKAHEAD
-                > constants::X265_ALLOWED_HEVC_MAX_CONSECUTIVE_BFRAMES
-        );
     }
 
     #[test]

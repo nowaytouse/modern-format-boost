@@ -35,9 +35,38 @@ pub enum CheckResult {
 
 impl CheckResult {
     /// Returns true if the check did not explicitly fail.
+    ///
+    /// Prefer [`Self::is_passed`] when the caller needs strict success semantics.
     #[must_use]
     pub fn is_ok(&self) -> bool {
-        !matches!(self, Self::Failed(_))
+        !self.is_failed()
+    }
+
+    /// Returns true only when the check was performed and passed.
+    #[must_use]
+    pub fn is_passed(&self) -> bool {
+        matches!(self, Self::Passed)
+    }
+
+    /// Returns true only when the check was performed and failed.
+    #[must_use]
+    pub fn is_failed(&self) -> bool {
+        matches!(self, Self::Failed(_))
+    }
+
+    /// Returns true when the check was skipped or not applicable.
+    #[must_use]
+    pub fn is_skipped(&self) -> bool {
+        matches!(self, Self::NotChecked)
+    }
+
+    /// Returns the failure reason when the check explicitly failed.
+    #[must_use]
+    pub fn failure_reason(&self) -> Option<&str> {
+        match self {
+            Self::Failed(reason) => Some(reason.as_str()),
+            Self::Passed | Self::NotChecked => None,
+        }
     }
 }
 
@@ -204,5 +233,29 @@ mod property_tests {
                 "Iteration {} of {} should fail", max + 1, max
             );
         }
+    }
+
+    #[test]
+    fn check_result_explicit_state_helpers_are_consistent() {
+        let passed = CheckResult::Passed;
+        assert!(passed.is_ok());
+        assert!(passed.is_passed());
+        assert!(!passed.is_failed());
+        assert!(!passed.is_skipped());
+        assert_eq!(passed.failure_reason(), None);
+
+        let failed = CheckResult::Failed("bad".to_string());
+        assert!(!failed.is_ok());
+        assert!(!failed.is_passed());
+        assert!(failed.is_failed());
+        assert!(!failed.is_skipped());
+        assert_eq!(failed.failure_reason(), Some("bad"));
+
+        let skipped = CheckResult::NotChecked;
+        assert!(skipped.is_ok());
+        assert!(!skipped.is_passed());
+        assert!(!skipped.is_failed());
+        assert!(skipped.is_skipped());
+        assert_eq!(skipped.failure_reason(), None);
     }
 }

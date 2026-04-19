@@ -32,6 +32,186 @@ fn cleanup_temp_output(temp_output: &Path, input: &Path) {
     }
 }
 
+struct AnimatedQualityFailureDecision {
+    label: &'static str,
+    protect_msg: String,
+    delete_msg: String,
+    skip_message: String,
+    skip_code: &'static str,
+}
+
+impl AnimatedQualityFailureDecision {
+    fn inspect_and_log(
+        input: &Path,
+        explore_result: &shared_utils::ExploreResult,
+        ultimate_mode: bool,
+    ) -> Self {
+        let actual_ssim = explore_result.ssim;
+        let threshold = explore_result.actual_min_ssim;
+        let video_stream_compressed =
+            explore_result.output_video_stream_size < explore_result.input_video_stream_size;
+
+        if !video_stream_compressed {
+            let input_stream_kb = explore_result.input_video_stream_size as f64 / 1024.0;
+            let output_stream_kb = explore_result.output_video_stream_size as f64 / 1024.0;
+            let stream_change_pct = if explore_result.input_video_stream_size > 0 {
+                (output_stream_kb / input_stream_kb - 1.0) * 100.0
+            } else {
+                0.0
+            };
+            tracing::warn!(
+                input = %input.display(),
+                "Video stream compression failed: {:.1}KB → {:.1}KB",
+                input_stream_kb,
+                output_stream_kb
+            );
+            eprintln!(
+                "   ⚠️  VIDEO STREAM COMPRESSION FAILED: {input_stream_kb:.1} KB → {output_stream_kb:.1} KB ({stream_change_pct:+.1}%) │ File may already be highly optimized"
+            );
+            return Self {
+                label: "VIDEO STREAM COMPRESSION FAILED",
+                protect_msg: "Original file PROTECTED (output did not compress)".to_string(),
+                delete_msg: "Output discarded (video stream larger than original)".to_string(),
+                skip_message: format!("Skipped: video stream larger ({stream_change_pct:+.1}%)"),
+                skip_code: "quality_failed",
+            };
+        }
+
+        if ultimate_mode {
+            let reason = explore_result
+                .quality_passed
+                .failure_reason()
+                .or(explore_result.enhanced_verify_fail_reason.as_deref())
+                .unwrap_or("quality/size check failed");
+            tracing::warn!(input = %input.display(), reason, "Quality validation failed");
+            eprintln!("   ⚠️  Quality validation FAILED: {reason}");
+            return Self {
+                label: "QUALITY/SIZE VALIDATION FAILED",
+                protect_msg: "Original file PROTECTED (quality/size check failed)".to_string(),
+                delete_msg: "Output discarded (quality/size check failed)".to_string(),
+                skip_message: format!("Skipped: {reason}"),
+                skip_code: "quality_failed",
+            };
+        }
+
+        if actual_ssim.is_none() {
+            tracing::warn!(
+                input = %input.display(),
+                "SSIM calculation failed — cannot validate quality"
+            );
+            eprintln!(
+                "   ⚠️  SSIM CALCULATION FAILED │ cannot validate quality │ may indicate codec compatibility issues"
+            );
+            return Self {
+                label: "SSIM CALCULATION FAILED",
+                protect_msg: "Original file PROTECTED (SSIM not available)".to_string(),
+                delete_msg: "Output discarded (SSIM calculation failed)".to_string(),
+                skip_message: "Skipped: SSIM calculation failed".to_string(),
+                skip_code: "quality_failed",
+            };
+        }
+
+        if actual_ssim.is_some_and(|ssim| ssim < threshold) {
+            let actual_ssim = actual_ssim.unwrap_or_default();
+            let score_str = explore_result
+                .ms_ssim_score
+                .map_or_else(|| "Unknown".to_string(), |s| format!("{s:.4}"));
+            tracing::warn!(
+                input = %input.display(),
+                ssim = actual_ssim,
+                threshold,
+                score = score_str,
+                "Quality validation failed"
+            );
+            eprintln!(
+                "   ⚠️  Quality validation FAILED: SSIM {actual_ssim:.4} < {threshold:.4} (Score: {score_str})"
+            );
+            return Self {
+                label: "QUALITY VALIDATION FAILED",
+                protect_msg: "Original file PROTECTED (quality below threshold)".to_string(),
+                delete_msg: "Output discarded (quality below threshold)".to_string(),
+                skip_message: format!(
+                    "Skipped: SSIM {actual_ssim:.4} below threshold {threshold:.4}"
+                ),
+                skip_code: "quality_failed",
+            };
+        }
+
+        let reason = explore_result
+            .enhanced_verify_fail_reason
+            .as_deref()
+            .unwrap_or("quality/size check failed");
+        tracing::warn!(input = %input.display(), reason, "Quality validation failed");
+        eprintln!("   ⚠️  Quality validation FAILED: {reason}");
+        Self {
+            label: "QUALITY VALIDATION FAILED",
+            protect_msg: "Original file PROTECTED (quality/size check failed)".to_string(),
+            delete_msg: "Output discarded (quality/size check failed)".to_string(),
+            skip_message: format!("Skipped: {reason}"),
+            skip_code: "quality_failed",
+        }
+    }
+
+    fn emit_summary(&self) {
+        eprintln!(
+            "   ⚠️  {} │ 🛡️  {} │ 🗑️  {}",
+            self.label, self.protect_msg, self.delete_msg
+        );
+    }
+}
+
+struct AnimatedFinalGateFailureDecision {
+    label: &'static str,
+    skip_message: String,
+    skip_code: &'static str,
+}
+
+impl AnimatedFinalGateFailureDecision {
+    fn inspect_and_log(
+        input: &Path,
+        explore_result: &shared_utils::ExploreResult,
+        ultimate_mode: bool,
+    ) -> Self {
+        let quality_summary = if ultimate_mode {
+            explore_result
+                .ultimate_quality_summary()
+                .unwrap_or_else(|| "3D metrics unavailable".to_string())
+        } else {
+            explore_result
+                .ms_ssim_score
+                .map_or_else(|| "Unknown".to_string(), |s| format!("{s:.4}"))
+        };
+        tracing::warn!(
+            input = %input.display(),
+            summary = %quality_summary,
+            "Final quality gate failed"
+        );
+
+        let label = if ultimate_mode {
+            "3D QUALITY GATE FAILED"
+        } else {
+            "QUALITY TARGET FAILED"
+        };
+
+        Self {
+            label,
+            skip_message: if ultimate_mode {
+                format!("Skipped: 3D quality gate failed ({quality_summary})")
+            } else {
+                format!("Skipped: MS-SSIM {quality_summary} below target 0.90")
+            },
+            skip_code: "quality_gate_failed",
+        }
+    }
+
+    fn emit_summary(&self) {
+        eprintln!(
+            "   ⚠️  {} │ 🛡️  Original file PROTECTED │ 🗑️  Output discarded",
+            self.label
+        );
+    }
+}
+
 fn probe_video_streams(input: &Path) -> Vec<VideoStreamInfo> {
     let output = match shared_utils::FfprobeBuilder::new()
         .input(input)
@@ -1279,95 +1459,44 @@ pub fn convert_to_mp4_matched(
     // apple_compat: if quality_passed=false only because the file couldn't be compressed
     // (not because of actual quality degradation), still accept the HEVC output.
     // A larger-but-playable HEVC is always better than a non-playable original (e.g. AVIF).
-    let quality_or_compat_ok = explore_result.quality_passed.is_ok()
-        || (options.apple_compat && explore_result.ssim.is_some_and(|s| s >= 0.90));
+    let quality_or_compat_ok = explore_result.quality_passed.is_passed()
+        || (options.apple_compat
+            && !flag_mode.is_ultimate()
+            && explore_result.ssim.is_some_and(|s| s >= 0.90));
 
     if !quality_or_compat_ok {
-        let actual_ssim = if let Some(s) = explore_result.ssim {
-            s
-        } else {
-            tracing::warn!(input = %input.display(), "SSIM calculation failed — cannot validate quality");
-            return Ok(failed_with_fallback(
-                input,
-                options,
-                "Skipped: SSIM calculation failed",
-                "ssim_failed",
-            ));
-        };
-        let threshold = explore_result.actual_min_ssim;
-
-        let video_stream_compressed =
-            explore_result.output_video_stream_size < explore_result.input_video_stream_size;
-
-        let (protect_msg, delete_msg) = if !video_stream_compressed {
-            let input_stream_kb = explore_result.input_video_stream_size as f64 / 1024.0;
-            let output_stream_kb = explore_result.output_video_stream_size as f64 / 1024.0;
-            let stream_change_pct = if explore_result.input_video_stream_size > 0 {
-                (output_stream_kb / input_stream_kb - 1.0) * 100.0
-            } else {
-                0.0
-            };
-            tracing::warn!(input = %input.display(), "Video stream compression failed: {:.1}KB → {:.1}KB", input_stream_kb, output_stream_kb);
-            eprintln!(
-                "   ⚠️  VIDEO STREAM COMPRESSION FAILED: {input_stream_kb:.1} KB → {output_stream_kb:.1} KB ({stream_change_pct:+.1}%) │ File may already be highly optimized"
-            );
-            (
-                "Original file PROTECTED (output did not compress)".to_string(),
-                "Output discarded (video stream larger than original)".to_string(),
-            )
-        } else if explore_result.ssim.is_none() {
-            tracing::warn!(input = %input.display(), "SSIM calculation failed — cannot validate quality");
-            eprintln!("   ⚠️  SSIM CALCULATION FAILED │ cannot validate quality │ may indicate codec compatibility issues");
-            (
-                "Original file PROTECTED (SSIM not available)".to_string(),
-                "Output discarded (SSIM calculation failed)".to_string(),
-            )
-        } else if actual_ssim < threshold {
-            let score_str = explore_result
-                .ms_ssim_score
-                .map_or_else(|| "Unknown".to_string(), |s| format!("{s:.4}"));
-            tracing::warn!(input = %input.display(), ssim = actual_ssim, threshold, score = score_str, "Quality validation failed");
-            eprintln!(
-                "   ⚠️  Quality validation FAILED: SSIM {actual_ssim:.4} < {threshold:.4} (Score: {score_str})"
-            );
-            (
-                "Original file PROTECTED (quality below threshold)".to_string(),
-                "Output discarded (quality below threshold)".to_string(),
-            )
-        } else {
-            let reason = explore_result
-                .enhanced_verify_fail_reason
-                .as_deref()
-                .unwrap_or("unknown reason");
-            tracing::warn!(input = %input.display(), reason, "Quality validation failed");
-            eprintln!("   ⚠️  Quality validation FAILED: {reason}");
-            (
-                "Original file PROTECTED (quality/size check failed)".to_string(),
-                "Output discarded (quality/size check failed)".to_string(),
-            )
-        };
-        eprintln!(
-            "   ⚠️  {} │ 🛡️  {} │ 🗑️  {}",
-            if !video_stream_compressed {
-                "VIDEO STREAM COMPRESSION FAILED"
-            } else if explore_result.ssim.is_none() {
-                "SSIM CALCULATION FAILED"
-            } else {
-                "QUALITY VALIDATION FAILED"
-            },
-            protect_msg,
-            delete_msg
+        let decision = AnimatedQualityFailureDecision::inspect_and_log(
+            input,
+            &explore_result,
+            flag_mode.is_ultimate(),
         );
+        decision.emit_summary();
 
         return Ok(failed_with_fallback_owned(
             input,
             options,
-            format!("Skipped: SSIM {actual_ssim:.4} below threshold {threshold:.4}"),
-            "quality_failed".to_string(),
+            decision.skip_message,
+            decision.skip_code.to_string(),
         ));
     }
 
-    if explore_result.quality_passed.is_ok() && explore_result.optimal_crf > 0.0 {
+    if explore_result.ms_ssim_passed.is_failed() {
+        let decision = AnimatedFinalGateFailureDecision::inspect_and_log(
+            input,
+            &explore_result,
+            flag_mode.is_ultimate(),
+        );
+        decision.emit_summary();
+
+        return Ok(failed_with_fallback_owned(
+            input,
+            options,
+            decision.skip_message,
+            decision.skip_code.to_string(),
+        ));
+    }
+
+    if explore_result.quality_passed.is_passed() && explore_result.optimal_crf > 0.0 {
         match options.codec {
             shared_utils::conversion_types::SelectedCodec::Hevc => {
                 shared_utils::crf_constants::update_global_last_hit_crf_hevc(

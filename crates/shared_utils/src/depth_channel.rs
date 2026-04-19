@@ -27,6 +27,12 @@ use quick_xml::reader::Reader;
 use std::path::Path;
 use tempfile::NamedTempFile;
 
+fn read_native_u16_word(data: &[u8], word_index: usize) -> Option<u16> {
+    let byte_index = word_index.checked_mul(2)?;
+    let bytes = data.get(byte_index..byte_index + 2)?;
+    Some(u16::from_ne_bytes([bytes[0], bytes[1]]))
+}
+
 /// Depth map data extracted from HEIC
 #[derive(Debug, Clone)]
 pub struct DepthMap {
@@ -141,14 +147,11 @@ fn decode_depth_handle(handle: &ImageHandle) -> Result<DynamicImage> {
 
     // Depth maps are typically 8-bit or 16-bit
     if bit_depth > 8 {
-        #[allow(clippy::cast_ptr_alignment)]
-        let data_u16: &[u16] = unsafe {
-            std::slice::from_raw_parts(y_plane.data.as_ptr().cast::<u16>(), y_plane.data.len() / 2)
-        };
         let mut buffer: ImageBuffer<Luma<u16>, Vec<u16>> = ImageBuffer::new(width, height);
         for (x, y, pixel) in buffer.enumerate_pixels_mut() {
             let offset = y as usize * (y_plane.stride / 2) + x as usize;
-            let val = data_u16[offset];
+            let val = read_native_u16_word(y_plane.data, offset)
+                .ok_or_else(|| anyhow!("Depth plane buffer shorter than expected"))?;
             *pixel = Luma([val]);
         }
         Ok(DynamicImage::ImageLuma16(buffer))

@@ -99,15 +99,6 @@ pub fn copy_unsupported_files(input_dir: &Path, output_dir: &Path, recursive: bo
 
     debug!(total_files = total_files, "Pre-scan completed");
 
-    let _heartbeat = if total_files > 10 {
-        Some(crate::universal_heartbeat::HeartbeatGuard::new(
-            crate::universal_heartbeat::HeartbeatConfig::medium("Batch File Copy")
-                .with_info(format!("{total_files} files")),
-        ))
-    } else {
-        None
-    };
-
     let walker = if recursive {
         WalkDir::new(input_dir).follow_links(true)
     } else {

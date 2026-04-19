@@ -25,6 +25,10 @@ import json
 import sqlite3
 import argparse
 from pathlib import Path
+from typing import Optional
+
+SCRIPT_DIR = Path(__file__).parent.resolve()
+PROJECT_ROOT = SCRIPT_DIR.parent
 
 # ANSI Colors
 if sys.stdout.isatty():
@@ -41,6 +45,63 @@ else:
 
 def clear_screen():
     print("\033[2J\033[H", end="")
+
+
+def can_prompt_user() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def resolve_python_executable() -> Optional[str]:
+    if sys.executable:
+        return sys.executable
+    return shutil.which("python3") or shutil.which("python")
+
+
+def run_post_cleanup_rebuild(project_root: Path) -> bool:
+    smart_build = project_root / "scripts" / "smart_build.py"
+    if not smart_build.is_file():
+        print(
+            f"{RED}❌ Error: rebuild script not found: {smart_build}{RESET}"
+        )
+        return False
+
+    python_exe = resolve_python_executable()
+    if not python_exe:
+        print(
+            f"{RED}❌ Error: no Python interpreter found for rebuild step.{RESET}"
+        )
+        return False
+
+    if not shutil.which("cargo"):
+        print(
+            f"{RED}❌ Error: cargo not found in PATH; cannot rebuild project.{RESET}"
+        )
+        return False
+
+    print(f"{BOLD}\n📦 Initializing Optimized Rebuild...{RESET}")
+    print(
+        f"{DIM}Build artifacts were purged. Rebuilding workspace tools with forced refresh...{RESET}\n"
+    )
+
+    try:
+        subprocess.run(
+            [python_exe, str(smart_build), "--force"],
+            cwd=project_root,
+            check=True,
+        )
+        print(f"\n{GREEN}✅ Project Rebuilt Successfully{RESET}")
+        return True
+    except subprocess.CalledProcessError as exc:
+        print(
+            f"\n{RED}❌ Error: Rebuild failed with exit code {exc.returncode}.{RESET}"
+        )
+    except FileNotFoundError as exc:
+        print(f"\n{RED}❌ Error: Rebuild failed to start: {exc}{RESET}")
+
+    print(
+        f"{YELLOW}Please run '{python_exe} {smart_build} --force' manually.{RESET}"
+    )
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -181,24 +242,22 @@ def show_stats(cache_dir, db_file, log_dir, mfb_progress_dir):
         prog_size = get_dir_size(mfb_progress_dir)
         print(f"   🔄 Progress:  {DIM}{prog_size}{RESET}")
 
-    script_dir = Path(__file__).parent.resolve()
-    project_root = script_dir.parent
-    target_dir = project_root / "target"
+    target_dir = PROJECT_ROOT / "target"
     if target_dir.is_dir():
         target_size = get_dir_size(target_dir)
         print(f"   🦀 Rust Build: {BOLD}{YELLOW}{target_size}{RESET}")
 
-    local_cache = project_root / ".cache"
+    local_cache = PROJECT_ROOT / ".cache"
     if local_cache.is_dir():
         local_cache_size = get_dir_size(local_cache)
         print(f"   ⚡ Runtime:    {BOLD}{YELLOW}{local_cache_size}{RESET}")
 
-    fuzz_target = project_root / "fuzz" / "target"
+    fuzz_target = PROJECT_ROOT / "fuzz" / "target"
     if fuzz_target.is_dir():
         fuzz_size = get_dir_size(fuzz_target)
         print(f"   🧪 Fuzz Build: {BOLD}{YELLOW}{fuzz_size}{RESET}")
     
-    dist_dir = project_root / "dist"
+    dist_dir = PROJECT_ROOT / "dist"
     if dist_dir.is_dir():
         dist_size = get_dir_size(dist_dir)
         print(f"   📦 Dist:       {BOLD}{BLUE}{dist_size}{RESET}")
@@ -381,15 +440,13 @@ def clean_sqlite_dbs(target_path: Path):
 
 
 def perform_full_cleanup():
-    script_dir = Path(__file__).parent.resolve()
-    project_root = script_dir.parent
-
     cache_dir = Path.home() / ".modern_format_boost" / "cache"
     lock_dir = Path.home() / ".modern_format_boost" / "locks"
     db_file = cache_dir / "image_analysis_v2.db"
-    log_dir = project_root / "logs"
+    log_dir = PROJECT_ROOT / "logs"
     mfb_progress_dir = Path.home() / ".mfb_progress"
     mfb_tmp_dir = Path.home() / ".modern_format_boost" / "tmp"
+    rust_build_artifacts_present = (PROJECT_ROOT / "target").is_dir()
 
     pg_available = _pg_available()
 
@@ -424,7 +481,7 @@ def perform_full_cleanup():
         print(f"\n{YELLOW}🚫 Cleanup cancelled by user.{RESET}")
         print(f"{DIM}   No action taken. Returning to menu...{RESET}")
         time.sleep(1.5)
-        return
+        return False, False
 
     print(f"\n{YELLOW}🚀 Executing full system cleanup...{RESET}\n")
 
@@ -449,7 +506,7 @@ def perform_full_cleanup():
         print(f"   {GREEN}✅ SQLite cache & path-tree JSON purged{RESET}")
 
     # 3. Clear logs (with strict safety check)
-    if log_dir.is_dir() and log_dir.name == "logs" and log_dir.parent == project_root:
+    if log_dir.is_dir() and log_dir.name == "logs" and log_dir.parent == PROJECT_ROOT:
         print(f"{DIM}   Clearing logs in {log_dir.name}...{RESET}")
         for log_file in log_dir.glob("*.log"):
             try:
@@ -472,24 +529,29 @@ def perform_full_cleanup():
         print(f"   {GREEN}✅ Isolated temp space cleared{RESET}")
     
     # 6. Cargo clean — mandatory for build artifact cleanup
-    target_dir = project_root / "target"
+    target_dir = PROJECT_ROOT / "target"
     if target_dir.is_dir():
-        print(f"{DIM}   Running cargo clean in {project_root.name}...{RESET}")
+        print(f"{DIM}   Running cargo clean in {PROJECT_ROOT.name}...{RESET}")
         try:
-            subprocess.run(["cargo", "clean"], cwd=project_root, check=True, capture_output=True)
+            subprocess.run(
+                ["cargo", "clean"],
+                cwd=PROJECT_ROOT,
+                check=True,
+                capture_output=True,
+            )
             print(f"   {GREEN}✅ Rust build artifacts purged{RESET}")
         except Exception as e:
             print(f"   {RED}⚠️ Cargo clean failed: {e}{RESET}")
 
     # 7. Project-local .cache (mfb_runtime)
-    local_cache = project_root / ".cache"
+    local_cache = PROJECT_ROOT / ".cache"
     if local_cache.is_dir():
         print(f"{DIM}   Purging project-local runtime cache...{RESET}")
         shutil.rmtree(local_cache, ignore_errors=True)
         print(f"   {GREEN}✅ Runtime cache cleared{RESET}")
 
     # 8. Fuzzing targets (fuzz/target)
-    fuzz_dir = project_root / "fuzz"
+    fuzz_dir = PROJECT_ROOT / "fuzz"
     if (fuzz_dir / "target").is_dir():
         print(f"{DIM}   Running cargo clean in {fuzz_dir.name}...{RESET}")
         try:
@@ -501,7 +563,7 @@ def perform_full_cleanup():
             print(f"   {GREEN}✅ Fuzzing artifacts purged (manual){RESET}")
 
     # 9. Dist folder
-    dist_dir = project_root / "dist"
+    dist_dir = PROJECT_ROOT / "dist"
     if dist_dir.is_dir():
         print(f"{DIM}   Removing dist directory...{RESET}")
         shutil.rmtree(dist_dir, ignore_errors=True)
@@ -511,7 +573,7 @@ def perform_full_cleanup():
     print(f"{DIM}   Searching for __pycache__ directories...{RESET}")
     pycache_count = 0
     # Search project-wide, but be careful not to enter hidden dirs like .git or .venv
-    for p in project_root.rglob("__pycache__"):
+    for p in PROJECT_ROOT.rglob("__pycache__"):
         # Skip virtualenvs and git to avoid touching installed deps or history
         if ".venv" in p.parts or ".git" in (p.parts):
             continue
@@ -546,6 +608,7 @@ def perform_full_cleanup():
             )
 
     print(f"\n{GREEN}✅ Full Cleanup Complete{RESET}\n")
+    return True, rust_build_artifacts_present
 
 
 def perform_targeted_cleanup(target_path: Path):
@@ -587,20 +650,28 @@ def main():
     if args.path:
         perform_targeted_cleanup(Path(args.path))
     else:
-        perform_full_cleanup()
-        print(f"{DIM}Press Enter to return and trigger project rebuild...{RESET}")
+        cleanup_completed, rebuild_recommended = perform_full_cleanup()
+        if not cleanup_completed:
+            return
+        if not rebuild_recommended:
+            print(
+                f"{DIM}No Rust build artifacts were removed; skipping rebuild step.{RESET}"
+            )
+            return
+
         try:
-            input()
-            print(f"{BOLD}\n📦 Initializing Optimized Rebuild...{RESET}")
-            print(f"{DIM}Build artifacts were purged. Synchronizing project state...{RESET}\n")
-            
-            # Use same python executable to maintain environment consistency
-            subprocess.run([sys.executable, str(project_root / "scripts" / "smart_build.py")], check=True)
-            print(f"\n{GREEN}✅ Project Rebuilt Successfully{RESET}")
+            if can_prompt_user():
+                print(
+                    f"{DIM}Press Enter to return and trigger project rebuild...{RESET}"
+                )
+                input()
+            else:
+                print(
+                    f"{DIM}Non-interactive session detected; triggering rebuild automatically...{RESET}"
+                )
+            run_post_cleanup_rebuild(PROJECT_ROOT)
         except (EOFError, KeyboardInterrupt):
             pass
-        except subprocess.CalledProcessError:
-            print(f"\n{RED}❌ Error: Rebuild failed. Please run 'scripts/smart_build.py' manually.{RESET}")
 
 
 if __name__ == "__main__":

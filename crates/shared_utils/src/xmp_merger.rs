@@ -952,15 +952,6 @@ impl XmpMerger {
         let xmp_files = self.find_xmp_files(dir)?;
         let mut results = Vec::with_capacity(xmp_files.len());
 
-        let _heartbeat = if xmp_files.len() > 10 {
-            Some(crate::universal_heartbeat::HeartbeatGuard::new(
-                crate::universal_heartbeat::HeartbeatConfig::medium("XMP Batch Merge")
-                    .with_info(format!("{} files", xmp_files.len())),
-            ))
-        } else {
-            None
-        };
-
         for xmp_path in xmp_files {
             let result = self.process_xmp(&xmp_path);
             results.push(result);

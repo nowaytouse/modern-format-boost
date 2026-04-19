@@ -26,7 +26,6 @@
 use chrono::{DateTime, FixedOffset, Utc};
 use std::any::Any;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 
@@ -102,133 +101,6 @@ impl StderrCapture {
             .iter()
             .cloned()
             .collect()
-    }
-}
-
-struct HeartbeatMonitor {
-    last_activity: Arc<Mutex<std::time::Instant>>,
-    stop_signal: Arc<AtomicBool>,
-    first_output: Arc<AtomicBool>,
-    child_pid: u32,
-    /// Timeout after first output (e.g. 300s = freeze detection).
-    timeout: std::time::Duration,
-    /// Timeout before first output (e.g. 30s = startup failed).
-    startup_timeout: std::time::Duration,
-}
-
-impl HeartbeatMonitor {
-    const fn new(
-        last_activity: Arc<Mutex<std::time::Instant>>,
-        stop_signal: Arc<AtomicBool>,
-        first_output: Arc<AtomicBool>,
-        child_pid: u32,
-        timeout: std::time::Duration,
-        startup_timeout: std::time::Duration,
-    ) -> Self {
-        Self {
-            last_activity,
-            stop_signal,
-            first_output,
-            child_pid,
-            timeout,
-            startup_timeout,
-        }
-    }
-
-    fn spawn(self) -> JoinHandle<()> {
-        std::thread::spawn(move || {
-            const CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
-
-            loop {
-                std::thread::sleep(CHECK_INTERVAL);
-
-                if self.stop_signal.load(Ordering::Relaxed) {
-                    break;
-                }
-
-                let elapsed = self
-                    .last_activity
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .elapsed();
-                let elapsed_secs = elapsed.as_secs();
-
-                let is_startup = !self.first_output.load(Ordering::Relaxed);
-                let limit = if is_startup {
-                    self.startup_timeout
-                } else {
-                    self.timeout
-                };
-
-                crate::log_eprintln!(
-                    "Heartbeat: {}s ago (Beijing: {})",
-                    elapsed_secs,
-                    beijing_time_now()
-                );
-
-                if elapsed > limit {
-                    if is_startup {
-                        crate::log_eprintln!(
-                            "❌ STARTUP FAILED: No output in {}s (Beijing: {})",
-                            elapsed_secs,
-                            beijing_time_now()
-                        );
-                    } else {
-                        crate::log_eprintln!(
-                            "⚠️  FREEZE DETECTED: No activity for {} seconds!",
-                            elapsed_secs
-                        );
-                    }
-                    crate::log_eprintln!(
-                        "   Terminating ffmpeg process (PID: {})...",
-                        self.child_pid
-                    );
-
-                    self.stop_signal.store(true, Ordering::Relaxed);
-
-                    #[cfg(unix)]
-                    // SAFETY: child_pid is the PID of the child process we spawned; we own it and may signal it.
-                    unsafe {
-                        if libc::kill(self.child_pid.cast_signed(), libc::SIGKILL) != 0 {
-                            crate::log_eprintln!(
-                                "⚠️  Failed to terminate ffmpeg PID {} via SIGKILL: {}",
-                                self.child_pid,
-                                std::io::Error::last_os_error()
-                            );
-                        }
-                    }
-
-                    #[cfg(windows)]
-                    {
-                        match crate::tool_builders::TaskkillBuilder::new()
-                            .pid(self.child_pid)
-                            .force()
-                            .build()
-                            .output()
-                        {
-                            Ok(output) if !output.status.success() => {
-                                let stderr = String::from_utf8_lossy(&output.stderr);
-                                crate::log_eprintln!(
-                                    "⚠️  taskkill failed for ffmpeg PID {}: {}",
-                                    self.child_pid,
-                                    stderr.trim()
-                                );
-                            }
-                            Err(err) => {
-                                crate::log_eprintln!(
-                                    "⚠️  Failed to invoke taskkill for ffmpeg PID {}: {}",
-                                    self.child_pid,
-                                    err
-                                );
-                            }
-                            Ok(_) => {}
-                        }
-                    }
-
-                    break;
-                }
-            }
-        })
     }
 }
 
@@ -1006,25 +878,12 @@ impl GpuAccel {
 }
 
 fn get_available_encoders() -> Result<Vec<String>, String> {
-    let output = crate::tool_builders::FfmpegBuilder::new()
-        .hide_banner()
-        .arg("-encoders")
-        .build()
-        .output();
-
-    match output {
-        Ok(out) if out.status.success() => {
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            Ok(stdout
-                .lines()
-                .filter(|line| line.starts_with(" V"))
-                .map(std::string::ToString::to_string)
-                .collect())
-        }
-        Ok(out) => Err(format!(
-            "ffmpeg -encoders failed: {}",
-            summarize_ffmpeg_failure_output(&out.stdout, &out.stderr)
-        )),
+    match crate::ffmpeg_builder::FfmpegBuilder::list_encoders() {
+        Ok(stdout) => Ok(stdout
+            .lines()
+            .filter(|line| line.starts_with(" V"))
+            .map(std::string::ToString::to_string)
+            .collect()),
         Err(err) => Err(format!("failed to run ffmpeg -encoders: {err}")),
     }
 }
@@ -1121,7 +980,7 @@ fn test_encoder(encoder: &GpuEncoder) -> Result<(), String> {
         let output = builder
             .frames_v(1)
             .format("null")
-            .output_null()
+            .output_pipe()
             .build()
             .output();
 
@@ -1218,7 +1077,7 @@ pub fn calculate_smart_sample(
         .arg("-vf")
         .arg(format!("select='{select_expr}',showinfo"))
         .format("null")
-        .output_null()
+        .output_pipe()
         .build()
         .output()
         .context("Failed to test smart sample filter")?;
@@ -1602,7 +1461,7 @@ fn calculate_psnr_fast(input: &str, output: &str) -> Result<f64, String> {
         .input(std::path::Path::new(output))
         .filter_complex("[0:v][1:v]psnr=stats_file=-")
         .format("null")
-        .output_null()
+        .output_pipe()
         .build()
         .output()
         .map_err(|e| format!("PSNR calculation failed: {e}"))?;
@@ -2090,11 +1949,9 @@ fn gpu_coarse_search_with_log_impl(
             GPU_SAMPLE_DURATION
         };
         let ratio = multi_segment_duration / duration;
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let val = crate::numeric_cast::f64_to_u64_sat(
+        crate::numeric_cast::f64_to_u64_sat(
             crate::numeric_cast::u64_to_f64(input_size) * f64::from(ratio),
-        );
-        val
+        )
     };
 
     let warmup_duration = duration.min(WARMUP_DURATION);
@@ -2144,12 +2001,10 @@ fn gpu_coarse_search_with_log_impl(
     let warmup_input_size = if duration <= WARMUP_DURATION || duration == 0.0 {
         input_size
     } else {
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let val = crate::numeric_cast::f64_to_u64_sat(
+        crate::numeric_cast::f64_to_u64_sat(
             crate::numeric_cast::u64_to_f64(input_size) * f64::from(warmup_duration)
                 / f64::from(duration),
-        );
-        val
+        )
     };
 
     let warmup_result = encode_warmup(config.max_crf);
@@ -2202,7 +2057,7 @@ fn gpu_coarse_search_with_log_impl(
     let encode_gpu = |crf: f32| -> anyhow::Result<u64> {
         use std::io::{BufRead, BufReader};
         use std::process::Stdio;
-        use std::time::{Duration, Instant};
+        use std::time::Instant;
 
         let crf_args = gpu_encoder.get_crf_args(crf);
         let extra_args = gpu_encoder.extra_args();
@@ -2245,27 +2100,12 @@ fn gpu_coarse_search_with_log_impl(
 
         let mut child = cmd.spawn().context("Failed to spawn ffmpeg")?;
         let start_time = Instant::now();
-        // Long-hanging processes are handled by HeartbeatMonitor (5-min timeout); no separate 12h check after wait().
-        let child_pid = child.id();
 
         let stderr_capture = StderrCapture::new(100);
         let stderr_handle = child
             .stderr
             .take()
             .map(|stderr| stderr_capture.spawn_capture_thread(stderr));
-
-        let last_activity = Arc::new(Mutex::new(Instant::now()));
-        let stop_signal = Arc::new(AtomicBool::new(false));
-        let first_output = Arc::new(AtomicBool::new(false));
-        let heartbeat = HeartbeatMonitor::new(
-            Arc::clone(&last_activity),
-            Arc::clone(&stop_signal),
-            Arc::clone(&first_output),
-            child_pid,
-            Duration::from_mins(5),
-            Duration::from_secs(30),
-        );
-        let heartbeat_handle = heartbeat.spawn();
 
         crate::verbose_eprintln!("GPU encoding started - Beijing: {}", beijing_time_now());
 
@@ -2276,18 +2116,6 @@ fn gpu_coarse_search_with_log_impl(
             let reader = BufReader::new(stdout);
 
             for line in reader.lines() {
-                if !first_output.load(Ordering::Relaxed) {
-                    first_output.store(true, Ordering::Relaxed);
-                }
-
-                let mut guard = last_activity.lock().unwrap_or_else(|err| {
-                    crate::log_eprintln!(
-                        "⚠️  GPU heartbeat activity mutex was poisoned; recovering activity tracking state"
-                    );
-                    err.into_inner()
-                });
-                *guard = Instant::now();
-
                 match line {
                     Ok(line) => {
                         if let Some(val) = line.strip_prefix("out_time_us=") {
@@ -2372,13 +2200,6 @@ fn gpu_coarse_search_with_log_impl(
 
         let status = child.wait().context("Failed to wait for ffmpeg")?;
 
-        stop_signal.store(true, Ordering::Relaxed);
-        if let Err(payload) = heartbeat_handle.join() {
-            crate::log_eprintln!(
-                "⚠️  GPU heartbeat monitor thread panicked: {}",
-                describe_thread_panic(payload)
-            );
-        }
         if let Some(handle) = stderr_handle {
             if let Err(payload) = handle.join() {
                 crate::log_eprintln!(
@@ -3106,7 +2927,7 @@ fn gpu_coarse_search_with_log_impl(
                     .input(output)
                     .filter_complex("ssim")
                     .format("null")
-                    .output_null()
+                    .output_pipe()
                     .build()
                     .output();
 

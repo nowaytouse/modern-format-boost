@@ -98,11 +98,11 @@ pub fn magick_safe_path(path: &Path) -> Cow<'_, str> {
 
     // 3. Apply the Shell/Argfile shield (./) to the escaped string
     // This blocks metacharacter expansion and argfile hijacking
-    if s_escaped.starts_with('/') {
+    if let Some(stripped) = s_escaped.strip_prefix('/') {
         // Absolute path fallback (triple-slash)
         let mut out = String::with_capacity(8 + s_escaped.len());
         out.push_str("file:///");
-        out.push_str(&s_escaped[1..]); // Remove leading slash for URI
+        out.push_str(stripped);
         Cow::Owned(out)
     } else if s_escaped.starts_with("file:")
         || s_escaped.starts_with("mp4:")

@@ -290,7 +290,7 @@ impl LoopMeta {
             file_name,
             source_extension,
             parent_directories: parent_directories.clone(),
-            has_audio: probe.has_audio,
+            has_audio: probe.audio.present,
             has_transparency,
             is_native_gif: probe.format_name == "gif",
             loop_count: probe.loop_count,
@@ -345,8 +345,7 @@ impl LoopMeta {
 
     /// Build `LoopMeta` from a `GIF` file using header-level scanning (fast, no `ffprobe`).
     pub fn from_gif_path(path: &Path) -> Option<Self> {
-        let (pal, exts, has_transparency, variation, delay_variation, loops, total_dur) =
-            crate::media_meta_utils::scan_gif_headers(path).ok()?;
+        let scan = crate::media_meta_utils::scan_gif_headers(path).ok()?;
 
         let file_size = std::fs::metadata(path).ok()?.len();
         let file_name = path
@@ -378,9 +377,9 @@ impl LoopMeta {
             (0, 0)
         };
 
-        let frame_count = if let Some(dur) = total_dur {
+        let frame_count = if let Some(dur) = scan.duration_secs {
             if dur > 0.0 {
-                if let Some(_v) = delay_variation {
+                if scan.frame_delay_variation.is_some() {
                     crate::numeric_cast::f64_to_u32_sat((dur * 10.0_f64).ceil()).min(10000_u32)
                 } else {
                     1_u32
@@ -392,7 +391,7 @@ impl LoopMeta {
             1_u32
         };
 
-        let fps = if let Some(dur) = total_dur {
+        let fps = if let Some(dur) = scan.duration_secs {
             if frame_count > 1 && dur > 0.0 {
                 f64::from(frame_count) / dur
             } else {
@@ -403,7 +402,7 @@ impl LoopMeta {
         };
 
         let mut meta = Self {
-            duration_secs: total_dur.unwrap_or(0.0),
+            duration_secs: scan.duration_secs.unwrap_or(0.0),
             width,
             height,
             fps,
@@ -413,22 +412,25 @@ impl LoopMeta {
             source_extension: Some("gif".to_string()),
             parent_directories: parent_directories.clone(),
             has_audio: false,
-            has_transparency,
-            loop_count: loops,
-            app_extensions: exts.clone(),
+            has_transparency: scan.has_transparency,
+            loop_count: scan.loop_count,
+            app_extensions: scan.app_extensions.clone(),
             container: Some("gif".to_string()),
             is_native_gif: true,
-            frame_payload_variation: variation,
-            frame_delay_variation: delay_variation,
-            palette_size: pal,
-            is_meme_platform: exts.as_ref().is_some_and(|e_list: &Vec<String>| {
-                e_list.iter().any(|e: &String| {
-                    let up = e.to_uppercase();
-                    crate::constants::LOOP_PLATFORM_MARKERS
-                        .iter()
-                        .any(|&m| up.contains(m))
-                })
-            }),
+            frame_payload_variation: scan.frame_payload_variation,
+            frame_delay_variation: scan.frame_delay_variation,
+            palette_size: scan.palette_size,
+            is_meme_platform: scan
+                .app_extensions
+                .as_ref()
+                .is_some_and(|e_list: &Vec<String>| {
+                    e_list.iter().any(|e: &String| {
+                        let up = e.to_uppercase();
+                        crate::constants::LOOP_PLATFORM_MARKERS
+                            .iter()
+                            .any(|&m| up.contains(m))
+                    })
+                }),
             ..Default::default()
         };
 
@@ -2069,7 +2071,7 @@ pub fn deep_refine_meta(meta: &mut LoopMeta, path: &std::path::Path) -> anyhow::
         .arg("-vf")
         .arg("signalstats,metadata=print")
         .format("null")
-        .output_null()
+        .output_pipe()
         .build()
         .output()?;
 
@@ -2099,7 +2101,7 @@ pub fn deep_refine_meta(meta: &mut LoopMeta, path: &std::path::Path) -> anyhow::
         .arg("scale=64:64")
         .format("rawvideo")
         .pix_fmt(crate::ffmpeg_builder::PixFmt::Rgb24)
-        .output_null()
+        .output_pipe()
         .build()
         .output()?;
 
@@ -2504,34 +2506,32 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::float_cmp)]
     fn test_score_directory_context() {
         let directory_score = score_directory_context(
             Some(&["Downloads".to_string(), "ReactionPacks".to_string()]),
             &[],
         );
-        assert!((directory_score - 1.0).abs() < f64::EPSILON);
+        assert!(crate::float_compare::approx_eq_f64(directory_score, 1.0));
     }
 
     #[test]
-    #[allow(clippy::float_cmp)]
     fn test_analyze_filename_with_keywords() {
         // Test Chinese keyword (from JSON)
         let analysis_zh = analyze_filename(Some("gif表情 (379).gif"), &[]);
-        assert_eq!(analysis_zh.raw, 0.85);
+        assert!(crate::float_compare::approx_eq_f64(analysis_zh.raw, 0.85));
         assert_eq!(analysis_zh.kind, FilenameKind::HumanSemantic);
 
         // Test English keyword (from JSON)
         let analysis_en = analyze_filename(Some("my_funny_meme.webp"), &[]);
-        assert_eq!(analysis_en.raw, 0.85);
+        assert!(crate::float_compare::approx_eq_f64(analysis_en.raw, 0.85));
 
         // Test Korean keyword (from JSON)
         let analysis_ko = analyze_filename(Some("cute_sticker_움짤.avif"), &[]);
-        assert_eq!(analysis_ko.raw, 0.85);
+        assert!(crate::float_compare::approx_eq_f64(analysis_ko.raw, 0.85));
 
         // Test non-meme filename
         let analysis_none = analyze_filename(Some("vacation_photo.jpg"), &[]);
-        assert_eq!(analysis_none.raw, 0.5);
+        assert!(crate::float_compare::approx_eq_f64(analysis_none.raw, 0.5));
     }
 
     #[test]
@@ -2658,18 +2658,17 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::float_cmp)]
     fn test_analyze_filename_variants() {
         let analysis_en = analyze_filename(Some("my_funny_meme.webp"), &[]);
-        assert_eq!(analysis_en.raw, 0.85);
+        assert!(crate::float_compare::approx_eq_f64(analysis_en.raw, 0.85));
 
         // Test Korean keyword (from JSON)
         let analysis_ko = analyze_filename(Some("cute_sticker_움짤.avif"), &[]);
-        assert_eq!(analysis_ko.raw, 0.85);
+        assert!(crate::float_compare::approx_eq_f64(analysis_ko.raw, 0.85));
 
         // Test non-meme filename
         let analysis_none = analyze_filename(Some("vacation_photo.jpg"), &[]);
-        assert_eq!(analysis_none.raw, 0.5);
+        assert!(crate::float_compare::approx_eq_f64(analysis_none.raw, 0.5));
     }
 
     #[test]

@@ -241,7 +241,7 @@ fn calculate_ms_ssim_channel_sampled(
         .arg(&filter)
         .arg("-f")
         .arg("null")
-        .output("-")
+        .output_pipe()
         .build()
         .output();
 
@@ -327,7 +327,7 @@ pub fn calculate_ms_ssim(input: &Path, output: &Path) -> Option<f64> {
         ))
         .arg("-f")
         .arg("null")
-        .output("-")
+        .output_pipe()
         .build()
         .output();
 
@@ -458,7 +458,7 @@ pub fn calculate_vmaf_y(input: &Path, output: &Path, sample_rate: usize) -> Opti
         .arg(&filter)
         .arg("-f")
         .arg("null")
-        .output("-")
+        .output_pipe()
         .build()
         .output();
 
@@ -531,7 +531,7 @@ pub fn calculate_cambi(output: &Path, sample_rate: usize) -> Option<f64> {
         .arg(&filter_complex)
         .arg("-f")
         .arg("null")
-        .output("-")
+        .output_pipe()
         .build()
         .output();
 
@@ -646,7 +646,7 @@ fn psnr_single_channel(
         .arg(&filter)
         .arg("-f")
         .arg("null")
-        .output("-")
+        .output_pipe()
         .build()
         .output();
 

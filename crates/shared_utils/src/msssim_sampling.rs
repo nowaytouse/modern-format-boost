@@ -104,9 +104,6 @@ impl SamplingConfig {
     }
 
     /// Print sampling information to the log.
-    ///
-    /// # Panics
-    /// Panics if the sampling rate is unavailable.
     pub fn print_info(&self) {
         if self.strategy == SamplingStrategy::Skip {
             eprintln!(
@@ -114,7 +111,12 @@ impl SamplingConfig {
                 self.duration_secs
             );
         } else {
-            let rate = self.strategy.sampling_rate().unwrap();
+            let Some(rate) = self.strategy.sampling_rate() else {
+                eprintln!(
+                    "⚠️  Quality verification sampling rate unavailable; continuing without MS-SSIM sampling detail."
+                );
+                return;
+            };
             let accuracy = self.strategy.accuracy_description();
             eprintln!(
                 "📊 MS-SSIM: Sampling 1/{} frames (duration: {:.1}s, accuracy: {})",

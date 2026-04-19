@@ -40,13 +40,11 @@ impl CacheStatistics {
     }
 
     #[must_use]
-    #[allow(clippy::cast_precision_loss)]
     pub fn db_size_mb(&self) -> f64 {
         crate::numeric_cast::u64_to_f64(self.db_size_bytes) / 1024.0 / 1024.0
     }
 
     #[must_use]
-    #[allow(clippy::cast_precision_loss)]
     pub fn db_size_gb(&self) -> f64 {
         crate::numeric_cast::u64_to_f64(self.db_size_bytes) / 1024.0 / 1024.0 / 1024.0
     }

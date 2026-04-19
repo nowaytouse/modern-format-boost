@@ -87,16 +87,6 @@ pub fn encode_with_x265(
     config: &X265Config,
     vf_args: &[String],
 ) -> Result<u64> {
-    use crate::universal_heartbeat::{HeartbeatConfig, HeartbeatGuard};
-    debug!(
-        "🖥️ CPU encoding started: CRF {:.1}, preset={}",
-        config.crf, config.preset
-    );
-
-    let _heartbeat = HeartbeatGuard::new(
-        HeartbeatConfig::medium("x265 CLI Encoding").with_info(format!("CRF {:.1}", config.crf)),
-    );
-
     let hevc_temp = tempfile::Builder::new()
         .suffix(".hevc")
         .tempfile()
@@ -257,7 +247,7 @@ fn encode_to_hevc(
         ffmpeg_builder.arg(arg);
     }
 
-    let mut ffmpeg_cmd = ffmpeg_builder.build();
+    let mut ffmpeg_cmd = ffmpeg_builder.output_pipe().build();
     ffmpeg_cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
     let log_level = if crate::progress_mode::is_verbose_mode() {
@@ -386,7 +376,11 @@ fn encode_to_hevc(
             if !ffmpeg_stderr.is_empty() {
                 eprintln!("FFmpeg error output:\n{ffmpeg_stderr}");
             }
-            bail!("FFmpeg decode failed");
+            bail!(
+                "FFmpeg decode failed (exit_code: {:?})\n\nStderr:\n{}",
+                ffmpeg_status.code(),
+                ffmpeg_stderr.trim()
+            );
         }
 
         if !x265_status.success() {

@@ -551,6 +551,34 @@ impl ExploreResult {
         self.ssim
             .is_some_and(|s| crate::float_compare::ssim_meets_threshold(s, threshold))
     }
+
+    /// Returns true when ultimate-mode 3D gate metrics were captured.
+    #[inline]
+    #[must_use]
+    pub fn has_ultimate_quality_metrics(&self) -> bool {
+        self.vmaf_y_score.is_some() || self.cambi_score.is_some() || self.psnr_uv_score.is_some()
+    }
+
+    /// Human-readable summary of ultimate-mode 3D gate metrics.
+    #[must_use]
+    pub fn ultimate_quality_summary(&self) -> Option<String> {
+        if !self.has_ultimate_quality_metrics() {
+            return None;
+        }
+
+        let vmaf = self
+            .vmaf_y_score
+            .map_or_else(|| "VMAF-Y=N/A".to_string(), |v| format!("VMAF-Y={v:.2}"));
+        let cambi = self
+            .cambi_score
+            .map_or_else(|| "CAMBI=N/A".to_string(), |c| format!("CAMBI={c:.2}"));
+        let psnr_uv = self.psnr_uv_score.map_or_else(
+            || "PSNR-UV=N/A".to_string(),
+            |(u, v)| format!("PSNR-UV={u:.2}/{v:.2}dB"),
+        );
+
+        Some(format!("{vmaf}, {cambi}, {psnr_uv}"))
+    }
 }
 
 /// Quality thresholds and validation flags for an exploration.
@@ -1059,71 +1087,94 @@ pub struct VideoExplorer {
     source_codec_name: Option<String>,
 }
 
+struct VideoExplorerBuildArgs<'a> {
+    input: &'a Path,
+    output: &'a Path,
+    encoder: VideoEncoder,
+    vf_args: Vec<String>,
+    config: ExploreConfig,
+    use_gpu: Option<bool>,
+    preset: EncoderPreset,
+    max_threads: usize,
+    hdr_x265_params: Option<String>,
+    apple_compat: bool,
+    source_codec_name: Option<String>,
+}
+
 impl VideoExplorer {
     /// Internal builder that validates paths, detects GPU availability, and initializes state.
-    #[allow(clippy::too_many_arguments)]
-    fn build(
-        input: &Path,
-        output: &Path,
-        encoder: VideoEncoder,
-        vf_args: Vec<String>,
-        config: ExploreConfig,
-        use_gpu: Option<bool>,
-        preset: EncoderPreset,
-        max_threads: usize,
-        hdr_x265_params: Option<String>,
-        apple_compat: bool,
-        source_codec_name: Option<String>,
-    ) -> Result<Self> {
-        crate::path_validator::validate_path(input).map_err(|e| anyhow::anyhow!("{e}"))?;
-        crate::path_validator::validate_path(output).map_err(|e| anyhow::anyhow!("{e}"))?;
+    fn build(args: VideoExplorerBuildArgs<'_>) -> Result<Self> {
+        Self::validate_paths(args.input, args.output)?;
 
-        let input_size = fs::metadata(input)
+        let input_size = fs::metadata(args.input)
             .context("Failed to read input file metadata")?
             .len();
+        let use_gpu = Self::resolve_gpu_usage(args.use_gpu, args.encoder);
+        let input_video_stream_size =
+            Self::resolve_input_video_stream_size(args.input, &args.config, input_size);
+        let source_codec_name = Self::resolve_source_codec_name(args.input, args.source_codec_name);
 
-        let use_gpu = if let Some(b) = use_gpu {
-            b
-        } else {
-            let gpu = crate::gpu_accel::GpuAccel::detect_with_retry();
-            gpu.is_available()
-                && match encoder {
-                    VideoEncoder::Hevc => gpu.get_hevc_encoder().is_some(),
-                    VideoEncoder::Av1 => gpu.get_av1_encoder().is_some(),
-                    VideoEncoder::H264 => gpu.get_h264_encoder().is_some(),
-                }
-        };
+        Ok(Self {
+            config: args.config,
+            encoder: args.encoder,
+            input_path: args.input.to_path_buf(),
+            output_path: args.output.to_path_buf(),
+            input_size,
+            vf_args: args.vf_args,
+            max_threads: args.max_threads,
+            use_gpu,
+            preset: args.preset,
+            input_video_stream_size,
+            hdr_x265_params: args.hdr_x265_params,
+            apple_compat: args.apple_compat,
+            source_codec_name,
+        })
+    }
 
-        let input_video_stream_size = if config.use_pure_media_comparison {
+    fn validate_paths(input: &Path, output: &Path) -> Result<()> {
+        crate::path_validator::validate_path(input).map_err(|e| anyhow::anyhow!("{e}"))?;
+        crate::path_validator::validate_path(output).map_err(|e| anyhow::anyhow!("{e}"))?;
+        Ok(())
+    }
+
+    fn resolve_gpu_usage(requested: Option<bool>, encoder: VideoEncoder) -> bool {
+        if let Some(requested) = requested {
+            return requested;
+        }
+
+        let gpu = crate::gpu_accel::GpuAccel::detect_with_retry();
+        gpu.is_available()
+            && match encoder {
+                VideoEncoder::Hevc => gpu.get_hevc_encoder().is_some(),
+                VideoEncoder::Av1 => gpu.get_av1_encoder().is_some(),
+                VideoEncoder::H264 => gpu.get_h264_encoder().is_some(),
+            }
+    }
+
+    fn resolve_input_video_stream_size(
+        input: &Path,
+        config: &ExploreConfig,
+        input_size: u64,
+    ) -> u64 {
+        if config.use_pure_media_comparison {
             let stream_info = crate::stream_size::extract_stream_sizes(input);
             stream_info.video_stream_size
         } else {
             input_size
-        };
+        }
+    }
 
+    fn resolve_source_codec_name(
+        input: &Path,
+        source_codec_name: Option<String>,
+    ) -> Option<String> {
         // Auto-probe the source codec when the caller didn't supply one, so that the
         // x265 memory profile can account for archival sources (ProRes/DNxHD) even
         // when they are well under the size threshold.
-        let source_codec_name = source_codec_name.or_else(|| {
+        source_codec_name.or_else(|| {
             crate::ffprobe::probe_video(input)
                 .ok()
                 .map(|probe| probe.video_codec)
-        });
-
-        Ok(Self {
-            config,
-            encoder,
-            input_path: input.to_path_buf(),
-            output_path: output.to_path_buf(),
-            input_size,
-            vf_args,
-            max_threads,
-            use_gpu,
-            preset,
-            input_video_stream_size,
-            hdr_x265_params,
-            apple_compat,
-            source_codec_name,
         })
     }
 
@@ -1142,19 +1193,19 @@ impl VideoExplorer {
         apple_compat: bool,
         source_codec_name: Option<String>,
     ) -> Result<Self> {
-        Self::build(
+        Self::build(VideoExplorerBuildArgs {
             input,
             output,
             encoder,
             vf_args,
             config,
-            None,
-            EncoderPreset::default(),
+            use_gpu: None,
+            preset: EncoderPreset::default(),
             max_threads,
             hdr_x265_params,
             apple_compat,
             source_codec_name,
-        )
+        })
     }
 
     /// Create a new `VideoExplorer` with GPU support.
@@ -1173,19 +1224,19 @@ impl VideoExplorer {
         apple_compat: bool,
         source_codec_name: Option<String>,
     ) -> Result<Self> {
-        Self::build(
+        Self::build(VideoExplorerBuildArgs {
             input,
             output,
             encoder,
             vf_args,
             config,
-            Some(use_gpu),
-            EncoderPreset::default(),
+            use_gpu: Some(use_gpu),
+            preset: EncoderPreset::default(),
             max_threads,
             hdr_x265_params,
             apple_compat,
             source_codec_name,
-        )
+        })
     }
 
     /// Create a new `VideoExplorer` with a specific preset.
@@ -1204,19 +1255,19 @@ impl VideoExplorer {
         apple_compat: bool,
         source_codec_name: Option<String>,
     ) -> Result<Self> {
-        Self::build(
+        Self::build(VideoExplorerBuildArgs {
             input,
             output,
             encoder,
             vf_args,
             config,
-            None,
+            use_gpu: None,
             preset,
             max_threads,
             hdr_x265_params,
             apple_compat,
             source_codec_name,
-        )
+        })
     }
 
     /// Runs the quality exploration according to the configured mode.
@@ -1380,9 +1431,9 @@ impl VideoExplorer {
         ));
 
         let quality_passed = self.check_quality_passed(quality.0, quality.1, quality.2);
-        if quality_passed.is_ok() {
+        if quality_passed.is_passed() {
             log.push("   ✅ Quality validation passed".to_string());
-        } else if let CheckResult::Failed(ref reason) = quality_passed {
+        } else if let Some(reason) = quality_passed.failure_reason() {
             log.push(format!("   ⚠️ Quality below threshold: {reason}"));
         } else {
             log.push("   ⚠️ Quality validation skipped or indeterminate".to_string());
@@ -1559,14 +1610,6 @@ impl VideoExplorer {
     fn explore_compress_with_quality(&self) -> Result<ExploreResult> {
         let mut log = Vec::new();
         let mut cache: CrfCache<(u64, Option<f64>)> = CrfCache::new();
-
-        let _heartbeat = crate::universal_heartbeat::HeartbeatGuard::new(
-            crate::universal_heartbeat::HeartbeatConfig::medium("Binary Search (Compress+Quality)")
-                .with_info(format!(
-                    "CRF {:.1}-{:.1}",
-                    self.config.initial_crf, self.config.max_crf
-                )),
-        );
 
         let pb = crate::progress::create_professional_spinner("📦 Compress+Quality");
 
@@ -2003,11 +2046,6 @@ impl VideoExplorer {
         let mut size_cache: CrfCache<u64> = CrfCache::new();
         let mut quality_cache: CrfCache<(Option<f64>, Option<f64>, Option<f64>)> = CrfCache::new();
         let mut last_encoded_crf: Option<f32> = None;
-
-        let _heartbeat = crate::universal_heartbeat::HeartbeatGuard::new(
-            crate::universal_heartbeat::HeartbeatConfig::slow("Ultimate Exploration")
-                .with_info("Precise Quality Match + Compression".to_string()),
-        );
 
         let target_size = self.get_compression_target();
 
@@ -2515,11 +2553,6 @@ impl VideoExplorer {
         use std::io::{BufRead, BufReader, Write};
         use std::process::Stdio;
 
-        use crate::universal_heartbeat::{HeartbeatConfig, HeartbeatGuard};
-        let _heartbeat = HeartbeatGuard::new(
-            HeartbeatConfig::medium("Video Encoding").with_info(format!("CRF {crf:.1}")),
-        );
-
         let mut builder = crate::ffmpeg_builder::FfmpegBuilder::new();
         builder
             .overwrite()
@@ -2910,7 +2943,7 @@ impl VideoExplorer {
             .input(&self.output_path)
             .filter_complex(filter)
             .format("null")
-            .output_null()
+            .output_pipe()
             .build()
             .output();
 
@@ -2971,9 +3004,6 @@ impl VideoExplorer {
     }
 
     fn calculate_ssim(&self) -> Result<Option<f64>> {
-        use crate::universal_heartbeat::{HeartbeatConfig, HeartbeatGuard};
-        let _heartbeat = HeartbeatGuard::new(HeartbeatConfig::fast("SSIM Calculation"));
-
         eprint!("      📊 Calculating SSIM...");
         let _ = std::io::stderr().flush();
 
@@ -3029,7 +3059,7 @@ impl VideoExplorer {
             .input(&self.output_path)
             .filter_complex(filter)
             .format("null")
-            .output_null()
+            .output_pipe()
             .build()
             .output()
             .context("Failed to run ffmpeg for SSIM")?;
@@ -3059,9 +3089,6 @@ impl VideoExplorer {
     }
 
     fn calculate_psnr(&self) -> Result<Option<f64>> {
-        use crate::universal_heartbeat::{HeartbeatConfig, HeartbeatGuard};
-        let _heartbeat = HeartbeatGuard::new(HeartbeatConfig::fast("PSNR Calculation"));
-
         let filter = "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];[ref][1:v]psnr=stats_file=-";
 
         let output = crate::ffmpeg_builder::FfmpegBuilder::new()
@@ -3069,7 +3096,7 @@ impl VideoExplorer {
             .input(&self.output_path)
             .filter_complex(filter)
             .format("null")
-            .output_null()
+            .output_pipe()
             .build()
             .output();
 
@@ -3146,7 +3173,7 @@ impl VideoExplorer {
             .input(&self.output_path)
             .filter_complex(&filter)
             .format("null")
-            .output_null()
+            .output_pipe()
             .build()
             .output();
 

@@ -18,8 +18,17 @@ mod tests {
         let output_file = tempfile::Builder::new().suffix(".jxl").tempfile().unwrap();
         let output = output_file.path();
 
-        let result =
-            run_imagemagick_cjxl_pipeline(&input, output, 1.0, 1, false, 8, false, false, false);
+        let result = run_imagemagick_cjxl_pipeline(ModeLockedImagemagickCjxlPipelineRequest {
+            input: &input,
+            output,
+            distance: 1.0,
+            max_threads: 1,
+            metadata_policy: JxlMetadataPolicy::Preserve,
+            output_depth: 8,
+            icc_policy: JxlIccPolicy::Preserve,
+            apple_compat: false,
+            mode: JxlMode::Normal,
+        });
 
         assert!(result.is_ok(), "Grayscale fallback failed!");
     }
@@ -32,8 +41,17 @@ mod tests {
         let output = output_file.path();
 
         // Test pipeline handles compositing and premultiply issues
-        let result =
-            run_imagemagick_cjxl_pipeline(&input, output, 1.0, 1, false, 8, false, false, false);
+        let result = run_imagemagick_cjxl_pipeline(ModeLockedImagemagickCjxlPipelineRequest {
+            input: &input,
+            output,
+            distance: 1.0,
+            max_threads: 1,
+            metadata_policy: JxlMetadataPolicy::Preserve,
+            output_depth: 8,
+            icc_policy: JxlIccPolicy::Preserve,
+            apple_compat: false,
+            mode: JxlMode::Normal,
+        });
 
         assert!(result.is_ok(), "Alpha bleed prevention pipeline failed!");
     }
@@ -44,17 +62,17 @@ mod tests {
         let input = get_edge_file("poison_pill_static_veto.gif");
 
         // This is a unit test of the pipeline's handling of static veto fixtures
-        let result = run_imagemagick_cjxl_pipeline(
-            &input,
-            Path::new("dummy.jxl"),
-            1.0,
-            1,
-            false,
-            8,
-            false,
-            false,
-            false,
-        );
+        let result = run_imagemagick_cjxl_pipeline(ModeLockedImagemagickCjxlPipelineRequest {
+            input: &input,
+            output: Path::new("dummy.jxl"),
+            distance: 1.0,
+            max_threads: 1,
+            metadata_policy: JxlMetadataPolicy::Preserve,
+            output_depth: 8,
+            icc_policy: JxlIccPolicy::Preserve,
+            apple_compat: false,
+            mode: JxlMode::Normal,
+        });
 
         // The result should indicate success or a clean handled failure if it's not a real multi-frame
         assert!(
@@ -73,17 +91,17 @@ mod tests {
         );
         let input = Path::new(&input_pattern);
 
-        let result = run_imagemagick_cjxl_pipeline(
+        let result = run_imagemagick_cjxl_pipeline(ModeLockedImagemagickCjxlPipelineRequest {
             input,
-            Path::new("rhythm.jxl"),
-            1.0,
-            1,
-            false,
-            8,
-            false,
-            false,
-            false,
-        );
+            output: Path::new("rhythm.jxl"),
+            distance: 1.0,
+            max_threads: 1,
+            metadata_policy: JxlMetadataPolicy::Preserve,
+            output_depth: 8,
+            icc_policy: JxlIccPolicy::Preserve,
+            apple_compat: false,
+            mode: JxlMode::Normal,
+        });
 
         assert!(
             result.is_ok() || result.is_err(),
@@ -100,17 +118,17 @@ mod tests {
         );
         let input = Path::new(&input_pattern);
 
-        let result = run_imagemagick_cjxl_pipeline(
+        let result = run_imagemagick_cjxl_pipeline(ModeLockedImagemagickCjxlPipelineRequest {
             input,
-            Path::new("pts.jxl"),
-            1.0,
-            1,
-            false,
-            8,
-            false,
-            false,
-            false,
-        );
+            output: Path::new("pts.jxl"),
+            distance: 1.0,
+            max_threads: 1,
+            metadata_policy: JxlMetadataPolicy::Preserve,
+            output_depth: 8,
+            icc_policy: JxlIccPolicy::Preserve,
+            apple_compat: false,
+            mode: JxlMode::Normal,
+        });
 
         assert!(
             result.is_ok() || result.is_err(),
@@ -124,17 +142,17 @@ mod tests {
         // Verifies the fix for 'multiplied instead of divided' BPP bug.
         let input = get_edge_file("poison_pill_bpp_precision.apng");
 
-        let result = run_imagemagick_cjxl_pipeline(
-            &input,
-            Path::new("bpp_test.jxl"),
-            1.0,
-            1,
-            false,
-            8,
-            false,
-            false,
-            false,
-        );
+        let result = run_imagemagick_cjxl_pipeline(ModeLockedImagemagickCjxlPipelineRequest {
+            input: &input,
+            output: Path::new("bpp_test.jxl"),
+            distance: 1.0,
+            max_threads: 1,
+            metadata_policy: JxlMetadataPolicy::Preserve,
+            output_depth: 8,
+            icc_policy: JxlIccPolicy::Preserve,
+            apple_compat: false,
+            mode: JxlMode::Normal,
+        });
         assert!(result.is_ok() || result.is_err());
     }
 
@@ -143,17 +161,17 @@ mod tests {
         // Poison Pill: GIF with 0ms delay between frames
         let input = get_edge_file("poison_pill_zero_duration.gif");
 
-        let result = run_imagemagick_cjxl_pipeline(
-            &input,
-            Path::new("zero.jxl"),
-            1.0,
-            1,
-            false,
-            8,
-            false,
-            false,
-            false,
-        );
+        let result = run_imagemagick_cjxl_pipeline(ModeLockedImagemagickCjxlPipelineRequest {
+            input: &input,
+            output: Path::new("zero.jxl"),
+            distance: 1.0,
+            max_threads: 1,
+            metadata_policy: JxlMetadataPolicy::Preserve,
+            output_depth: 8,
+            icc_policy: JxlIccPolicy::Preserve,
+            apple_compat: false,
+            mode: JxlMode::Normal,
+        });
 
         // This validates the FPS logic handles or rejects invalid timing
         assert!(

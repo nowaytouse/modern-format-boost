@@ -21,6 +21,7 @@ use std::time::{Duration, Instant};
 
 static PROGRESS_STDERR_LOCK: Mutex<()> = Mutex::new(());
 static ACTIVE_PROGRESS_LINE: Mutex<Option<String>> = Mutex::new(None);
+const SUB_SPINNER_TEMPLATE: &str = "  {spinner:.green} {prefix:.dim}: {msg}";
 
 pub struct CoarseProgressBar {
     total: u64,
@@ -1478,7 +1479,6 @@ impl GlobalProgressManager {
     ///
     /// # Panics
     /// Panics if the template is invalid.
-    #[allow(clippy::literal_string_with_formatting_args)]
     pub fn create_sub(&mut self, prefix: &str) -> &ProgressBar {
         let bar = self.multi.add(ProgressBar::new_spinner());
 
@@ -1487,7 +1487,7 @@ impl GlobalProgressManager {
         } else {
             bar.set_style(
                 ProgressStyle::default_spinner()
-                    .template("  {spinner:.green} {prefix:.dim}: {msg}")
+                    .template(SUB_SPINNER_TEMPLATE)
                     .expect("Invalid template")
                     .tick_chars(progress_style::SPINNER_CHARS),
             );

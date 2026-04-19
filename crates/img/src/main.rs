@@ -214,18 +214,19 @@ fn main() -> anyhow::Result<()> {
                 std::process::exit(1);
             }
 
-            let flag_mode = match shared_utils::validate_flags_result_with_ultimate(
-                explore,
-                match_quality,
-                compress,
-                ultimate,
-            ) {
-                Ok(mode) => mode,
-                Err(e) => {
-                    shared_utils::log_eprintln!("{}", e);
-                    std::process::exit(1);
-                }
-            };
+            let flag_mode =
+                match shared_utils::validate_flags_result_with_ultimate(shared_utils::FlagRequest {
+                    explore,
+                    match_quality,
+                    compress,
+                    ultimate,
+                }) {
+                    Ok(mode) => mode,
+                    Err(e) => {
+                        shared_utils::log_eprintln!("{}", e);
+                        std::process::exit(1);
+                    }
+                };
 
             // Fail-fast if critical sub-tools are missing
             if let Err(e) =

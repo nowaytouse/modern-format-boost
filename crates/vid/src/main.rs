@@ -170,12 +170,14 @@ fn main() -> anyhow::Result<()> {
                 std::process::exit(1);
             }
 
-            if let Err(e) = shared_utils::validate_flags_result_with_ultimate(
-                explore,
-                match_quality,
-                compress,
-                ultimate,
-            ) {
+            if let Err(e) =
+                shared_utils::validate_flags_result_with_ultimate(shared_utils::FlagRequest {
+                    explore,
+                    match_quality,
+                    compress,
+                    ultimate,
+                })
+            {
                 shared_utils::log_eprintln!("{e}");
                 std::process::exit(1);
             }

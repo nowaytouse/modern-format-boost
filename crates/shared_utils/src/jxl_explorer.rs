@@ -221,8 +221,8 @@ fn trim_decimal_string(mut raw: String) -> String {
     raw
 }
 
-fn format_scalar_for_log(value: f32) -> String {
-    let normalized = f64::from(value.max(0.0));
+fn format_scalar_for_log(value: f64) -> String {
+    let normalized = value.max(0.0);
     let raw = if normalized >= 0.99 {
         format!("{normalized:.8}")
     } else if normalized < 0.01 {
@@ -238,7 +238,7 @@ fn format_scalar_for_log(value: f32) -> String {
 
 #[must_use]
 pub fn format_distance_for_log(distance: f32) -> String {
-    format_scalar_for_log(clamp_explore_distance(distance))
+    format_scalar_for_log(f64::from(clamp_explore_distance(distance)))
 }
 
 fn size_ratio(size: u64, input_size: u64) -> f64 {
@@ -283,9 +283,7 @@ fn candidate_region_key(distance: f32) -> i32 {
     let span = (ceiling_log - floor_log).max(f64::EPSILON);
     let normalized = ((distance_log - floor_log) / span).clamp(0.0, 0.999_999);
 
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let bucket = (normalized * JXL_REGION_BUCKET_COUNT).floor() as i32;
-    bucket
+    crate::numeric_cast::f64_to_i32_sat((normalized * JXL_REGION_BUCKET_COUNT).floor())
 }
 
 fn canonicalize_generated_distance(distance: f64) -> Result<f32, String> {
@@ -302,8 +300,7 @@ fn canonicalize_generated_distance(distance: f64) -> Result<f32, String> {
     }
 
     let clamped = distance.clamp(floor, f64::from(JXL_EXPLORE_CEILING));
-    #[allow(clippy::cast_possible_truncation)]
-    let mut as_f32 = clamped as f32;
+    let mut as_f32 = crate::numeric_cast::f64_to_f32_lossy(clamped);
     if as_f32 < JXL_EXPLORE_FLOOR {
         as_f32 = JXL_EXPLORE_FLOOR;
     }
@@ -516,8 +513,9 @@ fn build_exploration_plan(
         JxlExplorationProfile::WidePush => (6usize, 10usize),
         JxlExplorationProfile::CeilingSweep => (8usize, 14usize),
     };
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let probe_count = (distance_span.ceil() as usize + 3).clamp(min_probes, max_probes);
+    let probe_count = crate::numeric_cast::f64_to_usize_sat(distance_span.ceil())
+        .saturating_add(3)
+        .clamp(min_probes, max_probes);
     let ladder = build_adaptive_ladder(profile, target_distance, probe_count)?;
 
     Ok(JxlExplorationPlan {
@@ -799,8 +797,8 @@ where
         format_distance_for_log(initial_distance),
         size_ratio_pct(initial_size, input_size),
         plan.ladder.len(),
-        format_scalar_for_log(#[allow(clippy::cast_possible_truncation)] { band_min as f32 }),
-        format_scalar_for_log(#[allow(clippy::cast_possible_truncation)] { band_max as f32 }),
+        format_scalar_for_log(band_min),
+        format_scalar_for_log(band_max),
         format_distance_for_log(plan.target_distance)
     ));
     log.push(format!(
@@ -1046,7 +1044,7 @@ where
                 } else {
                     d_over = Some(next);
                     probe = next;
-                    step = (step * 2.0).min(f32::from(JXL_EXPLORE_CEILING) - next);
+                    step = (step * 2.0).min(JXL_EXPLORE_CEILING - next);
                 }
             }
         }
@@ -1059,11 +1057,10 @@ where
             "Phase 2 binary search: lo=d={} (oversize), hi=d={} (below source), precision={}",
             format_distance_for_log(lo),
             format_distance_for_log(hi),
-            format_scalar_for_log(precision)
+            format_scalar_for_log(f64::from(precision))
         ));
 
         while iterations < JXL_EXPLORE_MAX_ITERATIONS && hi - lo >= precision {
-            #[allow(clippy::cast_possible_truncation)]
             let mid = canonicalize_generated_distance(f64::midpoint(f64::from(lo), f64::from(hi)))?;
 
             if tested.contains(&distance_key(mid))
@@ -1332,13 +1329,18 @@ mod tests {
             target_distance_for_ratio(ceiling_ratio, exploration_profile(ceiling_ratio)).unwrap();
 
         assert!(micro_target > JXL_EXPLORE_FLOOR);
-        #[allow(clippy::cast_possible_truncation)]
         {
-            assert!(micro_target <= JXL_DISTANCE_CEILING_PLATEAU_MAX as f32 + f32::EPSILON);
+            assert!(
+                f64::from(micro_target)
+                    <= JXL_DISTANCE_CEILING_PLATEAU_MAX + f64::from(f32::EPSILON)
+            );
             assert!(boundary_target > micro_target);
-            assert!(boundary_target <= JXL_DISTANCE_VISUAL_LOSSLESS_MAX as f32 + f32::EPSILON);
+            assert!(
+                f64::from(boundary_target)
+                    <= JXL_DISTANCE_VISUAL_LOSSLESS_MAX + f64::from(f32::EPSILON)
+            );
             assert!(wide_target > boundary_target);
-            assert!(wide_target <= JXL_DISTANCE_BALANCED_MAX as f32 + f32::EPSILON);
+            assert!(f64::from(wide_target) <= JXL_DISTANCE_BALANCED_MAX + f64::from(f32::EPSILON));
         }
         assert!(ceiling_target > wide_target);
         assert!(ceiling_target < JXL_EXPLORE_CEILING);
@@ -1452,8 +1454,9 @@ mod tests {
         // Size decreases monotonically as d increases; break-even near d=0.1.
         // Binary search should converge without exhausting the 50-iteration budget.
         let result = screen_jxl_candidates(1000, 1192, |distance| {
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let size = (1200.0 - f64::from(distance) * 2000.0).max(800.0) as u64;
+            let size = crate::numeric_cast::f64_to_u64_sat(
+                (1200.0 - f64::from(distance) * 2000.0).max(800.0),
+            );
             Ok(size)
         })
         .expect("exploration should succeed")

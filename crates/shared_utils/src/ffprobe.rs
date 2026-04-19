@@ -36,8 +36,59 @@ impl From<io::Error> for FFprobeError {
     }
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FFprobeAudioInfo {
+    pub present: bool,
+    pub codec: Option<String>,
+    pub bit_rate: Option<u64>,
+    pub sample_rate: Option<u32>,
+    pub channels: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FFprobeSubtitleInfo {
+    pub present: bool,
+    pub codec: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct DolbyVisionMetadata {
+    pub profile: Option<u8>,
+    pub bl_signal_compatibility_id: Option<u8>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FFprobeHdrInfo {
+    /// HDR10 mastering display metadata (e.g. "G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,500)")
+    pub mastering_display: Option<String>,
+    /// HDR10 content light level metadata (e.g. "MaxCLL=1000,MaxFALL=400")
+    pub max_cll: Option<String>,
+    /// Dolby Vision metadata when detected in side data
+    pub dolby_vision: Option<DolbyVisionMetadata>,
+    /// True when content uses HDR10+ dynamic metadata (SMPTE ST 2094-40)
+    pub hdr10_plus: bool,
+}
+
+impl FFprobeHdrInfo {
+    #[must_use]
+    pub const fn is_dolby_vision(&self) -> bool {
+        self.dolby_vision.is_some()
+    }
+
+    #[must_use]
+    pub fn dv_profile(&self) -> Option<u8> {
+        self.dolby_vision
+            .and_then(|dolby_vision| dolby_vision.profile)
+    }
+
+    #[must_use]
+    pub fn dv_bl_signal_compatibility_id(&self) -> Option<u8> {
+        self.dolby_vision
+            .and_then(|dolby_vision| dolby_vision.bl_signal_compatibility_id)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(clippy::struct_excessive_bools)]
 pub struct FFprobeResult {
     pub format_name: String,
     pub duration: f64,
@@ -55,36 +106,17 @@ pub struct FFprobeResult {
     pub color_transfer: Option<String>,
     pub color_primaries: Option<String>,
     pub bit_depth: u8,
-    pub has_audio: bool,
-    pub audio_codec: Option<String>,
-    pub audio_bit_rate: Option<u64>,
-    pub audio_sample_rate: Option<u32>,
-    pub audio_channels: Option<u32>,
+    pub audio: FFprobeAudioInfo,
     pub profile: Option<String>,
     pub level: Option<String>,
     /// Actual B-frame count (`max_b_frames`) from ffprobe.
     pub max_b_frames: u8,
-    pub has_b_frames: bool,
     /// Raw encoder settings string (e.g. from x264-params or x265-params tags).
     pub encoder_settings: Option<String>,
     pub video_bit_rate: Option<u64>,
     pub refs: Option<u32>,
-    /// HDR10 mastering display metadata (e.g. "G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,500)")
-    pub mastering_display: Option<String>,
-    /// HDR10 content light level metadata (e.g. "MaxCLL=1000,MaxFALL=400")
-    pub max_cll: Option<String>,
-    /// True when content uses Dolby Vision (side data detected)
-    pub is_dolby_vision: bool,
-    /// Dolby Vision profile number (5, 7, 8, etc.) — None if not DV
-    pub dv_profile: Option<u8>,
-    /// Dolby Vision BL signal compatibility ID (used to determine cross-compat)
-    pub dv_bl_signal_compatibility_id: Option<u8>,
-    /// True when content uses HDR10+ dynamic metadata (SMPTE ST 2094-40)
-    pub is_hdr10_plus: bool,
-    /// True when at least one subtitle stream is present
-    pub has_subtitles: bool,
-    /// Codec name of the first subtitle stream (e.g. "srt", "ass", "`mov_text`", "`hdmv_pga_subtitle`")
-    pub subtitle_codec: Option<String>,
+    pub hdr: FFprobeHdrInfo,
+    pub subtitles: FFprobeSubtitleInfo,
     /// Variable frame rate detected (`r_frame_rate` != `avg_frame_rate`)
     pub is_variable_frame_rate: bool,
     /// Stream index of the selected video stream (for multi-stream files like animated AVIF)
@@ -101,6 +133,13 @@ pub struct FFprobeResult {
     pub mv_magnitudes: Vec<f64>,
     /// Captured packet sizes for bitrate inequality analysis.
     pub pkt_sizes: Vec<u64>,
+}
+
+impl FFprobeResult {
+    #[must_use]
+    pub const fn has_b_frames(&self) -> bool {
+        self.max_b_frames > 0
+    }
 }
 
 #[must_use]
@@ -163,26 +202,10 @@ struct VideoStreamFields {
     profile: Option<String>,
     level: Option<String>,
     max_b_frames: u8,
-    has_b_frames: bool,
     encoder_settings: Option<String>,
     video_bit_rate: Option<u64>,
     refs: Option<u32>,
     is_variable_frame_rate: bool,
-}
-
-#[derive(Debug, Default)]
-struct AudioStreamFields {
-    has_audio: bool,
-    audio_codec: Option<String>,
-    audio_bit_rate: Option<u64>,
-    audio_sample_rate: Option<u32>,
-    audio_channels: Option<u32>,
-}
-
-#[derive(Debug, Default)]
-struct SubtitleStreamFields {
-    has_subtitles: bool,
-    subtitle_codec: Option<String>,
 }
 
 fn validate_probe_target(path: &Path) -> Result<(), FFprobeError> {
@@ -397,7 +420,6 @@ fn parse_video_stream_fields(
             .as_u64()
             .map(|level| format!("{:.1}", level as f64 / 10.0)),
         max_b_frames,
-        has_b_frames: max_b_frames > 0,
         encoder_settings: video_stream["tags"]["x265-params"]
             .as_str()
             .or_else(|| video_stream["tags"]["x264-params"].as_str())
@@ -411,37 +433,37 @@ fn parse_video_stream_fields(
     })
 }
 
-fn extract_audio_stream_fields(streams: &[serde_json::Value]) -> AudioStreamFields {
+fn extract_audio_stream_fields(streams: &[serde_json::Value]) -> FFprobeAudioInfo {
     let Some(audio_stream) = streams
         .iter()
         .find(|stream| stream["codec_type"].as_str() == Some("audio"))
     else {
-        return AudioStreamFields::default();
+        return FFprobeAudioInfo::default();
     };
 
-    AudioStreamFields {
-        has_audio: true,
-        audio_codec: audio_stream["codec_name"].as_str().map(str::to_string),
-        audio_bit_rate: parse_u64_string_field(&audio_stream["bit_rate"]),
-        audio_sample_rate: parse_u64_string_field(&audio_stream["sample_rate"])
+    FFprobeAudioInfo {
+        present: true,
+        codec: audio_stream["codec_name"].as_str().map(str::to_string),
+        bit_rate: parse_u64_string_field(&audio_stream["bit_rate"]),
+        sample_rate: parse_u64_string_field(&audio_stream["sample_rate"])
             .and_then(|sample_rate| u32::try_from(sample_rate).ok()),
-        audio_channels: audio_stream["channels"]
+        channels: audio_stream["channels"]
             .as_u64()
             .and_then(|channels| u32::try_from(channels).ok()),
     }
 }
 
-fn extract_subtitle_stream_fields(streams: &[serde_json::Value]) -> SubtitleStreamFields {
+fn extract_subtitle_stream_fields(streams: &[serde_json::Value]) -> FFprobeSubtitleInfo {
     let Some(subtitle_stream) = streams
         .iter()
         .find(|stream| stream["codec_type"].as_str() == Some("subtitle"))
     else {
-        return SubtitleStreamFields::default();
+        return FFprobeSubtitleInfo::default();
     };
 
-    SubtitleStreamFields {
-        has_subtitles: true,
-        subtitle_codec: subtitle_stream["codec_name"].as_str().map(str::to_string),
+    FFprobeSubtitleInfo {
+        present: true,
+        codec: subtitle_stream["codec_name"].as_str().map(str::to_string),
     }
 }
 
@@ -495,26 +517,15 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         color_transfer: video.color_transfer,
         color_primaries: video.color_primaries,
         bit_depth: video.bit_depth,
-        has_audio: audio.has_audio,
-        audio_codec: audio.audio_codec,
-        audio_bit_rate: audio.audio_bit_rate,
-        audio_sample_rate: audio.audio_sample_rate,
-        audio_channels: audio.audio_channels,
+        audio,
         profile: video.profile,
         level: video.level,
         max_b_frames: video.max_b_frames,
-        has_b_frames: video.has_b_frames,
         encoder_settings: video.encoder_settings,
         video_bit_rate: video.video_bit_rate,
         refs: video.refs,
-        mastering_display: hdr.mastering_display,
-        max_cll: hdr.max_cll,
-        is_dolby_vision: hdr.is_dolby_vision,
-        dv_profile: hdr.dv_profile,
-        dv_bl_signal_compatibility_id: hdr.dv_bl_signal_compatibility_id,
-        is_hdr10_plus: hdr.is_hdr10_plus,
-        has_subtitles: subtitles.has_subtitles,
-        subtitle_codec: subtitles.subtitle_codec,
+        hdr,
+        subtitles,
         is_variable_frame_rate: video.is_variable_frame_rate,
         stream_index,
         tags,
@@ -590,26 +601,9 @@ fn extract_pkt_sizes(json: &serde_json::Value) -> Vec<u64> {
 /// - Mastering display colour volume (HDR10 static metadata)
 /// - Content light level (`MaxCLL` / `MaxFALL`)
 ///
-/// Parsed HDR side data from ffprobe JSON.
-struct HdrSideData {
-    is_dolby_vision: bool,
-    is_hdr10_plus: bool,
-    mastering_display: Option<String>,
-    max_cll: Option<String>,
-    dv_profile: Option<u8>,
-    dv_bl_signal_compatibility_id: Option<u8>,
-}
-
 /// Returns parsed HDR side data including DV profile information.
-fn extract_hdr_side_data(json: &serde_json::Value) -> HdrSideData {
-    let mut result = HdrSideData {
-        is_dolby_vision: false,
-        is_hdr10_plus: false,
-        mastering_display: None,
-        max_cll: None,
-        dv_profile: None,
-        dv_bl_signal_compatibility_id: None,
-    };
+fn extract_hdr_side_data(json: &serde_json::Value) -> FFprobeHdrInfo {
+    let mut result = FFprobeHdrInfo::default();
 
     // Collect all side_data arrays from streams and frames
     let mut side_data_entries: Vec<&serde_json::Value> = Vec::new();
@@ -639,14 +633,15 @@ fn extract_hdr_side_data(json: &serde_json::Value) -> HdrSideData {
         let sd_type = sd["side_data_type"].as_str().unwrap_or("").to_lowercase();
 
         if sd_type.contains("dolby vision") || sd_type.contains("dovi") {
-            result.is_dolby_vision = true;
+            let dolby_vision = result.dolby_vision.get_or_insert_default();
 
             // Parse DOVI configuration record fields
             if let Some(profile) = sd["dv_profile"].as_u64() {
-                result.dv_profile = Some(u8::try_from(profile).unwrap_or(0));
+                dolby_vision.profile = Some(u8::try_from(profile).unwrap_or(0));
             }
             if let Some(compat_id) = sd["dv_bl_signal_compatibility_id"].as_u64() {
-                result.dv_bl_signal_compatibility_id = Some(u8::try_from(compat_id).unwrap_or(0));
+                dolby_vision.bl_signal_compatibility_id =
+                    Some(u8::try_from(compat_id).unwrap_or(0));
             }
         }
 
@@ -654,7 +649,7 @@ fn extract_hdr_side_data(json: &serde_json::Value) -> HdrSideData {
             || sd_type.contains("st2094")
             || sd_type.contains("hdr10+")
         {
-            result.is_hdr10_plus = true;
+            result.hdr10_plus = true;
         }
 
         // Mastering display: parse colour primaries + luminance into ffmpeg format

@@ -276,6 +276,8 @@ use std::sync::OnceLock;
 
 /// Global terminal logger instance
 static GLOBAL_LOGGER: OnceLock<TerminalLogger> = OnceLock::new();
+static FALLBACK_LOGGER: TerminalLogger = TerminalLogger::new(false, false);
+static FALLBACK_LOGGER_WARNING: OnceLock<()> = OnceLock::new();
 
 /// Initialize global terminal logger
 pub fn init_terminal_logger(use_colors: bool, debug_mode: bool) {
@@ -288,14 +290,17 @@ pub fn init_terminal_logger(use_colors: bool, debug_mode: bool) {
 }
 
 /// Get global terminal logger instance
-///
-/// # Panics
-///
-/// Panics if the terminal logger has not been initialized (via `init_terminal_logger`).
 pub fn terminal_logger() -> &'static TerminalLogger {
-    GLOBAL_LOGGER
-        .get()
-        .expect("Terminal logger not initialized. Call init_terminal_logger first.")
+    if let Some(logger) = GLOBAL_LOGGER.get() {
+        logger
+    } else {
+        if FALLBACK_LOGGER_WARNING.set(()).is_ok() {
+            eprintln!(
+                "⚠️ [Terminal Logger] used before initialization; falling back to a plain logger"
+            );
+        }
+        &FALLBACK_LOGGER
+    }
 }
 
 // ─── Convenience Macros ─────────────────────────────────────────────────────

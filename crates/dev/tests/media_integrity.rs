@@ -18,8 +18,17 @@ mod tests {
         let output_file = tempfile::Builder::new().suffix(".jxl").tempfile().unwrap();
         let output = output_file.path();
 
-        let result =
-            run_imagemagick_cjxl_pipeline(&input, output, 1.0, 1, false, 8, false, false, false);
+        let result = run_imagemagick_cjxl_pipeline(ModeLockedImagemagickCjxlPipelineRequest {
+            input: &input,
+            output,
+            distance: 1.0,
+            max_threads: 1,
+            metadata_policy: JxlMetadataPolicy::Preserve,
+            output_depth: 8,
+            icc_policy: JxlIccPolicy::Preserve,
+            apple_compat: false,
+            mode: JxlMode::Normal,
+        });
 
         // This should gracefully fail because ImageMagick cannot read a 0-byte JPG
         assert!(
@@ -44,8 +53,17 @@ mod tests {
         let output = output_file.path();
 
         // This test ensures the pipeline can at least attempt to call magick on a file with spaces
-        let result =
-            run_imagemagick_cjxl_pipeline(&input, output, 1.0, 1, false, 8, false, false, false);
+        let result = run_imagemagick_cjxl_pipeline(ModeLockedImagemagickCjxlPipelineRequest {
+            input: &input,
+            output,
+            distance: 1.0,
+            max_threads: 1,
+            metadata_policy: JxlMetadataPolicy::Preserve,
+            output_depth: 8,
+            icc_policy: JxlIccPolicy::Preserve,
+            apple_compat: false,
+            mode: JxlMode::Normal,
+        });
 
         // On many systems this might still fail if the file doesn't exist, but it must not be a shell injection or hang
         assert!(
@@ -59,17 +77,17 @@ mod tests {
         // Poison Pill: Image with abnormally high metadata density
         let input = get_edge_file("poison_pill_metadata_bomb.jpg");
 
-        let result = run_imagemagick_cjxl_pipeline(
-            &input,
-            Path::new("bomb.jxl"),
-            1.0,
-            1,
-            false,
-            8,
-            false,
-            false,
-            false,
-        );
+        let result = run_imagemagick_cjxl_pipeline(ModeLockedImagemagickCjxlPipelineRequest {
+            input: &input,
+            output: Path::new("bomb.jxl"),
+            distance: 1.0,
+            max_threads: 1,
+            metadata_policy: JxlMetadataPolicy::Preserve,
+            output_depth: 8,
+            icc_policy: JxlIccPolicy::Preserve,
+            apple_compat: false,
+            mode: JxlMode::Normal,
+        });
 
         // Success here means no OOM and no hang during metadata reading/piping
         assert!(

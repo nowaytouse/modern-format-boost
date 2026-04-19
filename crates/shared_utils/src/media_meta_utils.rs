@@ -4,35 +4,34 @@
 
 use std::path::Path;
 
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct GifHeaderScan {
+    pub palette_size: Option<u32>,
+    pub app_extensions: Option<Vec<String>>,
+    pub has_transparency: bool,
+    pub frame_payload_variation: Option<f64>,
+    pub frame_delay_variation: Option<f64>,
+    pub loop_count: Option<u16>,
+    pub duration_secs: Option<f64>,
+}
+
 /// Scans a GIF file's bytes to extract metadata not easily provided by ffprobe,
 /// such as application extensions (GIPHY/TENOR markers), loop counts, and
 /// detailed frame delay variation.
 ///
-/// Returns: (`palette_size`, `app_extensions`, `has_transparency`, `payload_var`, `delay_var`, `loop_count`, `duration_secs`)
-///
 /// # Errors
 /// Returns an error if the file cannot be read or if the `GIF` header is malformed.
-pub fn scan_gif_headers(
-    path: &Path,
-) -> std::io::Result<(
-    Option<u32>,
-    Option<Vec<String>>,
-    bool,
-    Option<f64>,
-    Option<f64>,
-    Option<u16>,
-    Option<f64>,
-)> {
+pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
     let buf = std::fs::read(path)?;
     let n = buf.len();
 
     if n < 13 {
-        return Ok((None, None, false, None, None, None, None));
+        return Ok(GifHeaderScan::default());
     }
 
     // GIF87a / GIF89a magic check
     if &buf[0..6] != b"GIF87a" && &buf[0..6] != b"GIF89a" {
-        return Ok((None, None, false, None, None, None, None));
+        return Ok(GifHeaderScan::default());
     }
 
     // Logical Screen Descriptor: byte 10 = packed field
@@ -188,15 +187,15 @@ pub fn scan_gif_headers(
         Some(frame_delays_cs.iter().map(|&d| f64::from(d)).sum::<f64>() / 100.0)
     };
 
-    Ok((
+    Ok(GifHeaderScan {
         palette_size,
         app_extensions,
         has_transparency,
         frame_payload_variation,
         frame_delay_variation,
         loop_count,
-        total_duration_secs,
-    ))
+        duration_secs: total_duration_secs,
+    })
 }
 
 fn skip_sub_blocks(buf: &[u8], mut pos: usize) -> usize {

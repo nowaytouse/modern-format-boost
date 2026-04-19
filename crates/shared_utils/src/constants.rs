@@ -164,7 +164,9 @@ pub const X265_LOW_MEMORY_LOOKAHEAD_SLICES: usize = 1;
 /// Low-memory x265 profile: cap worker pools aggressively to keep RAM spikes in check.
 pub const X265_LOW_MEMORY_MAX_POOLS: usize = 2;
 /// Current HEVC preset policy (`medium`/`slow`/`slower`) must tolerate x265's `slower`
-/// preset, which can use up to 8 consecutive B-frames. `rc-lookahead` must stay strictly
+/// preset.
+///
+/// That preset can use up to 8 consecutive B-frames, so `rc-lookahead` must stay strictly
 /// above that count or x265 rejects the encode at startup.
 pub const X265_ALLOWED_HEVC_MAX_CONSECUTIVE_BFRAMES: usize = 8;
 /// Low-memory x265 profile: shorten the lookahead queue to reduce buffered frames, while

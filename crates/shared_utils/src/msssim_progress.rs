@@ -116,11 +116,8 @@ impl MsssimProgressMonitor {
         for arg in ffmpeg_args {
             builder.arg(arg);
         }
-        let mut cmd = builder.build();
-        cmd.arg("-progress")
-            .arg("pipe:1")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+        let mut cmd = builder.arg("-progress").arg("pipe:1").output_pipe().build();
+        cmd.stdout(Stdio::piped()).stderr(Stdio::null());
 
         let mut child = cmd
             .spawn()

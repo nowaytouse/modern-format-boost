@@ -361,8 +361,8 @@ pub fn quick_calibrate(
                 color_primaries: probe.as_ref().and_then(|p| p.color_primaries.clone()),
                 color_trc: probe.as_ref().and_then(|p| p.color_transfer.clone()),
                 colorspace: probe.as_ref().and_then(|p| p.color_space.clone()),
-                mastering_display: probe.as_ref().and_then(|p| p.mastering_display.clone()),
-                max_cll: probe.as_ref().and_then(|p| p.max_cll.clone()),
+                mastering_display: probe.as_ref().and_then(|p| p.hdr.mastering_display.clone()),
+                max_cll: probe.as_ref().and_then(|p| p.hdr.max_cll.clone()),
                 ..Default::default()
             };
 

@@ -15,6 +15,7 @@ fn test_ffmpeg_flag_order_parity() {
         .vcodec(VideoCodec::Hevc)
         .crf(18.0)
         .preset(EncoderPreset::Slower)
+        .output(Path::new("out.mp4"))
         .build();
 
     let args: Vec<String> = cmd

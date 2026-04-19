@@ -50,6 +50,243 @@ fn cleanup_output_file(path: &Path, context: &str) {
     }
 }
 
+struct ExploreQualityFailureDecision {
+    fail_reason: String,
+    fail_message: String,
+    protect_msg: String,
+    delete_msg: String,
+}
+
+impl ExploreQualityFailureDecision {
+    fn inspect_and_log(
+        config: &ConversionConfig,
+        explore_result: &shared_utils::ExploreResult,
+        total_file_compressed: bool,
+        total_size_ratio: f64,
+    ) -> Self {
+        let actual_ssim = explore_result.ssim;
+        let threshold = explore_result.actual_min_ssim;
+        let video_stream_compressed = explore_result.output_video_stream_size
+            < explore_result.input_video_stream_size
+            || (config.allow_size_tolerance
+                && (explore_result.output_video_stream_size as i64
+                    - explore_result.input_video_stream_size as i64)
+                    < DEFAULT_SIZE_TOLERANCE_BYTES as i64);
+
+        tracing::debug!(
+            "stream_size: input={} output={} compressed={}",
+            explore_result.input_video_stream_size,
+            explore_result.output_video_stream_size,
+            video_stream_compressed
+        );
+
+        if !video_stream_compressed {
+            let input_b = explore_result.input_video_stream_size as f64;
+            let output_b = explore_result.output_video_stream_size as f64;
+            let stream_change_pct = if input_b > 0.0 {
+                (output_b / input_b - 1.0) * 100.0
+            } else {
+                0.0
+            };
+
+            let base_msg = if input_b < 1024.0 * 1024.0 {
+                format!(
+                    "⚠️  VIDEO STREAM COMPRESSION FAILED: {:.1} KB → {:.1} KB ({:+.1}%)",
+                    input_b / 1024.0,
+                    output_b / 1024.0,
+                    stream_change_pct
+                )
+            } else {
+                format!(
+                    "⚠️  VIDEO STREAM COMPRESSION FAILED: {:.3} MB → {:.3} MB ({:+.1}%)",
+                    input_b / 1024.0 / 1024.0,
+                    output_b / 1024.0 / 1024.0,
+                    stream_change_pct
+                )
+            };
+
+            let additional_info = if total_file_compressed {
+                "│ Total file smaller but video stream larger"
+            } else if total_size_ratio > 1.0 {
+                "│ Total file and video stream both larger"
+            } else {
+                "│ Video stream larger despite container overhead savings"
+            };
+
+            let final_msg =
+                format!("{base_msg} {additional_info} │ File may already be highly optimized");
+            tracing::debug!("   {final_msg}");
+            return Self {
+                fail_reason: format!("Video stream compression failed: {stream_change_pct:+.1}%"),
+                fail_message: format!("Skipped: video stream larger ({stream_change_pct:+.1}%)"),
+                protect_msg: "Original file PROTECTED (output did not compress)".to_string(),
+                delete_msg: "Output discarded (video stream larger than original)".to_string(),
+            };
+        }
+
+        if config.ultimate_mode {
+            let reason = explore_result
+                .quality_passed
+                .failure_reason()
+                .or(explore_result.enhanced_verify_fail_reason.as_deref())
+                .unwrap_or("quality/size check failed");
+            warn!("   ⚠️  Quality validation FAILED: {reason}");
+            return Self {
+                fail_reason: format!("Quality validation failed: {reason}"),
+                fail_message: format!("Skipped: {reason}"),
+                protect_msg: "Original file PROTECTED (quality/size check failed)".to_string(),
+                delete_msg: "Output discarded (quality/size check failed)".to_string(),
+            };
+        }
+
+        if actual_ssim.is_none() {
+            warn!(
+                "   ⚠️  SSIM CALCULATION FAILED │ cannot validate quality │ may indicate codec compatibility issues (VP8/VP9/alpha channel)"
+            );
+            return Self {
+                fail_reason: "SSIM calculation failed".to_string(),
+                fail_message: "Skipped: SSIM calculation failed".to_string(),
+                protect_msg: "Original file PROTECTED (SSIM not available)".to_string(),
+                delete_msg: "Output discarded (SSIM calculation failed)".to_string(),
+            };
+        }
+
+        if actual_ssim.is_some_and(|ssim| ssim < threshold) {
+            let actual_ssim = actual_ssim.unwrap_or_default();
+            warn!(
+                "   ⚠️  Quality validation FAILED: SSIM {:.4} < {:.4}",
+                actual_ssim, threshold
+            );
+            return Self {
+                fail_reason: format!(
+                    "Quality validation failed: SSIM {actual_ssim:.4} < {threshold:.4}"
+                ),
+                fail_message: format!(
+                    "Skipped: SSIM {actual_ssim:.4} below threshold {threshold:.4}"
+                ),
+                protect_msg: "Original file PROTECTED (quality below threshold)".to_string(),
+                delete_msg: "Output discarded (quality below threshold)".to_string(),
+            };
+        }
+
+        let reason = explore_result
+            .enhanced_verify_fail_reason
+            .as_deref()
+            .unwrap_or("quality/size check failed");
+        warn!("   ⚠️  Quality validation FAILED: {reason}");
+        Self {
+            fail_reason: format!("Quality validation failed: {reason}"),
+            fail_message: format!("Skipped: {reason}"),
+            protect_msg: "Original file PROTECTED (quality/size check failed)".to_string(),
+            delete_msg: "Output discarded (quality/size check failed)".to_string(),
+        }
+    }
+
+    fn emit(&self) {
+        shared_utils::progress_mode::video_skipped(&self.fail_message);
+        warn!("   🛡️  {} │ 🗑️  {}", self.protect_msg, self.delete_msg);
+    }
+
+    fn into_skip_output(
+        self,
+        input: &Path,
+        detection: &VideoDetectionResult,
+        explore_result: &shared_utils::ExploreResult,
+    ) -> ConversionOutput {
+        ConversionOutput {
+            input_path: input.display().to_string(),
+            output_path: input.display().to_string(),
+            strategy: ConversionStrategy {
+                target: TargetVideoFormat::Skip,
+                reason: self.fail_reason,
+                command: String::new(),
+                preserve_audio: detection.has_audio,
+                crf: explore_result.optimal_crf,
+                lossless: false,
+            },
+            input_size: detection.file_size,
+            output_size: detection.file_size,
+            size_ratio: 1.0,
+            success: false,
+            message: self.fail_message,
+            final_crf: explore_result.optimal_crf,
+            exploration_attempts: explore_result.iterations as u8,
+            blake3: None,
+        }
+    }
+}
+
+struct FinalQualityGateFailureDecision {
+    quality_summary: String,
+    skip_reason: String,
+    skip_message: String,
+}
+
+impl FinalQualityGateFailureDecision {
+    fn inspect_and_log(result: &shared_utils::ExploreResult, ultimate_mode: bool) -> Self {
+        let quality_summary = if ultimate_mode {
+            result
+                .ultimate_quality_summary()
+                .unwrap_or_else(|| "3D metrics unavailable".to_string())
+        } else {
+            result
+                .ms_ssim_score
+                .map_or_else(|| "Unknown".to_string(), |s| format!("score={s:.4}"))
+        };
+        let failure_label = if ultimate_mode {
+            "3D quality gate failed"
+        } else {
+            "QUALITY TARGET FAILED"
+        };
+        warn!(
+            "   {} ({}) │ 🛡️  Original file PROTECTED (quality below threshold) ❌",
+            failure_label, quality_summary
+        );
+
+        Self {
+            skip_reason: if ultimate_mode {
+                format!("3D quality gate failed ({quality_summary})")
+            } else {
+                format!("Quality target failed ({quality_summary})")
+            },
+            skip_message: if ultimate_mode {
+                format!("Skipped: 3D quality gate failed ({quality_summary})")
+            } else {
+                format!("Skipped: MS-SSIM {quality_summary} below target 0.90")
+            },
+            quality_summary,
+        }
+    }
+
+    fn into_skip_output(
+        self,
+        input: &Path,
+        detection: &VideoDetectionResult,
+        result: &shared_utils::ExploreResult,
+    ) -> ConversionOutput {
+        ConversionOutput {
+            input_path: input.display().to_string(),
+            output_path: input.display().to_string(),
+            strategy: ConversionStrategy {
+                target: TargetVideoFormat::Skip,
+                reason: self.skip_reason,
+                command: String::new(),
+                preserve_audio: detection.has_audio,
+                crf: result.optimal_crf,
+                lossless: false,
+            },
+            input_size: detection.file_size,
+            output_size: detection.file_size,
+            size_ratio: 1.0,
+            success: false,
+            message: self.skip_message,
+            final_crf: result.optimal_crf,
+            exploration_attempts: result.iterations as u8,
+            blake3: None,
+        }
+    }
+}
+
 /// Build `FFmpeg` HDR metadata arguments from detection results.
 /// Preserves primaries, transfer characteristics, matrix, and static HDR10 metadata.
 fn build_hdr_ffmpeg_args(detection: &VideoDetectionResult) -> Vec<String> {
@@ -912,13 +1149,14 @@ pub fn auto_convert_with_cache(
                     shared_utils::log_media_info_for_quality(&quality_analysis, input_path);
                 }
 
-                let flag_mode = shared_utils::validate_flags_result_with_ultimate(
-                    config.explore_smaller,
-                    config.match_quality,
-                    config.require_compression,
-                    config.ultimate_mode,
-                )
-                .map_err(VidQualityError::ConversionError)?;
+                let flag_mode =
+                    shared_utils::validate_flags_result_with_ultimate(shared_utils::FlagRequest {
+                        explore: config.explore_smaller,
+                        match_quality: config.match_quality,
+                        compress: config.require_compression,
+                        ultimate: config.ultimate_mode,
+                    })
+                    .map_err(VidQualityError::ConversionError)?;
 
                 let use_gpu = config.use_gpu;
                 if !use_gpu {
@@ -1069,133 +1307,33 @@ pub fn auto_convert_with_cache(
                 }
 
                 // --- Explore phase: quality/SSIM or size did not meet target; decide whether to keep or discard output. ---
-                if !explore_result.quality_passed.is_ok()
+                if !explore_result.quality_passed.is_passed()
                     && (config.match_quality || config.explore_smaller)
                 {
-                    let Some(actual_ssim) = explore_result.ssim else {
-                        warn!("   ⚠️  SSIM not measured, cannot verify quality");
-                        cleanup_output_file(
-                            &temp_path,
-                            "temporary output cleanup after missing SSIM",
-                        );
-                        return Err(VidQualityError::GeneralError(
-                            "Quality verification failed: SSIM not measured".to_string(),
-                        ));
-                    };
-                    let threshold = explore_result.actual_min_ssim;
-                    let video_stream_compressed = explore_result.output_video_stream_size
-                        < explore_result.input_video_stream_size
-                        || (config.allow_size_tolerance
-                            && (explore_result.output_video_stream_size as i64
-                                - explore_result.input_video_stream_size as i64)
-                                < DEFAULT_SIZE_TOLERANCE_BYTES as i64);
                     let total_file_compressed = explore_result.output_size < detection.file_size;
                     let total_size_ratio = if detection.file_size > 0 {
                         explore_result.output_size as f64 / detection.file_size as f64
                     } else {
                         1.0
                     };
-
-                    tracing::debug!(
-                        "stream_size: input={} output={} compressed={}",
-                        explore_result.input_video_stream_size,
-                        explore_result.output_video_stream_size,
-                        video_stream_compressed
+                    let decision = ExploreQualityFailureDecision::inspect_and_log(
+                        config,
+                        &explore_result,
+                        total_file_compressed,
+                        total_size_ratio,
                     );
-
-                    let (fail_reason, fail_message, protect_msg, delete_msg) =
-                        if !video_stream_compressed {
-                            let input_b = explore_result.input_video_stream_size as f64;
-                            let output_b = explore_result.output_video_stream_size as f64;
-                            let stream_change_pct = if input_b > 0.0 {
-                                (output_b / input_b - 1.0) * 100.0
-                            } else {
-                                0.0
-                            };
-
-                            let base_msg = if input_b < 1024.0 * 1024.0 {
-                                format!(
-                                "⚠️  VIDEO STREAM COMPRESSION FAILED: {:.1} KB → {:.1} KB ({:+.1}%)",
-                                input_b / 1024.0,
-                                output_b / 1024.0,
-                                stream_change_pct
-                            )
-                            } else {
-                                format!(
-                                "⚠️  VIDEO STREAM COMPRESSION FAILED: {:.3} MB → {:.3} MB ({:+.1}%)",
-                                input_b / 1024.0 / 1024.0,
-                                output_b / 1024.0 / 1024.0,
-                                stream_change_pct
-                            )
-                            };
-
-                            // Create beautiful single-line format with visual separators
-                            let additional_info = if total_file_compressed {
-                                "│ Total file smaller but video stream larger"
-                            } else {
-                                "│ Total file and video stream both larger"
-                            };
-
-                            let final_msg = format!(
-                                "{base_msg} {additional_info} │ File may already be highly optimized"
-                            );
-                            tracing::debug!("   {}", final_msg);
-                            (
-                                format!(
-                                    "Video stream compression failed: {stream_change_pct:+.1}%"
-                                ),
-                                format!("Skipped: video stream larger ({stream_change_pct:+.1}%)"),
-                                "Original file PROTECTED (output did not compress)".to_string(),
-                                "Output discarded (video stream larger than original)".to_string(),
-                            )
-                        } else if explore_result.ssim.is_none() {
-                            warn!("   ⚠️  SSIM CALCULATION FAILED │ cannot validate quality │ may indicate codec compatibility issues (VP8/VP9/alpha channel)");
-                            (
-                                "SSIM calculation failed".to_string(),
-                                "Skipped: SSIM calculation failed".to_string(),
-                                "Original file PROTECTED (SSIM not available)".to_string(),
-                                "Output discarded (SSIM calculation failed)".to_string(),
-                            )
-                        } else if actual_ssim < threshold {
-                            warn!(
-                                "   ⚠️  Quality validation FAILED: SSIM {:.4} < {:.4}",
-                                actual_ssim, threshold
-                            );
-                            (
-                                format!(
-                                    "Quality validation failed: SSIM {actual_ssim:.4} < {threshold:.4}"
-                                ),
-                                format!(
-                                    "Skipped: SSIM {actual_ssim:.4} below threshold {threshold:.4}"
-                                ),
-                                "Original file PROTECTED (quality below threshold)".to_string(),
-                                "Output discarded (quality below threshold)".to_string(),
-                            )
-                        } else {
-                            let reason = explore_result
-                                .enhanced_verify_fail_reason
-                                .as_deref()
-                                .unwrap_or("unknown reason");
-                            warn!("   ⚠️  Quality validation FAILED: {}", reason);
-                            (
-                                format!("Quality validation failed: {reason}"),
-                                format!("Skipped: {reason}"),
-                                "Original file PROTECTED (quality/size check failed)".to_string(),
-                                "Output discarded (quality/size check failed)".to_string(),
-                            )
-                        };
-                    // Combine protection message with the main warning in a beautiful single line
-                    shared_utils::progress_mode::video_skipped(&fail_message);
-                    warn!("   🛡️  {} │ 🗑️  {}", protect_msg, delete_msg);
+                    decision.emit();
 
                     // Keep/discard by total file size only (video stream is internal metric).
                     if shared_utils::should_keep_apple_fallback_hevc_output(
-                        detection.codec.as_str(),
-                        total_file_compressed,
-                        total_size_ratio,
-                        config.allow_size_tolerance,
-                        config.apple_compat,
-                        source_is_gif,
+                        shared_utils::AppleFallbackKeepRequest {
+                            codec_str: detection.codec.as_str(),
+                            total_file_compressed,
+                            total_size_ratio,
+                            allow_size_tolerance: config.allow_size_tolerance,
+                            apple_compat: config.apple_compat,
+                            source_is_gif,
+                        },
                     ) {
                         warn!("   ⚠️  APPLE COMPAT FALLBACK: keeping best-effort HEVC output (CRF {:.1}, {} iters) to ensure iOS importability, despite missing quality/size targets", explore_result.optimal_crf, explore_result.iterations);
                         shared_utils::conversion::commit_temp_to_output_with_metadata(
@@ -1245,26 +1383,7 @@ pub fn auto_convert_with_cache(
                     )
                     .map_err(|e| VidQualityError::GeneralError(e.to_string()))?;
 
-                    return Ok(ConversionOutput {
-                        input_path: input.display().to_string(),
-                        output_path: input.display().to_string(),
-                        strategy: ConversionStrategy {
-                            target: TargetVideoFormat::Skip,
-                            reason: fail_reason,
-                            command: String::new(),
-                            preserve_audio: detection.has_audio,
-                            crf: explore_result.optimal_crf,
-                            lossless: false,
-                        },
-                        input_size: detection.file_size,
-                        output_size: detection.file_size,
-                        size_ratio: 1.0,
-                        success: false,
-                        message: fail_message,
-                        final_crf: explore_result.optimal_crf,
-                        exploration_attempts: explore_result.iterations as u8,
-                        blake3: None,
-                    });
+                    return Ok(decision.into_skip_output(input, &detection, &explore_result));
                 }
 
                 (
@@ -1360,14 +1479,9 @@ pub fn auto_convert_with_cache(
     }
 
     if let Some(ref result) = explore_result_opt {
-        if !result.ms_ssim_passed.is_ok() {
-            let score_str = result
-                .ms_ssim_score
-                .map_or_else(|| "Unknown".to_string(), |s| format!("{s:.4}"));
-            // Note: In Ultimate Mode, ms_ssim_score stores VMAF-Y (0-1 scale).
-            // The quality gate can fail even with high VMAF if CAMBI or PSNR-UV fail.
-            // In Normal Mode, ms_ssim_score stores actual MS-SSIM or SSIM-All score.
-            warn!("   QUALITY TARGET FAILED (score: {}) │ 🛡️  Original file PROTECTED (quality below threshold) ❌", score_str);
+        if result.ms_ssim_passed.is_failed() {
+            let decision =
+                FinalQualityGateFailureDecision::inspect_and_log(result, config.ultimate_mode);
 
             // Only keep best-effort HEVC when source is Apple-incompatible (AV1/VP9/VVC/AV2).
             if config.apple_compat
@@ -1396,10 +1510,10 @@ pub fn auto_convert_with_cache(
                     size_ratio: result.output_size as f64 / detection.file_size as f64,
                     success: true,
                     message: format!(
-                        "Apple compat fallback: kept best-effort output (CRF {:.1}, {} iters); quality score {} below target — file is HEVC and importable",
+                        "Apple compat fallback: kept best-effort output (CRF {:.1}, {} iters); {} below target — file is HEVC and importable",
                         result.optimal_crf,
                         result.iterations,
-                        score_str
+                        decision.quality_summary
                     ),
                     final_crf: result.optimal_crf,
                     exploration_attempts: result.iterations as u8,
@@ -1423,26 +1537,7 @@ pub fn auto_convert_with_cache(
             )
             .map_err(|e| VidQualityError::GeneralError(e.to_string()))?;
 
-            return Ok(ConversionOutput {
-                input_path: input.display().to_string(),
-                output_path: input.display().to_string(),
-                strategy: ConversionStrategy {
-                    target: TargetVideoFormat::Skip,
-                    reason: format!("Quality target failed (score: {score_str})"),
-                    command: String::new(),
-                    preserve_audio: detection.has_audio,
-                    crf: result.optimal_crf,
-                    lossless: false,
-                },
-                input_size: detection.file_size,
-                output_size: detection.file_size,
-                size_ratio: 1.0,
-                success: false,
-                message: format!("Skipped: MS-SSIM {score_str} below target 0.90"),
-                final_crf: result.optimal_crf,
-                exploration_attempts: result.iterations as u8,
-                blake3: None,
-            });
+            return Ok(decision.into_skip_output(input, &detection, result));
         }
     }
 
@@ -1521,12 +1616,14 @@ pub fn auto_convert_with_cache(
 
         // Apple-compat fallback: still decided purely by total file behavior (video stream is internal detail).
         if shared_utils::should_keep_apple_fallback_hevc_output(
-            detection.codec.as_str(),
-            total_file_compressed,
-            total_size_ratio,
-            config.allow_size_tolerance,
-            config.apple_compat,
-            source_is_gif,
+            shared_utils::AppleFallbackKeepRequest {
+                codec_str: detection.codec.as_str(),
+                total_file_compressed,
+                total_size_ratio,
+                allow_size_tolerance: config.allow_size_tolerance,
+                apple_compat: config.apple_compat,
+                source_is_gif,
+            },
         ) {
             warn!("   ⚠️  APPLE COMPAT FALLBACK (not full success): compression check failed (total file not smaller enough)");
             warn!(
@@ -1673,7 +1770,7 @@ fn success_status_for_cache(
         || (matches!(
             target,
             TargetVideoFormat::HevcMp4 | TargetVideoFormat::Av1Mp4
-        ) && explore_result.is_some_and(|r| r.quality_passed.is_ok()))
+        ) && explore_result.is_some_and(|r| r.quality_passed.is_passed()))
 }
 
 fn best_effort_status_for_cache(
@@ -1685,7 +1782,7 @@ fn best_effort_status_for_cache(
         target,
         TargetVideoFormat::HevcMp4 | TargetVideoFormat::Av1Mp4
     ) && final_crf > 0.0
-        && explore_result.is_some_and(|r| !r.quality_passed.is_ok())
+        && explore_result.is_some_and(|r| r.quality_passed.is_failed())
 }
 
 /// Calculate matched CRF based on detection results and selected codec.

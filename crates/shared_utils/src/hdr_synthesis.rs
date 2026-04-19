@@ -27,6 +27,12 @@ use crate::image_builders::ExiftoolBuilder;
 use crate::image_jpeg_analysis::extract_gainmap_from_jpeg;
 use crate::jxl_builder::CjxlBuilder;
 
+fn read_native_u16_word(data: &[u8], word_index: usize) -> Option<u16> {
+    let byte_index = word_index.checked_mul(2)?;
+    let bytes = data.get(byte_index..byte_index + 2)?;
+    Some(u16::from_ne_bytes([bytes[0], bytes[1]]))
+}
+
 /// HDR intermediate format selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HdrIntermediateFormat {
@@ -479,20 +485,16 @@ fn decode_heif_handle(handle: &ImageHandle, color_space: ColorSpace) -> Result<D
 
             if bit_depth > 8 {
                 // Handle 10/12/16-bit (data is actually u16 even if returned as &[u8])
-                #[allow(clippy::cast_ptr_alignment)]
-                let data_u16: &[u16] = unsafe {
-                    std::slice::from_raw_parts(
-                        r_plane.data.as_ptr().cast::<u16>(),
-                        r_plane.data.len() / 2,
-                    )
-                };
                 let mut buffer = ImageBuffer::new(width, height);
                 for (x, y, pixel) in buffer.enumerate_pixels_mut() {
                     let offset = usize::try_from(y).unwrap_or(0) * (r_plane.stride / 2)
                         + usize::try_from(x).unwrap_or(0) * 3;
-                    let r = data_u16[offset];
-                    let g = data_u16[offset + 1];
-                    let b = data_u16[offset + 2];
+                    let r = read_native_u16_word(r_plane.data, offset)
+                        .ok_or_else(|| anyhow!("RGB16 plane buffer shorter than expected"))?;
+                    let g = read_native_u16_word(r_plane.data, offset + 1)
+                        .ok_or_else(|| anyhow!("RGB16 plane buffer shorter than expected"))?;
+                    let b = read_native_u16_word(r_plane.data, offset + 2)
+                        .ok_or_else(|| anyhow!("RGB16 plane buffer shorter than expected"))?;
                     *pixel = image::Rgb([r, g, b]);
                 }
                 Ok(DynamicImage::ImageRgb16(buffer))
@@ -514,18 +516,12 @@ fn decode_heif_handle(handle: &ImageHandle, color_space: ColorSpace) -> Result<D
             let y_plane = planes.y.ok_or_else(|| anyhow!("No Y plane"))?;
 
             if bit_depth > 8 {
-                #[allow(clippy::cast_ptr_alignment)]
-                let data_u16: &[u16] = unsafe {
-                    std::slice::from_raw_parts(
-                        y_plane.data.as_ptr().cast::<u16>(),
-                        y_plane.data.len() / 2,
-                    )
-                };
                 let mut buffer = ImageBuffer::new(width, height);
                 for (x, y, pixel) in buffer.enumerate_pixels_mut() {
                     let offset = usize::try_from(y).unwrap_or(0) * (y_plane.stride / 2)
                         + usize::try_from(x).unwrap_or(0);
-                    let val = data_u16[offset];
+                    let val = read_native_u16_word(y_plane.data, offset)
+                        .ok_or_else(|| anyhow!("Luma16 plane buffer shorter than expected"))?;
                     *pixel = image::Luma([val]);
                 }
                 Ok(DynamicImage::ImageLuma16(buffer))

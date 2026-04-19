@@ -468,9 +468,8 @@ pub struct LogConfig {
 
 impl Default for LogConfig {
     fn default() -> Self {
-        let log_dir = std::env::var("MFB_LOG_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| std::env::temp_dir());
+        let log_dir =
+            std::env::var("MFB_LOG_DIR").map_or_else(|_| std::env::temp_dir(), PathBuf::from);
         Self {
             log_dir,
             // 50 MiB default limit for "easy to open" logs

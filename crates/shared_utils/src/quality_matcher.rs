@@ -1716,23 +1716,27 @@ pub fn is_apple_incompatible_video_codec(codec_str: &str) -> bool {
 }
 
 /// Predicate for keeping Apple-compat fallback HEVC output.
+#[derive(Debug, Clone, Copy)]
+pub struct AppleFallbackKeepRequest<'a> {
+    pub codec_str: &'a str,
+    pub total_file_compressed: bool,
+    pub total_size_ratio: f64,
+    pub allow_size_tolerance: bool,
+    pub apple_compat: bool,
+    pub source_is_gif: bool,
+}
+
 #[must_use]
-pub fn should_keep_apple_fallback_hevc_output(
-    codec_str: &str,
-    total_file_compressed: bool,
-    total_size_ratio: f64,
-    allow_size_tolerance: bool,
-    apple_compat: bool,
-    source_is_gif: bool,
-) -> bool {
+pub fn should_keep_apple_fallback_hevc_output(request: AppleFallbackKeepRequest<'_>) -> bool {
     // If the source is already Apple-native (like GIF), we never allow fallback to a larger file.
-    if source_is_gif || is_apple_native_format(codec_str) {
+    if request.source_is_gif || is_apple_native_format(request.codec_str) {
         return false;
     }
-    if !apple_compat || !is_apple_incompatible_video_codec(codec_str) {
+    if !request.apple_compat || !is_apple_incompatible_video_codec(request.codec_str) {
         return false;
     }
-    total_file_compressed || (allow_size_tolerance && total_size_ratio < 1.01)
+    request.total_file_compressed
+        || (request.allow_size_tolerance && request.total_size_ratio < 1.01)
 }
 
 #[must_use]

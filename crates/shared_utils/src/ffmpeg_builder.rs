@@ -26,6 +26,12 @@ struct FfmpegParams {
     tag_video: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+enum OutputTarget {
+    Path(PathBuf),
+    Pipe,
+}
+
 impl VideoCodec {
     #[must_use]
     pub fn ffmpeg_name(&self, is_gpu: bool) -> &'static str {
@@ -181,8 +187,7 @@ impl StreamType {
 #[derive(Debug, Default, Clone)]
 pub struct FfmpegBuilder {
     inputs: Vec<PathBuf>,
-    output: Option<PathBuf>,
-    output_is_null: bool,
+    output_target: Option<OutputTarget>,
     vcodec: Option<VideoCodec>,
     input_format: Option<String>,
     format: Option<String>,
@@ -216,14 +221,13 @@ impl FfmpegBuilder {
     }
 
     pub fn output<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
-        self.output = Some(path.as_ref().to_path_buf());
-        self.output_is_null = false;
+        self.output_target = Some(OutputTarget::Path(path.as_ref().to_path_buf()));
         self
     }
 
-    pub fn output_null(&mut self) -> &mut Self {
-        self.output = None;
-        self.output_is_null = true;
+    /// Emit the `FFmpeg` output to `-` (stdout/pipe target).
+    pub fn output_pipe(&mut self) -> &mut Self {
+        self.output_target = Some(OutputTarget::Pipe);
         self
     }
 
@@ -391,9 +395,18 @@ impl FfmpegBuilder {
         self
     }
 
+    fn assert_output_target(&self) {
+        assert!(
+            self.output_target.is_some(),
+            "FFmpeg output target is required; use output(...) or output_pipe() before build()"
+        );
+    }
+
     /// Construct the `std::process::Command`.
     #[must_use]
     pub fn build(&self) -> Command {
+        self.assert_output_target();
+
         let mut cmd = Command::new(constants::TOOL_FFMPEG);
 
         if self.overwrite {
@@ -492,10 +505,14 @@ impl FfmpegBuilder {
             cmd.arg(arg);
         }
 
-        if self.output_is_null {
-            cmd.arg("-");
-        } else if let Some(output) = &self.output {
-            cmd.arg(crate::safe_path_arg(output).as_ref());
+        match &self.output_target {
+            Some(OutputTarget::Pipe) => {
+                cmd.arg("-");
+            }
+            Some(OutputTarget::Path(output)) => {
+                cmd.arg(crate::safe_path_arg(output).as_ref());
+            }
+            None => unreachable!("output target is asserted above"),
         }
 
         cmd
@@ -687,6 +704,27 @@ impl FfmpegBuilder {
             .arg("-hide_banner")
             .arg("-encoders")
             .output()?;
+        if !output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let summary = stderr
+                .lines()
+                .chain(stdout.lines())
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .take(3)
+                .collect::<Vec<_>>()
+                .join(" | ");
+
+            anyhow::bail!(
+                "ffmpeg -encoders failed{}",
+                if summary.is_empty() {
+                    format!(" with status {}", output.status)
+                } else {
+                    format!(": {summary}")
+                }
+            );
+        }
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
 }
@@ -694,6 +732,7 @@ impl FfmpegBuilder {
 #[cfg(test)]
 mod tests {
     use super::FfmpegBuilder;
+    use std::path::Path;
 
     #[test]
     fn input_format_is_emitted_before_input_paths() {
@@ -704,7 +743,7 @@ mod tests {
             .input("nullsrc=s=128x128:d=0.1")
             .frames_v(1)
             .format("null")
-            .output_null();
+            .output_pipe();
 
         let args: Vec<String> = builder
             .build()
@@ -727,5 +766,34 @@ mod tests {
             "output format should stay after the input"
         );
         assert_eq!(args[output_format_pos + 1], "null");
+    }
+
+    #[test]
+    fn output_pipe_emits_dash_target() {
+        let mut builder = FfmpegBuilder::new();
+        builder
+            .hide_banner()
+            .input("input.mov")
+            .format("yuv4mpegpipe")
+            .pix_fmt_str("yuv420p")
+            .output_pipe();
+
+        let args: Vec<String> = builder
+            .build()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+
+        assert_eq!(args.last().map(String::as_str), Some("-"));
+        assert!(args.windows(2).any(|pair| pair == ["-f", "yuv4mpegpipe"]));
+    }
+
+    #[test]
+    #[should_panic(expected = "FFmpeg output target is required")]
+    fn build_panics_without_output_target() {
+        let _ = FfmpegBuilder::new()
+            .hide_banner()
+            .input(Path::new("input.mov"))
+            .build();
     }
 }

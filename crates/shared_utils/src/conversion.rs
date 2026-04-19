@@ -803,10 +803,12 @@ impl ConvertOptions {
     /// Returns an error message if flag combination is invalid.
     pub fn flag_mode(&self) -> Result<crate::flag_validator::FlagMode, String> {
         crate::flag_validator::validate_flags_result_with_ultimate(
-            self.explore,
-            self.match_quality,
-            self.compress,
-            self.ultimate,
+            crate::flag_validator::FlagRequest {
+                explore: self.explore,
+                match_quality: self.match_quality,
+                compress: self.compress,
+                ultimate: self.ultimate,
+            },
         )
     }
 
@@ -945,17 +947,16 @@ pub fn format_size_change(input_size: u64, output_size: u64) -> String {
     let reduction = if input_size == 0 {
         0.0
     } else {
-        #[allow(clippy::cast_precision_loss)]
-        let red = 1.0 - (output_size as f64 / input_size as f64);
-        red
+        1.0 - (crate::numeric_cast::u64_to_f64(output_size)
+            / crate::numeric_cast::u64_to_f64(input_size))
     };
     let reduction_pct = reduction * 100.0;
 
     if reduction >= 0.0 {
         format!("size reduced {reduction_pct:.1}%")
     } else {
-        #[allow(clippy::cast_possible_wrap)]
-        let diff_bytes = (output_size as i64).saturating_sub(input_size as i64);
+        let diff_bytes = crate::numeric_cast::u64_to_i64_sat(output_size)
+            .saturating_sub(crate::numeric_cast::u64_to_i64_sat(input_size));
         let size_diff = crate::modern_ui::format_size_diff(diff_bytes);
         format!("size increased {:.1}% ({})", -reduction_pct, size_diff)
     }
@@ -1269,12 +1270,289 @@ pub fn get_input_dimensions(input: &Path) -> Result<(u32, u32), String> {
 ///
 /// Returns `Some(ConversionResult)` if the output should be rejected (caller should return it),
 /// or `None` if the output passes the size check.
+#[derive(Debug, Clone, Copy)]
+struct SizeDeltaSummary {
+    increase_bytes: u64,
+    increase_kb: f64,
+    increase_mb: f64,
+    change_pct: f64,
+}
+
+impl SizeDeltaSummary {
+    fn from_sizes(input_size: u64, output_size: u64) -> Self {
+        let increase_bytes = output_size.saturating_sub(input_size);
+        let increase_bytes_f64 = crate::numeric_cast::u64_to_f64(increase_bytes);
+        let input_size_f64 = crate::numeric_cast::u64_to_f64(input_size);
+        let output_size_f64 = crate::numeric_cast::u64_to_f64(output_size);
+
+        Self {
+            increase_bytes,
+            increase_kb: increase_bytes_f64 / 1024.0,
+            increase_mb: increase_bytes_f64 / (1024.0 * 1024.0),
+            change_pct: if input_size == 0 {
+                0.0
+            } else {
+                ((output_size_f64 / input_size_f64) - 1.0) * 100.0
+            },
+        }
+    }
+
+    fn uses_mb(self) -> bool {
+        self.increase_mb >= 1.0
+    }
+
+    fn ratio_pct(self) -> f64 {
+        100.0 + self.change_pct
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SizeGuardFailure {
+    ToleranceExceeded,
+    CompressionGoalMissed,
+}
+
+struct SizeToleranceCheck<'a> {
+    input: &'a Path,
+    output: &'a Path,
+    input_size: u64,
+    output_size: u64,
+    options: &'a ConvertOptions,
+    format_label: &'a str,
+}
+
+impl SizeToleranceCheck<'_> {
+    fn delta(&self) -> SizeDeltaSummary {
+        SizeDeltaSummary::from_sizes(self.input_size, self.output_size)
+    }
+
+    fn tolerance_bytes(&self) -> u64 {
+        crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES
+    }
+
+    fn is_guard_active(&self) -> bool {
+        let input_ext = self
+            .input
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or("");
+        crate::quality_matcher::is_size_guard_active(input_ext, self.options.apple_compat)
+    }
+
+    fn max_allowed_size(&self) -> u64 {
+        if self.options.allow_size_tolerance && self.is_guard_active() {
+            self.input_size.saturating_add(self.tolerance_bytes())
+        } else if self.is_guard_active() {
+            self.input_size
+        } else {
+            u64::MAX
+        }
+    }
+
+    fn evaluate(&self) -> Option<SizeGuardFailure> {
+        if self.output_size >= self.max_allowed_size() {
+            return Some(SizeGuardFailure::ToleranceExceeded);
+        }
+
+        if self.options.compress && self.output_size >= self.input_size {
+            let delta = self.delta();
+            if self.options.allow_size_tolerance && delta.increase_bytes < self.tolerance_bytes() {
+                return None;
+            }
+            return Some(SizeGuardFailure::CompressionGoalMissed);
+        }
+
+        None
+    }
+
+    fn handle_failure(&self, failure: SizeGuardFailure) -> ConversionResult {
+        match failure {
+            SizeGuardFailure::ToleranceExceeded => self.reject_tolerance_exceeded(),
+            SizeGuardFailure::CompressionGoalMissed => self.reject_compression_goal(),
+        }
+    }
+
+    fn reject_tolerance_exceeded(&self) -> ConversionResult {
+        let delta = self.delta();
+        let mode = if self.options.allow_size_tolerance {
+            "tolerance: absolute (< 1_048_576 bytes increase)"
+        } else {
+            "strict mode: no tolerance"
+        };
+
+        self.log_discard(delta, Some(mode));
+        self.cleanup_output(SizeGuardFailure::ToleranceExceeded);
+        self.preserve_original(SizeGuardFailure::ToleranceExceeded);
+        mark_as_processed(self.input);
+
+        ConversionResult::skipped_size_increase(self.input, self.input_size, self.output_size)
+    }
+
+    fn reject_compression_goal(&self) -> ConversionResult {
+        let delta = self.delta();
+
+        if delta.change_pct.abs() < 0.01 {
+            crate::log_eprintln!(
+                "   🗑️  {} output deleted: {}",
+                self.format_label,
+                "\x1b[1;33msize unchanged (compression goal not achieved)\x1b[0m"
+            );
+            crate::log_eprintln!(
+                "   📊 Size: {} → {} bytes",
+                format!("\x1b[2m{}\x1b[0m", self.input_size),
+                format!("\x1b[2m{}\x1b[0m", self.output_size)
+            );
+        } else {
+            self.log_discard(delta, None);
+        }
+
+        self.cleanup_output(SizeGuardFailure::CompressionGoalMissed);
+        self.preserve_original(SizeGuardFailure::CompressionGoalMissed);
+        mark_as_processed(self.input);
+
+        ConversionResult::skipped_size_unchanged(self.input, self.input_size, self.format_label)
+    }
+
+    fn log_discard(&self, delta: SizeDeltaSummary, mode: Option<&str>) {
+        if delta.uses_mb() {
+            if let Some(mode_label) = mode {
+                crate::log_eprintln!(
+                    "   {} {} output discarded │ {}ratio: {:.1}%{} │ {}increase: +{:.2}MB{} │ {}",
+                    symbols::CROSS,
+                    self.format_label,
+                    colors::BOLD,
+                    delta.ratio_pct(),
+                    colors::RESET,
+                    colors::MFB_ORANGE,
+                    delta.increase_mb,
+                    colors::RESET,
+                    mode_label
+                );
+            } else {
+                crate::log_eprintln!(
+                    "   {} {} output discarded │ {}ratio: {:.1}%{} │ {}increase: +{:.2}MB{}",
+                    symbols::CROSS,
+                    self.format_label,
+                    colors::BOLD,
+                    delta.ratio_pct(),
+                    colors::RESET,
+                    colors::MFB_ORANGE,
+                    delta.increase_mb,
+                    colors::RESET
+                );
+            }
+            crate::log_eprintln!(
+                "   {} Size: {} → {} (Δ +{:.2}MB)",
+                symbols::CHART,
+                format!("{}{}{} bytes", colors::DIM, self.input_size, colors::RESET),
+                format!(
+                    "{}{}{} bytes",
+                    colors::MFB_RED,
+                    self.output_size,
+                    colors::RESET
+                ),
+                delta.increase_mb
+            );
+            return;
+        }
+
+        if let Some(mode_label) = mode {
+            crate::log_eprintln!(
+                "   {} {} output discarded │ {}ratio: {:.1}%{} │ {}increase: +{:.1}KB{} │ {}",
+                symbols::CROSS,
+                self.format_label,
+                colors::BOLD,
+                delta.ratio_pct(),
+                colors::RESET,
+                colors::MFB_ORANGE,
+                delta.increase_kb,
+                colors::RESET,
+                mode_label
+            );
+        } else {
+            crate::log_eprintln!(
+                "   {} {} output discarded │ {}ratio: {:.1}%{} │ {}increase: +{:.1}KB{}",
+                symbols::CROSS,
+                self.format_label,
+                colors::BOLD,
+                delta.ratio_pct(),
+                colors::RESET,
+                colors::MFB_ORANGE,
+                delta.increase_kb,
+                colors::RESET
+            );
+        }
+        crate::log_eprintln!(
+            "   {} Size: {} → {} (Δ +{:.1}KB)",
+            symbols::CHART,
+            format!("{}{}{} bytes", colors::DIM, self.input_size, colors::RESET),
+            format!(
+                "{}{}{} bytes",
+                colors::MFB_RED,
+                self.output_size,
+                colors::RESET
+            ),
+            delta.increase_kb
+        );
+    }
+
+    fn cleanup_output(&self, failure: SizeGuardFailure) {
+        if let Err(err) = fs::remove_file(self.output) {
+            match failure {
+                SizeGuardFailure::ToleranceExceeded => {
+                    crate::log_eprintln!("   {} Cleanup failed: {}", symbols::WARNING, err);
+                }
+                SizeGuardFailure::CompressionGoalMissed => {
+                    crate::log_upstream_error!(
+                        "File cleanup",
+                        "Failed to remove output file: {}",
+                        err
+                    );
+                }
+            }
+        }
+    }
+
+    fn preserve_original(&self, failure: SizeGuardFailure) {
+        match crate::copy_on_skip_or_fail(
+            self.input,
+            self.options.output_dir.as_deref(),
+            self.options.base_dir.as_deref(),
+            false,
+        ) {
+            Ok(Some(dest)) => match failure {
+                SizeGuardFailure::ToleranceExceeded => {
+                    crate::log_eprintln!(
+                        "   {} Original preserved: {}",
+                        symbols::SHIELD,
+                        format!("{}{}{}", colors::DIM, dest.display(), colors::RESET)
+                    );
+                }
+                SizeGuardFailure::CompressionGoalMissed => {
+                    crate::log_eprintln!(
+                        "   📋 Original copied to: {}",
+                        format!("\x1b[2m{}\x1b[0m", dest.display())
+                    );
+                }
+            },
+            Ok(None) => {}
+            Err(err) => match failure {
+                SizeGuardFailure::ToleranceExceeded => {
+                    eprintln!("   ⚠️  Failed to copy original: {err}");
+                }
+                SizeGuardFailure::CompressionGoalMissed => {
+                    crate::log_upstream_error!(
+                        "File copy",
+                        "Failed to copy original to output dir: {}",
+                        err
+                    );
+                }
+            },
+        }
+    }
+}
+
 #[must_use]
-#[allow(
-    clippy::similar_names,
-    clippy::too_many_lines,
-    clippy::cast_precision_loss
-)]
 pub fn check_size_tolerance(
     input: &Path,
     output: &Path,
@@ -1283,226 +1561,18 @@ pub fn check_size_tolerance(
     options: &ConvertOptions,
     format_label: &str,
 ) -> Option<ConversionResult> {
-    // Tolerance: allow size increase < DEFAULT_SIZE_TOLERANCE_BYTES bytes
-    let tolerance_bytes = crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES;
-
-    let input_ext = input.extension().and_then(|e| e.to_str()).unwrap_or("");
-    let is_guard_active =
-        crate::quality_matcher::is_size_guard_active(input_ext, options.apple_compat);
-
-    let max_allowed_size = if options.allow_size_tolerance && is_guard_active {
-        input_size.saturating_add(tolerance_bytes)
-    } else if is_guard_active {
-        input_size
-    } else {
-        // Size guard is NOT active (Apple compat mode for incompatible source)
-        u64::MAX
+    let check = SizeToleranceCheck {
+        input,
+        output,
+        input_size,
+        output_size,
+        options,
+        format_label,
     };
 
-    // Over tolerance: output larger than or equal to allowed (e.g. >= input or increase >= 1MB)
-    if output_size >= max_allowed_size {
-        let size_increase_bytes = output_size.saturating_sub(input_size);
-        let size_increase_kb = size_increase_bytes as f64 / 1024.0;
-        let size_increase_mb = size_increase_bytes as f64 / (1024.0 * 1024.0);
-        let size_increase_pct = if input_size == 0 {
-            0.0
-        } else {
-            ((output_size as f64 / input_size as f64) - 1.0) * 100.0
-        };
-
-        // Always log deletion (not just in verbose mode)
-        let mode = if options.allow_size_tolerance {
-            "tolerance: absolute (< 1_048_576 bytes increase)".to_string()
-        } else {
-            "strict mode: no tolerance".to_string()
-        };
-
-        // Display in KB or MB depending on size
-        if size_increase_mb >= 1.0 {
-            crate::log_eprintln!(
-                "   {} {} output discarded │ {}ratio: {:.1}%{} │ {}increase: +{:.2}MB{} │ {}",
-                symbols::CROSS,
-                format_label,
-                colors::BOLD,
-                100.0 + size_increase_pct,
-                colors::RESET,
-                colors::MFB_ORANGE,
-                size_increase_mb,
-                colors::RESET,
-                mode
-            );
-            crate::log_eprintln!(
-                "   {} Size: {} → {} (Δ +{:.2}MB)",
-                symbols::CHART,
-                format!("{}{}{} bytes", colors::DIM, input_size, colors::RESET),
-                format!("{}{}{} bytes", colors::MFB_RED, output_size, colors::RESET),
-                size_increase_mb
-            );
-        } else {
-            crate::log_eprintln!(
-                "   {} {} output discarded │ {}ratio: {:.1}%{} │ {}increase: +{:.1}KB{} │ {}",
-                symbols::CROSS,
-                format_label,
-                colors::BOLD,
-                100.0 + size_increase_pct,
-                colors::RESET,
-                colors::MFB_ORANGE,
-                size_increase_kb,
-                colors::RESET,
-                mode
-            );
-            crate::log_eprintln!(
-                "   {} Size: {} → {} (Δ +{:.1}KB)",
-                symbols::CHART,
-                format!("{}{}{} bytes", colors::DIM, input_size, colors::RESET),
-                format!("{}{}{} bytes", colors::MFB_RED, output_size, colors::RESET),
-                size_increase_kb
-            );
-        }
-
-        if let Err(e) = fs::remove_file(output) {
-            crate::log_eprintln!("   {} Cleanup failed: {}", symbols::WARNING, e);
-        }
-
-        // Copy original to output directory
-        match crate::copy_on_skip_or_fail(
-            input,
-            options.output_dir.as_deref(),
-            options.base_dir.as_deref(),
-            false,
-        ) {
-            Ok(Some(dest)) => {
-                crate::log_eprintln!(
-                    "   {} Original preserved: {}",
-                    symbols::SHIELD,
-                    format!("{}{}{}", colors::DIM, dest.display(), colors::RESET)
-                );
-            }
-            Ok(None) => {
-                // No output_dir specified, nothing to copy
-            }
-            Err(e) => {
-                eprintln!("   ⚠️  Failed to copy original: {e}");
-            }
-        }
-
-        mark_as_processed(input);
-        return Some(ConversionResult::skipped_size_increase(
-            input,
-            input_size,
-            output_size,
-        ));
-    }
-
-    // Compress mode: goal is strictly smaller; equal = not achieved
-    // BUT: respect tolerance setting when enabled
-    if options.compress && output_size >= input_size {
-        let size_increase_bytes = output_size.saturating_sub(input_size);
-
-        // If tolerance is enabled and increase is within tolerance (< DEFAULT_SIZE_TOLERANCE_BYTES bytes), accept it
-        if options.allow_size_tolerance && size_increase_bytes < tolerance_bytes {
-            // Within tolerance, accept the output
-            return None;
-        }
-
-        // Beyond tolerance or tolerance disabled: reject
-        let kb_delta = size_increase_bytes as f64 / 1024.0;
-        let mb_delta = size_increase_bytes as f64 / (1024.0 * 1024.0);
-        let change_pct = if input_size == 0 {
-            0.0
-        } else {
-            ((output_size as f64 / input_size as f64) - 1.0) * 100.0
-        };
-
-        if change_pct.abs() < 0.01 {
-            crate::log_eprintln!(
-                "   🗑️  {} output deleted: {}",
-                format_label,
-                "\x1b[1;33msize unchanged (compression goal not achieved)\x1b[0m"
-            );
-            crate::log_eprintln!(
-                "   📊 Size: {} → {} bytes",
-                format!("\x1b[2m{}\x1b[0m", input_size),
-                format!("\x1b[2m{}\x1b[0m", output_size)
-            );
-        } else if mb_delta >= 1.0 {
-            crate::log_eprintln!(
-                "   {} {} output discarded │ {}ratio: {:.1}%{} │ {}increase: +{:.2}MB{}",
-                symbols::CROSS,
-                format_label,
-                colors::BOLD,
-                change_pct + 100.0,
-                colors::RESET,
-                colors::MFB_ORANGE,
-                mb_delta,
-                colors::RESET
-            );
-            crate::log_eprintln!(
-                "   {} Size: {} → {} (Δ +{:.2}MB)",
-                symbols::CHART,
-                format!("{}{}{} bytes", colors::DIM, input_size, colors::RESET),
-                format!("{}{}{} bytes", colors::MFB_RED, output_size, colors::RESET),
-                mb_delta
-            );
-        } else {
-            crate::log_eprintln!(
-                "   {} {} output discarded │ {}ratio: {:.1}%{} │ {}increase: +{:.1}KB{}",
-                symbols::CROSS,
-                format_label,
-                colors::BOLD,
-                change_pct + 100.0,
-                colors::RESET,
-                colors::MFB_ORANGE,
-                kb_delta,
-                colors::RESET
-            );
-            crate::log_eprintln!(
-                "   {} Size: {} → {} (Δ +{:.1}KB)",
-                symbols::CHART,
-                format!("{}{}{} bytes", colors::DIM, input_size, colors::RESET),
-                format!("{}{}{} bytes", colors::MFB_RED, output_size, colors::RESET),
-                kb_delta
-            );
-        }
-
-        if let Err(e) = fs::remove_file(output) {
-            crate::log_upstream_error!("File cleanup", "Failed to remove output file: {}", e);
-        }
-
-        // Copy original to output directory
-        match crate::copy_on_skip_or_fail(
-            input,
-            options.output_dir.as_deref(),
-            options.base_dir.as_deref(),
-            false,
-        ) {
-            Ok(Some(dest)) => {
-                crate::log_eprintln!(
-                    "   📋 Original copied to: {}",
-                    format!("\x1b[2m{}\x1b[0m", dest.display())
-                );
-            }
-            Ok(None) => {
-                // No output_dir specified, nothing to copy
-            }
-            Err(e) => {
-                crate::log_upstream_error!(
-                    "File copy",
-                    "Failed to copy original to output dir: {}",
-                    e
-                );
-            }
-        }
-
-        mark_as_processed(input);
-        return Some(ConversionResult::skipped_size_unchanged(
-            input,
-            input_size,
-            format_label,
-        ));
-    }
-
-    None
+    check
+        .evaluate()
+        .map(|failure| check.handle_failure(failure))
 }
 
 /// Validate input file for conversion.

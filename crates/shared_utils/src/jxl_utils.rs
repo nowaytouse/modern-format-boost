@@ -192,36 +192,102 @@ pub fn get_png_bit_depth(path: &Path) -> Option<u8> {
     Some(buf[24])
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JxlMetadataPolicy {
+    Preserve,
+    Strip,
+}
+
+impl JxlMetadataPolicy {
+    const fn should_strip(self) -> bool {
+        matches!(self, Self::Strip)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JxlIccPolicy {
+    Preserve,
+    NormalizeToSrgb,
+}
+
+impl JxlIccPolicy {
+    const fn should_normalize(self) -> bool {
+        matches!(self, Self::NormalizeToSrgb)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JxlMode {
+    Normal,
+    Ultimate,
+}
+
+impl JxlMode {
+    const fn is_ultimate(self) -> bool {
+        matches!(self, Self::Ultimate)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ImagemagickCjxlPipelineRequest<'a> {
+    pub input: &'a Path,
+    pub output: &'a Path,
+    pub distance: f32,
+    pub effort: u8,
+    pub max_threads: usize,
+    pub metadata_policy: JxlMetadataPolicy,
+    pub output_depth: u8,
+    pub icc_policy: JxlIccPolicy,
+    pub apple_compat: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ModeLockedImagemagickCjxlPipelineRequest<'a> {
+    pub input: &'a Path,
+    pub output: &'a Path,
+    pub distance: f32,
+    pub max_threads: usize,
+    pub metadata_policy: JxlMetadataPolicy,
+    pub output_depth: u8,
+    pub icc_policy: JxlIccPolicy,
+    pub apple_compat: bool,
+    pub mode: JxlMode,
+}
+
 /// Run the `cjxl` pipeline via `ImageMagick`.
-/// - `strip`: adds -strip (drops ICC/EXIF)
-/// - `depth`: PNG bit depth to emit (8 or 16); use 8 only for confirmed 8-bit sources
-/// - `normalize_icc`: replaces embedded ICC with standard sRGB without truncating bit depth
+/// - `metadata_policy`: preserve metadata or apply `-strip`
+/// - `output_depth`: PNG bit depth to emit (8 or 16); use 8 only for confirmed 8-bit sources
+/// - `icc_policy`: replaces embedded ICC with standard sRGB without truncating bit depth
 /// - `apple_compat`: adds `--compress_boxes=0` to cjxl for Apple device compatibility
 ///
 /// # Errors
 /// Returns an error if the pipeline fails.
 fn run_imagemagick_cjxl_pipeline_with_effort(
-    input: &Path,
-    output: &Path,
-    distance: f32,
-    effort: u8,
-    max_threads: usize,
-    strip: bool,
-    depth: u8,
-    normalize_icc: bool,
-    apple_compat: bool,
+    request: ImagemagickCjxlPipelineRequest<'_>,
 ) -> std::result::Result<(), (bool, bool, String)> {
     use std::process::Stdio;
+    let ImagemagickCjxlPipelineRequest {
+        input,
+        output,
+        distance,
+        effort,
+        max_threads,
+        metadata_policy,
+        output_depth,
+        icc_policy,
+        apple_compat,
+    } = request;
     debug_assert!(crate::constants::is_supported_jxl_effort(effort));
 
     let mut magick_builder = crate::image_builders::MagickBuilder::new();
-    magick_builder.input(input).strip(strip).use_stdout(true);
+    magick_builder
+        .input(input)
+        .strip(metadata_policy.should_strip())
+        .use_stdout(true);
 
-    if let Some(d) = Some(depth) {
-        magick_builder.depth(d);
-    }
+    magick_builder.depth(output_depth);
 
-    if normalize_icc {
+    if icc_policy.should_normalize() {
         magick_builder
             .define("png:preserve-colormap", "false")
             .set("colorspace", "sRGB");
@@ -394,27 +460,22 @@ fn run_imagemagick_cjxl_pipeline_with_effort(
 /// # Errors
 /// Returns an error if the pipeline fails.
 pub fn run_imagemagick_cjxl_pipeline(
-    input: &Path,
-    output: &Path,
-    distance: f32,
-    max_threads: usize,
-    strip: bool,
-    depth: u8,
-    normalize_icc: bool,
-    apple_compat: bool,
-    ultimate: bool,
+    request: ModeLockedImagemagickCjxlPipelineRequest<'_>,
 ) -> std::result::Result<(), (bool, bool, String)> {
-    run_imagemagick_cjxl_pipeline_with_effort(
-        input,
-        output,
-        crate::constants::jxl_distance_for_mode(distance, ultimate),
-        crate::constants::jxl_effort_for_mode(ultimate),
-        max_threads,
-        strip,
-        depth,
-        normalize_icc,
-        apple_compat,
-    )
+    run_imagemagick_cjxl_pipeline_with_effort(ImagemagickCjxlPipelineRequest {
+        input: request.input,
+        output: request.output,
+        distance: crate::constants::jxl_distance_for_mode(
+            request.distance,
+            request.mode.is_ultimate(),
+        ),
+        effort: crate::constants::jxl_effort_for_mode(request.mode.is_ultimate()),
+        max_threads: request.max_threads,
+        metadata_policy: request.metadata_policy,
+        output_depth: request.output_depth,
+        icc_policy: request.icc_policy,
+        apple_compat: request.apple_compat,
+    })
 }
 
 /// `ImageMagick` → cjxl fallback pipeline for when direct cjxl encoding fails.
@@ -444,23 +505,24 @@ pub fn try_imagemagick_fallback_with_effort(
 ) -> std::result::Result<(), std::io::Error> {
     use console::style;
     debug_assert!(crate::constants::is_supported_jxl_effort(effort));
+    let base_request = ImagemagickCjxlPipelineRequest {
+        input,
+        output,
+        distance,
+        effort,
+        max_threads,
+        metadata_policy: JxlMetadataPolicy::Preserve,
+        output_depth: 16,
+        icc_policy: JxlIccPolicy::Preserve,
+        apple_compat,
+    };
 
     // Attempt 1: no -strip, depth 16, preserve metadata
     crate::progress_mode::emit_stderr(&format!(
         "   🔄 Attempt 1: Default (16-bit, preserve metadata) - {}",
         input.display()
     ));
-    match run_imagemagick_cjxl_pipeline_with_effort(
-        input,
-        output,
-        distance,
-        effort,
-        max_threads,
-        false,
-        16,
-        false,
-        apple_compat,
-    ) {
+    match run_imagemagick_cjxl_pipeline_with_effort(base_request) {
         Ok(()) => {
             crate::progress_mode::emit_stderr(&format!(
                 "   {} Attempt 1 succeeded",
@@ -490,17 +552,10 @@ pub fn try_imagemagick_fallback_with_effort(
                 crate::progress_mode::emit_stderr(
                     "   🔄 Attempt 2: Grayscale ICC fix (-strip, 16-bit)",
                 );
-                match run_imagemagick_cjxl_pipeline_with_effort(
-                    input,
-                    output,
-                    distance,
-                    effort,
-                    max_threads,
-                    true,
-                    16,
-                    false,
-                    apple_compat,
-                ) {
+                match run_imagemagick_cjxl_pipeline_with_effort(ImagemagickCjxlPipelineRequest {
+                    metadata_policy: JxlMetadataPolicy::Strip,
+                    ..base_request
+                }) {
                     Ok(()) => {
                         crate::progress_mode::emit_stderr(&format!(
                             "   {} Attempt 2 succeeded",
@@ -534,15 +589,11 @@ pub fn try_imagemagick_fallback_with_effort(
                                     "   🔄 Attempt 3: 8-bit depth (-depth 8 -strip, 8-bit source confirmed)",
                                 );
                                 match run_imagemagick_cjxl_pipeline_with_effort(
-                                    input,
-                                    output,
-                                    distance,
-                                    effort,
-                                    max_threads,
-                                    true,
-                                    8,
-                                    false,
-                                    apple_compat,
+                                    ImagemagickCjxlPipelineRequest {
+                                        metadata_policy: JxlMetadataPolicy::Strip,
+                                        output_depth: 8,
+                                        ..base_request
+                                    },
                                 ) {
                                     Ok(()) => {
                                         crate::progress_mode::emit_stderr(&format!(
@@ -565,15 +616,10 @@ pub fn try_imagemagick_fallback_with_effort(
                                     "   🔄 Attempt 3: ICC normalization (sRGB, 16-bit source)",
                                 );
                                 if run_imagemagick_cjxl_pipeline_with_effort(
-                                    input,
-                                    output,
-                                    distance,
-                                    effort,
-                                    max_threads,
-                                    false,
-                                    16,
-                                    true,
-                                    apple_compat,
+                                    ImagemagickCjxlPipelineRequest {
+                                        icc_policy: JxlIccPolicy::NormalizeToSrgb,
+                                        ..base_request
+                                    },
                                 ) == Ok(())
                                 {
                                     crate::progress_mode::emit_stderr(&format!(
@@ -602,15 +648,11 @@ pub fn try_imagemagick_fallback_with_effort(
                         "   🔄 Attempt 2: 8-bit depth (-depth 8 -strip, 8-bit source confirmed)",
                     );
                     match run_imagemagick_cjxl_pipeline_with_effort(
-                        input,
-                        output,
-                        distance,
-                        effort,
-                        max_threads,
-                        true,
-                        8,
-                        false,
-                        apple_compat,
+                        ImagemagickCjxlPipelineRequest {
+                            metadata_policy: JxlMetadataPolicy::Strip,
+                            output_depth: 8,
+                            ..base_request
+                        },
                     ) {
                         Ok(()) => {
                             crate::progress_mode::emit_stderr(&format!(
@@ -632,17 +674,10 @@ pub fn try_imagemagick_fallback_with_effort(
                     crate::progress_mode::emit_stderr(
                         "   🔄 Attempt 2: ICC normalization (sRGB, 16-bit source)",
                     );
-                    if run_imagemagick_cjxl_pipeline_with_effort(
-                        input,
-                        output,
-                        distance,
-                        effort,
-                        max_threads,
-                        false,
-                        16,
-                        true,
-                        apple_compat,
-                    ) == Ok(())
+                    if run_imagemagick_cjxl_pipeline_with_effort(ImagemagickCjxlPipelineRequest {
+                        icc_policy: JxlIccPolicy::NormalizeToSrgb,
+                        ..base_request
+                    }) == Ok(())
                     {
                         crate::progress_mode::emit_stderr(&format!(
                             "   {} Attempt 2 succeeded",
@@ -664,17 +699,10 @@ pub fn try_imagemagick_fallback_with_effort(
             // Final fallback: if nothing worked and we haven't tried -strip yet, try it as last resort
             if magick_ok && !cjxl_ok && !stderr.contains("-strip") {
                 crate::progress_mode::emit_stderr("   🔄 Attempt (final): Last resort -strip");
-                match run_imagemagick_cjxl_pipeline_with_effort(
-                    input,
-                    output,
-                    distance,
-                    effort,
-                    max_threads,
-                    true,
-                    16,
-                    false,
-                    apple_compat,
-                ) {
+                match run_imagemagick_cjxl_pipeline_with_effort(ImagemagickCjxlPipelineRequest {
+                    metadata_policy: JxlMetadataPolicy::Strip,
+                    ..base_request
+                }) {
                     Ok(()) => {
                         crate::progress_mode::emit_stderr(&format!(
                             "   {} Final attempt succeeded",
@@ -700,17 +728,10 @@ pub fn try_imagemagick_fallback_with_effort(
                     style("🔄").yellow(),
                     effort
                 ));
-                match run_imagemagick_cjxl_pipeline_with_effort(
-                    input,
-                    output,
-                    distance,
-                    effort,
-                    max_threads,
-                    true,
-                    16,
-                    false,
-                    apple_compat,
-                ) {
+                match run_imagemagick_cjxl_pipeline_with_effort(ImagemagickCjxlPipelineRequest {
+                    metadata_policy: JxlMetadataPolicy::Strip,
+                    ..base_request
+                }) {
                     Ok(()) => {
                         crate::progress_mode::emit_stderr(&format!(
                             "   {} Signal-kill retry succeeded (effort {})",

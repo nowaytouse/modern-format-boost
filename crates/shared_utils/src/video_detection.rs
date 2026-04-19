@@ -415,6 +415,7 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
     let probe = probe_video(path)?;
 
     let codec = DetectedCodec::from_ffprobe(&probe.video_codec);
+    let has_b_frames = probe.has_b_frames();
 
     let pixels_per_second = f64::from(probe.width) * f64::from(probe.height) * probe.frame_rate;
     let bits_per_pixel = if pixels_per_second > 0.0 {
@@ -473,28 +474,28 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
         pix_fmt: probe.pix_fmt,
         color_space,
         bitrate: probe.bit_rate,
-        has_audio: probe.has_audio,
-        audio_codec: probe.audio_codec,
+        has_audio: probe.audio.present,
+        audio_codec: probe.audio.codec.clone(),
         file_size: probe.size,
         quality_score,
         archival_candidate,
         profile: probe.profile,
         max_b_frames: probe.max_b_frames,
-        has_b_frames: probe.has_b_frames,
+        has_b_frames,
         encoder_params: probe.encoder_settings.clone(),
         video_bitrate: probe.video_bit_rate,
         bits_per_pixel,
         color_primaries: probe.color_primaries,
         color_transfer: probe.color_transfer,
-        mastering_display: probe.mastering_display,
-        max_cll: probe.max_cll,
-        is_dolby_vision: probe.is_dolby_vision,
-        dv_profile: probe.dv_profile,
-        dv_bl_signal_compatibility_id: probe.dv_bl_signal_compatibility_id,
-        is_hdr10_plus: probe.is_hdr10_plus,
-        has_subtitles: probe.has_subtitles,
-        subtitle_codec: probe.subtitle_codec,
-        audio_channels: probe.audio_channels,
+        mastering_display: probe.hdr.mastering_display.clone(),
+        max_cll: probe.hdr.max_cll.clone(),
+        is_dolby_vision: probe.hdr.is_dolby_vision(),
+        dv_profile: probe.hdr.dv_profile(),
+        dv_bl_signal_compatibility_id: probe.hdr.dv_bl_signal_compatibility_id(),
+        is_hdr10_plus: probe.hdr.hdr10_plus,
+        has_subtitles: probe.subtitles.present,
+        subtitle_codec: probe.subtitles.codec.clone(),
+        audio_channels: probe.audio.channels,
         is_variable_frame_rate: probe.is_variable_frame_rate,
         precision,
         tags: probe.tags,

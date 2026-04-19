@@ -379,8 +379,9 @@ pub fn print_analysis(result: &DateAnalysisResult) {
         years.sort_by_key(|&(y, _)| y);
         let total = result.files_with_dates as f64;
         for (year, count) in years {
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let pct = (*count as f64 / total * 100.0) as usize;
+            let pct = crate::numeric_cast::f64_to_usize_sat(
+                crate::numeric_cast::usize_to_f64(*count) / total * 100.0,
+            );
             let bar: String = "█".repeat(pct / 3 + 1);
             println!("   {year}: {count:4} files ({pct:2}%) {bar}");
         }

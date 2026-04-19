@@ -14,6 +14,7 @@ mod tests {
             .vcodec(VideoCodec::Hevc)
             .crf(18.0)
             .preset(EncoderPreset::Slower)
+            .output(Path::new("output.mp4"))
             .build();
 
         let args: Vec<String> = cmd

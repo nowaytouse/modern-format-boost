@@ -1471,17 +1471,15 @@ pub fn sample_from_path(
 ) -> Option<SampleInsert> {
     let probe = crate::probe_video(path).ok()?;
     let mut meta = LoopMeta::from_ffprobe_result(&probe, path);
-    if let Ok((pal, exts, has_transparency, variation, delay_variation, loop_count, total_dur)) =
-        scan_gif_headers(path)
-    {
-        meta.palette_size = pal;
-        meta.app_extensions = exts;
-        meta.has_transparency = has_transparency;
-        meta.frame_payload_variation = variation;
-        meta.frame_delay_variation = delay_variation;
-        meta.loop_count = loop_count;
-        if let Some(d) = total_dur {
-            meta.duration_secs = d;
+    if let Ok(scan) = scan_gif_headers(path) {
+        meta.palette_size = scan.palette_size;
+        meta.app_extensions = scan.app_extensions;
+        meta.has_transparency = scan.has_transparency;
+        meta.frame_payload_variation = scan.frame_payload_variation;
+        meta.frame_delay_variation = scan.frame_delay_variation;
+        meta.loop_count = scan.loop_count;
+        if let Some(duration_secs) = scan.duration_secs {
+            meta.duration_secs = duration_secs;
         }
     }
 

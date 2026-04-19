@@ -30,7 +30,7 @@ impl FlagMode {
     pub const fn description_en(&self) -> &'static str {
         match self {
             Self::PreciseQualityWithCompress => "Precise quality match + must compress",
-            Self::UltimateExplore => "🔥 Ultimate explore (SSIM saturation) [GPU+CPU]",
+            Self::UltimateExplore => "🔥 Ultimate explore (3D quality plateau search) [GPU+CPU]",
         }
     }
 
@@ -46,25 +46,33 @@ pub enum FlagValidation {
     Invalid(String),
 }
 
-#[must_use]
-pub fn validate_flags(explore: bool, match_quality: bool, compress: bool) -> FlagValidation {
-    validate_flags_with_ultimate(explore, match_quality, compress, false)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FlagRequest {
+    pub explore: bool,
+    pub match_quality: bool,
+    pub compress: bool,
+    pub ultimate: bool,
 }
 
 #[must_use]
-pub fn validate_flags_with_ultimate(
-    explore: bool,
-    match_quality: bool,
-    compress: bool,
-    ultimate: bool,
-) -> FlagValidation {
-    if !explore || !match_quality || !compress {
+pub fn validate_flags(explore: bool, match_quality: bool, compress: bool) -> FlagValidation {
+    validate_flags_with_ultimate(FlagRequest {
+        explore,
+        match_quality,
+        compress,
+        ultimate: false,
+    })
+}
+
+#[must_use]
+pub fn validate_flags_with_ultimate(request: FlagRequest) -> FlagValidation {
+    if !request.explore || !request.match_quality || !request.compress {
         return FlagValidation::Invalid(
             "❌ Only the recommended flag combination is supported: explore + match-quality + compress (all on by default).\n\
              💡 Omit flags to use defaults, or do not turn off explore/match-quality/compress.".to_string(),
         );
     }
-    if ultimate {
+    if request.ultimate {
         return FlagValidation::Valid(FlagMode::UltimateExplore);
     }
     FlagValidation::Valid(FlagMode::PreciseQualityWithCompress)
@@ -89,13 +97,8 @@ pub fn validate_flags_result(
 ///
 /// # Errors
 /// Returns an error message if flag combination is invalid.
-pub fn validate_flags_result_with_ultimate(
-    explore: bool,
-    match_quality: bool,
-    compress: bool,
-    ultimate: bool,
-) -> Result<FlagMode, String> {
-    match validate_flags_with_ultimate(explore, match_quality, compress, ultimate) {
+pub fn validate_flags_result_with_ultimate(request: FlagRequest) -> Result<FlagMode, String> {
+    match validate_flags_with_ultimate(request) {
         FlagValidation::Valid(mode) => Ok(mode),
         FlagValidation::Invalid(err) => Err(err),
     }
@@ -104,7 +107,7 @@ pub fn validate_flags_result_with_ultimate(
 pub fn print_flag_help() {
     eprintln!("📋 Flag (simplified): Only the recommended combination is supported.");
     eprintln!("   Default: explore + match-quality + compress (all on).");
-    eprintln!("   Optional: --ultimate for SSIM saturation search.");
+    eprintln!("   Optional: --ultimate for tighter 3D quality plateau search.");
     eprintln!("   To disable optional features only: --no-apple-compat, --no-recursive, --no-allow-size-tolerance");
 }
 
@@ -154,15 +157,32 @@ mod tests {
 
     #[test]
     fn test_ultimate_valid_only_with_full_combination() {
-        let r = validate_flags_result_with_ultimate(true, true, true, true);
+        let r = validate_flags_result_with_ultimate(FlagRequest {
+            explore: true,
+            match_quality: true,
+            compress: true,
+            ultimate: true,
+        });
         assert!(r.is_ok());
         assert_eq!(r.unwrap(), FlagMode::UltimateExplore);
     }
 
     #[test]
     fn test_ultimate_invalid_with_incomplete() {
-        assert!(validate_flags_result_with_ultimate(false, false, false, true).is_err());
-        assert!(validate_flags_result_with_ultimate(true, true, false, true).is_err());
+        assert!(validate_flags_result_with_ultimate(FlagRequest {
+            explore: false,
+            match_quality: false,
+            compress: false,
+            ultimate: true,
+        })
+        .is_err());
+        assert!(validate_flags_result_with_ultimate(FlagRequest {
+            explore: true,
+            match_quality: true,
+            compress: false,
+            ultimate: true,
+        })
+        .is_err());
     }
 
     #[test]

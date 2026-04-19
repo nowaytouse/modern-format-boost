@@ -180,7 +180,7 @@ pub fn calculate_ssim_enhanced(input: &Path, output: &Path) -> Option<f64> {
             .input(output)
             .filter_complex(*filter)
             .format("null")
-            .output_null()
+            .output_pipe()
             .build()
             .output();
 
@@ -212,7 +212,7 @@ fn run_ssim_all_filter(input: &Path, output: &Path, lavfi: &str) -> Option<(f64,
         .input(output)
         .filter_complex(lavfi)
         .format("null")
-        .output_null()
+        .output_pipe()
         .build()
         .output()
         .ok()?;

@@ -255,8 +255,11 @@ impl FfmpegProgressParser {
     fn calculate_progress(&self) -> Option<f64> {
         if let Some(total) = self.total_frames {
             if total > 0 && self.current_frame > 0 {
-                #[allow(clippy::cast_precision_loss)]
-                return Some((self.current_frame as f64 / total as f64).min(1.0));
+                return Some(
+                    (crate::numeric_cast::u64_to_f64(self.current_frame)
+                        / crate::numeric_cast::u64_to_f64(total))
+                    .min(1.0),
+                );
             }
         }
 

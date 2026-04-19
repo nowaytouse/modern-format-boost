@@ -162,7 +162,6 @@ impl<T> CrfCache<T> {
             eprintln!("⚠️ CRF_CACHE: CRF {crf} exceeds max valid {CRF_CACHE_MAX_VALID} - rejected");
             return None;
         }
-        #[allow(clippy::cast_sign_loss)]
         Some(crate::numeric_cast::f32_to_u32_sat(
             (crf * CRF_CACHE_MULTIPLIER).round(),
         ))
@@ -580,7 +579,7 @@ impl ExploreContext {
             .input(&self.output_path)
             .filter_lavfi(filter)
             .format("null")
-            .output("-")
+            .output_pipe()
             .build()
             .output();
 
@@ -638,7 +637,7 @@ impl ExploreContext {
             .input(&self.output_path)
             .filter_lavfi(filter)
             .format("null")
-            .output("-")
+            .output_pipe()
             .build()
             .output();
 

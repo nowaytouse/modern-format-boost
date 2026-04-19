@@ -19,6 +19,94 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod raw {
+    #![allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_precision_loss,
+        clippy::cast_sign_loss
+    )]
+
+    #[inline]
+    pub(super) fn f64_to_u64(v: f64) -> u64 {
+        v as u64
+    }
+
+    #[inline]
+    pub(super) fn f64_to_u32(v: f64) -> u32 {
+        v as u32
+    }
+
+    #[inline]
+    pub(super) fn f64_to_usize(v: f64) -> usize {
+        v as usize
+    }
+
+    #[inline]
+    pub(super) fn f64_to_u16(v: f64) -> u16 {
+        v as u16
+    }
+
+    #[inline]
+    pub(super) fn f64_to_u8(v: f64) -> u8 {
+        v as u8
+    }
+
+    #[inline]
+    pub(super) fn f64_to_i32(v: f64) -> i32 {
+        v as i32
+    }
+
+    #[inline]
+    pub(super) fn f64_to_f32(v: f64) -> f32 {
+        v as f32
+    }
+
+    #[inline]
+    pub(super) fn f32_to_u32(v: f32) -> u32 {
+        v as u32
+    }
+
+    #[inline]
+    pub(super) fn f32_to_u16(v: f32) -> u16 {
+        v as u16
+    }
+
+    #[inline]
+    pub(super) fn f32_to_i32(v: f32) -> i32 {
+        v as i32
+    }
+
+    #[inline]
+    pub(super) fn f32_to_usize(v: f32) -> usize {
+        v as usize
+    }
+
+    #[inline]
+    pub(super) fn u64_to_f64(v: u64) -> f64 {
+        v as f64
+    }
+
+    #[inline]
+    pub(super) fn usize_to_f64(v: usize) -> f64 {
+        v as f64
+    }
+
+    #[inline]
+    pub(super) fn i64_to_f64(v: i64) -> f64 {
+        v as f64
+    }
+
+    #[inline]
+    pub(super) fn i32_to_f32(v: i32) -> f32 {
+        v as f32
+    }
+
+    #[inline]
+    pub(super) fn u32_to_f32(v: u32) -> f32 {
+        v as f32
+    }
+}
+
 // ---------------------------------------------------------------------------
 // f64 → unsigned integer (saturating)
 // ---------------------------------------------------------------------------
@@ -33,9 +121,7 @@ pub fn f64_to_u64_sat(v: f64) -> u64 {
     if v.is_nan() || v < 0.0 {
         return 0;
     }
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let result = v.min(u64::MAX as f64) as u64;
-    result
+    raw::f64_to_u64(v)
 }
 
 /// Saturating cast: `f64` → `u32`.
@@ -48,9 +134,7 @@ pub fn f64_to_u32_sat(v: f64) -> u32 {
     if v.is_nan() || v < 0.0 {
         return 0;
     }
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let result = v.min(f64::from(u32::MAX)) as u32;
-    result
+    raw::f64_to_u32(v)
 }
 
 /// Saturating cast: `f64` → `usize`.
@@ -63,9 +147,7 @@ pub fn f64_to_usize_sat(v: f64) -> usize {
     if v.is_nan() || v < 0.0 {
         return 0;
     }
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let result = v.min(usize::MAX as f64) as usize;
-    result
+    raw::f64_to_usize(v)
 }
 
 /// Checked cast: `f64` → `u8`.
@@ -77,8 +159,7 @@ pub fn f64_to_u8_checked(v: f64) -> Option<u8> {
     if v.is_nan() || v < 0.0 || v > f64::from(u8::MAX) {
         None
     } else {
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        Some(v as u8)
+        Some(raw::f64_to_u8(v))
     }
 }
 
@@ -91,8 +172,7 @@ pub fn f64_to_u32_checked(v: f64) -> Option<u32> {
     if v.is_nan() || v < 0.0 || v > f64::from(u32::MAX) {
         None
     } else {
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        Some(v as u32)
+        Some(raw::f64_to_u32(v))
     }
 }
 
@@ -106,9 +186,7 @@ pub fn f64_to_u16_sat(v: f64) -> u16 {
     if v.is_nan() || v < 0.0 {
         return 0;
     }
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let result = v.min(f64::from(u16::MAX)) as u16;
-    result
+    raw::f64_to_u16(v)
 }
 
 /// Saturating cast: `f64` → `u8`.
@@ -121,9 +199,7 @@ pub fn f64_to_u8_sat(v: f64) -> u8 {
     if v.is_nan() || v < 0.0 {
         return 0;
     }
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let result = v.min(f64::from(u8::MAX)) as u8;
-    result
+    raw::f64_to_u8(v)
 }
 
 // ---------------------------------------------------------------------------
@@ -140,9 +216,7 @@ pub fn f64_to_i32_sat(v: f64) -> i32 {
     if v.is_nan() {
         return 0;
     }
-    #[allow(clippy::cast_possible_truncation)]
-    let result = v.clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32;
-    result
+    raw::f64_to_i32(v)
 }
 
 // ---------------------------------------------------------------------------
@@ -159,10 +233,7 @@ pub fn f32_to_u32_sat(v: f32) -> u32 {
     if v.is_nan() || v < 0.0 {
         return 0;
     }
-    // f32 cannot represent u32::MAX exactly; 4_294_967_000.0 is the safe upper bound
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let result = v.min(u32::MAX as f32) as u32;
-    result
+    raw::f32_to_u32(v)
 }
 
 /// Saturating cast: `f32` → `u16`.
@@ -175,9 +246,7 @@ pub fn f32_to_u16_sat(v: f32) -> u16 {
     if v.is_nan() || v < 0.0 {
         return 0;
     }
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let result = v.min(f32::from(u16::MAX)) as u16;
-    result
+    raw::f32_to_u16(v)
 }
 
 // ---------------------------------------------------------------------------
@@ -194,10 +263,7 @@ pub fn f32_to_i32_sat(v: f32) -> i32 {
     if v.is_nan() {
         return 0;
     }
-    // f32 can represent i32 boundaries with enough precision for clamping
-    #[allow(clippy::cast_possible_truncation)]
-    let result = v.clamp(i32::MIN as f32, i32::MAX as f32) as i32;
-    result
+    raw::f32_to_i32(v)
 }
 
 // ---------------------------------------------------------------------------
@@ -210,63 +276,59 @@ pub fn f32_to_i32_sat(v: f32) -> i32 {
 /// where f32 precision (≈7 decimal digits) is sufficient.
 #[inline]
 #[must_use]
-#[allow(clippy::cast_possible_truncation)]
 pub fn f64_to_f32_lossy(v: f64) -> f32 {
-    v as f32
+    raw::f64_to_f32(v)
 }
 
-/// Lossless promotion: `f32` → `f64`.
+/// Exact promotion: `f32` → `f64`.
+///
+/// Retained as a named wrapper for API consistency with the other audited cast helpers.
 #[inline]
 #[must_use]
-#[allow(clippy::cast_lossless)]
 pub fn f32_to_f64_lossy(v: f32) -> f64 {
     f64::from(v)
 }
 
-/// Lossless promotion: `u64` → `f64`.
+/// Potentially lossy integer-to-float conversion: `u64` → `f64`.
 #[inline]
 #[must_use]
-#[allow(clippy::cast_precision_loss)]
 pub fn u64_to_f64(v: u64) -> f64 {
-    v as f64
+    raw::u64_to_f64(v)
 }
 
-/// Lossless promotion: `u32` → `f64`.
+/// Exact promotion: `u32` → `f64`.
 #[inline]
 #[must_use]
-#[allow(clippy::cast_lossless)]
 pub fn u32_to_f64(v: u32) -> f64 {
     f64::from(v)
 }
 
-/// Lossless promotion: `usize` → `f64`.
+/// Potentially lossy integer-to-float conversion: `usize` → `f64`.
+///
+/// On 64-bit targets, large values may lose integer precision once they exceed `2^53`.
 #[inline]
 #[must_use]
-#[allow(clippy::cast_precision_loss)]
 pub fn usize_to_f64(v: usize) -> f64 {
-    v as f64
+    raw::usize_to_f64(v)
 }
 
-/// Lossless promotion: `i32` → `f64`.
+/// Exact promotion: `i32` → `f64`.
 #[inline]
 #[must_use]
-#[allow(clippy::cast_precision_loss)]
 pub fn i32_to_f64(v: i32) -> f64 {
     f64::from(v)
 }
 
-/// Lossless promotion: `i64` → `f64`.
+/// Potentially lossy integer-to-float conversion: `i64` → `f64`.
 #[inline]
 #[must_use]
-#[allow(clippy::cast_precision_loss)]
 pub fn i64_to_f64(v: i64) -> f64 {
-    v as f64
+    raw::i64_to_f64(v)
 }
 
-/// Lossless promotion: `f32` → `f64`.
+/// Exact promotion: `f32` → `f64`.
 #[inline]
 #[must_use]
-#[allow(clippy::cast_lossless)]
 pub fn f32_to_f64(v: f32) -> f64 {
     f64::from(v)
 }
@@ -274,19 +336,15 @@ pub fn f32_to_f64(v: f32) -> f64 {
 /// Precision reduction: `i32` → `f32`.
 #[inline]
 #[must_use]
-#[allow(clippy::cast_precision_loss)]
 pub fn i32_to_f32_lossy(v: i32) -> f32 {
-    v as f32
+    raw::i32_to_f32(v)
 }
 
-/// Lossless promotion: `u32` → `f32`.
-///
-/// Audited: All `u32` values can be represented by `f32` (though some with precision loss).
+/// Potentially lossy integer-to-float conversion: `u32` → `f32`.
 #[inline]
 #[must_use]
-#[allow(clippy::cast_precision_loss)]
 pub fn u32_to_f32(v: u32) -> f32 {
-    v as f32
+    raw::u32_to_f32(v)
 }
 
 /// Saturating cast: `f32` → `usize`.
@@ -299,9 +357,7 @@ pub fn f32_to_usize_sat(v: f32) -> usize {
     if v.is_nan() || v < 0.0 {
         return 0;
     }
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let result = v.min(usize::MAX as f32) as usize;
-    result
+    raw::f32_to_usize(v)
 }
 
 // ---------------------------------------------------------------------------
@@ -484,9 +540,8 @@ pub fn i32_to_u64_sat(v: i32) -> u64 {
 /// Audited: On 32-bit and 64-bit systems, `usize` fits into `u64`.
 #[inline]
 #[must_use]
-#[allow(clippy::cast_lossless)]
 pub fn usize_to_u64(v: usize) -> u64 {
-    v as u64
+    u64::try_from(v).unwrap_or(u64::MAX)
 }
 
 /// Saturating cast: `i32` → `u8`.
@@ -537,10 +592,7 @@ pub fn unix_secs_i64() -> i64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    // Safe: current Unix timestamps (≈1.7 billion) are far below i64::MAX
-    #[allow(clippy::cast_possible_wrap)]
-    let result = secs as i64;
-    result
+    u64_to_i64_sat(secs)
 }
 
 /// Unix timestamp as `i64` from a fallible `SystemTime` operation.
@@ -552,9 +604,7 @@ pub fn unix_secs_i64() -> i64 {
 #[inline]
 pub fn unix_secs_i64_result() -> Result<i64, std::time::SystemTimeError> {
     let secs = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-    #[allow(clippy::cast_possible_wrap)]
-    let result = secs as i64;
-    Ok(result)
+    Ok(u64_to_i64_sat(secs))
 }
 
 // ---------------------------------------------------------------------------
@@ -641,6 +691,13 @@ mod tests {
         assert_eq!(f32_to_u32_sat(-1.0_f32), 0);
     }
 
+    #[test]
+    fn f32_to_usize_edge_cases() {
+        assert_eq!(f32_to_usize_sat(f32::NAN), 0);
+        assert_eq!(f32_to_usize_sat(-1.0_f32), 0);
+        assert_eq!(f32_to_usize_sat(f32::INFINITY), usize::MAX);
+    }
+
     // -- f64 → i32 --
 
     #[test]
@@ -654,6 +711,13 @@ mod tests {
         assert_eq!(f64_to_i32_sat(f64::NAN), 0);
         assert_eq!(f64_to_i32_sat(3_000_000_000.0), i32::MAX);
         assert_eq!(f64_to_i32_sat(-3_000_000_000.0), i32::MIN);
+    }
+
+    #[test]
+    fn f32_to_i32_edge_cases() {
+        assert_eq!(f32_to_i32_sat(f32::NAN), 0);
+        assert_eq!(f32_to_i32_sat(f32::INFINITY), i32::MAX);
+        assert_eq!(f32_to_i32_sat(f32::NEG_INFINITY), i32::MIN);
     }
 
     // -- f64 → f32 --

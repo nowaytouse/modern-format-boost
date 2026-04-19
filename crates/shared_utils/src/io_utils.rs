@@ -17,8 +17,6 @@ use tracing::warn;
 /// # Errors
 /// Returns an error if the metadata cannot be retrieved after all retries.
 ///
-/// # Panics
-/// Panics if the retry logic fails.
 pub fn metadata_with_retry<P: AsRef<Path>>(path: P) -> std::io::Result<fs::Metadata> {
     let p = path.as_ref();
     let mut last_err = None;
@@ -40,7 +38,16 @@ pub fn metadata_with_retry<P: AsRef<Path>>(path: P) -> std::io::Result<fs::Metad
         }
     }
 
-    let err = last_err.expect("Metadata retry loop failed unexpectedly without an error");
+    let Some(err) = last_err else {
+        let err =
+            std::io::Error::other("metadata retry loop exhausted without capturing an OS error");
+        warn!(
+            path = %p.display(),
+            error = %err,
+            "HARD FAILURE: metadata retry loop ended without an underlying OS error"
+        );
+        return Err(err);
+    };
 
     warn!(
         path = %p.display(),

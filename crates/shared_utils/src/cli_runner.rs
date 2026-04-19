@@ -240,7 +240,7 @@ where
         std::thread::available_parallelism().map_or(4, std::num::NonZero::get)
     );
     if let Some(hint) = crate::thread_manager::memory_cap_hint() {
-        info!("   💡 {}", hint);
+        info!("   💡 {hint}");
     }
 
     let pool = match rayon::ThreadPoolBuilder::new()
@@ -250,8 +250,7 @@ where
         Ok(pool) => pool,
         Err(err) => {
             warn!(
-                "⚠️ Failed to create {}-thread video pool: {}. Falling back to 1 thread.",
-                parallel_tasks, err
+                "⚠️ Failed to create {parallel_tasks}-thread video pool: {err}. Falling back to 1 thread."
             );
             rayon::ThreadPoolBuilder::new()
                 .num_threads(1)
@@ -291,7 +290,7 @@ where
                     errors
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .push((file.to_path_buf(), err.to_string()));
+                        .push((file.clone(), err.to_string()));
                     let current = processed.fetch_add(1, Ordering::Relaxed) + 1;
                     progress_bar.set(current as u64);
                     return;

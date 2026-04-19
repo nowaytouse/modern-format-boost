@@ -341,11 +341,9 @@ fn calculate_texture_variance(rgba: &[u8], width: u32, height: u32) -> f64 {
 
             for dy in -1i32..=1 {
                 for dx in -1i32..=1 {
-                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                     let px = crate::numeric_cast::i32_to_usize_sat(
                         crate::numeric_cast::usize_to_i32_sat(x) + dx,
                     );
-                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                     let py = crate::numeric_cast::i32_to_usize_sat(
                         crate::numeric_cast::usize_to_i32_sat(y) + dy,
                     );
@@ -653,7 +651,11 @@ fn classify_content_type(input: ClassifierInput) -> ImageContentType {
             }
         }
 
-        if best_rule.is_none() || rule.priority > best_rule.unwrap().priority {
+        let should_replace_best = match best_rule {
+            Some(best) => rule.priority > best.priority,
+            None => true,
+        };
+        if should_replace_best {
             best_rule = Some(rule);
         }
     }
@@ -803,7 +805,11 @@ mod property_tests {
             noise in 0.0..2.0f64
         ) {
             let score = calculate_overall_complexity(edge, div, tex, noise);
-            prop_assert!(score >= 0.0 && score <= 1.0, "Complexity score must be in [0, 1] (got {})", score);
+            prop_assert!(
+                (0.0..=1.0).contains(&score),
+                "Complexity score must be in [0, 1] (got {})",
+                score
+            );
         }
 
         #[test]
@@ -814,7 +820,11 @@ mod property_tests {
             div in 0.0..1.5f64
         ) {
             let conf = calculate_analysis_confidence(pixels, size, edge, div);
-            prop_assert!(conf >= 0.0 && conf <= 1.0, "Confidence must be in [0, 1] (got {})", conf);
+            prop_assert!(
+                (0.0..=1.0).contains(&conf),
+                "Confidence must be in [0, 1] (got {})",
+                conf
+            );
         }
     }
 }
