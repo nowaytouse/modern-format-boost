@@ -2,17 +2,7 @@
 //!
 //! Provides precise video analysis with intelligent format conversion:
 //! - HEVC Lossless MKV for archival (lossless sources)
-//! - HEVC MP4 for compression (lossy sources)
-//!
-//! ## Simple Mode
-//! ```rust,ignore
-//! use vid::simple_convert;
-//! use std::path::Path;
-//!
-//! let input = Path::new("video.mp4");
-//! let output_dir = Some(Path::new("output/"));
-//! simple_convert(input, output_dir)?;
-//! ```
+//! - HEVC MP4 or MOV for delivery, depending on compatibility mode
 
 pub mod animated_image;
 pub mod codecs;
@@ -21,8 +11,7 @@ pub mod detection_api;
 pub mod ffprobe;
 
 pub use conversion_api::{
-    auto_convert, auto_convert_with_cache, determine_strategy,
-    determine_strategy_with_apple_compat, simple_convert,
+    auto_convert, auto_convert_with_cache, determine_strategy, determine_strategy_with_apple_compat,
 };
 pub use detection_api::{
     detect_video, ColorSpace, CompressionType, DetectedCodec, VideoDetectionResult,

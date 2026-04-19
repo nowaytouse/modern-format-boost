@@ -435,6 +435,15 @@ pub fn determine_strategy(
     determine_strategy_with_apple_compat(result, false, false, codec)
 }
 
+#[inline]
+const fn hevc_delivery_target(apple_compat: bool) -> TargetVideoFormat {
+    if apple_compat {
+        TargetVideoFormat::HevcMov
+    } else {
+        TargetVideoFormat::HevcMp4
+    }
+}
+
 pub fn determine_strategy_with_apple_compat(
     result: &VideoDetectionResult,
     apple_compat: bool,
@@ -605,7 +614,7 @@ pub fn determine_strategy_with_apple_compat(
             )
         } else {
             let (target, reason_prefix) = match codec {
-                SelectedCodec::Hevc => (TargetVideoFormat::HevcMp4, "HEVC"),
+                SelectedCodec::Hevc => (hevc_delivery_target(apple_compat), "HEVC"),
                 SelectedCodec::Av1 => (TargetVideoFormat::Av1Mp4, "AV1"),
             };
             if result.archival_candidate || result.quality_score >= 90 {
@@ -642,108 +651,6 @@ pub fn determine_strategy_with_apple_compat(
         crf,
         lossless,
     }
-}
-
-/// Simple conversion with default settings.
-///
-/// # Errors
-/// Returns an error if conversion fails.
-pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<ConversionOutput> {
-    // Validate input file (check symlinks, file type, readability)
-    if let Err(e) = shared_utils::conversion::validate_input_file(input) {
-        return Err(VidQualityError::ConversionError(e));
-    }
-
-    // Default to HEVC for simple_convert unless specified?
-    // Actually simple_convert usually implies HEVC for compatibility
-    let detection = crate::detection_api::detect_video_with_cache(input, None)?;
-
-    let output_dir = output_dir.map_or_else(
-        || {
-            input
-                .parent()
-                .unwrap_or_else(|| Path::new("."))
-                .to_path_buf()
-        },
-        std::path::Path::to_path_buf,
-    );
-
-    std::fs::create_dir_all(&output_dir)?;
-
-    let stem = input
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("output");
-    let input_ext = input.extension().and_then(|e| e.to_str()).unwrap_or("");
-
-    let output_path = if input_ext.eq_ignore_ascii_case("MP4") {
-        output_dir.join(format!("{stem}_hevc.MP4"))
-    } else {
-        output_dir.join(format!("{stem}.MP4"))
-    };
-    let output_path = shared_utils::conversion::reserve_output_path(input, &output_path);
-    shared_utils::conversion::validate_output_path(&output_path, None)
-        .map_err(VidQualityError::ConversionError)?;
-
-    info!("🎬 Simple Mode: {} → HEVC MP4 (CRF 18)", input.display());
-
-    let max_threads = shared_utils::thread_manager::get_balanced_thread_config(
-        shared_utils::thread_manager::WorkloadType::Video,
-    )
-    .child_threads;
-
-    let temp_path = shared_utils::path_safety::isolated_temp_path_for_search(&output_path)
-        .map_err(|e| VidQualityError::conversion_error(e.to_string()))?;
-    let _temp_guard = shared_utils::conversion::TempOutputGuard::new(temp_path.clone());
-    let output_size = execute_conversion(
-        &detection,
-        &temp_path,
-        18,
-        max_threads,
-        SelectedCodec::Hevc,
-        true,
-        false,
-    )?;
-
-    if !shared_utils::conversion::commit_temp_to_output_with_metadata(
-        &temp_path,
-        &output_path,
-        true,
-        Some(input),
-    )
-    .map_err(|e| VidQualityError::ConversionError(e.to_string()))?
-    {
-        return Err(VidQualityError::ConversionError(
-            "Failed to commit temporary file to output".to_string(),
-        ));
-    }
-
-    shared_utils::copy_metadata(input, &output_path);
-
-    let size_ratio = output_size as f64 / detection.file_size as f64;
-
-    info!("   ✅ Complete: {:.1}% of original", size_ratio * 100.0);
-
-    Ok(ConversionOutput {
-        input_path: input.display().to_string(),
-        output_path: output_path.display().to_string(),
-        strategy: ConversionStrategy {
-            target: TargetVideoFormat::HevcMp4,
-            reason: "Simple mode: HEVC High Quality".to_string(),
-            command: String::new(),
-            preserve_audio: detection.has_audio,
-            crf: 18.0,
-            lossless: false,
-        },
-        input_size: detection.file_size,
-        output_size,
-        size_ratio,
-        success: true,
-        message: "Simple conversion successful (HEVC CRF 18)".to_string(),
-        final_crf: 18.0,
-        exploration_attempts: 0,
-        blake3: None,
-    })
 }
 
 /// Automatically convert video based on analysis.
@@ -940,11 +847,7 @@ pub fn auto_convert_with_cache(
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("output");
-    let target_ext = if config.apple_compat && strategy.target == TargetVideoFormat::HevcMp4 {
-        "MOV"
-    } else {
-        strategy.target.extension()
-    };
+    let target_ext = strategy.target.extension();
     let input_ext = input.extension().and_then(|e| e.to_str()).unwrap_or("");
     // GIF as source has no Apple compatibility issue; do not show "APPLE COMPAT FALLBACK" for GIF→video.
     let source_is_gif = input_ext.eq_ignore_ascii_case("gif");
@@ -1056,7 +959,7 @@ pub fn auto_convert_with_cache(
                 blake3: None,
             });
         }
-        TargetVideoFormat::HevcMp4 | TargetVideoFormat::Av1Mp4 => {
+        TargetVideoFormat::HevcMov | TargetVideoFormat::HevcMp4 | TargetVideoFormat::Av1Mp4 => {
             if config.use_lossless {
                 info!(
                     "   🚀 Using {} Lossless Mode (forced)",
@@ -1281,7 +1184,7 @@ pub fn auto_convert_with_cache(
                             input_path: input.display().to_string(),
                             output_path: output_path.display().to_string(),
                             strategy: ConversionStrategy {
-                                target: TargetVideoFormat::HevcMp4,
+                                target: hevc_delivery_target(config.apple_compat),
                                 reason: "Apple compat fallback: best-effort HEVC kept (quality/size below target)".to_string(),
                                 command: String::new(),
                                 preserve_audio: detection.has_audio,
@@ -1433,7 +1336,7 @@ pub fn auto_convert_with_cache(
                     input_path: input.display().to_string(),
                     output_path: output_path.display().to_string(),
                     strategy: ConversionStrategy {
-                        target: TargetVideoFormat::HevcMp4,
+                        target: hevc_delivery_target(config.apple_compat),
                         reason: "Apple compat fallback: best-effort HEVC kept (quality below target)".to_string(),
                         command: String::new(),
                         preserve_audio: detection.has_audio,
@@ -1558,7 +1461,7 @@ pub fn auto_convert_with_cache(
                 input_path: input.display().to_string(),
                 output_path: output_path.display().to_string(),
                 strategy: ConversionStrategy {
-                    target: TargetVideoFormat::HevcMp4,
+                    target: hevc_delivery_target(config.apple_compat),
                     reason: "Apple compat fallback: best-effort HEVC kept (compression check failed)".to_string(),
                     command: String::new(),
                     preserve_audio: detection.has_audio,
@@ -1687,7 +1590,7 @@ fn success_status_for_cache(
     matches!(target, TargetVideoFormat::Gif)
         || (matches!(
             target,
-            TargetVideoFormat::HevcMp4 | TargetVideoFormat::Av1Mp4
+            TargetVideoFormat::HevcMov | TargetVideoFormat::HevcMp4 | TargetVideoFormat::Av1Mp4
         ) && explore_result.is_some_and(|r| r.quality_passed.is_passed()))
 }
 
@@ -1698,7 +1601,7 @@ fn best_effort_status_for_cache(
 ) -> bool {
     matches!(
         target,
-        TargetVideoFormat::HevcMp4 | TargetVideoFormat::Av1Mp4
+        TargetVideoFormat::HevcMov | TargetVideoFormat::HevcMp4 | TargetVideoFormat::Av1Mp4
     ) && final_crf > 0.0
         && explore_result.is_some_and(|r| r.quality_passed.is_failed())
 }
@@ -1767,179 +1670,6 @@ pub fn calculate_matched_crf(
             "Quality analysis failed: {e}"
         ))),
     }
-}
-
-fn execute_conversion(
-    detection: &VideoDetectionResult,
-    output: &Path,
-    crf: u8,
-    max_threads: usize,
-    codec: SelectedCodec,
-    apple_compat: bool,
-    ultimate: bool,
-) -> Result<u64> {
-    tracing::debug!(
-        file = %detection.file_path,
-        output = %output.display(),
-        crf = crf,
-        threads = max_threads,
-        codec = %codec.as_str(),
-        apple_compat = apple_compat,
-        ultimate = ultimate,
-        width = detection.width,
-        height = detection.height,
-        "Video conversion execution starting"
-    );
-    // Attempt to extract DV RPU for injection (None = not DV or graceful fallback)
-    let dv_rpu = prepare_dv_rpu(detection);
-
-    // Attempt to extract HDR10+ metadata for injection
-    let hdr10plus = prepare_hdr10plus_metadata(detection);
-
-    // For HDR content (10-bit) we need additional x265 params to signal HDR correctly.
-    // hdr-opt=1 enables SEI HDR metadata writing; repeat-headers=1 ensures SPS/PPS on
-    // every keyframe so players always have the colour info available.
-    let is_hdr_content = detection.bit_depth >= 10
-        || detection.is_dolby_vision
-        || detection.is_hdr10_plus
-        || detection.mastering_display.is_some()
-        || matches!(
-            detection.color_transfer.as_deref(),
-            Some("smpte2084" | "arib-std-b67")
-        );
-
-    let x265_memory_profile = shared_utils::x265_params::memory_profile_for_detection(detection);
-    if x265_memory_profile.is_low_memory() {
-        info!(
-            file = %detection.file_path,
-            codec = %detection.codec.as_str(),
-            file_size_gb = detection.file_size as f64 / (1024.0 * 1024.0 * 1024.0),
-            "Applying low-memory x265 profile for large/high-fidelity source"
-        );
-    }
-    let mut extra_x265_params = String::new();
-    if is_hdr_content {
-        shared_utils::x265_params::push_param(&mut extra_x265_params, "hdr-opt=1");
-        shared_utils::x265_params::push_param(&mut extra_x265_params, "repeat-headers=1");
-    }
-    if let Some(ref md) = detection.mastering_display {
-        if !md.is_empty() {
-            shared_utils::x265_params::push_param(
-                &mut extra_x265_params,
-                &format!("master-display={md}"),
-            );
-        }
-    }
-    if let Some(ref cll) = detection.max_cll {
-        if !cll.is_empty() {
-            shared_utils::x265_params::push_param(
-                &mut extra_x265_params,
-                &format!("max-cll={cll}"),
-            );
-        }
-    }
-
-    // Inject DV RPU path and profile into x265 params when available
-    if let Some(ref dv) = dv_rpu {
-        shared_utils::x265_params::push_param(
-            &mut extra_x265_params,
-            &format!(
-                "dolby-vision-rpu={}:dolby-vision-profile={}",
-                dv.rpu_path.display(),
-                dv.profile_str
-            ),
-        );
-    }
-
-    // Inject HDR10+ metadata into x265 params
-    if let Some(ref hdr) = hdr10plus {
-        shared_utils::x265_params::push_param(
-            &mut extra_x265_params,
-            &format!("dhdr10-info={}", hdr.json_path.display()),
-        );
-    }
-    let x265_params = shared_utils::x265_params::format_x265_params(
-        max_threads,
-        Some(&extra_x265_params),
-        x265_memory_profile,
-    );
-
-    let vf_args = shared_utils::get_ffmpeg_dimension_args(detection.width, detection.height, false);
-    let mut builder = shared_utils::FfmpegBuilder::new();
-    builder
-        .overwrite()
-        .threads(max_threads)
-        .input(Path::new(&detection.file_path))
-        .vcodec(match codec {
-            SelectedCodec::Hevc => shared_utils::VideoCodec::Hevc,
-            SelectedCodec::Av1 => shared_utils::VideoCodec::Av1,
-        })
-        .crf(f32::from(crf))
-        .preset(if codec == SelectedCodec::Hevc && ultimate {
-            shared_utils::EncoderPreset::Slower
-        } else {
-            shared_utils::EncoderPreset::Medium // Default/SVT-AV1 default handled by builder/preset
-        })
-        .pix_fmt(if detection.bit_depth >= 10 {
-            shared_utils::PixFmt::Yuv420p10le
-        } else {
-            shared_utils::PixFmt::Yuv420p
-        });
-
-    if codec == SelectedCodec::Hevc {
-        if apple_compat {
-            builder.profile(shared_utils::VideoProfile::Main);
-            builder
-                .arg(shared_utils::constants::FFMPEG_ARG_TAG_VIDEO)
-                .arg(shared_utils::constants::FFMPEG_TAG_HVC1);
-        }
-        builder.arg("-x265-params").arg(x265_params);
-    }
-
-    // Preserve variable frame rate (VFR) for iPhone slow-motion videos
-    if detection.is_variable_frame_rate {
-        builder
-            .arg(shared_utils::constants::FFMPEG_ARG_VSYNC)
-            .arg(shared_utils::constants::FFMPEG_VAL_VFR);
-    }
-
-    // Append HDR colour metadata args (color_primaries, color_trc, colorspace,
-    // master_display, max_cll)
-    builder.args(build_hdr_ffmpeg_args(detection));
-
-    for arg in &vf_args {
-        builder.arg(arg);
-    }
-
-    if detection.has_audio {
-        builder.args(shared_utils::audio_args_for_container(
-            detection.audio_codec.as_deref(),
-            shared_utils::constants::EXT_MP4,
-        ));
-    } else {
-        builder.arg(shared_utils::constants::FFMPEG_ARG_NO_AUDIO);
-    }
-
-    // Subtitles: copy when format is MP4-compatible
-    builder.args(shared_utils::subtitle_args_for_container(
-        detection.has_subtitles,
-        detection.subtitle_codec.as_deref(),
-        "mp4",
-    ));
-
-    let result = builder.output(output).build().output()?;
-
-    if !result.status.success() {
-        return Err(VidQualityError::FFmpegError {
-            message: "FFmpeg command failed".to_string(),
-            stderr: String::from_utf8_lossy(&result.stderr).to_string(),
-            exit_code: result.status.code(),
-            command: None,
-            file_path: None,
-        });
-    }
-
-    Ok(std::fs::metadata(output)?.len())
 }
 
 fn execute_lossless(
@@ -2138,6 +1868,7 @@ mod tests {
     #[test]
     fn test_target_format() {
         assert_eq!(TargetVideoFormat::HevcLosslessMkv.extension(), "MKV");
+        assert_eq!(TargetVideoFormat::HevcMov.extension(), "MOV");
         assert_eq!(TargetVideoFormat::HevcMp4.extension(), "MP4");
     }
 
@@ -2254,8 +1985,8 @@ mod tests {
         );
         assert_eq!(
             strategy.target,
-            TargetVideoFormat::HevcMp4,
-            "VP9 should be converted to HEVC MP4 in Apple compat mode"
+            TargetVideoFormat::HevcMov,
+            "VP9 should be converted to HEVC MOV in Apple compat mode"
         );
     }
 
@@ -2505,7 +2236,7 @@ mod tests {
             ..Default::default()
         };
         let s = determine_strategy_with_apple_compat(&det, true, false, SelectedCodec::Hevc);
-        assert_eq!(s.target, TargetVideoFormat::HevcMp4);
+        assert_eq!(s.target, TargetVideoFormat::HevcMov);
         assert!(!s.lossless);
     }
 
@@ -2770,7 +2501,7 @@ mod tests {
             ..Default::default()
         };
         let s = determine_strategy_with_apple_compat(&det, true, false, SelectedCodec::Hevc);
-        assert_eq!(s.target, TargetVideoFormat::HevcMp4);
+        assert_eq!(s.target, TargetVideoFormat::HevcMov);
         assert!(
             (s.crf - 18.0).abs() < 0.1,
             "Visually lossless should use CRF 18, got {:.1}",

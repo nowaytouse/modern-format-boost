@@ -6,32 +6,30 @@ All notable changes to this project will be documented in this file.
 
 ## [0.11.2] — 2026-04-20
 
-### 🎬 GPU Coarse Search & Quality Gate Hardening (Major Rewrite)
+### 🎬 GPU Coarse Search & Engine Unification (Refactoring Phase)
 
+- **Engine Unification**: Successfully decommissioned legacy high-level conversion functions (`execute_video_conversion`, `simple_convert`). All video processing now funnels through a unified, parallelized GPU exploration engine in `shared_utils`.
 - **Strict Quality Thresholds**: Significant tightening of Ultimate mode quality bounds in `gpu_coarse_search.rs`.
   - **VMAF-Y**: Allowed drop from baseline reduced from `4.0` to `2.0`.
   - **PSNR-UV**: Allowed drop from baseline reduced from `4.0` to `1.5`.
-  - **CAMBI**: Reduced allowed banding growth from `2.0/3.0` to `1.0/1.5`.
-- **Refactored Decision Engine**: Rewrote the quality status reporting logic to utilize a semantic tri-state (`PASSED`, `FAILED`, `N/A`), providing clearer diagnostics for complex fallback scenarios.
 - **Dynamic Mapping Calibration**: Enhanced the GPU-to-CPU CRF mapping logic to more accurately project search boundaries across different hardware vendors.
 
-### 🛡️ Media Integrity & Size Validation
+### 🛡️ Media Integrity & Apple Compatibility (MOV Transition)
 
-- **Total File Size Gate**: Compression accept/reject decisions remain anchored to the final output file size rather than internal stream deltas. This matches what users actually care about: whether the produced file is smaller overall.
-- **Fail Reporting Cleanup**: Skip reasons and protection logs now report total file size regressions directly. Stream-level size data is retained only as an internal diagnostic signal.
-- **Animated Pipeline Resilience**: Refactored `animated_image.rs` to handle codec-specific failures (VP8/VP9/Alpha) more gracefully, ensuring fallback logic correctly preserves original assets.
+- **Apple Compatibility (MOV)**: Transitioned from `.mp4` to **`.mov`** (HEVC) when `--apple-compat` is enabled. This ensures 100% native compatibility with the Apple ecosystem (QuickTime, Photos, TV) while enabling better metadata and tag preservation.
+- **Total File Size Gate**: Compression accept/reject decisions are now anchored to the final output file size, ensuring that container overhead gains are correctly factored into the "success" metric.
+- **Fail Reporting Cleanup**: Skip reasons and protection logs now report total file size regressions directly. Stream-level size data is retained as an internal diagnostic signal in debug logs.
 
-### ⚖️ Global Numerical Safety Audit (Workspace-wide)
+### ⚖️ Global Numerical Safety & API Cleanup
 
-- **Audited Cast Hub**: Massive expansion of `numeric_cast.rs` with safe `raw` casting helpers.
-- **Systematic `as` Removal**: Replaced hundreds of unchecked saturating `as` casts with audited saturating/checked variants across `shared_utils`, `vid`, and `img` crates. This eliminates risk of silent overflows and logic drift in high-bitrate/high-resolution processing paths.
-- **Floating-Point Precision**: Hardened `f32/f64` comparison and conversion logic to handle edge cases like `NaN`, `Inf`, and near-zero values more predictably.
+- **Audited Cast Hub**: Massive expansion of `numeric_cast.rs` with safe `raw` casting helpers, eliminating high-risk `as` casts workspace-wide.
+- **API Streamlining**: Cleaned up public exports in `vid/src/lib.rs` and `img/src/lib.rs`, removing obsolete helper functions in favor of the structured exploration API.
+- **Animated Pipeline Resilience**: Refactored `animated_image.rs` and `conversion_api.rs` to handle codec-specific failures (VP8/VP9/Alpha) more gracefully.
 
-### ⚙️ Heartbeat System Decommission & Architecture Cleanup
+### ⚙️ Subsystem Decommission & Architecture Cleanup
 
-- **Legacy Subsystem Removal**: Deleted the entire heartbeat engine (`heartbeat_manager.rs`, `msssim_heartbeat.rs`, `universal_heartbeat.rs`), transitioning to more reliable filesystem-based locking and direct process monitoring.
-- **FFprobe Logic Refactor**: Comprehensive cleanup of the media probing layer in `ffprobe.rs`, implementing better error propagation and metadata extraction for archival formats.
-- **Shared Utils Consolidation**: Performed a large-scale structural refactoring of `lib.rs` and core utility modules to reduce technical debt and improve auditability.
+- **Heartbeat System Decommission**: Removed the legacy heartbeat signaling engine in favor of filesystem-based locking and direct process monitoring.
+- **FFprobe Logic Refactor**: Comprehensive cleanup of the media probing layer in `ffprobe.rs`, implementing better error propagation and metadata extraction (DV RPU, HDR10+).
 
 ### 🧹 Maintenance & Automation UX
 

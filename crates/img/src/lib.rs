@@ -22,8 +22,7 @@ pub use metrics::{
 pub use recommender::{get_recommendation, UpgradeRecommendation};
 
 pub use conversion_api::{
-    determine_strategy, simple_convert, smart_convert, ConversionConfig, ConversionOutput,
-    TargetFormat,
+    determine_strategy, smart_convert, ConversionConfig, ConversionOutput, TargetFormat,
 };
 pub use detection_api::{
     detect_image, CompressionType, DetectedFormat, DetectionResult, ImageType,

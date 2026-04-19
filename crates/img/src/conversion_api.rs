@@ -531,27 +531,6 @@ pub fn smart_convert(path: &Path, config: &ConversionConfig) -> Result<Conversio
     execute_conversion(&detection, &strategy, config)
 }
 
-/// Simplified wrapper: builds a default `ConversionConfig` and delegates to `smart_convert`.
-///
-/// Use `smart_convert` when you need compress, `preserve_metadata`, `preserve_timestamps`, `delete_original`, or `apple_compat`.
-/// Simple conversion using default settings.
-///
-/// # Errors
-/// Returns an error if conversion fails.
-pub fn simple_convert(path: &Path, output_dir: Option<&Path>) -> Result<ConversionOutput> {
-    let config = ConversionConfig {
-        output_dir: output_dir.map(PathBuf::from),
-        base_dir: None,
-        force: false,
-        delete_original: false,
-        preserve_timestamps: true, // Changed: Always preserve timestamps by default
-        preserve_metadata: true,   // Changed: Always preserve metadata by default
-        compress: false,
-        apple_compat: false,
-    };
-    smart_convert(path, &config)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

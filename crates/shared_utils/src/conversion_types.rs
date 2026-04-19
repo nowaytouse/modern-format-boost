@@ -7,6 +7,7 @@ pub enum TargetVideoFormat {
     Av1Mp4,
     Gif,
     HevcLosslessMkv,
+    HevcMov,
     HevcMp4,
     Skip,
 }
@@ -33,6 +34,7 @@ impl TargetVideoFormat {
     pub const fn extension(&self) -> &str {
         match self {
             Self::Ffv1Mkv | Self::HevcLosslessMkv => "MKV",
+            Self::HevcMov => "MOV",
             Self::Av1Mp4 | Self::HevcMp4 => "MP4",
             Self::Gif => "GIF",
             Self::Skip => "",
@@ -46,6 +48,7 @@ impl TargetVideoFormat {
             Self::Av1Mp4 => "AV1 MP4 (High Quality)",
             Self::Gif => "GIF (Loop Asset)",
             Self::HevcLosslessMkv => "HEVC Lossless MKV (Archival)",
+            Self::HevcMov => "HEVC MOV (Apple Compatible)",
             Self::HevcMp4 => "HEVC MP4 (High Quality)",
             Self::Skip => "Skip",
         }
