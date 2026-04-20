@@ -9,9 +9,7 @@ use shared_utils::constants::ANIMATION_CLIP_THRESHOLD_SECS;
 use shared_utils::conversion::{
     determine_output_path_with_base, is_already_processed, mark_as_processed,
 };
-use shared_utils::loop_intent::{
-    assess_loop_intent_from_probe, is_lossless_exploration_safe, LoopMeta,
-};
+use shared_utils::loop_intent::{is_lossless_exploration_safe, LoopMeta};
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct VideoStreamInfo {
     index: usize,
@@ -598,12 +596,25 @@ fn skipped_output_exists(input: &Path, output: &Path, _input_size: u64) -> Conve
 
 /// Return true when the input is either a native GIF or a GIF-like silent loop
 /// video that the scorer says should stay in the GIF domain.
-fn is_gif_meme(path: &Path) -> bool {
-    if let Ok(probe) = shared_utils::probe_video(path) {
-        assess_loop_intent_from_probe(&probe, path).is_keep_gif()
-    } else {
-        false
+fn assess_loop_intent_for_path(path: &Path) -> Option<shared_utils::LoopIntentVerdict> {
+    if shared_utils::should_use_gif_fast_path(path) {
+        if let Some(meta) = shared_utils::LoopMeta::from_gif_path(path) {
+            return Some(shared_utils::assess_loop_intent_from_meta(
+                &meta,
+                Some(path),
+            ));
+        }
     }
+
+    shared_utils::probe_video(path)
+        .ok()
+        .map(|probe| shared_utils::assess_loop_intent_from_probe(&probe, path))
+}
+
+/// Return true when the input is either a native GIF or a GIF-like silent loop
+/// video that the scorer says should stay in the GIF domain.
+fn is_gif_meme(path: &Path) -> bool {
+    assess_loop_intent_for_path(path).is_some_and(|verdict| verdict.is_keep_gif())
 }
 
 /// Returns true if the file is an animated image format but effectively static (0 or negligible duration).
@@ -2046,6 +2057,8 @@ pub fn convert_to_gif_apple_compat(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::Builder;
 
     #[test]
     fn test_alpha_aux_detection_rejects_poster_plus_animation_avif() {
@@ -2119,5 +2132,42 @@ mod tests {
         );
         assert_eq!(decision.label, "QUALITY VALIDATION FAILED");
         assert!(!decision.skip_message.contains("video stream"));
+    }
+
+    #[test]
+    fn test_short_gif_loop_intent_uses_gif_header_fast_path() {
+        // Keep the payload intentionally tiny: loop intent should come from the GIF header scan,
+        // not from a fragile ffprobe-only path.
+        let gif_data: &[u8] = &[
+            b'G', b'I', b'F', b'8', b'9', b'a', // Header
+            0x01, 0x00, 0x01, 0x00, // Logical screen: 1x1
+            0x80, 0x00, 0x00, // Global color table, background, aspect
+            0x00, 0x00, 0x00, // Color #0
+            0xFF, 0xFF, 0xFF, // Color #1
+            0x21, 0xFF, 0x0B, // App extension introducer
+            b'N', b'E', b'T', b'S', b'C', b'A', b'P', b'E', b'2', b'.', b'0', 0x03, 0x01, 0x00,
+            0x00, 0x00, // Infinite loop
+            0x21, 0xF9, 0x04, 0x00, 0x0A, 0x00, 0x00, 0x00, // Frame 1 GCE, 100 ms
+            0x2C, // Frame 1 image descriptor
+            0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x01, 0x00,
+            0x00, // Minimal image data block
+            0x21, 0xF9, 0x04, 0x00, 0x0A, 0x00, 0x00, 0x00, // Frame 2 GCE, 100 ms
+            0x2C, // Frame 2 image descriptor
+            0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x01, 0x00,
+            0x00, // Minimal image data block
+            0x3B, // Trailer
+        ];
+
+        let mut file = Builder::new().suffix(".gif").tempfile().unwrap();
+        file.write_all(gif_data).unwrap();
+
+        let verdict = assess_loop_intent_for_path(file.path())
+            .expect("short GIF should produce a loop-intent verdict");
+
+        assert!(
+            verdict.is_keep_gif(),
+            "expected short looping GIF to stay in GIF domain, got {verdict:?}"
+        );
+        assert!(is_gif_meme(file.path()));
     }
 }
