@@ -6,7 +6,20 @@ All notable changes to this project will be documented in this file.
 
 ## [0.11.2] — 2026-04-20
 
-### 🎬 GPU Coarse Search & Engine Unification (Refactoring Phase)
+### 🏗️ Workspace Reorganization & Asset Consolidation (Final Phase)
+- **Centralized Development Workspace**: Migrated and unified scattered developer assets into a dedicated `crates/dev/` directory to eliminate root-level clutter.
+  - **Refactored Test Structure**: Consolidated all integration and regression tests into `crates/dev/edge/rs/`, including internal parity tests previously located in `shared_utils`.
+  - **Consolidated Benchmarks**: Moved all Rust benchmarks to `crates/dev/benches/` and implemented verified `criterion` support for workspace-wide performance tracking.
+  - **Integrated Fuzzing**: Relocated `fuzz/` and `oss-fuzz/` into `crates/dev/`, updating all relative paths and dependency links.
+  - **Resource Categorization**: Organized edge-case media assets into specialized `crates/dev/edge/gifs/` and `crates/dev/edge/images/` subdirectories.
+- **System Asset Optimization**:
+  - **SQL Schema Consolidation**: Isolated all PostgreSQL and SQLite schema files to `crates/shared_utils/src/sql/` for better maintainability.
+  - **Environment Standardization**: Cleaned up redundant virtual environments and standardized local Python dependencies into a single project-level `.venv`.
+- **Infrastructure & Git Hygiene**:
+  - **Hardened .gitignore**: Implemented recursive exclusions for fuzzing corpora, temporary test snapshots, and local logs.
+  - **Diagnostic Cleanup**: Removed obsolete clippy output and temporary diagnostic documentation.
+
+### 🎬 GPU Coarse Search & Engine Unification
 
 - **Engine Unification**: Successfully decommissioned legacy high-level conversion functions (`execute_video_conversion`, `simple_convert`). All video processing now funnels through a unified, parallelized GPU exploration engine in `shared_utils`.
 - **Strict Quality Thresholds**: Significant tightening of Ultimate mode quality bounds in `gpu_coarse_search.rs`.
@@ -22,14 +35,6 @@ All notable changes to this project will be documented in this file.
   - **GIF Pipeline Stabilization**: Resolved a critical bug where multi-frame GIFs with missing or malformed Graphic Control Extension (GCE) blocks were misidentified as single-frame media. Implemented robust frame counting in `media_meta_utils.rs` by directly parsing Image Descriptor blocks.
 - **X265Builder Path Hardening**: Fixed a critical issue where standalone `x265` would fail to recognize stdin/stdout pipes (`-`) due to path armoring. Implemented `x265_io_arg` to ensure bare dashes are preserved for standard I/O.
 
-### 🏗️ Workspace Reorganization & Hardening
-
-- **Consolidated Development Workspace**: Migrated and unified scattered developer assets into a dedicated `crates/dev/` directory to eliminate root-level clutter.
-  - **Refactored Test Structure**: Merged `crates/dev/test/` and `crates/dev/tests/` into `crates/dev/edge/`, consolidating all integration and regression assets.
-  - **Centralized Fuzzing**: Moved `fuzz/` and `oss-fuzz/` into `crates/dev/`, updating all relative paths and CI workflows (ClusterFuzzLite) to maintain build stability.
-  - **Scratch & Edge Consolidation**: Relocated the `scratch/` directory to `crates/dev/edge/scratch/`, aligning temporary experimentation with the "edge" testing tier.
-- **Maintenance Script Path Safety**: Updated `check_all.py` and `cache_cleaner.py` to correctly target the reorganized directory structure, ensuring seamless automation and cleanup.
-- **Permanent Regression Suite**: Established a "zero-privacy" regression test suite in `shared_utils/tests/headless_gif_regression.rs` using synthetic assets to ensure long-term stability of the GIF processing pipeline.
 
 ### 🛡️ Media Integrity & Apple Compatibility (MOV Transition)
 
