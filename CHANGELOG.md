@@ -15,6 +15,8 @@ All notable changes to this project will be documented in this file.
 - **Dynamic Mapping Calibration**: Refined the GPU-to-CPU CRF projection logic to ensure deterministic search boundaries across varying hardware architectures.
 
 - **Loop Intent Detection 2.0 & GIF Stabilization**:
+  - **Modern Format Static Media Interception**: Implemented a critical 0.25s threshold hardening layer in `image_analyzer.rs`. This correctly identifies single-frame WebP/AVIF/HEIC/MP4 files that would otherwise bypass the loop engine due to legacy metadata declaring non-zero durations (e.g., 0.04s).
+  - **Dynamic Duration Normalization**: Files with durations $>0.0s$ and $<0.25s$ now trigger a mandatory `ffprobe -count_frames` packet audit. If `frame_count <= 1`, the duration is normalized to `0.0s`, ensuring the `vid` module correctly hands off the asset to the highly efficient `img` (JXL) pipeline.
   - **Native GIF Metadata Injection**: Enhanced the strategy engine to perform direct byte-level `scan_gif_headers` on the `current_path`. This prevents reliance on stale `ffprobe` metadata and ensures verified frame counts for sensitive GIF-to-Video paths.
   - **Error Propagation (Layer 1-A)**: Introduced a new **`LoopIntentVerdict::Error`** state. Assets with `frame_count <= 1` or negligible duration are now explicitly identified as "static media" and skipped, preventing illegitimate loop analysis for non-animated content.
   - **GIF Pipeline Hardening**: Resolved a critical bug where multi-frame GIFs with malformed GCE blocks were misidentified as single-frame. Implemented robust frame counting via direct binary scanning of Image Descriptor blocks.
