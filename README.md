@@ -203,6 +203,9 @@ brew install ffmpeg jpeg-xl exiftool imagemagick webp libheif
 cargo install dovi_tool
 ```
 
+> [!TIP]
+> For power users who want all advanced features (AI filters, FDK-AAC, etc.), see our [Advanced FFmpeg Setup Guide](docs/FFMPEG_SETUP.md) for instructions on installing a full-featured version without breaking system dependencies.
+
 #### Linux (Ubuntu/Debian)
 
 ```bash
