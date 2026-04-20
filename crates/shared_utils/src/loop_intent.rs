@@ -377,19 +377,7 @@ impl LoopMeta {
             (0, 0)
         };
 
-        let frame_count = if let Some(dur) = scan.duration_secs {
-            if dur > 0.0 {
-                if scan.frame_delay_variation.is_some() {
-                    crate::numeric_cast::f64_to_u32_sat((dur * 10.0_f64).ceil()).min(10000_u32)
-                } else {
-                    1_u32
-                }
-            } else {
-                1_u32
-            }
-        } else {
-            1_u32
-        };
+        let frame_count = scan.frame_count;
 
         let fps = if let Some(dur) = scan.duration_secs {
             if frame_count > 1 && dur > 0.0 {

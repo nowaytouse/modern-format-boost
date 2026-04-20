@@ -135,7 +135,7 @@ impl AnalysisCache {
     }
 
     fn init_schema(client: &mut Client) -> Result<()> {
-        let schema_sql = include_str!("analysis_cache_pg.sql");
+        let schema_sql = include_str!("sql/analysis_cache_pg.sql");
         client
             .batch_execute(schema_sql)
             .context("Failed to initialize Postgres cache schema")?;
@@ -469,8 +469,9 @@ impl AnalysisCache {
                     }
                 }
 
-                let analysis: VideoDetectionResult = rmp_serde::from_slice(&data)
+                let mut analysis: VideoDetectionResult = rmp_serde::from_slice(&data)
                     .context("Failed to unpack cached video data (path hit)")?;
+                analysis.file_path = path.display().to_string();
                 return Ok(Some(analysis));
             }
         }
@@ -491,7 +492,7 @@ impl AnalysisCache {
                 }
             }
 
-            let analysis: VideoDetectionResult = rmp_serde::from_slice(&data)
+            let mut analysis: VideoDetectionResult = rmp_serde::from_slice(&data)
                 .context("Failed to unpack cached video data (hash hit)")?;
 
             // Backfill path index
@@ -502,6 +503,7 @@ impl AnalysisCache {
                 &[&path_str.to_string(), &content_hash.as_bytes().as_slice(), &sig.mtime, &sig.size, &sig.atime, &sig.ctime, &sig.btime],
             )?;
 
+            analysis.file_path = path.display().to_string();
             return Ok(Some(analysis));
         }
 

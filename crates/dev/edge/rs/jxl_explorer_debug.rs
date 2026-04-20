@@ -5,10 +5,10 @@ use tempfile::tempdir;
 
 fn debug_sample_paths(root: &Path) -> Vec<PathBuf> {
     [
-        root.join("inputs/test_image_1080p.png"),
-        root.join("IMG_0413.JPG"),
-        root.join("IMG_8321.JPG"),
-        root.join("inputs/poison_pill_grayscale_icc.jpg"),
+        root.join("images/test_image_1080p.png"),
+        root.join("images/IMG_0413.JPG"),
+        root.join("images/IMG_8321.JPG"),
+        root.join("images/poison_pill_grayscale_icc.jpg"),
     ]
     .into_iter()
     .filter(|path| path.exists() && path.is_file())

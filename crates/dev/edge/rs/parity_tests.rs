@@ -1,9 +1,10 @@
 // parity_tests.rs
 
-use crate::ffmpeg_builder::{EncoderPreset, FfmpegBuilder, VideoCodec};
-use crate::image_builders::*;
-use crate::jxl_builder::{CjxlBuilder, DjxlBuilder};
-use crate::tool_builders::*;
+use shared_utils::ffmpeg_builder::{EncoderPreset, FfmpegBuilder, VideoCodec};
+use shared_utils::image_builders::*;
+use shared_utils::jxl_builder::{CjxlBuilder, DjxlBuilder};
+use shared_utils::tool_builders::*;
+
 use std::path::Path;
 
 #[test]
@@ -36,7 +37,7 @@ fn test_ffmpeg_flag_order_parity() {
 
 #[test]
 fn test_ffprobe_flag_order_parity() {
-    let cmd = crate::ffmpeg_builder::FfprobeBuilder::new()
+    let cmd = shared_utils::ffmpeg_builder::FfprobeBuilder::new()
         .arg("-v")
         .arg("error")
         .arg("-show_entries")
@@ -543,7 +544,7 @@ fn test_taskkill_flag_order_parity() {
 #[test]
 fn test_ffprobe_pattern_safety_hardening() {
     // Filename with brackets SHOULD trigger -pattern_type none automatically
-    let cmd = crate::ffmpeg_builder::FfprobeBuilder::new()
+    let cmd = shared_utils::ffmpeg_builder::FfprobeBuilder::new()
         .input(Path::new("frame[01].png"))
         .build();
     let args: Vec<String> = cmd
@@ -633,7 +634,7 @@ fn test_ffmpeg_global_flag_priority_parity() {
 
 #[test]
 fn test_sips_quality_clamping_hardening() {
-    let cmd = crate::image_builders::SipsBuilder::new()
+    let cmd = shared_utils::image_builders::SipsBuilder::new()
         .quality(150) // Should clamp to 100
         .format("jpeg")
         .input(Path::new("in.png"))
@@ -655,7 +656,7 @@ fn test_sips_quality_clamping_hardening() {
 
 #[test]
 fn test_vmaf_comprehensive_hardening() {
-    let cmd = crate::tool_builders::VmafBuilder::new()
+    let cmd = shared_utils::tool_builders::VmafBuilder::new()
         .threads(8)
         .model("vmaf_v0.6.1.json")
         .reference(Path::new("ref.mp4"))
@@ -673,7 +674,7 @@ fn test_vmaf_comprehensive_hardening() {
 
 #[test]
 fn test_identify_verbose_hardening() {
-    let cmd = crate::image_builders::IdentifyBuilder::new()
+    let cmd = shared_utils::image_builders::IdentifyBuilder::new()
         .verbose(true)
         .format("%w %h")
         .input(Path::new("in.jpg"))
@@ -690,7 +691,7 @@ fn test_identify_verbose_hardening() {
 
 #[test]
 fn test_gifski_performance_controls() {
-    let cmd = crate::image_builders::GifskiBuilder::new()
+    let cmd = shared_utils::image_builders::GifskiBuilder::new()
         .fast(true)
         .quality(85)
         .build();
@@ -705,7 +706,7 @@ fn test_gifski_performance_controls() {
 
 #[test]
 fn test_avifenc_quality_refinement() {
-    let cmd = crate::image_builders::AvifencBuilder::new()
+    let cmd = shared_utils::image_builders::AvifencBuilder::new()
         .quality(15, 35)
         .speed(8)
         .build();

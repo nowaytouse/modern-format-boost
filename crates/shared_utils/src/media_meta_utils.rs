@@ -13,6 +13,7 @@ pub struct GifHeaderScan {
     pub frame_delay_variation: Option<f64>,
     pub loop_count: Option<u16>,
     pub duration_secs: Option<f64>,
+    pub frame_count: u32,
 }
 
 /// Scans a GIF file's bytes to extract metadata not easily provided by ffprobe,
@@ -187,6 +188,12 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
         Some(frame_delays_cs.iter().map(|&d| f64::from(d)).sum::<f64>() / 100.0)
     };
 
+    let frame_count_calculated = std::cmp::max(
+        frame_payload_sizes.len() as u32,
+        frame_delays_cs.len() as u32,
+    );
+    let frame_count_calculated = if frame_count_calculated == 0 { 1 } else { frame_count_calculated };
+
     Ok(GifHeaderScan {
         palette_size,
         app_extensions,
@@ -195,6 +202,7 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
         frame_delay_variation,
         loop_count,
         duration_secs: total_duration_secs,
+        frame_count: frame_count_calculated,
     })
 }
 

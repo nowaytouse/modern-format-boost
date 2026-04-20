@@ -5,7 +5,8 @@ use tracing::info;
 use shared_utils::analysis_cache::AnalysisCache;
 use shared_utils::conversion_types::SelectedCodec;
 use vid::{
-    auto_convert_with_cache, detect_video, determine_strategy, ConversionConfig, VidQualityError,
+    auto_convert_with_cache, detect_video, determine_strategy_with_apple_compat, ConversionConfig,
+    VidQualityError,
 };
 
 #[derive(Parser)]
@@ -303,7 +304,8 @@ fn main() -> anyhow::Result<()> {
             } else {
                 SelectedCodec::Hevc
             };
-            let strategy = determine_strategy(&detection, selected_codec);
+            let strategy =
+                determine_strategy_with_apple_compat(&detection, &input, false, false, selected_codec);
 
             println!("\n🎯 Recommended Strategy (Auto Mode)");
             println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");

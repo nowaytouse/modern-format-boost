@@ -8,7 +8,18 @@ mod tests {
 
     fn get_edge_file(name: &str) -> PathBuf {
         let cargo_manifest = env!("CARGO_MANIFEST_DIR");
-        PathBuf::from(cargo_manifest).join("edge").join(name)
+        let edge = PathBuf::from(cargo_manifest).join("edge");
+        
+        let img = edge.join("images").join(name);
+        if img.exists() { return img; }
+        
+        let gif = edge.join("gifs").join(name);
+        if gif.exists() { return gif; }
+        
+        let vid = edge.join("videos").join(name);
+        if vid.exists() { return vid; }
+        
+        edge.join(name)
     }
 
     #[test]

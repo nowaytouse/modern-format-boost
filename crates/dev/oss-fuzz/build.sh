@@ -1,7 +1,7 @@
 #!/bin/bash -eu
 
 # Build fuzz targets
-cd $SRC/modern-format-boost/fuzz
+cd $SRC/modern-format-boost/crates/dev/fuzz
 cargo +nightly fuzz build --release --verbose
 
 # Copy binaries to OUT

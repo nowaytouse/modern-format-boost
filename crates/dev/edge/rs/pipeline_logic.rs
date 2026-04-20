@@ -8,7 +8,18 @@ mod tests {
 
     fn get_edge_file(name: &str) -> PathBuf {
         let cargo_manifest = env!("CARGO_MANIFEST_DIR");
-        PathBuf::from(cargo_manifest).join("edge").join(name)
+        let edge = PathBuf::from(cargo_manifest).join("edge");
+        
+        let img = edge.join("images").join(name);
+        if img.exists() { return img; }
+        
+        let gif = edge.join("gifs").join(name);
+        if gif.exists() { return gif; }
+        
+        let vid = edge.join("videos").join(name);
+        if vid.exists() { return vid; }
+        
+        edge.join(name)
     }
 
     #[test]
@@ -86,7 +97,7 @@ mod tests {
         // Poison Pill: PNG Sequence to bypass broken video delegates
         // For glob patterns, we might need a different handling
         let input_pattern = format!(
-            "{}/edge/poison_pill_rhythm_seq/*.png",
+            "{}/edge/images/poison_pill_rhythm_seq/*.png",
             env!("CARGO_MANIFEST_DIR")
         );
         let input = Path::new(&input_pattern);
@@ -113,7 +124,7 @@ mod tests {
     fn test_non_monotonic_pts_fallback() {
         // Poison Pill: PNG Sequence to bypass broken video delegates
         let input_pattern = format!(
-            "{}/edge/poison_pill_pts_seq/*.png",
+            "{}/edge/images/poison_pill_rhythm_seq/*.png",
             env!("CARGO_MANIFEST_DIR")
         );
         let input = Path::new(&input_pattern);

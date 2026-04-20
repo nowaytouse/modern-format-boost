@@ -5,7 +5,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TEST_DIR="$(dirname "$SCRIPT_DIR")/test"
+TEST_DIR="$SCRIPT_DIR"
 IMAGES_DIR="$TEST_DIR/images"
 VIDEOS_DIR="$TEST_DIR/videos"
 GIFS_DIR="$TEST_DIR/gifs"

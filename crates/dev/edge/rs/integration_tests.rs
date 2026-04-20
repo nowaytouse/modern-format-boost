@@ -6,9 +6,9 @@ mod integration_tests {
     use std::path::PathBuf;
 
     fn get_test_media_dir() -> PathBuf {
-        // Navigate from Cargo manifest directory to test/
+        // Navigate from Cargo manifest directory to edge/
         let cargo_manifest = env!("CARGO_MANIFEST_DIR");
-        PathBuf::from(cargo_manifest).join("test")
+        PathBuf::from(cargo_manifest).join("edge")
     }
 
     fn video_file(name: &str) -> PathBuf {

@@ -1195,7 +1195,7 @@ def main() -> None:
                     tracker,
                     "optional",
                     "cargo fuzz list (fuzz target discovery)",
-                    ["cargo", "+nightly", "fuzz", "list"],
+                    ["cargo", "+nightly", "fuzz", "list", "--fuzz-dir", "crates/dev/fuzz"],
                 )
             else:
                 missing_parts = []

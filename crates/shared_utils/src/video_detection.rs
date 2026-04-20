@@ -375,10 +375,11 @@ pub fn detect_video_with_cache(
 ) -> Result<VideoDetectionResult, FFprobeError> {
     if let Some(cache) = cache {
         match cache.get_video_analysis(path) {
-            Ok(Some(cached)) => {
+            Ok(Some(mut cached)) => {
                 if std::env::var("IMGQUALITY_DEBUG").is_ok() {
                     eprintln!("🔍 [Video Cache] Hit: {}", path.display());
                 }
+                cached.file_path = path.display().to_string();
                 return Ok(cached);
             }
             Ok(None) => {}

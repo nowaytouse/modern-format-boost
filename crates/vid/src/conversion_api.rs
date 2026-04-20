@@ -432,7 +432,7 @@ pub fn determine_strategy(
     result: &VideoDetectionResult,
     codec: SelectedCodec,
 ) -> ConversionStrategy {
-    determine_strategy_with_apple_compat(result, false, false, codec)
+    determine_strategy_with_apple_compat(result, Path::new(&result.file_path), false, false, codec)
 }
 
 #[inline]
@@ -446,12 +446,13 @@ const fn hevc_delivery_target(apple_compat: bool) -> TargetVideoFormat {
 
 pub fn determine_strategy_with_apple_compat(
     result: &VideoDetectionResult,
+    input: &Path,
     apple_compat: bool,
     force: bool,
     codec: SelectedCodec,
 ) -> ConversionStrategy {
     tracing::debug!(
-        file = %result.file_path,
+        file = %input.display(),
         apple_compat = apple_compat,
         force = force,
         codec = %codec.as_str(),
@@ -476,28 +477,26 @@ pub fn determine_strategy_with_apple_compat(
         shared_utils::should_skip_video_codec(result.codec.as_str())
     };
 
+    let mut detection = result.clone();
+    detection.file_path = input.display().to_string();
+
     // Loop Intent Identification System
     // For GIF files, use fast-path (from_gif_path) to preserve GIF-specific signals.
     // For videos, use ffprobe path with structural signal refresh.
-    let loop_verdict = if shared_utils::should_use_gif_fast_path(Path::new(&result.file_path)) {
+    let loop_verdict = if shared_utils::should_use_gif_fast_path(input) {
         // GIF file: use header-level detection
-        shared_utils::LoopMeta::from_gif_path(Path::new(&result.file_path)).map_or_else(
-            || shared_utils::assess_loop_intent(result),
+        shared_utils::LoopMeta::from_gif_path(input).map_or_else(
+            || shared_utils::assess_loop_intent(&detection),
             |meta| {
-                shared_utils::assess_loop_intent_from_meta(
-                    &meta,
-                    Some(Path::new(&result.file_path)),
-                )
+                shared_utils::assess_loop_intent_from_meta(&meta, Some(input))
             },
         )
     } else {
         // Video file: ensure structural signals are available
-        let mut detection = result.clone();
         if detection.pkt_sizes.len() < 3 || detection.pts_deltas.len() < 3 {
-            if let Ok(fresh) =
-                crate::detection_api::detect_video_with_cache(Path::new(&detection.file_path), None)
-            {
+            if let Ok(fresh) = crate::detection_api::detect_video_with_cache(input, None) {
                 detection = fresh;
+                detection.file_path = input.display().to_string();
             }
         }
         shared_utils::assess_loop_intent(&detection)
@@ -775,8 +774,11 @@ pub fn auto_convert_with_cache(
         warn!("HDR10+ detected: dynamic metadata will be stripped to HDR10 static layer");
     }
 
+    detection.file_path = input.display().to_string();
+
     let strategy = determine_strategy_with_apple_compat(
         &detection,
+        input,
         config.apple_compat,
         config.force,
         config.codec,
@@ -1864,6 +1866,30 @@ pub fn smart_convert(input: &Path, config: &ConversionConfig) -> Result<Conversi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::Builder;
+
+    const MINIMAL_TRANSPARENT_LOOP_GIF: &[u8] = &[
+        b'G', b'I', b'F', b'8', b'9', b'a', // Header
+        0x01, 0x00, 0x01, 0x00, // Logical screen: 1x1
+        0x80, 0x00, 0x00, // Global color table, background, aspect
+        0x00, 0x00, 0x00, // Color #0
+        0xFF, 0xFF, 0xFF, // Color #1
+        0x21, 0xFF, 0x0B, // App extension introducer
+        b'N', b'E', b'T', b'S', b'C', b'A', b'P', b'E', b'2', b'.', b'0', 0x03, 0x01, 0x00,
+        0x00, 0x00, // Infinite loop
+        0x21, 0xF9, 0x04, 0x01, 0x0A, 0x00, 0x00,
+        0x00, // Frame 1 GCE, transparency + 100 ms
+        0x2C, // Frame 1 image descriptor
+        0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x01, 0x00,
+        0x00, // Minimal image data block
+        0x21, 0xF9, 0x04, 0x01, 0x0A, 0x00, 0x00,
+        0x00, // Frame 2 GCE, transparency + 100 ms
+        0x2C, // Frame 2 image descriptor
+        0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x01, 0x00,
+        0x00, // Minimal image data block
+        0x3B, // Trailer
+    ];
 
     #[test]
     fn test_target_format() {
@@ -1976,8 +2002,13 @@ mod tests {
             ..Default::default()
         };
 
-        let strategy =
-            determine_strategy_with_apple_compat(&detection, true, false, SelectedCodec::Hevc);
+        let strategy = determine_strategy_with_apple_compat(
+            &detection,
+            Path::new(&detection.file_path),
+            true,
+            false,
+            SelectedCodec::Hevc,
+        );
         assert_ne!(
             strategy.target,
             TargetVideoFormat::Skip,
@@ -2042,8 +2073,13 @@ mod tests {
             "HEVC should be skipped in normal mode"
         );
 
-        let apple =
-            determine_strategy_with_apple_compat(&detection, true, false, SelectedCodec::Hevc);
+        let apple = determine_strategy_with_apple_compat(
+            &detection,
+            Path::new(&detection.file_path),
+            true,
+            false,
+            SelectedCodec::Hevc,
+        );
         assert_eq!(
             apple.target,
             TargetVideoFormat::Skip,
@@ -2103,8 +2139,13 @@ mod tests {
             "H.264 should NOT be skipped in normal mode"
         );
 
-        let apple =
-            determine_strategy_with_apple_compat(&detection, true, false, SelectedCodec::Hevc);
+        let apple = determine_strategy_with_apple_compat(
+            &detection,
+            Path::new(&detection.file_path),
+            true,
+            false,
+            SelectedCodec::Hevc,
+        );
         assert_ne!(
             apple.target,
             TargetVideoFormat::Skip,
@@ -2172,8 +2213,13 @@ mod tests {
             let detection = make_detection(codec.clone());
 
             let normal = determine_strategy(&detection, SelectedCodec::Hevc);
-            let apple =
-                determine_strategy_with_apple_compat(&detection, true, false, SelectedCodec::Hevc);
+            let apple = determine_strategy_with_apple_compat(
+                &detection,
+                Path::new(&detection.file_path),
+                true,
+                false,
+                SelectedCodec::Hevc,
+            );
 
             let is_skip_normal = normal.target == TargetVideoFormat::Skip;
             let is_skip_apple = apple.target == TargetVideoFormat::Skip;
@@ -2235,7 +2281,13 @@ mod tests {
             tags: std::collections::HashMap::new(),
             ..Default::default()
         };
-        let s = determine_strategy_with_apple_compat(&det, true, false, SelectedCodec::Hevc);
+        let s = determine_strategy_with_apple_compat(
+            &det,
+            Path::new(&det.file_path),
+            true,
+            false,
+            SelectedCodec::Hevc,
+        );
         assert_eq!(s.target, TargetVideoFormat::HevcMov);
         assert!(!s.lossless);
     }
@@ -2285,7 +2337,13 @@ mod tests {
             tags: std::collections::HashMap::new(),
             ..Default::default()
         };
-        let s = determine_strategy_with_apple_compat(&det, true, false, SelectedCodec::Hevc);
+        let s = determine_strategy_with_apple_compat(
+            &det,
+            Path::new(&det.file_path),
+            true,
+            false,
+            SelectedCodec::Hevc,
+        );
         assert_ne!(
             s.target,
             TargetVideoFormat::Skip,
@@ -2446,7 +2504,13 @@ mod tests {
             tags: std::collections::HashMap::new(),
             ..Default::default()
         };
-        let s = determine_strategy_with_apple_compat(&det, true, false, SelectedCodec::Hevc);
+        let s = determine_strategy_with_apple_compat(
+            &det,
+            Path::new(&det.file_path),
+            true,
+            false,
+            SelectedCodec::Hevc,
+        );
         assert_eq!(
             s.target,
             TargetVideoFormat::HevcLosslessMkv,
@@ -2500,7 +2564,13 @@ mod tests {
             tags: std::collections::HashMap::new(),
             ..Default::default()
         };
-        let s = determine_strategy_with_apple_compat(&det, true, false, SelectedCodec::Hevc);
+        let s = determine_strategy_with_apple_compat(
+            &det,
+            Path::new(&det.file_path),
+            true,
+            false,
+            SelectedCodec::Hevc,
+        );
         assert_eq!(s.target, TargetVideoFormat::HevcMov);
         assert!(
             (s.crf - 18.0).abs() < 0.1,
@@ -2560,7 +2630,13 @@ mod tests {
             TargetVideoFormat::Skip,
             "Unknown(\"vp9\") skipped in normal mode"
         );
-        let apple = determine_strategy_with_apple_compat(&det, true, false, SelectedCodec::Hevc);
+        let apple = determine_strategy_with_apple_compat(
+            &det,
+            Path::new(&det.file_path),
+            true,
+            false,
+            SelectedCodec::Hevc,
+        );
         assert_ne!(apple.target, TargetVideoFormat::Skip);
     }
 
@@ -2633,7 +2709,13 @@ mod tests {
         };
 
         // This should trigger the Gif strategy because it's silent, short, and fits sticker heuristic
-        let strategy = determine_strategy_with_apple_compat(&det, true, false, SelectedCodec::Hevc);
+        let strategy = determine_strategy_with_apple_compat(
+            &det,
+            Path::new(&det.file_path),
+            true,
+            false,
+            SelectedCodec::Hevc,
+        );
         assert_eq!(strategy.target, TargetVideoFormat::Gif);
         // Accept either loop-intent KNN path or sticker heuristic path — both produce GIF
         assert!(
@@ -2642,6 +2724,75 @@ mod tests {
             "unexpected reason: {}",
             strategy.reason
         );
+    }
+
+    #[test]
+    fn test_strategy_uses_current_input_path_for_native_gif_loop_intent() {
+        use crate::detection_api::{CompressionType, DetectedCodec};
+
+        let mut gif = Builder::new().suffix(".gif").tempfile().unwrap();
+        gif.write_all(MINIMAL_TRANSPARENT_LOOP_GIF).unwrap();
+        let detection = crate::detection_api::VideoDetectionResult {
+            file_path: "/stale/cache-hit.mp4".to_string(),
+            format: "gif".into(),
+            codec: DetectedCodec::Unknown("gif".into()),
+            compression: CompressionType::Lossless,
+            width: 1,
+            height: 1,
+            duration_secs: 0.2,
+            has_audio: false,
+            frame_count: 2,
+            fps: 10.0,
+            file_size: std::fs::metadata(gif.path()).unwrap().len(),
+            ..Default::default()
+        };
+
+        let adjusted = determine_strategy_with_apple_compat(
+            &detection,
+            gif.path(),
+            false,
+            false,
+            SelectedCodec::Hevc,
+        );
+
+        assert_eq!(adjusted.target, TargetVideoFormat::Skip);
+        assert!(
+            adjusted.reason.contains("Layer 1-B"),
+            "unexpected reason: {}",
+            adjusted.reason
+        );
+    }
+
+    #[test]
+    fn test_strategy_uses_current_input_path_for_native_gif_loop_intent_apple_compat() {
+        use crate::detection_api::{CompressionType, DetectedCodec};
+
+        let mut gif = Builder::new().suffix(".gif").tempfile().unwrap();
+        gif.write_all(MINIMAL_TRANSPARENT_LOOP_GIF).unwrap();
+        let detection = crate::detection_api::VideoDetectionResult {
+            file_path: "/stale/cache-hit.mp4".to_string(),
+            format: "gif".into(),
+            codec: DetectedCodec::Unknown("gif".into()),
+            compression: CompressionType::Lossless,
+            width: 1,
+            height: 1,
+            duration_secs: 0.2,
+            has_audio: false,
+            frame_count: 2,
+            fps: 10.0,
+            file_size: std::fs::metadata(gif.path()).unwrap().len(),
+            ..Default::default()
+        };
+
+        let adjusted = determine_strategy_with_apple_compat(
+            &detection,
+            gif.path(),
+            true,
+            false,
+            SelectedCodec::Hevc,
+        );
+
+        assert_eq!(adjusted.target, TargetVideoFormat::Gif);
     }
 
     #[test]

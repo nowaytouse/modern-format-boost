@@ -19,7 +19,17 @@ All notable changes to this project will be documented in this file.
   - **Explicit Early Exit**: Hardened Layers 1-5 to resolve common media profiles (Stickers, Memes) earlier, reducing reliance on Layer 7 fallbacks.
   - **Diagnostic Transparency**: Improved reasoning strings in `LoopIntentVerdict` for better auditability of the classification logic.
   - **Animated Pipeline Alignment**: Synchronized `animated_image.rs` with the `conversion_api` fast-path logic. Native GIFs now bypass heavy `ffprobe` analysis via direct header scanning, significantly accelerating classification for short assets. Added regression testing for ultra-short GIF fragments.
+  - **GIF Pipeline Stabilization**: Resolved a critical bug where multi-frame GIFs with missing or malformed Graphic Control Extension (GCE) blocks were misidentified as single-frame media. Implemented robust frame counting in `media_meta_utils.rs` by directly parsing Image Descriptor blocks.
 - **X265Builder Path Hardening**: Fixed a critical issue where standalone `x265` would fail to recognize stdin/stdout pipes (`-`) due to path armoring. Implemented `x265_io_arg` to ensure bare dashes are preserved for standard I/O.
+
+### 🏗️ Workspace Reorganization & Hardening
+
+- **Consolidated Development Workspace**: Migrated and unified scattered developer assets into a dedicated `crates/dev/` directory to eliminate root-level clutter.
+  - **Refactored Test Structure**: Merged `crates/dev/test/` and `crates/dev/tests/` into `crates/dev/edge/`, consolidating all integration and regression assets.
+  - **Centralized Fuzzing**: Moved `fuzz/` and `oss-fuzz/` into `crates/dev/`, updating all relative paths and CI workflows (ClusterFuzzLite) to maintain build stability.
+  - **Scratch & Edge Consolidation**: Relocated the `scratch/` directory to `crates/dev/edge/scratch/`, aligning temporary experimentation with the "edge" testing tier.
+- **Maintenance Script Path Safety**: Updated `check_all.py` and `cache_cleaner.py` to correctly target the reorganized directory structure, ensuring seamless automation and cleanup.
+- **Permanent Regression Suite**: Established a "zero-privacy" regression test suite in `shared_utils/tests/headless_gif_regression.rs` using synthetic assets to ensure long-term stability of the GIF processing pipeline.
 
 ### 🛡️ Media Integrity & Apple Compatibility (MOV Transition)
 
@@ -45,7 +55,8 @@ All notable changes to this project will be documented in this file.
 - **Intelligent Cache Cleaner**: Implemented `PROJECT_ROOT` discovery and automation-aware rebuilds in `cache_cleaner.py`.
 - **Documentation Hygiene**: Workspace-wide audit using `prettier` and `ruff` to resolve formatting and linting warnings in the documentation and maintenance scripts.
 
-## [0.11.2] — 2026-04-18
+
+
 
 ### 🎬 Video Filter & Sampling Hardening
 
@@ -134,7 +145,8 @@ All notable changes to this project will be documented in this file.
 - **Test Standardization**: Migrated diagnostic tools to `scripts/` and verified WebP/JXL duration parsing logic for animated media extraction.
 - **`log_conversion_analyzer.py`**: Hardened directory creation logic for report output to handle relative paths and empty directory strings.
 
-## [0.11.2] — 2026-04-15
+
+
 
 ### ✨ Recent Highlights
 
@@ -421,7 +433,8 @@ All notable changes to this project will be documented in this file.
 - **Workspace Members**: Added `fuzz` crate to workspace members list.
 - **shared_utils**: Added `arbitrary` (optional, feature-gated), `insta`, `proptest`, `tempfile` as dev dependencies; added `[[bench]]` section for `quality_benches`.
 
-## [0.11.2] — 2026-04-05
+
+
 
 ### 🔄 GPU Detection Resilient Caching & Diagnostic Enhancements
 
@@ -1402,17 +1415,6 @@ Completed the multi-phase migration to enforce strict responsibility separation 
 - **GIF Validation Sync**: Improved GIF-to-video SSIM validation by injecting a precision `pad` and `settb/setpts` filter chain to resolve irregular timing drift.
 
 ### 🧠 GIF Complexity Intelligence & GPU Search Enhancement
-
-- **GIF-to-Video Routing Enhancement**: Improved detection of GIFs that should be converted to video formats.
-  - **Large Sparse Canvas Detection**: Added `is_large_sparse_canvas` heuristic in `gif_meme_score.rs` to identify 1080P+ GIFs with long duration (≥2s) and low frame rates (≤6fps or ≤18 frames), automatically marking them for video conversion.
-  - **GPU Search Override**: Implemented `should_use_gpu_for_gif()` in `gpu_coarse_search.rs` to enable GPU coarse search for complex GIFs based on canvas size, density, and meme score metrics.
-  - **Enhanced Logging**: Added detailed diagnostic output showing GIF complexity reasons, scores (total, spatial_bpp, temporal_bpp) during GPU search decisions.
-  - **SSIM Pipeline Hardening (Regression Fix)**: Resolved `EINVAL` filter errors on odd-sized GIFs (e.g., `540x301`) by replacing the legacy "truncation" strategy with a robust "upward padding" strategy (`pad='iw+mod(iw,2)'`) and fixing FFmpeg expression syntax (migrated `%` to `mod()`).
-  - **Timestamp Synchronization**: Injected a `gif_sync` filter chain (`settb=1/1000,setpts=PTS-STARTPTS`) to eliminate validation failures caused by drift in variable-frame-rate animated files.
-  - **Routing Stability**: Restored the missing `is_gif_magic` re-export in `shared_utils`, ensuring stable routing for specialized GIF-to-HEVC pathways.
-  - **Unified Reverse Exploration (Direction Switch)**: Generalized the search "reversal" logic to all media types. Now, any file type (MP4, MKV, GIF, etc.) that hits an upward search plateau will automatically switch to a downward sweep from MAX_CRF for significantly better efficiency on difficult-to-compress content.
-  - **GPU Search Plateau Detection**: Ported stagnation tracking into the Stage 1A GPU search loop. The system now terminates fruitless upward GPU probes early (3 stagnant iterations with <0.5% size delta) to save hardware cycles and trigger earlier CPU fine-tuning.
-  - **Improved Exploration Observability**: Standardized log output from `🔄 GIF Search Direction Switch` to a format-neutral `🔄 Search Direction Switch` for all media formats.
 
 - **Adaptive Upward Search State Machine**: Refined the CRF exploration algorithm with multi-state search cadence control.
   - **New `UpwardSearchCadence` Enum**: Four states (Adaptive, Jogging, Paused, Normal) for fine-grained control over search behavior.

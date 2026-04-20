@@ -193,8 +193,8 @@ pub mod media_passthrough;
 pub mod video_detection;
 pub use media_passthrough::{audio_args_for_container, subtitle_args_for_container};
 
-#[cfg(test)]
-mod parity_tests;
+
+
 
 /// Shared database interface for quality matching.
 pub mod database;

@@ -244,7 +244,7 @@ def show_stats(cache_dir, db_file, log_dir, mfb_progress_dir):
         local_cache_size = get_dir_size(local_cache)
         print(f"   ⚡ Runtime:    {BOLD}{YELLOW}{local_cache_size}{RESET}")
 
-    fuzz_target = PROJECT_ROOT / "fuzz" / "target"
+    fuzz_target = PROJECT_ROOT / "crates" / "dev" / "fuzz" / "target"
     if fuzz_target.is_dir():
         fuzz_size = get_dir_size(fuzz_target)
         print(f"   🧪 Fuzz Build: {BOLD}{YELLOW}{fuzz_size}{RESET}")
@@ -542,10 +542,10 @@ def perform_full_cleanup():
         shutil.rmtree(local_cache, ignore_errors=True)
         print(f"   {GREEN}✅ Runtime cache cleared{RESET}")
 
-    # 8. Fuzzing targets (fuzz/target)
-    fuzz_dir = PROJECT_ROOT / "fuzz"
+    # 8. Fuzzing targets: project_root/crates/dev/fuzz/target/
+    fuzz_dir = PROJECT_ROOT / "crates" / "dev" / "fuzz"
     if (fuzz_dir / "target").is_dir():
-        print(f"{DIM}   Running cargo clean in {fuzz_dir.name}...{RESET}")
+        print(f"{DIM}   Running cargo clean in crates/dev/fuzz...{RESET}")
         try:
             subprocess.run(
                 ["cargo", "clean"], cwd=fuzz_dir, check=True, capture_output=True
