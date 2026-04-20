@@ -58,7 +58,7 @@ def resolve_python_executable() -> str | None:
 
 
 def run_post_cleanup_rebuild(project_root: Path) -> bool:
-    smart_build = project_root / "scripts" / "smart_build.py"
+    smart_build = SCRIPT_DIR / "smart_build.py"
     if not smart_build.is_file():
         print(f"{RED}❌ Error: rebuild script not found: {smart_build}{RESET}")
         return False
