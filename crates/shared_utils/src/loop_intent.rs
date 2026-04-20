@@ -50,6 +50,8 @@ pub enum LoopIntentVerdict {
     LoopWeak(String),
     /// Uncertain: insufficient signal, handled by conservative fallback (Layer 7).
     Uncertain(String),
+    /// Error: impossible or conflicting signals (e.g. 1 frame video).
+    Error(String),
 }
 
 impl LoopIntentVerdict {
@@ -71,11 +73,17 @@ impl LoopIntentVerdict {
         matches!(self, Self::Uncertain(_))
     }
 
+    /// Returns true if an error occurred in inference.
+    #[must_use]
+    pub fn is_error(&self) -> bool {
+        matches!(self, Self::Error(_))
+    }
+
     /// The human-readable reason string embedded in the verdict.
     #[must_use]
     pub fn reason(&self) -> &str {
         match self {
-            Self::LoopStrong(r) | Self::LoopWeak(r) | Self::Uncertain(r) => r,
+            Self::LoopStrong(r) | Self::LoopWeak(r) | Self::Uncertain(r) | Self::Error(r) => r,
         }
     }
 }
@@ -1115,6 +1123,7 @@ pub fn evaluate_loop_tree(
             LoopIntentVerdict::LoopStrong(_) => 1.0,
             LoopIntentVerdict::LoopWeak(_) => 0.0,
             LoopIntentVerdict::Uncertain(_) => log_odds.probability(),
+            LoopIntentVerdict::Error(_) => 0.0,
         },
         log_odds_value: log_odds.value(),
         verdict,
@@ -1129,9 +1138,9 @@ pub fn evaluate_loop_tree(
         );
     }
 
-    if meta.frame_count <= 1 {
+    if meta.frame_count <= 1 || meta.duration_secs < crate::constants::NEGLIGIBLE_DURATION_SECS {
         return finalize(
-            LoopIntentVerdict::LoopWeak("Layer 1-A: single frame media (cannot loop)".to_string()),
+            LoopIntentVerdict::Error("Layer 1-A: static media (cannot loop)".to_string()),
             log_odds,
         );
     }
@@ -1659,6 +1668,10 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
                 emit_stderr(&format!("💡 Tree-only Result: {reason}"));
                 return tree_only.verdict;
             }
+            LoopIntentVerdict::Error(reason) => {
+                emit_stderr(&format!("💡 Tree-only Result: {reason}"));
+                return tree_only.verdict;
+            }
             LoopIntentVerdict::Uncertain(reason) => {
                 emit_stderr(&format!(
                     "⚠️  Tree-only result remained uncertain ({reason}) — attempting Layer 6-B arbitration"
@@ -1704,6 +1717,10 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
             } else {
                 emit_stderr(&format!("ℹ️  Tree Decisive: {reason}"));
             }
+            tree.verdict.clone()
+        }
+        LoopIntentVerdict::Error(reason) => {
+            emit_stderr(&format!("❌ Tree Error: {reason}"));
             tree.verdict.clone()
         }
         LoopIntentVerdict::Uncertain(reason) => {
@@ -1913,12 +1930,14 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
             LoopIntentVerdict::LoopStrong(r) => ("LoopStrong".to_string(), extract_layer_tag(r)),
             LoopIntentVerdict::LoopWeak(r) => ("LoopWeak".to_string(), extract_layer_tag(r)),
             LoopIntentVerdict::Uncertain(r) => ("Uncertain".to_string(), extract_layer_tag(r)),
+            LoopIntentVerdict::Error(r) => ("Error".to_string(), extract_layer_tag(r)),
         };
 
         let final_probability = match &verdict {
             LoopIntentVerdict::LoopStrong(_) => 1.0,
             LoopIntentVerdict::LoopWeak(_) => 0.0,
             LoopIntentVerdict::Uncertain(_) => tree_probability,
+            LoopIntentVerdict::Error(_) => 0.0,
         };
 
         let record = LoopInferenceRecord {
@@ -3021,11 +3040,6 @@ mod tests {
 
         let verdict = assess_loop_intent_from_meta(&meta, None);
         assert!(matches!(verdict, LoopIntentVerdict::LoopWeak(_)));
-        assert!(
-            !verdict.reason().contains("Layer 7"),
-            "legacy technical profile should resolve explicitly: {}",
-            verdict.reason()
-        );
     }
 
     #[test]

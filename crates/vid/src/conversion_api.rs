@@ -505,6 +505,20 @@ pub fn determine_strategy_with_apple_compat(
     let is_loop_intent = loop_verdict.is_keep_gif();
 
     // ══════════════════════════════════════════════════════════════════════════════
+    // LOOP ERROR HANDLING: Skip on impossible or conflicting signals
+    // ══════════════════════════════════════════════════════════════════════════════
+    if let shared_utils::LoopIntentVerdict::Error(reason) = loop_verdict {
+        return ConversionStrategy {
+            target: TargetVideoFormat::Skip,
+            reason: format!("Loop Intent Error: {}", reason),
+            command: String::new(),
+            preserve_audio: false,
+            crf: 0.0,
+            lossless: false,
+        };
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════
     // DEFINITE LOOP INTENT: GIF conversions based on 7-layer decision
     // ══════════════════════════════════════════════════════════════════════════════
 

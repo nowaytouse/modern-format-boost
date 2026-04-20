@@ -6,35 +6,29 @@ All notable changes to this project will be documented in this file.
 
 ## [0.11.2] — 2026-04-20
 
-### 🏗️ Workspace Reorganization & Asset Consolidation (Final Phase)
-- **Centralized Development Workspace**: Migrated and unified scattered developer assets into a dedicated `crates/dev/` directory to eliminate root-level clutter.
-  - **Refactored Test Structure**: Consolidated all integration and regression tests into `crates/dev/edge/rs/`, including internal parity tests previously located in `shared_utils`.
-  - **Consolidated Benchmarks**: Moved all Rust benchmarks to `crates/dev/benches/` and implemented verified `criterion` support for workspace-wide performance tracking.
-  - **Integrated Fuzzing**: Relocated `fuzz/` and `oss-fuzz/` into `crates/dev/`, updating all relative paths and dependency links.
-  - **Resource Categorization**: Organized edge-case media assets into specialized `crates/dev/edge/gifs/` and `crates/dev/edge/images/` subdirectories.
-- **System Asset Optimization**:
-  - **SQL Schema Consolidation**: Isolated all PostgreSQL and SQLite schema files to `crates/shared_utils/src/sql/` for better maintainability.
-  - **Environment Standardization**: Cleaned up redundant virtual environments and standardized local Python dependencies into a single project-level `.venv`.
-- **Infrastructure & Git Hygiene**:
-  - **Hardened .gitignore**: Implemented recursive exclusions for fuzzing corpora, temporary test snapshots, and local logs.
-  - **Diagnostic Cleanup**: Removed obsolete clippy output and temporary diagnostic documentation.
-
 ### 🎬 GPU Coarse Search & Engine Unification
+- **Engine Unification**: Decommissioned legacy modular conversion functions (`execute_video_conversion`, `simple_convert`) in favor of a unified, parallelized GPU exploration engine in `shared_utils`.
+- **Strict Quality Thresholds (Ultimate Mode)**: Significant tightening of quality gates in `gpu_coarse_search.rs`.
+  - **VMAF-Y**: Allowed drop from baseline reduced from `4.0` to **`2.0`**.
+  - **PSNR-UV**: Allowed drop from baseline reduced from `4.0` to **`1.5`**.
+  - **CAMBI**: Banding growth tolerance reduced from `2.0+` to **`1.0/1.5`**.
+- **Dynamic Mapping Calibration**: Refined the GPU-to-CPU CRF projection logic to ensure deterministic search boundaries across varying hardware architectures.
 
-- **Engine Unification**: Successfully decommissioned legacy high-level conversion functions (`execute_video_conversion`, `simple_convert`). All video processing now funnels through a unified, parallelized GPU exploration engine in `shared_utils`.
-- **Strict Quality Thresholds**: Significant tightening of Ultimate mode quality bounds in `gpu_coarse_search.rs`.
-  - **VMAF-Y**: Allowed drop from baseline reduced from `4.0` to `2.0`.
-  - **PSNR-UV**: Allowed drop from baseline reduced from `4.0` to `1.5`.
-- **Dynamic Mapping Calibration**: Enhanced the GPU-to-CPU CRF mapping logic to more accurately project search boundaries across different hardware vendors.
+- **Loop Intent Detection 2.0 & GIF Stabilization**:
+  - **Native GIF Metadata Injection**: Enhanced the strategy engine to perform direct byte-level `scan_gif_headers` on the `current_path`. This prevents reliance on stale `ffprobe` metadata and ensures verified frame counts for sensitive GIF-to-Video paths.
+  - **Error Propagation (Layer 1-A)**: Introduced a new **`LoopIntentVerdict::Error`** state. Assets with `frame_count <= 1` or negligible duration are now explicitly identified as "static media" and skipped, preventing illegitimate loop analysis for non-animated content.
+  - **GIF Pipeline Hardening**: Resolved a critical bug where multi-frame GIFs with malformed GCE blocks were misidentified as single-frame. Implemented robust frame counting via direct binary scanning of Image Descriptor blocks.
+  - **Layer 1-B2 Priority (Sticker Heuristic)**: New auditable bypass for small (≤1.2M px), short (≤5s), and silent media, ensuring immediate high-efficiency GIF/AV1 conversion regardless of KNN noise.
+- **Physical Frame Alignment**: Synchronized `LoopMeta` attributes with scanned physical frame counts, eliminating duration-based heuristic estimation.
 
-- **Loop Intent Detection 2.0**: Major overhaul of the 7-layer decision tree in `shared_utils`.
-  - **Layer 6-B Arbitration**: Introduced directional arbitration to resolve inconclusive KNN results based on high-signal metadata (e.g., loop closure scores).
-  - **Explicit Early Exit**: Hardened Layers 1-5 to resolve common media profiles (Stickers, Memes) earlier, reducing reliance on Layer 7 fallbacks.
-  - **Diagnostic Transparency**: Improved reasoning strings in `LoopIntentVerdict` for better auditability of the classification logic.
-  - **Animated Pipeline Alignment**: Synchronized `animated_image.rs` with the `conversion_api` fast-path logic. Native GIFs now bypass heavy `ffprobe` analysis via direct header scanning, significantly accelerating classification for short assets. Added regression testing for ultra-short GIF fragments.
-  - **GIF Pipeline Stabilization**: Resolved a critical bug where multi-frame GIFs with missing or malformed Graphic Control Extension (GCE) blocks were misidentified as single-frame media. Implemented robust frame counting in `media_meta_utils.rs` by directly parsing Image Descriptor blocks.
-- **X265Builder Path Hardening**: Fixed a critical issue where standalone `x265` would fail to recognize stdin/stdout pipes (`-`) due to path armoring. Implemented `x265_io_arg` to ensure bare dashes are preserved for standard I/O.
+### 🛡️ Encoder Path Hardening & Apple Compatibility
+- **X265Builder Pipe Preservation**: Implemented `x265_io_arg` to resolve a bug where path-armoring caused standalone `x265` to reject stdin/stdout dashes (`-`).
+- **FFmpeg 8.1 Stability**: Resolved Y4M header failures for 10-bit color pipes (e.g., `yuv420p10le`) by automatically injecting `-strict -1` for non-legacy formats.
+- **HEVC MOV Standardization**: Finalized the transition to `.mov` (TargetVideoFormat::HevcMov) for all Apple-compatible outputs, supporting native metadata and system-level tagging.
 
+### 🏗️ Workspace Safety & Infrastructure
+- **SQL Embedded Schemas**: Centralized all PostgreSQL/SQLite migration files to `crates/shared_utils/src/sql/` and integrated them via `include_str!` for robust, data-safe binary deployments.
+- **Audited Numeric Safety**: Massive expansion of `numeric_cast.rs`, replacing unchecked `as` casts workspace-wide to prevent overflow/wrap-around bugs in media processing.
 
 ### 🛡️ Media Integrity & Apple Compatibility (MOV Transition)
 
@@ -42,9 +36,7 @@ All notable changes to this project will be documented in this file.
 - **Total File Size Gate**: Compression accept/reject decisions are now anchored to the final output file size, ensuring that container overhead gains are correctly factored into the "success" metric.
 - **Fail Reporting Cleanup**: Skip reasons and protection logs now report total file size regressions directly. Stream-level size data is retained as an internal diagnostic signal in debug logs.
 
-### ⚖️ Global Numerical Safety & API Cleanup
-
-- **Audited Cast Hub**: Massive expansion of `numeric_cast.rs` with safe `raw` casting helpers, eliminating high-risk `as` casts workspace-wide.
+### ⚖️ API Cleanup & Subsystem Resilience
 - **API Streamlining**: Cleaned up public exports in `vid/src/lib.rs` and `img/src/lib.rs`, removing obsolete helper functions in favor of the structured exploration API.
 - **Animated Pipeline Resilience**: Refactored `animated_image.rs` and `conversion_api.rs` to handle codec-specific failures (VP8/VP9/Alpha) more gracefully.
 
