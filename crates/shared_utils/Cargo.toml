@@ -15,9 +15,7 @@ proptest = { workspace = true }
 insta    = { workspace = true }
 criterion = { workspace = true }
 
-[[bench]]
-name = "quality_benches"
-harness = false
+
 
 [dependencies]
 anyhow = { workspace = true }

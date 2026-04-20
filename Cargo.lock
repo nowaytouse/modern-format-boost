@@ -696,6 +696,7 @@ dependencies = [
  "blake3",
  "chrono",
  "clap",
+ "criterion",
  "img",
  "insta",
  "proptest",

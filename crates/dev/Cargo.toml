@@ -22,6 +22,9 @@ proptest = { workspace = true }
 insta = { workspace = true }
 serial_test = "3.1.1"
 
+[dev-dependencies]
+criterion = { workspace = true }
+
 [[test]]
 name = "integration_tests"
 path = "edge/rs/integration_tests.rs"
@@ -85,4 +88,9 @@ path = "edge/rs/test_ultrahdr_real_file_final.rs"
 [[test]]
 name = "parity_tests"
 path = "edge/rs/parity_tests.rs"
+
+[[bench]]
+name = "quality_benches"
+path = "benches/quality_benches.rs"
+harness = false
 
