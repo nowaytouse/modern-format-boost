@@ -1151,6 +1151,8 @@ pub fn get_animation_duration_for_path(path: &Path) -> Option<f32> {
 }
 
 fn get_animation_duration(path: &Path) -> Option<f32> {
+    let mut final_duration = None;
+
     // Special handling for JXL: FFmpeg's jpegxl_anim decoder is incomplete
     // Convert to temporary APNG first, then probe duration
     if path
@@ -1159,24 +1161,14 @@ fn get_animation_duration(path: &Path) -> Option<f32> {
         .as_deref()
         == Some("jxl")
     {
-        if let Some(duration) = try_jxl_via_apng(path) {
-            return Some(duration);
-        }
-    }
-
-    if let Some(duration) = try_ffprobe_json(path) {
-        return Some(duration);
-    }
-
-    if let Some(duration) = try_ffprobe_default(path) {
-        return Some(duration);
-    }
-
-    if let Some(duration) = try_imagemagick_identify(path) {
-        return Some(duration);
-    }
-
-    if path
+        final_duration = try_jxl_via_apng(path);
+    } else if let Some(duration) = try_ffprobe_json(path) {
+        final_duration = Some(duration);
+    } else if let Some(duration) = try_ffprobe_default(path) {
+        final_duration = Some(duration);
+    } else if let Some(duration) = try_imagemagick_identify(path) {
+        final_duration = Some(duration);
+    } else if path
         .extension()
         .map(|e| e.to_string_lossy().to_lowercase())
         .as_deref()
@@ -1184,19 +1176,44 @@ fn get_animation_duration(path: &Path) -> Option<f32> {
     {
         if let Ok(data) = std::fs::read(path) {
             if let Some(secs) = crate::image_formats::webp::duration_secs_from_bytes(&data) {
-                return Some(secs);
+                final_duration = Some(secs);
             }
         }
     }
 
-    if let Some(ext) = path.extension() {
-        if ext.to_str().unwrap_or("").to_lowercase() == "gif" {
+    if let Some(d) = final_duration {
+        // Enforce the single-frame static image check for ALL modern formats (WebP, AVIF, HEIC, etc.)
+        // If the duration is suspiciously short (e.g., < 0.25s) but not already 0, we run an exact packet count.
+        // A duration of 0.04s is exactly 1 frame at 25fps.
+        if d > 0.0 && d < 0.25 {
             if let Some(frame_count) = try_get_frame_count(path) {
                 if frame_count <= 1 {
-                    log_eprintln!("🔍 Detected static GIF (1 frame): {}", path.display());
+                    log_eprintln!(
+                        "🔍 Detected static media (1 frame despite non-zero duration): {}",
+                        path.display()
+                    );
                     return Some(0.0);
                 }
             }
+        }
+        return Some(d);
+    }
+
+    // If all else fails and it's a GIF, do a raw frame count
+    if path
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .as_deref()
+        == Some("gif")
+    {
+        if let Some(frame_count) = try_get_frame_count(path) {
+            if frame_count <= 1 {
+                log_eprintln!("🔍 Detected static GIF (1 frame): {}", path.display());
+                return Some(0.0);
+            }
+            // For a valid animated GIF without explicit duration metadata,
+            // we fallback to 10fps (0.1s per frame) as a rough estimate
+            return Some((frame_count as f32) * 0.1);
         }
     }
 

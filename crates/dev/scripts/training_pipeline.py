@@ -8,11 +8,11 @@ scikit-learn KNeighborsClassifier with cross-validated hyperparameter search,
 and exports optimized feature statistics back to PostgreSQL.
 
 Usage:
-    python scripts/training_pipeline.py train
-    python scripts/training_pipeline.py evaluate
-    python scripts/training_pipeline.py export-stats
-    python scripts/training_pipeline.py ingest /path/to/dataset
-    python scripts/training_pipeline.py report
+    python crates/dev/scripts/training_pipeline.py train
+    python crates/dev/scripts/training_pipeline.py evaluate
+    python crates/dev/scripts/training_pipeline.py export-stats
+    python crates/dev/scripts/training_pipeline.py ingest /path/to/dataset
+    python crates/dev/scripts/training_pipeline.py report
 """
 
 from __future__ import annotations

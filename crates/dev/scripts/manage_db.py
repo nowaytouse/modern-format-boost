@@ -37,7 +37,7 @@ def check_deps():
     if not command_exists("psql"):
         print_c(
             RED,
-            "❌ PostgreSQL not found. Please run 'python3 scripts/install_deps.py' first.",
+            "❌ PostgreSQL not found. Please run 'python3 crates/dev/scripts/install_deps.py' first.",
         )
         sys.exit(1)
 

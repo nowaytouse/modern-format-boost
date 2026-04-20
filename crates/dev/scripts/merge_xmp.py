@@ -479,7 +479,7 @@ def main():
         target_dir = Path(sys.argv[1]).resolve()
     else:
         print(f"{RED}❌ Error: Please provide a target directory.{RESET}")
-        print("Usage: python3 scripts/merge_xmp.py /path/to/files")
+        print("Usage: python3 crates/dev/scripts/merge_xmp.py /path/to/files")
         sys.exit(1)
 
     print_header()

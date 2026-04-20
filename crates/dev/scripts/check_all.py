@@ -84,7 +84,7 @@ def get_repo_root() -> Path:
         ).strip()
         return Path(root)
     except Exception:
-        return Path(__file__).parent.parent.resolve()
+        return Path(__file__).parent.parent.parent.resolve()
 
 
 def format_duration(seconds: float) -> str:
@@ -1081,7 +1081,7 @@ def main() -> None:
         # ── Markdown / JSON / YAML / TOML ─────────────────────────────────────────
         if md_files and has_command("markdownlint-cli2", verbose=args.verbose):
             config_path = os.path.join(
-                repo_root, "scripts/config/.markdownlint-cli2.jsonc"
+                repo_root, "crates/dev/scripts/config/.markdownlint-cli2.jsonc"
             )
             run_step(
                 tracker,

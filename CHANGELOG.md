@@ -26,9 +26,13 @@ All notable changes to this project will be documented in this file.
 - **FFmpeg 8.1 Stability**: Resolved Y4M header failures for 10-bit color pipes (e.g., `yuv420p10le`) by automatically injecting `-strict -1` for non-legacy formats.
 - **HEVC MOV Standardization**: Finalized the transition to `.mov` (TargetVideoFormat::HevcMov) for all Apple-compatible outputs, supporting native metadata and system-level tagging.
 
-### 🏗️ Workspace Safety & Infrastructure
-- **SQL Embedded Schemas**: Centralized all PostgreSQL/SQLite migration files to `crates/shared_utils/src/sql/` and integrated them via `include_str!` for robust, data-safe binary deployments.
-- **Audited Numeric Safety**: Massive expansion of `numeric_cast.rs`, replacing unchecked `as` casts workspace-wide to prevent overflow/wrap-around bugs in media processing.
+### 🏗️ Workspace Refactoring & Final Consolidation
+- **Zero-Root Script Consolidation**: Successfully migrated all maintenance and utility scripts (15+ files) to `crates/dev/scripts/`, eliminating root-level script clutter.
+  - **Path Refactoring**: Updated `.envrc`, the macOS `.app` bundle internals, and `shared_utils::database` to resolve all hardcoded path references to the relocated assets.
+  - **Tooling Resilience**: Ensured that `check_all.py` and `cache_cleaner.py` remain fully functional in their new standardized locations.
+- **Test Suite Extension**:
+  - **WebP Edge Analysis**: Added `test_webp.rs` and associated media assets to the `dev/edge` tier to enhance the verification of complex WebP animation structures.
+  - **Redundant Resource Cleanup**: Purged loose diagnostic logs and obsolete test scripts (`scripts/useless/`) to maintain repository hygiene.
 
 ### 🛡️ Media Integrity & Apple Compatibility (MOV Transition)
 

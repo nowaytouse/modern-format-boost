@@ -8,7 +8,7 @@ APP_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 PROJECT_ROOT="$(dirname "$APP_DIR")"
 export LC_ALL=en_US.UTF-8
 export LANG=en_US.UTF-8
-PROCESSOR_SCRIPT="$PROJECT_ROOT/scripts/drag_and_drop_processor.py"
+PROCESSOR_SCRIPT="$PROJECT_ROOT/crates/dev/scripts/drag_and_drop_processor.py"
 PYTHON_BIN="$PROJECT_ROOT/.venv/bin/python"
 APP_PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 

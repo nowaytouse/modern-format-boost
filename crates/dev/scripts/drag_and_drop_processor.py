@@ -57,7 +57,8 @@ else:
     RED = GREEN = YELLOW = BLUE = MAGENTA = CYAN = WHITE = BOLD = DIM = RESET = ""
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
-PROJECT_ROOT = SCRIPT_DIR.parent
+PROJECT_ROOT = SCRIPT_DIR.parent.parent.parent
+
 
 IMGQUALITY_HEVC = PROJECT_ROOT / "target" / "release" / "img"
 VIDQUALITY_HEVC = PROJECT_ROOT / "target" / "release" / "vid"
@@ -993,7 +994,7 @@ def process_images():
 
         if not rebuild_tools():
             print(
-                f"{YELLOW}   Manual rebuild required: python3 scripts/smart_build.py{RESET}"
+                f"{YELLOW}   Manual rebuild required: python3 crates/dev/scripts/smart_build.py{RESET}"
             )
             print(f"{DIM}   Or drag/drop again after build completes.{RESET}\n")
             sys.exit(1)
@@ -1045,7 +1046,7 @@ def process_videos():
 
         if not rebuild_tools():
             print(
-                f"{YELLOW}   Manual rebuild required: python3 scripts/smart_build.py{RESET}"
+                f"{YELLOW}   Manual rebuild required: python3 crates/dev/scripts/smart_build.py{RESET}"
             )
             print(f"{DIM}   Or drag/drop again after build completes.{RESET}\n")
             sys.exit(1)

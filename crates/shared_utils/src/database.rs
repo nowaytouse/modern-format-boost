@@ -586,7 +586,7 @@ pub fn open_pg_client() -> Result<Client> {
                 crate::progress_mode::emit_stderr(&msg);
                 crate::progress_mode::emit_stderr("💡 System running in [LEGACY LIMITED MODE] (Heuristic Tree only, no KNN/Learning).");
                 crate::progress_mode::emit_stderr(
-                    "💡 To enable full intelligence, run: 'python3 scripts/manage_db.py setup'",
+                    "💡 To enable full intelligence, run: 'python3 crates/dev/scripts/manage_db.py setup'",
                 );
             }
             Err(e).with_context(|| format!("Failed to connect to PostgreSQL: {connstr}"))
@@ -776,7 +776,7 @@ fn lookup_similar_samples_inner(
         Ok(c) => c,
         Err(e) => {
             log::warn!("⚠️ PostgreSQL connection failed (graceful fallback): {e}");
-            log::warn!("💡 Suggestion: Run 'python3 scripts/manage_db.py setup' to initialize and start the local database service.");
+            log::warn!("💡 Suggestion: Run 'python3 crates/dev/scripts/manage_db.py setup' to initialize and start the local database service.");
             return Ok(None);
         }
     };
