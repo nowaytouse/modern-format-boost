@@ -153,6 +153,28 @@ Since the file is `include_str!`-embedded at compile time, a parse failure means
 
 **Fix**: Changed `unwrap_or_default()` to `expect("embedded meme_keywords.json is malformed")`.
 
+#### Residual Fixes
+- **`calculate_micro_nudges` stale meta**: Now uses `&mutable_meta` (post-penetration-detection)
+  instead of the original `meta`, ensuring nudge signals are consistent with the decision tree.
+- **`has_audible_audio` deduplicated**: Moved to `DerivedLoopSignals` struct, eliminating
+  identical computations in `evaluate_loop_tree` and `evaluate_video_tree`.
+- **Frame count signal fps-normalized**: The `>500 frames` convert signal in Layer 6 now only
+  triggers when `fps < 24`, preventing false penalties on high-fps short loops (e.g., Live2D
+  60fps animations at 10s = 600 frames).
+- **Test `set_var`/`remove_var` wrapped in `unsafe`**: Aligned with Rust 1.81+ safety requirements.
+- **Test assertions aligned to 6s/15s boundaries**: All test durations and signal values updated
+  to be valid under the new hard veto architecture.
+
+### ⚖️ Bias Correction — Reduced LoopStrong Structural Lean
+
+- **`TREE_DECISION_LOG_ODDS_THRESHOLD`**: Raised from `0.95` → `1.05`, requiring marginally
+  stronger accumulated evidence for a `LoopStrong` verdict.
+- **Layer 6 audible audio signal**: Added `+0.22` convert-side weight for audible audio tracks
+  (previously completely absent from Layer 6 arbitration despite being the strongest single
+  video indicator).
+- **Layer 6 high frame count signal**: Added fps-normalized `+0.04–0.14` convert-side weight
+  for `>500 frames @ <24fps` (protecting Live2D 60fps loops from false penalties).
+
 
 
 
