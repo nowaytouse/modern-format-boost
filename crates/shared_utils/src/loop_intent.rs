@@ -1207,41 +1207,64 @@ pub fn evaluate_loop_tree(
         );
     }
 
-    // ── Layer 0: Duration Dispatcher (Absolute Boundaries & Bias injection) ────
-    // duration_secs >= 30.0 is the absolute upper bound for animations in video containers.
-    // duration_secs <= 2.0 is the absolute lower bound (UltraShort).
-    let tier = meta.tier();
-    let has_audible_audio = meta.has_audio && !meta.audio_is_silent.unwrap_or(false);
+    // ── Layer 0-EX: Extreme Duration Hard Veto ─────────────────────────────────
+    // This is the ONLY place in the entire system where duration alone has
+    // absolute veto power without going through the log-odds pipeline.
+    //
+    // Design rationale:
+    //   • ≤ 2.0s silent: no real-world video content exists at this duration that
+    //     a human would intend as "video". Even screen recordings become GIFs.
+    //     No file size, resolution, or metadata signal overrides this.
+    //   • ≥ 30.0s: no real-world sticker, meme, or looping animated image exists
+    //     at this duration. Even "looping" music videos are videos.
+    //     No loop_count, transparency, or platform marker overrides this.
+    //
+    // The buffer zones (2–4s and 20–30s) provide graduated defense — they inject
+    // a very strong additional bias on top of the tier bias to make it extremely
+    // difficult (but not impossible) for other signals to flip the verdict.
 
-    // Absolute Veto: Long assets are videos.
-    if meta.duration_secs >= crate::constants::ANIMATION_CLIP_THRESHOLD_SECS && !meta.is_native_gif {
-        return finalize(
-            LoopIntentVerdict::LoopWeak(format!(
-                "Layer 0: duration {:.2}s >= 30s threshold (Absolute Video Boundary)",
-                meta.duration_secs
-            )),
-            log_odds,
-        );
-    }
+    let has_audible_audio_global = meta.has_audio && !meta.audio_is_silent.unwrap_or(false);
 
-    // Absolute Veto: Ultra-short silent assets are animations.
-    if tier == DurationTier::UltraShort && !has_audible_audio {
+    // Hard veto: Extreme short (≤ 2.0s, silent)
+    if meta.duration_secs <= crate::constants::EXTREME_SHORT_ABSOLUTE_LIMIT_SECS
+        && !has_audible_audio_global
+    {
         return finalize(
             LoopIntentVerdict::LoopStrong(format!(
-                "Layer 0: ultra-short silent asset {:.2}s (Absolute Animation Boundary)",
-                meta.duration_secs
+                "Layer 0-EX (Hard Veto): extreme-short duration {:.2}s ≤ {:.1}s — \
+                 definitively animated image regardless of all other signals",
+                meta.duration_secs,
+                crate::constants::EXTREME_SHORT_ABSOLUTE_LIMIT_SECS,
             )),
             log_odds,
         );
     }
 
+    // Hard veto: Extreme long (≥ 30.0s) — no exceptions, even for silent assets
+    if meta.duration_secs >= crate::constants::EXTREME_LONG_ABSOLUTE_LIMIT_SECS {
+        return finalize(
+            LoopIntentVerdict::LoopWeak(format!(
+                "Layer 0-EX (Hard Veto): extreme-long duration {:.2}s ≥ {:.1}s — \
+                 definitively video regardless of all other signals",
+                meta.duration_secs,
+                crate::constants::EXTREME_LONG_ABSOLUTE_LIMIT_SECS,
+            )),
+            log_odds,
+        );
+    }
+
+    // ── Layer 0: Duration Dispatcher (Bias injection, NOT fast-path exit) ────────
+    // Short duration is the strongest non-extreme signal, but it injects a massive
+    // bias into log-odds rather than bypassing the full analysis pipeline.
+    // This ensures that even a short asset with anomalous structural signals
+    // (e.g. scene cuts, complex motion) can still be downgraded by later layers.
     let is_short_tier = matches!(
         tier,
         DurationTier::UltraShort | DurationTier::Short | DurationTier::MediumLong
     );
 
     if is_short_tier {
-        if has_audible_audio {
+        if has_audible_audio_global {
             // Audible audio in a short asset is an extremely strong anti-loop signal,
             // but we still let the full tree run so structural signals can be logged.
             log_odds.add(-crate::constants::LOG_ODDS_BIAS_DEFINITIVELY_LONG);
@@ -1254,11 +1277,32 @@ pub fn evaluate_loop_tree(
                 DurationTier::MediumLong => log_odds.add(crate::constants::LOG_ODDS_BIAS_MEDIUM_LONG),
                 _ => {}
             }
+            // Buffer zone: 2–4s gets additional pro-loop bias (near the extreme-short veto)
+            if meta.duration_secs > crate::constants::EXTREME_SHORT_ABSOLUTE_LIMIT_SECS
+                && meta.duration_secs <= crate::constants::EXTREME_SHORT_BUFFER_UPPER_SECS
+            {
+                log_odds.add(crate::constants::EXTREME_SHORT_BUFFER_BIAS);
+            }
+        }
+    } else {
+        // Long tiers: apply graduated anti-loop bias
+        match tier {
+            DurationTier::Long => log_odds.add(crate::constants::LOG_ODDS_BIAS_LONG),
+            DurationTier::VeryLong => log_odds.add(crate::constants::LOG_ODDS_BIAS_VERY_LONG),
+            DurationTier::DefinitivelyLong => {
+                log_odds.add(crate::constants::LOG_ODDS_BIAS_DEFINITIVELY_LONG)
+            }
+            _ => {}
+        }
+        // Buffer zone: 20–30s gets additional anti-loop bias (approaching extreme-long veto)
+        if meta.duration_secs >= crate::constants::EXTREME_LONG_BUFFER_LOWER_SECS {
+            log_odds.add(-crate::constants::EXTREME_LONG_BUFFER_BIAS);
         }
     }
 
     // ── Stage 1: Specialized Tree Dispatch ─────────────────────────────────────
-    // Long assets proceed to specialized trees based on container family
+    // Extreme-zone assets have already exited. All remaining assets proceed to
+    // the specialized tree which accumulates further weighted evidence.
     if is_image || meta.is_native_gif {
         evaluate_image_tree(meta, &derived, &thresholds, log_odds, tier)
     } else {
@@ -1321,13 +1365,8 @@ fn evaluate_image_tree(
         }
     }
 
-    // General Signal Fusion for Images
-    match tier {
-        DurationTier::UltraShort => log_odds.add(crate::constants::LOG_ODDS_BIAS_ULTRA_SHORT),
-        DurationTier::Short => log_odds.add(crate::constants::LOG_ODDS_BIAS_SHORT),
-        DurationTier::MediumLong => log_odds.add(crate::constants::LOG_ODDS_BIAS_MEDIUM_LONG),
-        _ => {}
-    }
+    // Note: tier-based log-odds bias is applied by the top-level evaluate_loop_tree
+    // dispatcher (including buffer zones) before dispatching here. Do not re-apply.
 
     evaluate_kinetics_and_physics(meta, derived, thresholds, &mut log_odds);
     apply_structural_signals(meta, derived, thresholds, &mut log_odds, true, false);
@@ -1470,17 +1509,8 @@ fn evaluate_video_tree(
         );
     }
 
-    // Short silent video signal fusion
-    match tier {
-        DurationTier::UltraShort => log_odds.add(crate::constants::LOG_ODDS_BIAS_ULTRA_SHORT),
-        DurationTier::Short => log_odds.add(crate::constants::LOG_ODDS_BIAS_SHORT),
-        DurationTier::MediumLong => log_odds.add(crate::constants::LOG_ODDS_BIAS_MEDIUM_LONG),
-        DurationTier::Long => log_odds.add(crate::constants::LOG_ODDS_BIAS_LONG),
-        DurationTier::VeryLong => log_odds.add(crate::constants::LOG_ODDS_BIAS_VERY_LONG),
-        DurationTier::DefinitivelyLong => {
-            log_odds.add(crate::constants::LOG_ODDS_BIAS_DEFINITIVELY_LONG)
-        }
-    }
+    // Note: tier-based log-odds bias is applied by the top-level evaluate_loop_tree
+    // dispatcher (including buffer zones) before dispatching here. Do not re-apply.
 
     evaluate_kinetics_and_physics(meta, derived, thresholds, &mut log_odds);
     apply_structural_signals(meta, derived, thresholds, &mut log_odds, false, true);

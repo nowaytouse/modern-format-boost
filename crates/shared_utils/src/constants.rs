@@ -89,6 +89,35 @@ pub const LOG_ODDS_BIAS_LONG: f64 = -1.0;
 pub const LOG_ODDS_BIAS_VERY_LONG: f64 = -2.0;
 pub const LOG_ODDS_BIAS_DEFINITIVELY_LONG: f64 = -3.0;
 
+// --- Extreme Duration Hard-Veto Boundaries ---
+//
+// These are the ONLY two conditions where duration alone has absolute veto power.
+// All other thresholds (Short, MediumLong, etc.) only inject log-odds bias.
+//
+// Architecture rule: NO signal outside of these two zones can override the verdict
+// by itself — it must still win through log-odds accumulation.
+
+/// Assets at or below this duration are definitively animated images, regardless of
+/// file size, resolution, or any metadata signal. (2.0s — the UltraShort boundary)
+pub const EXTREME_SHORT_ABSOLUTE_LIMIT_SECS: f64 = DURATION_TIER_ULTRA_SHORT_LIMIT;
+
+/// Assets at or above this duration are definitively video, regardless of any
+/// metadata signal (loop_count, transparency, platform markers, etc.)
+/// Set to 30.0s — empirically, no real-world looping sticker or meme exceeds this.
+pub const EXTREME_LONG_ABSOLUTE_LIMIT_SECS: f64 = 30.0;
+
+/// Buffer zone below the extreme-short boundary (2–4s). Assets in this window get
+/// an additional strong pro-loop bias on top of their tier bias.
+pub const EXTREME_SHORT_BUFFER_UPPER_SECS: f64 = 4.0;
+/// Log-odds bonus applied in the extreme-short buffer zone (2–4s).
+pub const EXTREME_SHORT_BUFFER_BIAS: f64 = 1.0;
+
+/// Buffer zone above the extreme-long boundary (20–30s). Assets in this window get
+/// an additional strong anti-loop bias on top of their tier bias.
+pub const EXTREME_LONG_BUFFER_LOWER_SECS: f64 = 20.0;
+/// Log-odds penalty applied in the extreme-long buffer zone (20–30s).
+pub const EXTREME_LONG_BUFFER_BIAS: f64 = 1.5;
+
 /// Upper bound on `width * height` for **GIF** assets.
 ///
 /// Refers to [`crate::loop_intent::evaluate_loop_tree`]: a silent, sticker-class canvas is treated as

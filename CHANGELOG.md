@@ -6,22 +6,92 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### 🛡️ Loop Intent System — Zero-Trust Architecture (v2)
+
+This release represents a fundamental architectural shift in the loop intent judgment system.
+The system now operates on a **zero-trust-metadata** principle: no metadata signal (loop count,
+file extension, platform markers, transparency flag, etc.) can produce an immediate verdict on
+its own. All non-duration evidence is reduced to weighted log-odds contributions that must
+overcome accumulated counter-evidence to flip a verdict.
+
+#### Extreme Duration Hard Veto (Layer 0-EX)
+Two absolute boundaries have been established as the **only** signals in the system with true
+one-shot authority. These are physical reality constraints, not heuristics:
+
+- **≤ 2.0s (silent) → `LoopStrong` (Hard Veto)**: No real-world intentional "video" exists at
+  this duration. Even screen recordings and UI demos are better served as animated images.
+  No file size, resolution, pixel count, or metadata signal can override this.
+- **≥ 30.0s → `LoopWeak` (Hard Veto)**: No real-world looping sticker, meme, or animated image
+  exists at this duration. Even "looping background" videos are videos.
+  No `loop_count=0`, transparency, or platform marker can override this.
+
+#### Buffer Zone Graduated Defense
+Two graduated buffer zones provide additional robustness around the extreme boundaries:
+- **2–4s (Pro-Loop Buffer)**: Silent assets in this window receive an additional `+1.0` log-odds
+  bonus on top of their tier bias, making it extremely difficult for any anti-loop signal to
+  flip a verdict to `LoopWeak` at these durations.
+- **20–30s (Anti-Loop Buffer)**: Assets in this window receive an additional `-1.5` log-odds
+  penalty on top of their tier bias, making it extremely difficult for pro-loop signals (e.g.,
+  `loop_count=0`, transparency) to produce a `LoopStrong` verdict.
+
+#### Tier Bias Centralization
+The per-tier log-odds bias injection (UltraShort → +1.5, Short → +0.5, Long → -1.0, etc.) has
+been centralized into the top-level `evaluate_loop_tree` dispatcher. Sub-trees
+(`evaluate_image_tree`, `evaluate_video_tree`) no longer re-apply tier bias, eliminating
+double-counting that previously inflated scores for image-family containers.
+
+#### Metadata Signal Downgrade (Zero-Trust)
+All formerly "immediate exit" logic paths in the decision tree have been converted to weighted
+log-odds contributions:
+
+| Former Immediate Exit | Signal Type | Now |
+|---|---|---|
+| `loop_count=0` → `LoopStrong` | Container metadata | Weighted bonus (decays with duration) |
+| `loop_count=1` → `LoopWeak` | Container metadata | Weighted penalty |
+| Transparency present → `LoopStrong` | Metadata flag | `TRANSPARENCY_POSITIVE_LOG_ODDS × 2` bonus |
+| GIF + small canvas → `LoopStrong` | Extension + dimensions | `COMPACT_SILENT_POSITIVE_LOG_ODDS` bonus |
+| Audible audio → `LoopWeak` (absolute) | Audio track | Tier-modulated penalty (smaller for UltraShort) |
+| Platform marker (GIPHY, etc.) → `LoopStrong` | App extension tag | `PLATFORM_MARKER_POSITIVE_LOG_ODDS` bonus |
+| Short silent WebM → `LoopStrong` | Extension + silence | `COMPACT_SILENT_POSITIVE_LOG_ODDS` bonus |
+| Dimensional Sticker → `LoopStrong` | Dimensions + UltraShort | `COMPACT_SILENT_POSITIVE_LOG_ODDS` bonus |
+| Dev override (long silent) → `LoopWeak` | ENV flag + duration | Strong negative bias (not hard exit) |
+
+The only remaining immediate exits are physically impossible inputs:
+- `frame_count ≤ 1` → `Error` (cannot loop, physical impossibility)
+- `duration < 0.01s` (non-GIF) → `Error` (degenerate, physical impossibility)
+- `duration ≤ 2.0s` (silent) → `LoopStrong` (extreme short hard veto)
+- `duration ≥ 30.0s` → `LoopWeak` (extreme long hard veto)
+
+#### Design Principle: "File Size Cannot Vote"
+Per architectural policy, file size (even extremely large) has **no one-shot authority** when
+duration is extreme. A 500 MB, 4K file that is 1.5s long is an animated image. A 200 KB file
+that is 35s long is a video. Duration is the ground truth; file size is only a soft signal that
+contributes to the log-odds accumulation for assets in the gray zone (2–30s).
+
 ### 🔬 Penetrating Content Detection System (Hardened v3)
-- **Absolute Physical Verification**:
-    - **Absolute Frame Counting**: Replaced metadata-based counting with **FFmpeg Physical Decoding Summary**. Uses `-fps_mode passthrough` to force complete physical decoding, ensuring zero-deviation ground truth regardless of container deceptive tactics.
-    - **Stratified Transparency Sampling**: Implemented a two-phase check (Start/Middle/End sampling + Full Decode Fallback) using the `stats` filter to accurately detect non-linear or frame-specific alpha channels.
-- **Zero-Trust Loop Intent Architecture (Hardened)**:
-    - **Duration Veto (Physical Redlines)**: Established absolute boundaries where duration has final say:
-        - **Assets >= 30s**: Forced to video routing (LoopWeak) to prevent high-resource GIF/WebP encoding for long clips.
-        - **Silent Assets <= 2s**: Forced to animation routing (LoopStrong) to immediately capture micro-stickers and transient bursts.
-    - **Weighted Metadata**: All non-physical "certificates" (`loop_count=0`, platform markers, container extensions) are now demoted to weighted Log-Odds signals. They can no longer one-shot a verdict; they must be corroborated by structural analysis.
-    - **Mandatory Structural Analysis**: All assets (except those hitting absolute duration redlines) now undergo full kinetic, loop-closure, and periodicity analysis (Layer 3/4).
-- **Audio Silence Detection**: Uses `volumedetect` with full-stream decoding to identify both empty tracks and silent tracks (mean volume < -70 dB) with zero-bias.
-- **Maintenance**: Refactored `media_penetration.rs` for modularity and improved error handling during heavy decoding passes.
+- **Two-Phase Transparency Verification (Zero-Bias Guarantee)**:
+  - **Phase 1 - Stratified Sampling**: Fast check at 3 time points (start, mid, end) to catch most cases efficiently.
+  - **Phase 2 - Full Decode Fallback**: If sampling finds no transparency but alpha channel exists, performs complete frame-by-frame decode to ensure no false negatives. This catches transparency that only appears in specific frames.
+  - **Precision Filtering**: Uses `stats` filter for definitive pixel-level alpha analysis (`lavfi.stats.0.Min < 255.0`).
+  - **Dynamic Sampling**: Callers propagate `duration` to allow intelligent seek-based frame extraction.
+- **Physical Frame Count Validation (Ultimate Accuracy)**: Replaced `ffprobe -count_frames` with **FFmpeg Physical Decoding Summary**.
+  - **Zero-Bias Guarantee**: Uses `ffmpeg -map 0:v:0 -fps_mode passthrough -f null -` to force complete physical decoding without any frame rate conversion, duplication, or dropping.
+  - **Absolute Ground Truth**: Parses the final `frame=` summary line from FFmpeg's stderr, which represents the exact number of frames physically processed by the decoder → filter graph → output pipeline.
+  - **Edit List Immunity**: Unlike container-level metadata or stream analyzers, this method processes the actual decoded frames after all PTS/DTS corrections and Edit List applications, providing the true "playback frame count".
+  - **Performance Optimization**: Continues to skip verification for reasonable claims (2-50,000 frames) while hardening the gate for single-frame or extreme-length "liar" files.
+- **Audio Silence Detection (Complete Decode)**:
+  - **Full Stream Analysis**: Uses `volumedetect` filter to decode and analyze the entire audio stream.
+  - **Dual Detection**: Identifies both empty tracks (`n_samples: 0`) and silent tracks (mean volume < -70 dB).
+  - **Zero-Bias**: Complete decode ensures no silent segments are missed.
+- **Global API Refinement**:
+  - Synchronized `image_detection`, `video_detection`, and `loop_intent` with the new duration-aware penetration signatures.
+  - Hardened `FfmpegBuilder` call sites with fast-seek (`-ss`) support for large-asset sampling.
 
 ### 🐛 Bug Fixes
+- **Tier Bias Double-Counting**: Fixed a latent bug where image-family and video sub-trees were
+  re-applying the tier-based log-odds bias on top of the top-level dispatcher, causing inflated
+  pro-loop scores for image containers.
 - **FFprobe Frame Rate Parsing**: Fixed `parse_frame_rate()` to return error for division by zero (e.g., "30/0") instead of silently returning 0.0.
-- **Test Suite Updates**: Updated loop intent tests to accept Layer 0 fast-path routing for short silent assets, reflecting improved decision tree performance.
 
 ## [0.11.2] — 2026-04-20
 
