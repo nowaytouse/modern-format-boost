@@ -175,6 +175,46 @@ Since the file is `include_str!`-embedded at compile time, a parse failure means
 - **Layer 6 high frame count signal**: Added fps-normalized `+0.04–0.14` convert-side weight
   for `>500 frames @ <24fps` (protecting Live2D 60fps loops from false penalties).
 
+### 🔴 Design-Level Fixes
+
+#### KNN Training Data Pollution
+`log_inference_record` was writing the **original** `meta` (pre-penetration-detection) to the
+database, while the decision tree used the **corrected** `mutable_meta`. This meant the KNN
+training feature vectors (e.g., `has_transparency`, `audio_is_silent`, `frame_count`) could
+differ from what the tree actually used for its verdict, causing the KNN to self-corrupt over time.
+
+**Fix**: `log_inference_record` now uses `&mutable_meta`.
+
+#### Logistic Regression Fusion Math Error
+`logistic_regression_fusion` applied `sigmoid(p1*w1 + p2*w2 + bias)` — weighting raw
+probabilities (0-1) and then applying sigmoid. The correct formulation is
+`sigmoid(logit(p1)*w1 + logit(p2)*w2 + bias)`, which operates in log-odds space.
+The old approach systematically compressed high-confidence inputs toward 0.5, underestimating
+agreement between KNN and tree when both were confident.
+
+**Fix**: Added logit transform before weighting; recalibrated weights from `(3.8, 2.5, -3.2)`
+to `(0.65, 0.40, 0.0)` to match the expanded input range. The KNN:tree ratio (≈60:40) is
+preserved, and the neutral point is now mathematically correct (`p=0.5 → logit=0 → score=0 →
+sigmoid=0.5`).
+
+### ℹ️ Known Architectural Limitations (Not Addressed)
+
+The following are structural observations, not bugs. They represent accuracy ceiling constraints
+that require non-trivial architectural changes beyond the scope of this hardening pass:
+
+- **KNN Circular Self-Reinforcement**: The system's own verdicts serve as training data for
+  future KNN queries. Without external ground truth labels, systematic early-stage errors can
+  self-reinforce over time. Mitigation requires a human labeling workflow or external oracle.
+- **`motion_gini` / `loop_closure_score` Semantic Mismatch**: These fields measure codec-level
+  bitstream statistics (pkt_size Gini coefficient, pkt_size autocorrelation), not actual visual
+  motion or loop closure. CBR-encoded content and H.264 GOP structures can produce misleading
+  values. Proper signals would require pixel-domain analysis (optical flow, perceptual hashing).
+- **Layer 6-B Evidence Reuse**: Layer 6-B arbitration re-evaluates the same signals
+  (`platform_marker`, `transparency`, `loop_closure`) that Layer 5 already found inconclusive,
+  with lower thresholds. This can reduce measured uncertainty without introducing new evidence.
+- **`score_loop_frequency` Redundancy**: `loops_per_minute = 60/duration` is a linear transform
+  of duration, which is already represented by tier bias and `duration_z()`. The function adds
+  marginal information via frame density adjustment but is largely redundant.
 
 
 

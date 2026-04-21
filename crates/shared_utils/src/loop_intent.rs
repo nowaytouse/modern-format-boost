@@ -1653,12 +1653,23 @@ fn logistic_regression_fusion(
     // neighbor_count is log-scaled to normalized density signal
     let density_signal = crate::numeric_cast::usize_to_f64(neighbor_count).ln_1p();
 
-    let score = (knn_prob * LAYER6_LR_W_KNN)
-        + (tree_prob * LAYER6_LR_W_TREE)
+    // MATH FIX: Convert probabilities to log-odds (logit) before linear combination.
+    // Previously, raw probabilities were weighted and then passed through sigmoid,
+    // which is mathematically incorrect: sigmoid(p1*w1 + p2*w2) ≠ proper probability fusion.
+    // The correct form is: sigmoid(logit(p1)*w1 + logit(p2)*w2 + bias)
+    // This ensures high-confidence inputs (p ≈ 0 or p ≈ 1) are properly preserved
+    // through the fusion, instead of being compressed toward 0.5.
+    let logit = |p: f64| -> f64 {
+        let clamped = p.clamp(0.01, 0.99);
+        (clamped / (1.0 - clamped)).ln()
+    };
+
+    let score = (logit(knn_prob) * LAYER6_LR_W_KNN)
+        + (logit(tree_prob) * LAYER6_LR_W_TREE)
         + (density_signal * LAYER6_LR_W_DENSITY)
         + LAYER6_LR_BIAS;
 
-    // Apply sigmoid and then the micro-nudge adjustment
+    // Apply sigmoid once to convert the log-odds-weighted sum back to probability
     let fused_prob = 1.0 / (1.0 + (-score).exp());
     (fused_prob + nudge).clamp(0.01, 0.99)
 }
@@ -2302,7 +2313,11 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
             layer_exit,
         };
 
-        log_inference_record(client, meta, &record, path);
+        // Bug fix: use mutable_meta (post-penetration-detection) so the feature snapshot
+        // recorded in the database matches the feature vector the tree actually used.
+        // Previously, original `meta` was logged, causing KNN training data pollution:
+        // e.g., `has_transparency: true` recorded but decision made with `false`.
+        log_inference_record(client, &mutable_meta, &record, path);
     }
 
     verdict

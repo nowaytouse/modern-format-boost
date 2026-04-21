@@ -376,10 +376,17 @@ pub const LAYER6_MIN_KNN_WEIGHT: f64 = 0.25;
 pub const LAYER6_MAX_KNN_WEIGHT: f64 = 0.60;
 pub const LAYER6_KNN_COLD_START_NEIGHBORS: usize = 6;
 pub const LAYER6_KNN_FULL_WEIGHT_NEIGHBORS: usize = 16;
-pub const LAYER6_LR_W_KNN: f64 = 3.8;
-pub const LAYER6_LR_W_TREE: f64 = 2.5;
+// Weights recalibrated for logit-space inputs (see logistic_regression_fusion).
+// Old weights (3.8, 2.5) were for raw probability inputs [0,1].
+// With logit transform, inputs span [-4.6, +4.6], so weights are ~6x smaller.
+// The KNN-to-tree ratio (≈60:40) is preserved.
+pub const LAYER6_LR_W_KNN: f64 = 0.65;
+pub const LAYER6_LR_W_TREE: f64 = 0.40;
 pub const LAYER6_LR_W_DENSITY: f64 = 0.18;
-pub const LAYER6_LR_BIAS: f64 = -3.2;
+// Bias recalibrated: at knn=0.5, tree=0.5 the logit inputs are both 0,
+// so the score = 0 + 0 + density*0.18 + bias. With bias=0 and no density,
+// the fusion output is exactly 0.5, which is the correct neutral point.
+pub const LAYER6_LR_BIAS: f64 = 0.0;
 
 // --- Image Quality & Complexity Thresholds ---
 
