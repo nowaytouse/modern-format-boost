@@ -1207,76 +1207,61 @@ pub fn evaluate_loop_tree(
         );
     }
 
-    // ── Layer 0-EX: Extreme Duration Smooth Veto ───────────────────────────────
-    // This layer handles absolute authority for extreme durations while 
-    // ensuring a smooth transition to avoid "behavioral cliffs".
+    // ── Layer 0-EX: Extreme Duration Hard Veto ─────────────────────────────────
+    // This is the ONLY place in the entire system where duration alone has
+    // absolute veto power without going through the log-odds pipeline.
     //
-    // Design rationale:
-    //   • 0.0s – 5.5s (silent): Hard Veto LoopStrong.
-    //   • 5.5s – 6.5s (silent): Linearly decreasing super-bias (Smooth Veto).
-    //   • 14.5s – 15.5s: Linearly increasing negative super-bias (Smooth Veto).
-    //   • 15.5s+: Hard Veto LoopWeak.
+    // Boundaries (by design, not by heuristic):
+    //   • ≤ 6.0s silent: covers all real-world stickers, reactions, and looping memes.
+    //     No file size, resolution, or metadata signal overrides this.
+    //   • ≥ 15.0s: exceeds the practical upper bound for any real-world animated image.
+    //     No loop_count, transparency, or platform marker overrides this.
 
-    let half_window = crate::constants::EXTREME_TRANSITION_WINDOW_SECS / 2.0;
-    let short_limit = crate::constants::EXTREME_SHORT_ABSOLUTE_LIMIT_SECS;
-    let long_limit = crate::constants::EXTREME_LONG_ABSOLUTE_LIMIT_SECS;
     let has_audible_audio_global = meta.has_audio && !meta.audio_is_silent.unwrap_or(false);
 
-    // Calculate Short Extreme Bias (Pro-Loop)
-    let short_extreme_bias = if !has_audible_audio_global {
-        if meta.duration_secs <= short_limit - half_window {
-            crate::constants::LOG_ODDS_EXTREME_VETO_STRENGTH
-        } else if meta.duration_secs >= short_limit + half_window {
-            0.0
-        } else {
-            let t = (meta.duration_secs - (short_limit - half_window)) 
-                / crate::constants::EXTREME_TRANSITION_WINDOW_SECS;
-            crate::constants::LOG_ODDS_EXTREME_VETO_STRENGTH * (1.0 - t)
-        }
-    } else {
-        0.0
-    };
-
-    // Calculate Long Extreme Bias (Anti-Loop)
-    let long_extreme_bias = if meta.duration_secs >= long_limit + half_window {
-        -crate::constants::LOG_ODDS_EXTREME_VETO_STRENGTH
-    } else if meta.duration_secs <= long_limit - half_window {
-        0.0
-    } else {
-        let t = (meta.duration_secs - (long_limit - half_window)) 
-            / crate::constants::EXTREME_TRANSITION_WINDOW_SECS;
-        -crate::constants::LOG_ODDS_EXTREME_VETO_STRENGTH * t
-    };
-
-    // Immediate Hard Veto Exits (only outside the transition window)
-    if short_extreme_bias >= crate::constants::LOG_ODDS_EXTREME_VETO_STRENGTH {
+    // Hard veto: Extreme short (≤ 6.0s, silent)
+    if meta.duration_secs <= crate::constants::EXTREME_SHORT_ABSOLUTE_LIMIT_SECS
+        && !has_audible_audio_global
+    {
         return finalize(
             LoopIntentVerdict::LoopStrong(format!(
-                "Layer 0-EX (Hard Veto): extreme-short duration {:.2}s ≤ {:.1}s",
-                meta.duration_secs, short_limit - half_window
+                "Layer 0-EX (Hard Veto): extreme-short duration {:.2}s ≤ {:.1}s — \
+                 definitively animated image regardless of all other signals",
+                meta.duration_secs,
+                crate::constants::EXTREME_SHORT_ABSOLUTE_LIMIT_SECS,
             )),
             log_odds,
         );
     }
-    if long_extreme_bias <= -crate::constants::LOG_ODDS_EXTREME_VETO_STRENGTH {
+
+    // Hard veto: Extreme long (≥ 15.0s) — no exceptions, even for silent assets
+    if meta.duration_secs >= crate::constants::EXTREME_LONG_ABSOLUTE_LIMIT_SECS {
         return finalize(
             LoopIntentVerdict::LoopWeak(format!(
-                "Layer 0-EX (Hard Veto): extreme-long duration {:.2}s ≥ {:.1}s",
-                meta.duration_secs, long_limit + half_window
+                "Layer 0-EX (Hard Veto): extreme-long duration {:.2}s ≥ {:.1}s — \
+                 definitively video regardless of all other signals",
+                meta.duration_secs,
+                crate::constants::EXTREME_LONG_ABSOLUTE_LIMIT_SECS,
             )),
             log_odds,
         );
     }
 
-    // Inject smooth extreme bias for assets inside the transition window
-    log_odds.add(short_extreme_bias);
-    log_odds.add(long_extreme_bias);
+    // ── Layer 0: Duration Dispatcher (Bias + Anti-Cliff Proximity Ramp) ──────────
+    // Assets in the gray zone (6–15s) receive:
+    //   1. A tier-proportional base bias (UltraShort → +1.5 … DefinitivelyLong → -3.0)
+    //   2. A linearly-decaying proximity bonus/penalty for assets near a veto boundary.
+    //      This prevents the "behavioral cliff" where 5.9s and 6.1s are treated radically
+    //      differently despite being only 0.2s apart.
+    //
+    // Proximity ramp (short side, silent only):
+    //   At 6.0s + ε → proximity ≈ 1.0 → full +2.5 bonus (nearly as strong as the veto)
+    //   At 8.0s     → proximity = 0.0 → no additional bonus
+    //
+    // Proximity ramp (long side):
+    //   At 15.0s - ε → proximity ≈ 1.0 → full -2.5 penalty (nearly as strong as the veto)
+    //   At 13.0s     → proximity = 0.0 → no additional penalty
 
-    // ── Layer 0: Duration Dispatcher (Bias injection, NOT fast-path exit) ────────
-    // Short duration is the strongest non-extreme signal, but it injects a massive
-    // bias into log-odds rather than bypassing the full analysis pipeline.
-    // This ensures that even a short asset with anomalous structural signals
-    // (e.g. scene cuts, complex motion) can still be downgraded by later layers.
     let is_short_tier = matches!(
         tier,
         DurationTier::UltraShort | DurationTier::Short | DurationTier::MediumLong
@@ -1288,23 +1273,24 @@ pub fn evaluate_loop_tree(
             // but we still let the full tree run so structural signals can be logged.
             log_odds.add(-crate::constants::LOG_ODDS_BIAS_DEFINITIVELY_LONG);
         } else {
-            // Silent short assets get a very strong pro-loop bias from duration alone.
-            // The bias is tier-proportional: UltraShort gets the most, MediumLong the least.
+            // Silent short assets: tier bias
             match tier {
                 DurationTier::UltraShort => log_odds.add(crate::constants::LOG_ODDS_BIAS_ULTRA_SHORT),
                 DurationTier::Short => log_odds.add(crate::constants::LOG_ODDS_BIAS_SHORT),
                 DurationTier::MediumLong => log_odds.add(crate::constants::LOG_ODDS_BIAS_MEDIUM_LONG),
                 _ => {}
             }
-            // Buffer zone: 2–4s gets additional pro-loop bias (near the extreme-short veto)
-            if meta.duration_secs > crate::constants::EXTREME_SHORT_ABSOLUTE_LIMIT_SECS
-                && meta.duration_secs <= crate::constants::EXTREME_SHORT_BUFFER_UPPER_SECS
-            {
-                log_odds.add(crate::constants::EXTREME_SHORT_BUFFER_BIAS);
+            // Anti-cliff proximity ramp (short side): 6.0–8.0s
+            let short_veto = crate::constants::EXTREME_SHORT_ABSOLUTE_LIMIT_SECS;
+            let short_buf = crate::constants::EXTREME_SHORT_PROXIMITY_BUFFER_SECS;
+            let short_ramp_top = short_veto + short_buf;
+            if meta.duration_secs > short_veto && meta.duration_secs <= short_ramp_top {
+                let proximity = 1.0 - (meta.duration_secs - short_veto) / short_buf;
+                log_odds.add(proximity * crate::constants::EXTREME_SHORT_PROXIMITY_MAX_BIAS);
             }
         }
     } else {
-        // Long tiers: apply graduated anti-loop bias
+        // Long tiers: tier bias
         match tier {
             DurationTier::Long => log_odds.add(crate::constants::LOG_ODDS_BIAS_LONG),
             DurationTier::VeryLong => log_odds.add(crate::constants::LOG_ODDS_BIAS_VERY_LONG),
@@ -1313,20 +1299,25 @@ pub fn evaluate_loop_tree(
             }
             _ => {}
         }
-        // Buffer zone: 20–30s gets additional anti-loop bias (approaching extreme-long veto)
-        if meta.duration_secs >= crate::constants::EXTREME_LONG_BUFFER_LOWER_SECS {
-            log_odds.add(-crate::constants::EXTREME_LONG_BUFFER_BIAS);
+        // Anti-cliff proximity ramp (long side): 13.0–15.0s
+        let long_veto = crate::constants::EXTREME_LONG_ABSOLUTE_LIMIT_SECS;
+        let long_buf = crate::constants::EXTREME_LONG_PROXIMITY_BUFFER_SECS;
+        let long_ramp_bottom = long_veto - long_buf;
+        if meta.duration_secs >= long_ramp_bottom && meta.duration_secs < long_veto {
+            let proximity = (meta.duration_secs - long_ramp_bottom) / long_buf;
+            log_odds.add(-proximity * crate::constants::EXTREME_LONG_PROXIMITY_MAX_BIAS);
         }
     }
 
     // ── Stage 1: Specialized Tree Dispatch ─────────────────────────────────────
-    // Extreme-zone assets have already exited. All remaining assets proceed to
-    // the specialized tree which accumulates further weighted evidence.
+    // Extreme-zone assets have already exited. All remaining assets (6–15s gray zone)
+    // proceed to the specialized tree for further weighted evidence accumulation.
     if is_image || meta.is_native_gif {
         evaluate_image_tree(meta, &derived, &thresholds, log_odds, tier)
     } else {
         evaluate_video_tree(meta, &derived, &thresholds, log_odds, tier)
     }
+
 }
 
 fn evaluate_image_tree(

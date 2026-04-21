@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### 🛡️ Loop Intent System — Zero-Trust Architecture (v2)
+### 🛡️ Loop Intent System — Zero-Trust Architecture (v2.1)
 
 This release represents a fundamental architectural shift in the loop intent judgment system.
 The system now operates on a **zero-trust-metadata** principle: no metadata signal (loop count,
@@ -14,24 +14,34 @@ file extension, platform markers, transparency flag, etc.) can produce an immedi
 its own. All non-duration evidence is reduced to weighted log-odds contributions that must
 overcome accumulated counter-evidence to flip a verdict.
 
-#### Extreme Duration Smooth Veto (Layer 0-EX)
-Two absolute boundaries have been refined as the **only** signals in the system with true
-one-shot authority. A new **Smooth Veto** architecture (using 1.0s transition windows) prevents 
-"behavioral cliffs" near these thresholds:
+#### Extreme Duration Hard Veto (Layer 0-EX) — Updated Boundaries
+Two absolute boundaries have been established as the **only** signals in the system with true
+one-shot authority. These are physical reality constraints, not heuristics:
 
-- **≤ 6.0s (silent) → `LoopStrong` (Smooth Veto)**: Refined boundary for expressive short-form 
-  animation. Silent content under 6s is treated as definitively animated.
-- **≥ 15.0s → `LoopWeak` (Smooth Veto)**: Refined upper limit for looping media. Assets 
-  longer than 15s are treated as definitively video content.
-- **Cliff Prevention**: Linear interpolation of a massive `15.0` log-odds bias over transition 
-  windows (5.5s–6.5s and 14.5s–15.5s) ensures continuous probability curves for edge cases.
+- **≤ 6.0s (silent) → `LoopStrong` (Hard Veto)**: Empirically covers all real-world stickers,
+  reactions, looping memes, and UI animations. No file size, resolution, pixel count, or
+  metadata signal can override this. Audible audio explicitly excluded.
+- **≥ 15.0s → `LoopWeak` (Hard Veto)**: Exceeds the practical upper bound for any real-world
+  looping animated image. No `loop_count=0`, transparency, platform marker, or audio state
+  can override this.
 
-#### Buffer Zone Graduated Defense
-Two graduated buffer zones provide additional robustness around the new boundaries:
-- **6–8s (Pro-Loop Buffer)**: Silent assets in this window receive an additional `+1.0` log-odds
-  bonus, making it extremely difficult for any anti-loop signal to flip a verdict.
-- **12–15s (Anti-Loop Buffer)**: Assets in this window receive an additional `-1.5` log-odds
-  penalty, making it extremely difficult for pro-loop signals to produce a `LoopStrong` verdict.
+#### Anti-Cliff Proximity Ramp (New)
+The hard veto boundaries previously created a **behavioral cliff**: an asset at 5.9s received
+an absolute verdict, while a nearly identical 6.1s asset received only a weak tier bias. This
+discontinuity is now eliminated by a **linear proximity ramp** on both sides of each boundary.
+
+**Short side (6.0–8.0s, silent):**
+- At `6.0s + ε`: full `+2.5` additional bonus (behavior nearly identical to the veto)
+- At `8.0s`: ramp decays to `0` (only standard tier bias remains)
+- Formula: `bonus = (1 - (duration - 6.0) / 2.0) × 2.5`
+
+**Long side (13.0–15.0s):**
+- At `13.0s`: ramp is `0` (only standard tier bias)
+- At `15.0s - ε`: full `-2.5` additional penalty (behavior nearly identical to the veto)
+- Formula: `penalty = ((duration - 13.0) / 2.0) × 2.5`
+
+This means the effective behavior is now **continuous and monotonic** across the full 0–∞ range,
+with no behavioral discontinuities at any duration boundary.
 
 #### Tier Bias Centralization
 The per-tier log-odds bias injection (UltraShort → +1.5, Short → +0.5, Long → -1.0, etc.) has
@@ -58,14 +68,14 @@ log-odds contributions:
 The only remaining immediate exits are physically impossible inputs:
 - `frame_count ≤ 1` → `Error` (cannot loop, physical impossibility)
 - `duration < 0.01s` (non-GIF) → `Error` (degenerate, physical impossibility)
-- `duration ≤ 2.0s` (silent) → `LoopStrong` (extreme short hard veto)
-- `duration ≥ 30.0s` → `LoopWeak` (extreme long hard veto)
+- `duration ≤ 6.0s` (silent) → `LoopStrong` (extreme short hard veto)
+- `duration ≥ 15.0s` → `LoopWeak` (extreme long hard veto)
 
 #### Design Principle: "File Size Cannot Vote"
 Per architectural policy, file size (even extremely large) has **no one-shot authority** when
-duration is extreme. A 500 MB, 4K file that is 1.5s long is an animated image. A 200 KB file
-that is 35s long is a video. Duration is the ground truth; file size is only a soft signal that
-contributes to the log-odds accumulation for assets in the gray zone (2–30s).
+duration is extreme. A 500 MB, 4K file that is 4s long is an animated image. A 200 KB file
+that is 16s long is a video. Duration is the ground truth; file size is only a soft signal that
+contributes to the log-odds accumulation for assets in the gray zone (6–15s).
 
 ### 🔬 Penetrating Content Detection System (Hardened v3)
 - **Two-Phase Transparency Verification (Zero-Bias Guarantee)**:
@@ -91,6 +101,7 @@ contributes to the log-odds accumulation for assets in the gray zone (2–30s).
   re-applying the tier-based log-odds bias on top of the top-level dispatcher, causing inflated
   pro-loop scores for image containers.
 - **FFprobe Frame Rate Parsing**: Fixed `parse_frame_rate()` to return error for division by zero (e.g., "30/0") instead of silently returning 0.0.
+
 
 ## [0.11.2] — 2026-04-20
 
