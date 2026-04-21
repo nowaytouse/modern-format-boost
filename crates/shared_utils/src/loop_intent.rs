@@ -1138,7 +1138,8 @@ pub fn evaluate_loop_tree(
         );
     }
 
-    if meta.frame_count <= 1 || meta.duration_secs < crate::constants::NEGLIGIBLE_DURATION_SECS {
+    // Layer 1-A: Exclude native GIFs from the duration constraint since headless GIFs often have 0.0s duration
+    if meta.frame_count <= 1 || (!meta.is_native_gif && meta.duration_secs < crate::constants::NEGLIGIBLE_DURATION_SECS) {
         return finalize(
             LoopIntentVerdict::Error("Layer 1-A: static media (cannot loop)".to_string()),
             log_odds,
@@ -1183,10 +1184,13 @@ pub fn evaluate_loop_tree(
         );
     }
 
-    if !meta.has_audio && is_silent_webm(meta, &ext_lower) {
+    if !meta.has_audio
+        && is_silent_webm(meta, &ext_lower)
+        && meta.duration_secs <= crate::constants::HARD_PASS_SHORT_GIF_THRESHOLD_SECS
+    {
         return finalize(
             LoopIntentVerdict::LoopStrong(
-                "Layer 2-D: silent WebM container strongly implies animation / loop intent"
+                "Layer 2-D: short silent WebM container strongly implies animation / loop intent"
                     .to_string(),
             ),
             log_odds,
@@ -1229,6 +1233,43 @@ pub fn evaluate_loop_tree(
                 log_odds,
             );
         }
+    }
+
+    // Layer 1-B3: Dimensional Sticker (Content Optimization)
+    // Short, small, silent videos are likely emojis or UI screen captures.
+    // This absorbs the ad-hoc heuristic that was previously in conversion_api.rs.
+    if !meta.has_audio
+        && meta.duration_secs > 0.0
+        && meta.duration_secs <= 3.0
+        && meta.width > 0
+        && meta.height > 0
+        && meta.width <= crate::constants::STICKER_MAX_DIMENSION
+        && meta.height <= crate::constants::STICKER_MAX_DIMENSION
+        && (meta.pkt_sizes.len() < 3 || meta.pts_deltas.len() < 3)
+    {
+        return finalize(
+            LoopIntentVerdict::LoopStrong(format!(
+                "Layer 1-B3: Dimensional Sticker ({}x{}, {:.2}s)",
+                meta.width, meta.height, meta.duration_secs
+            )),
+            log_odds,
+        );
+    }
+
+    // Layer 1-B4: Dimension-Agnostic Micro-Clip
+    // Silent clips at or below the micro-clip ceiling are intrinsically animated-image
+    // equivalents regardless of resolution — screen captures, UI demos, motion graphics.
+    if !meta.has_audio
+        && meta.duration_secs > 0.0
+        && meta.duration_secs <= crate::constants::MICRO_CLIP_CEILING_SECS
+    {
+        return finalize(
+            LoopIntentVerdict::LoopStrong(format!(
+                "Layer 1-B4: Dimension-Agnostic Micro-Clip ({:.2}s <= {:.1}s ceiling)",
+                meta.duration_secs, crate::constants::MICRO_CLIP_CEILING_SECS
+            )),
+            log_odds,
+        );
     }
 
     let force_short_gifs =

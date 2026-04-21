@@ -343,14 +343,8 @@ fn resolve_probe_duration(
         parse_f64_string_field(&video_stream["duration"]).unwrap_or(0.0)
     };
 
-    if duration > 0.0 {
-        Ok(duration)
-    } else {
-        Err(FFprobeError::ParseError(
-            "Missing duration (both format and video stream reported 0 or invalid duration)"
-                .to_string(),
-        ))
-    }
+    // Allow 0.0 duration for formats like headless GIFs where duration is not globally specified
+    Ok(duration)
 }
 
 fn parse_required_u32_field(
@@ -876,11 +870,14 @@ pub fn parse_frame_rate(s: &str) -> Result<f64, FFprobeError> {
             let den = parts[1]
                 .parse::<f64>()
                 .map_err(|e| FFprobeError::ParseError(format!("Invalid denominator: {e}")))?;
-            if den > 0.0 {
-                let rate = num / den;
-                if rate > 0.0 {
-                    return Ok(rate);
-                }
+                
+            if den == 0.0 {
+                return Ok(0.0);
+            }
+            
+            let rate = num / den;
+            if rate >= 0.0 {
+                return Ok(rate);
             }
         }
     }

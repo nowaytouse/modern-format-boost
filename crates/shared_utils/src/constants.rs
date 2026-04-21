@@ -67,6 +67,13 @@ pub const STICKER_MAX_DIMENSION: u32 = 512;
 /// "Bottom-line" size control: assets below this size are likely stickers.
 pub const STICKER_MAX_SIZE_BYTES: u64 = 1_572_864; // 1.5 MB
 
+/// Maximum duration (seconds) for the dimension-agnostic micro-clip GIF interception.
+///
+/// Silent videos at or below this duration are treated as animated images regardless
+/// of resolution or file size — screen captures, UI demos, and motion graphics
+/// typically fall into this window.
+pub const MICRO_CLIP_CEILING_SECS: f64 = 2.0;
+
 /// Upper bound on `width * height` for **GIF** assets.
 ///
 /// Refers to [`crate::loop_intent::evaluate_loop_tree`]: a silent, sticker-class canvas is treated as

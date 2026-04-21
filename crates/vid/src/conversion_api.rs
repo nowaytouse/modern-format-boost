@@ -522,25 +522,11 @@ pub fn determine_strategy_with_apple_compat(
     // DEFINITE LOOP INTENT: GIF conversions based on 7-layer decision
     // ══════════════════════════════════════════════════════════════════════════════
 
-    if is_loop_intent && apple_compat && !force {
-        return ConversionStrategy {
-            target: TargetVideoFormat::Gif,
-            reason: format!(
-                "Loop intent confirmed ({}) - converting back to GIF for Apple compatibility",
-                loop_verdict.reason()
-            ),
-            command: String::new(),
-            preserve_audio: false,
-            crf: 0.0,
-            lossless: false,
-        };
-    }
-
     if is_loop_intent && !force {
         return ConversionStrategy {
-            target: TargetVideoFormat::Skip,
+            target: TargetVideoFormat::Gif,
             reason: format!(
-                "Preserving original micro-asset (trigger: {})",
+                "Loop intent confirmed ({}) - routing to animated image pipeline",
                 loop_verdict.reason()
             ),
             command: String::new(),
@@ -550,40 +536,14 @@ pub fn determine_strategy_with_apple_compat(
         };
     }
 
-    // ══════════════════════════════════════════════════════════════════════════════
-    // HEURISTIC: Content-based GIF conversion (independent of Apple compat)
-    // ══════════════════════════════════════════════════════════════════════════════
-    // Short, silent, small videos are likely stickers/emojis → optimize as GIF
-    // This is a content optimization decision, NOT an Apple compatibility workaround.
-
-    if !force
-        && !is_loop_intent
-        && !result.has_audio
-        && result.duration_secs <= 3.0
-        && result.width > 0
-        && result.height > 0
-        && result.width <= shared_utils::constants::STICKER_MAX_DIMENSION
-        && result.height <= shared_utils::constants::STICKER_MAX_DIMENSION
-        && (result.pkt_sizes.len() < 3 || result.pts_deltas.len() < 3)
-    {
-        return ConversionStrategy {
-            target: TargetVideoFormat::Gif,
-            reason: format!(
-                "Sticker-like content detected (no loop intent, short silent video {}s, {}x{}) - optimizing as GIF",
-                result.duration_secs, result.width, result.height
-            ),
-            command: String::new(),
-            preserve_audio: false,
-            crf: 0.0,
-            lossless: false,
-        };
-    }
+    // LoopWeak / Uncertain: not intercepted — falls through to standard pipeline
+    // (HEVC optimization, apple compat codec conversion, etc.)
 
     // ══════════════════════════════════════════════════════════════════════════════
     // APPLE COMPATIBILITY: Codec-based conversion
     // ══════════════════════════════════════════════════════════════════════════════
     // If Apple compat is enabled, convert unsupported codecs to HEVC.
-    // This runs AFTER loop intent and heuristic, so they take priority.
+    // This runs AFTER loop intent interception, so animated images take priority.
 
     if skip_decision.should_skip && !force {
         return ConversionStrategy {
@@ -2731,10 +2691,9 @@ mod tests {
             SelectedCodec::Hevc,
         );
         assert_eq!(strategy.target, TargetVideoFormat::Gif);
-        // Accept either loop-intent KNN path or sticker heuristic path — both produce GIF
+        // The sticker heuristic now lives in Layer 1-B3, so reason comes from the tree
         assert!(
-            strategy.reason.contains("Loop intent confirmed")
-                || strategy.reason.contains("Sticker-like content"),
+            strategy.reason.contains("Loop intent confirmed"),
             "unexpected reason: {}",
             strategy.reason
         );
@@ -2769,7 +2728,7 @@ mod tests {
             SelectedCodec::Hevc,
         );
 
-        assert_eq!(adjusted.target, TargetVideoFormat::Skip);
+        assert_eq!(adjusted.target, TargetVideoFormat::Gif);
         assert!(
             adjusted.reason.contains("Layer 1-B"),
             "unexpected reason: {}",

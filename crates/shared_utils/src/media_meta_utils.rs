@@ -189,8 +189,8 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
     };
 
     let frame_count_calculated = std::cmp::max(
-        frame_payload_sizes.len() as u32,
-        frame_delays_cs.len() as u32,
+        u32::try_from(frame_payload_sizes.len()).unwrap_or(u32::MAX),
+        u32::try_from(frame_delays_cs.len()).unwrap_or(u32::MAX),
     );
     let frame_count_calculated = if frame_count_calculated == 0 { 1 } else { frame_count_calculated };
 
