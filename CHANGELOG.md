@@ -6,12 +6,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### 🔬 Penetrating Content Detection System (Hardened v2)
+### 🔬 Penetrating Content Detection System (Hardened v3)
 - **Stratified Transparency Verification**: Upgraded from simple variance sampling to **Stratified Sampling** (Start, Mid, End points) to detect transparency that appears non-linearly.
   - **Precision Filtering**: Switched from `signalstats` to the `stats` filter for definitive pixel-level alpha analysis (`lavfi.stats.0.Min < 255.0`).
   - **Dynamic Sampling**: Callers now propagate `duration` to allow intelligent seek-based frame extraction instead of linear decoding.
-- **Canonical Frame Count Validation**: Replaced the `showinfo` decoder count with **`ffprobe -count_frames`**.
-  - **Absolute Accuracy**: Provides the industry-standard "ground truth" for real decodable frames, bypassing deceptive metadata headers.
+- **Physical Frame Count Validation (Ultimate Accuracy)**: Replaced `ffprobe -count_frames` with **FFmpeg Physical Decoding Summary**.
+  - **Zero-Bias Guarantee**: Uses `ffmpeg -map 0:v:0 -fps_mode passthrough -f null -` to force complete physical decoding without any frame rate conversion, duplication, or dropping.
+  - **Absolute Ground Truth**: Parses the final `frame=` summary line from FFmpeg's stderr, which represents the exact number of frames physically processed by the decoder → filter graph → output pipeline.
+  - **Edit List Immunity**: Unlike container-level metadata or stream analyzers, this method processes the actual decoded frames after all PTS/DTS corrections and Edit List applications, providing the true "playback frame count".
   - **Performance Optimization**: Continues to skip verification for reasonable claims (2-50,000 frames) while hardening the gate for single-frame or extreme-length "liar" files.
 - **Global API Refinement**:
   - Synchronized `image_detection`, `video_detection`, and `loop_intent` with the new duration-aware penetration signatures.
