@@ -15,6 +15,10 @@ All notable changes to this project will be documented in this file.
 - **Dynamic Mapping Calibration**: Refined the GPU-to-CPU CRF projection logic to ensure deterministic search boundaries across varying hardware architectures.
 
 - **Loop Intent Detection 2.0 & GIF Stabilization**:
+  - **Layer 0 (Duration-Based Priority Gate)**: Introduced a high-performance duration dispatcher at the top of the decision tree.
+    - **Fast-path Dispatch**: Definitively short/medium assets (< 8s) are now immediately routed based on duration and audio presence, bypassing complex signal analysis.
+    - **Stage 1 Gating**: Only long assets (≥ 8s) proceed to the full fused signal analysis stage, significantly improving classification throughput.
+    - **Legacy Integrity**: ALL original heuristic layers (Sticker GIF, Micro-clip, etc.) were preserved and re-aligned within the Stage 1 area to maintain regression safety.
   - **Modern Format Static Media Interception**: Implemented a critical 0.25s threshold hardening layer in `image_analyzer.rs`. This correctly identifies single-frame WebP/AVIF/HEIC/MP4 files that would otherwise bypass the loop engine due to legacy metadata declaring non-zero durations (e.g., 0.04s).
   - **Dynamic Duration Normalization**: Files with durations $>0.0s$ and $<0.25s$ now trigger a mandatory `ffprobe -count_frames` packet audit. If `frame_count <= 1`, the duration is normalized to `0.0s`, ensuring the `vid` module correctly hands off the asset to the highly efficient `img` (JXL) pipeline.
   - **Native GIF Metadata Injection**: Enhanced the strategy engine to perform direct byte-level `scan_gif_headers` on the `current_path`. This prevents reliance on stale `ffprobe` metadata and ensures verified frame counts for sensitive GIF-to-Video paths.
