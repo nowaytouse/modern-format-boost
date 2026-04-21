@@ -1833,6 +1833,20 @@ fn layer6_directional_arbitration(
         arbitration.add_convert(0.12, "large video envelope");
     }
 
+    // Convert-side signals missing from original implementation — added for symmetry:
+    // Audible audio is the single strongest real-world video indicator and was completely
+    // absent from Layer 6. High frame counts (>500) are extremely rare in animated images.
+    let has_audible_audio = meta.has_audio && !meta.audio_is_silent.unwrap_or(false);
+    if has_audible_audio {
+        let audio_weight = if short_silent_asset { 0.08 } else { 0.22 };
+        arbitration.add_convert(audio_weight, "audible audio track");
+    }
+    if meta.frame_count > 500 {
+        let weight = ((meta.frame_count.saturating_sub(500)) as f64 / 2000.0)
+            .clamp(0.04, 0.14);
+        arbitration.add_convert(weight, format!("high frame count {}", meta.frame_count));
+    }
+
     let margin = arbitration.keep_score - arbitration.convert_score;
     if margin.abs() < crate::constants::LAYER6_DIRECTIONAL_MARGIN_MIN {
         return None;
