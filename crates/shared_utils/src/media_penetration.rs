@@ -162,7 +162,7 @@ pub fn detect_real_transparency(path: &Path, duration: Option<f64>) -> Penetrati
     PenetrationResult::Verified(found_transparency)
 }
 
-/// Penetrating frame count detection: decode and count actual frames.
+/// Penetrating frame count detection: decode and count actual frames via ffmpeg summary.
 /// Returns `Verified(count)` with real count, `Skipped` if claim is reasonable.
 pub fn detect_real_frame_count(path: &Path, claimed_frame_count: u64) -> PenetrationResult<u64> {
     // Only verify suspicious claims (≤1 or >50000)
@@ -170,61 +170,65 @@ pub fn detect_real_frame_count(path: &Path, claimed_frame_count: u64) -> Penetra
         return PenetrationResult::Skipped;
     }
     
-    // Count frames via ffprobe's count_frames feature
-    // This is the most accurate way to verify the actual decodable frame count.
-    let output = match crate::ffmpeg_builder::FfprobeBuilder::new()
+    // Count frames via ffmpeg's physical output summary.
+    // Using '-fps_mode passthrough' ensures zero frame duplication/dropping, giving us 
+    // the absolute physical number of frames as seen by the processing engine.
+    let output = match crate::ffmpeg_builder::FfmpegBuilder::new()
         .input(path)
-        .arg("-count_frames")
-        .arg("-select_streams")
-        .arg("v:0")
-        .arg("-show_entries")
-        .arg("stream=nb_read_frames")
-        .arg("-of")
-        .arg("default=nokey=1:noprefix=1")
+        .arg("-map")
+        .arg("0:v:0")
+        .arg("-fps_mode")
+        .arg("passthrough")
+        .format("null")
+        .output_pipe()
         .build()
         .output()
     {
         Ok(out) => out,
         Err(e) => {
             emit_stderr(&format!(
-                "⚠️  Frame count penetration failed: ffprobe error ({})",
+                "⚠️  Frame count penetration failed: ffmpeg error ({})",
                 e
             ));
             return PenetrationResult::Failed;
         }
     };
 
-    if !output.status.success() {
-        emit_stderr(&format!(
-            "⚠️  Frame count penetration failed: ffprobe exit code {}",
-            output.status.code().unwrap_or(-1)
-        ));
-        return PenetrationResult::Failed;
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let trimmed = stdout.trim();
+    // FFmpeg's summary (frame= XXXX) is in stderr
+    let stderr = String::from_utf8_lossy(&output.stderr);
     
-    if trimmed.is_empty() {
-        emit_stderr("⚠️  Frame count penetration failed: ffprobe produced no output");
-        return PenetrationResult::Failed;
+    // Find the last "frame=" entry in the output
+    // Example line: "frame=  123 fps=0.1 q=-0.0 Lsize=N/A time=00:00:05.12 bitrate=N/A speed=4.5x"
+    let mut actual_u64 = None;
+    for line in stderr.lines().rev() {
+        if let Some(pos) = line.find("frame=") {
+            let part = &line[pos + 6..];
+            let count_str = part.trim_start().split_whitespace().next().unwrap_or("");
+            if let Ok(count) = count_str.parse::<u64>() {
+                actual_u64 = Some(count);
+                break;
+            }
+        }
     }
 
-    match trimmed.parse::<u64>() {
-        Ok(actual_u64) => {
-            if actual_u64 != claimed_frame_count {
+    match actual_u64 {
+        Some(actual) => {
+            if actual != claimed_frame_count {
                 emit_stderr(&format!(
-                    "⚠️  Frame count mismatch detected: metadata claimed {}, actual decoded {}",
-                    claimed_frame_count, actual_u64
+                    "⚠️  Frame count mismatch detected: metadata claimed {}, physical decoded {}",
+                    claimed_frame_count, actual
                 ));
             }
-            PenetrationResult::Verified(actual_u64)
+            PenetrationResult::Verified(actual)
         }
-        Err(e) => {
-            emit_stderr(&format!(
-                "⚠️  Frame count penetration failed: could not parse '{}' as u64 ({})",
-                trimmed, e
-            ));
+        None => {
+            emit_stderr("⚠️  Frame count penetration failed: ffmpeg produced no 'frame=' summary");
+            if !output.status.success() {
+                emit_stderr(&format!(
+                    "   FFmpeg exit code: {}",
+                    output.status.code().unwrap_or(-1)
+                ));
+            }
             PenetrationResult::Failed
         }
     }
