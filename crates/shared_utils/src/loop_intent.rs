@@ -1312,10 +1312,30 @@ pub fn evaluate_loop_tree(
     // ── Stage 1: Specialized Tree Dispatch ─────────────────────────────────────
     // Extreme-zone assets have already exited. All remaining assets (6–15s gray zone)
     // proceed to the specialized tree for further weighted evidence accumulation.
+    //
+    // Metadata Trust Decay: soft forged signals (loop_count, platform_marker,
+    // transparency flag) are attenuated by `metadata_trust` which scales from 1.0
+    // at the short-veto edge to 0.0 at the long-veto edge.
+    // Physical signals (loop_closure, periodicity, scene cuts) are NOT attenuated.
+    //
+    // Effect:
+    //   At 8s:  trust = 0.78 → GIPHY bonus: 0.52 × 0.78 = 0.41 (was 0.52)
+    //   At 10s: trust = 0.56 → GIPHY bonus: 0.52 × 0.56 = 0.29 (was 0.52)
+    //   At 12s: trust = 0.33 → GIPHY bonus: 0.52 × 0.33 = 0.17 (was 0.52)
+    //   At 14s: trust = 0.11 → GIPHY bonus: 0.52 × 0.11 = 0.06 (was 0.52)
+    // Combined forged signal ceiling at 12s: ~0.54 (was ~1.35) — cannot overcome
+    // Long-tier bias alone; requires genuine physical loop evidence.
+    let metadata_trust = {
+        let short_v = crate::constants::EXTREME_SHORT_ABSOLUTE_LIMIT_SECS;
+        let long_v = crate::constants::EXTREME_LONG_ABSOLUTE_LIMIT_SECS;
+        let t = (meta.duration_secs - short_v) / (long_v - short_v);
+        (1.0_f64 - t).clamp(0.0, 1.0)
+    };
+
     if is_image || meta.is_native_gif {
-        evaluate_image_tree(meta, &derived, &thresholds, log_odds, tier)
+        evaluate_image_tree(meta, &derived, &thresholds, log_odds, tier, metadata_trust)
     } else {
-        evaluate_video_tree(meta, &derived, &thresholds, log_odds, tier)
+        evaluate_video_tree(meta, &derived, &thresholds, log_odds, tier, metadata_trust)
     }
 
 }
@@ -1326,6 +1346,7 @@ fn evaluate_image_tree(
     thresholds: &LoopThresholds,
     mut log_odds: LogOdds,
     tier: DurationTier,
+    metadata_trust: f64,
 ) -> TreeEvaluation {
     let finalize = |verdict: LoopIntentVerdict, lo: LogOdds| TreeEvaluation {
         tree_probability: match verdict {
@@ -1341,20 +1362,24 @@ fn evaluate_image_tree(
     let ext_lower = meta.source_extension.as_deref().unwrap_or("").to_lowercase();
 
     // Layer 1-B: Transparency is a strong signal, but NOT decisive on its own.
-    // A 30-minute transparent video is not necessarily a sticker.
+    // Attenuated by metadata_trust: in the Long zone, transparency cannot carry
+    // enough weight to flip the verdict without genuine physical loop evidence.
     if !meta.has_audio && meta.has_transparency {
-        log_odds.add(crate::constants::TRANSPARENCY_POSITIVE_LOG_ODDS * 2.0);
+        log_odds.add(crate::constants::TRANSPARENCY_POSITIVE_LOG_ODDS * 2.0 * metadata_trust);
     }
 
-    // Layer 2: Explicit declarations (weighted signals to prevent metadata forgery)
+    // Layer 2: Explicit declarations — attenuated by metadata_trust.
+    // Soft metadata signals (loop_count, platform markers) decay toward zero as
+    // duration approaches the long-veto boundary. Physical signals are NOT affected.
     if meta.loop_count == Some(0) {
-        log_odds.add(loop_count_zero_bonus(meta, thresholds));
+        log_odds.add(loop_count_zero_bonus(meta, thresholds) * metadata_trust);
     } else if meta.loop_count == Some(1) {
+        // play-once is a negative signal — apply full weight regardless (safe direction)
         log_odds.add(PLAY_ONCE_NEGATIVE_LOG_ODDS);
     }
 
     if has_explicit_loop_platform_marker(meta) {
-        log_odds.add(crate::constants::PLATFORM_MARKER_POSITIVE_LOG_ODDS);
+        log_odds.add(crate::constants::PLATFORM_MARKER_POSITIVE_LOG_ODDS * metadata_trust);
     }
 
     // Sticker-class native GIF: weighted bonus, not immediate exit.
@@ -1440,6 +1465,7 @@ fn evaluate_video_tree(
     thresholds: &LoopThresholds,
     mut log_odds: LogOdds,
     tier: DurationTier,
+    metadata_trust: f64,
 ) -> TreeEvaluation {
     let finalize = |verdict: LoopIntentVerdict, lo: LogOdds| TreeEvaluation {
         tree_probability: match verdict {
@@ -1476,13 +1502,16 @@ fn evaluate_video_tree(
         log_odds.add(-crate::constants::LOG_ODDS_BIAS_DEFINITIVELY_LONG);
     }
 
-    // Layer 2: Explicit declarations (weighted signals to prevent metadata forgery)
+    // Layer 2: Explicit declarations — attenuated by metadata_trust.
+    // Soft metadata signals decay toward zero as duration approaches the long-veto
+    // boundary (15s), preventing forged metadata from overcoming the Long-tier bias
+    // without genuine physical loop evidence in Layers 3–5.
     if meta.loop_count == Some(0) {
-        log_odds.add(loop_count_zero_bonus(meta, thresholds));
+        log_odds.add(loop_count_zero_bonus(meta, thresholds) * metadata_trust);
     }
 
     if has_explicit_loop_platform_marker(meta) {
-        log_odds.add(crate::constants::PLATFORM_MARKER_POSITIVE_LOG_ODDS);
+        log_odds.add(crate::constants::PLATFORM_MARKER_POSITIVE_LOG_ODDS * metadata_trust);
     }
 
     // Layer 2-D: Short silent WebM (weighted signal)

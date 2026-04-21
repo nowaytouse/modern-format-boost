@@ -242,15 +242,42 @@ log-odds value and asset type.
 
 ---
 
+## Metadata Trust Decay (Gray Zone Defense)
+
+To prevent forged metadata (e.g., a 14s video declaring `loop_count=0` and `GIPHY` tags) from
+overwhelming the duration-based priors, the system implements **Metadata Trust Decay**.
+
+Soft metadata signals are multiplied by a `metadata_trust` factor in the 6.0–15.0s range:
+- **Trust = 1.0** at 6.0s (Full confidence)
+- **Trust = 0.0** at 15.0s (Zero confidence in metadata)
+
+**Attenuated Signals:**
+- `loop_count == 0` bonus
+- Platform markers (`GIPHY`, `TENOR`, etc.)
+- Transparency flag bonus
+
+**Non-Attenuated Signals (Physical Reality):**
+- All Layer 3–5 structural and content signals (Loop closure, periodicity, etc.)
+- Audio presence/silence signals
+- Tier-based log-odds bias
+
+### Effect on Gray Zone Forgery
+At 12.0s, the `metadata_trust` is approximately **0.33**. A forged `GIPHY` marker (+0.52)
+only contributes **+0.17** to the log-odds. This ensures that metadata alone cannot "pull"
+ a long asset back into a `LoopStrong` verdict; it **must** be supported by genuine physical
+ evidence from the frames themselves.
+
+---
+
 ## Anti-Forgery Guarantees
 
 | Scenario | Outcome | Reason |
 |---|---|---|
-| `loop_count=0` + GIPHY at 14.9s | LoopWeak | Proximity ramp: -2.375 penalty overwhelms both signals |
+| `loop_count=0` + GIPHY at 14.9s | LoopWeak | Proximity ramp (-2.375) + Trust Decay (~0.01) overwhelms all forgery |
 | `loop_count=0` + GIPHY at 16s | LoopWeak (Hard Veto) | Extreme long veto fires first |
 | 500 MB 4K file at 4s silent | LoopStrong (Hard Veto) | Extreme short veto fires first; file size has no vote |
-| Transparent WebP at 14s | LoopWeak | -1.0 long bias + -1.25 proximity >> +0.68 transparency |
-| Silent WebM at 12s (gray zone) | Depends on pipeline | No single signal decides; physical evidence rules |
+| Transparent WebP at 14s | LoopWeak | Long bias (-1.0) + Ramp (-1.25) >> Trust-decayed transparency |
+| Silent WebM at 12s (gray zone) | Physical Reality | Metadata trust is low (~0.33); physical loop signals must prove the intent |
 
 ---
 

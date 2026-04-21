@@ -33,12 +33,21 @@ discontinuity is now eliminated by a **linear proximity ramp** on both sides of 
 **Short side (6.0–8.0s, silent):**
 - At `6.0s + ε`: full `+2.5` additional bonus (behavior nearly identical to the veto)
 - At `8.0s`: ramp decays to `0` (only standard tier bias remains)
-- Formula: `bonus = (1 - (duration - 6.0) / 2.0) × 2.5`
 
 **Long side (13.0–15.0s):**
 - At `13.0s`: ramp is `0` (only standard tier bias)
 - At `15.0s - ε`: full `-2.5` additional penalty (behavior nearly identical to the veto)
-- Formula: `penalty = ((duration - 13.0) / 2.0) × 2.5`
+
+#### Metadata Trust Decay (Hardened Gray Zone)
+To further protect the 6.0–15.0s gray zone from forged metadata, a **Trust Decay** mechanism
+has been implemented. Soft metadata signals (loop count, platform markers, transparency) are
+now attenuated by a factor that scales from `1.0` (at 6s) to `0.0` (at 15s).
+
+- **Benefit**: A 12s video that forged `loop_count=0` and `GIPHY` tags now only receives ~33%
+  of the normal signal weight. It can no longer overcome the Long-tier duration bias through
+  metadata alone; only genuine physical loop evidence (Layer 3–5) can flip the verdict.
+- **Scope**: Only affects "soft" metadata. Physical signals (audio, loop closure, scene cuts)
+  retain full authority.
 
 This means the effective behavior is now **continuous and monotonic** across the full 0–∞ range,
 with no behavioral discontinuities at any duration boundary.
