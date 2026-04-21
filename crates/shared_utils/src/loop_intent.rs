@@ -1279,33 +1279,15 @@ fn evaluate_image_tree(
         );
     }
 
-    // Layer 2: Explicit declarations
+    // Layer 2: Explicit declarations (Refined to weighted signals to prevent metadata forgery)
     if meta.loop_count == Some(0) {
-        return finalize(
-            LoopIntentVerdict::LoopStrong(
-                "Layer 2-A (Image): explicit infinite-loop declaration (`loop_count=0`)".to_string(),
-            ),
-            log_odds,
-        );
-    }
-
-    if meta.loop_count == Some(1) {
-        return finalize(
-            LoopIntentVerdict::LoopWeak(
-                "Layer 2-B (Image): explicit play-once declaration (`loop_count=1`)".to_string(),
-            ),
-            log_odds,
-        );
+        log_odds.add(loop_count_zero_bonus(meta, thresholds));
+    } else if meta.loop_count == Some(1) {
+        log_odds.add(PLAY_ONCE_NEGATIVE_LOG_ODDS);
     }
 
     if has_explicit_loop_platform_marker(meta) {
-        return finalize(
-            LoopIntentVerdict::LoopStrong(
-                "Layer 2-C (Image): platform / application marker declares looping asset semantics"
-                    .to_string(),
-            ),
-            log_odds,
-        );
+        log_odds.add(crate::constants::PLATFORM_MARKER_POSITIVE_LOG_ODDS);
     }
 
     // Specific Image-family logic
@@ -1442,27 +1424,16 @@ fn evaluate_video_tree(
         );
     }
 
-    // Layer 2: Explicit declarations
+    // Layer 2: Explicit declarations (Refined to weighted signals to prevent metadata forgery)
     if meta.loop_count == Some(0) {
-        return finalize(
-            LoopIntentVerdict::LoopStrong(
-                "Layer 2-A (Video): explicit infinite-loop declaration (`loop_count=0`)".to_string(),
-            ),
-            log_odds,
-        );
+        log_odds.add(loop_count_zero_bonus(meta, thresholds));
     }
 
     if has_explicit_loop_platform_marker(meta) {
-        return finalize(
-            LoopIntentVerdict::LoopStrong(
-                "Layer 2-C (Video): platform / application marker declares looping asset semantics"
-                    .to_string(),
-            ),
-            log_odds,
-        );
+        log_odds.add(crate::constants::PLATFORM_MARKER_POSITIVE_LOG_ODDS);
     }
 
-    // Layer 2-D: Short silent WebM
+    // Layer 2-D: Short silent WebM (Refined to weighted signal)
     let ext_lower = meta.source_extension.as_deref().unwrap_or("").to_lowercase();
     if is_silent_webm(meta, &ext_lower)
         && matches!(
@@ -1470,13 +1441,7 @@ fn evaluate_video_tree(
             DurationTier::UltraShort | DurationTier::Short | DurationTier::MediumLong
         )
     {
-        return finalize(
-            LoopIntentVerdict::LoopStrong(format!(
-                "Layer 2-D (Video): short silent WebM container strongly implies animation / loop intent (tier={:?})",
-                tier
-            )),
-            log_odds,
-        );
+        log_odds.add(crate::constants::COMPACT_SILENT_POSITIVE_LOG_ODDS);
     }
 
     // Layer 1-B3: Dimensional Sticker (Refined Micro-Video)
