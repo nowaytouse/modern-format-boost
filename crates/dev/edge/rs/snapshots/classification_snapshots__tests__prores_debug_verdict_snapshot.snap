@@ -2,4 +2,4 @@
 source: crates/dev/edge/rs/classification_snapshots.rs
 expression: verdict.reason()
 ---
-"Layer 3: log-odds -1.37 <= -0.55 (self-referential structure points away from looping)"
+"Layer 1-B4: Dimension-Agnostic Micro-Clip (tier=UltraShort)"

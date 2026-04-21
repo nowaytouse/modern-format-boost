@@ -2934,6 +2934,7 @@ mod tests {
         let size = 120_000;
         LoopMeta {
             duration_secs: duration,
+            duration_tier: Some(crate::loop_intent::DurationTier::from_secs(duration)),
             width: 320,
             height: 320,
             fps: 12.0,

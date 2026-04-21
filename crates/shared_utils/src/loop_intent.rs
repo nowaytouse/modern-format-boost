@@ -90,6 +90,34 @@ impl LoopIntentVerdict {
 
 // ── LoopMeta: unified signal bundle ──────────────────────────────────────────
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DurationTier {
+    UltraShort,
+    Short,
+    MediumLong,
+    Long,
+    VeryLong,
+    DefinitivelyLong,
+}
+
+impl DurationTier {
+    pub fn from_secs(secs: f64) -> Self {
+        if secs <= crate::constants::DURATION_TIER_ULTRA_SHORT_LIMIT {
+            Self::UltraShort
+        } else if secs <= crate::constants::DURATION_TIER_SHORT_LIMIT {
+            Self::Short
+        } else if secs <= crate::constants::DURATION_TIER_MEDIUM_LONG_LIMIT {
+            Self::MediumLong
+        } else if secs <= crate::constants::DURATION_TIER_LONG_LIMIT {
+            Self::Long
+        } else if secs <= crate::constants::DURATION_TIER_VERY_LONG_LIMIT {
+            Self::VeryLong
+        } else {
+            Self::DefinitivelyLong
+        }
+    }
+}
+
 /// Unified signal bundle consumed by the 7-layer decision tree.
 ///
 /// Populated by constructors (`from_video_detection`, `from_ffprobe_result`, `from_gif_path`).
@@ -98,6 +126,7 @@ impl LoopIntentVerdict {
 pub struct LoopMeta {
     // ── Basic geometry ──
     pub duration_secs: f64,
+    pub duration_tier: Option<DurationTier>, // Optional so we don't break Default, though constructor populates it
     pub width: u32,
     pub height: u32,
     pub fps: f64,
@@ -196,6 +225,7 @@ impl LoopMeta {
 
         let mut meta = Self {
             duration_secs: detection.duration_secs,
+            duration_tier: Some(DurationTier::from_secs(detection.duration_secs)),
             width: detection.width,
             height: detection.height,
             fps: detection.fps,
@@ -290,6 +320,7 @@ impl LoopMeta {
 
         let mut meta = Self {
             duration_secs: probe.duration,
+            duration_tier: Some(DurationTier::from_secs(probe.duration)),
             width: probe.width,
             height: probe.height,
             fps: probe.frame_rate,
@@ -399,6 +430,7 @@ impl LoopMeta {
 
         let mut meta = Self {
             duration_secs: scan.duration_secs.unwrap_or(0.0),
+            duration_tier: Some(DurationTier::from_secs(scan.duration_secs.unwrap_or(0.0))),
             width,
             height,
             fps,
@@ -472,6 +504,12 @@ impl LoopMeta {
         self.directory_loop_intent_score =
             score_directory_context(self.parent_directories.as_deref(), keywords);
         self.filename_loop_intent_score = analyze_filename(self.file_name.as_deref(), keywords).raw;
+    }
+
+    /// Returns the duration tier, falling back to calculation if the cached field is None.
+    pub fn tier(&self) -> DurationTier {
+        self.duration_tier
+            .unwrap_or_else(|| DurationTier::from_secs(self.duration_secs))
     }
 }
 
@@ -668,10 +706,12 @@ fn is_silent_webm(meta: &LoopMeta, ext_lower: &str) -> bool {
         && !meta.has_audio
 }
 
-fn is_short_silent_asset(meta: &LoopMeta, thresholds: &LoopThresholds) -> bool {
+fn is_short_silent_asset(meta: &LoopMeta, _thresholds: &LoopThresholds) -> bool {
     !meta.has_audio
-        && meta.duration_secs > 0.0
-        && meta.duration_secs <= thresholds.short_asset_window_secs
+        && matches!(
+            meta.tier(),
+            DurationTier::UltraShort | DurationTier::Short | DurationTier::MediumLong
+        )
 }
 
 fn checkpoint_verdict(
@@ -714,18 +754,22 @@ fn is_near_16_by_9(width: u32, height: u32) -> bool {
         < crate::constants::ASPECT_RATIO_TOLERANCE_NEAR
 }
 
-fn loop_count_zero_bonus(duration_secs: f64, thresholds: &LoopThresholds) -> f64 {
-    let short_window = (thresholds.duration_override_secs * 6.0).max(3.0);
-    let long_window = (thresholds.modern_bias_duration_secs * 2.0).max(short_window + 1.0);
-
-    if duration_secs <= short_window {
-        crate::constants::LOOP_COUNT_ZERO_BONUS_MAX
-    } else if duration_secs <= long_window {
-        let decay = (duration_secs - short_window) / (long_window - short_window);
-        crate::constants::LOOP_COUNT_ZERO_BONUS_MAX
-            - (crate::constants::LOOP_COUNT_ZERO_BONUS_DECAY_MAX * decay)
-    } else {
-        crate::constants::LOOP_COUNT_ZERO_BONUS_MIN
+fn loop_count_zero_bonus(meta: &LoopMeta, _thresholds: &LoopThresholds) -> f64 {
+    match meta.tier() {
+        DurationTier::UltraShort | DurationTier::Short => {
+            crate::constants::LOOP_COUNT_ZERO_BONUS_MAX
+        }
+        DurationTier::MediumLong => {
+            crate::constants::LOOP_COUNT_ZERO_BONUS_MAX
+                - (crate::constants::LOOP_COUNT_ZERO_BONUS_DECAY_MAX
+                    * crate::constants::LOOP_COUNT_ZERO_BONUS_DECAY_MEDIUM)
+        }
+        DurationTier::Long | DurationTier::VeryLong => {
+            crate::constants::LOOP_COUNT_ZERO_BONUS_MAX
+                - (crate::constants::LOOP_COUNT_ZERO_BONUS_DECAY_MAX
+                    * crate::constants::LOOP_COUNT_ZERO_BONUS_DECAY_LONG)
+        }
+        _ => crate::constants::LOOP_COUNT_ZERO_BONUS_MIN,
     }
 }
 
@@ -954,7 +998,7 @@ fn apply_weak_heuristics(
     if meta.loop_count == Some(1) {
         log_odds.add(-PLAY_ONCE_NEGATIVE_LOG_ODDS);
     } else if meta.loop_count == Some(0) {
-        log_odds.add(loop_count_zero_bonus(meta.duration_secs, thresholds));
+        log_odds.add(loop_count_zero_bonus(meta, thresholds));
     }
 
     if let Some(delay_variation) = meta.frame_delay_variation {
@@ -1117,6 +1161,7 @@ pub fn evaluate_loop_tree(
     let derived = DerivedLoopSignals::from_meta(meta);
     let thresholds = LoopThresholds::from_profile(reference_profile);
     let mut log_odds = LogOdds::default();
+    let tier = meta.tier();
 
     let finalize = |verdict: LoopIntentVerdict, log_odds: LogOdds| TreeEvaluation {
         tree_probability: match verdict {
@@ -1186,38 +1231,39 @@ pub fn evaluate_loop_tree(
 
     if !meta.has_audio
         && is_silent_webm(meta, &ext_lower)
-        && meta.duration_secs <= crate::constants::HARD_PASS_SHORT_GIF_THRESHOLD_SECS
-    {
-        return finalize(
-            LoopIntentVerdict::LoopStrong(
-                "Layer 2-D: short silent WebM container strongly implies animation / loop intent"
-                    .to_string(),
-            ),
-            log_odds,
-        );
-    }
-
-    if !meta.has_audio
-        && meta.duration_secs > 0.0
-        && meta.duration_secs <= thresholds.duration_override_secs
+        && matches!(
+            tier,
+            DurationTier::UltraShort | DurationTier::Short | DurationTier::MediumLong
+        )
     {
         return finalize(
             LoopIntentVerdict::LoopStrong(format!(
-                "Layer 1-B: duration override ({:.2}s <= {:.2}s DB short-duration threshold)",
-                meta.duration_secs, thresholds.duration_override_secs
+                "Layer 2-D: short silent WebM container strongly implies animation / loop intent (tier={:?})",
+                tier
             )),
             log_odds,
         );
     }
 
-    // Layer 1-B2: Sticker-class native GIF — strong loop/sticker prior from physical envelope.
-    // Runs only after Layer 1-B (duration is above the DB short cutoff). Uncertain cases that
-    // do not match this profile still defer to Layer 4 and Layer 6 KNN.
+    if !meta.has_audio
+        && tier == DurationTier::UltraShort
+    {
+        return finalize(
+            LoopIntentVerdict::LoopStrong(format!(
+                "Layer 1-B: short duration override (tier={:?})",
+                tier
+            )),
+            log_odds,
+        );
+    }
+
     if ext_lower == "gif"
         && !meta.has_audio
         && meta.frame_count > 1
-        && meta.duration_secs > 0.0
-        && meta.duration_secs <= f64::from(crate::constants::ANIMATION_CLIP_THRESHOLD_SECS)
+        && matches!(
+            tier,
+            DurationTier::UltraShort | DurationTier::Short | DurationTier::MediumLong
+        )
         && meta.width > 0
         && meta.height > 0
         && meta.width <= crate::constants::STICKER_MAX_DIMENSION
@@ -1227,20 +1273,17 @@ pub fn evaluate_loop_tree(
         if px <= crate::constants::STICKER_TIER_NATIVE_GIF_MAX_PIXELS {
             return finalize(
                 LoopIntentVerdict::LoopStrong(format!(
-                    "Layer 1-B2: sticker-class native GIF ({}x{}, {:.2}s, {} px; strong loop/sticker prior)",
-                    meta.width, meta.height, meta.duration_secs, px
+                    "Layer 1-B2: sticker-class native GIF ({}x{}, tier={:?}, {} px; strong loop prior)",
+                    meta.width, meta.height, tier, px
                 )),
                 log_odds,
             );
         }
     }
-
-    // Layer 1-B3: Dimensional Sticker (Content Optimization)
-    // Short, small, silent videos are likely emojis or UI screen captures.
-    // This absorbs the ad-hoc heuristic that was previously in conversion_api.rs.
+ 
     if !meta.has_audio
         && meta.duration_secs > 0.0
-        && meta.duration_secs <= 3.0
+        && tier == DurationTier::UltraShort
         && meta.width > 0
         && meta.height > 0
         && meta.width <= crate::constants::STICKER_MAX_DIMENSION
@@ -1249,24 +1292,21 @@ pub fn evaluate_loop_tree(
     {
         return finalize(
             LoopIntentVerdict::LoopStrong(format!(
-                "Layer 1-B3: Dimensional Sticker ({}x{}, {:.2}s)",
-                meta.width, meta.height, meta.duration_secs
+                "Layer 1-B3: Dimensional Sticker ({}x{}, tier={:?})",
+                meta.width, meta.height, tier
             )),
             log_odds,
         );
     }
 
-    // Layer 1-B4: Dimension-Agnostic Micro-Clip
-    // Silent clips at or below the micro-clip ceiling are intrinsically animated-image
-    // equivalents regardless of resolution — screen captures, UI demos, motion graphics.
     if !meta.has_audio
         && meta.duration_secs > 0.0
-        && meta.duration_secs <= crate::constants::MICRO_CLIP_CEILING_SECS
+        && tier == DurationTier::UltraShort
     {
         return finalize(
             LoopIntentVerdict::LoopStrong(format!(
-                "Layer 1-B4: Dimension-Agnostic Micro-Clip ({:.2}s <= {:.1}s ceiling)",
-                meta.duration_secs, crate::constants::MICRO_CLIP_CEILING_SECS
+                "Layer 1-B4: Dimension-Agnostic Micro-Clip (tier={:?})",
+                tier
             )),
             log_odds,
         );
@@ -1276,14 +1316,15 @@ pub fn evaluate_loop_tree(
         developer_layer1_override_enabled(crate::constants::ENV_FORCE_SHORT_GIFS);
     if force_short_gifs
         && !meta.has_audio
-        && meta.duration_secs > 0.0
-        && meta.duration_secs <= crate::constants::HARD_PASS_SHORT_GIF_THRESHOLD_SECS
+        && matches!(
+            tier,
+            DurationTier::UltraShort | DurationTier::Short | DurationTier::MediumLong
+        )
     {
         return finalize(
             LoopIntentVerdict::LoopStrong(format!(
-                "Layer 1-C (Dev): forceful short asset pass ({:.2}s <= {:.2}s manual threshold)",
-                meta.duration_secs,
-                crate::constants::HARD_PASS_SHORT_GIF_THRESHOLD_SECS
+                "Layer 1-C (Dev): forceful short asset pass (tier={:?})",
+                tier
             )),
             log_odds,
         );
@@ -1293,15 +1334,29 @@ pub fn evaluate_loop_tree(
         developer_layer1_override_enabled(crate::constants::ENV_INTERCEPT_LONG_SILENT);
     if intercept_long_silent
         && !meta.has_audio
-        && meta.duration_secs > crate::constants::HARD_PASS_SHORT_GIF_THRESHOLD_SECS
+        && matches!(
+            tier,
+            DurationTier::Long | DurationTier::VeryLong | DurationTier::DefinitivelyLong
+        )
     {
         return finalize(
             LoopIntentVerdict::LoopWeak(format!(
-                "Layer 1-D (Dev): intercepting long silent asset (> {:.2}s) to video pathway",
-                crate::constants::HARD_PASS_SHORT_GIF_THRESHOLD_SECS
+                "Layer 1-D (Dev): intercepting long silent asset (tier={:?}) to video pathway",
+                tier
             )),
             log_odds,
         );
+    }
+
+    match tier {
+        DurationTier::UltraShort => log_odds.add(crate::constants::LOG_ODDS_BIAS_ULTRA_SHORT),
+        DurationTier::Short => log_odds.add(crate::constants::LOG_ODDS_BIAS_SHORT),
+        DurationTier::MediumLong => log_odds.add(crate::constants::LOG_ODDS_BIAS_MEDIUM_LONG),
+        DurationTier::Long => log_odds.add(crate::constants::LOG_ODDS_BIAS_LONG),
+        DurationTier::VeryLong => log_odds.add(crate::constants::LOG_ODDS_BIAS_VERY_LONG),
+        DurationTier::DefinitivelyLong => {
+            log_odds.add(crate::constants::LOG_ODDS_BIAS_DEFINITIVELY_LONG)
+        }
     }
 
     evaluate_kinetics_and_physics(meta, &derived, &thresholds, &mut log_odds);

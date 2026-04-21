@@ -21,6 +21,11 @@ All notable changes to this project will be documented in this file.
   - **Error Propagation (Layer 1-A)**: Introduced a new **`LoopIntentVerdict::Error`** state. Assets with `frame_count <= 1` or negligible duration are now explicitly identified as "static media" and skipped, preventing illegitimate loop analysis for non-animated content.
   - **GIF Pipeline Hardening**: Resolved a critical bug where multi-frame GIFs with malformed GCE blocks were misidentified as single-frame. Implemented robust frame counting via direct binary scanning of Image Descriptor blocks.
   - **Layer 1-B2 Priority (Sticker Heuristic)**: New auditable bypass for small (≤1.2M px), short (≤5s), and silent media, ensuring immediate high-efficiency GIF/AV1 conversion regardless of KNN noise.
+  - **Layer 1-B3 (Dimensional Sticker)**: Hardened bypass exclusively targeting short (≤3s), very small (≤320px) silent media to properly flag micro-stickers.
+  - **Layer 1-B4 (Dimension-Agnostic Micro-Clip)**: Added bypass to immediately route any extremely transient (≤2.0s) burst to the animated image pipeline, effectively identifying screen-record short bursts.
+  - **Headless GIF Parsing Resurrection**: Fixed `ffprobe` duration resolution to gracefully process assets manifesting `0.0s` format duration and parsing anomalies like `1/0` frame rates, restoring zero-metadata GIF processing.
+  - **Uncertain Strategy Routings**: Removed arbitrary interception drops for `Uncertain` tree logic outputs. Loop Intent verdicts of `Uncertain` and `LoopWeak` now seamlessly cascade down standard video optimization pipelines (HEVC/AV1) maintaining full Apple compatibility logic when toggled, explicitly reserving GIF rendering only for explicit `LoopStrong` assets.
+  - **DurationTier Synchronization & Stability**: Implemented `LoopMeta::tier()` lazy getter to ensure consistent classification when tier metadata is missing (e.g. in legacy tests). Refined matching windows for Layers 1-B, 1-B3, and 1-B4 to prioritize heuristic weighting for "Short" (2-5s) assets, resolving 4 critical test regressions.
 - **Physical Frame Alignment**: Synchronized `LoopMeta` attributes with scanned physical frame counts, eliminating duration-based heuristic estimation.
 
 ### 🛡️ Encoder Path Hardening & Apple Compatibility

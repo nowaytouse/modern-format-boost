@@ -72,7 +72,22 @@ pub const STICKER_MAX_SIZE_BYTES: u64 = 1_572_864; // 1.5 MB
 /// Silent videos at or below this duration are treated as animated images regardless
 /// of resolution or file size — screen captures, UI demos, and motion graphics
 /// typically fall into this window.
-pub const MICRO_CLIP_CEILING_SECS: f64 = 2.0;
+pub const MICRO_CLIP_CEILING_SECS: f64 = DURATION_TIER_ULTRA_SHORT_LIMIT;
+
+// --- Tiered Duration Classification (Loop Intent) ---
+
+pub const DURATION_TIER_ULTRA_SHORT_LIMIT: f64 = 2.0;
+pub const DURATION_TIER_SHORT_LIMIT: f64 = 5.0;
+pub const DURATION_TIER_MEDIUM_LONG_LIMIT: f64 = 8.0;
+pub const DURATION_TIER_LONG_LIMIT: f64 = 15.0;
+pub const DURATION_TIER_VERY_LONG_LIMIT: f64 = 18.0;
+
+pub const LOG_ODDS_BIAS_ULTRA_SHORT: f64 = 1.5;
+pub const LOG_ODDS_BIAS_SHORT: f64 = 0.5;
+pub const LOG_ODDS_BIAS_MEDIUM_LONG: f64 = -0.25;
+pub const LOG_ODDS_BIAS_LONG: f64 = -1.0;
+pub const LOG_ODDS_BIAS_VERY_LONG: f64 = -2.0;
+pub const LOG_ODDS_BIAS_DEFINITIVELY_LONG: f64 = -3.0;
 
 /// Upper bound on `width * height` for **GIF** assets.
 ///
@@ -237,6 +252,8 @@ pub const ASPECT_RATIO_TOLERANCE_NEAR: f64 = 0.05;
 pub const LOOP_COUNT_ZERO_BONUS_MAX: f64 = 0.18;
 pub const LOOP_COUNT_ZERO_BONUS_MIN: f64 = 0.06;
 pub const LOOP_COUNT_ZERO_BONUS_DECAY_MAX: f64 = 0.12;
+pub const LOOP_COUNT_ZERO_BONUS_DECAY_MEDIUM: f64 = 0.3;
+pub const LOOP_COUNT_ZERO_BONUS_DECAY_LONG: f64 = 0.8;
 
 pub const COMPACTNESS_SIGNAL_SIZE_WEIGHT: f64 = 0.70;
 pub const COMPACTNESS_SIGNAL_PIXELS_WEIGHT: f64 = 0.45;

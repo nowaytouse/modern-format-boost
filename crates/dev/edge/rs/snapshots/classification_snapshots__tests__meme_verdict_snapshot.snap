@@ -1,5 +1,5 @@
 ---
-source: crates/shared_utils/tests/classification_snapshots.rs
+source: crates/dev/edge/rs/classification_snapshots.rs
 expression: verdict.reason()
 ---
-"Layer 6-B: arbitration resolved KEEP (from Layer 5; keep=0.31, convert=0.14; short silent asset 3.50s | loop closure 0.95 | loop frequency 0.80)"
+"Layer 1-B: short duration override (tier=Short)"
