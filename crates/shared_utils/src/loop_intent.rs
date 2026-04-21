@@ -954,14 +954,16 @@ fn apply_weak_heuristics(
         && meta.duration_secs > thresholds.short_clip_secs
         && meta.duration_secs <= thresholds.short_asset_window_secs;
 
-    if has_explicit_loop_platform_marker(meta) {
-        log_odds.add(crate::constants::PLATFORM_MARKER_POSITIVE_LOG_ODDS);
+    // NOTE: platform_marker is already counted in Layer 2 of both image/video sub-trees
+    // (with metadata_trust attenuation). Do NOT re-add here — that would double-count.
+    //
+    // transparency is already counted in image Layer 1-B. Only add it here for video
+    // assets, where it is not applied upstream.
+    if meta.has_transparency && is_video {
+        log_odds.add(crate::constants::TRANSPARENCY_POSITIVE_LOG_ODDS);
     }
     if is_webm && !meta.has_audio {
         log_odds.add(crate::constants::SHORT_CLIP_MIN_BIAS);
-    }
-    if meta.has_transparency {
-        log_odds.add(crate::constants::TRANSPARENCY_POSITIVE_LOG_ODDS);
     }
     if is_short_clip {
         let range = (thresholds.short_clip_secs - thresholds.duration_override_secs).max(0.5);
@@ -1013,11 +1015,9 @@ fn apply_weak_heuristics(
                 * crate::constants::EXTENDED_SHORT_ASSET_PRIOR_LOG_ODDS,
         );
     }
-    if meta.loop_count == Some(1) {
-        log_odds.add(-PLAY_ONCE_NEGATIVE_LOG_ODDS);
-    } else if meta.loop_count == Some(0) {
-        log_odds.add(loop_count_zero_bonus(meta, thresholds));
-    }
+    // NOTE: loop_count signals are already counted in Layer 2 of each sub-tree
+    // (loop_count=0 with metadata_trust decay; loop_count=1 at full weight).
+    // Do NOT re-add here — that would double-count without the trust attenuation.
 
     if let Some(delay_variation) = meta.frame_delay_variation {
         log_odds.add(
@@ -1165,6 +1165,22 @@ fn developer_layer1_override_enabled(name: &str) -> bool {
     }
 }
 
+/// Converts a `LoopIntentVerdict` + accumulated `LogOdds` into a `TreeEvaluation`.
+///
+/// Extracted from the formerly-duplicated inline closure in `evaluate_loop_tree`,
+/// `evaluate_image_tree`, and `evaluate_video_tree`.
+fn finalize(verdict: LoopIntentVerdict, lo: LogOdds) -> TreeEvaluation {
+    TreeEvaluation {
+        tree_probability: match &verdict {
+            LoopIntentVerdict::LoopStrong(_) => 1.0,
+            LoopIntentVerdict::LoopWeak(_) | LoopIntentVerdict::Error(_) => 0.0,
+            LoopIntentVerdict::Uncertain(_) => lo.probability(),
+        },
+        log_odds_value: lo.value(),
+        verdict,
+    }
+}
+
 pub fn evaluate_loop_tree(
     meta: &LoopMeta,
     reference_profile: Option<&LoopReferenceProfile>,
@@ -1180,16 +1196,7 @@ pub fn evaluate_loop_tree(
     let mut log_odds = LogOdds::default();
     let tier = meta.tier();
 
-    let finalize = |verdict: LoopIntentVerdict, lo: LogOdds| TreeEvaluation {
-        tree_probability: match verdict {
-            LoopIntentVerdict::LoopStrong(_) => 1.0,
-            LoopIntentVerdict::LoopWeak(_) => 0.0,
-            LoopIntentVerdict::Uncertain(_) => lo.probability(),
-            LoopIntentVerdict::Error(_) => 0.0,
-        },
-        log_odds_value: lo.value(),
-        verdict,
-    };
+    // `finalize` is a module-level free function — see below evaluate_loop_tree.
 
     // ── Layer 0: Degenerate Input Guard (Veto/Error) ───────────────────────────
     // Must check BEFORE any fast-path logic to prevent 0-frame inputs from bypassing validation
@@ -1348,16 +1355,7 @@ fn evaluate_image_tree(
     tier: DurationTier,
     metadata_trust: f64,
 ) -> TreeEvaluation {
-    let finalize = |verdict: LoopIntentVerdict, lo: LogOdds| TreeEvaluation {
-        tree_probability: match verdict {
-            LoopIntentVerdict::LoopStrong(_) => 1.0,
-            LoopIntentVerdict::LoopWeak(_) => 0.0,
-            LoopIntentVerdict::Uncertain(_) => lo.probability(),
-            LoopIntentVerdict::Error(_) => 0.0,
-        },
-        log_odds_value: lo.value(),
-        verdict,
-    };
+    // `finalize` is a module-level free function — see below evaluate_loop_tree.
 
     let ext_lower = meta.source_extension.as_deref().unwrap_or("").to_lowercase();
 
@@ -1467,16 +1465,7 @@ fn evaluate_video_tree(
     tier: DurationTier,
     metadata_trust: f64,
 ) -> TreeEvaluation {
-    let finalize = |verdict: LoopIntentVerdict, lo: LogOdds| TreeEvaluation {
-        tree_probability: match verdict {
-            LoopIntentVerdict::LoopStrong(_) => 1.0,
-            LoopIntentVerdict::LoopWeak(_) => 0.0,
-            LoopIntentVerdict::Uncertain(_) => lo.probability(),
-            LoopIntentVerdict::Error(_) => 0.0,
-        },
-        log_odds_value: lo.value(),
-        verdict,
-    };
+    // `finalize` is a module-level free function — see below evaluate_loop_tree.
 
     // Layer 1-A: Audio is a very strong anti-loop signal, but not an absolute veto.
     // An ultra-short video with a single click sound is still plausibly a loop.
@@ -1508,6 +1497,9 @@ fn evaluate_video_tree(
     // without genuine physical loop evidence in Layers 3–5.
     if meta.loop_count == Some(0) {
         log_odds.add(loop_count_zero_bonus(meta, thresholds) * metadata_trust);
+    } else if meta.loop_count == Some(1) {
+        // play-once penalty: safe direction, apply full weight
+        log_odds.add(-PLAY_ONCE_NEGATIVE_LOG_ODDS);
     }
 
     if has_explicit_loop_platform_marker(meta) {
@@ -1537,16 +1529,11 @@ fn evaluate_video_tree(
         log_odds.add(crate::constants::COMPACT_SILENT_POSITIVE_LOG_ODDS);
     }
 
-    // Layer 1-B4: Micro-Clip
-    if tier == DurationTier::UltraShort && meta.duration_secs > 0.0 {
-        return finalize(
-            LoopIntentVerdict::LoopStrong(format!(
-                "Layer 1-B4 (Video): Dimension-Agnostic Micro-Clip (tier={:?})",
-                tier
-            )),
-            log_odds,
-        );
-    }
+    // Layer 1-B4: REMOVED — dead code.
+    // UltraShort tier = duration ≤ 2.0s. The Layer 0-EX hard veto fires at ≤ 6.0s (silent),
+    // so ALL UltraShort silent assets exit before reaching this point.
+    // UltraShort assets with audible audio are real short videos and should run the
+    // full pipeline, not be forced to LoopStrong.
 
     // Note: tier-based log-odds bias is applied by the top-level evaluate_loop_tree
     // dispatcher (including buffer zones) before dispatching here. Do not re-apply.
@@ -2036,10 +2023,13 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
         }
     }
 
-    let sample_match = lookup_similar_samples(meta, path);
-
+    // Bug fix: KNN must use the penetration-corrected `mutable_meta`, not the original `meta`.
+    // If penetrating detection changed has_transparency / audio_is_silent / frame_count,
+    // the KNN feature vector must reflect those corrections to match what the tree used.
     let tree = evaluate_loop_tree(&mutable_meta, reference_profile.as_ref());
     let tree_probability = tree.tree_probability;
+
+    let sample_match = lookup_similar_samples(&mutable_meta, path);
 
     // ── Tracking variables for inference logging ──
     let mut knn_keep_probability: Option<f64> = None;
@@ -2464,7 +2454,8 @@ fn get_meme_keywords() -> &'static [String] {
     MEME_KEYWORDS_CACHE.get_or_init(|| {
         let json_str = include_str!("meme_keywords.json");
         let languages: HashMap<String, Vec<String>> =
-            serde_json::from_str(json_str).unwrap_or_default();
+            serde_json::from_str(json_str)
+                .expect("embedded meme_keywords.json is malformed — binary is corrupt");
         let mut all_keywords = Vec::new();
         for list in languages.values() {
             all_keywords.extend(list.clone());

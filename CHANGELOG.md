@@ -105,11 +105,55 @@ contributes to the log-odds accumulation for assets in the gray zone (6–15s).
   - Synchronized `image_detection`, `video_detection`, and `loop_intent` with the new duration-aware penetration signatures.
   - Hardened `FfmpegBuilder` call sites with fast-seek (`-ss`) support for large-asset sampling.
 
-### 🐛 Bug Fixes
-- **Tier Bias Double-Counting**: Fixed a latent bug where image-family and video sub-trees were
-  re-applying the tier-based log-odds bias on top of the top-level dispatcher, causing inflated
-  pro-loop scores for image containers.
-- **FFprobe Frame Rate Parsing**: Fixed `parse_frame_rate()` to return error for division by zero (e.g., "30/0") instead of silently returning 0.0.
+### 🐛 Bug Fixes — Audit Remediation
+
+#### 🔴 Signal Double-Counting (apply_weak_heuristics)
+`apply_weak_heuristics` (Layer 4) was re-accumulating `platform_marker`, `transparency`, and
+`loop_count` signals that had already been added in Layer 1-B / Layer 2 of each sub-tree.
+This caused systematic upward bias toward `LoopStrong` for image-path assets.
+
+**Fix**: Removed all three duplicated signals from `apply_weak_heuristics`.
+- `platform_marker`: removed entirely (already in Layer 2 of both sub-trees with trust decay)
+- `loop_count`: removed entirely (already in Layer 2 of both sub-trees with trust decay)
+- `transparency`: guarded to `is_video` only (image tree already applies it in Layer 1-B)
+
+#### 🔴 KNN Feature Vector Inconsistency (Stale Meta)
+`lookup_similar_samples` was called with the original `meta` (pre-penetration-detection),
+while `evaluate_loop_tree` used the corrected `mutable_meta` (post-detection). If penetrating
+detection changed `has_transparency`, `audio_is_silent`, or `frame_count`, the KNN neighbors
+were selected against a different feature vector than the one used by the decision tree.
+
+**Fix**: Moved `lookup_similar_samples` to after `evaluate_loop_tree`, using `&mutable_meta`.
+
+#### 🟡 `loop_count=1` Missing from Video Layer 2
+The video sub-tree's Layer 2 only handled `loop_count == Some(0)`. The play-once penalty
+(`loop_count == Some(1)`) was only applied via `apply_weak_heuristics`, which is now cleaned.
+
+**Fix**: Added `loop_count == Some(1)` branch to video Layer 2 at full weight (negative signals
+are applied at full weight — trust decay only applies to positive/pro-loop signals).
+
+#### 🟡 Layer 1-B4 Dead Code Removed
+The "Micro-Clip" exit in `evaluate_video_tree` (`tier == UltraShort`) was unreachable:
+`UltraShort` ≤ 2.0s, but the Layer 0-EX hard veto fires at ≤ 6.0s (silent). All UltraShort
+silent assets exit at Layer 0-EX. UltraShort assets with audible audio should run the full
+pipeline — not be forced to `LoopStrong`.
+
+**Fix**: Removed the dead branch, replaced with an explanatory comment.
+
+#### 🟡 finalize Closure Deduplicated
+Three identical `finalize` closures existed inside `evaluate_loop_tree`,
+`evaluate_image_tree`, and `evaluate_video_tree`.
+
+**Fix**: Extracted as a single module-level free function `fn finalize(verdict, lo) -> TreeEvaluation`.
+
+#### 🟢 JSON Silent Failure Upgraded to Panic
+`get_meme_keywords()` silently returned an empty keyword list if `meme_keywords.json` failed
+to parse, causing the entire meme-keyword heuristic to go dark without any diagnostic output.
+Since the file is `include_str!`-embedded at compile time, a parse failure means a corrupt binary.
+
+**Fix**: Changed `unwrap_or_default()` to `expect("embedded meme_keywords.json is malformed")`.
+
+
 
 
 ## [0.11.2] — 2026-04-20
