@@ -14,25 +14,24 @@ file extension, platform markers, transparency flag, etc.) can produce an immedi
 its own. All non-duration evidence is reduced to weighted log-odds contributions that must
 overcome accumulated counter-evidence to flip a verdict.
 
-#### Extreme Duration Hard Veto (Layer 0-EX)
-Two absolute boundaries have been established as the **only** signals in the system with true
-one-shot authority. These are physical reality constraints, not heuristics:
+#### Extreme Duration Smooth Veto (Layer 0-EX)
+Two absolute boundaries have been refined as the **only** signals in the system with true
+one-shot authority. A new **Smooth Veto** architecture (using 1.0s transition windows) prevents 
+"behavioral cliffs" near these thresholds:
 
-- **≤ 2.0s (silent) → `LoopStrong` (Hard Veto)**: No real-world intentional "video" exists at
-  this duration. Even screen recordings and UI demos are better served as animated images.
-  No file size, resolution, pixel count, or metadata signal can override this.
-- **≥ 30.0s → `LoopWeak` (Hard Veto)**: No real-world looping sticker, meme, or animated image
-  exists at this duration. Even "looping background" videos are videos.
-  No `loop_count=0`, transparency, or platform marker can override this.
+- **≤ 6.0s (silent) → `LoopStrong` (Smooth Veto)**: Refined boundary for expressive short-form 
+  animation. Silent content under 6s is treated as definitively animated.
+- **≥ 15.0s → `LoopWeak` (Smooth Veto)**: Refined upper limit for looping media. Assets 
+  longer than 15s are treated as definitively video content.
+- **Cliff Prevention**: Linear interpolation of a massive `15.0` log-odds bias over transition 
+  windows (5.5s–6.5s and 14.5s–15.5s) ensures continuous probability curves for edge cases.
 
 #### Buffer Zone Graduated Defense
-Two graduated buffer zones provide additional robustness around the extreme boundaries:
-- **2–4s (Pro-Loop Buffer)**: Silent assets in this window receive an additional `+1.0` log-odds
-  bonus on top of their tier bias, making it extremely difficult for any anti-loop signal to
-  flip a verdict to `LoopWeak` at these durations.
-- **20–30s (Anti-Loop Buffer)**: Assets in this window receive an additional `-1.5` log-odds
-  penalty on top of their tier bias, making it extremely difficult for pro-loop signals (e.g.,
-  `loop_count=0`, transparency) to produce a `LoopStrong` verdict.
+Two graduated buffer zones provide additional robustness around the new boundaries:
+- **6–8s (Pro-Loop Buffer)**: Silent assets in this window receive an additional `+1.0` log-odds
+  bonus, making it extremely difficult for any anti-loop signal to flip a verdict.
+- **12–15s (Anti-Loop Buffer)**: Assets in this window receive an additional `-1.5` log-odds
+  penalty, making it extremely difficult for pro-loop signals to produce a `LoopStrong` verdict.
 
 #### Tier Bias Centralization
 The per-tier log-odds bias injection (UltraShort → +1.5, Short → +0.5, Long → -1.0, etc.) has

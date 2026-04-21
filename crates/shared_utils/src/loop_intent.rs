@@ -1207,51 +1207,70 @@ pub fn evaluate_loop_tree(
         );
     }
 
-    // ── Layer 0-EX: Extreme Duration Hard Veto ─────────────────────────────────
-    // This is the ONLY place in the entire system where duration alone has
-    // absolute veto power without going through the log-odds pipeline.
+    // ── Layer 0-EX: Extreme Duration Smooth Veto ───────────────────────────────
+    // This layer handles absolute authority for extreme durations while 
+    // ensuring a smooth transition to avoid "behavioral cliffs".
     //
     // Design rationale:
-    //   • ≤ 2.0s silent: no real-world video content exists at this duration that
-    //     a human would intend as "video". Even screen recordings become GIFs.
-    //     No file size, resolution, or metadata signal overrides this.
-    //   • ≥ 30.0s: no real-world sticker, meme, or looping animated image exists
-    //     at this duration. Even "looping" music videos are videos.
-    //     No loop_count, transparency, or platform marker overrides this.
-    //
-    // The buffer zones (2–4s and 20–30s) provide graduated defense — they inject
-    // a very strong additional bias on top of the tier bias to make it extremely
-    // difficult (but not impossible) for other signals to flip the verdict.
+    //   • 0.0s – 5.5s (silent): Hard Veto LoopStrong.
+    //   • 5.5s – 6.5s (silent): Linearly decreasing super-bias (Smooth Veto).
+    //   • 14.5s – 15.5s: Linearly increasing negative super-bias (Smooth Veto).
+    //   • 15.5s+: Hard Veto LoopWeak.
 
+    let half_window = crate::constants::EXTREME_TRANSITION_WINDOW_SECS / 2.0;
+    let short_limit = crate::constants::EXTREME_SHORT_ABSOLUTE_LIMIT_SECS;
+    let long_limit = crate::constants::EXTREME_LONG_ABSOLUTE_LIMIT_SECS;
     let has_audible_audio_global = meta.has_audio && !meta.audio_is_silent.unwrap_or(false);
 
-    // Hard veto: Extreme short (≤ 2.0s, silent)
-    if meta.duration_secs <= crate::constants::EXTREME_SHORT_ABSOLUTE_LIMIT_SECS
-        && !has_audible_audio_global
-    {
+    // Calculate Short Extreme Bias (Pro-Loop)
+    let short_extreme_bias = if !has_audible_audio_global {
+        if meta.duration_secs <= short_limit - half_window {
+            crate::constants::LOG_ODDS_EXTREME_VETO_STRENGTH
+        } else if meta.duration_secs >= short_limit + half_window {
+            0.0
+        } else {
+            let t = (meta.duration_secs - (short_limit - half_window)) 
+                / crate::constants::EXTREME_TRANSITION_WINDOW_SECS;
+            crate::constants::LOG_ODDS_EXTREME_VETO_STRENGTH * (1.0 - t)
+        }
+    } else {
+        0.0
+    };
+
+    // Calculate Long Extreme Bias (Anti-Loop)
+    let long_extreme_bias = if meta.duration_secs >= long_limit + half_window {
+        -crate::constants::LOG_ODDS_EXTREME_VETO_STRENGTH
+    } else if meta.duration_secs <= long_limit - half_window {
+        0.0
+    } else {
+        let t = (meta.duration_secs - (long_limit - half_window)) 
+            / crate::constants::EXTREME_TRANSITION_WINDOW_SECS;
+        -crate::constants::LOG_ODDS_EXTREME_VETO_STRENGTH * t
+    };
+
+    // Immediate Hard Veto Exits (only outside the transition window)
+    if short_extreme_bias >= crate::constants::LOG_ODDS_EXTREME_VETO_STRENGTH {
         return finalize(
             LoopIntentVerdict::LoopStrong(format!(
-                "Layer 0-EX (Hard Veto): extreme-short duration {:.2}s ≤ {:.1}s — \
-                 definitively animated image regardless of all other signals",
-                meta.duration_secs,
-                crate::constants::EXTREME_SHORT_ABSOLUTE_LIMIT_SECS,
+                "Layer 0-EX (Hard Veto): extreme-short duration {:.2}s ≤ {:.1}s",
+                meta.duration_secs, short_limit - half_window
+            )),
+            log_odds,
+        );
+    }
+    if long_extreme_bias <= -crate::constants::LOG_ODDS_EXTREME_VETO_STRENGTH {
+        return finalize(
+            LoopIntentVerdict::LoopWeak(format!(
+                "Layer 0-EX (Hard Veto): extreme-long duration {:.2}s ≥ {:.1}s",
+                meta.duration_secs, long_limit + half_window
             )),
             log_odds,
         );
     }
 
-    // Hard veto: Extreme long (≥ 30.0s) — no exceptions, even for silent assets
-    if meta.duration_secs >= crate::constants::EXTREME_LONG_ABSOLUTE_LIMIT_SECS {
-        return finalize(
-            LoopIntentVerdict::LoopWeak(format!(
-                "Layer 0-EX (Hard Veto): extreme-long duration {:.2}s ≥ {:.1}s — \
-                 definitively video regardless of all other signals",
-                meta.duration_secs,
-                crate::constants::EXTREME_LONG_ABSOLUTE_LIMIT_SECS,
-            )),
-            log_odds,
-        );
-    }
+    // Inject smooth extreme bias for assets inside the transition window
+    log_odds.add(short_extreme_bias);
+    log_odds.add(long_extreme_bias);
 
     // ── Layer 0: Duration Dispatcher (Bias injection, NOT fast-path exit) ────────
     // Short duration is the strongest non-extreme signal, but it injects a massive

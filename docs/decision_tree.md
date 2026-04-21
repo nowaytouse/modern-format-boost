@@ -27,44 +27,56 @@ This means:
 ## Duration Zones and Authority Model
 
 ```
-0s ─────────────────────────────────────────────────────── ∞
-     │←─ Hard Veto ─→│←── Buffer ──→│←── Gray Zone ──→│←── Buffer ──→│←─ Hard Veto ─→│
-     0              2s             4s                20s              30s             ∞
+0s ───────────────────────────────────────────────────────── ∞
+     │← Hard Veto →│← Transition →│← Gray Zone →│← Transition →│← Hard Veto →│
+     0            5.5s           6.5s          14.5s          15.5s          ∞
 
 ZONE          DURATION         AUTHORITY          DEFAULT VERDICT
 ────────────────────────────────────────────────────────────────────────────────────────
-Extreme Short  ≤ 2.0s (silent)  Absolute veto      LoopStrong — no exceptions
-Short Buffer   2.0–4.0s         Tier bias + +1.0   Very strong pro-loop prior
-Short Zone     4.0–5.0s         Tier bias + 0.5    Strong pro-loop prior
-Medium Zone    5.0–8.0s         Tier bias - 0.25   Slight anti-loop bias
-Gray Zone      8.0–20.0s        Full pipeline only  No default — all signals compete
-Long Buffer    20.0–30.0s       Tier bias - 1.5    Very strong anti-loop prior
-Extreme Long   ≥ 30.0s          Absolute veto      LoopWeak — no exceptions
+Extreme Short  ≤ 6.0s (silent)  Hard/Smooth Veto   LoopStrong
+Short Transition 5.5s – 6.5s    Interpolated Veto  Graduated authority
+Gray Zone      6.5s – 14.5s     Full pipeline only No default — all signals compete
+Long Transition 14.5s – 15.5s   Interpolated Veto  Graduated authority
+Extreme Long   ≥ 15.0s          Hard/Smooth Veto   LoopWeak
 ```
+
+---
+
+## Smooth Veto Architecture
+
+To prevent "behavioral cliffs" (e.g., a 5.9s asset being forced to GIF while a 6.1s asset is 
+forced to video), the system implements a **Smooth Veto** mechanism using a 1.0s transition window.
+
+### Logic Flow:
+1.  **Veto Injection**: A massive log-odds bias (`LOG_ODDS_EXTREME_VETO_STRENGTH = 15.0`) is calculated.
+2.  **Linear Interpolation**: Inside the transition windows (5.5s-6.5s and 14.5s-15.5s), this bias 
+    linearly ramps from 15.0 down to 0.0 (or vice versa).
+3.  **Hard Veto Exit**: An immediate return only triggers if the asset is strictly outside the 
+    transition window (i.e., ≤ 5.5s or ≥ 15.5s).
+4.  **Soft Integration**: Assets within the transition window proceed to the full pipeline, 
+    but with a very high starting bias, ensuring the resulting probability curve is continuous.
 
 ---
 
 ## Layer Architecture
 
-### Layer 0-EX: Extreme Duration Hard Veto
+### Layer 0-EX: Extreme Duration Smooth Veto
 
-**The only two conditions with one-shot authority.**
+**The only two zones with absolute authority.**
 
 ```
-IF duration ≤ 2.0s AND no audible audio:
-    → LoopStrong (Hard Veto) — exits immediately, no further analysis
+IF duration ≤ 5.5s AND silent:   → LoopStrong (Hard Veto)
+IF duration ≥ 15.5s:             → LoopWeak (Hard Veto)
 
-IF duration ≥ 30.0s:
-    → LoopWeak (Hard Veto) — exits immediately, no further analysis
+IF in [5.5s, 6.5s] OR [14.5s, 15.5s]:
+    → Inject interpolated Extreme Bias into Log-Odds
 ```
 
 **Why these boundaries?**
-- **2.0s**: The cognitive threshold for "intentional video content". No human creates a 1.5s
-  video they intend to watch as a non-looping clip. Screen recordings, UI demos, reactions —
-  all are better represented as animated images at this duration.
-- **30.0s**: The practical upper limit for any real-world looping animated image. Even long
-  "looping" GIFs on social platforms rarely exceed 15–20s. At 30s, the asset is unambiguously
-  video content regardless of its technical container or metadata.
+- **6.0s**: The refined threshold for "expressive short-form animation". Silent content under 6s 
+  is almost universally intended to be looped or treated as a sticker.
+- **15.0s**: The practical upper limit for looping media. Any asset longer than 15s is 
+  statistically much more likely to be standard video content.
 
 ### Layer 0: Degenerate Input Guard (Error)
 
