@@ -1920,7 +1920,7 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
         
         // 2. Transparency verification (detect fake alpha channels)
         if mutable_meta.has_transparency && mutable_meta.transparency_is_real.is_none() {
-            match detect_real_transparency(p, mutable_meta.has_transparency) {
+            match detect_real_transparency(p, Some(mutable_meta.duration_secs)) {
                 crate::media_penetration::PenetrationResult::Verified(is_real) => {
                     mutable_meta.transparency_is_real = Some(is_real);
                     if !is_real {
@@ -1959,68 +1959,7 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
             }
         }
     }
-    
-    // ── Penetrating Content-Based Detection ──
-    // Verify actual content instead of trusting potentially fake metadata
-    if let Some(p) = path {
-        // 1. Audio silence detection (including empty tracks)
-        if mutable_meta.has_audio && mutable_meta.audio_is_silent.is_none() {
-            match detect_audio_silence(p) {
-                crate::media_penetration::PenetrationResult::Verified(is_silent) => {
-                    mutable_meta.audio_is_silent = Some(is_silent);
-                    emit_stderr(&format!(
-                        "🔊 Audio penetration: {}",
-                        if is_silent { "SILENT (< -70 dB or empty)" } else { "AUDIBLE" }
-                    ));
-                }
-                crate::media_penetration::PenetrationResult::Failed => {
-                    emit_stderr("⚠️  Audio penetration failed, trusting metadata");
-                }
-                crate::media_penetration::PenetrationResult::Skipped => {}
-            }
-        }
-        
-        // 2. Transparency verification (detect fake alpha channels)
-        if mutable_meta.has_transparency && mutable_meta.transparency_is_real.is_none() {
-            match detect_real_transparency(p, mutable_meta.has_transparency) {
-                crate::media_penetration::PenetrationResult::Verified(is_real) => {
-                    mutable_meta.transparency_is_real = Some(is_real);
-                    if !is_real {
-                        emit_stderr("⚠️  Transparency penetration: FAKE (alpha unused), overriding metadata");
-                        mutable_meta.has_transparency = false;
-                    } else {
-                        emit_stderr("✅ Transparency penetration: REAL (alpha variance detected)");
-                    }
-                }
-                crate::media_penetration::PenetrationResult::Failed => {
-                    emit_stderr("⚠️  Transparency penetration failed, trusting metadata");
-                }
-                crate::media_penetration::PenetrationResult::Skipped => {}
-            }
-        }
-        
-        // 3. Frame count verification (detect metadata lies)
-        if mutable_meta.frame_count <= 1 || mutable_meta.frame_count > 50000 {
-            match detect_real_frame_count(p, mutable_meta.frame_count) {
-                crate::media_penetration::PenetrationResult::Verified(real_count) => {
-                    mutable_meta.real_frame_count = Some(real_count);
-                    if real_count != mutable_meta.frame_count {
-                        emit_stderr(&format!(
-                            "⚠️  Frame count mismatch: metadata={}, actual={}, overriding",
-                            mutable_meta.frame_count, real_count
-                        ));
-                        mutable_meta.frame_count = real_count;
-                    } else {
-                        emit_stderr(&format!("✅ Frame count verified: {}", real_count));
-                    }
-                }
-                crate::media_penetration::PenetrationResult::Failed => {
-                    emit_stderr("⚠️  Frame count penetration failed, trusting metadata");
-                }
-                crate::media_penetration::PenetrationResult::Skipped => {}
-            }
-        }
-    }
+
 
     // ── Layer 0: Legacy Fallback ──
     if is_legacy_mode {

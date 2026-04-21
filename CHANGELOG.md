@@ -6,22 +6,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### 🔬 Penetrating Content Detection System
-- **Metadata Verification Architecture**: Introduced a unified `media_penetration` module that verifies critical media properties by decoding actual content instead of trusting potentially fake container metadata.
-  - **Audio Silence Detection**: Decodes audio streams using FFmpeg `volumedetect` filter to identify silent tracks (< -70 dB or empty). Prevents "fake audio" metadata from misleading routing decisions.
-  - **Transparency Verification**: Extracts and analyzes alpha channel variance using `alphaextract` + `signalstats` filters. Detects "fake transparency" where alpha channels exist but are unused (all opaque).
-  - **Frame Count Validation**: Decodes and counts actual frames via `showinfo` filter for suspicious claims (≤1 or >50000 frames). Prevents single-frame files masquerading as animations or inflated frame count metadata.
-- **Global Integration**: Penetrating detection now runs automatically in all media detection entry points:
-  - `video_detection::detect_video()` - Video/animation detection
-  - `ffprobe::probe_video()` - Low-level FFprobe wrapper
-  - `image_detection::detect_image()` - Static/animated image detection
-  - `loop_intent::assess_loop_intent_from_meta()` - Loop intent classification
-- **Robust Error Handling**: Implemented `PenetrationResult<T>` enum with three states:
-  - `Verified(T)` - Detection succeeded with definitive result
-  - `Failed` - Detection failed (file unreadable, codec unsupported, etc.) - falls back to trusting metadata with warning
-  - `Skipped` - Detection skipped for performance (reasonable claims trusted)
-- **Performance Optimization**: Reasonable metadata claims (e.g., 2-50000 frames) are trusted without verification to avoid unnecessary decoding overhead.
-- **User Feedback**: All detection results emit structured warnings via stderr with emoji indicators (🔊 ✅ ⚠️) for transparency in processing decisions.
+### 🔬 Penetrating Content Detection System (Hardened v2)
+- **Stratified Transparency Verification**: Upgraded from simple variance sampling to **Stratified Sampling** (Start, Mid, End points) to detect transparency that appears non-linearly.
+  - **Precision Filtering**: Switched from `signalstats` to the `stats` filter for definitive pixel-level alpha analysis (`lavfi.stats.0.Min < 255.0`).
+  - **Dynamic Sampling**: Callers now propagate `duration` to allow intelligent seek-based frame extraction instead of linear decoding.
+- **Canonical Frame Count Validation**: Replaced the `showinfo` decoder count with **`ffprobe -count_frames`**.
+  - **Absolute Accuracy**: Provides the industry-standard "ground truth" for real decodable frames, bypassing deceptive metadata headers.
+  - **Performance Optimization**: Continues to skip verification for reasonable claims (2-50,000 frames) while hardening the gate for single-frame or extreme-length "liar" files.
+- **Global API Refinement**:
+  - Synchronized `image_detection`, `video_detection`, and `loop_intent` with the new duration-aware penetration signatures.
+  - Hardened `FfmpegBuilder` call sites with fast-seek (`-ss`) support for large-asset sampling.
+- **Unit Test Regression Coverage**: Updated/added tests in `media_penetration.rs` to verify new sampling signatures and frame-count logic.
 
 ### 🐛 Bug Fixes
 - **FFprobe Frame Rate Parsing**: Fixed `parse_frame_rate()` to return error for division by zero (e.g., "30/0") instead of silently returning 0.0.

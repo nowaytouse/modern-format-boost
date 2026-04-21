@@ -530,7 +530,7 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
         || result.pix_fmt.contains("gbrap");
     if has_transparency {
         if let crate::media_penetration::PenetrationResult::Verified(is_real) =
-            crate::media_penetration::detect_real_transparency(path, true)
+            crate::media_penetration::detect_real_transparency(path, Some(result.duration_secs))
         {
             if !is_real {
                 crate::progress_mode::emit_stderr(&format!(

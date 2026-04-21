@@ -2177,7 +2177,7 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
     // Verify transparency claim by checking actual alpha channel usage
     if result.has_alpha {
         if let crate::media_penetration::PenetrationResult::Verified(is_real) =
-            crate::media_penetration::detect_real_transparency(path, true)
+            crate::media_penetration::detect_real_transparency(path, result.duration.map(f64::from))
         {
             if !is_real {
                 crate::progress_mode::emit_stderr(&format!(
