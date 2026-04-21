@@ -93,6 +93,23 @@ mod tests {
         }
     }
 
+    fn mock_prores_debug_profile() -> LoopMeta {
+        LoopMeta {
+            duration_secs: 18.2,
+            duration_tier: Some(shared_utils::loop_intent::DurationTier::from_secs(18.2)),
+            width: 3840,
+            height: 2160,
+            fps: 60.0,
+            frame_count: 1092,
+            file_size_bytes: 800_000_000,
+            has_audio: false,
+            is_native_gif: false,
+            source_extension: Some("mov".to_string()),
+            container: Some("prores".to_string()),
+            ..LoopMeta::default()
+        }
+    }
+
     #[test]
     fn test_sticker_verdict_snapshot() {
         let meta = mock_sticker_profile();
@@ -124,6 +141,13 @@ mod tests {
     #[test]
     fn test_definitively_long_verdict_snapshot() {
         let meta = mock_definitively_long_profile();
+        let verdict = assess_loop_intent_from_meta(&meta, None);
+        assert_debug_snapshot!(verdict.reason());
+    }
+
+    #[test]
+    fn test_prores_debug_verdict_snapshot() {
+        let meta = mock_prores_debug_profile();
         let verdict = assess_loop_intent_from_meta(&meta, None);
         assert_debug_snapshot!(verdict.reason());
     }

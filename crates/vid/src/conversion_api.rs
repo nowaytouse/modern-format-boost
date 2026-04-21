@@ -502,7 +502,20 @@ pub fn determine_strategy_with_apple_compat(
         shared_utils::assess_loop_intent(&detection)
     };
 
-    let is_loop_intent = loop_verdict.is_keep_gif();
+    let mut is_loop_intent = loop_verdict.is_keep_gif();
+
+    // Apple Compatibility Fallback: Modern animations (WebP, AVIF, etc.) with Uncertain intent 
+    // are forced to GIF to ensure ecosystem compatibility in Apple mode.
+    if !is_loop_intent && apple_compat && !force {
+        if let Some(ext) = input.extension().and_then(|e| e.to_str()) {
+            let ext_lower = ext.to_lowercase();
+            if shared_utils::constants::MODERN_ANIMATED_EXTENSIONS.contains(&ext_lower.as_str()) {
+                if matches!(loop_verdict, shared_utils::LoopIntentVerdict::Uncertain(_)) {
+                    is_loop_intent = true;
+                }
+            }
+        }
+    }
 
     // ══════════════════════════════════════════════════════════════════════════════
     // LOOP ERROR HANDLING: Skip on impossible or conflicting signals
