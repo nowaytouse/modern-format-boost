@@ -7,24 +7,17 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### 🔬 Penetrating Content Detection System (Hardened v3)
-- **Two-Phase Transparency Verification (Zero-Bias Guarantee)**:
-  - **Phase 1 - Stratified Sampling**: Fast check at 3 time points (start, mid, end) to catch most cases efficiently.
-  - **Phase 2 - Full Decode Fallback**: If sampling finds no transparency but alpha channel exists, performs complete frame-by-frame decode to ensure no false negatives. This catches transparency that only appears in specific frames.
-  - **Precision Filtering**: Uses `stats` filter for definitive pixel-level alpha analysis (`lavfi.stats.0.Min < 255.0`).
-  - **Dynamic Sampling**: Callers propagate `duration` to allow intelligent seek-based frame extraction.
-- **Physical Frame Count Validation (Ultimate Accuracy)**: Replaced `ffprobe -count_frames` with **FFmpeg Physical Decoding Summary**.
-  - **Zero-Bias Guarantee**: Uses `ffmpeg -map 0:v:0 -fps_mode passthrough -f null -` to force complete physical decoding without any frame rate conversion, duplication, or dropping.
-  - **Absolute Ground Truth**: Parses the final `frame=` summary line from FFmpeg's stderr, which represents the exact number of frames physically processed by the decoder → filter graph → output pipeline.
-  - **Edit List Immunity**: Unlike container-level metadata or stream analyzers, this method processes the actual decoded frames after all PTS/DTS corrections and Edit List applications, providing the true "playback frame count".
-  - **Performance Optimization**: Continues to skip verification for reasonable claims (2-50,000 frames) while hardening the gate for single-frame or extreme-length "liar" files.
-- **Audio Silence Detection (Complete Decode)**:
-  - **Full Stream Analysis**: Uses `volumedetect` filter to decode and analyze the entire audio stream.
-  - **Dual Detection**: Identifies both empty tracks (`n_samples: 0`) and silent tracks (mean volume < -70 dB).
-  - **Zero-Bias**: Complete decode ensures no silent segments are missed.
-- **Global API Refinement**:
-  - Synchronized `image_detection`, `video_detection`, and `loop_intent` with the new duration-aware penetration signatures.
-  - Hardened `FfmpegBuilder` call sites with fast-seek (`-ss`) support for large-asset sampling.
-- **Unit Test Regression Coverage**: Updated/added tests in `media_penetration.rs` to verify new sampling signatures and frame-count logic.
+- **Absolute Physical Verification**:
+    - **Absolute Frame Counting**: Replaced metadata-based counting with **FFmpeg Physical Decoding Summary**. Uses `-fps_mode passthrough` to force complete physical decoding, ensuring zero-deviation ground truth regardless of container deceptive tactics.
+    - **Stratified Transparency Sampling**: Implemented a two-phase check (Start/Middle/End sampling + Full Decode Fallback) using the `stats` filter to accurately detect non-linear or frame-specific alpha channels.
+- **Zero-Trust Loop Intent Architecture (Hardened)**:
+    - **Duration Veto (Physical Redlines)**: Established absolute boundaries where duration has final say:
+        - **Assets >= 30s**: Forced to video routing (LoopWeak) to prevent high-resource GIF/WebP encoding for long clips.
+        - **Silent Assets <= 2s**: Forced to animation routing (LoopStrong) to immediately capture micro-stickers and transient bursts.
+    - **Weighted Metadata**: All non-physical "certificates" (`loop_count=0`, platform markers, container extensions) are now demoted to weighted Log-Odds signals. They can no longer one-shot a verdict; they must be corroborated by structural analysis.
+    - **Mandatory Structural Analysis**: All assets (except those hitting absolute duration redlines) now undergo full kinetic, loop-closure, and periodicity analysis (Layer 3/4).
+- **Audio Silence Detection**: Uses `volumedetect` with full-stream decoding to identify both empty tracks and silent tracks (mean volume < -70 dB) with zero-bias.
+- **Maintenance**: Refactored `media_penetration.rs` for modularity and improved error handling during heavy decoding passes.
 
 ### 🐛 Bug Fixes
 - **FFprobe Frame Rate Parsing**: Fixed `parse_frame_rate()` to return error for division by zero (e.g., "30/0") instead of silently returning 0.0.

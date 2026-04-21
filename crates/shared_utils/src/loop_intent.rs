@@ -1207,11 +1207,34 @@ pub fn evaluate_loop_tree(
         );
     }
 
-    // ── Layer 0: Duration Dispatcher (Bias injection, NOT fast-path exit) ────────
-    // Short duration is the strongest signal, but it injects a massive bias into
-    // log-odds rather than bypassing the full analysis pipeline.  This ensures that
-    // even a short asset with anomalous structural signals (e.g. scene cuts, complex
-    // motion) can still be downgraded by later layers.
+    // ── Layer 0: Duration Dispatcher (Absolute Boundaries & Bias injection) ────
+    // duration_secs >= 30.0 is the absolute upper bound for animations in video containers.
+    // duration_secs <= 2.0 is the absolute lower bound (UltraShort).
+    let tier = meta.tier();
+    let has_audible_audio = meta.has_audio && !meta.audio_is_silent.unwrap_or(false);
+
+    // Absolute Veto: Long assets are videos.
+    if meta.duration_secs >= crate::constants::ANIMATION_CLIP_THRESHOLD_SECS && !meta.is_native_gif {
+        return finalize(
+            LoopIntentVerdict::LoopWeak(format!(
+                "Layer 0: duration {:.2}s >= 30s threshold (Absolute Video Boundary)",
+                meta.duration_secs
+            )),
+            log_odds,
+        );
+    }
+
+    // Absolute Veto: Ultra-short silent assets are animations.
+    if tier == DurationTier::UltraShort && !has_audible_audio {
+        return finalize(
+            LoopIntentVerdict::LoopStrong(format!(
+                "Layer 0: ultra-short silent asset {:.2}s (Absolute Animation Boundary)",
+                meta.duration_secs
+            )),
+            log_odds,
+        );
+    }
+
     let is_short_tier = matches!(
         tier,
         DurationTier::UltraShort | DurationTier::Short | DurationTier::MediumLong
