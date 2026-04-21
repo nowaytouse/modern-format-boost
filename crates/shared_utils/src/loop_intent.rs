@@ -1241,8 +1241,6 @@ pub fn evaluate_loop_tree(
     );
 
     if is_short_tier {
-        let has_audible_audio = meta.has_audio && !meta.audio_is_silent.unwrap_or(false);
-        
         if has_audible_audio {
             // Audible audio in a short asset is an extremely strong anti-loop signal,
             // but we still let the full tree run so structural signals can be logged.
