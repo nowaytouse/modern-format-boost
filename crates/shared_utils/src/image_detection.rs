@@ -2151,7 +2151,7 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
         None
     };
 
-    Ok(DetectionResult {
+    let mut result = DetectionResult {
         file_path: path.display().to_string(),
         format,
         image_type: if is_animated {
@@ -2171,7 +2171,43 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
         estimated_quality,
         entropy,
         precision,
-    })
+    };
+
+    // ── Penetrating Content Verification ──
+    // Verify transparency claim by checking actual alpha channel usage
+    if result.has_alpha {
+        if let crate::media_penetration::PenetrationResult::Verified(is_real) =
+            crate::media_penetration::detect_real_transparency(path, true)
+        {
+            if !is_real {
+                crate::progress_mode::emit_stderr(&format!(
+                    "⚠️  [{}] Image transparency penetration: FAKE alpha (unused)",
+                    path.file_name().and_then(|n| n.to_str()).unwrap_or("?")
+                ));
+                result.has_alpha = false;
+            }
+        }
+    }
+
+    // Verify frame count for animated images
+    if is_animated && (frame_count <= 1 || frame_count > 50000) {
+        if let crate::media_penetration::PenetrationResult::Verified(real_count) =
+            crate::media_penetration::detect_real_frame_count(path, u64::from(frame_count))
+        {
+            let real_u32 = u32::try_from(real_count).unwrap_or(frame_count);
+            if real_u32 != frame_count {
+                crate::progress_mode::emit_stderr(&format!(
+                    "⚠️  [{}] Image frame count mismatch: metadata={}, actual={}, correcting",
+                    path.file_name().and_then(|n| n.to_str()).unwrap_or("?"),
+                    frame_count,
+                    real_u32
+                ));
+                result.frame_count = real_u32;
+            }
+        }
+    }
+
+    Ok(result)
 }
 
 fn estimate_lossy_quality_fallback(

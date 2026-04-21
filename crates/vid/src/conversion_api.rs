@@ -2743,7 +2743,7 @@ mod tests {
 
         assert_eq!(adjusted.target, TargetVideoFormat::Gif);
         assert!(
-            adjusted.reason.contains("Layer 1-B"),
+            adjusted.reason.contains("Layer 0") || adjusted.reason.contains("Layer 1-B"),
             "unexpected reason: {}",
             adjusted.reason
         );

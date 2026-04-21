@@ -228,6 +228,8 @@ pub mod loop_intent;
 pub mod media_index_types;
 /// Unified media metadata extraction.
 pub mod media_meta_utils;
+/// Content-based penetrating detection (bypasses fake metadata).
+pub mod media_penetration;
 /// Quality-preserving video conversion recommender.
 pub mod video_recommender;
 

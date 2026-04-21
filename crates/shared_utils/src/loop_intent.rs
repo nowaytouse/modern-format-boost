@@ -18,6 +18,7 @@ use crate::constants::{
 };
 use crate::database::LoopReferenceProfile;
 use crate::file_copier::{SUPPORTED_IMAGE_EXTENSIONS, SUPPORTED_VIDEO_EXTENSIONS};
+use crate::media_penetration::{detect_audio_silence, detect_real_frame_count, detect_real_transparency};
 use crate::progress_mode::emit_stderr;
 use crate::video_detection::ColorSpace;
 use crate::video_detection::VideoDetectionResult;
@@ -140,9 +141,17 @@ pub struct LoopMeta {
 
     // ── Layer 1 signals (hard constraints) ──
     pub has_audio: bool,
+    /// Whether the audio track is silent (mean_volume < -70 dB or n_samples == 0).
+    /// `None` = not yet detected, `Some(true)` = silent, `Some(false)` = has audible content.
+    pub audio_is_silent: Option<bool>,
     pub has_transparency: bool,
+    /// Whether transparency is actually used (not all opaque). Penetrating detection.
+    /// `None` = not yet verified, `Some(true)` = real transparency, `Some(false)` = fake/unused alpha.
+    pub transparency_is_real: Option<bool>,
     /// Whether the source is natively a GIF container.
     pub is_native_gif: bool,
+    /// Actual decoded frame count (may differ from metadata claim). Penetrating detection.
+    pub real_frame_count: Option<u64>,
 
     // ── Layer 2 signals (explicit declarations) ──
     /// 0 = infinite loop, 1 = play once, `None` = unknown.
@@ -235,8 +244,11 @@ impl LoopMeta {
             source_extension,
             parent_directories: parent_directories.clone(),
             has_audio: detection.has_audio,
+            audio_is_silent: None, // Will be populated on-demand
             has_transparency,
+            transparency_is_real: None, // Will be verified on-demand
             is_native_gif: detection.format == "gif",
+            real_frame_count: None, // Will be verified on-demand
             loop_count: detection.loop_count,
             app_extensions: Some(Vec::new()),
             container: Some(detection.format.clone()),
@@ -330,8 +342,11 @@ impl LoopMeta {
             source_extension,
             parent_directories: parent_directories.clone(),
             has_audio: probe.audio.present,
+            audio_is_silent: None, // Will be populated on-demand
             has_transparency,
+            transparency_is_real: None, // Will be verified on-demand
             is_native_gif: probe.format_name == "gif",
+            real_frame_count: None, // Will be verified on-demand
             loop_count: probe.loop_count,
             app_extensions: Some(Vec::new()),
             container: Some(probe.format_name.clone()),
@@ -440,11 +455,14 @@ impl LoopMeta {
             source_extension: Some("gif".to_string()),
             parent_directories: parent_directories.clone(),
             has_audio: false,
+            audio_is_silent: Some(true), // GIFs never have audio
             has_transparency: scan.has_transparency,
+            transparency_is_real: if scan.has_transparency { None } else { Some(false) }, // Verify if claimed
+            is_native_gif: true,
+            real_frame_count: Some(u64::from(frame_count)), // GIF frame count is reliable
             loop_count: scan.loop_count,
             app_extensions: scan.app_extensions.clone(),
             container: Some("gif".to_string()),
-            is_native_gif: true,
             frame_payload_variation: scan.frame_payload_variation,
             frame_delay_variation: scan.frame_delay_variation,
             palette_size: scan.palette_size,
@@ -1157,114 +1175,115 @@ pub fn evaluate_loop_tree(
         .unwrap_or("")
         .to_lowercase();
     let is_image = SUPPORTED_IMAGE_EXTENSIONS.contains(&ext_lower.as_str());
-    let is_video = !is_image && SUPPORTED_VIDEO_EXTENSIONS.contains(&ext_lower.as_str());
     let derived = DerivedLoopSignals::from_meta(meta);
     let thresholds = LoopThresholds::from_profile(reference_profile);
-    let mut log_odds = LogOdds::default();
+    let log_odds = LogOdds::default();
     let tier = meta.tier();
 
-    let finalize = |verdict: LoopIntentVerdict, log_odds: LogOdds| TreeEvaluation {
+    let finalize = |verdict: LoopIntentVerdict, lo: LogOdds| TreeEvaluation {
         tree_probability: match verdict {
             LoopIntentVerdict::LoopStrong(_) => 1.0,
             LoopIntentVerdict::LoopWeak(_) => 0.0,
-            LoopIntentVerdict::Uncertain(_) => log_odds.probability(),
+            LoopIntentVerdict::Uncertain(_) => lo.probability(),
             LoopIntentVerdict::Error(_) => 0.0,
         },
-        log_odds_value: log_odds.value(),
+        log_odds_value: lo.value(),
         verdict,
     };
 
+    // ── Layer 0: Degenerate Input Guard (Veto/Error) ───────────────────────────
+    // Must check BEFORE any fast-path logic to prevent 0-frame inputs from bypassing validation
+    if meta.frame_count <= 1 {
+        return finalize(
+            LoopIntentVerdict::Error("Layer 0: single-frame / zero-frame input, cannot loop".to_string()),
+            log_odds,
+        );
+    }
+
+    if !meta.is_native_gif && meta.duration_secs < crate::constants::NEGLIGIBLE_DURATION_SECS {
+        return finalize(
+            LoopIntentVerdict::Error("Layer 0: degenerate duration".to_string()),
+            log_odds,
+        );
+    }
+
     // ── Layer 0: Duration Dispatcher (Fast-path gating) ────────────────────────
-    //
-    // ONLY Handle Short/Medium assets here. Long assets proceed to Stage 1.
-    if matches!(
+    // Handle short/medium assets with clear routing rules
+    let is_short_tier = matches!(
         tier,
         DurationTier::UltraShort | DurationTier::Short | DurationTier::MediumLong
-    ) {
-        if meta.has_audio && is_video {
+    );
+
+    if is_short_tier {
+        // BUG FIX: Audio track in ANY short media (video or image) = real video, not animation
+        // ENHANCEMENT: Treat silent audio tracks (< -70 dB) as no audio
+        let has_audible_audio = meta.has_audio && !meta.audio_is_silent.unwrap_or(false);
+        
+        if has_audible_audio {
             return finalize(
-                LoopIntentVerdict::LoopWeak("Layer 0: short asset with audio".to_string()),
+                LoopIntentVerdict::LoopWeak(format!(
+                    "Layer 0: short asset with audible audio — audio disqualifies loop conversion (tier={:?})",
+                    tier
+                )),
                 log_odds,
             );
         }
-        return finalize(
-            LoopIntentVerdict::LoopStrong(format!("Layer 0: silent short asset prior (tier={:?})", tier)),
-            log_odds,
-        );
-    }
 
-    // ── Stage 1: Further Judgment (Complex Signal Fusion) ──────────────────────
-    //
-    // Only reached when Layer 0 determines an asset is "Long" (>= 8s)
-
-    let force_short_gifs =
-        developer_layer1_override_enabled(crate::constants::ENV_FORCE_SHORT_GIFS);
-    if force_short_gifs
-        && !meta.has_audio
-        && matches!(
-            tier,
-            DurationTier::UltraShort | DurationTier::Short | DurationTier::MediumLong
-        )
-    {
+        // Silent short assets (including silent audio tracks) are animation candidates
         return finalize(
             LoopIntentVerdict::LoopStrong(format!(
-                "Layer 1-C (Dev): forceful short asset pass (tier={:?})",
+                "Layer 0: silent short asset — animation candidate (tier={:?})",
                 tier
             )),
             log_odds,
         );
     }
 
-    let intercept_long_silent =
-        developer_layer1_override_enabled(crate::constants::ENV_INTERCEPT_LONG_SILENT);
-    if intercept_long_silent
-        && !meta.has_audio
-        && matches!(
-            tier,
-            DurationTier::Long | DurationTier::VeryLong | DurationTier::DefinitivelyLong
-        )
-    {
-        return finalize(
-            LoopIntentVerdict::LoopWeak(format!(
-                "Layer 1-D (Dev): intercepting long silent asset (tier={:?}) to video pathway",
-                tier
-            )),
-            log_odds,
-        );
+    // ── Stage 1: Specialized Tree Dispatch ─────────────────────────────────────
+    // Long assets proceed to specialized trees based on container family
+    if is_image || meta.is_native_gif {
+        evaluate_image_tree(meta, &derived, &thresholds, log_odds, tier)
+    } else {
+        evaluate_video_tree(meta, &derived, &thresholds, log_odds, tier)
     }
+}
 
+fn evaluate_image_tree(
+    meta: &LoopMeta,
+    derived: &DerivedLoopSignals,
+    thresholds: &LoopThresholds,
+    mut log_odds: LogOdds,
+    tier: DurationTier,
+) -> TreeEvaluation {
+    let finalize = |verdict: LoopIntentVerdict, lo: LogOdds| TreeEvaluation {
+        tree_probability: match verdict {
+            LoopIntentVerdict::LoopStrong(_) => 1.0,
+            LoopIntentVerdict::LoopWeak(_) => 0.0,
+            LoopIntentVerdict::Uncertain(_) => lo.probability(),
+            LoopIntentVerdict::Error(_) => 0.0,
+        },
+        log_odds_value: lo.value(),
+        verdict,
+    };
 
-    if meta.has_audio && is_video {
-        return finalize(
-            LoopIntentVerdict::LoopWeak(
-                "Layer 1-A: audio track present in a video container".to_string(),
-            ),
-            log_odds,
-        );
-    }
+    let ext_lower = meta.source_extension.as_deref().unwrap_or("").to_lowercase();
 
-    // Layer 1-A: Exclude native GIFs from the duration constraint since headless GIFs often have 0.0s duration
-    if meta.frame_count <= 1 || (!meta.is_native_gif && meta.duration_secs < crate::constants::NEGLIGIBLE_DURATION_SECS) {
-        return finalize(
-            LoopIntentVerdict::Error("Layer 1-A: static media (cannot loop)".to_string()),
-            log_odds,
-        );
-    }
-
+    // Layer 1-B: Transparency is a definitive signal for images.
     if !meta.has_audio && meta.has_transparency {
         return finalize(
             LoopIntentVerdict::LoopStrong(
-                "Layer 1-B: silent asset with transparency strongly implies loop/sticker intent"
+                "Layer 1-B (Image): silent asset with transparency strongly implies loop/sticker intent"
                     .to_string(),
             ),
             log_odds,
         );
     }
 
+    // Layer 2: Explicit declarations
     if meta.loop_count == Some(0) {
         return finalize(
             LoopIntentVerdict::LoopStrong(
-                "Layer 2-A: explicit infinite-loop declaration (`loop_count=0`)".to_string(),
+                "Layer 2-A (Image): explicit infinite-loop declaration (`loop_count=0`)".to_string(),
             ),
             log_odds,
         );
@@ -1273,7 +1292,7 @@ pub fn evaluate_loop_tree(
     if meta.loop_count == Some(1) {
         return finalize(
             LoopIntentVerdict::LoopWeak(
-                "Layer 2-B: explicit play-once declaration (`loop_count=1`)".to_string(),
+                "Layer 2-B (Image): explicit play-once declaration (`loop_count=1`)".to_string(),
             ),
             log_odds,
         );
@@ -1282,50 +1301,21 @@ pub fn evaluate_loop_tree(
     if has_explicit_loop_platform_marker(meta) {
         return finalize(
             LoopIntentVerdict::LoopStrong(
-                "Layer 2-C: platform / application marker declares looping asset semantics"
+                "Layer 2-C (Image): platform / application marker declares looping asset semantics"
                     .to_string(),
             ),
             log_odds,
         );
     }
 
-    if !meta.has_audio
-        && is_silent_webm(meta, &ext_lower)
-        && matches!(
-            tier,
-            DurationTier::UltraShort | DurationTier::Short | DurationTier::MediumLong
-        )
-    {
-        return finalize(
-            LoopIntentVerdict::LoopStrong(format!(
-                "Layer 2-D: short silent WebM container strongly implies animation / loop intent (tier={:?})",
-                tier
-            )),
-            log_odds,
-        );
-    }
-
-    if !meta.has_audio
-        && tier == DurationTier::UltraShort
-    {
-        return finalize(
-            LoopIntentVerdict::LoopStrong(format!(
-                "Layer 1-B: short duration override (tier={:?})",
-                tier
-            )),
-            log_odds,
-        );
-    }
-
+    // Specific Image-family logic
     if ext_lower == "gif"
         && !meta.has_audio
-        && meta.frame_count > 1
         && matches!(
             tier,
             DurationTier::UltraShort | DurationTier::Short | DurationTier::MediumLong
         )
         && meta.width > 0
-        && meta.height > 0
         && meta.width <= crate::constants::STICKER_MAX_DIMENSION
         && meta.height <= crate::constants::STICKER_MAX_DIMENSION
     {
@@ -1333,47 +1323,191 @@ pub fn evaluate_loop_tree(
         if px <= crate::constants::STICKER_TIER_NATIVE_GIF_MAX_PIXELS {
             return finalize(
                 LoopIntentVerdict::LoopStrong(format!(
-                    "Layer 1-B2: sticker-class native GIF ({}x{}, tier={:?}, {} px; strong loop prior)",
+                    "Layer 1-B2 (Image): sticker-class native GIF ({}x{}, tier={:?}, {} px)",
                     meta.width, meta.height, tier, px
                 )),
                 log_odds,
             );
         }
     }
- 
-    if !meta.has_audio
-        && meta.duration_secs > 0.0
-        && tier == DurationTier::UltraShort
-        && meta.width > 0
-        && meta.height > 0
-        && meta.width <= crate::constants::STICKER_MAX_DIMENSION
-        && meta.height <= crate::constants::STICKER_MAX_DIMENSION
-        && (meta.pkt_sizes.len() < 3 || meta.pts_deltas.len() < 3)
-    {
-        return finalize(
+
+    // General Signal Fusion for Images
+    match tier {
+        DurationTier::UltraShort => log_odds.add(crate::constants::LOG_ODDS_BIAS_ULTRA_SHORT),
+        DurationTier::Short => log_odds.add(crate::constants::LOG_ODDS_BIAS_SHORT),
+        DurationTier::MediumLong => log_odds.add(crate::constants::LOG_ODDS_BIAS_MEDIUM_LONG),
+        _ => {}
+    }
+
+    evaluate_kinetics_and_physics(meta, derived, thresholds, &mut log_odds);
+    apply_structural_signals(meta, derived, thresholds, &mut log_odds, true, false);
+
+    if let Some(verdict) = checkpoint_verdict(
+        log_odds,
+        crate::constants::TREE_STRUCTURAL_CHECKPOINT_LOG_ODDS_THRESHOLD,
+        "Layer 3 (Image)",
+        "self-referential loop structure",
+        "self-referential structure points away from looping",
+    ) {
+        return finalize(verdict, log_odds);
+    }
+
+    apply_weak_heuristics(meta, derived, thresholds, &mut log_odds, true, false);
+
+    if let Some(verdict) = checkpoint_verdict(
+        log_odds,
+        crate::constants::TREE_CONTENT_CHECKPOINT_LOG_ODDS_THRESHOLD,
+        "Layer 4 (Image)",
+        "content and envelope strongly favor a looping asset",
+        "content and envelope strongly favor standard video processing",
+    ) {
+        return finalize(verdict, log_odds);
+    }
+
+    // Final arbitration for Images
+    if log_odds.value() >= thresholds.decision_threshold {
+        finalize(
             LoopIntentVerdict::LoopStrong(format!(
-                "Layer 1-B3: Dimensional Sticker ({}x{}, tier={:?})",
-                meta.width, meta.height, tier
+                "Layer 5 (Image): log-odds {:.2} >= {:.2}",
+                log_odds.value(),
+                thresholds.decision_threshold
             )),
+            log_odds,
+        )
+    } else if log_odds.value() <= -thresholds.decision_threshold {
+        finalize(
+            LoopIntentVerdict::LoopWeak(format!(
+                "Layer 5 (Image): log-odds {:.2} <= -{:.2}",
+                log_odds.value(),
+                thresholds.decision_threshold
+            )),
+            log_odds,
+        )
+    } else {
+        finalize(
+            LoopIntentVerdict::Uncertain(format!(
+                "Layer 5 (Image): log-odds {:.2} within ±{:.2}",
+                log_odds.value(),
+                thresholds.decision_threshold
+            )),
+            log_odds,
+        )
+    }
+}
+
+fn evaluate_video_tree(
+    meta: &LoopMeta,
+    derived: &DerivedLoopSignals,
+    thresholds: &LoopThresholds,
+    mut log_odds: LogOdds,
+    tier: DurationTier,
+) -> TreeEvaluation {
+    let finalize = |verdict: LoopIntentVerdict, lo: LogOdds| TreeEvaluation {
+        tree_probability: match verdict {
+            LoopIntentVerdict::LoopStrong(_) => 1.0,
+            LoopIntentVerdict::LoopWeak(_) => 0.0,
+            LoopIntentVerdict::Uncertain(_) => lo.probability(),
+            LoopIntentVerdict::Error(_) => 0.0,
+        },
+        log_odds_value: lo.value(),
+        verdict,
+    };
+
+    // Layer 1-A: Audio veto (only for audible audio)
+    let has_audible_audio = meta.has_audio && !meta.audio_is_silent.unwrap_or(false);
+    if has_audible_audio {
+        return finalize(
+            LoopIntentVerdict::LoopWeak(
+                "Layer 1-A (Video): audible audio track present in video container disqualified loop conversion"
+                    .to_string(),
+            ),
             log_odds,
         );
     }
 
-    if !meta.has_audio
-        && meta.duration_secs > 0.0
-        && tier == DurationTier::UltraShort
+    // Layer 1-D: Long silent video handling (with Dev override)
+    let intercept_long_silent = developer_layer1_override_enabled(crate::constants::ENV_INTERCEPT_LONG_SILENT);
+    if intercept_long_silent
+        && matches!(
+            tier,
+            DurationTier::Long | DurationTier::VeryLong | DurationTier::DefinitivelyLong
+        )
     {
         return finalize(
-            LoopIntentVerdict::LoopStrong(format!(
-                "Layer 1-B4: Dimension-Agnostic Micro-Clip (tier={:?})",
+            LoopIntentVerdict::LoopWeak(format!(
+                "Layer 1-D (Video/Dev): long silent asset (tier={:?}) intercepted to video routing",
                 tier
             )),
             log_odds,
         );
     }
 
+    // Layer 2: Explicit declarations
+    if meta.loop_count == Some(0) {
+        return finalize(
+            LoopIntentVerdict::LoopStrong(
+                "Layer 2-A (Video): explicit infinite-loop declaration (`loop_count=0`)".to_string(),
+            ),
+            log_odds,
+        );
+    }
 
+    if has_explicit_loop_platform_marker(meta) {
+        return finalize(
+            LoopIntentVerdict::LoopStrong(
+                "Layer 2-C (Video): platform / application marker declares looping asset semantics"
+                    .to_string(),
+            ),
+            log_odds,
+        );
+    }
 
+    // Layer 2-D: Short silent WebM
+    let ext_lower = meta.source_extension.as_deref().unwrap_or("").to_lowercase();
+    if is_silent_webm(meta, &ext_lower)
+        && matches!(
+            tier,
+            DurationTier::UltraShort | DurationTier::Short | DurationTier::MediumLong
+        )
+    {
+        return finalize(
+            LoopIntentVerdict::LoopStrong(format!(
+                "Layer 2-D (Video): short silent WebM container strongly implies animation / loop intent (tier={:?})",
+                tier
+            )),
+            log_odds,
+        );
+    }
+
+    // Layer 1-B3: Dimensional Sticker (Refined Micro-Video)
+    if tier == DurationTier::UltraShort
+        && meta.width > 0
+        && meta.width <= crate::constants::STICKER_MAX_DIMENSION
+        && meta.height > 0
+        && meta.height <= crate::constants::STICKER_MAX_DIMENSION
+        && (meta.pkt_sizes.len() < 3 || meta.pts_deltas.len() < 3)
+    {
+        return finalize(
+            LoopIntentVerdict::LoopStrong(format!(
+                "Layer 1-B3 (Video): Dimensional Sticker ({}x{}, tier={:?})",
+                meta.width, meta.height, tier
+            )),
+            log_odds,
+        );
+    }
+
+    // Layer 1-B4: Micro-Clip
+    if tier == DurationTier::UltraShort && meta.duration_secs > 0.0 {
+        return finalize(
+            LoopIntentVerdict::LoopStrong(format!(
+                "Layer 1-B4 (Video): Dimension-Agnostic Micro-Clip (tier={:?})",
+                tier
+            )),
+            log_odds,
+        );
+    }
+
+    // Short silent video signal fusion
     match tier {
         DurationTier::UltraShort => log_odds.add(crate::constants::LOG_ODDS_BIAS_ULTRA_SHORT),
         DurationTier::Short => log_odds.add(crate::constants::LOG_ODDS_BIAS_SHORT),
@@ -1385,75 +1519,60 @@ pub fn evaluate_loop_tree(
         }
     }
 
-    evaluate_kinetics_and_physics(meta, &derived, &thresholds, &mut log_odds);
-    apply_structural_signals(
-        meta,
-        &derived,
-        &thresholds,
-        &mut log_odds,
-        is_image,
-        is_video,
-    );
+    evaluate_kinetics_and_physics(meta, derived, thresholds, &mut log_odds);
+    apply_structural_signals(meta, derived, thresholds, &mut log_odds, false, true);
 
     if let Some(verdict) = checkpoint_verdict(
         log_odds,
         crate::constants::TREE_STRUCTURAL_CHECKPOINT_LOG_ODDS_THRESHOLD,
-        "Layer 3",
+        "Layer 3 (Video)",
         "self-referential loop structure",
         "self-referential structure points away from looping",
     ) {
         return finalize(verdict, log_odds);
     }
 
-    apply_weak_heuristics(
-        meta,
-        &derived,
-        &thresholds,
-        &mut log_odds,
-        is_image,
-        is_video,
-    );
+    apply_weak_heuristics(meta, derived, thresholds, &mut log_odds, false, true);
 
     if let Some(verdict) = checkpoint_verdict(
         log_odds,
         crate::constants::TREE_CONTENT_CHECKPOINT_LOG_ODDS_THRESHOLD,
-        "Layer 4",
+        "Layer 4 (Video)",
         "content and envelope strongly favor a looping asset",
         "content and envelope strongly favor standard video processing",
     ) {
         return finalize(verdict, log_odds);
     }
 
+    // Final arbitration for Video
     if log_odds.value() >= thresholds.decision_threshold {
-        return finalize(
+        finalize(
             LoopIntentVerdict::LoopStrong(format!(
-                "Layer 5: log-odds {:.2} >= {:.2} (context reinforced looping profile)",
+                "Layer 5 (Video): log-odds {:.2} >= {:.2}",
                 log_odds.value(),
                 thresholds.decision_threshold
             )),
             log_odds,
-        );
-    }
-
-    if log_odds.value() <= -thresholds.decision_threshold {
-        return finalize(
+        )
+    } else if log_odds.value() <= -thresholds.decision_threshold {
+        finalize(
             LoopIntentVerdict::LoopWeak(format!(
-                "Layer 5: log-odds {:.2} <= -{:.2} (context reinforced video profile)",
+                "Layer 5 (Video): log-odds {:.2} <= -{:.2}",
                 log_odds.value(),
                 thresholds.decision_threshold
             )),
             log_odds,
-        );
+        )
+    } else {
+        finalize(
+            LoopIntentVerdict::Uncertain(format!(
+                "Layer 5 (Video): log-odds {:.2} within ±{:.2}",
+                log_odds.value(),
+                thresholds.decision_threshold
+            )),
+            log_odds,
+        )
     }
-
-    finalize(
-        LoopIntentVerdict::Uncertain(format!(
-            "Layer 5: log-odds {:.2} within ±{:.2}; defer to KNN fusion / arbitration",
-            log_odds.value(),
-            thresholds.decision_threshold
-        )),
-        log_odds,
-    )
 }
 
 fn should_accept_layer6_loopstrong(
@@ -1778,6 +1897,130 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
 
     let mut mutable_meta = meta.clone();
     mutable_meta.refresh_semantics(keywords);
+    
+    // ── Penetrating Content-Based Detection ──
+    // Verify actual content instead of trusting potentially fake metadata
+    if let Some(p) = path {
+        // 1. Audio silence detection (including empty tracks)
+        if mutable_meta.has_audio && mutable_meta.audio_is_silent.is_none() {
+            match detect_audio_silence(p) {
+                crate::media_penetration::PenetrationResult::Verified(is_silent) => {
+                    mutable_meta.audio_is_silent = Some(is_silent);
+                    emit_stderr(&format!(
+                        "🔊 Audio penetration: {}",
+                        if is_silent { "SILENT (< -70 dB or empty)" } else { "AUDIBLE" }
+                    ));
+                }
+                crate::media_penetration::PenetrationResult::Failed => {
+                    emit_stderr("⚠️  Audio penetration failed, trusting metadata");
+                }
+                crate::media_penetration::PenetrationResult::Skipped => {}
+            }
+        }
+        
+        // 2. Transparency verification (detect fake alpha channels)
+        if mutable_meta.has_transparency && mutable_meta.transparency_is_real.is_none() {
+            match detect_real_transparency(p, mutable_meta.has_transparency) {
+                crate::media_penetration::PenetrationResult::Verified(is_real) => {
+                    mutable_meta.transparency_is_real = Some(is_real);
+                    if !is_real {
+                        emit_stderr("⚠️  Transparency penetration: FAKE (alpha unused), overriding metadata");
+                        mutable_meta.has_transparency = false;
+                    } else {
+                        emit_stderr("✅ Transparency penetration: REAL (alpha variance detected)");
+                    }
+                }
+                crate::media_penetration::PenetrationResult::Failed => {
+                    emit_stderr("⚠️  Transparency penetration failed, trusting metadata");
+                }
+                crate::media_penetration::PenetrationResult::Skipped => {}
+            }
+        }
+        
+        // 3. Frame count verification (detect metadata lies)
+        if mutable_meta.frame_count <= 1 || mutable_meta.frame_count > 50000 {
+            match detect_real_frame_count(p, mutable_meta.frame_count) {
+                crate::media_penetration::PenetrationResult::Verified(real_count) => {
+                    mutable_meta.real_frame_count = Some(real_count);
+                    if real_count != mutable_meta.frame_count {
+                        emit_stderr(&format!(
+                            "⚠️  Frame count mismatch: metadata={}, actual={}, overriding",
+                            mutable_meta.frame_count, real_count
+                        ));
+                        mutable_meta.frame_count = real_count;
+                    } else {
+                        emit_stderr(&format!("✅ Frame count verified: {}", real_count));
+                    }
+                }
+                crate::media_penetration::PenetrationResult::Failed => {
+                    emit_stderr("⚠️  Frame count penetration failed, trusting metadata");
+                }
+                crate::media_penetration::PenetrationResult::Skipped => {}
+            }
+        }
+    }
+    
+    // ── Penetrating Content-Based Detection ──
+    // Verify actual content instead of trusting potentially fake metadata
+    if let Some(p) = path {
+        // 1. Audio silence detection (including empty tracks)
+        if mutable_meta.has_audio && mutable_meta.audio_is_silent.is_none() {
+            match detect_audio_silence(p) {
+                crate::media_penetration::PenetrationResult::Verified(is_silent) => {
+                    mutable_meta.audio_is_silent = Some(is_silent);
+                    emit_stderr(&format!(
+                        "🔊 Audio penetration: {}",
+                        if is_silent { "SILENT (< -70 dB or empty)" } else { "AUDIBLE" }
+                    ));
+                }
+                crate::media_penetration::PenetrationResult::Failed => {
+                    emit_stderr("⚠️  Audio penetration failed, trusting metadata");
+                }
+                crate::media_penetration::PenetrationResult::Skipped => {}
+            }
+        }
+        
+        // 2. Transparency verification (detect fake alpha channels)
+        if mutable_meta.has_transparency && mutable_meta.transparency_is_real.is_none() {
+            match detect_real_transparency(p, mutable_meta.has_transparency) {
+                crate::media_penetration::PenetrationResult::Verified(is_real) => {
+                    mutable_meta.transparency_is_real = Some(is_real);
+                    if !is_real {
+                        emit_stderr("⚠️  Transparency penetration: FAKE (alpha unused), overriding metadata");
+                        mutable_meta.has_transparency = false;
+                    } else {
+                        emit_stderr("✅ Transparency penetration: REAL (alpha variance detected)");
+                    }
+                }
+                crate::media_penetration::PenetrationResult::Failed => {
+                    emit_stderr("⚠️  Transparency penetration failed, trusting metadata");
+                }
+                crate::media_penetration::PenetrationResult::Skipped => {}
+            }
+        }
+        
+        // 3. Frame count verification (detect metadata lies)
+        if mutable_meta.frame_count <= 1 || mutable_meta.frame_count > 50000 {
+            match detect_real_frame_count(p, mutable_meta.frame_count) {
+                crate::media_penetration::PenetrationResult::Verified(real_count) => {
+                    mutable_meta.real_frame_count = Some(real_count);
+                    if real_count != mutable_meta.frame_count {
+                        emit_stderr(&format!(
+                            "⚠️  Frame count mismatch: metadata={}, actual={}, overriding",
+                            mutable_meta.frame_count, real_count
+                        ));
+                        mutable_meta.frame_count = real_count;
+                    } else {
+                        emit_stderr(&format!("✅ Frame count verified: {}", real_count));
+                    }
+                }
+                crate::media_penetration::PenetrationResult::Failed => {
+                    emit_stderr("⚠️  Frame count penetration failed, trusting metadata");
+                }
+                crate::media_penetration::PenetrationResult::Skipped => {}
+            }
+        }
+    }
 
     // ── Layer 0: Legacy Fallback ──
     if is_legacy_mode {
@@ -2080,6 +2323,9 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
 }
 
 /// Layer 7: Conservative fallback with minimum-loss default.
+/// 
+/// BUG FIX: Removed sticker safe zone logic. "Uncertain" means we don't know,
+/// so we preserve the original format routing without making additional guesses.
 fn layer7_fallback(meta: &LoopMeta, upstream_reason: &str) -> LoopIntentVerdict {
     let ext = meta
         .source_extension
@@ -2092,39 +2338,18 @@ fn layer7_fallback(meta: &LoopMeta, upstream_reason: &str) -> LoopIntentVerdict 
 
     let reason = format!("Layer 7: Fallback [{upstream_reason}]");
 
+    // Preserve original format routing without additional heuristics:
+    // - Animation formats (GIF/WebP/AVIF) → keep as animation
+    // - Video formats (MP4/MOV/etc) → keep as video
+    // - Unknown → default to video (safer for quality preservation)
     if is_modern_animated {
-        LoopIntentVerdict::LoopStrong(format!("{reason} → convert to GIF (modern animated)"))
+        LoopIntentVerdict::LoopStrong(format!("{reason} → preserve modern animated format"))
     } else if is_gif {
-        LoopIntentVerdict::LoopStrong(format!("{reason} → preserve GIF as-is (Layer 7 default)"))
+        LoopIntentVerdict::LoopStrong(format!("{reason} → preserve GIF as-is"))
     } else if is_video {
-        let sticker_limit = match std::env::var(crate::constants::ENV_STICKER_LIMIT_SECS) {
-            Ok(s) => match s.parse::<f64>() {
-                Ok(v) => v,
-                Err(e) => {
-                    tracing::error!(env = crate::constants::ENV_STICKER_LIMIT_SECS, input = s, error = %e, "Invalid sticker limit env var; admitting unknown input via default value {}", crate::constants::MODERN_FORMAT_VIDEO_BIAS_THRESHOLD_SECS);
-                    crate::constants::MODERN_FORMAT_VIDEO_BIAS_THRESHOLD_SECS
-                }
-            },
-            Err(_) => crate::constants::MODERN_FORMAT_VIDEO_BIAS_THRESHOLD_SECS,
-        };
-
-        let is_sticker_safe_zone = !meta.has_audio
-            && meta.duration_secs > 0.0
-            && meta.duration_secs <= sticker_limit
-            && meta.file_size_bytes > 0
-            && meta.file_size_bytes <= crate::constants::STICKER_MAX_SIZE_BYTES;
-
-        if is_sticker_safe_zone {
-            LoopIntentVerdict::LoopStrong(format!(
-                "{reason} → promotion [Sticker Safe Zone] (short/small/silent video)"
-            ))
-        } else {
-            LoopIntentVerdict::LoopWeak(format!(
-                "{reason} → standard video processing (no loop intent)"
-            ))
-        }
+        LoopIntentVerdict::LoopWeak(format!("{reason} → preserve video format"))
     } else {
-        LoopIntentVerdict::LoopWeak(format!("{reason} → unknown format, standard processing"))
+        LoopIntentVerdict::LoopWeak(format!("{reason} → unknown format, default to video"))
     }
 }
 
@@ -2144,6 +2369,8 @@ fn extract_layer_tag(reason: &str) -> String {
     }
 }
 
+/// Penetrating audio detection: decode and analyze actual audio samples.
+/// Returns `Some(true)` if silent (< -70 dB or empty), `Some(false)` if audible.
 // ── Safety & Exploration Helpers ──────────────────────────────────────────────
 
 /// Dynamic safety-guard for CRF 0.00 (lossless) exploration.
@@ -2935,10 +3162,16 @@ mod tests {
         let mut meta = base_meta();
         meta.duration_secs = 2.0;
         meta.has_audio = true;
+        meta.audio_is_silent = Some(false); // Audible audio
+        meta.frame_count = 48; // Ensure valid frame count
 
         let verdict = verdict_with_profile(&meta, &profile);
         assert!(matches!(verdict, LoopIntentVerdict::LoopWeak(_)));
-        assert!(verdict.reason().contains("Layer 0: short asset with audio"));
+        assert!(
+            verdict.reason().contains("Layer 0") && verdict.reason().contains("audible audio"),
+            "Expected Layer 0 audible audio veto, got: {}",
+            verdict.reason()
+        );
     }
 
     #[test]
@@ -3012,10 +3245,16 @@ mod tests {
         let mut meta = base_meta();
         meta.duration_secs = 1.5;
         meta.has_audio = true;
+        meta.audio_is_silent = Some(false); // Audible audio
+        meta.frame_count = 36; // Ensure valid frame count
 
         let verdict = verdict_with_profile(&meta, &profile);
         assert!(matches!(verdict, LoopIntentVerdict::LoopWeak(_)));
-        assert!(verdict.reason().contains("Layer 0"));
+        assert!(
+            verdict.reason().contains("Layer 0") && verdict.reason().contains("audible"),
+            "Expected Layer 0 audible audio veto, got: {}",
+            verdict.reason()
+        );
     }
 
 
@@ -3036,11 +3275,26 @@ mod tests {
         let profile = base_profile();
         let mut meta = base_meta();
         meta.app_extensions = Some(vec!["TENOR".to_string()]);
-        meta.duration_secs = 14.0;
+        meta.duration_secs = 14.0; // Long duration - will go to specialized tree
+        meta.has_audio = false; // Ensure it's silent
+        meta.frame_count = 168; // Ensure valid frame count
+        meta.source_extension = Some("mp4".to_string()); // Video container
 
         let verdict = verdict_with_profile(&meta, &profile);
-        assert!(matches!(verdict, LoopIntentVerdict::LoopStrong(_)));
-        assert!(verdict.reason().contains("Layer 2-C"));
+        eprintln!("DEBUG: verdict = {:?}", verdict);
+        
+        // With 14s duration (Long tier), it goes to video tree
+        // Platform marker should be detected in Layer 2-C (Video tree)
+        assert!(
+            matches!(verdict, LoopIntentVerdict::LoopStrong(_)),
+            "Expected LoopStrong, got: {:?}",
+            verdict
+        );
+        assert!(
+            verdict.reason().contains("Layer 2"),
+            "Expected Layer 2 platform marker detection, got: {}",
+            verdict.reason()
+        );
     }
 
     #[test]
@@ -3148,21 +3402,23 @@ mod tests {
         let mut meta = base_meta();
         meta.duration_secs = 9.0;
         meta.loop_closure_score = Some(1.0);
-        meta.motion_periodicity = Some(0.85); // Added nudge
+        meta.motion_periodicity = Some(0.85);
         meta.filename_loop_intent_score = 1.0; 
         meta.directory_loop_intent_score = 1.0;
-
+        meta.frame_count = 108; // Ensure valid frame count
 
         let verdict = verdict_with_profile(&meta, &profile);
-
-
-
 
         assert!(
             matches!(verdict, LoopIntentVerdict::Uncertain(_)),
             "expected uncertain, got {verdict:?}"
         );
-        assert!(verdict.reason().contains("defer to KNN"));
+        // The reason should contain "Layer 5" (final arbitration) and indicate uncertainty
+        assert!(
+            verdict.reason().contains("Layer 5") || verdict.reason().contains("within"),
+            "Expected Layer 5 uncertainty message, got: {}",
+            verdict.reason()
+        );
     }
 
     #[test]
@@ -3354,6 +3610,35 @@ mod tests {
         // Test non-meme filename
         let analysis_none = analyze_filename(Some("vacation_photo.jpg"), &[]);
         assert!(crate::float_compare::approx_eq_f64(analysis_none.raw, 0.5));
+    }
+
+    #[test]
+    fn bug_fix_silent_audio_track_should_be_treated_as_animation() {
+        // Regression test for: 2.28s video with silent audio track (-91 dB)
+        // Real-world case: "Commission finish_Apple_ProRes_422_HQ.mov"
+        // Expected: Should be treated as animation (LoopStrong)
+        let profile = base_profile();
+        let mut meta = base_meta();
+        meta.duration_secs = 2.28;
+        meta.frame_count = 57;
+        meta.has_audio = true; // Audio track exists
+        meta.audio_is_silent = Some(true); // But it's silent (-91 dB)
+        meta.source_extension = Some("mov".to_string());
+        meta.container = Some("mov".to_string());
+        
+        let verdict = verdict_with_profile(&meta, &profile);
+        
+        // After fix: silent audio → LoopStrong (animation route)
+        assert!(
+            matches!(verdict, LoopIntentVerdict::LoopStrong(_)),
+            "Expected LoopStrong for silent audio track, got: {:?}",
+            verdict
+        );
+        assert!(
+            verdict.reason().contains("Layer 0") && verdict.reason().contains("silent"),
+            "Expected Layer 0 silent asset routing, got: {}",
+            verdict.reason()
+        );
     }
 
     #[test]

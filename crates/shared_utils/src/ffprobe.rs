@@ -494,7 +494,7 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
     let audio = extract_audio_stream_fields(streams);
     let subtitles = extract_subtitle_stream_fields(streams);
 
-    Ok(FFprobeResult {
+    let mut result = FFprobeResult {
         format_name,
         duration,
         size,
@@ -528,7 +528,31 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         pts_deltas: extract_pts_deltas(&json),
         pkt_sizes: extract_pkt_sizes(&json),
         mv_magnitudes: Vec::new(),
-    })
+    };
+
+    // ── Penetrating Content Verification ──
+    // Verify critical metadata by decoding actual content
+    if result.audio.present {
+        if let crate::media_penetration::PenetrationResult::Verified(is_silent) =
+            crate::media_penetration::detect_audio_silence(path)
+        {
+            if is_silent {
+                result.audio.present = false;
+            }
+        }
+    }
+
+    if result.frame_count <= 1 || result.frame_count > 50000 {
+        if let crate::media_penetration::PenetrationResult::Verified(real_count) =
+            crate::media_penetration::detect_real_frame_count(path, result.frame_count)
+        {
+            if real_count != result.frame_count {
+                result.frame_count = real_count;
+            }
+        }
+    }
+
+    Ok(result)
 }
 
 /// Attempt to extract loop count from format tags (e.g. NETSCAPE2.0 or `LoopCount`)
@@ -872,7 +896,9 @@ pub fn parse_frame_rate(s: &str) -> Result<f64, FFprobeError> {
                 .map_err(|e| FFprobeError::ParseError(format!("Invalid denominator: {e}")))?;
                 
             if den == 0.0 {
-                return Ok(0.0);
+                return Err(FFprobeError::ParseError(
+                    "Frame rate denominator cannot be zero".to_string()
+                ));
             }
             
             let rate = num / den;

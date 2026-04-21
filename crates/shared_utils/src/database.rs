@@ -2944,7 +2944,9 @@ mod tests {
             palette_size: Some(64),
             app_extensions: None,
             has_transparency: true,
+            transparency_is_real: None,
             is_native_gif: true,
+            real_frame_count: None,
             frame_payload_variation: Some(0.4),
             frame_delay_variation: Some(0.6),
             source_extension: Some("gif".to_string()),
@@ -2956,6 +2958,7 @@ mod tests {
             has_complex_color_profile: false,
             loop_count: None,
             has_audio: false,
+            audio_is_silent: Some(true), // GIFs never have audio
             frame_types: vec!['P'; usize::try_from(frames).unwrap_or(0)],
             pts_deltas: vec![
                 duration / f64::from(u32::try_from(frames).unwrap_or(u32::MAX));

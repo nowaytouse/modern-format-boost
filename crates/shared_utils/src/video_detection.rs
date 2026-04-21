@@ -460,7 +460,7 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
         CompressionType::Lossless | CompressionType::VisuallyLossless
     ) || codec.can_be_lossless();
 
-    Ok(VideoDetectionResult {
+    let mut result = VideoDetectionResult {
         file_path: path.display().to_string(),
         format: probe.format_name,
         codec,
@@ -507,7 +507,57 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
         pts_deltas: probe.pts_deltas,
         mv_magnitudes: probe.mv_magnitudes,
         pkt_sizes: probe.pkt_sizes,
-    })
+    };
+
+    // ── Penetrating Content Verification ──
+    // Verify critical metadata claims by decoding actual content
+    if result.has_audio {
+        if let crate::media_penetration::PenetrationResult::Verified(is_silent) =
+            crate::media_penetration::detect_audio_silence(path)
+        {
+            if is_silent {
+                crate::progress_mode::emit_stderr(&format!(
+                    "🔊 [{}] Audio penetration: SILENT track detected, treating as no audio",
+                    path.file_name().and_then(|n| n.to_str()).unwrap_or("?")
+                ));
+                result.has_audio = false;
+            }
+        }
+    }
+
+    let has_transparency = result.pix_fmt.contains("a") 
+        || result.pix_fmt.contains("yuva") 
+        || result.pix_fmt.contains("gbrap");
+    if has_transparency {
+        if let crate::media_penetration::PenetrationResult::Verified(is_real) =
+            crate::media_penetration::detect_real_transparency(path, true)
+        {
+            if !is_real {
+                crate::progress_mode::emit_stderr(&format!(
+                    "⚠️  [{}] Transparency penetration: FAKE alpha channel (unused)",
+                    path.file_name().and_then(|n| n.to_str()).unwrap_or("?")
+                ));
+            }
+        }
+    }
+
+    if result.frame_count <= 1 || result.frame_count > 50000 {
+        if let crate::media_penetration::PenetrationResult::Verified(real_count) =
+            crate::media_penetration::detect_real_frame_count(path, result.frame_count)
+        {
+            if real_count != result.frame_count {
+                crate::progress_mode::emit_stderr(&format!(
+                    "⚠️  [{}] Frame count mismatch: metadata={}, actual={}, correcting",
+                    path.file_name().and_then(|n| n.to_str()).unwrap_or("?"),
+                    result.frame_count,
+                    real_count
+                ));
+                result.frame_count = real_count;
+            }
+        }
+    }
+
+    Ok(result)
 }
 
 fn extract_video_precision(

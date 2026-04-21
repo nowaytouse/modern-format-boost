@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [Unreleased]
+
+### 🔬 Penetrating Content Detection System
+- **Metadata Verification Architecture**: Introduced a unified `media_penetration` module that verifies critical media properties by decoding actual content instead of trusting potentially fake container metadata.
+  - **Audio Silence Detection**: Decodes audio streams using FFmpeg `volumedetect` filter to identify silent tracks (< -70 dB or empty). Prevents "fake audio" metadata from misleading routing decisions.
+  - **Transparency Verification**: Extracts and analyzes alpha channel variance using `alphaextract` + `signalstats` filters. Detects "fake transparency" where alpha channels exist but are unused (all opaque).
+  - **Frame Count Validation**: Decodes and counts actual frames via `showinfo` filter for suspicious claims (≤1 or >50000 frames). Prevents single-frame files masquerading as animations or inflated frame count metadata.
+- **Global Integration**: Penetrating detection now runs automatically in all media detection entry points:
+  - `video_detection::detect_video()` - Video/animation detection
+  - `ffprobe::probe_video()` - Low-level FFprobe wrapper
+  - `image_detection::detect_image()` - Static/animated image detection
+  - `loop_intent::assess_loop_intent_from_meta()` - Loop intent classification
+- **Robust Error Handling**: Implemented `PenetrationResult<T>` enum with three states:
+  - `Verified(T)` - Detection succeeded with definitive result
+  - `Failed` - Detection failed (file unreadable, codec unsupported, etc.) - falls back to trusting metadata with warning
+  - `Skipped` - Detection skipped for performance (reasonable claims trusted)
+- **Performance Optimization**: Reasonable metadata claims (e.g., 2-50000 frames) are trusted without verification to avoid unnecessary decoding overhead.
+- **User Feedback**: All detection results emit structured warnings via stderr with emoji indicators (🔊 ✅ ⚠️) for transparency in processing decisions.
+
+### 🐛 Bug Fixes
+- **FFprobe Frame Rate Parsing**: Fixed `parse_frame_rate()` to return error for division by zero (e.g., "30/0") instead of silently returning 0.0.
+- **Test Suite Updates**: Updated loop intent tests to accept Layer 0 fast-path routing for short silent assets, reflecting improved decision tree performance.
+
 ## [0.11.2] — 2026-04-20
 
 ### 🎬 GPU Coarse Search & Engine Unification
