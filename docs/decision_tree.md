@@ -267,6 +267,12 @@ reliability have no causal relationship — only a spurious correlation in the t
 | AVIF | 0.6 | Loop semantics exist but less standardized |
 | MP4/MKV/AVI | 0.2 | No authoritative loop field |
 
+#### Creator Software Overrides (Deep Penetration)
+Trust levels are dynamically adjusted if **encoder/software tags** are present:
+- **Absolute Trust (1.0)**: Dedicated animation/meme tools (`Photoshop`, `GIPHY`, `Ezgif`, `ScreenToGif`, `Krita`, `Procreate`, `Clip Studio`).
+- **Absolute Distrust (0.2)**: Professional NLEs (`Adobe Premiere`, `DaVinci Resolve`, `Final Cut`, `Avid`, `Vegas`). Even if a loop block exists, it is treated as a video container.
+- **FFmpeg Penalty (-0.1)**: Generic `Lavf` wrappers are slightly penalized compared to dedicated tools.
+
 **Attenuated Signals** (multiplied by trust):
 - `loop_count == 0` bonus
 - Platform markers (`GIPHY`, `TENOR`, etc.)
@@ -277,6 +283,8 @@ reliability have no causal relationship — only a spurious correlation in the t
 - Audio presence/silence
 - Scene cuts, motion periodicity
 - Tier-based log-odds bias
+- **Physical Hard-Counters**:
+    - `is_interlaced == true`: decodes short sample with `idet`. If TFF/BFF detected, apply `-2.0 * BIAS_DEFINITIVELY_LONG` (absolute loop veto).
 
 ### Effect on Forgery
 A forged `GIPHY` marker (+0.52) in an MP4 container only contributes `+0.52 × 0.2 = +0.104`.
