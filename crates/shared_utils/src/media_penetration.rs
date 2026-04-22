@@ -287,6 +287,66 @@ pub fn detect_real_frame_count(path: &Path, claimed_frame_count: u64) -> Penetra
     }
 }
 
+/// Penetrating interlace detection: decodes a short sample and uses the `idet` filter.
+/// Returns `Verified(true)` if interlacing is physically detected, `Verified(false)` if progressive.
+/// `Skipped` if the check isn't necessary.
+pub fn detect_interlacing(path: &Path) -> PenetrationResult<bool> {
+    // Only sample the first 24 frames (~1 second) to keep the penetration fast.
+    let output = match crate::ffmpeg_builder::FfmpegBuilder::new()
+        .input(path)
+        .frames_v(24)
+        .arg("-vf")
+        .arg("idet")
+        .format("null")
+        .output_pipe()
+        .build()
+        .output()
+    {
+        Ok(out) => out,
+        Err(e) => {
+            emit_stderr(&format!(
+                "⚠️  Interlace detection failed: ffmpeg error ({})",
+                e
+            ));
+            return PenetrationResult::Failed;
+        }
+    };
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    
+    // Look for: "Parsed_idet_0 ... Single frame detection: TFF: 12 BFF: 0 Progressive: 40 Undetermined: 0"
+    for line in stderr.lines() {
+        if line.contains("Parsed_idet_") && line.contains("Single frame detection:") {
+            let mut tff = 0;
+            let mut bff = 0;
+            
+            if let Some(tff_idx) = line.find("TFF:") {
+                let s = line[tff_idx + 4..].trim_start().split_whitespace().next().unwrap_or("0");
+                tff = s.parse::<u64>().unwrap_or(0);
+            }
+            if let Some(bff_idx) = line.find("BFF:") {
+                let s = line[bff_idx + 4..].trim_start().split_whitespace().next().unwrap_or("0");
+                bff = s.parse::<u64>().unwrap_or(0);
+            }
+            
+            // If we found multiple clear interlaced frames in the short sample, it's interlaced.
+            // Using a threshold of 2 to avoid single-frame false positives.
+            if tff + bff >= 2 {
+                emit_stderr(&format!(
+                    "📺 [{}] Interlace penetration: INTERLACED frames detected (TFF:{}, BFF:{})",
+                    path.file_name().and_then(|n| n.to_str()).unwrap_or("?"),
+                    tff, bff
+                ));
+                return PenetrationResult::Verified(true);
+            } else {
+                return PenetrationResult::Verified(false);
+            }
+        }
+    }
+    
+    PenetrationResult::Failed
+}
+
 /// Summary of penetration detection results for reporting
 #[derive(Debug, Default)]
 pub struct PenetrationSummary {

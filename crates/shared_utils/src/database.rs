@@ -2943,6 +2943,8 @@ mod tests {
             file_name: None,
             palette_size: Some(64),
             app_extensions: None,
+            encoder_software: None,
+            is_interlaced: None,
             has_transparency: true,
             transparency_is_real: None,
             is_native_gif: true,

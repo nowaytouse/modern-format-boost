@@ -160,6 +160,10 @@ pub struct LoopMeta {
     pub app_extensions: Option<Vec<String>>,
     /// "webm", "mp4", "gif", etc.
     pub container: Option<String>,
+    /// Encoder software tags extracted from format/stream metadata (e.g., "Adobe Premiere", "Lavf", "Photoshop").
+    pub encoder_software: Option<String>,
+    /// Whether the video is physically interlaced (from penetration testing).
+    pub is_interlaced: Option<bool>,
 
     // ── Layer 3 signals (self-referential structure) ──
     /// `frame_payload_variation`: coefficient of variation of frame packet sizes (`pkt_sizes` CV)
@@ -252,6 +256,13 @@ impl LoopMeta {
             loop_count: detection.loop_count,
             app_extensions: Some(Vec::new()),
             container: Some(detection.format.clone()),
+            encoder_software: detection
+                .precision
+                .original_encoder
+                .clone()
+                .or_else(|| detection.tags.get("software").cloned())
+                .or_else(|| detection.tags.get("encoder").cloned()),
+            is_interlaced: detection.is_interlaced,
             has_embedded_icc: false,
             has_complex_color_profile: matches!(
                 detection.color_space,
@@ -350,6 +361,8 @@ impl LoopMeta {
             loop_count: probe.loop_count,
             app_extensions: Some(Vec::new()),
             container: Some(probe.format_name.clone()),
+            encoder_software: probe.tags.get("software").cloned().or_else(|| probe.tags.get("encoder").cloned()),
+            is_interlaced: None,
             frame_payload_variation: calculate_cv(&probe.pkt_sizes),
             frame_delay_variation: calculate_cv_f64(&probe.pts_deltas),
             pkt_sizes: probe.pkt_sizes.clone(),
@@ -1039,6 +1052,13 @@ fn apply_structural_signals(
         let bonus = 0.06 * f64::from(pro_loop_count - 2); // +0.06 per signal beyond 2
         log_odds.add(bonus);
     }
+
+    // ── Absolute Physical Hard-Counters ──
+    if meta.is_interlaced == Some(true) {
+        // Interlaced video is a physical impossibility for native animation tools.
+        // Apply overwhelming negative odds to kill any loop intent.
+        log_odds.add(-crate::constants::LOG_ODDS_BIAS_DEFINITIVELY_LONG * 2.0);
+    }
 }
 
 
@@ -1446,7 +1466,7 @@ pub fn evaluate_loop_tree(
     let metadata_trust = {
         let ext = meta.source_extension.as_deref().unwrap_or("").to_ascii_lowercase();
         let container = meta.container.as_deref().unwrap_or("").to_ascii_lowercase();
-        if meta.is_native_gif || ext == "gif" || container == "gif" {
+        let mut base_trust: f64 = if meta.is_native_gif || ext == "gif" || container == "gif" {
             1.0 // GIF NETSCAPE2.0 is authoritative
         } else if ext == "webp" || ext == "apng" || ext == "png"
             || container == "webp" || container == "apng" || container == "png"
@@ -1457,7 +1477,35 @@ pub fn evaluate_loop_tree(
         } else {
             // MP4, MKV, AVI, etc. — no authoritative loop metadata
             0.2
+        };
+
+        // ── Deep Penetration: Creator Software Validation ──
+        // If we know the software that generated this file, we can override trust.
+        // This solves the "Adobe Premiere exporting WebP with a loop marker" forgery risk.
+        if let Some(encoder) = &meta.encoder_software {
+            let lower = encoder.to_lowercase();
+            // NLE (Non-Linear Editors) exporting to WebP/GIF rarely intend for short loops.
+            // Even if they write a loop block, they are treated as untrusted video.
+            if lower.contains("premiere") || lower.contains("resolve") 
+                || lower.contains("final cut") || lower.contains("avid") || lower.contains("vegas") 
+            {
+                base_trust = base_trust.min(0.2); 
+            } 
+            // Dedicated animation/meme creation tools
+            else if lower.contains("photoshop") || lower.contains("giphy") 
+                || lower.contains("ezgif") || lower.contains("screentogif") 
+                || lower.contains("krita") || lower.contains("procreate") || lower.contains("clip studio") 
+            {
+                base_trust = base_trust.max(1.0); // Absolute trust
+            }
+            // Generic FFmpeg wrapper without explicit loop intent
+            else if lower.contains("lavf") && base_trust > 0.8 {
+                // Slightly penalize generic FFmpeg wrappers (0.85 -> 0.75 for WebP)
+                base_trust -= 0.1; 
+            }
         }
+        
+        base_trust
     };
 
     if is_image || meta.is_native_gif {

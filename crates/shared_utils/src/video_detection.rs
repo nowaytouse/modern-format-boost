@@ -179,6 +179,7 @@ impl ColorSpace {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct VideoDetectionResult {
     pub file_path: String,
     pub format: String,
@@ -247,6 +248,8 @@ pub struct VideoDetectionResult {
     pub mv_magnitudes: Vec<f64>,
     /// 🎞️ Packet sizes (in bytes) for bitrate analysis.
     pub pkt_sizes: Vec<u64>,
+    /// 📺 Whether the video is physically interlaced (penetration detection).
+    pub is_interlaced: Option<bool>,
 }
 
 impl VideoDetectionResult {
@@ -507,6 +510,7 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
         pts_deltas: probe.pts_deltas,
         mv_magnitudes: probe.mv_magnitudes,
         pkt_sizes: probe.pkt_sizes,
+        is_interlaced: None,
     };
 
     // ── Penetrating Content Verification ──
@@ -554,6 +558,18 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
                 ));
                 result.frame_count = real_count;
             }
+        }
+    }
+
+    // Interlace detection is expensive, so we only run it for "gray zone" assets (4s to 18s)
+    // where loop intent might be ambiguous, and only if it's not a native gif/webp.
+    if result.duration_secs >= 4.0 && result.duration_secs <= 18.0 
+        && result.format != "gif" && result.format != "webp" 
+    {
+        if let crate::media_penetration::PenetrationResult::Verified(is_interlaced) =
+            crate::media_penetration::detect_interlacing(path)
+        {
+            result.is_interlaced = Some(is_interlaced);
         }
     }
 

@@ -216,6 +216,12 @@ that require non-trivial architectural changes beyond the scope of this hardenin
   of duration, which is already represented by tier bias and `duration_z()`. The function adds
   marginal information via frame density adjustment but is largely redundant.
 
+### 🛡️ Deep Penetration & Forgery Protection (Hardening v3.0)
+
+- **Creator Software Validation**: Integrated encoder/software tag analysis. Professional NLEs (Premiere, Resolve) exporting WebP/GIF now trigger an automatic trust floor (0.2), neutralizing loop marker forgery. Dedicated animation tools (Photoshop, GIPHY) grant absolute trust (1.0).
+- **Interlace Physical Scanning**: Integrated FFmpeg `idet` filter for 4s-18s "gray zone" assets. Interlaced frames (TFF/BFF) now act as a physical hard-counter, providing a decisive negative bias against loop intent.
+- **Dynamic Penetration Triggering**: Implemented selective execution of expensive penetration checks (interlace, transparency, audio silence) based on duration-tier risk profiles to maintain high throughput.
+
 ### 🔧 Signal Architecture Overhaul
 
 #### New Zero-Cost Signals from Existing Data
