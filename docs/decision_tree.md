@@ -2,7 +2,7 @@
 
 > **Source**: `crates/shared_utils/src/loop_intent.rs`  
 > **Entry point**: `assess_loop_intent_from_meta` → `evaluate_loop_tree`  
-> **Version**: v2.1 (Zero-Trust Metadata + Anti-Cliff Architecture)
+> **Version**: v3.0 (Signal Architecture Overhaul + Container-Aware Trust)
 
 ---
 
@@ -204,13 +204,22 @@ they accumulate as evidence that must overcome the duration-based prior.
 ### Layer 3: Structural Kinetics (Checkpoint at ±0.55)
 
 Physical motion and loop-structure signals:
-- **Loop closure score**: How similar is the first frame to the last?
-- **Motion periodicity**: Does the motion repeat rhythmically?
-- **Loop frequency**: Does the frame cadence suggest looping animation?
-- **Sparse cadence**: Low-FPS animation style?
-- **Temporal jitter**: Irregular frame delays typical of GIF encoders?
+- **I-frame ratio** (NEW): Ratio of I-frames to total frames. All-I-frame → GIF transcode;
+  normal GOP structure → real video. Weight: 0.30. Direct encoding evidence.
+- **Bytes per frame** (NEW): File size / frame count. Z-score normalized. Weight: 0.18.
+- **Loop closure score**: Pkt_size autocorrelation. Weight **reduced** to 0.12 (was 0.34).
+  Positive signal **restricted to short tiers only** — CBR/GOP patterns create false positives
+  in long content. Negative signal (low autocorrelation → scene changes) remains universal.
+- **Motion periodicity**: Does the motion repeat rhythmically? Weight: 0.22.
+- **Loop frequency**: Does the frame cadence suggest looping animation? Weight: 0.16.
+- **Sparse cadence**: Low-FPS animation style? Weight: 0.12.
+- **Temporal jitter**: Weight **reduced** to 0.06 (was 0.10). Penalizes abrupt memes unfairly.
 - **Scene cut**: Hard cuts strongly imply non-looping video.
 - **Compactness / large media signals**: File size × canvas size priors.
+- **9:16 portrait detection** (NEW): TikTok/Reels/Shorts standard aspect ratio.
+  Symmetric with existing 16:9 widescreen detection. Penalty: 0.10.
+- **Co-alignment bonus**: When 3+ independent signals converge on the same direction,
+  a nonlinear convergence bonus (+0.06 per signal beyond 2) is applied.
 
 **Checkpoint** at ±0.55: exits if structural evidence is already decisive.
 
@@ -242,30 +251,36 @@ log-odds value and asset type.
 
 ---
 
-## Metadata Trust Decay (Gray Zone Defense)
+## Metadata Trust: Container-Aware (Replaces Duration-Based Decay)
 
-To prevent forged metadata (e.g., a 14s video declaring `loop_count=0` and `GIPHY` tags) from
-overwhelming the duration-based priors, the system implements **Metadata Trust Decay**.
+The system uses **container-aware fixed trust** to weight soft metadata signals.
 
-Soft metadata signals are multiplied by a `metadata_trust` factor in the 6.0–15.0s range:
-- **Trust = 1.0** at 6.0s (Full confidence)
-- **Trust = 0.0** at 15.0s (Zero confidence in metadata)
+**Rationale**: MP4 `loop_count` is unreliable at **any** duration (no standard loop field in
+ISO BMFF). GIF NETSCAPE2.0 is authoritative at **any** duration. Duration and metadata
+reliability have no causal relationship — only a spurious correlation in the training data.
 
-**Attenuated Signals:**
+| Container | Trust | Authoritative Loop Mechanism |
+|-----------|-------|------------------------------|
+| GIF | 1.0 | NETSCAPE2.0 application extension block |
+| WebP | 0.85 | ANIM chunk loop count field |
+| APNG/PNG | 0.85 | acTL num_plays field |
+| AVIF | 0.6 | Loop semantics exist but less standardized |
+| MP4/MKV/AVI | 0.2 | No authoritative loop field |
+
+**Attenuated Signals** (multiplied by trust):
 - `loop_count == 0` bonus
 - Platform markers (`GIPHY`, `TENOR`, etc.)
-- Transparency flag bonus
+- Transparency flag bonus (image tree only)
 
-**Non-Attenuated Signals (Physical Reality):**
-- All Layer 3–5 structural and content signals (Loop closure, periodicity, etc.)
-- Audio presence/silence signals
+**Non-Attenuated Signals** (physical reality, always at full weight):
+- I-frame ratio, bytes per frame
+- Audio presence/silence
+- Scene cuts, motion periodicity
 - Tier-based log-odds bias
 
-### Effect on Gray Zone Forgery
-At 12.0s, the `metadata_trust` is approximately **0.33**. A forged `GIPHY` marker (+0.52)
-only contributes **+0.17** to the log-odds. This ensures that metadata alone cannot "pull"
- a long asset back into a `LoopStrong` verdict; it **must** be supported by genuine physical
- evidence from the frames themselves.
+### Effect on Forgery
+A forged `GIPHY` marker (+0.52) in an MP4 container only contributes `+0.52 × 0.2 = +0.104`.
+The same marker in a genuine GIF contributes the full `+0.52`.
 
 ---
 
@@ -299,4 +314,10 @@ only contributes **+0.17** to the log-odds. This ensures that metadata alone can
 | `LOG_ODDS_BIAS_DEFINITIVELY_LONG` | -3.0 | Tier bias for 18+s |
 | `TREE_STRUCTURAL_CHECKPOINT_LOG_ODDS_THRESHOLD` | 0.55 | Layer 3 checkpoint |
 | `TREE_CONTENT_CHECKPOINT_LOG_ODDS_THRESHOLD` | 0.78 | Layer 4 checkpoint |
-| `TREE_DECISION_LOG_ODDS_THRESHOLD` | 0.95 | Layer 5 final arbitration |
+| `TREE_DECISION_LOG_ODDS_THRESHOLD` | **1.05** | Layer 5 final arbitration |
+| `FEATURE_WEIGHT_IFRAME_RATIO` | 0.30 | I-frame ratio signal weight |
+| `FEATURE_WEIGHT_BYTES_PER_FRAME` | 0.18 | Bytes per frame signal weight |
+| `FEATURE_WEIGHT_LOOP_CLOSURE` | 0.12 | Loop closure signal weight (reduced) |
+| `FEATURE_WEIGHT_MOTION_PERIODICITY` | 0.22 | Motion periodicity weight |
+| `FEATURE_WEIGHT_TEMPORAL_JITTER` | 0.06 | Temporal jitter weight (reduced) |
+| `PORTRAIT_ASPECT_PENALTY` | 0.10 | 9:16 portrait aspect penalty |

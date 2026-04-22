@@ -216,6 +216,50 @@ that require non-trivial architectural changes beyond the scope of this hardenin
   of duration, which is already represented by tier bias and `duration_z()`. The function adds
   marginal information via frame density adjustment but is largely redundant.
 
+### 🔧 Signal Architecture Overhaul
+
+#### New Zero-Cost Signals from Existing Data
+
+- **I-frame ratio** (`FEATURE_WEIGHT_IFRAME_RATIO = 0.30`): GIF→MP4 transcodes produce
+  all-I-frame streams (ratio ≈ 1.0); real video with GOP structure (I-P-B-B-P...) has
+  ratio ≈ 0.03–0.10. This is direct encoding-structure evidence with no semantic ambiguity.
+  Computed from `LoopMeta.frame_types` which was previously collected but never used.
+- **Bytes per frame** (`FEATURE_WEIGHT_BYTES_PER_FRAME = 0.18`): GIF-class content has
+  much lower bytes_per_frame than real video. Z-score normalized against reference profile.
+  Computed from existing `file_size_bytes / frame_count`.
+- **9:16 portrait detection** (`PORTRAIT_ASPECT_PENALTY = 0.10`): TikTok/Reels/Shorts
+  standard aspect ratio is a strong video signal. Symmetric with existing 16:9 widescreen
+  detection. Previously completely missing.
+
+#### Signal Weight Corrections
+
+- **`loop_closure_score`**: Weight reduced `0.34` → `0.12`. This signal measures pkt_size
+  autocorrelation (codec behavior), not visual loop closure. CBR encoding and H.264 GOP
+  structures create false periodicity. Positive contribution now restricted to short-duration
+  tiers only — negative signal (low autocorrelation → scene changes) remains universal.
+- **`temporal_jitter`**: Weight reduced `0.10` → `0.06`. Penalizes abrupt-style memes with
+  intentional frame delay variation (dramatic pause before punchline).
+
+#### Metadata Trust: Container-Aware (Replaces Duration-Based Decay)
+
+The former `metadata_trust` decayed linearly from 1.0 to 0.0 based on duration (6s→15s),
+which has no causal basis — MP4 `loop_count` is unreliable at any duration (no standard
+loop field), while GIF NETSCAPE2.0 is authoritative at any duration.
+
+Replaced with container-aware fixed trust levels:
+| Container | Trust | Rationale |
+|-----------|-------|-----------|
+| GIF | 1.0 | NETSCAPE2.0 extension is authoritative |
+| WebP/APNG | 0.85 | ANIM chunk / acTL have real loop fields |
+| AVIF | 0.6 | Loop semantics exist but less standardized |
+| MP4/MKV/AVI | 0.2 | No authoritative loop field |
+
+#### Co-Alignment Bonus
+
+Added nonlinear convergence bonus when 3+ independent physical signals point the same
+direction. This addresses the structural limitation of pure additive log-odds: when audio,
+scene cuts, portrait aspect, and GOP structure all agree "this is video", the combined
+evidence should be stronger than the linear sum.
 
 
 ## [0.11.2] — 2026-04-20

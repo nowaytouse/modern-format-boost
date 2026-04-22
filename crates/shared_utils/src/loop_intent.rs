@@ -556,18 +556,47 @@ struct DerivedLoopSignals {
     localized_motion: bool,
     zero_motion_ratio: f64,
     /// Whether the asset has audible (non-silent) audio.
-    /// Computed once here; previously duplicated in `evaluate_loop_tree` and `evaluate_video_tree`.
     has_audible_audio: bool,
+    /// Ratio of I-frames to total frames. GIF→MP4 transcodes produce all-I-frame streams
+    /// (ratio ≈ 1.0); real video with GOP structure has ratio ≈ 0.03–0.10.
+    iframe_ratio: f64,
+    /// Average bytes per frame. GIF-class content typically has low bytes_per_frame
+    /// compared to real video content.
+    bytes_per_frame: f64,
+    /// Whether the aspect ratio is near 9:16 (TikTok/Reels/Shorts).
+    is_portrait: bool,
 }
 
 impl DerivedLoopSignals {
     fn from_meta(meta: &LoopMeta) -> Self {
         let zero_motion_ratio = zero_motion_ratio(&meta.mv_magnitudes);
+        let i_count = meta.frame_types.iter().filter(|&&c| c == 'I').count();
+        let total = meta.frame_types.len();
+        let iframe_ratio = if total > 0 {
+            i_count as f64 / total as f64
+        } else {
+            0.5 // neutral when no frame type data
+        };
+        let bytes_per_frame = if meta.frame_count > 0 {
+            meta.file_size_bytes as f64 / meta.frame_count as f64
+        } else {
+            0.0
+        };
+        let is_portrait = if meta.width > 0 && meta.height > 0 {
+            let ratio = meta.height as f64 / meta.width as f64;
+            (ratio - crate::constants::ASPECT_RATIO_WIDESCREEN).abs()
+                < crate::constants::ASPECT_RATIO_TOLERANCE_NEAR
+        } else {
+            false
+        };
         Self {
             scene_cut: detect_scene_cut(&meta.pkt_sizes),
             localized_motion: meta.mv_magnitudes.len() >= 10 && zero_motion_ratio > 0.70,
             zero_motion_ratio,
             has_audible_audio: meta.has_audio && !meta.audio_is_silent.unwrap_or(false),
+            iframe_ratio,
+            bytes_per_frame,
+            is_portrait,
         }
     }
 }
@@ -870,9 +899,17 @@ fn apply_structural_signals(
     is_video: bool,
 ) {
     let short_silent_asset = is_short_silent_asset(meta, thresholds);
+    let is_short_tier = matches!(
+        meta.tier(),
+        DurationTier::UltraShort | DurationTier::Short | DurationTier::MediumLong
+    );
 
+    // loop_closure_score: pkt_size autocorrelation. This measures CODEC behavior, not visual
+    // content. Positive signal restricted to short tiers only — for long content, CBR encoding
+    // and H.264 GOP structure create false periodicity in pkt_sizes. Negative signal kept
+    // universal since low autocorrelation reliably indicates scene changes.
     if let Some(closure) = meta.loop_closure_score {
-        if closure >= 0.82 {
+        if closure >= 0.82 && is_short_tier {
             let strength = ((closure - 0.82) / 0.18).clamp(0.25, 1.0);
             log_odds.add(strength * crate::constants::FEATURE_WEIGHT_LOOP_CLOSURE);
         } else if closure <= 0.35 {
@@ -926,6 +963,43 @@ fn apply_structural_signals(
         }
     }
 
+    // ── New zero-cost signals ────────────────────────────────────────────────
+
+    // I-frame ratio: GIF→MP4 transcodes produce all-I-frame streams (ratio ≈ 1.0).
+    // Real video with standard GOP (I-P-B-B-P...) has ratio ≈ 0.03–0.10.
+    // Only active when frame_types data is present (ratio != 0.5 neutral default).
+    if (derived.iframe_ratio - 0.5).abs() > 0.01 {
+        if derived.iframe_ratio >= 0.85 {
+            // All-I-frame or nearly so → strong GIF/animation signal
+            let strength = ((derived.iframe_ratio - 0.85) / 0.15).clamp(0.25, 1.0);
+            log_odds.add(strength * crate::constants::FEATURE_WEIGHT_IFRAME_RATIO);
+        } else if derived.iframe_ratio <= 0.15 {
+            // Normal GOP structure → strong video signal
+            let strength = ((0.15 - derived.iframe_ratio) / 0.15).clamp(0.25, 1.0);
+            log_odds.add(-strength * crate::constants::FEATURE_WEIGHT_IFRAME_RATIO);
+        }
+    }
+
+    // Bytes per frame: GIF-class content has much lower bytes_per_frame than real video.
+    // Use z-score against reference profile for normalization.
+    if derived.bytes_per_frame > 0.0 {
+        let bpf_z = thresholds.file_size_z(derived.bytes_per_frame);
+        if bpf_z <= -1.5 {
+            // Compact frames → animation-like
+            let strength = ((-bpf_z - 1.5) / 1.5).clamp(0.15, 1.0);
+            log_odds.add(strength * crate::constants::FEATURE_WEIGHT_BYTES_PER_FRAME);
+        } else if bpf_z >= 1.5 {
+            // Large frames → video-like
+            let strength = ((bpf_z - 1.5) / 1.5).clamp(0.15, 1.0);
+            log_odds.add(-strength * crate::constants::FEATURE_WEIGHT_BYTES_PER_FRAME);
+        }
+    }
+
+    // 9:16 portrait detection (TikTok/Reels/Shorts). Symmetric with existing 16:9 detection.
+    if derived.is_portrait {
+        log_odds.add(-crate::constants::PORTRAIT_ASPECT_PENALTY);
+    }
+
     if is_video
         && !short_silent_asset
         && !meta.has_transparency
@@ -934,7 +1008,39 @@ fn apply_structural_signals(
     {
         log_odds.add(-0.08);
     }
+
+    // ── Co-alignment bonus ──────────────────────────────────────────────────
+    // When multiple independent signals converge on the same direction, the combined
+    // evidence is stronger than the linear sum. This bonus models the nonlinear
+    // confidence boost from convergent independent signals.
+    //
+    // Count independent anti-loop physical signals:
+    let mut anti_loop_count: u8 = 0;
+    if derived.has_audible_audio { anti_loop_count += 1; }
+    if derived.scene_cut { anti_loop_count += 1; }
+    if derived.is_portrait { anti_loop_count += 1; }
+    if is_near_16_by_9(meta.width, meta.height) { anti_loop_count += 1; }
+    if derived.iframe_ratio < 0.15 { anti_loop_count += 1; }
+    // Convergence bonus: 3+ independent anti-loop signals → additional penalty
+    if anti_loop_count >= 3 {
+        let bonus = 0.06 * f64::from(anti_loop_count - 2); // +0.06 per signal beyond 2
+        log_odds.add(-bonus);
+    }
+
+    // Count independent pro-loop physical signals:
+    let mut pro_loop_count: u8 = 0;
+    if !meta.has_audio { pro_loop_count += 1; }
+    if meta.width > 0 && meta.height > 0 && meta.width == meta.height { pro_loop_count += 1; }
+    if derived.iframe_ratio >= 0.85 { pro_loop_count += 1; }
+    if meta.loop_closure_score.unwrap_or(0.0) >= 0.82 && is_short_tier { pro_loop_count += 1; }
+    if meta.motion_periodicity.unwrap_or(0.0) >= 0.72 { pro_loop_count += 1; }
+    // Convergence bonus: 3+ independent pro-loop signals → additional bonus
+    if pro_loop_count >= 3 {
+        let bonus = 0.06 * f64::from(pro_loop_count - 2); // +0.06 per signal beyond 2
+        log_odds.add(bonus);
+    }
 }
+
 
 fn apply_weak_heuristics(
     meta: &LoopMeta,
@@ -1099,6 +1205,9 @@ fn apply_weak_heuristics(
             log_odds.add(crate::constants::SQUARE_ASPECT_BONUS);
         } else if is_near_16_by_9(meta.width, meta.height) {
             log_odds.add(-crate::constants::WIDESCREEN_ASPECT_PENALTY);
+        } else if derived.is_portrait {
+            // 9:16 portrait (TikTok/Reels/Shorts standard) — strong video signal
+            log_odds.add(-crate::constants::PORTRAIT_ASPECT_PENALTY);
         }
     }
 
@@ -1325,23 +1434,30 @@ pub fn evaluate_loop_tree(
     // Extreme-zone assets have already exited. All remaining assets (6–15s gray zone)
     // proceed to the specialized tree for further weighted evidence accumulation.
     //
-    // Metadata Trust Decay: soft forged signals (loop_count, platform_marker,
-    // transparency flag) are attenuated by `metadata_trust` which scales from 1.0
-    // at the short-veto edge to 0.0 at the long-veto edge.
-    // Physical signals (loop_closure, periodicity, scene cuts) are NOT attenuated.
+    // Container-Aware Metadata Trust: replaces the former duration-proportional decay.
+    // The old approach assumed "longer → less trustworthy metadata", which has no causal
+    // basis. MP4 loop_count is unreliable at ANY duration (no standard loop field).
+    // GIF NETSCAPE2.0 is authoritative at ANY duration.
     //
-    // Effect:
-    //   At 8s:  trust = 0.78 → GIPHY bonus: 0.52 × 0.78 = 0.41 (was 0.52)
-    //   At 10s: trust = 0.56 → GIPHY bonus: 0.52 × 0.56 = 0.29 (was 0.52)
-    //   At 12s: trust = 0.33 → GIPHY bonus: 0.52 × 0.33 = 0.17 (was 0.52)
-    //   At 14s: trust = 0.11 → GIPHY bonus: 0.52 × 0.11 = 0.06 (was 0.52)
-    // Combined forged signal ceiling at 12s: ~0.54 (was ~1.35) — cannot overcome
-    // Long-tier bias alone; requires genuine physical loop evidence.
+    // Trust levels:
+    //   1.0: GIF (NETSCAPE2.0 extension), WebP (ANIM chunk loop field), APNG (acTL loop)
+    //   0.6: Modern animated containers where loop semantics exist but are less standardized
+    //   0.2: MP4/MKV/AVI — no authoritative loop field; loop_count is typically inferred
     let metadata_trust = {
-        let short_v = crate::constants::EXTREME_SHORT_ABSOLUTE_LIMIT_SECS;
-        let long_v = crate::constants::EXTREME_LONG_ABSOLUTE_LIMIT_SECS;
-        let t = (meta.duration_secs - short_v) / (long_v - short_v);
-        (1.0_f64 - t).clamp(0.0, 1.0)
+        let ext = meta.source_extension.as_deref().unwrap_or("").to_ascii_lowercase();
+        let container = meta.container.as_deref().unwrap_or("").to_ascii_lowercase();
+        if meta.is_native_gif || ext == "gif" || container == "gif" {
+            1.0 // GIF NETSCAPE2.0 is authoritative
+        } else if ext == "webp" || ext == "apng" || ext == "png"
+            || container == "webp" || container == "apng" || container == "png"
+        {
+            0.85 // WebP ANIM chunk / APNG acTL have real loop fields
+        } else if ext == "avif" || container == "avif" {
+            0.6 // AVIF loop semantics exist but less standardized
+        } else {
+            // MP4, MKV, AVI, etc. — no authoritative loop metadata
+            0.2
+        }
     };
 
     if is_image || meta.is_native_gif {

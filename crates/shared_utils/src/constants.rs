@@ -326,21 +326,34 @@ pub const EXTENDED_SHORT_ASSET_IMAGE_BONUS: f64 = 0.05;
 pub const EXTENDED_SHORT_ASSET_COMPACT_BONUS: f64 = 0.05;
 
 pub const FEATURE_WEIGHT_DELAY_VAR: f64 = 0.18;
-pub const FEATURE_WEIGHT_LOOP_CLOSURE: f64 = 0.34;
+// Reduced from 0.34: loop_closure_score measures pkt_size autocorrelation (codec behavior),
+// not visual loop closure. Abrupt memes have intentionally different first/last frames.
+// Retained at low weight as a secondary correlation signal for short content only.
+pub const FEATURE_WEIGHT_LOOP_CLOSURE: f64 = 0.12;
 pub const FEATURE_WEIGHT_MOTION_PERIODICITY: f64 = 0.22;
 pub const FEATURE_WEIGHT_LOOP_FREQUENCY: f64 = 0.16;
 pub const FEATURE_WEIGHT_SPARSE_CADENCE: f64 = 0.12;
-pub const FEATURE_WEIGHT_TEMPORAL_JITTER: f64 = 0.10;
+// Reduced from 0.10: temporal_jitter unfairly penalizes abrupt memes with intentional
+// frame delay variation (dramatic pause before punchline).
+pub const FEATURE_WEIGHT_TEMPORAL_JITTER: f64 = 0.06;
 pub const FEATURE_WEIGHT_WEBP_RATIO: f64 = 0.16;
 pub const FEATURE_WEIGHT_MOTION_GINI: f64 = 0.14;
 pub const FEATURE_WEIGHT_PALETTE_DEPTH: f64 = 0.12;
 pub const FEATURE_WEIGHT_TEMPORAL_FLATNESS: f64 = 0.10;
+
+// New zero-cost signals from existing LoopMeta data:
+// I-frame ratio: GIF→MP4 transcodes produce all-I-frame streams; real video has GOP structure.
+pub const FEATURE_WEIGHT_IFRAME_RATIO: f64 = 0.30;
+// Bytes per frame: GIF-class content has much lower bytes_per_frame than real video.
+pub const FEATURE_WEIGHT_BYTES_PER_FRAME: f64 = 0.18;
 
 pub const FRAME_COUNT_SHORT_BONUS: f64 = 0.05;
 pub const FRAME_COUNT_LONG_PENALTY: f64 = 0.10;
 
 pub const SQUARE_ASPECT_BONUS: f64 = 0.08;
 pub const WIDESCREEN_ASPECT_PENALTY: f64 = 0.10;
+// 9:16 portrait (TikTok/Reels/Shorts standard) is a strong video signal, symmetric with 16:9.
+pub const PORTRAIT_ASPECT_PENALTY: f64 = 0.10;
 
 pub const FPS_ANOMALY_BONUS: f64 = 0.04;
 
