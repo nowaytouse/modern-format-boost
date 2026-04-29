@@ -83,7 +83,7 @@ pub enum JxlPromotionReason {
 }
 
 impl JxlPromotionReason {
-    fn label(self) -> &'static str {
+    const fn label(self) -> &'static str {
         match self {
             Self::Baseline => "baseline",
             Self::BetterThanCurrentBest => "better-than-best",
@@ -94,7 +94,7 @@ impl JxlPromotionReason {
         }
     }
 
-    fn weight(self) -> u32 {
+    const fn weight(self) -> u32 {
         match self {
             Self::Baseline => 1,
             Self::NewRegion => 2,
@@ -171,7 +171,7 @@ enum JxlExplorationProfile {
 }
 
 impl JxlExplorationProfile {
-    fn label(self) -> &'static str {
+    const fn label(self) -> &'static str {
         match self {
             Self::MicroAdjust => "micro-adjust",
             Self::BoundaryPush => "boundary-push",
@@ -197,7 +197,7 @@ type DistanceKey = u32;
 /// Clamps a distance value to the valid exploration range `[FLOOR, CEILING]`.
 #[inline]
 #[must_use]
-pub fn clamp_explore_distance(distance: f32) -> f32 {
+pub const fn clamp_explore_distance(distance: f32) -> f32 {
     if !distance.is_finite() {
         return JXL_EXPLORE_FLOOR;
     }
@@ -205,7 +205,7 @@ pub fn clamp_explore_distance(distance: f32) -> f32 {
     distance.clamp(JXL_EXPLORE_FLOOR, JXL_EXPLORE_CEILING)
 }
 
-fn distance_key(distance: f32) -> DistanceKey {
+const fn distance_key(distance: f32) -> DistanceKey {
     clamp_explore_distance(distance).to_bits()
 }
 
@@ -318,7 +318,7 @@ fn normalize_ratio_band(value: f64, start: f64, end: f64) -> f64 {
 
 fn smoothstep01(value: f64) -> f64 {
     let clamped = value.clamp(0.0, 1.0);
-    clamped * clamped * (3.0 - 2.0 * clamped)
+    clamped * clamped * 2.0f64.mul_add(-clamped, 3.0)
 }
 
 /// Interpolate in **log10-distance space** (plateau tier only).
@@ -335,7 +335,7 @@ fn interpolate_plateau_distance(
     let t = smoothstep01(normalized);
     let min_log = min_distance.log10();
     let max_log = max_distance.log10();
-    canonicalize_generated_distance(10f64.powf(min_log + (max_log - min_log) * t))
+    canonicalize_generated_distance(10f64.powf((max_log - min_log).mul_add(t, min_log)))
 }
 
 /// Interpolate in **linear distance space** (perceptual tiers).
@@ -350,7 +350,7 @@ fn interpolate_perceptual_distance(
     normalized: f64,
 ) -> Result<f32, String> {
     let t = smoothstep01(normalized);
-    canonicalize_generated_distance(min_distance + (max_distance - min_distance) * t)
+    canonicalize_generated_distance((max_distance - min_distance).mul_add(t, min_distance))
 }
 
 fn profile_distance_range(profile: JxlExplorationProfile) -> (f64, f64) {
@@ -383,7 +383,7 @@ fn profile_distance_range(profile: JxlExplorationProfile) -> (f64, f64) {
 /// "get stuck" in dense anchor regions. Monitor the telemetry fields (`initial_ratio`,
 /// `pressure_stops`, `profile`, `target_distance`) logged by the screening pass to
 /// detect anchor regions that consistently fail to produce break-even candidates.
-fn profile_anchor_distances(profile: JxlExplorationProfile) -> &'static [f64] {
+const fn profile_anchor_distances(profile: JxlExplorationProfile) -> &'static [f64] {
     match profile {
         JxlExplorationProfile::MicroAdjust => &[JXL_DISTANCE_CEILING_PLATEAU_MAX],
         JxlExplorationProfile::BoundaryPush => &[
@@ -493,7 +493,7 @@ fn build_adaptive_ladder(
         }
     }
 
-    ladder.sort_by(|left, right| left.total_cmp(right));
+    ladder.sort_by(f32::total_cmp);
     Ok(ladder)
 }
 
@@ -1379,7 +1379,7 @@ mod tests {
             JXL_MICRO_PRESSURE_STOPS_MAX,
             JXL_BOUNDARY_PRESSURE_STOPS_MAX,
         );
-        let midpoint_ratio = 2f64.powf(midpoint_stops);
+        let midpoint_ratio = midpoint_stops.exp2();
         let target =
             target_distance_for_ratio(midpoint_ratio, exploration_profile(midpoint_ratio)).unwrap();
 
@@ -1455,7 +1455,7 @@ mod tests {
         // Binary search should converge without exhausting the 50-iteration budget.
         let result = screen_jxl_candidates(1000, 1192, |distance| {
             let size = crate::numeric_cast::f64_to_u64_sat(
-                (1200.0 - f64::from(distance) * 2000.0).max(800.0),
+                f64::from(distance).mul_add(-2000.0, 1200.0).max(800.0),
             );
             Ok(size)
         })

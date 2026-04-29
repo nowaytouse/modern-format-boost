@@ -35,7 +35,7 @@ enum IntentLabel {
 }
 
 impl IntentLabel {
-    fn to_db_label(self) -> &'static str {
+    const fn to_db_label(self) -> &'static str {
         match self {
             Self::Loop | Self::VideoLoop => "high",
             Self::NonLoop => "video",
@@ -63,7 +63,7 @@ fn main() -> Result<()> {
     }
 
     // Pass the label override to the batch ingestion engine
-    let label_str = cli.label.map(|l| l.to_db_label());
+    let label_str = cli.label.map(IntentLabel::to_db_label);
     let count = batch_ingest_samples(&cli.input, label_str).context("Batch ingestion failed")?;
 
     println!("✅ Success! Ingested {count} dynamic samples.");

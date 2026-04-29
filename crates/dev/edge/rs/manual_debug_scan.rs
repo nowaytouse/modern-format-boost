@@ -35,7 +35,7 @@ fn manual_debug_scan_debug_dir_only() {
         .unwrap_or(30usize);
 
     let mut undecided: Vec<std::path::PathBuf> = Vec::new();
-    for entry in WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
+    for entry in WalkDir::new(root).into_iter().filter_map(std::result::Result::ok) {
         if scanned >= cap {
             break;
         }
@@ -45,7 +45,7 @@ fn manual_debug_scan_debug_dir_only() {
         }
         if p.extension()
             .and_then(|s| s.to_str())
-            .map(|s| s.to_lowercase())
+            .map(str::to_lowercase)
             != Some("gif".to_string())
         {
             continue;

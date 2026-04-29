@@ -464,7 +464,7 @@ pub fn analyze_jpeg_quality(data: &[u8]) -> Result<JpegQualityAnalysis, String> 
         quality_description,
         is_high_quality_original,
         is_complete,
-        encoder_hint: encoder_hint.clone(),
+        encoder_hint,
     };
 
     debug!(

@@ -1540,7 +1540,7 @@ pub fn convert_to_jxl_matched(
     }
 }
 
-fn jxl_screening_effort(ultimate: bool, explore: bool) -> u8 {
+const fn jxl_screening_effort(ultimate: bool, explore: bool) -> u8 {
     if ultimate && explore {
         shared_utils::constants::JXL_DEFAULT_EFFORT
     } else {

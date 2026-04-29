@@ -232,15 +232,21 @@ static GPU_CONCURRENCY_CVAR: Condvar = Condvar::new();
 
 fn acquire_gpu_slot() {
     let max = gpu_concurrency_max();
-    let mut g = GPU_CONCURRENCY_CURRENT.lock().unwrap();
+    let mut g = GPU_CONCURRENCY_CURRENT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     while *g >= max {
-        g = GPU_CONCURRENCY_CVAR.wait(g).unwrap();
+        g = GPU_CONCURRENCY_CVAR
+            .wait(g)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
     }
     *g += 1;
 }
 
 fn release_gpu_slot() {
-    let mut g = GPU_CONCURRENCY_CURRENT.lock().unwrap();
+    let mut g = GPU_CONCURRENCY_CURRENT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     *g = g.saturating_sub(1);
     GPU_CONCURRENCY_CVAR.notify_one();
 }
@@ -397,6 +403,7 @@ impl GpuAccel {
     /// Successful probes stay cached. Failed probes are soft-cached and automatically retried
     /// after a short TTL so transient startup or device-busy failures do not latch CPU mode for
     /// the lifetime of the process.
+    #[must_use] 
     pub fn detect() -> Self {
         let cached = Self::cached_state();
         if cached.should_refresh() {

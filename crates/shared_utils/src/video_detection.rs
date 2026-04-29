@@ -529,8 +529,8 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
         }
     }
 
-    let has_transparency = result.pix_fmt.contains("a") 
-        || result.pix_fmt.contains("yuva") 
+    let has_transparency = result.pix_fmt.contains('a')
+        || result.pix_fmt.contains("yuva")
         || result.pix_fmt.contains("gbrap");
     if has_transparency {
         if let crate::media_penetration::PenetrationResult::Verified(is_real) =
@@ -563,8 +563,10 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
 
     // Interlace detection is expensive, so we only run it for "gray zone" assets (4s to 18s)
     // where loop intent might be ambiguous, and only if it's not a native gif/webp.
-    if result.duration_secs >= 4.0 && result.duration_secs <= 18.0 
-        && result.format != "gif" && result.format != "webp" 
+    if result.duration_secs >= 4.0
+        && result.duration_secs <= 18.0
+        && result.format != "gif"
+        && result.format != "webp"
     {
         if let crate::media_penetration::PenetrationResult::Verified(is_interlaced) =
             crate::media_penetration::detect_interlacing(path)

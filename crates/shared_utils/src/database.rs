@@ -608,6 +608,7 @@ pub fn report_db_status() {
 /// Returns a `SampleMatch` if enough labeled training data exists and
 /// similar neighbors are found. Returns `None` on DB error or if the
 /// database is too immature for reliable KNN.
+#[must_use] 
 pub fn lookup_similar_samples(meta: &LoopMeta, path: Option<&Path>) -> Option<SampleMatch> {
     lookup_similar_samples_inner(meta, path).ok().flatten()
 }
@@ -904,7 +905,7 @@ fn lookup_similar_samples_inner(
         }
 
         let relative_distance = (*distance - min_distance).max(0.0);
-        let distance_weight = 1.0 / (1.0 + relative_distance * relative_distance * 3.0);
+        let distance_weight = 1.0 / (relative_distance * relative_distance).mul_add(3.0, 1.0);
 
         let class_weight = match label {
             LabelStatus::LoopStrong => w_quality,
@@ -937,7 +938,7 @@ fn lookup_similar_samples_inner(
     let local_keep_probability = weighted_keep / total_weight.max(1e-6);
     let eff_n = effective_sample_size(weight_squares_sum, total_weight);
     // With higher imbalance, require stronger local evidence before moving away from global prior.
-    let prior_strength = 3.0 + 2.0 * global_imbalance_ratio.ln_1p();
+    let prior_strength = 2.0f64.mul_add(global_imbalance_ratio.ln_1p(), 3.0);
     let shrink = (eff_n / (eff_n + prior_strength)).clamp(0.0, 1.0);
     let keep_probability =
         (local_keep_probability * shrink + global_keep_prior * (1.0 - shrink)).clamp(0.0, 1.0);
@@ -1464,6 +1465,7 @@ fn determine_loss_tolerance(
 /// on content characteristics and directory heuristics, and computes
 /// derived features like temporal/spatial BPP. Returns `None` if the
 /// file cannot be probed.
+#[must_use] 
 pub fn sample_from_path(
     path: &Path,
     labeled_by: &str,
@@ -1607,10 +1609,7 @@ fn compute_sample_vector(sample: &SampleRow, stats_map: &FeatureMap) -> Vec<f32>
     let sample_fps_score: f64 = (1.0_f64
         - normalize_log_ratio(sample.fps.max(1e-3), baseline_fps, 1.2))
     .clamp(0.0_f64, 1.0_f64);
-    let sample_loop_affinity = (sample.loop_frequency.unwrap_or(0.5) * 0.45
-        + sample.cadence_score.unwrap_or(0.5) * 0.25
-        + sample_audio_score * 0.20
-        + sample_fps_score * 0.10)
+    let sample_loop_affinity = sample_fps_score.mul_add(0.10, sample.loop_frequency.unwrap_or(0.5).mul_add(0.45, sample.cadence_score.unwrap_or(0.5) * 0.25) + sample_audio_score * 0.20)
         .clamp(0.0, 1.0);
 
     let get_std = |f: &str| stats_map.stats.get(f).map_or(1.0, |s| s.std_dev).max(1e-6);
@@ -1878,7 +1877,7 @@ fn percentile_value(sorted_values: &[f64], quantile: f64) -> Option<f64> {
 
     let lower = sorted_values.get(lower_index).copied()?;
     let upper = sorted_values.get(upper_index).copied()?;
-    Some(lower + (upper - lower) * (scaled_index - crate::numeric_cast::usize_to_f64(lower_index)))
+    Some((upper - lower).mul_add(scaled_index - crate::numeric_cast::usize_to_f64(lower_index), lower))
 }
 
 fn build_feature_stats(values: &[f64]) -> FeatureStats {

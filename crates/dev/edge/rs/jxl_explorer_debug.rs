@@ -79,7 +79,7 @@ fn manual_debug_jxl_explorer_uses_copies_only() {
         let ext = copied_input
             .extension()
             .and_then(|ext| ext.to_str())
-            .map(|ext| ext.to_ascii_lowercase())
+            .map(str::to_ascii_lowercase)
             .unwrap_or_default();
 
         if ext == "jpg" || ext == "jpeg" {

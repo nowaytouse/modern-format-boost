@@ -2,4 +2,4 @@
 source: crates/dev/edge/rs/classification_snapshots.rs
 expression: verdict.reason()
 ---
-"Layer 1-B: short duration override (tier=Short)"
+"Layer 0-EX (Hard Veto): extreme-short duration 3.50s ≤ 6.0s — definitively animated image regardless of all other signals"

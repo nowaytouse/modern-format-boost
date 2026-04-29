@@ -98,12 +98,14 @@ pub const LOG_ODDS_BIAS_DEFINITIVELY_LONG: f64 = -3.0;
 // by itself — it must still win through log-odds accumulation.
 
 /// Assets at or below this duration (silent) are definitively animated images.
+///
 /// 6.0s — empirically covers virtually all real-world stickers, reactions, and memes
 /// without misclassifying intentional short video clips.
 pub const EXTREME_SHORT_ABSOLUTE_LIMIT_SECS: f64 = 6.0;
 
 /// Assets at or above this duration are definitively video, regardless of any
-/// metadata signal (loop_count, transparency, platform markers, etc.).
+///
+/// metadata signal (`loop_count`, transparency, platform markers, etc.).
 /// 15.0s — the practical upper bound for any real-world looping animated image.
 pub const EXTREME_LONG_ABSOLUTE_LIMIT_SECS: f64 = 15.0;
 
@@ -135,7 +137,6 @@ pub const EXTREME_LONG_PROXIMITY_BUFFER_SECS: f64 = 2.0;
 /// Maximum additional log-odds penalty at the veto edge (decays linearly to 0 at
 /// `EXTREME_LONG_ABSOLUTE_LIMIT_SECS - EXTREME_LONG_PROXIMITY_BUFFER_SECS`).
 pub const EXTREME_LONG_PROXIMITY_MAX_BIAS: f64 = 2.5;
-
 
 /// Upper bound on `width * height` for **GIF** assets.
 ///

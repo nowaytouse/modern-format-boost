@@ -49,12 +49,9 @@ fn main() -> Result<()> {
         let path = entry.path();
 
         // 1. Calculate BLAKE3
-        let b3 = match calculate_blake3(path) {
-            Ok(h) => h,
-            Err(_) => {
-                errors += 1;
-                continue;
-            }
+        let b3 = if let Ok(h) = calculate_blake3(path) { h } else {
+            errors += 1;
+            continue;
         };
         let b3_str = b3.to_string();
 

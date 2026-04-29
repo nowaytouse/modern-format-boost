@@ -642,7 +642,8 @@ impl DetailedCoarseProgressBar {
         };
 
         if let Ok(mut last) = self.last_render.lock() {
-            *last = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
+            let now = Instant::now();
+            *last = now.checked_sub(Duration::from_secs(1)).unwrap_or(now);
         }
         self.render(iter, crf, size, ssim);
     }

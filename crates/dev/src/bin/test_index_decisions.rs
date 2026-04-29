@@ -43,7 +43,7 @@ fn main() -> Result<()> {
 
     let blake3_hashes: Vec<String> = stmt
         .query_map([], |row| row.get::<_, String>(0))?
-        .filter_map(|r| r.ok())
+        .filter_map(std::result::Result::ok)
         .collect();
 
     for hash in blake3_hashes {

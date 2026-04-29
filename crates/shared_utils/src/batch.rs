@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::UNIX_EPOCH;
 use tracing::{debug, warn};
-use walkdir::WalkDir;
+use walkdir::{DirEntry, WalkDir};
 
 const PATH_TREE_CACHE_SCHEMA_VERSION: u32 = 1;
 const PATH_TREE_CACHE_DIR: &str = "path_tree";
@@ -65,6 +65,21 @@ struct CachedVideoTreeSnapshot {
     files: Vec<CachedVideoSortEntry>,
 }
 
+fn is_safe_entry(entry: &DirEntry) -> bool {
+    if entry.path_is_symlink() {
+        if let Ok(canonical) = entry.path().canonicalize() {
+            if crate::safety::check_dangerous_directory(&canonical).is_err() {
+                warn!(path = %entry.path().display(), "Security: skipping dangerous symlink traversal");
+                return false;
+            }
+        } else {
+            // Unresolvable symlinks are inherently unsafe in batch contexts
+            return false;
+        }
+    }
+    true
+}
+
 pub fn collect_files(dir: &Path, extensions: &[&str], recursive: bool) -> Vec<PathBuf> {
     let walker = if recursive {
         WalkDir::new(dir).follow_links(true)
@@ -73,7 +88,7 @@ pub fn collect_files(dir: &Path, extensions: &[&str], recursive: bool) -> Vec<Pa
     };
 
     let mut files = Vec::new();
-    for entry in walker {
+    for entry in walker.into_iter().filter_entry(is_safe_entry) {
         match entry {
             Ok(entry) => {
                 let path = entry.path();
@@ -183,7 +198,7 @@ pub fn calculate_directory_size_by_extensions(
     };
 
     let mut total = 0u64;
-    for entry in walker {
+    for entry in walker.into_iter().filter_entry(is_safe_entry) {
         match entry {
             Ok(entry) => {
                 if !entry.file_type().is_file()
@@ -347,6 +362,7 @@ impl BatchResult {
         self.paused_remaining = remaining;
     }
 
+    #[must_use] 
     pub fn success_rate(&self) -> f64 {
         if self.total == 0 {
             100.0
@@ -578,7 +594,7 @@ fn scan_image_tree_snapshot(
     let mut directories = Vec::new();
     let mut files = Vec::new();
 
-    for entry in walker {
+    for entry in walker.into_iter().filter_entry(is_safe_entry) {
         match entry {
             Ok(entry) => {
                 if entry.file_type().is_dir() {
@@ -743,7 +759,7 @@ fn scan_video_tree_snapshot(
     let mut directories = Vec::new();
     let mut files = Vec::new();
 
-    for entry in walker {
+    for entry in walker.into_iter().filter_entry(is_safe_entry) {
         match entry {
             Ok(entry) => {
                 if entry.file_type().is_dir() {

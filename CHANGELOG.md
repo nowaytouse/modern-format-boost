@@ -6,6 +6,29 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### 🛡️ Media Processing Pipeline Hardening & Security Audit
+
+This release focuses on hardening the media processing pipeline against resource exhaustion attacks, concurrency race conditions, and deep structural vulnerabilities identified during a comprehensive security audit.
+
+#### OOM & Resource Exhaustion Protection
+- **Standardized FTYP Parsing Limit**: Hardened the FTYP box reader in `image_detection.rs` to read up to **1MB (1,048,576 bytes)**. 
+  - **Security Rationale**: Prevents Memory Overflow (OOM) Denial of Service (DoS) attacks where a multi-GB malicious file is passed to the system. 1MB provides a safe buffer for even the most bloated metadata while strictly capping memory usage.
+- **Arithmetic Safety**: Replaced all direct coordinate and dimension calculations in `video.rs` and `image_detection.rs` with **saturating arithmetic** (`saturating_sub`, `saturating_add`).
+  - **Security Rationale**: Eliminates potential process panics caused by integer underflow/overflow when processing degenerate media files (e.g., 0x0 dimensions or malformed block offsets).
+
+#### Concurrency & Concurrency Safety
+- **Lock Acquisition Resilience**: Increased `MAX_LOCK_RETRIES` from 5 to **15** in `checkpoint.rs`.
+  - **Stability Rationale**: Prevents process "zombie" states and premature IO error timeouts during periods of extreme filesystem contention or high-concurrency batch processing.
+- **Safe Symlink Validation**: Integrated a recursive `is_safe_entry` validator into the `WalkDir` file collection engine in `batch.rs`.
+  - **Security Rationale**: Protects against Directory Traversal attacks. The system now canonicalizes all paths and validates targets against a restricted "dangerous directory" list before processing, ensuring that malicious symlinks cannot lead to sensitive system areas.
+
+#### Technical Debt & Code Quality (Zero-Warning Audit)
+- **Clippy Compliance**: Resolved all remaining technical debt and linting warnings:
+  - Fixed "identical if blocks" in the `loop_intent.rs` decision tree by merging redundant conditional paths.
+  - Resolved "confusing item placement" warnings in `checkpoint.rs` by moving constant declarations to the block start.
+  - The project now achieves a **100% clean build** under `cargo clippy --all-targets --all-features`.
+- **Language Standardization**: Ensured all new error messages and diagnostic logs adhere to the project's English-only output policy.
+
 ### 🛡️ Loop Intent System — Zero-Trust Architecture (v2.1)
 
 This release represents a fundamental architectural shift in the loop intent judgment system.

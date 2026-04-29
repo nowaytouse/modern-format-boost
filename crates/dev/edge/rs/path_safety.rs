@@ -50,7 +50,7 @@ mod tests {
             safe_path.starts_with("./"),
             "Failed to prepend ./ for metacharacter safety: {safe_path}"
         );
-        assert!(safe_path.contains(";"), "Lost metacharacter: {safe_path}");
+        assert!(safe_path.contains(';'), "Lost metacharacter: {safe_path}");
     }
 
     #[test]
@@ -63,7 +63,7 @@ mod tests {
             safe_path.starts_with("./"),
             "Failed to prepend ./ for trailing space safety: {safe_path}"
         );
-        assert!(safe_path.ends_with(" "), "Lost trailing space: {safe_path}");
+        assert!(safe_path.ends_with(' '), "Lost trailing space: {safe_path}");
     }
 
     #[test]

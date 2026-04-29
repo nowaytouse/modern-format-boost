@@ -501,11 +501,12 @@ impl CheckpointManager {
     ///
     /// Returns an error if the lock cannot be acquired or if the lock file exists and is not stale.
     pub fn acquire_lock(&self) -> io::Result<()> {
+        const MAX_LOCK_RETRIES: u32 = 15;
         let lock_info = LockInfo::new();
         let json = serde_json::to_string_pretty(&lock_info)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
-        loop {
+        for _attempt in 0..MAX_LOCK_RETRIES {
             match OpenOptions::new()
                 .write(true)
                 .create_new(true)
@@ -522,10 +523,14 @@ impl CheckpointManager {
                             format!("Checkpoint lock already held by PID {pid}"),
                         ));
                     }
+                    // Stale lock was cleared; retry create_new
                 }
                 Err(err) => return Err(err),
             }
         }
+        Err(io::Error::other(
+            "Failed to acquire checkpoint lock after maximum retries",
+        ))
     }
 
     /// # Errors

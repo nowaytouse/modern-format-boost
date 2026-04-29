@@ -545,7 +545,7 @@ impl ExploreResult {
     /// Returns true when ultimate-mode 3D gate metrics were captured.
     #[inline]
     #[must_use]
-    pub fn has_ultimate_quality_metrics(&self) -> bool {
+    pub const fn has_ultimate_quality_metrics(&self) -> bool {
         self.vmaf_y_score.is_some() || self.cambi_score.is_some() || self.psnr_uv_score.is_some()
     }
 

@@ -793,6 +793,7 @@ impl ConvertOptions {
         crate::is_apple_native_format(&input_ext)
     }
 
+    #[must_use] 
     pub const fn should_delete_original(&self) -> bool {
         self.delete_original || self.in_place
     }
@@ -1326,7 +1327,7 @@ impl SizeToleranceCheck<'_> {
         SizeDeltaSummary::from_sizes(self.input_size, self.output_size)
     }
 
-    fn tolerance_bytes(&self) -> u64 {
+    const fn tolerance_bytes(&self) -> u64 {
         crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES
     }
 

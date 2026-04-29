@@ -34,7 +34,7 @@ enum OutputTarget {
 
 impl VideoCodec {
     #[must_use]
-    pub fn ffmpeg_name(&self, is_gpu: bool) -> &'static str {
+    pub const fn ffmpeg_name(&self, is_gpu: bool) -> &'static str {
         match self {
             Self::H264 => {
                 if is_gpu {
@@ -231,7 +231,7 @@ impl FfmpegBuilder {
         self
     }
 
-    pub fn vcodec(&mut self, codec: VideoCodec) -> &mut Self {
+    pub const fn vcodec(&mut self, codec: VideoCodec) -> &mut Self {
         self.vcodec = Some(codec);
         self
     }
@@ -270,27 +270,27 @@ impl FfmpegBuilder {
         self
     }
 
-    pub fn frames_v(&mut self, count: u32) -> &mut Self {
+    pub const fn frames_v(&mut self, count: u32) -> &mut Self {
         self.frames_v = Some(count);
         self
     }
 
-    pub fn crf(&mut self, crf: f32) -> &mut Self {
+    pub const fn crf(&mut self, crf: f32) -> &mut Self {
         self.crf = Some(crf);
         self
     }
 
-    pub fn preset(&mut self, preset: EncoderPreset) -> &mut Self {
+    pub const fn preset(&mut self, preset: EncoderPreset) -> &mut Self {
         self.preset = Some(preset);
         self
     }
 
-    pub fn profile(&mut self, profile: VideoProfile) -> &mut Self {
+    pub const fn profile(&mut self, profile: VideoProfile) -> &mut Self {
         self.profile = Some(profile);
         self
     }
 
-    pub fn pix_fmt(&mut self, pix_fmt: PixFmt) -> &mut Self {
+    pub const fn pix_fmt(&mut self, pix_fmt: PixFmt) -> &mut Self {
         self.pix_fmt = Some(pix_fmt);
         self
     }
@@ -301,17 +301,17 @@ impl FfmpegBuilder {
         self
     }
 
-    pub fn threads(&mut self, threads: usize) -> &mut Self {
+    pub const fn threads(&mut self, threads: usize) -> &mut Self {
         self.threads = Some(threads);
         self
     }
 
-    pub fn overwrite(&mut self) -> &mut Self {
+    pub const fn overwrite(&mut self) -> &mut Self {
         self.overwrite = true;
         self
     }
 
-    pub fn overwrite_bool(&mut self, overwrite: bool) -> &mut Self {
+    pub const fn overwrite_bool(&mut self, overwrite: bool) -> &mut Self {
         self.overwrite = overwrite;
         self
     }
@@ -332,7 +332,7 @@ impl FfmpegBuilder {
         self
     }
 
-    pub fn use_gpu(&mut self, use_gpu: bool) -> &mut Self {
+    pub const fn use_gpu(&mut self, use_gpu: bool) -> &mut Self {
         self.is_gpu = use_gpu;
         self
     }
@@ -347,7 +347,7 @@ impl FfmpegBuilder {
         self
     }
 
-    pub fn hide_banner(&mut self) -> &mut Self {
+    pub const fn hide_banner(&mut self) -> &mut Self {
         self.hide_banner = true;
         self
     }
@@ -379,7 +379,7 @@ impl FfmpegBuilder {
 
     /// Automatically corrects odd dimensions by scaling to floor(w/2)*2.
     /// Prevents filtergraph crashes with SSIM/VMAF on odd-sized inputs.
-    pub fn with_odd_dim_correction(&mut self) -> &mut Self {
+    pub const fn with_odd_dim_correction(&mut self) -> &mut Self {
         self.odd_dim_correction = true;
         self
     }
@@ -548,7 +548,7 @@ pub struct FfprobeBuilder {
 
 impl FfprobeBuilder {
     #[must_use]
-    pub fn new() -> self::FfprobeBuilder {
+    pub fn new() -> Self {
         Self::default()
     }
 
@@ -557,12 +557,12 @@ impl FfprobeBuilder {
         self
     }
 
-    pub fn show_streams(&mut self) -> &mut Self {
+    pub const fn show_streams(&mut self) -> &mut Self {
         self.show_streams = true;
         self
     }
 
-    pub fn show_format(&mut self) -> &mut Self {
+    pub const fn show_format(&mut self) -> &mut Self {
         self.show_format = true;
         self
     }
@@ -597,12 +597,12 @@ impl FfprobeBuilder {
         self
     }
 
-    pub fn show_frames(&mut self) -> &mut Self {
+    pub const fn show_frames(&mut self) -> &mut Self {
         self.show_frames = true;
         self
     }
 
-    pub fn count_frames(&mut self) -> &mut Self {
+    pub const fn count_frames(&mut self) -> &mut Self {
         self.count_frames = true;
         self
     }

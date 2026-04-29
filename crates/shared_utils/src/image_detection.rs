@@ -392,11 +392,18 @@ pub fn detect_format_from_bytes(path: &Path) -> Result<DetectedFormat> {
 /// AVIF spec allows mif1 as major brand; without this, such files get routed to
 /// `detect_heic_compression` (hvcC lookup) which always fails → Err.
 fn resolve_mif1_from_compatible_brands(path: &Path, major_brand: &[u8]) -> DetectedFormat {
-    // Read enough for ftyp box (typically < 64 bytes, but can be larger)
-    let Ok(data) = std::fs::read(path) else {
-        // Fallback: mif1 without readable file → HEIC (legacy behavior)
+    // Security: Read up to 1MB (1048576 bytes) to safely parse FTYP even if it has bloated metadata,
+    // while still preventing OOM on multi-GB fake files.
+    let Ok(mut file) = std::fs::File::open(path) else {
         return DetectedFormat::HEIC;
     };
+    let mut data = vec![0u8; 1048576];
+    let read_len = std::io::Read::read(&mut file, &mut data).unwrap_or(0);
+    if read_len == 0 {
+        // Fallback: mif1 without readable file → HEIC (legacy behavior)
+        return DetectedFormat::HEIC;
+    }
+    data.truncate(read_len);
 
     if data.len() < 16 || &data[4..8] != b"ftyp" {
         return DetectedFormat::HEIC;
@@ -416,7 +423,10 @@ fn resolve_mif1_from_compatible_brands(path: &Path, major_brand: &[u8]) -> Detec
     let mut format_heif_detected = false;
 
     for chunk in compat_data.chunks_exact(4) {
-        let cb: &[u8; 4] = chunk.try_into().unwrap();
+        let cb: &[u8; 4] = match chunk.try_into() {
+            Ok(arr) => arr,
+            Err(_) => continue,
+        };
         // AVIF-specific brands — highest priority
         if cb == b"avif" || cb == b"avis" || cb == b"MA1B" || cb == b"MA1A" {
             return DetectedFormat::AVIF;
@@ -1490,7 +1500,7 @@ fn detect_dithering_pattern(img: &DynamicImage) -> f64 {
     let mut high_freq_count = 0u64;
     let mut total_comparisons = 0u64;
 
-    let step = crate::numeric_cast::f64_to_u32_sat((f64::from(width * height) / 10000.0).max(1.0));
+    let step = crate::numeric_cast::f64_to_u32_sat((crate::numeric_cast::u64_to_f64(u64::from(width) * u64::from(height)) / 10000.0).max(1.0));
 
     for y in 1..height - 1 {
         for x in 1..width - 1 {
@@ -1728,10 +1738,10 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
             // Pick a pixel near the center of each block (deterministic, no RNG needed)
             let px = u32::try_from(bx * block_size + block_size / 2)
                 .unwrap_or(u32::MAX)
-                .min(width - 1);
+                .min(width.saturating_sub(1));
             let py = u32::try_from(by * block_size + block_size / 2)
                 .unwrap_or(u32::MAX)
-                .min(height - 1);
+                .min(height.saturating_sub(1));
             let pixel = rgba.get_pixel(px, py);
             let key = [pixel[0], pixel[1], pixel[2], pixel[3]];
             *color_freq.entry(key).or_insert(0) += 1;

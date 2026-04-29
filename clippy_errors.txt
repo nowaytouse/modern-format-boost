@@ -1,0 +1,649 @@
+[1m[92m    Checking[0m shared_utils v0.11.2 (/Users/nyamiiko/Downloads/GitHub/modern_format_boost/crates/shared_utils)
+[1m[91merror[0m[1m: empty line after doc comment[0m
+    [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:2538:1
+     [1m[94m|[0m
+[1m[94m2538[0m [1m[94m|[0m [1m[91m/[0m /// Returns `Some(true)` if silent (< -70 dB or empty), `Some(false)` if audible.
+[1m[94m2539[0m [1m[94m|[0m [1m[91m|[0m // ── Safety & Exploration Helpers ──────────────────────────────────────────────
+[1m[94m2540[0m [1m[94m|[0m [1m[91m|[0m
+     [1m[94m|[0m [1m[91m|_^[0m
+[1m[94m...[0m
+[1m[94m2543[0m [1m[94m|[0m   pub fn is_lossless_exploration_safe(meta: &LoopMeta, path: Option<&Path>) -> bool {
+     [1m[94m|[0m   [1m[94m-----------------------------------[0m [1m[94mthe comment documents this function[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#empty_line_after_doc_comments
+     [1m[94m= [0m[1mnote[0m: `-D clippy::empty-line-after-doc-comments` implied by `-D warnings`
+     [1m[94m= [0m[1mhelp[0m: to override `-D warnings` add `#[allow(clippy::empty_line_after_doc_comments)]`
+     [1m[94m= [0m[1mhelp[0m: if the empty line is unintentional, remove it
+[1m[96mhelp[0m: if the doc comment should not document function `is_lossless_exploration_safe` then comment it out
+     [1m[94m|[0m
+[1m[94m2537[0m [92m~ // [0m/// Penetrating audio detection: decode and analyze actual audio samples.
+[1m[94m2538[0m [92m~ // [0m/// Returns `Some(true)` if silent (< -70 dB or empty), `Some(false)` if audible.
+     [1m[94m|[0m
+
+[1m[91merror[0m[1m: first doc comment paragraph is too long[0m
+   [1m[94m--> [0mcrates/shared_utils/src/constants.rs:100:1
+    [1m[94m|[0m
+[1m[94m100[0m [1m[94m|[0m [1m[91m/[0m /// Assets at or below this duration (silent) are definitively animated images.
+[1m[94m101[0m [1m[94m|[0m [1m[91m|[0m /// 6.0s — empirically covers virtually all real-world stickers, reactions, and memes
+[1m[94m102[0m [1m[94m|[0m [1m[91m|[0m /// without misclassifying intentional short video clips.
+    [1m[94m|[0m [1m[91m|_^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#too_long_first_doc_paragraph
+    [1m[94m= [0m[1mnote[0m: `-D clippy::too-long-first-doc-paragraph` implied by `-D warnings`
+    [1m[94m= [0m[1mhelp[0m: to override `-D warnings` add `#[allow(clippy::too_long_first_doc_paragraph)]`
+[1m[96mhelp[0m: add an empty line
+    [1m[94m|[0m
+[1m[94m100[0m [1m[94m|[0m /// Assets at or below this duration (silent) are definitively animated images.
+[1m[94m101[0m [92m+ ///[0m
+    [1m[94m|[0m
+
+[1m[91merror[0m[1m: item in documentation is missing backticks[0m
+   [1m[94m--> [0mcrates/shared_utils/src/constants.rs:106:22
+    [1m[94m|[0m
+[1m[94m106[0m [1m[94m|[0m /// metadata signal (loop_count, transparency, platform markers, etc.).
+    [1m[94m|[0m                      [1m[91m^^^^^^^^^^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#doc_markdown
+    [1m[94m= [0m[1mnote[0m: `-D clippy::doc-markdown` implied by `-D warnings`
+    [1m[94m= [0m[1mhelp[0m: to override `-D warnings` add `#[allow(clippy::doc_markdown)]`
+[1m[96mhelp[0m: try
+    [1m[94m|[0m
+[1m[94m106[0m [91m- [0m/// metadata signal ([91mloop_count[0m, transparency, platform markers, etc.).
+[1m[94m106[0m [92m+ [0m/// metadata signal ([92m`loop_count`[0m, transparency, platform markers, etc.).
+    [1m[94m|[0m
+
+[1m[91merror[0m[1m: first doc comment paragraph is too long[0m
+   [1m[94m--> [0mcrates/shared_utils/src/constants.rs:105:1
+    [1m[94m|[0m
+[1m[94m105[0m [1m[94m|[0m [1m[91m/[0m /// Assets at or above this duration are definitively video, regardless of any
+[1m[94m106[0m [1m[94m|[0m [1m[91m|[0m /// metadata signal (loop_count, transparency, platform markers, etc.).
+[1m[94m107[0m [1m[94m|[0m [1m[91m|[0m /// 15.0s — the practical upper bound for any real-world looping animated image.
+    [1m[94m|[0m [1m[91m|_^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#too_long_first_doc_paragraph
+
+[1m[91merror[0m[1m: item in documentation is missing backticks[0m
+   [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:144:44
+    [1m[94m|[0m
+[1m[94m144[0m [1m[94m|[0m     /// Whether the audio track is silent (mean_volume < -70 dB or n_samples == 0).
+    [1m[94m|[0m                                            [1m[91m^^^^^^^^^^^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#doc_markdown
+[1m[96mhelp[0m: try
+    [1m[94m|[0m
+[1m[94m144[0m [91m- [0m    /// Whether the audio track is silent ([91mmean_volume[0m < -70 dB or n_samples == 0).
+[1m[94m144[0m [92m+ [0m    /// Whether the audio track is silent ([92m`mean_volume`[0m < -70 dB or n_samples == 0).
+    [1m[94m|[0m
+
+[1m[91merror[0m[1m: item in documentation is missing backticks[0m
+   [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:144:68
+    [1m[94m|[0m
+[1m[94m144[0m [1m[94m|[0m     /// Whether the audio track is silent (mean_volume < -70 dB or n_samples == 0).
+    [1m[94m|[0m                                                                    [1m[91m^^^^^^^^^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#doc_markdown
+[1m[96mhelp[0m: try
+    [1m[94m|[0m
+[1m[94m144[0m [91m- [0m    /// Whether the audio track is silent (mean_volume < -70 dB or [91mn_samples[0m == 0).
+[1m[94m144[0m [92m+ [0m    /// Whether the audio track is silent (mean_volume < -70 dB or [92m`n_samples`[0m == 0).
+    [1m[94m|[0m
+
+[1m[91merror[0m[1m: item in documentation is missing backticks[0m
+   [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:576:70
+    [1m[94m|[0m
+[1m[94m576[0m [1m[94m|[0m     /// Average bytes per frame. GIF-class content typically has low bytes_per_frame
+    [1m[94m|[0m                                                                      [1m[91m^^^^^^^^^^^^^^^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#doc_markdown
+[1m[96mhelp[0m: try
+    [1m[94m|[0m
+[1m[94m576[0m [91m- [0m    /// Average bytes per frame. GIF-class content typically has low [91mbytes_per_frame[0m
+[1m[94m576[0m [92m+ [0m    /// Average bytes per frame. GIF-class content typically has low [92m`bytes_per_frame`[0m
+    [1m[94m|[0m
+
+[1m[91merror[0m[1m: casts from `u32` to `f64` can be expressed infallibly using `From`[0m
+   [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:599:25
+    [1m[94m|[0m
+[1m[94m599[0m [1m[94m|[0m             let ratio = meta.height as f64 / meta.width as f64;
+    [1m[94m|[0m                         [1m[91m^^^^^^^^^^^^^^^^^^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: an `as` cast can become silently lossy if the types change in the future
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#cast_lossless
+    [1m[94m= [0m[1mnote[0m: `-D clippy::cast-lossless` implied by `-D warnings`
+    [1m[94m= [0m[1mhelp[0m: to override `-D warnings` add `#[allow(clippy::cast_lossless)]`
+[1m[96mhelp[0m: use `f64::from` instead
+    [1m[94m|[0m
+[1m[94m599[0m [91m- [0m            let ratio = [91mmeta.height as f64[0m / meta.width as f64;
+[1m[94m599[0m [92m+ [0m            let ratio = [92mf64::from(meta.height)[0m / meta.width as f64;
+    [1m[94m|[0m
+
+[1m[91merror[0m[1m: casts from `u32` to `f64` can be expressed infallibly using `From`[0m
+   [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:599:46
+    [1m[94m|[0m
+[1m[94m599[0m [1m[94m|[0m             let ratio = meta.height as f64 / meta.width as f64;
+    [1m[94m|[0m                                              [1m[91m^^^^^^^^^^^^^^^^^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: an `as` cast can become silently lossy if the types change in the future
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#cast_lossless
+[1m[96mhelp[0m: use `f64::from` instead
+    [1m[94m|[0m
+[1m[94m599[0m [91m- [0m            let ratio = meta.height as f64 / [91mmeta.width as f64[0m;
+[1m[94m599[0m [92m+ [0m            let ratio = meta.height as f64 / [92mf64::from(meta.width)[0m;
+    [1m[94m|[0m
+
+[1m[91merror[0m[1m: this `if` has identical blocks[0m
+    [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:1174:62
+     [1m[94m|[0m
+[1m[94m1174[0m [1m[94m|[0m           } else if z.is_sign_negative() && short_silent_asset {
+     [1m[94m|[0m [1m[91m ______________________________________________________________^[0m
+[1m[94m1175[0m [1m[94m|[0m [1m[91m|[0m             0.55
+[1m[94m1176[0m [1m[94m|[0m [1m[91m|[0m         } else if z.is_sign_positive()
+     [1m[94m|[0m [1m[91m|_________^[0m
+     [1m[94m|[0m
+[1m[92mnote[0m: same as this
+    [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:1178:9
+     [1m[94m|[0m
+[1m[94m1178[0m [1m[94m|[0m [1m[92m/[0m         {
+[1m[94m1179[0m [1m[94m|[0m [1m[92m|[0m             0.55
+[1m[94m1180[0m [1m[94m|[0m [1m[92m|[0m         } else {
+     [1m[94m|[0m [1m[92m|_________^[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#if_same_then_else
+     [1m[94m= [0m[1mnote[0m: `-D clippy::if-same-then-else` implied by `-D warnings`
+     [1m[94m= [0m[1mhelp[0m: to override `-D warnings` add `#[allow(clippy::if_same_then_else)]`
+
+[1m[91merror[0m[1m: variables can be used directly in the `format!` string[0m
+    [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:1921:17
+     [1m[94m|[0m
+[1m[94m1921[0m [1m[94m|[0m                 format!("KNN keep {:.2} @ conf {:.2}", knn_keep, conf),
+     [1m[94m|[0m                 [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#uninlined_format_args
+     [1m[94m= [0m[1mnote[0m: `-D clippy::uninlined-format-args` implied by `-D warnings`
+     [1m[94m= [0m[1mhelp[0m: to override `-D warnings` add `#[allow(clippy::uninlined_format_args)]`
+[1m[96mhelp[0m: change this to
+     [1m[94m|[0m
+[1m[94m1921[0m [91m- [0m                format!("KNN keep {:.2} @ conf {:.2}"[91m, knn_keep, conf[0m),
+[1m[94m1921[0m [92m+ [0m                format!("KNN keep {[92mknn_keep[0m:.2} @ conf {[92mconf[0m:.2}"),
+     [1m[94m|[0m
+
+[1m[91merror[0m[1m: variables can be used directly in the `format!` string[0m
+    [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:1927:17
+     [1m[94m|[0m
+[1m[94m1927[0m [1m[94m|[0m                 format!("KNN keep {:.2} @ conf {:.2}", knn_keep, conf),
+     [1m[94m|[0m                 [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#uninlined_format_args
+[1m[96mhelp[0m: change this to
+     [1m[94m|[0m
+[1m[94m1927[0m [91m- [0m                format!("KNN keep {:.2} @ conf {:.2}"[91m, knn_keep, conf[0m),
+[1m[94m1927[0m [92m+ [0m                format!("KNN keep {[92mknn_keep[0m:.2} @ conf {[92mconf[0m:.2}"),
+     [1m[94m|[0m
+
+[1m[91merror[0m[1m: variables can be used directly in the `format!` string[0m
+    [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:1936:41
+     [1m[94m|[0m
+[1m[94m1936[0m [1m[94m|[0m             arbitration.add_keep(delta, format!("fusion score {:.2}", score));
+     [1m[94m|[0m                                         [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#uninlined_format_args
+[1m[96mhelp[0m: change this to
+     [1m[94m|[0m
+[1m[94m1936[0m [91m- [0m            arbitration.add_keep(delta, format!("fusion score {:.2}"[91m, score[0m));
+[1m[94m1936[0m [92m+ [0m            arbitration.add_keep(delta, format!("fusion score {[92mscore[0m:.2}"));
+     [1m[94m|[0m
+
+[1m[91merror[0m[1m: variables can be used directly in the `format!` string[0m
+    [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:1939:44
+     [1m[94m|[0m
+[1m[94m1939[0m [1m[94m|[0m             arbitration.add_convert(delta, format!("fusion score {:.2}", score));
+     [1m[94m|[0m                                            [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#uninlined_format_args
+[1m[96mhelp[0m: change this to
+     [1m[94m|[0m
+[1m[94m1939[0m [91m- [0m            arbitration.add_convert(delta, format!("fusion score {:.2}"[91m, score[0m));
+[1m[94m1939[0m [92m+ [0m            arbitration.add_convert(delta, format!("fusion score {[92mscore[0m:.2}"));
+     [1m[94m|[0m
+
+[1m[91merror[0m[1m: variables can be used directly in the `format!` string[0m
+    [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:1970:41
+     [1m[94m|[0m
+[1m[94m1970[0m [1m[94m|[0m             arbitration.add_keep(delta, format!("loop closure {:.2}", closure));
+     [1m[94m|[0m                                         [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#uninlined_format_args
+[1m[96mhelp[0m: change this to
+     [1m[94m|[0m
+[1m[94m1970[0m [91m- [0m            arbitration.add_keep(delta, format!("loop closure {:.2}"[91m, closure[0m));
+[1m[94m1970[0m [92m+ [0m            arbitration.add_keep(delta, format!("loop closure {[92mclosure[0m:.2}"));
+     [1m[94m|[0m
+
+[1m[91merror[0m[1m: variables can be used directly in the `format!` string[0m
+    [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:1973:44
+     [1m[94m|[0m
+[1m[94m1973[0m [1m[94m|[0m             arbitration.add_convert(delta, format!("loop closure {:.2}", closure));
+     [1m[94m|[0m                                            [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#uninlined_format_args
+[1m[96mhelp[0m: change this to
+     [1m[94m|[0m
+[1m[94m1973[0m [91m- [0m            arbitration.add_convert(delta, format!("loop closure {:.2}"[91m, closure[0m));
+[1m[94m1973[0m [92m+ [0m            arbitration.add_convert(delta, format!("loop closure {[92mclosure[0m:.2}"));
+     [1m[94m|[0m
+
+[1m[91merror[0m[1m: variables can be used directly in the `format!` string[0m
+    [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:1980:41
+     [1m[94m|[0m
+[1m[94m1980[0m [1m[94m|[0m             arbitration.add_keep(delta, format!("motion periodicity {:.2}", periodicity));
+     [1m[94m|[0m                                         [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#uninlined_format_args
+[1m[96mhelp[0m: change this to
+     [1m[94m|[0m
+[1m[94m1980[0m [91m- [0m            arbitration.add_keep(delta, format!("motion periodicity {:.2}"[91m, periodicity[0m));
+[1m[94m1980[0m [92m+ [0m            arbitration.add_keep(delta, format!("motion periodicity {[92mperiodicity[0m:.2}"));
+     [1m[94m|[0m
+
+[1m[91merror[0m[1m: variables can be used directly in the `format!` string[0m
+    [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:1983:44
+     [1m[94m|[0m
+[1m[94m1983[0m [1m[94m|[0m             arbitration.add_convert(delta, format!("motion periodicity {:.2}", periodicity));
+     [1m[94m|[0m                                            [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#uninlined_format_args
+[1m[96mhelp[0m: change this to
+     [1m[94m|[0m
+[1m[94m1983[0m [91m- [0m            arbitration.add_convert(delta, format!("motion periodicity {:.2}"[91m, periodicity[0m));
+[1m[94m1983[0m [92m+ [0m            arbitration.add_convert(delta, format!("motion periodicity {[92mperiodicity[0m:.2}"));
+     [1m[94m|[0m
+
+[1m[91merror[0m[1m: variables can be used directly in the `format!` string[0m
+    [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:1990:37
+     [1m[94m|[0m
+[1m[94m1990[0m [1m[94m|[0m         arbitration.add_keep(delta, format!("loop frequency {:.2}", loop_frequency));
+     [1m[94m|[0m                                     [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#uninlined_format_args
+[1m[96mhelp[0m: change this to
+     [1m[94m|[0m
+[1m[94m1990[0m [91m- [0m        arbitration.add_keep(delta, format!("loop frequency {:.2}"[91m, loop_frequency[0m));
+[1m[94m1990[0m [92m+ [0m        arbitration.add_keep(delta, format!("loop frequency {[92mloop_frequency[0m:.2}"));
+     [1m[94m|[0m
+
+[1m[91merror[0m[1m: variables can be used directly in the `format!` string[0m
+    [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:1993:40
+     [1m[94m|[0m
+[1m[94m1993[0m [1m[94m|[0m         arbitration.add_convert(delta, format!("loop frequency {:.2}", loop_frequency));
+     [1m[94m|[0m                                        [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#uninlined_format_args
+[1m[96mhelp[0m: change this to
+     [1m[94m|[0m
+[1m[94m1993[0m [91m- [0m        arbitration.add_convert(delta, format!("loop frequency {:.2}"[91m, loop_frequency[0m));
+[1m[94m1993[0m [92m+ [0m        arbitration.add_convert(delta, format!("loop frequency {[92mloop_frequency[0m:.2}"));
+     [1m[94m|[0m
+
+[1m[91merror[0m[1m: unnecessary boolean `not` operation[0m
+    [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:2145:21
+     [1m[94m|[0m
+[1m[94m2145[0m [1m[94m|[0m [1m[91m/[0m                     if !is_real {
+[1m[94m2146[0m [1m[94m|[0m [1m[91m|[0m                         emit_stderr("⚠️  Transparency penetration: FAKE (alpha unused), overriding metadata");
+[1m[94m2147[0m [1m[94m|[0m [1m[91m|[0m                         mutable_meta.has_transparency = false;
+[1m[94m2148[0m [1m[94m|[0m [1m[91m|[0m                     } else {
+[1m[94m2149[0m [1m[94m|[0m [1m[91m|[0m                         emit_stderr("✅ Transparency penetration: REAL (alpha variance detected)");
+[1m[94m2150[0m [1m[94m|[0m [1m[91m|[0m                     }
+     [1m[94m|[0m [1m[91m|_____________________^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#if_not_else
+     [1m[94m= [0m[1mnote[0m: `-D clippy::if-not-else` implied by `-D warnings`
+     [1m[94m= [0m[1mhelp[0m: to override `-D warnings` add `#[allow(clippy::if_not_else)]`
+[1m[96mhelp[0m: try
+     [1m[94m|[0m
+[1m[94m2145[0m [92m~ [0m                    [92mif is_real {[0m
+[1m[94m2146[0m [92m~                         emit_stderr("✅ Transparency penetration: REAL (alpha variance detected)");[0m
+[1m[94m2147[0m [92m+                     } else {[0m
+[1m[94m2148[0m [92m~                         emit_stderr("⚠️  Transparency penetration: FAKE (alpha unused), overriding metadata");[0m
+[1m[94m2149[0m [92m+                         mutable_meta.has_transparency = false;[0m
+[1m[94m2150[0m [92m+                     }[0m
+     [1m[94m|[0m
+
+[1m[91merror[0m[1m: unnecessary `!=` operation[0m
+    [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:2164:21
+     [1m[94m|[0m
+[1m[94m2164[0m [1m[94m|[0m [1m[91m/[0m                     if real_count != mutable_meta.frame_count {
+[1m[94m2165[0m [1m[94m|[0m [1m[91m|[0m                         emit_stderr(&format!(
+[1m[94m2166[0m [1m[94m|[0m [1m[91m|[0m                             "⚠️  Frame count mismatch: metadata={}, actual={}, overriding",
+[1m[94m2167[0m [1m[94m|[0m [1m[91m|[0m                             mutable_meta.frame_count, real_count
+[1m[94m...[0m    [1m[91m|[0m
+[1m[94m2171[0m [1m[94m|[0m [1m[91m|[0m                         emit_stderr(&format!("✅ Frame count verified: {}", real_count));
+[1m[94m2172[0m [1m[94m|[0m [1m[91m|[0m                     }
+     [1m[94m|[0m [1m[91m|_____________________^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#if_not_else
+[1m[96mhelp[0m: try
+     [1m[94m|[0m
+[1m[94m2164[0m [92m~ [0m                    [92mif real_count == mutable_meta.frame_count {[0m
+[1m[94m2165[0m [92m~                         emit_stderr(&format!("✅ Frame count verified: {}", real_count));[0m
+[1m[94m2166[0m [92m+                     } else {[0m
+[1m[94m2167[0m [92m+                         emit_stderr(&format!([0m
+[1m[94m2168[0m [92m~                             "⚠️  Frame count mismatch: metadata={}, actual={}, overriding",[0m
+[1m[94m2169[0m [92m+                             mutable_meta.frame_count, real_count[0m
+[1m[94m2170[0m [92m+                         ));[0m
+[1m[94m2171[0m [92m+                         mutable_meta.frame_count = real_count;[0m
+[1m[94m2172[0m [92m+                     }[0m
+     [1m[94m|[0m
+
+[1m[91merror[0m[1m: variables can be used directly in the `format!` string[0m
+    [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:2171:38
+     [1m[94m|[0m
+[1m[94m2171[0m [1m[94m|[0m                         emit_stderr(&format!("✅ Frame count verified: {}", real_count));
+     [1m[94m|[0m                                      [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#uninlined_format_args
+[1m[96mhelp[0m: change this to
+     [1m[94m|[0m
+[1m[94m2171[0m [91m- [0m                        emit_stderr(&format!("✅ Frame count verified: {}",[91m real_count)[0m);
+[1m[94m2171[0m [92m+ [0m                        emit_stderr(&format!("✅ Frame count verified: {[92mreal_count[0m}"));
+     [1m[94m|[0m
+
+[1m[91merror[0m[1m: first doc comment paragraph is too long[0m
+    [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:2537:1
+     [1m[94m|[0m
+[1m[94m2537[0m [1m[94m|[0m [1m[91m/[0m /// Penetrating audio detection: decode and analyze actual audio samples.
+[1m[94m2538[0m [1m[94m|[0m [1m[91m|[0m /// Returns `Some(true)` if silent (< -70 dB or empty), `Some(false)` if audible.
+[1m[94m...[0m    [1m[91m|[0m
+[1m[94m2541[0m [1m[94m|[0m [1m[91m|[0m /// Dynamic safety-guard for CRF 0.00 (lossless) exploration.
+     [1m[94m|[0m [1m[91m|_^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#too_long_first_doc_paragraph
+[1m[96mhelp[0m: add an empty line
+     [1m[94m|[0m
+[1m[94m2537[0m [1m[94m|[0m /// Penetrating audio detection: decode and analyze actual audio samples.
+[1m[94m2538[0m [92m+ ///[0m
+     [1m[94m|[0m
+
+[1m[91merror[0m[1m: variables can be used directly in the `format!` string[0m
+  [1m[94m--> [0mcrates/shared_utils/src/media_penetration.rs:51:26
+   [1m[94m|[0m
+[1m[94m51[0m [1m[94m|[0m               emit_stderr(&format!(
+   [1m[94m|[0m [1m[91m __________________________^[0m
+[1m[94m52[0m [1m[94m|[0m [1m[91m|[0m                 "⚠️  Audio penetration failed: ffmpeg error ({})",
+[1m[94m53[0m [1m[94m|[0m [1m[91m|[0m                 e
+[1m[94m54[0m [1m[94m|[0m [1m[91m|[0m             ));
+   [1m[94m|[0m [1m[91m|_____________^[0m
+   [1m[94m|[0m
+   [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#uninlined_format_args
+
+[1m[91merror[0m[1m: first doc comment paragraph is too long[0m
+  [1m[94m--> [0mcrates/shared_utils/src/media_penetration.rs:89:1
+   [1m[94m|[0m
+[1m[94m89[0m [1m[94m|[0m [1m[91m/[0m /// Penetrating transparency detection: decode frames and check alpha variance.
+[1m[94m90[0m [1m[94m|[0m [1m[91m|[0m /// Uses stratified sampling first, then falls back to full decode if suspicious.
+[1m[94m91[0m [1m[94m|[0m [1m[91m|[0m /// Returns `Verified(true)` if alpha is used, `Verified(false)` if fake, `Skipped` if no claim.
+   [1m[94m|[0m [1m[91m|_^[0m
+   [1m[94m|[0m
+   [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#too_long_first_doc_paragraph
+[1m[96mhelp[0m: add an empty line
+   [1m[94m|[0m
+[1m[94m89[0m [1m[94m|[0m /// Penetrating transparency detection: decode frames and check alpha variance.
+[1m[94m90[0m [92m+ ///[0m
+   [1m[94m|[0m
+
+[1m[91merror[0m[1m: variables can be used directly in the `format!` string[0m
+   [1m[94m--> [0mcrates/shared_utils/src/media_penetration.rs:122:30
+    [1m[94m|[0m
+[1m[94m122[0m [1m[94m|[0m                   emit_stderr(&format!(
+    [1m[94m|[0m [1m[91m ______________________________^[0m
+[1m[94m123[0m [1m[94m|[0m [1m[91m|[0m                     "⚠️  Transparency sampling failed at {:.2}s: ffmpeg error ({})",
+[1m[94m124[0m [1m[94m|[0m [1m[91m|[0m                     ss, e
+[1m[94m125[0m [1m[94m|[0m [1m[91m|[0m                 ));
+    [1m[94m|[0m [1m[91m|_________________^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#uninlined_format_args
+
+[1m[91merror[0m[1m: found call to `str::trim` before `str::split_whitespace`[0m
+   [1m[94m--> [0mcrates/shared_utils/src/media_penetration.rs:144:48
+    [1m[94m|[0m
+[1m[94m144[0m [1m[94m|[0m                 let min_str = line[idx + 18..].trim().split_whitespace().next().unwrap_or("");
+    [1m[94m|[0m                                                [1m[91m^^^^^^^[0m [1m[91mhelp: remove `trim()`[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#trim_split_whitespace
+    [1m[94m= [0m[1mnote[0m: `-D clippy::trim-split-whitespace` implied by `-D warnings`
+    [1m[94m= [0m[1mhelp[0m: to override `-D warnings` add `#[allow(clippy::trim_split_whitespace)]`
+
+[1m[91merror[0m[1m: variables can be used directly in the `format!` string[0m
+   [1m[94m--> [0mcrates/shared_utils/src/media_penetration.rs:181:30
+    [1m[94m|[0m
+[1m[94m181[0m [1m[94m|[0m                   emit_stderr(&format!(
+    [1m[94m|[0m [1m[91m ______________________________^[0m
+[1m[94m182[0m [1m[94m|[0m [1m[91m|[0m                     "⚠️  Full transparency decode failed: ffmpeg error ({})",
+[1m[94m183[0m [1m[94m|[0m [1m[91m|[0m                     e
+[1m[94m184[0m [1m[94m|[0m [1m[91m|[0m                 ));
+    [1m[94m|[0m [1m[91m|_________________^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#uninlined_format_args
+
+[1m[91merror[0m[1m: found call to `str::trim` before `str::split_whitespace`[0m
+   [1m[94m--> [0mcrates/shared_utils/src/media_penetration.rs:202:48
+    [1m[94m|[0m
+[1m[94m202[0m [1m[94m|[0m                 let min_str = line[idx + 18..].trim().split_whitespace().next().unwrap_or("");
+    [1m[94m|[0m                                                [1m[91m^^^^^^^[0m [1m[91mhelp: remove `trim()`[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#trim_split_whitespace
+
+[1m[91merror[0m[1m: variables can be used directly in the `format!` string[0m
+   [1m[94m--> [0mcrates/shared_utils/src/media_penetration.rs:242:26
+    [1m[94m|[0m
+[1m[94m242[0m [1m[94m|[0m               emit_stderr(&format!(
+    [1m[94m|[0m [1m[91m __________________________^[0m
+[1m[94m243[0m [1m[94m|[0m [1m[91m|[0m                 "⚠️  Frame count penetration failed: ffmpeg error ({})",
+[1m[94m244[0m [1m[94m|[0m [1m[91m|[0m                 e
+[1m[94m245[0m [1m[94m|[0m [1m[91m|[0m             ));
+    [1m[94m|[0m [1m[91m|_____________^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#uninlined_format_args
+
+[1m[91merror[0m[1m: found call to `str::trim_start` before `str::split_whitespace`[0m
+   [1m[94m--> [0mcrates/shared_utils/src/media_penetration.rs:259:34
+    [1m[94m|[0m
+[1m[94m259[0m [1m[94m|[0m             let count_str = part.trim_start().split_whitespace().next().unwrap_or("");
+    [1m[94m|[0m                                  [1m[91m^^^^^^^^^^^^^[0m [1m[91mhelp: remove `trim_start()`[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#trim_split_whitespace
+
+[1m[91merror[0m[1m: variables can be used directly in the `format!` string[0m
+   [1m[94m--> [0mcrates/shared_utils/src/media_penetration.rs:270:30
+    [1m[94m|[0m
+[1m[94m270[0m [1m[94m|[0m                   emit_stderr(&format!(
+    [1m[94m|[0m [1m[91m ______________________________^[0m
+[1m[94m271[0m [1m[94m|[0m [1m[91m|[0m                     "⚠️  Frame count mismatch detected: metadata claimed {}, physical decoded {}",
+[1m[94m272[0m [1m[94m|[0m [1m[91m|[0m                     claimed_frame_count, actual
+[1m[94m273[0m [1m[94m|[0m [1m[91m|[0m                 ));
+    [1m[94m|[0m [1m[91m|_________________^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#uninlined_format_args
+
+[1m[91merror[0m[1m: first doc comment paragraph is too long[0m
+   [1m[94m--> [0mcrates/shared_utils/src/media_penetration.rs:290:1
+    [1m[94m|[0m
+[1m[94m290[0m [1m[94m|[0m [1m[91m/[0m /// Penetrating interlace detection: decodes a short sample and uses the `idet` filter.
+[1m[94m291[0m [1m[94m|[0m [1m[91m|[0m /// Returns `Verified(true)` if interlacing is physically detected, `Verified(false)` if progressive.
+[1m[94m292[0m [1m[94m|[0m [1m[91m|[0m /// `Skipped` if the check isn't necessary.
+    [1m[94m|[0m [1m[91m|_^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#too_long_first_doc_paragraph
+[1m[96mhelp[0m: add an empty line
+    [1m[94m|[0m
+[1m[94m290[0m [1m[94m|[0m /// Penetrating interlace detection: decodes a short sample and uses the `idet` filter.
+[1m[94m291[0m [92m+ ///[0m
+    [1m[94m|[0m
+
+[1m[91merror[0m[1m: variables can be used directly in the `format!` string[0m
+   [1m[94m--> [0mcrates/shared_utils/src/media_penetration.rs:307:26
+    [1m[94m|[0m
+[1m[94m307[0m [1m[94m|[0m               emit_stderr(&format!(
+    [1m[94m|[0m [1m[91m __________________________^[0m
+[1m[94m308[0m [1m[94m|[0m [1m[91m|[0m                 "⚠️  Interlace detection failed: ffmpeg error ({})",
+[1m[94m309[0m [1m[94m|[0m [1m[91m|[0m                 e
+[1m[94m310[0m [1m[94m|[0m [1m[91m|[0m             ));
+    [1m[94m|[0m [1m[91m|_____________^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#uninlined_format_args
+
+[1m[91merror[0m[1m: found call to `str::trim_start` before `str::split_whitespace`[0m
+   [1m[94m--> [0mcrates/shared_utils/src/media_penetration.rs:324:45
+    [1m[94m|[0m
+[1m[94m324[0m [1m[94m|[0m                 let s = line[tff_idx + 4..].trim_start().split_whitespace().next().unwrap_or("0");
+    [1m[94m|[0m                                             [1m[91m^^^^^^^^^^^^^[0m [1m[91mhelp: remove `trim_start()`[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#trim_split_whitespace
+
+[1m[91merror[0m[1m: found call to `str::trim_start` before `str::split_whitespace`[0m
+   [1m[94m--> [0mcrates/shared_utils/src/media_penetration.rs:328:45
+    [1m[94m|[0m
+[1m[94m328[0m [1m[94m|[0m                 let s = line[bff_idx + 4..].trim_start().split_whitespace().next().unwrap_or("0");
+    [1m[94m|[0m                                             [1m[91m^^^^^^^^^^^^^[0m [1m[91mhelp: remove `trim_start()`[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#trim_split_whitespace
+
+[1m[91merror[0m[1m: docs for function which may panic missing `# Panics` section[0m
+   [1m[94m--> [0mcrates/shared_utils/src/media_penetration.rs:362:5
+    [1m[94m|[0m
+[1m[94m362[0m [1m[94m|[0m     pub fn has_any_mismatch(&self) -> bool {
+    [1m[94m|[0m     [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+    [1m[94m|[0m
+[1m[92mnote[0m: first possible panic found here
+   [1m[94m--> [0mcrates/shared_utils/src/media_penetration.rs:364:56
+    [1m[94m|[0m
+[1m[94m364[0m [1m[94m|[0m             || (self.transparency_result.is_some() && !self.transparency_result.unwrap())
+    [1m[94m|[0m                                                        [1m[92m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#missing_panics_doc
+    [1m[94m= [0m[1mnote[0m: `-D clippy::missing-panics-doc` implied by `-D warnings`
+    [1m[94m= [0m[1mhelp[0m: to override `-D warnings` add `#[allow(clippy::missing_panics_doc)]`
+
+[1m[91merror[0m[1m: variables can be used directly in the `format!` string[0m
+   [1m[94m--> [0mcrates/shared_utils/src/media_penetration.rs:391:28
+    [1m[94m|[0m
+[1m[94m391[0m [1m[94m|[0m                   lines.push(format!(
+    [1m[94m|[0m [1m[91m ____________________________^[0m
+[1m[94m392[0m [1m[94m|[0m [1m[91m|[0m                     "  Frame count: MISMATCH (claimed={}, actual={})",
+[1m[94m393[0m [1m[94m|[0m [1m[91m|[0m                     claimed, actual
+[1m[94m394[0m [1m[94m|[0m [1m[91m|[0m                 ));
+    [1m[94m|[0m [1m[91m|_________________^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#uninlined_format_args
+
+[1m[91merror[0m: could not compile `shared_utils` (lib) due to 39 previous errors
+[1m[33mwarning[0m: build failed, waiting for other jobs to finish...
+[1m[91merror[0m[1m: variables can be used directly in the `format!` string[0m
+    [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:3323:9
+     [1m[94m|[0m
+[1m[94m3323[0m [1m[94m|[0m [1m[91m/[0m         assert!(
+[1m[94m3324[0m [1m[94m|[0m [1m[91m|[0m             matches!(verdict, LoopIntentVerdict::LoopStrong(_)),
+[1m[94m3325[0m [1m[94m|[0m [1m[91m|[0m             "short duration should dominate over large file size, got: {:?}",
+[1m[94m3326[0m [1m[94m|[0m [1m[91m|[0m             verdict
+[1m[94m3327[0m [1m[94m|[0m [1m[91m|[0m         );
+     [1m[94m|[0m [1m[91m|_________^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#uninlined_format_args
+
+[1m[91merror[0m[1m: variables can be used directly in the `format!` string[0m
+    [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:3352:9
+     [1m[94m|[0m
+[1m[94m3352[0m [1m[94m|[0m [1m[91m/[0m         assert!(
+[1m[94m3353[0m [1m[94m|[0m [1m[91m|[0m             matches!(verdict, LoopIntentVerdict::LoopWeak(_)),
+[1m[94m3354[0m [1m[94m|[0m [1m[91m|[0m             "audible audio in Long-tier video should resolve to LoopWeak, got: {:?}",
+[1m[94m3355[0m [1m[94m|[0m [1m[91m|[0m             verdict
+[1m[94m3356[0m [1m[94m|[0m [1m[91m|[0m         );
+     [1m[94m|[0m [1m[91m|_________^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#uninlined_format_args
+
+[1m[91merror[0m[1m: variables can be used directly in the `format!` string[0m
+    [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:3371:9
+     [1m[94m|[0m
+[1m[94m3371[0m [1m[94m|[0m [1m[91m/[0m         assert!(
+[1m[94m3372[0m [1m[94m|[0m [1m[91m|[0m             !verdict.is_error(),
+[1m[94m3373[0m [1m[94m|[0m [1m[91m|[0m             "Long asset with loop_count=0 should not error: {:?}",
+[1m[94m3374[0m [1m[94m|[0m [1m[91m|[0m             verdict
+[1m[94m3375[0m [1m[94m|[0m [1m[91m|[0m         );
+     [1m[94m|[0m [1m[91m|_________^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#uninlined_format_args
+
+[1m[91merror[0m[1m: variables can be used directly in the `format!` string[0m
+    [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:3397:9
+     [1m[94m|[0m
+[1m[94m3397[0m [1m[94m|[0m [1m[91m/[0m         assert!(
+[1m[94m3398[0m [1m[94m|[0m [1m[91m|[0m             matches!(verdict, LoopIntentVerdict::LoopStrong(_)),
+[1m[94m3399[0m [1m[94m|[0m [1m[91m|[0m             "small native GIF should still resolve to LoopStrong, got {:?}",
+[1m[94m3400[0m [1m[94m|[0m [1m[91m|[0m             verdict
+[1m[94m3401[0m [1m[94m|[0m [1m[91m|[0m         );
+     [1m[94m|[0m [1m[91m|_________^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#uninlined_format_args
+
+[1m[91merror[0m[1m: variables can be used directly in the `format!` string[0m
+    [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:3449:9
+     [1m[94m|[0m
+[1m[94m3449[0m [1m[94m|[0m [1m[91m/[0m         assert!(
+[1m[94m3450[0m [1m[94m|[0m [1m[91m|[0m             matches!(verdict, LoopIntentVerdict::LoopWeak(_)),
+[1m[94m3451[0m [1m[94m|[0m [1m[91m|[0m             "audible audio should resolve to LoopWeak, got: {:?}",
+[1m[94m3452[0m [1m[94m|[0m [1m[91m|[0m             verdict
+[1m[94m3453[0m [1m[94m|[0m [1m[91m|[0m         );
+     [1m[94m|[0m [1m[91m|_________^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#uninlined_format_args
+
+[1m[91merror[0m[1m: variables can be used directly in the `format!` string[0m
+    [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:3469:9
+     [1m[94m|[0m
+[1m[94m3469[0m [1m[94m|[0m [1m[91m/[0m         assert!(
+[1m[94m3470[0m [1m[94m|[0m [1m[91m|[0m             !verdict.is_error(),
+[1m[94m3471[0m [1m[94m|[0m [1m[91m|[0m             "loop_count=0 at 12s should not error: {:?}",
+[1m[94m3472[0m [1m[94m|[0m [1m[91m|[0m             verdict
+[1m[94m3473[0m [1m[94m|[0m [1m[91m|[0m         );
+     [1m[94m|[0m [1m[91m|_________^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#uninlined_format_args
+
+[1m[91merror[0m[1m: variables can be used directly in the `format!` string[0m
+    [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:3491:9
+     [1m[94m|[0m
+[1m[94m3491[0m [1m[94m|[0m [1m[91m/[0m         assert!(
+[1m[94m3492[0m [1m[94m|[0m [1m[91m|[0m             !verdict.is_error(),
+[1m[94m3493[0m [1m[94m|[0m [1m[91m|[0m             "platform marker at 14s should not error: {:?}",
+[1m[94m3494[0m [1m[94m|[0m [1m[91m|[0m             verdict
+[1m[94m3495[0m [1m[94m|[0m [1m[91m|[0m         );
+     [1m[94m|[0m [1m[91m|_________^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#uninlined_format_args
+
+[1m[91merror[0m[1m: variables can be used directly in the `format!` string[0m
+    [1m[94m--> [0mcrates/shared_utils/src/loop_intent.rs:3842:9
+     [1m[94m|[0m
+[1m[94m3842[0m [1m[94m|[0m [1m[91m/[0m         assert!(
+[1m[94m3843[0m [1m[94m|[0m [1m[91m|[0m             matches!(verdict, LoopIntentVerdict::LoopStrong(_)),
+[1m[94m3844[0m [1m[94m|[0m [1m[91m|[0m             "Expected LoopStrong for silent audio track, got: {:?}",
+[1m[94m3845[0m [1m[94m|[0m [1m[91m|[0m             verdict
+[1m[94m3846[0m [1m[94m|[0m [1m[91m|[0m         );
+     [1m[94m|[0m [1m[91m|_________^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#uninlined_format_args
+
+[1m[91merror[0m[1m: field assignment outside of initializer for an instance created with Default::default()[0m
+   [1m[94m--> [0mcrates/shared_utils/src/media_penetration.rs:466:9
+    [1m[94m|[0m
+[1m[94m466[0m [1m[94m|[0m         summary.audio_checked = true;
+    [1m[94m|[0m         [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+    [1m[94m|[0m
+[1m[92mnote[0m: consider initializing the variable with `media_penetration::PenetrationSummary { audio_checked: true, audio_result: Some(true), transparency_checked: true, transparency_result: Some(false), ..Default::default() }` and removing relevant reassignments
+   [1m[94m--> [0mcrates/shared_utils/src/media_penetration.rs:465:9
+    [1m[94m|[0m
+[1m[94m465[0m [1m[94m|[0m         let mut summary = PenetrationSummary::default();
+    [1m[94m|[0m         [1m[92m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#field_reassign_with_default
+    [1m[94m= [0m[1mnote[0m: `-D clippy::field-reassign-with-default` implied by `-D warnings`
+    [1m[94m= [0m[1mhelp[0m: to override `-D warnings` add `#[allow(clippy::field_reassign_with_default)]`
+
+[1m[91merror[0m: could not compile `shared_utils` (lib test) due to 48 previous errors

@@ -35,12 +35,12 @@ impl MagickBuilder {
         self
     }
 
-    pub fn strip(&mut self, enabled: bool) -> &mut Self {
+    pub const fn strip(&mut self, enabled: bool) -> &mut Self {
         self.strip = enabled;
         self
     }
 
-    pub fn depth(&mut self, depth: u8) -> &mut Self {
+    pub const fn depth(&mut self, depth: u8) -> &mut Self {
         self.depth = Some(depth);
         self
     }
@@ -70,7 +70,7 @@ impl MagickBuilder {
         self
     }
 
-    pub fn use_stdout(&mut self, enabled: bool) -> &mut Self {
+    pub const fn use_stdout(&mut self, enabled: bool) -> &mut Self {
         self.use_stdout = enabled;
         self
     }
@@ -172,13 +172,13 @@ impl IdentifyBuilder {
         self
     }
 
-    pub fn use_magick(&mut self, enabled: bool) -> &mut Self {
+    pub const fn use_magick(&mut self, enabled: bool) -> &mut Self {
         self.use_magick = enabled;
         self
     }
 
     /// Enables verbose output.
-    pub fn verbose(&mut self, enabled: bool) -> &mut Self {
+    pub const fn verbose(&mut self, enabled: bool) -> &mut Self {
         self.verbose = enabled;
         self
     }
@@ -264,12 +264,12 @@ impl WebpmuxBuilder {
         self
     }
 
-    pub fn info(&mut self, enabled: bool) -> &mut Self {
+    pub const fn info(&mut self, enabled: bool) -> &mut Self {
         self.info = enabled;
         self
     }
 
-    pub fn get_frame(&mut self, index: u32) -> &mut Self {
+    pub const fn get_frame(&mut self, index: u32) -> &mut Self {
         self.get_frame = Some(index);
         self
     }
@@ -287,7 +287,7 @@ impl WebpmuxBuilder {
         self
     }
 
-    pub fn loop_count(&mut self, count: u32) -> &mut Self {
+    pub const fn loop_count(&mut self, count: u32) -> &mut Self {
         self.loop_count = Some(count);
         self
     }
@@ -386,38 +386,38 @@ impl GifskiBuilder {
         self
     }
 
-    pub fn fps(&mut self, fps: f32) -> &mut Self {
+    pub const fn fps(&mut self, fps: f32) -> &mut Self {
         self.fps = Some(fps);
         self
     }
 
-    pub fn quality(&mut self, quality: u8) -> &mut Self {
+    pub const fn quality(&mut self, quality: u8) -> &mut Self {
         self.quality = Some(quality);
         self
     }
 
-    pub fn motion_quality(&mut self, quality: u8) -> &mut Self {
+    pub const fn motion_quality(&mut self, quality: u8) -> &mut Self {
         self.motion_quality = Some(quality);
         self
     }
 
-    pub fn lossy_quality(&mut self, quality: u8) -> &mut Self {
+    pub const fn lossy_quality(&mut self, quality: u8) -> &mut Self {
         self.lossy_quality = Some(quality);
         self
     }
 
-    pub fn dimensions(&mut self, width: u32, height: u32) -> &mut Self {
+    pub const fn dimensions(&mut self, width: u32, height: u32) -> &mut Self {
         self.width = Some(width);
         self.height = Some(height);
         self
     }
 
-    pub fn repeat(&mut self, repeat: u32) -> &mut Self {
+    pub const fn repeat(&mut self, repeat: u32) -> &mut Self {
         self.repeat = Some(repeat);
         self
     }
 
-    pub fn fast(&mut self, enabled: bool) -> &mut Self {
+    pub const fn fast(&mut self, enabled: bool) -> &mut Self {
         self.fast = enabled;
         self
     }
@@ -503,6 +503,7 @@ pub struct AvifencBuilder {
 }
 
 impl AvifencBuilder {
+    #[must_use] 
     pub fn new() -> Self {
         Self::default()
     }
@@ -517,18 +518,18 @@ impl AvifencBuilder {
         self
     }
 
-    pub fn speed(&mut self, speed: u8) -> &mut Self {
+    pub const fn speed(&mut self, speed: u8) -> &mut Self {
         self.speed = Some(speed);
         self
     }
 
-    pub fn quality(&mut self, min: u8, max: u8) -> &mut Self {
+    pub const fn quality(&mut self, min: u8, max: u8) -> &mut Self {
         self.min_quality = Some(min);
         self.max_quality = Some(max);
         self
     }
 
-    pub fn lossless(&mut self, enabled: bool) -> &mut Self {
+    pub const fn lossless(&mut self, enabled: bool) -> &mut Self {
         self.lossless = enabled;
         self
     }
@@ -538,7 +539,7 @@ impl AvifencBuilder {
         self
     }
 
-    pub fn depth(&mut self, depth: u8) -> &mut Self {
+    pub const fn depth(&mut self, depth: u8) -> &mut Self {
         self.depth = Some(depth);
         self
     }
@@ -737,7 +738,7 @@ impl ExiftoolBuilder {
         self
     }
 
-    pub fn overwrite_original(&mut self) -> &mut Self {
+    pub const fn overwrite_original(&mut self) -> &mut Self {
         self.overwrite_original = true;
         self
     }
@@ -747,7 +748,7 @@ impl ExiftoolBuilder {
         self
     }
 
-    pub fn use_stdin(&mut self) -> &mut Self {
+    pub const fn use_stdin(&mut self) -> &mut Self {
         self.use_stdin = true;
         self
     }

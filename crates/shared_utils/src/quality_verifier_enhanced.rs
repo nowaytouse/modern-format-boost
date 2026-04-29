@@ -82,7 +82,7 @@ pub struct EnhancedVerifyResult {
 impl EnhancedVerifyResult {
     /// True only when file is OK and no required check explicitly failed.
     #[must_use]
-    pub fn passed(&self) -> bool {
+    pub const fn passed(&self) -> bool {
         self.file_ok && !self.duration_match.is_failed() && !self.has_video_stream.is_failed()
     }
 

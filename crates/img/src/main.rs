@@ -146,8 +146,11 @@ fn main() -> anyhow::Result<()> {
     // Extract input path from relevant commands to lock the directory ONLY if it involves destructive or interactive shared state.
     let input_to_lock = match &cli.command {
         Commands::Run {
-            input, in_place, ..
-        } if *in_place => Some(input),
+            input,
+            in_place,
+            delete_original,
+            ..
+        } if *in_place || *delete_original => Some(input),
         Commands::Verify {
             original: input, ..
         }
@@ -598,6 +601,13 @@ fn auto_convert_single_file(
         std::process::exit(1);
     }
 
+    if let Some(ref out_dir) = config.output_dir {
+        if let Err(e) = shared_utils::check_apple_photos_library(out_dir) {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    }
+
     // Fix extension by content first so all downstream checks see the real format (avoids disguised-extension panic).
     // When an output directory is configured the source tree must remain immutable:
     // use the readonly variant that logs mismatches without renaming source files.
@@ -859,6 +869,13 @@ fn auto_convert_directory(
     if let Err(e) = shared_utils::check_apple_photos_library(input) {
         eprintln!("{e}");
         std::process::exit(1);
+    }
+
+    if let Some(ref out_dir) = config.output_dir {
+        if let Err(e) = shared_utils::check_apple_photos_library(out_dir) {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
     }
 
     if config.delete_original || config.in_place {

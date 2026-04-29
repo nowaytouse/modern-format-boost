@@ -2,13 +2,12 @@ use std::path::Path;
 
 #[test]
 fn test_headless_gif_regression_frame_count_and_loop_intent() {
-    let dev_asset_path =
-        Path::new("../../crates/dev/edge/gifs/simulated_headless_sticker.gif");
+    let dev_asset_path = Path::new("../../crates/dev/edge/gifs/simulated_headless_sticker.gif");
 
     // 1. Verify the fallback logic in GifHeaderScan correctly catches payload size
     let scan = shared_utils::media_meta_utils::scan_gif_headers(dev_asset_path)
         .expect("Failed to scan headless GIF");
-    
+
     // There were 7 images inside the standard_7f.gif
     assert_eq!(
         scan.frame_count, 7,

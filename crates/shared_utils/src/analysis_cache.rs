@@ -622,7 +622,7 @@ impl AnalysisCache {
     ///
     /// # Errors
     /// Returns an error if the database deletion fails.
-    pub fn enforce_size_limit(&self) -> Result<()> {
+    pub const fn enforce_size_limit(&self) -> Result<()> {
         // Size enforcement in shared Postgres is handled differently (usually by policy or quota)
         // or we can implement a row-count based pruning here if needed.
         // For now, we rely on cleanup_old_records.

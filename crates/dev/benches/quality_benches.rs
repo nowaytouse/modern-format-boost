@@ -19,7 +19,7 @@ fn bench_quality_analysis(c: &mut Criterion) {
                 black_box(1),
                 black_box(PrecisionMetadata::default()),
             )
-        })
+        });
     });
 }
 

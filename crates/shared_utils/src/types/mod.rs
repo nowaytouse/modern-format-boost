@@ -38,31 +38,31 @@ impl CheckResult {
     ///
     /// Prefer [`Self::is_passed`] when the caller needs strict success semantics.
     #[must_use]
-    pub fn is_ok(&self) -> bool {
+    pub const fn is_ok(&self) -> bool {
         !self.is_failed()
     }
 
     /// Returns true only when the check was performed and passed.
     #[must_use]
-    pub fn is_passed(&self) -> bool {
+    pub const fn is_passed(&self) -> bool {
         matches!(self, Self::Passed)
     }
 
     /// Returns true only when the check was performed and failed.
     #[must_use]
-    pub fn is_failed(&self) -> bool {
+    pub const fn is_failed(&self) -> bool {
         matches!(self, Self::Failed(_))
     }
 
     /// Returns true when the check was skipped or not applicable.
     #[must_use]
-    pub fn is_skipped(&self) -> bool {
+    pub const fn is_skipped(&self) -> bool {
         matches!(self, Self::NotChecked)
     }
 
     /// Returns the failure reason when the check explicitly failed.
     #[must_use]
-    pub fn failure_reason(&self) -> Option<&str> {
+    pub const fn failure_reason(&self) -> Option<&str> {
         match self {
             Self::Failed(reason) => Some(reason.as_str()),
             Self::Passed | Self::NotChecked => None,

@@ -38,7 +38,7 @@ impl CjxlBuilder {
         self
     }
 
-    pub fn distance(&mut self, distance: f32) -> &mut Self {
+    pub const fn distance(&mut self, distance: f32) -> &mut Self {
         self.distance = Some(distance);
         self
     }
@@ -52,12 +52,12 @@ impl CjxlBuilder {
         self
     }
 
-    pub fn threads(&mut self, threads: usize) -> &mut Self {
+    pub const fn threads(&mut self, threads: usize) -> &mut Self {
         self.threads = Some(threads);
         self
     }
 
-    pub fn lossless_jpeg(&mut self, enabled: bool) -> &mut Self {
+    pub const fn lossless_jpeg(&mut self, enabled: bool) -> &mut Self {
         self.lossless_jpeg = enabled;
         if enabled {
             self.distance = Some(0.0);
@@ -65,7 +65,7 @@ impl CjxlBuilder {
         self
     }
 
-    pub fn allow_jpeg_reconstruction(&mut self, allow: bool) -> &mut Self {
+    pub const fn allow_jpeg_reconstruction(&mut self, allow: bool) -> &mut Self {
         self.allow_jpeg_recon = Some(allow);
         self
     }
@@ -80,17 +80,17 @@ impl CjxlBuilder {
         self
     }
 
-    pub fn apple_compat(&mut self, enabled: bool) -> &mut Self {
+    pub const fn apple_compat(&mut self, enabled: bool) -> &mut Self {
         self.apple_compat = enabled;
         self
     }
 
-    pub fn use_stdin(&mut self, enabled: bool) -> &mut Self {
+    pub const fn use_stdin(&mut self, enabled: bool) -> &mut Self {
         self.use_stdin = enabled;
         self
     }
 
-    pub fn intensity_target(&mut self, target: f32) -> &mut Self {
+    pub const fn intensity_target(&mut self, target: f32) -> &mut Self {
         self.intensity_target = Some(target);
         self
     }

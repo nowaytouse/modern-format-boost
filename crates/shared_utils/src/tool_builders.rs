@@ -52,13 +52,13 @@ impl VmafBuilder {
         self
     }
 
-    pub fn json(&mut self, enabled: bool) -> &mut Self {
+    pub const fn json(&mut self, enabled: bool) -> &mut Self {
         self.json = enabled;
         self
     }
 
     /// Sets the number of threads for VMAF calculation.
-    pub fn threads(&mut self, count: usize) -> &mut Self {
+    pub const fn threads(&mut self, count: usize) -> &mut Self {
         self.threads = Some(count);
         self
     }
@@ -318,7 +318,7 @@ impl Hdr10PlusBuilder {
         self
     }
 
-    pub fn skip_validation(&mut self, enabled: bool) -> &mut Self {
+    pub const fn skip_validation(&mut self, enabled: bool) -> &mut Self {
         self.skip_validation = enabled;
         self
     }
@@ -402,17 +402,17 @@ impl X265Builder {
         self
     }
 
-    pub fn y4m(&mut self, enabled: bool) -> &mut Self {
+    pub const fn y4m(&mut self, enabled: bool) -> &mut Self {
         self.y4m = enabled;
         self
     }
 
-    pub fn crf(&mut self, crf: f32) -> &mut Self {
+    pub const fn crf(&mut self, crf: f32) -> &mut Self {
         self.crf = Some(crf);
         self
     }
 
-    pub fn lossless(&mut self, enabled: bool) -> &mut Self {
+    pub const fn lossless(&mut self, enabled: bool) -> &mut Self {
         self.lossless = enabled;
         self
     }
@@ -433,12 +433,12 @@ impl X265Builder {
         self
     }
 
-    pub fn hdr10_opt(&mut self, enabled: bool) -> &mut Self {
+    pub const fn hdr10_opt(&mut self, enabled: bool) -> &mut Self {
         self.hdr10_opt = enabled;
         self
     }
 
-    pub fn repeat_headers(&mut self, enabled: bool) -> &mut Self {
+    pub const fn repeat_headers(&mut self, enabled: bool) -> &mut Self {
         self.repeat_headers = enabled;
         self
     }
@@ -601,6 +601,7 @@ pub struct OsascriptBuilder {
 }
 
 impl OsascriptBuilder {
+    #[must_use] 
     pub fn new() -> Self {
         Self::default()
     }
@@ -652,6 +653,7 @@ pub struct PowershellBuilder {
 }
 
 impl PowershellBuilder {
+    #[must_use] 
     pub fn new() -> Self {
         Self::default()
     }
@@ -680,7 +682,7 @@ impl PowershellBuilder {
     }
 
     #[must_use]
-    pub fn check_available() -> bool {
+    pub const fn check_available() -> bool {
         #[cfg(target_os = "windows")]
         {
             Command::new("powershell")
@@ -706,6 +708,7 @@ pub struct AclBuilder {
 }
 
 impl AclBuilder {
+    #[must_use] 
     pub fn getfacl() -> Self {
         Self {
             tool: "getfacl".to_string(),
@@ -714,12 +717,14 @@ impl AclBuilder {
     }
 
     /// Configures setfacl to restore ACLs from stdin (-R --restore=-).
+    #[must_use] 
     pub fn restore() -> Self {
         let mut builder = Self::setfacl();
         builder.arg("--restore=-");
         builder
     }
 
+    #[must_use] 
     pub fn setfacl() -> Self {
         Self {
             tool: "setfacl".to_string(),
@@ -765,6 +770,7 @@ pub struct SysctlBuilder {
 }
 
 impl SysctlBuilder {
+    #[must_use] 
     pub fn new() -> Self {
         Self::default()
     }
@@ -797,6 +803,7 @@ impl SysctlBuilder {
 pub struct VmstatBuilder {}
 
 impl VmstatBuilder {
+    #[must_use] 
     pub fn new() -> Self {
         Self::default()
     }
@@ -822,6 +829,7 @@ pub struct AttribBuilder {
 }
 
 impl AttribBuilder {
+    #[must_use] 
     pub fn new() -> Self {
         Self::default()
     }
@@ -867,6 +875,7 @@ pub struct RsyncBuilder {
 }
 
 impl RsyncBuilder {
+    #[must_use] 
     pub fn new() -> Self {
         Self::default()
     }
@@ -920,11 +929,12 @@ pub struct PsBuilder {
 }
 
 impl PsBuilder {
+    #[must_use] 
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub fn pid(&mut self, pid: u32) -> &mut Self {
+    pub const fn pid(&mut self, pid: u32) -> &mut Self {
         self.pid = Some(pid);
         self
     }
@@ -956,6 +966,7 @@ pub struct KillBuilder {
 }
 
 impl KillBuilder {
+    #[must_use] 
     pub fn new() -> Self {
         Self::default()
     }
@@ -965,7 +976,7 @@ impl KillBuilder {
         self
     }
 
-    pub fn pid(&mut self, pid: u32) -> &mut Self {
+    pub const fn pid(&mut self, pid: u32) -> &mut Self {
         self.pid = Some(pid);
         self
     }
@@ -988,6 +999,7 @@ impl KillBuilder {
 pub struct HostnameBuilder {}
 
 impl HostnameBuilder {
+    #[must_use] 
     pub fn new() -> Self {
         Self::default()
     }
@@ -1006,16 +1018,17 @@ pub struct TaskkillBuilder {
 }
 
 impl TaskkillBuilder {
+    #[must_use] 
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub fn pid(&mut self, pid: u32) -> &mut Self {
+    pub const fn pid(&mut self, pid: u32) -> &mut Self {
         self.pid = Some(pid);
         self
     }
 
-    pub fn force(&mut self) -> &mut Self {
+    pub const fn force(&mut self) -> &mut Self {
         self.force = true;
         self
     }

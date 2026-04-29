@@ -487,9 +487,7 @@ pub fn determine_strategy_with_apple_compat(
         // GIF file: use header-level detection
         shared_utils::LoopMeta::from_gif_path(input).map_or_else(
             || shared_utils::assess_loop_intent(&detection),
-            |meta| {
-                shared_utils::assess_loop_intent_from_meta(&meta, Some(input))
-            },
+            |meta| shared_utils::assess_loop_intent_from_meta(&meta, Some(input)),
         )
     } else {
         // Video file: ensure structural signals are available
@@ -504,16 +502,15 @@ pub fn determine_strategy_with_apple_compat(
 
     let mut is_loop_intent = loop_verdict.is_keep_gif();
 
-    // Apple Compatibility Fallback: Modern animations (WebP, AVIF, etc.) with Uncertain intent 
+    // Apple Compatibility Fallback: Modern animations (WebP, AVIF, etc.) with Uncertain intent
     // are forced to GIF to ensure ecosystem compatibility in Apple mode.
     if !is_loop_intent && apple_compat && !force {
         if let Some(ext) = input.extension().and_then(|e| e.to_str()) {
             let ext_lower = ext.to_lowercase();
-            if shared_utils::constants::MODERN_ANIMATED_EXTENSIONS.contains(&ext_lower.as_str()) {
-                if matches!(loop_verdict, shared_utils::LoopIntentVerdict::Uncertain(_)) {
+            if shared_utils::constants::MODERN_ANIMATED_EXTENSIONS.contains(&ext_lower.as_str())
+                && matches!(loop_verdict, shared_utils::LoopIntentVerdict::Uncertain(_)) {
                     is_loop_intent = true;
                 }
-            }
         }
     }
 
@@ -523,7 +520,7 @@ pub fn determine_strategy_with_apple_compat(
     if let shared_utils::LoopIntentVerdict::Error(reason) = loop_verdict {
         return ConversionStrategy {
             target: TargetVideoFormat::Skip,
-            reason: format!("Loop Intent Error: {}", reason),
+            reason: format!("Loop Intent Error: {reason}"),
             command: String::new(),
             preserve_audio: false,
             crf: 0.0,
@@ -1090,7 +1087,7 @@ pub fn auto_convert_with_cache(
                         shared_utils::explore_hevc_with_gpu(shared_utils::GpuSearchRequest {
                             input: input.to_path_buf(),
                             output: temp_path.clone(),
-                            vf_args: vf_args.clone(),
+                            vf_args,
                             baseline_crf: predicted_crf,
                             warm_start_crf,
                             ultimate_mode: ultimate,
@@ -1111,7 +1108,7 @@ pub fn auto_convert_with_cache(
                         shared_utils::explore_av1_with_gpu(shared_utils::GpuSearchRequest {
                             input: input.to_path_buf(),
                             output: temp_path.clone(),
-                            vf_args: vf_args.clone(),
+                            vf_args,
                             baseline_crf: predicted_crf,
                             warm_start_crf,
                             ultimate_mode: ultimate,
@@ -1232,10 +1229,10 @@ pub fn auto_convert_with_cache(
     if cache_exact_hint && final_crf > 0.0 {
         match config.codec {
             SelectedCodec::Hevc => {
-                shared_utils::crf_constants::update_global_last_hit_crf_hevc(final_crf)
+                shared_utils::crf_constants::update_global_last_hit_crf_hevc(final_crf);
             }
             SelectedCodec::Av1 => {
-                shared_utils::crf_constants::update_global_last_hit_crf_av1(final_crf)
+                shared_utils::crf_constants::update_global_last_hit_crf_av1(final_crf);
             }
         }
     }
@@ -1863,15 +1860,13 @@ mod tests {
         0x00, 0x00, 0x00, // Color #0
         0xFF, 0xFF, 0xFF, // Color #1
         0x21, 0xFF, 0x0B, // App extension introducer
-        b'N', b'E', b'T', b'S', b'C', b'A', b'P', b'E', b'2', b'.', b'0', 0x03, 0x01, 0x00,
-        0x00, 0x00, // Infinite loop
-        0x21, 0xF9, 0x04, 0x01, 0x0A, 0x00, 0x00,
-        0x00, // Frame 1 GCE, transparency + 100 ms
+        b'N', b'E', b'T', b'S', b'C', b'A', b'P', b'E', b'2', b'.', b'0', 0x03, 0x01, 0x00, 0x00,
+        0x00, // Infinite loop
+        0x21, 0xF9, 0x04, 0x01, 0x0A, 0x00, 0x00, 0x00, // Frame 1 GCE, transparency + 100 ms
         0x2C, // Frame 1 image descriptor
         0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x01, 0x00,
         0x00, // Minimal image data block
-        0x21, 0xF9, 0x04, 0x01, 0x0A, 0x00, 0x00,
-        0x00, // Frame 2 GCE, transparency + 100 ms
+        0x21, 0xF9, 0x04, 0x01, 0x0A, 0x00, 0x00, 0x00, // Frame 2 GCE, transparency + 100 ms
         0x2C, // Frame 2 image descriptor
         0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x01, 0x00,
         0x00, // Minimal image data block

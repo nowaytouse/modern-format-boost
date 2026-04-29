@@ -1485,12 +1485,12 @@ pub fn convert_to_mp4_matched(
             shared_utils::conversion_types::SelectedCodec::Hevc => {
                 shared_utils::crf_constants::update_global_last_hit_crf_hevc(
                     explore_result.optimal_crf,
-                )
+                );
             }
             shared_utils::conversion_types::SelectedCodec::Av1 => {
                 shared_utils::crf_constants::update_global_last_hit_crf_av1(
                     explore_result.optimal_crf,
-                )
+                );
             }
         }
     }
@@ -1922,7 +1922,7 @@ pub fn convert_to_gif_apple_compat(
             .map_err(|e| {
                 VidQualityError::ConversionError(format!("Failed to read frame directory: {e}"))
             })?
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
             .map(|e| e.path())
             .filter(|p| p.extension().is_some_and(|ext| ext == "png"))
             .collect();

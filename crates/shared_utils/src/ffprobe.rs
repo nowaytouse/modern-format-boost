@@ -894,13 +894,13 @@ pub fn parse_frame_rate(s: &str) -> Result<f64, FFprobeError> {
             let den = parts[1]
                 .parse::<f64>()
                 .map_err(|e| FFprobeError::ParseError(format!("Invalid denominator: {e}")))?;
-                
+
             if den == 0.0 {
                 return Err(FFprobeError::ParseError(
-                    "Frame rate denominator cannot be zero".to_string()
+                    "Frame rate denominator cannot be zero".to_string(),
                 ));
             }
-            
+
             let rate = num / den;
             if rate >= 0.0 {
                 return Ok(rate);

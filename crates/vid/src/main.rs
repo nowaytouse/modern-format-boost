@@ -107,8 +107,11 @@ fn main() -> anyhow::Result<()> {
     // Extract input path from relevant commands to lock the directory ONLY if it involves destructive or interactive shared state.
     let input_to_lock = match &cli.command {
         Commands::Run {
-            input, in_place, ..
-        } if *in_place => Some(input),
+            input,
+            in_place,
+            delete_original,
+            ..
+        } if *in_place || *delete_original => Some(input),
         _ => None,
     };
 
@@ -287,6 +290,7 @@ fn main() -> anyhow::Result<()> {
                         }
                     }),
                     resume,
+                    protect_destructive_dirs: delete_original || in_place,
                 },
                 |file| {
                     auto_convert_with_cache(file, &config, cache.as_ref())
@@ -304,8 +308,13 @@ fn main() -> anyhow::Result<()> {
             } else {
                 SelectedCodec::Hevc
             };
-            let strategy =
-                determine_strategy_with_apple_compat(&detection, &input, false, false, selected_codec);
+            let strategy = determine_strategy_with_apple_compat(
+                &detection,
+                &input,
+                false,
+                false,
+                selected_codec,
+            );
 
             println!("\n🎯 Recommended Strategy (Auto Mode)");
             println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");

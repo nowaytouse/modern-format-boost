@@ -10,12 +10,12 @@ pub const fn ensure_even_dimensions(width: u32, height: u32) -> (u32, u32, bool)
     let corrected_width = if width.is_multiple_of(2) {
         width
     } else {
-        width - 1
+        width.saturating_sub(1)
     };
     let corrected_height = if height.is_multiple_of(2) {
         height
     } else {
-        height - 1
+        height.saturating_sub(1)
     };
     let needs_correction = corrected_width != width || corrected_height != height;
 
@@ -25,8 +25,8 @@ pub const fn ensure_even_dimensions(width: u32, height: u32) -> (u32, u32, bool)
 /// Even dimensions by padding (no pixel loss). For odd width/height, pad to next even.
 #[must_use]
 pub const fn ensure_even_dimensions_pad(width: u32, height: u32) -> (u32, u32, bool) {
-    let w = width + (width % 2);
-    let h = height + (height % 2);
+    let w = width.saturating_add(width % 2);
+    let h = height.saturating_add(height % 2);
     let needs = w != width || h != height;
     (w, h, needs)
 }

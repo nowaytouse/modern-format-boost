@@ -66,6 +66,7 @@ pub struct CliRunnerConfig {
     pub label: String,
     pub base_dir: Option<PathBuf>,
     pub resume: bool,
+    pub protect_destructive_dirs: bool,
 }
 
 /// Resolve `base_dir` for video `run` command. Shared by `vid_hevc` and `vid_av1` to reduce duplication.
@@ -112,6 +113,22 @@ where
     // Check for Apple Photos library before processing
     if let Err(e) = crate::safety::check_apple_photos_library(input) {
         anyhow::bail!("{e}");
+    }
+    if config.protect_destructive_dirs {
+        if let Err(e) = crate::safety::check_dangerous_directory(input) {
+            anyhow::bail!("{e}");
+        }
+    }
+
+    if let Some(ref out_dir) = config.output {
+        if let Err(e) = crate::safety::check_apple_photos_library(out_dir) {
+            anyhow::bail!("{e}");
+        }
+        if config.protect_destructive_dirs {
+            if let Err(e) = crate::safety::check_dangerous_directory(out_dir) {
+                anyhow::bail!("{e}");
+            }
+        }
     }
 
     let files = crate::collect_video_files_for_perceived_speed(
@@ -555,6 +572,12 @@ where
     // Check for Apple Photos library before processing
     if let Err(e) = crate::safety::check_apple_photos_library(&config.input) {
         anyhow::bail!("{e}");
+    }
+
+    if let Some(ref out_dir) = config.output {
+        if let Err(e) = crate::safety::check_apple_photos_library(out_dir) {
+            anyhow::bail!("{e}");
+        }
     }
 
     // Fix extension by content first so all downstream checks see the real format (avoids disguised-extension panic).

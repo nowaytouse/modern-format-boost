@@ -38,7 +38,7 @@ enum QualityLabel {
 }
 
 impl QualityLabel {
-    fn as_str(self) -> &'static str {
+    const fn as_str(self) -> &'static str {
         match self {
             Self::PngHigh => "png-high",
             Self::PngLow => "png-low",

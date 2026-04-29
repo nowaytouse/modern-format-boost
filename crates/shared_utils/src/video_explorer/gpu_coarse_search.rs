@@ -4358,7 +4358,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     let quality_fail_reason = if !total_file_compressed {
         "Total file not smaller than input".to_string()
     } else if !enhanced.passed() {
-        enhanced.message.clone()
+        enhanced.message
     } else if !ultimate_mode && !ssim_ok {
         "SSIM below target".to_string()
     } else {

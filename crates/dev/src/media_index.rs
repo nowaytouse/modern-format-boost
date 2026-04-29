@@ -256,12 +256,14 @@ impl MediaIndex {
     }
 
     /// ⚡ Zero-overhead check: Returns true if a `MediaIndex` exists at the path.
+    #[must_use] 
     pub fn exists_at(db_path: &Path) -> bool {
         db_path.exists() && db_path.is_file()
     }
 }
 
 /// Helper to get current unix time.
+#[must_use] 
 pub fn now_unix() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

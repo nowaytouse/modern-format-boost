@@ -27,82 +27,82 @@ mod raw {
     )]
 
     #[inline]
-    pub(super) fn f64_to_u64(v: f64) -> u64 {
+    pub(super) const fn f64_to_u64(v: f64) -> u64 {
         v as u64
     }
 
     #[inline]
-    pub(super) fn f64_to_u32(v: f64) -> u32 {
+    pub(super) const fn f64_to_u32(v: f64) -> u32 {
         v as u32
     }
 
     #[inline]
-    pub(super) fn f64_to_usize(v: f64) -> usize {
+    pub(super) const fn f64_to_usize(v: f64) -> usize {
         v as usize
     }
 
     #[inline]
-    pub(super) fn f64_to_u16(v: f64) -> u16 {
+    pub(super) const fn f64_to_u16(v: f64) -> u16 {
         v as u16
     }
 
     #[inline]
-    pub(super) fn f64_to_u8(v: f64) -> u8 {
+    pub(super) const fn f64_to_u8(v: f64) -> u8 {
         v as u8
     }
 
     #[inline]
-    pub(super) fn f64_to_i32(v: f64) -> i32 {
+    pub(super) const fn f64_to_i32(v: f64) -> i32 {
         v as i32
     }
 
     #[inline]
-    pub(super) fn f64_to_f32(v: f64) -> f32 {
+    pub(super) const fn f64_to_f32(v: f64) -> f32 {
         v as f32
     }
 
     #[inline]
-    pub(super) fn f32_to_u32(v: f32) -> u32 {
+    pub(super) const fn f32_to_u32(v: f32) -> u32 {
         v as u32
     }
 
     #[inline]
-    pub(super) fn f32_to_u16(v: f32) -> u16 {
+    pub(super) const fn f32_to_u16(v: f32) -> u16 {
         v as u16
     }
 
     #[inline]
-    pub(super) fn f32_to_i32(v: f32) -> i32 {
+    pub(super) const fn f32_to_i32(v: f32) -> i32 {
         v as i32
     }
 
     #[inline]
-    pub(super) fn f32_to_usize(v: f32) -> usize {
+    pub(super) const fn f32_to_usize(v: f32) -> usize {
         v as usize
     }
 
     #[inline]
-    pub(super) fn u64_to_f64(v: u64) -> f64 {
+    pub(super) const fn u64_to_f64(v: u64) -> f64 {
         v as f64
     }
 
     #[inline]
-    pub(super) fn usize_to_f64(v: usize) -> f64 {
+    pub(super) const fn usize_to_f64(v: usize) -> f64 {
         v as f64
     }
 
     #[inline]
-    pub(super) fn i64_to_f64(v: i64) -> f64 {
+    pub(super) const fn i64_to_f64(v: i64) -> f64 {
         v as f64
     }
 
     #[inline]
-    pub(super) fn i32_to_f32(v: i32) -> f32 {
+    pub(super) const fn i32_to_f32(v: i32) -> f32 {
         v as f32
     }
 
     #[inline]
-    pub(super) fn u32_to_f32(v: u32) -> f32 {
+    pub(super) const fn u32_to_f32(v: u32) -> f32 {
         v as f32
     }
 }
@@ -212,7 +212,7 @@ pub fn f64_to_u8_sat(v: f64) -> u8 {
 /// - clamped to `[i32::MIN, i32::MAX]`
 #[inline]
 #[must_use]
-pub fn f64_to_i32_sat(v: f64) -> i32 {
+pub const fn f64_to_i32_sat(v: f64) -> i32 {
     if v.is_nan() {
         return 0;
     }
@@ -259,7 +259,7 @@ pub fn f32_to_u16_sat(v: f32) -> u16 {
 /// - clamped to `[i32::MIN, i32::MAX]`
 #[inline]
 #[must_use]
-pub fn f32_to_i32_sat(v: f32) -> i32 {
+pub const fn f32_to_i32_sat(v: f32) -> i32 {
     if v.is_nan() {
         return 0;
     }
@@ -276,7 +276,7 @@ pub fn f32_to_i32_sat(v: f32) -> i32 {
 /// where f32 precision (≈7 decimal digits) is sufficient.
 #[inline]
 #[must_use]
-pub fn f64_to_f32_lossy(v: f64) -> f32 {
+pub const fn f64_to_f32_lossy(v: f64) -> f32 {
     raw::f64_to_f32(v)
 }
 
@@ -292,7 +292,7 @@ pub fn f32_to_f64_lossy(v: f32) -> f64 {
 /// Potentially lossy integer-to-float conversion: `u64` → `f64`.
 #[inline]
 #[must_use]
-pub fn u64_to_f64(v: u64) -> f64 {
+pub const fn u64_to_f64(v: u64) -> f64 {
     raw::u64_to_f64(v)
 }
 
@@ -308,7 +308,7 @@ pub fn u32_to_f64(v: u32) -> f64 {
 /// On 64-bit targets, large values may lose integer precision once they exceed `2^53`.
 #[inline]
 #[must_use]
-pub fn usize_to_f64(v: usize) -> f64 {
+pub const fn usize_to_f64(v: usize) -> f64 {
     raw::usize_to_f64(v)
 }
 
@@ -322,7 +322,7 @@ pub fn i32_to_f64(v: i32) -> f64 {
 /// Potentially lossy integer-to-float conversion: `i64` → `f64`.
 #[inline]
 #[must_use]
-pub fn i64_to_f64(v: i64) -> f64 {
+pub const fn i64_to_f64(v: i64) -> f64 {
     raw::i64_to_f64(v)
 }
 
@@ -336,14 +336,14 @@ pub fn f32_to_f64(v: f32) -> f64 {
 /// Precision reduction: `i32` → `f32`.
 #[inline]
 #[must_use]
-pub fn i32_to_f32_lossy(v: i32) -> f32 {
+pub const fn i32_to_f32_lossy(v: i32) -> f32 {
     raw::i32_to_f32(v)
 }
 
 /// Potentially lossy integer-to-float conversion: `u32` → `f32`.
 #[inline]
 #[must_use]
-pub fn u32_to_f32(v: u32) -> f32 {
+pub const fn u32_to_f32(v: u32) -> f32 {
     raw::u32_to_f32(v)
 }
 

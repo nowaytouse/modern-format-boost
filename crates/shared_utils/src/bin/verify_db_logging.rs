@@ -82,7 +82,7 @@ fn main() {
             println!("   - Verdict: {verdict} (expected LoopStrong)");
             println!("   - Snapshot: {snapshot}");
 
-            if snapshot.get("width").and_then(|v| v.as_u64()) == Some(640) {
+            if snapshot.get("width").and_then(serde_json::Value::as_u64) == Some(640) {
                 println!("   - Snapshot data integrity: OK");
             } else {
                 println!("   - ⚠️ Snapshot data integrity: Mismatch or missing 'width' (snapshot: {snapshot:?})");

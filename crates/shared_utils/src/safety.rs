@@ -3,7 +3,7 @@
 //! Provides safety checks to prevent accidental damage to system directories
 //! Reference: media/CONTRIBUTING.md - Robust Safety & Loud Errors requirement
 
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 const DANGEROUS_DIRS: &[&str] = &[
     "/",
@@ -24,49 +24,87 @@ const DANGEROUS_DIRS: &[&str] = &[
     "/proc",
     "/sys",
     "/tmp",
+    "/private/tmp",
     "/opt",
 ];
+
+fn normalize_path_lexically(path: &Path) -> PathBuf {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("/"))
+            .join(path)
+    };
+
+    let mut normalized = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let _ = normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
+}
+
+fn normalized_danger_candidates(path: &Path) -> Vec<PathBuf> {
+    let mut candidates = vec![normalize_path_lexically(path)];
+    if let Ok(canonical) = path.canonicalize() {
+        let canonical = normalize_path_lexically(&canonical);
+        if !candidates.iter().any(|candidate| candidate == &canonical) {
+            candidates.push(canonical);
+        }
+    }
+    candidates
+}
+
+fn is_exact_dangerous_dir(path: &Path) -> bool {
+    normalized_danger_candidates(path).iter().any(|candidate| {
+        let candidate = candidate.to_string_lossy();
+        DANGEROUS_DIRS.contains(&candidate.as_ref())
+    })
+}
+
+fn is_home_rootish(path: &Path) -> bool {
+    normalized_danger_candidates(path).iter().any(|candidate| {
+        let path_str = candidate.to_string_lossy();
+        let components = candidate.components().count();
+        (path_str.starts_with("/Users/") || path_str.starts_with("/home/")) && components <= 3
+    })
+}
 
 /// Check if a directory is dangerous to perform operations in.
 ///
 /// # Errors
 /// Returns an error if the directory is considered dangerous.
 pub fn check_dangerous_directory(path: &Path) -> Result<(), String> {
-    let path_str = path.to_string_lossy();
-
-    for dangerous in DANGEROUS_DIRS {
-        if path_str == *dangerous {
-            return Err(format!(
-                "🚨 DANGEROUS OPERATION BLOCKED!\n\
-                 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\
-                 ❌ Target directory '{dangerous}' is a protected system directory.\n\
-                 ❌ Operating on this directory could cause IRREVERSIBLE DAMAGE to your system.\n\
-                 \n\
-                 💡 Please specify a safe subdirectory instead.\n\
-                 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            ));
-        }
+    if is_exact_dangerous_dir(path) {
+        return Err(format!(
+            "🚨 DANGEROUS OPERATION BLOCKED!\n\
+             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\
+             ❌ Target directory '{}' is a protected system directory.\n\
+             ❌ Operating on this directory could cause IRREVERSIBLE DAMAGE to your system.\n\
+             \n\
+             💡 Please specify a safe subdirectory instead.\n\
+             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            path.display()
+        ));
     }
 
-    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let components: Vec<_> = canonical.components().collect();
-
-    if components.len() <= 3 {
-        let path_str = canonical.to_string_lossy();
-        if (path_str.starts_with("/Users/") || path_str.starts_with("/home/"))
-            && components.len() <= 3
-        {
-            return Err(format!(
-                    "🚨 DANGEROUS OPERATION BLOCKED!\n\
-                     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\
-                     ❌ Target '{}' is too close to your home directory root.\n\
-                     ❌ Operating here could affect ALL your personal files.\n\
-                     \n\
-                     💡 Please specify a subdirectory like ~/Documents/photos instead.\n\
-                     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-                    path.display()
-                ));
-        }
+    if is_home_rootish(path) {
+        return Err(format!(
+            "🚨 DANGEROUS OPERATION BLOCKED!\n\
+             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\
+             ❌ Target '{}' is too close to your home directory root.\n\
+             ❌ Operating here could affect ALL your personal files.\n\
+             \n\
+             💡 Please specify a subdirectory like ~/Documents/photos instead.\n\
+             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            path.display()
+        ));
     }
 
     Ok(())
@@ -79,7 +117,8 @@ pub fn check_dangerous_directory(path: &Path) -> Result<(), String> {
 pub fn check_safe_for_destructive(path: &Path, operation: &str) -> Result<(), String> {
     check_dangerous_directory(path)?;
 
-    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let canonical =
+        normalize_path_lexically(&path.canonicalize().unwrap_or_else(|_| path.to_path_buf()));
     let path_str = canonical.to_string_lossy();
 
     if path_str.contains("/Desktop") || path_str.contains("/Downloads") {
@@ -159,6 +198,9 @@ mod tests {
         assert!(check_dangerous_directory(Path::new("/")).is_err());
         assert!(check_dangerous_directory(Path::new("/System")).is_err());
         assert!(check_dangerous_directory(Path::new("/usr")).is_err());
+        assert!(check_dangerous_directory(Path::new("/Users/")).is_err());
+        assert!(check_dangerous_directory(Path::new("/private/tmp")).is_err());
+        assert!(check_dangerous_directory(Path::new("/Users/test/..")).is_err());
     }
 
     #[test]
