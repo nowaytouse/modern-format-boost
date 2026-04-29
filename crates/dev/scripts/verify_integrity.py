@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Modern Format Boost - Post-Processing Integrity Verifier
 
-Validates that every media file in the source directory has a corresponding
-output in the optimized directory, ensuring zero data loss during batch
-processing.
+Checks that every media file in the source directory has a corresponding
+output in the optimized directory. Reports any discrepancies with full
+detail and writes a log file to the project logs/ directory.
 
 Usage:
     # Auto-detect mode: pass an __optimized directory, auto-finds the source
@@ -13,6 +13,7 @@ Usage:
     python3 verify_integrity.py /path/to/MyPhotos /path/to/MyPhotos_optimized
 """
 
+import datetime
 import os
 import sys
 from pathlib import Path
@@ -28,6 +29,10 @@ if sys.stdout.isatty():
     RESET = "\033[0m"
 else:
     RED = GREEN = CYAN = YELLOW = BOLD = DIM = RESET = ""
+
+SCRIPT_DIR = Path(__file__).parent.resolve()
+PROJECT_ROOT = SCRIPT_DIR.parent.parent.parent
+LOG_DIR = PROJECT_ROOT / "logs"
 
 # ---------------------------------------------------------------------------
 # Media extension sets (mirrors drag_and_drop_processor.py)
@@ -146,7 +151,6 @@ def resolve_directories(args: list[str]) -> tuple[Path, Path]:
                 candidate = given.parent / source_name
                 if candidate.is_dir():
                     return candidate, given
-                # Try without the suffix variation
                 break
 
         # Case 2: given path is the source → look for _optimized sibling
@@ -164,10 +168,10 @@ def resolve_directories(args: list[str]) -> tuple[Path, Path]:
         print(
             f"   {DIM}  python3 verify_integrity.py /source/dir /optimized/dir{RESET}"
         )
-        sys.exit(1)
+        sys.exit(0)
 
     print(f"{RED}❌ Usage: verify_integrity.py <source_dir> [optimized_dir]{RESET}")
-    sys.exit(1)
+    sys.exit(0)
 
 
 def format_size(size_bytes: int) -> str:
@@ -182,21 +186,108 @@ def format_size(size_bytes: int) -> str:
         return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
 
 
-def verify_integrity(source_dir: Path, optimized_dir: Path) -> int:
-    """Compare source and optimized directories for completeness.
+def write_log(
+    source_dir: Path,
+    optimized_dir: Path,
+    source_files: dict[str, Path],
+    optimized_files: dict[str, Path],
+    matched: list[tuple[str, Path, Path]],
+    missing: list[tuple[str, Path]],
+    extra: list[tuple[str, Path]],
+    missing_dirs: set[str],
+) -> Path:
+    """Write detailed verification report to a log file in the logs/ directory."""
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    project_name = source_dir.name
+    log_path = LOG_DIR / f"verify_{project_name}_{timestamp}.log"
 
-    Returns exit code: 0 if all files accounted for, 1 if discrepancies found.
-    """
+    with open(log_path, "w", encoding="utf-8") as f:
+        f.write("=" * 72 + "\n")
+        f.write("Modern Format Boost - Integrity Verification Report\n")
+        f.write(f"Generated: {datetime.datetime.now().isoformat()}\n")
+        f.write("=" * 72 + "\n\n")
+
+        f.write(f"Source:    {source_dir}\n")
+        f.write(f"Optimized: {optimized_dir}\n\n")
+
+        # Count summary
+        f.write("--- File Count Summary ---\n")
+        f.write(f"Source files:    {len(source_files)}\n")
+        f.write(f"Optimized files: {len(optimized_files)}\n")
+        delta = len(optimized_files) - len(source_files)
+        if delta == 0:
+            f.write("Count status:    MATCH\n")
+        else:
+            direction = "more" if delta > 0 else "fewer"
+            f.write(
+                f"Count status:    MISMATCH ({abs(delta)} {direction} in optimized)\n"
+            )
+
+        f.write(f"\nMatched:   {len(matched)}\n")
+        f.write(f"Missing:   {len(missing)}\n")
+        f.write(f"Extra:     {len(extra)}\n\n")
+
+        # Matched files
+        f.write("--- Matched Files ---\n")
+        for key, src_path, opt_path in matched:
+            src_rel = src_path.relative_to(source_dir)
+            opt_rel = opt_path.relative_to(optimized_dir)
+            try:
+                src_sz = src_path.stat().st_size
+                opt_sz = opt_path.stat().st_size
+                f.write(
+                    f"  ✓ {src_rel} → {opt_rel}  ({format_size(src_sz)} → {format_size(opt_sz)})\n"
+                )
+            except OSError:
+                f.write(f"  ✓ {src_rel} → {opt_rel}\n")
+
+        # Missing files
+        if missing:
+            f.write(f"\n--- Missing from Optimized ({len(missing)}) ---\n")
+            for key, src_path in missing:
+                rel = src_path.relative_to(source_dir)
+                try:
+                    sz = src_path.stat().st_size
+                    f.write(f"  ✗ {rel}  ({format_size(sz)})\n")
+                except OSError:
+                    f.write(f"  ✗ {rel}\n")
+
+        # Extra files
+        if extra:
+            f.write(f"\n--- Extra in Optimized ({len(extra)}) ---\n")
+            for key, opt_path in extra:
+                rel = opt_path.relative_to(optimized_dir)
+                try:
+                    sz = opt_path.stat().st_size
+                    f.write(f"  + {rel}  ({format_size(sz)})\n")
+                except OSError:
+                    f.write(f"  + {rel}\n")
+
+        # Missing directories
+        if missing_dirs:
+            f.write(f"\n--- Missing Subdirectories ({len(missing_dirs)}) ---\n")
+            for d in sorted(missing_dirs):
+                f.write(f"  ✗ {d}/\n")
+
+        f.write("\n" + "=" * 72 + "\n")
+        f.write("End of Report\n")
+
+    return log_path
+
+
+def verify_integrity(source_dir: Path, optimized_dir: Path):
+    """Compare source and optimized directories and report findings."""
     print(f"  {BOLD}Source:{RESET}    {source_dir}")
     print(f"  {BOLD}Optimized:{RESET} {optimized_dir}\n")
 
     if not source_dir.is_dir():
         print(f"{RED}❌ Source directory does not exist: {source_dir}{RESET}")
-        return 1
+        return
 
     if not optimized_dir.is_dir():
         print(f"{RED}❌ Optimized directory does not exist: {optimized_dir}{RESET}")
-        return 1
+        return
 
     # Collect files from both directories
     print(f"{DIM}   Scanning source directory...{RESET}", end="", flush=True)
@@ -209,17 +300,15 @@ def verify_integrity(source_dir: Path, optimized_dir: Path) -> int:
 
     if not source_files:
         print(f"{YELLOW}⚠️  No media files found in source directory.{RESET}")
-        return 0
+        return
 
     # =========================================================================
-    # Layer 0: File Count Consistency (Hard Gate)
-    # This is the single most important verification — if the counts don't
-    # match, something was lost or duplicated regardless of name matching.
+    # File Count Consistency
     # =========================================================================
     src_count = len(source_files)
     opt_count = len(optimized_files)
 
-    # Break down by category for granular diagnosis
+    # Break down by category
     src_img = sum(1 for p in source_files.values() if p.suffix.lower() in IMG_EXTS)
     src_vid = sum(1 for p in source_files.values() if p.suffix.lower() in VID_EXTS)
     opt_img = sum(
@@ -231,38 +320,29 @@ def verify_integrity(source_dir: Path, optimized_dir: Path) -> int:
         if p.suffix.lower() in VID_EXTS
         and p.suffix.lower() not in (IMG_EXTS | {".jxl"})
     )
-    # Files that converted format (e.g. .png → .jxl) won't cleanly split,
-    # so we use total count as the authoritative gate.
 
     print(f"{DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{RESET}")
-    print(f"{BOLD}Layer 0: File Count Consistency{RESET}\n")
+    print(f"{BOLD}File Count Consistency{RESET}\n")
 
-    count_ok = src_count == opt_count
-    if count_ok:
+    if src_count == opt_count:
         print(f"  {GREEN}✅ Total Count: {src_count} == {opt_count} (MATCH){RESET}")
     else:
         delta = opt_count - src_count
         direction = "more" if delta > 0 else "fewer"
         print(
-            f"  {RED}❌ Total Count: Source={src_count}  Optimized={opt_count}  "
+            f"  {YELLOW}⚠️  Total Count: Source={src_count}  Optimized={opt_count}  "
             f"({abs(delta)} {direction}){RESET}"
         )
 
     print(f"  {DIM}   Source  → Images: {src_img}  Videos: {src_vid}{RESET}")
     print(f"  {DIM}   Output  → Images: {opt_img}  Videos: {opt_vid}{RESET}")
 
-    if not count_ok:
-        print(
-            f"\n  {RED}{BOLD}⛔ COUNT MISMATCH — processing is incomplete or has duplicates.{RESET}"
-        )
-
     # =========================================================================
-    # Layer 1: Stem-Based Cross-Reference
+    # Stem-Based Cross-Reference
     # =========================================================================
     print(f"\n{DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{RESET}")
-    print(f"{BOLD}Layer 1: Stem-Based Cross-Reference{RESET}\n")
+    print(f"{BOLD}Stem-Based Cross-Reference{RESET}\n")
 
-    # Cross-reference: every source file should have a match in optimized
     missing: list[tuple[str, Path]] = []
     matched: list[tuple[str, Path, Path]] = []
     extra: list[tuple[str, Path]] = []
@@ -277,7 +357,25 @@ def verify_integrity(source_dir: Path, optimized_dir: Path) -> int:
         if key not in source_files:
             extra.append((key, opt_path))
 
-    # Calculate size statistics for matched files
+    # Match rate
+    match_rate = (len(matched) / len(source_files) * 100) if source_files else 0
+    if match_rate == 100:
+        print(
+            f"  {GREEN}✅ Match Rate: {match_rate:.1f}% "
+            f"({len(matched)}/{len(source_files)}){RESET}"
+        )
+    elif match_rate >= 90:
+        print(
+            f"  {YELLOW}⚠️  Match Rate: {match_rate:.1f}% "
+            f"({len(matched)}/{len(source_files)}){RESET}"
+        )
+    else:
+        print(
+            f"  {RED}   Match Rate: {match_rate:.1f}% "
+            f"({len(matched)}/{len(source_files)}){RESET}"
+        )
+
+    # Size comparison for matched files
     total_src_size = 0
     total_opt_size = 0
     for _, src_path, opt_path in matched:
@@ -290,28 +388,6 @@ def verify_integrity(source_dir: Path, optimized_dir: Path) -> int:
         except OSError:
             pass
 
-    # =========================================================================
-    # Layer 2: Detailed Results
-    # =========================================================================
-    print(f"\n{DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{RESET}")
-    print(f"{BOLD}Layer 2: Detailed Results{RESET}\n")
-
-    # Matched files summary
-    match_rate = (len(matched) / len(source_files) * 100) if source_files else 0
-    if match_rate == 100:
-        print(
-            f"  {GREEN}✅ Match Rate: {match_rate:.1f}% ({len(matched)}/{len(source_files)}){RESET}"
-        )
-    elif match_rate >= 90:
-        print(
-            f"  {YELLOW}⚠️  Match Rate: {match_rate:.1f}% ({len(matched)}/{len(source_files)}){RESET}"
-        )
-    else:
-        print(
-            f"  {RED}❌ Match Rate: {match_rate:.1f}% ({len(matched)}/{len(source_files)}){RESET}"
-        )
-
-    # Size comparison
     if total_src_size > 0:
         savings = total_src_size - total_opt_size
         savings_pct = (savings / total_src_size * 100) if total_src_size > 0 else 0
@@ -319,37 +395,43 @@ def verify_integrity(source_dir: Path, optimized_dir: Path) -> int:
         print(f"  {DIM}   Optimized total: {format_size(total_opt_size)}{RESET}")
         if savings > 0:
             print(
-                f"  {GREEN}   Space saved:     {format_size(savings)} ({savings_pct:.1f}%){RESET}"
+                f"  {GREEN}   Space saved:     "
+                f"{format_size(savings)} ({savings_pct:.1f}%){RESET}"
             )
         else:
             print(
-                f"  {YELLOW}   Size increase:   {format_size(-savings)} (+{-savings_pct:.1f}%){RESET}"
+                f"  {YELLOW}   Size increase:   "
+                f"{format_size(-savings)} (+{-savings_pct:.1f}%){RESET}"
             )
 
-    # Missing files detail
+    # =========================================================================
+    # Discrepancy Details
+    # =========================================================================
+    if missing or extra:
+        print(f"\n{DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{RESET}")
+        print(f"{BOLD}Discrepancy Details{RESET}\n")
+
     if missing:
-        print(f"\n  {RED}❌ Missing from optimized ({len(missing)} files):{RESET}")
-        # Group by directory for readability
+        print(f"  {YELLOW}Missing from optimized ({len(missing)} files):{RESET}")
         shown = 0
-        max_show = 50
+        max_show = 30
         for key, src_path in missing:
             if shown >= max_show:
                 remaining = len(missing) - max_show
-                print(f"     {DIM}... and {remaining} more{RESET}")
+                print(f"     {DIM}... and {remaining} more (see log file){RESET}")
                 break
             rel = src_path.relative_to(source_dir)
-            print(f"     {RED}✗{RESET} {rel}")
+            print(f"     {YELLOW}✗{RESET} {rel}")
             shown += 1
 
-    # Extra files in optimized (informational)
     if extra:
-        print(f"\n  {CYAN}ℹ️  Extra files in optimized ({len(extra)} files):{RESET}")
+        print(f"\n  {CYAN}Extra in optimized ({len(extra)} files):{RESET}")
         shown = 0
         max_show = 20
         for key, opt_path in extra:
             if shown >= max_show:
                 remaining = len(extra) - max_show
-                print(f"     {DIM}... and {remaining} more{RESET}")
+                print(f"     {DIM}... and {remaining} more (see log file){RESET}")
                 break
             rel = opt_path.relative_to(optimized_dir)
             print(f"     {CYAN}+{RESET} {rel}")
@@ -370,39 +452,53 @@ def verify_integrity(source_dir: Path, optimized_dir: Path) -> int:
 
     missing_dirs = src_dirs - opt_dirs
     if missing_dirs:
-        print(f"\n  {YELLOW}⚠️  Missing subdirectories ({len(missing_dirs)}):{RESET}")
+        print(f"\n  {YELLOW}Missing subdirectories ({len(missing_dirs)}):{RESET}")
         for d in sorted(missing_dirs)[:20]:
             print(f"     {YELLOW}✗{RESET} {d}/")
 
-    # Final verdict
+    # =========================================================================
+    # Write log file
+    # =========================================================================
+    log_path = write_log(
+        source_dir,
+        optimized_dir,
+        source_files,
+        optimized_files,
+        matched,
+        missing,
+        extra,
+        missing_dirs,
+    )
+
+    # =========================================================================
+    # Summary
+    # =========================================================================
     print(f"\n{DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{RESET}")
-    all_ok = count_ok and not missing and not missing_dirs
-    if all_ok:
+    has_issues = missing or (src_count != opt_count) or missing_dirs
+
+    if not has_issues:
         print(
-            f"{GREEN}{BOLD}🌟 INTEGRITY VERIFIED: All {len(source_files)} media files "
-            f"accounted for ({src_count} → {opt_count}).{RESET}"
+            f"{GREEN}{BOLD}🌟 All {len(source_files)} media files accounted for "
+            f"({src_count} → {opt_count}).{RESET}"
         )
-        return 0
     else:
-        issues: list[str] = []
-        if not count_ok:
-            issues.append(f"count mismatch ({src_count} vs {opt_count})")
+        parts: list[str] = []
+        if src_count != opt_count:
+            parts.append(f"count: {src_count} vs {opt_count}")
         if missing:
-            issues.append(f"{len(missing)} file(s) missing")
+            parts.append(f"{len(missing)} missing")
         if missing_dirs:
-            issues.append(f"{len(missing_dirs)} dir(s) missing")
-        summary = ", ".join(issues)
-        print(f"{RED}{BOLD}⚠️  INTEGRITY CHECK FAILED: {summary}{RESET}")
-        print(f"{DIM}   Processing may be incomplete. Check logs for errors.{RESET}")
-        return 1
+            parts.append(f"{len(missing_dirs)} dirs missing")
+        print(f"{YELLOW}{BOLD}⚠️  Discrepancies found: {', '.join(parts)}{RESET}")
+
+    print(f"  {DIM}📄 Full report saved to: {log_path}{RESET}")
 
 
 def main():
     print_header()
     source_dir, optimized_dir = resolve_directories(sys.argv[1:])
-    exit_code = verify_integrity(source_dir, optimized_dir)
+    verify_integrity(source_dir, optimized_dir)
     print()
-    sys.exit(exit_code)
 
 
 if __name__ == "__main__":

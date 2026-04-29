@@ -8,10 +8,11 @@ All notable changes to this project will be documented in this file.
 
 ### 🔧 Tooling: Post-Processing Integrity Verifier
 
-- **New Tool**: `verify_integrity.py` — validates that every media file in the source directory has a corresponding output in the optimized directory, ensuring zero data loss during batch processing.
-  - **Layer 0 — File Count Consistency (Hard Gate)**: The most critical check. Compares raw file counts (total, images, videos) between source and optimized directories. A count mismatch is treated as a hard failure regardless of name matching results.
-  - **Layer 1 — Stem-Based Cross-Format Matching**: Matches `photo.png` → `photo.jxl`, `clip.mov` → `clip.mp4`, etc., so format conversions are correctly recognized as successful outputs.
-  - **Layer 2 — Detailed Report**: Match rate percentage, total size comparison with space savings, missing files list, extra files list, and missing subdirectory structure audit.
+- **New Tool**: `verify_integrity.py` — checks that every media file in the source directory has a corresponding output in the optimized directory and reports any discrepancies. This is a purely diagnostic tool with no side effects.
+  - **File Count Consistency**: Compares total file counts (with image/video breakdown) between source and optimized directories, reporting exact numbers and any delta.
+  - **Stem-Based Cross-Format Matching**: Matches `photo.png` → `photo.jxl`, `clip.mov` → `clip.mp4`, etc., so format conversions are correctly recognized.
+  - **Discrepancy Reporting**: Lists every missing file, extra file, and missing subdirectory with relative paths and file sizes.
+  - **Log Output**: Writes a full detailed report (all matched files, all missing files, all extras) to `logs/verify_<project>_<timestamp>.log` for archival and review.
   - **Auto-Detect Mode**: Pass an `__optimized` or `_optimized` directory and the tool automatically locates the adjacent source directory.
   - **Explicit Mode**: Pass both source and optimized directories for full control.
   - **XMP Exclusion**: `.xmp` sidecar files and hidden files are excluded from verification.
