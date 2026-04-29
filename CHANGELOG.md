@@ -6,6 +6,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### 🔧 Tooling: Post-Processing Integrity Verifier
+
+- **New Tool**: `verify_integrity.py` — validates that every media file in the source directory has a corresponding output in the optimized directory, ensuring zero data loss during batch processing.
+  - **Stem-Based Cross-Format Matching**: Matches `photo.png` → `photo.jxl`, `clip.mov` → `clip.mp4`, etc., so format conversions are correctly recognized as successful outputs.
+  - **Auto-Detect Mode**: Pass an `__optimized` or `_optimized` directory and the tool automatically locates the adjacent source directory.
+  - **Explicit Mode**: Pass both source and optimized directories for full control.
+  - **Reports**: Match rate percentage, total size comparison with space savings, missing files, extra files, and missing subdirectory structures.
+  - **XMP Exclusion**: `.xmp` sidecar files and hidden files are excluded from verification.
+- **Menu Integration**: Added as the 4th option in the Workspace Tools tab of `drag_and_drop_processor.py` (`Tab` to cycle → "Tool: Verify Integrity").
+
 ### 🛡️ Media Processing Pipeline Hardening & Security Audit
 
 This release focuses on hardening the media processing pipeline against resource exhaustion attacks, concurrency race conditions, and deep structural vulnerabilities identified during a comprehensive security audit.

@@ -556,9 +556,12 @@ def select_mode():
                 elif tools_sub_state == 1:
                     display_text = "Tool: Collect Optimized Media [Tab to Switch]"
                     desc = "Move optimized outputs into a mirrored directory tree."
-                else:
+                elif tools_sub_state == 2:
                     display_text = "Tool: Merge XMP Attachments [Tab to Switch]"
                     desc = "Automatically embed XMP sidecars into source media files safely."
+                else:
+                    display_text = "Tool: Verify Integrity [Tab to Switch]"
+                    desc = "Check that all media files were processed without loss."
 
                 if is_selected:
                     if "Console" in globals():
@@ -591,7 +594,7 @@ def select_mode():
                 if selected == 0:
                     mode_sub_state = 1 - mode_sub_state
                 elif selected == 1:
-                    tools_sub_state = (tools_sub_state + 1) % 3
+                    tools_sub_state = (tools_sub_state + 1) % 4
             elif key in ("\r", "\n"):
                 # Action based on selection
                 if selected == 0:
@@ -680,6 +683,18 @@ def select_mode():
                         drain_stdin()
                         subprocess.run(
                             [sys.executable, str(xmp_script), str(TARGET_DIR)]
+                        )
+                        print(f"\n{DIM}   Returning to menu...{RESET}")
+                        time.sleep(3)
+                        continue
+                    elif tools_sub_state == 3:
+                        OUTPUT_MODE = "verify_integrity"
+                        print(f"\n{GREEN}VERIFY INTEGRITY SELECTED{RESET}")
+                        print(f"   Target: {DIM}{TARGET_DIR}{RESET}\n")
+                        verify_script = SCRIPT_DIR / "verify_integrity.py"
+                        drain_stdin()
+                        subprocess.run(
+                            [sys.executable, str(verify_script), str(TARGET_DIR)]
                         )
                         print(f"\n{DIM}   Returning to menu...{RESET}")
                         time.sleep(3)
