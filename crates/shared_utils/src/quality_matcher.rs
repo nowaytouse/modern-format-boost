@@ -302,7 +302,7 @@ impl SourceCodec {
     pub fn identify_by_content(path: &std::path::Path) -> Option<Self> {
         use std::io::Read;
         let mut file = std::fs::File::open(path).ok()?;
-        let mut header = [0u8; 64]; // Expanded to 64 bytes to capture VP8X and acTL chunks
+        let mut header = [0u8; 1024]; // Increased to 1024 bytes for robust chunk scanning (APNG/WebP/BMFF)
         let n = file.read(&mut header).ok()?;
         if n < 2 {
             return None;
@@ -325,9 +325,21 @@ impl SourceCodec {
         }
         // PNG: 89 50 4E 47 0D 0A 1A 0A
         if header.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
-            // Check for APNG acTL chunk which usually follows immediately after IHDR (byte 33 starts the second chunk)
-            if header.len() >= 41 && &header[37..41] == b"acTL" {
-                return Some(Self::Apng);
+            // Robust check for APNG acTL chunk in the first 1024 bytes.
+            // Chunks start at offset 8. Each chunk: 4 len + 4 type + data + 4 crc.
+            let mut pos = 8;
+            while pos + 8 <= header.len() {
+                let chunk_len = u32::from_be_bytes([header[pos], header[pos + 1], header[pos + 2], header[pos + 3]]) as usize;
+                let chunk_type = &header[pos + 4..pos + 8];
+                
+                if chunk_type == b"acTL" {
+                    return Some(Self::Apng);
+                }
+                if chunk_type == b"IDAT" || chunk_type == b"IEND" {
+                    break; // acTL must appear before IDAT
+                }
+                
+                pos += 8 + chunk_len + 4; // Move to next chunk
             }
             return Some(Self::Png);
         }
@@ -359,13 +371,26 @@ impl SourceCodec {
             if header.len() >= 12 {
                 let brand = &header[8..12];
                 if brand == b"WEBP" {
-                    // Check for VP8X extended header which contains the animation flag
-                    if header.len() >= 21 && &header[12..16] == b"VP8X" {
-                        // The animation flag is the 2nd bit of the flags byte at offset 20
-                        let flags = header[20];
-                        if (flags & 0x02) != 0 {
-                            return Some(Self::WebpAnimated);
+                    // Robust check for VP8X in RIFF chunks
+                    let mut pos = 12;
+                    while pos + 8 <= header.len() {
+                        let chunk_type = &header[pos..pos + 4];
+                        let chunk_len = u32::from_le_bytes([header[pos + 4], header[pos + 5], header[pos + 6], header[pos + 7]]) as usize;
+                        
+                        if chunk_type == b"VP8X" {
+                            if pos + 8 + 1 <= header.len() {
+                                let flags = header[pos + 8];
+                                if (flags & 0x02) != 0 {
+                                    return Some(Self::WebpAnimated);
+                                }
+                            }
+                            return Some(Self::WebpStatic);
                         }
+                        if chunk_type == b"VP8 " || chunk_type == b"VP8L" {
+                            return Some(Self::WebpStatic);
+                        }
+                        
+                        pos += 8 + (chunk_len + 1) & !1; // Move to next chunk (padded to 2 bytes)
                     }
                     return Some(Self::WebpStatic);
                 }
