@@ -648,8 +648,12 @@ def select_mode():
                         cache_script = SCRIPT_DIR / "cache_cleaner.py"
                         drain_stdin()
                         subprocess.run([sys.executable, str(cache_script)])
-                        print(f"\n{DIM}   Returning to menu...{RESET}")
-                        time.sleep(2)
+                        print(f"\n   {CYAN}Press Enter to return to menu...{RESET}")
+                        drain_stdin()
+                        try:
+                            input()
+                        except EOFError:
+                            pass
                         continue
                     elif tools_sub_state == 1:
                         OUTPUT_MODE = "collect"
@@ -672,8 +676,12 @@ def select_mode():
                                 OUTPUT_DIR,
                             ]
                         )
-                        print(f"\n{DIM}   Returning to menu...{RESET}")
-                        time.sleep(3)
+                        print(f"\n   {CYAN}Press Enter to return to menu...{RESET}")
+                        drain_stdin()
+                        try:
+                            input()
+                        except EOFError:
+                            pass
                         continue
                     elif tools_sub_state == 2:
                         OUTPUT_MODE = "merge_xmp"
@@ -684,8 +692,12 @@ def select_mode():
                         subprocess.run(
                             [sys.executable, str(xmp_script), str(TARGET_DIR)]
                         )
-                        print(f"\n{DIM}   Returning to menu...{RESET}")
-                        time.sleep(3)
+                        print(f"\n   {CYAN}Press Enter to return to menu...{RESET}")
+                        drain_stdin()
+                        try:
+                            input()
+                        except EOFError:
+                            pass
                         continue
                     elif tools_sub_state == 3:
                         OUTPUT_MODE = "verify_integrity"
@@ -696,8 +708,12 @@ def select_mode():
                         subprocess.run(
                             [sys.executable, str(verify_script), str(TARGET_DIR)]
                         )
-                        print(f"\n{DIM}   Returning to menu...{RESET}")
-                        time.sleep(3)
+                        print(f"\n   {CYAN}Press Enter to return to menu...{RESET}")
+                        drain_stdin()
+                        try:
+                            input()
+                        except EOFError:
+                            pass
                         continue
                     continue
             elif key.lower() == "q":

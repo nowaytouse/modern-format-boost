@@ -17,6 +17,7 @@ All notable changes to this project will be documented in this file.
   - **Explicit Mode**: Pass both source and optimized directories for full control.
   - **XMP Exclusion**: `.xmp` sidecar files and hidden files are excluded from verification.
 - **Menu Integration**: Added as the 4th option in the Workspace Tools tab of `drag_and_drop_processor.py` (`Tab` to cycle → "Tool: Verify Integrity").
+  - **Manual Return**: Replaced the automatic 3-second menu return with a manual `Enter` key confirmation for all workspace tools, ensuring users have enough time to review long reports and verification results.
 
 ### 🛡️ Media Processing Pipeline Hardening & Security Audit
 
