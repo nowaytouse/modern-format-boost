@@ -6,14 +6,14 @@ Extracts modern format conversions, loop intent edge cases (Uncertain/KNN Bypass
 and verifies that every source file has a corresponding optimized output.
 
 Usage:
-    # 1. Log analysis only
-    python3 verify.py logs/img_20260430.log
+    # 1. Log analysis (auto-scans directory for .log and error files)
+    python3 verify.py logs/
 
-    # 2. Integrity verification only
-    python3 verify.py --verify /path/to/SourceDir /path/to/OptimizedDir
+    # 2. Integrity verification (auto-detects paired source/optimized folder)
+    python3 verify.py --verify /path/to/MyPhotos_optimized
 
-    # 3. Combined analysis (pass logs and use --verify)
-    python3 verify.py logs/img_*.log --verify /src /opt
+    # 3. Combined analysis
+    python3 verify.py logs/ --verify /path/to/MyPhotos
 """
 import argparse
 import os
@@ -103,6 +103,31 @@ def format_size(size_bytes: int) -> str:
         return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
 
 
+def resolve_verify_dirs(args_verify: list[str]) -> tuple[Path, Path] | None:
+    """Resolve source and optimized directories with auto-detection."""
+    if len(args_verify) >= 2:
+        return Path(args_verify[0]).resolve(), Path(args_verify[1]).resolve()
+
+    given = Path(args_verify[0]).resolve()
+    optimized_suffixes = ("_optimized", "__optimized")
+
+    # Case 1: given path ends with _optimized → derive source
+    for suffix in optimized_suffixes:
+        if given.name.endswith(suffix):
+            source_name = given.name[:-len(suffix)]
+            candidate = given.parent / source_name
+            if candidate.is_dir():
+                return candidate, given
+
+    # Case 2: given path is the source → look for _optimized sibling
+    for suffix in optimized_suffixes:
+        candidate = given.parent / (given.name + suffix)
+        if candidate.is_dir():
+            return given, candidate
+
+    return None
+
+
 def run_integrity_check(source_dir: Path, optimized_dir: Path, report_f):
     """Perform integrity check and write results to the open report file handle."""
     report_f.write("── INTEGRITY VERIFICATION ─────────────────────────────────────\n")
@@ -121,7 +146,7 @@ def run_integrity_check(source_dir: Path, optimized_dir: Path, report_f):
 
     report_f.write(f"Source files:    {src_count}\n")
     report_f.write(f"Optimized files: {opt_count}\n")
-    
+
     delta = opt_count - src_count
     if delta == 0:
         report_f.write("Count status:    MATCH\n")
@@ -202,7 +227,10 @@ def parse_logs(log_paths, report_f):
 
     for path in log_paths:
         p = Path(path)
-        files = list(p.glob("**/*.log")) + list(p.glob("**/error")) if p.is_dir() else [p]
+        if p.is_dir():
+            files = list(p.glob("**/*.log")) + list(p.glob("**/error"))
+        else:
+            files = [p]
 
         for log_file in files:
             current_file = None
@@ -293,11 +321,11 @@ def parse_logs(log_paths, report_f):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="MFB Conversion Analyzer & Integrity Verifier")
     parser.add_argument("logs", nargs="*", help="Log files or directories to scan.")
-    parser.add_argument("--verify", nargs="+", help="Explicit source and optimized directories for integrity check.")
+    parser.add_argument("--verify", nargs="+", help="Source and/or optimized directories for integrity check (auto-detects if one provided).")
     parser.add_argument("-o", "--output", help="Custom output report path.")
-    
+
     args = parser.parse_args()
-    
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_report = args.output if args.output else f"logs/diagnostic_report_{timestamp}.txt"
     os.makedirs(os.path.dirname(output_report), exist_ok=True) if os.path.dirname(output_report) else None
@@ -310,13 +338,12 @@ if __name__ == "__main__":
 
         # 1. Integrity Check
         if args.verify:
-            if len(args.verify) >= 2:
-                src, opt = Path(args.verify[0]).resolve(), Path(args.verify[1]).resolve()
+            resolved = resolve_verify_dirs(args.verify)
+            if resolved:
+                src, opt = resolved
+                run_integrity_check(src, opt, report_f)
             else:
-                # Auto-detect attempt (basic)
-                src = Path(args.verify[0]).resolve()
-                opt = Path(str(src) + "_optimized")
-            run_integrity_check(src, opt, report_f)
+                report_f.write(f"❌ Error: Could not resolve paired directory for {args.verify[0]}\n\n")
 
         # 2. Log Analysis
         if args.logs:
@@ -325,3 +352,4 @@ if __name__ == "__main__":
             print(f"🔭 Uncertain loop cases: {unc_count}")
 
     print(f"📊 Full report generated: {output_report}")
+
