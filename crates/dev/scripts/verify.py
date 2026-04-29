@@ -1,0 +1,327 @@
+#!/usr/bin/env python3
+"""Modern Format Boost - Conversion Analyzer & Integrity Verifier
+
+Combines log-based conversion analysis with filesystem-level integrity checking.
+Extracts modern format conversions, loop intent edge cases (Uncertain/KNN Bypass),
+and verifies that every source file has a corresponding optimized output.
+
+Usage:
+    # 1. Log analysis only
+    python3 verify.py logs/img_20260430.log
+
+    # 2. Integrity verification only
+    python3 verify.py --verify /path/to/SourceDir /path/to/OptimizedDir
+
+    # 3. Combined analysis (pass logs and use --verify)
+    python3 verify.py logs/img_*.log --verify /src /opt
+"""
+import argparse
+import os
+import re
+import sys
+from datetime import datetime
+from pathlib import Path
+
+
+# Console Output Colors
+if sys.stdout.isatty():
+    RED = "\033[38;5;196m"
+    GREEN = "\033[38;5;46m"
+    CYAN = "\033[38;5;51m"
+    YELLOW = "\033[38;5;226m"
+    BLUE = "\033[0;34m"
+    BOLD = "\033[1m"
+    DIM = "\033[2m"
+    NC = "\033[0m"
+    RESET = "\033[0m"
+else:
+    RED = GREEN = CYAN = YELLOW = BLUE = BOLD = DIM = NC = RESET = ""
+
+# ---------------------------------------------------------------------------
+# Constants from Integrity Verifier
+# ---------------------------------------------------------------------------
+IMG_EXTS = {
+    ".jpg", ".jpeg", ".jpe", ".jfif", ".png", ".webp",
+    ".heic", ".heif", ".avif", ".tiff", ".tif", ".bmp",
+}
+
+VID_EXTS = {
+    ".gif", ".mp4", ".mov", ".mkv", ".avi", ".webm",
+    ".m4v", ".wmv", ".flv",
+}
+
+OUTPUT_EXTS = {
+    ".jxl", ".avif", ".heic", ".heif", ".mp4", ".mov",
+    ".mkv", ".webm", ".jpg", ".jpeg", ".png", ".webp",
+    ".gif", ".tiff", ".tif", ".bmp",
+}
+
+MEDIA_EXTS = IMG_EXTS | VID_EXTS
+ALL_KNOWN_EXTS = MEDIA_EXTS | OUTPUT_EXTS
+SKIP_EXTS = {".xmp", ".ds_store", ".thumbs.db", ".desktop.ini"}
+
+# ---------------------------------------------------------------------------
+# Integrity Verification Logic
+# ---------------------------------------------------------------------------
+
+def is_media_file(path: Path) -> bool:
+    """Check if file is a media file (excludes XMP, hidden files, etc.)."""
+    if path.name.startswith("."):
+        return False
+    ext = path.suffix.lower()
+    if ext in SKIP_EXTS:
+        return False
+    return ext in ALL_KNOWN_EXTS
+
+
+def collect_media_files(directory: Path) -> dict[str, Path]:
+    """Walk directory and collect all media files mapping stem keys to paths."""
+    result: dict[str, Path] = {}
+    for root, _, files in os.walk(directory):
+        for fname in files:
+            full = Path(root) / fname
+            if not is_media_file(full):
+                continue
+            try:
+                rel = full.relative_to(directory)
+                key = str(rel.with_suffix("")).lower()
+                result[key] = full
+            except ValueError:
+                continue
+    return result
+
+
+def format_size(size_bytes: int) -> str:
+    """Format byte count into human-readable string."""
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    elif size_bytes < 1024 * 1024 * 1024:
+        return f"{size_bytes / (1024 * 1024):.1f} MB"
+    else:
+        return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
+
+
+def run_integrity_check(source_dir: Path, optimized_dir: Path, report_f):
+    """Perform integrity check and write results to the open report file handle."""
+    report_f.write("── INTEGRITY VERIFICATION ─────────────────────────────────────\n")
+    report_f.write(f"Source:    {source_dir}\n")
+    report_f.write(f"Optimized: {optimized_dir}\n\n")
+
+    if not source_dir.is_dir() or not optimized_dir.is_dir():
+        report_f.write("❌ Error: Source or Optimized directory missing.\n\n")
+        return
+
+    source_files = collect_media_files(source_dir)
+    optimized_files = collect_media_files(optimized_dir)
+
+    src_count = len(source_files)
+    opt_count = len(optimized_files)
+
+    report_f.write(f"Source files:    {src_count}\n")
+    report_f.write(f"Optimized files: {opt_count}\n")
+    
+    delta = opt_count - src_count
+    if delta == 0:
+        report_f.write("Count status:    MATCH\n")
+    else:
+        direction = "more" if delta > 0 else "fewer"
+        report_f.write(f"Count status:    MISMATCH ({abs(delta)} {direction} in optimized)\n")
+
+    # Matching logic
+    missing = []
+    matched = []
+    extra = []
+
+    for key, src_path in sorted(source_files.items()):
+        if key in optimized_files:
+            matched.append((key, src_path, optimized_files[key]))
+        else:
+            missing.append((key, src_path))
+
+    for key, opt_path in sorted(optimized_files.items()):
+        if key not in source_files:
+            extra.append((key, opt_path))
+
+    report_f.write(f"Matched:         {len(matched)}\n")
+    report_f.write(f"Missing:         {len(missing)}\n")
+    report_f.write(f"Extra:           {len(extra)}\n\n")
+
+    if missing:
+        report_f.write(f"--- Missing from Optimized ({len(missing)}) ---\n")
+        for _, src_path in missing:
+            rel = src_path.relative_to(source_dir)
+            report_f.write(f"  ✗ {rel}\n")
+        report_f.write("\n")
+
+    if extra:
+        report_f.write(f"--- Extra in Optimized ({len(extra)}) ---\n")
+        for _, opt_path in extra:
+            rel = opt_path.relative_to(optimized_dir)
+            report_f.write(f"  + {rel}\n")
+        report_f.write("\n")
+
+    # Space savings
+    total_src_size = 0
+    total_opt_size = 0
+    for _, src_path, opt_path in matched:
+        try:
+            total_src_size += src_path.stat().st_size
+            total_opt_size += opt_path.stat().st_size
+        except OSError:
+            pass
+
+    if total_src_size > 0:
+        savings = total_src_size - total_opt_size
+        savings_pct = (savings / total_src_size * 100)
+        report_f.write("--- Storage Impact (Matched Files) ---\n")
+        report_f.write(f"  Source total:    {format_size(total_src_size)}\n")
+        report_f.write(f"  Optimized total: {format_size(total_opt_size)}\n")
+        report_f.write(f"  Space saved:     {format_size(savings)} ({savings_pct:.1f}%)\n\n")
+
+# ---------------------------------------------------------------------------
+# Log Analysis Logic
+# ---------------------------------------------------------------------------
+
+def parse_logs(log_paths, report_f):
+    """Analyze logs and write results to the report file handle."""
+    result_pattern = re.compile(r"([\S\s]+?)\s*→\s*([\S\s]+?)\s*\(([^)]+)\)\s*([✅❌])")
+    activity_pattern = re.compile(r"🔄\s*Animated→([A-Z0-9\s]+)\s*\(([^)]+)\):\s*(.+)")
+    checking_pattern = re.compile(r"checking\s+([^\s]+)$")
+    uncertain_pattern = re.compile(r"Tree uncertain \(([^)]+)\) \[prob=([\d.]+)\].*falling back to Layer 6 KNN")
+    knn_bypass_pattern = re.compile(r"Loop DB unavailable or disabled — running tree without KNN")
+    tree_uncertain_pattern = re.compile(r"Tree-only result remained uncertain \(([^)]+)\)")
+
+    modern_exts = {".webp", ".avif", ".jxl", ".heic", ".heif"}
+    target_formats = {"GIF", "MOV", "MP4", "HEVC", "AV1"}
+
+    results = []
+    uncertain_cases = []
+    log_dir_path = Path("logs")
+
+    for path in log_paths:
+        p = Path(path)
+        files = list(p.glob("**/*.log")) + list(p.glob("**/error")) if p.is_dir() else [p]
+
+        for log_file in files:
+            current_file = None
+            try:
+                with open(log_file, encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+
+                        # Track file
+                        if (m := checking_pattern.search(line)):
+                            current_file = m.group(1).strip()
+
+                        # Conversions
+                        if (m := result_pattern.search(line)):
+                            source = m.group(1).split(">")[-1].strip()
+                            current_file = source
+                            target, msg, status_icon = m.group(2).strip(), m.group(3).strip(), m.group(4)
+                            if Path(source).suffix.lower() in modern_exts and any(f in target.upper() or f in msg.upper() for f in target_formats):
+                                results.append({"log": log_file.name, "source": source, "target": target, "status": "SUCCESS" if status_icon == "✅" else "FAILED", "details": msg})
+
+                        if (m := activity_pattern.search(line)):
+                            target_fmt, details, source = m.group(1).strip(), m.group(2).strip(), m.group(3).strip()
+                            current_file = source
+                            if Path(source).suffix.lower() in modern_exts and any(f in target_fmt.upper() for f in target_formats):
+                                results.append({"log": log_file.name, "source": source, "target": f"CONVERTED TO {target_fmt}", "status": "PROCESSING/UNKNOWN", "details": details})
+
+                        # Loop Intent
+                        if uncertain_pattern.search(line) or knn_bypass_pattern.search(line) or tree_uncertain_pattern.search(line):
+                            if current_file:
+                                reason, prob = "N/A", "N/A"
+                                if (u := uncertain_pattern.search(line)):
+                                    reason, prob = u.group(1), u.group(2)
+                                elif knn_bypass_pattern.search(line):
+                                    reason = "KNN Bypassed (DB Unavailable)"
+                                elif (t := tree_uncertain_pattern.search(line)):
+                                    reason = t.group(1)
+
+                                # Duplicate check
+                                if not any(c["file"] == current_file and c["log"] == log_file.name for c in uncertain_cases):
+                                    matching_folders = [item.name for item in log_dir_path.iterdir() if item.is_dir() and Path(current_file).stem in item.name] if log_dir_path.exists() else []
+                                    uncertain_cases.append({"file": current_file, "reason": reason, "probability": prob, "log": log_file.name, "matching_folders": matching_folders})
+
+            except Exception as e:
+                print(f"⚠️ Error reading {log_file}: {e}", file=sys.stderr)
+
+    # Dedup and write
+    unique_results = []
+    seen_res = set()
+    for r in results:
+        if (r["source"], r["target"]) not in seen_res:
+            unique_results.append(r)
+            seen_res.add((r["source"], r["target"]))
+
+    unique_uncertain = []
+    seen_unc = set()
+    for c in uncertain_cases:
+        if c["file"] not in seen_unc:
+            unique_uncertain.append(c)
+            seen_unc.add(c["file"])
+
+    report_f.write("── LOOP INTENT EDGE CASES (UNCERTAIN / KNN BYPASSED) ──────────\n")
+    if not unique_uncertain:
+        report_f.write("No uncertain loop intent cases found.\n\n")
+    else:
+        for i, c in enumerate(unique_uncertain, 1):
+            report_f.write(f"[{i}] FILE: {c['file']}\n    REASON: {c['reason']}\n    PROB:   {c['probability']}\n    LOG:    {c['log']}\n")
+            if c["matching_folders"]:
+                report_f.write(f"    FOLDERS: {', '.join(c['matching_folders'])}\n")
+            report_f.write("-" * 40 + "\n")
+        report_f.write("\n")
+
+    report_f.write("── MODERN TO LEGACY CONVERSIONS ───────────────────────────────\n")
+    if not unique_results:
+        report_f.write("No conversions found.\n")
+    else:
+        for i, r in enumerate(unique_results, 1):
+            report_f.write(f"[{i}] SOURCE: {r['source']}\n    TARGET: {r['target']}\n    STATUS: {r['status']}\n    INFO:   {r['details']}\n    LOG:    {r['log']}\n")
+            report_f.write("-" * 40 + "\n")
+
+    return len(unique_results), len(unique_uncertain)
+
+# ---------------------------------------------------------------------------
+# Main Execution
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="MFB Conversion Analyzer & Integrity Verifier")
+    parser.add_argument("logs", nargs="*", help="Log files or directories to scan.")
+    parser.add_argument("--verify", nargs="+", help="Explicit source and optimized directories for integrity check.")
+    parser.add_argument("-o", "--output", help="Custom output report path.")
+    
+    args = parser.parse_args()
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_report = args.output if args.output else f"logs/diagnostic_report_{timestamp}.txt"
+    os.makedirs(os.path.dirname(output_report), exist_ok=True) if os.path.dirname(output_report) else None
+
+    with open(output_report, "w", encoding="utf-8") as report_f:
+        report_f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+        report_f.write("      MODERN FORMAT BOOST - DIAGNOSTIC ANALYSIS REPORT\n")
+        report_f.write(f"      Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        report_f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
+
+        # 1. Integrity Check
+        if args.verify:
+            if len(args.verify) >= 2:
+                src, opt = Path(args.verify[0]).resolve(), Path(args.verify[1]).resolve()
+            else:
+                # Auto-detect attempt (basic)
+                src = Path(args.verify[0]).resolve()
+                opt = Path(str(src) + "_optimized")
+            run_integrity_check(src, opt, report_f)
+
+        # 2. Log Analysis
+        if args.logs:
+            conv_count, unc_count = parse_logs(args.logs, report_f)
+            print(f"📈 Total conversion events: {conv_count}")
+            print(f"🔭 Uncertain loop cases: {unc_count}")
+
+    print(f"📊 Full report generated: {output_report}")

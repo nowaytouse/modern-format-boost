@@ -560,8 +560,8 @@ def select_mode():
                     display_text = "Tool: Merge XMP Attachments [Tab to Switch]"
                     desc = "Automatically embed XMP sidecars into source media files safely."
                 else:
-                    display_text = "Tool: Verify Integrity [Tab to Switch]"
-                    desc = "Check that all media files were processed without loss."
+                    display_text = "Tool: Diagnostic Analysis [Tab to Switch]"
+                    desc = "Analyze logs for edge cases and verify output integrity."
 
                 if is_selected:
                     if "Console" in globals():
@@ -700,14 +700,28 @@ def select_mode():
                             pass
                         continue
                     elif tools_sub_state == 3:
-                        OUTPUT_MODE = "verify_integrity"
-                        print(f"\n{GREEN}VERIFY INTEGRITY SELECTED{RESET}")
-                        print(f"   Target: {DIM}{TARGET_DIR}{RESET}\n")
-                        verify_script = SCRIPT_DIR / "verify_integrity.py"
+                        OUTPUT_MODE = "diagnostic_analysis"
+                        print(f"\n{GREEN}DIAGNOSTIC ANALYSIS SELECTED{RESET}")
+                        print(f"   Target: {DIM}{TARGET_DIR}{RESET}")
+                        print(f"   Logs:   {DIM}{LOG_DIR}{RESET}\n")
+                        
+                        # Consolidated Diagnostic Tool
+                        diag_script = SCRIPT_DIR / "verify.py"
+                        
+                        # Determine optimized dir for verification
+                        tdir = Path(TARGET_DIR).resolve()
+                        opt_dir = tdir.parent / (tdir.name + "_optimized")
+                        if not opt_dir.is_dir():
+                            # Secondary fallback
+                            opt_dir = tdir.parent / (tdir.name + "__optimized")
+
+                        cmd = [sys.executable, str(diag_script), str(LOG_DIR)]
+                        if opt_dir.is_dir():
+                            cmd.extend(["--verify", str(TARGET_DIR), str(opt_dir)])
+                        
                         drain_stdin()
-                        subprocess.run(
-                            [sys.executable, str(verify_script), str(TARGET_DIR)]
-                        )
+                        subprocess.run(cmd)
+                        
                         print(f"\n   {CYAN}Press Enter to return to menu...{RESET}")
                         drain_stdin()
                         try:

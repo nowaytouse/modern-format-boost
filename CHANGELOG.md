@@ -6,16 +6,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### 🔧 Tooling: Post-Processing Integrity Verifier
+### 🔧 Tooling
 
-- **New Tool**: `verify_integrity.py` — checks that every media file in the source directory has a corresponding output in the optimized directory and reports any discrepancies. This is a purely diagnostic tool with no side effects.
-  - **File Count Consistency**: Compares total file counts (with image/video breakdown) between source and optimized directories, reporting exact numbers and any delta.
-  - **Stem-Based Cross-Format Matching**: Matches `photo.png` → `photo.jxl`, `clip.mov` → `clip.mp4`, etc., so format conversions are correctly recognized.
-  - **Discrepancy Reporting**: Lists every missing file, extra file, and missing subdirectory with relative paths and file sizes.
-  - **Log Output**: Writes a full detailed report (all matched files, all missing files, all extras) to `logs/verify_<project>_<timestamp>.log` for archival and review.
-  - **Auto-Detect Mode**: Pass an `__optimized` or `_optimized` directory and the tool automatically locates the adjacent source directory.
-  - **Explicit Mode**: Pass both source and optimized directories for full control.
-  - **XMP Exclusion**: `.xmp` sidecar files and hidden files are excluded from verification.
+- **Consolidated Diagnostic Tool**: `verify.py` (formerly `log_conversion_analyzer.py`) — a unified script for media optimization analysis.
+  - **Integrated Analysis**: Combines filesystem-level integrity checking (from the deprecated `verify_integrity.py`) with log-based loop intent and conversion extraction.
+  - **Edge Case Extraction**: Specifically identifies files where the decision tree remained uncertain or where the KNN system was bypassed due to missing database connectivity.
+  - **Contextual File Association**: Tracks the current file being processed in the log stream to accurately associate diagnostic messages with specific media assets.
+  - **Log Artifact Discovery**: Automatically searches the `logs/` directory for folders matching the filenames of uncertain assets, helping to locate additional diagnostic artifacts or frame samples.
+  - **Unified Reporting**: Generates a comprehensive `diagnostic_report_<timestamp>.txt` in the `logs/` folder containing both integrity mismatches and conversion edge cases.
 - **Menu Integration**: Added as the 4th option in the Workspace Tools tab of `drag_and_drop_processor.py` (`Tab` to cycle → "Tool: Verify Integrity").
   - **Manual Return**: Replaced the automatic 3-second menu return with a manual `Enter` key confirmation for all workspace tools, ensuring users have enough time to review long reports and verification results.
 
