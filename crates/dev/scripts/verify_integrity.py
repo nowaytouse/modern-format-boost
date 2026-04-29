@@ -211,6 +211,57 @@ def verify_integrity(source_dir: Path, optimized_dir: Path) -> int:
         print(f"{YELLOW}⚠️  No media files found in source directory.{RESET}")
         return 0
 
+    # =========================================================================
+    # Layer 0: File Count Consistency (Hard Gate)
+    # This is the single most important verification — if the counts don't
+    # match, something was lost or duplicated regardless of name matching.
+    # =========================================================================
+    src_count = len(source_files)
+    opt_count = len(optimized_files)
+
+    # Break down by category for granular diagnosis
+    src_img = sum(1 for p in source_files.values() if p.suffix.lower() in IMG_EXTS)
+    src_vid = sum(1 for p in source_files.values() if p.suffix.lower() in VID_EXTS)
+    opt_img = sum(
+        1 for p in optimized_files.values() if p.suffix.lower() in (IMG_EXTS | {".jxl"})
+    )
+    opt_vid = sum(
+        1
+        for p in optimized_files.values()
+        if p.suffix.lower() in VID_EXTS
+        and p.suffix.lower() not in (IMG_EXTS | {".jxl"})
+    )
+    # Files that converted format (e.g. .png → .jxl) won't cleanly split,
+    # so we use total count as the authoritative gate.
+
+    print(f"{DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{RESET}")
+    print(f"{BOLD}Layer 0: File Count Consistency{RESET}\n")
+
+    count_ok = src_count == opt_count
+    if count_ok:
+        print(f"  {GREEN}✅ Total Count: {src_count} == {opt_count} (MATCH){RESET}")
+    else:
+        delta = opt_count - src_count
+        direction = "more" if delta > 0 else "fewer"
+        print(
+            f"  {RED}❌ Total Count: Source={src_count}  Optimized={opt_count}  "
+            f"({abs(delta)} {direction}){RESET}"
+        )
+
+    print(f"  {DIM}   Source  → Images: {src_img}  Videos: {src_vid}{RESET}")
+    print(f"  {DIM}   Output  → Images: {opt_img}  Videos: {opt_vid}{RESET}")
+
+    if not count_ok:
+        print(
+            f"\n  {RED}{BOLD}⛔ COUNT MISMATCH — processing is incomplete or has duplicates.{RESET}"
+        )
+
+    # =========================================================================
+    # Layer 1: Stem-Based Cross-Reference
+    # =========================================================================
+    print(f"\n{DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{RESET}")
+    print(f"{BOLD}Layer 1: Stem-Based Cross-Reference{RESET}\n")
+
     # Cross-reference: every source file should have a match in optimized
     missing: list[tuple[str, Path]] = []
     matched: list[tuple[str, Path, Path]] = []
@@ -239,9 +290,11 @@ def verify_integrity(source_dir: Path, optimized_dir: Path) -> int:
         except OSError:
             pass
 
-    # Print results
-    print(f"{DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{RESET}")
-    print(f"{BOLD}Verification Results:{RESET}\n")
+    # =========================================================================
+    # Layer 2: Detailed Results
+    # =========================================================================
+    print(f"\n{DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{RESET}")
+    print(f"{BOLD}Layer 2: Detailed Results{RESET}\n")
 
     # Matched files summary
     match_rate = (len(matched) / len(source_files) * 100) if source_files else 0
@@ -323,16 +376,23 @@ def verify_integrity(source_dir: Path, optimized_dir: Path) -> int:
 
     # Final verdict
     print(f"\n{DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{RESET}")
-    if not missing and not missing_dirs:
+    all_ok = count_ok and not missing and not missing_dirs
+    if all_ok:
         print(
-            f"{GREEN}{BOLD}🌟 INTEGRITY VERIFIED: All {len(source_files)} media files accounted for.{RESET}"
+            f"{GREEN}{BOLD}🌟 INTEGRITY VERIFIED: All {len(source_files)} media files "
+            f"accounted for ({src_count} → {opt_count}).{RESET}"
         )
         return 0
     else:
-        total_issues = len(missing) + len(missing_dirs)
-        print(
-            f"{RED}{BOLD}⚠️  INTEGRITY CHECK FAILED: {total_issues} issue(s) detected.{RESET}"
-        )
+        issues: list[str] = []
+        if not count_ok:
+            issues.append(f"count mismatch ({src_count} vs {opt_count})")
+        if missing:
+            issues.append(f"{len(missing)} file(s) missing")
+        if missing_dirs:
+            issues.append(f"{len(missing_dirs)} dir(s) missing")
+        summary = ", ".join(issues)
+        print(f"{RED}{BOLD}⚠️  INTEGRITY CHECK FAILED: {summary}{RESET}")
         print(f"{DIM}   Processing may be incomplete. Check logs for errors.{RESET}")
         return 1
 

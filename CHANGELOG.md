@@ -9,10 +9,11 @@ All notable changes to this project will be documented in this file.
 ### 🔧 Tooling: Post-Processing Integrity Verifier
 
 - **New Tool**: `verify_integrity.py` — validates that every media file in the source directory has a corresponding output in the optimized directory, ensuring zero data loss during batch processing.
-  - **Stem-Based Cross-Format Matching**: Matches `photo.png` → `photo.jxl`, `clip.mov` → `clip.mp4`, etc., so format conversions are correctly recognized as successful outputs.
+  - **Layer 0 — File Count Consistency (Hard Gate)**: The most critical check. Compares raw file counts (total, images, videos) between source and optimized directories. A count mismatch is treated as a hard failure regardless of name matching results.
+  - **Layer 1 — Stem-Based Cross-Format Matching**: Matches `photo.png` → `photo.jxl`, `clip.mov` → `clip.mp4`, etc., so format conversions are correctly recognized as successful outputs.
+  - **Layer 2 — Detailed Report**: Match rate percentage, total size comparison with space savings, missing files list, extra files list, and missing subdirectory structure audit.
   - **Auto-Detect Mode**: Pass an `__optimized` or `_optimized` directory and the tool automatically locates the adjacent source directory.
   - **Explicit Mode**: Pass both source and optimized directories for full control.
-  - **Reports**: Match rate percentage, total size comparison with space savings, missing files, extra files, and missing subdirectory structures.
   - **XMP Exclusion**: `.xmp` sidecar files and hidden files are excluded from verification.
 - **Menu Integration**: Added as the 4th option in the Workspace Tools tab of `drag_and_drop_processor.py` (`Tab` to cycle → "Tool: Verify Integrity").
 
