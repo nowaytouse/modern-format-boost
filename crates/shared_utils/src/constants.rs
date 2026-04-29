@@ -187,14 +187,14 @@ pub const ENV_FORCE_QUALITY_KNN: &str = "MODERN_FORMAT_FORCE_QUALITY_KNN";
 // These thresholds gate both the GIF/Video KNN and the static image quality KNN.
 
 /// Minimum total labeled samples required for GIF/Video KNN to engage.
-/// Below this count, data is too sparse to be representative.
-pub const MIN_GIF_SAMPLES_TOTAL: i64 = 150;
+/// The V7 seed database provides 30 highly-curated boundary samples.
+pub const MIN_GIF_SAMPLES_TOTAL: i64 = 30;
 /// Minimum samples per class (high/video) for GIF/Video KNN.
-/// Without both sides of the decision boundary, KNN will be biased toward one class.
+/// The V7 seed database provides exactly 10 LoopWeak and 20 LoopStrong.
 pub const MIN_GIF_SAMPLES_PER_CLASS: i64 = 10;
 
 /// Minimum total labeled samples required for static image KNN to engage.
-pub const MIN_QUALITY_SAMPLES_TOTAL: i64 = 50;
+pub const MIN_QUALITY_SAMPLES_TOTAL: i64 = 30;
 /// Minimum samples per class (high/low) for static image KNN.
 pub const MIN_QUALITY_SAMPLES_PER_CLASS: i64 = 10;
 
