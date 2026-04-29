@@ -113,6 +113,15 @@ enum Commands {
         #[arg(value_name = "INPUT")]
         input: PathBuf,
     },
+
+    /// Batch ingest unannotated static image samples into SQLite database for Active Learning
+    IngestSamples {
+        #[arg(value_name = "INPUT_DIR")]
+        input: PathBuf,
+
+        #[arg(short, long)]
+        label: Option<String>,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -155,7 +164,9 @@ fn main() -> anyhow::Result<()> {
             original: input, ..
         }
         | Commands::RestoreTimestamps { source: input, .. }
-        | Commands::LockCheck { input } => Some(input),
+        | Commands::LockCheck { input }
+        | Commands::PathHash { input } => Some(input),
+        Commands::IngestSamples { input, .. } => Some(input),
         _ => None,
     };
 
@@ -436,6 +447,46 @@ fn main() -> anyhow::Result<()> {
         Commands::PathHash { input } => {
             let hash = shared_utils::hash_path_to_hex(&input).unwrap_or_else(|_| "err".to_string());
             println!("{hash}");
+        }
+
+        Commands::IngestSamples { input, label } => {
+            let mut conn = shared_utils::database::open_pg_client()?;
+            shared_utils::image_quality_db::init_quality_schema(&mut conn)?;
+
+            let mut count = 0;
+            let mut dirs_to_visit = vec![input.clone()];
+            
+            while let Some(dir) = dirs_to_visit.pop() {
+                if let Ok(entries) = std::fs::read_dir(&dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_dir() {
+                            dirs_to_visit.push(path);
+                        } else if path.is_file() {
+                            let ext = path
+                                .extension()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("")
+                                .to_lowercase();
+                            
+                            if ["jpg", "jpeg", "png", "heic", "heif", "jxl", "tiff", "bmp", "webp"].contains(&ext.as_str()) {
+                                let default_label = label.clone().unwrap_or_else(|| "low".to_string());
+                                if let Err(e) = shared_utils::image_quality_db::ingest_quality_sample(
+                                    &mut conn,
+                                    &path,
+                                    &default_label,
+                                    "fusion_v1",
+                                ) {
+                                    eprintln!("⚠️ Failed to ingest {}: {}", path.display(), e);
+                                } else {
+                                    count += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            println!("✅ Successfully ingested {} static image samples.", count);
         }
     }
 
