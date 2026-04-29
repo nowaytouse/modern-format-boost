@@ -362,7 +362,7 @@ impl BatchResult {
         self.paused_remaining = remaining;
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn success_rate(&self) -> f64 {
         if self.total == 0 {
             100.0

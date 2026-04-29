@@ -31,7 +31,7 @@ impl<T> PenetrationResult<T> {
 
 /// Penetrating audio detection: decode and analyze actual audio samples.
 /// Returns `Verified(true)` if silent, `Verified(false)` if audible, `Failed` on error.
-#[must_use] 
+#[must_use]
 pub fn detect_audio_silence(path: &Path) -> PenetrationResult<bool> {
     const SILENCE_THRESHOLD_DB: f64 = -70.0;
 
@@ -49,9 +49,7 @@ pub fn detect_audio_silence(path: &Path) -> PenetrationResult<bool> {
     {
         Ok(out) => out,
         Err(e) => {
-            emit_stderr(&format!(
-                "⚠️  Audio penetration failed: ffmpeg error ({e})"
-            ));
+            emit_stderr(&format!("⚠️  Audio penetration failed: ffmpeg error ({e})"));
             return PenetrationResult::Failed;
         }
     };
@@ -90,7 +88,7 @@ pub fn detect_audio_silence(path: &Path) -> PenetrationResult<bool> {
 ///
 /// Uses stratified sampling first, then falls back to full decode if suspicious.
 /// Returns `Verified(true)` if alpha is used, `Verified(false)` if fake, `Skipped` if no claim.
-#[must_use] 
+#[must_use]
 pub fn detect_real_transparency(path: &Path, duration: Option<f64>) -> PenetrationResult<bool> {
     // Phase 1: Stratified Sampling (fast check)
     // Sample up to 3 points in time to catch most cases efficiently.
@@ -142,10 +140,7 @@ pub fn detect_real_transparency(path: &Path, duration: Option<f64>) -> Penetrati
         // Parse "lavfi.stats.0.Min" from stderr
         for line in stderr.lines() {
             if let Some(idx) = line.find("lavfi.stats.0.Min:") {
-                let min_str = line[idx + 18..]
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or("");
+                let min_str = line[idx + 18..].split_whitespace().next().unwrap_or("");
                 if let Ok(min_val) = min_str.parse::<f64>() {
                     if min_val < 255.0 {
                         found_transparency = true;
@@ -204,10 +199,7 @@ pub fn detect_real_transparency(path: &Path, duration: Option<f64>) -> Penetrati
         // Check all frames for any Min < 255
         for line in stderr.lines() {
             if let Some(idx) = line.find("lavfi.stats.0.Min:") {
-                let min_str = line[idx + 18..]
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or("");
+                let min_str = line[idx + 18..].split_whitespace().next().unwrap_or("");
                 if let Ok(min_val) = min_str.parse::<f64>() {
                     if min_val < 255.0 {
                         emit_stderr("   Full decode found transparency in at least one frame");
@@ -225,7 +217,7 @@ pub fn detect_real_transparency(path: &Path, duration: Option<f64>) -> Penetrati
 
 /// Penetrating frame count detection: decode and count actual frames via ffmpeg summary.
 /// Returns `Verified(count)` with real count, `Skipped` if claim is reasonable.
-#[must_use] 
+#[must_use]
 pub fn detect_real_frame_count(path: &Path, claimed_frame_count: u64) -> PenetrationResult<u64> {
     // Only verify suspicious claims (≤1 or >50000)
     if claimed_frame_count > 1 && claimed_frame_count <= 50000 {
@@ -295,7 +287,7 @@ pub fn detect_real_frame_count(path: &Path, claimed_frame_count: u64) -> Penetra
 ///
 /// Returns `Verified(true)` if interlacing is physically detected, `Verified(false)` if progressive.
 /// `Skipped` if the check isn't necessary.
-#[must_use] 
+#[must_use]
 pub fn detect_interlacing(path: &Path) -> PenetrationResult<bool> {
     // Only sample the first 24 frames (~1 second) to keep the penetration fast.
     let output = match crate::ffmpeg_builder::FfmpegBuilder::new()
@@ -326,17 +318,11 @@ pub fn detect_interlacing(path: &Path) -> PenetrationResult<bool> {
             let mut bff = 0;
 
             if let Some(tff_idx) = line.find("TFF:") {
-                let s = line[tff_idx + 4..]
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or("0");
+                let s = line[tff_idx + 4..].split_whitespace().next().unwrap_or("0");
                 tff = s.parse::<u64>().unwrap_or(0);
             }
             if let Some(bff_idx) = line.find("BFF:") {
-                let s = line[bff_idx + 4..]
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or("0");
+                let s = line[bff_idx + 4..].split_whitespace().next().unwrap_or("0");
                 bff = s.parse::<u64>().unwrap_or(0);
             }
 
@@ -370,14 +356,14 @@ pub struct PenetrationSummary {
 }
 
 impl PenetrationSummary {
-    #[must_use] 
+    #[must_use]
     pub const fn has_any_mismatch(&self) -> bool {
         self.audio_result.is_some()
             || matches!(self.transparency_result, Some(false))
             || self.frame_count_mismatch.is_some()
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn report(&self) -> String {
         let mut lines = Vec::new();
 

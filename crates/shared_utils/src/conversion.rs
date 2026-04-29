@@ -793,7 +793,7 @@ impl ConvertOptions {
         crate::is_apple_native_format(&input_ext)
     }
 
-    #[must_use] 
+    #[must_use]
     pub const fn should_delete_original(&self) -> bool {
         self.delete_original || self.in_place
     }

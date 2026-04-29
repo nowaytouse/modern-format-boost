@@ -42,7 +42,7 @@ use std::cmp::Ordering;
 /// This ensures transitivity: if A > B and B > None, then A > None.
 /// NOTE: When used with `min_by`, this correctly selects the highest quality candidate.
 #[inline]
-#[must_use] 
+#[must_use]
 pub fn compare_quality_desc(left: Option<f64>, right: Option<f64>, epsilon: f64) -> Ordering {
     match (left, right) {
         (Some(left), Some(right)) => {
@@ -64,7 +64,7 @@ pub fn compare_quality_desc(left: Option<f64>, right: Option<f64>, epsilon: f64)
 /// This ensures transitivity: if A < B and B < None, then A < None.
 /// NOTE: When used with `min_by`, this correctly selects the lowest value candidate.
 #[inline]
-#[must_use] 
+#[must_use]
 pub fn compare_quality_asc(left: Option<f64>, right: Option<f64>, epsilon: f64) -> Ordering {
     match (left, right) {
         (Some(left), Some(right)) => {
@@ -84,7 +84,7 @@ pub fn compare_quality_asc(left: Option<f64>, right: Option<f64>, epsilon: f64) 
 ///
 /// Uses the floor (minimum) of each pair as the primary comparison, then individual components.
 #[inline]
-#[must_use] 
+#[must_use]
 pub fn compare_quality_pair_desc(
     left: Option<(f64, f64)>,
     right: Option<(f64, f64)>,
@@ -106,7 +106,7 @@ pub fn compare_quality_pair_desc(
 ///
 /// Used as a gate check before other comparisons.
 #[inline]
-#[must_use] 
+#[must_use]
 pub const fn compare_pass_gate(left_passed: bool, right_passed: bool) -> Ordering {
     match (left_passed, right_passed) {
         (true, false) => Ordering::Less,
@@ -123,7 +123,7 @@ pub const fn compare_pass_gate_result<E>(left: &Result<(), E>, right: &Result<()
 
 /// Compares file sizes: smaller is better (ascending order).
 #[inline]
-#[must_use] 
+#[must_use]
 pub fn compare_size_asc(left: u64, right: u64) -> Ordering {
     left.cmp(&right)
 }
@@ -131,7 +131,7 @@ pub fn compare_size_asc(left: u64, right: u64) -> Ordering {
 /// Compares CRF values: lower/more aggressive CRF is slightly preferred as tiebreaker.
 /// (Higher CRF means lower quality; we prefer candidates that achieved compression at lower CRF.)
 #[inline]
-#[must_use] 
+#[must_use]
 pub fn compare_crf_asc(left: f32, right: f32) -> Ordering {
     left.total_cmp(&right)
 }
@@ -139,7 +139,7 @@ pub fn compare_crf_asc(left: f32, right: f32) -> Ordering {
 /// Compares distance values for JXL: higher distance = more compression.
 /// Prefer higher distance (reversed comparison).
 #[inline]
-#[must_use] 
+#[must_use]
 pub fn compare_distance_desc(left: f32, right: f32) -> Ordering {
     right.total_cmp(&left)
 }

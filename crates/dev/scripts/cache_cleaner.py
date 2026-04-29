@@ -25,7 +25,6 @@ import json
 import sqlite3
 import argparse
 from pathlib import Path
-from typing import Optional
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 PROJECT_ROOT = SCRIPT_DIR.parent.parent.parent

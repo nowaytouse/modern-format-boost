@@ -9,6 +9,18 @@ import os
 import subprocess
 from pathlib import Path
 import shutil
+import ctypes
+from ctypes import (
+    c_char_p,
+    c_uint32,
+    c_int32,
+    c_void_p,
+    c_size_t,
+    Structure,
+    c_uint16,
+    c_int64,
+    byref,
+)
 
 # Console Output Colors
 if sys.stdout.isatty():
@@ -166,7 +178,7 @@ def find_media_match(xmp_path: Path) -> tuple[Path | None, str]:
     parent = xmp_path.parent
     xmp_name = xmp_path.name
     xmp_stem = xmp_path.stem
-    xmp_ext = xmp_path.suffix.lower()
+    xmp_path.suffix.lower()
 
     candidates = generate_candidates(parent)
 
@@ -255,19 +267,6 @@ def find_media_match(xmp_path: Path) -> tuple[Path | None, str]:
 
     return None, "No match"
 
-
-import ctypes
-from ctypes import (
-    c_char_p,
-    c_uint32,
-    c_int32,
-    c_void_p,
-    c_size_t,
-    Structure,
-    c_uint16,
-    c_int64,
-    byref,
-)
 
 # Define libc for macOS
 try:

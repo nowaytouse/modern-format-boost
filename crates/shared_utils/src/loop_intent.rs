@@ -104,7 +104,7 @@ pub enum DurationTier {
 }
 
 impl DurationTier {
-    #[must_use] 
+    #[must_use]
     pub fn from_secs(secs: f64) -> Self {
         if secs <= crate::constants::DURATION_TIER_ULTRA_SHORT_LIMIT {
             Self::UltraShort
@@ -208,7 +208,7 @@ pub struct LoopMeta {
 
 impl LoopMeta {
     /// Build `LoopMeta` from a full `VideoDetectionResult`.
-    #[must_use] 
+    #[must_use]
     pub fn from_video_detection(detection: &VideoDetectionResult) -> Self {
         let file_path = Path::new(&detection.file_path);
         let file_name = file_path
@@ -315,7 +315,7 @@ impl LoopMeta {
     }
 
     /// Build `LoopMeta` from an `FFprobeResult` (used in pipelines without full detection).
-    #[must_use] 
+    #[must_use]
     pub fn from_ffprobe_result(probe: &crate::ffprobe::FFprobeResult, path: &Path) -> Self {
         let file_name = path
             .file_name()
@@ -420,7 +420,7 @@ impl LoopMeta {
     }
 
     /// Build `LoopMeta` from a `GIF` file using header-level scanning (fast, no `ffprobe`).
-    #[must_use] 
+    #[must_use]
     pub fn from_gif_path(path: &Path) -> Option<Self> {
         let scan = crate::media_meta_utils::scan_gif_headers(path).ok()?;
 
@@ -540,7 +540,7 @@ impl LoopMeta {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn should_sample_webp_compression_ratio(&self) -> bool {
         self.width >= 64 && self.height >= 64 && self.duration_secs > 0.05
     }
@@ -553,7 +553,7 @@ impl LoopMeta {
     }
 
     /// Returns the duration tier, falling back to calculation if the cached field is None.
-    #[must_use] 
+    #[must_use]
     pub fn tier(&self) -> DurationTier {
         self.duration_tier
             .unwrap_or_else(|| DurationTier::from_secs(self.duration_secs))
@@ -661,7 +661,10 @@ impl LoopThresholds {
                 .min(median_scaled.max(0.35))
                 .clamp(0.35, reference.collection.duration_p90.max(0.35))
         } else {
-            reference.duration.std_dev.mul_add(0.25, reference.duration.mean)
+            reference
+                .duration
+                .std_dev
+                .mul_add(0.25, reference.duration.mean)
                 .clamp(crate::constants::DEFAULT_LOOP_BASELINE_DURATION_SECS, 4.5)
         };
         let short_clip_secs = reference
@@ -669,7 +672,10 @@ impl LoopThresholds {
             .p50
             .or(reference.duration.p75.map(|value| value.min(8.0)))
             .unwrap_or(
-                reference.duration.std_dev.mul_add(0.50, reference.duration.mean)
+                reference
+                    .duration
+                    .std_dev
+                    .mul_add(0.50, reference.duration.mean)
                     .clamp(duration_override_secs + 1.0, 8.0),
             )
             .max(duration_override_secs + 0.5);
@@ -839,11 +845,15 @@ fn loop_count_zero_bonus(meta: &LoopMeta, _thresholds: &LoopThresholds) -> f64 {
         DurationTier::UltraShort | DurationTier::Short => {
             crate::constants::LOOP_COUNT_ZERO_BONUS_MAX
         }
-        DurationTier::MediumLong => {
-            crate::constants::LOOP_COUNT_ZERO_BONUS_DECAY_MAX.mul_add(-crate::constants::LOOP_COUNT_ZERO_BONUS_DECAY_MEDIUM, crate::constants::LOOP_COUNT_ZERO_BONUS_MAX)
-        }
+        DurationTier::MediumLong => crate::constants::LOOP_COUNT_ZERO_BONUS_DECAY_MAX.mul_add(
+            -crate::constants::LOOP_COUNT_ZERO_BONUS_DECAY_MEDIUM,
+            crate::constants::LOOP_COUNT_ZERO_BONUS_MAX,
+        ),
         DurationTier::Long | DurationTier::VeryLong => {
-            crate::constants::LOOP_COUNT_ZERO_BONUS_DECAY_MAX.mul_add(-crate::constants::LOOP_COUNT_ZERO_BONUS_DECAY_LONG, crate::constants::LOOP_COUNT_ZERO_BONUS_MAX)
+            crate::constants::LOOP_COUNT_ZERO_BONUS_DECAY_MAX.mul_add(
+                -crate::constants::LOOP_COUNT_ZERO_BONUS_DECAY_LONG,
+                crate::constants::LOOP_COUNT_ZERO_BONUS_MAX,
+            )
         }
         _ => crate::constants::LOOP_COUNT_ZERO_BONUS_MIN,
     }
@@ -881,8 +891,14 @@ fn evaluate_kinetics_and_physics(
         log_odds.add(-crate::constants::SCENE_CUT_NEGATIVE_LOG_ODDS);
     }
 
-    let compactness_signal =
-        (-thresholds.file_size_z(crate::numeric_cast::u64_to_f64(meta.file_size_bytes))).max(0.0).mul_add(crate::constants::COMPACTNESS_SIGNAL_SIZE_WEIGHT, (-thresholds.pixels_z(total_pixels)).max(0.0) * crate::constants::COMPACTNESS_SIGNAL_PIXELS_WEIGHT);
+    let compactness_signal = (-thresholds
+        .file_size_z(crate::numeric_cast::u64_to_f64(meta.file_size_bytes)))
+    .max(0.0)
+    .mul_add(
+        crate::constants::COMPACTNESS_SIGNAL_SIZE_WEIGHT,
+        (-thresholds.pixels_z(total_pixels)).max(0.0)
+            * crate::constants::COMPACTNESS_SIGNAL_PIXELS_WEIGHT,
+    );
     if !meta.has_audio && compactness_signal > 0.0 {
         log_odds.add(
             (compactness_signal + crate::constants::COMPACTNESS_SIGNAL_BIAS)
@@ -893,7 +909,12 @@ fn evaluate_kinetics_and_physics(
 
     let large_media_signal = thresholds
         .file_size_z(crate::numeric_cast::u64_to_f64(meta.file_size_bytes))
-        .max(0.0).mul_add(crate::constants::LARGE_MEDIA_SIGNAL_SIZE_WEIGHT, thresholds.pixels_z(total_pixels).max(0.0) * crate::constants::LARGE_MEDIA_SIGNAL_PIXELS_WEIGHT);
+        .max(0.0)
+        .mul_add(
+            crate::constants::LARGE_MEDIA_SIGNAL_SIZE_WEIGHT,
+            thresholds.pixels_z(total_pixels).max(0.0)
+                * crate::constants::LARGE_MEDIA_SIGNAL_PIXELS_WEIGHT,
+        );
     if large_media_signal > 0.0 {
         let audio_multiplier = if meta.has_audio {
             1.0
@@ -1197,7 +1218,8 @@ fn apply_weak_heuristics(
         let support_relief = if z.is_sign_negative() && loop_support >= 0.80 {
             0.35
         } else if (z.is_sign_negative() && short_silent_asset)
-            || (z.is_sign_positive() && !(short_silent_asset || is_image || derived.localized_motion))
+            || (z.is_sign_positive()
+                && !(short_silent_asset || is_image || derived.localized_motion))
         {
             0.55
         } else {
@@ -1337,7 +1359,7 @@ fn finalize(verdict: LoopIntentVerdict, lo: LogOdds) -> TreeEvaluation {
     }
 }
 
-#[must_use] 
+#[must_use]
 pub fn evaluate_loop_tree(
     meta: &LoopMeta,
     reference_profile: Option<&LoopReferenceProfile>,
@@ -1881,8 +1903,10 @@ fn logistic_regression_fusion(
         (clamped / (1.0 - clamped)).ln()
     };
 
-    let score = density_signal.mul_add(LAYER6_LR_W_DENSITY, (logit(knn_prob) * LAYER6_LR_W_KNN) + (logit(tree_prob) * LAYER6_LR_W_TREE))
-        + LAYER6_LR_BIAS;
+    let score = density_signal.mul_add(
+        LAYER6_LR_W_DENSITY,
+        (logit(knn_prob) * LAYER6_LR_W_KNN) + (logit(tree_prob) * LAYER6_LR_W_TREE),
+    ) + LAYER6_LR_BIAS;
 
     // Apply sigmoid once to convert the log-odds-weighted sum back to probability
     let fused_prob = 1.0 / (1.0 + (-score).exp());
@@ -1967,16 +1991,10 @@ fn layer6_directional_arbitration(
         let conf = confidence.unwrap_or(0.55).clamp(0.35, 1.0);
         if knn_keep >= 0.65 {
             let delta = (((knn_keep - 0.5) * 0.90) * conf).clamp(0.08, 0.28);
-            arbitration.add_keep(
-                delta,
-                format!("KNN keep {knn_keep:.2} @ conf {conf:.2}"),
-            );
+            arbitration.add_keep(delta, format!("KNN keep {knn_keep:.2} @ conf {conf:.2}"));
         } else if knn_keep <= 0.35 {
             let delta = (((0.5 - knn_keep) * 0.90) * conf).clamp(0.08, 0.28);
-            arbitration.add_convert(
-                delta,
-                format!("KNN keep {knn_keep:.2} @ conf {conf:.2}"),
-            );
+            arbitration.add_convert(delta, format!("KNN keep {knn_keep:.2} @ conf {conf:.2}"));
         }
     }
 
@@ -2120,7 +2138,7 @@ fn layer6_directional_arbitration(
 /// # Errors
 /// Returns an error if the underlying database fetches fail or the
 /// classification logic encounters an IO error.
-#[must_use] 
+#[must_use]
 pub fn assess_loop_intent(detection: &VideoDetectionResult) -> LoopIntentVerdict {
     let meta = LoopMeta::from_video_detection(detection);
     assess_loop_intent_from_meta(&meta, Some(Path::new(&detection.file_path)))
@@ -2131,7 +2149,7 @@ pub fn assess_loop_intent(detection: &VideoDetectionResult) -> LoopIntentVerdict
 /// # Errors
 /// Returns an error if the underlying database fetches fail or the
 /// classification logic encounters an IO error.
-#[must_use] 
+#[must_use]
 pub fn assess_loop_intent_from_probe(
     probe: &crate::ffprobe::FFprobeResult,
     path: &Path,
@@ -2146,7 +2164,7 @@ pub fn assess_loop_intent_from_probe(
 /// # Errors
 /// Returns an error if the underlying database fetches fail or the
 /// classification logic encounters an IO error during visual sampling.
-#[must_use] 
+#[must_use]
 pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> LoopIntentVerdict {
     use crate::database::{
         fetch_loop_reference_profile, log_inference_record, lookup_similar_samples, open_pg_client,
@@ -2599,10 +2617,14 @@ fn extract_layer_tag(reason: &str) -> String {
 #[must_use]
 pub fn is_lossless_exploration_safe(meta: &LoopMeta, path: Option<&Path>) -> bool {
     let sample_match = crate::database::lookup_similar_samples(meta, path);
-    let (threshold, keep_prob_label) = if let Some(keep_prob) = sample_match.as_ref().and_then(|m| m.keep_probability) { (
-        lossless_duration_limit_for_keep_prob(keep_prob),
-        format!("keep_prob={keep_prob:.2}"),
-    ) } else {
+    let (threshold, keep_prob_label) = if let Some(keep_prob) =
+        sample_match.as_ref().and_then(|m| m.keep_probability)
+    {
+        (
+            lossless_duration_limit_for_keep_prob(keep_prob),
+            format!("keep_prob={keep_prob:.2}"),
+        )
+    } else {
         emit_stderr(
             "   ⚠️  Lossless-first safety: KNN evidence unavailable — using conservative high-value limit",
         );
@@ -2724,7 +2746,7 @@ fn get_meme_keywords() -> &'static [String] {
 ///
 /// # Errors
 /// This function does not typically return `Result`, but uses `0.5` as a neutral score.
-#[must_use] 
+#[must_use]
 pub fn score_directory_context(parts: Option<&[String]>, keywords: &[String]) -> f64 {
     let Some(parts) = parts else {
         return 0.5;
@@ -2747,7 +2769,7 @@ pub fn score_directory_context(parts: Option<&[String]>, keywords: &[String]) ->
 ///
 /// # Errors
 /// This function does not typically return `Result`, but uses `0.5` as a neutral score.
-#[must_use] 
+#[must_use]
 pub fn analyze_filename(name: Option<&str>, keywords: &[String]) -> FilenameAnalysis {
     let Some(name) = name else {
         return FilenameAnalysis {
@@ -2794,7 +2816,7 @@ pub fn analyze_filename(name: Option<&str>, keywords: &[String]) -> FilenameAnal
     }
 }
 
-#[must_use] 
+#[must_use]
 pub fn score_loop_frequency(duration_secs: f64, frame_count: u64) -> f64 {
     if duration_secs <= 0.01 || frame_count == 0 {
         return 0.5;
@@ -2828,7 +2850,7 @@ pub fn score_loop_frequency(duration_secs: f64, frame_count: u64) -> f64 {
     combined_score.clamp(0.0_f64, 1.0_f64)
 }
 
-#[must_use] 
+#[must_use]
 pub fn score_sparse_cadence(duration_secs: f64, frame_count: u64) -> f64 {
     if duration_secs <= 0.01 || frame_count <= 1 {
         return 0.5;
@@ -2976,7 +2998,10 @@ fn calculate_band_variance(img: &image::DynamicImage, y_start: u32, y_end: u32) 
     for y in y_start..y_end.min(img.height()) {
         for x in 0..w.min(img.width()) {
             let pixel = img.get_pixel(x, y);
-            let gray = f64::from(pixel[2]).mul_add(0.114, f64::from(pixel[0]).mul_add(0.299, f64::from(pixel[1]) * 0.587));
+            let gray = f64::from(pixel[2]).mul_add(
+                0.114,
+                f64::from(pixel[0]).mul_add(0.299, f64::from(pixel[1]) * 0.587),
+            );
             values.push(gray);
         }
     }

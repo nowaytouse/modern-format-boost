@@ -608,7 +608,7 @@ pub fn report_db_status() {
 /// Returns a `SampleMatch` if enough labeled training data exists and
 /// similar neighbors are found. Returns `None` on DB error or if the
 /// database is too immature for reliable KNN.
-#[must_use] 
+#[must_use]
 pub fn lookup_similar_samples(meta: &LoopMeta, path: Option<&Path>) -> Option<SampleMatch> {
     lookup_similar_samples_inner(meta, path).ok().flatten()
 }
@@ -1465,7 +1465,7 @@ fn determine_loss_tolerance(
 /// on content characteristics and directory heuristics, and computes
 /// derived features like temporal/spatial BPP. Returns `None` if the
 /// file cannot be probed.
-#[must_use] 
+#[must_use]
 pub fn sample_from_path(
     path: &Path,
     labeled_by: &str,
@@ -1609,7 +1609,15 @@ fn compute_sample_vector(sample: &SampleRow, stats_map: &FeatureMap) -> Vec<f32>
     let sample_fps_score: f64 = (1.0_f64
         - normalize_log_ratio(sample.fps.max(1e-3), baseline_fps, 1.2))
     .clamp(0.0_f64, 1.0_f64);
-    let sample_loop_affinity = sample_fps_score.mul_add(0.10, sample.loop_frequency.unwrap_or(0.5).mul_add(0.45, sample.cadence_score.unwrap_or(0.5) * 0.25) + sample_audio_score * 0.20)
+    let sample_loop_affinity = sample_fps_score
+        .mul_add(
+            0.10,
+            sample
+                .loop_frequency
+                .unwrap_or(0.5)
+                .mul_add(0.45, sample.cadence_score.unwrap_or(0.5) * 0.25)
+                + sample_audio_score * 0.20,
+        )
         .clamp(0.0, 1.0);
 
     let get_std = |f: &str| stats_map.stats.get(f).map_or(1.0, |s| s.std_dev).max(1e-6);
@@ -1877,7 +1885,10 @@ fn percentile_value(sorted_values: &[f64], quantile: f64) -> Option<f64> {
 
     let lower = sorted_values.get(lower_index).copied()?;
     let upper = sorted_values.get(upper_index).copied()?;
-    Some((upper - lower).mul_add(scaled_index - crate::numeric_cast::usize_to_f64(lower_index), lower))
+    Some((upper - lower).mul_add(
+        scaled_index - crate::numeric_cast::usize_to_f64(lower_index),
+        lower,
+    ))
 }
 
 fn build_feature_stats(values: &[f64]) -> FeatureStats {

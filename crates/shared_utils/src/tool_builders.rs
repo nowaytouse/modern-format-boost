@@ -601,7 +601,7 @@ pub struct OsascriptBuilder {
 }
 
 impl OsascriptBuilder {
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -653,7 +653,7 @@ pub struct PowershellBuilder {
 }
 
 impl PowershellBuilder {
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -708,7 +708,7 @@ pub struct AclBuilder {
 }
 
 impl AclBuilder {
-    #[must_use] 
+    #[must_use]
     pub fn getfacl() -> Self {
         Self {
             tool: "getfacl".to_string(),
@@ -717,14 +717,14 @@ impl AclBuilder {
     }
 
     /// Configures setfacl to restore ACLs from stdin (-R --restore=-).
-    #[must_use] 
+    #[must_use]
     pub fn restore() -> Self {
         let mut builder = Self::setfacl();
         builder.arg("--restore=-");
         builder
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn setfacl() -> Self {
         Self {
             tool: "setfacl".to_string(),
@@ -770,7 +770,7 @@ pub struct SysctlBuilder {
 }
 
 impl SysctlBuilder {
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -803,7 +803,7 @@ impl SysctlBuilder {
 pub struct VmstatBuilder {}
 
 impl VmstatBuilder {
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -829,7 +829,7 @@ pub struct AttribBuilder {
 }
 
 impl AttribBuilder {
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -875,7 +875,7 @@ pub struct RsyncBuilder {
 }
 
 impl RsyncBuilder {
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -929,7 +929,7 @@ pub struct PsBuilder {
 }
 
 impl PsBuilder {
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -966,7 +966,7 @@ pub struct KillBuilder {
 }
 
 impl KillBuilder {
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -999,7 +999,7 @@ impl KillBuilder {
 pub struct HostnameBuilder {}
 
 impl HostnameBuilder {
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -1018,7 +1018,7 @@ pub struct TaskkillBuilder {
 }
 
 impl TaskkillBuilder {
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }

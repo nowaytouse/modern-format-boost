@@ -403,7 +403,7 @@ impl GpuAccel {
     /// Successful probes stay cached. Failed probes are soft-cached and automatically retried
     /// after a short TTL so transient startup or device-busy failures do not latch CPU mode for
     /// the lifetime of the process.
-    #[must_use] 
+    #[must_use]
     pub fn detect() -> Self {
         let cached = Self::cached_state();
         if cached.should_refresh() {

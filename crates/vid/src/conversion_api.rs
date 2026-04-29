@@ -508,9 +508,10 @@ pub fn determine_strategy_with_apple_compat(
         if let Some(ext) = input.extension().and_then(|e| e.to_str()) {
             let ext_lower = ext.to_lowercase();
             if shared_utils::constants::MODERN_ANIMATED_EXTENSIONS.contains(&ext_lower.as_str())
-                && matches!(loop_verdict, shared_utils::LoopIntentVerdict::Uncertain(_)) {
-                    is_loop_intent = true;
-                }
+                && matches!(loop_verdict, shared_utils::LoopIntentVerdict::Uncertain(_))
+            {
+                is_loop_intent = true;
+            }
         }
     }
 

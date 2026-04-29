@@ -12,7 +12,7 @@ TEST_STATE_ROOT = tempfile.mkdtemp(prefix="mfb_drag_drop_test_")
 os.environ["MFB_HOME_ROOT"] = TEST_STATE_ROOT
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import drag_and_drop_processor as ddp
+import drag_and_drop_processor as ddp  # noqa: E402
 
 
 class TestCheckSystemResources(unittest.TestCase):

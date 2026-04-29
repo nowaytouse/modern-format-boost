@@ -571,7 +571,10 @@ fn test_ffmpeg_odd_dim_correction_hardening() {
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
         .collect();
 
-    let filter_idx = args.iter().position(|r| r == "-filter_complex").expect("-filter_complex not found");
+    let filter_idx = args
+        .iter()
+        .position(|r| r == "-filter_complex")
+        .expect("-filter_complex not found");
     // Should prepend scaling: scale=trunc(iw/2)*2:trunc(ih/2)*2,ssim
     assert!(args[filter_idx + 1].starts_with("scale=trunc(iw/2)*2:trunc(ih/2)*2,"));
     assert!(args[filter_idx + 1].contains("ssim"));
@@ -625,7 +628,10 @@ fn test_ffmpeg_global_flag_priority_parity() {
 
     // Priority check: -y and -hide_banner MUST come before -i
     let y_idx = args.iter().position(|r| r == "-y").expect("-y not found");
-    let hb_idx = args.iter().position(|r| r == "-hide_banner").expect("-hide_banner not found");
+    let hb_idx = args
+        .iter()
+        .position(|r| r == "-hide_banner")
+        .expect("-hide_banner not found");
     let i_idx = args.iter().position(|r| r == "-i").expect("-i not found");
 
     assert!(y_idx < i_idx);

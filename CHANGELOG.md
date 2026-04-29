@@ -11,18 +11,21 @@ All notable changes to this project will be documented in this file.
 This release focuses on hardening the media processing pipeline against resource exhaustion attacks, concurrency race conditions, and deep structural vulnerabilities identified during a comprehensive security audit.
 
 #### OOM & Resource Exhaustion Protection
-- **Standardized FTYP Parsing Limit**: Hardened the FTYP box reader in `image_detection.rs` to read up to **1MB (1,048,576 bytes)**. 
+
+- **Standardized FTYP Parsing Limit**: Hardened the FTYP box reader in `image_detection.rs` to read up to **1MB (1,048,576 bytes)**.
   - **Security Rationale**: Prevents Memory Overflow (OOM) Denial of Service (DoS) attacks where a multi-GB malicious file is passed to the system. 1MB provides a safe buffer for even the most bloated metadata while strictly capping memory usage.
 - **Arithmetic Safety**: Replaced all direct coordinate and dimension calculations in `video.rs` and `image_detection.rs` with **saturating arithmetic** (`saturating_sub`, `saturating_add`).
   - **Security Rationale**: Eliminates potential process panics caused by integer underflow/overflow when processing degenerate media files (e.g., 0x0 dimensions or malformed block offsets).
 
 #### Concurrency & Concurrency Safety
+
 - **Lock Acquisition Resilience**: Increased `MAX_LOCK_RETRIES` from 5 to **15** in `checkpoint.rs`.
   - **Stability Rationale**: Prevents process "zombie" states and premature IO error timeouts during periods of extreme filesystem contention or high-concurrency batch processing.
 - **Safe Symlink Validation**: Integrated a recursive `is_safe_entry` validator into the `WalkDir` file collection engine in `batch.rs`.
   - **Security Rationale**: Protects against Directory Traversal attacks. The system now canonicalizes all paths and validates targets against a restricted "dangerous directory" list before processing, ensuring that malicious symlinks cannot lead to sensitive system areas.
 
 #### Technical Debt & Code Quality (Zero-Warning Audit)
+
 - **Clippy Compliance**: Resolved all remaining technical debt and linting warnings:
   - Fixed "identical if blocks" in the `loop_intent.rs` decision tree by merging redundant conditional paths.
   - Resolved "confusing item placement" warnings in `checkpoint.rs` by moving constant declarations to the block start.
@@ -38,6 +41,7 @@ its own. All non-duration evidence is reduced to weighted log-odds contributions
 overcome accumulated counter-evidence to flip a verdict.
 
 #### Extreme Duration Hard Veto (Layer 0-EX) — Updated Boundaries
+
 Two absolute boundaries have been established as the **only** signals in the system with true
 one-shot authority. These are physical reality constraints, not heuristics:
 
@@ -49,19 +53,23 @@ one-shot authority. These are physical reality constraints, not heuristics:
   can override this.
 
 #### Anti-Cliff Proximity Ramp (New)
+
 The hard veto boundaries previously created a **behavioral cliff**: an asset at 5.9s received
 an absolute verdict, while a nearly identical 6.1s asset received only a weak tier bias. This
 discontinuity is now eliminated by a **linear proximity ramp** on both sides of each boundary.
 
 **Short side (6.0–8.0s, silent):**
+
 - At `6.0s + ε`: full `+2.5` additional bonus (behavior nearly identical to the veto)
 - At `8.0s`: ramp decays to `0` (only standard tier bias remains)
 
 **Long side (13.0–15.0s):**
+
 - At `13.0s`: ramp is `0` (only standard tier bias)
 - At `15.0s - ε`: full `-2.5` additional penalty (behavior nearly identical to the veto)
 
 #### Metadata Trust Decay (Hardened Gray Zone)
+
 To further protect the 6.0–15.0s gray zone from forged metadata, a **Trust Decay** mechanism
 has been implemented. Soft metadata signals (loop count, platform markers, transparency) are
 now attenuated by a factor that scales from `1.0` (at 6s) to `0.0` (at 15s).
@@ -76,40 +84,45 @@ This means the effective behavior is now **continuous and monotonic** across the
 with no behavioral discontinuities at any duration boundary.
 
 #### Tier Bias Centralization
+
 The per-tier log-odds bias injection (UltraShort → +1.5, Short → +0.5, Long → -1.0, etc.) has
 been centralized into the top-level `evaluate_loop_tree` dispatcher. Sub-trees
 (`evaluate_image_tree`, `evaluate_video_tree`) no longer re-apply tier bias, eliminating
 double-counting that previously inflated scores for image-family containers.
 
 #### Metadata Signal Downgrade (Zero-Trust)
+
 All formerly "immediate exit" logic paths in the decision tree have been converted to weighted
 log-odds contributions:
 
-| Former Immediate Exit | Signal Type | Now |
-|---|---|---|
-| `loop_count=0` → `LoopStrong` | Container metadata | Weighted bonus (decays with duration) |
-| `loop_count=1` → `LoopWeak` | Container metadata | Weighted penalty |
-| Transparency present → `LoopStrong` | Metadata flag | `TRANSPARENCY_POSITIVE_LOG_ODDS × 2` bonus |
-| GIF + small canvas → `LoopStrong` | Extension + dimensions | `COMPACT_SILENT_POSITIVE_LOG_ODDS` bonus |
-| Audible audio → `LoopWeak` (absolute) | Audio track | Tier-modulated penalty (smaller for UltraShort) |
-| Platform marker (GIPHY, etc.) → `LoopStrong` | App extension tag | `PLATFORM_MARKER_POSITIVE_LOG_ODDS` bonus |
-| Short silent WebM → `LoopStrong` | Extension + silence | `COMPACT_SILENT_POSITIVE_LOG_ODDS` bonus |
-| Dimensional Sticker → `LoopStrong` | Dimensions + UltraShort | `COMPACT_SILENT_POSITIVE_LOG_ODDS` bonus |
-| Dev override (long silent) → `LoopWeak` | ENV flag + duration | Strong negative bias (not hard exit) |
+| Former Immediate Exit                        | Signal Type             | Now                                             |
+| -------------------------------------------- | ----------------------- | ----------------------------------------------- |
+| `loop_count=0` → `LoopStrong`                | Container metadata      | Weighted bonus (decays with duration)           |
+| `loop_count=1` → `LoopWeak`                  | Container metadata      | Weighted penalty                                |
+| Transparency present → `LoopStrong`          | Metadata flag           | `TRANSPARENCY_POSITIVE_LOG_ODDS × 2` bonus      |
+| GIF + small canvas → `LoopStrong`            | Extension + dimensions  | `COMPACT_SILENT_POSITIVE_LOG_ODDS` bonus        |
+| Audible audio → `LoopWeak` (absolute)        | Audio track             | Tier-modulated penalty (smaller for UltraShort) |
+| Platform marker (GIPHY, etc.) → `LoopStrong` | App extension tag       | `PLATFORM_MARKER_POSITIVE_LOG_ODDS` bonus       |
+| Short silent WebM → `LoopStrong`             | Extension + silence     | `COMPACT_SILENT_POSITIVE_LOG_ODDS` bonus        |
+| Dimensional Sticker → `LoopStrong`           | Dimensions + UltraShort | `COMPACT_SILENT_POSITIVE_LOG_ODDS` bonus        |
+| Dev override (long silent) → `LoopWeak`      | ENV flag + duration     | Strong negative bias (not hard exit)            |
 
 The only remaining immediate exits are physically impossible inputs:
+
 - `frame_count ≤ 1` → `Error` (cannot loop, physical impossibility)
 - `duration < 0.01s` (non-GIF) → `Error` (degenerate, physical impossibility)
 - `duration ≤ 6.0s` (silent) → `LoopStrong` (extreme short hard veto)
 - `duration ≥ 15.0s` → `LoopWeak` (extreme long hard veto)
 
 #### Design Principle: "File Size Cannot Vote"
+
 Per architectural policy, file size (even extremely large) has **no one-shot authority** when
 duration is extreme. A 500 MB, 4K file that is 4s long is an animated image. A 200 KB file
 that is 16s long is a video. Duration is the ground truth; file size is only a soft signal that
 contributes to the log-odds accumulation for assets in the gray zone (6–15s).
 
 ### 🔬 Penetrating Content Detection System (Hardened v3)
+
 - **Two-Phase Transparency Verification (Zero-Bias Guarantee)**:
   - **Phase 1 - Stratified Sampling**: Fast check at 3 time points (start, mid, end) to catch most cases efficiently.
   - **Phase 2 - Full Decode Fallback**: If sampling finds no transparency but alpha channel exists, performs complete frame-by-frame decode to ensure no false negatives. This catches transparency that only appears in specific frames.
@@ -132,16 +145,19 @@ contributes to the log-odds accumulation for assets in the gray zone (6–15s).
 ### 🐛 Bug Fixes — Audit Remediation
 
 #### 🔴 Signal Double-Counting (apply_weak_heuristics)
+
 `apply_weak_heuristics` (Layer 4) was re-accumulating `platform_marker`, `transparency`, and
 `loop_count` signals that had already been added in Layer 1-B / Layer 2 of each sub-tree.
 This caused systematic upward bias toward `LoopStrong` for image-path assets.
 
 **Fix**: Removed all three duplicated signals from `apply_weak_heuristics`.
+
 - `platform_marker`: removed entirely (already in Layer 2 of both sub-trees with trust decay)
 - `loop_count`: removed entirely (already in Layer 2 of both sub-trees with trust decay)
 - `transparency`: guarded to `is_video` only (image tree already applies it in Layer 1-B)
 
 #### 🔴 KNN Feature Vector Inconsistency (Stale Meta)
+
 `lookup_similar_samples` was called with the original `meta` (pre-penetration-detection),
 while `evaluate_loop_tree` used the corrected `mutable_meta` (post-detection). If penetrating
 detection changed `has_transparency`, `audio_is_silent`, or `frame_count`, the KNN neighbors
@@ -150,6 +166,7 @@ were selected against a different feature vector than the one used by the decisi
 **Fix**: Moved `lookup_similar_samples` to after `evaluate_loop_tree`, using `&mutable_meta`.
 
 #### 🟡 `loop_count=1` Missing from Video Layer 2
+
 The video sub-tree's Layer 2 only handled `loop_count == Some(0)`. The play-once penalty
 (`loop_count == Some(1)`) was only applied via `apply_weak_heuristics`, which is now cleaned.
 
@@ -157,6 +174,7 @@ The video sub-tree's Layer 2 only handled `loop_count == Some(0)`. The play-once
 are applied at full weight — trust decay only applies to positive/pro-loop signals).
 
 #### 🟡 Layer 1-B4 Dead Code Removed
+
 The "Micro-Clip" exit in `evaluate_video_tree` (`tier == UltraShort`) was unreachable:
 `UltraShort` ≤ 2.0s, but the Layer 0-EX hard veto fires at ≤ 6.0s (silent). All UltraShort
 silent assets exit at Layer 0-EX. UltraShort assets with audible audio should run the full
@@ -165,12 +183,14 @@ pipeline — not be forced to `LoopStrong`.
 **Fix**: Removed the dead branch, replaced with an explanatory comment.
 
 #### 🟡 finalize Closure Deduplicated
+
 Three identical `finalize` closures existed inside `evaluate_loop_tree`,
 `evaluate_image_tree`, and `evaluate_video_tree`.
 
 **Fix**: Extracted as a single module-level free function `fn finalize(verdict, lo) -> TreeEvaluation`.
 
 #### 🟢 JSON Silent Failure Upgraded to Panic
+
 `get_meme_keywords()` silently returned an empty keyword list if `meme_keywords.json` failed
 to parse, causing the entire meme-keyword heuristic to go dark without any diagnostic output.
 Since the file is `include_str!`-embedded at compile time, a parse failure means a corrupt binary.
@@ -178,6 +198,7 @@ Since the file is `include_str!`-embedded at compile time, a parse failure means
 **Fix**: Changed `unwrap_or_default()` to `expect("embedded meme_keywords.json is malformed")`.
 
 #### Residual Fixes
+
 - **`calculate_micro_nudges` stale meta**: Now uses `&mutable_meta` (post-penetration-detection)
   instead of the original `meta`, ensuring nudge signals are consistent with the decision tree.
 - **`has_audible_audio` deduplicated**: Moved to `DerivedLoopSignals` struct, eliminating
@@ -202,6 +223,7 @@ Since the file is `include_str!`-embedded at compile time, a parse failure means
 ### 🔴 Design-Level Fixes
 
 #### KNN Training Data Pollution
+
 `log_inference_record` was writing the **original** `meta` (pre-penetration-detection) to the
 database, while the decision tree used the **corrected** `mutable_meta`. This meant the KNN
 training feature vectors (e.g., `has_transparency`, `audio_is_silent`, `frame_count`) could
@@ -210,6 +232,7 @@ differ from what the tree actually used for its verdict, causing the KNN to self
 **Fix**: `log_inference_record` now uses `&mutable_meta`.
 
 #### Logistic Regression Fusion Math Error
+
 `logistic_regression_fusion` applied `sigmoid(p1*w1 + p2*w2 + bias)` — weighting raw
 probabilities (0-1) and then applying sigmoid. The correct formulation is
 `sigmoid(logit(p1)*w1 + logit(p2)*w2 + bias)`, which operates in log-odds space.
@@ -291,10 +314,10 @@ direction. This addresses the structural limitation of pure additive log-odds: w
 scene cuts, portrait aspect, and GOP structure all agree "this is video", the combined
 evidence should be stronger than the linear sum.
 
-
 ## [0.11.2] — 2026-04-20
 
 ### 🎬 GPU Coarse Search & Engine Unification
+
 - **Engine Unification**: Decommissioned legacy modular conversion functions (`execute_video_conversion`, `simple_convert`) in favor of a unified, parallelized GPU exploration engine in `shared_utils`.
 - **Strict Quality Thresholds (Ultimate Mode)**: Significant tightening of quality gates in `gpu_coarse_search.rs`.
   - **VMAF-Y**: Allowed drop from baseline reduced from `4.0` to **`2.0`**.
@@ -322,11 +345,13 @@ evidence should be stronger than the linear sum.
 - **Physical Frame Alignment**: Synchronized `LoopMeta` attributes with scanned physical frame counts, eliminating duration-based heuristic estimation.
 
 ### 🛡️ Encoder Path Hardening & Apple Compatibility
+
 - **X265Builder Pipe Preservation**: Implemented `x265_io_arg` to resolve a bug where path-armoring caused standalone `x265` to reject stdin/stdout dashes (`-`).
 - **FFmpeg 8.1 Stability**: Resolved Y4M header failures for 10-bit color pipes (e.g., `yuv420p10le`) by automatically injecting `-strict -1` for non-legacy formats.
 - **HEVC MOV Standardization**: Finalized the transition to `.mov` (TargetVideoFormat::HevcMov) for all Apple-compatible outputs, supporting native metadata and system-level tagging.
 
 ### 🏗️ Workspace Refactoring & Final Consolidation
+
 - **Zero-Root Script Consolidation**: Successfully migrated all maintenance and utility scripts (15+ files) to `crates/dev/scripts/`, eliminating root-level script clutter.
   - **Path Refactoring**: Updated `.envrc`, the macOS `.app` bundle internals, and `shared_utils::database` to resolve all hardcoded path references to the relocated assets.
   - **Tooling Resilience**: Ensured that `check_all.py` and `cache_cleaner.py` remain fully functional in their new standardized locations.
@@ -341,6 +366,7 @@ evidence should be stronger than the linear sum.
 - **Fail Reporting Cleanup**: Skip reasons and protection logs now report total file size regressions directly. Stream-level size data is retained as an internal diagnostic signal in debug logs.
 
 ### ⚖️ API Cleanup & Subsystem Resilience
+
 - **API Streamlining**: Cleaned up public exports in `vid/src/lib.rs` and `img/src/lib.rs`, removing obsolete helper functions in favor of the structured exploration API.
 - **Animated Pipeline Resilience**: Refactored `animated_image.rs` and `conversion_api.rs` to handle codec-specific failures (VP8/VP9/Alpha) more gracefully.
 
@@ -355,9 +381,6 @@ evidence should be stronger than the linear sum.
 
 - **Intelligent Cache Cleaner**: Implemented `PROJECT_ROOT` discovery and automation-aware rebuilds in `cache_cleaner.py`.
 - **Documentation Hygiene**: Workspace-wide audit using `prettier` and `ruff` to resolve formatting and linting warnings in the documentation and maintenance scripts.
-
-
-
 
 ### 🎬 Video Filter & Sampling Hardening
 
@@ -446,9 +469,6 @@ evidence should be stronger than the linear sum.
 
 - **Test Standardization**: Migrated diagnostic tools to `scripts/` and verified WebP/JXL duration parsing logic for animated media extraction.
 - **`log_conversion_analyzer.py`**: Hardened directory creation logic for report output to handle relative paths and empty directory strings.
-
-
-
 
 ### ✨ Recent Highlights
 
@@ -734,9 +754,6 @@ evidence should be stronger than the linear sum.
 - **Cargo.toml**: Added `insta` and `criterion` from GitHub sources to workspace dev dependencies.
 - **Workspace Members**: Added `fuzz` crate to workspace members list.
 - **shared_utils**: Added `arbitrary` (optional, feature-gated), `insta`, `proptest`, `tempfile` as dev dependencies; added `[[bench]]` section for `quality_benches`.
-
-
-
 
 ### 🔄 GPU Detection Resilient Caching & Diagnostic Enhancements
 

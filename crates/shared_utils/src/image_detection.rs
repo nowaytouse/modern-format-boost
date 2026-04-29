@@ -1500,7 +1500,9 @@ fn detect_dithering_pattern(img: &DynamicImage) -> f64 {
     let mut high_freq_count = 0u64;
     let mut total_comparisons = 0u64;
 
-    let step = crate::numeric_cast::f64_to_u32_sat((crate::numeric_cast::u64_to_f64(u64::from(width) * u64::from(height)) / 10000.0).max(1.0));
+    let step = crate::numeric_cast::f64_to_u32_sat(
+        (crate::numeric_cast::u64_to_f64(u64::from(width) * u64::from(height)) / 10000.0).max(1.0),
+    );
 
     for y in 1..height - 1 {
         for x in 1..width - 1 {

@@ -35,7 +35,10 @@ fn manual_debug_scan_debug_dir_only() {
         .unwrap_or(30usize);
 
     let mut undecided: Vec<std::path::PathBuf> = Vec::new();
-    for entry in WalkDir::new(root).into_iter().filter_map(std::result::Result::ok) {
+    for entry in WalkDir::new(root)
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+    {
         if scanned >= cap {
             break;
         }

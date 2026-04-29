@@ -484,7 +484,7 @@ pub enum PtsIntegrity {
     Broken,
 }
 
-#[must_use] 
+#[must_use]
 pub fn check_pts_integrity(input: &Path) -> PtsIntegrity {
     let output = match crate::ffmpeg_builder::FfprobeBuilder::new()
         .input(input)

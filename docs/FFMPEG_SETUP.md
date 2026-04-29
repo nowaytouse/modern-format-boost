@@ -9,16 +9,21 @@ This guide explains how to install a full-featured FFmpeg (with plugins like FDK
 ## 📖 English
 
 ### The "Link Overwrite" Strategy
+
 Homebrew's standard `chromaprint` package strictly depends on the formula named `ffmpeg`. To satisfy this dependency while using the enhanced version, we install both and use Homebrew's linking system to toggle the active version.
 
 #### 1. Install Official FFmpeg
+
 This satisfies dependencies for other packages like `chromaprint`.
+
 ```bash
 brew install ffmpeg
 ```
 
 #### 2. Install Full-Featured Tap Version
+
 Install the enhanced version from the tap. It will be built in its own Cellar.
+
 ```bash
 brew tap homebrew-ffmpeg/ffmpeg
 brew install homebrew-ffmpeg/ffmpeg/ffmpeg \
@@ -69,10 +74,13 @@ brew install homebrew-ffmpeg/ffmpeg/ffmpeg \
     --with-openssl@3 \
     --with-speex
 ```
-*Note: `--with-decklink` and `--with-libflite` are excluded as they require manual SDKs or have current platform issues.*
+
+_Note: `--with-decklink` and `--with-libflite` are excluded as they require manual SDKs or have current platform issues._
 
 #### 3. Overwrite Systems Links
+
 Toggle the active `ffmpeg` command to the tap version.
+
 ```bash
 # Unlink the core version
 brew unlink ffmpeg
@@ -81,7 +89,9 @@ brew link --overwrite homebrew-ffmpeg/ffmpeg/ffmpeg
 ```
 
 #### 4. Accessing Official Version (Optional)
+
 The core version is still in the Cellar. You can create a dedicated alias for it:
+
 ```bash
 # Create a symbolic link to the core version with a unique name
 ln -sf $(brew --prefix)/opt/ffmpeg/bin/ffmpeg $(brew --prefix)/bin/ffmpeg-official
@@ -92,16 +102,21 @@ ln -sf $(brew --prefix)/opt/ffmpeg/bin/ffmpeg $(brew --prefix)/bin/ffmpeg-offici
 ## 🇨🇳 简体中文
 
 ### “链接覆盖”策略
+
 Homebrew 标准的 `chromaprint` 软件包严格依赖于名为 `ffmpeg` 的公式。为了满足此依赖，我们先安装官方版，再安装增强版并利用 Homebrew 的链接机制进行切换。
 
 #### 1. 安装官方 FFmpeg
+
 这步是为了安装 `chromaprint` 等依赖于 `ffmpeg` 名称的包。
+
 ```bash
 brew install ffmpeg
 ```
 
 #### 2. 安装“终极全功能版”
+
 从 `homebrew-ffmpeg` 安装增强版。它会安装在独立的目录中，不会覆盖原版。
+
 ```bash
 brew tap homebrew-ffmpeg/ffmpeg
 brew install homebrew-ffmpeg/ffmpeg/ffmpeg \
@@ -152,10 +167,13 @@ brew install homebrew-ffmpeg/ffmpeg/ffmpeg \
     --with-openssl@3 \
     --with-speex
 ```
-*注意：`--with-decklink` 和 `--with-libflite` 已排除，前者需要手动下载 SDK，后者存在兼容性问题。*
+
+_注意：`--with-decklink` 和 `--with-libflite` 已排除，前者需要手动下载 SDK，后者存在兼容性问题。_
 
 #### 3. 覆盖系统链接
+
 将 `ffmpeg` 命令指向全功能版。
+
 ```bash
 # 断开官方版链接
 brew unlink ffmpeg
@@ -164,7 +182,9 @@ brew link --overwrite homebrew-ffmpeg/ffmpeg/ffmpeg
 ```
 
 #### 4. 调用官方原版（可选）
+
 官方版本依然在系统中，你可以通过建立别名来随时调用它：
+
 ```bash
 # 将官方核心版链接为 'ffmpeg-official'
 ln -sf $(brew --prefix)/opt/ffmpeg/bin/ffmpeg $(brew --prefix)/bin/ffmpeg-official

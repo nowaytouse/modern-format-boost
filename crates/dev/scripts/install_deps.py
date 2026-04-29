@@ -148,7 +148,9 @@ def main():
 
     print("--------------------------------------------------------")
     print_c(GREEN, "🌟 All dependencies installed successfully!")
-    print("You can now run 'python3 crates/dev/scripts/check_all.py' to verify the workspace.")
+    print(
+        "You can now run 'python3 crates/dev/scripts/check_all.py' to verify the workspace."
+    )
 
 
 if __name__ == "__main__":
