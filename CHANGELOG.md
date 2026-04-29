@@ -124,6 +124,7 @@ contributes to the log-odds accumulation for assets in the gray zone (6–15s).
   - **Full Stream Analysis**: Uses `volumedetect` filter to decode and analyze the entire audio stream.
   - **Dual Detection**: Identifies both empty tracks (`n_samples: 0`) and silent tracks (mean volume < -70 dB).
   - **Zero-Bias**: Complete decode ensures no silent segments are missed.
+- **Unified Media Penetration Module**: Introduced `media_penetration.rs` to centralize all physical scanning logic (interlace detection, transparency analysis, and silent audio probes), ensuring consistent behavior across all detection sites.
 - **Global API Refinement**:
   - Synchronized `image_detection`, `video_detection`, and `loop_intent` with the new duration-aware penetration signatures.
   - Hardened `FfmpegBuilder` call sites with fast-seek (`-ss`) support for large-asset sampling.
@@ -375,6 +376,7 @@ evidence should be stronger than the linear sum.
   - **Thread-Capped Pool Allocation**: Introduced `capped_pool_threads` to physically limit x265's `pools` based on the memory profile, ensuring frame-threads and lookahead buffers stay within the safe resident set size (RSS) envelope.
 - **x265 Parameters Stability**: Fixed a startup crash in `LowMemory` mode where `rc-lookahead` (previously 8) was too low for the `slower` preset; boosted to 9 to satisfy x265's strict `rc-lookahead > max-bframes` constraint.
 - **FFmpeg Builder Hardening**: Implemented `input_format` capability in `FfmpegBuilder` and corrected the parameter ordering for `lavfi` sources. This ensures a bit-perfect command structure (`-f lavfi -i nullsrc...`) for encoder self-probes and archival analysis.
+- **x265 Parameter Management**: Introduced `x265_params.rs` as a dedicated module for complex x265 parameter generation, ensuring deterministic and high-fidelity encoding across varying memory profiles.
 - **Codec Information Propagation**: Fixed 3 call sites in `video_explorer.rs` and `explore_strategy.rs` where the actual source codec name was lost, ensuring ProRes and other archival formats correctly trigger RAM-aware optimized memory profiles throughout the entire search and fine-tune pipeline.
 
 ### 🎬 Animated Image Pipeline & HDR Hardening
