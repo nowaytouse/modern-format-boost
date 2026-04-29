@@ -14,7 +14,14 @@ All notable changes to this project will be documented in this file.
 - **APNG & Modern Format Extension Gap**: Fixed a severe logic gap where animated images masquerading with standard extensions (like an APNG named `.png`) were skipped by `img` (because they are animated) but completely ignored by `vid` (because `.png` was not in `supported_video_extensions()`).
   - **Fix**: Expanded `identify_by_content()` with a lightning-fast `Seek`-based chunk jumping parser for PNG files. 64 bytes is insufficient because image editors often inject large `iCCP` (ICC profile) or `eXIf` metadata chunks before the `acTL` (animation) chunk, pushing it far beyond the header. By skipping chunk payloads and reading only the 8-byte headers, it guarantees 100% accurate APNG detection regardless of metadata size, without triggering `ffprobe`.
   - **Fix**: Safely added `"png"`, `"apng"`, `"jxl"`, and `"heif"` to the `vid` tool's `SUPPORTED_VIDEO_EXTENSIONS` list. Because the shallow probe now accurately distinguishes static vs animated variants natively, `vid` can safely scan `.png` folders at lightning speed without triggering expensive `ffprobe` operations on static files.
-
+- **Live Photo `.HEIC` Deletion Bug**: Fixed a severe logic gap where the `.HEIC` (static) component of a Live Photo pair was permanently lost during batch conversion.
+  - **Root Cause**: `img` completely ignores Live Photo `.HEIC` files (expecting `vid` to handle them to avoid splitting the pair). When `vid` processed the directory, it collected the `.HEIC`, detected `frame_count = 1`, and skipped it. Because the `copy_on_skip_or_fail` fallback was removed to prevent output clutter, neither tool copied the `.HEIC` file to the output directory.
+  - **Fix**: Upgraded `vid`'s static isolation logic to act as the custodian for Live Photos. If `vid` isolates a 1-frame image, it now explicitly checks `is_live_photo()`. If true, `vid` safely copies the file to the output directory, preserving the complete pair.
+- **Static `.JXL` File Omission**: Fixed a bug where `.jxl` files present in the source directory were entirely omitted from the output.
+  - **Root Cause**: `"jxl"` was correctly listed in `SUPPORTED_IMAGE_EXTENSIONS` (so `copy_unsupported_files` ignored it), but it was mistakenly omitted from `IMAGE_EXTENSIONS_FOR_CONVERT` (so `img` ignored it too). 
+  - **Fix**: Added `"jxl"` to the convert collection array. `img` now correctly collects it, analyzes it, instantly marks it as "Already Optimal", and safely copies it to the output directory.
+- **Standalone `img` Data Loss**: Fixed a pipeline gap where running `img` independently (without subsequently running `vid`) resulted in the loss of all non-media files (PDFs, TXT, etc.).
+  - **Fix**: Brought absolute parity to `img` by implementing the `copy_unsupported_files` and `verify_output_completeness` phases at the end of its batch loop, matching `vid`'s behavior perfectly.
 ### 🛡️ Verification & Security Hardening
 
 - **Content Hash Verification** (`verify.py`): Added SHA-256 partial hashing (first 64KB) to collision detection.
