@@ -215,8 +215,12 @@ def run_integrity_check(source_dir: Path, optimized_dir: Path, report_f):
 # Log Analysis Logic
 # ---------------------------------------------------------------------------
 
-def parse_logs(log_paths, report_f):
-    """Analyze logs and write results to the report file handle."""
+def parse_logs(log_paths, report_f, filter_dir=None):
+    """Analyze logs and write results to the report file handle.
+    
+    If filter_dir is provided, only entries belonging to that directory tree
+    will be included in the report.
+    """
     result_pattern = re.compile(r"([\S\s]+?)\s*→\s*([\S\s]+?)\s*\(([^)]+)\)\s*([✅❌])")
     activity_pattern = re.compile(r"🔄\s*Animated→([A-Z0-9\s]+)\s*\(([^)]+)\):\s*(.+)")
     checking_pattern = re.compile(r"checking\s+([^\s]+)$")
@@ -230,6 +234,9 @@ def parse_logs(log_paths, report_f):
     results = []
     uncertain_cases = []
     log_dir_path = Path("logs")
+    
+    # Pre-resolve filter_dir if provided
+    filter_dir_abs = str(Path(filter_dir).resolve()) if filter_dir else None
 
     for path in log_paths:
         p = Path(path)
@@ -251,10 +258,32 @@ def parse_logs(log_paths, report_f):
                         if (m := checking_pattern.search(line)):
                             current_file = m.group(1).strip()
 
+                        # Check if current_file is within filter_dir
+                        is_relevant = True
+                        if filter_dir_abs and current_file:
+                            try:
+                                abs_current = str(Path(current_file).resolve())
+                                if not abs_current.startswith(filter_dir_abs):
+                                    is_relevant = False
+                            except Exception:
+                                pass
+
+                        if not is_relevant:
+                            continue
+
                         # Conversions
                         if (m := result_pattern.search(line)):
                             source = m.group(1).split(">")[-1].strip()
                             current_file = source
+                            
+                            # Re-verify relevance for conversion line
+                            if filter_dir_abs:
+                                try:
+                                    if not str(Path(source).resolve()).startswith(filter_dir_abs):
+                                        continue
+                                except Exception:
+                                    pass
+
                             target, msg, status_icon = m.group(2).strip(), m.group(3).strip(), m.group(4)
                             if Path(source).suffix.lower() in modern_exts and any(f in target.upper() or f in msg.upper() for f in target_formats):
                                 results.append({"log": log_file.name, "source": source, "target": target, "status": "SUCCESS" if status_icon == "✅" else "FAILED", "details": msg})
@@ -262,6 +291,15 @@ def parse_logs(log_paths, report_f):
                         if (m := activity_pattern.search(line)):
                             target_fmt, details, source = m.group(1).strip(), m.group(2).strip(), m.group(3).strip()
                             current_file = source
+                            
+                            # Re-verify relevance
+                            if filter_dir_abs:
+                                try:
+                                    if not str(Path(source).resolve()).startswith(filter_dir_abs):
+                                        continue
+                                except Exception:
+                                    pass
+
                             if Path(source).suffix.lower() in modern_exts and any(f in target_fmt.upper() for f in target_formats):
                                 results.append({"log": log_file.name, "source": source, "target": f"CONVERTED TO {target_fmt}", "status": "PROCESSING/UNKNOWN", "details": details})
 
@@ -278,7 +316,13 @@ def parse_logs(log_paths, report_f):
 
                                 # Duplicate check
                                 if not any(c["file"] == current_file and c["log"] == log_file.name for c in uncertain_cases):
-                                    matching_folders = [item.name for item in log_dir_path.iterdir() if item.is_dir() and Path(current_file).stem in item.name] if log_dir_path.exists() else []
+                                    matching_folders = []
+                                    if log_dir_path.exists():
+                                        stem = Path(current_file).stem
+                                        for item in log_dir_path.iterdir():
+                                            if item.is_dir() and stem in item.name:
+                                                matching_folders.append(item.name)
+                                    
                                     uncertain_cases.append({"file": current_file, "reason": reason, "probability": prob, "log": log_file.name, "matching_folders": matching_folders})
 
             except Exception as e:
@@ -343,17 +387,19 @@ if __name__ == "__main__":
         report_f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
 
         # 1. Integrity Check
+        source_dir_context = None
         if args.verify:
             resolved = resolve_verify_dirs(args.verify)
             if resolved:
                 src, opt = resolved
+                source_dir_context = src
                 run_integrity_check(src, opt, report_f)
             else:
                 report_f.write(f"❌ Error: Could not resolve paired directory for {args.verify[0]}\n\n")
 
         # 2. Log Analysis
         if args.logs:
-            conv_count, unc_count = parse_logs(args.logs, report_f)
+            conv_count, unc_count = parse_logs(args.logs, report_f, filter_dir=source_dir_context)
             print(f"📈 Total conversion events: {conv_count}")
             print(f"🔭 Uncertain loop cases: {unc_count}")
 
