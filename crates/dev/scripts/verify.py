@@ -12,8 +12,14 @@ Usage:
     # 2. Integrity verification (auto-detects paired source/optimized folder)
     python3 verify.py --verify /path/to/MyPhotos_optimized
 
-    # 3. Combined analysis
+    # 3. Integrity verification (explicitly specify both directories)
+    python3 verify.py --verify /path/to/Source /path/to/Optimized
+
+    # 4. Combined analysis (log scanning + auto-detecting verification)
     python3 verify.py logs/ --verify /path/to/MyPhotos
+
+    # 5. Combined analysis (log scanning + explicit dual-directory verification)
+    python3 verify.py logs/ --verify /path/to/Source /path/to/Optimized
 """
 import argparse
 import os
