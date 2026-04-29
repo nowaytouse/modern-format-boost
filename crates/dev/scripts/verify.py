@@ -22,6 +22,7 @@ Usage:
     python3 verify.py logs/ --verify /path/to/Source /path/to/Optimized
 """
 import argparse
+import hashlib
 import os
 import re
 import sys
@@ -49,17 +50,20 @@ else:
 IMG_EXTS = {
     ".jpg", ".jpeg", ".jpe", ".jfif", ".png", ".webp",
     ".heic", ".heif", ".avif", ".tiff", ".tif", ".bmp",
+    ".ico", ".svg", ".jp2", ".j2k",
 }
 
 VID_EXTS = {
     ".gif", ".mp4", ".mov", ".mkv", ".avi", ".webm",
-    ".m4v", ".wmv", ".flv",
+    ".m4v", ".wmv", ".flv", ".mpg", ".mpeg", ".ts",
+    ".mts", ".m2ts", ".m2v", ".3gp", ".3g2", ".ogv",
+    ".f4v", ".asf",
 }
 
 OUTPUT_EXTS = {
     ".jxl", ".avif", ".heic", ".heif", ".mp4", ".mov",
     ".mkv", ".webm", ".jpg", ".jpeg", ".png", ".webp",
-    ".gif", ".tiff", ".tif", ".bmp",
+    ".gif", ".tiff", ".tif", ".bmp", ".apng",
 }
 
 MEDIA_EXTS = IMG_EXTS | VID_EXTS
@@ -80,9 +84,20 @@ def is_media_file(path: Path) -> bool:
     return ext in ALL_KNOWN_EXTS
 
 
-def collect_media_files(directory: Path) -> dict[str, Path]:
-    """Walk directory and collect all media files mapping stem keys to paths."""
-    result: dict[str, Path] = {}
+def file_content_hash(path: Path, chunk_size: int = 65536) -> str:
+    """Compute SHA-256 of first 64KB for fast identity comparison."""
+    h = hashlib.sha256()
+    try:
+        with open(path, "rb") as f:
+            h.update(f.read(chunk_size))
+    except OSError:
+        return "ERROR"
+    return h.hexdigest()[:16]
+
+
+def collect_media_files(directory: Path) -> dict[str, list[Path]]:
+    """Walk directory and collect all media files, tracking potential collisions."""
+    result: dict[str, list[Path]] = {}
     for root, _, files in os.walk(directory):
         for fname in files:
             full = Path(root) / fname
@@ -90,8 +105,12 @@ def collect_media_files(directory: Path) -> dict[str, Path]:
                 continue
             try:
                 rel = full.relative_to(directory)
+                # The 'key' is the relative path without suffix, lowercase.
+                # This helps match 'Folder/Img.jpg' with 'folder/img.jxl'.
                 key = str(rel.with_suffix("")).lower()
-                result[key] = full
+                if key not in result:
+                    result[key] = []
+                result[key].append(full)
             except ValueError:
                 continue
     return result
@@ -147,8 +166,12 @@ def run_integrity_check(source_dir: Path, optimized_dir: Path, report_f):
     source_files = collect_media_files(source_dir)
     optimized_files = collect_media_files(optimized_dir)
 
-    src_count = len(source_files)
-    opt_count = len(optimized_files)
+    # Collision Detection (Security hardening)
+    src_collisions = {k: v for k, v in source_files.items() if len(v) > 1}
+    opt_collisions = {k: v for k, v in optimized_files.items() if len(v) > 1}
+
+    src_count = sum(len(v) for v in source_files.values())
+    opt_count = sum(len(v) for v in optimized_files.values())
 
     report_f.write(f"Source files:    {src_count}\n")
     report_f.write(f"Optimized files: {opt_count}\n")
@@ -162,22 +185,87 @@ def run_integrity_check(source_dir: Path, optimized_dir: Path, report_f):
 
     # Matching logic
     missing = []
-    matched = []
+    matched = []  # List of (key, src_path, opt_path)
     extra = []
+    ambiguous = [] # 1-to-N or N-to-1 matches
 
-    for key, src_path in sorted(source_files.items()):
+    # 1. Identify matches and missing
+    for key, src_paths in sorted(source_files.items()):
         if key in optimized_files:
-            matched.append((key, src_path, optimized_files[key]))
+            opt_paths = optimized_files[key]
+            # If it's a clean 1-to-1 match
+            if len(src_paths) == 1 and len(opt_paths) == 1:
+                matched.append((key, src_paths[0], opt_paths[0]))
+            else:
+                # N-to-M collision or ambiguity
+                ambiguous.append((key, src_paths, opt_paths))
         else:
-            missing.append((key, src_path))
+            for p in src_paths:
+                missing.append((key, p))
 
-    for key, opt_path in sorted(optimized_files.items()):
+    # 2. Identify extras
+    for key, opt_paths in sorted(optimized_files.items()):
         if key not in source_files:
-            extra.append((key, opt_path))
+            for p in opt_paths:
+                extra.append((key, p))
 
     report_f.write(f"Matched:         {len(matched)}\n")
+    report_f.write(f"Ambiguous:       {len(ambiguous)} (Collisions detected!)\n")
     report_f.write(f"Missing:         {len(missing)}\n")
     report_f.write(f"Extra:           {len(extra)}\n\n")
+
+    if src_collisions or opt_collisions or ambiguous:
+        report_f.write("── COLLISIONS & SAFETY WARNINGS ───────────────────────────────\n")
+        if src_collisions:
+            report_f.write("⚠️ WARNING: Duplicate source stems detected (Unsafe for 1-to-1 mapping):\n")
+            for key, paths in sorted(src_collisions.items()):
+                hashes = [file_content_hash(p) for p in paths]
+                unique_h = len(set(hashes))
+                label = "IDENTICAL content" if unique_h == 1 else f"{unique_h} DISTINCT files"
+                report_f.write(f"  Key '{key}' maps to {len(paths)} files ({label}):\n")
+                for p, h in zip(paths, hashes):
+                    report_f.write(f"    - {p.relative_to(source_dir)}  [sha256:{h}]\n")
+            report_f.write("\n")
+
+        if opt_collisions:
+            report_f.write("⚠️ WARNING: Duplicate optimized stems detected (Potential overwrites):\n")
+            for key, paths in sorted(opt_collisions.items()):
+                hashes = [file_content_hash(p) for p in paths]
+                unique_h = len(set(hashes))
+                label = "IDENTICAL content" if unique_h == 1 else f"{unique_h} DISTINCT files"
+                report_f.write(f"  Key '{key}' maps to {len(paths)} outputs ({label}):\n")
+                for p, h in zip(paths, hashes):
+                    report_f.write(f"    - {p.relative_to(optimized_dir)}  [sha256:{h}]\n")
+            report_f.write("\n")
+
+        if ambiguous:
+            report_f.write("⚠️ WARNING: Ambiguous mapping (N-to-M relationship):\n")
+            for key, srcs, opts in sorted(ambiguous):
+                report_f.write(f"  Key '{key}':\n")
+                report_f.write("    Sources:\n")
+                for p in srcs:
+                    report_f.write(f"      - {p.name}\n")
+                report_f.write("    Optimized:\n")
+                for p in opts:
+                    report_f.write(f"      - {p.name}\n")
+            report_f.write("\n")
+
+    # 3. Type Mismatch Check (Content Consistency)
+    mismatched_types = []
+    for key, src_p, opt_p in matched:
+        src_is_vid = src_p.suffix.lower() in VID_EXTS
+        opt_is_vid = opt_p.suffix.lower() in VID_EXTS
+        if src_is_vid != opt_is_vid:
+            mismatched_types.append((src_p, opt_p))
+
+    if mismatched_types:
+        report_f.write("── CONTENT CONSISTENCY WARNINGS ───────────────────────────────\n")
+        report_f.write("⚠️ WARNING: Media type mismatch detected (Suspicious conversion):\n")
+        for src, opt in mismatched_types:
+            s_type = "Video" if src.suffix.lower() in VID_EXTS else "Image"
+            o_type = "Video" if opt.suffix.lower() in VID_EXTS else "Image"
+            report_f.write(f"  - {src.name} ({s_type}) → {opt.name} ({o_type})\n")
+        report_f.write("\n")
 
     if missing:
         report_f.write(f"--- Missing from Optimized ({len(missing)}) ---\n")

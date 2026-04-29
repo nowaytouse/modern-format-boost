@@ -6,6 +6,30 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### 🐛 Critical Bug Fixes & Deep Audit (File Loss Prevention)
+
+- **WebP Animated File Loss**: Fixed a critical bug where animated WebP files were silently dropped from the output directory.
+  - **Root Cause**: `SourceCodec::identify_by_content()` previously only read the 16-byte RIFF header, meaning it returned `WebpStatic` for all WebP files (unable to distinguish animated vs static). The `vid` tool's file collector filtered by `is_video() || can_be_animated()`, and `WebpStatic` was intentionally omitted to prevent slow deep-probing of thousands of static WebPs. Meanwhile, `img` correctly detected animation via deep analysis and ignored the file ("handled by vid"). Neither tool processed it → file loss.
+  - **Fix**: Expanded `identify_by_content()` to read 64 bytes and implemented full parsing of the `VP8X` extended header to accurately read the animation flag bit. It now correctly returns `WebpAnimated` natively, allowing `vid` to safely collect it without needing `WebpStatic` in the filter.
+- **APNG & Modern Format Extension Gap**: Fixed a severe logic gap where animated images masquerading with standard extensions (like an APNG named `.png`) were skipped by `img` (because they are animated) but completely ignored by `vid` (because `.png` was not in `supported_video_extensions()`).
+  - **Fix**: Expanded `identify_by_content()` to scan the first 64 bytes for the `acTL` chunk, accurately distinguishing `Apng` from `Png` instantly without `ffprobe`.
+  - **Fix**: Safely added `"png"`, `"apng"`, `"jxl"`, and `"heif"` to the `vid` tool's `SUPPORTED_VIDEO_EXTENSIONS` list. Because the shallow probe now accurately distinguishes static vs animated variants natively, `vid` can safely scan `.png` folders at lightning speed without triggering expensive `ffprobe` operations on static files.
+
+### 🛡️ Verification & Security Hardening
+
+- **Content Hash Verification** (`verify.py`): Added SHA-256 partial hashing (first 64KB) to collision detection.
+  - When duplicate stems are found (e.g. `IMG_0116.WEBP` and `IMG_0116.JPG`), the report now shows whether files have IDENTICAL or DISTINCT content, detecting silent overwrites.
+- **Extension Sync**: Synchronized `verify.py` extension sets with Rust pipeline constants — added `.mpg`, `.mpeg`, `.ts`, `.mts`, `.m2ts`, `.3gp`, `.ogv`, `.apng`, `.ico`, `.svg`, `.jp2`, `.j2k` and others to prevent false missing-file reports.
+
+### 📊 KNN Database
+
+- **Boundary Samples Expanded (25→30)**: Added 5 new edge-case samples targeting format-confusion boundaries:
+  - Animated WebP disguised as static (VP8X header ambiguity)
+  - Animated AVIF sticker
+  - HEIC animated burst sequence
+  - APNG masquerading as `.png`
+  - Large VP8X extended WebP (static, high-res)
+
 ### 🔧 Tooling
 
 - **Consolidated Diagnostic Tool**: `verify.py` (formerly `log_conversion_analyzer.py`) — a unified script for media optimization analysis.

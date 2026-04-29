@@ -145,7 +145,12 @@ impl SourceCodec {
     pub const fn can_be_animated(&self) -> bool {
         matches!(
             self,
-            Self::Gif | Self::Apng | Self::WebpAnimated | Self::Avif | Self::Heic | Self::JpegXl
+            Self::Gif
+                | Self::Apng
+                | Self::WebpAnimated
+                | Self::Avif
+                | Self::Heic
+                | Self::JpegXl
         )
     }
 
@@ -216,7 +221,7 @@ impl SourceCodec {
     pub const fn supported_video_extensions() -> &'static [&'static str] {
         &[
             "mp4", "mov", "avi", "mkv", "webm", "m4v", "wmv", "flv", "mpg", "mpeg", "ts", "mts",
-            "m2ts", "m2v", "3gp", "3g2", "ogv", "f4v", "asf", "gif", "webp", "avif", "heic",
+            "m2ts", "m2v", "3gp", "3g2", "ogv", "f4v", "asf", "gif", "webp", "avif", "heic", "heif", "apng", "png", "jxl",
         ]
     }
 
@@ -297,7 +302,7 @@ impl SourceCodec {
     pub fn identify_by_content(path: &std::path::Path) -> Option<Self> {
         use std::io::Read;
         let mut file = std::fs::File::open(path).ok()?;
-        let mut header = [0u8; 16];
+        let mut header = [0u8; 64]; // Expanded to 64 bytes to capture VP8X and acTL chunks
         let n = file.read(&mut header).ok()?;
         if n < 2 {
             return None;
@@ -320,6 +325,10 @@ impl SourceCodec {
         }
         // PNG: 89 50 4E 47 0D 0A 1A 0A
         if header.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
+            // Check for APNG acTL chunk which usually follows immediately after IHDR (byte 33 starts the second chunk)
+            if header.len() >= 41 && &header[37..41] == b"acTL" {
+                return Some(Self::Apng);
+            }
             return Some(Self::Png);
         }
         // GIF: GIF87a / GIF89a
@@ -347,14 +356,22 @@ impl SourceCodec {
 
         // 2. RIFF Containers (WebP, AVI)
         if header.starts_with(b"RIFF") {
-            let brand = &header[8..12];
-            if brand == b"WEBP" {
-                // Determine if animated requires deeper probe, but for identification WebpStatic/Animated is fine
-                // Here we return WebpStatic as the base type.
-                return Some(Self::WebpStatic);
-            }
-            if brand == b"AVI " {
-                return Some(Self::Mpeg4); // AVI often contains MPEG4 variants
+            if header.len() >= 12 {
+                let brand = &header[8..12];
+                if brand == b"WEBP" {
+                    // Check for VP8X extended header which contains the animation flag
+                    if header.len() >= 21 && &header[12..16] == b"VP8X" {
+                        // The animation flag is the 2nd bit of the flags byte at offset 20
+                        let flags = header[20];
+                        if (flags & 0x02) != 0 {
+                            return Some(Self::WebpAnimated);
+                        }
+                    }
+                    return Some(Self::WebpStatic);
+                }
+                if brand == b"AVI " {
+                    return Some(Self::Mpeg4); // AVI often contains MPEG4 variants
+                }
             }
         }
 
