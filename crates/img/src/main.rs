@@ -1231,6 +1231,34 @@ fn auto_convert_directory(
 
     if !result.paused {
         if let Some(ref output_dir) = config.output_dir {
+            shared_utils::log_eprintln!("\n📦 Copying unsupported files...");
+            let copy_result = shared_utils::copy_unsupported_files(
+                config.base_dir.as_deref().unwrap_or(Path::new(".")),
+                output_dir,
+                recursive,
+            );
+            if copy_result.copied > 0 {
+                shared_utils::log_eprintln!("📦 Copied {} unsupported files", copy_result.copied);
+            }
+            if copy_result.failed > 0 {
+                shared_utils::log_eprintln!("❌ Failed to copy {} files", copy_result.failed);
+            }
+
+            shared_utils::log_eprintln!("\n🔍 Verifying output completeness...");
+            let verify = shared_utils::verify_output_completeness(
+                config.base_dir.as_deref().unwrap_or(Path::new(".")),
+                output_dir,
+                recursive,
+            );
+            shared_utils::log_eprintln!("{}", verify.message);
+            if !verify.passed {
+                shared_utils::log_eprintln!("⚠️  Some files may be missing from output!");
+            }
+        }
+    }
+
+    if !result.paused {
+        if let Some(ref output_dir) = config.output_dir {
             if let Some(ref base_dir) = config.base_dir {
                 shared_utils::preserve_directory_metadata_with_log(base_dir, output_dir);
             }

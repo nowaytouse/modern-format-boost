@@ -716,17 +716,22 @@ pub fn auto_convert_with_cache(
 
         let file_size = std::fs::metadata(input).map_or(0, |m| m.len());
 
-        shared_utils::copy_on_skip_or_fail(
-            input,
-            config.output_dir.as_deref(),
-            config.base_dir.as_deref(),
-            false,
-        )
-        .map_err(|e| VidQualityError::GeneralError(e.to_string()))?;
+        // Exception: If this is the static part of a Live Photo, img will completely ignore it 
+        // to avoid splitting the pair. Therefore, vid must act as the custodian and copy it 
+        // to the output directory to prevent permanent data loss.
+        if shared_utils::is_live_photo(input) {
+            shared_utils::copy_on_skip_or_fail(
+                input,
+                config.output_dir.as_deref(),
+                config.base_dir.as_deref(),
+                false,
+            )
+            .map_err(|e| VidQualityError::GeneralError(e.to_string()))?;
+        }
 
         return Ok(ConversionOutput {
             input_path: input.display().to_string(),
-            output_path: String::new(),
+            output_path: input.display().to_string(),
             strategy: ConversionStrategy {
                 target: TargetVideoFormat::Skip,
                 reason: reason.to_string(),
