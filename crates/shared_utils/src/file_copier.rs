@@ -157,6 +157,19 @@ pub fn copy_unsupported_files(input_dir: &Path, output_dir: &Path, recursive: bo
 
         let dest = output_dir.join(rel_path);
 
+        // Concurrency Guard: If running img and vid in parallel, they might both try to copy 
+        // the same unsupported file (e.g. document.pdf). Check if it already exists 
+        // with the correct size to avoid redundant I/O and potential write-contention.
+        if dest.exists() {
+            if let (Ok(src_meta), Ok(dst_meta)) = (std::fs::metadata(path), std::fs::metadata(&dest)) {
+                if src_meta.len() == dst_meta.len() {
+                    debug!(file = %path.display(), "Skipping unsupported file copy (already exists in destination with matching size)");
+                    result.skipped += 1;
+                    continue;
+                }
+            }
+        }
+
         if let Some(parent) = dest.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
                 let error_msg = format!("Failed to create directory: {e}");

@@ -4,7 +4,20 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
-## [Unreleased]
+### 🧠 Fusion Database & KNN Maturity (v3.0)
+
+This release focuses on building a robust, high-quality "Fusion Database" for media training, replacing generic synthetic samples with verified real-world assets.
+
+- **Fusion Dataset Generation**: Developed a safe extraction pipeline (`build.py`) to collect real-world samples from diverse sources while maintaining 100% filesystem integrity.
+  - **Copy-First Architecture**: All analysis tools (FFprobe, ImageMagick) now strictly operate on local copies in `training_tmp/`, ensuring original source files are never modified or touched by metadata analysis.
+  - **2K/4K High-Quality Baseline**: Elevated the "High Quality" threshold from 1080p to **2K (2560x1440)** and above, ensuring the training set represents modern high-resolution standards.
+  - **DPI/Print Resolution Awareness**: Integrated ImageMagick's `identify` tool to differentiate quality based on **300+ DPI** print standards vs **72 DPI** screen defaults.
+  - **Audio Penetration Detection**: Implemented FFmpeg's `volumedetect` filter to verify "Silent Art Loops". This mechanism detects actual audible signal (> -60dB), preventing media with silent/dummy audio streams from polluting the silent loop dataset.
+  - **Modern Format Prioritization**: Specifically targeted WebP, AVIF, and APNG for animated loop training, while using HEIC and 2K+ JPGs for static quality baselines.
+
+- **KNN Model Maturity**:
+  - **Maturity Threshold**: Established a 30-50 sample minimum per class to activate advanced KNN matching. The Fusion DB currently provides ~450 verified real-world samples, far exceeding this threshold.
+  - **Vector Crowding Logic**: By injecting hundreds of 2K+ and DPI-verified samples into the shared `samples` table, real-world high-quality inputs now effectively "crowd out" generic seed samples in the 31-dimensional feature space, leading to more accurate encoding decisions.
 
 ### 🐛 Critical Bug Fixes & Deep Audit (File Loss Prevention)
 
@@ -65,6 +78,8 @@ This release focuses on hardening the media processing pipeline against resource
   - **Stability Rationale**: Prevents process "zombie" states and premature IO error timeouts during periods of extreme filesystem contention or high-concurrency batch processing.
 - **Safe Symlink Validation**: Integrated a recursive `is_safe_entry` validator into the `WalkDir` file collection engine in `batch.rs`.
   - **Security Rationale**: Protects against Directory Traversal attacks. The system now canonicalizes all paths and validates targets against a restricted "dangerous directory" list before processing, ensuring that malicious symlinks cannot lead to sensitive system areas.
+- **File Copier Concurrency Guard**: Added a size-matching check to `copy_unsupported_files`.
+  - **Efficiency Rationale**: Prevents redundant I/O and potential write contention when `img` and `vid` tools are run in parallel on the same directory.
 
 #### Technical Debt & Code Quality (Zero-Warning Audit)
 

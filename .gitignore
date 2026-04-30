@@ -156,3 +156,5 @@ mutants.out/
 .venv/
 .venv_training/
 
+.training_tmp/
+training_tmp/
