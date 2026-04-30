@@ -51,9 +51,8 @@ and Apple compatibility GIF delivery behavior.
   - Reduced false integrity alarms in `verify.py`:
     - expected modern-animated-image to GIF compatibility conversions are no longer flagged as
       suspicious media-type mismatch.
-  - Prevented duplicate GIF processing outputs:
-    - `gif` removed from `IMAGE_EXTENSIONS_FOR_CONVERT` so image pipeline no longer produces
-      competing image outputs for assets that should be handled by video/animated path.
+  - Kept existing GIF collection behavior in `img` unchanged to preserve prior workflow
+    compatibility while fixing the panic and verifier false positives.
   - Added/kept static skip copy safeguards to ensure no input asset silently disappears from output.
 
 - **Apple compatibility behavior (modern animated formats)**
