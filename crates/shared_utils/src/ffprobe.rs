@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io;
 use std::path::Path;
-use tracing::warn;
+use tracing::{warn, debug};
 
 #[derive(Debug)]
 pub enum FFprobeError {
@@ -175,6 +175,7 @@ fn detect_vfr_enhanced(
     let diff_ratio = (r_frame_rate - avg_frame_rate).abs() / r_frame_rate;
     diff_ratio > 0.02
 }
+
 
 #[derive(Debug)]
 struct ProbeFormatInfo {
@@ -347,6 +348,33 @@ fn resolve_probe_duration(
     Ok(duration)
 }
 
+/// Fallback for dimension parsing using ImageMagick's identify tool.
+fn get_dimensions_via_identify(path: &Path) -> Option<(u32, u32)> {
+    if !crate::image_builders::IdentifyBuilder::check_available() {
+        return None;
+    }
+
+    let output = crate::image_builders::IdentifyBuilder::new()
+        .input(path)
+        .format("%w %h")
+        .build()
+        .output()
+        .ok()?;
+
+    if output.status.success() {
+        let s = String::from_utf8_lossy(&output.stdout);
+        // identify might output multiple lines for animations; take the first frame's dimensions.
+        let first_line = s.lines().next()?;
+        let parts: Vec<&str> = first_line.split_whitespace().collect();
+        if parts.len() >= 2 {
+            let w = parts[0].parse().ok()?;
+            let h = parts[1].parse().ok()?;
+            return Some((w, h));
+        }
+    }
+    None
+}
+
 fn parse_required_u32_field(
     video_stream: &serde_json::Value,
     field_name: &str,
@@ -363,6 +391,7 @@ fn parse_video_stream_fields(
     video_stream: &serde_json::Value,
     format_name: &str,
     duration: f64,
+    path: &Path,
 ) -> Result<VideoStreamFields, FFprobeError> {
     let video_codec = video_stream["codec_name"]
         .as_str()
@@ -372,12 +401,24 @@ fn parse_video_stream_fields(
         .as_str()
         .unwrap_or("")
         .to_string();
-    let width = parse_required_u32_field(video_stream, "width")?;
-    let height = parse_required_u32_field(video_stream, "height")?;
+    let mut width = parse_required_u32_field(video_stream, "width")?;
+    let mut height = parse_required_u32_field(video_stream, "height")?;
     if width == 0 || height == 0 {
-        return Err(FFprobeError::ParseError(format!(
-            "Invalid dimensions: {width}x{height}"
-        )));
+        // 🛡️ WebP Fallback: Some WebP files (especially animated ones) return 0x0 from ffprobe metadata.
+        // Use ImageMagick's identify as a trusted fallback.
+        if format_name.contains("webp") {
+            if let Some((w, h)) = get_dimensions_via_identify(path) {
+                debug!(path = %path.display(), "ffprobe reported 0x0, fell back to identify: {w}x{h}");
+                width = w;
+                height = h;
+            }
+        }
+
+        if width == 0 || height == 0 {
+            return Err(FFprobeError::ParseError(format!(
+                "Invalid dimensions: {width}x{height}"
+            )));
+        }
     }
 
     let frame_rate = parse_frame_rate(video_stream["r_frame_rate"].as_str().unwrap_or("0/1"))
@@ -489,7 +530,7 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         .ok_or_else(|| FFprobeError::ParseError("No streams found".to_string()))?;
     let (stream_index, video_stream) = select_video_stream(streams)?;
     let duration = resolve_probe_duration(format_duration, video_stream)?;
-    let video = parse_video_stream_fields(video_stream, &format_name, duration)?;
+    let video = parse_video_stream_fields(video_stream, &format_name, duration, path)?;
     let hdr = extract_hdr_side_data(&json);
     let audio = extract_audio_stream_fields(streams);
     let subtitles = extract_subtitle_stream_fields(streams);
