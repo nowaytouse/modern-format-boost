@@ -502,22 +502,38 @@ pub fn determine_strategy_with_apple_compat(
 
     let mut is_loop_intent = loop_verdict.is_keep_gif();
 
-    // Apple compat hard rule:
-    // In Apple compatibility mode, modern animated *image* formats (WebP/AVIF/etc) must be
-    // delivered as GIF when they are clearly animated and silent. This is intentionally
-    // independent of the loop-intent tree (which can error on degenerate metadata).
+    // Apple compat hard rule (scoped):
+    // In Apple compatibility mode, modern animated *image* formats (WebP/AVIF/etc) should be
+    // delivered as GIF when they are "animated image" (short / sticker-like) and silent.
+    //
+    // IMPORTANT: do NOT force long animations (video-like assets) into GIF — they must remain
+    // eligible for HEVC delivery. This bypass is intentionally independent of the loop-intent
+    // tree because the tree can error on degenerate metadata (e.g. duration=0).
     if apple_compat && !force {
         if let Some(ext) = input.extension().and_then(|e| e.to_str()) {
             let ext_lower = ext.to_lowercase();
             let is_modern_anim = shared_utils::constants::MODERN_ANIMATED_EXTENSIONS
                 .contains(&ext_lower.as_str());
-            let is_clearly_animated = detection.frame_count > 1 && !detection.has_audio;
-            if is_modern_anim && is_clearly_animated {
+            let is_silent_animated = detection.frame_count > 1 && !detection.has_audio;
+
+            // Prefer duration-based gating when available.
+            // - ≤ 6s: definitively animated-image territory.
+            // - ≥ 15s: definitively video-like; never force GIF.
+            let dur = detection.duration_secs;
+            let is_short = dur > 0.0 && dur <= shared_utils::constants::EXTREME_SHORT_ABSOLUTE_LIMIT_SECS;
+            let is_long = dur >= shared_utils::constants::EXTREME_LONG_ABSOLUTE_LIMIT_SECS;
+
+            // Degenerate duration fallback: only treat as "short" for apple-compat forcing when the
+            // animation is clearly not video-like (small-ish frame count, silent).
+            let degenerate_short_fallback =
+                dur <= 0.0 && detection.frame_count > 1 && detection.frame_count <= 300 && !detection.has_audio;
+
+            if is_modern_anim && is_silent_animated && !is_long && (is_short || degenerate_short_fallback) {
                 return ConversionStrategy {
                     target: TargetVideoFormat::Gif,
                     reason: format!(
-                        "Apple compat: modern animated format ({ext_lower}) forced to GIF (frames={}, audio={})",
-                        detection.frame_count, detection.has_audio
+                        "Apple compat: modern animated format ({ext_lower}) forced to GIF (duration={:.2}s, frames={}, audio={})",
+                        detection.duration_secs, detection.frame_count, detection.has_audio
                     ),
                     command: String::new(),
                     preserve_audio: false,
@@ -2810,7 +2826,8 @@ mod tests {
         use crate::detection_api::{CompressionType, DetectedCodec};
 
         // Simulate an animated WebP with degenerate duration (the historical edge case).
-        // Apple compat must still force GIF delivery for modern animated formats.
+        // Apple compat must still force GIF delivery for modern animated formats *when it is
+        // clearly an animated-image (short / sticker-like) asset*.
         let det = crate::detection_api::VideoDetectionResult {
             file_path: "IMG_0116.WEBP".into(),
             format: "webp".into(),
@@ -2840,6 +2857,37 @@ mod tests {
             "unexpected reason: {}",
             strategy.reason
         );
+    }
+
+    #[test]
+    fn test_apple_compat_does_not_force_gif_for_long_modern_animation() {
+        use crate::detection_api::{CompressionType, DetectedCodec};
+
+        // Long animations are video-like and must remain eligible for HEVC delivery in apple compat.
+        let det = crate::detection_api::VideoDetectionResult {
+            file_path: "LONG_ANIM.WEBP".into(),
+            format: "webp".into(),
+            codec: DetectedCodec::Unknown("webp".into()),
+            compression: CompressionType::Standard,
+            width: 720,
+            height: 720,
+            duration_secs: shared_utils::constants::EXTREME_LONG_ABSOLUTE_LIMIT_SECS + 5.0,
+            has_audio: false,
+            frame_count: 600,
+            fps: 30.0,
+            file_size: 5_000_000,
+            ..Default::default()
+        };
+
+        let strategy = determine_strategy_with_apple_compat(
+            &det,
+            Path::new(&det.file_path),
+            true,
+            false,
+            SelectedCodec::Hevc,
+        );
+
+        assert_ne!(strategy.target, TargetVideoFormat::Gif);
     }
 
     #[test]
