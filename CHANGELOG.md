@@ -45,10 +45,10 @@ and Apple compatibility GIF delivery behavior.
       into the session log file.
     - **Manual diagnostic mode** keeps interactive diagnostics behavior (with optional log analysis)
       without forcing auto-pipeline summary formatting.
-  - Fixed GIF dual-output ambiguity in default batch mode:
-    - in `drag_and_drop_processor.py` with `PROCESSING_MODE=both`, GIF now routes to `vid` only,
-      preventing same-stem parallel outputs like `IMG_xxx.GIF` + `IMG_xxx.JXL` from one source.
-    - `images_only` mode keeps GIF image-pipeline compatibility behavior unchanged.
+  - Unified duplicate-output suppression for dual img/vid dispatch:
+    - when `vid` classifies an input as static or skip-target, it now checks whether `img` already
+      emitted a same-stem output in the target directory and suppresses duplicate copy/output in
+      that case, preventing `Ambiguous` same-stem dual artifacts (e.g. `GIF + JXL`).
   - Fixed a fallback pipeline crash during difficult PNG/JXL paths:
     - `img` FFmpeg→cjxl fallback now uses `output_pipe()` (builder-validated output target),
       preventing runtime panic `FFmpeg output target is required`.
