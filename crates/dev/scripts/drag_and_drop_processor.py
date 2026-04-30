@@ -106,6 +106,66 @@ SESSION_START_TIME = ""
 WATCH_MODE = False
 BRANCH_TYPE = "NIGHTLY"
 
+# Keep these lists in lockstep with Rust SourceCodec extension support.
+# (shared_utils::quality_matcher::{supported_image_extensions,supported_video_extensions})
+IMG_EXTENSIONS = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".jpe",
+    ".jfif",
+    ".webp",
+    ".tiff",
+    ".tif",
+    ".heic",
+    ".heif",
+    ".avif",
+    ".bmp",
+    ".ico",
+    ".svg",
+    ".jp2",
+    ".j2k",
+    ".jxl",
+}
+
+VID_EXTENSIONS = {
+    ".mp4",
+    ".mov",
+    ".avi",
+    ".mkv",
+    ".webm",
+    ".m4v",
+    ".wmv",
+    ".flv",
+    ".mpg",
+    ".mpeg",
+    ".ts",
+    ".mts",
+    ".m2ts",
+    ".m2v",
+    ".3gp",
+    ".3g2",
+    ".ogv",
+    ".f4v",
+    ".asf",
+    ".gif",
+    # Modern animated/image containers collected by vid for animation handling
+    ".webp",
+    ".avif",
+    ".heic",
+    ".heif",
+    ".apng",
+    ".png",
+    ".jxl",
+}
+
+
+def _ci_rsync_exclude(ext_with_dot: str) -> str:
+    """Build a case-insensitive rsync exclude glob for one extension."""
+    ext = ext_with_dot.lstrip(".")
+    ci = "".join(f"[{c.lower()}{c.upper()}]" if c.isalpha() else c for c in ext)
+    return f"--exclude=*.{ci}"
+
 # Threading & Control
 stats_lock = threading.Lock()
 watch_timer = None
@@ -780,40 +840,10 @@ def count_files():
     print(f"{DIM}   Analyzing directory structure...{RESET}")
 
     total, img, vid, xmp, other, media_size = 0, 0, 0, 0, 0, 0
-    img_exts = {
-        ".jpg",
-        ".jpeg",
-        ".jpe",
-        ".jfif",
-        ".png",
-        ".webp",
-        ".heic",
-        ".heif",
-        ".avif",
-        ".tiff",
-        ".tif",
-        ".bmp",
-    }
+    img_exts = IMG_EXTENSIONS
     # GIFs need the video pipeline in full/video mode, but the image pipeline may still
     # touch them in image-only runs to preserve/copy skipped originals.
-    vid_exts = {
-        ".gif",
-        ".mp4",
-        ".mov",
-        ".mkv",
-        ".avi",
-        ".webm",
-        ".m4v",
-        ".wmv",
-        ".flv",
-        ".mpg",
-        ".mpeg",
-        ".ts",
-        ".mts",
-        ".m2ts",
-        ".3gp",
-        ".ogv",
-    }
+    vid_exts = VID_EXTENSIONS
     media_exts = img_exts | vid_exts
 
     def is_animated_webp(p: Path) -> bool:
@@ -1163,40 +1193,8 @@ def sync_non_media_files():
     # media extensions, otherwise rsync cannot copy them and we can lose files.
     excludes = ["--exclude=*.[xX][mM][pP]"]  # always exclude sidecars (handled separately)
 
-    img_ext_excludes = [
-        "--exclude=*.[jJ][pP][gG]",
-        "--exclude=*.[jJ][pP][eE][gG]",
-        "--exclude=*.[jJ][pP][eE]",
-        "--exclude=*.[jJ][fF][iI][fF]",
-        "--exclude=*.[pP][nN][gG]",
-        "--exclude=*.[wW][eE][bB][pP]",
-        "--exclude=*.[hH][eE][iI][cC]",
-        "--exclude=*.[hH][eE][iI][fF]",
-        "--exclude=*.[aA][vV][iI][fF]",
-        "--exclude=*.[tT][iI][fF]",
-        "--exclude=*.[bB][mM][pP]",
-        "--exclude=*.[jJ][xX][lL]",
-        # Optional image-ish containers that may be handled by vid/img depending on animation
-        "--exclude=*.[aA][pP][nN][gG]",
-    ]
-    vid_ext_excludes = [
-        "--exclude=*.[gG][iI][fF]",
-        "--exclude=*.[mM][pP]4",
-        "--exclude=*.[mM][oO][vV]",
-        "--exclude=*.[mM][kK][vV]",
-        "--exclude=*.[aA][vV][iI]",
-        "--exclude=*.[wW][eE][bB][mM]",
-        "--exclude=*.[mM]4[vV]",
-        "--exclude=*.[wW][mM][vV]",
-        "--exclude=*.[fF][lL][vV]",
-        "--exclude=*.[mM][pP][gG]",
-        "--exclude=*.[mM][pP][eE][gG]",
-        "--exclude=*.[tT][sS]",
-        "--exclude=*.[mM][tT][sS]",
-        "--exclude=*.[mM]2[tT][sS]",
-        "--exclude=*.[3][gG][pP]",
-        "--exclude=*.[oO][gG][vV]",
-    ]
+    img_ext_excludes = [_ci_rsync_exclude(ext) for ext in sorted(IMG_EXTENSIONS | {".gif", ".apng"})]
+    vid_ext_excludes = [_ci_rsync_exclude(ext) for ext in sorted(VID_EXTENSIONS)]
 
     if IMG_COUNT > 0:
         excludes += img_ext_excludes

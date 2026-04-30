@@ -29,6 +29,14 @@ and Apple compatibility GIF delivery behavior.
   - `drag_and_drop_processor.py` now classifies animated WebP by content and routes it to `vid`.
   - Dynamic rsync exclude behavior now depends on active pipelines (`IMG_COUNT`/`VID_COUNT`) to
     prevent cross-pipeline omissions when one side is skipped.
+  - Extension handling in Python scripts was further unified with Rust support tables to prevent
+    low-level misses when new suffixes are added:
+    - `drag_and_drop_processor.py` now uses centralized extension sets aligned with Rust
+      `supported_image_extensions` / `supported_video_extensions`.
+    - rsync exclude patterns are now generated from those sets (case-insensitive), eliminating
+      fragile hand-maintained exclude arrays.
+    - `verify.py` media extension tables were synced again (including `.jxl`/`.apng`) to reduce
+      false "missing file" diagnostics caused by extension drift.
   - Added/kept static skip copy safeguards to ensure no input asset silently disappears from output.
 
 - **Apple compatibility behavior (modern animated formats)**

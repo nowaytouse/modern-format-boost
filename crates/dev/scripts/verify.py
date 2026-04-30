@@ -50,14 +50,14 @@ else:
 IMG_EXTS = {
     ".jpg", ".jpeg", ".jpe", ".jfif", ".png", ".webp",
     ".heic", ".heif", ".avif", ".tiff", ".tif", ".bmp",
-    ".ico", ".svg", ".jp2", ".j2k",
+    ".ico", ".svg", ".jp2", ".j2k", ".jxl",
 }
 
 VID_EXTS = {
     ".gif", ".mp4", ".mov", ".mkv", ".avi", ".webm",
     ".m4v", ".wmv", ".flv", ".mpg", ".mpeg", ".ts",
     ".mts", ".m2ts", ".m2v", ".3gp", ".3g2", ".ogv",
-    ".f4v", ".asf",
+    ".f4v", ".asf", ".apng",
 }
 
 OUTPUT_EXTS = {
