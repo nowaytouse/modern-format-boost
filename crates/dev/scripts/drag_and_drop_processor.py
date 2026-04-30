@@ -859,8 +859,16 @@ def count_files():
                 is_img = False
                 is_vid = True
             else:
-                is_img = ext in img_exts or ext == ".gif"
-                is_vid = ext in vid_exts
+                # GIF routing policy:
+                # - both mode: route GIF to video pipeline only (avoid dual outputs: GIF + JXL)
+                # - images_only: allow GIF in image pipeline for compatibility/manual workflows
+                # - videos_only: naturally handled by video pipeline
+                if ext == ".gif":
+                    is_vid = True
+                    is_img = PROCESSING_MODE == "images_only"
+                else:
+                    is_img = ext in img_exts
+                    is_vid = ext in vid_exts
 
             if is_img:
                 img += 1
