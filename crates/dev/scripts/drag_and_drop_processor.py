@@ -764,24 +764,11 @@ def select_mode():
                         print(f"\n{GREEN}DIAGNOSTIC ANALYSIS SELECTED{RESET}")
                         print(f"   Target: {DIM}{TARGET_DIR}{RESET}")
                         print(f"   Logs:   {DIM}{LOG_DIR}{RESET}\n")
-                        
-                        # Consolidated Diagnostic Tool
-                        diag_script = SCRIPT_DIR / "verify.py"
-                        
-                        # Determine optimized dir for verification
-                        tdir = Path(TARGET_DIR).resolve()
-                        opt_dir = tdir.parent / (tdir.name + "_optimized")
-                        if not opt_dir.is_dir():
-                            # Secondary fallback
-                            opt_dir = tdir.parent / (tdir.name + "__optimized")
 
-                        cmd = [sys.executable, str(diag_script), str(LOG_DIR)]
-                        if opt_dir.is_dir():
-                            cmd.extend(["--verify", str(TARGET_DIR), str(opt_dir)])
-                        
+                        # Manual diagnostic mode: run the unified verifier with logs.
                         drain_stdin()
-                        subprocess.run(cmd)
-                        
+                        run_unified_verification(include_logs=True)
+
                         print(f"\n   {CYAN}Press Enter to return to menu...{RESET}")
                         drain_stdin()
                         try:
@@ -1220,6 +1207,44 @@ def sync_non_media_files():
     print(f"   {GREEN}✅ Timestamps restored.{RESET}")
 
 
+def run_unified_verification(include_logs: bool = False):
+    """
+    Unified verification entrypoint.
+    Delegates integrity verification to verify.py as the single source of truth.
+    """
+    verify_script = SCRIPT_DIR / "verify.py"
+    if not verify_script.exists():
+        print(f"   {RED}❌ verify.py not found: {verify_script}{RESET}")
+        return
+
+    src_dir = Path(TARGET_DIR).resolve()
+    opt_dir = None
+
+    if OUTPUT_MODE == "adjacent" and OUTPUT_DIR:
+        opt_dir = Path(OUTPUT_DIR).resolve()
+    else:
+        # Manual diagnostic mode fallback: infer adjacent optimized dir.
+        candidate = src_dir.parent / (src_dir.name + "_optimized")
+        if candidate.is_dir():
+            opt_dir = candidate
+        else:
+            candidate2 = src_dir.parent / (src_dir.name + "__optimized")
+            if candidate2.is_dir():
+                opt_dir = candidate2
+
+    cmd = [sys.executable, str(verify_script)]
+    if opt_dir is not None:
+        cmd.extend(["--verify", str(src_dir), str(opt_dir)])
+    else:
+        print(
+            f"   {YELLOW}⚠️ Optimized pair not found; running log-only analysis.{RESET}"
+        )
+
+    if include_logs:
+        cmd.append(str(LOG_DIR))
+    subprocess.run(cmd)
+
+
 def finish_log():
     if not LOG_FILE:
         return
@@ -1519,6 +1544,9 @@ def main():
 
     if OUTPUT_MODE == "adjacent":
         sync_non_media_files()
+        draw_separator("Auto Verification")
+        print(f"   {DIM}Running unified integrity verification via verify.py...{RESET}")
+        run_unified_verification(include_logs=False)
 
     draw_separator("Task Completed")
 

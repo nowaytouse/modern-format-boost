@@ -37,6 +37,9 @@ and Apple compatibility GIF delivery behavior.
       fragile hand-maintained exclude arrays.
     - `verify.py` media extension tables were synced again (including `.jxl`/`.apng`) to reduce
       false "missing file" diagnostics caused by extension drift.
+  - Removed script-level verification duplication: `drag_and_drop_processor.py` now delegates
+    automatic post-run integrity checks and Tab-menu manual diagnostics to the same unified
+    `verify.py` entrypoint (single verification implementation).
   - Added/kept static skip copy safeguards to ensure no input asset silently disappears from output.
 
 - **Apple compatibility behavior (modern animated formats)**
