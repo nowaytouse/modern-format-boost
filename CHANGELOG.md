@@ -4,6 +4,53 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+### 🔁 Animated WebP / Apple Compat Stabilization (No Version Bump)
+
+This section documents the full chain of fixes and refactors completed in the last few hours
+for the `IMG_0116.WEBP`-class edge case, including missing-output prevention, probe hardening,
+and Apple compatibility GIF delivery behavior.
+
+- **FFprobe + native WebP metadata hardening**
+  - Fixed WebP edge parsing where ffprobe could emit incomplete/invalid fields (e.g. `0x0`,
+    missing pixel format, invalid duration/frame metadata).
+  - Added robust fallbacks for dimensions and pixel format handling; parsing no longer fails hard
+    on missing `pix_fmt`.
+  - Corrected ANMF duration parsing to the WebP-spec 24-bit field (`payload[12..15]`) and added
+    defensive RIFF/chunk boundary checks plus sanity caps for corrupted payloads.
+  - For animated WebP, native ANIM/ANMF-derived frame/duration data is used to correct unreliable
+    ffprobe outputs.
+
+- **Penetrating frame verification policy correction**
+  - Penetration frame verification is now **non-destructive**: positive verified counts can
+    strengthen metadata, but failed/degenerate probe values can no longer downgrade animated
+    assets into single-frame/static outcomes.
+
+- **Routing and omission-prevention fixes**
+  - `drag_and_drop_processor.py` now classifies animated WebP by content and routes it to `vid`.
+  - Dynamic rsync exclude behavior now depends on active pipelines (`IMG_COUNT`/`VID_COUNT`) to
+    prevent cross-pipeline omissions when one side is skipped.
+  - Added/kept static skip copy safeguards to ensure no input asset silently disappears from output.
+
+- **Apple compatibility behavior (modern animated formats)**
+  - Apple-compat GIF forcing is now scoped (not blanket):
+    - force GIF for short/silent modern animated image assets (including degenerate-duration
+      sticker-like cases),
+    - do **not** force long/video-like animated assets into GIF,
+    - preserve uncertain modern-animation fallback to GIF for compatibility.
+  - This policy was refactored out of `vid` orchestration and centralized in
+    `shared_utils::loop_intent` to keep strategy logic unified and reusable.
+
+- **Synthetic privacy-safe regression coverage**
+  - Added synthetic WebP edge fixtures and tests for:
+    - animated WebP classification with delayed animation markers,
+    - ANMF duration parsing correctness,
+    - Apple-compat modern animated routing behavior (short vs long cases).
+  - No real user media is used in tests.
+
+- **Quality gates**
+  - `cargo +nightly clippy --all-targets --all-features` passed.
+  - Full `cargo test` passed after the refactor and policy centralization.
+
 ### 🩹 FFprobe Robustness Fix (WebP Edge Case)
 
 - **Fixed WEBP probe regression**: some Safari-exported WEBP files returned incomplete ffprobe stream metadata (`width/height = 0`, missing `pix_fmt`), causing hard failures like `Parse error: Invalid dimensions: 0x0` and `Parse error: Missing pixel format`.
