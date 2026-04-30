@@ -2144,6 +2144,80 @@ pub fn assess_loop_intent(detection: &VideoDetectionResult) -> LoopIntentVerdict
     assess_loop_intent_from_meta(&meta, Some(Path::new(&detection.file_path)))
 }
 
+/// Apply Apple compatibility delivery policy to a loop-intent verdict.
+///
+/// This keeps the "what should we deliver on Apple?" rule centralized in `shared_utils`,
+/// while callers (e.g. `vid`) remain orchestration-only.
+///
+/// Policy summary (modern animated image formats only):
+/// - Short, silent animated-image assets should be delivered as GIF.
+/// - Long animations must NOT be forced into GIF (keep eligible for HEVC delivery).
+/// - Uncertain verdicts are forced to GIF in Apple mode to maximize compatibility.
+#[must_use]
+pub fn apply_apple_compat_modern_animation_policy(
+    verdict: LoopIntentVerdict,
+    meta: &LoopMeta,
+    apple_compat: bool,
+    force: bool,
+) -> LoopIntentVerdict {
+    if !apple_compat || force {
+        return verdict;
+    }
+
+    let ext_lower = meta
+        .source_extension
+        .as_deref()
+        .unwrap_or("")
+        .to_lowercase();
+    let is_modern_anim = crate::constants::MODERN_ANIMATED_EXTENSIONS.contains(&ext_lower.as_str());
+    if !is_modern_anim {
+        return verdict;
+    }
+
+    // Only apply to silent animations; audio-bearing assets should remain video-delivered.
+    if meta.has_audio {
+        return verdict;
+    }
+
+    // Guard: do not synthesize loop policy for single/zero-frame inputs.
+    if meta.frame_count <= 1 {
+        return verdict;
+    }
+
+    // Long animations are video-like; never force GIF.
+    if meta.duration_secs >= crate::constants::EXTREME_LONG_ABSOLUTE_LIMIT_SECS {
+        return verdict;
+    }
+
+    // Short animations are definitively "animated image" territory.
+    if meta.duration_secs > 0.0
+        && meta.duration_secs <= crate::constants::EXTREME_SHORT_ABSOLUTE_LIMIT_SECS
+    {
+        return LoopIntentVerdict::LoopStrong(format!(
+            "Apple compat policy: modern animated format ({ext_lower}) → force GIF (duration={:.2}s, frames={}, audio={})",
+            meta.duration_secs, meta.frame_count, meta.has_audio
+        ));
+    }
+
+    // Degenerate duration fallback: only treat as "short" for apple-compat forcing when the
+    // animation is clearly not video-like (small-ish frame count, silent).
+    if meta.duration_secs <= 0.0 && meta.frame_count <= 300 {
+        return LoopIntentVerdict::LoopStrong(format!(
+            "Apple compat policy: modern animated format ({ext_lower}) → force GIF (degenerate duration, frames={}, audio={})",
+            meta.frame_count, meta.has_audio
+        ));
+    }
+
+    // Compatibility fallback: modern animated formats with uncertain intent are delivered as GIF.
+    if matches!(verdict, LoopIntentVerdict::Uncertain(_)) {
+        return LoopIntentVerdict::LoopStrong(format!(
+            "Apple compat policy: modern animated format ({ext_lower}) with uncertain intent → force GIF",
+        ));
+    }
+
+    verdict
+}
+
 /// Execute the loop intent identification for a given probe result.
 ///
 /// # Errors

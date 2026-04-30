@@ -238,8 +238,8 @@ pub use depth_channel::{
 pub use image_quality_db::{lookup_image_quality, QualityScore};
 pub use loop_intent::{
     assess_loop_intent, assess_loop_intent_from_meta, assess_loop_intent_from_probe,
-    identify_loop_intent, is_lossless_exploration_safe, should_use_gif_fast_path,
-    LoopIntentVerdict, LoopMeta,
+    apply_apple_compat_modern_animation_policy, identify_loop_intent, is_lossless_exploration_safe,
+    should_use_gif_fast_path, LoopIntentVerdict, LoopMeta,
 };
 
 pub use hdr_synthesis::{

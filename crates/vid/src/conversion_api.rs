@@ -500,62 +500,17 @@ pub fn determine_strategy_with_apple_compat(
         shared_utils::assess_loop_intent(&detection)
     };
 
-    let mut is_loop_intent = loop_verdict.is_keep_gif();
+    // Centralized Apple-compat delivery policy lives in `shared_utils::loop_intent`.
+    // `vid` should only orchestrate and convert, not define compatibility policy.
+    let meta_for_policy = shared_utils::LoopMeta::from_video_detection(&detection);
+    let loop_verdict = shared_utils::apply_apple_compat_modern_animation_policy(
+        loop_verdict,
+        &meta_for_policy,
+        apple_compat,
+        force,
+    );
 
-    // Apple compat hard rule (scoped):
-    // In Apple compatibility mode, modern animated *image* formats (WebP/AVIF/etc) should be
-    // delivered as GIF when they are "animated image" (short / sticker-like) and silent.
-    //
-    // IMPORTANT: do NOT force long animations (video-like assets) into GIF — they must remain
-    // eligible for HEVC delivery. This bypass is intentionally independent of the loop-intent
-    // tree because the tree can error on degenerate metadata (e.g. duration=0).
-    if apple_compat && !force {
-        if let Some(ext) = input.extension().and_then(|e| e.to_str()) {
-            let ext_lower = ext.to_lowercase();
-            let is_modern_anim = shared_utils::constants::MODERN_ANIMATED_EXTENSIONS
-                .contains(&ext_lower.as_str());
-            let is_silent_animated = detection.frame_count > 1 && !detection.has_audio;
-
-            // Prefer duration-based gating when available.
-            // - ≤ 6s: definitively animated-image territory.
-            // - ≥ 15s: definitively video-like; never force GIF.
-            let dur = detection.duration_secs;
-            let is_short = dur > 0.0 && dur <= shared_utils::constants::EXTREME_SHORT_ABSOLUTE_LIMIT_SECS;
-            let is_long = dur >= shared_utils::constants::EXTREME_LONG_ABSOLUTE_LIMIT_SECS;
-
-            // Degenerate duration fallback: only treat as "short" for apple-compat forcing when the
-            // animation is clearly not video-like (small-ish frame count, silent).
-            let degenerate_short_fallback =
-                dur <= 0.0 && detection.frame_count > 1 && detection.frame_count <= 300 && !detection.has_audio;
-
-            if is_modern_anim && is_silent_animated && !is_long && (is_short || degenerate_short_fallback) {
-                return ConversionStrategy {
-                    target: TargetVideoFormat::Gif,
-                    reason: format!(
-                        "Apple compat: modern animated format ({ext_lower}) forced to GIF (duration={:.2}s, frames={}, audio={})",
-                        detection.duration_secs, detection.frame_count, detection.has_audio
-                    ),
-                    command: String::new(),
-                    preserve_audio: false,
-                    crf: 0.0,
-                    lossless: false,
-                };
-            }
-        }
-    }
-
-    // Apple Compatibility Fallback: Modern animations (WebP, AVIF, etc.) with Uncertain intent
-    // are forced to GIF to ensure ecosystem compatibility in Apple mode.
-    if !is_loop_intent && apple_compat && !force {
-        if let Some(ext) = input.extension().and_then(|e| e.to_str()) {
-            let ext_lower = ext.to_lowercase();
-            if shared_utils::constants::MODERN_ANIMATED_EXTENSIONS.contains(&ext_lower.as_str())
-                && matches!(loop_verdict, shared_utils::LoopIntentVerdict::Uncertain(_))
-            {
-                is_loop_intent = true;
-            }
-        }
-    }
+    let is_loop_intent = loop_verdict.is_keep_gif();
 
     // ══════════════════════════════════════════════════════════════════════════════
     // LOOP ERROR HANDLING: Skip on impossible or conflicting signals
@@ -2853,7 +2808,7 @@ mod tests {
 
         assert_eq!(strategy.target, TargetVideoFormat::Gif);
         assert!(
-            strategy.reason.contains("Apple compat: modern animated format"),
+            strategy.reason.contains("Apple compat policy: modern animated format"),
             "unexpected reason: {}",
             strategy.reason
         );
