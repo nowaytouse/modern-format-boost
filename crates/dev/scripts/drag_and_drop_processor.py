@@ -767,7 +767,7 @@ def select_mode():
 
                         # Manual diagnostic mode: run the unified verifier with logs.
                         drain_stdin()
-                        run_unified_verification(include_logs=True)
+                        run_unified_verification(include_logs=True, auto_mode=False)
 
                         print(f"\n   {CYAN}Press Enter to return to menu...{RESET}")
                         drain_stdin()
@@ -1207,7 +1207,7 @@ def sync_non_media_files():
     print(f"   {GREEN}✅ Timestamps restored.{RESET}")
 
 
-def run_unified_verification(include_logs: bool = False):
+def run_unified_verification(include_logs: bool = False, auto_mode: bool = False):
     """
     Unified verification entrypoint.
     Delegates integrity verification to verify.py as the single source of truth.
@@ -1242,6 +1242,26 @@ def run_unified_verification(include_logs: bool = False):
 
     if include_logs:
         cmd.append(str(LOG_DIR))
+    if auto_mode:
+        cmd.append("--print-integrity-summary")
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.stdout:
+            print(proc.stdout, end="" if proc.stdout.endswith("\n") else "\n")
+            if LOG_FILE:
+                try:
+                    with open(LOG_FILE, "a", encoding="utf-8") as f:
+                        f.write("\n========================================\n")
+                        f.write("🔍 Auto Verification Summary\n")
+                        f.write("========================================\n")
+                        f.write(proc.stdout)
+                        if not proc.stdout.endswith("\n"):
+                            f.write("\n")
+                except Exception:
+                    pass
+        if proc.stderr:
+            print(proc.stderr, end="" if proc.stderr.endswith("\n") else "\n")
+        return
+
     subprocess.run(cmd)
 
 
@@ -1546,7 +1566,7 @@ def main():
         sync_non_media_files()
         draw_separator("Auto Verification")
         print(f"   {DIM}Running unified integrity verification via verify.py...{RESET}")
-        run_unified_verification(include_logs=False)
+        run_unified_verification(include_logs=False, auto_mode=True)
 
     draw_separator("Task Completed")
 

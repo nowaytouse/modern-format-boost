@@ -40,6 +40,11 @@ and Apple compatibility GIF delivery behavior.
   - Removed script-level verification duplication: `drag_and_drop_processor.py` now delegates
     automatic post-run integrity checks and Tab-menu manual diagnostics to the same unified
     `verify.py` entrypoint (single verification implementation).
+  - Added explicit auto/manual verification differentiation:
+    - **Auto mode** now requests full integrity summary output to terminal and mirrors the summary
+      into the session log file.
+    - **Manual diagnostic mode** keeps interactive diagnostics behavior (with optional log analysis)
+      without forcing auto-pipeline summary formatting.
   - Added/kept static skip copy safeguards to ensure no input asset silently disappears from output.
 
 - **Apple compatibility behavior (modern animated formats)**

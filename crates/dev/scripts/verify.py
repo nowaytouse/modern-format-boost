@@ -161,7 +161,7 @@ def run_integrity_check(source_dir: Path, optimized_dir: Path, report_f):
 
     if not source_dir.is_dir() or not optimized_dir.is_dir():
         report_f.write("❌ Error: Source or Optimized directory missing.\n\n")
-        return
+        return None
 
     source_files = collect_media_files(source_dir)
     optimized_files = collect_media_files(optimized_dir)
@@ -298,6 +298,21 @@ def run_integrity_check(source_dir: Path, optimized_dir: Path, report_f):
         report_f.write(f"  Source total:    {format_size(total_src_size)}\n")
         report_f.write(f"  Optimized total: {format_size(total_opt_size)}\n")
         report_f.write(f"  Space saved:     {format_size(savings)} ({savings_pct:.1f}%)\n\n")
+
+    return {
+        "source": str(source_dir),
+        "optimized": str(optimized_dir),
+        "source_files": src_count,
+        "optimized_files": opt_count,
+        "count_delta": delta,
+        "matched": len(matched),
+        "ambiguous": len(ambiguous),
+        "missing": len(missing),
+        "extra": len(extra),
+        "mismatched_types": len(mismatched_types),
+        "source_total_size": total_src_size,
+        "optimized_total_size": total_opt_size,
+    }
 
 # ---------------------------------------------------------------------------
 # Log Analysis Logic
@@ -461,6 +476,11 @@ if __name__ == "__main__":
     parser.add_argument("logs", nargs="*", help="Log files or directories to scan.")
     parser.add_argument("--verify", nargs="+", help="Source and/or optimized directories for integrity check (auto-detects if one provided).")
     parser.add_argument("-o", "--output", help="Custom output report path.")
+    parser.add_argument(
+        "--print-integrity-summary",
+        action="store_true",
+        help="Print integrity summary to stdout for automation pipelines.",
+    )
 
     args = parser.parse_args()
 
@@ -476,12 +496,13 @@ if __name__ == "__main__":
 
         # 1. Integrity Check
         source_dir_context = None
+        integrity_stats = None
         if args.verify:
             resolved = resolve_verify_dirs(args.verify)
             if resolved:
                 src, opt = resolved
                 source_dir_context = src
-                run_integrity_check(src, opt, report_f)
+                integrity_stats = run_integrity_check(src, opt, report_f)
             else:
                 report_f.write(f"❌ Error: Could not resolve paired directory for {args.verify[0]}\n\n")
 
@@ -490,6 +511,36 @@ if __name__ == "__main__":
             conv_count, unc_count = parse_logs(args.logs, report_f, filter_dir=source_dir_context)
             print(f"📈 Total conversion events: {conv_count}")
             print(f"🔭 Uncertain loop cases: {unc_count}")
+
+    if args.print_integrity_summary:
+        if integrity_stats is None:
+            print("🔎 Integrity summary: unavailable (source/optimized pair not resolved)")
+        else:
+            delta = integrity_stats["count_delta"]
+            if delta == 0:
+                delta_text = "MATCH"
+            else:
+                direction = "more" if delta > 0 else "fewer"
+                delta_text = f"MISMATCH ({abs(delta)} {direction} in optimized)"
+            print("🔎 Integrity summary")
+            print(f"   Source:    {integrity_stats['source']}")
+            print(f"   Optimized: {integrity_stats['optimized']}")
+            print(f"   Source files:    {integrity_stats['source_files']}")
+            print(f"   Optimized files: {integrity_stats['optimized_files']}")
+            print(f"   Count status:    {delta_text}")
+            print(f"   Matched:         {integrity_stats['matched']}")
+            print(f"   Ambiguous:       {integrity_stats['ambiguous']}")
+            print(f"   Missing:         {integrity_stats['missing']}")
+            print(f"   Extra:           {integrity_stats['extra']}")
+            print(f"   Type mismatch:   {integrity_stats['mismatched_types']}")
+            if integrity_stats["source_total_size"] > 0:
+                src_size = integrity_stats["source_total_size"]
+                opt_size = integrity_stats["optimized_total_size"]
+                savings = src_size - opt_size
+                savings_pct = (savings / src_size) * 100
+                print(
+                    f"   Space saved:     {format_size(savings)} ({savings_pct:.1f}%)"
+                )
 
     print(f"📊 Full report generated: {output_report}")
 
