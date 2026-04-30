@@ -45,10 +45,11 @@ and Apple compatibility GIF delivery behavior.
       into the session log file.
     - **Manual diagnostic mode** keeps interactive diagnostics behavior (with optional log analysis)
       without forcing auto-pipeline summary formatting.
-  - Unified duplicate-output suppression for dual img/vid dispatch:
-    - when `vid` classifies an input as static or skip-target, it now checks whether `img` already
-      emitted a same-stem output in the target directory and suppresses duplicate copy/output in
-      that case, preventing `Ambiguous` same-stem dual artifacts (e.g. `GIF + JXL`).
+  - Strengthened internal animated-GIF classification in `img`:
+    - when structural GIF parsing reports static/1-frame, `img` now runs decode-based penetration
+      frame verification before deciding static, so animated GIFs are reliably deferred to `vid`.
+    - this removes the root cause of same-stem dual outputs by aligning internal `img`/`vid`
+      animated-vs-static judgment instead of relying on external dedupe guards.
   - Fixed a fallback pipeline crash during difficult PNG/JXL paths:
     - `img` FFmpeg→cjxl fallback now uses `output_pipe()` (builder-validated output target),
       preventing runtime panic `FFmpeg output target is required`.

@@ -1061,6 +1061,25 @@ fn check_gif_animation(path: &Path) -> Result<bool> {
         }
     }
 
+    // Stage 3: Penetrating decode fallback (ground-truth frame count)
+    // Some edge GIFs can bypass structural/GCE heuristics; use decode-based verification
+    // only when metadata is suspiciously static to keep cost bounded.
+    if structural_count <= 1 {
+        if let crate::media_penetration::PenetrationResult::Verified(real_count) =
+            crate::media_penetration::detect_real_frame_count(path, u64::from(structural_count))
+        {
+            if real_count > 1 {
+                log_eprintln!(
+                    "🎞️  [Penetration: GIF] Structural scan reported {} frame, decode confirmed {} frames: {}",
+                    structural_count,
+                    real_count,
+                    path.display()
+                );
+                return Ok(true);
+            }
+        }
+    }
+
     Ok(structural_count > 1)
 }
 

@@ -713,18 +713,15 @@ pub fn auto_convert_with_cache(
 
         let file_size = std::fs::metadata(input).map_or(0, |m| m.len());
 
-        // If img already produced a same-stem output, do not emit another same-stem artifact here.
-        if !has_existing_same_stem_output(input, config.output_dir.as_deref(), config.base_dir.as_deref()) {
-            // Data-loss guard: when vid isolates a file as static, still copy original in output mode.
-            // This prevents omission if img/vid disagree on animated detection for edge files.
-            shared_utils::copy_on_skip_or_fail(
-                input,
-                config.output_dir.as_deref(),
-                config.base_dir.as_deref(),
-                false,
-            )
-            .map_err(|e| VidQualityError::GeneralError(e.to_string()))?;
-        }
+        // Data-loss guard: when vid isolates a file as static, still copy original in output mode.
+        // This prevents omission if img/vid disagree on animated detection for edge files.
+        shared_utils::copy_on_skip_or_fail(
+            input,
+            config.output_dir.as_deref(),
+            config.base_dir.as_deref(),
+            false,
+        )
+        .map_err(|e| VidQualityError::GeneralError(e.to_string()))?;
 
         return Ok(ConversionOutput {
             input_path: input.display().to_string(),
@@ -790,15 +787,13 @@ pub fn auto_convert_with_cache(
     if strategy.target == TargetVideoFormat::Skip {
         shared_utils::progress_mode::video_skipped(&strategy.reason);
 
-        if !has_existing_same_stem_output(input, config.output_dir.as_deref(), config.base_dir.as_deref()) {
-            shared_utils::copy_on_skip_or_fail(
-                input,
-                config.output_dir.as_deref(),
-                config.base_dir.as_deref(),
-                false,
-            )
-            .map_err(|e| VidQualityError::GeneralError(e.to_string()))?;
-        }
+        shared_utils::copy_on_skip_or_fail(
+            input,
+            config.output_dir.as_deref(),
+            config.base_dir.as_deref(),
+            false,
+        )
+        .map_err(|e| VidQualityError::GeneralError(e.to_string()))?;
 
         return Ok(ConversionOutput {
             input_path: input.display().to_string(),
@@ -1574,43 +1569,6 @@ pub fn auto_convert_with_cache(
     })
 }
 
-fn has_existing_same_stem_output(
-    input: &Path,
-    output_dir: Option<&Path>,
-    base_dir: Option<&Path>,
-) -> bool {
-    let Some(out_root) = output_dir else {
-        return false;
-    };
-    let stem = input
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .map(str::to_lowercase);
-    let Some(stem) = stem else {
-        return false;
-    };
-
-    let target_parent = if let Some(base) = base_dir {
-        if let Ok(rel) = input.strip_prefix(base) {
-            out_root.join(rel.parent().unwrap_or_else(|| Path::new("")))
-        } else {
-            out_root.to_path_buf()
-        }
-    } else {
-        out_root.to_path_buf()
-    };
-
-    let Ok(entries) = std::fs::read_dir(&target_parent) else {
-        return false;
-    };
-    entries.flatten().any(|entry| {
-        let p = entry.path();
-        p.is_file()
-            && p.file_stem()
-                .and_then(|s| s.to_str())
-                .is_some_and(|s| s.eq_ignore_ascii_case(&stem))
-    })
-}
 
 fn success_status_for_cache(
     target: TargetVideoFormat,
