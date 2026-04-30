@@ -502,6 +502,32 @@ pub fn determine_strategy_with_apple_compat(
 
     let mut is_loop_intent = loop_verdict.is_keep_gif();
 
+    // Apple compat hard rule:
+    // In Apple compatibility mode, modern animated *image* formats (WebP/AVIF/etc) must be
+    // delivered as GIF when they are clearly animated and silent. This is intentionally
+    // independent of the loop-intent tree (which can error on degenerate metadata).
+    if apple_compat && !force {
+        if let Some(ext) = input.extension().and_then(|e| e.to_str()) {
+            let ext_lower = ext.to_lowercase();
+            let is_modern_anim = shared_utils::constants::MODERN_ANIMATED_EXTENSIONS
+                .contains(&ext_lower.as_str());
+            let is_clearly_animated = detection.frame_count > 1 && !detection.has_audio;
+            if is_modern_anim && is_clearly_animated {
+                return ConversionStrategy {
+                    target: TargetVideoFormat::Gif,
+                    reason: format!(
+                        "Apple compat: modern animated format ({ext_lower}) forced to GIF (frames={}, audio={})",
+                        detection.frame_count, detection.has_audio
+                    ),
+                    command: String::new(),
+                    preserve_audio: false,
+                    crf: 0.0,
+                    lossless: false,
+                };
+            }
+        }
+    }
+
     // Apple Compatibility Fallback: Modern animations (WebP, AVIF, etc.) with Uncertain intent
     // are forced to GIF to ensure ecosystem compatibility in Apple mode.
     if !is_loop_intent && apple_compat && !force {
@@ -2777,6 +2803,43 @@ mod tests {
         );
 
         assert_eq!(adjusted.target, TargetVideoFormat::Gif);
+    }
+
+    #[test]
+    fn test_apple_compat_forces_gif_for_modern_animated_webp_even_if_loop_tree_errors() {
+        use crate::detection_api::{CompressionType, DetectedCodec};
+
+        // Simulate an animated WebP with degenerate duration (the historical edge case).
+        // Apple compat must still force GIF delivery for modern animated formats.
+        let det = crate::detection_api::VideoDetectionResult {
+            file_path: "IMG_0116.WEBP".into(),
+            format: "webp".into(),
+            codec: DetectedCodec::Unknown("webp".into()),
+            compression: CompressionType::Standard,
+            width: 512,
+            height: 512,
+            duration_secs: 0.0,
+            has_audio: false,
+            frame_count: 12,
+            fps: 0.0,
+            file_size: 500_000,
+            ..Default::default()
+        };
+
+        let strategy = determine_strategy_with_apple_compat(
+            &det,
+            Path::new(&det.file_path),
+            true,
+            false,
+            SelectedCodec::Hevc,
+        );
+
+        assert_eq!(strategy.target, TargetVideoFormat::Gif);
+        assert!(
+            strategy.reason.contains("Apple compat: modern animated format"),
+            "unexpected reason: {}",
+            strategy.reason
+        );
     }
 
     #[test]

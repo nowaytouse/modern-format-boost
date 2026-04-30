@@ -1,5 +1,6 @@
 ---
 source: crates/dev/edge/rs/classification_snapshots.rs
+assertion_line: 138
 expression: verdict.reason()
 ---
-"Layer 3 (Video): log-odds -1.37 <= -0.55 (self-referential structure points away from looping)"
+"Layer 3 (Video): log-odds -0.66 <= -0.55 (self-referential structure points away from looping)"

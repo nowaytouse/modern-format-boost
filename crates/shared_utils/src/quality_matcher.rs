@@ -1977,6 +1977,19 @@ mod tests {
     }
 
     #[test]
+    fn test_size_guard_in_apple_compat_is_disabled_for_non_apple_native_inputs() {
+        // Apple compat should never size-guard non-apple-native sources such as WebP/AVIF:
+        // compatibility takes priority and the guard is only meaningful for already-native inputs.
+        assert!(!is_size_guard_active("webp", true));
+        assert!(!is_size_guard_active("avif", true));
+
+        // Apple-native inputs can keep the size guard active under apple_compat.
+        assert!(is_size_guard_active("gif", true));
+        assert!(is_size_guard_active("jpeg", true));
+        assert!(is_size_guard_active("png", true));
+    }
+
+    #[test]
     fn test_jxl_distance_with_quality() {
         let analysis = QualityAnalysis {
             bpp: 0.0,

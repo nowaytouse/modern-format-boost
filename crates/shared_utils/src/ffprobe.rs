@@ -613,9 +613,11 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         if let crate::media_penetration::PenetrationResult::Verified(real_count) =
             crate::media_penetration::detect_real_frame_count(path, result.frame_count)
         {
-            // Guard: penetration probes can fail and report 0. Never downgrade to 0 frames.
-            if real_count > 0 && real_count != result.frame_count {
-                result.frame_count = real_count;
+            // Penetration is authoritative only when it successfully returns a positive count.
+            // It must never *downgrade* an already-plausible frame_count (e.g. animated media)
+            // due to probe failure, partial decode, or container quirks.
+            if real_count > 0 {
+                result.frame_count = result.frame_count.max(real_count);
             }
         }
     }
