@@ -809,6 +809,18 @@ def count_files():
     }
     media_exts = img_exts | vid_exts
 
+    def is_animated_webp(p: Path) -> bool:
+        """
+        Fast WebP animation detection without ffprobe.
+        We scan a bounded prefix for ANIM/ANMF markers (matches Rust fallback logic).
+        """
+        try:
+            with open(p, "rb") as f:
+                data = f.read(1024 * 1024)  # 1 MiB cap
+            return (b"ANIM" in data) or (b"ANMF" in data)
+        except Exception:
+            return False
+
     for root, _, files in os.walk(TARGET_DIR):
         for file in files:
             if file.startswith("."):
@@ -817,8 +829,14 @@ def count_files():
             p = Path(root) / file
             ext = p.suffix.lower()
 
-            is_img = ext in img_exts or ext == ".gif"
-            is_vid = ext in vid_exts
+            # Root fix: animated WebP must go through video pipeline.
+            # Otherwise img will IGNORE it and it won't be copied, causing data loss.
+            if ext == ".webp" and is_animated_webp(p):
+                is_img = False
+                is_vid = True
+            else:
+                is_img = ext in img_exts or ext == ".gif"
+                is_vid = ext in vid_exts
 
             if is_img:
                 img += 1

@@ -310,6 +310,32 @@ impl SourceCodec {
 
         let mut codec = Self::identify_by_header(&header[..n]);
 
+        // Deep WebP animation verification
+        // Some WebP files (notably Safari exports) may not place `VP8X` within the first 64 bytes
+        // even when the file is animated, causing false `WebpStatic` classification.
+        // We scan a bounded prefix for `ANIM`/`ANMF` markers as a fast, reliable fallback.
+        if codec == Some(Self::WebpStatic)
+            && header.starts_with(b"RIFF")
+            && n >= 12
+            && &header[8..12] == b"WEBP"
+        {
+            const SCAN_LIMIT: usize = 1024 * 1024; // 1 MiB cap (safe & fast)
+            let mut buf = Vec::with_capacity(SCAN_LIMIT);
+            buf.extend_from_slice(&header[..n]);
+
+            let remaining = SCAN_LIMIT.saturating_sub(n);
+            if remaining > 0 {
+                let mut extra = vec![0u8; remaining];
+                if let Ok(read_n) = file.read(&mut extra) {
+                    buf.extend_from_slice(&extra[..read_n]);
+                }
+            }
+
+            if buf.windows(4).any(|w| w == b"ANIM") || buf.windows(4).any(|w| w == b"ANMF") {
+                codec = Some(Self::WebpAnimated);
+            }
+        }
+
         // Deep APNG verification
         // 64 bytes is insufficient for PNG because large chunks (like iCCP or eXIf)
         // can push the acTL chunk far beyond the header. We use Seek to jump over chunk data.

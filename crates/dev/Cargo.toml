@@ -89,6 +89,10 @@ path = "edge/rs/test_ultrahdr_real_file_final.rs"
 name = "parity_tests"
 path = "edge/rs/parity_tests.rs"
 
+[[test]]
+name = "test_webp_animated_classification"
+path = "edge/rs/test_webp_animated_classification.rs"
+
 [[bench]]
 name = "quality_benches"
 path = "benches/quality_benches.rs"
