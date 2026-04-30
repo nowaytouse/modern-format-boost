@@ -190,7 +190,7 @@ pub const ENV_FORCE_QUALITY_KNN: &str = "MODERN_FORMAT_FORCE_QUALITY_KNN";
 /// The V7 seed database provides 30 highly-curated boundary samples.
 pub const MIN_GIF_SAMPLES_TOTAL: i64 = 30;
 /// Minimum samples per class (high/video) for GIF/Video KNN.
-/// The V7 seed database provides exactly 10 LoopWeak and 20 LoopStrong.
+/// The V7 seed database provides exactly 10 `LoopWeak` and 20 `LoopStrong`.
 pub const MIN_GIF_SAMPLES_PER_CLASS: i64 = 10;
 
 /// Minimum total labeled samples required for static image KNN to engage.

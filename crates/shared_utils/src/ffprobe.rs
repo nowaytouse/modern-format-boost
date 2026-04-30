@@ -348,7 +348,7 @@ fn resolve_probe_duration(
     Ok(duration)
 }
 
-/// Fallback for dimension parsing using ImageMagick's identify tool.
+/// Fallback for dimension parsing using `ImageMagick`'s identify tool.
 fn get_dimensions_via_identify(path: &Path) -> Option<(u32, u32)> {
     if !crate::image_builders::IdentifyBuilder::check_available() {
         return None;

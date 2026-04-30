@@ -313,9 +313,9 @@ impl SourceCodec {
         // Deep APNG verification
         // 64 bytes is insufficient for PNG because large chunks (like iCCP or eXIf)
         // can push the acTL chunk far beyond the header. We use Seek to jump over chunk data.
-        if let Some(Self::Png) = codec {
+        if codec == Some(Self::Png) {
             use std::io::{Seek, SeekFrom};
-            if let Ok(_) = file.seek(SeekFrom::Start(8)) {
+            if file.seek(SeekFrom::Start(8)).is_ok() {
                 let mut chunk_header = [0u8; 8];
                 loop {
                     if file.read_exact(&mut chunk_header).is_err() {
@@ -392,8 +392,8 @@ impl SourceCodec {
         }
 
         // 2. RIFF Containers (WebP, AVI)
-        if header.starts_with(b"RIFF") {
-            if header.len() >= 12 {
+        if header.starts_with(b"RIFF")
+            && header.len() >= 12 {
                 let brand = &header[8..12];
                 if brand == b"WEBP" {
                     // Check for VP8X extended header which contains the animation flag
@@ -410,7 +410,6 @@ impl SourceCodec {
                     return Some(Self::Mpeg4); // AVI often contains MPEG4 variants
                 }
             }
-        }
 
         // 3. ISO Base Media File Format (MP4, MOV, HEIC, AVIF)
         // [Any 4 bytes] + "ftyp"

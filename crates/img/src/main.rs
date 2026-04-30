@@ -114,7 +114,7 @@ enum Commands {
         input: PathBuf,
     },
 
-    /// Batch ingest unannotated static image samples into SQLite database for Active Learning
+    /// Batch ingest unannotated static image samples into `SQLite` database for Active Learning
     IngestSamples {
         #[arg(value_name = "INPUT_DIR")]
         input: PathBuf,
@@ -486,7 +486,7 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
             }
-            println!("✅ Successfully ingested {} static image samples.", count);
+            println!("✅ Successfully ingested {count} static image samples.");
         }
     }
 
