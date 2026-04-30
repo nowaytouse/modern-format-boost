@@ -8,18 +8,35 @@ pub fn build_synthetic_animated_webp_without_vp8x_in_header() -> Vec<u8> {
     bytes.extend_from_slice(&0u32.to_le_bytes());
     bytes.extend_from_slice(b"WEBP");
 
-    // Pad so VP8X is not in the first 64 bytes (and we don't include it at all)
-    bytes.extend(std::iter::repeat_n(0u8, 80));
+    // Add a JUNK chunk to push animation metadata beyond the first 64 bytes
+    // while keeping valid RIFF chunk structure (id + size + payload).
+    let junk_payload = vec![0u8; 80];
+    bytes.extend_from_slice(b"JUNK");
+    bytes.extend_from_slice(&(junk_payload.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&junk_payload);
 
-    // Insert animation markers
+    // Insert ANIM chunk (with a small payload)
+    let anim_payload = vec![0u8; 16];
     bytes.extend_from_slice(b"ANIM");
-    bytes.extend(std::iter::repeat_n(0u8, 16));
+    bytes.extend_from_slice(&(anim_payload.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&anim_payload);
 
-    // Two frames markers
-    bytes.extend_from_slice(b"ANMF");
-    bytes.extend(std::iter::repeat_n(0u8, 16));
-    bytes.extend_from_slice(b"ANMF");
-    bytes.extend(std::iter::repeat_n(0u8, 16));
+    // Two ANMF chunks with a minimal 16-byte frame header.
+    // Duration is a 24-bit little-endian integer at offset 12..15 in the ANMF payload.
+    fn anmf_chunk(duration_ms: u32) -> Vec<u8> {
+        let mut payload = vec![0u8; 16];
+        payload[12] = (duration_ms & 0xFF) as u8;
+        payload[13] = ((duration_ms >> 8) & 0xFF) as u8;
+        payload[14] = ((duration_ms >> 16) & 0xFF) as u8;
+        let mut out = Vec::new();
+        out.extend_from_slice(b"ANMF");
+        out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        out.extend_from_slice(&payload);
+        // RIFF chunks are padded to even size (payload len 16 already even)
+        out
+    }
+    bytes.extend_from_slice(&anmf_chunk(100));
+    bytes.extend_from_slice(&anmf_chunk(120));
 
     bytes
 }

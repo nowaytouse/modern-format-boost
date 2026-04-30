@@ -806,6 +806,13 @@ def count_files():
         ".m4v",
         ".wmv",
         ".flv",
+        ".mpg",
+        ".mpeg",
+        ".ts",
+        ".mts",
+        ".m2ts",
+        ".3gp",
+        ".ogv",
     }
     media_exts = img_exts | vid_exts
 
@@ -1151,20 +1158,29 @@ def process_videos():
 
 def sync_non_media_files():
     draw_separator("Syncing Non-Media Files")
-    excludes = [
+    # IMPORTANT: only exclude extensions that are actually processed by the Rust tools.
+    # If a pipeline is disabled (IMG_COUNT==0 or VID_COUNT==0), we must NOT exclude those
+    # media extensions, otherwise rsync cannot copy them and we can lose files.
+    excludes = ["--exclude=*.[xX][mM][pP]"]  # always exclude sidecars (handled separately)
+
+    img_ext_excludes = [
         "--exclude=*.[jJ][pP][gG]",
         "--exclude=*.[jJ][pP][eE][gG]",
+        "--exclude=*.[jJ][pP][eE]",
+        "--exclude=*.[jJ][fF][iI][fF]",
         "--exclude=*.[pP][nN][gG]",
         "--exclude=*.[wW][eE][bB][pP]",
         "--exclude=*.[hH][eE][iI][cC]",
         "--exclude=*.[hH][eE][iI][fF]",
         "--exclude=*.[aA][vV][iI][fF]",
-        "--exclude=*.[gG][iI][fF]",
         "--exclude=*.[tT][iI][fF]",
-        "--exclude=*.[jJ][pP][eE]",
-        "--exclude=*.[jJ][fF][iI][fF]",
         "--exclude=*.[bB][mM][pP]",
         "--exclude=*.[jJ][xX][lL]",
+        # Optional image-ish containers that may be handled by vid/img depending on animation
+        "--exclude=*.[aA][pP][nN][gG]",
+    ]
+    vid_ext_excludes = [
+        "--exclude=*.[gG][iI][fF]",
         "--exclude=*.[mM][pP]4",
         "--exclude=*.[mM][oO][vV]",
         "--exclude=*.[mM][kK][vV]",
@@ -1173,8 +1189,19 @@ def sync_non_media_files():
         "--exclude=*.[mM]4[vV]",
         "--exclude=*.[wW][mM][vV]",
         "--exclude=*.[fF][lL][vV]",
-        "--exclude=*.[xX][mM][pP]",
+        "--exclude=*.[mM][pP][gG]",
+        "--exclude=*.[mM][pP][eE][gG]",
+        "--exclude=*.[tT][sS]",
+        "--exclude=*.[mM][tT][sS]",
+        "--exclude=*.[mM]2[tT][sS]",
+        "--exclude=*.[3][gG][pP]",
+        "--exclude=*.[oO][gG][vV]",
     ]
+
+    if IMG_COUNT > 0:
+        excludes += img_ext_excludes
+    if VID_COUNT > 0:
+        excludes += vid_ext_excludes
     rsync = (
         "/opt/homebrew/opt/rsync/bin/rsync"
         if os.path.exists("/opt/homebrew/opt/rsync/bin/rsync")

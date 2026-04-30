@@ -355,7 +355,7 @@ pub mod webp {
         if !data.windows(4).any(|w| w == b"ANIM") {
             return None;
         }
-        let mut pos = 12usize; // TODO: manual fix needed for multi-line
+        let mut pos = 12usize; // RIFF payload start
         let mut total_ms = 0u64;
         while pos + 8 <= data.len() {
             let chunk_id = &data[pos..pos + 4];
@@ -367,20 +367,47 @@ pub mod webp {
             ]))
             .unwrap_or(usize::MAX);
             let payload_start = pos + 8;
-            let payload_end = (payload_start + chunk_size).min(data.len());
-            if chunk_id == b"ANMF" && payload_end >= payload_start + 20 {
-                let duration_ms = u32::from_le_bytes([
-                    data[payload_start + 16],
-                    data[payload_start + 17],
-                    data[payload_start + 18],
-                    data[payload_start + 19],
-                ]);
+        // Strict bounds: if chunk_size is malformed, stop trusting RIFF traversal.
+            if chunk_size > data.len().saturating_sub(payload_start) {
+                break;
+            }
+            let payload_end = payload_start + chunk_size;
+        // ANMF frame header is 16 bytes. Duration is a 24-bit little-endian integer at offset 12..15.
+        if chunk_id == b"ANMF" && payload_end >= payload_start + 16 {
+            let duration_ms = u32::from(data[payload_start + 12])
+                | (u32::from(data[payload_start + 13]) << 8)
+                | (u32::from(data[payload_start + 14]) << 16);
+            if duration_ms > 0 && duration_ms <= 60_000 {
                 total_ms += u64::from(duration_ms);
+            }
             }
             let padded = (chunk_size + 1) & !1;
             pos = payload_start + padded;
         }
+        // If RIFF traversal failed (common for Safari exports), fall back to a marker scan:
+        // search for ANMF and read the duration field at a fixed offset relative to chunk header.
         if total_ms == 0 {
+            for idx in data
+                .windows(4)
+                .enumerate()
+                .filter_map(|(i, w)| if w == b"ANMF" { Some(i) } else { None })
+            {
+                // ANMF chunk layout: "ANMF" (4) + size (4) + payload...
+                // duration is 24-bit LE at payload offset 12..15 => idx + 8 + 12..15
+                let dur_off = idx + 8 + 12;
+                if dur_off + 3 <= data.len() {
+                    let duration_ms = u32::from(data[dur_off])
+                        | (u32::from(data[dur_off + 1]) << 8)
+                        | (u32::from(data[dur_off + 2]) << 16);
+                    if duration_ms > 0 && duration_ms <= 60_000 {
+                        total_ms += u64::from(duration_ms);
+                    }
+                }
+            }
+        }
+
+        // Hard sanity cap: if duration is absurd, treat as unknown.
+        if total_ms == 0 || total_ms > 600_000 {
             return None;
         }
         Some(crate::numeric_cast::f64_to_f32_lossy(

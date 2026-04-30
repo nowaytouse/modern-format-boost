@@ -1408,7 +1408,10 @@ pub fn convert_to_mp4_matched(
 
     // apple_compat mode: compatibility takes priority over file size.
     // However, if the source is already apple-compatible (like GIF/APNG), size guard stays active.
-    let is_guard_active = shared_utils::is_size_guard_active(&input_ext, options.apple_compat);
+    // For definitive loop assets, compatibility/domain correctness beats size.
+    // If loop intent says this should stay in the GIF domain, do not apply the size guard.
+    let is_guard_active = shared_utils::is_size_guard_active(&input_ext, options.apple_compat)
+        && !is_gif_meme(input);
 
     if is_guard_active && explore_result.output_size > max_allowed_size {
         let size_increase_pct =

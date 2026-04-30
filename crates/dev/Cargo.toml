@@ -93,6 +93,10 @@ path = "edge/rs/parity_tests.rs"
 name = "test_webp_animated_classification"
 path = "edge/rs/test_webp_animated_classification.rs"
 
+[[test]]
+name = "test_webp_duration_parser"
+path = "edge/rs/test_webp_duration_parser.rs"
+
 [[bench]]
 name = "quality_benches"
 path = "benches/quality_benches.rs"

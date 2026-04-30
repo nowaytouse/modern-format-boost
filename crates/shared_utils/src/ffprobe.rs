@@ -345,12 +345,27 @@ fn select_video_stream<'a>(
 fn resolve_probe_duration(
     format_duration: f64,
     video_stream: &serde_json::Value,
+    format_name: &str,
+    path: &Path,
 ) -> Result<f64, FFprobeError> {
-    let duration = if format_duration > 0.0 {
+    let mut duration = if format_duration > 0.0 {
         format_duration
     } else {
         parse_f64_string_field(&video_stream["duration"]).unwrap_or(0.0)
     };
+
+    // Root fix: ffprobe often reports 0/N/A duration for animated WebP (`webp_pipe`).
+    // Loop-intent logic requires a real duration; derive it from ANMF frame durations.
+    if duration <= 0.0 && format_name.contains("webp") {
+        if let Ok(data) = std::fs::read(path) {
+            if let Some(native_dur) = crate::image_formats::webp::duration_secs_from_bytes(&data) {
+                let native_dur = f64::from(native_dur);
+                if native_dur > 0.0 {
+                    duration = native_dur;
+                }
+            }
+        }
+    }
 
     // Allow 0.0 duration for formats like headless GIFs where duration is not globally specified
     Ok(duration)
@@ -415,19 +430,25 @@ fn parse_video_stream_fields(
     let mut frame_count = parse_u64_string_field(&video_stream["nb_frames"])
         .unwrap_or_else(|| crate::numeric_cast::f64_to_u64_sat(duration * frame_rate));
 
-    // Root fix for Safari-style animated WebP: ffprobe often reports zero/invalid frame metadata
-    // (e.g. nb_frames missing, image data not found) even when ANMF frames exist.
-    if format_name.contains("webp") && frame_count <= 1 {
+    // Root fix for Safari-style animated WebP: ffprobe often reports invalid frame metadata
+    // (e.g. nb_frames missing/absurd, image data not found) even when ANMF frames exist.
+    // If the container is animated per native markers, trust native frame counting.
+    if format_name.contains("webp") {
         if let Ok(data) = std::fs::read(path) {
-            let native_frames = u64::from(crate::image_formats::webp::count_frames_from_bytes(&data));
-            if native_frames > 1 {
-                frame_count = native_frames;
-                if let Some(duration_secs) =
-                    crate::image_formats::webp::duration_secs_from_bytes(&data)
-                {
-                    let duration_secs = f64::from(duration_secs);
-                    if duration_secs > 0.0 {
-                        avg_frame_rate = frame_count as f64 / duration_secs;
+            if crate::image_formats::webp::is_animated_from_bytes(&data) {
+                let native_frames =
+                    u64::from(crate::image_formats::webp::count_frames_from_bytes(&data));
+                if native_frames > 1 {
+                    frame_count = native_frames;
+                }
+                if duration <= 0.0 {
+                    if let Some(duration_secs) =
+                        crate::image_formats::webp::duration_secs_from_bytes(&data)
+                    {
+                        let duration_secs = f64::from(duration_secs);
+                        if duration_secs > 0.0 {
+                            avg_frame_rate = frame_count.max(1) as f64 / duration_secs;
+                        }
                     }
                 }
             }
@@ -534,7 +555,7 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         .as_array()
         .ok_or_else(|| FFprobeError::ParseError("No streams found".to_string()))?;
     let (stream_index, video_stream) = select_video_stream(streams)?;
-    let duration = resolve_probe_duration(format_duration, video_stream)?;
+    let duration = resolve_probe_duration(format_duration, video_stream, &format_name, path)?;
     let video = parse_video_stream_fields(video_stream, &format_name, duration, path)?;
     let hdr = extract_hdr_side_data(&json);
     let audio = extract_audio_stream_fields(streams);
@@ -592,7 +613,8 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         if let crate::media_penetration::PenetrationResult::Verified(real_count) =
             crate::media_penetration::detect_real_frame_count(path, result.frame_count)
         {
-            if real_count != result.frame_count {
+            // Guard: penetration probes can fail and report 0. Never downgrade to 0 frames.
+            if real_count > 0 && real_count != result.frame_count {
                 result.frame_count = real_count;
             }
         }
