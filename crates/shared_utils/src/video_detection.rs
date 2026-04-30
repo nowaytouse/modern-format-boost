@@ -376,14 +376,44 @@ pub fn detect_video_with_cache(
     path: &Path,
     cache: Option<&crate::analysis_cache::AnalysisCache>,
 ) -> Result<VideoDetectionResult, FFprobeError> {
+    let should_refresh_cached_result =
+        |cached: &VideoDetectionResult| -> bool {
+            if cached.frame_count > 1 {
+                return false;
+            }
+
+            // Root fix: invalidate stale WebP cache entries produced by old ffprobe-only logic.
+            // Some animated WebP files were previously cached as single-frame static.
+            let Ok(format) = crate::image_detection::detect_format_from_bytes(path) else {
+                return false;
+            };
+            if !matches!(format, crate::image_detection::DetectedFormat::WebP) {
+                return false;
+            }
+            let Ok((is_animated, native_frames, _)) =
+                crate::image_detection::detect_animation(path, &format)
+            else {
+                return false;
+            };
+            is_animated && native_frames > 1
+        };
+
     if let Some(cache) = cache {
         match cache.get_video_analysis(path) {
             Ok(Some(mut cached)) => {
-                if std::env::var("IMGQUALITY_DEBUG").is_ok() {
-                    eprintln!("🔍 [Video Cache] Hit: {}", path.display());
+                if should_refresh_cached_result(&cached) {
+                    tracing::warn!(
+                        path = %path.display(),
+                        cached_frames = cached.frame_count,
+                        "Invalidating stale cached WebP frame metadata and re-running detection"
+                    );
+                } else {
+                    if std::env::var("IMGQUALITY_DEBUG").is_ok() {
+                        eprintln!("🔍 [Video Cache] Hit: {}", path.display());
+                    }
+                    cached.file_path = path.display().to_string();
+                    return Ok(cached);
                 }
-                cached.file_path = path.display().to_string();
-                return Ok(cached);
             }
             Ok(None) => {}
             Err(err) => {

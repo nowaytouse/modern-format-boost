@@ -407,12 +407,32 @@ fn parse_video_stream_fields(
 
     let frame_rate = parse_frame_rate(video_stream["r_frame_rate"].as_str().unwrap_or("0/1"))
         .map_err(|e| FFprobeError::ParseError(format!("Invalid r_frame_rate: {e}")))?;
-    let avg_frame_rate = parse_frame_rate(video_stream["avg_frame_rate"].as_str().unwrap_or("0/1"))
-        .map_err(|e| FFprobeError::ParseError(format!("Invalid avg_frame_rate: {e}")))?;
+    let mut avg_frame_rate =
+        parse_frame_rate(video_stream["avg_frame_rate"].as_str().unwrap_or("0/1"))
+            .map_err(|e| FFprobeError::ParseError(format!("Invalid avg_frame_rate: {e}")))?;
     let is_variable_frame_rate =
         detect_vfr_enhanced(video_stream, frame_rate, avg_frame_rate, format_name);
-    let frame_count = parse_u64_string_field(&video_stream["nb_frames"])
+    let mut frame_count = parse_u64_string_field(&video_stream["nb_frames"])
         .unwrap_or_else(|| crate::numeric_cast::f64_to_u64_sat(duration * frame_rate));
+
+    // Root fix for Safari-style animated WebP: ffprobe often reports zero/invalid frame metadata
+    // (e.g. nb_frames missing, image data not found) even when ANMF frames exist.
+    if format_name.contains("webp") && frame_count <= 1 {
+        if let Ok(data) = std::fs::read(path) {
+            let native_frames = u64::from(crate::image_formats::webp::count_frames_from_bytes(&data));
+            if native_frames > 1 {
+                frame_count = native_frames;
+                if let Some(duration_secs) =
+                    crate::image_formats::webp::duration_secs_from_bytes(&data)
+                {
+                    let duration_secs = f64::from(duration_secs);
+                    if duration_secs > 0.0 {
+                        avg_frame_rate = frame_count as f64 / duration_secs;
+                    }
+                }
+            }
+        }
+    }
 
     let pix_fmt = video_stream["pix_fmt"]
         .as_str()
