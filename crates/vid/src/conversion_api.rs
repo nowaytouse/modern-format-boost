@@ -736,22 +736,12 @@ pub fn auto_convert_with_cache(
         }
     }
 
-    // --- Strict Animated Isolation: Skip static images in vid ---
+    // --- Strict Animated Isolation: Ignore static images in vid ---
     if detection.frame_count <= 1 {
-        let reason = "Static image detected (1 frame) - vid strictly processes animated media only (handled by img)";
+        let reason = "Static image detected (1 frame) - vid ignores static media (handled by img)";
         shared_utils::progress_mode::video_skipped(reason);
 
         let file_size = std::fs::metadata(input).map_or(0, |m| m.len());
-
-        // Data-loss guard: when vid isolates a file as static, still copy original in output mode.
-        // This prevents omission if img/vid disagree on animated detection for edge files.
-        shared_utils::copy_on_skip_or_fail(
-            input,
-            config.output_dir.as_deref(),
-            config.base_dir.as_deref(),
-            false,
-        )
-        .map_err(|e| VidQualityError::GeneralError(e.to_string()))?;
 
         return Ok(ConversionOutput {
             input_path: input.display().to_string(),
@@ -768,7 +758,7 @@ pub fn auto_convert_with_cache(
             output_size: 0,
             size_ratio: 0.0,
             success: true,
-            message: "Skipped static image in vid module".to_string(),
+            message: "Ignored static image in vid module".to_string(),
             final_crf: 0.0,
             exploration_attempts: 0,
             blake3: None,

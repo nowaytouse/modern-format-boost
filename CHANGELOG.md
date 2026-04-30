@@ -54,6 +54,8 @@ and Apple compatibility GIF delivery behavior.
     - when `vid` initially sees `frame_count <= 1` on formats that can be animated, it now
       re-checks via `image_detection` (including penetration-backed animated detection) before
       entering static-isolation skip path.
+    - for true static results after reconciliation, `vid` now uses ignore semantics (no copy/output)
+      and leaves handling to `img`, keeping module responsibilities self-consistent.
   - Fixed a fallback pipeline crash during difficult PNG/JXL paths:
     - `img` FFmpeg→cjxl fallback now uses `output_pipe()` (builder-validated output target),
       preventing runtime panic `FFmpeg output target is required`.
