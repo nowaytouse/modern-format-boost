@@ -706,6 +706,36 @@ pub fn auto_convert_with_cache(
 
     let mut detection = crate::detection_api::detect_video_with_cache(input, cache)?;
 
+    // Internal judgment reconciliation:
+    // If vid sees single-frame on a format that can be animated, re-check with image_detection
+    // (which includes structural + penetration animation verification) before static isolation.
+    if detection.frame_count <= 1
+        && shared_utils::quality_matcher::SourceCodec::identify_by_content(input)
+            .is_some_and(|codec| codec.can_be_animated())
+    {
+        if let Ok(image_det) = shared_utils::image_detection::detect_image(input) {
+            if matches!(image_det.image_type, shared_utils::image_detection::ImageType::Animated)
+                || image_det.frame_count > 1
+            {
+                let corrected = u64::from(image_det.frame_count.max(2));
+                tracing::warn!(
+                    file = %input.display(),
+                    vid_frame_count = detection.frame_count,
+                    image_frame_count = corrected,
+                    "Animated-image reconciliation corrected frame_count before vid static isolation"
+                );
+                detection.frame_count = corrected;
+                if detection.duration_secs <= 0.0 {
+                    if let Some(dur) = image_det.duration {
+                        if dur > 0.0 {
+                            detection.duration_secs = f64::from(dur);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // --- Strict Animated Isolation: Skip static images in vid ---
     if detection.frame_count <= 1 {
         let reason = "Static image detected (1 frame) - vid strictly processes animated media only (handled by img)";

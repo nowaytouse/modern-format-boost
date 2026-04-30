@@ -50,6 +50,10 @@ and Apple compatibility GIF delivery behavior.
       frame verification before deciding static, so animated GIFs are reliably deferred to `vid`.
     - this removes the root cause of same-stem dual outputs by aligning internal `img`/`vid`
       animated-vs-static judgment instead of relying on external dedupe guards.
+  - Added matching internal reconciliation in `vid`:
+    - when `vid` initially sees `frame_count <= 1` on formats that can be animated, it now
+      re-checks via `image_detection` (including penetration-backed animated detection) before
+      entering static-isolation skip path.
   - Fixed a fallback pipeline crash during difficult PNG/JXL paths:
     - `img` FFmpeg→cjxl fallback now uses `output_pipe()` (builder-validated output target),
       preventing runtime panic `FFmpeg output target is required`.
