@@ -10,6 +10,14 @@ This section documents the full chain of fixes and refactors completed in the la
 for the `IMG_0116.WEBP`-class edge case, including missing-output prevention, probe hardening,
 and Apple compatibility GIF delivery behavior.
 
+- **Comprehensive license documentation**
+  - Generated detailed license information using `cargo-about`:
+    - `LICENSES.html`: Interactive HTML report with all dependencies, their licenses, and full license texts.
+    - `LICENSES.txt`: Summary of license types (MIT, Apache-2.0, BSD, GPL-3.0-or-later, etc.).
+    - `about.toml`: Configuration file aligned with `deny.toml` for license compliance validation.
+  - Project uses permissive licenses (MIT, Apache-2.0, BSD variants) for primary dependencies.
+  - GPL-3.0-or-later components (jpegxl bindings) are properly disclosed and compatible.
+
 - **Self-consistency and data-integrity test suite**
   - Added comprehensive unit tests for single-frame animated image handling (`test_animated_frame_consistency.rs`).
   - Test coverage verifies:
