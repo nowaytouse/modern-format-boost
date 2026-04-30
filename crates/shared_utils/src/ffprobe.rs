@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io;
 use std::path::Path;
-use tracing::{warn, debug};
+use tracing::warn;
 
 #[derive(Debug)]
 pub enum FFprobeError {
@@ -176,7 +176,6 @@ fn detect_vfr_enhanced(
     diff_ratio > 0.02
 }
 
-
 #[derive(Debug)]
 struct ProbeFormatInfo {
     format_name: String,
@@ -317,10 +316,19 @@ fn select_video_stream<'a>(
         ));
     }
 
+    let has_valid_dimensions = |stream: &serde_json::Value| -> bool {
+        stream["width"].as_u64().unwrap_or(0) > 0 && stream["height"].as_u64().unwrap_or(0) > 0
+    };
+
     let (fallback_index, stream) = if video_streams.len() > 1 {
         video_streams
             .into_iter()
-            .max_by_key(|(_, stream)| parse_u64_string_field(&stream["nb_frames"]).unwrap_or(0))
+            .max_by_key(|(_, stream)| {
+                (
+                    u8::from(has_valid_dimensions(stream)),
+                    parse_u64_string_field(&stream["nb_frames"]).unwrap_or(0),
+                )
+            })
             .ok_or_else(|| FFprobeError::ParseError("No video stream found".to_string()))?
     } else {
         video_streams[0]
@@ -348,39 +356,21 @@ fn resolve_probe_duration(
     Ok(duration)
 }
 
-/// Fallback for dimension parsing using `ImageMagick`'s identify tool.
-fn get_dimensions_via_identify(path: &Path) -> Option<(u32, u32)> {
-    if !crate::image_builders::IdentifyBuilder::check_available() {
-        return None;
-    }
-
-    let output = crate::image_builders::IdentifyBuilder::new()
-        .input(path)
-        .format("%w %h")
-        .build()
-        .output()
-        .ok()?;
-
-    if output.status.success() {
-        let s = String::from_utf8_lossy(&output.stdout);
-        // identify might output multiple lines for animations; take the first frame's dimensions.
-        let first_line = s.lines().next()?;
-        let parts: Vec<&str> = first_line.split_whitespace().collect();
-        if parts.len() >= 2 {
-            let w = parts[0].parse().ok()?;
-            let h = parts[1].parse().ok()?;
-            return Some((w, h));
-        }
-    }
-    None
-}
-
 fn parse_required_u32_field(
     video_stream: &serde_json::Value,
     field_name: &str,
 ) -> Result<u32, FFprobeError> {
     let raw_value = video_stream[field_name]
         .as_u64()
+        .or_else(|| {
+            if field_name == "width" {
+                video_stream["coded_width"].as_u64()
+            } else if field_name == "height" {
+                video_stream["coded_height"].as_u64()
+            } else {
+                None
+            }
+        })
         .ok_or_else(|| FFprobeError::ParseError(format!("Missing {field_name}")))?;
 
     u32::try_from(raw_value)
@@ -404,21 +394,15 @@ fn parse_video_stream_fields(
     let mut width = parse_required_u32_field(video_stream, "width")?;
     let mut height = parse_required_u32_field(video_stream, "height")?;
     if width == 0 || height == 0 {
-        // 🛡️ WebP Fallback: Some WebP files (especially animated ones) return 0x0 from ffprobe metadata.
-        // Use ImageMagick's identify as a trusted fallback.
-        if format_name.contains("webp") {
-            if let Some((w, h)) = get_dimensions_via_identify(path) {
-                debug!(path = %path.display(), "ffprobe reported 0x0, fell back to identify: {w}x{h}");
-                width = w;
-                height = h;
-            }
+        if let Ok((fallback_w, fallback_h)) = image::image_dimensions(path) {
+            width = fallback_w;
+            height = fallback_h;
         }
-
-        if width == 0 || height == 0 {
-            return Err(FFprobeError::ParseError(format!(
-                "Invalid dimensions: {width}x{height}"
-            )));
-        }
+    }
+    if width == 0 || height == 0 {
+        return Err(FFprobeError::ParseError(format!(
+            "Invalid dimensions: {width}x{height}"
+        )));
     }
 
     let frame_rate = parse_frame_rate(video_stream["r_frame_rate"].as_str().unwrap_or("0/1"))
@@ -432,7 +416,8 @@ fn parse_video_stream_fields(
 
     let pix_fmt = video_stream["pix_fmt"]
         .as_str()
-        .ok_or_else(|| FFprobeError::ParseError("Missing pixel format".to_string()))?
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("unknown")
         .to_string();
     let max_b_frames =
         u8::try_from(video_stream["has_b_frames"].as_i64().unwrap_or(0)).unwrap_or(0);

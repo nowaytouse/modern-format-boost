@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+### 🩹 FFprobe Robustness Fix (WebP Edge Case)
+
+- **Fixed WEBP probe regression**: some Safari-exported WEBP files returned incomplete ffprobe stream metadata (`width/height = 0`, missing `pix_fmt`), causing hard failures like `Parse error: Invalid dimensions: 0x0` and `Parse error: Missing pixel format`.
+  - **Root cause**: `shared_utils::ffprobe::probe_video()` treated these fields as strict required values and aborted early instead of degrading gracefully.
+  - **Fix**:
+    - Stream selection now prefers video streams with valid dimensions when multiple streams exist.
+    - `width/height` now fallback to `coded_width/coded_height`.
+    - If dimensions are still `0x0`, probe now fallback-reads dimensions via `image::image_dimensions`.
+    - Missing/empty `pix_fmt` no longer hard-fails and now defaults to `"unknown"`.
+  - **Impact**: avoids false conversion failures on edge-case WEBP inputs and keeps static/animated routing stable.
+
 ### 🧠 Fusion Database & KNN Maturity (v3.0)
 
 This release focuses on building a robust, high-quality "Fusion Database" for media training, replacing generic synthetic samples with verified real-world assets.
