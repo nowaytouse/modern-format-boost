@@ -709,6 +709,28 @@ pub fn auto_convert_with_cache(
 
     let mut detection = crate::detection_api::detect_video_with_cache(input, cache)?;
 
+    // Reconcile ffprobe edge cases with native animation parsing before static isolation.
+    if detection.frame_count <= 1 {
+        if let Ok(format) = shared_utils::image_detection::detect_format_from_bytes(input) {
+            if let Ok((is_animated, native_frames, native_fps)) =
+                shared_utils::image_detection::detect_animation(input, &format)
+            {
+                if is_animated && native_frames > 1 {
+                    tracing::warn!(
+                        file = %input.display(),
+                        ffprobe_frames = detection.frame_count,
+                        native_frames,
+                        "Animated media mismatch: overriding ffprobe 1-frame result with native parser"
+                    );
+                    detection.frame_count = u64::from(native_frames);
+                    if let Some(fps) = native_fps.filter(|fps| *fps > 0.0) {
+                        detection.fps = f64::from(fps);
+                    }
+                }
+            }
+        }
+    }
+
     // --- Strict Animated Isolation: Skip static images in vid ---
     if detection.frame_count <= 1 {
         let reason = "Static image detected (1 frame) - vid strictly processes animated media only (handled by img)";
@@ -716,18 +738,15 @@ pub fn auto_convert_with_cache(
 
         let file_size = std::fs::metadata(input).map_or(0, |m| m.len());
 
-        // Exception: If this is the static part of a Live Photo, img will completely ignore it 
-        // to avoid splitting the pair. Therefore, vid must act as the custodian and copy it 
-        // to the output directory to prevent permanent data loss.
-        if shared_utils::is_live_photo(input) {
-            shared_utils::copy_on_skip_or_fail(
-                input,
-                config.output_dir.as_deref(),
-                config.base_dir.as_deref(),
-                false,
-            )
-            .map_err(|e| VidQualityError::GeneralError(e.to_string()))?;
-        }
+        // Data-loss guard: when vid isolates a file as static, still copy original in output mode.
+        // This prevents omission if img/vid disagree on animated detection for edge files.
+        shared_utils::copy_on_skip_or_fail(
+            input,
+            config.output_dir.as_deref(),
+            config.base_dir.as_deref(),
+            false,
+        )
+        .map_err(|e| VidQualityError::GeneralError(e.to_string()))?;
 
         return Ok(ConversionOutput {
             input_path: input.display().to_string(),

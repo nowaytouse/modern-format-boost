@@ -13,6 +13,8 @@ All notable changes to this project will be documented in this file.
     - `width/height` now fallback to `coded_width/coded_height`.
     - If dimensions are still `0x0`, probe now fallback-reads dimensions via `image::image_dimensions`.
     - Missing/empty `pix_fmt` no longer hard-fails and now defaults to `"unknown"`.
+    - `vid` now re-validates animation with native image parser before static isolation; if ffprobe reports 0/1 frame but native parser finds multi-frame animation (e.g. problematic WEBP), it overrides frame metadata to prevent false static classification.
+    - `vid` static-skip path now always applies copy fallback in output mode to prevent omission when `img`/`vid` animation classification disagrees.
   - **Impact**: avoids false conversion failures on edge-case WEBP inputs and keeps static/animated routing stable.
 
 ### 🧠 Fusion Database & KNN Maturity (v3.0)
