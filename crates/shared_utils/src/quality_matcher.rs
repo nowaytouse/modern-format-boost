@@ -211,7 +211,7 @@ impl SourceCodec {
     #[must_use]
     pub const fn image_extensions_for_convert() -> &'static [&'static str] {
         &[
-            "png", "jpg", "jpeg", "jpe", "jfif", "webp", "gif", "tiff", "tif", "heic", "heif",
+            "png", "jpg", "jpeg", "jpe", "jfif", "webp", "tiff", "tif", "heic", "heif",
             "avif", "bmp", "ico", "svg", "jp2", "j2k", "jxl",
         ]
     }

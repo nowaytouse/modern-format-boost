@@ -549,7 +549,7 @@ pub fn convert_to_jxl(
                     .pix_fmt(pix_fmt)
                     .vcodec(shared_utils::VideoCodec::Png)
                     .format("image2pipe")
-                    .arg("-"); // output to pipe
+                    .output_pipe(); // output to pipe
 
                 let ffmpeg_result = ffmpeg_builder
                     .build()

@@ -45,6 +45,15 @@ and Apple compatibility GIF delivery behavior.
       into the session log file.
     - **Manual diagnostic mode** keeps interactive diagnostics behavior (with optional log analysis)
       without forcing auto-pipeline summary formatting.
+  - Fixed a fallback pipeline crash during difficult PNG/JXL paths:
+    - `img` FFmpeg→cjxl fallback now uses `output_pipe()` (builder-validated output target),
+      preventing runtime panic `FFmpeg output target is required`.
+  - Reduced false integrity alarms in `verify.py`:
+    - expected modern-animated-image to GIF compatibility conversions are no longer flagged as
+      suspicious media-type mismatch.
+  - Prevented duplicate GIF processing outputs:
+    - `gif` removed from `IMAGE_EXTENSIONS_FOR_CONVERT` so image pipeline no longer produces
+      competing image outputs for assets that should be handled by video/animated path.
   - Added/kept static skip copy safeguards to ensure no input asset silently disappears from output.
 
 - **Apple compatibility behavior (modern animated formats)**

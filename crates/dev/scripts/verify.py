@@ -252,9 +252,15 @@ def run_integrity_check(source_dir: Path, optimized_dir: Path, report_f):
 
     # 3. Type Mismatch Check (Content Consistency)
     mismatched_types = []
+    expected_image_to_gif = {".webp", ".avif", ".heic", ".heif", ".apng"}
     for key, src_p, opt_p in matched:
         src_is_vid = src_p.suffix.lower() in VID_EXTS
         opt_is_vid = opt_p.suffix.lower() in VID_EXTS
+        src_ext = src_p.suffix.lower()
+        opt_ext = opt_p.suffix.lower()
+        # Expected compatibility transcodes should not be reported as suspicious mismatch.
+        if src_ext in expected_image_to_gif and opt_ext == ".gif":
+            continue
         if src_is_vid != opt_is_vid:
             mismatched_types.append((src_p, opt_p))
 
