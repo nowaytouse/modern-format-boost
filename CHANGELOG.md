@@ -10,6 +10,21 @@ This section documents the full chain of fixes and refactors completed in the la
 for the `IMG_0116.WEBP`-class edge case, including missing-output prevention, probe hardening,
 and Apple compatibility GIF delivery behavior.
 
+- **Self-consistency and data-integrity test suite**
+  - Added comprehensive unit tests for single-frame animated image handling (`test_animated_frame_consistency.rs`).
+  - Test coverage verifies:
+    - **Cyclability**: processing same file twice produces identical results (no data loss/gain).
+    - **Dual-pipeline parity**: `img` and `vid` make identical animated-vs-static judgments.
+    - **Single-frame edge cases**: GIF, WebP, and APNG with 1 frame are routed correctly.
+    - **Penetration detection reliability**: animation markers are detected consistently across repeated calls.
+    - **No cross-layer omission**: files never silently lost when routed between pipelines.
+    - **Metadata preservation**: frame_count, duration, animation_type remain consistent across boundaries.
+    - **Stem deduplication safety**: file deduplication never loses valid outputs.
+    - **Batch processing**: multiple files in sequence don't trigger cumulative losses.
+    - **Cache consistency**: cached detections don't diverge from fresh detection on reload.
+  - These tests document the critical requirement that **no files are silently lost** during processing
+    (which is described as "extremely serious" and represents data loss).
+
 - **FFprobe + native WebP metadata hardening**
   - Fixed WebP edge parsing where ffprobe could emit incomplete/invalid fields (e.g. `0x0`,
     missing pixel format, invalid duration/frame metadata).
