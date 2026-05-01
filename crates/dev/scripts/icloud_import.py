@@ -77,13 +77,13 @@ def select_import_mode():
         print(f"{DIM}{'─' * 50}{RESET}")
         print(f"  {GREEN}1{RESET} - {BOLD}Optimized Import (Default){RESET}")
         print(f"     {DIM}• Auto-rename folder with ✨ emoji{RESET}")
-        print(f"     {DIM}• Organize into ✨/✨/{{folder_name}} albums{RESET}")
+        print(f"     {DIM}• Organize into ✨/{{folder_name}} albums{RESET}")
         print(f"     {DIM}• Best for processed/final media{RESET}")
         print()
         print(f"  {GREEN}2{RESET} - {BOLD}Simple Import{RESET}")
-        print(f"     {DIM}• Import directly, no renaming{RESET}")
-        print(f"     {DIM}• No album organization{RESET}")
-        print(f"     {DIM}• Quick import to main library{RESET}")
+        print(f"     {DIM}• Basic album organization by folder name{RESET}")
+        print(f"     {DIM}• Simpler than Mode 1, no ✨ renaming{RESET}")
+        print(f"     {DIM}• Quick import with organized structure{RESET}")
         print(f"{DIM}{'─' * 50}{RESET}")
 
         try:
@@ -178,7 +178,7 @@ def run_optimized_import(target_dir):
 
 
 def run_simple_import(target_dir):
-    """Mode 2: Simple import without album organization."""
+    """Mode 2: Simple import with basic album organization by folder name."""
     target_path = Path(target_dir).resolve()
 
     if not target_path.is_dir():
@@ -187,7 +187,7 @@ def run_simple_import(target_dir):
 
     print(f"\n{BLUE}🚀 Starting Simple Import...{RESET}")
     print(f"   Target: {CYAN}{target_path}{RESET}")
-    print(f"   Mode:   {YELLOW}Simple (no album organization){RESET}\n")
+    print(f"   Mode:   {YELLOW}Simple (organized by folder name){RESET}\n")
 
     osxphotos_path = find_osxphotos()
 
@@ -196,6 +196,8 @@ def run_simple_import(target_dir):
         "import",
         str(target_path),
         "--walk",
+        "--album",
+        "{filepath.parent.name}",
     ]
 
     try:

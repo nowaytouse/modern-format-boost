@@ -13,12 +13,13 @@ All notable changes to this project will be documented in this file.
     - Recursive directory walking (`--walk`)
     - Best for processed/final media requiring organized storage
   - **Mode 2 - Simple Import**:
-    - Plain import without any folder renaming
-    - No album organization, direct import to main library
+    - Basic album organization by folder name `{filepath.parent.name}` (no ✨ prefix or renaming)
+    - Recursive directory walking (`--walk`)
     - Quick import path for temporary or unsorted content
   - Interactive mode selection menu (defaults to Mode 1)
   - Robust `osxphotos` detection across system paths
   - Fixed: Album path corrected from double nesting (`✨/✨/{folder_name}`) to single nesting (`✨/{folder_name}`)
+  - Enhancement: Mode 2 now includes basic album organization to prevent scattered imports
 
 - **Integrated into `drag_and_drop_processor.py`**
   - Added as the 5th option in the "Workspace Tools" menu.
