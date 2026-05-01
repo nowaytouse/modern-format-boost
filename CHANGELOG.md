@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+### 🚀 iCloud Photo Import Integration (Enhanced)
+
+- **Enhanced `icloud_import.py` with dual import modes**
+  - **Mode 1 - Optimized Import (Default)**:
+    - Auto-renames folder with ✨ emoji prefix to mark completion
+    - Organizes assets into structured albums: `✨/✨/{filepath.parent.name}`
+    - Recursive directory walking (`--walk`)
+    - Best for processed/final media requiring organized storage
+  - **Mode 2 - Simple Import**:
+    - Plain import without any folder renaming
+    - No album organization, direct import to main library
+    - Quick import path for temporary or unsorted content
+  - Interactive mode selection menu (defaults to Mode 1)
+  - Robust `osxphotos` detection across system paths
+
+- **Integrated into `drag_and_drop_processor.py`**
+  - Added as the 5th option in the "Workspace Tools" menu.
+  - Accessible via the Tab-switch loop in the main UI.
+  - Supports seamless hand-off from "Collect" or "In-Place" modes to iCloud import.
+
 ### 🔁 Animated WebP / Apple Compat Stabilization (No Version Bump)
 
 This section documents the full chain of fixes and refactors completed in the last few hours
