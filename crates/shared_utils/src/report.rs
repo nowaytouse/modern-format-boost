@@ -19,7 +19,9 @@ pub fn print_summary_report(
     };
 
     let reduction = if input_bytes > 0 {
-        (1.0 - output_bytes as f64 / input_bytes as f64) * 100.0
+        (1.0 - crate::numeric_cast::u64_to_f64(output_bytes)
+            / crate::numeric_cast::u64_to_f64(input_bytes))
+            * 100.0
     } else {
         0.0
     };
@@ -120,7 +122,7 @@ pub fn print_summary_report(
         RESET
     );
     if result.total > 0 {
-        let avg_time = duration.as_secs_f64() / result.total as f64;
+        let avg_time = duration.as_secs_f64() / crate::numeric_cast::usize_to_f64(result.total);
         println!(
             "{MFB_BLUE}│{RESET}  ⏱️  Avg Time/File:      {DIM}{avg_time:>9.2}s{RESET}                                         {MFB_BLUE}│{RESET}"
         );
@@ -164,7 +166,8 @@ pub fn print_simple_summary(result: &BatchResult) {
 pub fn print_health_report(passed: usize, failed: usize, warnings: usize) {
     let total = passed + failed + warnings;
     let health_rate = if total > 0 {
-        (passed as f64 / total as f64) * 100.0
+        (crate::numeric_cast::usize_to_f64(passed) / crate::numeric_cast::usize_to_f64(total))
+            * 100.0
     } else {
         100.0
     };
@@ -234,22 +237,30 @@ mod tests {
     fn test_size_reduction_formula() {
         let input = 1000u64;
         let output = 500u64;
-        let expected_reduction = (1.0 - output as f64 / input as f64) * 100.0;
+        let expected_reduction = (1.0
+            - crate::numeric_cast::u64_to_f64(output) / crate::numeric_cast::u64_to_f64(input))
+            * 100.0;
         assert!((expected_reduction - 50.0).abs() < 0.01);
 
         let input = 1000u64;
         let output = 250u64;
-        let expected_reduction = (1.0 - output as f64 / input as f64) * 100.0;
+        let expected_reduction = (1.0
+            - crate::numeric_cast::u64_to_f64(output) / crate::numeric_cast::u64_to_f64(input))
+            * 100.0;
         assert!((expected_reduction - 75.0).abs() < 0.01);
 
         let input = 1000u64;
         let output = 1000u64;
-        let expected_reduction = (1.0 - output as f64 / input as f64) * 100.0;
+        let expected_reduction = (1.0
+            - crate::numeric_cast::u64_to_f64(output) / crate::numeric_cast::u64_to_f64(input))
+            * 100.0;
         assert!((expected_reduction - 0.0).abs() < 0.01);
 
         let input = 500u64;
         let output = 1000u64;
-        let expected_reduction = (1.0 - output as f64 / input as f64) * 100.0;
+        let expected_reduction = (1.0
+            - crate::numeric_cast::u64_to_f64(output) / crate::numeric_cast::u64_to_f64(input))
+            * 100.0;
         assert!((expected_reduction - (-100.0)).abs() < 0.01);
     }
 
@@ -289,7 +300,7 @@ mod tests {
     fn test_strict_avg_time_calculation() {
         let total_files = 10usize;
         let duration = Duration::from_secs(100);
-        let avg_time = duration.as_secs_f64() / total_files as f64;
+        let avg_time = duration.as_secs_f64() / crate::numeric_cast::usize_to_f64(total_files);
         assert!(
             (avg_time - 10.0).abs() < 0.001,
             "STRICT: 100s / 10 files = 10s/file, got {avg_time}"
@@ -297,7 +308,7 @@ mod tests {
 
         let total_files = 3usize;
         let duration = Duration::from_secs(9);
-        let avg_time = duration.as_secs_f64() / total_files as f64;
+        let avg_time = duration.as_secs_f64() / crate::numeric_cast::usize_to_f64(total_files);
         assert!(
             (avg_time - 3.0).abs() < 0.001,
             "STRICT: 9s / 3 files = 3s/file, got {avg_time}"
