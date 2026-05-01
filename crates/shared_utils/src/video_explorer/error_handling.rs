@@ -138,7 +138,10 @@ pub fn validate_size_reduction(output_size: u64, input_size: u64) -> Result<()> 
     } else {
         bail!(
             "Output size {output_size} bytes >= input size {input_size} bytes ({:+.1}%)",
-            ((output_size as f64 / input_size as f64) - 1.0) * 100.0
+            ((crate::numeric_cast::u64_to_f64(output_size)
+                / crate::numeric_cast::u64_to_f64(input_size))
+                - 1.0)
+                * 100.0
         )
     }
 }

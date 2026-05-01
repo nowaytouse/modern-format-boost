@@ -124,7 +124,8 @@ fn profile_for_available_memory(available_mb: u64, total_mb: u64) -> X265MemoryP
         return X265MemoryProfile::LowMemory;
     }
 
-    let free_ratio = available_mb as f64 / total_mb as f64;
+    let free_ratio = crate::numeric_cast::u64_to_f64(available_mb)
+        / crate::numeric_cast::u64_to_f64(total_mb);
 
     if available_mb >= constants::X265_DEFAULT_RAM_THRESHOLD_MB
         || (available_mb >= constants::X265_RELAXED_DEFAULT_RAM_THRESHOLD_MB
