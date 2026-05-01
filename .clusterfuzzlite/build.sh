@@ -5,27 +5,29 @@ set -e
 # This script is called by ClusterFuzzLite to build fuzz targets
 
 echo "Building fuzz targets for Modern Format Boost..."
+echo "Sanitizer: $SANITIZER"
 
-# Install cargo-fuzz if not already installed
-if ! command -v cargo-fuzz &> /dev/null; then
-    echo "Installing cargo-fuzz..."
-    cargo install cargo-fuzz
-fi
-
-# Build all fuzz targets
+# Navigate to the fuzzing crate
 cd crates/dev/fuzz
 
-echo "Building fuzz targets..."
-cargo fuzz build --release
+# Build all fuzz targets with the requested sanitizer
+# ClusterFuzzLite provides $SANITIZER (address, undefined, etc.)
+# cargo-fuzz uses --sanitizer (address, leak, memory, thread, none)
+FUZZ_SANITIZER=${SANITIZER:-address}
+
+echo "Building fuzz targets with sanitizer: $FUZZ_SANITIZER..."
+cargo fuzz build --release --sanitizer $FUZZ_SANITIZER
 
 # Copy fuzz targets to $OUT directory (expected by ClusterFuzzLite)
 if [ -n "$OUT" ]; then
     echo "Copying fuzz targets to $OUT..."
-    cp target/x86_64-unknown-linux-gnu/release/jpeg_extractor "$OUT/" || true
-    cp target/x86_64-unknown-linux-gnu/release/hdr_synthesis "$OUT/" || true
-    cp target/x86_64-unknown-linux-gnu/release/heic_parser "$OUT/" || true
-    cp target/x86_64-unknown-linux-gnu/release/jxl_utils "$OUT/" || true
-    cp target/x86_64-unknown-linux-gnu/release/image_analyzer "$OUT/" || true
+    # Binary names are determined by the names in crates/dev/fuzz/fuzz_targets/
+    # In ClusterFuzzLite, binaries should be at the root of $OUT
+    find target/ -name "jpeg_extractor" -exec cp {} "$OUT/" \;
+    find target/ -name "hdr_synthesis" -exec cp {} "$OUT/" \;
+    find target/ -name "heic_parser" -exec cp {} "$OUT/" \;
+    find target/ -name "jxl_utils" -exec cp {} "$OUT/" \;
+    find target/ -name "image_analyzer" -exec cp {} "$OUT/" \;
     
     # List what was copied
     echo "Fuzz targets in $OUT:"
@@ -35,3 +37,4 @@ else
 fi
 
 echo "Build complete!"
+
