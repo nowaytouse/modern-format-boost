@@ -1041,11 +1041,10 @@ where
                         &mut log,
                     );
                     break; // hand off to binary search
-                } else {
-                    d_over = Some(next);
-                    probe = next;
-                    step = (step * 2.0).min(JXL_EXPLORE_CEILING - next);
                 }
+                d_over = Some(next);
+                probe = next;
+                step = (step * 2.0).min(JXL_EXPLORE_CEILING - next);
             }
         }
     }

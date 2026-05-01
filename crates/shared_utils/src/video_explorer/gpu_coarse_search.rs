@@ -2781,14 +2781,13 @@ fn cpu_fine_tune_from_gpu_boundary(
                             RESET
                         );
                         break;
-                    } else {
-                        crate::log_eprintln!(
-                            "   {} [CPU] 🧱 Minimum step reached and hit capacity wall. Stopping exploration.{}",
-                            BRIGHT_YELLOW,
-                            RESET
-                        );
-                        break;
                     }
+                    crate::log_eprintln!(
+                        "   {} [CPU] 🧱 Minimum step reached and hit capacity wall. Stopping exploration.{}",
+                        BRIGHT_YELLOW,
+                        RESET
+                    );
+                    break;
                 }
 
                 if wall_hits >= max_wall_hits {

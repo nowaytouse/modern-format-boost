@@ -264,7 +264,7 @@ pub fn execute_conversion(
         if detection.file_size == 0 {
             0.0
         } else {
-            100.0 * (1.0 - s as f32 / detection.file_size as f32)
+            (100.0 * (1.0 - s as f64 / detection.file_size as f64)) as f32
         }
     });
 
@@ -323,7 +323,7 @@ pub fn execute_conversion(
     let message = if reduction >= 0.0 {
         format!("✅ JXL {action}: -{reduction:.1}%")
     } else {
-        let diff_bytes = output_size.unwrap_or(0) as i64 - detection.file_size as i64;
+        let diff_bytes = output_size.unwrap_or(0).cast_signed() - detection.file_size.cast_signed();
         let size_diff = shared_utils::modern_ui::format_size_diff(diff_bytes);
         format!("✅ JXL {action}: {size_diff}")
     };

@@ -457,7 +457,7 @@ fn main() -> anyhow::Result<()> {
             shared_utils::image_quality_db::init_quality_schema(&mut conn)?;
 
             let mut count = 0;
-            let mut dirs_to_visit = vec![input.clone()];
+            let mut dirs_to_visit = vec![input];
             
             while let Some(dir) = dirs_to_visit.pop() {
                 if let Ok(entries) = std::fs::read_dir(&dir) {
