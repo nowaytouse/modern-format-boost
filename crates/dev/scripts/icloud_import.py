@@ -163,6 +163,10 @@ def rename_with_emoji(target_dir):
 
 def run_optimized_import(target_dir):
     """Mode 1: Import with ✨ prefix and organized album structure."""
+    # Intentional delay for pacing
+    print(f"\n{CYAN}⏳ Preparing for optimized import...{RESET}")
+    time.sleep(1.2)
+
     # Auto-rename feature
     target_dir = rename_with_emoji(target_dir)
     target_path = Path(target_dir).resolve()
@@ -174,7 +178,22 @@ def run_optimized_import(target_dir):
     print(f"\n{BLUE}🚀 Starting Optimized Import...{RESET}")
     print(f"   Target:     {CYAN}{target_path}{RESET}")
     print(f"   Mode:       {YELLOW}Organized (✨/{{folder_name}}){RESET}")
-    print(f"   Auto-Album: {YELLOW}Enabled{RESET}\n")
+    print(f"   Auto-Album: {YELLOW}Enabled{RESET}")
+
+    # Mandatory confirmation
+    print(f"\n{YELLOW}⚠️  READY TO IMPORT?{RESET}")
+    confirm = (
+        input(f"   {CYAN}Type {GREEN}'y'{CYAN} to proceed: {RESET}").strip().lower()
+    )
+    if confirm != "y":
+        print(f"\n{RED}❌ Import cancelled by user.{RESET}")
+        time.sleep(1)
+        return False
+
+    print(f"\n{CYAN}⚙️ Initializing osxphotos...{RESET}")
+    time.sleep(1.5)
+    print(f"   {DIM}Connecting to Apple Photos library...{RESET}")
+    time.sleep(1)
 
     osxphotos_path = find_osxphotos()
 
@@ -216,6 +235,10 @@ def run_optimized_import(target_dir):
 
 def run_simple_import(target_dir):
     """Mode 2: Simple import with basic album organization by folder name."""
+    # Intentional delay for pacing
+    print(f"\n{CYAN}⏳ Preparing for simple import...{RESET}")
+    time.sleep(1.2)
+
     target_path = Path(target_dir).resolve()
 
     if not target_path.is_dir():
@@ -224,7 +247,20 @@ def run_simple_import(target_dir):
 
     print(f"\n{BLUE}🚀 Starting Simple Import...{RESET}")
     print(f"   Target: {CYAN}{target_path}{RESET}")
-    print(f"   Mode:   {YELLOW}Simple (organized by folder name){RESET}\n")
+    print(f"   Mode:   {YELLOW}Simple (organized by folder name){RESET}")
+
+    # Mandatory confirmation
+    print(f"\n{YELLOW}⚠️  READY TO IMPORT?{RESET}")
+    confirm = (
+        input(f"   {CYAN}Type {GREEN}'y'{CYAN} to proceed: {RESET}").strip().lower()
+    )
+    if confirm != "y":
+        print(f"\n{RED}❌ Import cancelled by user.{RESET}")
+        time.sleep(1)
+        return False
+
+    print(f"\n{CYAN}⚙️ Initializing osxphotos...{RESET}")
+    time.sleep(1.5)
 
     osxphotos_path = find_osxphotos()
 

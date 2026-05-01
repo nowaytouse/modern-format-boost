@@ -135,7 +135,18 @@ def train_new_data():
         return
 
     print(f"\n{BLUE}🎓 Train New Data{RESET}")
-    print(f"{DIM}{'─' * 60}{RESET}\n")
+    print(f"{DIM}{'─' * 60}{RESET}")
+    print(f"{YELLOW}⚠️  CONFIRM: Start new training session?{RESET}")
+    if (
+        input(f"   {CYAN}Type {GREEN}'y'{CYAN} to proceed: {RESET}").strip().lower()
+        != "y"
+    ):
+        print(f"\n{RED}❌ Cancelled.{RESET}")
+        time.sleep(1)
+        return
+
+    print(f"\n{CYAN}⏳ Initializing training environment...{RESET}")
+    time.sleep(1.5)
 
     print("Data types available:")
     print(f"  {GREEN}1{RESET} - Image Quality Training")
@@ -223,7 +234,18 @@ def manage_indexes():
         return
 
     print(f"\n{BLUE}📇 Vector Index Manager{RESET}")
-    print(f"{DIM}{'─' * 60}{RESET}\n")
+    print(f"{DIM}{'─' * 60}{RESET}")
+    print(f"{YELLOW}⚠️  CONFIRM: Access index management?{RESET}")
+    if (
+        input(f"   {CYAN}Type {GREEN}'y'{CYAN} to proceed: {RESET}").strip().lower()
+        != "y"
+    ):
+        print(f"\n{RED}❌ Cancelled.{RESET}")
+        time.sleep(1)
+        return
+
+    print(f"\n{CYAN}⏳ Analyzing vector indexes...{RESET}")
+    time.sleep(1.2)
 
     print("Index Management Options:")
     print(f"  {GREEN}1{RESET} - View Indexes")
@@ -273,7 +295,18 @@ def backup_restore():
         return
 
     print(f"\n{BLUE}💾 Backup & Restore{RESET}")
-    print(f"{DIM}{'─' * 60}{RESET}\n")
+    print(f"{DIM}{'─' * 60}{RESET}")
+    print(f"{YELLOW}⚠️  CONFIRM: Access backup/restore tools?{RESET}")
+    if (
+        input(f"   {CYAN}Type {GREEN}'y'{CYAN} to proceed: {RESET}").strip().lower()
+        != "y"
+    ):
+        print(f"\n{RED}❌ Cancelled.{RESET}")
+        time.sleep(1)
+        return
+
+    print(f"\n{CYAN}⏳ Checking storage for backups...{RESET}")
+    time.sleep(1.2)
 
     print("Options:")
     print(f"  {GREEN}1{RESET} - Create Backup")

@@ -27,7 +27,13 @@ All notable changes to this project will be documented in this file.
   - Accessible via the Tab-switch loop in the main UI.
   - Supports seamless hand-off from "Collect" or "In-Place" modes to iCloud import.
 
-### 🛠️ Maintenance & Database Management
+### 🛡️ Safety & UX Enhancements
+21: 
+22: - **Human-Like Pacing**: Introduced intentional delays (`time.sleep`) across all key scripts to prevent "rushed" execution and improve system stability feedback.
+23: - **Mandatory 'y' Confirmation**: Implemented explicit confirmation prompts for all high-risk or core operations (Import, Cleanup, Training). Operations now require a lowercase 'y' to proceed, preventing accidental triggers.
+24: - **Interactive Hardening**: Refined the `drag_and_drop_processor.py` maintenance menu with inline confirmation before launching external cleanup tools.
+25: 
+26: ### 🛠️ Maintenance & Database Management
 21: 
 22: - **Refactored `database_manager.py`**
 23:   - **Removed "Clean Database" feature**: Eliminated redundancy as the functionality is covered by the dedicated cache cleaning scripts.

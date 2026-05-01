@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from typing import Optional
 from collections.abc import Callable
 
@@ -13,6 +14,7 @@ from collections.abc import Callable
 GREEN = "\033[0;32m"
 BLUE = "\033[0;34m"
 YELLOW = "\033[1;33m"
+CYAN = "\033[0;36m"
 RED = "\033[0;31m"
 NC = "\033[0m"
 
@@ -234,6 +236,23 @@ def run_collection(
 
     if not validate_paths(src_root, dest_root):
         return False
+
+    # Mandatory confirmation using 'y'
+    print(f"\n{BLUE}📂 COLLECTION TASK PREVIEW{NC}")
+    print(f"   Source:      {CYAN}{src_root}{NC}")
+    print(f"   Destination: {CYAN}{dest_root}{NC}")
+    if dry_run:
+        print(f"   {YELLOW}⚠️  DRY RUN MODE ENABLED{NC}")
+
+    print(f"\n{YELLOW}⚠️  CONFIRM: Start collecting optimized media?{NC}")
+    confirm = input(f"   {BLUE}Type {GREEN}'y'{BLUE} to proceed: {NC}").strip().lower()
+    if confirm != "y":
+        print(f"\n{RED}❌ Task cancelled by user.{NC}")
+        time.sleep(1)
+        return False
+
+    print(f"\n{BLUE}⏳ Initializing collection engine...{NC}")
+    time.sleep(1.2)
 
     print(f"{BLUE}>>> Snapshotting directory structure and timestamps...{NC}")
     directory_metadata = snapshot_directories(src_root)

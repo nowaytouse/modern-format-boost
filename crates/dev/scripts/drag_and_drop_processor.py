@@ -808,10 +808,28 @@ def select_mode():
                         continue
                     elif maintenance_sub_state == 1:
                         OUTPUT_MODE = "cache_clean"
-                        print(f"\n{RED}CACHE & LOG CLEANUP MODE{RESET}")
+                        # Mandatory confirmation using 'y'
                         print(
-                            f"{DIM}   Analysis cache and ALL task progress will be permanently deleted.{RESET}\n"
+                            f"\n{YELLOW}⚠️  CONFIRM: Start full system cleanup?{RESET}"
                         )
+                        confirm = (
+                            input(f"   {CYAN}Type {GREEN}'y'{CYAN} to proceed: {RESET}")
+                            .strip()
+                            .lower()
+                        )
+                        if confirm != "y":
+                            print(f"\n{RED}🚫 Cleanup cancelled by user.{RESET}")
+                            print(
+                                f"{DIM}   No action taken. Returning to menu...{RESET}"
+                            )
+                            time.sleep(1.5)
+                            continue
+
+                        print(f"\n{YELLOW}🚀 Executing full system cleanup...{RESET}")
+                        time.sleep(1.2)
+                        print(f"   {DIM}Initializing cleanup engine...{RESET}\n")
+                        time.sleep(0.8)
+
                         cache_script = SCRIPT_DIR / "cache_cleaner.py"
                         drain_stdin()
                         subprocess.run([sys.executable, str(cache_script)])
@@ -1616,6 +1634,10 @@ def main():
         sys.exit(0)
 
     start_elapsed_spinner()
+
+    # Intentional delay before starting actual work
+    print(f"\n{CYAN}⏳ Pacing start to ensure system stability...{RESET}")
+    time.sleep(1.5)
 
     if PROCESSING_MODE in ("both", "images_only"):
         process_images()

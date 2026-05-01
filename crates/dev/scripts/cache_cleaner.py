@@ -35,11 +35,12 @@ if sys.stdout.isatty():
     GREEN = "\033[0;32m"
     YELLOW = "\033[1;33m"
     BLUE = "\033[0;34m"
+    CYAN = "\033[0;36m"
     BOLD = "\033[1m"
     DIM = "\033[2m"
     RESET = "\033[0m"
 else:
-    RED = GREEN = YELLOW = BLUE = BOLD = DIM = RESET = ""
+    RED = GREEN = YELLOW = BLUE = CYAN = BOLD = DIM = RESET = ""
 
 
 def clear_screen():
@@ -465,16 +466,21 @@ def perform_full_cleanup():
     print("   - All STALE directory locks (Active locks will be skipped)")
     print("")
 
-    confirm = input(
-        f"   {BOLD}Type 'yes' to confirm cleanup (yes/N) [Default: N]: {RESET}"
-    ).strip()
-    if not confirm or confirm.lower() != "yes":
-        print(f"\n{YELLOW}🚫 Cleanup cancelled by user.{RESET}")
+    # Mandatory confirmation using 'y'
+    print(f"\n{YELLOW}⚠️  CONFIRM: Start full system cleanup?{RESET}")
+    confirm = (
+        input(f"   {CYAN}Type {GREEN}'y'{CYAN} to proceed: {RESET}").strip().lower()
+    )
+    if confirm != "y":
+        print(f"\n{RED}🚫 Cleanup cancelled by user.{RESET}")
         print(f"{DIM}   No action taken. Returning to menu...{RESET}")
         time.sleep(1.5)
         return False, False
 
-    print(f"\n{YELLOW}🚀 Executing full system cleanup...{RESET}\n")
+    print(f"\n{YELLOW}🚀 Executing full system cleanup...{RESET}")
+    time.sleep(1.2)
+    print(f"   {DIM}Initializing cleanup engine...{RESET}\n")
+    time.sleep(0.8)
 
     # 1. PostgreSQL — primary cache backend (must be cleared first; SQLite is just a fallback)
     if pg_available:
