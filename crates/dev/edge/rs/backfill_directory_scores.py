@@ -1,7 +1,21 @@
 #!/usr/bin/env python3
 """
-Backfill `directory_loop_intent_score` by recomputing it from `source_path`.
-Stops writing the legacy boolean `directory_meme_hint` (keeps DB column for now).
+[DEPRECATED] Backfill `directory_loop_intent_score` by recomputing it from `source_path`.
+
+⚠️ This script is deprecated and kept for reference only.
+
+The logic has been moved to:
+- Configuration: crates/dev/config/directory_keywords.json
+- Implementation: Should be in Rust code (database.rs or similar)
+
+This approach is better because:
+1. Keywords are in a JSON config file (easy to update)
+2. Scoring logic runs automatically when inserting/updating samples
+3. No need for manual backfill scripts
+4. Consistent scoring across all operations
+
+If you need to backfill existing data, consider implementing this in Rust
+as a one-time migration or database maintenance function.
 """
 
 from __future__ import annotations

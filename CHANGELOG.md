@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+### 🔧 Development Scripts Reorganization
+
+- **Moved development/debugging scripts to edge folder**
+  - `strip_gif_delays.py` → `crates/dev/edge/rs/`
+  - `analysis.py` → `crates/dev/edge/rs/`
+  - `backfill_directory_scores.py` → `crates/dev/edge/rs/` (deprecated)
+
+- **Enhanced `install_deps.py`**
+  - Added comprehensive FFmpeg setup documentation in script header
+  - Integrated content from `docs/FFMPEG_SETUP.md` (now deleted)
+  - Added `chromaprint` to macOS dependencies
+  - Added `libchromaprint-dev` to Linux dependencies
+  - Added Python dependencies: `psycopg2-binary`, `tabulate`
+  - Improved ffmpeg detection with path display
+  - Added helpful tips for advanced FFmpeg tap installation
+  - Better handling of existing installations to avoid conflicts
+
+- **Created `directory_keywords.json` configuration**
+  - Extracted hardcoded keywords from `backfill_directory_scores.py`
+  - Location: `crates/dev/config/directory_keywords.json`
+  - Contains meme/sticker keywords and scoring parameters
+  - Enables easy configuration updates without code changes
+  - Recommended: Implement scoring logic in Rust for automatic application
+
 ### 🔧 Database Management Consolidation
 
 - **Merged `manage_db.py` into `database_manager.py`**

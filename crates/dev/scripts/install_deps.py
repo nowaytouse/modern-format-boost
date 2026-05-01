@@ -1,4 +1,37 @@
 #!/usr/bin/env python3
+"""Modern Format Boost - Dependency Installer
+
+Installs all required dependencies for the project including:
+- System dependencies (ffmpeg, imagemagick, postgresql, etc.)
+- Rust toolchain and components
+- Cargo utilities
+- Python tools
+- Node.js tools
+
+Supports macOS (Homebrew) and Linux (apt).
+
+FFmpeg Installation Notes:
+--------------------------
+By default, this script installs the standard Homebrew ffmpeg.
+
+For advanced users who need full-featured FFmpeg with plugins like FDK-AAC,
+Chromaprint, AI filters, etc., you can use the homebrew-ffmpeg tap:
+
+1. Install both versions:
+   brew install ffmpeg  # Standard version (for dependencies)
+   brew tap homebrew-ffmpeg/ffmpeg
+   brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-chromaprint --with-fdk-aac ...
+
+2. Switch to the full-featured version:
+   brew unlink ffmpeg
+   brew link --overwrite homebrew-ffmpeg/ffmpeg/ffmpeg
+
+3. (Optional) Create alias for standard version:
+   ln -sf $(brew --prefix)/opt/ffmpeg/bin/ffmpeg $(brew --prefix)/bin/ffmpeg-official
+
+This script will detect and preserve existing ffmpeg installations to avoid conflicts.
+"""
+
 import sys
 import subprocess
 import shutil
@@ -9,6 +42,7 @@ GREEN = "\033[0;32m"
 BLUE = "\033[0;34m"
 YELLOW = "\033[1;33m"
 RED = "\033[0;31m"
+DIM = "\033[2m"
 NC = "\033[0m"
 
 
@@ -27,6 +61,11 @@ def run_cmd(cmd, check=True):
 def main():
     print_c(BLUE, "🚀 Modern Format Boost - Dependency Installer v0.11.2")
     print("--------------------------------------------------------")
+    print_c(
+        DIM,
+        "💡 For advanced FFmpeg setup (FDK-AAC, AI filters, etc.), see script header.",
+    )
+    print("--------------------------------------------------------\n")
 
     OS_TYPE = platform.system().lower()
 
@@ -53,15 +92,24 @@ def main():
             "shfmt",
             "postgresql@14",
             "pgvector",
+            "chromaprint",  # Added chromaprint for audio fingerprinting
         ]
 
+        # Handle ffmpeg specially to avoid tap conflicts
         if not command_exists("ffmpeg"):
-            print("Installing ffmpeg...")
+            print("Installing ffmpeg (standard version)...")
+            print_c(
+                DIM,
+                "   💡 For full-featured ffmpeg, see script header for homebrew-ffmpeg tap instructions.",
+            )
             run_cmd("brew install ffmpeg")
         else:
+            ffmpeg_info = run_cmd("which ffmpeg", check=False)
             print_c(
-                GREEN, "✅ ffmpeg already installed (skipping to avoid tap conflicts)."
+                GREEN,
+                f"✅ ffmpeg already installed at: {ffmpeg_info.stdout.strip() if ffmpeg_info.stdout else 'unknown'}",
             )
+            print_c(DIM, "   Skipping to preserve existing installation.")
 
         for dep in deps:
             binary = dep
@@ -82,7 +130,9 @@ def main():
             print("Installing system dependencies via apt...")
             run_cmd("sudo apt-get update")
             run_cmd(
-                "sudo apt-get install -y ffmpeg libimage-exiftool-perl imagemagick webp libheif-dev coreutils nodejs npm shellcheck shfmt curl git build-essential postgresql postgresql-contrib"
+                "sudo apt-get install -y ffmpeg libimage-exiftool-perl imagemagick "
+                "webp libheif-dev coreutils nodejs npm shellcheck shfmt curl git "
+                "build-essential postgresql postgresql-contrib libchromaprint-dev"
             )
         else:
             print_c(
@@ -130,9 +180,11 @@ def main():
 
     print_c(BLUE, "🐍 Installing Python utilities...")
     if command_exists("pip3"):
-        run_cmd("pip3 install --upgrade ruff rich", check=False)
+        run_cmd(
+            "pip3 install --upgrade ruff rich psycopg2-binary tabulate", check=False
+        )
     else:
-        print_c(RED, "⚠️  pip3 not found. Skipping Python tools (ruff, rich).")
+        print_c(RED, "⚠️  pip3 not found. Skipping Python tools.")
 
     print_c(BLUE, "🟢 Installing Node.js utilities...")
     if command_exists("npm"):
@@ -142,14 +194,16 @@ def main():
         else:
             run_cmd("npm install -g prettier markdownlint-cli2", check=False)
     else:
-        print_c(
-            RED, "⚠️  npm not found. Skipping Node tools (prettier, markdownlint-cli2)."
-        )
+        print_c(RED, "⚠️  npm not found. Skipping Node tools.")
 
     print("--------------------------------------------------------")
     print_c(GREEN, "🌟 All dependencies installed successfully!")
     print(
         "You can now run 'python3 crates/dev/scripts/check_all.py' to verify the workspace."
+    )
+    print_c(
+        DIM,
+        "\n💡 Tip: For advanced FFmpeg features, see the script header for tap instructions.",
     )
 
 
