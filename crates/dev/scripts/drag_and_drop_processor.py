@@ -568,10 +568,12 @@ def select_mode():
     # Internal state for the "Mode" item (0: adjacent, 1: inplace)
     # Internal state for the "Mode" item (0: adjacent, 1: inplace)
     mode_sub_state = 0 if OUTPUT_MODE == "adjacent" else 1
-    # Internal state for the "Tools" item (0: Cleanup, 1: Collect, 2: Merge XMP)
-    tools_sub_state = 0
+    # Internal state for the "Workspace Tools" item (0: Collect, 1: Merge XMP, 2: iCloud Import)
+    workspace_sub_state = 0
+    # Internal state for the "Maintenance Tools" item (0: Diagnostic Analysis, 1: Cleanup Cache)
+    maintenance_sub_state = 0
 
-    options = ["Optimization Mode", "Workspace Tools"]
+    options = ["Optimization Mode", "Workspace Tools", "Maintenance Tools"]
 
     while True:
         clear_screen()
@@ -609,22 +611,40 @@ def select_mode():
                     else:
                         print(f"    {DIM}- {display_text}{RESET}")
                         print(f"    {DIM}{description}{RESET}\n")
-            else:  # Tools item
-                if tools_sub_state == 0:
-                    display_text = "Tool: Cleanup Cache & Logs [Tab to Switch]"
-                    desc = "Clear analysis cache, session logs, and ALL task progress."
-                elif tools_sub_state == 1:
+            elif i == 1:  # Workspace Tools item
+                if workspace_sub_state == 0:
                     display_text = "Tool: Collect Optimized Media [Tab to Switch]"
                     desc = "Move optimized outputs into a mirrored directory tree."
-                elif tools_sub_state == 2:
+                elif workspace_sub_state == 1:
                     display_text = "Tool: Merge XMP Attachments [Tab to Switch]"
                     desc = "Automatically embed XMP sidecars into source media files safely."
-                elif tools_sub_state == 3:
-                    display_text = "Tool: Diagnostic Analysis [Tab to Switch]"
-                    desc = "Analyze logs for edge cases and verify output integrity."
                 else:
                     display_text = "Tool: iCloud Photo Import [Tab to Switch]"
                     desc = "Import processed assets into iCloud using osxphotos (Auto-Album)."
+
+                if is_selected:
+                    if "Console" in globals():
+                        console.print(
+                            f"  [bold #00aaff]➜[/bold #00aaff] [reverse #00aaff] {display_text} [/reverse #00aaff]"
+                        )
+                        console.print(f"     [#00ccff]{desc}[/#00ccff]\n")
+                    else:
+                        print(f"  {CYAN}➜ {BOLD}{display_text}{RESET}")
+                        print(f"    {CYAN}{DIM}{desc}{RESET}\n")
+                else:
+                    if "Console" in globals():
+                        console.print(f"     [dim]○ {display_text}[/dim]")
+                        console.print(f"     [dim]{desc}[/dim]\n")
+                    else:
+                        print(f"    {DIM}○ {display_text}{RESET}")
+                        print(f"    {DIM}{desc}{RESET}\n")
+            else:  # Maintenance Tools item (i == 2)
+                if maintenance_sub_state == 0:
+                    display_text = "Tool: Diagnostic Analysis [Tab to Switch]"
+                    desc = "Analyze logs for edge cases and verify output integrity."
+                else:
+                    display_text = "Tool: Cleanup Cache & Logs [Tab to Switch]"
+                    desc = "Clear analysis cache, session logs, and ALL task progress."
 
                 if is_selected:
                     if "Console" in globals():
@@ -657,7 +677,9 @@ def select_mode():
                 if selected == 0:
                     mode_sub_state = 1 - mode_sub_state
                 elif selected == 1:
-                    tools_sub_state = (tools_sub_state + 1) % 5
+                    workspace_sub_state = (workspace_sub_state + 1) % 3
+                elif selected == 2:
+                    maintenance_sub_state = (maintenance_sub_state + 1) % 2
             elif key in ("\r", "\n"):
                 # Action based on selection
                 if selected == 0:
@@ -702,23 +724,7 @@ def select_mode():
                             show_cursor()
                             break  # Confirmed, start processing
                 elif selected == 1:
-                    if tools_sub_state == 0:
-                        OUTPUT_MODE = "cache_clean"
-                        print(f"\n{RED}CACHE & LOG CLEANUP MODE{RESET}")
-                        print(
-                            f"{DIM}   Analysis cache and ALL task progress will be permanently deleted.{RESET}\n"
-                        )
-                        cache_script = SCRIPT_DIR / "cache_cleaner.py"
-                        drain_stdin()
-                        subprocess.run([sys.executable, str(cache_script)])
-                        print(f"\n   {CYAN}Press Enter to return to menu...{RESET}")
-                        drain_stdin()
-                        try:
-                            input()
-                        except EOFError:
-                            pass
-                        continue
-                    elif tools_sub_state == 1:
+                    if workspace_sub_state == 0:
                         OUTPUT_MODE = "collect"
                         tdir = Path(TARGET_DIR).resolve()
                         OUTPUT_DIR = str(
@@ -746,7 +752,7 @@ def select_mode():
                         except EOFError:
                             pass
                         continue
-                    elif tools_sub_state == 2:
+                    elif workspace_sub_state == 1:
                         OUTPUT_MODE = "merge_xmp"
                         print(f"\n{GREEN}MERGE XMP ATTACHMENTS SELECTED{RESET}")
                         print(f"   Source: {DIM}{TARGET_DIR}{RESET}\n")
@@ -762,7 +768,24 @@ def select_mode():
                         except EOFError:
                             pass
                         continue
-                    elif tools_sub_state == 3:
+                    else:  # workspace_sub_state == 2
+                        OUTPUT_MODE = "icloud_import"
+                        print(f"\n{GREEN}ICLOUD PHOTO IMPORT SELECTED{RESET}")
+                        print(f"   Target: {DIM}{TARGET_DIR}{RESET}\n")
+                        icloud_script = SCRIPT_DIR / "icloud_import.py"
+                        drain_stdin()
+                        subprocess.run(
+                            [sys.executable, str(icloud_script), str(TARGET_DIR)]
+                        )
+                        print(f"\n   {CYAN}Press Enter to return to menu...{RESET}")
+                        drain_stdin()
+                        try:
+                            input()
+                        except EOFError:
+                            pass
+                        continue
+                elif selected == 2:
+                    if maintenance_sub_state == 0:
                         OUTPUT_MODE = "diagnostic_analysis"
                         print(f"\n{GREEN}DIAGNOSTIC ANALYSIS SELECTED{RESET}")
                         print(f"   Target: {DIM}{TARGET_DIR}{RESET}")
@@ -779,15 +802,15 @@ def select_mode():
                         except EOFError:
                             pass
                         continue
-                    elif tools_sub_state == 4:
-                        OUTPUT_MODE = "icloud_import"
-                        print(f"\n{GREEN}ICLOUD PHOTO IMPORT SELECTED{RESET}")
-                        print(f"   Target: {DIM}{TARGET_DIR}{RESET}\n")
-                        icloud_script = SCRIPT_DIR / "icloud_import.py"
-                        drain_stdin()
-                        subprocess.run(
-                            [sys.executable, str(icloud_script), str(TARGET_DIR)]
+                    else:  # maintenance_sub_state == 1
+                        OUTPUT_MODE = "cache_clean"
+                        print(f"\n{RED}CACHE & LOG CLEANUP MODE{RESET}")
+                        print(
+                            f"{DIM}   Analysis cache and ALL task progress will be permanently deleted.{RESET}\n"
                         )
+                        cache_script = SCRIPT_DIR / "cache_cleaner.py"
+                        drain_stdin()
+                        subprocess.run([sys.executable, str(cache_script)])
                         print(f"\n   {CYAN}Press Enter to return to menu...{RESET}")
                         drain_stdin()
                         try:
@@ -795,7 +818,6 @@ def select_mode():
                         except EOFError:
                             pass
                         continue
-                    continue
             elif key.lower() == "q":
                 show_cursor()
                 sys.exit(0)
