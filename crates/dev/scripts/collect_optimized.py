@@ -388,4 +388,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print(f"\n{YELLOW}⚠️  Collection interrupted by user.{NC}")
+        sys.exit(0)

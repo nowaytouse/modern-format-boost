@@ -344,4 +344,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print(f"\n{YELLOW}⚠️  Import interrupted by user.{RESET}")
+        sys.exit(0)

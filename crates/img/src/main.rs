@@ -135,6 +135,9 @@ fn main() -> anyhow::Result<()> {
         eprintln!("⚠️ Failed to initialize logging: {e}");
     }
 
+    // Initialize Ctrl+C guard for long-running batch operations
+    shared_utils::ctrlc_guard::init();
+
     let cache = AnalysisCache::default_local()
         .map(Arc::new)
         .map_err(|e| {
@@ -1072,9 +1075,6 @@ fn auto_convert_directory(
     let actual_input_bytes = std::sync::atomic::AtomicU64::new(0);
     let actual_output_bytes = std::sync::atomic::AtomicU64::new(0);
     let pause_controller = Arc::new(BatchPauseController::new());
-
-    // Initialize Ctrl+C guard for long-running batch operations
-    shared_utils::ctrlc_guard::init();
 
     shared_utils::progress_mode::enable_quiet_mode();
     let progress_bar = Arc::new(shared_utils::CoarseProgressBar::new(
