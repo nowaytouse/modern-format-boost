@@ -18,8 +18,10 @@ All notable changes to this project will be documented in this file.
   - Script remains in `crates/dev/scripts/` for database maintenance
 
 - **Enhanced `install_deps.py`**
-  - Added comprehensive FFmpeg setup documentation in script header
-  - Integrated content from `docs/FFMPEG_SETUP.md` (now deleted)
+  - **Restored complete FFmpeg tap installation instructions** (no省略号!)
+    - Full command with all 50+ build options listed
+    - Includes: chromaprint, fdk-aac, tensorflow, whisper-cpp, libvmaf, etc.
+    - Clear step-by-step instructions for tap installation
   - **Added missing system dependencies:**
     - `libvmaf` - Video quality metrics (VMAF, MS-SSIM)
     - `chromaprint` - Audio fingerprinting
@@ -32,7 +34,6 @@ All notable changes to this project will be documented in this file.
     - `Pillow` - Image processing
   - Improved dependency detection (libvmaf via pkg-config, libheif via heif-convert)
   - Better ffmpeg detection with path display
-  - Added helpful tips for advanced FFmpeg tap installation
   - Better handling of existing installations to avoid conflicts
   - Fixed duplicate Linux section and syntax errors
 
@@ -53,7 +54,18 @@ All notable changes to this project will be documented in this file.
     - Full setup (start service + setup DB in one step)
   - Removed redundant `manage_db.py` script
   - Updated references in `shared_utils/src/database.rs` to point to the unified tool
-  - Benefits: Single entry point, reduced code duplication, easier maintenance
+
+- **Integrated training pipeline into `database_manager.py`**
+  - Removed duplicate training placeholder code
+  - Now delegates to `training_pipeline.py` for full ML functionality
+  - Added training options menu:
+    1. Full Training (train + evaluate + export stats)
+    2. Train Only
+    3. Evaluate Existing Model
+    4. Export Feature Statistics
+    5. Generate Dataset Report
+  - Maintains separation of concerns: UI in database_manager.py, ML logic in training_pipeline.py
+  - Benefits: Single entry point, no code duplication, full ML capabilities
 
 ### 🚀 iCloud Photo Import Integration (Enhanced)
 

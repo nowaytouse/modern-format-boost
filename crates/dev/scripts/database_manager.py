@@ -3,11 +3,21 @@
 Provides interactive database operations with numeric key selection.
 
 Features:
-  1. Train New Data - Import and train new datasets
-  2. Database Status - View database statistics
-  3. Vector Index Manager - Manage pgvector indexes
-  4. Backup & Restore - Backup and restore database
-  5. Return to Home - Exit to main interface
+  1. Database Setup & Service Control - Start PostgreSQL and setup database
+  2. Train New Data - KNN training pipeline (delegates to training_pipeline.py)
+  3. Database Status - View database statistics
+  4. Vector Index Manager - Manage pgvector indexes
+  5. Backup & Restore - Backup and restore database
+  6. Return to Home - Exit to main interface
+
+Training Integration:
+  The training functionality delegates to training_pipeline.py which provides:
+  - KNN classifier training with grid search
+  - Cross-validation and hyperparameter optimization
+  - Model evaluation with comprehensive metrics
+  - Feature importance analysis
+  - Feature statistics export
+  - Dataset reporting
 """
 
 import sys
@@ -152,8 +162,8 @@ def show_menu():
         print(f"  {GREEN}1{RESET} - {BOLD}Database Setup & Service Control{RESET}")
         print(f"     {DIM}Start PostgreSQL service and setup database{RESET}\n")
 
-        print(f"  {GREEN}2{RESET} - {BOLD}Train New Data{RESET}")
-        print(f"     {DIM}Import and process new training datasets{RESET}\n")
+        print(f"  {GREEN}2{RESET} - {BOLD}Train New Data (KNN Pipeline){RESET}")
+        print(f"     {DIM}Train KNN classifier with full ML pipeline{RESET}\n")
 
         print(f"  {GREEN}3{RESET} - {BOLD}Database Status{RESET}")
         print(f"     {DIM}View database statistics and schema info{RESET}\n")
@@ -252,15 +262,43 @@ def service_control_menu():
 
 
 def train_new_data():
-    """Train new data - interactive data import and processing."""
+    """Train new data - delegates to training_pipeline.py for full ML pipeline."""
     if not check_psql() or not check_db_exists():
         print(f"{RED}❌ Database not available.{RESET}\n")
         input("Press Enter to continue...")
         return
 
-    print(f"\n{BLUE}🎓 Train New Data{RESET}")
+    print(f"\n{BLUE}🎓 KNN Training Pipeline{RESET}")
     print(f"{DIM}{'─' * 60}{RESET}")
-    print(f"{YELLOW}⚠️  CONFIRM: Start new training session?{RESET}")
+
+    print("\nTraining Options:")
+    print(f"  {GREEN}1{RESET} - Full Training (train + evaluate + export stats)")
+    print(f"  {GREEN}2{RESET} - Train Only")
+    print(f"  {GREEN}3{RESET} - Evaluate Existing Model")
+    print(f"  {GREEN}4{RESET} - Export Feature Statistics")
+    print(f"  {GREEN}5{RESET} - Generate Dataset Report")
+    print(f"  {GREEN}0{RESET} - Back to main menu\n")
+
+    choice = input(f"{CYAN}Select option (0-5): {RESET}").strip()
+
+    if choice == "0":
+        return
+
+    # Map choices to training_pipeline.py commands
+    commands = {
+        "1": ["train"],  # Full training includes evaluation
+        "2": ["train"],
+        "3": ["evaluate"],
+        "4": ["export-stats"],
+        "5": ["report"],
+    }
+
+    if choice not in commands:
+        print(f"{RED}❌ Invalid option.{RESET}")
+        time.sleep(1)
+        return
+
+    print(f"\n{YELLOW}⚠️  CONFIRM: Start training operation?{RESET}")
     if input(
         f"   {CYAN}Type {GREEN}'yes'{CYAN} to proceed: {RESET}"
     ).strip().lower() not in ("y", "yes"):
@@ -268,36 +306,32 @@ def train_new_data():
         time.sleep(1)
         return
 
-    print(f"\n{CYAN}⏳ Initializing training environment...{RESET}")
-    time.sleep(1.5)
+    print(f"\n{CYAN}⏳ Launching training pipeline...{RESET}\n")
+    time.sleep(1)
 
-    print("Data types available:")
-    print(f"  {GREEN}1{RESET} - Image Quality Training")
-    print(f"  {GREEN}2{RESET} - Format Optimization Patterns")
-    print(f"  {GREEN}3{RESET} - Metadata Analysis")
-    print(f"  {GREEN}0{RESET} - Back to main menu\n")
+    # Get the script directory
+    script_dir = Path(__file__).parent
+    training_script = script_dir / "training_pipeline.py"
 
-    data_type = input(f"{CYAN}Select data type (0-3): {RESET}").strip()
-
-    if data_type == "0":
+    if not training_script.exists():
+        print(f"{RED}❌ training_pipeline.py not found at {training_script}{RESET}")
+        input("\nPress Enter to continue...")
         return
-    elif data_type == "1":
-        print(f"\n{CYAN}📸 Image Quality Training{RESET}")
-        print(f"{DIM}Importing image quality assessment datasets...{RESET}\n")
-        # Placeholder for image quality training
-        print(f"{GREEN}✅ Image quality training data queued for import.{RESET}")
-    elif data_type == "2":
-        print(f"\n{CYAN}🎨 Format Optimization Patterns{RESET}")
-        print(f"{DIM}Importing format optimization training patterns...{RESET}\n")
-        # Placeholder for format optimization training
-        print(f"{GREEN}✅ Format optimization patterns queued for import.{RESET}")
-    elif data_type == "3":
-        print(f"\n{CYAN}📊 Metadata Analysis{RESET}")
-        print(f"{DIM}Importing metadata analysis datasets...{RESET}\n")
-        # Placeholder for metadata training
-        print(f"{GREEN}✅ Metadata analysis data queued for import.{RESET}")
-    else:
-        print(f"{RED}❌ Invalid option.{RESET}")
+
+    # Run training_pipeline.py with the selected command
+    cmd = commands[choice]
+    try:
+        result = subprocess.run(
+            ["python3", str(training_script)] + cmd,
+            check=False,
+        )
+
+        if result.returncode == 0:
+            print(f"\n{GREEN}✅ Training operation completed successfully!{RESET}")
+        else:
+            print(f"\n{YELLOW}⚠️  Training operation completed with warnings.{RESET}")
+    except Exception as e:
+        print(f"\n{RED}❌ Error running training pipeline: {e}{RESET}")
 
     input(f"\n{CYAN}Press Enter to continue...{RESET}")
 

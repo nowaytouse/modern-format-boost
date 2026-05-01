@@ -17,16 +17,67 @@ By default, this script installs the standard Homebrew ffmpeg.
 For advanced users who need full-featured FFmpeg with plugins like FDK-AAC,
 Chromaprint, AI filters, etc., you can use the homebrew-ffmpeg tap:
 
-1. Install both versions:
-   brew install ffmpeg  # Standard version (for dependencies)
-   brew tap homebrew-ffmpeg/ffmpeg
-   brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-chromaprint --with-fdk-aac ...
+1. Install both versions (standard version satisfies dependencies):
+   brew install ffmpeg
 
-2. Switch to the full-featured version:
+2. Install full-featured version from tap:
+   brew tap homebrew-ffmpeg/ffmpeg
+   brew install homebrew-ffmpeg/ffmpeg/ffmpeg \\
+       --with-chromaprint \\
+       --with-dvd \\
+       --with-fdk-aac \\
+       --with-game-music-emu \\
+       --with-ggml \\
+       --with-jack \\
+       --with-jpeg-xl \\
+       --with-libaribcaption \\
+       --with-libmodplug \\
+       --with-libopenmpt \\
+       --with-libplacebo \\
+       --with-librist \\
+       --with-librsvg \\
+       --with-libsoxr \\
+       --with-libssh \\
+       --with-tensorflow \\
+       --with-tesseract \\
+       --with-libvidstab \\
+       --with-openal-soft \\
+       --with-openapv \\
+       --with-opencore-amr \\
+       --with-openh264 \\
+       --with-openjpeg \\
+       --with-openvino \\
+       --with-rav1e \\
+       --with-rtmpdump \\
+       --with-rubberband \\
+       --with-two-lame \\
+       --with-webp \\
+       --with-whisper-cpp \\
+       --with-xvid \\
+       --with-zeromq \\
+       --with-zimg \\
+       --with-srt \\
+       --with-libvmaf \\
+       --with-libxml2 \\
+       --with-libzvbi \\
+       --with-aribb24 \\
+       --with-libbluray \\
+       --with-libbs2b \\
+       --with-libcaca \\
+       --with-libdvdnav \\
+       --with-libdvdread \\
+       --with-libgsm \\
+       --with-openssl@3 \\
+       --with-speex
+
+   Note: --with-decklink and --with-libflite are excluded (require manual SDKs
+   or have platform issues)
+
+3. Switch to the full-featured version:
    brew unlink ffmpeg
    brew link --overwrite homebrew-ffmpeg/ffmpeg/ffmpeg
 
-3. (Optional) Create alias for standard version:
+4. (Optional) Create alias for standard version:
    ln -sf $(brew --prefix)/opt/ffmpeg/bin/ffmpeg $(brew --prefix)/bin/ffmpeg-official
 
 This script will detect and preserve existing ffmpeg installations to avoid conflicts.
