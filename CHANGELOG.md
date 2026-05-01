@@ -9,7 +9,13 @@ All notable changes to this project will be documented in this file.
 - **Moved development/debugging scripts to edge folder**
   - `strip_gif_delays.py` → `crates/dev/edge/rs/`
   - `analysis.py` → `crates/dev/edge/rs/`
-  - `backfill_directory_scores.py` → `crates/dev/edge/rs/` (deprecated)
+
+- **Enhanced `backfill_directory_scores.py`**
+  - Now reads keywords from `crates/dev/config/directory_keywords.json`
+  - Removed hardcoded keywords from script
+  - Added configuration display and statistics output
+  - Improved error handling and user feedback
+  - Script remains in `crates/dev/scripts/` for database maintenance
 
 - **Enhanced `install_deps.py`**
   - Added comprehensive FFmpeg setup documentation in script header
@@ -22,11 +28,11 @@ All notable changes to this project will be documented in this file.
   - Better handling of existing installations to avoid conflicts
 
 - **Created `directory_keywords.json` configuration**
-  - Extracted hardcoded keywords from `backfill_directory_scores.py`
   - Location: `crates/dev/config/directory_keywords.json`
-  - Contains meme/sticker keywords and scoring parameters
-  - Enables easy configuration updates without code changes
-  - Recommended: Implement scoring logic in Rust for automatic application
+  - Centralized meme/sticker keywords configuration
+  - Includes scoring parameters (base_score, max_depth, match_weight)
+  - Used by `backfill_directory_scores.py` for database updates
+  - Easy to update without modifying code
 
 ### 🔧 Database Management Consolidation
 
