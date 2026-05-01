@@ -412,6 +412,38 @@ def draw_separator(title):
     print(f"{DIM}# {BOLD}{WHITE}{title}{RESET} {DIM}{'#' * 50}{RESET}\n")
 
 
+def unescape_path(path_str: str) -> str:
+    """Handle shell-escaped paths common in terminal drag-and-drop."""
+    if not path_str:
+        return path_str
+
+    # Remove surrounding quotes
+    path_str = path_str.strip("\"'")
+
+    # If the path doesn't exist but has backslashes, it might be escaped
+    if "\\" in path_str and not os.path.exists(path_str):
+        try:
+            import shlex
+
+            # shlex.split handles shell escaping
+            parts = shlex.split(path_str)
+            if parts:
+                return parts[0]
+        except Exception:
+            # Fallback: manual replacement for common terminal escapes if shlex fails
+            return (
+                path_str.replace("\\ ", " ")
+                .replace("\\!", "!")
+                .replace("\\&", "&")
+                .replace("\\(", "(")
+                .replace("\\)", ")")
+                .replace("\\'", "'")
+                .replace('\\"', '"')
+            )
+
+    return path_str
+
+
 def get_target_directory():
     global TARGET_DIR
     if not TARGET_DIR and not os.environ.get("FROM_APP"):
@@ -420,7 +452,7 @@ def get_target_directory():
         print(f"{DIM}   Please drag and drop a folder here, then press Enter.{RESET}")
         drain_stdin()
         TARGET_DIR = input(f"   {BOLD}> {RESET}").strip()
-        TARGET_DIR = TARGET_DIR.strip("\"'")
+        TARGET_DIR = unescape_path(TARGET_DIR)
 
     if "\n" in TARGET_DIR or "\r" in TARGET_DIR:
         print(f"\n{RED}ERROR: Path contains unsupported control characters.{RESET}")
@@ -1475,7 +1507,7 @@ def main():
             non_flag_args.append(arg)
 
     if non_flag_args:
-        TARGET_DIR = non_flag_args[0]
+        TARGET_DIR = unescape_path(non_flag_args[0])
 
     # Set terminal window size to wide format (wide aspect ratio)
     resize_terminal(35, 110)

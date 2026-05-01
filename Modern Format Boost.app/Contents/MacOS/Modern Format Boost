@@ -90,10 +90,8 @@ launch_in_terminal() {
         inner_cmd+="; exit \$?"
     fi
 
-    local escaped_inner_cmd
-    escaped_inner_cmd=$(escape_shell_double_quotes "$inner_cmd")
-
-    local cmd="clear; exec /bin/zsh -f -c \"$escaped_inner_cmd\""
+    # Use zsh native quoting for the entire inner command to ensure safety across all shells
+    local cmd="clear; exec /bin/zsh -f -c ${(q)inner_cmd}"
 
     local escaped_cmd
     escaped_cmd=$(escape_applescript_string "$cmd")
