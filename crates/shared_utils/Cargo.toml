@@ -70,4 +70,5 @@ path = "src/bin/train_quality.rs"
 [features]
 default = ["v1_21"]
 v1_21 = ["libheif-rs/v1_21"]
+ci-static-build = ["libheif-rs/embedded-libheif", "v1_21"]
 fuzzing = ["dep:arbitrary"]

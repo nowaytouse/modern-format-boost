@@ -20,7 +20,7 @@ cd crates/dev/fuzz
 FUZZ_SANITIZER=${SANITIZER:-address}
 
 echo "Building fuzz targets with sanitizer: $FUZZ_SANITIZER..."
-cargo fuzz build --release --sanitizer $FUZZ_SANITIZER
+cargo fuzz build --release --sanitizer $FUZZ_SANITIZER --features shared_utils/ci-static-build
 
 # Copy fuzz targets to $OUT directory (expected by ClusterFuzzLite)
 if [ -n "$OUT" ]; then
