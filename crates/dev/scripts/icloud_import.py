@@ -3,7 +3,7 @@
 Uses osxphotos to import processed assets into Apple Photos/iCloud.
 
 Two import modes:
-  Mode 1 (Optimized): Imports with ✨ emoji prefix and organized album structure
+  Mode 1 (Optimized): Imports with ✨ emoji prefix and organized album structure (✨/{folder_name})
   Mode 2 (Simple): Plain import without album organization
 """
 
@@ -136,7 +136,7 @@ def run_optimized_import(target_dir):
 
     print(f"\n{BLUE}🚀 Starting Optimized Import...{RESET}")
     print(f"   Target:     {CYAN}{target_path}{RESET}")
-    print(f"   Mode:       {YELLOW}Organized (✨/✨/{{folder_name}}){RESET}")
+    print(f"   Mode:       {YELLOW}Organized (✨/{{folder_name}}){RESET}")
     print(f"   Auto-Album: {YELLOW}Enabled{RESET}\n")
 
     osxphotos_path = find_osxphotos()
