@@ -166,6 +166,7 @@ def _ci_rsync_exclude(ext_with_dot: str) -> str:
     ci = "".join(f"[{c.lower()}{c.upper()}]" if c.isalpha() else c for c in ext)
     return f"--exclude=*.{ci}"
 
+
 # Threading & Control
 stats_lock = threading.Lock()
 watch_timer = None
@@ -1235,9 +1236,13 @@ def sync_non_media_files():
     # IMPORTANT: only exclude extensions that are actually processed by the Rust tools.
     # If a pipeline is disabled (IMG_COUNT==0 or VID_COUNT==0), we must NOT exclude those
     # media extensions, otherwise rsync cannot copy them and we can lose files.
-    excludes = ["--exclude=*.[xX][mM][pP]"]  # always exclude sidecars (handled separately)
+    excludes = [
+        "--exclude=*.[xX][mM][pP]"
+    ]  # always exclude sidecars (handled separately)
 
-    img_ext_excludes = [_ci_rsync_exclude(ext) for ext in sorted(IMG_EXTENSIONS | {".gif", ".apng"})]
+    img_ext_excludes = [
+        _ci_rsync_exclude(ext) for ext in sorted(IMG_EXTENSIONS | {".gif", ".apng"})
+    ]
     vid_ext_excludes = [_ci_rsync_exclude(ext) for ext in sorted(VID_EXTENSIONS)]
 
     if IMG_COUNT > 0:

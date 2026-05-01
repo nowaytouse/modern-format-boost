@@ -21,6 +21,7 @@ Usage:
     # 5. Combined analysis (log scanning + explicit dual-directory verification)
     python3 verify.py logs/ --verify /path/to/Source /path/to/Optimized
 """
+
 import argparse
 import hashlib
 import os
@@ -48,22 +49,67 @@ else:
 # Constants from Integrity Verifier
 # ---------------------------------------------------------------------------
 IMG_EXTS = {
-    ".jpg", ".jpeg", ".jpe", ".jfif", ".png", ".webp",
-    ".heic", ".heif", ".avif", ".tiff", ".tif", ".bmp",
-    ".ico", ".svg", ".jp2", ".j2k", ".jxl",
+    ".jpg",
+    ".jpeg",
+    ".jpe",
+    ".jfif",
+    ".png",
+    ".webp",
+    ".heic",
+    ".heif",
+    ".avif",
+    ".tiff",
+    ".tif",
+    ".bmp",
+    ".ico",
+    ".svg",
+    ".jp2",
+    ".j2k",
+    ".jxl",
 }
 
 VID_EXTS = {
-    ".gif", ".mp4", ".mov", ".mkv", ".avi", ".webm",
-    ".m4v", ".wmv", ".flv", ".mpg", ".mpeg", ".ts",
-    ".mts", ".m2ts", ".m2v", ".3gp", ".3g2", ".ogv",
-    ".f4v", ".asf", ".apng",
+    ".gif",
+    ".mp4",
+    ".mov",
+    ".mkv",
+    ".avi",
+    ".webm",
+    ".m4v",
+    ".wmv",
+    ".flv",
+    ".mpg",
+    ".mpeg",
+    ".ts",
+    ".mts",
+    ".m2ts",
+    ".m2v",
+    ".3gp",
+    ".3g2",
+    ".ogv",
+    ".f4v",
+    ".asf",
+    ".apng",
 }
 
 OUTPUT_EXTS = {
-    ".jxl", ".avif", ".heic", ".heif", ".mp4", ".mov",
-    ".mkv", ".webm", ".jpg", ".jpeg", ".png", ".webp",
-    ".gif", ".tiff", ".tif", ".bmp", ".apng",
+    ".jxl",
+    ".avif",
+    ".heic",
+    ".heif",
+    ".mp4",
+    ".mov",
+    ".mkv",
+    ".webm",
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".webp",
+    ".gif",
+    ".tiff",
+    ".tif",
+    ".bmp",
+    ".apng",
 }
 
 MEDIA_EXTS = IMG_EXTS | VID_EXTS
@@ -73,6 +119,7 @@ SKIP_EXTS = {".xmp", ".ds_store", ".thumbs.db", ".desktop.ini"}
 # ---------------------------------------------------------------------------
 # Integrity Verification Logic
 # ---------------------------------------------------------------------------
+
 
 def is_media_file(path: Path) -> bool:
     """Check if file is a media file (excludes XMP, hidden files, etc.)."""
@@ -139,7 +186,7 @@ def resolve_verify_dirs(args_verify: list[str]) -> tuple[Path, Path] | None:
     # Case 1: given path ends with _optimized → derive source
     for suffix in optimized_suffixes:
         if given.name.endswith(suffix):
-            source_name = given.name[:-len(suffix)]
+            source_name = given.name[: -len(suffix)]
             candidate = given.parent / source_name
             if candidate.is_dir():
                 return candidate, given
@@ -181,13 +228,15 @@ def run_integrity_check(source_dir: Path, optimized_dir: Path, report_f):
         report_f.write("Count status:    MATCH\n")
     else:
         direction = "more" if delta > 0 else "fewer"
-        report_f.write(f"Count status:    MISMATCH ({abs(delta)} {direction} in optimized)\n")
+        report_f.write(
+            f"Count status:    MISMATCH ({abs(delta)} {direction} in optimized)\n"
+        )
 
     # Matching logic
     missing = []
     matched = []  # List of (key, src_path, opt_path)
     extra = []
-    ambiguous = [] # 1-to-N or N-to-1 matches
+    ambiguous = []  # 1-to-N or N-to-1 matches
 
     # 1. Identify matches and missing
     for key, src_paths in sorted(source_files.items()):
@@ -215,27 +264,45 @@ def run_integrity_check(source_dir: Path, optimized_dir: Path, report_f):
     report_f.write(f"Extra:           {len(extra)}\n\n")
 
     if src_collisions or opt_collisions or ambiguous:
-        report_f.write("── COLLISIONS & SAFETY WARNINGS ───────────────────────────────\n")
+        report_f.write(
+            "── COLLISIONS & SAFETY WARNINGS ───────────────────────────────\n"
+        )
         if src_collisions:
-            report_f.write("⚠️ WARNING: Duplicate source stems detected (Unsafe for 1-to-1 mapping):\n")
+            report_f.write(
+                "⚠️ WARNING: Duplicate source stems detected (Unsafe for 1-to-1 mapping):\n"
+            )
             for key, paths in sorted(src_collisions.items()):
                 hashes = [file_content_hash(p) for p in paths]
                 unique_h = len(set(hashes))
-                label = "IDENTICAL content" if unique_h == 1 else f"{unique_h} DISTINCT files"
+                label = (
+                    "IDENTICAL content"
+                    if unique_h == 1
+                    else f"{unique_h} DISTINCT files"
+                )
                 report_f.write(f"  Key '{key}' maps to {len(paths)} files ({label}):\n")
                 for p, h in zip(paths, hashes):
                     report_f.write(f"    - {p.relative_to(source_dir)}  [sha256:{h}]\n")
             report_f.write("\n")
 
         if opt_collisions:
-            report_f.write("⚠️ WARNING: Duplicate optimized stems detected (Potential overwrites):\n")
+            report_f.write(
+                "⚠️ WARNING: Duplicate optimized stems detected (Potential overwrites):\n"
+            )
             for key, paths in sorted(opt_collisions.items()):
                 hashes = [file_content_hash(p) for p in paths]
                 unique_h = len(set(hashes))
-                label = "IDENTICAL content" if unique_h == 1 else f"{unique_h} DISTINCT files"
-                report_f.write(f"  Key '{key}' maps to {len(paths)} outputs ({label}):\n")
+                label = (
+                    "IDENTICAL content"
+                    if unique_h == 1
+                    else f"{unique_h} DISTINCT files"
+                )
+                report_f.write(
+                    f"  Key '{key}' maps to {len(paths)} outputs ({label}):\n"
+                )
                 for p, h in zip(paths, hashes):
-                    report_f.write(f"    - {p.relative_to(optimized_dir)}  [sha256:{h}]\n")
+                    report_f.write(
+                        f"    - {p.relative_to(optimized_dir)}  [sha256:{h}]\n"
+                    )
             report_f.write("\n")
 
         if ambiguous:
@@ -265,8 +332,12 @@ def run_integrity_check(source_dir: Path, optimized_dir: Path, report_f):
             mismatched_types.append((src_p, opt_p))
 
     if mismatched_types:
-        report_f.write("── CONTENT CONSISTENCY WARNINGS ───────────────────────────────\n")
-        report_f.write("⚠️ WARNING: Media type mismatch detected (Suspicious conversion):\n")
+        report_f.write(
+            "── CONTENT CONSISTENCY WARNINGS ───────────────────────────────\n"
+        )
+        report_f.write(
+            "⚠️ WARNING: Media type mismatch detected (Suspicious conversion):\n"
+        )
         for src, opt in mismatched_types:
             s_type = "Video" if src.suffix.lower() in VID_EXTS else "Image"
             o_type = "Video" if opt.suffix.lower() in VID_EXTS else "Image"
@@ -299,11 +370,13 @@ def run_integrity_check(source_dir: Path, optimized_dir: Path, report_f):
 
     if total_src_size > 0:
         savings = total_src_size - total_opt_size
-        savings_pct = (savings / total_src_size * 100)
+        savings_pct = savings / total_src_size * 100
         report_f.write("--- Storage Impact (Matched Files) ---\n")
         report_f.write(f"  Source total:    {format_size(total_src_size)}\n")
         report_f.write(f"  Optimized total: {format_size(total_opt_size)}\n")
-        report_f.write(f"  Space saved:     {format_size(savings)} ({savings_pct:.1f}%)\n\n")
+        report_f.write(
+            f"  Space saved:     {format_size(savings)} ({savings_pct:.1f}%)\n\n"
+        )
 
     return {
         "source": str(source_dir),
@@ -320,22 +393,30 @@ def run_integrity_check(source_dir: Path, optimized_dir: Path, report_f):
         "optimized_total_size": total_opt_size,
     }
 
+
 # ---------------------------------------------------------------------------
 # Log Analysis Logic
 # ---------------------------------------------------------------------------
 
+
 def parse_logs(log_paths, report_f, filter_dir=None):
     """Analyze logs and write results to the report file handle.
-    
+
     If filter_dir is provided, only entries belonging to that directory tree
     will be included in the report.
     """
     result_pattern = re.compile(r"([\S\s]+?)\s*→\s*([\S\s]+?)\s*\(([^)]+)\)\s*([✅❌])")
     activity_pattern = re.compile(r"🔄\s*Animated→([A-Z0-9\s]+)\s*\(([^)]+)\):\s*(.+)")
     checking_pattern = re.compile(r"checking\s+([^\s]+)$")
-    uncertain_pattern = re.compile(r"Tree uncertain \(([^)]+)\) \[prob=([\d.]+)\].*falling back to Layer 6 KNN")
-    knn_bypass_pattern = re.compile(r"Loop DB unavailable or disabled — running tree without KNN")
-    tree_uncertain_pattern = re.compile(r"Tree-only result remained uncertain \(([^)]+)\)")
+    uncertain_pattern = re.compile(
+        r"Tree uncertain \(([^)]+)\) \[prob=([\d.]+)\].*falling back to Layer 6 KNN"
+    )
+    knn_bypass_pattern = re.compile(
+        r"Loop DB unavailable or disabled — running tree without KNN"
+    )
+    tree_uncertain_pattern = re.compile(
+        r"Tree-only result remained uncertain \(([^)]+)\)"
+    )
 
     modern_exts = {".webp", ".avif", ".jxl", ".heic", ".heif"}
     target_formats = {"GIF", "MOV", "MP4", "HEVC", "AV1"}
@@ -343,7 +424,7 @@ def parse_logs(log_paths, report_f, filter_dir=None):
     results = []
     uncertain_cases = []
     log_dir_path = Path("logs")
-    
+
     # Pre-resolve filter_dir if provided
     filter_dir_abs = str(Path(filter_dir).resolve()) if filter_dir else None
 
@@ -364,7 +445,7 @@ def parse_logs(log_paths, report_f, filter_dir=None):
                             continue
 
                         # Track file
-                        if (m := checking_pattern.search(line)):
+                        if m := checking_pattern.search(line):
                             current_file = m.group(1).strip()
 
                         # Check if current_file is within filter_dir
@@ -381,58 +462,109 @@ def parse_logs(log_paths, report_f, filter_dir=None):
                             continue
 
                         # Conversions
-                        if (m := result_pattern.search(line)):
+                        if m := result_pattern.search(line):
                             source = m.group(1).split(">")[-1].strip()
                             current_file = source
-                            
+
                             # Re-verify relevance for conversion line
                             if filter_dir_abs:
                                 try:
-                                    if not str(Path(source).resolve()).startswith(filter_dir_abs):
+                                    if not str(Path(source).resolve()).startswith(
+                                        filter_dir_abs
+                                    ):
                                         continue
                                 except Exception:
                                     pass
 
-                            target, msg, status_icon = m.group(2).strip(), m.group(3).strip(), m.group(4)
-                            if Path(source).suffix.lower() in modern_exts and any(f in target.upper() or f in msg.upper() for f in target_formats):
-                                results.append({"log": log_file.name, "source": source, "target": target, "status": "SUCCESS" if status_icon == "✅" else "FAILED", "details": msg})
+                            target, msg, status_icon = (
+                                m.group(2).strip(),
+                                m.group(3).strip(),
+                                m.group(4),
+                            )
+                            if Path(source).suffix.lower() in modern_exts and any(
+                                f in target.upper() or f in msg.upper()
+                                for f in target_formats
+                            ):
+                                results.append(
+                                    {
+                                        "log": log_file.name,
+                                        "source": source,
+                                        "target": target,
+                                        "status": "SUCCESS"
+                                        if status_icon == "✅"
+                                        else "FAILED",
+                                        "details": msg,
+                                    }
+                                )
 
-                        if (m := activity_pattern.search(line)):
-                            target_fmt, details, source = m.group(1).strip(), m.group(2).strip(), m.group(3).strip()
+                        if m := activity_pattern.search(line):
+                            target_fmt, details, source = (
+                                m.group(1).strip(),
+                                m.group(2).strip(),
+                                m.group(3).strip(),
+                            )
                             current_file = source
-                            
+
                             # Re-verify relevance
                             if filter_dir_abs:
                                 try:
-                                    if not str(Path(source).resolve()).startswith(filter_dir_abs):
+                                    if not str(Path(source).resolve()).startswith(
+                                        filter_dir_abs
+                                    ):
                                         continue
                                 except Exception:
                                     pass
 
-                            if Path(source).suffix.lower() in modern_exts and any(f in target_fmt.upper() for f in target_formats):
-                                results.append({"log": log_file.name, "source": source, "target": f"CONVERTED TO {target_fmt}", "status": "PROCESSING/UNKNOWN", "details": details})
+                            if Path(source).suffix.lower() in modern_exts and any(
+                                f in target_fmt.upper() for f in target_formats
+                            ):
+                                results.append(
+                                    {
+                                        "log": log_file.name,
+                                        "source": source,
+                                        "target": f"CONVERTED TO {target_fmt}",
+                                        "status": "PROCESSING/UNKNOWN",
+                                        "details": details,
+                                    }
+                                )
 
                         # Loop Intent
-                        if uncertain_pattern.search(line) or knn_bypass_pattern.search(line) or tree_uncertain_pattern.search(line):
+                        if (
+                            uncertain_pattern.search(line)
+                            or knn_bypass_pattern.search(line)
+                            or tree_uncertain_pattern.search(line)
+                        ):
                             if current_file:
                                 reason, prob = "N/A", "N/A"
-                                if (u := uncertain_pattern.search(line)):
+                                if u := uncertain_pattern.search(line):
                                     reason, prob = u.group(1), u.group(2)
                                 elif knn_bypass_pattern.search(line):
                                     reason = "KNN Bypassed (DB Unavailable)"
-                                elif (t := tree_uncertain_pattern.search(line)):
+                                elif t := tree_uncertain_pattern.search(line):
                                     reason = t.group(1)
 
                                 # Duplicate check
-                                if not any(c["file"] == current_file and c["log"] == log_file.name for c in uncertain_cases):
+                                if not any(
+                                    c["file"] == current_file
+                                    and c["log"] == log_file.name
+                                    for c in uncertain_cases
+                                ):
                                     matching_folders = []
                                     if log_dir_path.exists():
                                         stem = Path(current_file).stem
                                         for item in log_dir_path.iterdir():
                                             if item.is_dir() and stem in item.name:
                                                 matching_folders.append(item.name)
-                                    
-                                    uncertain_cases.append({"file": current_file, "reason": reason, "probability": prob, "log": log_file.name, "matching_folders": matching_folders})
+
+                                    uncertain_cases.append(
+                                        {
+                                            "file": current_file,
+                                            "reason": reason,
+                                            "probability": prob,
+                                            "log": log_file.name,
+                                            "matching_folders": matching_folders,
+                                        }
+                                    )
 
             except Exception as e:
                 print(f"⚠️ Error reading {log_file}: {e}", file=sys.stderr)
@@ -457,7 +589,9 @@ def parse_logs(log_paths, report_f, filter_dir=None):
         report_f.write("No uncertain loop intent cases found.\n\n")
     else:
         for i, c in enumerate(unique_uncertain, 1):
-            report_f.write(f"[{i}] FILE: {c['file']}\n    REASON: {c['reason']}\n    PROB:   {c['probability']}\n    LOG:    {c['log']}\n")
+            report_f.write(
+                f"[{i}] FILE: {c['file']}\n    REASON: {c['reason']}\n    PROB:   {c['probability']}\n    LOG:    {c['log']}\n"
+            )
             if c["matching_folders"]:
                 report_f.write(f"    FOLDERS: {', '.join(c['matching_folders'])}\n")
             report_f.write("-" * 40 + "\n")
@@ -468,19 +602,28 @@ def parse_logs(log_paths, report_f, filter_dir=None):
         report_f.write("No conversions found.\n")
     else:
         for i, r in enumerate(unique_results, 1):
-            report_f.write(f"[{i}] SOURCE: {r['source']}\n    TARGET: {r['target']}\n    STATUS: {r['status']}\n    INFO:   {r['details']}\n    LOG:    {r['log']}\n")
+            report_f.write(
+                f"[{i}] SOURCE: {r['source']}\n    TARGET: {r['target']}\n    STATUS: {r['status']}\n    INFO:   {r['details']}\n    LOG:    {r['log']}\n"
+            )
             report_f.write("-" * 40 + "\n")
 
     return len(unique_results), len(unique_uncertain)
+
 
 # ---------------------------------------------------------------------------
 # Main Execution
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="MFB Conversion Analyzer & Integrity Verifier")
+    parser = argparse.ArgumentParser(
+        description="MFB Conversion Analyzer & Integrity Verifier"
+    )
     parser.add_argument("logs", nargs="*", help="Log files or directories to scan.")
-    parser.add_argument("--verify", nargs="+", help="Source and/or optimized directories for integrity check (auto-detects if one provided).")
+    parser.add_argument(
+        "--verify",
+        nargs="+",
+        help="Source and/or optimized directories for integrity check (auto-detects if one provided).",
+    )
     parser.add_argument("-o", "--output", help="Custom output report path.")
     parser.add_argument(
         "--print-integrity-summary",
@@ -491,14 +634,24 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_report = args.output if args.output else f"logs/diagnostic_report_{timestamp}.txt"
-    os.makedirs(os.path.dirname(output_report), exist_ok=True) if os.path.dirname(output_report) else None
+    output_report = (
+        args.output if args.output else f"logs/diagnostic_report_{timestamp}.txt"
+    )
+    os.makedirs(os.path.dirname(output_report), exist_ok=True) if os.path.dirname(
+        output_report
+    ) else None
 
     with open(output_report, "w", encoding="utf-8") as report_f:
-        report_f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+        report_f.write(
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        )
         report_f.write("      MODERN FORMAT BOOST - DIAGNOSTIC ANALYSIS REPORT\n")
-        report_f.write(f"      Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        report_f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
+        report_f.write(
+            f"      Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        )
+        report_f.write(
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        )
 
         # 1. Integrity Check
         source_dir_context = None
@@ -510,17 +663,23 @@ if __name__ == "__main__":
                 source_dir_context = src
                 integrity_stats = run_integrity_check(src, opt, report_f)
             else:
-                report_f.write(f"❌ Error: Could not resolve paired directory for {args.verify[0]}\n\n")
+                report_f.write(
+                    f"❌ Error: Could not resolve paired directory for {args.verify[0]}\n\n"
+                )
 
         # 2. Log Analysis
         if args.logs:
-            conv_count, unc_count = parse_logs(args.logs, report_f, filter_dir=source_dir_context)
+            conv_count, unc_count = parse_logs(
+                args.logs, report_f, filter_dir=source_dir_context
+            )
             print(f"📈 Total conversion events: {conv_count}")
             print(f"🔭 Uncertain loop cases: {unc_count}")
 
     if args.print_integrity_summary:
         if integrity_stats is None:
-            print("🔎 Integrity summary: unavailable (source/optimized pair not resolved)")
+            print(
+                "🔎 Integrity summary: unavailable (source/optimized pair not resolved)"
+            )
         else:
             delta = integrity_stats["count_delta"]
             if delta == 0:
@@ -549,4 +708,3 @@ if __name__ == "__main__":
                 )
 
     print(f"📊 Full report generated: {output_report}")
-
