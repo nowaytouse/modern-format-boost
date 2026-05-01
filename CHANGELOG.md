@@ -18,10 +18,13 @@ All notable changes to this project will be documented in this file.
   - Script remains in `crates/dev/scripts/` for database maintenance
 
 - **Enhanced `install_deps.py`**
-  - **Restored complete FFmpeg tap installation instructions** (no省略号!)
-    - Full command with all 50+ build options listed
+  - **Restored complete FFmpeg tap installation documentation**
+    - Added "Link Overwrite" strategy explanation
+    - Full command with all 50+ build options (no ellipsis!)
     - Includes: chromaprint, fdk-aac, tensorflow, whisper-cpp, libvmaf, etc.
-    - Clear step-by-step instructions for tap installation
+    - Clear step-by-step instructions (4 steps)
+    - Explains why decklink and libflite are excluded
+    - Information parity with deleted docs/FFMPEG_SETUP.md
   - **Added missing system dependencies:**
     - `libvmaf` - Video quality metrics (VMAF, MS-SSIM)
     - `chromaprint` - Audio fingerprinting
@@ -58,6 +61,7 @@ All notable changes to this project will be documented in this file.
 - **Integrated training pipeline into `database_manager.py`**
   - Removed duplicate training placeholder code
   - Now delegates to `training_pipeline.py` for full ML functionality
+  - `training_pipeline.py` remains as the ML implementation (not deleted)
   - Added training options menu:
     1. Full Training (train + evaluate + export stats)
     2. Train Only

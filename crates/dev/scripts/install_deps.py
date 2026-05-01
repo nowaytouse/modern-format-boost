@@ -15,12 +15,21 @@ FFmpeg Installation Notes:
 By default, this script installs the standard Homebrew ffmpeg.
 
 For advanced users who need full-featured FFmpeg with plugins like FDK-AAC,
-Chromaprint, AI filters, etc., you can use the homebrew-ffmpeg tap:
+Chromaprint, AI filters, etc., you can use the homebrew-ffmpeg tap.
 
-1. Install both versions (standard version satisfies dependencies):
+The "Link Overwrite" Strategy:
+-------------------------------
+Homebrew's standard `chromaprint` package strictly depends on the formula named
+`ffmpeg`. To satisfy this dependency while using the enhanced version, we install
+both and use Homebrew's linking system to toggle the active version.
+
+Step-by-Step Instructions:
+--------------------------
+
+1. Install Official FFmpeg (satisfies dependencies for chromaprint, etc.):
    brew install ffmpeg
 
-2. Install full-featured version from tap:
+2. Install Full-Featured Tap Version:
    brew tap homebrew-ffmpeg/ffmpeg
    brew install homebrew-ffmpeg/ffmpeg/ffmpeg \\
        --with-chromaprint \\
@@ -70,14 +79,14 @@ Chromaprint, AI filters, etc., you can use the homebrew-ffmpeg tap:
        --with-openssl@3 \\
        --with-speex
 
-   Note: --with-decklink and --with-libflite are excluded (require manual SDKs
-   or have platform issues)
+   Note: --with-decklink and --with-libflite are excluded as they require
+   manual SDKs or have current platform issues.
 
-3. Switch to the full-featured version:
+3. Toggle to Full-Featured Version:
    brew unlink ffmpeg
    brew link --overwrite homebrew-ffmpeg/ffmpeg/ffmpeg
 
-4. (Optional) Create alias for standard version:
+4. (Optional) Create Alias for Standard Version:
    ln -sf $(brew --prefix)/opt/ffmpeg/bin/ffmpeg $(brew --prefix)/bin/ffmpeg-official
 
 This script will detect and preserve existing ffmpeg installations to avoid conflicts.
