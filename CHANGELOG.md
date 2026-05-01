@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+### 🔧 CI/CD Improvements
+
+- **Fixed ClusterFuzzLite workflow**
+  - Added `nightly` branch to trigger branches (was only `main`)
+  - Created `.clusterfuzzlite/build.sh` for proper fuzz target building
+  - Ensures fuzzing runs on nightly branch pushes and PRs
+  - Fuzz targets: jpeg_extractor, hdr_synthesis, heic_parser, jxl_utils, image_analyzer
+
 ### 🔧 Development Scripts Reorganization
 
 - **Moved development/debugging scripts to edge folder**

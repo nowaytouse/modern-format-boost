@@ -1,9 +1,9 @@
 name: ClusterFuzzLite
 on:
   push:
-    branches: [main]
+    branches: [main, nightly]
   pull_request:
-    branches: [main]
+    branches: [main, nightly]
   schedule:
     - cron: "0 0 * * *" # Daily
 
