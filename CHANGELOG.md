@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## Unreleased
+
+### 🔧 CI/CD Improvements
+
+- **Fixed ClusterFuzzLite workflow**
+  - Created `.clusterfuzzlite/build.sh` for proper fuzz target building
+  - Ensures fuzzing runs correctly on main branch
+  - Fuzz targets: jpeg_extractor, hdr_synthesis, heic_parser, jxl_utils, image_analyzer
+  - Installs cargo-fuzz automatically if needed
+  - Properly copies built targets to $OUT directory for ClusterFuzzLite
+
 ## [0.11.2] — 2026-04-11
 
 ### ✨ User-Facing Highlights
