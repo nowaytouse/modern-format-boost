@@ -570,7 +570,7 @@ def select_mode():
     mode_sub_state = 0 if OUTPUT_MODE == "adjacent" else 1
     # Internal state for the "Workspace Tools" item (0: Collect, 1: Merge XMP, 2: iCloud Import)
     workspace_sub_state = 0
-    # Internal state for the "Maintenance Tools" item (0: Diagnostic Analysis, 1: Cleanup Cache)
+    # Internal state for the "Maintenance Tools" item (0: Diagnostic Analysis, 1: Cleanup Cache, 2: Database Manager)
     maintenance_sub_state = 0
 
     options = ["Optimization Mode", "Workspace Tools", "Maintenance Tools"]
@@ -642,9 +642,12 @@ def select_mode():
                 if maintenance_sub_state == 0:
                     display_text = "Tool: Diagnostic Analysis [Tab to Switch]"
                     desc = "Analyze logs for edge cases and verify output integrity."
-                else:
+                elif maintenance_sub_state == 1:
                     display_text = "Tool: Cleanup Cache & Logs [Tab to Switch]"
                     desc = "Clear analysis cache, session logs, and ALL task progress."
+                else:
+                    display_text = "Tool: Database Manager [Tab to Switch]"
+                    desc = "Clean, train, backup and manage database with interactive menu."
 
                 if is_selected:
                     if "Console" in globals():
@@ -679,7 +682,7 @@ def select_mode():
                 elif selected == 1:
                     workspace_sub_state = (workspace_sub_state + 1) % 3
                 elif selected == 2:
-                    maintenance_sub_state = (maintenance_sub_state + 1) % 2
+                    maintenance_sub_state = (maintenance_sub_state + 1) % 3
             elif key in ("\r", "\n"):
                 # Action based on selection
                 if selected == 0:
@@ -802,7 +805,7 @@ def select_mode():
                         except EOFError:
                             pass
                         continue
-                    else:  # maintenance_sub_state == 1
+                    elif maintenance_sub_state == 1:
                         OUTPUT_MODE = "cache_clean"
                         print(f"\n{RED}CACHE & LOG CLEANUP MODE{RESET}")
                         print(
@@ -811,6 +814,19 @@ def select_mode():
                         cache_script = SCRIPT_DIR / "cache_cleaner.py"
                         drain_stdin()
                         subprocess.run([sys.executable, str(cache_script)])
+                        print(f"\n   {CYAN}Press Enter to return to menu...{RESET}")
+                        drain_stdin()
+                        try:
+                            input()
+                        except EOFError:
+                            pass
+                        continue
+                    else:  # maintenance_sub_state == 2
+                        OUTPUT_MODE = "database_manager"
+                        print(f"\n{GREEN}DATABASE MANAGER SELECTED{RESET}\n")
+                        db_script = SCRIPT_DIR / "database_manager.py"
+                        drain_stdin()
+                        subprocess.run([sys.executable, str(db_script)])
                         print(f"\n   {CYAN}Press Enter to return to menu...{RESET}")
                         drain_stdin()
                         try:
