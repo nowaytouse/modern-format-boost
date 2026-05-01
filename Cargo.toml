@@ -83,7 +83,7 @@ infer = "0.16"
 crc32fast = "1.5.0"
 quick-xml = "0.31.0"
 exr = "1.74.0"
-jpegxl-rs = { version = "0.12", features = ["vendored"] }
+jpegxl-rs = { version = "0.12", default-features = false }
 
 shared_utils = { path = "crates/shared_utils" }
 img = { path = "crates/img" }

@@ -1262,18 +1262,8 @@ dependencies = [
  "bon",
  "byteorder",
  "half",
- "image",
  "jpegxl-sys",
  "thiserror 2.0.18",
-]
-
-[[package]]
-name = "jpegxl-src"
-version = "0.11.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "902ce3ffcd089c3c02a74a44bdd4fd01ad18ecc63ec582b9c84b12418cdeba1e"
-dependencies = [
- "cmake",
 ]
 
 [[package]]
@@ -1282,7 +1272,6 @@ version = "0.12.1+libjxl-0.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "00cb4f7ffb45ee4327e9ec6ca1a732f3abef470ee008f7d4be3afb414075cd7d"
 dependencies = [
- "jpegxl-src",
  "pkg-config",
 ]
 

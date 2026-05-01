@@ -18,6 +18,10 @@ All notable changes to this project will be documented in this file.
 - **Fixed ClusterFuzzLite workflow**
   - Added `nightly` branch to trigger branches (was only `main`)
   - Created `.clusterfuzzlite/build.sh` for proper fuzz target building
+  - **Fixed jpegxl-sys CMake build issues in CI**
+    - Removed `vendored` feature from jpegxl-rs to use system libjxl
+    - Updated build script to install libjxl-dev from apt
+    - Avoids "undefined reference to main" error in djxl_fuzzer
   - Ensures fuzzing runs on nightly branch pushes and PRs
   - Fuzz targets: jpeg_extractor, hdr_synthesis, heic_parser, jxl_utils, image_analyzer
 
