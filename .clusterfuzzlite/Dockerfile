@@ -3,6 +3,8 @@ FROM gcr.io/oss-fuzz-base/base-builder-rust
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     pkg-config \
+    cmake \
+    nasm \
     libheif-dev \
     libchromaprint-dev \
     libjpeg-dev \
