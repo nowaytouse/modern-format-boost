@@ -41,8 +41,8 @@ EOF
 }
 
 shell_quote() {
-    # Native zsh rigorous quoting, safely handles single quotes, spaces, and all special characters
-    echo "${(q)1}"
+    # Use single-quote quoting (qq) for better compatibility and safety
+    echo "${(qq)1}"
 }
 
 escape_applescript_string() {
@@ -90,8 +90,8 @@ launch_in_terminal() {
         inner_cmd+="; exit \$?"
     fi
 
-    # Use zsh native quoting for the entire inner command to ensure safety across all shells
-    local cmd="clear; exec /bin/zsh -f -c ${(q)inner_cmd}"
+    # Use single-quote quoting (qq) for the inner command to prevent history expansion issues (like '!')
+    local cmd="clear; exec /bin/zsh -f -c ${(qq)inner_cmd}"
 
     local escaped_cmd
     escaped_cmd=$(escape_applescript_string "$cmd")
