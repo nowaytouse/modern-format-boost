@@ -20,6 +20,7 @@ All notable changes to this project will be documented in this file.
   - Robust `osxphotos` detection across system paths
   - Fixed: Album path corrected from double nesting (`✨/✨/{folder_name}`) to single nesting (`✨/{folder_name}`)
   - Enhancement: Mode 2 now includes basic album organization to prevent scattered imports
+  - Robustness: Added mutual exclusion lock to prevent concurrent imports (prevents photo library errors)
 
 - **Integrated into `drag_and_drop_processor.py`**
   - Added as the 5th option in the "Workspace Tools" menu.

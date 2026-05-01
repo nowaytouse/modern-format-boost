@@ -11,6 +11,7 @@ import os
 import sys
 import subprocess
 import time
+import fcntl
 from pathlib import Path
 
 # Add ANSI colors for terminal output
@@ -27,7 +28,34 @@ else:
     RED = GREEN = YELLOW = BLUE = CYAN = BOLD = DIM = RESET = ""
 
 
-def find_osxphotos():
+def get_import_lock_path():
+    """Get the path to the import lock file."""
+    return Path.home() / ".icloud_import.lock"
+
+
+def acquire_import_lock():
+    """Acquire an exclusive lock to prevent concurrent imports.
+    
+    Returns:
+        File object if lock acquired, None if already locked
+    """
+    lock_path = get_import_lock_path()
+    try:
+        lock_file = open(lock_path, 'w')
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return lock_file
+    except (IOError, OSError):
+        return None
+
+
+def release_import_lock(lock_file):
+    """Release the import lock."""
+    if lock_file:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            lock_file.close()
+        except (IOError, OSError):
+            pass
     """Find osxphotos in common locations and verify it works."""
     # Try common installation paths
     common_paths = [
@@ -239,15 +267,27 @@ def main():
         print(f"{YELLOW}   Or if already installed, add its directory to PATH.{RESET}")
         sys.exit(1)
 
-    # Show mode selection menu
-    import_mode = select_import_mode()
+    # Acquire import lock to prevent concurrent imports
+    import_lock = acquire_import_lock()
+    if not import_lock:
+        print(f"\n{RED}❌ Error: Another import operation is already in progress.{RESET}")
+        print(f"{YELLOW}   Please wait for the current import to complete before starting a new one.{RESET}")
+        print(f"{YELLOW}   If you believe this is an error, delete: {get_import_lock_path()}{RESET}")
+        sys.exit(1)
 
-    if import_mode == 1:
-        success = run_optimized_import(target_dir)
-    else:
-        success = run_simple_import(target_dir)
+    try:
+        # Show mode selection menu
+        import_mode = select_import_mode()
 
-    sys.exit(0 if success else 1)
+        if import_mode == 1:
+            success = run_optimized_import(target_dir)
+        else:
+            success = run_simple_import(target_dir)
+
+        sys.exit(0 if success else 1)
+    finally:
+        # Always release the lock when exiting
+        release_import_lock(import_lock)
 
 
 if __name__ == "__main__":
