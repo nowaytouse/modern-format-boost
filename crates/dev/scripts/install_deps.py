@@ -32,11 +32,11 @@ Chromaprint, AI filters, etc., you can use the homebrew-ffmpeg tap:
 This script will detect and preserve existing ffmpeg installations to avoid conflicts.
 """
 
-import sys
-import subprocess
-import shutil
-import platform
 import os
+import platform
+import shutil
+import subprocess
+import sys
 
 GREEN = "\033[0;32m"
 BLUE = "\033[0;34m"
@@ -54,8 +54,10 @@ def command_exists(cmd):
     return shutil.which(cmd) is not None
 
 
-def run_cmd(cmd, check=True):
-    return subprocess.run(cmd, shell=True, check=check)
+def run_cmd(cmd, check=True, capture_output=False):
+    return subprocess.run(
+        cmd, shell=True, check=check, capture_output=capture_output, text=True
+    )
 
 
 def main():
@@ -81,18 +83,19 @@ def main():
         print("Checking and installing system dependencies via Homebrew...")
 
         deps = [
-            "jpeg-xl",
-            "exiftool",
-            "imagemagick",
-            "webp",
-            "libheif",
-            "coreutils",
-            "node",
-            "shellcheck",
-            "shfmt",
-            "postgresql@14",
-            "pgvector",
-            "chromaprint",  # Added chromaprint for audio fingerprinting
+            "jpeg-xl",  # cjxl, djxl, jxlinfo
+            "exiftool",  # Metadata preservation
+            "imagemagick",  # Image format conversion (magick)
+            "webp",  # WebP support (dwebp, cwebp)
+            "libheif",  # HEIF/HEIC support
+            "coreutils",  # GNU core utilities
+            "node",  # Node.js for prettier/markdownlint
+            "shellcheck",  # Shell script linting
+            "shfmt",  # Shell script formatting
+            "postgresql@14",  # Database for ML training
+            "pgvector",  # Vector similarity search extension
+            "chromaprint",  # Audio fingerprinting
+            "libvmaf",  # Video quality metrics
         ]
 
         # Handle ffmpeg specially to avoid tap conflicts
@@ -104,7 +107,7 @@ def main():
             )
             run_cmd("brew install ffmpeg")
         else:
-            ffmpeg_info = run_cmd("which ffmpeg", check=False)
+            ffmpeg_info = run_cmd("which ffmpeg", check=False, capture_output=True)
             print_c(
                 GREEN,
                 f"✅ ffmpeg already installed at: {ffmpeg_info.stdout.strip() if ffmpeg_info.stdout else 'unknown'}",
@@ -115,14 +118,22 @@ def main():
             binary = dep
             if dep == "postgresql@14":
                 binary = "psql"
-            if dep == "jpeg-xl":
+            elif dep == "jpeg-xl":
                 binary = "cjxl"
+            elif dep == "libheif":
+                binary = "heif-convert"
+            elif dep == "libvmaf":
+                # libvmaf is a library, check via pkg-config
+                if run_cmd("pkg-config --exists libvmaf", check=False).returncode == 0:
+                    print_c(GREEN, f"✅ {dep} already installed.")
+                    continue
+                binary = None
 
-            if not command_exists(binary):
+            if binary and command_exists(binary):
+                print_c(GREEN, f"✅ {dep} already installed.")
+            else:
                 print(f"Installing {dep}...")
                 run_cmd(f"brew install {dep}")
-            else:
-                print_c(GREEN, f"✅ {dep} already installed.")
 
     elif OS_TYPE == "linux":
         print_c(YELLOW, "🐧 Detected Linux")
@@ -132,8 +143,15 @@ def main():
             run_cmd(
                 "sudo apt-get install -y ffmpeg libimage-exiftool-perl imagemagick "
                 "webp libheif-dev coreutils nodejs npm shellcheck shfmt curl git "
-                "build-essential postgresql postgresql-contrib libchromaprint-dev"
+                "build-essential postgresql postgresql-contrib libchromaprint-dev "
+                "libvmaf-dev pkg-config"
             )
+
+            # Check for libjxl (JPEG XL)
+            if not command_exists("cjxl"):
+                print_c(YELLOW, "⚠️  JPEG XL tools not found in apt.")
+                print("   You may need to build from source or use a PPA:")
+                print("   https://github.com/libjxl/libjxl")
         else:
             print_c(
                 RED,
@@ -161,14 +179,14 @@ def main():
 
     print_c(BLUE, "📦 Installing Cargo utilities...")
     cargo_tools = {
-        "cargo-nextest": "cargo-nextest",
-        "taplo-cli": "taplo",
-        "cargo-bloat": "cargo-bloat",
-        "cargo-hack": "cargo-hack",
-        "cargo-audit": "cargo-audit",
-        "dovi_tool": "dovi_tool",
-        "hdr10plus_tool": "hdr10plus_tool",
-        "kondo": "kondo",
+        "cargo-nextest": "cargo-nextest",  # Next-generation test runner
+        "taplo-cli": "taplo",  # TOML formatter
+        "cargo-bloat": "cargo-bloat",  # Binary size profiler
+        "cargo-hack": "cargo-hack",  # Feature combination testing
+        "cargo-audit": "cargo-audit",  # Security vulnerability scanner
+        "dovi_tool": "dovi_tool",  # Dolby Vision metadata tool
+        "hdr10plus_tool": "hdr10plus_tool",  # HDR10+ metadata tool
+        "kondo": "kondo",  # Project cleanup tool
     }
 
     for package, binary in cargo_tools.items():
@@ -180,9 +198,20 @@ def main():
 
     print_c(BLUE, "🐍 Installing Python utilities...")
     if command_exists("pip3"):
-        run_cmd(
-            "pip3 install --upgrade ruff rich psycopg2-binary tabulate", check=False
-        )
+        python_packages = [
+            "ruff",  # Python linter and formatter
+            "rich",  # Terminal formatting
+            "psycopg2-binary",  # PostgreSQL adapter
+            "tabulate",  # Table formatting
+            "numpy",  # Numerical computing
+            "pandas",  # Data analysis
+            "scikit-learn",  # Machine learning
+            "matplotlib",  # Plotting (for analysis.py)
+            "imageio",  # Image/video I/O (for analysis.py)
+            "Pillow",  # Image processing
+        ]
+        print(f"   Installing: {', '.join(python_packages)}")
+        run_cmd(f"pip3 install --upgrade {' '.join(python_packages)}", check=False)
     else:
         print_c(RED, "⚠️  pip3 not found. Skipping Python tools.")
 

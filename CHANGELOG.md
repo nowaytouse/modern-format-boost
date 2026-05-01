@@ -20,12 +20,21 @@ All notable changes to this project will be documented in this file.
 - **Enhanced `install_deps.py`**
   - Added comprehensive FFmpeg setup documentation in script header
   - Integrated content from `docs/FFMPEG_SETUP.md` (now deleted)
-  - Added `chromaprint` to macOS dependencies
-  - Added `libchromaprint-dev` to Linux dependencies
-  - Added Python dependencies: `psycopg2-binary`, `tabulate`
-  - Improved ffmpeg detection with path display
+  - **Added missing system dependencies:**
+    - `libvmaf` - Video quality metrics (VMAF, MS-SSIM)
+    - `chromaprint` - Audio fingerprinting
+  - **Added Python ML/analysis dependencies:**
+    - `numpy` - Numerical computing
+    - `pandas` - Data analysis
+    - `scikit-learn` - Machine learning (for training_pipeline.py)
+    - `matplotlib` - Plotting (for analysis.py)
+    - `imageio` - Image/video I/O (for analysis.py)
+    - `Pillow` - Image processing
+  - Improved dependency detection (libvmaf via pkg-config, libheif via heif-convert)
+  - Better ffmpeg detection with path display
   - Added helpful tips for advanced FFmpeg tap installation
   - Better handling of existing installations to avoid conflicts
+  - Fixed duplicate Linux section and syntax errors
 
 - **Created `directory_keywords.json` configuration**
   - Location: `crates/dev/config/directory_keywords.json`
