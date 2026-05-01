@@ -9,14 +9,6 @@ members = [
 resolver = "2"
 
 [workspace.lints.clippy]
-# Add non-constructive allow rules that user requested
-too_many_lines = "allow"
-struct_excessive_bools = "allow"
-match_same_arms = "allow"
-cast_precision_loss = "allow"
-cast_possible_truncation = "allow"
-cast_sign_loss = "allow"
-cast_possible_wrap = "allow"
 
 [workspace.package]
 version = "0.11.2"

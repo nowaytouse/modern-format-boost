@@ -11,6 +11,10 @@ echo "Sanitizer: $SANITIZER"
 export LIBHEIF_STATIC=1
 export LIBHEIF_SYS_STATIC=1
 
+# Filter out fuzzer sanitize flags from C/C++ flags to prevent CMake linker errors in jpegxl-sys
+export CFLAGS=$(echo $CFLAGS | sed 's/-fsanitize=fuzzer-no-link//g' | sed 's/-fsanitize=fuzzer//g')
+export CXXFLAGS=$(echo $CXXFLAGS | sed 's/-fsanitize=fuzzer-no-link//g' | sed 's/-fsanitize=fuzzer//g')
+
 # Navigate to the fuzzing crate
 cd crates/dev/fuzz
 
