@@ -35,13 +35,13 @@ def get_import_lock_path():
 
 def acquire_import_lock():
     """Acquire an exclusive lock to prevent concurrent imports.
-    
+
     Returns:
         File object if lock acquired, None if already locked
     """
     lock_path = get_import_lock_path()
     try:
-        lock_file = open(lock_path, 'w')
+        lock_file = open(lock_path, "w")
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         return lock_file
     except (IOError, OSError):
@@ -56,6 +56,9 @@ def release_import_lock(lock_file):
             lock_file.close()
         except (IOError, OSError):
             pass
+
+
+def find_osxphotos():
     """Find osxphotos in common locations and verify it works."""
     # Try common installation paths
     common_paths = [
@@ -73,7 +76,11 @@ def release_import_lock(lock_file):
             check=True,
         )
         return "osxphotos"
-    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+    except (
+        subprocess.CalledProcessError,
+        FileNotFoundError,
+        subprocess.TimeoutExpired,
+    ):
         pass
 
     # Try common paths
@@ -115,7 +122,9 @@ def select_import_mode():
         print(f"{DIM}{'─' * 50}{RESET}")
 
         try:
-            choice = input(f"{CYAN}Select mode (1 or 2) [{GREEN}default: 1{CYAN}]: {RESET}").strip()
+            choice = input(
+                f"{CYAN}Select mode (1 or 2) [{GREEN}default: 1{CYAN}]: {RESET}"
+            ).strip()
             if choice == "" or choice == "1":
                 return 1
             elif choice == "2":
@@ -130,11 +139,11 @@ def select_import_mode():
 
 def rename_with_emoji(target_dir):
     """Add ✨ prefix to the folder name if not already present.
-    
+
     Only renames the target folder itself, not parent directories.
     """
     path = Path(target_dir).resolve()
-    
+
     # Check if folder name already has ✨ prefix
     if path.name.startswith("✨"):
         print(f"   {CYAN}ℹ️ Folder already has ✨ prefix: {path.name}{RESET}")
@@ -261,8 +270,12 @@ def main():
     target_dir = sys.argv[1]
 
     if not check_osxphotos():
-        print(f"{RED}❌ Error: 'osxphotos' not found in system PATH or common locations.{RESET}")
-        print(f"{YELLOW}   Tried: ~/.local/bin, /opt/homebrew/bin, /usr/local/bin{RESET}")
+        print(
+            f"{RED}❌ Error: 'osxphotos' not found in system PATH or common locations.{RESET}"
+        )
+        print(
+            f"{YELLOW}   Tried: ~/.local/bin, /opt/homebrew/bin, /usr/local/bin{RESET}"
+        )
         print(f"{YELLOW}   Please install it first: {CYAN}pip install osxphotos{RESET}")
         print(f"{YELLOW}   Or if already installed, add its directory to PATH.{RESET}")
         sys.exit(1)
@@ -270,9 +283,15 @@ def main():
     # Acquire import lock to prevent concurrent imports
     import_lock = acquire_import_lock()
     if not import_lock:
-        print(f"\n{RED}❌ Error: Another import operation is already in progress.{RESET}")
-        print(f"{YELLOW}   Please wait for the current import to complete before starting a new one.{RESET}")
-        print(f"{YELLOW}   If you believe this is an error, delete: {get_import_lock_path()}{RESET}")
+        print(
+            f"\n{RED}❌ Error: Another import operation is already in progress.{RESET}"
+        )
+        print(
+            f"{YELLOW}   Please wait for the current import to complete before starting a new one.{RESET}"
+        )
+        print(
+            f"{YELLOW}   If you believe this is an error, delete: {get_import_lock_path()}{RESET}"
+        )
         sys.exit(1)
 
     try:
