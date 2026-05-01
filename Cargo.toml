@@ -195,7 +195,7 @@ chrono  = { version = "0.4.44", features = ["serde"] }
 
 # Image processing
 image       = { version = "0.25.8", default-features = false, features = ["png", "jpeg", "webp", "gif", "tiff", "avif"] }
-libheif-rs  = { version = "2.7.0", features = ["v1_21", "vendored"] }
+libheif-rs  = { version = "2.7.0", features = ["v1_21", "embedded-libheif"] }
 mp4parse    = "0.14.0"
 
 # Testing and compression
