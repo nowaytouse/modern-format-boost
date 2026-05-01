@@ -11,10 +11,16 @@ All notable changes to this project will be documented in this file.
     - Auto-renames folder with ✨ emoji prefix to mark completion (skips if already prefixed)
     - Organizes assets into structured albums: `✨/{filepath.parent.name}`
     - Recursive directory walking (`--walk`)
+    - **Auto-strips all suffix combinations from filenames during import** (only affects imported library names, Finder files remain unchanged):
+      - `_optimized_collected`
+      - `_collected_optimized`
+      - `_optimized`
+      - `_collected`
     - Best for processed/final media requiring organized storage
   - **Mode 2 - Simple Import**:
     - Basic album organization by folder name `{filepath.parent.name}` (no ✨ prefix or renaming)
     - Recursive directory walking (`--walk`)
+    - **Auto-strips all suffix combinations from filenames during import** (same as Mode 1)
     - Quick import path for temporary or unsorted content
   - Interactive mode selection menu (defaults to Mode 1)
   - Robust `osxphotos` detection across system paths

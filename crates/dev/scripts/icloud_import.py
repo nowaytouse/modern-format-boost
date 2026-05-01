@@ -137,6 +137,32 @@ def select_import_mode():
             sys.exit(0)
 
 
+def strip_suffix_from_filename(filename_stem):
+    """Remove _optimized, _collected, and their combinations from filename stem.
+    
+    Handles all possible combinations:
+    - _optimized_collected
+    - _collected_optimized
+    - _optimized
+    - _collected
+    
+    Returns the cleaned filename stem.
+    """
+    # Remove all possible suffix combinations
+    suffixes_to_remove = [
+        "_optimized_collected",
+        "_collected_optimized",
+        "_optimized",
+        "_collected",
+    ]
+    
+    cleaned = filename_stem
+    for suffix in suffixes_to_remove:
+        cleaned = cleaned.removesuffix(suffix)
+    
+    return cleaned
+
+
 def rename_with_emoji(target_dir):
     """Add ✨ prefix to the folder name if not already present.
 
@@ -179,6 +205,7 @@ def run_optimized_import(target_dir):
     print(f"   Target:     {CYAN}{target_path}{RESET}")
     print(f"   Mode:       {YELLOW}Organized (✨/{{folder_name}}){RESET}")
     print(f"   Auto-Album: {YELLOW}Enabled{RESET}")
+    print(f"   Filename:   {YELLOW}Auto-strip '_optimized_collected' suffix{RESET}")
 
     # Mandatory confirmation
     print(f"\n{YELLOW}⚠️  READY TO IMPORT?{RESET}")
@@ -196,6 +223,17 @@ def run_optimized_import(target_dir):
 
     osxphotos_path = find_osxphotos()
 
+    # Use chained removesuffix to handle all combinations
+    # Order matters: remove longer suffixes first to handle all cases
+    filename_template = (
+        "{filepath.stem"
+        ".removesuffix('_optimized_collected')"
+        ".removesuffix('_collected_optimized')"
+        ".removesuffix('_optimized')"
+        ".removesuffix('_collected')"
+        "}{filepath.suffix}"
+    )
+
     cmd = [
         osxphotos_path,
         "import",
@@ -205,6 +243,8 @@ def run_optimized_import(target_dir):
         "✨/{filepath.parent.name}",
         "--split-folder",
         "/",
+        "--filename",
+        filename_template,
     ]
 
     try:
@@ -245,8 +285,9 @@ def run_simple_import(target_dir):
         return False
 
     print(f"\n{BLUE}🚀 Starting Simple Import...{RESET}")
-    print(f"   Target: {CYAN}{target_path}{RESET}")
-    print(f"   Mode:   {YELLOW}Simple (organized by folder name){RESET}")
+    print(f"   Target:   {CYAN}{target_path}{RESET}")
+    print(f"   Mode:     {YELLOW}Simple (organized by folder name){RESET}")
+    print(f"   Filename: {YELLOW}Auto-strip '_optimized_collected' suffix{RESET}")
 
     # Mandatory confirmation
     print(f"\n{YELLOW}⚠️  READY TO IMPORT?{RESET}")
@@ -262,6 +303,17 @@ def run_simple_import(target_dir):
 
     osxphotos_path = find_osxphotos()
 
+    # Use chained removesuffix to handle all combinations
+    # Order matters: remove longer suffixes first to handle all cases
+    filename_template = (
+        "{filepath.stem"
+        ".removesuffix('_optimized_collected')"
+        ".removesuffix('_collected_optimized')"
+        ".removesuffix('_optimized')"
+        ".removesuffix('_collected')"
+        "}{filepath.suffix}"
+    )
+
     cmd = [
         osxphotos_path,
         "import",
@@ -269,6 +321,8 @@ def run_simple_import(target_dir):
         "--walk",
         "--album",
         "{filepath.parent.name}",
+        "--filename",
+        filename_template,
     ]
 
     try:
