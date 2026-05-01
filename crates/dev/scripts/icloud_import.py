@@ -21,13 +21,47 @@ else:
     RED = GREEN = YELLOW = BLUE = CYAN = BOLD = RESET = ""
 
 
+def find_osxphotos():
+    """Find osxphotos in common locations and verify it works."""
+    # Try common installation paths
+    common_paths = [
+        "/Users/nyamiiko/.local/bin/osxphotos",
+        "/opt/homebrew/bin/osxphotos",
+        "/usr/local/bin/osxphotos",
+    ]
+
+    # First try the system PATH
+    try:
+        subprocess.run(
+            ["osxphotos", "--version"],
+            capture_output=True,
+            timeout=5,
+            check=True,
+        )
+        return "osxphotos"
+    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    # Try common paths
+    for path in common_paths:
+        if os.path.exists(path):
+            try:
+                subprocess.run(
+                    [path, "--version"],
+                    capture_output=True,
+                    timeout=5,
+                    check=True,
+                )
+                return path
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                continue
+
+    return None
+
+
 def check_osxphotos():
     """Verify osxphotos is installed and accessible."""
-    try:
-        subprocess.run(["osxphotos", "--version"], capture_output=True, check=True)
-        return True
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return False
+    return find_osxphotos() is not None
 
 
 def rename_with_emoji(target_dir):
@@ -66,8 +100,10 @@ def run_import(target_dir):
     # osxphotos import /dir --walk --album "✨/✨/{filepath.parent.name}"
     # --split-folder /
 
+    osxphotos_path = find_osxphotos()
+
     cmd = [
-        "osxphotos",
+        osxphotos_path,
         "import",
         str(target_path),
         "--walk",
@@ -110,8 +146,10 @@ def main():
     target_dir = sys.argv[1]
 
     if not check_osxphotos():
-        print(f"{RED}❌ Error: 'osxphotos' not found.{RESET}")
+        print(f"{RED}❌ Error: 'osxphotos' not found in system PATH or common locations.{RESET}")
+        print(f"{YELLOW}   Tried: ~/.local/bin, /opt/homebrew/bin, /usr/local/bin{RESET}")
         print(f"{YELLOW}   Please install it first: {CYAN}pip install osxphotos{RESET}")
+        print(f"{YELLOW}   Or if already installed, add its directory to PATH.{RESET}")
         sys.exit(1)
 
     success = run_import(target_dir)
