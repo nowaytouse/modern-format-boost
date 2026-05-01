@@ -27,7 +27,19 @@ All notable changes to this project will be documented in this file.
   - Accessible via the Tab-switch loop in the main UI.
   - Supports seamless hand-off from "Collect" or "In-Place" modes to iCloud import.
 
-### 🔁 Animated WebP / Apple Compat Stabilization (No Version Bump)
+### 🛠️ Maintenance & Database Management
+21: 
+22: - **Refactored `database_manager.py`**
+23:   - **Removed "Clean Database" feature**: Eliminated redundancy as the functionality is covered by the dedicated cache cleaning scripts.
+24:   - **Menu Renumbering**: Optimized the interactive menu for better clarity (1-4 for core tasks).
+25:   - **Integrated "Return to Home"**: Added option 5 to seamlessly return to the main processor interface.
+26: 
+27: - **Enhanced `icloud_import.py` (User Assisted)**
+28:   - **Dual Import Modes**: Added support for "Optimized Import" (with ✨ prefix and organized albums) and "Simple Import".
+29:   - **Concurrency Safety**: Implemented a global file-based lock (`~/.icloud_import.lock`) to prevent race conditions during multiple import tasks.
+30:   - **Tool Discovery**: Improved `osxphotos` binary path resolution (system PATH + common Homebrew/local paths).
+31: 
+32: ### 🚀 iCloud Photo Import Integration (Initial Release)
 
 This section documents the full chain of fixes and refactors completed in the last few hours
 for the `IMG_0116.WEBP`-class edge case, including missing-output prevention, probe hardening,
