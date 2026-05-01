@@ -217,7 +217,7 @@ fn build_coarse_progress_line(
 
         if variant.show_bar {
             let filled = crate::numeric_cast::f64_to_usize_sat(
-                ((percent / 100.0) * bar_width as f64).round(),
+                ((percent / 100.0) * crate::numeric_cast::usize_to_f64(bar_width)).round(),
             );
             let empty = bar_width.saturating_sub(filled);
             line.push_str(progress_style::BAR_LEFT);
@@ -391,7 +391,10 @@ impl CoarseProgressBar {
 
         let current = self.current.load(Ordering::Relaxed);
         let total = self.total.max(1);
-        let percent = (current as f64 / total as f64 * 100.0).min(100.0);
+        let percent = (crate::numeric_cast::u64_to_f64(current)
+            / crate::numeric_cast::u64_to_f64(total)
+            * 100.0)
+            .min(100.0);
         let elapsed = self.start_time.elapsed();
         let message = self
             .message
@@ -401,9 +404,10 @@ impl CoarseProgressBar {
         let stats = crate::progress_mode::get_current_stats_string();
 
         let eta_str = if current > 0 && current < total {
-            let avg_time = elapsed.as_secs_f64() / current as f64;
-            let remaining_secs =
-                crate::numeric_cast::f64_to_u64_sat(((total - current) as f64) * avg_time);
+            let avg_time = elapsed.as_secs_f64() / crate::numeric_cast::u64_to_f64(current);
+            let remaining_secs = crate::numeric_cast::f64_to_u64_sat(
+                crate::numeric_cast::u64_to_f64(total - current) * avg_time,
+            );
             format_eta_simple(remaining_secs)
         } else {
             "---".to_string()
@@ -547,11 +551,11 @@ impl DetailedCoarseProgressBar {
         }
 
         let total = self.total_iterations.max(1);
-        let percent = (iter as f64 / total as f64 * 100.0).min(100.0);
+        let percent = (crate::numeric_cast::u64_to_f64(iter) / crate::numeric_cast::u64_to_f64(total) * 100.0).min(100.0);
         let elapsed = self.start_time.elapsed();
 
         let size_pct = if self.input_size > 0 {
-            ((size as f64 / self.input_size as f64) - 1.0) * 100.0
+            ((crate::numeric_cast::u64_to_f64(size) / crate::numeric_cast::u64_to_f64(self.input_size)) - 1.0) * 100.0
         } else {
             0.0
         };
@@ -584,7 +588,7 @@ impl DetailedCoarseProgressBar {
         // Ensure we don't overflow the subtraction
         let available_for_prefix = terminal_width.saturating_sub(reserved + bar_width);
         let filled =
-            crate::numeric_cast::f64_to_usize_sat(((percent / 100.0) * bar_width as f64).round());
+            crate::numeric_cast::f64_to_usize_sat(((percent / 100.0) * crate::numeric_cast::usize_to_f64(bar_width)).round());
         let empty = bar_width.saturating_sub(filled);
         let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
 
@@ -656,7 +660,10 @@ impl DetailedCoarseProgressBar {
         let elapsed = self.start_time.elapsed();
 
         let size_pct = if self.input_size > 0 {
-            ((final_size as f64 / self.input_size as f64) - 1.0) * 100.0
+            ((crate::numeric_cast::u64_to_f64(final_size)
+                / crate::numeric_cast::u64_to_f64(self.input_size))
+                - 1.0)
+                * 100.0
         } else {
             0.0
         };
@@ -847,7 +854,7 @@ impl FixedBottomProgress {
             output_bytes: output,
             elapsed: self.start_time.elapsed(),
             compression_ratio: if input > 0 {
-                output as f64 / input as f64
+                crate::numeric_cast::u64_to_f64(output) / crate::numeric_cast::u64_to_f64(input)
             } else {
                 1.0
             },
@@ -953,7 +960,7 @@ impl ExploreProgress {
         let best_ssim = self.best_ssim.lock().map_or(0.0, |s| *s);
 
         let size_change = if self.input_size > 0 {
-            ((size as f64 / self.input_size as f64) - 1.0) * 100.0
+            ((crate::numeric_cast::u64_to_f64(size) / crate::numeric_cast::u64_to_f64(self.input_size)) - 1.0) * 100.0
         } else {
             0.0
         };
@@ -977,7 +984,10 @@ impl ExploreProgress {
 
     pub fn finish(&self, result_crf: f32, result_ssim: f64, result_size: u64) {
         let size_change = if self.input_size > 0 {
-            ((result_size as f64 / self.input_size as f64) - 1.0) * 100.0
+            ((crate::numeric_cast::u64_to_f64(result_size)
+                / crate::numeric_cast::u64_to_f64(self.input_size))
+                - 1.0)
+                * 100.0
         } else {
             0.0
         };
@@ -1067,7 +1077,7 @@ impl ExploreLogger {
 
     fn calc_change(&self, size: u64) -> f64 {
         if self.input_size > 0 {
-            ((size as f64 / self.input_size as f64) - 1.0) * 100.0
+            ((crate::numeric_cast::u64_to_f64(size) / crate::numeric_cast::u64_to_f64(self.input_size)) - 1.0) * 100.0
         } else {
             0.0
         }
@@ -1092,7 +1102,7 @@ impl ExploreLogger {
             eprintln!(
                 "   💾 Saved: {} ({:.2} MB)",
                 format_bytes(saved),
-                saved as f64 / 1024.0 / 1024.0
+                crate::numeric_cast::u64_to_f64(saved) / 1024.0 / 1024.0
             );
         }
         eprintln!(
@@ -1266,8 +1276,8 @@ impl SmartProgressBar {
         let remaining = self.total.saturating_sub(self.processed);
         let eta = if !self.recent_times.is_empty() && remaining > 0 {
             let avg_time: f64 =
-                self.recent_times.iter().sum::<f64>() / self.recent_times.len() as f64;
-            let eta_secs = avg_time * remaining as f64;
+                self.recent_times.iter().sum::<f64>() / crate::numeric_cast::usize_to_f64(self.recent_times.len());
+            let eta_secs = avg_time * crate::numeric_cast::u64_to_f64(remaining);
             format_eta(eta_secs)
         } else {
             "calculating...".to_string()
@@ -1411,11 +1421,20 @@ pub fn format_bytes(bytes: u64) -> String {
     const GB: u64 = MB * 1024;
 
     if bytes >= GB {
-        format!("{:.2} GB", bytes as f64 / GB as f64)
+        format!(
+            "{:.2} GB",
+            crate::numeric_cast::u64_to_f64(bytes) / crate::numeric_cast::u64_to_f64(GB)
+        )
     } else if bytes >= MB {
-        format!("{:.2} MB", bytes as f64 / MB as f64)
+        format!(
+            "{:.2} MB",
+            crate::numeric_cast::u64_to_f64(bytes) / crate::numeric_cast::u64_to_f64(MB)
+        )
     } else if bytes >= KB {
-        format!("{:.2} KB", bytes as f64 / KB as f64)
+        format!(
+            "{:.2} KB",
+            crate::numeric_cast::u64_to_f64(bytes) / crate::numeric_cast::u64_to_f64(KB)
+        )
     } else {
         format!("{bytes} B")
     }
