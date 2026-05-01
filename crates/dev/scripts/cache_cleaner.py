@@ -468,10 +468,9 @@ def perform_full_cleanup():
 
     # Mandatory confirmation using 'y'
     print(f"\n{YELLOW}⚠️  CONFIRM: Start full system cleanup?{RESET}")
-    confirm = (
-        input(f"   {CYAN}Type {GREEN}'y'{CYAN} to proceed: {RESET}").strip().lower()
-    )
-    if confirm != "y":
+    if input(
+        f"   {CYAN}Type {GREEN}'yes'{CYAN} to proceed: {RESET}"
+    ).strip().lower() not in ("y", "yes"):
         print(f"\n{RED}🚫 Cleanup cancelled by user.{RESET}")
         print(f"{DIM}   No action taken. Returning to menu...{RESET}")
         time.sleep(1.5)

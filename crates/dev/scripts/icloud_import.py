@@ -182,10 +182,9 @@ def run_optimized_import(target_dir):
 
     # Mandatory confirmation
     print(f"\n{YELLOW}⚠️  READY TO IMPORT?{RESET}")
-    confirm = (
-        input(f"   {CYAN}Type {GREEN}'y'{CYAN} to proceed: {RESET}").strip().lower()
-    )
-    if confirm != "y":
+    if input(
+        f"   {CYAN}Type {GREEN}'yes'{CYAN} to proceed: {RESET}"
+    ).strip().lower() not in ("y", "yes"):
         print(f"\n{RED}❌ Import cancelled by user.{RESET}")
         time.sleep(1)
         return False
@@ -251,10 +250,9 @@ def run_simple_import(target_dir):
 
     # Mandatory confirmation
     print(f"\n{YELLOW}⚠️  READY TO IMPORT?{RESET}")
-    confirm = (
-        input(f"   {CYAN}Type {GREEN}'y'{CYAN} to proceed: {RESET}").strip().lower()
-    )
-    if confirm != "y":
+    if input(
+        f"   {CYAN}Type {GREEN}'yes'{CYAN} to proceed: {RESET}"
+    ).strip().lower() not in ("y", "yes"):
         print(f"\n{RED}❌ Import cancelled by user.{RESET}")
         time.sleep(1)
         return False

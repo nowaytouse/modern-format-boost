@@ -137,10 +137,9 @@ def train_new_data():
     print(f"\n{BLUE}🎓 Train New Data{RESET}")
     print(f"{DIM}{'─' * 60}{RESET}")
     print(f"{YELLOW}⚠️  CONFIRM: Start new training session?{RESET}")
-    if (
-        input(f"   {CYAN}Type {GREEN}'y'{CYAN} to proceed: {RESET}").strip().lower()
-        != "y"
-    ):
+    if input(
+        f"   {CYAN}Type {GREEN}'yes'{CYAN} to proceed: {RESET}"
+    ).strip().lower() not in ("y", "yes"):
         print(f"\n{RED}❌ Cancelled.{RESET}")
         time.sleep(1)
         return
@@ -236,10 +235,9 @@ def manage_indexes():
     print(f"\n{BLUE}📇 Vector Index Manager{RESET}")
     print(f"{DIM}{'─' * 60}{RESET}")
     print(f"{YELLOW}⚠️  CONFIRM: Access index management?{RESET}")
-    if (
-        input(f"   {CYAN}Type {GREEN}'y'{CYAN} to proceed: {RESET}").strip().lower()
-        != "y"
-    ):
+    if input(
+        f"   {CYAN}Type {GREEN}'yes'{CYAN} to proceed: {RESET}"
+    ).strip().lower() not in ("y", "yes"):
         print(f"\n{RED}❌ Cancelled.{RESET}")
         time.sleep(1)
         return
@@ -297,10 +295,9 @@ def backup_restore():
     print(f"\n{BLUE}💾 Backup & Restore{RESET}")
     print(f"{DIM}{'─' * 60}{RESET}")
     print(f"{YELLOW}⚠️  CONFIRM: Access backup/restore tools?{RESET}")
-    if (
-        input(f"   {CYAN}Type {GREEN}'y'{CYAN} to proceed: {RESET}").strip().lower()
-        != "y"
-    ):
+    if input(
+        f"   {CYAN}Type {GREEN}'yes'{CYAN} to proceed: {RESET}"
+    ).strip().lower() not in ("y", "yes"):
         print(f"\n{RED}❌ Cancelled.{RESET}")
         time.sleep(1)
         return

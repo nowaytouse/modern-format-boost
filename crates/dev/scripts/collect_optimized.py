@@ -245,8 +245,9 @@ def run_collection(
         print(f"   {YELLOW}⚠️  DRY RUN MODE ENABLED{NC}")
 
     print(f"\n{YELLOW}⚠️  CONFIRM: Start collecting optimized media?{NC}")
-    confirm = input(f"   {BLUE}Type {GREEN}'y'{BLUE} to proceed: {NC}").strip().lower()
-    if confirm != "y":
+    if input(
+        f"   {BLUE}Type {GREEN}'yes'{BLUE} to proceed: {NC}"
+    ).strip().lower() not in ("y", "yes"):
         print(f"\n{RED}❌ Task cancelled by user.{NC}")
         time.sleep(1)
         return False
