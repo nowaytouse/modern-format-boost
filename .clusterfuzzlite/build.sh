@@ -7,6 +7,10 @@ set -e
 echo "Building fuzz targets for Modern Format Boost..."
 echo "Sanitizer: $SANITIZER"
 
+# Force static compilation for libheif in CI environment to satisfy version requirements
+export LIBHEIF_STATIC=1
+export LIBHEIF_SYS_STATIC=1
+
 # Navigate to the fuzzing crate
 cd crates/dev/fuzz
 
