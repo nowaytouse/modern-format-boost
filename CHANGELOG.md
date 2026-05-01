@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+### 🔧 Database Management Consolidation
+
+- **Merged `manage_db.py` into `database_manager.py`**
+  - Consolidated two separate database management scripts into one unified interactive tool
+  - Added new menu option: "Database Setup & Service Control"
+    - Start PostgreSQL service
+    - Setup database (create DB + pgvector extension)
+    - Full setup (start service + setup DB in one step)
+  - Removed redundant `manage_db.py` script
+  - Updated references in `shared_utils/src/database.rs` to point to the unified tool
+  - Benefits: Single entry point, reduced code duplication, easier maintenance
+
 ### 🚀 iCloud Photo Import Integration (Enhanced)
 
 - **Enhanced `icloud_import.py` with dual import modes**

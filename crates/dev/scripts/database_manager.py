@@ -75,49 +75,122 @@ def check_db_exists():
     return res.returncode == 0
 
 
+def start_postgres_service():
+    """Start PostgreSQL service based on OS."""
+    print(f"{YELLOW}🔄 Starting PostgreSQL service...{RESET}")
+
+    if OS_TYPE == "darwin":
+        if command_exists("brew"):
+            res = run_cmd(
+                "brew services list | awk '/^postgresql/ {print $1}' | head -n 1"
+            )
+            pg_service = res.stdout.strip()
+            if pg_service:
+                print(f"   Starting service '{pg_service}' via Homebrew...")
+                run_cmd(f"brew services start {pg_service}")
+            else:
+                print(
+                    f"{YELLOW}⚠️  No PostgreSQL service found in 'brew services'.{RESET}"
+                )
+                print("   Trying to install default...")
+                run_cmd("brew install postgresql && brew services start postgresql")
+        else:
+            print("   Homebrew not found. Trying pg_ctl...")
+            run_cmd("pg_ctl start")
+    elif OS_TYPE == "linux":
+        if command_exists("systemctl"):
+            run_cmd("sudo systemctl start postgresql")
+        else:
+            run_cmd("sudo service postgresql start")
+
+    time.sleep(2)
+
+    if run_cmd("pg_isready").returncode == 0:
+        print(f"{GREEN}✅ PostgreSQL started successfully!{RESET}")
+    else:
+        print(f"{RED}❌ Failed to start PostgreSQL.{RESET}")
+
+
+def setup_database():
+    """Setup database and pgvector extension."""
+    print(f"\n{BLUE}🏗️  Setting up database: {DB_NAME}{RESET}")
+    print(f"{DIM}{'─' * 60}{RESET}\n")
+
+    # Check if database exists
+    res = run_cmd(f"psql -lqt | cut -d \\| -f 1 | grep -qw '{DB_NAME}'")
+    if res.returncode == 0:
+        print(f"{GREEN}✅ Database '{DB_NAME}' already exists.{RESET}")
+    else:
+        print(f"   Creating database '{DB_NAME}'...")
+        if run_cmd(f'createdb "{DB_NAME}"').returncode != 0:
+            run_cmd(f'psql -c "CREATE DATABASE {DB_NAME};"')
+        print(f"{GREEN}✅ Database created.{RESET}")
+
+    # Enable pgvector extension
+    print("\n   Ensuring pgvector extension is enabled...")
+    res = run_cmd(f'psql -d "{DB_NAME}" -c "CREATE EXTENSION IF NOT EXISTS vector;"')
+    if res.returncode != 0:
+        print(f"{RED}❌ Failed to create 'vector' extension.{RESET}")
+        print(f"{YELLOW}   Is 'pgvector' installed?{RESET}")
+        print(f"{DIM}   Try: brew install pgvector (macOS){RESET}")
+        print(f"{DIM}   Or refer to your Linux distribution's pgvector package.{RESET}")
+        input(f"\n{CYAN}Press Enter to continue...{RESET}")
+        return False
+
+    print(f"{GREEN}✅ pgvector extension enabled.{RESET}")
+    print(f"\n{GREEN}✅ Database setup complete!{RESET}")
+    input(f"\n{CYAN}Press Enter to continue...{RESET}")
+    return True
+
+
 def show_menu():
     """Display interactive database management menu."""
     while True:
         print_header()
         print(f"{CYAN}Database Management Options:{RESET}\n")
 
-        print(f"  {GREEN}1{RESET} - {BOLD}Train New Data{RESET}")
+        print(f"  {GREEN}1{RESET} - {BOLD}Database Setup & Service Control{RESET}")
+        print(f"     {DIM}Start PostgreSQL service and setup database{RESET}\n")
+
+        print(f"  {GREEN}2{RESET} - {BOLD}Train New Data{RESET}")
         print(f"     {DIM}Import and process new training datasets{RESET}\n")
 
-        print(f"  {GREEN}2{RESET} - {BOLD}Database Status{RESET}")
+        print(f"  {GREEN}3{RESET} - {BOLD}Database Status{RESET}")
         print(f"     {DIM}View database statistics and schema info{RESET}\n")
 
-        print(f"  {GREEN}3{RESET} - {BOLD}Vector Index Manager{RESET}")
+        print(f"  {GREEN}4{RESET} - {BOLD}Vector Index Manager{RESET}")
         print(f"     {DIM}Manage pgvector indexes and embeddings{RESET}\n")
 
-        print(f"  {GREEN}4{RESET} - {BOLD}Backup & Restore{RESET}")
+        print(f"  {GREEN}5{RESET} - {BOLD}Backup & Restore{RESET}")
         print(f"     {DIM}Backup database or restore from backup{RESET}\n")
 
-        print(f"  {GREEN}5{RESET} - {BOLD}Return to Home{RESET}")
+        print(f"  {GREEN}6{RESET} - {BOLD}Return to Home{RESET}")
         print(f"     {DIM}Exit database manager and return to main interface{RESET}\n")
 
         print(f"  {GREEN}0{RESET} - {BOLD}Exit{RESET}\n")
         print(f"{DIM}{'─' * 60}{RESET}")
 
         try:
-            choice = input(f"{CYAN}Select option (0-5): {RESET}").strip()
+            choice = input(f"{CYAN}Select option (0-6): {RESET}").strip()
 
             if choice == "0":
                 print(f"\n{CYAN}Exiting database manager.{RESET}")
                 sys.exit(0)
-            elif choice == "5":
+            elif choice == "6":
                 print(f"\n{CYAN}Returning to main menu...{RESET}\n")
                 break
             elif choice == "1":
-                train_new_data()
+                service_control_menu()
             elif choice == "2":
-                show_status()
+                train_new_data()
             elif choice == "3":
-                manage_indexes()
+                show_status()
             elif choice == "4":
+                manage_indexes()
+            elif choice == "5":
                 backup_restore()
             else:
-                print(f"{RED}❌ Invalid option. Please enter 0-5.{RESET}")
+                print(f"{RED}❌ Invalid option. Please enter 0-6.{RESET}")
                 time.sleep(1)
         except KeyboardInterrupt:
             print(f"\n{YELLOW}⚠️ Cancelled.{RESET}")
@@ -125,6 +198,57 @@ def show_menu():
         except Exception as e:
             print(f"{RED}❌ Error: {e}{RESET}")
             time.sleep(1)
+
+
+def service_control_menu():
+    """Database setup and service control submenu."""
+    print(f"\n{BLUE}🔧 Database Setup & Service Control{RESET}")
+    print(f"{DIM}{'─' * 60}{RESET}\n")
+
+    print(f"  {GREEN}1{RESET} - Start PostgreSQL Service")
+    print(f"  {GREEN}2{RESET} - Setup Database (create DB + pgvector)")
+    print(f"  {GREEN}3{RESET} - Full Setup (start service + setup DB)")
+    print(f"  {GREEN}0{RESET} - Back to main menu\n")
+
+    choice = input(f"{CYAN}Select option (0-3): {RESET}").strip()
+
+    if choice == "0":
+        return
+    elif choice == "1":
+        if not command_exists("psql"):
+            print(f"{RED}❌ PostgreSQL not found. Please install it first.{RESET}\n")
+            input("Press Enter to continue...")
+            return
+        start_postgres_service()
+        input(f"\n{CYAN}Press Enter to continue...{RESET}")
+    elif choice == "2":
+        if not check_psql():
+            print(
+                f"{RED}❌ PostgreSQL is not running. Start it first (option 1).{RESET}\n"
+            )
+            input("Press Enter to continue...")
+            return
+        setup_database()
+    elif choice == "3":
+        if not command_exists("psql"):
+            print(f"{RED}❌ PostgreSQL not found. Please install it first.{RESET}\n")
+            input("Press Enter to continue...")
+            return
+
+        print(f"\n{YELLOW}⚠️  CONFIRM: Run full database setup?{RESET}")
+        if input(
+            f"   {CYAN}Type {GREEN}'yes'{CYAN} to proceed: {RESET}"
+        ).strip().lower() not in ("y", "yes"):
+            print(f"\n{RED}❌ Cancelled.{RESET}")
+            time.sleep(1)
+            return
+
+        start_postgres_service()
+        print()
+        setup_database()
+    else:
+        print(f"{RED}❌ Invalid option.{RESET}")
+        time.sleep(1)
 
 
 def train_new_data():
