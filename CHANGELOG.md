@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+### 📄 License & Compliance
+
+- **Enhanced license documentation with cargo-about**
+  - Generated comprehensive license reports: `LICENSES.html`, `LICENSES.json`
+  - Created `THIRD_PARTY_LICENSES.md` with license summary
+  - Updated `about.toml` with complete accepted license list
+  - Added clarifications for GPL-3.0-or-later dependencies (jpegxl-rs, jpegxl-sys)
+  - Documented all dependency licenses: MIT, Apache-2.0, BSD, MPL-2.0, GPL-3.0-or-later, etc.
+
 ### 🔧 CI/CD Improvements
 
 - **Fixed ClusterFuzzLite workflow**

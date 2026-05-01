@@ -1,5 +1,6 @@
 # cargo-about configuration
 # License acceptance list aligned with deny.toml
+# Generated license reports: LICENSES.html, LICENSES.txt, LICENSES.json
 
 accepted = [
     "MIT",
@@ -13,4 +14,12 @@ accepted = [
     "IJG",
     "Unicode-3.0",
     "GPL-3.0-or-later",
+    "LGPL-2.1-or-later",
+    "ISC",
+    "CC0-1.0",
 ]
+
+# Clarifications for specific crates
+[clarify]
+# jpegxl-rs and jpegxl-sys use GPL-3.0-or-later
+# This is acceptable as they are optional dependencies for JXL support

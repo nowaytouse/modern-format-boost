@@ -1,3 +1,9 @@
+2026-05-01 4:58:24.914778 +00:00:00 [[31mERROR[0m] failed to parse license 'GPL-3.0' into a valid expression: GPL-3.0
+^^^^^^^ a deprecated license identifier was used[0m
+2026-05-01 4:58:25.031112 +00:00:00 [[31mERROR[0m] failed to parse license 'GPL-3.0' into a valid expression: GPL-3.0
+^^^^^^^ a deprecated license identifier was used[0m
+2026-05-01 4:58:25.069268 +00:00:00 [[31mERROR[0m] failed to parse license 'GPL-3.0' into a valid expression: GPL-3.0
+^^^^^^^ a deprecated license identifier was used[0m
 # cargo-about configuration
 # License acceptance list aligned with deny.toml
 # Generated license reports: LICENSES.html, LICENSES.txt, LICENSES.json
@@ -23,3 +29,4 @@ accepted = [
 [clarify]
 # jpegxl-rs and jpegxl-sys use GPL-3.0-or-later
 # This is acceptable as they are optional dependencies for JXL support
+
