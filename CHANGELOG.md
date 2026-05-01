@@ -9,18 +9,21 @@ All notable changes to this project will be documented in this file.
 - **Enhanced `icloud_import.py` with dual import modes**
   - **Mode 1 - Optimized Import (Default)**:
     - Auto-renames folder with ✨ emoji prefix to mark completion (skips if already prefixed)
-    - Organizes assets into structured albums: `✨/{filepath.parent.name}`
+    - Organizes assets into structured albums: `✨/{folder_name}`
     - Recursive directory walking (`--walk`)
-    - **Auto-strips all suffix combinations from filenames during import** (only affects imported library names, Finder files remain unchanged):
+    - **Auto-strips all suffix combinations from album names** (removes suffixes from folder names when creating albums in Photos library):
       - `_optimized_collected`
       - `_collected_optimized`
       - `_optimized`
       - `_collected`
+    - Example: Folder `Vacation_optimized_collected` → Album `✨/Vacation` in Photos
+    - Finder folder names remain unchanged
     - Best for processed/final media requiring organized storage
   - **Mode 2 - Simple Import**:
-    - Basic album organization by folder name `{filepath.parent.name}` (no ✨ prefix or renaming)
+    - Basic album organization by folder name (no ✨ prefix)
     - Recursive directory walking (`--walk`)
-    - **Auto-strips all suffix combinations from filenames during import** (same as Mode 1)
+    - **Auto-strips all suffix combinations from album names** (same as Mode 1)
+    - Example: Folder `Vacation_optimized` → Album `Vacation` in Photos
     - Quick import path for temporary or unsorted content
   - Interactive mode selection menu (defaults to Mode 1)
   - Robust `osxphotos` detection across system paths
