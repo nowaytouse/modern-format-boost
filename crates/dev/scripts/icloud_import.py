@@ -101,9 +101,15 @@ def select_import_mode():
 
 
 def rename_with_emoji(target_dir):
-    """Add ✨ prefix to the folder name if not already present."""
+    """Add ✨ prefix to the folder name if not already present.
+    
+    Only renames the target folder itself, not parent directories.
+    """
     path = Path(target_dir).resolve()
+    
+    # Check if folder name already has ✨ prefix
     if path.name.startswith("✨"):
+        print(f"   {CYAN}ℹ️ Folder already has ✨ prefix: {path.name}{RESET}")
         return str(path)
 
     new_name = f"✨{path.name}"
@@ -141,7 +147,7 @@ def run_optimized_import(target_dir):
         str(target_path),
         "--walk",
         "--album",
-        "✨/✨/{filepath.parent.name}",
+        "✨/{filepath.parent.name}",
         "--split-folder",
         "/",
     ]

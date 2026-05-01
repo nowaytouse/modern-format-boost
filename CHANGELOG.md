@@ -8,8 +8,8 @@ All notable changes to this project will be documented in this file.
 
 - **Enhanced `icloud_import.py` with dual import modes**
   - **Mode 1 - Optimized Import (Default)**:
-    - Auto-renames folder with ✨ emoji prefix to mark completion
-    - Organizes assets into structured albums: `✨/✨/{filepath.parent.name}`
+    - Auto-renames folder with ✨ emoji prefix to mark completion (skips if already prefixed)
+    - Organizes assets into structured albums: `✨/{filepath.parent.name}`
     - Recursive directory walking (`--walk`)
     - Best for processed/final media requiring organized storage
   - **Mode 2 - Simple Import**:
@@ -18,6 +18,7 @@ All notable changes to this project will be documented in this file.
     - Quick import path for temporary or unsorted content
   - Interactive mode selection menu (defaults to Mode 1)
   - Robust `osxphotos` detection across system paths
+  - Fixed: Album path corrected from double nesting (`✨/✨/{folder_name}`) to single nesting (`✨/{folder_name}`)
 
 - **Integrated into `drag_and_drop_processor.py`**
   - Added as the 5th option in the "Workspace Tools" menu.

@@ -619,9 +619,12 @@ def select_mode():
                 elif tools_sub_state == 2:
                     display_text = "Tool: Merge XMP Attachments [Tab to Switch]"
                     desc = "Automatically embed XMP sidecars into source media files safely."
-                else:
+                elif tools_sub_state == 3:
                     display_text = "Tool: Diagnostic Analysis [Tab to Switch]"
                     desc = "Analyze logs for edge cases and verify output integrity."
+                else:
+                    display_text = "Tool: iCloud Photo Import [Tab to Switch]"
+                    desc = "Import processed assets into iCloud using osxphotos (Auto-Album)."
 
                 if is_selected:
                     if "Console" in globals():
@@ -654,7 +657,7 @@ def select_mode():
                 if selected == 0:
                     mode_sub_state = 1 - mode_sub_state
                 elif selected == 1:
-                    tools_sub_state = (tools_sub_state + 1) % 4
+                    tools_sub_state = (tools_sub_state + 1) % 5
             elif key in ("\r", "\n"):
                 # Action based on selection
                 if selected == 0:
@@ -769,6 +772,22 @@ def select_mode():
                         drain_stdin()
                         run_unified_verification(include_logs=True, auto_mode=False)
 
+                        print(f"\n   {CYAN}Press Enter to return to menu...{RESET}")
+                        drain_stdin()
+                        try:
+                            input()
+                        except EOFError:
+                            pass
+                        continue
+                    elif tools_sub_state == 4:
+                        OUTPUT_MODE = "icloud_import"
+                        print(f"\n{GREEN}ICLOUD PHOTO IMPORT SELECTED{RESET}")
+                        print(f"   Target: {DIM}{TARGET_DIR}{RESET}\n")
+                        icloud_script = SCRIPT_DIR / "icloud_import.py"
+                        drain_stdin()
+                        subprocess.run(
+                            [sys.executable, str(icloud_script), str(TARGET_DIR)]
+                        )
                         print(f"\n   {CYAN}Press Enter to return to menu...{RESET}")
                         drain_stdin()
                         try:
