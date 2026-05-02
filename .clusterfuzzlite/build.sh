@@ -14,11 +14,16 @@ export LIBHEIF_SYS_STATIC=1
 # Tell gmp-mpfr-sys to use system libraries to avoid failing internal tests in ASAN/MSAN
 # On Ubuntu, libgmp-dev installs to these locations
 export GMP_LIB_DIR=/usr/lib/x86_64-linux-gnu
-export GMP_INCLUDE_DIR=/usr/include/x86_64-linux-gnu
+export GMP_INCLUDE_DIR=/usr/include
+export MPFR_LIB_DIR=/usr/lib/x86_64-linux-gnu
+export MPFR_INCLUDE_DIR=/usr/include
+export MPC_LIB_DIR=/usr/lib/x86_64-linux-gnu
+export MPC_INCLUDE_DIR=/usr/include
 
 # Filter out fuzzer sanitize flags from C/C++ flags to prevent CMake linker errors in jpegxl-sys
 export CFLAGS=$(echo $CFLAGS | sed 's/-fsanitize=fuzzer-no-link//g' | sed 's/-fsanitize=fuzzer//g')
 export CXXFLAGS=$(echo $CXXFLAGS | sed 's/-fsanitize=fuzzer-no-link//g' | sed 's/-fsanitize=fuzzer//g')
+
 
 # Navigate to the fuzzing crate
 cd crates/dev/fuzz

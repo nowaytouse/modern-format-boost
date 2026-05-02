@@ -60,6 +60,8 @@ serial_test = "3.4.0"
 jpegxl-sys = { workspace = true }
 arbitrary = { version = "1.4", features = ["derive"], optional = true }
 rug = { workspace = true }
+gmp-mpfr-sys = { workspace = true }
+
 
 [[bin]]
 name = "train_knn"

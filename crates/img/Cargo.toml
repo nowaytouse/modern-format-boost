@@ -11,7 +11,9 @@ categories.workspace = true
 description = "High-performance image format converter and analyzer"
 
 [dependencies]
-rug = "1.30.0"
+rug = { workspace = true }
+gmp-mpfr-sys = { workspace = true }
+
 clap = { workspace = true }
 image = { workspace = true }
 serde = { workspace = true }
