@@ -1171,6 +1171,7 @@ dependencies = [
  "bitflags",
  "clap",
  "console",
+ "gmp-mpfr-sys",
  "image",
  "rayon",
  "rug",
@@ -2403,12 +2404,12 @@ dependencies = [
  "exr",
  "filetime",
  "flate2",
+ "gmp-mpfr-sys",
  "image",
  "indicatif",
  "infer",
  "insta",
  "jpegxl-rs",
- "jpegxl-sys",
  "libc",
  "libheif-rs",
  "log",
@@ -2949,6 +2950,7 @@ version = "0.11.2"
 dependencies = [
  "anyhow",
  "clap",
+ "gmp-mpfr-sys",
  "rayon",
  "rug",
  "serde",
@@ -3410,8 +3412,3 @@ checksum = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
 dependencies = [
  "zune-core",
 ]
-
-[[patch.unused]]
-name = "libc"
-version = "1.0.0-alpha.3"
-source = "git+https://github.com/rust-lang/libc.git#13f655f610f272a167580805d8016e8e1a0e32ac"

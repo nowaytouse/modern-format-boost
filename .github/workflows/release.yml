@@ -125,6 +125,8 @@ jobs:
           echo "PKG_CONFIG_ALLOW_CROSS=1" >> "$GITHUB_ENV"
           # Linker must find x86_64 dylibs
           echo "LIBRARY_PATH=/usr/local/lib:${LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+          echo "CC=clang" >> "$GITHUB_ENV"
+          echo "CFLAGS=-target x86_64-apple-darwin" >> "$GITHUB_ENV"
           echo "CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER=clang" >> "$GITHUB_ENV"
 
       # ── Windows ────────────────────────────────────────────────────────────

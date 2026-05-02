@@ -1,4 +1,3 @@
-#![warn(clippy::pedantic)]
 //! Shared Utilities for `modern_format_boost` tools
 //!
 //! This crate provides common functionality shared across `img` and `vid`:
@@ -197,6 +196,7 @@ pub use media_passthrough::{audio_args_for_container, subtitle_args_for_containe
 /// Shared database interface for quality matching.
 pub mod database;
 /// Depth map extraction and embedding.
+#[cfg(feature = "jpegxl-ffi")]
 pub mod depth_channel;
 /// Gainmap to `HDR` synthesis pipeline.
 pub mod hdr_synthesis;
@@ -233,6 +233,7 @@ pub mod video_recommender;
 
 pub use blake3;
 pub use database::{lookup_similar_samples, SampleMatch};
+#[cfg(feature = "jpegxl-ffi")]
 pub use depth_channel::{
     encode_jxl_depth_fallback, encode_jxl_with_depth, extract_depth_from_heic, DepthMap, DepthType,
 };

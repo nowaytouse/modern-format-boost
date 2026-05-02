@@ -141,7 +141,6 @@ jpegxl-sys = { git = "https://github.com/inflation/jpegxl-rs.git" }
 # Misc libs
 walkdir = { git = "https://github.com/BurntSushi/walkdir.git" }
 filetime = { git = "https://github.com/alexcrichton/filetime.git" }
-libc = { git = "https://github.com/rust-lang/libc.git" }
 log = { git = "https://github.com/rust-lang/log.git" }
 console = { git = "https://github.com/console-rs/console.git" }
 chrono = { git = "https://github.com/chronotope/chrono.git" }

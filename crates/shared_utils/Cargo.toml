@@ -44,7 +44,7 @@ tempfile = { workspace = true }
 image = { workspace = true }
 rayon = { workspace = true }
 libheif-rs = { workspace = true }
-    jpegxl-rs = { workspace = true }
+jpegxl-rs = { workspace = true, optional = true }
 flate2 = { workspace = true }
 ctrlc = { workspace = true }
 blake3 = { workspace = true }
@@ -57,7 +57,6 @@ quick-xml = { workspace = true }
 exr = { workspace = true }
 proptest = { workspace = true }
 serial_test = "3.4.0"
-jpegxl-sys = { workspace = true }
 arbitrary = { version = "1.4", features = ["derive"], optional = true }
 rug = { workspace = true }
 gmp-mpfr-sys = { workspace = true }
@@ -76,7 +75,8 @@ name = "train_quality"
 path = "src/bin/train_quality.rs"
 
 [features]
-default = ["v1_21"]
+default = ["v1_21", "jpegxl-ffi"]
 v1_21 = ["libheif-rs/v1_21"]
+jpegxl-ffi = ["dep:jpegxl-rs"]
 ci-static-build = ["libheif-rs/embedded-libheif", "v1_21"]
 fuzzing = ["dep:arbitrary"]

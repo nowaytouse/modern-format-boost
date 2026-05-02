@@ -1,4 +1,3 @@
-#![warn(clippy::pedantic)]
 use clap::{Parser, Subcommand};
 use rug::Rational;
 
