@@ -136,7 +136,10 @@ mod tests {
         let mut guard = IterationGuard::new(5, "test");
 
         for i in 1..=5 {
-            assert_eq!(guard.increment().unwrap_or_else(|e| panic!("error: {e:?}")), i);
+            assert_eq!(
+                guard.increment().unwrap_or_else(|e| panic!("error: {e:?}")),
+                i
+            );
         }
 
         assert!(guard.increment().is_err());

@@ -22,18 +22,48 @@ fn convert_options_from_config(
         codec: config.codec,
         ..Default::default()
     };
-    
-    opts.flags.set(shared_utils::conversion::ConvertFlags::FORCE, config.force());
-    opts.flags.set(shared_utils::conversion::ConvertFlags::DELETE_ORIGINAL, config.delete_original());
-    opts.flags.set(shared_utils::conversion::ConvertFlags::IN_PLACE, config.in_place());
-    opts.flags.set(shared_utils::conversion::ConvertFlags::EXPLORE, config.explore_smaller());
-    opts.flags.set(shared_utils::conversion::ConvertFlags::MATCH_QUALITY, config.match_quality());
-    opts.flags.set(shared_utils::conversion::ConvertFlags::APPLE_COMPAT, config.apple_compat());
-    opts.flags.set(shared_utils::conversion::ConvertFlags::COMPRESS, config.require_compression());
-    opts.flags.set(shared_utils::conversion::ConvertFlags::USE_GPU, config.use_gpu());
-    opts.flags.set(shared_utils::conversion::ConvertFlags::ULTIMATE, config.ultimate_mode());
-    opts.flags.set(shared_utils::conversion::ConvertFlags::ALLOW_SIZE_TOLERANCE, config.allow_size_tolerance());
-    
+
+    opts.flags.set(
+        shared_utils::conversion::ConvertFlags::FORCE,
+        config.force(),
+    );
+    opts.flags.set(
+        shared_utils::conversion::ConvertFlags::DELETE_ORIGINAL,
+        config.delete_original(),
+    );
+    opts.flags.set(
+        shared_utils::conversion::ConvertFlags::IN_PLACE,
+        config.in_place(),
+    );
+    opts.flags.set(
+        shared_utils::conversion::ConvertFlags::EXPLORE,
+        config.explore_smaller(),
+    );
+    opts.flags.set(
+        shared_utils::conversion::ConvertFlags::MATCH_QUALITY,
+        config.match_quality(),
+    );
+    opts.flags.set(
+        shared_utils::conversion::ConvertFlags::APPLE_COMPAT,
+        config.apple_compat(),
+    );
+    opts.flags.set(
+        shared_utils::conversion::ConvertFlags::COMPRESS,
+        config.require_compression(),
+    );
+    opts.flags.set(
+        shared_utils::conversion::ConvertFlags::USE_GPU,
+        config.use_gpu(),
+    );
+    opts.flags.set(
+        shared_utils::conversion::ConvertFlags::ULTIMATE,
+        config.ultimate_mode(),
+    );
+    opts.flags.set(
+        shared_utils::conversion::ConvertFlags::ALLOW_SIZE_TOLERANCE,
+        config.allow_size_tolerance(),
+    );
+
     opts
 }
 
@@ -715,8 +745,10 @@ pub fn auto_convert_with_cache(
             .is_some_and(|codec| codec.can_be_animated())
     {
         if let Ok(image_det) = shared_utils::image_detection::detect_image(input) {
-            if matches!(image_det.image_type, shared_utils::image_detection::ImageType::Animated)
-                || image_det.frame_count > 1
+            if matches!(
+                image_det.image_type,
+                shared_utils::image_detection::ImageType::Animated
+            ) || image_det.frame_count > 1
             {
                 let corrected = u64::from(image_det.frame_count.max(2));
                 tracing::warn!(
@@ -1160,7 +1192,8 @@ pub fn auto_convert_with_cache(
                 {
                     let total_file_compressed = explore_result.output_size < detection.file_size;
                     let total_size_ratio = if detection.file_size > 0 {
-                        let ratio = rug::Rational::from((explore_result.output_size, detection.file_size));
+                        let ratio =
+                            rug::Rational::from((explore_result.output_size, detection.file_size));
                         ratio.to_f64()
                     } else {
                         1.0
@@ -1602,7 +1635,6 @@ pub fn auto_convert_with_cache(
     })
 }
 
-
 fn success_status_for_cache(
     target: TargetVideoFormat,
     explore_result: Option<&shared_utils::ExploreResult>,
@@ -1917,7 +1949,10 @@ mod tests {
     #[test]
     fn test_config_default_apple_compat() {
         let config = ConversionConfig::default();
-        assert!(!config.apple_compat(), "Default apple_compat should be false");
+        assert!(
+            !config.apple_compat(),
+            "Default apple_compat should be false"
+        );
     }
 
     #[test]
@@ -2412,7 +2447,8 @@ mod tests {
             tags: std::collections::HashMap::new(),
             ..Default::default()
         };
-        let crf = calculate_matched_crf(&det, &SelectedCodec::Hevc).unwrap_or_else(|e| panic!("error: {e:?}"));
+        let crf = calculate_matched_crf(&det, &SelectedCodec::Hevc)
+            .unwrap_or_else(|e| panic!("error: {e:?}"));
         assert!(
             (0.0..=35.0).contains(&crf),
             "CRF {crf:.1} should be in [0, 35]"
@@ -2468,7 +2504,8 @@ mod tests {
             tags: std::collections::HashMap::new(),
             ..Default::default()
         };
-        let crf = calculate_matched_crf(&det, &SelectedCodec::Hevc).unwrap_or_else(|e| panic!("error: {e:?}"));
+        let crf = calculate_matched_crf(&det, &SelectedCodec::Hevc)
+            .unwrap_or_else(|e| panic!("error: {e:?}"));
         assert!(
             (0.0..=22.0).contains(&crf),
             "High bitrate AV1 should get CRF <= 22, got {crf:.1}"
@@ -2745,8 +2782,12 @@ mod tests {
     fn test_strategy_uses_current_input_path_for_native_gif_loop_intent() {
         use crate::detection_api::{CompressionType, DetectedCodec};
 
-        let mut gif = Builder::new().suffix(".gif").tempfile().unwrap_or_else(|e| panic!("error: {e:?}"));
-        gif.write_all(MINIMAL_TRANSPARENT_LOOP_GIF).unwrap_or_else(|e| panic!("error: {e:?}"));
+        let mut gif = Builder::new()
+            .suffix(".gif")
+            .tempfile()
+            .unwrap_or_else(|e| panic!("error: {e:?}"));
+        gif.write_all(MINIMAL_TRANSPARENT_LOOP_GIF)
+            .unwrap_or_else(|e| panic!("error: {e:?}"));
         let detection = crate::detection_api::VideoDetectionResult {
             file_path: "/stale/cache-hit.mp4".to_string(),
             format: "gif".into(),
@@ -2758,7 +2799,9 @@ mod tests {
             has_audio: false,
             frame_count: 2,
             fps: 10.0,
-            file_size: std::fs::metadata(gif.path()).unwrap_or_else(|e| panic!("error: {e:?}")).len(),
+            file_size: std::fs::metadata(gif.path())
+                .unwrap_or_else(|e| panic!("error: {e:?}"))
+                .len(),
             ..Default::default()
         };
 
@@ -2782,8 +2825,12 @@ mod tests {
     fn test_strategy_uses_current_input_path_for_native_gif_loop_intent_apple_compat() {
         use crate::detection_api::{CompressionType, DetectedCodec};
 
-        let mut gif = Builder::new().suffix(".gif").tempfile().unwrap_or_else(|e| panic!("error: {e:?}"));
-        gif.write_all(MINIMAL_TRANSPARENT_LOOP_GIF).unwrap_or_else(|e| panic!("error: {e:?}"));
+        let mut gif = Builder::new()
+            .suffix(".gif")
+            .tempfile()
+            .unwrap_or_else(|e| panic!("error: {e:?}"));
+        gif.write_all(MINIMAL_TRANSPARENT_LOOP_GIF)
+            .unwrap_or_else(|e| panic!("error: {e:?}"));
         let detection = crate::detection_api::VideoDetectionResult {
             file_path: "/stale/cache-hit.mp4".to_string(),
             format: "gif".into(),
@@ -2795,7 +2842,9 @@ mod tests {
             has_audio: false,
             frame_count: 2,
             fps: 10.0,
-            file_size: std::fs::metadata(gif.path()).unwrap_or_else(|e| panic!("error: {e:?}")).len(),
+            file_size: std::fs::metadata(gif.path())
+                .unwrap_or_else(|e| panic!("error: {e:?}"))
+                .len(),
             ..Default::default()
         };
 
@@ -2842,7 +2891,9 @@ mod tests {
 
         assert_eq!(strategy.target, TargetVideoFormat::Gif);
         assert!(
-            strategy.reason.contains("Apple compat policy: modern animated format"),
+            strategy
+                .reason
+                .contains("Apple compat policy: modern animated format"),
             "unexpected reason: {}",
             strategy.reason
         );

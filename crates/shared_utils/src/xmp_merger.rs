@@ -204,15 +204,17 @@ impl XmpMerger {
                         }
                     }
                 }
-                Ok(Event::Eof) => break,
-                Err(_) => break,
+                Ok(Event::Eof) | Err(_) => break,
                 _ => (),
             }
             buf.clear();
         }
 
         // Fallback to exiftool only if native parsing found nothing
-        if xmp_info.document_id.is_none() && xmp_info.derived_from.is_none() && xmp_info.source.is_none() {
+        if xmp_info.document_id.is_none()
+            && xmp_info.derived_from.is_none()
+            && xmp_info.source.is_none()
+        {
             let output = crate::tool_builders::ExiftoolBuilder::new()
                 .arg("-charset")
                 .arg("filename=utf8")
@@ -781,8 +783,7 @@ impl XmpMerger {
             .ok_or_else(|| anyhow::anyhow!("Failed to open stdin for exiftool"))?;
 
         let mut reader = std::io::BufReader::new(xmp_file);
-        std::io::copy(&mut reader, &mut stdin)
-            .context("Failed to stream XMP to exiftool stdin")?;
+        std::io::copy(&mut reader, &mut stdin).context("Failed to stream XMP to exiftool stdin")?;
         drop(stdin); // Close stdin to signal EOF
 
         let output = child
@@ -819,12 +820,13 @@ impl XmpMerger {
     ) -> Result<()> {
         let xmp_filename = xmp_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
-        let detected_ext = if let Some(hint) = hint_ext {
-            Some(hint.to_string())
-        } else {
-            crate::common_utils::detect_real_extension(media_path)
-                .map(std::string::ToString::to_string)
-        };
+        let detected_ext = hint_ext.map_or_else(
+            || {
+                crate::common_utils::detect_real_extension(media_path)
+                    .map(std::string::ToString::to_string)
+            },
+            |hint| Some(hint.to_string()),
+        );
 
         let implied_ext = if xmp_filename.to_lowercase().ends_with(".xmp") {
             let stem = &xmp_filename[..xmp_filename.len() - 4];
@@ -833,7 +835,8 @@ impl XmpMerger {
             None
         };
 
-        let target_ext = detected_ext.or(implied_ext.map(std::string::ToString::to_string));
+        let target_ext =
+            detected_ext.or_else(|| implied_ext.map(std::string::ToString::to_string));
 
         let Some(original_ext) = target_ext else {
             return self.merge_xmp_core(xmp_path, media_path);
@@ -1043,7 +1046,7 @@ impl MergeSummary {
 pub fn merge_xmp_for_copied_file(input: &Path, dest: &Path) -> Result<bool> {
     let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("");
     let ext = input.extension().and_then(|e| e.to_str()).unwrap_or("");
-    let parent = input.parent().unwrap_or(Path::new("."));
+    let parent = input.parent().unwrap_or_else(|| Path::new("."));
 
     let ext_lower = ext.to_lowercase();
     let xmp_candidates = [
@@ -1117,7 +1120,9 @@ mod tests {
         fs::write(&jpg, "").unwrap_or_else(|_| panic!("error"));
 
         let merger = XmpMerger::new(XmpMergerConfig::default());
-        let xmp_files = merger.find_xmp_files(temp_dir.path()).unwrap_or_else(|_| panic!("error"));
+        let xmp_files = merger
+            .find_xmp_files(temp_dir.path())
+            .unwrap_or_else(|_| panic!("error"));
 
         assert_eq!(xmp_files.len(), 2);
     }
@@ -1237,7 +1242,9 @@ mod tests {
         fs::write(&xmp, "fake xmp").unwrap_or_else(|_| panic!("error"));
 
         let merger = XmpMerger::new(XmpMergerConfig::default());
-        let (result, strategy) = merger.find_media_file(&xmp).unwrap_or_else(|_| panic!("error"));
+        let (result, strategy) = merger
+            .find_media_file(&xmp)
+            .unwrap_or_else(|_| panic!("error"));
 
         assert!(result.is_some());
         assert!(strategy == "same_name" || strategy == "case_insensitive");
@@ -1342,7 +1349,9 @@ mod tests {
         let missing_xmp = temp_dir.path().join("missing.xmp");
         let _merger = XmpMerger::new(XmpMergerConfig::default());
 
-        let err = XmpMerger::extract_xmp_metadata(&missing_xmp).err().unwrap_or_else(|| anyhow::anyhow!("unknown error"));
+        let err = XmpMerger::extract_xmp_metadata(&missing_xmp)
+            .err()
+            .unwrap_or_else(|| anyhow::anyhow!("unknown error"));
         assert!(err
             .to_string()
             .contains("ExifTool metadata extraction failed"));

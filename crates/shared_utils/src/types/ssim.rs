@@ -199,12 +199,34 @@ mod tests {
     #[test]
     fn test_ssim_quality_description() {
         assert_eq!(
-            Ssim::new(0.99).unwrap_or_else(|e| panic!("error: {e:?}")).quality_description(),
+            Ssim::new(0.99)
+                .unwrap_or_else(|e| panic!("error: {e:?}"))
+                .quality_description(),
             "Excellent (visually lossless)"
         );
-        assert_eq!(Ssim::new(0.95).unwrap_or_else(|e| panic!("error: {e:?}")).quality_description(), "Very Good");
-        assert_eq!(Ssim::new(0.90).unwrap_or_else(|e| panic!("error: {e:?}")).quality_description(), "Good");
-        assert_eq!(Ssim::new(0.80).unwrap_or_else(|e| panic!("error: {e:?}")).quality_description(), "Fair");
-        assert_eq!(Ssim::new(0.70).unwrap_or_else(|e| panic!("error: {e:?}")).quality_description(), "Poor");
+        assert_eq!(
+            Ssim::new(0.95)
+                .unwrap_or_else(|e| panic!("error: {e:?}"))
+                .quality_description(),
+            "Very Good"
+        );
+        assert_eq!(
+            Ssim::new(0.90)
+                .unwrap_or_else(|e| panic!("error: {e:?}"))
+                .quality_description(),
+            "Good"
+        );
+        assert_eq!(
+            Ssim::new(0.80)
+                .unwrap_or_else(|e| panic!("error: {e:?}"))
+                .quality_description(),
+            "Fair"
+        );
+        assert_eq!(
+            Ssim::new(0.70)
+                .unwrap_or_else(|e| panic!("error: {e:?}"))
+                .quality_description(),
+            "Poor"
+        );
     }
 }

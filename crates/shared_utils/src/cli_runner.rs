@@ -211,7 +211,8 @@ where
             let required = total_input_size.saturating_add(1024 * 1024 * 1024);
             if avail < required {
                 let avail_gb = crate::numeric_cast::u64_to_f64(avail) / (1024.0 * 1024.0 * 1024.0);
-                let required_gb = crate::numeric_cast::u64_to_f64(required) / (1024.0 * 1024.0 * 1024.0);
+                let required_gb =
+                    crate::numeric_cast::u64_to_f64(required) / (1024.0 * 1024.0 * 1024.0);
                 anyhow::bail!(
                     "❌ Insufficient disk space on output volume.\n\
                      💾 Available: {avail_gb:.2} GB\n\
@@ -232,7 +233,10 @@ where
     let total_files = files.len();
     let pause_controller = Arc::new(BatchPauseController::new());
     let fatal_stop = AtomicBool::new(false);
-    let progress_bar = Arc::new(crate::CoarseProgressBar::new(crate::numeric_cast::usize_to_u64(total_files), "Running"));
+    let progress_bar = Arc::new(crate::CoarseProgressBar::new(
+        crate::numeric_cast::usize_to_u64(total_files),
+        "Running",
+    ));
     let thread_config = crate::thread_manager::get_balanced_thread_config(
         crate::thread_manager::WorkloadType::Video,
     );
@@ -378,7 +382,7 @@ where
                         crate::progress_mode::video_processed_success();
                         total_input_bytes.fetch_add(result.input_size(), Ordering::Relaxed);
                         total_output_bytes.fetch_add(
-                            result.output_size().unwrap_or(result.input_size()),
+                            result.output_size().unwrap_or_else(|| result.input_size()),
                             Ordering::Relaxed,
                         );
 

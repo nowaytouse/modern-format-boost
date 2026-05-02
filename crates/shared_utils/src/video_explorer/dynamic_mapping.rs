@@ -32,7 +32,8 @@ impl DynamicCrfMapper {
         if gpu_size == 0 {
             return;
         }
-        let size_ratio = crate::numeric_cast::u64_to_f64(cpu_size) / crate::numeric_cast::u64_to_f64(gpu_size);
+        let size_ratio =
+            crate::numeric_cast::u64_to_f64(cpu_size) / crate::numeric_cast::u64_to_f64(gpu_size);
         self.anchors.push(AnchorPoint {
             crf,
             gpu_size,
@@ -65,7 +66,10 @@ impl DynamicCrfMapper {
         }
 
         if self.anchors.len() == 1 {
-            let offset = self.anchors.first().map_or(0.0, |a| Self::calculate_offset_from_ratio(a.size_ratio));
+            let offset = self
+                .anchors
+                .first()
+                .map_or(0.0, |a| Self::calculate_offset_from_ratio(a.size_ratio));
             return ((gpu_crf + offset).clamp(10.0, max_crf), 0.75);
         }
 
@@ -190,7 +194,7 @@ pub fn quick_calibrate(
         .is_some_and(|p| p.format_name.eq_ignore_ascii_case("gif"));
     let input_duration = probe
         .as_ref()
-        .map_or(f64::from(sample_duration), |p| p.duration);
+        .map_or_else(|| f64::from(sample_duration), |p| p.duration);
     if is_gif_input {
         crate::verbose_eprintln!(
             "   GIF detected: using FFmpeg libx265 path for calibration (no Y4M pipeline)"
@@ -440,7 +444,8 @@ pub fn quick_calibrate(
         if gpu_size > 0 && cpu_size > 0 {
             mapper.add_anchor(*anchor_crf, gpu_size, cpu_size);
 
-            let ratio = crate::numeric_cast::u64_to_f64(cpu_size) / crate::numeric_cast::u64_to_f64(gpu_size);
+            let ratio = crate::numeric_cast::u64_to_f64(cpu_size)
+                / crate::numeric_cast::u64_to_f64(gpu_size);
 
             crate::verbose_eprintln!("   ✅ Calibration successful at CRF {:.1}", anchor_crf);
             crate::verbose_eprintln!(
@@ -462,19 +467,20 @@ pub fn quick_calibrate(
     }
 
     {
-    if let Some(anchor) = mapper.anchors.first() {
-        let ratio = crate::numeric_cast::u64_to_f64(anchor.cpu_size) / crate::numeric_cast::u64_to_f64(anchor.gpu_size);
-        let offset = DynamicCrfMapper::calculate_offset_from_ratio(ratio);
-        let gpu_size = anchor.gpu_size;
-        let cpu_size = anchor.cpu_size;
-        crate::verbose_eprintln!(
-            "✅ Calibration complete: GPU {} → CPU {} (ratio {:.3}, offset +{:.1})",
-            gpu_size,
-            cpu_size,
-            ratio,
-            offset
-        );
-    }
+        if let Some(anchor) = mapper.anchors.first() {
+            let ratio = crate::numeric_cast::u64_to_f64(anchor.cpu_size)
+                / crate::numeric_cast::u64_to_f64(anchor.gpu_size);
+            let offset = DynamicCrfMapper::calculate_offset_from_ratio(ratio);
+            let gpu_size = anchor.gpu_size;
+            let cpu_size = anchor.cpu_size;
+            crate::verbose_eprintln!(
+                "✅ Calibration complete: GPU {} → CPU {} (ratio {:.3}, offset +{:.1})",
+                gpu_size,
+                cpu_size,
+                ratio,
+                offset
+            );
+        }
     }
 
     Ok(mapper)

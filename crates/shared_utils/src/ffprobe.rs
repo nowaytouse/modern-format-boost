@@ -161,7 +161,11 @@ fn detect_vfr_enhanced(
     // Slow-motion detection (separate logic for reliability)
     if (format_name.contains("mov") || format_name.contains("mp4")) && avg_frame_rate >= 60.0 {
         // Check for Apple's slow-mo tag (most reliable indicator)
-        if video_stream.get("tags").and_then(|t| t.get("com.apple.quicktime.fullframerate")).is_some_and(serde_json::Value::is_string) {
+        if video_stream
+            .get("tags")
+            .and_then(|t| t.get("com.apple.quicktime.fullframerate"))
+            .is_some_and(serde_json::Value::is_string)
+        {
             return true;
         }
 
@@ -450,7 +454,8 @@ fn parse_video_stream_fields(
                     {
                         let duration_secs = f64::from(duration_secs);
                         if duration_secs > 0.0 {
-                            avg_frame_rate = crate::numeric_cast::u64_to_f64(frame_count.max(1)) / duration_secs;
+                            avg_frame_rate =
+                                crate::numeric_cast::u64_to_f64(frame_count.max(1)) / duration_secs;
                         }
                     }
                 }
@@ -559,7 +564,8 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         duration: format_duration,
         tags,
     } = parse_probe_format(json.get("format").unwrap_or(&serde_json::Value::Null))?;
-    let streams = json.get("streams")
+    let streams = json
+        .get("streams")
         .and_then(serde_json::Value::as_array)
         .ok_or_else(|| FFprobeError::ParseError("No streams found".to_string()))?;
     let (stream_index, video_stream) = select_video_stream(streams)?;
@@ -966,11 +972,13 @@ pub fn parse_frame_rate(s: &str) -> Result<f64, FFprobeError> {
     if s.contains('/') {
         let parts: Vec<&str> = s.split('/').collect();
         if parts.len() == 2 {
-            let num = parts.first()
+            let num = parts
+                .first()
                 .ok_or_else(|| FFprobeError::ParseError("Missing numerator".to_string()))?
                 .parse::<f64>()
                 .map_err(|e| FFprobeError::ParseError(format!("Invalid numerator: {e}")))?;
-            let den = parts.get(1)
+            let den = parts
+                .get(1)
                 .ok_or_else(|| FFprobeError::ParseError("Missing denominator".to_string()))?
                 .parse::<f64>()
                 .map_err(|e| FFprobeError::ParseError(format!("Invalid denominator: {e}")))?;
@@ -1135,7 +1143,11 @@ mod tests {
                 }
             }
         });
-        let loop_count = extract_loop_count(json_with_loop.get("format").unwrap_or(&serde_json::Value::Null));
+        let loop_count = extract_loop_count(
+            json_with_loop
+                .get("format")
+                .unwrap_or(&serde_json::Value::Null),
+        );
         assert_eq!(loop_count, Some(5));
 
         let json_no_loop = serde_json::json!({
@@ -1143,7 +1155,11 @@ mod tests {
                 "tags": {}
             }
         });
-        let loop_count = extract_loop_count(json_no_loop.get("format").unwrap_or(&serde_json::Value::Null));
+        let loop_count = extract_loop_count(
+            json_no_loop
+                .get("format")
+                .unwrap_or(&serde_json::Value::Null),
+        );
         assert_eq!(loop_count, None);
     }
 }

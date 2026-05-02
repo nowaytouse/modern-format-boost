@@ -20,4 +20,3 @@ fn classify_animated_webp_even_without_vp8x_in_first_64_bytes() {
     let content_codec = SourceCodec::identify_by_content(&path);
     assert_eq!(content_codec, Some(SourceCodec::WebpAnimated));
 }
-

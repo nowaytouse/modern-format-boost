@@ -482,7 +482,8 @@ fn build_adaptive_ladder(
     let interpolation_start = band_min.min(target_distance_f64);
 
     for probe_idx in 1..=interpolation_budget {
-        let progress = crate::numeric_cast::usize_to_f64(probe_idx) / crate::numeric_cast::usize_to_f64(interpolation_budget);
+        let progress = crate::numeric_cast::usize_to_f64(probe_idx)
+            / crate::numeric_cast::usize_to_f64(interpolation_budget);
         let candidate = if profile == JxlExplorationProfile::MicroAdjust {
             interpolate_plateau_distance(interpolation_start, target_distance_f64, progress)?
         } else {
@@ -526,7 +527,12 @@ fn build_exploration_plan(
 }
 
 fn near_best_margin(input_size: u64) -> u64 {
-    let margin = Rational::from(input_size) * crate::numeric_cast::f64_to_rational_loud(JXL_NEAR_BEST_MARGIN_RATIO, 0, "JXL_NEAR_BEST_MARGIN_RATIO");
+    let margin = Rational::from(input_size)
+        * crate::numeric_cast::f64_to_rational_loud(
+            JXL_NEAR_BEST_MARGIN_RATIO,
+            0,
+            "JXL_NEAR_BEST_MARGIN_RATIO",
+        );
     crate::numeric_cast::f64_to_u64_sat(margin.to_f64()).max(1)
 }
 
@@ -933,7 +939,9 @@ where
             if tighter_than_current && below_d_under {
                 d_over = Some(candidate_distance);
             }
-            let oversize_best_size = candidates.get(oversize_best_idx).map_or(u64::MAX, |c| c.output_size);
+            let oversize_best_size = candidates
+                .get(oversize_best_idx)
+                .map_or(u64::MAX, |c| c.output_size);
             if size < oversize_best_size {
                 if current_idx > 0 {
                     add_reason(
@@ -1123,7 +1131,9 @@ where
             if size < input_size {
                 // New best: lower d that still beats source
                 hi = mid;
-                if best_below_idx.is_none_or(|idx| candidates.get(idx).is_none_or(|c| mid < c.distance)) {
+                if best_below_idx
+                    .is_none_or(|idx| candidates.get(idx).is_none_or(|c| mid < c.distance))
+                {
                     best_below_idx = Some(probe_idx);
                     add_reason(
                         &mut candidates,
@@ -1314,7 +1324,9 @@ mod tests {
 
     #[test]
     fn test_screening_rejects_distances_below_the_floor() {
-        let err = canonicalize_generated_distance(0.0009).err().unwrap_or_else(|| panic!("sub-floor values must fail"));
+        let err = canonicalize_generated_distance(0.0009)
+            .err()
+            .unwrap_or_else(|| panic!("sub-floor values must fail"));
         assert!(err.contains("below the floor"));
     }
 
@@ -1325,14 +1337,16 @@ mod tests {
         let wide_ratio = 2.0;
         let ceiling_ratio = 10.0;
 
-        let micro_target =
-            target_distance_for_ratio(micro_ratio, exploration_profile(micro_ratio)).unwrap_or_else(|_| panic!("failed to get target distance"));
+        let micro_target = target_distance_for_ratio(micro_ratio, exploration_profile(micro_ratio))
+            .unwrap_or_else(|_| panic!("failed to get target distance"));
         let boundary_target =
-            target_distance_for_ratio(boundary_ratio, exploration_profile(boundary_ratio)).unwrap_or_else(|_| panic!("failed to get target distance"));
-        let wide_target =
-            target_distance_for_ratio(wide_ratio, exploration_profile(wide_ratio)).unwrap_or_else(|_| panic!("failed to get target distance"));
+            target_distance_for_ratio(boundary_ratio, exploration_profile(boundary_ratio))
+                .unwrap_or_else(|_| panic!("failed to get target distance"));
+        let wide_target = target_distance_for_ratio(wide_ratio, exploration_profile(wide_ratio))
+            .unwrap_or_else(|_| panic!("failed to get target distance"));
         let ceiling_target =
-            target_distance_for_ratio(ceiling_ratio, exploration_profile(ceiling_ratio)).unwrap_or_else(|_| panic!("failed to get target distance"));
+            target_distance_for_ratio(ceiling_ratio, exploration_profile(ceiling_ratio))
+                .unwrap_or_else(|_| panic!("failed to get target distance"));
 
         assert!(micro_target > JXL_EXPLORE_FLOOR);
         {
@@ -1354,8 +1368,10 @@ mod tests {
 
     #[test]
     fn test_ceiling_sweep_uses_denser_phase_one_ladder() {
-        let micro_plan = build_exploration_plan(100, 102).unwrap_or_else(|e| panic!("failed to build plan: {e:?}"));
-        let ceiling_plan = build_exploration_plan(100, 600).unwrap_or_else(|e| panic!("failed to build plan: {e:?}"));
+        let micro_plan = build_exploration_plan(100, 102)
+            .unwrap_or_else(|e| panic!("failed to build plan: {e:?}"));
+        let ceiling_plan = build_exploration_plan(100, 600)
+            .unwrap_or_else(|e| panic!("failed to build plan: {e:?}"));
 
         assert!(ceiling_plan.ladder.len() > micro_plan.ladder.len());
         assert!(ceiling_plan.target_distance > micro_plan.target_distance);
@@ -1386,8 +1402,8 @@ mod tests {
             JXL_BOUNDARY_PRESSURE_STOPS_MAX,
         );
         let midpoint_ratio = midpoint_stops.exp2();
-        let target =
-            target_distance_for_ratio(midpoint_ratio, exploration_profile(midpoint_ratio)).unwrap_or_else(|_| panic!("failed to get target distance"));
+        let target = target_distance_for_ratio(midpoint_ratio, exploration_profile(midpoint_ratio))
+            .unwrap_or_else(|_| panic!("failed to get target distance"));
 
         assert!(
             (target - 0.055).abs() < 0.01,

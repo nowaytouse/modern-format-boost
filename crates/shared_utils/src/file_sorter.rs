@@ -100,7 +100,8 @@ mod tests {
         let path = dir.join(name);
         let mut file = fs::File::create(&path).unwrap_or_else(|e| panic!("create failed: {e:?}"));
         let data = vec![0u8; size];
-        file.write_all(&data).unwrap_or_else(|e| panic!("write failed: {e:?}"));
+        file.write_all(&data)
+            .unwrap_or_else(|e| panic!("write failed: {e:?}"));
         path
     }
 
@@ -133,8 +134,14 @@ mod tests {
         let sorted = sort_by_size_ascending(files);
 
         assert_eq!(sorted.len(), 3);
-        assert_eq!(*sorted.first().unwrap_or_else(|| panic!("missing 0")), small);
-        assert_eq!(*sorted.get(1).unwrap_or_else(|| panic!("missing 1")), medium);
+        assert_eq!(
+            *sorted.first().unwrap_or_else(|| panic!("missing 0")),
+            small
+        );
+        assert_eq!(
+            *sorted.get(1).unwrap_or_else(|| panic!("missing 1")),
+            medium
+        );
         assert_eq!(*sorted.get(2).unwrap_or_else(|| panic!("missing 2")), large);
     }
 
@@ -150,8 +157,14 @@ mod tests {
         let sorted = sort_by_size_descending(files);
 
         assert_eq!(sorted.len(), 3);
-        assert_eq!(*sorted.first().unwrap_or_else(|| panic!("missing 0")), large);
-        assert_eq!(*sorted.get(1).unwrap_or_else(|| panic!("missing 1")), medium);
+        assert_eq!(
+            *sorted.first().unwrap_or_else(|| panic!("missing 0")),
+            large
+        );
+        assert_eq!(
+            *sorted.get(1).unwrap_or_else(|| panic!("missing 1")),
+            medium
+        );
         assert_eq!(*sorted.get(2).unwrap_or_else(|| panic!("missing 2")), small);
     }
 
@@ -235,8 +248,12 @@ mod tests {
         let sorted_paths = sort_by_size_ascending(files);
 
         for i in 0..sorted_paths.len() - 1 {
-            let first_size = fs::metadata(sorted_paths.get(i).unwrap_or(&PathBuf::new())).unwrap_or_else(|e| panic!("error: {e:?}")).len();
-            let second_size = fs::metadata(sorted_paths.get(i + 1).unwrap_or(&PathBuf::new())).unwrap_or_else(|e| panic!("error: {e:?}")).len();
+            let first_size = fs::metadata(sorted_paths.get(i).unwrap_or(&PathBuf::new()))
+                .unwrap_or_else(|e| panic!("error: {e:?}"))
+                .len();
+            let second_size = fs::metadata(sorted_paths.get(i + 1).unwrap_or(&PathBuf::new()))
+                .unwrap_or_else(|e| panic!("error: {e:?}"))
+                .len();
             assert!(
                 first_size <= second_size,
                 "STRICT: File {} ({}B) should be <= file {} ({}B)",

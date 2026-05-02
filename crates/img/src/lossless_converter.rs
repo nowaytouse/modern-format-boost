@@ -92,15 +92,8 @@ fn finalize_with_size_check(
     }
 
     // Finalize with metadata preservation
-    finalize_conversion(
-        input,
-        output,
-        input_size,
-        format_label,
-        extra_info,
-        options,
-    )
-    .map_err(ImgQualityError::IoError)
+    finalize_conversion(input, output, input_size, format_label, extra_info, options)
+        .map_err(ImgQualityError::IoError)
 }
 
 /// Finalize a JXL produced by a fallback pipeline (ffmpeg or imagemagick).
@@ -603,9 +596,9 @@ pub fn convert_to_jxl(
                                                 use std::io::Read;
                                                 let mut buf = String::with_capacity(64 * 1024);
                                                 if let Err(err) = stderr
-                                                    .take(
-                                                        shared_utils::numeric_cast::usize_to_u64(crate::constants::STDERR_BUFFER_MAX),
-                                                    )
+                                                    .take(shared_utils::numeric_cast::usize_to_u64(
+                                                        crate::constants::STDERR_BUFFER_MAX,
+                                                    ))
                                                     .read_to_string(&mut buf)
                                                 {
                                                     shared_utils::log_rare_error!(
@@ -620,33 +613,23 @@ pub fn convert_to_jxl(
                                     let ffmpeg_status = ffmpeg_proc.wait();
                                     let cjxl_status = cjxl_proc.wait();
 
-                                    let ffmpeg_stderr_str = match ffmpeg_stderr_thread {
-                                        Some(handle) => {
-                                            if let Ok(s) = handle.join() {
-                                                s
-                                            } else {
-                                                shared_utils::log_rare_error!(
-                                                    "Background Thread",
-                                                    "FFmpeg stderr thread panicked"
-                                                );
-                                                String::new()
-                                            }
-                                        }
-                                        None => String::new(),
-                                    };
-                                    let cjxl_stderr_str = match cjxl_stderr_thread {
-                                        Some(handle) => {
-                                            if let Ok(s) = handle.join() {
-                                                s
-                                            } else {
-                                                shared_utils::progress_mode::emit_stderr(
-                                                    "   ⚠️ cjxl stderr thread panicked",
-                                                );
-                                                String::new()
-                                            }
-                                        }
-                                        None => String::new(),
-                                    };
+                                    let ffmpeg_stderr_str = ffmpeg_stderr_thread.map_or_else(String::new, |handle| {
+                                        handle.join().unwrap_or_else(|_| {
+                                            shared_utils::log_rare_error!(
+                                                "Background Thread",
+                                                "FFmpeg stderr thread panicked"
+                                            );
+                                            String::new()
+                                        })
+                                    });
+                                    let cjxl_stderr_str = cjxl_stderr_thread.map_or_else(String::new, |handle| {
+                                        handle.join().unwrap_or_else(|_| {
+                                            shared_utils::progress_mode::emit_stderr(
+                                                "   ⚠️ cjxl stderr thread panicked",
+                                            );
+                                            String::new()
+                                        })
+                                    });
 
                                     let ffmpeg_ok = match ffmpeg_status {
                                         Ok(status) if status.success() => true,
@@ -731,7 +714,9 @@ pub fn convert_to_jxl(
                                         if cjxl_ok { "✓" } else { "✗" }
                                     );
                                     shared_utils::progress_mode::emit_stderr(&line);
-                                    shared_utils::progress_mode::emit_stderr("   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline...");
+                                    shared_utils::progress_mode::emit_stderr(
+                                        "   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline...",
+                                    );
                                     if try_imagemagick_fallback_with_effort(
                                         input,
                                         &temp_output,
@@ -1843,7 +1828,10 @@ fn try_explore_ultimate_jxl_distance(
                         input_size,
                         finalist.distance,
                         size,
-                        screening.finalists.get(*best_idx).map_or(0.01, |f| f.distance),
+                        screening
+                            .finalists
+                            .get(*best_idx)
+                            .map_or(0.01, |f| f.distance),
                         *best_size,
                     ) == std::cmp::Ordering::Less
                 });
@@ -1891,7 +1879,9 @@ fn try_explore_ultimate_jxl_distance(
     }
 
     let best_candidate = screening.finalists.get(best_idx).ok_or_else(|| {
-        ImgQualityError::ConversionError("Failed to find best JXL candidate in finalists".to_string())
+        ImgQualityError::ConversionError(
+            "Failed to find best JXL candidate in finalists".to_string(),
+        )
     })?;
     let _ = shared_utils::io_utils::safe_remove_file(temp_output);
     shared_utils::io_utils::robust_move(&best_path, temp_output)
@@ -2062,11 +2052,13 @@ fn prepare_input_for_cjxl(
 ) -> Result<(std::path::PathBuf, Option<tempfile::NamedTempFile>)> {
     // Ensure we have color info for bit depth detection if not provided
     let local_hdr_info;
-    let hdr_info = if let Some(info) = hdr_info {
-        info
-    } else {
-        local_hdr_info = shared_utils::ffprobe_json::extract_color_info(input);
-        &local_hdr_info
+    #[allow(clippy::option_if_let_else, clippy::single_match_else)]
+    let hdr_info = match hdr_info {
+        Some(info) => info,
+        None => {
+            local_hdr_info = shared_utils::ffprobe_json::extract_color_info(input);
+            &local_hdr_info
+        }
     };
 
     // Determine target bit depth (match source if > 8-bit, else 8-bit)
@@ -2517,7 +2509,8 @@ mod tests {
     #[test]
     fn test_get_output_path() {
         let tmp = tempdir().unwrap_or_else(|e| panic!("create temp dir: {e:?}"));
-        let root = std::fs::canonicalize(tmp.path()).unwrap_or_else(|e| panic!("canonicalize: {e:?}"));
+        let root =
+            std::fs::canonicalize(tmp.path()).unwrap_or_else(|e| panic!("canonicalize: {e:?}"));
         let input_dir = root.join("path").join("to");
         std::fs::create_dir_all(&input_dir).unwrap_or_else(|e| panic!("create input dir: {e:?}"));
         let input = input_dir.join("image.png");
@@ -2527,14 +2520,16 @@ mod tests {
             base_dir: None,
             ..Default::default()
         };
-        let output = get_output_path(&input, "jxl", &options).unwrap_or_else(|e| panic!("error: {e:?}"));
+        let output =
+            get_output_path(&input, "jxl", &options).unwrap_or_else(|e| panic!("error: {e:?}"));
         assert_eq!(output, input_dir.join("image.JXL"));
     }
 
     #[test]
     fn test_get_output_path_with_dir() {
         let tmp = tempdir().unwrap_or_else(|e| panic!("create temp dir: {e:?}"));
-        let root = std::fs::canonicalize(tmp.path()).unwrap_or_else(|e| panic!("canonicalize: {e:?}"));
+        let root =
+            std::fs::canonicalize(tmp.path()).unwrap_or_else(|e| panic!("canonicalize: {e:?}"));
         let input_dir = root.join("path").join("to");
         std::fs::create_dir_all(&input_dir).unwrap_or_else(|e| panic!("create input dir: {e:?}"));
         let input = input_dir.join("image.png");
@@ -2545,14 +2540,16 @@ mod tests {
             base_dir: None,
             ..Default::default()
         };
-        let output = get_output_path(&input, "avif", &options).unwrap_or_else(|e| panic!("error: {e:?}"));
+        let output =
+            get_output_path(&input, "avif", &options).unwrap_or_else(|e| panic!("error: {e:?}"));
         assert_eq!(output, output_dir.join("image.AVIF"));
     }
 
     #[test]
     fn test_get_output_path_same_file_error() {
         let tmp = tempdir().unwrap_or_else(|e| panic!("create temp dir: {e:?}"));
-        let root = std::fs::canonicalize(tmp.path()).unwrap_or_else(|e| panic!("canonicalize: {e:?}"));
+        let root =
+            std::fs::canonicalize(tmp.path()).unwrap_or_else(|e| panic!("canonicalize: {e:?}"));
         let input = root.join("image.JXL");
         let options = ConvertOptions {
             output_dir: None,

@@ -33,6 +33,7 @@ fn resolve_debug_root() -> PathBuf {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn manual_debug_jxl_explorer_uses_copies_only() {
     if std::env::var("MFB_RUN_JXL_DEBUG_EXPLORER").is_err() {
         eprintln!(
@@ -72,7 +73,11 @@ fn manual_debug_jxl_explorer_uses_copies_only() {
         let original_size = fs::metadata(&sample)
             .unwrap_or_else(|e| panic!("failed to read metadata: {e:?}"))
             .len();
-        let copied_input = input_dir.join(sample.file_name().unwrap_or_else(|| panic!("missing file name")));
+        let copied_input = input_dir.join(
+            sample
+                .file_name()
+                .unwrap_or_else(|| panic!("missing file name")),
+        );
         fs::copy(&sample, &copied_input).unwrap_or_else(|e| panic!("failed to copy: {e:?}"));
 
         let mut working_input = copied_input.clone();

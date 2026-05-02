@@ -120,10 +120,10 @@ pub fn robust_move(src: &Path, dst: &Path) -> std::io::Result<()> {
             || e.raw_os_error() == Some(18)
             || e.to_string().to_lowercase().contains("crosses devices")
         {
-            let staging = match dst.extension().and_then(|e| e.to_str()) {
-                Some(ext) => dst.with_extension(format!("{ext}.mfb-tmp")),
-                None => dst.with_extension("mfb-tmp"),
-            };
+            let staging = dst.extension().and_then(|e| e.to_str()).map_or_else(
+                || dst.with_extension("mfb-tmp"),
+                |ext| dst.with_extension(format!("{ext}.mfb-tmp")),
+            );
             if staging.exists() {
                 let _ = std::fs::remove_file(&staging);
             }

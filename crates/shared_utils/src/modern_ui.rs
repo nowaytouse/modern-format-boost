@@ -218,13 +218,19 @@ static SPINNER_FRAME: AtomicU64 = AtomicU64::new(0);
 /// Returns the next spinner animation frame (rotating through dash, slash, pipe, backslash).
 pub fn spinner_frame() -> &'static str {
     let frame = usize::try_from(SPINNER_FRAME.fetch_add(1, Ordering::Relaxed)).unwrap_or(0);
-    SPINNER_FRAMES.get(frame % SPINNER_FRAMES.len()).copied().unwrap_or("-")
+    SPINNER_FRAMES
+        .get(frame % SPINNER_FRAMES.len())
+        .copied()
+        .unwrap_or("-")
 }
 
 /// Returns the next spinner dots animation frame (rotating through asterisk, dot, small o, capital O).
 pub fn spinner_dots() -> &'static str {
     let frame = usize::try_from(SPINNER_FRAME.fetch_add(1, Ordering::Relaxed)).unwrap_or(0);
-    SPINNER_DOTS.get(frame % SPINNER_DOTS.len()).copied().unwrap_or("*")
+    SPINNER_DOTS
+        .get(frame % SPINNER_DOTS.len())
+        .copied()
+        .unwrap_or("*")
 }
 
 /// Visual style variants for progress bar rendering.
@@ -275,8 +281,8 @@ pub fn render_progress_bar(progress: f64, width: usize, style: ProgressStyle) ->
         ProgressStyle::Blocks => {
             let mut bar = String::new();
             for i in 0..width {
-                let pos = crate::numeric_cast::usize_to_f64(i)
-                    / crate::numeric_cast::usize_to_f64(width);
+                let pos =
+                    crate::numeric_cast::usize_to_f64(i) / crate::numeric_cast::usize_to_f64(width);
                 if pos < progress - 0.1 {
                     bar.push('█');
                 } else if pos < progress - 0.05 {

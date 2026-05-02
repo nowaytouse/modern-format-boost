@@ -64,7 +64,8 @@ impl StreamSizeInfo {
         if self.total_file_size == 0 {
             return 0.0;
         }
-        let ratio = Rational::from(self.container_overhead) / Rational::from(self.total_file_size.max(1));
+        let ratio =
+            Rational::from(self.container_overhead) / Rational::from(self.total_file_size.max(1));
         (ratio * Rational::from(100)).to_f64()
     }
 
@@ -212,37 +213,21 @@ fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<StreamSiz
 
     let audio_stream = parsed.streams.iter().find(|s| s.codec_type == "audio");
 
-    let (video_stream_size, video_bitrate) = if let Some(vs) = video_stream {
-        if let Some(br_str) = &vs.bit_rate {
-            if let Ok(br) = br_str.parse::<u64>() {
-                let size_rational = (Rational::from(br) * crate::numeric_cast::f64_to_rational_loud(duration_secs, 0, "duration_secs")) / Rational::from(8);
-                let size = crate::numeric_cast::f64_to_u64_sat(size_rational.to_f64());
-                (size, Some(br))
-            } else {
-                (0, None)
-            }
-        } else {
-            (0, None)
-        }
-    } else {
-        (0, None)
-    };
+    let (video_stream_size, video_bitrate) = video_stream.and_then(|vs| vs.bit_rate.as_ref()).and_then(|br_str| br_str.parse::<u64>().ok()).map_or((0, None), |br| {
+        let size_rational = (Rational::from(br)
+            * crate::numeric_cast::f64_to_rational_loud(duration_secs, 0, "duration_secs"))
+            / Rational::from(8);
+        let size = crate::numeric_cast::f64_to_u64_sat(size_rational.to_f64());
+        (size, Some(br))
+    });
 
-    let (audio_stream_size, audio_bitrate) = if let Some(aus) = audio_stream {
-        if let Some(br_str) = &aus.bit_rate {
-            if let Ok(br) = br_str.parse::<u64>() {
-                let size_rational = (Rational::from(br) * crate::numeric_cast::f64_to_rational_loud(duration_secs, 0, "duration_secs")) / Rational::from(8);
-                let size = crate::numeric_cast::f64_to_u64_sat(size_rational.to_f64());
-                (size, Some(br))
-            } else {
-                (0, None)
-            }
-        } else {
-            (0, None)
-        }
-    } else {
-        (0, None)
-    };
+    let (audio_stream_size, audio_bitrate) = audio_stream.and_then(|aus| aus.bit_rate.as_ref()).and_then(|br_str| br_str.parse::<u64>().ok()).map_or((0, None), |br| {
+        let size_rational = (Rational::from(br)
+            * crate::numeric_cast::f64_to_rational_loud(duration_secs, 0, "duration_secs"))
+            / Rational::from(8);
+        let size = crate::numeric_cast::f64_to_u64_sat(size_rational.to_f64());
+        (size, Some(br))
+    });
 
     if video_stream_size == 0 {
         warn!(
@@ -304,7 +289,8 @@ pub fn get_output_video_stream_size(output_path: &Path) -> u64 {
 fn estimate_stream_sizes(path: &Path, total_file_size: u64) -> StreamSizeInfo {
     let overhead_percent = get_container_overhead_percent(path);
     let estimated_overhead = {
-        let overhead = Rational::from(total_file_size) * crate::numeric_cast::f64_to_rational_loud(overhead_percent, 0, "overhead_percent");
+        let overhead = Rational::from(total_file_size)
+            * crate::numeric_cast::f64_to_rational_loud(overhead_percent, 0, "overhead_percent");
         crate::numeric_cast::f64_to_u64_sat(overhead.to_f64())
     };
     let estimated_video_size = total_file_size.saturating_sub(estimated_overhead);

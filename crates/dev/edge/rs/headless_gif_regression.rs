@@ -22,8 +22,10 @@ fn test_headless_gif_regression_frame_count_and_loop_intent() {
 
     // 3. Complete LoopMeta Pipeline checks
     // If the fast path executes, we expect it is parsed successfully and is considered a loop
-    let meta = shared_utils::loop_intent::LoopMeta::from_gif_path(dev_asset_path)
-        .unwrap_or_else(|| panic!("LoopMeta from_gif_path must succeed for valid GIF without delays"));
+    let meta =
+        shared_utils::loop_intent::LoopMeta::from_gif_path(dev_asset_path).unwrap_or_else(|| {
+            panic!("LoopMeta from_gif_path must succeed for valid GIF without delays")
+        });
 
     assert_eq!(
         meta.frame_count, 7,

@@ -1,3 +1,4 @@
+#![allow(clippy::too_many_lines)]
 pub mod analyzer;
 pub mod constants;
 pub mod formats;
@@ -22,7 +23,8 @@ pub use metrics::{
 pub use recommender::{get_recommendation, UpgradeRecommendation};
 
 pub use conversion_api::{
-    determine_strategy, smart_convert, ConfigFlags, ConversionConfig, ConversionOutput, TargetFormat,
+    determine_strategy, smart_convert, ConfigFlags, ConversionConfig, ConversionOutput,
+    TargetFormat,
 };
 pub use detection_api::{
     detect_image, CompressionType, DetectedFormat, DetectionResult, ImageType,

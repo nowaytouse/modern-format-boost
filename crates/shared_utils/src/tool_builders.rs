@@ -590,7 +590,10 @@ mod tests {
             .iter()
             .position(|arg| arg == "--input")
             .unwrap_or_else(|| panic!("x265 input arg should exist"));
-        assert_eq!(args.get(input_idx + 1).unwrap_or(&String::new()), "./-clip.y4m");
+        assert_eq!(
+            args.get(input_idx + 1).unwrap_or(&String::new()),
+            "./-clip.y4m"
+        );
     }
 }
 

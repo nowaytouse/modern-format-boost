@@ -8,6 +8,7 @@
 use walkdir::WalkDir;
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn manual_debug_scan_debug_dir_only() {
     // Disabled by default to avoid accidental scans of private media.
     if std::env::var("MFB_RUN_DEBUG_SCAN").is_err() {
@@ -120,7 +121,9 @@ fn manual_debug_scan_debug_dir_only() {
         }
 
         for idx in picks {
-            let p = undecided.get(idx).unwrap_or_else(|| panic!("missing index {idx}"));
+            let p = undecided
+                .get(idx)
+                .unwrap_or_else(|| panic!("missing index {idx}"));
             eprintln!("--- Deep sample: {}", p.display());
             if let Some(meta) = shared_utils::loop_intent::LoopMeta::from_gif_path(p) {
                 let verdict =

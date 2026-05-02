@@ -32,7 +32,10 @@ mod tests {
     fn test_zero_byte_file_handling() {
         // Poison Pill: 0-byte file that should NOT cause a crash or hang
         let input = get_edge_file("poison_pill_zero_byte.jpg");
-        let output_file = tempfile::Builder::new().suffix(".jxl").tempfile().unwrap_or_else(|e| panic!("error: {e:?}"));
+        let output_file = tempfile::Builder::new()
+            .suffix(".jxl")
+            .tempfile()
+            .unwrap_or_else(|e| panic!("error: {e:?}"));
         let output = output_file.path();
 
         let result = run_imagemagick_cjxl_pipeline(ModeLockedImagemagickCjxlPipelineRequest {
@@ -66,7 +69,10 @@ mod tests {
     fn test_trailing_space_path_loading() {
         // Poison Pill: Filename with trailing space handled via safe_path_arg
         let input = get_edge_file("poison_pill_trailing_space.jpg ");
-        let output_file = tempfile::Builder::new().suffix(".jxl").tempfile().unwrap_or_else(|e| panic!("error: {e:?}"));
+        let output_file = tempfile::Builder::new()
+            .suffix(".jxl")
+            .tempfile()
+            .unwrap_or_else(|e| panic!("error: {e:?}"));
         let output = output_file.path();
 
         // This test ensures the pipeline can at least attempt to call magick on a file with spaces

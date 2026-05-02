@@ -58,7 +58,8 @@ fn print_inference_summary(conn: &mut postgres::Client) -> Result<()> {
 
     println!("   Total inferences logged: {}", summary.total_records);
     let permille = {
-        let ratio = rug::Rational::from(summary.layer7_fallback_count) / rug::Rational::from(summary.total_records.max(1));
+        let ratio = rug::Rational::from(summary.layer7_fallback_count)
+            / rug::Rational::from(summary.total_records.max(1));
         let res: rug::Rational = ratio * rug::Rational::from(10_000);
         res.to_f64()
     };
@@ -126,10 +127,10 @@ fn print_discriminative_power(conn: &mut postgres::Client) -> Result<()> {
     for f in &features {
         let strong_str = f
             .mean_loop_strong
-            .map_or("   N/A".to_string(), |v| format!("{v:>12.4}"));
+            .map_or_else(|| "   N/A".to_string(), |v| format!("{v:>12.4}"));
         let weak_str = f
             .mean_loop_weak
-            .map_or("   N/A".to_string(), |v| format!("{v:>12.4}"));
+            .map_or_else(|| "   N/A".to_string(), |v| format!("{v:>12.4}"));
 
         let indicator = if f.discriminative_power.abs() > 0.5 {
             "★"
@@ -201,7 +202,7 @@ fn print_blind_spots(conn: &mut postgres::Client) -> Result<()> {
         let layer = spot.example_layer_exit.as_deref().unwrap_or("?");
         let avg_final = spot
             .avg_final_probability
-            .map_or("N/A".to_string(), |v| format!("{v:.3}"));
+            .map_or_else(|| "N/A".to_string(), |v| format!("{v:.3}"));
         println!(
             "   {:<12.0} {:<12.0} {:>10.3} {:>10} {:>8} {}",
             spot.duration_bucket,

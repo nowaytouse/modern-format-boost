@@ -146,12 +146,7 @@ impl SourceCodec {
     pub const fn can_be_animated(&self) -> bool {
         matches!(
             self,
-            Self::Gif
-                | Self::Apng
-                | Self::WebpAnimated
-                | Self::Avif
-                | Self::Heic
-                | Self::JpegXl
+            Self::Gif | Self::Apng | Self::WebpAnimated | Self::Avif | Self::Heic | Self::JpegXl
         )
     }
 
@@ -222,7 +217,8 @@ impl SourceCodec {
     pub const fn supported_video_extensions() -> &'static [&'static str] {
         &[
             "mp4", "mov", "avi", "mkv", "webm", "m4v", "wmv", "flv", "mpg", "mpeg", "ts", "mts",
-            "m2ts", "m2v", "3gp", "3g2", "ogv", "f4v", "asf", "gif", "webp", "avif", "heic", "heif", "apng", "png", "jxl",
+            "m2ts", "m2v", "3gp", "3g2", "ogv", "f4v", "asf", "gif", "webp", "avif", "heic",
+            "heif", "apng", "png", "jxl",
         ]
     }
 
@@ -416,24 +412,23 @@ impl SourceCodec {
         }
 
         // 2. RIFF Containers (WebP, AVI)
-        if header.starts_with(b"RIFF")
-            && header.len() >= 12 {
-                let brand = header.get(8..12).unwrap_or(&[]);
-                if brand == b"WEBP" {
-                    // Check for VP8X extended header which contains the animation flag
-                    if header.len() >= 21 && header.get(12..16) == Some(b"VP8X") {
-                        // The animation flag is the 2nd bit of the flags byte at offset 20
-                        let flags = *header.get(20).unwrap_or(&0);
-                        if (flags & 0x02) != 0 {
-                            return Some(Self::WebpAnimated);
-                        }
+        if header.starts_with(b"RIFF") && header.len() >= 12 {
+            let brand = header.get(8..12).unwrap_or(&[]);
+            if brand == b"WEBP" {
+                // Check for VP8X extended header which contains the animation flag
+                if header.len() >= 21 && header.get(12..16) == Some(b"VP8X") {
+                    // The animation flag is the 2nd bit of the flags byte at offset 20
+                    let flags = *header.get(20).unwrap_or(&0);
+                    if (flags & 0x02) != 0 {
+                        return Some(Self::WebpAnimated);
                     }
-                    return Some(Self::WebpStatic);
                 }
-                if brand == b"AVI " {
-                    return Some(Self::Mpeg4); // AVI often contains MPEG4 variants
-                }
+                return Some(Self::WebpStatic);
             }
+            if brand == b"AVI " {
+                return Some(Self::Mpeg4); // AVI often contains MPEG4 variants
+            }
+        }
 
         // 3. ISO Base Media File Format (MP4, MOV, HEIC, AVIF)
         // [Any 4 bytes] + "ftyp"
@@ -1014,7 +1009,8 @@ fn calculate_raw_bpp(analysis: &QualityAnalysis, pixels: u64) -> Result<f64, Str
         if video_bitrate > 0 {
             if let Some(fps) = analysis.fps {
                 if fps > 0.0 {
-                    let bits_per_frame = Rational::from(video_bitrate) / crate::numeric_cast::f64_to_rational_loud(fps, 1, "fps");
+                    let bits_per_frame = Rational::from(video_bitrate)
+                        / crate::numeric_cast::f64_to_rational_loud(fps, 1, "fps");
                     return Ok((bits_per_frame / Rational::from(pixels)).to_f64());
                 }
             }
@@ -1041,7 +1037,8 @@ fn calculate_raw_bpp(analysis: &QualityAnalysis, pixels: u64) -> Result<f64, Str
         }
         // BPP = bits per pixel; file_size is in bytes so multiply by 8
         return Ok(((Rational::from(analysis.file_size) * Rational::from(8))
-            / Rational::from(pixels)).to_f64());
+            / Rational::from(pixels))
+        .to_f64());
     }
 
     Err("❌ Cannot calculate bpp: no video_bitrate, file_size, or bpp provided".to_string())
@@ -1068,21 +1065,18 @@ fn calculate_gop_factor(gop_size: Option<u32>, b_frames: u8) -> f64 {
 }
 
 fn calculate_chroma_factor(pix_fmt: Option<&str>) -> f64 {
-    match pix_fmt {
-        Some(fmt) => {
-            let fmt_lower = fmt.to_lowercase();
-            if fmt_lower.contains("444") {
-                1.15
-            } else if fmt_lower.contains("422") {
-                1.05
-            } else if fmt_lower.contains("rgb") || fmt_lower.contains("gbr") {
-                1.20
-            } else {
-                1.0
-            }
+    pix_fmt.map_or(1.0, |fmt| {
+        let fmt_lower = fmt.to_lowercase();
+        if fmt_lower.contains("444") {
+            1.15
+        } else if fmt_lower.contains("422") {
+            1.05
+        } else if fmt_lower.contains("rgb") || fmt_lower.contains("gbr") {
+            1.20
+        } else {
+            1.0
         }
-        None => 1.0,
-    }
+    })
 }
 
 fn calculate_hdr_factor(is_hdr: Option<bool>, color_space: Option<&str>) -> f64 {
@@ -3508,7 +3502,8 @@ mod content_id_tests {
     use tempfile::NamedTempFile;
 
     fn create_temp_with_content(content: &[u8]) -> NamedTempFile {
-        let mut file = NamedTempFile::new().unwrap_or_else(|e| panic!("Failed to create temp file: {e}"));
+        let mut file =
+            NamedTempFile::new().unwrap_or_else(|e| panic!("Failed to create temp file: {e}"));
         file.write_all(content)
             .unwrap_or_else(|e| panic!("Failed to write to temp file: {e}"));
         file
@@ -3518,7 +3513,8 @@ mod content_id_tests {
     fn test_identify_jpeg() {
         let file =
             create_temp_with_content(&[0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, b'J', b'F', b'I', b'F']);
-        let codec = SourceCodec::identify_by_content(file.path()).unwrap_or_else(|| panic!("Should identify JPEG"));
+        let codec = SourceCodec::identify_by_content(file.path())
+            .unwrap_or_else(|| panic!("Should identify JPEG"));
         assert_eq!(codec, SourceCodec::Jpeg);
         assert!(codec.is_extension_compatible("jpg"));
         assert!(codec.is_extension_compatible("jpeg"));
@@ -3528,7 +3524,8 @@ mod content_id_tests {
     #[test]
     fn test_identify_png() {
         let file = create_temp_with_content(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
-        let codec = SourceCodec::identify_by_content(file.path()).unwrap_or_else(|| panic!("Should identify PNG"));
+        let codec = SourceCodec::identify_by_content(file.path())
+            .unwrap_or_else(|| panic!("Should identify PNG"));
         assert_eq!(codec, SourceCodec::Png);
         assert!(codec.is_extension_compatible("png"));
     }
@@ -3550,7 +3547,8 @@ mod content_id_tests {
         let file = create_temp_with_content(&[
             0x00, 0x00, 0x00, 0x1C, b'f', b't', b'y', b'p', b'h', b'e', b'i', b'c',
         ]);
-        let codec = SourceCodec::identify_by_content(file.path()).unwrap_or_else(|| panic!("Should identify HEIC"));
+        let codec = SourceCodec::identify_by_content(file.path())
+            .unwrap_or_else(|| panic!("Should identify HEIC"));
         assert_eq!(codec, SourceCodec::Heic);
         assert!(codec.is_extension_compatible("heic"));
     }
@@ -3558,8 +3556,8 @@ mod content_id_tests {
     #[test]
     fn test_identify_mkv() {
         let file = create_temp_with_content(&[0x1A, 0x45, 0xDF, 0xA3, 0x01, 0x00, 0x00, 0x00]);
-        let codec =
-            SourceCodec::identify_by_content(file.path()).unwrap_or_else(|| panic!("Should identify EBML/MKV"));
+        let codec = SourceCodec::identify_by_content(file.path())
+            .unwrap_or_else(|| panic!("Should identify EBML/MKV"));
         assert_eq!(codec, SourceCodec::Av1); // MKV catch-all
         assert!(codec.is_extension_compatible("mkv"));
         assert!(codec.is_extension_compatible("webm"));
@@ -3568,10 +3566,12 @@ mod content_id_tests {
     #[test]
     fn test_mismatch_extension_correction() {
         // Create a PNG file but name it .jpg
-        let temp_dir = tempfile::tempdir().unwrap_or_else(|e| panic!("Failed to create temp dir: {e:?}"));
+        let temp_dir =
+            tempfile::tempdir().unwrap_or_else(|e| panic!("Failed to create temp dir: {e:?}"));
         let png_as_jpg = temp_dir.path().join("image.jpg");
         {
-            let mut file = std::fs::File::create(&png_as_jpg).unwrap_or_else(|e| panic!("Failed to create file: {e:?}"));
+            let mut file = std::fs::File::create(&png_as_jpg)
+                .unwrap_or_else(|e| panic!("Failed to create file: {e:?}"));
             file.write_all(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
                 .unwrap_or_else(|e| panic!("Failed to write PNG header: {e:?}"));
         }

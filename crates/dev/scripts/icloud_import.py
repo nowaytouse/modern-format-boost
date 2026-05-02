@@ -139,13 +139,13 @@ def select_import_mode():
 
 def strip_folder_suffix(folder_name):
     """Remove _optimized, _collected, and their combinations from folder name.
-    
+
     Handles all possible combinations:
     - _optimized_collected
     - _collected_optimized
     - _optimized
     - _collected
-    
+
     Returns the cleaned folder name.
     """
     # Remove all possible suffix combinations
@@ -155,11 +155,11 @@ def strip_folder_suffix(folder_name):
         "_optimized",
         "_collected",
     ]
-    
+
     cleaned = folder_name
     for suffix in suffixes_to_remove:
         cleaned = cleaned.removesuffix(suffix)
-    
+
     return cleaned
 
 

@@ -364,31 +364,21 @@ fn run_imagemagick_cjxl_pipeline_with_effort(
     let magick_status = magick_proc.wait();
     let cjxl_status = cjxl_proc.wait();
 
-    let magick_stderr = match magick_stderr_thread {
-        Some(handle) => {
-            if let Ok(stderr) = handle.join() {
-                stderr
-            } else {
-                crate::log_rare_error!(
-                    "Background Thread",
-                    "ImageMagick stderr capture thread panicked"
-                );
-                String::new()
-            }
-        }
-        None => String::new(),
-    };
-    let cjxl_stderr = match cjxl_stderr_thread {
-        Some(handle) => {
-            if let Ok(stderr) = handle.join() {
-                stderr
-            } else {
-                crate::log_rare_error!("Background Thread", "cjxl stderr capture thread panicked");
-                String::new()
-            }
-        }
-        None => String::new(),
-    };
+    let magick_stderr = magick_stderr_thread.map_or_else(String::new, |handle| {
+        handle.join().unwrap_or_else(|_| {
+            crate::log_rare_error!(
+                "Background Thread",
+                "ImageMagick stderr capture thread panicked"
+            );
+            String::new()
+        })
+    });
+    let cjxl_stderr = cjxl_stderr_thread.map_or_else(String::new, |handle| {
+        handle.join().unwrap_or_else(|_| {
+            crate::log_rare_error!("Background Thread", "cjxl stderr capture thread panicked");
+            String::new()
+        })
+    });
 
     let magick_ok = match magick_status {
         Ok(status) if status.success() => true,

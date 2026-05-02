@@ -79,14 +79,16 @@ pub fn magick_safe_path(path: &Path) -> Cow<'_, str> {
     // 1. Relativize first to bypass the '/Users' bug and avoid delegates
     let rel_string: Cow<'_, str> = if path.is_relative() {
         path.to_string_lossy()
-    } else if let Ok(cwd) = std::env::current_dir() {
-        if let Ok(rel) = path.strip_prefix(&cwd) {
-            rel.to_string_lossy().into_owned().into()
-        } else {
-            path.to_string_lossy()
-        }
     } else {
-        path.to_string_lossy()
+        std::env::current_dir().map_or_else(
+            |_| path.to_string_lossy(),
+            |cwd| {
+                path.strip_prefix(cwd).map_or_else(
+                    |_| path.to_string_lossy(),
+                    |rel| Cow::Owned(rel.to_string_lossy().into_owned()),
+                )
+            },
+        )
     };
 
     // 2. Perform property escaping (%%) on the chosen string

@@ -377,27 +377,26 @@ pub fn detect_video_with_cache(
     path: &Path,
     cache: Option<&crate::analysis_cache::AnalysisCache>,
 ) -> Result<VideoDetectionResult, FFprobeError> {
-    let should_refresh_cached_result =
-        |cached: &VideoDetectionResult| -> bool {
-            if cached.frame_count > 1 {
-                return false;
-            }
+    let should_refresh_cached_result = |cached: &VideoDetectionResult| -> bool {
+        if cached.frame_count > 1 {
+            return false;
+        }
 
-            // Root fix: invalidate stale WebP cache entries produced by old ffprobe-only logic.
-            // Some animated WebP files were previously cached as single-frame static.
-            let Ok(format) = crate::image_detection::detect_format_from_bytes(path) else {
-                return false;
-            };
-            if !matches!(format, crate::image_detection::DetectedFormat::WebP) {
-                return false;
-            }
-            let Ok((is_animated, native_frames, _)) =
-                crate::image_detection::detect_animation(path, &format)
-            else {
-                return false;
-            };
-            is_animated && native_frames > 1
+        // Root fix: invalidate stale WebP cache entries produced by old ffprobe-only logic.
+        // Some animated WebP files were previously cached as single-frame static.
+        let Ok(format) = crate::image_detection::detect_format_from_bytes(path) else {
+            return false;
         };
+        if !matches!(format, crate::image_detection::DetectedFormat::WebP) {
+            return false;
+        }
+        let Ok((is_animated, native_frames, _)) =
+            crate::image_detection::detect_animation(path, &format)
+        else {
+            return false;
+        };
+        is_animated && native_frames > 1
+    };
 
     if let Some(cache) = cache {
         match cache.get_video_analysis(path) {
@@ -477,7 +476,7 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
     let color_space = probe
         .color_space
         .as_ref()
-        .map_or(ColorSpace::Unknown("unknown".to_string()), |s| {
+        .map_or_else(|| ColorSpace::Unknown("unknown".to_string()), |s| {
             ColorSpace::parse(s)
         });
 
@@ -621,13 +620,10 @@ fn extract_video_precision(
     };
 
     // Prioritize explicit encoder_settings (x264-params/x265-params) over generic tags
-    let search_string = if let Some(settings) = encoder_settings {
-        settings.to_string()
-    } else if let Some(comment) = tags.get("comment") {
-        comment.clone()
-    } else {
-        String::new()
-    };
+    let search_string = encoder_settings.map_or_else(
+        || tags.get("comment").cloned().unwrap_or_default(),
+        std::string::ToString::to_string,
+    );
 
     if !search_string.is_empty() {
         let lower = search_string.to_lowercase();

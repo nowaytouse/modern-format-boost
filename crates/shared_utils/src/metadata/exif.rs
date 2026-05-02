@@ -565,10 +565,12 @@ mod tests {
         let src_path = temp.path().join(evil_name);
 
         // Create an actual image file with these characters
-        fs::write(&src_path, [0xFF, 0xD8, 0xFF, 0xDB, 0x00, 0x00]).unwrap_or_else(|e| panic!("error: {e:?}"));
+        fs::write(&src_path, [0xFF, 0xD8, 0xFF, 0xDB, 0x00, 0x00])
+            .unwrap_or_else(|e| panic!("error: {e:?}"));
 
         let dst_path = temp.path().join("output.jpg");
-        fs::write(&dst_path, [0xFF, 0xD8, 0xFF, 0xDB, 0x00, 0x00]).unwrap_or_else(|e| panic!("error: {e:?}"));
+        fs::write(&dst_path, [0xFF, 0xD8, 0xFF, 0xDB, 0x00, 0x00])
+            .unwrap_or_else(|e| panic!("error: {e:?}"));
 
         let result = preserve_internal_metadata(&src_path, &dst_path);
 

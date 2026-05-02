@@ -1,3 +1,4 @@
+#![allow(clippy::too_many_lines)]
 //! vid - Video Quality Analysis and HEVC/H.265/AV1 Conversion API
 //!
 //! Provides precise video analysis with intelligent format conversion:

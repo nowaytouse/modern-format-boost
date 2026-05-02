@@ -184,9 +184,18 @@ mod tests {
 
         assert!(mapping.has_enough_points());
 
-        assert!((mapping.predict_ssim(40.0).unwrap_or_else(|| panic!("missing predicted value")) - 0.95).abs() < 0.001);
+        assert!(
+            (mapping
+                .predict_ssim(40.0)
+                .unwrap_or_else(|| panic!("missing predicted value"))
+                - 0.95)
+                .abs()
+                < 0.001
+        );
 
-        let predicted = mapping.predict_ssim(35.0).unwrap_or_else(|| panic!("missing predicted value"));
+        let predicted = mapping
+            .predict_ssim(35.0)
+            .unwrap_or_else(|| panic!("missing predicted value"));
         assert!((predicted - 0.925).abs() < 0.001);
     }
 
@@ -207,7 +216,19 @@ mod tests {
         mapping.update(30.2, 0.91);
 
         assert_eq!(mapping.len(), 1);
-        assert!((mapping.get_points().first().unwrap_or(&MappingPoint { psnr: 0.0, ssim: 0.0 }).ssim - 0.91).abs() < 0.001);
+        assert!(
+            (mapping
+                .get_points()
+                .first()
+                .unwrap_or(&MappingPoint {
+                    psnr: 0.0,
+                    ssim: 0.0
+                })
+                .ssim
+                - 0.91)
+                .abs()
+                < 0.001
+        );
     }
 
     #[test]
@@ -217,7 +238,19 @@ mod tests {
         mapping.insert(30.0, 0.92);
 
         assert_eq!(mapping.len(), 1);
-        assert!((mapping.get_points().first().unwrap_or(&MappingPoint { psnr: 0.0, ssim: 0.0 }).ssim - 0.92).abs() < 0.001);
+        assert!(
+            (mapping
+                .get_points()
+                .first()
+                .unwrap_or(&MappingPoint {
+                    psnr: 0.0,
+                    ssim: 0.0
+                })
+                .ssim
+                - 0.92)
+                .abs()
+                < 0.001
+        );
     }
 
     #[test]
@@ -235,7 +268,9 @@ mod tests {
             ],
         };
 
-        let predicted = mapping.predict_ssim(35.0).unwrap_or_else(|| panic!("prediction should exist"));
+        let predicted = mapping
+            .predict_ssim(35.0)
+            .unwrap_or_else(|| panic!("prediction should exist"));
         assert!(predicted.is_finite());
         assert!((predicted - 0.92).abs() < 0.001);
     }

@@ -174,6 +174,36 @@ def scan_xmp_ref(media_path: Path, target_xmp: str) -> bool:
         return False
 
 
+def extract_batch_doc_ids(media_paths: list[Path]) -> dict[str, str]:
+    """Batch extract DocumentID from multiple files using exiftool."""
+    if not media_paths:
+        return {}
+    cmd = [
+        "exiftool",
+        "-j",
+        "-DocumentID",
+        "-charset",
+        "filename=utf8",
+        "-api",
+        "windowsunicode=1",
+    ] + [str(p) for p in media_paths]
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        if res.returncode != 0:
+            return {}
+        import json
+
+        data = json.loads(res.stdout)
+        # ExifTool SourceFile might use forward slashes even on Windows, or backslashes.
+        # We'll normalize to absolute paths for comparison.
+        return {
+            str(Path(item["SourceFile"]).resolve()): item.get("DocumentID", "")
+            for item in data
+        }
+    except Exception:
+        return {}
+
+
 def find_media_match(xmp_path: Path) -> tuple[Path | None, str]:
     parent = xmp_path.parent
     xmp_name = xmp_path.name
@@ -220,8 +250,9 @@ def find_media_match(xmp_path: Path) -> tuple[Path | None, str]:
     # Strategy 4: DocumentID
     if xmp_info.doc_id and is_uuid_format(xmp_stem):
         print(f"  🔍 Searching by DocumentID: {xmp_info.doc_id}")
+        doc_ids = extract_batch_doc_ids(candidates)
         for p in candidates:
-            if extract_media_doc_id(p) == xmp_info.doc_id:
+            if doc_ids.get(str(p.resolve())) == xmp_info.doc_id:
                 return p, "DocumentID match"
 
     # Strategy 5: Fuzzy match (alphanumeric only)

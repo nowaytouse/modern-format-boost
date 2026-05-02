@@ -123,7 +123,7 @@ impl MediaIndex {
                 i64::from(row.width),
                 i64::from(row.height),
                 row.format,
-                row.file_size as i64,
+                row.file_size.cast_signed(),
                 row.has_hdr,
                 row.has_alpha,
                 row.duration,

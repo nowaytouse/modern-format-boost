@@ -552,7 +552,10 @@ fn is_display_p3(data: &[u8]) -> bool {
         if colr_data.len() >= 11 && colr_data.get(0..4) == Some(b"nclx") {
             // flavour: nclx
             // colour_primaries: bytes 8-9 (u16 BE)
-            let primaries = u16::from_be_bytes([*colr_data.get(8).unwrap_or(&0), *colr_data.get(9).unwrap_or(&0)]);
+            let primaries = u16::from_be_bytes([
+                *colr_data.get(8).unwrap_or(&0),
+                *colr_data.get(9).unwrap_or(&0),
+            ]);
             return primaries == 12; // 12 = Display P3, 1 = Rec.709/sRGB
         }
     }
@@ -591,7 +594,7 @@ fn parse_gainmap_from_xmp(xmp_data: &[u8]) -> Option<GainMapParams> {
                 // 1. Check Attributes (Common for Google/Samsung/ISO)
                 for attr in e.attributes().flatten() {
                     let local_name = attr.key.local_name();
-                    
+
                     // Zero-copy attribute parsing
                     if let Ok(attr_val_cow) = attr.normalized_value(XmlVersion::V1_0) {
                         if let Ok(f) = attr_val_cow.parse::<f32>() {
@@ -605,10 +608,14 @@ fn parse_gainmap_from_xmp(xmp_data: &[u8]) -> Option<GainMapParams> {
                             } else if name_bytes.windows(5).any(|w| w == b"Gamma") {
                                 params.gamma = f;
                                 found_any = true;
-                            } else if name_bytes.windows(9).any(|w| w == b"OffsetSDR") || name_bytes.windows(9).any(|w| w == b"OffsetSdr") {
+                            } else if name_bytes.windows(9).any(|w| w == b"OffsetSDR")
+                                || name_bytes.windows(9).any(|w| w == b"OffsetSdr")
+                            {
                                 params.offset_sdr = f;
                                 found_any = true;
-                            } else if name_bytes.windows(9).any(|w| w == b"OffsetHDR") || name_bytes.windows(9).any(|w| w == b"OffsetHdr") {
+                            } else if name_bytes.windows(9).any(|w| w == b"OffsetHDR")
+                                || name_bytes.windows(9).any(|w| w == b"OffsetHdr")
+                            {
                                 params.offset_hdr = f;
                                 found_any = true;
                             }
@@ -638,7 +645,9 @@ fn parse_gainmap_from_xmp(xmp_data: &[u8]) -> Option<GainMapParams> {
                             }
                         }
                     }
-                } else if name_ref.windows(9).any(|w| w == b"OffsetSDR") || name_ref.windows(9).any(|w| w == b"OffsetSdr") {
+                } else if name_ref.windows(9).any(|w| w == b"OffsetSDR")
+                    || name_ref.windows(9).any(|w| w == b"OffsetSdr")
+                {
                     if let Ok(val) = reader.read_text(name_bytes) {
                         if let Ok(text_cow) = reader.decoder().decode(val.as_ref()) {
                             if let Ok(f) = text_cow.parse::<f32>() {
@@ -647,7 +656,9 @@ fn parse_gainmap_from_xmp(xmp_data: &[u8]) -> Option<GainMapParams> {
                             }
                         }
                     }
-                } else if name_ref.windows(9).any(|w| w == b"OffsetHDR") || name_ref.windows(9).any(|w| w == b"OffsetHdr") {
+                } else if name_ref.windows(9).any(|w| w == b"OffsetHDR")
+                    || name_ref.windows(9).any(|w| w == b"OffsetHdr")
+                {
                     if let Ok(val) = reader.read_text(name_bytes) {
                         if let Ok(text_cow) = reader.decoder().decode(val.as_ref()) {
                             if let Ok(f) = text_cow.parse::<f32>() {
@@ -694,13 +705,17 @@ pub fn synthesize_hdr(
     use image::GenericImageView;
     let (width, height) = sdr.dimensions();
 
-    let gain_resized: DynamicImage = if gain.dimensions() == (width, height) {
-        gain.clone()
+    let gain_resized_storage: DynamicImage;
+    let gain_resized: &DynamicImage = if gain.dimensions() == (width, height) {
+        gain
     } else {
-        gain.resize_exact(width, height, image::imageops::FilterType::Triangle)
+        gain_resized_storage =
+            gain.resize_exact(width, height, image::imageops::FilterType::Triangle);
+        &gain_resized_storage
     };
 
-    let mut hdr_pixels = Vec::with_capacity(usize::try_from(width * height * 3).unwrap_or(0));
+    let total_pixels = (width * height * 3) as usize;
+    let mut hdr_pixels = vec![0.0f32; total_pixels];
 
     // Get typed buffers to avoid scale-to-u8 bug in GenericImageView::get_pixel
     let sdr_8 = if sdr.color().bits_per_pixel() <= 24 {
@@ -739,24 +754,32 @@ pub fn synthesize_hdr(
 
     for y in 0..height {
         for x in 0..width {
+            let idx = ((y * width + x) * 3) as usize;
             // 1. Get Normalized SDR (Linearized later)
-            let (r_norm, g_norm, b_norm) = if let Some(buf) = sdr_16.as_ref() {
-                let p = <image::ImageBuffer<image::Rgb<u16>, Vec<u16>>>::get_pixel(buf, x, y);
-                (
-                    f32::from(p.0[0]) / 65535.0,
-                    f32::from(p.0[1]) / 65535.0,
-                    f32::from(p.0[2]) / 65535.0,
-                )
-            } else if let Some(buf) = sdr_8.as_ref() {
-                let p = <image::ImageBuffer<image::Rgb<u8>, Vec<u8>>>::get_pixel(buf, x, y);
-                (
-                    f32::from(p.0[0]) / 255.0,
-                    f32::from(p.0[1]) / 255.0,
-                    f32::from(p.0[2]) / 255.0,
-                )
-            } else {
-                unreachable!("SDR buffer type mismatch");
-            };
+            let (r_norm, g_norm, b_norm) = sdr_16.as_ref().map_or_else(
+                || {
+                    sdr_8.as_ref().map_or_else(
+                        || unreachable!("SDR buffer type mismatch"),
+                        |buf| {
+                            let p =
+                                <image::ImageBuffer<image::Rgb<u8>, Vec<u8>>>::get_pixel(buf, x, y);
+                            (
+                                f32::from(p.0[0]) / 255.0,
+                                f32::from(p.0[1]) / 255.0,
+                                f32::from(p.0[2]) / 255.0,
+                            )
+                        },
+                    )
+                },
+                |buf| {
+                    let p = <image::ImageBuffer<image::Rgb<u16>, Vec<u16>>>::get_pixel(buf, x, y);
+                    (
+                        f32::from(p.0[0]) / 65535.0,
+                        f32::from(p.0[1]) / 65535.0,
+                        f32::from(p.0[2]) / 65535.0,
+                    )
+                },
+            );
 
             // SDR to Linear (sRGB/Rec.709 Transfer function)
             let r_lin = srgb_to_linear(r_norm);
@@ -774,34 +797,54 @@ pub fn synthesize_hdr(
 
             let gain_channels = gain_resized.color().channel_count();
             let (gain_r, gain_g, gain_b) = if gain_channels >= 3 {
-                if let Some(buf) = gain_rgb16.as_ref() {
-                    let p = <image::ImageBuffer<image::Rgb<u16>, Vec<u16>>>::get_pixel(buf, x, y);
-                    (
-                        apply_gain(f32::from(p.0[0]), 65535.0),
-                        apply_gain(f32::from(p.0[1]), 65535.0),
-                        apply_gain(f32::from(p.0[2]), 65535.0),
-                    )
-                } else if let Some(buf) = gain_rgb8.as_ref() {
-                    let p = <image::ImageBuffer<image::Rgb<u8>, Vec<u8>>>::get_pixel(buf, x, y);
-                    (
-                        apply_gain(f32::from(p.0[0]), 255.0),
-                        apply_gain(f32::from(p.0[1]), 255.0),
-                        apply_gain(f32::from(p.0[2]), 255.0),
-                    )
-                } else {
-                    let g_val = apply_gain(128.0, 255.0);
-                    (g_val, g_val, g_val)
-                }
+                gain_rgb16.as_ref().map_or_else(
+                    || {
+                        gain_rgb8.as_ref().map_or_else(
+                            || {
+                                let g_val = apply_gain(128.0, 255.0);
+                                (g_val, g_val, g_val)
+                            },
+                            |buf| {
+                                let p = <image::ImageBuffer<image::Rgb<u8>, Vec<u8>>>::get_pixel(
+                                    buf, x, y,
+                                );
+                                (
+                                    apply_gain(f32::from(p.0[0]), 255.0),
+                                    apply_gain(f32::from(p.0[1]), 255.0),
+                                    apply_gain(f32::from(p.0[2]), 255.0),
+                                )
+                            },
+                        )
+                    },
+                    |buf| {
+                        let p =
+                            <image::ImageBuffer<image::Rgb<u16>, Vec<u16>>>::get_pixel(buf, x, y);
+                        (
+                            apply_gain(f32::from(p.0[0]), 65535.0),
+                            apply_gain(f32::from(p.0[1]), 65535.0),
+                            apply_gain(f32::from(p.0[2]), 65535.0),
+                        )
+                    },
+                )
             } else {
-                let g_val = if let Some(buf) = gain_16.as_ref() {
-                    let p = <image::ImageBuffer<image::Luma<u16>, Vec<u16>>>::get_pixel(buf, x, y);
-                    apply_gain(f32::from(p.0[0]), 65535.0)
-                } else if let Some(buf) = gain_8.as_ref() {
-                    let p = <image::ImageBuffer<image::Luma<u8>, Vec<u8>>>::get_pixel(buf, x, y);
-                    apply_gain(f32::from(p.0[0]), 255.0)
-                } else {
-                    apply_gain(128.0, 255.0)
-                };
+                let g_val = gain_16.as_ref().map_or_else(
+                    || {
+                        gain_8.as_ref().map_or_else(
+                            || apply_gain(128.0, 255.0),
+                            |buf| {
+                                let p = <image::ImageBuffer<image::Luma<u8>, Vec<u8>>>::get_pixel(
+                                    buf, x, y,
+                                );
+                                apply_gain(f32::from(p.0[0]), 255.0)
+                            },
+                        )
+                    },
+                    |buf| {
+                        let p =
+                            <image::ImageBuffer<image::Luma<u16>, Vec<u16>>>::get_pixel(buf, x, y);
+                        apply_gain(f32::from(p.0[0]), 65535.0)
+                    },
+                );
                 (g_val, g_val, g_val)
             };
 
@@ -818,13 +861,13 @@ pub fn synthesize_hdr(
                 let b_srgb =
                     1.0983f32.mul_add(b_hdr, (-0.0197f32).mul_add(r_hdr, -(0.0786 * g_hdr)));
 
-                hdr_pixels.push(r_srgb.max(0.0));
-                hdr_pixels.push(g_srgb.max(0.0));
-                hdr_pixels.push(b_srgb.max(0.0));
+                hdr_pixels[idx] = r_srgb.max(0.0);
+                hdr_pixels[idx + 1] = g_srgb.max(0.0);
+                hdr_pixels[idx + 2] = b_srgb.max(0.0);
             } else {
-                hdr_pixels.push(r_hdr.max(0.0));
-                hdr_pixels.push(g_hdr.max(0.0));
-                hdr_pixels.push(b_hdr.max(0.0));
+                hdr_pixels[idx] = r_hdr.max(0.0);
+                hdr_pixels[idx + 1] = g_hdr.max(0.0);
+                hdr_pixels[idx + 2] = b_hdr.max(0.0);
             }
         }
     }
@@ -904,9 +947,15 @@ fn write_png16(pixels: &[f32], width: u32, height: u32, path: &Path) -> Result<(
 
     for (x, y, pixel) in buffer.enumerate_pixels_mut() {
         let idx = usize::try_from(y * width + x).unwrap_or(0) * 3;
-        let r = crate::numeric_cast::f32_to_u16_sat(linear_to_pq(*pixels.get(idx).unwrap_or(&0.0)) * 65535.0);
-        let g = crate::numeric_cast::f32_to_u16_sat(linear_to_pq(*pixels.get(idx + 1).unwrap_or(&0.0)) * 65535.0);
-        let b = crate::numeric_cast::f32_to_u16_sat(linear_to_pq(*pixels.get(idx + 2).unwrap_or(&0.0)) * 65535.0);
+        let r = crate::numeric_cast::f32_to_u16_sat(
+            linear_to_pq(*pixels.get(idx).unwrap_or(&0.0)) * 65535.0,
+        );
+        let g = crate::numeric_cast::f32_to_u16_sat(
+            linear_to_pq(*pixels.get(idx + 1).unwrap_or(&0.0)) * 65535.0,
+        );
+        let b = crate::numeric_cast::f32_to_u16_sat(
+            linear_to_pq(*pixels.get(idx + 2).unwrap_or(&0.0)) * 65535.0,
+        );
         *pixel = Rgb([r, g, b]);
     }
 
@@ -982,7 +1031,8 @@ mod tests {
                 </rdf:RDF>
             </xmpmeta>
         "#;
-        let params = parse_gainmap_from_xmp(xmp.as_bytes()).unwrap_or_else(|| panic!("failed to parse gainmap"));
+        let params = parse_gainmap_from_xmp(xmp.as_bytes())
+            .unwrap_or_else(|| panic!("failed to parse gainmap"));
         assert!(crate::float_compare::approx_eq_f64(
             f64::from(params.gain_map_max),
             3.0
@@ -1016,7 +1066,8 @@ mod tests {
                 </rdf:RDF>
             </xmpmeta>
         "#;
-        let params = parse_gainmap_from_xmp(xmp.as_bytes()).unwrap_or_else(|| panic!("failed to parse gainmap"));
+        let params = parse_gainmap_from_xmp(xmp.as_bytes())
+            .unwrap_or_else(|| panic!("failed to parse gainmap"));
         assert!(crate::float_compare::approx_eq_f64(
             f64::from(params.gain_map_max),
             4.5

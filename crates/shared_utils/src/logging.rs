@@ -209,12 +209,20 @@ impl Write for RunLogWriter {
             .lock()
             .map_err(|e| io::Error::other(e.to_string()))?;
         buffer.extend_from_slice(buf);
+        let mut lines_to_process = Vec::new();
         while let Some(i) = buffer.iter().position(|&b| b == b'\n') {
             let line: Vec<u8> = buffer.drain(..=i).collect();
+            lines_to_process.push(line);
+        }
+        drop(buffer);
+
+        for line in lines_to_process {
             let line_str = String::from_utf8_lossy(&line);
             let stripped = strip_ansi_str(line_str.trim_end_matches('\n'));
             let guard = RUN_LOG_FORWARDER.lock().unwrap_or_else(|err| {
-                eprintln!("⚠️ [Logging] run-log forwarder mutex was poisoned during write; recovering state");
+                eprintln!(
+                    "⚠️ [Logging] run-log forwarder mutex was poisoned during write; recovering state"
+                );
                 err.into_inner()
             });
             if let Some(ref f) = *guard {
@@ -242,6 +250,7 @@ impl Write for RunLogWriter {
             }
             buffer.clear();
         }
+        drop(buffer);
         Ok(())
     }
 }
@@ -333,6 +342,7 @@ impl<W: Write + Send> StripAnsiWriter<W> {
             .lock()
             .map_err(|e| io::Error::other(e.to_string()))?;
         w.write_all(&stripped)?;
+        drop(w);
         Ok(())
     }
 }
@@ -349,6 +359,7 @@ impl<W: Write + Send> Write for StripAnsiWriter<W> {
                 .lock()
                 .map_err(|e| io::Error::other(e.to_string()))?;
             w.write_all(&stripped)?;
+            drop(w);
         }
         Ok(buf.len())
     }
@@ -360,6 +371,7 @@ impl<W: Write + Send> Write for StripAnsiWriter<W> {
             .lock()
             .map_err(|e| io::Error::other(e.to_string()))?;
         w.flush()?;
+        drop(w);
         Ok(())
     }
 }
@@ -859,11 +871,13 @@ mod tests {
 
         for i in 0..10 {
             let file_path = temp_dir.path().join(format!("{program_name}.{i}.log"));
-            fs::write(&file_path, format!("log content {i}")).unwrap_or_else(|e| panic!("error: {e:?}"));
+            fs::write(&file_path, format!("log content {i}"))
+                .unwrap_or_else(|e| panic!("error: {e:?}"));
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
 
-        cleanup_old_logs(temp_dir.path(), program_name, 3).unwrap_or_else(|e| panic!("error: {e:?}"));
+        cleanup_old_logs(temp_dir.path(), program_name, 3)
+            .unwrap_or_else(|e| panic!("error: {e:?}"));
 
         let remaining_files: Vec<_> = fs::read_dir(temp_dir.path())
             .unwrap_or_else(|e| panic!("error: {e:?}"))
@@ -906,7 +920,8 @@ mod tests {
 
     #[test]
     fn test_external_command_result_structure() {
-        let result = execute_external_command("echo", &["test"]).unwrap_or_else(|e| panic!("error: {e:?}"));
+        let result =
+            execute_external_command("echo", &["test"]).unwrap_or_else(|e| panic!("error: {e:?}"));
 
         assert!(result.exit_code.is_some());
         assert!(!result.stdout.is_empty() || !result.stderr.is_empty());
@@ -936,7 +951,9 @@ mod tests {
         // Write enough to trigger rotation
         for i in 0..20 {
             let msg = format!("Log entry number {i} filling space\n");
-            appender.write_all(msg.as_bytes()).unwrap_or_else(|e| panic!("error: {e:?}"));
+            appender
+                .write_all(msg.as_bytes())
+                .unwrap_or_else(|e| panic!("error: {e:?}"));
         }
         appender.flush().unwrap_or_else(|e| panic!("error: {e:?}"));
 

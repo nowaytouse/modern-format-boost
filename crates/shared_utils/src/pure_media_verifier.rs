@@ -209,9 +209,15 @@ mod tests {
 
     #[test]
     fn test_video_compression_ratio() {
-        assert_eq!(video_compression_ratio(1000, 800), Rational::from((800, 1000)));
+        assert_eq!(
+            video_compression_ratio(1000, 800),
+            Rational::from((800, 1000))
+        );
         assert_eq!(video_compression_ratio(1000, 1000), Rational::from(1));
-        assert_eq!(video_compression_ratio(1000, 1200), Rational::from((1200, 1000)));
+        assert_eq!(
+            video_compression_ratio(1000, 1200),
+            Rational::from((1200, 1000))
+        );
         assert_eq!(video_compression_ratio(0, 100), Rational::from(1));
     }
 

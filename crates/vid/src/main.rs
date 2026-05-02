@@ -1,3 +1,4 @@
+#![allow(clippy::too_many_lines)]
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tracing::info;

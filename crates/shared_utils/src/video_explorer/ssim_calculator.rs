@@ -60,12 +60,10 @@ pub fn calculate_ms_ssim_yuv(
         }
     }
 
-    let duration = if let Some(d) = super::stream_analysis::get_video_duration(input) {
-        d
-    } else {
+    let duration = super::stream_analysis::get_video_duration(input).unwrap_or_else(|| {
         eprintln!("   ⚠️  Cannot determine video duration, using full calculation");
         60.0
-    };
+    });
     let duration_min = duration / 60.0;
 
     // Caller sets max_duration_min (e.g. 5 min normal, 25 min ultimate) to control skip threshold.
@@ -793,7 +791,10 @@ mod tests {
         let json = r#"{"pooled_metrics": {"vmaf": {"mean": 100, "min": 99}}}"#;
         let result = parse_vmaf_mean_from_json(json);
         assert!(result.is_some());
-        assert!(crate::float_compare::approx_eq_f64(result.unwrap_or_else(|| panic!("missing value")), 100.0));
+        assert!(crate::float_compare::approx_eq_f64(
+            result.unwrap_or_else(|| panic!("missing value")),
+            100.0
+        ));
     }
 
     #[test]
@@ -933,7 +934,10 @@ mod tests {
         let stderr = "PSNR y:inf u:inf v:inf average:inf min:inf max:inf\n";
         let result = parse_psnr_average_y_from_stderr(stderr);
         assert!(result.is_some());
-        assert!(crate::float_compare::approx_eq_f64(result.unwrap_or_else(|| panic!("missing value")), 100.0));
+        assert!(crate::float_compare::approx_eq_f64(
+            result.unwrap_or_else(|| panic!("missing value")),
+            100.0
+        ));
 
         let stderr_avg = "PSNR average:inf min:inf max:inf\n";
         let result_avg = parse_psnr_average_y_from_stderr(stderr_avg);
@@ -985,13 +989,19 @@ mod tests {
     #[test]
     fn test_parse_ms_ssim_json_perfect() {
         let json = r#"{"pooled_metrics": {"float_ms_ssim": {"mean": 1.0}}}"#;
-        assert!((parse_ms_ssim_from_json(json).unwrap_or_else(|| panic!("missing value")) - 1.0).abs() < 1e-6);
+        assert!(
+            (parse_ms_ssim_from_json(json).unwrap_or_else(|| panic!("missing value")) - 1.0).abs()
+                < 1e-6
+        );
     }
 
     #[test]
     fn test_parse_ms_ssim_json_integer() {
         let json = r#"{"pooled_metrics": {"float_ms_ssim": {"mean": 1}}}"#;
-        assert!((parse_ms_ssim_from_json(json).unwrap_or_else(|| panic!("missing value")) - 1.0).abs() < 1e-6);
+        assert!(
+            (parse_ms_ssim_from_json(json).unwrap_or_else(|| panic!("missing value")) - 1.0).abs()
+                < 1e-6
+        );
     }
 
     #[test]
@@ -1016,19 +1026,30 @@ mod tests {
     #[test]
     fn test_parse_ms_ssim_legacy_typical() {
         let s = "[libvmaf] MS-SSIM score: 0.9856\n";
-        assert!((parse_ms_ssim_from_legacy(s).unwrap_or_else(|| panic!("missing value")) - 0.9856).abs() < 1e-4);
+        assert!(
+            (parse_ms_ssim_from_legacy(s).unwrap_or_else(|| panic!("missing value")) - 0.9856)
+                .abs()
+                < 1e-4
+        );
     }
 
     #[test]
     fn test_parse_ms_ssim_legacy_ms_ssim_variant() {
         let s = "ms_ssim score: 0.9732\n";
-        assert!((parse_ms_ssim_from_legacy(s).unwrap_or_else(|| panic!("missing value")) - 0.9732).abs() < 1e-4);
+        assert!(
+            (parse_ms_ssim_from_legacy(s).unwrap_or_else(|| panic!("missing value")) - 0.9732)
+                .abs()
+                < 1e-4
+        );
     }
 
     #[test]
     fn test_parse_ms_ssim_legacy_float_variant() {
         let s = "float_ms_ssim score: 0.9900\n";
-        assert!((parse_ms_ssim_from_legacy(s).unwrap_or_else(|| panic!("missing value")) - 0.99).abs() < 1e-4);
+        assert!(
+            (parse_ms_ssim_from_legacy(s).unwrap_or_else(|| panic!("missing value")) - 0.99).abs()
+                < 1e-4
+        );
     }
 
     #[test]
@@ -1053,19 +1074,31 @@ mod tests {
         let s = "PSNR y: inf u: inf v: inf average: inf min: inf max: inf\n";
         let r = parse_psnr_average_y_from_stderr(s);
         assert!(r.is_some(), "inf with leading spaces");
-        assert!(crate::float_compare::approx_eq_f64(r.unwrap_or_else(|| panic!("missing value")), 100.0));
+        assert!(crate::float_compare::approx_eq_f64(
+            r.unwrap_or_else(|| panic!("missing value")),
+            100.0
+        ));
     }
 
     #[test]
     fn test_parse_psnr_very_high_value() {
         let s = "PSNR y:99.999 average:99.999 min:95.0 max:99.999\n";
-        assert!((parse_psnr_average_y_from_stderr(s).unwrap_or_else(|| panic!("missing value")) - 99.999).abs() < 1e-3);
+        assert!(
+            (parse_psnr_average_y_from_stderr(s).unwrap_or_else(|| panic!("missing value"))
+                - 99.999)
+                .abs()
+                < 1e-3
+        );
     }
 
     #[test]
     fn test_parse_psnr_low_value() {
         let s = "PSNR y:25.5 average:24.0 min:20.0 max:30.0\n";
-        assert!((parse_psnr_average_y_from_stderr(s).unwrap_or_else(|| panic!("missing value")) - 25.5).abs() < 1e-3);
+        assert!(
+            (parse_psnr_average_y_from_stderr(s).unwrap_or_else(|| panic!("missing value")) - 25.5)
+                .abs()
+                < 1e-3
+        );
     }
 
     #[test]
@@ -1096,7 +1129,11 @@ mod tests {
     #[test]
     fn test_parse_vmaf_mean_perfect_100() {
         let json = r#"{"pooled_metrics": {"vmaf": {"mean": 100.0}}}"#;
-        assert!((parse_vmaf_mean_from_json(json).unwrap_or_else(|| panic!("missing value")) - 100.0).abs() < 1e-6);
+        assert!(
+            (parse_vmaf_mean_from_json(json).unwrap_or_else(|| panic!("missing value")) - 100.0)
+                .abs()
+                < 1e-6
+        );
     }
 
     // ── CAMBI parser hardening ────────────────────────────────────────────

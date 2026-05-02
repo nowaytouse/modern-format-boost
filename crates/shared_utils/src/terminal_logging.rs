@@ -252,7 +252,8 @@ impl TerminalLogger {
         let old_str = self.format_size(old);
         let new_str = self.format_size(new);
         let percent = if old > 0 {
-            let permille = u32::try_from((u128::from(new) * 10_000) / u128::from(old)).unwrap_or(u32::MAX);
+            let permille =
+                u32::try_from((u128::from(new) * 10_000) / u128::from(old)).unwrap_or(u32::MAX);
             (f64::from(permille) / 100.0) - 100.0
         } else {
             0.0

@@ -271,7 +271,8 @@ mod tests {
     fn test_crf_cache_key_round_trip() {
         let original = Crf::<HevcEncoder>::new(23.5).unwrap_or_else(|e| panic!("error: {e:?}"));
         let key = original.to_cache_key();
-        let recovered = Crf::<HevcEncoder>::from_cache_key(key).unwrap_or_else(|e| panic!("error: {e:?}"));
+        let recovered =
+            Crf::<HevcEncoder>::from_cache_key(key).unwrap_or_else(|e| panic!("error: {e:?}"));
         assert!(original.approx_eq(&recovered));
     }
 

@@ -1,4 +1,5 @@
 #![warn(clippy::pedantic)]
+#![allow(clippy::too_many_lines)]
 //! Shared Utilities for `modern_format_boost` tools
 //!
 //! This crate provides common functionality shared across `img` and `vid`:
@@ -238,8 +239,8 @@ pub use depth_channel::{
 };
 pub use image_quality_db::{lookup_image_quality, QualityScore};
 pub use loop_intent::{
-    assess_loop_intent, assess_loop_intent_from_meta, assess_loop_intent_from_probe,
-    apply_apple_compat_modern_animation_policy, identify_loop_intent, is_lossless_exploration_safe,
+    apply_apple_compat_modern_animation_policy, assess_loop_intent, assess_loop_intent_from_meta,
+    assess_loop_intent_from_probe, identify_loop_intent, is_lossless_exploration_safe,
     should_use_gif_fast_path, LoopIntentVerdict, LoopMeta,
 };
 

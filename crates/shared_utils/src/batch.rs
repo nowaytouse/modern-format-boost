@@ -990,7 +990,10 @@ mod tests {
             let expected_calc = if result.total == 0 {
                 100.0
             } else {
-                let p = u32::try_from((result.succeeded as u128 * 10_000) / result.total.max(1) as u128).unwrap_or(u32::MAX);
+                let p = u32::try_from(
+                    (result.succeeded as u128 * 10_000) / result.total.max(1) as u128,
+                )
+                .unwrap_or(u32::MAX);
                 f64::from(p) / 100.0
             };
 
@@ -1089,13 +1092,16 @@ mod tests {
         assert!(controller.request_pause(Path::new("first.png"), "first"));
         assert!(!controller.request_pause(Path::new("second.png"), "second"));
 
-        let info = controller.pause_info().unwrap_or_else(|| panic!("pause info should exist"));
+        let info = controller
+            .pause_info()
+            .unwrap_or_else(|| panic!("pause info should exist"));
         assert_eq!(info.path, PathBuf::from("first.png"));
         assert_eq!(info.reason, "first");
     }
 
     #[test]
-    fn test_collect_image_files_for_perceived_speed_respects_priority_order() -> anyhow::Result<()> {
+    fn test_collect_image_files_for_perceived_speed_respects_priority_order() -> anyhow::Result<()>
+    {
         let temp_dir = TempDir::new().map_err(|e| anyhow::anyhow!("temp dir: {e}"))?;
         let root = temp_dir.path();
         let nested = root.join("nested");
@@ -1115,7 +1121,12 @@ mod tests {
         let files = collect_image_files_for_perceived_speed(root, &["png", "jpg"], true);
         let ordered_names = files
             .iter()
-            .map(|path| path.file_name().map_or_else(|| "unknown".to_string(), |n| n.to_string_lossy().into_owned()))
+            .map(|path| {
+                path.file_name().map_or_else(
+                    || "unknown".to_string(),
+                    |n| n.to_string_lossy().into_owned(),
+                )
+            })
             .collect::<Vec<_>>();
 
         assert_eq!(
@@ -1205,8 +1216,14 @@ mod tests {
         sort_cached_video_entries(&mut entries);
 
         assert_eq!(entries.first().map(|e| &e.path), Some(&fast_finish.path));
-        assert_eq!(entries.get(1).map(|e| &e.path), Some(&same_depth_shorter.path));
-        assert_eq!(entries.get(2).map(|e| &e.path), Some(&same_depth_heavier.path));
+        assert_eq!(
+            entries.get(1).map(|e| &e.path),
+            Some(&same_depth_shorter.path)
+        );
+        assert_eq!(
+            entries.get(2).map(|e| &e.path),
+            Some(&same_depth_heavier.path)
+        );
         assert_eq!(entries.get(3).map(|e| &e.path), Some(&shallower.path));
     }
 }

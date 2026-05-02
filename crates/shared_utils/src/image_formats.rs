@@ -170,7 +170,10 @@ pub mod jpeg {
             let mut buffer = vec![0u8; 4096];
             if file.read(&mut buffer).is_ok() {
                 for i in 0..buffer.len().saturating_sub(70) {
-                    if buffer.get(i) == Some(&0xFF) && buffer.get(i + 1) == Some(&0xDB) && i + 5 < buffer.len() {
+                    if buffer.get(i) == Some(&0xFF)
+                        && buffer.get(i + 1) == Some(&0xDB)
+                        && i + 5 < buffer.len()
+                    {
                         let q_value = u32::from(*buffer.get(i + 5).unwrap_or(&0));
                         return match q_value {
                             0..=2 => 98,
@@ -289,13 +292,12 @@ pub mod webp {
         let mut pos = 12; // skip RIFF + size + WEBP
         while pos + 8 <= data.len() {
             let chunk_id = data.get(pos..pos + 4).unwrap_or(&[]);
-            let chunk_size =
-                    crate::numeric_cast::u32_to_usize_sat(u32::from_le_bytes([
-                        *data.get(pos + 4).unwrap_or(&0),
-                        *data.get(pos + 5).unwrap_or(&0),
-                        *data.get(pos + 6).unwrap_or(&0),
-                        *data.get(pos + 7).unwrap_or(&0),
-                    ]));
+            let chunk_size = crate::numeric_cast::u32_to_usize_sat(u32::from_le_bytes([
+                *data.get(pos + 4).unwrap_or(&0),
+                *data.get(pos + 5).unwrap_or(&0),
+                *data.get(pos + 6).unwrap_or(&0),
+                *data.get(pos + 7).unwrap_or(&0),
+            ]));
             let payload_start = pos + 8;
             let payload_end = (payload_start + chunk_size).min(data.len());
 
@@ -371,19 +373,19 @@ pub mod webp {
                 *data.get(pos + 7).unwrap_or(&0),
             ]));
             let payload_start = pos + 8;
-        // Strict bounds: if chunk_size is malformed, stop trusting RIFF traversal.
+            // Strict bounds: if chunk_size is malformed, stop trusting RIFF traversal.
             if chunk_size > data.len().saturating_sub(payload_start) {
                 break;
             }
             let payload_end = payload_start + chunk_size;
-        // ANMF frame header is 16 bytes. Duration is a 24-bit little-endian integer at offset 12..15.
-        if chunk_id == b"ANMF" && payload_end >= payload_start + 16 {
-            let duration_ms = u32::from(*data.get(payload_start + 12).unwrap_or(&0))
-                | (u32::from(*data.get(payload_start + 13).unwrap_or(&0)) << 8)
-                | (u32::from(*data.get(payload_start + 14).unwrap_or(&0)) << 16);
-            if duration_ms > 0 && duration_ms <= 60_000 {
-                total_ms += u64::from(duration_ms);
-            }
+            // ANMF frame header is 16 bytes. Duration is a 24-bit little-endian integer at offset 12..15.
+            if chunk_id == b"ANMF" && payload_end >= payload_start + 16 {
+                let duration_ms = u32::from(*data.get(payload_start + 12).unwrap_or(&0))
+                    | (u32::from(*data.get(payload_start + 13).unwrap_or(&0)) << 8)
+                    | (u32::from(*data.get(payload_start + 14).unwrap_or(&0)) << 16);
+                if duration_ms > 0 && duration_ms <= 60_000 {
+                    total_ms += u64::from(duration_ms);
+                }
             }
             let padded = (chunk_size + 1) & !1;
             pos = payload_start + padded;
@@ -391,10 +393,10 @@ pub mod webp {
         // If RIFF traversal failed (common for Safari exports), fall back to a marker scan:
         // search for ANMF and read the duration field at a fixed offset relative to chunk header.
         if total_ms == 0 {
-            for idx in data
-                .windows(4)
-                .enumerate()
-                .filter_map(|(i, w)| if w == b"ANMF" { Some(i) } else { None })
+            for idx in
+                data.windows(4)
+                    .enumerate()
+                    .filter_map(|(i, w)| if w == b"ANMF" { Some(i) } else { None })
             {
                 // ANMF chunk layout: "ANMF" (4) + size (4) + payload...
                 // duration is 24-bit LE at payload offset 12..15 => idx + 8 + 12..15
@@ -483,7 +485,8 @@ pub mod gif {
 
                     // Skip Image Data sub-blocks
                     while pos < data.len() {
-                        let block_size = crate::numeric_cast::u8_to_usize_sat(*data.get(pos).unwrap_or(&0));
+                        let block_size =
+                            crate::numeric_cast::u8_to_usize_sat(*data.get(pos).unwrap_or(&0));
                         pos += 1;
                         if block_size == 0 {
                             break;
@@ -508,7 +511,8 @@ pub mod gif {
                     pos += 2;
                     // Skip Extension Data blocks
                     while pos < data.len() {
-                        let block_size = crate::numeric_cast::u8_to_usize_sat(*data.get(pos).unwrap_or(&0));
+                        let block_size =
+                            crate::numeric_cast::u8_to_usize_sat(*data.get(pos).unwrap_or(&0));
                         pos += 1;
                         if block_size == 0 {
                             break;
@@ -599,7 +603,10 @@ pub mod avif {
                 // Dimension 2: colr Identity matrix (MC=0)
                 if let Some(colr_data) = find_box_data_recursive(data, *b"colr") {
                     if colr_data.len() >= 11 && colr_data.get(0..4) == Some(b"nclx") {
-                        let matrix_coefficients = u16::from_be_bytes([*colr_data.get(8).unwrap_or(&0), *colr_data.get(9).unwrap_or(&0)]);
+                        let matrix_coefficients = u16::from_be_bytes([
+                            *colr_data.get(8).unwrap_or(&0),
+                            *colr_data.get(9).unwrap_or(&0),
+                        ]);
                         if matrix_coefficients == 0 {
                             return Ok(true);
                         }
@@ -620,10 +627,17 @@ pub mod avif {
                 if is_444 {
                     if let Some(pixi_data) = find_box_data_recursive(data, *b"pixi") {
                         if !pixi_data.is_empty() {
-                            let num_ch = crate::numeric_cast::u8_to_usize_sat(*pixi_data.first().unwrap_or(&0));
+                            let num_ch = crate::numeric_cast::u8_to_usize_sat(
+                                *pixi_data.first().unwrap_or(&0),
+                            );
                             if num_ch > 0 && pixi_data.len() > num_ch {
-                                let max_depth =
-                                    pixi_data.get(1..=num_ch).unwrap_or(&[]).iter().copied().max().unwrap_or(0);
+                                let max_depth = pixi_data
+                                    .get(1..=num_ch)
+                                    .unwrap_or(&[])
+                                    .iter()
+                                    .copied()
+                                    .max()
+                                    .unwrap_or(0);
                                 if max_depth >= 12 {
                                     return Ok(true);
                                 }
@@ -887,8 +901,10 @@ mod tests {
             0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
             0x00, 0x90, 0x77, 0x53, 0xDE,
         ];
-        let mut file = NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temporary file"));
-        file.write_all(png_data).unwrap_or_else(|_| panic!("Failed to write to file"));
+        let mut file =
+            NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temporary file"));
+        file.write_all(png_data)
+            .unwrap_or_else(|_| panic!("Failed to write to file"));
 
         let level = png::estimate_compression_level(file.path());
         assert!(
@@ -907,8 +923,10 @@ mod tests {
             0x0C, 0x0C, 0x0C, 0x0C, 0x07, 0x09, 0x0E, 0x0F, 0x0D, 0x0C, 0x0E, 0x0B, 0x0C, 0x0C,
             0x0C,
         ];
-        let mut file = NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temporary file"));
-        file.write_all(jpeg_data).unwrap_or_else(|_| panic!("Failed to write to file"));
+        let mut file =
+            NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temporary file"));
+        file.write_all(jpeg_data)
+            .unwrap_or_else(|_| panic!("Failed to write to file"));
 
         let quality = jpeg::estimate_quality(file.path());
         assert!(
@@ -927,7 +945,8 @@ mod tests {
             data.extend_from_slice(&[0u8; 20]);
             data
         };
-        let mut file = NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temporary file"));
+        let mut file =
+            NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temporary file"));
         file.write_all(&webp_lossless)
             .unwrap_or_else(|_| panic!("Failed to write to file"));
 
@@ -947,7 +966,8 @@ mod tests {
             data.extend_from_slice(&[0u8; 20]);
             data
         };
-        let mut file = NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temporary file"));
+        let mut file =
+            NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temporary file"));
         file.write_all(&webp_lossy)
             .unwrap_or_else(|_| panic!("Failed to write to file"));
 
@@ -983,8 +1003,10 @@ mod tests {
             data.push(0x3B);
             data
         };
-        let mut file = NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temp file"));
-        file.write_all(&gif_data).unwrap_or_else(|_| panic!("Failed to write"));
+        let mut file =
+            NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temp file"));
+        file.write_all(&gif_data)
+            .unwrap_or_else(|_| panic!("Failed to write"));
 
         let count = gif::get_frame_count(file.path());
         assert_eq!(count, 2, "Expected 2 frames, got: {count}");
@@ -997,7 +1019,8 @@ mod tests {
     #[test]
     fn test_jxl_codestream_signature() {
         let jxl_codestream: &[u8] = &[0xFF, 0x0A, 0x00, 0x00];
-        let mut file = NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temporary file"));
+        let mut file =
+            NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temporary file"));
         file.write_all(jxl_codestream)
             .unwrap_or_else(|_| panic!("Failed to write to file"));
 

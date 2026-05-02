@@ -2,7 +2,10 @@
 use clap::{Parser, Subcommand};
 use rug::Rational;
 
-use img::{calculate_psnr, calculate_ssim, psnr_quality_description, ssim_quality_description, ConfigFlags, ConvertFlags};
+use img::{
+    calculate_psnr, calculate_ssim, psnr_quality_description, ssim_quality_description,
+    ConfigFlags, ConvertFlags,
+};
 use shared_utils::analysis_cache::AnalysisCache;
 use shared_utils::modern_ui::{colors, symbols};
 use shared_utils::quality_matcher::SourceCodec;
@@ -126,6 +129,7 @@ enum Commands {
     },
 }
 
+#[allow(clippy::too_many_lines)]
 fn main() -> anyhow::Result<()> {
     if let Err(e) = shared_utils::init_ghost_mode() {
         eprintln!("⚠️ Failed to initialize Ghost Mode isolation: {e}");
@@ -175,22 +179,23 @@ fn main() -> anyhow::Result<()> {
         _ => None,
     };
 
-    let _lock_guard = if let Some(input) = input_to_lock {
-        let input_abs = std::fs::canonicalize(input).unwrap_or_else(|_| input.clone());
-        if input_abs.is_dir() {
-            match shared_utils::acquire_dir_lock(&input_abs) {
-                Ok(guard) => Some(guard),
-                Err(e) => {
-                    shared_utils::log_eprintln!("❌ {e}");
-                    std::process::exit(3);
+    let _lock_guard = input_to_lock.map_or_else(
+        || None,
+        |input| {
+            let input_abs = std::fs::canonicalize(input).unwrap_or_else(|_| input.clone());
+            if input_abs.is_dir() {
+                match shared_utils::acquire_dir_lock(&input_abs) {
+                    Ok(guard) => Some(guard),
+                    Err(e) => {
+                        shared_utils::log_eprintln!("❌ {e}");
+                        std::process::exit(3);
+                    }
                 }
+            } else {
+                None
             }
-        } else {
-            None
-        }
-    } else {
-        None
-    };
+        },
+    );
     // ------------------------------------------------------
 
     match cli.command {
@@ -399,7 +404,8 @@ fn main() -> anyhow::Result<()> {
                                 stats.algorithm_version_distribution.iter().collect();
                             versions.sort_by_key(|(v, _)| *v);
                             for (version, count) in versions {
-                                let marker = match (*version).cmp(&stats.current_algorithm_version) {
+                                let marker = match (*version).cmp(&stats.current_algorithm_version)
+                                {
                                     std::cmp::Ordering::Less => "⚠️  (stale)",
                                     std::cmp::Ordering::Equal => "✅ (current)",
                                     std::cmp::Ordering::Greater => "❓ (future)",
@@ -414,7 +420,10 @@ fn main() -> anyhow::Result<()> {
                         }
 
                         let permille = {
-                            let ratio = Rational::from(stats.db_size_bytes) / Rational::from(shared_utils::analysis_cache::CACHE_SIZE_LIMIT_BYTES.max(1));
+                            let ratio = Rational::from(stats.db_size_bytes)
+                                / Rational::from(
+                                    shared_utils::analysis_cache::CACHE_SIZE_LIMIT_BYTES.max(1),
+                                );
                             let res: Rational = ratio * Rational::from(10_000);
                             res.to_f64()
                         };
@@ -465,7 +474,7 @@ fn main() -> anyhow::Result<()> {
 
             let mut count = 0;
             let mut dirs_to_visit = vec![input];
-            
+
             while let Some(dir) = dirs_to_visit.pop() {
                 if let Ok(entries) = std::fs::read_dir(&dir) {
                     for entry in entries.flatten() {
@@ -478,15 +487,22 @@ fn main() -> anyhow::Result<()> {
                                 .and_then(|s| s.to_str())
                                 .unwrap_or("")
                                 .to_lowercase();
-                            
-                            if ["jpg", "jpeg", "png", "heic", "heif", "jxl", "tiff", "bmp", "webp"].contains(&ext.as_str()) {
-                                let default_label = label.clone().unwrap_or_else(|| "low".to_string());
-                                if let Err(e) = shared_utils::image_quality_db::ingest_quality_sample(
-                                    &mut conn,
-                                    &path,
-                                    &default_label,
-                                    "fusion_v1",
-                                ) {
+
+                            if [
+                                "jpg", "jpeg", "png", "heic", "heif", "jxl", "tiff", "bmp", "webp",
+                            ]
+                            .contains(&ext.as_str())
+                            {
+                                let default_label =
+                                    label.clone().unwrap_or_else(|| "low".to_string());
+                                if let Err(e) =
+                                    shared_utils::image_quality_db::ingest_quality_sample(
+                                        &mut conn,
+                                        &path,
+                                        &default_label,
+                                        "fusion_v1",
+                                    )
+                                {
                                     eprintln!("⚠️ Failed to ingest {}: {}", path.display(), e);
                                 } else {
                                     count += 1;
@@ -529,8 +545,10 @@ fn verify_conversion(
         shared_utils::numeric_cast::u64_to_f64(converted_analysis.file_size) / 1024.0
     );
 
-    let reduction =
-        100.0 * (1.0 - shared_utils::numeric_cast::u64_to_f64(converted_analysis.file_size) / shared_utils::numeric_cast::u64_to_f64(original_analysis.file_size));
+    let reduction = 100.0
+        * (1.0
+            - shared_utils::numeric_cast::u64_to_f64(converted_analysis.file_size)
+                / shared_utils::numeric_cast::u64_to_f64(original_analysis.file_size));
     println!("   Size reduction: {reduction:.2}%");
 
     let orig_img = load_image_safe(original)?;
@@ -645,6 +663,7 @@ fn convert_result_to_output(result: shared_utils::ConversionResult) -> Conversio
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn auto_convert_single_file(
     input: &Path,
     config: &AutoConvertConfig,
@@ -789,16 +808,31 @@ fn auto_convert_single_file(
         base_dir: config.base_dir.clone(),
         flags: {
             let mut f = ConvertFlags::empty();
-            f.set(ConvertFlags::FORCE, config.flags.contains(ConfigFlags::FORCE));
-            f.set(ConvertFlags::DELETE_ORIGINAL, config.flags.contains(ConfigFlags::DELETE_ORIGINAL));
+            f.set(
+                ConvertFlags::FORCE,
+                config.flags.contains(ConfigFlags::FORCE),
+            );
+            f.set(
+                ConvertFlags::DELETE_ORIGINAL,
+                config.flags.contains(ConfigFlags::DELETE_ORIGINAL),
+            );
             f.set(ConvertFlags::IN_PLACE, config.in_place);
             f.set(ConvertFlags::EXPLORE, config.explore);
             f.set(ConvertFlags::MATCH_QUALITY, config.match_quality);
-            f.set(ConvertFlags::COMPRESS, config.flags.contains(ConfigFlags::COMPRESS));
-            f.set(ConvertFlags::APPLE_COMPAT, config.flags.contains(ConfigFlags::APPLE_COMPAT));
+            f.set(
+                ConvertFlags::COMPRESS,
+                config.flags.contains(ConfigFlags::COMPRESS),
+            );
+            f.set(
+                ConvertFlags::APPLE_COMPAT,
+                config.flags.contains(ConfigFlags::APPLE_COMPAT),
+            );
             f.set(ConvertFlags::USE_GPU, config.use_gpu);
             f.set(ConvertFlags::ULTIMATE, config.ultimate);
-            f.set(ConvertFlags::ALLOW_SIZE_TOLERANCE, config.allow_size_tolerance);
+            f.set(
+                ConvertFlags::ALLOW_SIZE_TOLERANCE,
+                config.allow_size_tolerance,
+            );
             f.set(ConvertFlags::VERBOSE, config.verbose);
             f
         },
@@ -922,6 +956,7 @@ fn dispatch_static_conversion(
     })
 }
 
+#[allow(clippy::too_many_lines)]
 fn auto_convert_directory(
     input: &Path,
     config: &AutoConvertConfig,
@@ -1294,7 +1329,7 @@ fn auto_convert_directory(
         if let Some(ref output_dir) = config.output_dir {
             shared_utils::log_eprintln!("\n📦 Copying unsupported files...");
             let copy_result = shared_utils::copy_unsupported_files(
-                config.base_dir.as_deref().unwrap_or(Path::new(".")),
+                config.base_dir.as_deref().unwrap_or_else(|| Path::new(".")),
                 output_dir,
                 recursive,
             );
@@ -1307,7 +1342,7 @@ fn auto_convert_directory(
 
             shared_utils::log_eprintln!("\n🔍 Verifying output completeness...");
             let verify = shared_utils::verify_output_completeness(
-                config.base_dir.as_deref().unwrap_or(Path::new(".")),
+                config.base_dir.as_deref().unwrap_or_else(|| Path::new(".")),
                 output_dir,
                 recursive,
             );

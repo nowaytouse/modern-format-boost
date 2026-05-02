@@ -267,7 +267,12 @@ mod tests {
         let with_context = add_context(result, "test operation");
         assert!(with_context.is_err());
 
-        let err_msg = format!("{}", with_context.err().unwrap_or_else(|| panic!("missing error")));
+        let err_msg = format!(
+            "{}",
+            with_context
+                .err()
+                .unwrap_or_else(|| panic!("missing error"))
+        );
         assert!(err_msg.contains("test operation"));
     }
 
@@ -279,7 +284,12 @@ mod tests {
         let with_context = result.context_err("using ResultExt trait");
         assert!(with_context.is_err());
 
-        let err_msg = format!("{}", with_context.err().unwrap_or_else(|| panic!("missing error")));
+        let err_msg = format!(
+            "{}",
+            with_context
+                .err()
+                .unwrap_or_else(|| panic!("missing error"))
+        );
         assert!(err_msg.contains("using ResultExt trait"));
     }
 

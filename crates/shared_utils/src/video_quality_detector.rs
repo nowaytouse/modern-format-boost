@@ -264,9 +264,12 @@ pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualit
 
     let effective_bitrate = video_bitrate.unwrap_or(total_bitrate);
     let bpp = {
-        let pixels_per_second = Rational::from(width) * Rational::from(height) * crate::numeric_cast::f64_to_rational_loud(fps, 1, "fps");
+        let pixels_per_second = Rational::from(width)
+            * Rational::from(height)
+            * crate::numeric_cast::f64_to_rational_loud(fps, 1, "fps");
         if pixels_per_second > 0 {
-            let bits_per_second = Rational::from(u32::try_from(effective_bitrate).unwrap_or(u32::MAX));
+            let bits_per_second =
+                Rational::from(u32::try_from(effective_bitrate).unwrap_or(u32::MAX));
             (bits_per_second / pixels_per_second).to_f64()
         } else {
             0.0
@@ -289,11 +292,10 @@ pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualit
     let quality_score = calculate_quality_score(bpp, codec_type, bit_depth, compression_type);
 
     // Prioritize precise CRF/QP from encoder tags over BPP heuristic
-    let estimated_crf = if let Some(params) = encoder_params {
-        extract_crf_from_params(params).unwrap_or_else(|| estimate_crf_from_bpp(bpp, codec_type))
-    } else {
-        estimate_crf_from_bpp(bpp, codec_type)
-    };
+    let estimated_crf = encoder_params.map_or_else(
+        || estimate_crf_from_bpp(bpp, codec_type),
+        |params| extract_crf_from_params(params).unwrap_or_else(|| estimate_crf_from_bpp(bpp, codec_type)),
+    );
 
     let confidence = calculate_video_confidence(
         video_bitrate.is_some(),
@@ -1327,7 +1329,10 @@ mod tests {
         });
 
         assert!(result.is_err(), "Should fail on zero width");
-        assert!(result.err().unwrap_or_default().contains("Invalid dimensions"));
+        assert!(result
+            .err()
+            .unwrap_or_default()
+            .contains("Invalid dimensions"));
     }
 
     #[test]
@@ -1350,7 +1355,10 @@ mod tests {
         });
 
         assert!(result.is_err(), "Should fail on zero height");
-        assert!(result.err().unwrap_or_default().contains("Invalid dimensions"));
+        assert!(result
+            .err()
+            .unwrap_or_default()
+            .contains("Invalid dimensions"));
     }
 
     #[test]
@@ -1373,7 +1381,10 @@ mod tests {
         });
 
         assert!(result.is_err(), "Should fail on zero fps");
-        assert!(result.err().unwrap_or_default().contains("Invalid frame rate"));
+        assert!(result
+            .err()
+            .unwrap_or_default()
+            .contains("Invalid frame rate"));
     }
 
     #[test]
@@ -1418,7 +1429,10 @@ mod tests {
         });
 
         assert!(result.is_err(), "Should fail on zero duration");
-        assert!(result.err().unwrap_or_default().contains("Invalid duration"));
+        assert!(result
+            .err()
+            .unwrap_or_default()
+            .contains("Invalid duration"));
     }
 
     #[test]
@@ -2076,7 +2090,13 @@ mod tests {
         assert_eq!(qa.width, 1920);
         assert_eq!(qa.height, 1080);
         assert!((qa.fps.unwrap_or_else(|| panic!("missing fps")) - 30.0).abs() < 0.01);
-        assert!((qa.duration_secs.unwrap_or_else(|| panic!("missing duration")) - 60.0).abs() < 0.01);
+        assert!(
+            (qa.duration_secs
+                .unwrap_or_else(|| panic!("missing duration"))
+                - 60.0)
+                .abs()
+                < 0.01
+        );
         assert_eq!(qa.video_bitrate, Some(7_500_000));
     }
 

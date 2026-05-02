@@ -177,8 +177,9 @@ pub fn copy_on_skip_or_fail(
     base_dir: Option<&Path>,
     verbose: bool,
 ) -> Result<Option<PathBuf>> {
-    if let Some(out_dir) = output_dir {
-        match smart_copy_with_structure(source, out_dir, base_dir, verbose) {
+    output_dir.map_or_else(
+        || Ok(None),
+        |out_dir| match smart_copy_with_structure(source, out_dir, base_dir, verbose) {
             Ok(dest) => Ok(Some(dest)),
             Err(e) => {
                 eprintln!("❌ COPY FAILED: {e}");
@@ -186,10 +187,8 @@ pub fn copy_on_skip_or_fail(
                 eprintln!("   Output dir: {}", out_dir.display());
                 Err(e)
             }
-        }
-    } else {
-        Ok(None)
-    }
+        },
+    )
 }
 
 #[cfg(test)]
@@ -208,11 +207,15 @@ mod tests {
         let source = base.join("photos/2024/test.txt");
         fs::write(&source, "test").unwrap_or_else(|e| panic!("error: {e:?}"));
 
-        let dest = smart_copy_with_structure(&source, &output, Some(&base), false).unwrap_or_else(|e| panic!("error: {e:?}"));
+        let dest = smart_copy_with_structure(&source, &output, Some(&base), false)
+            .unwrap_or_else(|e| panic!("error: {e:?}"));
 
         assert_eq!(dest, output.join("photos/2024/test.txt"));
         assert!(dest.exists());
-        assert_eq!(fs::read_to_string(&dest).unwrap_or_else(|e| panic!("error: {e:?}")), "test");
+        assert_eq!(
+            fs::read_to_string(&dest).unwrap_or_else(|e| panic!("error: {e:?}")),
+            "test"
+        );
     }
 
     #[test]
@@ -221,7 +224,8 @@ mod tests {
         let source = temp.path().join("test.txt");
         fs::write(&source, "test").unwrap_or_else(|e| panic!("error: {e:?}"));
 
-        let result = copy_on_skip_or_fail(&source, None, None, false).unwrap_or_else(|e| panic!("error: {e:?}"));
+        let result = copy_on_skip_or_fail(&source, None, None, false)
+            .unwrap_or_else(|e| panic!("error: {e:?}"));
         assert!(result.is_none());
     }
 
@@ -236,7 +240,8 @@ mod tests {
         header[8..12].copy_from_slice(b"isom");
         fs::write(&wrong_ext, header).unwrap_or_else(|e| panic!("error: {e:?}"));
 
-        let fixed = fix_extension_if_mismatch(&wrong_ext).unwrap_or_else(|e| panic!("error: {e:?}"));
+        let fixed =
+            fix_extension_if_mismatch(&wrong_ext).unwrap_or_else(|e| panic!("error: {e:?}"));
         assert_eq!(fixed.extension().and_then(|e| e.to_str()), Some("mp4"));
         assert!(fixed.exists());
         assert!(!wrong_ext.exists());

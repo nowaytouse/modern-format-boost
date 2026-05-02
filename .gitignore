@@ -156,5 +156,11 @@ mutants.out/
 .venv/
 .venv_training/
 
+# Clippy logs
+*_clippy.txt
+*_clippy_*.txt
+nightly_clippy_latest.txt
+img_clippy.txt
+
 .training_tmp/
 training_tmp/*.txt

@@ -64,18 +64,24 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
                 0xFF => {
                     let block_size = buf.get(pos + 2).copied().unwrap_or(0) as usize;
                     if block_size == 11 && pos + 3 + block_size <= buf.len() {
-                        if let Ok(vendor) = std::str::from_utf8(buf.get(pos + 3..pos + 3 + block_size).unwrap_or(&[]))
-                        {
+                        if let Ok(vendor) = std::str::from_utf8(
+                            buf.get(pos + 3..pos + 3 + block_size).unwrap_or(&[]),
+                        ) {
                             if !vendor.is_empty() {
                                 app_extensions.push(vendor.to_owned());
                                 if vendor == "NETSCAPE2.0" {
                                     let sub_pos = pos + 3 + block_size;
                                     if sub_pos + 3 < buf.len() {
                                         let sub_size = buf.get(sub_pos).copied().unwrap_or(0);
-                                        if sub_size >= 3 && buf.get(sub_pos + 1).copied().unwrap_or(0) == 0x01 {
+                                        if sub_size >= 3
+                                            && buf.get(sub_pos + 1).copied().unwrap_or(0) == 0x01
+                                        {
                                             loop_count = Some(
-                                                u16::from(buf.get(sub_pos + 2).copied().unwrap_or(0))
-                                                    | (u16::from(buf.get(sub_pos + 3).copied().unwrap_or(0)) << 8),
+                                                u16::from(
+                                                    buf.get(sub_pos + 2).copied().unwrap_or(0),
+                                                ) | (u16::from(
+                                                    buf.get(sub_pos + 3).copied().unwrap_or(0),
+                                                ) << 8),
                                             );
                                         }
                                     }
@@ -90,7 +96,8 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
                     if buf.get(pos + 3).copied().unwrap_or(0) & 0x01 != 0 {
                         has_transparency = true;
                     }
-                    let delay = u16::from(buf.get(pos + 4).copied().unwrap_or(0)) | (u16::from(buf.get(pos + 5).copied().unwrap_or(0)) << 8);
+                    let delay = u16::from(buf.get(pos + 4).copied().unwrap_or(0))
+                        | (u16::from(buf.get(pos + 5).copied().unwrap_or(0)) << 8);
                     frame_delays_cs.push(delay);
                     pos += 8;
                 }
@@ -141,8 +148,8 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
     };
 
     let frame_payload_variation = if frame_payload_sizes.len() >= 2 {
-        let mean =
-            crate::numeric_cast::usize_to_f64(frame_payload_sizes.iter().sum::<usize>()) / crate::numeric_cast::usize_to_f64(frame_payload_sizes.len());
+        let mean = crate::numeric_cast::usize_to_f64(frame_payload_sizes.iter().sum::<usize>())
+            / crate::numeric_cast::usize_to_f64(frame_payload_sizes.len());
         if mean > 0.0 {
             let variance = frame_payload_sizes
                 .iter()

@@ -117,11 +117,11 @@ fn get_classifier_rules() -> &'static [ClassifierRule] {
     CLASSIFIER_RULES.get_or_init(|| {
         let json = include_str!("image_classifiers.json");
         let wrapper: serde_json::Value = serde_json::from_str(json).unwrap_or_default();
-        if let Some(rules_array) = wrapper.get("classifiers") {
-            serde_json::from_value(rules_array.clone()).unwrap_or_default()
-        } else {
-            vec![]
-        }
+        wrapper
+            .get("classifiers")
+            .map_or_else(Vec::new, |rules_array| {
+                serde_json::from_value(rules_array.clone()).unwrap_or_default()
+            })
     })
 }
 
@@ -159,11 +159,10 @@ pub fn analyze_image_quality(
 
     let edge_density = calculate_edge_density(rgba_data, width, height);
 
-    let color_diversity = if let Some(p_size) = precision.palette_size {
-        (crate::numeric_cast::usize_to_f64(p_size) / 256.0).min(1.0)
-    } else {
-        calculate_color_diversity(rgba_data, width, height)
-    };
+    let color_diversity = precision.palette_size.map_or_else(
+        || calculate_color_diversity(rgba_data, width, height),
+        |p_size| (crate::numeric_cast::usize_to_f64(p_size) / 256.0).min(1.0),
+    );
 
     let texture_variance = calculate_texture_variance(rgba_data, width, height);
 
@@ -400,9 +399,10 @@ fn calculate_noise_level(rgba: &[u8], width: u32, height: u32) -> f64 {
             let idx_down = idx + (crate::numeric_cast::u32_to_usize_sat(width) * 4);
 
             if idx_down + 2 < rgba.len() {
-                let curr =
-                    (i32::from(rgba.get(idx).copied().unwrap_or(0)) + i32::from(rgba.get(idx + 1).copied().unwrap_or(0)) + i32::from(rgba.get(idx + 2).copied().unwrap_or(0)))
-                        / 3;
+                let curr = (i32::from(rgba.get(idx).copied().unwrap_or(0))
+                    + i32::from(rgba.get(idx + 1).copied().unwrap_or(0))
+                    + i32::from(rgba.get(idx + 2).copied().unwrap_or(0)))
+                    / 3;
                 let right = (i32::from(rgba.get(idx_right).copied().unwrap_or(0))
                     + i32::from(rgba.get(idx_right + 1).copied().unwrap_or(0))
                     + i32::from(rgba.get(idx_right + 2).copied().unwrap_or(0)))
@@ -651,24 +651,19 @@ fn classify_content_type(input: &ClassifierInput) -> ImageContentType {
             }
         }
 
-        let should_replace_best = match best_rule {
-            Some(best) => rule.priority > best.priority,
-            None => true,
-        };
-        if should_replace_best {
+        if best_rule.is_none_or(|best| rule.priority > best.priority) {
             best_rule = Some(rule);
         }
     }
 
-    if let Some(rule) = best_rule {
-        ImageContentType {
-            name: rule.name.clone(),
-        }
-    } else {
-        ImageContentType {
+    best_rule.map_or_else(
+        || ImageContentType {
             name: "UNKNOWN".to_string(),
-        }
-    }
+        },
+        |rule| ImageContentType {
+            name: rule.name.clone(),
+        },
+    )
 }
 
 pub(crate) fn calculate_analysis_confidence(

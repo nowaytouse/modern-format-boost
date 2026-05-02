@@ -158,8 +158,14 @@ fn calculate_window_ssim(
     let mut mean_y = 0.0;
     for (i, row) in window.iter().enumerate() {
         for (j, &w) in row.iter().enumerate() {
-            mean_x = w.mul_add(buf_x.get(i).and_then(|r| r.get(j)).copied().unwrap_or(0.0), mean_x);
-            mean_y = w.mul_add(buf_y.get(i).and_then(|r| r.get(j)).copied().unwrap_or(0.0), mean_y);
+            mean_x = w.mul_add(
+                buf_x.get(i).and_then(|r| r.get(j)).copied().unwrap_or(0.0),
+                mean_x,
+            );
+            mean_y = w.mul_add(
+                buf_y.get(i).and_then(|r| r.get(j)).copied().unwrap_or(0.0),
+                mean_y,
+            );
         }
     }
 
@@ -320,7 +326,9 @@ mod tests {
         let img2 = img1.clone();
 
         let psnr = calculate_psnr(&img1, &img2);
-        assert!(psnr.unwrap_or_else(|| panic!("missing metric value")).is_infinite());
+        assert!(psnr
+            .unwrap_or_else(|| panic!("missing metric value"))
+            .is_infinite());
 
         let ssim = calculate_ssim(&img1, &img2);
         assert!((ssim.unwrap_or_else(|| panic!("missing metric value")) - 1.0).abs() < 0.01);
@@ -398,7 +406,10 @@ mod tests {
         }));
         let result = calculate_ms_ssim(&img, &img);
         assert!(result.is_some());
-        assert!(result.unwrap_or_else(|| panic!("missing metric value")) >= 0.99 && result.unwrap_or_else(|| panic!("missing metric value")) <= 1.01);
+        assert!(
+            result.unwrap_or_else(|| panic!("missing metric value")) >= 0.99
+                && result.unwrap_or_else(|| panic!("missing metric value")) <= 1.01
+        );
     }
 
     #[test]

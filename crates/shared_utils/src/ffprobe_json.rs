@@ -398,25 +398,40 @@ mod tests {
     #[test]
     fn test_parse_valid_json() {
         let json = r#"{"streams":[{"color_space":"bt709","pix_fmt":"yuv420p","bits_per_raw_sample":"8"}]}"#;
-        let parsed: FfprobeOutput = serde_json::from_str(json).unwrap_or_else(|e| panic!("error: {e:?}"));
+        let parsed: FfprobeOutput =
+            serde_json::from_str(json).unwrap_or_else(|e| panic!("error: {e:?}"));
         assert_eq!(parsed.streams.len(), 1);
-        assert_eq!(parsed.streams.first().and_then(|s| s.color_space.clone()), Some("bt709".to_string()));
-        assert_eq!(parsed.streams.first().and_then(|s| s.pix_fmt.clone()), Some("yuv420p".to_string()));
+        assert_eq!(
+            parsed.streams.first().and_then(|s| s.color_space.clone()),
+            Some("bt709".to_string())
+        );
+        assert_eq!(
+            parsed.streams.first().and_then(|s| s.pix_fmt.clone()),
+            Some("yuv420p".to_string())
+        );
     }
 
     #[test]
     fn test_parse_empty_streams() {
         let json = r#"{"streams":[]}"#;
-        let parsed: FfprobeOutput = serde_json::from_str(json).unwrap_or_else(|e| panic!("error: {e:?}"));
+        let parsed: FfprobeOutput =
+            serde_json::from_str(json).unwrap_or_else(|e| panic!("error: {e:?}"));
         assert!(parsed.streams.is_empty());
     }
 
     #[test]
     fn test_parse_missing_fields() {
         let json = r#"{"streams":[{"pix_fmt":"yuv420p10le"}]}"#;
-        let parsed: FfprobeOutput = serde_json::from_str(json).unwrap_or_else(|e| panic!("error: {e:?}"));
-        assert_eq!(parsed.streams.first().and_then(|s| s.color_space.clone()), None);
-        assert_eq!(parsed.streams.first().and_then(|s| s.pix_fmt.clone()), Some("yuv420p10le".to_string()));
+        let parsed: FfprobeOutput =
+            serde_json::from_str(json).unwrap_or_else(|e| panic!("error: {e:?}"));
+        assert_eq!(
+            parsed.streams.first().and_then(|s| s.color_space.clone()),
+            None
+        );
+        assert_eq!(
+            parsed.streams.first().and_then(|s| s.pix_fmt.clone()),
+            Some("yuv420p10le".to_string())
+        );
     }
 
     #[test]

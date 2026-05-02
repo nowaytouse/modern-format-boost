@@ -49,8 +49,8 @@ pub fn memory_pressure_level() -> Option<MemoryPressure> {
     if total_mb == 0 {
         return None;
     }
-    let ratio = crate::numeric_cast::u64_to_f64(available_mb)
-        / crate::numeric_cast::u64_to_f64(total_mb);
+    let ratio =
+        crate::numeric_cast::u64_to_f64(available_mb) / crate::numeric_cast::u64_to_f64(total_mb);
     // More conservative thresholds to prevent OOM during cjxl/ImageMagick operations
     let level = if ratio >= 0.30 && available_mb >= 3072 {
         MemoryPressure::Low
@@ -102,14 +102,10 @@ fn get_memory_macos() -> (u64, u64) {
 
     let available = match crate::tool_builders::VmstatBuilder::new().build().output() {
         Ok(output) if output.status.success() => match String::from_utf8(output.stdout) {
-            Ok(stdout) => {
-                if let Some(available) = parse_vm_stat_available(&stdout) {
-                    available
-                } else {
-                    warn!("Failed to parse macOS available memory from vm_stat");
-                    0
-                }
-            }
+            Ok(stdout) => parse_vm_stat_available(&stdout).unwrap_or_else(|| {
+                warn!("Failed to parse macOS available memory from vm_stat");
+                0
+            }),
             Err(err) => {
                 warn!(error = %err, "vm_stat returned non-UTF-8 output");
                 0

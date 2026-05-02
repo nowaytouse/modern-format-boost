@@ -440,7 +440,7 @@ impl LoopMeta {
         });
 
         // Fast header read for GIF dimensions
-        let (width, height) = if let Ok(mut f) = std::fs::File::open(path) {
+        let (width, height) = std::fs::File::open(path).map_or((0, 0), |mut f| {
             use std::io::Read;
             let mut head = [0u8; 10];
             if f.read_exact(&mut head).is_ok() {
@@ -451,21 +451,17 @@ impl LoopMeta {
             } else {
                 (0, 0)
             }
-        } else {
-            (0, 0)
-        };
+        });
 
         let frame_count = scan.frame_count;
 
-        let fps = if let Some(dur) = scan.duration_secs {
+        let fps = scan.duration_secs.map_or(12.0, |dur| {
             if frame_count > 1 && dur > 0.0 {
                 f64::from(frame_count) / dur
             } else {
                 12.0
             }
-        } else {
-            12.0
-        };
+        });
 
         let mut meta = Self {
             duration_secs: scan.duration_secs.unwrap_or(0.0),
@@ -609,7 +605,8 @@ impl DerivedLoopSignals {
             0.5 // neutral when no frame type data
         };
         let bytes_per_frame = if meta.frame_count > 0 {
-            crate::numeric_cast::u64_to_f64(meta.file_size_bytes) / crate::numeric_cast::u64_to_f64(meta.frame_count)
+            crate::numeric_cast::u64_to_f64(meta.file_size_bytes)
+                / crate::numeric_cast::u64_to_f64(meta.frame_count)
         } else {
             0.0
         };
@@ -648,12 +645,12 @@ impl LoopThresholds {
         let duration_percentiles_available = reference.duration.p25.is_some()
             || reference.duration.p10.is_some()
             || reference.duration.p50.is_some();
-        let short_percentile = reference.duration.p25.or(reference.duration.p10).unwrap_or(
+        let short_percentile = reference.duration.p25.or(reference.duration.p10).unwrap_or_else(|| {
             reference
                 .collection
                 .duration_p90
-                .min(crate::constants::DEFAULT_LOOP_BASELINE_DURATION_SECS),
-        );
+                .min(crate::constants::DEFAULT_LOOP_BASELINE_DURATION_SECS)
+        });
         let median_scaled = reference
             .duration
             .p50
@@ -672,14 +669,14 @@ impl LoopThresholds {
         let short_clip_secs = reference
             .duration
             .p50
-            .or(reference.duration.p75.map(|value| value.min(8.0)))
-            .unwrap_or(
+            .or_else(|| reference.duration.p75.map(|value| value.min(8.0)))
+            .unwrap_or_else(|| {
                 reference
                     .duration
                     .std_dev
                     .mul_add(0.50, reference.duration.mean)
-                    .clamp(duration_override_secs + 1.0, 8.0),
-            )
+                    .clamp(duration_override_secs + 1.0, 8.0)
+            })
             .max(duration_override_secs + 0.5);
         let short_asset_window_secs =
             short_clip_secs.max(crate::constants::HARD_PASS_SHORT_GIF_THRESHOLD_SECS);
@@ -1334,16 +1331,12 @@ pub fn identify_loop_intent(meta: &LoopMeta) -> LoopIntentVerdict {
 }
 
 fn developer_layer1_override_enabled(name: &str) -> bool {
-    let val = std::env::var(name).ok();
-    if let Some(value) = val {
+    std::env::var(name).is_ok_and(|value| {
         matches!(
             value.trim().to_ascii_lowercase().as_str(),
             "1" | "true" | "yes" | "on"
         )
-    } else {
-        // PATCH: Default disabled. All logic now relies on DB-tuned thresholds (Layer 1-B) and KNN (Layer 6).
-        false
-    }
+    })
 }
 
 /// Converts a `LoopIntentVerdict` + accumulated `LogOdds` into a `TreeEvaluation`.
@@ -2099,7 +2092,9 @@ fn layer6_directional_arbitration(
     if meta.frame_count > 500 && meta.duration_secs > 0.01 {
         let fps = crate::numeric_cast::u64_to_f64(meta.frame_count) / meta.duration_secs;
         if fps < 24.0 {
-            let weight = (crate::numeric_cast::u64_to_f64(meta.frame_count.saturating_sub(500)) / 2000.0).clamp(0.04, 0.14);
+            let weight = (crate::numeric_cast::u64_to_f64(meta.frame_count.saturating_sub(500))
+                / 2000.0)
+                .clamp(0.04, 0.14);
             arbitration.add_convert(
                 weight,
                 format!("high frame count {} @ {:.0}fps", meta.frame_count, fps),
@@ -2672,17 +2667,20 @@ fn layer7_fallback(meta: &LoopMeta, upstream_reason: &str) -> LoopIntentVerdict 
 /// Extract the layer tag (e.g. "Layer 1-A", "Layer 6", "Layer 7") from a verdict reason string.
 fn extract_layer_tag(reason: &str) -> String {
     // Reason strings start with "Layer X..." — extract the prefix up to the first ':'
-    if let Some(colon_pos) = reason.find(':') {
-        reason[..colon_pos].trim().to_string()
-    } else if reason.starts_with("Layer") {
-        // Some reasons don't have a colon (e.g. Layer 7 fallback sub-reasons)
-        reason.split_once('→').map_or_else(
-            || reason.to_string(),
-            |(prefix, _)| prefix.trim().to_string(),
-        )
-    } else {
-        "Unknown".to_string()
-    }
+    reason.find(':').map_or_else(
+        || {
+            if reason.starts_with("Layer") {
+                // Some reasons don't have a colon (e.g. Layer 7 fallback sub-reasons)
+                reason.split_once('→').map_or_else(
+                    || reason.to_string(),
+                    |(prefix, _)| prefix.trim().to_string(),
+                )
+            } else {
+                "Unknown".to_string()
+            }
+        },
+        |colon_pos| reason[..colon_pos].trim().to_string(),
+    )
 }
 
 // ── Safety & Exploration Helpers ──────────────────────────────────────────────
@@ -2691,22 +2689,26 @@ fn extract_layer_tag(reason: &str) -> String {
 #[must_use]
 pub fn is_lossless_exploration_safe(meta: &LoopMeta, path: Option<&Path>) -> bool {
     let sample_match = crate::database::lookup_similar_samples(meta, path);
-    let (threshold, keep_prob_label) = if let Some(keep_prob) =
-        sample_match.as_ref().and_then(|m| m.keep_probability)
-    {
-        (
-            lossless_duration_limit_for_keep_prob(keep_prob),
-            format!("keep_prob={keep_prob:.2}"),
-        )
-    } else {
-        emit_stderr(
+    let (threshold, keep_prob_label) = sample_match
+        .as_ref()
+        .and_then(|m| m.keep_probability)
+        .map_or_else(
+            || {
+                emit_stderr(
             "   ⚠️  Lossless-first safety: KNN evidence unavailable — using conservative high-value limit",
         );
-        (
-            crate::constants::HIGH_VALUE_LOSSLESS_DURATION_LIMIT,
-            "keep_prob=unknown".to_string(),
-        )
-    };
+                (
+                    crate::constants::HIGH_VALUE_LOSSLESS_DURATION_LIMIT,
+                    "keep_prob=unknown".to_string(),
+                )
+            },
+            |keep_prob| {
+                (
+                    lossless_duration_limit_for_keep_prob(keep_prob),
+                    format!("keep_prob={keep_prob:.2}"),
+                )
+            },
+        );
     let is_safe = meta.duration_secs < f64::from(threshold);
 
     if !is_safe {
@@ -2806,8 +2808,8 @@ static MEME_KEYWORDS_CACHE: OnceLock<Vec<String>> = OnceLock::new();
 fn get_meme_keywords() -> &'static [String] {
     MEME_KEYWORDS_CACHE.get_or_init(|| {
         let json_str = include_str!("meme_keywords.json");
-        let languages: HashMap<String, Vec<String>> = serde_json::from_str(json_str)
-            .unwrap_or_default();
+        let languages: HashMap<String, Vec<String>> =
+            serde_json::from_str(json_str).unwrap_or_default();
         let mut all_keywords = Vec::new();
         for list in languages.values() {
             all_keywords.extend(list.clone());
@@ -3000,10 +3002,15 @@ fn detect_scene_cut(pkt_sizes: &[u64]) -> bool {
     if pkt_sizes.len() < 5 {
         return false;
     }
-    let inner = pkt_sizes.get(1..pkt_sizes.len().saturating_sub(1)).unwrap_or(&[]);
+    let inner = pkt_sizes
+        .get(1..pkt_sizes.len().saturating_sub(1))
+        .unwrap_or(&[]);
     let mut baseline = inner.to_vec();
     baseline.sort_unstable();
-    let median = baseline.get(baseline.len() / 2).copied().map_or(0.0, crate::numeric_cast::u64_to_f64);
+    let median = baseline
+        .get(baseline.len() / 2)
+        .copied()
+        .map_or(0.0, crate::numeric_cast::u64_to_f64);
 
     if median <= 0.0 {
         return false;
@@ -3207,7 +3214,8 @@ pub fn deep_refine_meta(meta: &mut LoopMeta, path: &std::path::Path) -> anyhow::
     let mut ydif_values = Vec::new();
     for line in stderr.lines() {
         if let Some(idx) = line.find("lavfi.signalstats.YDIF=") {
-            if let Ok(val) = line.get(idx + 23..)
+            if let Ok(val) = line
+                .get(idx + 23..)
                 .unwrap_or("")
                 .split_whitespace()
                 .next()

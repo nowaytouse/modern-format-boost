@@ -9,4 +9,3 @@ fn parse_duration_from_synthetic_animated_webp_anmf_payloads() {
     // 100ms + 120ms = 220ms
     assert!((dur - 0.22).abs() < 0.001, "duration={dur}");
 }
-

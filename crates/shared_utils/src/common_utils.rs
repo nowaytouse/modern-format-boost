@@ -95,19 +95,10 @@ pub fn ensure_parent_dir_exists(file_path: &Path) -> Result<()> {
 /// # Errors
 /// Returns an I/O error if the directory cannot be determined or created.
 pub fn get_user_project_cache_dir() -> anyhow::Result<PathBuf> {
-    let mut path = if let Ok(root) = std::env::var("MFB_HOME_ROOT") {
-        PathBuf::from(root)
-    } else if let Ok(home) = std::env::var("HOME") {
-        PathBuf::from(home)
-    } else if let Ok(userprofile) = std::env::var("USERPROFILE") {
-        PathBuf::from(userprofile)
-    } else {
+    let mut path = std::env::var("MFB_HOME_ROOT").map(PathBuf::from).or_else(|_| std::env::var("HOME").map(PathBuf::from)).or_else(|_| std::env::var("USERPROFILE").map(PathBuf::from)).unwrap_or_else(|_| {
         // Fallback to project root .cache if HOME is missing
-        match std::env::current_dir() {
-            Ok(curr) => curr,
-            Err(_) => PathBuf::from("."),
-        }
-    };
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    });
 
     if path
         .file_name()
@@ -629,7 +620,10 @@ mod tests {
         let file_path = temp.path().join("a/b/c/file.txt");
 
         ensure_parent_dir_exists(&file_path).unwrap_or_else(|e| panic!("error: {e:?}"));
-        assert!(file_path.parent().unwrap_or_else(|| panic!("missing parent")).exists());
+        assert!(file_path
+            .parent()
+            .unwrap_or_else(|| panic!("missing parent"))
+            .exists());
     }
 
     #[test]
@@ -652,9 +646,13 @@ mod tests {
 
         fs::write(&source, "test content").unwrap_or_else(|e| panic!("error: {e:?}"));
 
-        let bytes = copy_file_with_context(&source, &dest).unwrap_or_else(|e| panic!("error: {e:?}"));
+        let bytes =
+            copy_file_with_context(&source, &dest).unwrap_or_else(|e| panic!("error: {e:?}"));
         assert_eq!(bytes, 12);
-        assert_eq!(fs::read_to_string(&dest).unwrap_or_else(|e| panic!("error: {e:?}")), "test content");
+        assert_eq!(
+            fs::read_to_string(&dest).unwrap_or_else(|e| panic!("error: {e:?}")),
+            "test content"
+        );
     }
 
     #[test]
@@ -724,7 +722,8 @@ mod tests {
         let mut cmd = Command::new("echo");
         cmd.arg("test");
 
-        let output = execute_command_with_logging(&mut cmd).unwrap_or_else(|e| panic!("error: {e:?}"));
+        let output =
+            execute_command_with_logging(&mut cmd).unwrap_or_else(|e| panic!("error: {e:?}"));
         assert!(output.status.success());
 
         let stdout = String::from_utf8_lossy(&output.stdout);

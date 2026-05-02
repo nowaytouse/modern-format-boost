@@ -43,11 +43,15 @@ fn beijing_time_now() -> String {
 }
 
 fn describe_thread_panic(payload: Box<dyn Any + Send + 'static>) -> String {
-    payload.downcast::<String>().map(|msg| *msg).unwrap_or_else(|payload| {
-        payload
-            .downcast::<&'static str>()
-            .map_or_else(|_| "non-string panic payload".to_string(), |msg| (*msg).to_string())
-    })
+    payload.downcast::<String>().map_or_else(
+        |payload| {
+            payload.downcast::<&'static str>().map_or_else(
+                |_| "non-string panic payload".to_string(),
+                |msg| (*msg).to_string(),
+            )
+        },
+        |msg| *msg,
+    )
 }
 
 struct StderrCapture {
@@ -1545,7 +1549,10 @@ impl QualityCeilingDetector {
 
         if self.samples.len() >= 2 {
             let last = self.samples.last().map_or(0.0, |s| s.1);
-            let prev = self.samples.get(self.samples.len().saturating_sub(2)).map_or(0.0, |s| s.1);
+            let prev = self
+                .samples
+                .get(self.samples.len().saturating_sub(2))
+                .map_or(0.0, |s| s.1);
             let change = (last - prev).abs();
 
             if change < self.plateau_threshold {
@@ -1742,6 +1749,7 @@ pub fn gpu_coarse_search_with_log(
     result
 }
 
+#[allow(clippy::too_many_lines)]
 fn gpu_coarse_search_with_log_impl(
     input: &std::path::Path,
     output: &std::path::Path,
@@ -2497,10 +2505,8 @@ fn gpu_coarse_search_with_log_impl(
 
             while test_crf <= config.max_crf && iterations < max_iterations_limit {
                 let cached = size_cache.get(test_crf).copied();
-                let size_result = match cached {
-                    Some(s) => Ok(s),
-                    None => encode_cached(test_crf, &mut size_cache),
-                };
+                let size_result =
+                    cached.map_or_else(|| encode_cached(test_crf, &mut size_cache), Ok);
 
                 match size_result {
                     Ok(size) => {
@@ -2627,10 +2633,8 @@ fn gpu_coarse_search_with_log_impl(
 
             while test_crf >= config.min_crf && iterations < max_iterations_limit {
                 let cached = size_cache.get(test_crf).copied();
-                let size_result = match cached {
-                    Some(s) => Ok(s),
-                    None => encode_cached(test_crf, &mut size_cache),
-                };
+                let size_result =
+                    cached.map_or_else(|| encode_cached(test_crf, &mut size_cache), Ok);
 
                 match size_result {
                     Ok(size) => {
@@ -2702,12 +2706,10 @@ fn gpu_coarse_search_with_log_impl(
         }
     }
 
-    let skip_stage2 = if let Some(b) = best_crf {
+    let skip_stage2 = best_crf.is_some_and(|b| {
         let fract = (b * 2.0).fract();
         fract.abs() < 0.01 || (fract - 1.0).abs() < 0.01
-    } else {
-        false
-    };
+    });
 
     if found_compress_point && !skip_stage2 && (boundary_high - boundary_low) > 1.0 {
         let mut lo = crate::numeric_cast::f32_to_i32_sat(boundary_low.ceil());
@@ -2912,11 +2914,10 @@ fn gpu_coarse_search_with_log_impl(
         }
     }
 
-    let (last_tested_crf, found, fine_tuned) = if let Some(b) = best_crf {
-        (b, true, iterations > 8)
-    } else {
-        (config.max_crf, false, false)
-    };
+    let (last_tested_crf, found, fine_tuned) = best_crf.map_or_else(
+        || (config.max_crf, false, false),
+        |b| (b, true, iterations > 8),
+    );
 
     let quality_ceiling_info = if ceiling_detector.ceiling_detected {
         ceiling_detector.get_ceiling()
@@ -2945,45 +2946,26 @@ fn gpu_coarse_search_with_log_impl(
                 let psnr_result =
                     calculate_psnr_fast(&input.to_string_lossy(), &output.to_string_lossy());
 
-                let ssim = match ssim_output {
-                    Ok(out) => {
-                        let stderr = String::from_utf8_lossy(&out.stderr);
-                        if let Some(line) = stderr
-                            .lines()
-                            .find(|l| l.contains("SSIM") && l.contains("All:"))
-                        {
-                            if let Some(all_pos) = line.find("All:") {
-                                let after_all = &line[all_pos + 4..];
-                                if let Some(space_pos) = after_all.find(' ') {
-                                    if let Ok(ssim) = after_all[..space_pos].parse::<f64>() {
-                                        log_msg!("      📊 Final GPU SSIM: {:.6}", ssim);
-                                        Some(ssim)
-                                    } else {
-                                        None
-                                    }
-                                } else if let Ok(ssim) = after_all.trim().parse::<f64>() {
-                                    log_msg!("      📊 Final GPU SSIM: {:.6}", ssim);
-                                    Some(ssim)
-                                } else {
-                                    None
-                                }
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    }
-                    Err(_) => None,
-                };
+                let ssim = ssim_output.ok().and_then(|out| {
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    stderr
+                        .lines()
+                        .find(|l| l.contains("SSIM") && l.contains("All:"))
+                        .and_then(|line| line.find("All:").map(|pos| &line[pos + 4..]))
+                        .and_then(|after_all| {
+                            let val_str = after_all
+                                .find(' ')
+                                .map_or(after_all, |pos| &after_all[..pos]);
+                            val_str.trim().parse::<f64>().ok()
+                        })
+                        .inspect(|&ssim| {
+                            log_msg!("      📊 Final GPU SSIM: {:.6}", ssim);
+                        })
+                });
 
-                let psnr = match psnr_result {
-                    Ok(p) => {
-                        log_msg!("      📊 Final GPU PSNR: {:.2}dB", p);
-                        Some(p)
-                    }
-                    Err(_) => None,
-                };
+                let psnr = psnr_result.ok().inspect(|&p| {
+                    log_msg!("      📊 Final GPU PSNR: {:.2}dB", p);
+                });
 
                 if let (Some(p), Some(s)) = (psnr, ssim) {
                     psnr_ssim_mapper.add_calibration_point(p, s);
@@ -3002,17 +2984,17 @@ fn gpu_coarse_search_with_log_impl(
         (None, None)
     };
 
-    let gpu_boundary_crf = if let Some(ceiling_crf) = quality_ceiling_info.map(|(crf, _)| crf) {
-        log_msg!("   🎯 GPU Quality Ceiling Detected!");
-        log_msg!("      └─ Ceiling CRF: {:.1} (PSNR plateau)", ceiling_crf);
-        log_msg!("      └─ Last tested CRF: {:.1}", last_tested_crf);
-        if !crate::float_compare::approx_eq_crf(ceiling_crf, last_tested_crf) {
-            log_msg!("      └─ Boundary = Ceiling (lower CRFs are bloated, no quality gain)");
-        }
-        ceiling_crf
-    } else {
-        last_tested_crf
-    };
+    let gpu_boundary_crf = quality_ceiling_info
+        .map(|(crf, _)| crf)
+        .map_or(last_tested_crf, |ceiling_crf| {
+            log_msg!("   🎯 GPU Quality Ceiling Detected!");
+            log_msg!("      └─ Ceiling CRF: {:.1} (PSNR plateau)", ceiling_crf);
+            log_msg!("      └─ Last tested CRF: {:.1}", last_tested_crf);
+            if !crate::float_compare::approx_eq_crf(ceiling_crf, last_tested_crf) {
+                log_msg!("      └─ Boundary = Ceiling (lower CRFs are bloated, no quality gain)");
+            }
+            ceiling_crf
+        });
 
     log_msg!("   ═══════════════════════════════════════════════════");
     if found {
@@ -3235,7 +3217,11 @@ mod tests {
             0.0, 0.5, 1.0, 10.0, 20.0, 30.0, 40.0, 50.0, 51.0, 60.0, 100.0,
         ] {
             let args = encoder.get_crf_args(crf);
-            let qv: f32 = args.get(1).unwrap_or(&String::new()).parse().unwrap_or_else(|e| panic!("error: {e:?}"));
+            let qv: f32 = args
+                .get(1)
+                .unwrap_or(&String::new())
+                .parse()
+                .unwrap_or_else(|e| panic!("error: {e:?}"));
             assert!(qv >= 1.0, "q:v should be >= 1, got {qv} for CRF {crf}");
             assert!(qv <= 100.0, "q:v should be <= 100, got {qv} for CRF {crf}");
         }

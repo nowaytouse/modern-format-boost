@@ -8,7 +8,8 @@ use shared_utils::tool_builders::*;
 use std::path::Path;
 
 fn get_arg(args: &[String], idx: usize) -> &str {
-    args.get(idx).map_or_else(|| panic!("missing arg at index {idx}"), String::as_str)
+    args.get(idx)
+        .map_or_else(|| panic!("missing arg at index {idx}"), String::as_str)
 }
 
 #[test]
@@ -631,12 +632,18 @@ fn test_ffmpeg_global_flag_priority_parity() {
         .collect();
 
     // Priority check: -y and -hide_banner MUST come before -i
-    let y_idx = args.iter().position(|r| r == "-y").unwrap_or_else(|| panic!("-y not found"));
+    let y_idx = args
+        .iter()
+        .position(|r| r == "-y")
+        .unwrap_or_else(|| panic!("-y not found"));
     let hb_idx = args
         .iter()
         .position(|r| r == "-hide_banner")
         .unwrap_or_else(|| panic!("-hide_banner not found"));
-    let i_idx = args.iter().position(|r| r == "-i").unwrap_or_else(|| panic!("-i not found"));
+    let i_idx = args
+        .iter()
+        .position(|r| r == "-i")
+        .unwrap_or_else(|| panic!("-i not found"));
 
     assert!(y_idx < i_idx);
     assert!(hb_idx < i_idx);

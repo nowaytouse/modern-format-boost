@@ -92,7 +92,7 @@ fn build_coarse_progress_line(
     stats: &str,
     terminal_width: usize,
 ) -> String {
-#[allow(clippy::struct_excessive_bools)]
+    #[allow(clippy::struct_excessive_bools)]
     struct Variant {
         show_bar: bool,
         show_elapsed: bool,
@@ -305,15 +305,16 @@ pub fn active_progress_line() -> Option<String> {
 
 #[must_use]
 pub fn wrap_output_for_active_progress(line: &str) -> String {
-    if let Some(progress_line) = active_progress_line() {
-        // 1. \r: move to start
-        // 2. \x1b[2K: clear entire line
-        // 3. line + \n: print the actual log message and go to next line
-        // 4. \r + progress_line: print progress bar at the new start
-        format!("\r\x1b[2K{line}\n\r{progress_line}")
-    } else {
-        format!("{line}\n")
-    }
+    active_progress_line().map_or_else(
+        || format!("{line}\n"),
+        |progress_line| {
+            // 1. \r: move to start
+            // 2. \x1b[2K: clear entire line
+            // 3. line + \n: print the actual log message and go to next line
+            // 4. \r + progress_line: print progress bar at the new start
+            format!("\r\x1b[2K{line}\n\r{progress_line}")
+        },
+    )
 }
 
 impl CoarseProgressBar {
@@ -552,11 +553,17 @@ impl DetailedCoarseProgressBar {
         }
 
         let total = self.total_iterations.max(1);
-        let percent = (crate::numeric_cast::u64_to_f64(iter) / crate::numeric_cast::u64_to_f64(total) * 100.0).min(100.0);
+        let percent = (crate::numeric_cast::u64_to_f64(iter)
+            / crate::numeric_cast::u64_to_f64(total)
+            * 100.0)
+            .min(100.0);
         let elapsed = self.start_time.elapsed();
 
         let size_pct = if self.input_size > 0 {
-            ((crate::numeric_cast::u64_to_f64(size) / crate::numeric_cast::u64_to_f64(self.input_size)) - 1.0) * 100.0
+            ((crate::numeric_cast::u64_to_f64(size)
+                / crate::numeric_cast::u64_to_f64(self.input_size))
+                - 1.0)
+                * 100.0
         } else {
             0.0
         };
@@ -567,11 +574,7 @@ impl DetailedCoarseProgressBar {
             "📈"
         };
 
-        let ssim_str = if let Some(s) = ssim {
-            format!("SSIM {s:.4}")
-        } else {
-            String::new()
-        };
+        let ssim_str = ssim.map_or_else(String::new, |s| format!("SSIM {s:.4}"));
 
         let best_crf =
             f32::from_bits(u32::try_from(self.best_crf.load(Ordering::Relaxed)).unwrap_or(0));
@@ -588,8 +591,9 @@ impl DetailedCoarseProgressBar {
         let bar_width = dynamic_bar_width(terminal_width, reserved + prefix_width);
         // Ensure we don't overflow the subtraction
         let available_for_prefix = terminal_width.saturating_sub(reserved + bar_width);
-        let filled =
-            crate::numeric_cast::f64_to_usize_sat(((percent / 100.0) * crate::numeric_cast::usize_to_f64(bar_width)).round());
+        let filled = crate::numeric_cast::f64_to_usize_sat(
+            ((percent / 100.0) * crate::numeric_cast::usize_to_f64(bar_width)).round(),
+        );
         let empty = bar_width.saturating_sub(filled);
         let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
 
@@ -961,7 +965,10 @@ impl ExploreProgress {
         let best_ssim = self.best_ssim.lock().map_or(0.0, |s| *s);
 
         let size_change = if self.input_size > 0 {
-            ((crate::numeric_cast::u64_to_f64(size) / crate::numeric_cast::u64_to_f64(self.input_size)) - 1.0) * 100.0
+            ((crate::numeric_cast::u64_to_f64(size)
+                / crate::numeric_cast::u64_to_f64(self.input_size))
+                - 1.0)
+                * 100.0
         } else {
             0.0
         };
@@ -1078,7 +1085,10 @@ impl ExploreLogger {
 
     fn calc_change(&self, size: u64) -> f64 {
         if self.input_size > 0 {
-            ((crate::numeric_cast::u64_to_f64(size) / crate::numeric_cast::u64_to_f64(self.input_size)) - 1.0) * 100.0
+            ((crate::numeric_cast::u64_to_f64(size)
+                / crate::numeric_cast::u64_to_f64(self.input_size))
+                - 1.0)
+                * 100.0
         } else {
             0.0
         }
@@ -1276,8 +1286,8 @@ impl SmartProgressBar {
 
         let remaining = self.total.saturating_sub(self.processed);
         let eta = if !self.recent_times.is_empty() && remaining > 0 {
-            let avg_time: f64 =
-                self.recent_times.iter().sum::<f64>() / crate::numeric_cast::usize_to_f64(self.recent_times.len());
+            let avg_time: f64 = self.recent_times.iter().sum::<f64>()
+                / crate::numeric_cast::usize_to_f64(self.recent_times.len());
             let eta_secs = avg_time * crate::numeric_cast::u64_to_f64(remaining);
             format_eta(eta_secs)
         } else {

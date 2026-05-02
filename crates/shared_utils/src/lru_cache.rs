@@ -201,23 +201,25 @@ impl<K: Hash + Eq + Clone + for<'de> Deserialize<'de>, V: Clone + for<'de> Deser
 
     #[must_use]
     pub fn load_from_file(path: &std::path::Path, capacity: usize) -> Self {
-        match std::fs::read_to_string(path) {
-            Ok(json) => match Self::from_json(&json) {
-                Ok(cache) => {
-                    eprintln!(
-                        "📦 LRU Cache: loaded {} entries from {}",
-                        cache.len(),
-                        path.display()
-                    );
-                    cache
-                }
-                Err(e) => {
-                    eprintln!("⚠️ LRU Cache: failed to parse cache file, starting fresh: {e}");
-                    Self::new(capacity)
-                }
+        std::fs::read_to_string(path).map_or_else(
+            |_| Self::new(capacity),
+            |json| {
+                Self::from_json(&json).map_or_else(
+                    |e| {
+                        eprintln!("⚠️ LRU Cache: failed to parse cache file, starting fresh: {e}");
+                        Self::new(capacity)
+                    },
+                    |cache| {
+                        eprintln!(
+                            "📦 LRU Cache: loaded {} entries from {}",
+                            cache.len(),
+                            path.display()
+                        );
+                        cache
+                    },
+                )
             },
-            Err(_) => Self::new(capacity),
-        }
+        )
     }
 }
 
@@ -362,7 +364,9 @@ mod prop_tests {
                 original.insert(key, value);
             }
 
-            let json = original.to_json().unwrap_or_else(|e| panic!("error: {e:?}"));
+            let json = original
+                .to_json()
+                .unwrap_or_else(|e| panic!("error: {e:?}"));
 
             let restored: LruCache<i32, i32> =
                 LruCache::from_json(&json).unwrap_or_else(|e| panic!("error: {e:?}"));
@@ -386,7 +390,9 @@ mod prop_tests {
                 );
                 assert_eq!(
                     entry.value,
-                    restored_entry.unwrap_or_else(|| panic!("missing entry")).value,
+                    restored_entry
+                        .unwrap_or_else(|| panic!("missing entry"))
+                        .value,
                     "Seed {seed}: Value mismatch for key {key}"
                 );
             }
@@ -411,8 +417,10 @@ mod prop_tests {
             let temp_dir = std::env::temp_dir();
             let temp_file = temp_dir.join(format!("test_corrupted_cache_{i}.json"));
 
-            let mut file = std::fs::File::create(&temp_file).unwrap_or_else(|e| panic!("error: {e:?}"));
-            file.write_all(corrupted.as_bytes()).unwrap_or_else(|e| panic!("error: {e:?}"));
+            let mut file =
+                std::fs::File::create(&temp_file).unwrap_or_else(|e| panic!("error: {e:?}"));
+            file.write_all(corrupted.as_bytes())
+                .unwrap_or_else(|e| panic!("error: {e:?}"));
 
             let cache: LruCache<i32, i32> = LruCache::load_from_file(&temp_file, 10);
             assert_eq!(

@@ -4,10 +4,10 @@
 
 use crate::detection_api::{CompressionType, DetectedFormat, DetectionResult, ImageType};
 use crate::{ImgQualityError, Result};
+use bitflags::bitflags;
 use rug::Rational;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use bitflags::bitflags;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TargetFormat {
@@ -44,12 +44,30 @@ pub struct ConversionConfig {
 }
 
 impl ConversionConfig {
-    #[must_use] pub const fn force(&self) -> bool { self.flags.contains(ConfigFlags::FORCE) }
-    #[must_use] pub const fn delete_original(&self) -> bool { self.flags.contains(ConfigFlags::DELETE_ORIGINAL) }
-    #[must_use] pub const fn preserve_timestamps(&self) -> bool { self.flags.contains(ConfigFlags::PRESERVE_TIMESTAMPS) }
-    #[must_use] pub const fn preserve_metadata(&self) -> bool { self.flags.contains(ConfigFlags::PRESERVE_METADATA) }
-    #[must_use] pub const fn compress(&self) -> bool { self.flags.contains(ConfigFlags::COMPRESS) }
-    #[must_use] pub const fn apple_compat(&self) -> bool { self.flags.contains(ConfigFlags::APPLE_COMPAT) }
+    #[must_use]
+    pub const fn force(&self) -> bool {
+        self.flags.contains(ConfigFlags::FORCE)
+    }
+    #[must_use]
+    pub const fn delete_original(&self) -> bool {
+        self.flags.contains(ConfigFlags::DELETE_ORIGINAL)
+    }
+    #[must_use]
+    pub const fn preserve_timestamps(&self) -> bool {
+        self.flags.contains(ConfigFlags::PRESERVE_TIMESTAMPS)
+    }
+    #[must_use]
+    pub const fn preserve_metadata(&self) -> bool {
+        self.flags.contains(ConfigFlags::PRESERVE_METADATA)
+    }
+    #[must_use]
+    pub const fn compress(&self) -> bool {
+        self.flags.contains(ConfigFlags::COMPRESS)
+    }
+    #[must_use]
+    pub const fn apple_compat(&self) -> bool {
+        self.flags.contains(ConfigFlags::APPLE_COMPAT)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -374,11 +392,10 @@ fn resolve_output_path(
     let file_stem = input.file_stem().ok_or_else(|| {
         ImgQualityError::ConversionError("Invalid file path: no file stem".to_string())
     })?;
-    let output = if let Some(dir) = output_dir {
-        dir.join(file_stem).with_extension(extension)
-    } else {
-        input.with_extension(extension)
-    };
+    let output = output_dir.map_or_else(
+        || input.with_extension(extension),
+        |dir| dir.join(file_stem).with_extension(extension),
+    );
     shared_utils::conversion::validate_output_path(&output, None)
         .map_err(ImgQualityError::ConversionError)?;
     Ok(output)

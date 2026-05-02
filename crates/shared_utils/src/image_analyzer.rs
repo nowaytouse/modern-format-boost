@@ -5,8 +5,8 @@ use crate::image_jpeg_analysis::{analyze_jpeg_file, JpegQualityAnalysis};
 use crate::img_errors::{ImgQualityError, Result};
 use crate::log_eprintln;
 use crate::types::{ProcessHistory, VisualPerception};
-use rug::Rational;
 use image::{DynamicImage, GenericImageView, ImageFormat};
+use rug::Rational;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -311,11 +311,9 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
     }
 
     // AVIF: image crate fails on some variants (e.g. tachimanga output); fall back to ffprobe
-    let is_avif = if let Ok(format) = crate::image_detection::detect_format_from_bytes(path) {
+    let is_avif = crate::image_detection::detect_format_from_bytes(path).is_ok_and(|format| {
         format == crate::image_detection::DetectedFormat::AVIF
-    } else {
-        false
-    };
+    });
 
     if is_avif {
         if let Some(ext) = path.extension() {
@@ -421,13 +419,11 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
 
     let jxl_indicator = generate_jxl_indicator(format, is_lossless, jpeg_analysis.as_ref(), path);
 
-    let (psnr, ssim) = if let Some(jpeg) = jpeg_analysis.as_ref() {
+    let (psnr, ssim) = jpeg_analysis.as_ref().map_or((None, None), |jpeg| {
         let estimated_psnr = estimate_psnr_from_quality(jpeg.estimated_quality);
         let estimated_ssim = estimate_ssim_from_quality(jpeg.estimated_quality);
         (Some(estimated_psnr), Some(estimated_ssim))
-    } else {
-        (None, None)
-    };
+    });
 
     let mut metadata = extract_metadata(path);
 
@@ -488,23 +484,31 @@ impl ImageAnalysis {
     /// Returns a human-readable quality summary label (e.g. "Q=95 Excellence", "Lossless").
     #[must_use]
     pub fn quality_summary(&self) -> String {
-        if let Some(ref jpeg) = self.jpeg_analysis {
-            format!("Q={} {}", jpeg.estimated_quality, jpeg.quality_description)
-        } else if let Some(ref heic) = self.heic_analysis {
-            if heic.is_lossless {
-                "Lossless".to_string()
-            } else {
-                format!(
-                    "{} {}",
-                    heic.codec,
-                    if heic.bit_depth > 8 { "HDR" } else { "SD" }
+        self.jpeg_analysis.as_ref().map_or_else(
+            || {
+                self.heic_analysis.as_ref().map_or_else(
+                    || {
+                        if self.is_lossless {
+                            "Lossless".to_string()
+                        } else {
+                            "Lossy".to_string()
+                        }
+                    },
+                    |heic| {
+                        if heic.is_lossless {
+                            "Lossless".to_string()
+                        } else {
+                            format!(
+                                "{} {}",
+                                heic.codec,
+                                if heic.bit_depth > 8 { "HDR" } else { "SD" }
+                            )
+                        }
+                    },
                 )
-            }
-        } else if self.is_lossless {
-            "Lossless".to_string()
-        } else {
-            "Lossy".to_string()
-        }
+            },
+            |jpeg| format!("Q={} {}", jpeg.estimated_quality, jpeg.quality_description),
+        )
     }
 }
 
@@ -711,16 +715,15 @@ fn analyze_jpeg_fast_path(path: &Path, file_size: u64) -> ImageAnalysis {
             );
         }
     }
-    let jxl_indicator = generate_jxl_indicator(ImageFormat::Jpeg, false, jpeg_analysis.as_ref(), path);
+    let jxl_indicator =
+        generate_jxl_indicator(ImageFormat::Jpeg, false, jpeg_analysis.as_ref(), path);
 
-    let (psnr, ssim) = if let Some(jpeg) = jpeg_analysis.as_ref() {
+    let (psnr, ssim) = jpeg_analysis.as_ref().map_or((None, None), |jpeg| {
         (
             Some(estimate_psnr_from_quality(jpeg.estimated_quality)),
             Some(estimate_ssim_from_quality(jpeg.estimated_quality)),
         )
-    } else {
-        (None, None)
-    };
+    });
 
     ImageAnalysis {
         cache_version: 2,
@@ -1307,20 +1310,25 @@ fn try_jxl_via_apng(path: &Path) -> Option<f32> {
     if probe_output.status.success() {
         let json_str = String::from_utf8_lossy(&probe_output.stdout);
         if let Ok(json) = serde_json::from_str::<serde_json::Value>(&json_str) {
-            if let Some(stream) = json.get("streams").and_then(|s| s.as_array()).and_then(|s| s.first()) {
-                let nb_frames = stream.get("nb_read_frames")
+            if let Some(stream) = json
+                .get("streams")
+                .and_then(|s| s.as_array())
+                .and_then(|s| s.first())
+            {
+                let nb_frames = stream
+                    .get("nb_read_frames")
                     .and_then(|v| v.as_str())
                     .and_then(|s| s.parse::<u64>().ok())
                     .unwrap_or(0);
 
-                let r_frame_rate = stream.get("r_frame_rate").and_then(|v| v.as_str()).unwrap_or("0/1");
+                let r_frame_rate = stream
+                    .get("r_frame_rate")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0/1");
 
                 // Parse frame rate (format: "num/den")
-                let fps = if let Ok(rate) = crate::ffprobe::parse_frame_rate(r_frame_rate) {
-                    crate::numeric_cast::f64_to_f32_lossy(rate)
-                } else {
-                    0.0
-                };
+                let fps = crate::ffprobe::parse_frame_rate(r_frame_rate)
+                    .map_or(0.0, crate::numeric_cast::f64_to_f32_lossy);
 
                 if nb_frames > 0 && fps > 0.0 {
                     let duration = crate::numeric_cast::u64_to_f64(nb_frames) / f64::from(fps);
@@ -1634,14 +1642,13 @@ fn pixel_fallback_lossless(path: &Path) -> bool {
             analysis.color_diversity,
         );
         // Conservative strategy: no longer decide whether to treat as lossless based on old RoutingDecision; universally treat as lossy.
-        false
     } else {
         log_eprintln!(
             "⚠️  [Lossless Fallback] Pixel-level analysis failed for {}; treating as lossy",
             path.display()
         );
-        false
     }
+    false
 }
 
 fn is_jxl_file(path: &Path) -> bool {

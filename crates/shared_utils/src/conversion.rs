@@ -332,9 +332,10 @@ impl VideoExplorationMetrics<'_> {
             size_tag
         );
 
-        self.quality_label
-            .filter(|q| !q.is_empty())
-            .map_or_else(|| format!("✅ {core_msg}"), |q| format!("✅ {q} | {core_msg}"))
+        self.quality_label.filter(|q| !q.is_empty()).map_or_else(
+            || format!("✅ {core_msg}"),
+            |q| format!("✅ {q} | {core_msg}"),
+        )
     }
 }
 
@@ -608,7 +609,9 @@ impl ConversionResult {
         let size_reduction = if input_size == 0 {
             0.0
         } else {
-            (1.0 - (crate::numeric_cast::u64_to_f64(output_size) / crate::numeric_cast::u64_to_f64(input_size))) * 100.0
+            (1.0 - (crate::numeric_cast::u64_to_f64(output_size)
+                / crate::numeric_cast::u64_to_f64(input_size)))
+                * 100.0
         };
 
         Self {
@@ -639,7 +642,8 @@ impl ConversionResult {
         let reduction = if input_size == 0 {
             0.0
         } else {
-            1.0 - (crate::numeric_cast::u64_to_f64(output_size) / crate::numeric_cast::u64_to_f64(input_size))
+            1.0 - (crate::numeric_cast::u64_to_f64(output_size)
+                / crate::numeric_cast::u64_to_f64(input_size))
         };
         let reduction_pct = reduction * 100.0;
 
@@ -677,9 +681,10 @@ impl ConversionResult {
             |info| format!("{format_name} {action} ({info}): {size_tag}"),
         );
 
-        let message = quality_label
-            .filter(|q| !q.is_empty())
-            .map_or_else(|| format!("✅ {core_msg}"), |q| format!("✅ {q} | {core_msg}"));
+        let message = quality_label.filter(|q| !q.is_empty()).map_or_else(
+            || format!("✅ {core_msg}"),
+            |q| format!("✅ {q} | {core_msg}"),
+        );
 
         Self {
             success: true,
@@ -705,7 +710,9 @@ impl ConversionResult {
         let reduction_pct = if metrics.input_size == 0 {
             0.0
         } else {
-            (1.0 - (crate::numeric_cast::u64_to_f64(metrics.output_size) / crate::numeric_cast::u64_to_f64(metrics.input_size))) * 100.0
+            (1.0 - (crate::numeric_cast::u64_to_f64(metrics.output_size)
+                / crate::numeric_cast::u64_to_f64(metrics.input_size)))
+                * 100.0
         };
 
         let message = metrics.format_message(reduction_pct);
@@ -756,27 +763,49 @@ pub struct ConvertOptions {
 
 impl ConvertOptions {
     #[must_use]
-    pub const fn force(&self) -> bool { self.flags.contains(ConvertFlags::FORCE) }
+    pub const fn force(&self) -> bool {
+        self.flags.contains(ConvertFlags::FORCE)
+    }
     #[must_use]
-    pub const fn delete_original(&self) -> bool { self.flags.contains(ConvertFlags::DELETE_ORIGINAL) }
+    pub const fn delete_original(&self) -> bool {
+        self.flags.contains(ConvertFlags::DELETE_ORIGINAL)
+    }
     #[must_use]
-    pub const fn in_place(&self) -> bool { self.flags.contains(ConvertFlags::IN_PLACE) }
+    pub const fn in_place(&self) -> bool {
+        self.flags.contains(ConvertFlags::IN_PLACE)
+    }
     #[must_use]
-    pub const fn explore(&self) -> bool { self.flags.contains(ConvertFlags::EXPLORE) }
+    pub const fn explore(&self) -> bool {
+        self.flags.contains(ConvertFlags::EXPLORE)
+    }
     #[must_use]
-    pub const fn match_quality(&self) -> bool { self.flags.contains(ConvertFlags::MATCH_QUALITY) }
+    pub const fn match_quality(&self) -> bool {
+        self.flags.contains(ConvertFlags::MATCH_QUALITY)
+    }
     #[must_use]
-    pub const fn apple_compat(&self) -> bool { self.flags.contains(ConvertFlags::APPLE_COMPAT) }
+    pub const fn apple_compat(&self) -> bool {
+        self.flags.contains(ConvertFlags::APPLE_COMPAT)
+    }
     #[must_use]
-    pub const fn compress(&self) -> bool { self.flags.contains(ConvertFlags::COMPRESS) }
+    pub const fn compress(&self) -> bool {
+        self.flags.contains(ConvertFlags::COMPRESS)
+    }
     #[must_use]
-    pub const fn use_gpu(&self) -> bool { self.flags.contains(ConvertFlags::USE_GPU) }
+    pub const fn use_gpu(&self) -> bool {
+        self.flags.contains(ConvertFlags::USE_GPU)
+    }
     #[must_use]
-    pub const fn ultimate(&self) -> bool { self.flags.contains(ConvertFlags::ULTIMATE) }
+    pub const fn ultimate(&self) -> bool {
+        self.flags.contains(ConvertFlags::ULTIMATE)
+    }
     #[must_use]
-    pub const fn allow_size_tolerance(&self) -> bool { self.flags.contains(ConvertFlags::ALLOW_SIZE_TOLERANCE) }
+    pub const fn allow_size_tolerance(&self) -> bool {
+        self.flags.contains(ConvertFlags::ALLOW_SIZE_TOLERANCE)
+    }
     #[must_use]
-    pub const fn verbose(&self) -> bool { self.flags.contains(ConvertFlags::VERBOSE) }
+    pub const fn verbose(&self) -> bool {
+        self.flags.contains(ConvertFlags::VERBOSE)
+    }
 }
 
 impl Default for ConvertOptions {
@@ -982,7 +1011,9 @@ pub fn calculate_size_reduction(input_size: u64, output_size: u64) -> f64 {
     if input_size == 0 {
         return 0.0;
     }
-    (1.0 - (crate::numeric_cast::u64_to_f64(output_size) / crate::numeric_cast::u64_to_f64(input_size))) * 100.0
+    (1.0 - (crate::numeric_cast::u64_to_f64(output_size)
+        / crate::numeric_cast::u64_to_f64(input_size)))
+        * 100.0
 }
 
 /// Pre-conversion check: tests duplicate and output-exists skip conditions.
@@ -1373,7 +1404,8 @@ impl SizeToleranceCheck<'_> {
 
         if self.options.compress() && self.output_size >= self.input_size {
             let delta = self.delta();
-            if self.options.allow_size_tolerance() && delta.increase_bytes < Self::tolerance_bytes() {
+            if self.options.allow_size_tolerance() && delta.increase_bytes < Self::tolerance_bytes()
+            {
                 return None;
             }
             return Some(SizeGuardFailure::CompressionGoalMissed);
@@ -1785,7 +1817,10 @@ mod tests {
 
         for (input, output, expected) in test_cases {
             let result = calculate_size_reduction(input, output);
-            let expected_calc = (1.0 - (crate::numeric_cast::u64_to_f64(output) / crate::numeric_cast::u64_to_f64(input))) * 100.0;
+            let expected_calc = (1.0
+                - (crate::numeric_cast::u64_to_f64(output)
+                    / crate::numeric_cast::u64_to_f64(input)))
+                * 100.0;
 
             assert!(
                 (result - expected).abs() < 0.001,
@@ -1864,7 +1899,8 @@ mod tests {
     fn test_removed_commit_temp_to_output_returns_error() {
         #[expect(deprecated, reason = "regression test for removed compatibility shim")]
         let err = commit_temp_to_output(Path::new("temp.tmp"), Path::new("out.mp4"), false)
-            .err().unwrap_or_else(|| panic!("removed API should return an error instead of panicking"));
+            .err()
+            .unwrap_or_else(|| panic!("removed API should return an error instead of panicking"));
 
         assert_eq!(err.kind(), std::io::ErrorKind::Unsupported);
         assert!(
@@ -1897,14 +1933,16 @@ mod tests {
 
         let tracked = std::env::temp_dir().join("mfb-processed-track.mp4");
         let tracked_canonical = tracked.display().to_string();
-        let mut list = NamedTempFile::new().unwrap_or_else(|e| panic!("failed to create processed list: {e:?}"));
+        let mut list = NamedTempFile::new()
+            .unwrap_or_else(|e| panic!("failed to create processed list: {e:?}"));
         list.write_all(tracked_canonical.as_bytes())
             .unwrap_or_else(|e| panic!("failed to write valid entry: {e:?}"));
         list.write_all(b"\n\xff\n")
             .unwrap_or_else(|e| panic!("failed to write invalid utf8: {e:?}"));
 
-        let err = load_processed_list(list.path())
-            .err().unwrap_or_else(|| panic!("invalid utf8 should fail instead of partially loading state"));
+        let err = load_processed_list(list.path()).err().unwrap_or_else(|| {
+            panic!("invalid utf8 should fail instead of partially loading state")
+        });
         assert!(
             !is_already_processed(&tracked),
             "processed list should not be partially updated on read failure"
@@ -1919,7 +1957,8 @@ mod tests {
     #[test]
     fn test_validate_input_file_rejects_newlines() {
         let err = validate_input_file(Path::new("bad\nname.png"))
-            .err().unwrap_or_else(|| panic!("newline path should be rejected before filesystem access"));
+            .err()
+            .unwrap_or_else(|| panic!("newline path should be rejected before filesystem access"));
         assert!(err.contains("PATH SECURITY ERROR"));
     }
 
@@ -1950,7 +1989,8 @@ mod tests {
         symlink(&target, &output).unwrap_or_else(|e| panic!("symlink leaf: {e:?}"));
 
         let err = validate_output_path(&output, None)
-            .err().unwrap_or_else(|| panic!("symlink output leaf should still be rejected"));
+            .err()
+            .unwrap_or_else(|| panic!("symlink output leaf should still be rejected"));
         assert!(err.contains("symbolic link"));
     }
 
@@ -1976,30 +2016,41 @@ mod tests {
 
     #[test]
     fn test_determine_output_path() {
-        let _lock = TEST_RESERVATION_LOCK.lock().unwrap_or_else(|e| panic!("{e:?}"));
+        let _lock = TEST_RESERVATION_LOCK
+            .lock()
+            .unwrap_or_else(|e| panic!("{e:?}"));
         clear_reserved_output_paths();
-        let temp = tempdir_in(std::env::current_dir().unwrap_or_else(|e| panic!("{e:?}"))).unwrap_or_else(|e| panic!("{e:?}"));
+        let temp = tempdir_in(std::env::current_dir().unwrap_or_else(|e| panic!("{e:?}")))
+            .unwrap_or_else(|e| panic!("{e:?}"));
         let input = temp.path().join("nested/image.png");
-        let output = determine_output_path(&input, "jxl", &None).unwrap_or_else(|e| panic!("{e:?}"));
+        let output =
+            determine_output_path(&input, "jxl", &None).unwrap_or_else(|e| panic!("{e:?}"));
         assert_eq!(output, temp.path().join("nested/image.JXL"));
     }
 
     #[test]
     fn test_determine_output_path_with_dir() {
-        let _lock = TEST_RESERVATION_LOCK.lock().unwrap_or_else(|e| panic!("{e:?}"));
+        let _lock = TEST_RESERVATION_LOCK
+            .lock()
+            .unwrap_or_else(|e| panic!("{e:?}"));
         clear_reserved_output_paths();
-        let temp = tempdir_in(std::env::current_dir().unwrap_or_else(|e| panic!("{e:?}"))).unwrap_or_else(|e| panic!("{e:?}"));
+        let temp = tempdir_in(std::env::current_dir().unwrap_or_else(|e| panic!("{e:?}")))
+            .unwrap_or_else(|e| panic!("{e:?}"));
         let input = temp.path().join("nested/image.png");
         let output_dir = Some(temp.path().join("output"));
-        let output = determine_output_path(&input, "avif", &output_dir).unwrap_or_else(|e| panic!("{e:?}"));
+        let output =
+            determine_output_path(&input, "avif", &output_dir).unwrap_or_else(|e| panic!("{e:?}"));
         assert_eq!(output, temp.path().join("output/image.AVIF"));
     }
 
     #[test]
     fn test_determine_output_path_various_extensions() {
-        let _lock = TEST_RESERVATION_LOCK.lock().unwrap_or_else(|e| panic!("{e:?}"));
+        let _lock = TEST_RESERVATION_LOCK
+            .lock()
+            .unwrap_or_else(|e| panic!("{e:?}"));
         clear_reserved_output_paths();
-        let temp = tempdir_in(std::env::current_dir().unwrap_or_else(|e| panic!("{e:?}"))).unwrap_or_else(|e| panic!("{e:?}"));
+        let temp = tempdir_in(std::env::current_dir().unwrap_or_else(|e| panic!("{e:?}")))
+            .unwrap_or_else(|e| panic!("{e:?}"));
         let input = temp.path().join("nested/video.mp4");
 
         let webm = determine_output_path(&input, "webm", &None).unwrap_or_else(|e| panic!("{e:?}"));
@@ -2011,15 +2062,20 @@ mod tests {
 
     #[test]
     fn test_determine_output_path_disambiguates_batch_collisions() {
-        let _lock = TEST_RESERVATION_LOCK.lock().unwrap_or_else(|e| panic!("{e:?}"));
+        let _lock = TEST_RESERVATION_LOCK
+            .lock()
+            .unwrap_or_else(|e| panic!("{e:?}"));
         clear_reserved_output_paths();
-        let temp = tempdir_in(std::env::current_dir().unwrap_or_else(|e| panic!("{e:?}"))).unwrap_or_else(|e| panic!("{e:?}"));
+        let temp = tempdir_in(std::env::current_dir().unwrap_or_else(|e| panic!("{e:?}")))
+            .unwrap_or_else(|e| panic!("{e:?}"));
         let output_dir = Some(temp.path().join("output"));
         let first = temp.path().join("set_a/clip.mp4");
         let second = temp.path().join("set_b/clip.mp4");
 
-        let first_output = determine_output_path(&first, "gif", &output_dir).unwrap_or_else(|e| panic!("{e:?}"));
-        let second_output = determine_output_path(&second, "gif", &output_dir).unwrap_or_else(|e| panic!("{e:?}"));
+        let first_output =
+            determine_output_path(&first, "gif", &output_dir).unwrap_or_else(|e| panic!("{e:?}"));
+        let second_output =
+            determine_output_path(&second, "gif", &output_dir).unwrap_or_else(|e| panic!("{e:?}"));
 
         assert_eq!(first_output, temp.path().join("output/clip.GIF"));
         assert_eq!(second_output, temp.path().join("output/clip (1).GIF"));
@@ -2027,14 +2083,19 @@ mod tests {
 
     #[test]
     fn test_determine_output_path_keeps_same_reservation_for_same_input() {
-        let _lock = TEST_RESERVATION_LOCK.lock().unwrap_or_else(|e| panic!("{e:?}"));
+        let _lock = TEST_RESERVATION_LOCK
+            .lock()
+            .unwrap_or_else(|e| panic!("{e:?}"));
         clear_reserved_output_paths();
-        let temp = tempdir_in(std::env::current_dir().unwrap_or_else(|e| panic!("{e:?}"))).unwrap_or_else(|e| panic!("{e:?}"));
+        let temp = tempdir_in(std::env::current_dir().unwrap_or_else(|e| panic!("{e:?}")))
+            .unwrap_or_else(|e| panic!("{e:?}"));
         let output_dir = Some(temp.path().join("output"));
         let input = temp.path().join("nested/clip.mp4");
 
-        let first_output = determine_output_path(&input, "gif", &output_dir).unwrap_or_else(|e| panic!("{e:?}"));
-        let second_output = determine_output_path(&input, "gif", &output_dir).unwrap_or_else(|e| panic!("{e:?}"));
+        let first_output =
+            determine_output_path(&input, "gif", &output_dir).unwrap_or_else(|e| panic!("{e:?}"));
+        let second_output =
+            determine_output_path(&input, "gif", &output_dir).unwrap_or_else(|e| panic!("{e:?}"));
 
         assert_eq!(first_output, second_output);
         assert_eq!(first_output, temp.path().join("output/clip.GIF"));
@@ -2051,7 +2112,14 @@ mod tests {
         assert!(!result.skipped);
         assert_eq!(result.input_size, 1000);
         assert_eq!(result.output_size, Some(500));
-        assert!((result.size_reduction.unwrap_or_else(|| panic!("missing size reduction")) - 50.0).abs() < 0.1);
+        assert!(
+            (result
+                .size_reduction
+                .unwrap_or_else(|| panic!("missing size reduction"))
+                - 50.0)
+                .abs()
+                < 0.1
+        );
         assert!(
             result.message.contains("encoding"),
             "expected 'encoding' in: {}",
@@ -2293,11 +2361,7 @@ mod tests {
             explored_from_crf: Some(21.0),
             quality_label: Some("Medium"),
         };
-        let result = ConversionResult::success_video_explored(
-            input_path,
-            output_path,
-            &metrics,
-        );
+        let result = ConversionResult::success_video_explored(input_path, output_path, &metrics);
 
         assert!(result.success);
         assert!(result.message.contains("HEVC"));

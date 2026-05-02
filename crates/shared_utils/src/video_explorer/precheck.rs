@@ -223,7 +223,8 @@ fn parse_duration_from_precheck_json(
     }
 
     warn!("DURATION: stream.duration unavailable, trying format.duration");
-    let format_duration: Option<f64> = json.get("format")
+    let format_duration: Option<f64> = json
+        .get("format")
         .and_then(|f| f.get("duration"))
         .and_then(serde_json::Value::as_str)
         .and_then(|s| s.parse().ok())
@@ -263,7 +264,8 @@ fn parse_duration_from_precheck_json(
 
 /// P3: Compute only BPP from precheck JSON (one ffprobe, no full `VideoInfo`).
 fn bpp_from_precheck_json(json: &serde_json::Value, file_size: u64, input: &Path) -> Result<f64> {
-    let stream = json.get("streams")
+    let stream = json
+        .get("streams")
         .and_then(|s| s.get(0))
         .context("No video stream in ffprobe output")?;
     let width: u32 = stream["width"]
@@ -305,7 +307,8 @@ fn bpp_from_precheck_json(json: &serde_json::Value, file_size: u64, input: &Path
     };
     let total_pixels = u64::from(width) * u64::from(height) * frame_count;
     if total_pixels > 0 {
-        let bpp = (Rational::from(bytes_for_bpp) * Rational::from(8)) / Rational::from(total_pixels.max(1));
+        let bpp = (Rational::from(bytes_for_bpp) * Rational::from(8))
+            / Rational::from(total_pixels.max(1));
         Ok(bpp.to_f64())
     } else {
         bail!("Total pixels is 0, cannot calculate BPP")
@@ -341,21 +344,24 @@ pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'s
     let json: serde_json::Value =
         serde_json::from_str(&json_str).context("ffprobe JSON parse failed")?;
 
-    let stream = json.get("streams")
+    let stream = json
+        .get("streams")
         .and_then(|s| s.as_array())
         .and_then(|s| s.first())
         .context("No video stream")?;
     let fps: f64 = parse_fps_from_stream(stream)
         .context("Could not determine FPS for duration calculation")?;
 
-    let frame_count: u64 = json.get("streams")
+    let frame_count: u64 = json
+        .get("streams")
         .and_then(|s| s.get(0))
         .and_then(|s| s.get("nb_frames"))
         .and_then(serde_json::Value::as_str)
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
 
-    let stream_duration: Option<f64> = json.get("streams")
+    let stream_duration: Option<f64> = json
+        .get("streams")
         .and_then(|s| s.get(0))
         .and_then(|s| s.get("duration"))
         .and_then(serde_json::Value::as_str)
@@ -368,7 +374,8 @@ pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'s
     }
 
     warn!("DURATION: stream.duration unavailable, trying format.duration");
-    let format_duration: Option<f64> = json.get("format")
+    let format_duration: Option<f64> = json
+        .get("format")
         .and_then(|f| f.get("duration"))
         .and_then(serde_json::Value::as_str)
         .and_then(|s| s.parse().ok())
@@ -417,7 +424,8 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
         .len();
 
     let json = run_precheck_ffprobe(input)?;
-    let stream = json.get("streams")
+    let stream = json
+        .get("streams")
         .and_then(|s| s.get(0))
         .context("No video stream in ffprobe output")?;
 
@@ -493,7 +501,8 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
     };
     let total_pixels = u64::from(width) * u64::from(height) * frame_count;
     let bpp = if total_pixels > 0 {
-        ((Rational::from(bytes_for_bpp) * Rational::from(8)) / Rational::from(total_pixels.max(1))).to_f64()
+        ((Rational::from(bytes_for_bpp) * Rational::from(8)) / Rational::from(total_pixels.max(1)))
+            .to_f64()
     } else {
         bail!("Total pixels is 0, cannot calculate BPP");
     };
@@ -657,13 +666,19 @@ fn evaluate_processing_recommendation(
     let source_codec = parse_source_codec(codec);
     let codec_efficiency = source_codec.efficiency_factor();
 
-    let resolution_factor = (Rational::from(width) * Rational::from(height)) / Rational::from(1920 * 1080);
+    let resolution_factor =
+        (Rational::from(width) * Rational::from(height)) / Rational::from(1920 * 1080);
     let fps_factor = crate::numeric_cast::f64_to_rational_loud(fps, 1, "fps") / Rational::from(30);
-    let codec_efficiency_r = crate::numeric_cast::f64_to_rational_loud(codec_efficiency, 1, "codec_efficiency");
+    let codec_efficiency_r =
+        crate::numeric_cast::f64_to_rational_loud(codec_efficiency, 1, "codec_efficiency");
 
     let base_bitrate_1080p30_h264 = 2500.0;
-    let expected_min_bitrate = (crate::numeric_cast::f64_to_rational_loud(base_bitrate_1080p30_h264, 0, "base_bitrate") 
-        * resolution_factor * fps_factor * codec_efficiency_r).to_f64();
+    let expected_min_bitrate =
+        (crate::numeric_cast::f64_to_rational_loud(base_bitrate_1080p30_h264, 0, "base_bitrate")
+            * resolution_factor
+            * fps_factor
+            * codec_efficiency_r)
+            .to_f64();
 
     let bpp_threshold_very_low = 0.05 / codec_efficiency;
     let bpp_threshold_low = 0.10 / codec_efficiency;

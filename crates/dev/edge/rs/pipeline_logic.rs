@@ -32,7 +32,10 @@ mod tests {
     fn test_grayscale_icc_fallback() {
         // Poison Pill: Synthetic image with Grayscale pixels but RGB ICC profile
         let input = get_edge_file("poison_pill_grayscale_icc.jpg");
-        let output_file = tempfile::Builder::new().suffix(".jxl").tempfile().unwrap_or_else(|e| panic!("error: {e:?}"));
+        let output_file = tempfile::Builder::new()
+            .suffix(".jxl")
+            .tempfile()
+            .unwrap_or_else(|e| panic!("error: {e:?}"));
         let output = output_file.path();
 
         let result = run_imagemagick_cjxl_pipeline(ModeLockedImagemagickCjxlPipelineRequest {
@@ -54,7 +57,10 @@ mod tests {
     fn test_alpha_bleed_prevention() {
         // Poison Pill: Semi-transparent WebP that may bleed into black during conversion
         let input = get_edge_file("poison_pill_alpha_bleed.webp");
-        let output_file = tempfile::Builder::new().suffix(".jxl").tempfile().unwrap_or_else(|e| panic!("error: {e:?}"));
+        let output_file = tempfile::Builder::new()
+            .suffix(".jxl")
+            .tempfile()
+            .unwrap_or_else(|e| panic!("error: {e:?}"));
         let output = output_file.path();
 
         // Test pipeline handles compositing and premultiply issues

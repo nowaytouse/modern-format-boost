@@ -165,7 +165,10 @@ mod tests {
             ultimate: true,
         });
         assert!(r.is_ok());
-        assert_eq!(r.unwrap_or_else(|e| panic!("error: {e:?}")), FlagMode::UltimateExplore);
+        assert_eq!(
+            r.unwrap_or_else(|e| panic!("error: {e:?}")),
+            FlagMode::UltimateExplore
+        );
     }
 
     #[test]

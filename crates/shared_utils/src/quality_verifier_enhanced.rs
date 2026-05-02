@@ -262,7 +262,8 @@ mod tests {
 
         let small = dir.join("quality_verifier_test_small");
         let mut f = std::fs::File::create(&small).unwrap_or_else(|e| panic!("error: {e:?}"));
-        f.write_all(&[0u8; 64]).unwrap_or_else(|e| panic!("error: {e:?}"));
+        f.write_all(&[0u8; 64])
+            .unwrap_or_else(|e| panic!("error: {e:?}"));
         f.sync_all().unwrap_or_else(|e| panic!("error: {e:?}"));
         drop(f);
         let r = verify_output_file(&small, 32);

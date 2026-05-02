@@ -207,12 +207,18 @@ fn probe_video_streams(input: &Path) -> Vec<VideoStreamInfo> {
         .flatten()
         .filter(|stream| stream.get("codec_type").and_then(|v| v.as_str()) == Some("video"))
         .map(|stream| VideoStreamInfo {
-            index: stream.get("index").and_then(serde_json::Value::as_u64).unwrap_or(0) as usize,
-            frame_count: stream.get("nb_frames")
+            index: stream
+                .get("index")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|v| usize::try_from(v).ok())
+                .unwrap_or(0),
+            frame_count: stream
+                .get("nb_frames")
                 .and_then(|v| v.as_str())
                 .and_then(|value| value.parse::<u64>().ok())
                 .unwrap_or(0),
-            pix_fmt: stream.get("pix_fmt")
+            pix_fmt: stream
+                .get("pix_fmt")
                 .and_then(|v| v.as_str())
                 .unwrap_or_default()
                 .to_ascii_lowercase(),
@@ -376,9 +382,9 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
     // Fallback if mismatch: pad missing frames with the last parsed delay so
     // the animation keeps local continuity near the tail, rather than copying
     // the first frame's delay across every unparsed frame.
-    if frame_durations_ms.len() as u32 != frame_count {
+    if u32::try_from(frame_durations_ms.len()).unwrap_or(u32::MAX) != frame_count {
         let pad = *frame_durations_ms.last().unwrap_or(&100);
-        frame_durations_ms.resize(frame_count as usize, pad);
+        frame_durations_ms.resize(usize::try_from(frame_count).unwrap_or(usize::MAX), pad);
     }
 
     // Guard against degenerate 0-duration WebPs: replace any zero delays with a
@@ -390,8 +396,8 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
     }
 
     if verbose {
-        let avg_dur =
-            f64::from(frame_durations_ms.iter().sum::<u32>()) / shared_utils::numeric_cast::usize_to_f64(frame_durations_ms.len());
+        let avg_dur = f64::from(frame_durations_ms.iter().sum::<u32>())
+            / shared_utils::numeric_cast::usize_to_f64(frame_durations_ms.len());
         eprintln!("   📊 WebP: {frame_count} frames, ~{avg_dur:.1}ms/frame");
     }
 
@@ -438,7 +444,10 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
         }
 
         // Add to concat list
-        let duration_sec = frame_durations_ms.get((i - 1) as usize).copied().map_or(0.1, |d| f64::from(d) / 1000.0);
+        let duration_sec = frame_durations_ms
+            .get((i - 1) as usize)
+            .copied()
+            .map_or(0.1, |d| f64::from(d) / 1000.0);
         let _ = writeln!(
             concat_content,
             "file '{}'",
@@ -509,13 +518,16 @@ fn get_output_path(
     extension: &str,
     options: &ConvertOptions,
 ) -> Result<std::path::PathBuf> {
-    if let Some(ref base) = options.base_dir {
-        determine_output_path_with_base(input, base, extension, &options.output_dir)
-            .map_err(VidQualityError::ConversionError)
-    } else {
-        shared_utils::conversion::determine_output_path(input, extension, &options.output_dir)
-            .map_err(VidQualityError::ConversionError)
-    }
+    options.base_dir.as_ref().map_or_else(
+        || {
+            shared_utils::conversion::determine_output_path(input, extension, &options.output_dir)
+                .map_err(VidQualityError::ConversionError)
+        },
+        |base| {
+            determine_output_path_with_base(input, base, extension, &options.output_dir)
+                .map_err(VidQualityError::ConversionError)
+        },
+    )
 }
 
 fn skipped_with_fallback(
@@ -630,7 +642,11 @@ fn is_static_animated_image(path: &Path) -> bool {
     }
     if let Ok(analysis) = shared_utils::image_analyzer::analyze_image(path) {
         if let Some(duration_secs) = analysis.duration_secs {
-            if duration_secs < shared_utils::numeric_cast::f64_to_f32_lossy(shared_utils::constants::NEGLIGIBLE_DURATION_SECS) {
+            if duration_secs
+                < shared_utils::numeric_cast::f64_to_f32_lossy(
+                    shared_utils::constants::NEGLIGIBLE_DURATION_SECS,
+                )
+            {
                 return true;
             }
         }
@@ -1281,18 +1297,18 @@ pub fn convert_to_mp4_matched(
 
     // Get duration and metadata for smart CRF initialization
     let probe = shared_utils::ffprobe::probe_video(input).ok();
-    let duration = probe.as_ref().map_or(0.0, |p| shared_utils::numeric_cast::f64_to_f32_lossy(p.duration));
+    let duration = probe.as_ref().map_or(0.0, |p| {
+        shared_utils::numeric_cast::f64_to_f32_lossy(p.duration)
+    });
 
-    let is_safe_for_lossless = if is_gif && flag_mode.is_ultimate() {
-        if let Some(p) = probe.as_ref() {
-            let meta = LoopMeta::from_ffprobe_result(p, input);
-            is_lossless_exploration_safe(&meta, Some(input))
-        } else {
-            duration < ANIMATION_CLIP_THRESHOLD_SECS
-        }
-    } else {
-        false
-    };
+    let is_safe_for_lossless = (is_gif && flag_mode.is_ultimate())
+        && probe.as_ref().map_or_else(
+            || duration < ANIMATION_CLIP_THRESHOLD_SECS,
+            |p| {
+                let meta = LoopMeta::from_ffprobe_result(p, input);
+                is_lossless_exploration_safe(&meta, Some(input))
+            },
+        );
 
     if is_safe_for_lossless {
         // [Data-Driven Optimization]
@@ -1407,7 +1423,8 @@ pub fn convert_to_mp4_matched(
     // We use Rational for precise max size calculation. tolerance_ratio (e.g. 1.05)
     let max_allowed_size = {
         let input_rat = rug::Rational::from(input_size);
-        let tol_rat = rug::Rational::from_f64(tolerance_ratio).unwrap_or_else(|| rug::Rational::from(1));
+        let tol_rat =
+            rug::Rational::from_f64(tolerance_ratio).unwrap_or_else(|| rug::Rational::from(1));
         let res: rug::Rational = input_rat * tol_rat;
         shared_utils::numeric_cast::f64_to_u64_sat(res.to_f64().round())
     };
@@ -1420,11 +1437,10 @@ pub fn convert_to_mp4_matched(
         && !is_gif_meme(input);
 
     if is_guard_active && explore_result.output_size > max_allowed_size {
-        let size_increase_pct =
-            {
-                let ratio = rug::Rational::from((explore_result.output_size, input_size.max(1)));
-                (ratio.to_f64() - 1.0) * 100.0
-            };
+        let size_increase_pct = {
+            let ratio = rug::Rational::from((explore_result.output_size, input_size.max(1)));
+            (ratio.to_f64() - 1.0) * 100.0
+        };
         let codec_name = options.codec.as_str().to_uppercase();
         if let Err(e) = fs::remove_file(&temp_output) {
             eprintln!("⚠️ [cleanup] Failed to remove oversized {codec_name} output: {e}");
@@ -1539,7 +1555,9 @@ pub fn convert_to_mp4_matched(
             codec_name: options.codec.as_str(),
             crf: explore_result.optimal_crf,
             is_lossless: explore_result.optimal_crf
-                < shared_utils::numeric_cast::f64_to_f32_lossy(shared_utils::constants::NEGLIGIBLE_DURATION_SECS),
+                < shared_utils::numeric_cast::f64_to_f32_lossy(
+                    shared_utils::constants::NEGLIGIBLE_DURATION_SECS,
+                ),
             iterations: explore_result.iterations,
             ssim: explore_result.ssim,
             explored_from_crf: Some(actual_initial_crf),
@@ -2001,7 +2019,8 @@ pub fn convert_to_gif_apple_compat(
     };
     let max_allowed_size = {
         let input_rat = rug::Rational::from(input_size);
-        let tol_rat = rug::Rational::from_f64(tolerance_ratio).unwrap_or_else(|| rug::Rational::from(1));
+        let tol_rat =
+            rug::Rational::from_f64(tolerance_ratio).unwrap_or_else(|| rug::Rational::from(1));
         let res: rug::Rational = input_rat * tol_rat;
         shared_utils::numeric_cast::f64_to_u64_sat(res.to_f64().round())
     };
@@ -2119,7 +2138,9 @@ mod tests {
     #[test]
     fn test_apple_compat_blocks_copying_incompatible_originals() {
         let mut options = ConvertOptions::default();
-        options.flags.set(shared_utils::conversion::ConvertFlags::APPLE_COMPAT, true);
+        options
+            .flags
+            .set(shared_utils::conversion::ConvertFlags::APPLE_COMPAT, true);
 
         assert!(!options.should_copy_original_on_skip(Path::new("/tmp/test.avif")));
         assert!(!options.should_copy_original_on_skip(Path::new("/tmp/test.webp")));
@@ -2176,8 +2197,12 @@ mod tests {
             0x3B, // Trailer
         ];
 
-        let mut file = Builder::new().suffix(".gif").tempfile().unwrap_or_else(|e| panic!("error: {e:?}"));
-        file.write_all(gif_data).unwrap_or_else(|e| panic!("error: {e:?}"));
+        let mut file = Builder::new()
+            .suffix(".gif")
+            .tempfile()
+            .unwrap_or_else(|e| panic!("error: {e:?}"));
+        file.write_all(gif_data)
+            .unwrap_or_else(|e| panic!("error: {e:?}"));
 
         let verdict = assess_loop_intent_for_path(file.path())
             .unwrap_or_else(|| panic!("short GIF should produce a loop-intent verdict"));

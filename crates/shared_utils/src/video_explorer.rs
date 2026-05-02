@@ -87,7 +87,12 @@ pub const METADATA_MARGIN_PERCENT: f64 = crate::constants::METADATA_MARGIN_RATIO
 #[must_use]
 pub fn calculate_metadata_margin(input_size: u64) -> u64 {
     let percent_based = {
-        let margin = Rational::from(input_size) * crate::numeric_cast::f64_to_rational_loud(METADATA_MARGIN_PERCENT, 0, "METADATA_MARGIN_PERCENT");
+        let margin = Rational::from(input_size)
+            * crate::numeric_cast::f64_to_rational_loud(
+                METADATA_MARGIN_PERCENT,
+                0,
+                "METADATA_MARGIN_PERCENT",
+            );
         crate::numeric_cast::f64_to_u64_sat(margin.to_f64())
     };
     percent_based.clamp(METADATA_MARGIN_MIN, METADATA_MARGIN_MAX)
@@ -244,7 +249,9 @@ pub fn calculate_zero_gains_for_duration_and_range(
         1.0
     };
 
-    let scaled = crate::numeric_cast::f32_to_u32_sat((crate::numeric_cast::u32_to_f32(base) * factor).round());
+    let scaled = crate::numeric_cast::f32_to_u32_sat(
+        (crate::numeric_cast::u32_to_f32(base) * factor).round(),
+    );
     let min_gains = if ultimate_mode { 15 } else { 3 };
     scaled.max(min_gains)
 }
@@ -1316,7 +1323,9 @@ impl VideoExplorer {
             crate::log_eprintln!("┌ 🔍 Size-Only Explore ({:?})", self.encoder);
             crate::log_eprintln!(
                 "└ 📁 Input: {:.2} MB",
-                crate::numeric_cast::f64_to_f32_lossy(crate::numeric_cast::u64_to_f64(self.input_size) / 1024.0 / 1024.0)
+                crate::numeric_cast::f64_to_f32_lossy(
+                    crate::numeric_cast::u64_to_f64(self.input_size) / 1024.0 / 1024.0
+                )
             );
         });
 
@@ -1337,9 +1346,7 @@ impl VideoExplorer {
         let ssim = self.calculate_ssim();
         if ssim.is_none() {
             pb.suspend(|| {
-                crate::log_eprintln!(
-                    "⚠️  SSIM calculation failed during size-only explore"
-                );
+                crate::log_eprintln!("⚠️  SSIM calculation failed during size-only explore");
             });
         }
         progress_done();
@@ -1463,7 +1470,9 @@ impl VideoExplorer {
             crate::log_eprintln!("┌ 📦 Compress-Only ({:?})", self.encoder);
             crate::log_eprintln!(
                 "└ 📁 Input: {:.2} MB",
-                crate::numeric_cast::f64_to_f32_lossy(crate::numeric_cast::u64_to_f64(self.input_size) / 1024.0 / 1024.0)
+                crate::numeric_cast::f64_to_f32_lossy(
+                    crate::numeric_cast::u64_to_f64(self.input_size) / 1024.0 / 1024.0
+                )
             );
         });
         log.push(format!("📦 Compress-Only ({:?})", self.encoder));
@@ -1747,7 +1756,9 @@ impl VideoExplorer {
         log_realtime!(
             "   📁 Input: {} bytes ({:.2} MB)",
             self.input_size,
-            crate::numeric_cast::f64_to_f32_lossy(crate::numeric_cast::u64_to_f64(self.input_size) / 1024.0 / 1024.0)
+            crate::numeric_cast::f64_to_f32_lossy(
+                crate::numeric_cast::u64_to_f64(self.input_size) / 1024.0 / 1024.0
+            )
         );
         log_realtime!(
             "   📐 CRF range: [{:.1}, {:.1}]",
@@ -2050,7 +2061,10 @@ impl VideoExplorer {
         macro_rules! log_progress {
             ($stage:expr, $crf:expr, $size:expr, $iter:expr) => {{
                 let size_pct = if self.input_size > 0 {
-                    let permille = u32::try_from((u128::from($size) * 10_000) / u128::from(self.input_size.max(1))).unwrap_or(u32::MAX);
+                    let permille = u32::try_from(
+                        (u128::from($size) * 10_000) / u128::from(self.input_size.max(1)),
+                    )
+                    .unwrap_or(u32::MAX);
                     (f64::from(permille) / 100.0) - 100.0
                 } else {
                     0.0
@@ -2103,7 +2117,9 @@ impl VideoExplorer {
         log_header!(
             "🔬 Precise Quality + Compression ({:?}) • Input: {:.2} MB",
             self.encoder,
-            crate::numeric_cast::f64_to_f32_lossy(crate::numeric_cast::u64_to_f64(self.input_size) / 1024.0 / 1024.0)
+            crate::numeric_cast::f64_to_f32_lossy(
+                crate::numeric_cast::u64_to_f64(self.input_size) / 1024.0 / 1024.0
+            )
         );
         log_header!(
             "   Goal: Best SSIM + Output < Input • Range: [{:.1}, {:.1}]",
@@ -2278,7 +2294,8 @@ impl VideoExplorer {
                 .take(WINDOW_SIZE)
                 .map(|(_, s)| {
                     f64::from(crate::numeric_cast::f64_to_f32_lossy(
-                        crate::numeric_cast::u64_to_f64(*s) / crate::numeric_cast::u64_to_f64(input_size),
+                        crate::numeric_cast::u64_to_f64(*s)
+                            / crate::numeric_cast::u64_to_f64(input_size),
                     ))
                 })
                 .collect();
@@ -2290,7 +2307,8 @@ impl VideoExplorer {
             if recent.is_empty() {
                 0.0
             } else {
-                recent.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / crate::numeric_cast::usize_to_f64(recent.len())
+                recent.iter().map(|x| (x - mean).powi(2)).sum::<f64>()
+                    / crate::numeric_cast::usize_to_f64(recent.len())
             }
         };
 
@@ -2386,7 +2404,9 @@ impl VideoExplorer {
                 best_boundary = test_crf;
                 best_crf_so_far = test_crf;
 
-                if let Some(&prev) = fine_tune_history.get(fine_tune_history.len().saturating_sub(2)) {
+                if let Some(&prev) =
+                    fine_tune_history.get(fine_tune_history.len().saturating_sub(2))
+                {
                     let rate = calc_change_rate(prev, size);
                     if rate < CHANGE_RATE_THRESHOLD {
                         progress_done();
@@ -2426,7 +2446,9 @@ impl VideoExplorer {
                     best_boundary = test_crf;
                     best_crf_so_far = test_crf;
 
-                    if let Some(&prev) = fine_tune_history.get(fine_tune_history.len().saturating_sub(2)) {
+                    if let Some(&prev) =
+                        fine_tune_history.get(fine_tune_history.len().saturating_sub(2))
+                    {
                         let rate = calc_change_rate(prev, size);
                         if rate < CHANGE_RATE_THRESHOLD {
                             progress_done();
@@ -2476,7 +2498,9 @@ impl VideoExplorer {
             ssim,
             status,
             size_change_pct,
-            crate::numeric_cast::f64_to_f32_lossy(crate::numeric_cast::u64_to_f64(saved) / 1024.0 / 1024.0),
+            crate::numeric_cast::f64_to_f32_lossy(
+                crate::numeric_cast::u64_to_f64(saved) / 1024.0 / 1024.0
+            ),
             iterations,
             elapsed.as_secs_f64()
         );
@@ -2854,15 +2878,18 @@ impl VideoExplorer {
             } else {
                 f64::from(LONG_VIDEO_THRESHOLD_SECS)
             };
-            let should_skip = if let Some(d) = duration {
-                d >= ms_ssim_skip_threshold_secs
-                    && !self.config.quality_thresholds.force_ms_ssim_long
-            } else {
-                crate::log_eprintln!(
-                    "   ⚠️  Cannot detect video duration, skipping MS-SSIM verification"
-                );
-                true
-            };
+            let should_skip = duration.map_or_else(
+                || {
+                    crate::log_eprintln!(
+                        "   ⚠️  Cannot detect video duration, skipping MS-SSIM verification"
+                    );
+                    true
+                },
+                |d| {
+                    d >= ms_ssim_skip_threshold_secs
+                        && !self.config.quality_thresholds.force_ms_ssim_long
+                },
+            );
 
             if should_skip {
                 if let Some(d) = duration {
@@ -4679,7 +4706,8 @@ mod tests {
                 .take(window_size)
                 .map(|s| {
                     f64::from(crate::numeric_cast::f64_to_f32_lossy(
-                        crate::numeric_cast::u64_to_f64(*s) / crate::numeric_cast::u64_to_f64(input_size),
+                        crate::numeric_cast::u64_to_f64(*s)
+                            / crate::numeric_cast::u64_to_f64(input_size),
                     ))
                 })
                 .collect();
@@ -4691,7 +4719,8 @@ mod tests {
             if recent.is_empty() {
                 0.0
             } else {
-                recent.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / crate::numeric_cast::usize_to_f64(recent.len())
+                recent.iter().map(|x| (x - mean).powi(2)).sum::<f64>()
+                    / crate::numeric_cast::usize_to_f64(recent.len())
             }
         };
 
@@ -4719,7 +4748,9 @@ mod tests {
             if prev == 0 {
                 return f64::MAX;
             }
-            ((crate::numeric_cast::u64_to_f64(curr) - crate::numeric_cast::u64_to_f64(prev)) / crate::numeric_cast::u64_to_f64(prev.max(1))).abs()
+            ((crate::numeric_cast::u64_to_f64(curr) - crate::numeric_cast::u64_to_f64(prev))
+                / crate::numeric_cast::u64_to_f64(prev.max(1)))
+            .abs()
         };
 
         let small_change = calc_change_rate(1_000_000, 1_004_000);

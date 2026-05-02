@@ -118,7 +118,10 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
                     .or_else(|| find_box_data_recursive(data, *b"colr"))
                     .and_then(|colr_data| {
                         if colr_data.len() >= 11 && colr_data.get(0..4) == Some(b"nclx") {
-                            Some(u16::from_be_bytes([*colr_data.get(8).unwrap_or(&0), *colr_data.get(9).unwrap_or(&0)]))
+                            Some(u16::from_be_bytes([
+                                *colr_data.get(8).unwrap_or(&0),
+                                *colr_data.get(9).unwrap_or(&0),
+                            ]))
                         } else {
                             None
                         }
@@ -136,9 +139,19 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
                         if pixi_data.is_empty() {
                             None
                         } else {
-                            let num_ch = crate::numeric_cast::u8_to_usize_sat(*pixi_data.first().unwrap_or(&0));
+                            let num_ch = crate::numeric_cast::u8_to_usize_sat(
+                                *pixi_data.first().unwrap_or(&0),
+                            );
                             if num_ch > 0 && pixi_data.len() > num_ch {
-                                Some(pixi_data.get(1..=num_ch).unwrap_or(&[]).iter().copied().max().unwrap_or(0))
+                                Some(
+                                    pixi_data
+                                        .get(1..=num_ch)
+                                        .unwrap_or(&[])
+                                        .iter()
+                                        .copied()
+                                        .max()
+                                        .unwrap_or(0),
+                                )
                             } else {
                                 None
                             }
@@ -464,8 +477,14 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
     // Quick scan for HDR/DV boxes in the already read data
     if let Some(colr_data) = find_box_data_recursive(&data, *b"colr") {
         if colr_data.len() >= 11 && colr_data.get(0..4) == Some(b"nclx") {
-            let primaries = u16::from_be_bytes([*colr_data.get(4).unwrap_or(&0), *colr_data.get(5).unwrap_or(&0)]);
-            let transfer = u16::from_be_bytes([*colr_data.get(6).unwrap_or(&0), *colr_data.get(7).unwrap_or(&0)]);
+            let primaries = u16::from_be_bytes([
+                *colr_data.get(4).unwrap_or(&0),
+                *colr_data.get(5).unwrap_or(&0),
+            ]);
+            let transfer = u16::from_be_bytes([
+                *colr_data.get(6).unwrap_or(&0),
+                *colr_data.get(7).unwrap_or(&0),
+            ]);
             if primaries == 9 && (transfer == 16 || transfer == 18) {
                 is_hdr = true;
             }

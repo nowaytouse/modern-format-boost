@@ -96,7 +96,10 @@ impl UnifiedProgressBar {
         let iter = self.current_iteration.fetch_add(1, Ordering::Relaxed) + 1;
         self.bar.set_position(iter);
         let size_pct = if self.input_size > 0 {
-            ((crate::numeric_cast::u64_to_f64(size) / crate::numeric_cast::u64_to_f64(self.input_size)) - 1.0) * 100.0
+            ((crate::numeric_cast::u64_to_f64(size)
+                / crate::numeric_cast::u64_to_f64(self.input_size))
+                - 1.0)
+                * 100.0
         } else {
             0.0
         };

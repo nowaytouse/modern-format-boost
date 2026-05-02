@@ -182,21 +182,24 @@ fn fmt_stats_line_final(msg: &str) -> String {
 ///   "`Cache_4ac28036da7d11be.jpg`" → "`Cache_4ac28036da7…jpg`"
 pub fn set_log_context(prefix: &str) {
     let s = if prefix.chars().count() > LOG_PREFIX_MAX_DISPLAY {
-        if let Some(dot_pos) = prefix.rfind('.') {
-            let ext = &prefix[dot_pos..]; // e.g. ".jpeg"
-            let ext_chars = ext.chars().count();
-            if ext_chars < LOG_PREFIX_MAX_DISPLAY - 2 {
-                let stem_max_chars = LOG_PREFIX_MAX_DISPLAY - ext_chars - 1;
-                let stem = truncate_to_char_boundary(prefix, stem_max_chars);
-                format!("{stem}…{ext}")
-            } else {
+        prefix.rfind('.').map_or_else(
+            || {
                 let head = truncate_to_char_boundary(prefix, LOG_PREFIX_MAX_DISPLAY - 1);
                 format!("{head}…")
-            }
-        } else {
-            let head = truncate_to_char_boundary(prefix, LOG_PREFIX_MAX_DISPLAY - 1);
-            format!("{head}…")
-        }
+            },
+            |dot_pos| {
+                let ext = &prefix[dot_pos..]; // e.g. ".jpeg"
+                let ext_chars = ext.chars().count();
+                if ext_chars < LOG_PREFIX_MAX_DISPLAY - 2 {
+                    let stem_max_chars = LOG_PREFIX_MAX_DISPLAY - ext_chars - 1;
+                    let stem = truncate_to_char_boundary(prefix, stem_max_chars);
+                    format!("{stem}…{ext}")
+                } else {
+                    let head = truncate_to_char_boundary(prefix, LOG_PREFIX_MAX_DISPLAY - 1);
+                    format!("{head}…")
+                }
+            },
+        )
     } else {
         prefix.to_string()
     };
@@ -211,7 +214,7 @@ pub fn clear_log_context() {
 /// Detect file type emoji based on extension.
 /// Returns 🖼️  for still images, 🎞️  for GIF/animated, 🎬 for videos, empty string for unknown.
 fn file_type_emoji(filename: &str) -> &'static str {
-    if let Some(ext_start) = filename.rfind('.') {
+    filename.rfind('.').map_or("", |ext_start| {
         let ext = &filename[ext_start + 1..].to_lowercase();
         match ext.as_str() {
             // Animated / GIF
@@ -225,9 +228,7 @@ fn file_type_emoji(filename: &str) -> &'static str {
             | "3gp" | "ogv" | "ts" | "mts" | "m2ts" => "🎬 ",
             _ => "",
         }
-    } else {
-        ""
-    }
+    })
 }
 
 /// Format a log line with optional tag, emoji prefix, and padded indent so message bodies align.

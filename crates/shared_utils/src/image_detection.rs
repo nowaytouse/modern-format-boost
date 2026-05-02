@@ -411,14 +411,13 @@ fn resolve_mif1_from_compatible_brands(path: &Path, major_brand: &[u8]) -> Detec
         return DetectedFormat::HEIC;
     }
 
-    let box_size =
-        usize::try_from(u32::from_be_bytes([
-            *data.first().unwrap_or(&0),
-            *data.get(1).unwrap_or(&0),
-            *data.get(2).unwrap_or(&0),
-            *data.get(3).unwrap_or(&0),
-        ]))
-        .unwrap_or(0);
+    let box_size = usize::try_from(u32::from_be_bytes([
+        *data.first().unwrap_or(&0),
+        *data.get(1).unwrap_or(&0),
+        *data.get(2).unwrap_or(&0),
+        *data.get(3).unwrap_or(&0),
+    ]))
+    .unwrap_or(0);
     let ftyp_end = box_size.min(data.len());
 
     // compatible_brands start at offset 16 (after size[4] + "ftyp"[4] + major_brand[4] + minor_version[4])
@@ -763,8 +762,14 @@ fn is_jxl_animated_via_ffprobe(path: &Path) -> bool {
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
-                if let Some(stream) = json.get("streams").and_then(|s| s.as_array()).and_then(|s| s.first()) {
-                    if let Some(nb_frames_str) = stream.get("nb_read_frames").and_then(|v| v.as_str()) {
+                if let Some(stream) = json
+                    .get("streams")
+                    .and_then(|s| s.as_array())
+                    .and_then(|s| s.first())
+                {
+                    if let Some(nb_frames_str) =
+                        stream.get("nb_read_frames").and_then(|v| v.as_str())
+                    {
                         if let Ok(nb_frames) = nb_frames_str.parse::<u32>() {
                             return nb_frames > 1;
                         }
@@ -916,7 +921,8 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
 
         let colors_per_megapixel = {
             let num = Rational::from(u32::try_from(palette_size).unwrap_or(u32::MAX));
-            let den = Rational::from(u32::try_from(pixel_count).unwrap_or(u32::MAX)) / Rational::from(1_000_000);
+            let den = Rational::from(u32::try_from(pixel_count).unwrap_or(u32::MAX))
+                / Rational::from(1_000_000);
             (num / den).to_f64().min(1000.0)
         };
 
@@ -926,7 +932,12 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
         let palette_density = {
             let num = Rational::from(u32::try_from(palette_size).unwrap_or(u32::MAX));
             let den_f = f64::from(u32::try_from(pixel_count).unwrap_or(u32::MAX)).sqrt();
-            (num / crate::numeric_cast::f64_to_rational_loud(den_f, 1, "palette_density_denominator")).to_f64()
+            (num / crate::numeric_cast::f64_to_rational_loud(
+                den_f,
+                1,
+                "palette_density_denominator",
+            ))
+            .to_f64()
         };
 
         if palette_size > 240 {
@@ -994,8 +1005,10 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
                 let is_large_image = pixel_count > 100_000;
 
                 if let Some(palette_size) = png_info.palette_size {
-                    let usage_ratio = (Rational::from(u32::try_from(unique_colors).unwrap_or(u32::MAX))
-                        / Rational::from(u32::try_from(palette_size).unwrap_or(u32::MAX))).to_f64();
+                    let usage_ratio =
+                        (Rational::from(u32::try_from(unique_colors).unwrap_or(u32::MAX))
+                            / Rational::from(u32::try_from(palette_size).unwrap_or(u32::MAX)))
+                        .to_f64();
 
                     if is_large_image {
                         if usage_ratio > 0.8 {
@@ -1443,7 +1456,8 @@ pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructure
                 if chunk_type == b"zTXt" {
                     // zTXt: keyword\0 + compression_method(1) + compressed_text
                     if let Some(null_pos) = payload.iter().position(|&b| b == 0) {
-                        let keyword = String::from_utf8_lossy(payload.get(..null_pos).unwrap_or(&[]));
+                        let keyword =
+                            String::from_utf8_lossy(payload.get(..null_pos).unwrap_or(&[]));
                         for &(pattern, tool_name) in signatures {
                             if keyword.contains(pattern) {
                                 detected_tool = Some(tool_name.to_string());
@@ -2050,9 +2064,15 @@ fn calculate_rgb_entropy(img: &DynamicImage) -> f64 {
 
     for pixel in rgba.pixels() {
         let [r, g, b, _] = pixel.0;
-        if let Some(h) = hist_r.get_mut(usize::from(r)) { *h += 1; }
-        if let Some(h) = hist_g.get_mut(usize::from(g)) { *h += 1; }
-        if let Some(h) = hist_b.get_mut(usize::from(b)) { *h += 1; }
+        if let Some(h) = hist_r.get_mut(usize::from(r)) {
+            *h += 1;
+        }
+        if let Some(h) = hist_g.get_mut(usize::from(g)) {
+            *h += 1;
+        }
+        if let Some(h) = hist_b.get_mut(usize::from(b)) {
+            *h += 1;
+        }
     }
 
     let total = f64::from(u32::try_from(rgba.pixels().count()).unwrap_or(u32::MAX));
@@ -2811,8 +2831,10 @@ fn find_jp2_wavelets(cs: &[u8]) -> (Option<u8>, Vec<(u16, u8)>) {
         if pos + 4 > cs.len() {
             break;
         }
-        let seg_len =
-            crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([*cs.get(pos + 2).unwrap_or(&0), *cs.get(pos + 3).unwrap_or(&0)]));
+        let seg_len = crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([
+            *cs.get(pos + 2).unwrap_or(&0),
+            *cs.get(pos + 3).unwrap_or(&0),
+        ]));
         pos += 2 + seg_len;
     }
 
@@ -2842,10 +2864,12 @@ mod tests {
     #[test]
     fn test_detect_png_format() {
         let png_magic: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
-        let mut file = NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temporary file"));
+        let mut file =
+            NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temporary file"));
         let mut data = png_magic.to_vec();
         data.extend_from_slice(&[0u8; 24]);
-        file.write_all(&data).unwrap_or_else(|_| panic!("Failed to write"));
+        file.write_all(&data)
+            .unwrap_or_else(|_| panic!("Failed to write"));
 
         let result = detect_format_from_bytes(file.path());
         assert!(result.is_ok(), "PNG format detection should succeed");
@@ -2859,10 +2883,12 @@ mod tests {
     #[test]
     fn test_detect_jpeg_format() {
         let jpeg_magic: &[u8] = &[0xFF, 0xD8, 0xFF, 0xE0];
-        let mut file = NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temporary file"));
+        let mut file =
+            NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temporary file"));
         let mut data = jpeg_magic.to_vec();
         data.extend_from_slice(&[0u8; 28]);
-        file.write_all(&data).unwrap_or_else(|_| panic!("Failed to write"));
+        file.write_all(&data)
+            .unwrap_or_else(|_| panic!("Failed to write"));
 
         let result = detect_format_from_bytes(file.path());
         assert!(result.is_ok(), "JPEG format detection should succeed");
@@ -2876,10 +2902,12 @@ mod tests {
     #[test]
     fn test_detect_gif_format() {
         let gif_magic: &[u8] = b"GIF89a";
-        let mut file = NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temporary file"));
+        let mut file =
+            NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temporary file"));
         let mut data = gif_magic.to_vec();
         data.extend_from_slice(&[0u8; 26]);
-        file.write_all(&data).unwrap_or_else(|_| panic!("Failed to write"));
+        file.write_all(&data)
+            .unwrap_or_else(|_| panic!("Failed to write"));
 
         let result = detect_format_from_bytes(file.path());
         assert!(result.is_ok(), "GIF format detection should succeed");
@@ -2897,8 +2925,10 @@ mod tests {
         webp_data.extend_from_slice(b"WEBP");
         webp_data.extend_from_slice(&[0u8; 20]);
 
-        let mut file = NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temporary file"));
-        file.write_all(&webp_data).unwrap_or_else(|_| panic!("Failed to write"));
+        let mut file =
+            NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temporary file"));
+        file.write_all(&webp_data)
+            .unwrap_or_else(|_| panic!("Failed to write"));
 
         let result = detect_format_from_bytes(file.path());
         assert!(result.is_ok(), "WebP format detection should succeed");
@@ -2912,10 +2942,12 @@ mod tests {
     #[test]
     fn test_detect_unknown_format() {
         let random_data: &[u8] = &[0x00, 0x01, 0x02, 0x03, 0x04, 0x05];
-        let mut file = NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temporary file"));
+        let mut file =
+            NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temporary file"));
         let mut data = random_data.to_vec();
         data.extend_from_slice(&[0u8; 26]);
-        file.write_all(&data).unwrap_or_else(|_| panic!("Failed to write"));
+        file.write_all(&data)
+            .unwrap_or_else(|_| panic!("Failed to write"));
 
         let result = detect_format_from_bytes(file.path());
         assert!(
@@ -2985,7 +3017,9 @@ mod tests {
             5.0,
         )
         .err()
-        .unwrap_or_else(|| panic!("invalid dimensions should not produce a hardcoded fallback quality"));
+        .unwrap_or_else(|| {
+            panic!("invalid dimensions should not produce a hardcoded fallback quality")
+        });
 
         match err {
             ImgQualityError::AnalysisError(message) => {
