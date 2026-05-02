@@ -1,3 +1,4 @@
+#![warn(clippy::pedantic)]
 use clap::{Parser, Subcommand};
 use rug::Rational;
 
@@ -599,6 +600,7 @@ fn load_image_safe(path: &std::path::Path) -> anyhow::Result<image::DynamicImage
 /// Print image analysis in human-readable format.
 /// Currently unused but kept for potential future CLI output mode.
 #[derive(Clone)]
+#[allow(clippy::struct_excessive_bools)]
 struct AutoConvertConfig {
     output_dir: Option<PathBuf>,
     base_dir: Option<PathBuf>,

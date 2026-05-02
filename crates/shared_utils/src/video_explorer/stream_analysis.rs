@@ -14,6 +14,7 @@ use tracing::{info, warn};
 pub const LONG_VIDEO_THRESHOLD: f32 = 300.0;
 
 #[derive(Debug, Clone)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct QualityThresholds {
     pub min_ssim: f64,
     pub min_psnr: f64,

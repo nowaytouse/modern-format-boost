@@ -127,6 +127,7 @@ impl DurationTier {
 /// Populated by constructors (`from_video_detection`, `from_ffprobe_result`, `from_gif_path`).
 /// The tree itself is a pure function over this struct — no I/O, no side effects.
 #[derive(Debug, Clone, Default)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct LoopMeta {
     // ── Basic geometry ──
     pub duration_secs: f64,
@@ -580,6 +581,7 @@ impl LogOdds {
 }
 
 #[derive(Debug, Default, Clone, Copy)]
+#[allow(clippy::struct_excessive_bools)]
 struct DerivedLoopSignals {
     scene_cut: bool,
     localized_motion: bool,

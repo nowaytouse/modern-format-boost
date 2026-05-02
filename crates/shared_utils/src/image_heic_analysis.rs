@@ -11,6 +11,7 @@ use std::path::Path;
 use tracing::debug;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct HeicAnalysis {
     pub bit_depth: u8,
     pub codec: String,

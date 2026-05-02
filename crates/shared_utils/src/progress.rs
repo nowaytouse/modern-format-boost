@@ -92,6 +92,7 @@ fn build_coarse_progress_line(
     stats: &str,
     terminal_width: usize,
 ) -> String {
+#[allow(clippy::struct_excessive_bools)]
     struct Variant {
         show_bar: bool,
         show_elapsed: bool,

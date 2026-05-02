@@ -26,6 +26,7 @@ use std::path::Path;
 use tracing::Level;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct VideoQualityAnalysis {
     pub width: u32,
     pub height: u32,

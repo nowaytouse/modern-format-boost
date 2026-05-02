@@ -490,6 +490,7 @@ impl Default for LoopReferenceProfile {
 
 /// Row shape for GIF/video KNN features; some fields are stored for DB round-trip / future use.
 #[derive(Debug, Clone)]
+#[allow(clippy::struct_excessive_bools)]
 struct SampleRow {
     _loss_tolerance: Option<String>,
     width: u32,
@@ -1304,6 +1305,7 @@ fn seed_positive_dataset_if_needed(conn: &mut Client) -> Result<()> {
 /// Intermediate representation of a sample's metadata ready for database
 /// insertion. Contains all extracted features and classification labels.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct SampleInsert {
     /// BLAKE3 hash of the file contents.
     file_hash: String,

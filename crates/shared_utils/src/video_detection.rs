@@ -180,6 +180,7 @@ impl ColorSpace {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct VideoDetectionResult {
     pub file_path: String,
     pub format: String,

@@ -357,6 +357,7 @@ impl Hdr10PlusBuilder {
 
 /// Builder for constructing `x265` commands.
 #[derive(Debug, Default)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct X265Builder {
     input: Option<PathBuf>,
     output: Option<PathBuf>,

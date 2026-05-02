@@ -326,6 +326,7 @@ fn stream_size_change_pct(output_size: u64, input_size: u64) -> f64 {
 
 /// Arguments for GPU-accelerated CRF exploration.
 #[derive(Debug, Clone)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct GpuSearchArgs<'a> {
     pub input: &'a Path,
     pub output: &'a Path,
@@ -346,6 +347,7 @@ pub struct GpuSearchArgs<'a> {
 
 /// A request for a GPU-backed video quality exploration.
 #[derive(Debug, Clone)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct GpuSearchRequest {
     pub input: std::path::PathBuf,
     pub output: std::path::PathBuf,
@@ -363,6 +365,7 @@ pub struct GpuSearchRequest {
 }
 
 /// Arguments for CPU fine-tuning phase.
+#[allow(clippy::struct_excessive_bools)]
 struct FineTuneArgs<'a> {
     input: &'a Path,
     output: &'a Path,

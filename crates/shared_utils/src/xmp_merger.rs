@@ -67,6 +67,7 @@ pub struct MergeResult {
 }
 
 #[derive(Debug, Clone)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct XmpMergerConfig {
     pub delete_xmp_after_merge: bool,
     pub overwrite_original: bool,

@@ -185,6 +185,7 @@ impl StreamType {
 
 /// Builder for constructing `ffmpeg` commands.
 #[derive(Debug, Default, Clone)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct FfmpegBuilder {
     inputs: Vec<PathBuf>,
     output_target: Option<OutputTarget>,
@@ -531,6 +532,7 @@ impl FfmpegBuilder {
 
 /// Builder for constructing `ffprobe` commands.
 #[derive(Debug, Default)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct FfprobeBuilder {
     input: Option<PathBuf>,
     show_streams: bool,

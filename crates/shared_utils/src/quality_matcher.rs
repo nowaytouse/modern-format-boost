@@ -1796,6 +1796,7 @@ pub fn is_apple_incompatible_video_codec(codec_str: &str) -> bool {
         parse_source_codec(codec_str),
         SourceCodec::Av1 | SourceCodec::Vp9 | SourceCodec::Vvc | SourceCodec::Av2
     )
+#[allow(clippy::struct_excessive_bools)]
 }
 
 /// Predicate for keeping Apple-compat fallback HEVC output.

@@ -47,6 +47,7 @@ pub enum FlagValidation {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct FlagRequest {
     pub explore: bool,
     pub match_quality: bool,

@@ -576,6 +576,7 @@ impl ExploreResult {
 
 /// Quality thresholds and validation flags for an exploration.
 #[derive(Debug, Clone)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct QualityThresholds {
     /// Minimum acceptable SSIM score.
     pub min_ssim: f64,
