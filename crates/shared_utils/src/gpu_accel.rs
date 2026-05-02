@@ -33,7 +33,9 @@ use crate::explore_strategy::CrfCache;
 
 fn beijing_time_now() -> String {
     // UTC+8 (28800 seconds) is always a valid fixed offset
-    let beijing = FixedOffset::east_opt(8 * 3600).expect("UTC+8 is a valid fixed offset");
+    let beijing = FixedOffset::east_opt(8 * 3600).unwrap_or_else(|| {
+        FixedOffset::east_opt(0).unwrap_or_else(|| unsafe { std::hint::unreachable_unchecked() })
+    });
     let now: DateTime<Utc> = Utc::now();
     now.with_timezone(&beijing)
         .format("%Y-%m-%d %H:%M:%S (UTC+8)")
@@ -124,8 +126,12 @@ fn collect_vf_filters(vf_args: &[String]) -> Vec<String> {
     let mut idx = 0;
 
     while idx + 1 < vf_args.len() {
-        if vf_args[idx] == "-vf" && !vf_args[idx + 1].is_empty() {
-            filters.push(vf_args[idx + 1].clone());
+        let current = vf_args.get(idx);
+        let next = vf_args.get(idx + 1);
+        if current.is_some_and(|v| v == "-vf") && next.is_some_and(|v| !v.is_empty()) {
+            if let Some(n) = next {
+                filters.push(n.clone());
+            }
             idx += 2;
         } else {
             idx += 1;
@@ -1504,8 +1510,8 @@ fn calculate_psnr_fast(input: &str, output: &str) -> Result<f64, String> {
             if let Some(pos) = line.find("average:") {
                 let after = &line[pos + 8..];
                 let parts: Vec<&str> = after.split_whitespace().collect();
-                if !parts.is_empty() {
-                    if let Ok(psnr) = parts[0].trim().parse::<f64>() {
+                if let Some(first) = parts.first() {
+                    if let Ok(psnr) = first.trim().parse::<f64>() {
                         return Ok(psnr);
                     }
                 }
@@ -1541,8 +1547,8 @@ impl QualityCeilingDetector {
         self.samples.push((crf, quality));
 
         if self.samples.len() >= 2 {
-            let last = self.samples[self.samples.len() - 1].1;
-            let prev = self.samples[self.samples.len() - 2].1;
+            let last = self.samples.last().map_or(0.0, |s| s.1);
+            let prev = self.samples.get(self.samples.len().saturating_sub(2)).map_or(0.0, |s| s.1);
             let change = (last - prev).abs();
 
             if change < self.plateau_threshold {
@@ -1601,9 +1607,9 @@ impl PsnrSsimMapper {
         let mut points = self.calibration_points.clone();
         points.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
-        for i in 0..points.len() - 1 {
-            let (psnr1, ssim1) = points[i];
-            let (psnr2, ssim2) = points[i + 1];
+        for i in 0..points.len().saturating_sub(1) {
+            let (psnr1, ssim1) = *points.get(i).unwrap_or(&(0.0, 0.0));
+            let (psnr2, ssim2) = *points.get(i + 1).unwrap_or(&(0.0, 0.0));
 
             if psnr >= psnr1 && psnr <= psnr2 {
                 let denom = psnr2 - psnr1;
@@ -1616,9 +1622,9 @@ impl PsnrSsimMapper {
             }
         }
 
-        if psnr < points[0].0 {
-            let (psnr1, ssim1) = points[0];
-            let (psnr2, ssim2) = points[1];
+        if psnr < points.first().map_or(0.0, |p| p.0) {
+            let (psnr1, ssim1) = *points.first().unwrap_or(&(0.0, 0.0));
+            let (psnr2, ssim2) = *points.get(1).unwrap_or(&(0.0, 0.0));
             let denom = psnr2 - psnr1;
             if denom.abs() < f64::EPSILON {
                 return Some(ssim1);
@@ -1627,8 +1633,8 @@ impl PsnrSsimMapper {
             Some(slope.mul_add(psnr - psnr1, ssim1))
         } else {
             let n = points.len();
-            let (psnr1, ssim1) = points[n - 2];
-            let (psnr2, ssim2) = points[n - 1];
+            let (psnr1, ssim1) = *points.get(n.saturating_sub(2)).unwrap_or(&(0.0, 0.0));
+            let (psnr2, ssim2) = *points.last().unwrap_or(&(0.0, 0.0));
             let denom = psnr2 - psnr1;
             if denom.abs() < f64::EPSILON {
                 return Some(ssim2);
@@ -2361,7 +2367,7 @@ fn gpu_coarse_search_with_log_impl(
 
     let probe_results = if skip_parallel {
         log_msg!("   ⚡ Skip parallel probe (large file mode)");
-        let test_crf = probe_crfs[0];
+        let test_crf = probe_crfs.first().copied().unwrap_or(0.0);
         log_msg!("   🔄 [GPU] Testing CRF {:.0} (anchor point)...", test_crf);
         let single_result = encode_gpu(test_crf);
         if let Ok(size) = &single_result {
@@ -2375,9 +2381,9 @@ fn gpu_coarse_search_with_log_impl(
     } else {
         log_msg!(
             "   🚀 [GPU] Parallel probe: CRF {:.0}, {:.0}, {:.0}",
-            probe_crfs[0],
-            probe_crfs[1],
-            probe_crfs[2]
+            probe_crfs.first().copied().unwrap_or(0.0),
+            probe_crfs.get(1).copied().unwrap_or(0.0),
+            probe_crfs.get(2).copied().unwrap_or(0.0)
         );
         encode_parallel(&probe_crfs)
     };
@@ -2396,18 +2402,18 @@ fn gpu_coarse_search_with_log_impl(
 
     let initial_result = probe_results
         .iter()
-        .find(|(c, _)| (*c - probe_crfs[0]).abs() < 0.1);
+        .find(|(c, _)| (*c - probe_crfs.first().copied().unwrap_or(0.0)).abs() < 0.1);
     let max_result = if probe_crfs.len() > 1 {
         probe_results
             .iter()
-            .find(|(c, _)| (*c - probe_crfs[1]).abs() < 0.1)
+            .find(|(c, _)| (*c - probe_crfs.get(1).copied().unwrap_or(0.0)).abs() < 0.1)
     } else {
         None
     };
     let min_result = if probe_crfs.len() > 2 {
         probe_results
             .iter()
-            .find(|(c, _)| (*c - probe_crfs[2]).abs() < 0.1)
+            .find(|(c, _)| (*c - probe_crfs.get(2).copied().unwrap_or(0.0)).abs() < 0.1)
     } else {
         None
     };

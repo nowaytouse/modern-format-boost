@@ -65,13 +65,15 @@ impl DynamicCrfMapper {
         }
 
         if self.anchors.len() == 1 {
-            let offset = Self::calculate_offset_from_ratio(self.anchors[0].size_ratio);
+            let offset = self.anchors.first().map_or(0.0, |a| Self::calculate_offset_from_ratio(a.size_ratio));
             return ((gpu_crf + offset).clamp(10.0, max_crf), 0.75);
         }
 
         // Multi-anchor interpolation (currently unused: quick_calibrate stops after first success).
-        let p1 = &self.anchors[0];
-        let p2 = &self.anchors[1];
+        let [p1, p2, ..] = match self.anchors[..] {
+            [ref a, ref b, ..] => [a, b],
+            _ => return ((gpu_crf + base_offset).clamp(10.0, max_crf), 0.5),
+        };
 
         let offset1 = Self::calculate_offset_from_ratio(p1.size_ratio);
         let offset2 = Self::calculate_offset_from_ratio(p2.size_ratio);
@@ -123,13 +125,19 @@ fn collect_vf_filters(vf_args: &[String]) -> Vec<String> {
     let mut filters = Vec::new();
     let mut idx = 0;
 
-    while idx + 1 < vf_args.len() {
-        if vf_args[idx] == "-vf" && !vf_args[idx + 1].is_empty() {
-            filters.push(vf_args[idx + 1].clone());
-            idx += 2;
-        } else {
-            idx += 1;
+    while idx < vf_args.len() {
+        if let Some(arg) = vf_args.get(idx) {
+            if arg == "-vf" {
+                if let Some(val) = vf_args.get(idx + 1) {
+                    if !val.is_empty() {
+                        filters.push(val.clone());
+                        idx += 2;
+                        continue;
+                    }
+                }
+            }
         }
+        idx += 1;
     }
 
     filters
@@ -455,10 +463,11 @@ pub fn quick_calibrate(
     }
 
     {
-        let ratio = crate::numeric_cast::u64_to_f64(mapper.anchors[0].cpu_size) / crate::numeric_cast::u64_to_f64(mapper.anchors[0].gpu_size);
+    if let Some(anchor) = mapper.anchors.first() {
+        let ratio = crate::numeric_cast::u64_to_f64(anchor.cpu_size) / crate::numeric_cast::u64_to_f64(anchor.gpu_size);
         let offset = DynamicCrfMapper::calculate_offset_from_ratio(ratio);
-        let gpu_size = mapper.anchors[0].gpu_size;
-        let cpu_size = mapper.anchors[0].cpu_size;
+        let gpu_size = anchor.gpu_size;
+        let cpu_size = anchor.cpu_size;
         crate::verbose_eprintln!(
             "✅ Calibration complete: GPU {} → CPU {} (ratio {:.3}, offset +{:.1})",
             gpu_size,
@@ -466,6 +475,7 @@ pub fn quick_calibrate(
             ratio,
             offset
         );
+    }
     }
 
     Ok(mapper)

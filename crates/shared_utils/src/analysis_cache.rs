@@ -639,7 +639,7 @@ fn calculate_blake3(path: &Path) -> Result<blake3::Hash> {
         if bytes_read == 0 {
             break;
         }
-        hasher.update(&buffer[..bytes_read]);
+        hasher.update(buffer.get(..bytes_read).unwrap_or(&[]));
     }
     Ok(hasher.finalize())
 }
@@ -649,7 +649,7 @@ fn calculate_content_fingerprint(path: &Path) -> Result<[u8; 32]> {
     let mut hasher = Hasher::new();
     let mut buffer = vec![0u8; 65536];
     let bytes_read = file.read(&mut buffer)?;
-    hasher.update(&buffer[..bytes_read]);
+    hasher.update(buffer.get(..bytes_read).unwrap_or(&[]));
     Ok(*hasher.finalize().as_bytes())
 }
 

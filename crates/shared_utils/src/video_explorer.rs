@@ -2386,8 +2386,7 @@ impl VideoExplorer {
                 best_boundary = test_crf;
                 best_crf_so_far = test_crf;
 
-                if fine_tune_history.len() >= 2 {
-                    let prev = fine_tune_history[fine_tune_history.len() - 2];
+                if let Some(&prev) = fine_tune_history.get(fine_tune_history.len().saturating_sub(2)) {
                     let rate = calc_change_rate(prev, size);
                     if rate < CHANGE_RATE_THRESHOLD {
                         progress_done();
@@ -2427,8 +2426,7 @@ impl VideoExplorer {
                     best_boundary = test_crf;
                     best_crf_so_far = test_crf;
 
-                    if fine_tune_history.len() >= 2 {
-                        let prev = fine_tune_history[fine_tune_history.len() - 2];
+                    if let Some(&prev) = fine_tune_history.get(fine_tune_history.len().saturating_sub(2)) {
                         let rate = calc_change_rate(prev, size);
                         if rate < CHANGE_RATE_THRESHOLD {
                             progress_done();
@@ -2646,8 +2644,8 @@ impl VideoExplorer {
 
             if self.encoder == VideoEncoder::Hevc && is_animated {
                 if let Some(pos) = args.iter().position(|x| x == "-x265-params") {
-                    if pos + 1 < args.len() {
-                        args[pos + 1].push_str(":bframes=0");
+                    if let Some(param_val) = args.get_mut(pos.saturating_add(1)) {
+                        param_val.push_str(":bframes=0");
                     }
                 }
             }

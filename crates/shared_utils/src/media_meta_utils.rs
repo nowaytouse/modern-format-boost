@@ -31,12 +31,13 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
     }
 
     // GIF87a / GIF89a magic check
-    if &buf[0..6] != b"GIF87a" && &buf[0..6] != b"GIF89a" {
+    let magic = buf.get(0..6).unwrap_or(&[]);
+    if magic != b"GIF87a" && magic != b"GIF89a" {
         return Ok(GifHeaderScan::default());
     }
 
     // Logical Screen Descriptor: byte 10 = packed field
-    let packed = buf[10];
+    let packed = buf.get(10).copied().unwrap_or(0);
     let has_gct = (packed & 0x80) != 0;
     let palette_size: Option<u32> = if has_gct {
         let n = u32::from(packed & 0x07);
@@ -58,23 +59,23 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
     }
 
     while pos + 2 < buf.len() {
-        match buf[pos] {
-            0x21 if pos + 1 < buf.len() => match buf[pos + 1] {
+        match buf.get(pos).copied().unwrap_or(0) {
+            0x21 if pos + 1 < buf.len() => match buf.get(pos + 1).copied().unwrap_or(0) {
                 0xFF => {
                     let block_size = buf.get(pos + 2).copied().unwrap_or(0) as usize;
                     if block_size == 11 && pos + 3 + block_size <= buf.len() {
-                        if let Ok(vendor) = std::str::from_utf8(&buf[pos + 3..pos + 3 + block_size])
+                        if let Ok(vendor) = std::str::from_utf8(buf.get(pos + 3..pos + 3 + block_size).unwrap_or(&[]))
                         {
                             if !vendor.is_empty() {
                                 app_extensions.push(vendor.to_owned());
                                 if vendor == "NETSCAPE2.0" {
                                     let sub_pos = pos + 3 + block_size;
                                     if sub_pos + 3 < buf.len() {
-                                        let sub_size = buf[sub_pos];
-                                        if sub_size >= 3 && buf[sub_pos + 1] == 0x01 {
+                                        let sub_size = buf.get(sub_pos).copied().unwrap_or(0);
+                                        if sub_size >= 3 && buf.get(sub_pos + 1).copied().unwrap_or(0) == 0x01 {
                                             loop_count = Some(
-                                                u16::from(buf[sub_pos + 2])
-                                                    | (u16::from(buf[sub_pos + 3]) << 8),
+                                                u16::from(buf.get(sub_pos + 2).copied().unwrap_or(0))
+                                                    | (u16::from(buf.get(sub_pos + 3).copied().unwrap_or(0)) << 8),
                                             );
                                         }
                                     }
@@ -85,11 +86,11 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
                     pos += 3 + block_size;
                     pos = skip_sub_blocks(&buf, pos);
                 }
-                0xF9 if pos + 7 < buf.len() && buf[pos + 2] == 0x04 => {
-                    if buf[pos + 3] & 0x01 != 0 {
+                0xF9 if pos + 7 < buf.len() && buf.get(pos + 2).copied().unwrap_or(0) == 0x04 => {
+                    if buf.get(pos + 3).copied().unwrap_or(0) & 0x01 != 0 {
                         has_transparency = true;
                     }
-                    let delay = u16::from(buf[pos + 4]) | (u16::from(buf[pos + 5]) << 8);
+                    let delay = u16::from(buf.get(pos + 4).copied().unwrap_or(0)) | (u16::from(buf.get(pos + 5).copied().unwrap_or(0)) << 8);
                     frame_delays_cs.push(delay);
                     pos += 8;
                 }
@@ -105,7 +106,7 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
                 if pos + 10 >= buf.len() {
                     break;
                 }
-                let packed = buf[pos + 9];
+                let packed = buf.get(pos + 9).copied().unwrap_or(0);
                 pos += 10;
                 if (packed & 0x80) != 0 {
                     let lct_size_pow = usize::from(packed & 0x07);

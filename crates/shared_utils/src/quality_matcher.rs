@@ -309,7 +309,7 @@ impl SourceCodec {
             return None;
         }
 
-        let mut codec = Self::identify_by_header(&header[..n]);
+        let mut codec = Self::identify_by_header(header.get(..n).unwrap_or(&[]));
 
         // Deep WebP animation verification
         // Some WebP files (notably Safari exports) may not place `VP8X` within the first 64 bytes
@@ -318,17 +318,17 @@ impl SourceCodec {
         if codec == Some(Self::WebpStatic)
             && header.starts_with(b"RIFF")
             && n >= 12
-            && &header[8..12] == b"WEBP"
+            && header.get(8..12) == Some(b"WEBP")
         {
             const SCAN_LIMIT: usize = 1024 * 1024; // 1 MiB cap (safe & fast)
             let mut buf = Vec::with_capacity(SCAN_LIMIT);
-            buf.extend_from_slice(&header[..n]);
+            buf.extend_from_slice(header.get(..n).unwrap_or(&[]));
 
             let remaining = SCAN_LIMIT.saturating_sub(n);
             if remaining > 0 {
                 let mut extra = vec![0u8; remaining];
                 if let Ok(read_n) = file.read(&mut extra) {
-                    buf.extend_from_slice(&extra[..read_n]);
+                    buf.extend_from_slice(extra.get(..read_n).unwrap_or(&[]));
                 }
             }
 
@@ -347,12 +347,12 @@ impl SourceCodec {
                     break;
                 }
                 let length = u32::from_be_bytes([
-                    chunk_header[0],
-                    chunk_header[1],
-                    chunk_header[2],
-                    chunk_header[3],
+                    *chunk_header.first().unwrap_or(&0),
+                    *chunk_header.get(1).unwrap_or(&0),
+                    *chunk_header.get(2).unwrap_or(&0),
+                    *chunk_header.get(3).unwrap_or(&0),
                 ]);
-                let chunk_type = &chunk_header[4..8];
+                let chunk_type = chunk_header.get(4..8).unwrap_or(&[]);
 
                 if chunk_type == b"acTL" {
                     codec = Some(Self::Apng);
@@ -387,7 +387,7 @@ impl SourceCodec {
         // PNG: 89 50 4E 47 0D 0A 1A 0A
         if header.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
             // Check for APNG acTL chunk which usually follows immediately after IHDR (byte 33 starts the second chunk)
-            if header.len() >= 41 && &header[37..41] == b"acTL" {
+            if header.len() >= 41 && header.get(37..41) == Some(b"acTL") {
                 return Some(Self::Apng);
             }
             return Some(Self::Png);
@@ -418,12 +418,12 @@ impl SourceCodec {
         // 2. RIFF Containers (WebP, AVI)
         if header.starts_with(b"RIFF")
             && header.len() >= 12 {
-                let brand = &header[8..12];
+                let brand = header.get(8..12).unwrap_or(&[]);
                 if brand == b"WEBP" {
                     // Check for VP8X extended header which contains the animation flag
-                    if header.len() >= 21 && &header[12..16] == b"VP8X" {
+                    if header.len() >= 21 && header.get(12..16) == Some(b"VP8X") {
                         // The animation flag is the 2nd bit of the flags byte at offset 20
-                        let flags = header[20];
+                        let flags = *header.get(20).unwrap_or(&0);
                         if (flags & 0x02) != 0 {
                             return Some(Self::WebpAnimated);
                         }
@@ -437,8 +437,8 @@ impl SourceCodec {
 
         // 3. ISO Base Media File Format (MP4, MOV, HEIC, AVIF)
         // [Any 4 bytes] + "ftyp"
-        if header.len() >= 12 && &header[4..8] == b"ftyp" {
-            let brand = &header[8..12];
+        if header.len() >= 12 && header.get(4..8) == Some(b"ftyp") {
+            let brand = header.get(8..12).unwrap_or(&[]);
             match brand {
                 b"heic" | b"heix" | b"heim" | b"heis" | b"mif1" | b"msf1" => {
                     return Some(Self::Heic)
@@ -1954,7 +1954,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = calculate_av1_crf(&analysis).unwrap();
+        let result = calculate_av1_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
         // Updated: AV1 CRF range is now 0.0-51.0 (not 15.0-40.0) after removing artificial constraints
         assert!(result.crf >= 0.0 && result.crf <= 51.0);
         assert!(result.analysis_details.confidence > 0.5);
@@ -1977,7 +1977,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = calculate_hevc_crf(&analysis).unwrap();
+        let result = calculate_hevc_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
         assert!(result.crf <= 35.0);
     }
 
@@ -2011,7 +2011,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = calculate_jxl_distance(&analysis).unwrap();
+        let result = calculate_jxl_distance(&analysis).unwrap_or_else(|e| panic!("{e}"));
         assert!((result.distance - 1.5).abs() < 0.2);
     }
 
@@ -2054,13 +2054,13 @@ mod tests {
             MatchMode::Quality,
             QualityBias::Conservative,
         )
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
         let balanced =
             calculate_av1_crf_with_options(&analysis, MatchMode::Quality, QualityBias::Balanced)
-                .unwrap();
+                .unwrap_or_else(|e| panic!("{e}"));
         let aggressive =
             calculate_av1_crf_with_options(&analysis, MatchMode::Quality, QualityBias::Aggressive)
-                .unwrap();
+                .unwrap_or_else(|e| panic!("{e}"));
 
         assert!(conservative.crf <= balanced.crf);
         assert!(aggressive.crf >= balanced.crf);
@@ -2138,7 +2138,7 @@ mod tests {
             pix_fmt: Some("yuv420p".to_string()),
             ..Default::default()
         };
-        let result = calculate_av1_crf(&complete).unwrap();
+        let result = calculate_av1_crf(&complete).unwrap_or_else(|e| panic!("{e}"));
         assert!(result.analysis_details.confidence > 0.8);
 
         let minimal = QualityAnalysis {
@@ -2155,7 +2155,7 @@ mod tests {
             estimated_quality: None,
             ..Default::default()
         };
-        let result = calculate_av1_crf(&minimal).unwrap();
+        let result = calculate_av1_crf(&minimal).unwrap_or_else(|e| panic!("{e}"));
         assert!(result.analysis_details.confidence < 0.7);
     }
 
@@ -2210,7 +2210,7 @@ mod tests {
             .bit_depth(8)
             .build();
 
-        let result = calculate_av1_crf(&analysis).unwrap();
+        let result = calculate_av1_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
 
         eprintln!("1080p H.264 8Mbps test:");
         eprintln!("  raw_bpp: {:.4}", result.analysis_details.raw_bpp);
@@ -2246,7 +2246,7 @@ mod tests {
             .bit_depth(8)
             .build();
 
-        let result = calculate_av1_crf(&analysis).unwrap();
+        let result = calculate_av1_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             result.crf >= 22.0 && result.crf <= 32.0,
@@ -2272,8 +2272,8 @@ mod tests {
             .content_type(ContentType::Animation)
             .build();
 
-        let base_result = calculate_av1_crf(&base).unwrap();
-        let anim_result = calculate_av1_crf(&animation).unwrap();
+        let base_result = calculate_av1_crf(&base).unwrap_or_else(|e| panic!("{e}"));
+        let anim_result = calculate_av1_crf(&animation).unwrap_or_else(|e| panic!("{e}"));
 
         let crf_diff = crate::numeric_cast::f32_to_i32_sat(anim_result.crf)
             - crate::numeric_cast::f32_to_i32_sat(base_result.crf);
@@ -2301,8 +2301,8 @@ mod tests {
             .film_grain(true)
             .build();
 
-        let base_result = calculate_av1_crf(&base).unwrap();
-        let grain_result = calculate_av1_crf(&grain).unwrap();
+        let base_result = calculate_av1_crf(&base).unwrap_or_else(|e| panic!("{e}"));
+        let grain_result = calculate_av1_crf(&grain).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             grain_result.crf <= base_result.crf,
@@ -2338,8 +2338,8 @@ mod tests {
             .bit_depth(10)
             .build();
 
-        let sdr_result = calculate_av1_crf(&sdr).unwrap();
-        let hdr_result = calculate_av1_crf(&hdr).unwrap();
+        let sdr_result = calculate_av1_crf(&sdr).unwrap_or_else(|e| panic!("{e}"));
+        let hdr_result = calculate_av1_crf(&hdr).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             hdr_result.crf <= sdr_result.crf,
@@ -2365,8 +2365,8 @@ mod tests {
             .pix_fmt("yuv444p")
             .build();
 
-        let yuv420_result = calculate_av1_crf(&yuv420).unwrap();
-        let yuv444_result = calculate_av1_crf(&yuv444).unwrap();
+        let yuv420_result = calculate_av1_crf(&yuv420).unwrap_or_else(|e| panic!("{e}"));
+        let yuv444_result = calculate_av1_crf(&yuv444).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             yuv444_result.crf <= yuv420_result.crf,
@@ -2392,8 +2392,8 @@ mod tests {
             .pix_fmt("yuv420p")
             .build();
 
-        let intra_result = calculate_av1_crf(&all_intra).unwrap();
-        let gop_result = calculate_av1_crf(&long_gop).unwrap();
+        let intra_result = calculate_av1_crf(&all_intra).unwrap_or_else(|e| panic!("{e}"));
+        let gop_result = calculate_av1_crf(&long_gop).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             intra_result.analysis_details.gop_factor < 0.8,
@@ -2417,7 +2417,7 @@ mod tests {
             .content_type(ContentType::ScreenRecording)
             .build();
 
-        let result = calculate_av1_crf(&screen).unwrap();
+        let result = calculate_av1_crf(&screen).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             result.crf >= 25.0,
@@ -2447,8 +2447,8 @@ mod tests {
             .pix_fmt("yuv420p")
             .build();
 
-        let _standard_result = calculate_av1_crf(&standard).unwrap();
-        let ultrawide_result = calculate_av1_crf(&ultrawide).unwrap();
+        let _standard_result = calculate_av1_crf(&standard).unwrap_or_else(|e| panic!("{e}"));
+        let ultrawide_result = calculate_av1_crf(&ultrawide).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             ultrawide_result.analysis_details.aspect_factor > 1.0,
@@ -2473,8 +2473,8 @@ mod tests {
             .pix_fmt("yuv420p")
             .build();
 
-        let h264_result = calculate_av1_crf(&h264_source).unwrap();
-        let hevc_result = calculate_av1_crf(&hevc_source).unwrap();
+        let h264_result = calculate_av1_crf(&h264_source).unwrap_or_else(|e| panic!("{e}"));
+        let hevc_result = calculate_av1_crf(&hevc_source).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             hevc_result.analysis_details.codec_factor < h264_result.analysis_details.codec_factor,
@@ -2493,7 +2493,7 @@ mod tests {
             .pix_fmt("yuv420p")
             .build();
 
-        let result = calculate_av1_crf(&low_bpp).unwrap();
+        let result = calculate_av1_crf(&low_bpp).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             result.crf <= 40.0,
@@ -2517,7 +2517,7 @@ mod tests {
             .bit_depth(10)
             .build();
 
-        let result = calculate_av1_crf(&high_bpp).unwrap();
+        let result = calculate_av1_crf(&high_bpp).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             result.crf >= 6.0,
@@ -2542,7 +2542,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = calculate_jxl_distance(&jpeg).unwrap();
+        let result = calculate_jxl_distance(&jpeg).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             (result.distance - 1.5).abs() < 0.3,
@@ -2573,7 +2573,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = calculate_jxl_distance(&jpeg).unwrap();
+        let result = calculate_jxl_distance(&jpeg).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             (result.distance - 0.5).abs() < 0.3,
@@ -2596,7 +2596,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = calculate_hevc_crf(&gif).unwrap();
+        let result = calculate_hevc_crf(&gif).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             result.crf >= 20.0 && result.crf <= 32.0,
@@ -2620,8 +2620,8 @@ mod tests {
             .pix_fmt("yuv420p")
             .build();
 
-        let result1 = calculate_av1_crf(&analysis).unwrap();
-        let result2 = calculate_av1_crf(&analysis).unwrap();
+        let result1 = calculate_av1_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
+        let result2 = calculate_av1_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             crate::float_compare::approx_eq_crf(result1.crf, result2.crf),
@@ -2644,10 +2644,10 @@ mod tests {
 
         let quality =
             calculate_av1_crf_with_options(&analysis, MatchMode::Quality, QualityBias::Balanced)
-                .unwrap();
+                .unwrap_or_else(|e| panic!("{e}"));
         let size =
             calculate_av1_crf_with_options(&analysis, MatchMode::Size, QualityBias::Balanced)
-                .unwrap();
+                .unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             size.crf >= quality.crf,
@@ -2666,7 +2666,7 @@ mod tests {
             .pix_fmt("yuv420p")
             .build();
 
-        let result = calculate_av1_crf(&analysis).unwrap();
+        let result = calculate_av1_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             result.crf >= 23.0 && result.crf <= 27.0,
@@ -2684,7 +2684,7 @@ mod tests {
             .pix_fmt("yuv420p")
             .build();
 
-        let result = calculate_av1_crf(&analysis).unwrap();
+        let result = calculate_av1_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             result.crf >= 25.0 && result.crf <= 29.0,
@@ -2702,7 +2702,7 @@ mod tests {
             .pix_fmt("yuv420p")
             .build();
 
-        let result = calculate_av1_crf(&analysis).unwrap();
+        let result = calculate_av1_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             result.crf >= 24.0 && result.crf <= 28.0,
@@ -2720,7 +2720,7 @@ mod tests {
             .pix_fmt("yuv420p")
             .build();
 
-        let result = calculate_av1_crf(&analysis).unwrap();
+        let result = calculate_av1_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             result.crf >= 30.0 && result.crf <= 40.0,
@@ -2739,7 +2739,7 @@ mod tests {
             .bit_depth(10)
             .build();
 
-        let result = calculate_av1_crf(&analysis).unwrap();
+        let result = calculate_av1_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             result.crf >= 0.0 && result.crf <= 30.0,
@@ -2757,7 +2757,7 @@ mod tests {
             .pix_fmt("yuv420p")
             .build();
 
-        let result = calculate_av1_crf(&analysis).unwrap();
+        let result = calculate_av1_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             result.crf >= 10.0 && result.crf <= 25.0,
@@ -2776,7 +2776,7 @@ mod tests {
             .bit_depth(10)
             .build();
 
-        let result = calculate_av1_crf(&analysis).unwrap();
+        let result = calculate_av1_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             result.crf >= 28.0 && result.crf <= 38.0,
@@ -2794,7 +2794,7 @@ mod tests {
             .pix_fmt("yuv420p")
             .build();
 
-        let result = calculate_av1_crf(&analysis).unwrap();
+        let result = calculate_av1_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             result.crf >= 18.0 && result.crf <= 28.0,
@@ -2812,7 +2812,7 @@ mod tests {
             .pix_fmt("yuv420p")
             .build();
 
-        let result = calculate_av1_crf(&analysis).unwrap();
+        let result = calculate_av1_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             result.analysis_details.gop_factor < 0.9,
@@ -2830,7 +2830,7 @@ mod tests {
             .pix_fmt("yuv420p")
             .build();
 
-        let result = calculate_av1_crf(&analysis).unwrap();
+        let result = calculate_av1_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             result.analysis_details.gop_factor > 1.3,
@@ -2850,7 +2850,7 @@ mod tests {
             .bit_depth(10)
             .build();
 
-        let result = calculate_av1_crf(&analysis).unwrap();
+        let result = calculate_av1_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             result.analysis_details.hdr_factor > 1.1,
@@ -2874,7 +2874,7 @@ mod tests {
             .pix_fmt("rgb24")
             .build();
 
-        let result = calculate_av1_crf(&analysis).unwrap();
+        let result = calculate_av1_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             result.analysis_details.chroma_factor > 1.1,
@@ -2892,7 +2892,7 @@ mod tests {
             .pix_fmt("yuv420p")
             .build();
 
-        let result = calculate_av1_crf(&analysis).unwrap();
+        let result = calculate_av1_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             result.crf >= 20.0 && result.crf <= 30.0,
@@ -2910,7 +2910,7 @@ mod tests {
             .pix_fmt("yuv420p")
             .build();
 
-        let result = calculate_av1_crf(&analysis).unwrap();
+        let result = calculate_av1_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             result.crf >= 20.0 && result.crf <= 28.0,
@@ -2929,7 +2929,7 @@ mod tests {
             .bit_depth(10)
             .build();
 
-        let result = calculate_av1_crf(&analysis).unwrap();
+        let result = calculate_av1_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             result.crf >= 15.0 && result.crf <= 25.0,
@@ -2954,8 +2954,8 @@ mod tests {
             .pix_fmt("yuv420p")
             .build();
 
-        let short_result = calculate_av1_crf(&short_gop).unwrap();
-        let long_result = calculate_av1_crf(&long_gop).unwrap();
+        let short_result = calculate_av1_crf(&short_gop).unwrap_or_else(|e| panic!("{e}"));
+        let long_result = calculate_av1_crf(&long_gop).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             long_result.analysis_details.gop_factor > short_result.analysis_details.gop_factor,
@@ -2981,8 +2981,8 @@ mod tests {
             .pix_fmt("yuv444p")
             .build();
 
-        let yuv420_result = calculate_av1_crf(&yuv420).unwrap();
-        let yuv444_result = calculate_av1_crf(&yuv444).unwrap();
+        let yuv420_result = calculate_av1_crf(&yuv420).unwrap_or_else(|e| panic!("{e}"));
+        let yuv444_result = calculate_av1_crf(&yuv444).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             yuv444_result.analysis_details.chroma_factor
@@ -3011,8 +3011,8 @@ mod tests {
             .color("bt2020nc", true)
             .build();
 
-        let sdr_result = calculate_av1_crf(&sdr).unwrap();
-        let hdr_result = calculate_av1_crf(&hdr).unwrap();
+        let sdr_result = calculate_av1_crf(&sdr).unwrap_or_else(|e| panic!("{e}"));
+        let hdr_result = calculate_av1_crf(&hdr).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             hdr_result.analysis_details.hdr_factor > sdr_result.analysis_details.hdr_factor,
@@ -3040,8 +3040,8 @@ mod tests {
             .content_type(ContentType::Animation)
             .build();
 
-        let live_result = calculate_av1_crf(&live_action).unwrap();
-        let anim_result = calculate_av1_crf(&animation).unwrap();
+        let live_result = calculate_av1_crf(&live_action).unwrap_or_else(|e| panic!("{e}"));
+        let anim_result = calculate_av1_crf(&animation).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             anim_result.analysis_details.content_type_adjustment
@@ -3073,13 +3073,13 @@ mod tests {
             MatchMode::Quality,
             QualityBias::Conservative,
         )
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
         let balanced =
             calculate_av1_crf_with_options(&analysis, MatchMode::Quality, QualityBias::Balanced)
-                .unwrap();
+                .unwrap_or_else(|e| panic!("{e}"));
         let aggressive =
             calculate_av1_crf_with_options(&analysis, MatchMode::Quality, QualityBias::Aggressive)
-                .unwrap();
+                .unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             conservative.crf < balanced.crf,
@@ -3292,7 +3292,7 @@ fn test_apple_compat_hevc_crf_vp9_source() {
         .pix_fmt("yuv420p")
         .build();
 
-    let result = calculate_hevc_crf(&analysis).unwrap();
+    let result = calculate_hevc_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
     assert!(
         result.crf >= 18.0 && result.crf <= 28.0,
         "VP9→HEVC CRF should be 18-28, got {:.1}",
@@ -3310,7 +3310,7 @@ fn test_apple_compat_hevc_crf_av1_source() {
         .pix_fmt("yuv420p")
         .build();
 
-    let result = calculate_hevc_crf(&analysis).unwrap();
+    let result = calculate_hevc_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
     assert!(
         result.crf >= 16.0 && result.crf <= 26.0,
         "AV1→HEVC CRF should be 16-26, got {:.1}",
@@ -3329,7 +3329,7 @@ fn test_apple_compat_hevc_crf_4k_hdr() {
         .color("bt2020nc", true)
         .build();
 
-    let result = calculate_hevc_crf(&analysis).unwrap();
+    let result = calculate_hevc_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
     assert!(
         result.crf >= 0.0 && result.crf <= 22.0,
         "4K HDR should get CRF <= 22, got {:.1}",
@@ -3362,7 +3362,7 @@ fn test_h264_to_hevc_crf_1080p_8mbps() {
         .gop(60, 2)
         .build();
 
-    let result = calculate_hevc_crf(&analysis).unwrap();
+    let result = calculate_hevc_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
     assert!(
         result.crf >= 18.0 && result.crf <= 26.0,
         "H.264 8Mbps 1080p→HEVC should get CRF 18-26, got {:.1}",
@@ -3385,7 +3385,7 @@ fn test_h264_to_hevc_crf_720p_4mbps() {
         .gop(30, 2)
         .build();
 
-    let result = calculate_hevc_crf(&analysis).unwrap();
+    let result = calculate_hevc_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
     assert!(
         result.crf >= 20.0 && result.crf <= 28.0,
         "H.264 4Mbps 720p→HEVC should get CRF 20-28, got {:.1}",
@@ -3404,7 +3404,7 @@ fn test_h264_to_hevc_crf_4k_20mbps() {
         .gop(60, 3)
         .build();
 
-    let result = calculate_hevc_crf(&analysis).unwrap();
+    let result = calculate_hevc_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
     assert!(
         result.crf >= 18.0 && result.crf <= 30.0,
         "H.264 20Mbps 4K→HEVC should get CRF 18-30, got {:.1}",
@@ -3423,7 +3423,7 @@ fn test_h264_to_hevc_crf_low_bitrate() {
         .gop(48, 1)
         .build();
 
-    let result = calculate_hevc_crf(&analysis).unwrap();
+    let result = calculate_hevc_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
     assert!(
         result.crf >= 24.0 && result.crf <= 32.0,
         "H.264 1.2Mbps 480p→HEVC should get CRF 24-32, got {:.1}",
@@ -3442,7 +3442,7 @@ fn test_h264_to_hevc_crf_bluray_quality() {
         .gop(24, 3)
         .build();
 
-    let result = calculate_hevc_crf(&analysis).unwrap();
+    let result = calculate_hevc_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
     assert!(
         result.crf >= 0.0 && result.crf <= 22.0,
         "H.264 40Mbps Blu-ray→HEVC should get CRF 0-22, got {:.1}",
@@ -3468,8 +3468,8 @@ fn test_h264_vs_av1_efficiency_comparison() {
         .pix_fmt("yuv420p")
         .build();
 
-    let h264_result = calculate_hevc_crf(&h264).unwrap();
-    let av1_result = calculate_hevc_crf(&av1).unwrap();
+    let h264_result = calculate_hevc_crf(&h264).unwrap_or_else(|e| panic!("{e}"));
+    let av1_result = calculate_hevc_crf(&av1).unwrap_or_else(|e| panic!("{e}"));
 
     let crf_diff = (h264_result.crf - av1_result.crf).abs();
     assert!(
@@ -3508,9 +3508,9 @@ mod content_id_tests {
     use tempfile::NamedTempFile;
 
     fn create_temp_with_content(content: &[u8]) -> NamedTempFile {
-        let mut file = NamedTempFile::new().expect("Failed to create temp file");
+        let mut file = NamedTempFile::new().unwrap_or_else(|e| panic!("Failed to create temp file: {e}"));
         file.write_all(content)
-            .expect("Failed to write to temp file");
+            .unwrap_or_else(|e| panic!("Failed to write to temp file: {e}"));
         file
     }
 
@@ -3518,7 +3518,7 @@ mod content_id_tests {
     fn test_identify_jpeg() {
         let file =
             create_temp_with_content(&[0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, b'J', b'F', b'I', b'F']);
-        let codec = SourceCodec::identify_by_content(file.path()).expect("Should identify JPEG");
+        let codec = SourceCodec::identify_by_content(file.path()).unwrap_or_else(|| panic!("Should identify JPEG"));
         assert_eq!(codec, SourceCodec::Jpeg);
         assert!(codec.is_extension_compatible("jpg"));
         assert!(codec.is_extension_compatible("jpeg"));
@@ -3528,7 +3528,7 @@ mod content_id_tests {
     #[test]
     fn test_identify_png() {
         let file = create_temp_with_content(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
-        let codec = SourceCodec::identify_by_content(file.path()).expect("Should identify PNG");
+        let codec = SourceCodec::identify_by_content(file.path()).unwrap_or_else(|| panic!("Should identify PNG"));
         assert_eq!(codec, SourceCodec::Png);
         assert!(codec.is_extension_compatible("png"));
     }
@@ -3539,7 +3539,7 @@ mod content_id_tests {
             0x00, 0x00, 0x00, 0x20, b'f', b't', b'y', b'p', b'i', b's', b'o', b'm',
         ]);
         let codec = SourceCodec::identify_by_content(file.path())
-            .expect("Should identify MP4 (H264 fallback)");
+            .unwrap_or_else(|| panic!("Should identify MP4 (H264 fallback)"));
         assert_eq!(codec, SourceCodec::H264);
         assert!(codec.is_extension_compatible("mp4"));
         assert!(codec.is_extension_compatible("mov"));
@@ -3550,7 +3550,7 @@ mod content_id_tests {
         let file = create_temp_with_content(&[
             0x00, 0x00, 0x00, 0x1C, b'f', b't', b'y', b'p', b'h', b'e', b'i', b'c',
         ]);
-        let codec = SourceCodec::identify_by_content(file.path()).expect("Should identify HEIC");
+        let codec = SourceCodec::identify_by_content(file.path()).unwrap_or_else(|| panic!("Should identify HEIC"));
         assert_eq!(codec, SourceCodec::Heic);
         assert!(codec.is_extension_compatible("heic"));
     }
@@ -3559,7 +3559,7 @@ mod content_id_tests {
     fn test_identify_mkv() {
         let file = create_temp_with_content(&[0x1A, 0x45, 0xDF, 0xA3, 0x01, 0x00, 0x00, 0x00]);
         let codec =
-            SourceCodec::identify_by_content(file.path()).expect("Should identify EBML/MKV");
+            SourceCodec::identify_by_content(file.path()).unwrap_or_else(|| panic!("Should identify EBML/MKV"));
         assert_eq!(codec, SourceCodec::Av1); // MKV catch-all
         assert!(codec.is_extension_compatible("mkv"));
         assert!(codec.is_extension_compatible("webm"));
@@ -3568,20 +3568,20 @@ mod content_id_tests {
     #[test]
     fn test_mismatch_extension_correction() {
         // Create a PNG file but name it .jpg
-        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let temp_dir = tempfile::tempdir().unwrap_or_else(|e| panic!("Failed to create temp dir: {e:?}"));
         let png_as_jpg = temp_dir.path().join("image.jpg");
         {
-            let mut file = std::fs::File::create(&png_as_jpg).expect("Failed to create file");
+            let mut file = std::fs::File::create(&png_as_jpg).unwrap_or_else(|e| panic!("Failed to create file: {e:?}"));
             file.write_all(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
-                .expect("Failed to write PNG header");
+                .unwrap_or_else(|e| panic!("Failed to write PNG header: {e:?}"));
         }
 
         let fixed_path = crate::smart_file_copier::fix_extension_if_mismatch(&png_as_jpg)
-            .expect("Should fix extension");
+            .unwrap_or_else(|e| panic!("Should fix extension: {e:?}"));
         assert_eq!(
             fixed_path
                 .extension()
-                .unwrap()
+                .unwrap_or_else(|| panic!("missing extension"))
                 .to_string_lossy()
                 .to_lowercase(),
             "png"

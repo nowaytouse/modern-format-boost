@@ -7,6 +7,12 @@ use shared_utils::tool_builders::*;
 
 use std::path::Path;
 
+fn get_arg(args: &[String], idx: usize) -> &str {
+    args.get(idx)
+        .map(String::as_str)
+        .unwrap_or_else(|| panic!("missing arg at index {idx}"))
+}
+
 #[test]
 fn test_ffmpeg_flag_order_parity() {
     let cmd = FfmpegBuilder::new()
@@ -24,15 +30,15 @@ fn test_ffmpeg_flag_order_parity() {
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
         .collect();
     // Snapshotted order from commit 73edfa6: -y -threads [N] -i [in] [opts] [out]
-    assert_eq!(args[0], "-y");
-    assert_eq!(args[1], "-threads");
-    assert_eq!(args[2], "4");
-    assert_eq!(args[3], "-i");
-    assert!(args[4].contains("in.mp4"));
-    assert_eq!(args[5], "-c:v");
-    assert!(args[6].contains("libx265") || args[6].contains("hevc"));
-    assert_eq!(args[7], "-crf");
-    assert_eq!(args[9], "-preset");
+    assert_eq!(get_arg(&args, 0), "-y");
+    assert_eq!(get_arg(&args, 1), "-threads");
+    assert_eq!(get_arg(&args, 2), "4");
+    assert_eq!(get_arg(&args, 3), "-i");
+    assert!(get_arg(&args, 4).contains("in.mp4"));
+    assert_eq!(get_arg(&args, 5), "-c:v");
+    assert!(get_arg(&args, 6).contains("libx265") || get_arg(&args, 6).contains("hevc"));
+    assert_eq!(get_arg(&args, 7), "-crf");
+    assert_eq!(get_arg(&args, 9), "-preset");
 }
 
 #[test]
@@ -50,12 +56,12 @@ fn test_ffprobe_flag_order_parity() {
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
         .collect();
     // Snapshotted: -v error -show_entries ... -- [path]
-    assert_eq!(args[0], "-v");
-    assert_eq!(args[1], "error");
-    assert_eq!(args[2], "-show_entries");
-    assert_eq!(args[3], "format=duration");
-    assert_eq!(args[4], "--");
-    assert!(args[5].contains("in.mp4"));
+    assert_eq!(get_arg(&args, 0), "-v");
+    assert_eq!(get_arg(&args, 1), "error");
+    assert_eq!(get_arg(&args, 2), "-show_entries");
+    assert_eq!(get_arg(&args, 3), "format=duration");
+    assert_eq!(get_arg(&args, 4), "--");
+    assert!(get_arg(&args, 5).contains("in.mp4"));
 }
 
 #[test]
@@ -72,12 +78,12 @@ fn test_cjxl_flag_order_parity() {
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
         .collect();
     // Snapshotted order from commit 73edfa6: [in] [out] [flags]
-    assert!(args[0].contains("in.png"));
-    assert!(args[1].contains("out.jxl"));
-    assert_eq!(args[2], "-d");
-    assert_eq!(args[3], "0.5");
-    assert_eq!(args[4], "-e");
-    assert_eq!(args[5], "7");
+    assert!(get_arg(&args, 0).contains("in.png"));
+    assert!(get_arg(&args, 1).contains("out.jxl"));
+    assert_eq!(get_arg(&args, 2), "-d");
+    assert_eq!(get_arg(&args, 3), "0.5");
+    assert_eq!(get_arg(&args, 4), "-e");
+    assert_eq!(get_arg(&args, 5), "7");
 }
 
 #[test]
@@ -91,8 +97,8 @@ fn test_djxl_flag_order_parity() {
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
         .collect();
     // Snapshotted: [in] [out]
-    assert!(args[0].contains("in.jxl"));
-    assert!(args[1].contains("out.png"));
+    assert!(get_arg(&args, 0).contains("in.jxl"));
+    assert!(get_arg(&args, 1).contains("out.png"));
 }
 
 #[test]
@@ -103,7 +109,7 @@ fn test_jxlinfo_flag_order_parity() {
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
         .collect();
     // Snapshotted: [in]
-    assert!(args[0].contains("in.jxl"));
+    assert!(get_arg(&args, 0).contains("in.jxl"));
 }
 
 #[test]
@@ -120,11 +126,11 @@ fn test_magick_flag_order_parity() {
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
         .collect();
     // Snapshotted: -- [in] [flags] [out]
-    assert_eq!(args[0], "--");
-    assert!(args[1].contains("in.jpg"));
-    assert_eq!(args[2], "-quality");
-    assert_eq!(args[3], "85");
-    assert!(args[4].contains("out.png"));
+    assert_eq!(get_arg(&args, 0), "--");
+    assert!(get_arg(&args, 1).contains("in.jpg"));
+    assert_eq!(get_arg(&args, 2), "-quality");
+    assert_eq!(get_arg(&args, 3), "85");
+    assert!(get_arg(&args, 4).contains("out.png"));
 }
 
 #[test]
@@ -138,8 +144,8 @@ fn test_identify_flag_order_parity() {
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
         .collect();
     // Snapshotted: [flags] [in]
-    assert_eq!(args[0], "-verbose");
-    assert!(args[1].contains("in.jpg"));
+    assert_eq!(get_arg(&args, 0), "-verbose");
+    assert!(get_arg(&args, 1).contains("in.jpg"));
 }
 
 #[test]
@@ -156,11 +162,11 @@ fn test_sips_flag_order_parity() {
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
         .collect();
     // Snapshotted: [flags] [in] --out [out]
-    assert_eq!(args[0], "-s");
-    assert_eq!(args[2], "jpeg");
-    assert!(args[3].contains("in.png"));
-    assert_eq!(args[4], "--out");
-    assert!(args[5].contains("out.jpg"));
+    assert_eq!(get_arg(&args, 0), "-s");
+    assert_eq!(get_arg(&args, 2), "jpeg");
+    assert!(get_arg(&args, 3).contains("in.png"));
+    assert_eq!(get_arg(&args, 4), "--out");
+    assert!(get_arg(&args, 5).contains("out.jpg"));
 }
 
 #[test]
@@ -176,11 +182,11 @@ fn test_webpmux_flag_order_parity() {
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
         .collect();
     // Snapshotted: [flags] [in] -o [out]
-    assert_eq!(args[0], "-get");
-    assert_eq!(args[1], "icc");
-    assert!(args[2].contains("in.webp"));
-    assert_eq!(args[3], "-o");
-    assert!(args[4].contains("out.icc"));
+    assert_eq!(get_arg(&args, 0), "-get");
+    assert_eq!(get_arg(&args, 1), "icc");
+    assert!(get_arg(&args, 2).contains("in.webp"));
+    assert_eq!(get_arg(&args, 3), "-o");
+    assert!(get_arg(&args, 4).contains("out.icc"));
 }
 
 #[test]
@@ -196,10 +202,10 @@ fn test_gifski_flag_order_parity() {
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
         .collect();
     // Snapshotted: [flags] -o [out] [in]
-    assert_eq!(args[0], "--quality");
-    assert_eq!(args[2], "-o");
-    assert!(args[3].contains("out.gif"));
-    assert!(args[4].contains("frame.png"));
+    assert_eq!(get_arg(&args, 0), "--quality");
+    assert_eq!(get_arg(&args, 2), "-o");
+    assert!(get_arg(&args, 3).contains("out.gif"));
+    assert!(get_arg(&args, 4).contains("frame.png"));
 }
 
 #[test]
@@ -215,9 +221,9 @@ fn test_avifenc_flag_order_parity() {
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
         .collect();
     // Snapshotted: [flags] [in] [out]
-    assert_eq!(args[0], "--speed");
-    assert!(args[2].contains("in.png"));
-    assert!(args[3].contains("out.avif"));
+    assert_eq!(get_arg(&args, 0), "--speed");
+    assert!(get_arg(&args, 2).contains("in.png"));
+    assert!(get_arg(&args, 3).contains("out.avif"));
 }
 
 #[test]
@@ -232,10 +238,10 @@ fn test_dwebp_flag_order_parity() {
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
         .collect();
     // Snapshotted: [in] [flags] -o [out]
-    assert!(args[0].contains("in.webp"));
-    assert_eq!(args[1], "-lossless");
-    assert_eq!(args[2], "-o");
-    assert!(args[3].contains("out.png"));
+    assert!(get_arg(&args, 0).contains("in.webp"));
+    assert_eq!(get_arg(&args, 1), "-lossless");
+    assert_eq!(get_arg(&args, 2), "-o");
+    assert!(get_arg(&args, 3).contains("out.png"));
 }
 
 #[test]
@@ -250,9 +256,9 @@ fn test_exiftool_flag_order_parity() {
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
         .collect();
     // Snapshotted: [flags] [in]
-    assert_eq!(args[0], "-icc_profile");
-    assert_eq!(args[1], "-b");
-    assert!(args[2].contains("in.jpg"));
+    assert_eq!(get_arg(&args, 0), "-icc_profile");
+    assert_eq!(get_arg(&args, 1), "-b");
+    assert!(get_arg(&args, 2).contains("in.jpg"));
 }
 
 #[test]
@@ -266,8 +272,8 @@ fn test_exiv2_flag_order_parity() {
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
         .collect();
     // Snapshotted: [flags] [in]
-    assert_eq!(args[0], "-pt");
-    assert!(args[1].contains("in.jpg"));
+    assert_eq!(get_arg(&args, 0), "-pt");
+    assert!(get_arg(&args, 1).contains("in.jpg"));
 }
 
 #[test]
@@ -282,12 +288,12 @@ fn test_vmaf_flag_order_parity() {
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
         .collect();
     // Snapshotted: --reference [ref] --distorted [dist] --output [out]
-    assert_eq!(args[0], "--reference");
-    assert!(args[1].contains("ref.mp4"));
-    assert_eq!(args[2], "--distorted");
-    assert!(args[3].contains("dist.mp4"));
-    assert_eq!(args[4], "--output");
-    assert!(args[5].contains("out.json"));
+    assert_eq!(get_arg(&args, 0), "--reference");
+    assert!(get_arg(&args, 1).contains("ref.mp4"));
+    assert_eq!(get_arg(&args, 2), "--distorted");
+    assert!(get_arg(&args, 3).contains("dist.mp4"));
+    assert_eq!(get_arg(&args, 4), "--output");
+    assert!(get_arg(&args, 5).contains("out.json"));
 }
 
 #[test]
@@ -303,12 +309,12 @@ fn test_x265_flag_order_parity() {
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
         .collect();
     // Snapshotted: [flags] --input [in] --output [out]
-    assert_eq!(args[0], "--crf");
-    assert_eq!(args[2], "--preset");
-    assert_eq!(args[4], "--input");
-    assert!(args[5].contains("in.y4m"));
-    assert_eq!(args[6], "--output");
-    assert!(args[7].contains("out.hevc"));
+    assert_eq!(get_arg(&args, 0), "--crf");
+    assert_eq!(get_arg(&args, 2), "--preset");
+    assert_eq!(get_arg(&args, 4), "--input");
+    assert!(get_arg(&args, 5).contains("in.y4m"));
+    assert_eq!(get_arg(&args, 6), "--output");
+    assert!(get_arg(&args, 7).contains("out.hevc"));
 }
 
 #[test]
@@ -326,8 +332,8 @@ fn test_ffmpeg_hevc_preset_is_sanitized() {
     let preset_idx = args
         .iter()
         .position(|arg| arg == "-preset")
-        .expect("preset arg should exist");
-    assert_eq!(args[preset_idx + 1], "medium");
+        .unwrap_or_else(|| panic!("preset arg should exist"));
+    assert_eq!(get_arg(&args, preset_idx + 1), "medium");
 }
 
 #[test]
@@ -345,8 +351,8 @@ fn test_x265_preset_is_sanitized() {
     let preset_idx = args
         .iter()
         .position(|arg| arg == "--preset")
-        .expect("preset arg should exist");
-    assert_eq!(args[preset_idx + 1], "slower");
+        .unwrap_or_else(|| panic!("preset arg should exist"));
+    assert_eq!(get_arg(&args, preset_idx + 1), "slower");
 }
 
 #[test]
@@ -361,11 +367,11 @@ fn test_dovi_flag_order_parity() {
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
         .collect();
     // Snapshotted: [mode] -i [in] -o [out]
-    assert_eq!(args[0], "demux");
-    assert_eq!(args[1], "-i");
-    assert!(args[2].contains("in.hevc"));
-    assert_eq!(args[3], "-o");
-    assert!(args[4].contains("out.rpu"));
+    assert_eq!(get_arg(&args, 0), "demux");
+    assert_eq!(get_arg(&args, 1), "-i");
+    assert!(get_arg(&args, 2).contains("in.hevc"));
+    assert_eq!(get_arg(&args, 3), "-o");
+    assert!(get_arg(&args, 4).contains("out.rpu"));
 }
 
 #[test]
@@ -380,11 +386,11 @@ fn test_hdr10plus_flag_order_parity() {
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
         .collect();
     // Snapshotted: [mode] -i [in] -o [out]
-    assert_eq!(args[0], "extract");
-    assert_eq!(args[1], "-i");
-    assert!(args[2].contains("in.hevc"));
-    assert_eq!(args[3], "-o");
-    assert!(args[4].contains("out.json"));
+    assert_eq!(get_arg(&args, 0), "extract");
+    assert_eq!(get_arg(&args, 1), "-i");
+    assert!(get_arg(&args, 2).contains("in.hevc"));
+    assert_eq!(get_arg(&args, 3), "-o");
+    assert!(get_arg(&args, 4).contains("out.json"));
 }
 
 #[test]
@@ -395,8 +401,8 @@ fn test_osascript_flag_order_parity() {
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
         .collect();
     // Snapshotted: -e [script]
-    assert_eq!(args[0], "-e");
-    assert_eq!(args[1], "return 1");
+    assert_eq!(get_arg(&args, 0), "-e");
+    assert_eq!(get_arg(&args, 1), "return 1");
 }
 
 #[test]
@@ -407,10 +413,10 @@ fn test_powershell_flag_order_parity() {
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
         .collect();
     // Snapshotted: -NoProfile -NonInteractive -Command [command]
-    assert_eq!(args[0], "-NoProfile");
-    assert_eq!(args[1], "-NonInteractive");
-    assert_eq!(args[2], "-Command");
-    assert_eq!(args[3], "Get-Date");
+    assert_eq!(get_arg(&args, 0), "-NoProfile");
+    assert_eq!(get_arg(&args, 1), "-NonInteractive");
+    assert_eq!(get_arg(&args, 2), "-Command");
+    assert_eq!(get_arg(&args, 3), "Get-Date");
 }
 
 #[test]
@@ -421,8 +427,8 @@ fn test_sysctl_flag_order_parity() {
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
         .collect();
     // Snapshotted: [flags] [key]
-    assert_eq!(args[0], "-n");
-    assert_eq!(args[1], "hw.ncpu");
+    assert_eq!(get_arg(&args, 0), "-n");
+    assert_eq!(get_arg(&args, 1), "hw.ncpu");
 }
 
 #[test]
@@ -441,7 +447,7 @@ fn test_acl_getfacl_flag_order_parity() {
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
         .collect();
     // Snapshotted: [in]
-    assert!(args[0].contains("test.txt"));
+    assert!(get_arg(&args, 0).contains("test.txt"));
 }
 
 #[test]
@@ -456,9 +462,9 @@ fn test_acl_setfacl_flag_order_parity() {
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
         .collect();
     // Snapshotted: [flags] [in]
-    assert_eq!(args[0], "-m");
-    assert_eq!(args[1], "u:user:rwx");
-    assert!(args[2].contains("test.txt"));
+    assert_eq!(get_arg(&args, 0), "-m");
+    assert_eq!(get_arg(&args, 1), "u:user:rwx");
+    assert!(get_arg(&args, 2).contains("test.txt"));
 }
 
 #[test]
@@ -472,8 +478,8 @@ fn test_attrib_flag_order_parity() {
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
         .collect();
     // Snapshotted: [flags] [in]
-    assert_eq!(args[0], "+R");
-    assert!(args[1].contains("test.txt"));
+    assert_eq!(get_arg(&args, 0), "+R");
+    assert!(get_arg(&args, 1).contains("test.txt"));
 }
 
 #[test]
@@ -488,10 +494,10 @@ fn test_rsync_flag_order_parity() {
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
         .collect();
     // Snapshotted: [flags] [src] [dest]
-    assert_eq!(args[0], "--protect-args");
-    assert_eq!(args[1], "-av");
-    assert!(args[2].contains("src"));
-    assert!(args[3].contains("dest"));
+    assert_eq!(get_arg(&args, 0), "--protect-args");
+    assert_eq!(get_arg(&args, 1), "-av");
+    assert!(get_arg(&args, 2).contains("src"));
+    assert!(get_arg(&args, 3).contains("dest"));
 }
 
 #[test]
@@ -502,10 +508,10 @@ fn test_ps_flag_order_parity() {
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
         .collect();
     // Snapshotted: -p [pid] -o [fields]=
-    assert_eq!(args[0], "-p");
-    assert_eq!(args[1], "1234");
-    assert_eq!(args[2], "-o");
-    assert_eq!(args[3], "pid=");
+    assert_eq!(get_arg(&args, 0), "-p");
+    assert_eq!(get_arg(&args, 1), "1234");
+    assert_eq!(get_arg(&args, 2), "-o");
+    assert_eq!(get_arg(&args, 3), "pid=");
 }
 
 #[test]
@@ -516,8 +522,8 @@ fn test_kill_flag_order_parity() {
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
         .collect();
     // Snapshotted: [sig] [pid]
-    assert_eq!(args[0], "-9");
-    assert_eq!(args[1], "1234");
+    assert_eq!(get_arg(&args, 0), "-9");
+    assert_eq!(get_arg(&args, 1), "1234");
 }
 
 #[test]
@@ -536,9 +542,9 @@ fn test_taskkill_flag_order_parity() {
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
         .collect();
     // Snapshotted: /PID [pid] /F
-    assert_eq!(args[0], "/PID");
-    assert_eq!(args[1], "1234");
-    assert_eq!(args[2], "/F");
+    assert_eq!(get_arg(&args, 0), "/PID");
+    assert_eq!(get_arg(&args, 1), "1234");
+    assert_eq!(get_arg(&args, 2), "/F");
 }
 
 #[test]
@@ -552,10 +558,10 @@ fn test_ffprobe_pattern_safety_hardening() {
         .map(|s: &std::ffi::OsStr| s.to_string_lossy().to_string())
         .collect();
 
-    assert_eq!(args[0], "-pattern_type");
-    assert_eq!(args[1], "none");
-    assert_eq!(args[2], "--");
-    assert!(args[3].contains("frame[01].png"));
+    assert_eq!(get_arg(&args, 0), "-pattern_type");
+    assert_eq!(get_arg(&args, 1), "none");
+    assert_eq!(get_arg(&args, 2), "--");
+    assert!(get_arg(&args, 3).contains("frame[01].png"));
 }
 
 #[test]
@@ -574,10 +580,10 @@ fn test_ffmpeg_odd_dim_correction_hardening() {
     let filter_idx = args
         .iter()
         .position(|r| r == "-filter_complex")
-        .expect("-filter_complex not found");
+        .unwrap_or_else(|| panic!("-filter_complex not found"));
     // Should prepend scaling: scale=trunc(iw/2)*2:trunc(ih/2)*2,ssim
-    assert!(args[filter_idx + 1].starts_with("scale=trunc(iw/2)*2:trunc(ih/2)*2,"));
-    assert!(args[filter_idx + 1].contains("ssim"));
+    assert!(get_arg(&args, filter_idx + 1).starts_with("scale=trunc(iw/2)*2:trunc(ih/2)*2,"));
+    assert!(get_arg(&args, filter_idx + 1).contains("ssim"));
 }
 
 #[test]
@@ -592,8 +598,8 @@ fn test_magick_path_armor_hardening() {
         .collect();
 
     // Should have ./ (protocol-less relative) and %% escaping
-    assert_eq!(args[0], "--");
-    assert_eq!(args[1], "./img%%1.jpg");
+    assert_eq!(get_arg(&args, 0), "--");
+    assert_eq!(get_arg(&args, 1), "./img%%1.jpg");
 }
 
 #[test]
@@ -627,12 +633,12 @@ fn test_ffmpeg_global_flag_priority_parity() {
         .collect();
 
     // Priority check: -y and -hide_banner MUST come before -i
-    let y_idx = args.iter().position(|r| r == "-y").expect("-y not found");
+    let y_idx = args.iter().position(|r| r == "-y").unwrap_or_else(|| panic!("-y not found"));
     let hb_idx = args
         .iter()
         .position(|r| r == "-hide_banner")
-        .expect("-hide_banner not found");
-    let i_idx = args.iter().position(|r| r == "-i").expect("-i not found");
+        .unwrap_or_else(|| panic!("-hide_banner not found"));
+    let i_idx = args.iter().position(|r| r == "-i").unwrap_or_else(|| panic!("-i not found"));
 
     assert!(y_idx < i_idx);
     assert!(hb_idx < i_idx);
@@ -652,12 +658,12 @@ fn test_sips_quality_clamping_hardening() {
         .collect();
 
     // Match: -s format jpeg -s formatOptions 100 in.png --out out.jpg
-    assert_eq!(args[0], "-s");
-    assert_eq!(args[1], "format");
-    assert_eq!(args[2], "jpeg");
-    assert_eq!(args[3], "-s");
-    assert_eq!(args[4], "formatOptions");
-    assert_eq!(args[5], "100");
+    assert_eq!(get_arg(&args, 0), "-s");
+    assert_eq!(get_arg(&args, 1), "format");
+    assert_eq!(get_arg(&args, 2), "jpeg");
+    assert_eq!(get_arg(&args, 3), "-s");
+    assert_eq!(get_arg(&args, 4), "formatOptions");
+    assert_eq!(get_arg(&args, 5), "100");
 }
 
 #[test]

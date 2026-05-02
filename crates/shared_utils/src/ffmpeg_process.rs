@@ -245,9 +245,9 @@ impl FfmpegProgressParser {
             return None;
         }
 
-        let hours: f64 = parts[0].parse().ok()?;
-        let minutes: f64 = parts[1].parse().ok()?;
-        let seconds: f64 = parts[2].parse().ok()?;
+        let hours: f64 = parts.first()?.parse().ok()?;
+        let minutes: f64 = parts.get(1)?.parse().ok()?;
+        let seconds: f64 = parts.get(2)?.parse().ok()?;
 
         Some(hours.mul_add(3600.0, minutes.mul_add(60.0, seconds)))
     }

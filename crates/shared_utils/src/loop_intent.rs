@@ -2806,7 +2806,7 @@ fn get_meme_keywords() -> &'static [String] {
     MEME_KEYWORDS_CACHE.get_or_init(|| {
         let json_str = include_str!("meme_keywords.json");
         let languages: HashMap<String, Vec<String>> = serde_json::from_str(json_str)
-            .expect("embedded meme_keywords.json is malformed — binary is corrupt");
+            .unwrap_or_default();
         let mut all_keywords = Vec::new();
         for list in languages.values() {
             all_keywords.extend(list.clone());
@@ -2999,10 +2999,10 @@ fn detect_scene_cut(pkt_sizes: &[u64]) -> bool {
     if pkt_sizes.len() < 5 {
         return false;
     }
-    let inner = &pkt_sizes[1..pkt_sizes.len() - 1];
+    let inner = pkt_sizes.get(1..pkt_sizes.len().saturating_sub(1)).unwrap_or(&[]);
     let mut baseline = inner.to_vec();
     baseline.sort_unstable();
-    let median = crate::numeric_cast::u64_to_f64(baseline[baseline.len() / 2]);
+    let median = baseline.get(baseline.len() / 2).copied().map_or(0.0, crate::numeric_cast::u64_to_f64);
 
     if median <= 0.0 {
         return false;
@@ -3206,7 +3206,8 @@ pub fn deep_refine_meta(meta: &mut LoopMeta, path: &std::path::Path) -> anyhow::
     let mut ydif_values = Vec::new();
     for line in stderr.lines() {
         if let Some(idx) = line.find("lavfi.signalstats.YDIF=") {
-            if let Ok(val) = line[idx + 23..]
+            if let Ok(val) = line.get(idx + 23..)
+                .unwrap_or("")
                 .split_whitespace()
                 .next()
                 .unwrap_or("")
@@ -3235,9 +3236,9 @@ pub fn deep_refine_meta(meta: &mut LoopMeta, path: &std::path::Path) -> anyhow::
     if thumb_output.status.success() && thumb_output.stdout.len() >= 64 * 64 * 3 {
         let mut quantized = std::collections::HashSet::new();
         for chunk in thumb_output.stdout.chunks_exact(3) {
-            let r = chunk[0] >> 3;
-            let g = chunk[1] >> 3;
-            let b = chunk[2] >> 3;
+            let r = chunk.first().copied().unwrap_or(0) >> 3;
+            let g = chunk.get(1).copied().unwrap_or(0) >> 3;
+            let b = chunk.get(2).copied().unwrap_or(0) >> 3;
             quantized.insert((r, g, b));
         }
         meta.palette_depth = Some(palette_depth_score(quantized.len()));
@@ -3290,8 +3291,12 @@ fn loop_closure_score(pkt_sizes: &[u64]) -> Option<f64> {
     // Normalized autocorrelation at lag = half sequence length.
     // A looping sequence has high self-similarity between its first and second half.
     let lag = n / 2;
-    let autocorr: f64 = (0..n - lag)
-        .map(|i| (vals[i] - mean) * (vals[i + lag] - mean))
+    let autocorr: f64 = (0..n.saturating_sub(lag))
+        .map(|i| {
+            let v1 = vals.get(i).copied().unwrap_or(mean);
+            let v2 = vals.get(i + lag).copied().unwrap_or(mean);
+            (v1 - mean) * (v2 - mean)
+        })
         .sum::<f64>()
         / (crate::numeric_cast::usize_to_f64(n.saturating_sub(lag).max(1)) * variance);
 
@@ -3322,8 +3327,12 @@ fn motion_periodicity_score(mv_magnitudes: &[f64]) -> Option<f64> {
         .iter()
         .filter(|&&lag| lag > 0 && lag < n)
         .map(|&lag| {
-            let r: f64 = (0..n - lag)
-                .map(|i| (mv_magnitudes[i] - mean) * (mv_magnitudes[i + lag] - mean))
+            let r: f64 = (0..n.saturating_sub(lag))
+                .map(|i| {
+                    let v1 = mv_magnitudes.get(i).copied().unwrap_or(mean);
+                    let v2 = mv_magnitudes.get(i + lag).copied().unwrap_or(mean);
+                    (v1 - mean) * (v2 - mean)
+                })
                 .sum::<f64>()
                 / (crate::numeric_cast::usize_to_f64(n.saturating_sub(lag).max(1)) * variance);
             r.clamp(-1.0, 1.0)
@@ -3355,8 +3364,12 @@ fn temporal_jitter_score(pts_deltas: &[f64]) -> Option<f64> {
 
     // Lag-1 autocorrelation: measures rhythmic regularity of frame intervals.
     // A looping animation has consistent, self-similar inter-frame timing.
-    let lag1: f64 = (0..n - 1)
-        .map(|i| (pts_deltas[i] - mean) * (pts_deltas[i + 1] - mean))
+    let lag1: f64 = (0..n.saturating_sub(1))
+        .map(|i| {
+            let v1 = pts_deltas.get(i).copied().unwrap_or(mean);
+            let v2 = pts_deltas.get(i + 1).copied().unwrap_or(mean);
+            (v1 - mean) * (v2 - mean)
+        })
         .sum::<f64>()
         / (crate::numeric_cast::usize_to_f64(n.saturating_sub(1).max(1)) * variance);
 

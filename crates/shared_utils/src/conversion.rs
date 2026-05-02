@@ -60,7 +60,7 @@ pub fn next_temp_output_suffix() -> String {
 
     for slot in suffix.iter_mut().rev() {
         let idx = (value % ALPHABET.len() as u128) as usize;
-        *slot = ALPHABET[idx];
+        *slot = *ALPHABET.get(idx).unwrap_or(&b'0');
         value /= ALPHABET.len() as u128;
     }
 
@@ -1259,9 +1259,11 @@ pub fn get_input_dimensions(input: &Path) -> Result<(u32, u32), String> {
                 if let Some(line) = s.lines().next() {
                     let parts: Vec<&str> = line.split_whitespace().collect();
                     if parts.len() >= 2 {
-                        if let (Ok(w), Ok(h)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>()) {
-                            if w > 0 && h > 0 {
-                                return Ok((w, h));
+                        if let (Some(p0), Some(p1)) = (parts.first(), parts.get(1)) {
+                            if let (Ok(w), Ok(h)) = (p0.parse::<u32>(), p1.parse::<u32>()) {
+                                if w > 0 && h > 0 {
+                                    return Ok((w, h));
+                                }
                             }
                         }
                     }

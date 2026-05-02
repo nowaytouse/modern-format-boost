@@ -407,12 +407,18 @@ fn resolve_mif1_from_compatible_brands(path: &Path, major_brand: &[u8]) -> Detec
     }
     data.truncate(read_len);
 
-    if data.len() < 16 || &data[4..8] != b"ftyp" {
+    if data.len() < 16 || data.get(4..8) != Some(b"ftyp") {
         return DetectedFormat::HEIC;
     }
 
     let box_size =
-        usize::try_from(u32::from_be_bytes([data[0], data[1], data[2], data[3]])).unwrap_or(0);
+        usize::try_from(u32::from_be_bytes([
+            *data.get(0).unwrap_or(&0),
+            *data.get(1).unwrap_or(&0),
+            *data.get(2).unwrap_or(&0),
+            *data.get(3).unwrap_or(&0),
+        ]))
+        .unwrap_or(0);
     let ftyp_end = box_size.min(data.len());
 
     // compatible_brands start at offset 16 (after size[4] + "ftyp"[4] + major_brand[4] + minor_version[4])
@@ -420,7 +426,7 @@ fn resolve_mif1_from_compatible_brands(path: &Path, major_brand: &[u8]) -> Detec
         return DetectedFormat::HEIC;
     }
 
-    let compat_data = &data[16..ftyp_end];
+    let compat_data = data.get(16..ftyp_end).unwrap_or(&[]);
     let mut brand_heic_found = false;
     let mut format_heif_detected = false;
 
@@ -604,10 +610,10 @@ pub fn parse_gif_precision_metadata(path: &Path) -> Result<PrecisionMetadata> {
         let mut current_pos = 13 + gct_byte_size;
 
         while current_pos + 10 < data.len() {
-            match data[current_pos] {
+            match *data.get(current_pos).unwrap_or(&0) {
                 0x2C => {
                     // Image Descriptor
-                    let packed_img = data[current_pos + 9];
+                    let packed_img = *data.get(current_pos + 9).unwrap_or(&0);
                     let local_color_table_flag = (packed_img & 0x80) != 0;
                     if local_color_table_flag {
                         let lct_size_exp = packed_img & 0x07;
@@ -618,8 +624,8 @@ pub fn parse_gif_precision_metadata(path: &Path) -> Result<PrecisionMetadata> {
                         current_pos += 10;
                     }
                     // Skip image data blocks
-                    while current_pos < data.len() && data[current_pos] != 0 {
-                        let block_size = usize::from(data[current_pos]);
+                    while current_pos < data.len() && data.get(current_pos) != Some(&0) {
+                        let block_size = usize::from(*data.get(current_pos).unwrap_or(&0));
                         current_pos += block_size + 1;
                     }
                     current_pos += 1;
@@ -630,8 +636,8 @@ pub fn parse_gif_precision_metadata(path: &Path) -> Result<PrecisionMetadata> {
                         break;
                     }
                     current_pos += 2;
-                    while current_pos < data.len() && data[current_pos] != 0 {
-                        let block_size = usize::from(data[current_pos]);
+                    while current_pos < data.len() && data.get(current_pos) != Some(&0) {
+                        let block_size = usize::from(*data.get(current_pos).unwrap_or(&0));
                         current_pos += block_size + 1;
                     }
                     current_pos += 1;
@@ -757,8 +763,8 @@ fn is_jxl_animated_via_ffprobe(path: &Path) -> bool {
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
-                if let Some(stream) = json["streams"].as_array().and_then(|s| s.first()) {
-                    if let Some(nb_frames_str) = stream["nb_read_frames"].as_str() {
+                if let Some(stream) = json.get("streams").and_then(|s| s.as_array()).and_then(|s| s.first()) {
+                    if let Some(nb_frames_str) = stream.get("nb_read_frames").and_then(|v| v.as_str()) {
                         if let Ok(nb_frames) = nb_frames_str.parse::<u32>() {
                             return nb_frames > 1;
                         }
@@ -1437,7 +1443,7 @@ pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructure
                 if chunk_type == b"zTXt" {
                     // zTXt: keyword\0 + compression_method(1) + compressed_text
                     if let Some(null_pos) = payload.iter().position(|&b| b == 0) {
-                        let keyword = String::from_utf8_lossy(&payload[..null_pos]);
+                        let keyword = String::from_utf8_lossy(payload.get(..null_pos).unwrap_or(&[]));
                         for &(pattern, tool_name) in signatures {
                             if keyword.contains(pattern) {
                                 detected_tool = Some(tool_name.to_string());
@@ -1445,7 +1451,7 @@ pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructure
                             }
                         }
                         if detected_tool.is_none() && null_pos + 2 < payload.len() {
-                            let compressed = &payload[null_pos + 2..];
+                            let compressed = payload.get(null_pos + 2..).unwrap_or(&[]);
                             let mut decompressed = Vec::new();
                             if flate2::read::ZlibDecoder::new(compressed)
                                 .read_to_end(&mut decompressed)
@@ -1962,7 +1968,9 @@ pub fn calculate_entropy(img: &DynamicImage) -> f64 {
     let mut histogram = [0u64; 256];
 
     for pixel in gray.pixels() {
-        histogram[usize::from(pixel[0])] += 1;
+        if let Some(h) = histogram.get_mut(usize::from(pixel.0.first().copied().unwrap_or(0))) {
+            *h += 1;
+        }
     }
 
     let total = f64::from(u32::try_from(gray.pixels().count()).unwrap_or(u32::MAX));
@@ -2001,7 +2009,7 @@ fn calculate_palette_index_entropy(img: &DynamicImage, palette_size: usize) -> (
     // (it decodes to RGBA), we approximate by quantizing to unique RGBA values and counting.
     let mut color_freq: HashMap<[u8; 4], u64> = HashMap::new();
     for pixel in rgba.pixels() {
-        let key = [pixel[0], pixel[1], pixel[2], pixel[3]];
+        let key = pixel.0;
         *color_freq.entry(key).or_insert(0) += 1;
     }
 
@@ -2041,9 +2049,10 @@ fn calculate_rgb_entropy(img: &DynamicImage) -> f64 {
     let mut hist_b = [0u64; 256];
 
     for pixel in rgba.pixels() {
-        hist_r[usize::from(pixel[0])] += 1;
-        hist_g[usize::from(pixel[1])] += 1;
-        hist_b[usize::from(pixel[2])] += 1;
+        let [r, g, b, _] = pixel.0;
+        if let Some(h) = hist_r.get_mut(usize::from(r)) { *h += 1; }
+        if let Some(h) = hist_g.get_mut(usize::from(g)) { *h += 1; }
+        if let Some(h) = hist_b.get_mut(usize::from(b)) { *h += 1; }
     }
 
     let total = f64::from(u32::try_from(rgba.pixels().count()).unwrap_or(u32::MAX));
@@ -2314,7 +2323,12 @@ pub(crate) fn parse_apng_frames(data: &[u8]) -> (bool, u32) {
         }
 
         // Read chunk length (big-endian)
-        let length = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
+        let length = u32::from_be_bytes([
+            *data.get(pos).unwrap_or(&0),
+            *data.get(pos + 1).unwrap_or(&0),
+            *data.get(pos + 2).unwrap_or(&0),
+            *data.get(pos + 3).unwrap_or(&0),
+        ]);
         pos += 4;
 
         if pos + 4 > data.len() {
@@ -2322,15 +2336,19 @@ pub(crate) fn parse_apng_frames(data: &[u8]) -> (bool, u32) {
         }
 
         // Read chunk type
-        let chunk_type = &data[pos..pos + 4];
+        let chunk_type = data.get(pos..pos + 4).unwrap_or(&[]);
         pos += 4;
 
         // Check if this is acTL chunk
         if chunk_type == b"acTL" {
             if pos + 4 <= data.len() {
                 // Read num_frames (first 4 bytes of acTL data)
-                let num_frames =
-                    u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
+                let num_frames = u32::from_be_bytes([
+                    *data.get(pos).unwrap_or(&0),
+                    *data.get(pos + 1).unwrap_or(&0),
+                    *data.get(pos + 2).unwrap_or(&0),
+                    *data.get(pos + 3).unwrap_or(&0),
+                ]);
                 return (num_frames > 1, num_frames.max(1));
             }
             return (true, 2); // Fallback if we can't read frame count
@@ -2479,7 +2497,12 @@ fn detect_exr_compression(path: &Path) -> Result<CompressionType> {
     }
 
     // Check version field for multi-part flag (bit 9)
-    let version = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+    let version = u32::from_le_bytes([
+        *data.get(4).unwrap_or(&0),
+        *data.get(5).unwrap_or(&0),
+        *data.get(6).unwrap_or(&0),
+        *data.get(7).unwrap_or(&0),
+    ]);
     let is_multipart = (version & (1 << 9)) != 0;
 
     let mut pos = 8; // skip magic + version
@@ -2495,13 +2518,13 @@ fn detect_exr_compression(path: &Path) -> Result<CompressionType> {
         while pos < data.len() {
             // Read attribute name (null-terminated)
             let name_start = pos;
-            while pos < data.len() && data[pos] != 0 {
+            while pos < data.len() && data.get(pos) != Some(&0) {
                 pos += 1;
             }
             if pos >= data.len() {
                 break;
             }
-            let name = &data[name_start..pos];
+            let name = data.get(name_start..pos).unwrap_or(&[]);
             pos += 1; // skip null terminator
 
             // Empty name = end of this part's header
@@ -2510,7 +2533,7 @@ fn detect_exr_compression(path: &Path) -> Result<CompressionType> {
             }
 
             // Read type name (null-terminated)
-            while pos < data.len() && data[pos] != 0 {
+            while pos < data.len() && data.get(pos) != Some(&0) {
                 pos += 1;
             }
             if pos >= data.len() {
@@ -2523,15 +2546,15 @@ fn detect_exr_compression(path: &Path) -> Result<CompressionType> {
                 break;
             }
             let value_size = crate::numeric_cast::u32_to_usize_sat(u32::from_le_bytes([
-                data[pos],
-                data[pos + 1],
-                data[pos + 2],
-                data[pos + 3],
+                *data.get(pos).unwrap_or(&0),
+                *data.get(pos + 1).unwrap_or(&0),
+                *data.get(pos + 2).unwrap_or(&0),
+                *data.get(pos + 3).unwrap_or(&0),
             ]));
             pos += 4;
 
             if name == b"compression" && value_size >= 1 && pos < data.len() {
-                let compression = data[pos];
+                let compression = *data.get(pos).unwrap_or(&0);
                 found_any_compression = true;
 
                 if std::env::var("IMGQUALITY_VERBOSE").is_ok() {
@@ -2571,7 +2594,7 @@ fn detect_exr_compression(path: &Path) -> Result<CompressionType> {
         }
 
         // Multi-part: check for second consecutive empty name (end of all parts)
-        if pos < data.len() && data[pos] == 0 {
+        if data.get(pos) == Some(&0) {
             // Two consecutive empty names → end of multi-part file
             break;
         }
@@ -2620,7 +2643,7 @@ fn detect_jp2_compression(path: &Path) -> Result<CompressionType> {
     // Scan for COD and COC markers in the codestream header area
     // COD/COC must appear before the first tile-part, so limit scan to first 4KB of codestream
     let scan_end = (cs_start + 4096).min(data.len());
-    let cs = &data[cs_start..scan_end];
+    let cs = data.get(cs_start..scan_end).unwrap_or(&[]);
 
     let (cod_wavelet, coc_wavelets) = find_jp2_wavelets(cs);
 
@@ -2677,12 +2700,12 @@ fn find_jp2c_offset(data: &[u8]) -> Option<usize> {
     let mut pos = 0;
     while pos + 8 <= data.len() {
         let size = crate::numeric_cast::u32_to_usize_sat(u32::from_be_bytes([
-            data[pos],
-            data[pos + 1],
-            data[pos + 2],
-            data[pos + 3],
+            *data.get(pos).unwrap_or(&0),
+            *data.get(pos + 1).unwrap_or(&0),
+            *data.get(pos + 2).unwrap_or(&0),
+            *data.get(pos + 3).unwrap_or(&0),
         ]));
-        let box_type = &data[pos + 4..pos + 8];
+        let box_type = data.get(pos + 4..pos + 8).unwrap_or(&[]);
 
         if box_type == b"jp2c" {
             return Some(pos + 8);
@@ -2695,14 +2718,14 @@ fn find_jp2c_offset(data: &[u8]) -> Option<usize> {
                 break;
             }
             let ext = crate::numeric_cast::u64_to_usize_sat(u64::from_be_bytes([
-                data[pos + 8],
-                data[pos + 9],
-                data[pos + 10],
-                data[pos + 11],
-                data[pos + 12],
-                data[pos + 13],
-                data[pos + 14],
-                data[pos + 15],
+                *data.get(pos + 8).unwrap_or(&0),
+                *data.get(pos + 9).unwrap_or(&0),
+                *data.get(pos + 10).unwrap_or(&0),
+                *data.get(pos + 11).unwrap_or(&0),
+                *data.get(pos + 12).unwrap_or(&0),
+                *data.get(pos + 13).unwrap_or(&0),
+                *data.get(pos + 14).unwrap_or(&0),
+                *data.get(pos + 15).unwrap_or(&0),
             ]));
             pos += ext;
         } else if size < 8 {
@@ -2725,11 +2748,11 @@ fn find_jp2_wavelets(cs: &[u8]) -> (Option<u8>, Vec<(u16, u8)>) {
     // Walk markers: each marker is FF xx, followed by 2-byte length (except SOC=FF4F, SOD=FF93)
     let mut pos = 0;
     while pos + 2 <= cs.len() {
-        if cs[pos] != 0xFF {
+        if cs.get(pos) != Some(&0xFF) {
             pos += 1;
             continue;
         }
-        let marker = cs[pos + 1];
+        let marker = *cs.get(pos + 1).unwrap_or(&0);
 
         // SOC (FF 4F) — no length field
         if marker == 0x4F {
@@ -2744,8 +2767,8 @@ fn find_jp2_wavelets(cs: &[u8]) -> (Option<u8>, Vec<(u16, u8)>) {
         // COD marker (FF 52)
         if marker == 0x52 && pos + 4 <= cs.len() {
             let seg_len = crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([
-                cs[pos + 2],
-                cs[pos + 3],
+                *cs.get(pos + 2).unwrap_or(&0),
+                *cs.get(pos + 3).unwrap_or(&0),
             ]));
             // COD segment: Scod(1) + SGcod(4) + SPcod(variable)
             // SPcod starts at offset 5 within segment data
@@ -2754,7 +2777,7 @@ fn find_jp2_wavelets(cs: &[u8]) -> (Option<u8>, Vec<(u16, u8)>) {
             // segment_data starts at pos+4, so transform is at pos+4+9 = pos+13
             let transform_offset = pos + 4 + 9;
             if transform_offset < cs.len() && seg_len >= 10 {
-                let wavelet = cs[transform_offset];
+                let wavelet = *cs.get(transform_offset).unwrap_or(&0);
                 if wavelet <= 1 {
                     cod_wavelet = Some(wavelet);
                 }
@@ -2764,8 +2787,8 @@ fn find_jp2_wavelets(cs: &[u8]) -> (Option<u8>, Vec<(u16, u8)>) {
         // COC marker (FF 53) — component-specific coding style
         if marker == 0x53 && pos + 4 <= cs.len() {
             let seg_len = crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([
-                cs[pos + 2],
-                cs[pos + 3],
+                *cs.get(pos + 2).unwrap_or(&0),
+                *cs.get(pos + 3).unwrap_or(&0),
             ]));
             // COC segment: Ccoc(1 or 2 bytes) + Scoc(1) + SPcoc(variable)
             // For images with < 257 components, Ccoc is 1 byte; otherwise 2 bytes
@@ -2776,8 +2799,8 @@ fn find_jp2_wavelets(cs: &[u8]) -> (Option<u8>, Vec<(u16, u8)>) {
             let transform_offset = spcoc_offset + 1 + 4; // SPcoc[4] = transform
 
             if component_offset < cs.len() && transform_offset < cs.len() && seg_len >= 7 {
-                let component = u16::from(cs[component_offset]);
-                let wavelet = cs[transform_offset];
+                let component = u16::from(*cs.get(component_offset).unwrap_or(&0));
+                let wavelet = *cs.get(transform_offset).unwrap_or(&0);
                 if wavelet <= 1 {
                     coc_wavelets.push((component, wavelet));
                 }
@@ -2789,7 +2812,7 @@ fn find_jp2_wavelets(cs: &[u8]) -> (Option<u8>, Vec<(u16, u8)>) {
             break;
         }
         let seg_len =
-            crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([cs[pos + 2], cs[pos + 3]]));
+            crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([*cs.get(pos + 2).unwrap_or(&0), *cs.get(pos + 3).unwrap_or(&0)]));
         pos += 2 + seg_len;
     }
 
@@ -2819,15 +2842,15 @@ mod tests {
     #[test]
     fn test_detect_png_format() {
         let png_magic: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
-        let mut file = NamedTempFile::new().expect("Failed to create temporary file");
+        let mut file = NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temporary file"));
         let mut data = png_magic.to_vec();
         data.extend_from_slice(&[0u8; 24]);
-        file.write_all(&data).expect("Failed to write");
+        file.write_all(&data).unwrap_or_else(|_| panic!("Failed to write"));
 
         let result = detect_format_from_bytes(file.path());
         assert!(result.is_ok(), "PNG format detection should succeed");
         assert_eq!(
-            result.unwrap(),
+            result.unwrap_or_else(|_| panic!("Unwrap failed")),
             DetectedFormat::PNG,
             "Should be detected as PNG format"
         );
@@ -2836,15 +2859,15 @@ mod tests {
     #[test]
     fn test_detect_jpeg_format() {
         let jpeg_magic: &[u8] = &[0xFF, 0xD8, 0xFF, 0xE0];
-        let mut file = NamedTempFile::new().expect("Failed to create temporary file");
+        let mut file = NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temporary file"));
         let mut data = jpeg_magic.to_vec();
         data.extend_from_slice(&[0u8; 28]);
-        file.write_all(&data).expect("Failed to write");
+        file.write_all(&data).unwrap_or_else(|_| panic!("Failed to write"));
 
         let result = detect_format_from_bytes(file.path());
         assert!(result.is_ok(), "JPEG format detection should succeed");
         assert_eq!(
-            result.unwrap(),
+            result.unwrap_or_else(|_| panic!("Unwrap failed")),
             DetectedFormat::JPEG,
             "Should be detected as JPEG format"
         );
@@ -2853,15 +2876,15 @@ mod tests {
     #[test]
     fn test_detect_gif_format() {
         let gif_magic: &[u8] = b"GIF89a";
-        let mut file = NamedTempFile::new().expect("Failed to create temporary file");
+        let mut file = NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temporary file"));
         let mut data = gif_magic.to_vec();
         data.extend_from_slice(&[0u8; 26]);
-        file.write_all(&data).expect("Failed to write");
+        file.write_all(&data).unwrap_or_else(|_| panic!("Failed to write"));
 
         let result = detect_format_from_bytes(file.path());
         assert!(result.is_ok(), "GIF format detection should succeed");
         assert_eq!(
-            result.unwrap(),
+            result.unwrap_or_else(|_| panic!("Unwrap failed")),
             DetectedFormat::GIF,
             "Should be detected as GIF format"
         );
@@ -2874,13 +2897,13 @@ mod tests {
         webp_data.extend_from_slice(b"WEBP");
         webp_data.extend_from_slice(&[0u8; 20]);
 
-        let mut file = NamedTempFile::new().expect("Failed to create temporary file");
-        file.write_all(&webp_data).expect("Failed to write");
+        let mut file = NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temporary file"));
+        file.write_all(&webp_data).unwrap_or_else(|_| panic!("Failed to write"));
 
         let result = detect_format_from_bytes(file.path());
         assert!(result.is_ok(), "WebP format detection should succeed");
         assert_eq!(
-            result.unwrap(),
+            result.unwrap_or_else(|_| panic!("Unwrap failed")),
             DetectedFormat::WebP,
             "Should be detected as WebP format"
         );
@@ -2889,17 +2912,17 @@ mod tests {
     #[test]
     fn test_detect_unknown_format() {
         let random_data: &[u8] = &[0x00, 0x01, 0x02, 0x03, 0x04, 0x05];
-        let mut file = NamedTempFile::new().expect("Failed to create temporary file");
+        let mut file = NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temporary file"));
         let mut data = random_data.to_vec();
         data.extend_from_slice(&[0u8; 26]);
-        file.write_all(&data).expect("Failed to write");
+        file.write_all(&data).unwrap_or_else(|_| panic!("Failed to write"));
 
         let result = detect_format_from_bytes(file.path());
         assert!(
             result.is_ok(),
             "Unknown format detection should succeed (return Unknown)"
         );
-        match result.unwrap() {
+        match result.unwrap_or_else(|_| panic!("Unwrap failed")) {
             DetectedFormat::Unknown(_) => (),
             other => panic!("Should be detected as Unknown format, actual {other:?}"),
         }
@@ -2910,18 +2933,18 @@ mod tests {
         let mut heic_test_builder = Builder::new()
             .suffix(".heic")
             .tempfile()
-            .expect("create temp heic");
+            .unwrap_or_else(|_| panic!("create temp heic"));
         heic_test_builder
             .write_all(&[0, 0, 0, 12, b'f', b't', b'y', b'p', b'h', b'e', b'i', b'c'])
-            .expect("write heic header");
+            .unwrap_or_else(|_| panic!("write heic header"));
 
         let mut heif_sample_builder = Builder::new()
             .suffix(".HEIF")
             .tempfile()
-            .expect("create temp heif");
+            .unwrap_or_else(|_| panic!("create temp heif"));
         heif_sample_builder
             .write_all(&[0, 0, 0, 12, b'f', b't', b'y', b'p', b'm', b'i', b'f', b'1'])
-            .expect("write heif header");
+            .unwrap_or_else(|_| panic!("write heif header"));
     }
 
     #[test]
@@ -2961,7 +2984,8 @@ mod tests {
             1,
             5.0,
         )
-        .expect_err("invalid dimensions should not produce a hardcoded fallback quality");
+        .err()
+        .unwrap_or_else(|| panic!("invalid dimensions should not produce a hardcoded fallback quality"));
 
         match err {
             ImgQualityError::AnalysisError(message) => {

@@ -545,14 +545,17 @@ fn add_reason(
     reason: JxlPromotionReason,
     log: &mut Vec<String>,
 ) {
-    if candidates[idx].has_reason(reason) {
+    let Some(candidate) = candidates.get_mut(idx) else {
+        return;
+    };
+    if candidate.has_reason(reason) {
         return;
     }
 
-    candidates[idx].reasons.push(reason);
+    candidate.reasons.push(reason);
     log.push(format!(
         "Shortlist keeps d={} ({})",
-        format_distance_for_log(candidates[idx].distance),
+        format_distance_for_log(candidate.distance),
         reason.label()
     ));
 }
@@ -607,7 +610,9 @@ fn shortlist_finalists(
     let mut selected = HashSet::new();
 
     // Always include the best known below-source candidate first (guaranteed slot).
-    include_finalist(&mut finalists, &mut selected, &candidates[best_idx]);
+    if let Some(best) = candidates.get(best_idx) {
+        include_finalist(&mut finalists, &mut selected, best);
+    }
 
     // Fill remaining slots: tier 1 → tier 2 → tier 3.
     for tier in [
@@ -696,17 +701,20 @@ fn finalize_screening_result(
 
     // Structured telemetry for data-driven calibration.
     // Collect these lines to fit band boundaries statistically rather than manually.
+    let best_candidate = candidates.get(best_idx);
+    let (best_dist, best_size) = best_candidate.map_or((0.0, 0), |c| (c.distance, c.output_size));
+
     log.push(format!(
         "TELEMETRY: initial_ratio={initial_ratio:.6} pressure_stops={pressure_stops:.4} profile={profile_label} target_distance={} best_distance={} best_pct={:.1} iterations={iterations} finalists={}",
         format_distance_for_log(target_distance),
-        format_distance_for_log(candidates[best_idx].distance),
-        size_ratio_pct(candidates[best_idx].output_size, input_size),
+        format_distance_for_log(best_dist),
+        size_ratio_pct(best_size, input_size),
         finalists.len()
     ));
 
     JxlScreeningResult {
-        best_distance: candidates[best_idx].distance,
-        best_output_size: candidates[best_idx].output_size,
+        best_distance: best_dist,
+        best_output_size: best_size,
         iterations,
         screened_candidates: candidates,
         finalists,
@@ -925,7 +933,8 @@ where
             if tighter_than_current && below_d_under {
                 d_over = Some(candidate_distance);
             }
-            if size < candidates[oversize_best_idx].output_size {
+            let oversize_best_size = candidates.get(oversize_best_idx).map_or(u64::MAX, |c| c.output_size);
+            if size < oversize_best_size {
                 if current_idx > 0 {
                     add_reason(
                         &mut candidates,
@@ -942,7 +951,7 @@ where
                 );
                 pending_adjacent_promotion = true;
                 oversize_best_idx = current_idx;
-            } else if near_best(size, candidates[oversize_best_idx].output_size, input_size) {
+            } else if near_best(size, oversize_best_size, input_size) {
                 add_reason(
                     &mut candidates,
                     current_idx,
@@ -1114,7 +1123,7 @@ where
             if size < input_size {
                 // New best: lower d that still beats source
                 hi = mid;
-                if best_below_idx.is_none_or(|idx| mid < candidates[idx].distance) {
+                if best_below_idx.is_none_or(|idx| candidates.get(idx).is_none_or(|c| mid < c.distance)) {
                     best_below_idx = Some(probe_idx);
                     add_reason(
                         &mut candidates,

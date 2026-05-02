@@ -123,17 +123,17 @@ impl PsnrSsimMapping {
         }
 
         match (lower, upper) {
-            (Some(l), Some(u)) if l == u => Some(self.points[l].ssim),
+            (Some(l), Some(u)) if l == u => self.points.get(l).map(|p| p.ssim),
             (Some(l), Some(u)) => {
-                let p1 = &self.points[l];
-                let p2 = &self.points[u];
+                let p1 = self.points.get(l)?;
+                let p2 = self.points.get(u)?;
                 Some(Self::interpolate_or_clamp(p1, p2, psnr))
             }
             (Some(_), None) => {
                 let n = self.points.len();
                 if n >= 2 {
-                    let p1 = &self.points[n - 2];
-                    let p2 = &self.points[n - 1];
+                    let p1 = self.points.get(n.saturating_sub(2))?;
+                    let p2 = self.points.get(n.saturating_sub(1))?;
                     Some(Self::interpolate_or_clamp(p1, p2, psnr))
                 } else {
                     None
@@ -141,8 +141,8 @@ impl PsnrSsimMapping {
             }
             (None, Some(_)) => {
                 if self.points.len() >= 2 {
-                    let p1 = &self.points[0];
-                    let p2 = &self.points[1];
+                    let p1 = self.points.first()?;
+                    let p2 = self.points.get(1)?;
                     Some(Self::interpolate_or_clamp(p1, p2, psnr))
                 } else {
                     None

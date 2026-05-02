@@ -161,7 +161,7 @@ fn detect_vfr_enhanced(
     // Slow-motion detection (separate logic for reliability)
     if (format_name.contains("mov") || format_name.contains("mp4")) && avg_frame_rate >= 60.0 {
         // Check for Apple's slow-mo tag (most reliable indicator)
-        if video_stream["tags"]["com.apple.quicktime.fullframerate"].is_string() {
+        if video_stream.get("tags").and_then(|t| t.get("com.apple.quicktime.fullframerate")).is_some_and(serde_json::Value::is_string) {
             return true;
         }
 
@@ -331,7 +331,10 @@ fn select_video_stream<'a>(
             })
             .ok_or_else(|| FFprobeError::ParseError("No video stream found".to_string()))?
     } else {
-        video_streams[0]
+        video_streams
+            .into_iter()
+            .next()
+            .ok_or_else(|| FFprobeError::ParseError("No video stream found".to_string()))?
     };
 
     let actual_index = stream["index"]
@@ -481,11 +484,16 @@ fn parse_video_stream_fields(
             .as_u64()
             .map(|level| format!("{:.1}", crate::numeric_cast::u64_to_f64(level) / 10.0)),
         max_b_frames,
-        encoder_settings: video_stream["tags"]["x265-params"]
-            .as_str()
-            .or_else(|| video_stream["tags"]["x264-params"].as_str())
-            .or_else(|| video_stream["tags"]["encoder_settings"].as_str())
-            .map(str::to_string),
+        encoder_settings: video_stream.get("tags").and_then(|tags| {
+            tags.get("x265-params")
+                .and_then(serde_json::Value::as_str)
+                .or_else(|| tags.get("x264-params").and_then(serde_json::Value::as_str))
+                .or_else(|| {
+                    tags.get("encoder_settings")
+                        .and_then(serde_json::Value::as_str)
+                })
+                .map(str::to_string)
+        }),
         video_bit_rate: parse_u64_string_field(&video_stream["bit_rate"]),
         refs: video_stream["refs"]
             .as_u64()
@@ -550,9 +558,9 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         bit_rate,
         duration: format_duration,
         tags,
-    } = parse_probe_format(&json["format"])?;
-    let streams = json["streams"]
-        .as_array()
+    } = parse_probe_format(json.get("format").unwrap_or(&serde_json::Value::Null))?;
+    let streams = json.get("streams")
+        .and_then(serde_json::Value::as_array)
         .ok_or_else(|| FFprobeError::ParseError("No streams found".to_string()))?;
     let (stream_index, video_stream) = select_video_stream(streams)?;
     let duration = resolve_probe_duration(format_duration, video_stream, &format_name, path);
@@ -590,7 +598,7 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         is_variable_frame_rate: video.is_variable_frame_rate,
         stream_index,
         tags,
-        loop_count: extract_loop_count(&json["format"]),
+        loop_count: extract_loop_count(json.get("format").unwrap_or(&serde_json::Value::Null)),
         frame_types: extract_frame_types(&json),
         pts_deltas: extract_pts_deltas(&json),
         pkt_sizes: extract_pkt_sizes(&json),
@@ -958,10 +966,12 @@ pub fn parse_frame_rate(s: &str) -> Result<f64, FFprobeError> {
     if s.contains('/') {
         let parts: Vec<&str> = s.split('/').collect();
         if parts.len() == 2 {
-            let num = parts[0]
+            let num = parts.first()
+                .ok_or_else(|| FFprobeError::ParseError("Missing numerator".to_string()))?
                 .parse::<f64>()
                 .map_err(|e| FFprobeError::ParseError(format!("Invalid numerator: {e}")))?;
-            let den = parts[1]
+            let den = parts.get(1)
+                .ok_or_else(|| FFprobeError::ParseError("Missing denominator".to_string()))?
                 .parse::<f64>()
                 .map_err(|e| FFprobeError::ParseError(format!("Invalid denominator: {e}")))?;
 

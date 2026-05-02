@@ -228,7 +228,7 @@ fn detect_encoder(
         return Some("IJG/libjpeg (standard)".to_string());
     }
 
-    let luma = &tables[0];
+    let luma = tables.first()?;
 
     if let Some(c_sse) = chroma_sse {
         if (720.0..735.0).contains(&luma_sse) && (5.0..12.0).contains(&c_sse) {
@@ -279,18 +279,18 @@ const MARKER_EOI: u8 = 0xD9;
 pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, String> {
     let mut tables = Vec::new();
 
-    if data.len() < 2 || data[0] != 0xFF || data[1] != MARKER_SOI {
+    if data.len() < 2 || data.get(0..2) != Some(&[0xFF, MARKER_SOI]) {
         return Err("Not a valid JPEG file".to_string());
     }
     let mut pos = 2;
 
     while pos < data.len() - 1 {
-        if data[pos] != 0xFF {
+        if data.get(pos) != Some(&0xFF) {
             pos += 1;
             continue;
         }
 
-        while pos < data.len() && data[pos] == 0xFF {
+        while pos < data.len() && data.get(pos) == Some(&0xFF) {
             pos += 1;
         }
 
@@ -298,7 +298,7 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
             break;
         }
 
-        let marker = data[pos];
+        let marker = *data.get(pos).unwrap_or(&0);
         pos += 1;
 
         if marker == MARKER_SOI || marker == MARKER_EOI || (0xD0..=0xD7).contains(&marker) {
@@ -308,7 +308,7 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
         if pos + 2 > data.len() {
             break;
         }
-        let length = (usize::from(data[pos]) << 8) | usize::from(data[pos + 1]);
+        let length = (usize::from(*data.get(pos).unwrap_or(&0)) << 8) | usize::from(*data.get(pos + 1).unwrap_or(&0));
 
         if marker == MARKER_DQT {
             let segment_end = (pos + length).min(data.len());
@@ -319,7 +319,7 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
                     break;
                 }
 
-                let pq_tq = data[seg_pos];
+                let pq_tq = *data.get(seg_pos).unwrap_or(&0);
                 let precision = (pq_tq >> 4) & 0x0F;
                 seg_pos += 1;
 
@@ -332,7 +332,9 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
                     for &zigzag in &ZIGZAG_ORDER {
                         let row = zigzag / 8;
                         let col = zigzag % 8;
-                        table[row][col] = u16::from(data[seg_pos]);
+                        if let Some(cell) = table.get_mut(row).and_then(|r| r.get_mut(col)) {
+                            *cell = u16::from(*data.get(seg_pos).unwrap_or(&0));
+                        }
                         seg_pos += 1;
                     }
                 } else {
@@ -342,8 +344,9 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
                     for &zigzag in &ZIGZAG_ORDER {
                         let row = zigzag / 8;
                         let col = zigzag % 8;
-                        table[row][col] =
-                            (u16::from(data[seg_pos]) << 8) | u16::from(data[seg_pos + 1]);
+                        if let Some(cell) = table.get_mut(row).and_then(|r| r.get_mut(col)) {
+                            *cell = (u16::from(*data.get(seg_pos).unwrap_or(&0)) << 8) | u16::from(*data.get(seg_pos + 1).unwrap_or(&0));
+                        }
                         seg_pos += 2;
                     }
                 }
@@ -383,7 +386,7 @@ pub fn is_jpeg_complete(data: &[u8]) -> bool {
     }
 
     // 1) Verify Start of Image (SOI): FF D8
-    if data[0] != 0xFF || data[1] != 0xD8 {
+    if data.get(0..2) != Some(&[0xFF, 0xD8]) {
         return false;
     }
 
@@ -391,7 +394,7 @@ pub fn is_jpeg_complete(data: &[u8]) -> bool {
     // We search from the end because it's more likely to be near the end,
     // even if there's a few hundred bytes of trailing metadata.
     // In a valid JPEG bitstream, FF D9 should not appear in the scan data (due to byte stuffing).
-    data.windows(2).rev().any(|w| w[0] == 0xFF && w[1] == 0xD9)
+    data.windows(2).rev().any(|w| w == b"\xFF\xD9")
 }
 
 /// Analyze JPEG quality by inspecting DQT (Define Quantization Table) markers.
@@ -401,17 +404,10 @@ pub fn is_jpeg_complete(data: &[u8]) -> bool {
 pub fn analyze_jpeg_quality(data: &[u8]) -> Result<JpegQualityAnalysis, String> {
     let tables = extract_quantization_tables(data)?;
 
-    if tables.is_empty() {
-        return Err("No quantization tables found".to_string());
-    }
+    let luma_table = tables.first().ok_or_else(|| "No quantization tables found".to_string())?;
+    let luma_estimate = estimate_quality_precise(luma_table, &IJG_LUMINANCE_BASE);
 
-    let luma_estimate = estimate_quality_precise(&tables[0], &IJG_LUMINANCE_BASE);
-
-    let chroma_estimate = if tables.len() > 1 {
-        Some(estimate_quality_precise(&tables[1], &IJG_CHROMINANCE_BASE))
-    } else {
-        None
-    };
+    let chroma_estimate = tables.get(1).map(|table| estimate_quality_precise(table, &IJG_CHROMINANCE_BASE));
 
     let confidence = calculate_confidence(&luma_estimate, chroma_estimate.as_ref());
 
@@ -497,7 +493,7 @@ pub fn analyze_jpeg_file(path: &std::path::Path) -> Result<JpegQualityAnalysis, 
 /// Returns true if the file is a `UltraHDR` JPEG with embedded gainmap.
 #[must_use]
 pub fn is_ultra_hdr_jpeg(data: &[u8]) -> bool {
-    if data.len() < 4 || data[0] != 0xFF || data[1] != 0xD8 {
+    if data.len() < 4 || data.get(0..2) != Some(&[0xFF, 0xD8]) {
         return false;
     }
 
@@ -507,15 +503,15 @@ pub fn is_ultra_hdr_jpeg(data: &[u8]) -> bool {
     let mut pos = 2;
     while pos + 1 < data.len() {
         // Skip leading 0xFFs including padding
-        while pos + 1 < data.len() && data[pos] == 0xFF && data[pos + 1] == 0xFF {
+        while pos + 1 < data.len() && data.get(pos..pos + 2) == Some(&[0xFF, 0xFF]) {
             pos += 1;
         }
 
-        if pos + 1 >= data.len() || data[pos] != 0xFF {
+        if pos + 1 >= data.len() || data.get(pos) != Some(&0xFF) {
             break;
         }
 
-        let marker = data[pos + 1];
+        let marker = *data.get(pos + 1).unwrap_or(&0);
         pos += 2;
 
         // Stop if we hit SOS or EOI - metadata is in the header
@@ -532,17 +528,17 @@ pub fn is_ultra_hdr_jpeg(data: &[u8]) -> bool {
         if pos + 2 > data.len() {
             break;
         }
-        let seg_len = usize::from(u16::from_be_bytes([data[pos], data[pos + 1]]));
+        let seg_len = usize::from(u16::from_be_bytes([*data.get(pos).unwrap_or(&0), *data.get(pos + 1).unwrap_or(&0)]));
         if seg_len < 2 || pos + seg_len > data.len() {
             break;
         }
 
-        let payload = &data[pos + 2..pos + seg_len];
+        let payload = data.get(pos + 2..pos + seg_len).unwrap_or(&[]);
 
         // APP2 (0xE2): check for XMP gainmap or MPF
         if marker == 0xE2 {
             if payload.starts_with(b"http://ns.adobe.com/xap/1.0/\0") && payload.len() > 29 {
-                let xmp = String::from_utf8_lossy(&payload[29..]);
+                let xmp = String::from_utf8_lossy(payload.get(29..).unwrap_or(&[]));
                 if xmp.contains("hdrgm:") || xmp.contains("GainMap") || xmp.contains("gainmap") {
                     has_gainmap_xmp = true;
                 }
@@ -556,7 +552,7 @@ pub fn is_ultra_hdr_jpeg(data: &[u8]) -> bool {
             && payload.starts_with(b"http://ns.adobe.com/xap/1.0/\0")
             && payload.len() > 29
         {
-            let xmp = String::from_utf8_lossy(&payload[29..]);
+            let xmp = String::from_utf8_lossy(payload.get(29..).unwrap_or(&[]));
             if xmp.contains("hdrgm:") || xmp.contains("GainMap") || xmp.contains("gainmap") {
                 has_gainmap_xmp = true;
             }
@@ -592,28 +588,28 @@ pub fn extract_xmp_from_jpeg_data(data: &[u8]) -> Option<Vec<String>> {
 
     while pos < data.len() {
         // Look for APP1 marker 0xFF 0xE1
-        if data[pos] == 0xFF && pos + 1 < data.len() && data[pos + 1] == 0xE1 {
+        if data.get(pos..pos + 2) == Some(&[0xFF, 0xE1]) {
             if pos + 3 >= data.len() {
                 break;
             }
-            let seg_len = usize::from(u16::from_be_bytes([data[pos + 2], data[pos + 3]]));
+            let seg_len = usize::from(u16::from_be_bytes([*data.get(pos + 2).unwrap_or(&0), *data.get(pos + 3).unwrap_or(&0)]));
             if seg_len < 2 || pos + 2 + seg_len > data.len() {
                 pos += 1;
                 continue;
             }
 
-            let payload = &data[pos + 4..pos + 2 + seg_len];
+            let payload = data.get(pos + 4..pos + 2 + seg_len).unwrap_or(&[]);
 
             // APP1 (0xE1): XMP Standard
             if payload.starts_with(b"http://ns.adobe.com/xap/1.0/\0") && payload.len() > 29 {
-                let xmp = String::from_utf8_lossy(&payload[29..]).to_string();
+                let xmp = String::from_utf8_lossy(payload.get(29..).unwrap_or(&[])).to_string();
                 xmp_blocks.push(xmp);
             }
             // APP1 (0xE1): XMP Extended
             else if payload.starts_with(b"http://ns.adobe.com/xmp/extension/\0")
                 && payload.len() > 35 + 32 + 8
             {
-                let xmp = String::from_utf8_lossy(&payload[35 + 32 + 8..]).to_string();
+                let xmp = String::from_utf8_lossy(payload.get(35 + 32 + 8..).unwrap_or(&[])).to_string();
                 xmp_blocks.push(xmp);
             }
             pos += 2 + seg_len;
@@ -652,7 +648,7 @@ pub fn extract_gainmap_from_jpeg(data: &[u8]) -> Result<(DynamicImage, DynamicIm
     tracing::debug!(size = data.len(), "Extracting gainmap from UltraHDR JPEG");
 
     // Validate JPEG signature
-    if data.len() < 4 || data[0] != 0xFF || data[1] != 0xD8 {
+    if data.len() < 4 || data.get(0..2) != Some(&[0xFF, 0xD8]) {
         return Err(format!(
             "Invalid JPEG signature: expected FFD8, got {:02X}{:02X}. \
              File size: {} bytes. This is not a valid JPEG file.",
@@ -824,7 +820,7 @@ fn collect_scanned_gainmap_candidates(
         return;
     }
 
-    for (offset, window) in jpeg_data[range_start..bounded_end]
+    for (offset, window) in jpeg_data.get(range_start..bounded_end).unwrap_or(&[])
         .windows(JPEG_SOI_BYTES.len())
         .enumerate()
     {
@@ -929,7 +925,7 @@ fn candidate_gainmap_bytes(
         _ => return None,
     };
 
-    let mut candidate = jpeg_data[start..end].to_vec();
+    let mut candidate = jpeg_data.get(start..end).unwrap_or(&[]).to_vec();
     let repaired_eoi = !candidate.ends_with(&JPEG_EOI_BYTES);
     if repaired_eoi {
         candidate.extend_from_slice(&JPEG_EOI_BYTES);
@@ -1099,11 +1095,11 @@ fn find_mpf_segment(data: &[u8]) -> Result<Vec<u8>, String> {
 
     while pos + 1 < data.len() {
         // Skip padding
-        while pos + 1 < data.len() && data[pos] == 0xFF && data[pos + 1] == 0xFF {
+        while pos + 1 < data.len() && data.get(pos..pos + 2) == Some(&[0xFF, 0xFF]) {
             pos += 1;
         }
 
-        if pos + 1 >= data.len() || data[pos] != 0xFF {
+        if pos + 1 >= data.len() || data.get(pos) != Some(&0xFF) {
             return Err(format!(
                 "Invalid JPEG structure: expected marker 0xFF at position {}, found 0x{:02X}",
                 pos,
@@ -1111,7 +1107,7 @@ fn find_mpf_segment(data: &[u8]) -> Result<Vec<u8>, String> {
             ));
         }
 
-        let marker = data[pos + 1];
+        let marker = *data.get(pos + 1).unwrap_or(&0);
         pos += 2;
 
         if marker == 0xDA || marker == 0xD9 {
@@ -1126,14 +1122,14 @@ fn find_mpf_segment(data: &[u8]) -> Result<Vec<u8>, String> {
             return Err(format!("Truncated segment at position {pos}"));
         }
 
-        let seg_len = usize::from(u16::from_be_bytes([data[pos], data[pos + 1]]));
+        let seg_len = usize::from(u16::from_be_bytes([*data.get(pos).unwrap_or(&0), *data.get(pos + 1).unwrap_or(&0)]));
         if seg_len < 2 || pos + seg_len > data.len() {
             return Err(format!(
                 "Invalid segment length {seg_len} at position {pos} (marker 0x{marker:02X})"
             ));
         }
 
-        let payload = &data[pos + 2..pos + seg_len];
+        let payload = data.get(pos + 2..pos + seg_len).unwrap_or(&[]);
 
         if marker == 0xE2 {
             if let Some(mpf_payload) = strip_mpf_identifier(payload) {
@@ -1178,7 +1174,7 @@ fn extract_gainmap_from_mpf(
     );
 
     // Read first IFD offset (4 bytes after endianness marker)
-    let first_ifd_offset = read_u32(&mpf_data[4..8], is_big_endian)?;
+    let first_ifd_offset = read_u32(mpf_data.get(4..8).unwrap_or(&[]), is_big_endian)?;
     info!("First IFD offset: {}", first_ifd_offset);
 
     // Navigate to first IFD
@@ -1192,7 +1188,7 @@ fn extract_gainmap_from_mpf(
 
     // Read number of entries in IFD
     let num_entries = read_u16(
-        &mpf_data[usize::try_from(first_ifd_offset).unwrap_or(0)..],
+        mpf_data.get(usize::try_from(first_ifd_offset).unwrap_or(0)..).unwrap_or(&[]),
         is_big_endian,
     )?;
     info!("IFD entries: {}", num_entries);
@@ -1213,10 +1209,10 @@ fn extract_gainmap_from_mpf(
             ));
         }
 
-        let tag = read_u16(&mpf_data[entry_offset..], is_big_endian)?;
-        let _data_type = read_u16(&mpf_data[entry_offset + 2..], is_big_endian)?;
-        let num_components = read_u32(&mpf_data[entry_offset + 4..], is_big_endian)?;
-        let value_offset = read_u32(&mpf_data[entry_offset + 8..], is_big_endian)?;
+        let tag = read_u16(mpf_data.get(entry_offset..).unwrap_or(&[]), is_big_endian)?;
+        let _data_type = read_u16(mpf_data.get(entry_offset + 2..).unwrap_or(&[]), is_big_endian)?;
+        let num_components = read_u32(mpf_data.get(entry_offset + 4..).unwrap_or(&[]), is_big_endian)?;
+        let value_offset = read_u32(mpf_data.get(entry_offset + 8..).unwrap_or(&[]), is_big_endian)?;
 
         match tag {
             mpf::TAG_NUMBER_OF_IMAGES => {
@@ -1283,9 +1279,9 @@ fn extract_gainmap_from_mpf(
         ));
     }
 
-    let attributes = read_u32(&mpf_data[gainmap_entry_offset..], is_big_endian)?;
-    let gainmap_length = read_u32(&mpf_data[gainmap_entry_offset + 4..], is_big_endian)?;
-    let gainmap_offset = read_u32(&mpf_data[gainmap_entry_offset + 8..], is_big_endian)?;
+    let attributes = read_u32(mpf_data.get(gainmap_entry_offset..).unwrap_or(&[]), is_big_endian)?;
+    let gainmap_length = read_u32(mpf_data.get(gainmap_entry_offset + 4..).unwrap_or(&[]), is_big_endian)?;
+    let gainmap_offset = read_u32(mpf_data.get(gainmap_entry_offset + 8..).unwrap_or(&[]), is_big_endian)?;
 
     info!(
         "Gainmap entry: attributes=0x{:08X}, length={}, offset={}",
@@ -1350,15 +1346,15 @@ fn find_mpf_base_position(jpeg_data: &[u8]) -> Result<usize, String> {
 
     while pos + 1 < jpeg_data.len() {
         // Skip padding
-        while pos + 1 < jpeg_data.len() && jpeg_data[pos] == 0xFF && jpeg_data[pos + 1] == 0xFF {
+        while pos + 1 < jpeg_data.len() && jpeg_data.get(pos..pos + 2) == Some(&[0xFF, 0xFF]) {
             pos += 1;
         }
 
-        if pos + 1 >= jpeg_data.len() || jpeg_data[pos] != 0xFF {
+        if pos + 1 >= jpeg_data.len() || jpeg_data.get(pos) != Some(&0xFF) {
             break;
         }
 
-        let marker = jpeg_data[pos + 1];
+        let marker = *jpeg_data.get(pos + 1).unwrap_or(&0);
         pos += 2;
 
         if marker == 0xDA || marker == 0xD9 {
@@ -1373,12 +1369,12 @@ fn find_mpf_base_position(jpeg_data: &[u8]) -> Result<usize, String> {
             break;
         }
 
-        let seg_len = usize::from(u16::from_be_bytes([jpeg_data[pos], jpeg_data[pos + 1]]));
+        let seg_len = usize::from(u16::from_be_bytes([*jpeg_data.get(pos).unwrap_or(&0), *jpeg_data.get(pos + 1).unwrap_or(&0)]));
         if seg_len < 2 || pos + seg_len > jpeg_data.len() {
             break;
         }
 
-        let payload = &jpeg_data[pos + 2..pos + seg_len];
+        let payload = jpeg_data.get(pos + 2..pos + seg_len).unwrap_or(&[]);
 
         if marker == 0xE2 && strip_mpf_identifier(payload).is_some() {
             // Offsets are relative to the TIFF header that begins immediately after
@@ -1401,9 +1397,9 @@ fn read_u16(data: &[u8], big_endian: bool) -> Result<u16, String> {
         ));
     }
     Ok(if big_endian {
-        u16::from_be_bytes([data[0], data[1]])
+        u16::from_be_bytes([*data.first().unwrap_or(&0), *data.get(1).unwrap_or(&0)])
     } else {
-        u16::from_le_bytes([data[0], data[1]])
+        u16::from_le_bytes([*data.first().unwrap_or(&0), *data.get(1).unwrap_or(&0)])
     })
 }
 
@@ -1416,9 +1412,19 @@ fn read_u32(data: &[u8], big_endian: bool) -> Result<u32, String> {
         ));
     }
     Ok(if big_endian {
-        u32::from_be_bytes([data[0], data[1], data[2], data[3]])
+        u32::from_be_bytes([
+            *data.first().unwrap_or(&0),
+            *data.get(1).unwrap_or(&0),
+            *data.get(2).unwrap_or(&0),
+            *data.get(3).unwrap_or(&0),
+        ])
     } else {
-        u32::from_le_bytes([data[0], data[1], data[2], data[3]])
+        u32::from_le_bytes([
+            *data.first().unwrap_or(&0),
+            *data.get(1).unwrap_or(&0),
+            *data.get(2).unwrap_or(&0),
+            *data.get(3).unwrap_or(&0),
+        ])
     })
 }
 
@@ -1543,9 +1549,9 @@ mod tests {
 
         let extracted = extract_xmp_from_jpeg_data(&jpeg_with_xmp);
         assert!(extracted.is_some());
-        let xmp_blocks = extracted.unwrap();
+        let xmp_blocks = extracted.unwrap_or_default();
         assert_eq!(xmp_blocks.len(), 1);
-        let xmp_str = &xmp_blocks[0];
+        let xmp_str = xmp_blocks.first().unwrap_or_else(|| panic!("No XMP blocks found"));
         assert!(xmp_str.contains("<x:xmpmeta>"));
         assert!(xmp_str.contains("test content"));
     }
@@ -1611,7 +1617,7 @@ mod tests {
         let invalid_data = b"not a jpeg";
         let result = extract_gainmap_from_jpeg(invalid_data);
         assert!(result.is_err());
-        let err_msg = result.unwrap_err();
+        let err_msg = result.err().unwrap_or_default();
         assert!(err_msg.contains("Invalid JPEG signature"));
         assert!(err_msg.contains("FFD8"));
     }
@@ -1621,7 +1627,7 @@ mod tests {
         let empty_data: &[u8] = &[];
         let result = extract_gainmap_from_jpeg(empty_data);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Invalid JPEG signature"));
+        assert!(result.err().is_some_and(|e| e.contains("Invalid JPEG signature")));
     }
 
     #[test]
@@ -1630,7 +1636,7 @@ mod tests {
         let truncated = vec![0xFF, 0xD8, 0xFF, 0xE0]; // SOI + APP0 marker only
         let result = extract_gainmap_from_jpeg(&truncated);
         assert!(result.is_err());
-        let err_msg = result.unwrap_err();
+        let err_msg = result.err().unwrap_or_default();
         assert!(
             err_msg.contains("Truncated")
                 || err_msg.contains("Failed to decode")
@@ -1816,11 +1822,11 @@ mod tests {
         data.extend_from_slice(&[0xFF, 0xD8, 0xFF, 0xD9]); // Valid JPEG (SOI+EOI)
 
         // [WHEN] We search for MPF segment
-        let mpf_segment = find_mpf_segment(&data).expect("Should find MPF");
+        let mpf_segment = find_mpf_segment(&data).unwrap_or_else(|_| panic!("Should find MPF"));
 
         // [THEN] Standard relative logic would fail, but fallback should work
         let gainmap_extracted =
-            extract_gainmap_from_mpf(&data, &mpf_segment, None).expect("Fallback failed");
+            extract_gainmap_from_mpf(&data, &mpf_segment, None).unwrap_or_else(|_| panic!("Fallback failed"));
         assert_eq!(gainmap_extracted, vec![0xFF, 0xD8, 0xFF, 0xD9]);
     }
 
@@ -1871,9 +1877,9 @@ mod tests {
         assert_eq!(data.len(), absolute_offset as usize);
         data.extend_from_slice(&[0xFF, 0xD8, 0xFF, 0xD9]);
 
-        let mpf_segment = find_mpf_segment(&data).expect("Should find MPF");
+        let mpf_segment = find_mpf_segment(&data).unwrap_or_else(|_| panic!("Should find MPF"));
         let gainmap_extracted =
-            extract_gainmap_from_mpf(&data, &mpf_segment, None).expect("Fallback failed");
+            extract_gainmap_from_mpf(&data, &mpf_segment, None).unwrap_or_else(|_| panic!("Fallback failed"));
 
         assert_eq!(gainmap_extracted, vec![0xFF, 0xD8, 0xFF, 0xD9]);
     }

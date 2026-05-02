@@ -247,9 +247,9 @@ fn calculate_edge_density(rgba: &[u8], width: u32, height: u32) -> f64 {
         for x in (1..(width - 1) as usize).step_by(step) {
             let get_gray = |px: usize, py: usize| -> i32 {
                 let idx = (py * w + px) * 4;
-                let r = i32::from(rgba[idx]);
-                let g = i32::from(rgba[idx + 1]);
-                let b = i32::from(rgba[idx + 2]);
+                let r = i32::from(rgba.get(idx).copied().unwrap_or(0));
+                let g = i32::from(rgba.get(idx + 1).copied().unwrap_or(0));
+                let b = i32::from(rgba.get(idx + 2).copied().unwrap_or(0));
                 (r * crate::constants::LUMA_COEFF_R
                     + g * crate::constants::LUMA_COEFF_G
                     + b * crate::constants::LUMA_COEFF_B)
@@ -298,9 +298,9 @@ fn calculate_color_diversity(rgba: &[u8], width: u32, height: u32) -> f64 {
     for i in (0..pixels).step_by(step) {
         let idx = i * 4;
         if idx + 2 < rgba.len() {
-            let r = rgba[idx] / quantize_step;
-            let g = rgba[idx + 1] / quantize_step;
-            let b = rgba[idx + 2] / quantize_step;
+            let r = rgba.get(idx).copied().unwrap_or(0) / quantize_step;
+            let g = rgba.get(idx + 1).copied().unwrap_or(0) / quantize_step;
+            let b = rgba.get(idx + 2).copied().unwrap_or(0) / quantize_step;
             colors.insert((r, g, b));
             sample_count += 1;
         }
@@ -349,9 +349,9 @@ fn calculate_texture_variance(rgba: &[u8], width: u32, height: u32) -> f64 {
                     );
                     let idx = (py * crate::numeric_cast::u32_to_usize_sat(width) + px) * 4;
 
-                    let gray = (i32::from(rgba[idx]) * 299
-                        + i32::from(rgba[idx + 1]) * 587
-                        + i32::from(rgba[idx + 2]) * 114)
+                    let gray = (i32::from(rgba.get(idx).copied().unwrap_or(0)) * 299
+                        + i32::from(rgba.get(idx + 1).copied().unwrap_or(0)) * 587
+                        + i32::from(rgba.get(idx + 2).copied().unwrap_or(0)) * 114)
                         / 1000;
                     sum += gray;
                     sq_sum += i64::from(gray) * i64::from(gray);
@@ -401,15 +401,15 @@ fn calculate_noise_level(rgba: &[u8], width: u32, height: u32) -> f64 {
 
             if idx_down + 2 < rgba.len() {
                 let curr =
-                    (i32::from(rgba[idx]) + i32::from(rgba[idx + 1]) + i32::from(rgba[idx + 2]))
+                    (i32::from(rgba.get(idx).copied().unwrap_or(0)) + i32::from(rgba.get(idx + 1).copied().unwrap_or(0)) + i32::from(rgba.get(idx + 2).copied().unwrap_or(0)))
                         / 3;
-                let right = (i32::from(rgba[idx_right])
-                    + i32::from(rgba[idx_right + 1])
-                    + i32::from(rgba[idx_right + 2]))
+                let right = (i32::from(rgba.get(idx_right).copied().unwrap_or(0))
+                    + i32::from(rgba.get(idx_right + 1).copied().unwrap_or(0))
+                    + i32::from(rgba.get(idx_right + 2).copied().unwrap_or(0)))
                     / 3;
-                let down = (i32::from(rgba[idx_down])
-                    + i32::from(rgba[idx_down + 1])
-                    + i32::from(rgba[idx_down + 2]))
+                let down = (i32::from(rgba.get(idx_down).copied().unwrap_or(0))
+                    + i32::from(rgba.get(idx_down + 1).copied().unwrap_or(0))
+                    + i32::from(rgba.get(idx_down + 2).copied().unwrap_or(0)))
                     / 3;
 
                 diff_sum += f64::from((curr - right).abs());
@@ -449,9 +449,9 @@ fn calculate_sharpness(rgba: &[u8], width: u32, height: u32) -> f64 {
 
     let get_gray = |x: usize, y: usize| -> i32 {
         let idx = (y * crate::numeric_cast::u32_to_usize_sat(width) + x) * 4;
-        (i32::from(rgba[idx]) * crate::constants::LUMA_COEFF_R
-            + i32::from(rgba[idx + 1]) * crate::constants::LUMA_COEFF_G
-            + i32::from(rgba[idx + 2]) * crate::constants::LUMA_COEFF_B)
+        (i32::from(rgba.get(idx).copied().unwrap_or(0)) * crate::constants::LUMA_COEFF_R
+            + i32::from(rgba.get(idx + 1).copied().unwrap_or(0)) * crate::constants::LUMA_COEFF_G
+            + i32::from(rgba.get(idx + 2).copied().unwrap_or(0)) * crate::constants::LUMA_COEFF_B)
             / crate::constants::LUMA_DIVISOR
     };
 
@@ -499,11 +499,11 @@ fn calculate_contrast(rgba: &[u8], width: u32, height: u32) -> f64 {
     for i in (0..pixels).step_by(step) {
         let idx = i * 4;
         if idx + 2 < rgba.len() {
-            let gray = (u64::from(rgba[idx])
+            let gray = (u64::from(rgba.get(idx).copied().unwrap_or(0))
                 * crate::numeric_cast::i32_to_u64_sat(crate::constants::LUMA_COEFF_R)
-                + u64::from(rgba[idx + 1])
+                + u64::from(rgba.get(idx + 1).copied().unwrap_or(0))
                     * crate::numeric_cast::i32_to_u64_sat(crate::constants::LUMA_COEFF_G)
-                + u64::from(rgba[idx + 2])
+                + u64::from(rgba.get(idx + 2).copied().unwrap_or(0))
                     * crate::numeric_cast::i32_to_u64_sat(crate::constants::LUMA_COEFF_B))
                 / crate::numeric_cast::i32_to_u64_sat(crate::constants::LUMA_DIVISOR);
             sum += gray;
@@ -529,7 +529,7 @@ fn calculate_contrast(rgba: &[u8], width: u32, height: u32) -> f64 {
 fn detect_alpha_usage(rgba: &[u8]) -> bool {
     for i in (0..rgba.len()).step_by(crate::constants::IMAGE_ALPHA_SAMPLING_STEP) {
         let alpha_idx = i + 3;
-        if alpha_idx < rgba.len() && rgba[alpha_idx] < 255 {
+        if alpha_idx < rgba.len() && rgba.get(alpha_idx).copied().unwrap_or(0) < 255 {
             return true;
         }
     }

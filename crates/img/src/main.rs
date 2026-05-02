@@ -1142,7 +1142,9 @@ fn auto_convert_directory(
                         break;
                     }
 
-                    let path = &files[index];
+                    let Some(path) = files.get(index) else {
+                        break;
+                    };
                     progress_bar.set_message(&path.file_name().unwrap_or_default().to_string_lossy());
 
                     // Check if already completed (thread-safe)

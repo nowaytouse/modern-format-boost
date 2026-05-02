@@ -131,18 +131,26 @@ fn calculate_window_ssim(
         for (j, _) in row.iter().enumerate() {
             let px = x + j;
             let py = y + i;
-            buf_x[i][j] = f64::from(
-                orig.get_pixel(
-                    u32::try_from(px).unwrap_or(0),
-                    u32::try_from(py).unwrap_or(0),
-                )[0],
-            );
-            buf_y[i][j] = f64::from(
-                conv.get_pixel(
-                    u32::try_from(px).unwrap_or(0),
-                    u32::try_from(py).unwrap_or(0),
-                )[0],
-            );
+            if let Some(r) = buf_x.get_mut(i) {
+                if let Some(c) = r.get_mut(j) {
+                    *c = f64::from(
+                        orig.get_pixel(
+                            u32::try_from(px).unwrap_or(0),
+                            u32::try_from(py).unwrap_or(0),
+                        )[0],
+                    );
+                }
+            }
+            if let Some(r) = buf_y.get_mut(i) {
+                if let Some(c) = r.get_mut(j) {
+                    *c = f64::from(
+                        conv.get_pixel(
+                            u32::try_from(px).unwrap_or(0),
+                            u32::try_from(py).unwrap_or(0),
+                        )[0],
+                    );
+                }
+            }
         }
     }
 
@@ -150,8 +158,8 @@ fn calculate_window_ssim(
     let mut mean_y = 0.0;
     for (i, row) in window.iter().enumerate() {
         for (j, &w) in row.iter().enumerate() {
-            mean_x += w * buf_x[i][j];
-            mean_y += w * buf_y[i][j];
+            mean_x += w * buf_x.get(i).and_then(|r| r.get(j)).copied().unwrap_or(0.0);
+            mean_y += w * buf_y.get(i).and_then(|r| r.get(j)).copied().unwrap_or(0.0);
         }
     }
 
@@ -160,8 +168,8 @@ fn calculate_window_ssim(
     let mut cov_xy = 0.0;
     for (i, row) in window.iter().enumerate() {
         for (j, &w) in row.iter().enumerate() {
-            let dx = buf_x[i][j] - mean_x;
-            let dy = buf_y[i][j] - mean_y;
+            let dx = buf_x.get(i).and_then(|r| r.get(j)).copied().unwrap_or(0.0) - mean_x;
+            let dy = buf_y.get(i).and_then(|r| r.get(j)).copied().unwrap_or(0.0) - mean_y;
             var_x += w * dx * dx;
             var_y += w * dy * dy;
             cov_xy += w * dx * dy;

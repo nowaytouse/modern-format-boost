@@ -75,8 +75,8 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
         debug!("   hvcc_data.len: {}", hvcc_data.len());
 
         if hvcc_data.len() >= 20 {
-            let profile_idc = hvcc_data[1] & 0x1F;
-            let chroma_format_idc = hvcc_data[16] & 0x03;
+            let profile_idc = *hvcc_data.get(1).unwrap_or(&0) & 0x1F;
+            let chroma_format_idc = *hvcc_data.get(16).unwrap_or(&0) & 0x03;
 
             debug!(
                 "   profile_idc: {}, chroma_format_idc: {}",
@@ -84,15 +84,19 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
             );
 
             // Bytes 2-5: general_profile_compatibility_flags (32 bits)
-            let compat_flags =
-                u32::from_be_bytes([hvcc_data[2], hvcc_data[3], hvcc_data[4], hvcc_data[5]]);
+            let compat_flags = u32::from_be_bytes([
+                *hvcc_data.get(2).unwrap_or(&0),
+                *hvcc_data.get(3).unwrap_or(&0),
+                *hvcc_data.get(4).unwrap_or(&0),
+                *hvcc_data.get(5).unwrap_or(&0),
+            ]);
 
             // HEVCDecoderConfigurationRecord fixed fields:
             //   [16] chromaFormatIdc (low 2 bits)
             //   [17] bitDepthLumaMinus8 (high 3 bits) + reserved (2 bits) + bitDepthChromaMinus8 (low 3 bits)
-            let chroma_format_idc = hvcc_data[16] & 0x03; // 0=mono, 1=4:2:0, 2=4:2:2, 3=4:4:4
-            let bit_depth_luma = ((hvcc_data[17] >> 5) & 0x07) + 8;
-            let bit_depth_chroma = (hvcc_data[17] & 0x07) + 8;
+            let chroma_format_idc = *hvcc_data.get(16).unwrap_or(&0) & 0x03; // 0=mono, 1=4:2:0, 2=4:2:2, 3=4:4:4
+            let bit_depth_luma = ((*hvcc_data.get(17).unwrap_or(&0) >> 5) & 0x07) + 8;
+            let bit_depth_chroma = (*hvcc_data.get(17).unwrap_or(&0) & 0x07) + 8;
 
             // Dimension 0: chromaFormatIdc — direct chroma subsampling
             // 4:2:0 (1) or 4:2:2 (2) → definitively lossy (HEVC lossless requires 4:4:4)
@@ -113,8 +117,8 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
                 let has_rgb_identity_matrix = find_box_payload_by_magic(data, *b"colr")
                     .or_else(|| find_box_data_recursive(data, *b"colr"))
                     .and_then(|colr_data| {
-                        if colr_data.len() >= 11 && &colr_data[0..4] == b"nclx" {
-                            Some(u16::from_be_bytes([colr_data[8], colr_data[9]]))
+                        if colr_data.len() >= 11 && colr_data.get(0..4) == Some(b"nclx") {
+                            Some(u16::from_be_bytes([*colr_data.get(8).unwrap_or(&0), *colr_data.get(9).unwrap_or(&0)]))
                         } else {
                             None
                         }
@@ -132,9 +136,9 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
                         if pixi_data.is_empty() {
                             None
                         } else {
-                            let num_ch = crate::numeric_cast::u8_to_usize_sat(pixi_data[0]);
+                            let num_ch = crate::numeric_cast::u8_to_usize_sat(*pixi_data.first().unwrap_or(&0));
                             if num_ch > 0 && pixi_data.len() > num_ch {
-                                Some(pixi_data[1..=num_ch].iter().copied().max().unwrap_or(0))
+                                Some(pixi_data.get(1..=num_ch).unwrap_or(&[]).iter().copied().max().unwrap_or(0))
                             } else {
                                 None
                             }
@@ -204,16 +208,16 @@ fn parse_sps_for_transquant_bypass_flag(hvcc_data: &[u8]) -> Option<bool> {
     if hvcc_data.len() < 25 {
         return None;
     }
-    let num_nalu_arrays = crate::numeric_cast::u8_to_usize_sat(hvcc_data[24]);
+    let num_nalu_arrays = crate::numeric_cast::u8_to_usize_sat(*hvcc_data.get(24).unwrap_or(&0));
     let mut pos = 25;
     for _ in 0..num_nalu_arrays {
         if pos + 3 > hvcc_data.len() {
             return None;
         }
-        let nal_unit_type = hvcc_data[pos] & 0x3F;
+        let nal_unit_type = *hvcc_data.get(pos).unwrap_or(&0) & 0x3F;
         let num_nalus = crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([
-            hvcc_data[pos + 1],
-            hvcc_data[pos + 2],
+            *hvcc_data.get(pos + 1).unwrap_or(&0),
+            *hvcc_data.get(pos + 2).unwrap_or(&0),
         ]));
         pos += 3;
         if nal_unit_type == 33 {
@@ -222,14 +226,14 @@ fn parse_sps_for_transquant_bypass_flag(hvcc_data: &[u8]) -> Option<bool> {
                     return None;
                 }
                 let nal_unit_length = crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([
-                    hvcc_data[pos],
-                    hvcc_data[pos + 1],
+                    *hvcc_data.get(pos).unwrap_or(&0),
+                    *hvcc_data.get(pos + 1).unwrap_or(&0),
                 ]));
                 pos += 2;
                 if pos + nal_unit_length > hvcc_data.len() {
                     return None;
                 }
-                let sps_payload = &hvcc_data[pos..pos + nal_unit_length];
+                let sps_payload = hvcc_data.get(pos..pos + nal_unit_length).unwrap_or(&[]);
                 pos += nal_unit_length;
                 if sps_payload.len() < 3 {
                     continue;
@@ -242,8 +246,8 @@ fn parse_sps_for_transquant_bypass_flag(hvcc_data: &[u8]) -> Option<bool> {
                     return None;
                 }
                 let nal_unit_length = crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([
-                    hvcc_data[pos],
-                    hvcc_data[pos + 1],
+                    *hvcc_data.get(pos).unwrap_or(&0),
+                    *hvcc_data.get(pos + 1).unwrap_or(&0),
                 ]));
                 pos += 2 + nal_unit_length;
             }
@@ -270,7 +274,7 @@ fn parse_sps_rbsp_for_transquant_bypass(sps_payload: &[u8]) -> Option<bool> {
                 let byte_pos = (self.bit_pos + i) / 8;
                 let bit_offset = 7 - ((self.bit_pos + i) % 8);
                 if byte_pos < self.data.len() {
-                    let bit = (self.data[byte_pos] >> bit_offset) & 1;
+                    let bit = (*self.data.get(byte_pos).unwrap_or(&0) >> bit_offset) & 1;
                     value = (value << 1) | u32::from(bit);
                 }
             }
@@ -298,7 +302,7 @@ fn parse_sps_rbsp_for_transquant_bypass(sps_payload: &[u8]) -> Option<bool> {
     if sps_payload.len() < 3 {
         return None;
     }
-    let rbsp = &sps_payload[2..];
+    let rbsp = sps_payload.get(2..).unwrap_or(&[]);
     let mut reader = BitReader::new(rbsp);
     reader.read_bits(4)?; // sps_video_parameter_set_id
     let max_sub_layers = reader.read_bits(3)?;
@@ -399,7 +403,7 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
                 // Fallback 1: Try to find ftyp box manually
                 if let Some(pos) = data.windows(4).position(|w| w == b"ftyp") {
                     if pos >= 4 {
-                        let sliced_data = &data[pos - 4..];
+                        let sliced_data = data.get(pos - 4..).unwrap_or(&[]);
                         if matches!(ctx.read_bytes(sliced_data), Ok(())) {
                             return Ok(());
                         }
@@ -459,9 +463,9 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
 
     // Quick scan for HDR/DV boxes in the already read data
     if let Some(colr_data) = find_box_data_recursive(&data, *b"colr") {
-        if colr_data.len() >= 11 && &colr_data[0..4] == b"nclx" {
-            let primaries = u16::from_be_bytes([colr_data[4], colr_data[5]]);
-            let transfer = u16::from_be_bytes([colr_data[6], colr_data[7]]);
+        if colr_data.len() >= 11 && colr_data.get(0..4) == Some(b"nclx") {
+            let primaries = u16::from_be_bytes([*colr_data.get(4).unwrap_or(&0), *colr_data.get(5).unwrap_or(&0)]);
+            let transfer = u16::from_be_bytes([*colr_data.get(6).unwrap_or(&0), *colr_data.get(7).unwrap_or(&0)]);
             if primaries == 9 && (transfer == 16 || transfer == 18) {
                 is_hdr = true;
             }
@@ -576,7 +580,7 @@ pub fn extract_xmp_from_heic_data(data: &[u8]) -> Option<String> {
         if let Some(start) = data.windows(marker.len()).position(|w| w == *marker) {
             // XMP is always UTF-8; grab up to 64 KB from the start marker
             let end = (start + 65536).min(data.len());
-            return String::from_utf8_lossy(&data[start..end])
+            return String::from_utf8_lossy(data.get(start..end).unwrap_or(&[]))
                 .into_owned()
                 .into();
         }
@@ -591,13 +595,13 @@ fn find_box_payload_by_magic(data: &[u8], box_type: [u8; 4]) -> Option<&[u8]> {
     if let Some(pos) = data.windows(4).position(|w| w == box_type) {
         if pos >= 4 {
             let size = crate::numeric_cast::u32_to_usize_sat(u32::from_be_bytes([
-                data[pos - 4],
-                data[pos - 3],
-                data[pos - 2],
-                data[pos - 1],
+                *data.get(pos - 4).unwrap_or(&0),
+                *data.get(pos - 3).unwrap_or(&0),
+                *data.get(pos - 2).unwrap_or(&0),
+                *data.get(pos - 1).unwrap_or(&0),
             ]));
             if size >= 8 && pos + size - 4 <= data.len() {
-                return Some(&data[pos + 4..pos - 4 + size]);
+                return data.get(pos + 4..pos - 4 + size);
             }
         }
     }
@@ -615,25 +619,25 @@ mod tests {
         let mut heic_asset_builder = Builder::new()
             .suffix(".heic")
             .tempfile()
-            .expect("create temp heic");
+            .unwrap_or_else(|e| panic!("create temp heic: {e:?}"));
         heic_asset_builder
             .write_all(&[0, 0, 0, 12, b'f', b't', b'y', b'p', b'h', b'e', b'i', b'c'])
-            .expect("write heic header");
+            .unwrap_or_else(|e| panic!("write heic header: {e:?}"));
 
         let mut heif_sample_builder = Builder::new()
             .suffix(".HEIF")
             .tempfile()
-            .expect("create temp heif");
+            .unwrap_or_else(|e| panic!("create temp heif: {e:?}"));
         heif_sample_builder
             .write_all(&[0, 0, 0, 12, b'f', b't', b'y', b'p', b'm', b'i', b'f', b'1'])
-            .expect("write heif header");
+            .unwrap_or_else(|e| panic!("write heif header: {e:?}"));
 
         let mut jpg = Builder::new()
             .suffix(".jpg")
             .tempfile()
-            .expect("create temp jpg");
+            .unwrap_or_else(|e| panic!("create temp jpg: {e:?}"));
         jpg.write_all(&[0, 0, 0, 12, b'f', b't', b'y', b'p', b'j', b'p', b'e', b'g'])
-            .expect("write jpg header");
+            .unwrap_or_else(|e| panic!("write jpg header: {e:?}"));
 
         assert!(is_heic_file(heic_asset_builder.path()));
         assert!(is_heic_file(heif_sample_builder.path()));

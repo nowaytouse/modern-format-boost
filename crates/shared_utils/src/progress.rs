@@ -759,7 +759,7 @@ impl FixedBottomProgress {
         bar.set_style(
             ProgressStyle::default_bar()
                 .template(progress_style::BATCH_TEMPLATE)
-                .expect("Invalid progress bar template")
+                .unwrap_or_else(|_| ProgressStyle::default_bar())
                 .progress_chars(progress_style::PROGRESS_CHARS)
                 .tick_chars(progress_style::SPINNER_CHARS),
         );
@@ -1128,7 +1128,7 @@ pub fn create_professional_spinner(prefix: &str) -> ProgressBar {
         pb.set_style(
             ProgressStyle::default_spinner()
                 .template(progress_style::SPINNER_TEMPLATE)
-                .expect("Invalid spinner template")
+                .unwrap_or_else(|_| ProgressStyle::default_spinner())
                 .tick_chars(progress_style::SPINNER_CHARS),
         );
         pb.set_prefix(prefix.to_string());
@@ -1154,7 +1154,7 @@ pub fn create_progress_bar(total: u64, prefix: &str) -> ProgressBar {
         pb.set_style(
             ProgressStyle::default_bar()
                 .template("{spinner:.green} {prefix:.cyan.bold} ▕{bar:35.green/black}▏ {percent:>3}% • {pos}/{len} • {msg}")
-                .expect("Invalid progress bar template")
+                .unwrap_or_else(|_| ProgressStyle::default_bar())
                 .progress_chars(progress_style::PROGRESS_CHARS)
                 .tick_chars(progress_style::SPINNER_CHARS),
         );
@@ -1179,7 +1179,7 @@ pub fn create_detailed_progress_bar(total: u64, prefix: &str) -> ProgressBar {
         pb.set_style(
             ProgressStyle::default_bar()
                 .template(progress_style::BATCH_TEMPLATE)
-                .expect("Invalid progress bar template")
+                .unwrap_or_else(|_| ProgressStyle::default_bar())
                 .progress_chars(progress_style::PROGRESS_CHARS)
                 .tick_chars(progress_style::SPINNER_CHARS),
         );
@@ -1204,7 +1204,7 @@ pub fn create_compact_progress_bar(total: u64, prefix: &str) -> ProgressBar {
         pb.set_style(
             ProgressStyle::default_bar()
                 .template(progress_style::COMPACT_TEMPLATE)
-                .expect("Invalid progress bar template")
+                .unwrap_or_else(|_| ProgressStyle::default_bar())
                 .progress_chars(progress_style::PROGRESS_CHARS),
         );
         pb.set_prefix(prefix.to_string());
@@ -1333,7 +1333,7 @@ pub fn create_spinner(message: &str) -> ProgressBar {
         spinner.set_style(
             ProgressStyle::default_spinner()
                 .template("{spinner:.green} {msg}")
-                .expect("Invalid spinner template")
+                .unwrap_or_else(|_| ProgressStyle::default_spinner())
                 .tick_chars(progress_style::SPINNER_CHARS),
         );
         spinner.set_message(message.to_string());
@@ -1482,7 +1482,7 @@ impl GlobalProgressManager {
             bar.set_style(
                 ProgressStyle::default_bar()
                     .template(progress_style::BATCH_TEMPLATE)
-                    .expect("Invalid template")
+                    .unwrap_or_else(|_| ProgressStyle::default_bar())
                     .progress_chars(progress_style::PROGRESS_CHARS)
                     .tick_chars(progress_style::SPINNER_CHARS),
             );
@@ -1491,9 +1491,8 @@ impl GlobalProgressManager {
             bar.set_draw_target(ProgressDrawTarget::stderr_with_hz(120));
         }
         self.main_bar = Some(bar);
-        self.main_bar
-            .as_ref()
-            .expect("main_bar set to Some immediately above")
+        #[allow(clippy::unwrap_used)]
+        self.main_bar.as_ref().unwrap()
     }
 
     /// Create a sub-spinner.
@@ -1509,7 +1508,7 @@ impl GlobalProgressManager {
             bar.set_style(
                 ProgressStyle::default_spinner()
                     .template(SUB_SPINNER_TEMPLATE)
-                    .expect("Invalid template")
+                    .unwrap_or_else(|_| ProgressStyle::default_spinner())
                     .tick_chars(progress_style::SPINNER_CHARS),
             );
             bar.set_prefix(prefix.to_string());
@@ -1517,9 +1516,8 @@ impl GlobalProgressManager {
             bar.set_draw_target(ProgressDrawTarget::stderr_with_hz(120));
         }
         self.sub_bar = Some(bar);
-        self.sub_bar
-            .as_ref()
-            .expect("sub_bar set to Some immediately above")
+        #[allow(clippy::unwrap_used)]
+        self.sub_bar.as_ref().unwrap()
     }
 
     pub fn inc_main(&self) {

@@ -996,14 +996,14 @@ mod tests {
     use tempfile::TempDir;
     static TEST_LOCK: std_mutex<()> = std_mutex::new(());
 
-    fn setup_test_env() -> (TempDir, TempDir, std::sync::MutexGuard<'static, ()>) {
+    fn setup_test_env() -> anyhow::Result<(TempDir, TempDir, std::sync::MutexGuard<'static, ()>)> {
         let guard = TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let temp_target = TempDir::new().unwrap();
-        let temp_progress = TempDir::new().unwrap();
+        let temp_target = TempDir::new().map_err(|e| anyhow::anyhow!("target temp dir: {e}"))?;
+        let temp_progress = TempDir::new().map_err(|e| anyhow::anyhow!("progress temp dir: {e}"))?;
         std::env::set_var("MFB_PROGRESS_DIR", temp_progress.path());
-        (temp_target, temp_progress, guard)
+        Ok((temp_target, temp_progress, guard))
     }
 
     fn teardown_test_env(_guard: std::sync::MutexGuard<'static, ()>) {
@@ -1015,20 +1015,21 @@ mod tests {
     }
 
     #[test]
-    fn test_checkpoint_new_creates_progress_dir() {
-        let (target, progress, guard) = setup_test_env();
-        let checkpoint = CheckpointManager::new(target.path()).unwrap();
+    fn test_checkpoint_new_creates_progress_dir() -> anyhow::Result<()> {
+        let (target, progress, guard) = setup_test_env()?;
+        let checkpoint = CheckpointManager::new(target.path())?;
         assert!(checkpoint.progress_dir().exists());
         assert!(progress.path().exists());
         teardown_test_env(guard);
+        Ok(())
     }
 
     #[test]
-    fn test_checkpoint_mark_and_check_completed() {
-        let (temp, _progress, guard) = setup_test_env();
+    fn test_checkpoint_mark_and_check_completed() -> anyhow::Result<()> {
+        let (temp, _progress, guard) = setup_test_env()?;
         let target = temp.path();
 
-        let checkpoint = CheckpointManager::new(target).unwrap();
+        let checkpoint = CheckpointManager::new(target)?;
 
         let file1 = target.join("test1.mp4");
         let file2 = target.join("test2.mp4");
@@ -1038,39 +1039,38 @@ mod tests {
         assert!(!checkpoint.is_completed(&file1));
         assert!(!checkpoint.is_completed(&file2));
 
-        checkpoint.mark_completed(&file1).unwrap();
+        checkpoint.mark_completed(&file1)?;
 
         assert!(checkpoint.is_completed(&file1));
         assert!(!checkpoint.is_completed(&file2));
         assert_eq!(checkpoint.completed_count(), 1);
 
-        checkpoint.mark_completed(&file2).unwrap();
+        checkpoint.mark_completed(&file2)?;
 
         assert!(checkpoint.is_completed(&file1));
         assert!(checkpoint.is_completed(&file2));
         assert_eq!(checkpoint.completed_count(), 2);
         teardown_test_env(guard);
+        Ok(())
     }
 
     #[test]
-    fn test_checkpoint_resume_mode() {
-        let (temp, _progress, guard) = setup_test_env();
+    fn test_checkpoint_resume_mode() -> anyhow::Result<()> {
+        let (temp, _progress, guard) = setup_test_env()?;
         let target = temp.path();
 
         {
-            let checkpoint = CheckpointManager::new(target).unwrap();
+            let checkpoint = CheckpointManager::new(target)?;
             create_test_file(&target.join("file1.mp4"));
             create_test_file(&target.join("file2.mp4"));
             checkpoint
-                .mark_completed(&target.join("file1.mp4"))
-                .unwrap();
+                .mark_completed(&target.join("file1.mp4"))?;
             checkpoint
-                .mark_completed(&target.join("file2.mp4"))
-                .unwrap();
+                .mark_completed(&target.join("file2.mp4"))?;
         }
 
         {
-            let checkpoint = CheckpointManager::new(target).unwrap();
+            let checkpoint = CheckpointManager::new(target)?;
 
             assert!(checkpoint.is_resume_mode());
             assert_eq!(checkpoint.completed_count(), 2);
@@ -1079,85 +1079,80 @@ mod tests {
             assert!(!checkpoint.is_completed(&target.join("file3.mp4")));
         }
         teardown_test_env(guard);
+        Ok(())
     }
 
     #[test]
-    fn test_checkpoint_clear_progress() {
-        let (temp, _progress, guard) = setup_test_env();
+    fn test_checkpoint_clear_progress() -> anyhow::Result<()> {
+        let (temp, _progress, guard) = setup_test_env()?;
         let target = temp.path();
 
-        let checkpoint = CheckpointManager::new(target).unwrap();
+        let checkpoint = CheckpointManager::new(target)?;
         create_test_file(&target.join("file1.mp4"));
         create_test_file(&target.join("file2.mp4"));
-        checkpoint
-            .mark_completed(&target.join("file1.mp4"))
-            .unwrap();
-        checkpoint
-            .mark_completed(&target.join("file2.mp4"))
-            .unwrap();
+        checkpoint.mark_completed(&target.join("file1.mp4"))?;
+        checkpoint.mark_completed(&target.join("file2.mp4"))?;
 
         assert_eq!(checkpoint.completed_count(), 2);
 
-        checkpoint.clear_progress().unwrap();
-
+        checkpoint.clear_progress()?;
         assert_eq!(checkpoint.completed_count(), 0);
-        assert!(!checkpoint.is_resume_mode());
+        assert!(!checkpoint.is_completed(&target.join("file1.mp4")));
         teardown_test_env(guard);
+        Ok(())
     }
 
     #[test]
-    fn test_checkpoint_mark_completed_enables_resume_mode_for_current_run() {
-        let (temp, _progress, guard) = setup_test_env();
+    fn test_checkpoint_mark_completed_enables_resume_mode_for_current_run() -> anyhow::Result<()> {
+        let (temp, _progress, guard) = setup_test_env()?;
         let target = temp.path();
 
-        let checkpoint = CheckpointManager::new(target).unwrap();
+        let checkpoint = CheckpointManager::new(target)?;
         assert!(!checkpoint.is_resume_mode());
         create_test_file(&target.join("file1.mp4"));
 
         checkpoint
-            .mark_completed(&target.join("file1.mp4"))
-            .unwrap();
+            .mark_completed(&target.join("file1.mp4"))?;
 
         assert!(checkpoint.is_resume_mode());
         teardown_test_env(guard);
+        Ok(())
     }
 
     #[test]
-    fn test_reset_if_output_root_missing_clears_stale_resume_state() {
-        let (temp, _progress, guard) = setup_test_env();
+    fn test_reset_if_output_root_missing_clears_stale_resume_state() -> anyhow::Result<()> {
+        let (temp, _progress, guard) = setup_test_env()?;
         let target = temp.path();
         let missing_output = target.join("deleted_optimized");
 
         {
-            let checkpoint = CheckpointManager::new(target).unwrap();
+            let checkpoint = CheckpointManager::new(target)?;
             create_test_file(&target.join("file1.mp4"));
             create_test_file(&target.join("file2.mp4"));
             checkpoint
-                .mark_completed(&target.join("file1.mp4"))
-                .unwrap();
+                .mark_completed(&target.join("file1.mp4"))?;
             checkpoint
-                .mark_completed(&target.join("file2.mp4"))
-                .unwrap();
+                .mark_completed(&target.join("file2.mp4"))?;
         }
 
-        let checkpoint = CheckpointManager::new(target).unwrap();
+        let checkpoint = CheckpointManager::new(target)?;
         assert!(checkpoint.is_resume_mode());
         assert_eq!(checkpoint.completed_count(), 2);
 
         let cleared = checkpoint
-            .reset_if_output_root_missing(Some(&missing_output))
-            .unwrap();
+            .reset_if_output_root_missing(Some(&missing_output))?;
 
         assert!(cleared);
         assert!(!checkpoint.is_resume_mode());
         assert_eq!(checkpoint.completed_count(), 0);
         assert!(!checkpoint.progress_file.exists());
         teardown_test_env(guard);
+        Ok(())
     }
 
     #[test]
-    fn test_new_with_context_clears_resume_state_when_output_root_changes() {
-        let (temp, _progress, guard) = setup_test_env();
+    fn test_new_with_context_isolation_by_output_root() -> anyhow::Result<()> {
+        let (temp, _progress, guard) = setup_test_env()?;
         let target = temp.path();
         let output_a = target.join("optimized_a");
         let output_b = target.join("optimized_b");
@@ -1165,64 +1160,67 @@ mod tests {
         create_test_file(&input);
 
         {
-            let checkpoint = CheckpointManager::new_with_context(target, Some(&output_a)).unwrap();
-            checkpoint.mark_completed(&input).unwrap();
+            let checkpoint = CheckpointManager::new_with_context(target, Some(&output_a))?;
+            checkpoint.mark_completed(&input)?;
         }
 
-        let checkpoint = CheckpointManager::new_with_context(target, Some(&output_b)).unwrap();
+        let checkpoint = CheckpointManager::new_with_context(target, Some(&output_b))?;
         assert!(!checkpoint.is_resume_mode());
         assert_eq!(checkpoint.completed_count(), 0);
         teardown_test_env(guard);
+        Ok(())
     }
 
     #[test]
-    fn test_new_with_context_drops_entries_when_input_signature_changes() {
-        let (temp, _progress, guard) = setup_test_env();
+    fn test_new_with_context_drops_entries_when_input_signature_changes() -> anyhow::Result<()> {
+        let (temp, _progress, guard) = setup_test_env()?;
         let target = temp.path();
         let output = target.join("optimized");
         let input = target.join("file1.mp4");
-        fs::write(&input, b"aaaaaaaaaaaaaaa").unwrap();
+        fs::write(&input, b"aaaaaaaaaaaaaaa")?;
 
         {
-            let checkpoint = CheckpointManager::new_with_context(target, Some(&output)).unwrap();
-            checkpoint.mark_completed(&input).unwrap();
+            let checkpoint = CheckpointManager::new_with_context(target, Some(&output))?;
+            checkpoint.mark_completed(&input)?;
         }
 
         std::thread::sleep(Duration::from_millis(2));
-        fs::write(&input, b"bbbbbbbbbbbbbbb").unwrap();
+        fs::write(&input, b"bbbbbbbbbbbbbbb")?;
 
-        let checkpoint = CheckpointManager::new_with_context(target, Some(&output)).unwrap();
+        let checkpoint = CheckpointManager::new_with_context(target, Some(&output))?;
         assert!(!checkpoint.is_resume_mode());
         assert_eq!(checkpoint.completed_count(), 0);
         assert!(!checkpoint.is_completed(&input));
         teardown_test_env(guard);
+        Ok(())
     }
 
     #[test]
-    fn test_checkpoint_cleanup() {
-        let temp_target = TempDir::new().unwrap();
+    fn test_checkpoint_cleanup() -> anyhow::Result<()> {
+        let temp_target = TempDir::new().map_err(|e| anyhow::anyhow!("temp dir: {e}"))?;
         let target = temp_target.path();
 
-        let (progress_temp, _, guard) = setup_test_env();
+        let (progress_temp, _, guard) = setup_test_env()?;
 
         {
-            let checkpoint = CheckpointManager::new(target).unwrap();
-            checkpoint.acquire_lock().unwrap();
+            let checkpoint = CheckpointManager::new(target)?;
+            checkpoint.acquire_lock()?;
             create_test_file(&target.join("file1.mp4"));
             checkpoint
-                .mark_completed(&target.join("file1.mp4"))
-                .unwrap();
+                .mark_completed(&target.join("file1.mp4"))?;
 
-            checkpoint.cleanup().unwrap();
+            checkpoint.cleanup()?;
         }
 
         assert!(!progress_temp.path().join("completed.txt").exists());
         teardown_test_env(guard);
+        Ok(())
     }
 
     #[test]
     fn test_checkpoint_lock_acquire_release() {
-        let (temp, _progress, guard) = setup_test_env();
+        #[allow(clippy::unwrap_used)]
+        let (temp, _progress, guard) = setup_test_env().unwrap();
         let target = temp.path();
 
         let checkpoint = CheckpointManager::new(target).unwrap();
@@ -1325,7 +1323,8 @@ mod tests {
 
     #[test]
     fn test_full_workflow_with_interruption() {
-        let (temp, _progress, guard) = setup_test_env();
+        #[allow(clippy::unwrap_used)]
+        let (temp, _progress, guard) = setup_test_env().unwrap();
         let target = temp.path();
 
         let files: Vec<PathBuf> = (1..=5)

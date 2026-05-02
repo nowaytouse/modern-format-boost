@@ -100,8 +100,15 @@ jobs:
         if: matrix.target == 'aarch64-apple-darwin'
         run: |
           brew install libheif dav1d jpeg-xl gmp
-          BREW=$(brew --prefix)
-          echo "PKG_CONFIG_PATH=${BREW}/lib/pkgconfig:${BREW}/opt/dav1d/lib/pkgconfig:${BREW}/opt/jpeg-xl/lib/pkgconfig" >> "$GITHUB_ENV"
+          BREW_PREFIX=$(brew --prefix)
+          echo "PKG_CONFIG_PATH=${BREW_PREFIX}/lib/pkgconfig:${BREW_PREFIX}/opt/dav1d/lib/pkgconfig:${BREW_PREFIX}/opt/jpeg-xl/lib/pkgconfig" >> "$GITHUB_ENV"
+
+      - name: Workaround for stdc++ on macOS
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p /tmp/libstdcxx-fix
+          ln -s /usr/lib/libc++.1.dylib /tmp/libstdcxx-fix/libstdc++.dylib
+          echo "LIBRARY_PATH=/tmp/libstdcxx-fix:${LIBRARY_PATH:-}" >> "$GITHUB_ENV"
 
       # ── macOS x86_64 (cross-compile via Rosetta brew) ──────────────────────
       - name: Install dependencies (macOS x86_64)

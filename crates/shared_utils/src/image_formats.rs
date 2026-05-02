@@ -20,56 +20,58 @@ pub mod tiff {
             return Ok(true);
         }
 
-        let is_little_endian = &data[0..2] == b"II";
-        if &data[0..2] != b"II" && &data[0..2] != b"MM" {
+        let is_little_endian = data.get(0..2) == Some(b"II");
+        if data.get(0..2) != Some(b"II") && data.get(0..2) != Some(b"MM") {
             // Invalid byte order marker - fallback to lossless (safe default)
             return Ok(true);
         }
 
         let version = if is_little_endian {
-            u16::from_le_bytes([data[2], data[3]])
+            u16::from_le_bytes([*data.get(2).unwrap_or(&0), *data.get(3).unwrap_or(&0)])
         } else {
-            u16::from_be_bytes([data[2], data[3]])
+            u16::from_be_bytes([*data.get(2).unwrap_or(&0), *data.get(3).unwrap_or(&0)])
         };
         let is_bigtiff = version == 0x002B;
 
         let read_u16 = |off: usize| -> u16 {
+            let bytes = [
+                *data.get(off).unwrap_or(&0),
+                *data.get(off + 1).unwrap_or(&0),
+            ];
             if is_little_endian {
-                u16::from_le_bytes([data[off], data[off + 1]])
+                u16::from_le_bytes(bytes)
             } else {
-                u16::from_be_bytes([data[off], data[off + 1]])
+                u16::from_be_bytes(bytes)
             }
         };
         let read_u32 = |off: usize| -> u32 {
+            let bytes = [
+                *data.get(off).unwrap_or(&0),
+                *data.get(off + 1).unwrap_or(&0),
+                *data.get(off + 2).unwrap_or(&0),
+                *data.get(off + 3).unwrap_or(&0),
+            ];
             if is_little_endian {
-                u32::from_le_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]])
+                u32::from_le_bytes(bytes)
             } else {
-                u32::from_be_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]])
+                u32::from_be_bytes(bytes)
             }
         };
         let read_u64 = |off: usize| -> u64 {
+            let bytes = [
+                *data.get(off).unwrap_or(&0),
+                *data.get(off + 1).unwrap_or(&0),
+                *data.get(off + 2).unwrap_or(&0),
+                *data.get(off + 3).unwrap_or(&0),
+                *data.get(off + 4).unwrap_or(&0),
+                *data.get(off + 5).unwrap_or(&0),
+                *data.get(off + 6).unwrap_or(&0),
+                *data.get(off + 7).unwrap_or(&0),
+            ];
             if is_little_endian {
-                u64::from_le_bytes([
-                    data[off],
-                    data[off + 1],
-                    data[off + 2],
-                    data[off + 3],
-                    data[off + 4],
-                    data[off + 5],
-                    data[off + 6],
-                    data[off + 7],
-                ])
+                u64::from_le_bytes(bytes)
             } else {
-                u64::from_be_bytes([
-                    data[off],
-                    data[off + 1],
-                    data[off + 2],
-                    data[off + 3],
-                    data[off + 4],
-                    data[off + 5],
-                    data[off + 6],
-                    data[off + 7],
-                ])
+                u64::from_be_bytes(bytes)
             }
         };
 
@@ -168,8 +170,8 @@ pub mod jpeg {
             let mut buffer = vec![0u8; 4096];
             if file.read(&mut buffer).is_ok() {
                 for i in 0..buffer.len().saturating_sub(70) {
-                    if buffer[i] == 0xFF && buffer[i + 1] == 0xDB && i + 5 < buffer.len() {
-                        let q_value = u32::from(buffer[i + 5]);
+                    if buffer.get(i) == Some(&0xFF) && buffer.get(i + 1) == Some(&0xDB) && i + 5 < buffer.len() {
+                        let q_value = u32::from(*buffer.get(i + 5).unwrap_or(&0));
                         return match q_value {
                             0..=2 => 98,
                             3..=5 => 95,
@@ -192,7 +194,7 @@ pub mod jpeg {
             let mut buffer = vec![0u8; 4096];
             if file.read(&mut buffer).is_ok() {
                 for i in 0..buffer.len().saturating_sub(1) {
-                    if buffer[i] == 0xFF && buffer[i + 1] == 0xC2 {
+                    if buffer.get(i) == Some(&0xFF) && buffer.get(i + 1) == Some(&0xC2) {
                         return true;
                     }
                 }
@@ -228,12 +230,12 @@ pub mod webp {
         let mut found_any_frame = false;
 
         while pos + 8 <= data.len() {
-            let chunk_id = &data[pos..pos + 4];
+            let chunk_id = data.get(pos..pos + 4).unwrap_or(&[]);
             let chunk_size = usize::try_from(u32::from_le_bytes([
-                data[pos + 4],
-                data[pos + 5],
-                data[pos + 6],
-                data[pos + 7],
+                *data.get(pos + 4).unwrap_or(&0),
+                *data.get(pos + 5).unwrap_or(&0),
+                *data.get(pos + 6).unwrap_or(&0),
+                *data.get(pos + 7).unwrap_or(&0),
             ]))
             .unwrap_or(usize::MAX);
             let payload_start = pos + 8;
@@ -242,10 +244,10 @@ pub mod webp {
             if chunk_id == b"ANMF" && payload_end > payload_start + 24 {
                 found_any_frame = true;
                 // ANMF payload: 24 bytes header, then frame data sub-chunk
-                let frame_data = &data[payload_start + 24..payload_end];
+                let frame_data = data.get(payload_start + 24..payload_end).unwrap_or(&[]);
                 if frame_data.len() >= 4 {
                     // Check sub-chunk type: VP8L = lossless, VP8 = lossy
-                    let sub_chunk = &frame_data[0..4];
+                    let sub_chunk = frame_data.get(0..4).unwrap_or(&[]);
                     if sub_chunk == b"VP8 " {
                         return Ok(false); // Lossy
                     } else if sub_chunk != b"VP8L" {
@@ -287,17 +289,22 @@ pub mod webp {
     pub fn estimate_quality_from_bytes(data: &[u8]) -> Result<u8> {
         let mut pos = 12; // skip RIFF + size + WEBP
         while pos + 8 <= data.len() {
-            let chunk_id = &data[pos..pos + 4];
+            let chunk_id = data.get(pos..pos + 4).unwrap_or(&[]);
             let chunk_size =
-                u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]])
+                u32::from_le_bytes([
+                    *data.get(pos + 4).unwrap_or(&0),
+                    *data.get(pos + 5).unwrap_or(&0),
+                    *data.get(pos + 6).unwrap_or(&0),
+                    *data.get(pos + 7).unwrap_or(&0),
+                ])
                     as usize; // TODO: manual fix needed for multi-line
             let payload_start = pos + 8;
             let payload_end = (payload_start + chunk_size).min(data.len());
 
             if chunk_id == b"VP8 " && payload_end > payload_start + 10 {
-                let vp8_data = &data[payload_start..payload_end];
-                if vp8_data.len() >= 10 && vp8_data[3..6] == [0x9D, 0x01, 0x2A] {
-                    let y_ac_qi = vp8_data[10] & 0x7F;
+                let vp8_data = data.get(payload_start..payload_end).unwrap_or(&[]);
+                if vp8_data.len() >= 11 && vp8_data.get(3..6).unwrap_or(&[]) == [0x9D, 0x01, 0x2A] {
+                    let y_ac_qi = *vp8_data.get(10).unwrap_or(&0) & 0x7F;
                     let quality = crate::numeric_cast::u32_to_u8_sat(
                         (u32::from(127 - y_ac_qi) * 100)
                             .checked_div(127)
@@ -349,7 +356,7 @@ pub mod webp {
     /// Returns None if not animated WebP or no ANMF chunks.
     #[must_use]
     pub fn duration_secs_from_bytes(data: &[u8]) -> Option<f32> {
-        if data.len() < 12 || &data[0..4] != b"RIFF" || &data[8..12] != b"WEBP" {
+        if data.len() < 12 || data.get(0..4) != Some(b"RIFF") || data.get(8..12) != Some(b"WEBP") {
             return None;
         }
         if !data.windows(4).any(|w| w == b"ANIM") {
@@ -358,12 +365,12 @@ pub mod webp {
         let mut pos = 12usize; // RIFF payload start
         let mut total_ms = 0u64;
         while pos + 8 <= data.len() {
-            let chunk_id = &data[pos..pos + 4];
+            let chunk_id = data.get(pos..pos + 4).unwrap_or(&[]);
             let chunk_size = usize::try_from(u32::from_le_bytes([
-                data[pos + 4],
-                data[pos + 5],
-                data[pos + 6],
-                data[pos + 7],
+                *data.get(pos + 4).unwrap_or(&0),
+                *data.get(pos + 5).unwrap_or(&0),
+                *data.get(pos + 6).unwrap_or(&0),
+                *data.get(pos + 7).unwrap_or(&0),
             ]))
             .unwrap_or(usize::MAX);
             let payload_start = pos + 8;
@@ -374,9 +381,9 @@ pub mod webp {
             let payload_end = payload_start + chunk_size;
         // ANMF frame header is 16 bytes. Duration is a 24-bit little-endian integer at offset 12..15.
         if chunk_id == b"ANMF" && payload_end >= payload_start + 16 {
-            let duration_ms = u32::from(data[payload_start + 12])
-                | (u32::from(data[payload_start + 13]) << 8)
-                | (u32::from(data[payload_start + 14]) << 16);
+            let duration_ms = u32::from(*data.get(payload_start + 12).unwrap_or(&0))
+                | (u32::from(*data.get(payload_start + 13).unwrap_or(&0)) << 8)
+                | (u32::from(*data.get(payload_start + 14).unwrap_or(&0)) << 16);
             if duration_ms > 0 && duration_ms <= 60_000 {
                 total_ms += u64::from(duration_ms);
             }
@@ -396,9 +403,9 @@ pub mod webp {
                 // duration is 24-bit LE at payload offset 12..15 => idx + 8 + 12..15
                 let dur_off = idx + 8 + 12;
                 if dur_off + 3 <= data.len() {
-                    let duration_ms = u32::from(data[dur_off])
-                        | (u32::from(data[dur_off + 1]) << 8)
-                        | (u32::from(data[dur_off + 2]) << 16);
+                    let duration_ms = u32::from(*data.get(dur_off).unwrap_or(&0))
+                        | (u32::from(*data.get(dur_off + 1).unwrap_or(&0)) << 8)
+                        | (u32::from(*data.get(dur_off + 2).unwrap_or(&0)) << 16);
                     if duration_ms > 0 && duration_ms <= 60_000 {
                         total_ms += u64::from(duration_ms);
                     }
@@ -432,7 +439,7 @@ pub mod gif {
 
     #[must_use]
     pub fn count_frames_from_bytes(data: &[u8]) -> u32 {
-        if data.len() < 24 || &data[0..3] != b"GIF" {
+        if data.len() < 24 || data.get(0..3) != Some(b"GIF") {
             return 0;
         }
 
@@ -440,7 +447,7 @@ pub mod gif {
         if pos + 7 > data.len() {
             return 0;
         }
-        let packed = data[pos + 4];
+        let packed = *data.get(pos + 4).unwrap_or(&0);
         let has_gct = (packed & 0x80) != 0;
         let gct_size = if has_gct {
             3 * (1 << ((packed & 0x07) + 1))
@@ -453,14 +460,14 @@ pub mod gif {
         let mut gce_count = 0u32; // Graphic Control Extension count
 
         while pos < data.len() {
-            match data[pos] {
+            match *data.get(pos).unwrap_or(&0) {
                 0x2C => {
                     // Image Descriptor
                     image_descriptors += 1;
                     if pos + 10 > data.len() {
                         break;
                     }
-                    let img_packed = data[pos + 9];
+                    let img_packed = *data.get(pos + 9).unwrap_or(&0);
                     let local_palette_active = (img_packed & 0x80) != 0;
                     let lct_size = if local_palette_active {
                         3 * (1 << ((img_packed & 0x07) + 1))
@@ -479,7 +486,7 @@ pub mod gif {
 
                     // Skip Image Data sub-blocks
                     while pos < data.len() {
-                        let block_size = usize::from(data[pos]); // TODO: manual fix needed for multi-line
+                        let block_size = usize::from(*data.get(pos).unwrap_or(&0)); // TODO: manual fix needed for multi-line
                         pos += 1;
                         if block_size == 0 {
                             break;
@@ -496,7 +503,7 @@ pub mod gif {
                     if pos + 2 >= data.len() {
                         break;
                     }
-                    let label = data[pos + 1];
+                    let label = *data.get(pos + 1).unwrap_or(&0);
                     if label == 0xF9 {
                         gce_count += 1;
                     }
@@ -504,7 +511,7 @@ pub mod gif {
                     pos += 2;
                     // Skip Extension Data blocks
                     while pos < data.len() {
-                        let block_size = usize::from(data[pos]); // TODO: manual fix needed for multi-line
+                        let block_size = usize::from(*data.get(pos).unwrap_or(&0)); // TODO: manual fix needed for multi-line
                         pos += 1;
                         if block_size == 0 {
                             break;
@@ -570,8 +577,8 @@ pub mod avif {
     pub fn is_lossless_from_bytes(data: &[u8], path: &Path) -> Result<bool> {
         if let Some(av1c_data) = find_box_data_recursive(data, *b"av1C") {
             if av1c_data.len() >= 4 {
-                let byte1 = av1c_data[1];
-                let byte2 = av1c_data[2];
+                let byte1 = *av1c_data.get(1).unwrap_or(&0);
+                let byte2 = *av1c_data.get(2).unwrap_or(&0);
 
                 let seq_profile = (byte1 >> 5) & 0x07;
                 let high_bitdepth = (byte2 >> 6) & 0x01;
@@ -594,8 +601,8 @@ pub mod avif {
 
                 // Dimension 2: colr Identity matrix (MC=0)
                 if let Some(colr_data) = find_box_data_recursive(data, *b"colr") {
-                    if colr_data.len() >= 11 && &colr_data[0..4] == b"nclx" {
-                        let matrix_coefficients = u16::from_be_bytes([colr_data[8], colr_data[9]]);
+                    if colr_data.len() >= 11 && colr_data.get(0..4) == Some(b"nclx") {
+                        let matrix_coefficients = u16::from_be_bytes([*colr_data.get(8).unwrap_or(&0), *colr_data.get(9).unwrap_or(&0)]);
                         if matrix_coefficients == 0 {
                             return Ok(true);
                         }
@@ -616,10 +623,10 @@ pub mod avif {
                 if is_444 {
                     if let Some(pixi_data) = find_box_data_recursive(data, *b"pixi") {
                         if !pixi_data.is_empty() {
-                            let num_ch = usize::from(pixi_data[0]); // TODO: manual fix needed for multi-line
+                            let num_ch = usize::from(*pixi_data.first().unwrap_or(&0)); // TODO: manual fix needed for multi-line
                             if num_ch > 0 && pixi_data.len() > num_ch {
                                 let max_depth =
-                                    pixi_data[1..=num_ch].iter().copied().max().unwrap_or(0);
+                                    pixi_data.get(1..=num_ch).unwrap_or(&[]).iter().copied().max().unwrap_or(0);
                                 if max_depth >= 12 {
                                     return Ok(true);
                                 }
@@ -675,7 +682,7 @@ pub mod jxl {
             )));
         }
 
-        let is_naked = data[0] == 0xFF && data[1] == 0x0A;
+        let is_naked = data.get(0..2) == Some(b"\xFF\x0A");
 
         // Dimension 1: jbrd = JPEG bitstream reconstruction = lossless
         if !is_naked && find_any_box_recursive(data, *b"jbrd") {
@@ -728,7 +735,7 @@ pub mod jxl {
                 if self.byte_pos >= self.data.len() {
                     return None;
                 }
-                let bit = (self.data[self.byte_pos] >> self.bit_pos) & 1;
+                let bit = (*self.data.get(self.byte_pos).unwrap_or(&0) >> self.bit_pos) & 1;
                 result |= u32::from(bit) << i;
                 self.bit_pos += 1;
                 if self.bit_pos == 8 {
@@ -743,14 +750,14 @@ pub mod jxl {
         }
         fn read_u32(&mut self, dists: [(u32, u8); 4]) -> Option<u32> {
             let sel = crate::numeric_cast::u32_to_usize_sat(self.read_bits(2)?);
-            let (base, extra_bits) = dists[sel];
+            let (base, extra_bits) = *dists.get(sel).unwrap_or(&(0, 0));
             let extra = self.read_bits(extra_bits)?;
             Some(base + extra)
         }
     }
 
     fn parse_jxl_xyb_encoded(codestream: &[u8]) -> Option<bool> {
-        let start = if codestream.len() >= 2 && codestream[0] == 0xFF && codestream[1] == 0x0A {
+        let start = if codestream.get(0..2) == Some(b"\xFF\x0A") {
             2
         } else {
             0
@@ -758,7 +765,7 @@ pub mod jxl {
         if start >= codestream.len() {
             return None;
         }
-        let mut r = JxlBitReader::new(&codestream[start..]);
+        let mut r = JxlBitReader::new(codestream.get(start..).unwrap_or(&[]));
 
         // --- SizeHeader ---
         let small = r.read_bool()?;
@@ -883,8 +890,8 @@ mod tests {
             0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
             0x00, 0x90, 0x77, 0x53, 0xDE,
         ];
-        let mut file = NamedTempFile::new().expect("Failed to create temporary file");
-        file.write_all(png_data).expect("Failed to write to file");
+        let mut file = NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temporary file"));
+        file.write_all(png_data).unwrap_or_else(|_| panic!("Failed to write to file"));
 
         let level = png::estimate_compression_level(file.path());
         assert!(
@@ -903,8 +910,8 @@ mod tests {
             0x0C, 0x0C, 0x0C, 0x0C, 0x07, 0x09, 0x0E, 0x0F, 0x0D, 0x0C, 0x0E, 0x0B, 0x0C, 0x0C,
             0x0C,
         ];
-        let mut file = NamedTempFile::new().expect("Failed to create temporary file");
-        file.write_all(jpeg_data).expect("Failed to write to file");
+        let mut file = NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temporary file"));
+        file.write_all(jpeg_data).unwrap_or_else(|_| panic!("Failed to write to file"));
 
         let quality = jpeg::estimate_quality(file.path());
         assert!(
@@ -923,9 +930,9 @@ mod tests {
             data.extend_from_slice(&[0u8; 20]);
             data
         };
-        let mut file = NamedTempFile::new().expect("Failed to create temporary file");
+        let mut file = NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temporary file"));
         file.write_all(&webp_lossless)
-            .expect("Failed to write to file");
+            .unwrap_or_else(|_| panic!("Failed to write to file"));
 
         assert!(
             webp::is_lossless(file.path()),
@@ -943,9 +950,9 @@ mod tests {
             data.extend_from_slice(&[0u8; 20]);
             data
         };
-        let mut file = NamedTempFile::new().expect("Failed to create temporary file");
+        let mut file = NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temporary file"));
         file.write_all(&webp_lossy)
-            .expect("Failed to write to file");
+            .unwrap_or_else(|_| panic!("Failed to write to file"));
 
         assert!(
             !webp::is_lossless(file.path()),
@@ -979,8 +986,8 @@ mod tests {
             data.push(0x3B);
             data
         };
-        let mut file = NamedTempFile::new().expect("Failed to create temp file");
-        file.write_all(&gif_data).expect("Failed to write");
+        let mut file = NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temp file"));
+        file.write_all(&gif_data).unwrap_or_else(|_| panic!("Failed to write"));
 
         let count = gif::get_frame_count(file.path());
         assert_eq!(count, 2, "Expected 2 frames, got: {count}");
@@ -993,9 +1000,9 @@ mod tests {
     #[test]
     fn test_jxl_codestream_signature() {
         let jxl_codestream: &[u8] = &[0xFF, 0x0A, 0x00, 0x00];
-        let mut file = NamedTempFile::new().expect("Failed to create temporary file");
+        let mut file = NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temporary file"));
         file.write_all(jxl_codestream)
-            .expect("Failed to write to file");
+            .unwrap_or_else(|_| panic!("Failed to write to file"));
 
         assert!(
             jxl::verify_signature(file.path()),

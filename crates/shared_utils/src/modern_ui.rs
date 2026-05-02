@@ -218,13 +218,13 @@ static SPINNER_FRAME: AtomicU64 = AtomicU64::new(0);
 /// Returns the next spinner animation frame (rotating through dash, slash, pipe, backslash).
 pub fn spinner_frame() -> &'static str {
     let frame = usize::try_from(SPINNER_FRAME.fetch_add(1, Ordering::Relaxed)).unwrap_or(0);
-    SPINNER_FRAMES[frame % SPINNER_FRAMES.len()]
+    SPINNER_FRAMES.get(frame % SPINNER_FRAMES.len()).copied().unwrap_or("-")
 }
 
 /// Returns the next spinner dots animation frame (rotating through asterisk, dot, small o, capital O).
 pub fn spinner_dots() -> &'static str {
     let frame = usize::try_from(SPINNER_FRAME.fetch_add(1, Ordering::Relaxed)).unwrap_or(0);
-    SPINNER_DOTS[frame % SPINNER_DOTS.len()]
+    SPINNER_DOTS.get(frame % SPINNER_DOTS.len()).copied().unwrap_or("*")
 }
 
 /// Visual style variants for progress bar rendering.

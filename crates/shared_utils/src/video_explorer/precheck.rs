@@ -155,16 +155,17 @@ fn run_precheck_ffprobe(input: &Path) -> Result<serde_json::Value> {
 fn parse_rational_fps(value: &serde_json::Value) -> Option<f64> {
     value.as_str().and_then(|s| {
         let parts: Vec<&str> = s.split('/').collect();
-        if parts.len() == 2 {
-            let num: f64 = parts[0].parse().ok()?;
-            let den: f64 = parts[1].parse().ok()?;
-            if den > 0.0 {
-                Some(num / den)
-            } else {
-                None
+        match parts[..] {
+            [num_str, den_str] => {
+                let num: f64 = num_str.parse().ok()?;
+                let den: f64 = den_str.parse().ok()?;
+                if den > 0.0 {
+                    Some(num / den)
+                } else {
+                    None
+                }
             }
-        } else {
-            s.parse().ok()
+            _ => s.parse().ok(),
         }
     })
 }
@@ -222,8 +223,9 @@ fn parse_duration_from_precheck_json(
     }
 
     warn!("DURATION: stream.duration unavailable, trying format.duration");
-    let format_duration: Option<f64> = json["format"]["duration"]
-        .as_str()
+    let format_duration: Option<f64> = json.get("format")
+        .and_then(|f| f.get("duration"))
+        .and_then(serde_json::Value::as_str)
         .and_then(|s| s.parse().ok())
         .filter(|&d: &f64| d > 0.0 && !d.is_nan());
 
@@ -261,8 +263,8 @@ fn parse_duration_from_precheck_json(
 
 /// P3: Compute only BPP from precheck JSON (one ffprobe, no full `VideoInfo`).
 fn bpp_from_precheck_json(json: &serde_json::Value, file_size: u64, input: &Path) -> Result<f64> {
-    let stream = json["streams"]
-        .get(0)
+    let stream = json.get("streams")
+        .and_then(|s| s.get(0))
         .context("No video stream in ffprobe output")?;
     let width: u32 = stream["width"]
         .as_u64()
@@ -343,15 +345,17 @@ pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'s
     let fps: f64 = parse_fps_from_stream(stream)
         .context("Could not determine FPS for duration calculation")?;
 
-    let frame_count: u64 = json["streams"]
-        .get(0)
-        .and_then(|s| s["nb_frames"].as_str())
+    let frame_count: u64 = json.get("streams")
+        .and_then(|s| s.get(0))
+        .and_then(|s| s.get("nb_frames"))
+        .and_then(serde_json::Value::as_str)
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
 
-    let stream_duration: Option<f64> = json["streams"]
-        .get(0)
-        .and_then(|s| s["duration"].as_str())
+    let stream_duration: Option<f64> = json.get("streams")
+        .and_then(|s| s.get(0))
+        .and_then(|s| s.get("duration"))
+        .and_then(serde_json::Value::as_str)
         .and_then(|s| s.parse().ok())
         .filter(|&d: &f64| d > 0.0 && !d.is_nan());
 
@@ -361,8 +365,9 @@ pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'s
     }
 
     warn!("DURATION: stream.duration unavailable, trying format.duration");
-    let format_duration: Option<f64> = json["format"]["duration"]
-        .as_str()
+    let format_duration: Option<f64> = json.get("format")
+        .and_then(|f| f.get("duration"))
+        .and_then(serde_json::Value::as_str)
         .and_then(|s| s.parse().ok())
         .filter(|&d: &f64| d > 0.0 && !d.is_nan());
 
@@ -409,8 +414,8 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
         .len();
 
     let json = run_precheck_ffprobe(input)?;
-    let stream = json["streams"]
-        .get(0)
+    let stream = json.get("streams")
+        .and_then(|s| s.get(0))
         .context("No video stream in ffprobe output")?;
 
     let codec = stream["codec_name"]

@@ -35,6 +35,12 @@ jobs:
           BREW_PREFIX=$(brew --prefix)
           echo "PKG_CONFIG_PATH=${BREW_PREFIX}/lib/pkgconfig:${BREW_PREFIX}/opt/dav1d/lib/pkgconfig:${BREW_PREFIX}/opt/jpeg-xl/lib/pkgconfig" >> "$GITHUB_ENV"
 
+      - name: Workaround for stdc++ on macOS
+        run: |
+          mkdir -p /tmp/libstdcxx-fix
+          ln -s /usr/lib/libc++.1.dylib /tmp/libstdcxx-fix/libstdc++.dylib
+          echo "LIBRARY_PATH=/tmp/libstdcxx-fix:${LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+
       - name: Install dependencies (x86_64 Cross-compile)
         if: matrix.target == 'x86_64-apple-darwin'
         run: |

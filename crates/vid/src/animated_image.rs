@@ -201,19 +201,19 @@ fn probe_video_streams(input: &Path) -> Vec<VideoStreamInfo> {
         Err(_) => return Vec::new(),
     };
 
-    json["streams"]
-        .as_array()
+    json.get("streams")
+        .and_then(|v| v.as_array())
         .into_iter()
         .flatten()
-        .filter(|stream| stream["codec_type"].as_str() == Some("video"))
+        .filter(|stream| stream.get("codec_type").and_then(|v| v.as_str()) == Some("video"))
         .map(|stream| VideoStreamInfo {
-            index: stream["index"].as_u64().unwrap_or(0) as usize,
-            frame_count: stream["nb_frames"]
-                .as_str()
+            index: stream.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
+            frame_count: stream.get("nb_frames")
+                .and_then(|v| v.as_str())
                 .and_then(|value| value.parse::<u64>().ok())
                 .unwrap_or(0),
-            pix_fmt: stream["pix_fmt"]
-                .as_str()
+            pix_fmt: stream.get("pix_fmt")
+                .and_then(|v| v.as_str())
                 .unwrap_or_default()
                 .to_ascii_lowercase(),
         })
@@ -359,8 +359,8 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
             parsing_frames = true;
         } else if parsing_frames {
             let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 7 && parts[0].ends_with(':') {
-                if let Ok(duration) = parts[6].parse::<u32>() {
+            if parts.len() >= 7 && parts.first().is_some_and(|p| p.ends_with(':')) {
+                if let Some(Ok(duration)) = parts.get(6).map(|p| p.parse::<u32>()) {
                     frame_durations_ms.push(duration);
                 }
             }
@@ -438,7 +438,7 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
         }
 
         // Add to concat list
-        let duration_sec = f64::from(frame_durations_ms[(i - 1) as usize]) / 1000.0;
+        let duration_sec = frame_durations_ms.get((i - 1) as usize).copied().map(|d| f64::from(d) / 1000.0).unwrap_or(0.1);
         let _ = writeln!(
             concat_content,
             "file '{}'",

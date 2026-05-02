@@ -247,7 +247,7 @@ pub fn calculate_blake3_hash(path: &Path) -> Result<String> {
         if bytes_read == 0 {
             break;
         }
-        hasher.update(&buffer[..bytes_read]);
+        hasher.update(buffer.get(..bytes_read).unwrap_or(&[]));
     }
 
     Ok(hasher.finalize().to_hex().to_string())
@@ -269,7 +269,7 @@ pub fn truncate_string(s: &str, max_len: usize) -> String {
     } else if max_len <= 3 {
         "...".to_string()
     } else {
-        format!("{}...", &s[..max_len - 3])
+        format!("{}...", s.get(..max_len - 3).unwrap_or(""))
     }
 }
 
@@ -357,12 +357,12 @@ fn find_box_data_recursive_impl(
     let mut pos = 0;
     while pos + 8 <= data.len() {
         let size = crate::numeric_cast::u32_to_usize_sat(u32::from_be_bytes([
-            data[pos],
-            data[pos + 1],
-            data[pos + 2],
-            data[pos + 3],
+            *data.get(pos).unwrap_or(&0),
+            *data.get(pos + 1).unwrap_or(&0),
+            *data.get(pos + 2).unwrap_or(&0),
+            *data.get(pos + 3).unwrap_or(&0),
         ]));
-        let current_type = &data[pos + 4..pos + 8];
+        let current_type = data.get(pos + 4..pos + 8).unwrap_or(&[]);
 
         let (payload_start, next_pos) = if size == 0 {
             // Size 0 means "to end of file"
@@ -374,14 +374,14 @@ fn find_box_data_recursive_impl(
                 continue;
             }
             let ext = crate::numeric_cast::u64_to_usize_sat(u64::from_be_bytes([
-                data[pos + 8],
-                data[pos + 9],
-                data[pos + 10],
-                data[pos + 11],
-                data[pos + 12],
-                data[pos + 13],
-                data[pos + 14],
-                data[pos + 15],
+                *data.get(pos + 8).unwrap_or(&0),
+                *data.get(pos + 9).unwrap_or(&0),
+                *data.get(pos + 10).unwrap_or(&0),
+                *data.get(pos + 11).unwrap_or(&0),
+                *data.get(pos + 12).unwrap_or(&0),
+                *data.get(pos + 13).unwrap_or(&0),
+                *data.get(pos + 14).unwrap_or(&0),
+                *data.get(pos + 15).unwrap_or(&0),
             ]));
             if ext < 16 || pos + ext > data.len() {
                 pos += 16;
@@ -402,7 +402,7 @@ fn find_box_data_recursive_impl(
 
         if current_type == box_type {
             if next_pos <= data.len() && payload_start < next_pos {
-                return Some(&data[payload_start..next_pos]);
+                return data.get(payload_start..next_pos);
             }
             return None;
         }
@@ -431,7 +431,7 @@ fn find_box_data_recursive_impl(
             };
 
             if sub_start < next_pos {
-                let sub = &data[sub_start..next_pos];
+                let sub = data.get(sub_start..next_pos).unwrap_or(&[]);
                 if let Some(payload) =
                     find_box_data_recursive_impl(sub, box_type, depth + 1, max_depth)
                 {
@@ -459,12 +459,12 @@ fn find_any_box_recursive_impl(data: &[u8], box_type: [u8; 4], depth: u32, max_d
     let mut pos = 0;
     while pos + 8 <= data.len() {
         let size = crate::numeric_cast::u32_to_usize_sat(u32::from_be_bytes([
-            data[pos],
-            data[pos + 1],
-            data[pos + 2],
-            data[pos + 3],
+            *data.get(pos).unwrap_or(&0),
+            *data.get(pos + 1).unwrap_or(&0),
+            *data.get(pos + 2).unwrap_or(&0),
+            *data.get(pos + 3).unwrap_or(&0),
         ]));
-        let current_type = &data[pos + 4..pos + 8];
+        let current_type = data.get(pos + 4..pos + 8).unwrap_or(&[]);
         if current_type == box_type {
             return true;
         }
@@ -476,14 +476,14 @@ fn find_any_box_recursive_impl(data: &[u8], box_type: [u8; 4], depth: u32, max_d
                 continue;
             }
             let ext = crate::numeric_cast::u64_to_usize_sat(u64::from_be_bytes([
-                data[pos + 8],
-                data[pos + 9],
-                data[pos + 10],
-                data[pos + 11],
-                data[pos + 12],
-                data[pos + 13],
-                data[pos + 14],
-                data[pos + 15],
+                *data.get(pos + 8).unwrap_or(&0),
+                *data.get(pos + 9).unwrap_or(&0),
+                *data.get(pos + 10).unwrap_or(&0),
+                *data.get(pos + 11).unwrap_or(&0),
+                *data.get(pos + 12).unwrap_or(&0),
+                *data.get(pos + 13).unwrap_or(&0),
+                *data.get(pos + 14).unwrap_or(&0),
+                *data.get(pos + 15).unwrap_or(&0),
             ]));
             (pos + 16, (pos + ext).min(data.len()))
         } else if size < 8 {
@@ -494,7 +494,7 @@ fn find_any_box_recursive_impl(data: &[u8], box_type: [u8; 4], depth: u32, max_d
         };
         if next_pos > payload_start
             && find_any_box_recursive_impl(
-                &data[payload_start..next_pos],
+                data.get(payload_start..next_pos).unwrap_or(&[]),
                 box_type,
                 depth + 1,
                 max_depth,

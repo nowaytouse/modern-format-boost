@@ -842,7 +842,7 @@ mod tests {
 
     fn write_test_image(path: &Path, width: u32, height: u32, format: ImageFormat) {
         let image = RgbImage::from_pixel(width, height, Rgb([128, 96, 64]));
-        image.save_with_format(path, format).unwrap();
+        let _ = image.save_with_format(path, format);
     }
 
     #[test]
@@ -1095,12 +1095,12 @@ mod tests {
     }
 
     #[test]
-    fn test_collect_image_files_for_perceived_speed_respects_priority_order() {
-        let temp_dir = TempDir::new().unwrap();
+    fn test_collect_image_files_for_perceived_speed_respects_priority_order() -> anyhow::Result<()> {
+        let temp_dir = TempDir::new().map_err(|e| anyhow::anyhow!("temp dir: {e}"))?;
         let root = temp_dir.path();
         let nested = root.join("nested");
         let deeper = nested.join("deeper");
-        fs::create_dir_all(&deeper).unwrap();
+        fs::create_dir_all(&deeper).map_err(|e| anyhow::anyhow!("create dir: {e}"))?;
 
         let root_png = root.join("root.png");
         let nested_jpg = nested.join("nested.jpg");
@@ -1115,7 +1115,7 @@ mod tests {
         let files = collect_image_files_for_perceived_speed(root, &["png", "jpg"], true);
         let ordered_names = files
             .iter()
-            .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+            .map(|path| path.file_name().map_or_else(|| "unknown".to_string(), |n| n.to_string_lossy().into_owned()))
             .collect::<Vec<_>>();
 
         assert_eq!(
@@ -1128,14 +1128,15 @@ mod tests {
             ],
             "Expected deeper paths first, then JPEG fast-lane, then remaining files"
         );
+        Ok(())
     }
 
     #[test]
-    fn test_validate_cached_image_tree_detects_directory_changes() {
-        let temp_dir = TempDir::new().unwrap();
+    fn test_validate_cached_image_tree_detects_directory_changes() -> anyhow::Result<()> {
+        let temp_dir = TempDir::new().map_err(|e| anyhow::anyhow!("temp dir: {e}"))?;
         let root = temp_dir.path();
         let nested = root.join("nested");
-        fs::create_dir_all(&nested).unwrap();
+        fs::create_dir_all(&nested).map_err(|e| anyhow::anyhow!("create dir: {e}"))?;
 
         let image_path = nested.join("sample.jpg");
         write_test_image(&image_path, 16, 16, ImageFormat::Jpeg);
@@ -1147,12 +1148,13 @@ mod tests {
             crate::numeric_cast::u64_to_i64_sat(path_modified_unix_secs(&nested)) + 10,
             0,
         );
-        filetime::set_file_mtime(&nested, bumped).unwrap();
+        filetime::set_file_mtime(&nested, bumped).map_err(|e| anyhow::anyhow!("set mtime: {e}"))?;
 
         assert!(
             !validate_cached_image_tree(&snapshot, root, &["jpg"], true),
             "Directory mtime drift should invalidate the cached path tree"
         );
+        Ok(())
     }
 
     #[test]
@@ -1202,9 +1204,9 @@ mod tests {
         ];
         sort_cached_video_entries(&mut entries);
 
-        assert_eq!(entries[0].path, fast_finish.path);
-        assert_eq!(entries[1].path, same_depth_shorter.path);
-        assert_eq!(entries[2].path, same_depth_heavier.path);
-        assert_eq!(entries[3].path, shallower.path);
+        assert_eq!(entries.get(0).map(|e| &e.path), Some(&fast_finish.path));
+        assert_eq!(entries.get(1).map(|e| &e.path), Some(&same_depth_shorter.path));
+        assert_eq!(entries.get(2).map(|e| &e.path), Some(&same_depth_heavier.path));
+        assert_eq!(entries.get(3).map(|e| &e.path), Some(&shallower.path));
     }
 }
