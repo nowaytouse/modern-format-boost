@@ -1,0 +1,16 @@
+Replace 🔥 fire emoji with 🔍 magnifying glass for Ultimate Explore
+
+Before:
+🔥 Ultimate explore (SSIM saturation)
+🔥 Ultimate Explore: ENABLED (search until SSIM saturates)
+
+After:
+🔍 Ultimate explore (SSIM saturation)
+🔍 Ultimate Explore: ENABLED (search until SSIM saturates)
+
+Reasoning:
+- 🔥 fire emoji doesn't represent SSIM saturation exploration accurately
+- 🔍 magnifying glass better represents the search/analysis nature of finding quality saturation points
+- More semantically appropriate for a precision quality search algorithm
+- Updated across all tools: img_hevc, vid_hevc, vid_av1, img_av1
+- Updated in flag descriptions and startup logs

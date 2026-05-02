@@ -1,0 +1,16 @@
+tree ab44763212ce63a59094b13fac5f5829c8b8a7c1
+parent 0a43633c527277c6da259c76b59ce5f5bd5846fa
+author nowaytouse <104445933+nowaytouse@users.noreply.github.com> 1773097956 +0800
+committer nowaytouse <104445933+nowaytouse@users.noreply.github.com> 1773097956 +0800
+
+Unify per-file log: emoji at tail, fixed-width filename column
+
+- Move ✅/❌ to end of per-file result lines (img_hevc, img_av1, vid_hevc)
+- Smart filename truncation preserving extension:
+    Image_103999006594198.jpeg → Image_103999006…jpeg
+    Cache_4ac28036da7d11be.jpg → Cache_4ac28036da7…jpg
+- Widen LOG_TAG_WIDTH 24→28 for longer filenames without truncation
+- LOG_PREFIX_MAX_DISPLAY=25 ensures consistent column width
+- All result lines now align: [filename]<pad> message text ✅/❌
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
