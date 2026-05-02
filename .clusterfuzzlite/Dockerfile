@@ -15,9 +15,9 @@ RUN apt-get update && apt-get install -y \
 
 # Update Rust toolchain to latest nightly to support jpegxl-rs @ 1.92.0+
 RUN rustup toolchain install nightly && \
-    rustup default nightly && \
-    rustup component add rust-src && \
-    rustup update
+    rustup component add rust-src --toolchain nightly
+ENV RUSTUP_TOOLCHAIN=nightly
+
 
 
 
