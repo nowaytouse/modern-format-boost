@@ -81,6 +81,102 @@ fn dynamic_bar_width(terminal_width: usize, reserved_width: usize) -> usize {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ProgressVariant {
+    flags: u8,
+}
+
+const SHOW_BAR: u8 = 1;
+const SHOW_ELAPSED: u8 = 2;
+const SHOW_ETA: u8 = 4;
+const SHOW_MESSAGE: u8 = 8;
+
+impl ProgressVariant {
+    const fn get_all(message_empty: bool) -> [Self; 5] {
+        [
+            Self {
+                flags: SHOW_BAR
+                    | SHOW_ELAPSED
+                    | SHOW_ETA
+                    | if message_empty { 0 } else { SHOW_MESSAGE },
+            },
+            Self {
+                flags: SHOW_BAR | SHOW_ELAPSED | SHOW_ETA,
+            },
+            Self {
+                flags: SHOW_BAR | SHOW_ELAPSED,
+            },
+            Self { flags: SHOW_BAR },
+            Self { flags: 0 },
+        ]
+    }
+
+    const fn show_bar(self) -> bool {
+        (self.flags & SHOW_BAR) != 0
+    }
+
+    const fn show_elapsed(self) -> bool {
+        (self.flags & SHOW_ELAPSED) != 0
+    }
+
+    const fn show_eta(self) -> bool {
+        (self.flags & SHOW_ETA) != 0
+    }
+
+    const fn show_message(self) -> bool {
+        (self.flags & SHOW_MESSAGE) != 0
+    }
+}
+
+fn calculate_fixed_width(variant: ProgressVariant, widths: &LayoutWidths) -> usize {
+    let mut fixed_width = widths.prefix + 1;
+    if !variant.show_bar() {
+        fixed_width += widths.percent + 3;
+    }
+    fixed_width += widths.counts;
+
+    if variant.show_elapsed() {
+        fixed_width += 3 + measure_text_width("⏱️ ") + widths.elapsed;
+    }
+    if variant.show_eta() {
+        fixed_width += 3 + measure_text_width("ETA ") + widths.eta_val;
+    }
+    if widths.stats > 0 {
+        fixed_width += widths.stats;
+    }
+
+    if variant.show_bar() {
+        fixed_width += 1 + widths.bar_left + widths.bar_right + 1;
+    }
+    fixed_width
+}
+
+struct LayoutWidths {
+    prefix: usize,
+    percent: usize,
+    counts: usize,
+    elapsed: usize,
+    eta_val: usize,
+    stats: usize,
+    bar_left: usize,
+    bar_right: usize,
+}
+
+#[derive(Clone, Copy)]
+struct AssembleContext<'a> {
+    prefix: &'a str,
+    variant: ProgressVariant,
+    percent: f64,
+    bar_width: usize,
+    percent_str: &'a str,
+    counts_str: &'a str,
+    elapsed_str: &'a str,
+    eta_str: &'a str,
+    message_text: &'a str,
+    stats: &'a str,
+    terminal_width: usize,
+}
+
 fn build_coarse_progress_line(
     prefix: &str,
     percent: f64,
@@ -92,98 +188,39 @@ fn build_coarse_progress_line(
     stats: &str,
     terminal_width: usize,
 ) -> String {
-    #[allow(clippy::struct_excessive_bools)]
-    struct Variant {
-        show_bar: bool,
-        show_elapsed: bool,
-        show_eta: bool,
-        show_message: bool,
-    }
-
     let color = "\x1b[32m";
     let percent_str = format!("{percent:>5.1}%");
     let counts_str = format!("{current}/{total}");
     let elapsed_str = format_duration_compact(elapsed);
 
-    let variants = [
-        Variant {
-            show_bar: true,
-            show_elapsed: true,
-            show_eta: true,
-            show_message: !message.is_empty(),
-        },
-        Variant {
-            show_bar: true,
-            show_elapsed: true,
-            show_eta: true,
-            show_message: false,
-        },
-        Variant {
-            show_bar: true,
-            show_elapsed: true,
-            show_eta: false,
-            show_message: false,
-        },
-        Variant {
-            show_bar: true,
-            show_elapsed: false,
-            show_eta: false,
-            show_message: false,
-        },
-        Variant {
-            show_bar: false,
-            show_elapsed: false,
-            show_eta: false,
-            show_message: false,
-        },
-    ];
+    let widths = LayoutWidths {
+        prefix: measure_text_width(prefix),
+        percent: measure_text_width(&percent_str),
+        counts: measure_text_width(&counts_str),
+        elapsed: measure_text_width(&elapsed_str),
+        eta_val: measure_text_width(eta_str),
+        stats: measure_text_width(stats),
+        bar_left: measure_text_width(progress_style::BAR_LEFT),
+        bar_right: measure_text_width(progress_style::BAR_RIGHT),
+    };
 
-    let prefix_width = measure_text_width(prefix);
-    let percent_width = measure_text_width(&percent_str);
-    let counts_width = measure_text_width(&counts_str);
-    let elapsed_width = measure_text_width(&elapsed_str);
-    let eta_val_width = measure_text_width(eta_str);
-    let stats_width = measure_text_width(stats);
-    let bar_left_width = measure_text_width(progress_style::BAR_LEFT);
-    let bar_right_width = measure_text_width(progress_style::BAR_RIGHT);
-
-    for variant in variants {
-        let mut fixed_width = prefix_width + 1;
-        if !variant.show_bar {
-            fixed_width += percent_width + 3;
-        }
-        fixed_width += counts_width;
-
-        if variant.show_elapsed {
-            fixed_width += 3 + measure_text_width("⏱️ ") + elapsed_width;
-        }
-        if variant.show_eta {
-            fixed_width += 3 + measure_text_width("ETA ") + eta_val_width;
-        }
-        if !stats.is_empty() {
-            fixed_width += stats_width;
-        }
-
-        if variant.show_bar {
-            fixed_width += 1 + bar_left_width + bar_right_width + 1;
-        }
-
-        let min_bar = if variant.show_bar { 6 } else { 0 };
-        let mut bar_width = if variant.show_bar {
+    for variant in ProgressVariant::get_all(message.is_empty()) {
+        let fixed_width = calculate_fixed_width(variant, &widths);
+        let min_bar = if variant.show_bar() { 6 } else { 0 };
+        let mut bar_width = if variant.show_bar() {
             dynamic_bar_width(terminal_width, fixed_width)
         } else {
             0
         };
 
-        if variant.show_bar && bar_width < min_bar {
+        if variant.show_bar() && bar_width < min_bar {
             continue;
         }
 
-        let message_text = if variant.show_message {
+        let message_text = if variant.show_message() {
             let available = terminal_width.saturating_sub(fixed_width + bar_width + 3);
             if available < 6 {
-                if variant.show_bar && bar_width > min_bar {
-                    // Try shrinking bar once to find space for message
+                if variant.show_bar() && bar_width > min_bar {
                     let needed = 6_usize.saturating_sub(available);
                     if bar_width.saturating_sub(needed) >= min_bar {
                         bar_width -= needed;
@@ -194,71 +231,102 @@ fn build_coarse_progress_line(
                     continue;
                 }
             }
-            // 📏 Unify Width: Cap filename to 24 chars for layout stability
-            let width_limit = available.clamp(6, 24);
-            truncate_progress_message(message, width_limit)
+            truncate_progress_message(message, available.clamp(6, 24))
         } else {
             String::new()
         };
 
-        // Re-check final width with chosen bar and message
         let final_fixed =
             fixed_width + message_text.len() + (if message_text.is_empty() { 0 } else { 3 });
-        if variant.show_bar && bar_width + final_fixed > terminal_width {
+        if variant.show_bar() && bar_width + final_fixed > terminal_width {
             bar_width = terminal_width.saturating_sub(final_fixed + 1).max(min_bar);
             if bar_width < min_bar {
                 continue;
             }
         }
 
-        let mut line = String::with_capacity(terminal_width + 32);
-        line.push_str(color);
-        line.push_str(prefix);
-        line.push(' ');
+        let line = assemble_coarse_line(AssembleContext {
+            prefix,
+            variant,
+            percent,
+            bar_width,
+            percent_str: &percent_str,
+            counts_str: &counts_str,
+            elapsed_str: &elapsed_str,
+            eta_str,
+            message_text: &message_text,
+            stats,
+            terminal_width,
+        });
 
-        if variant.show_bar {
-            let filled = crate::numeric_cast::f64_to_usize_sat(
-                ((percent / 100.0) * crate::numeric_cast::usize_to_f64(bar_width)).round(),
-            );
-            let empty = bar_width.saturating_sub(filled);
-            line.push_str(progress_style::BAR_LEFT);
-            for _ in 0..filled {
-                line.push('█');
-            }
-            for _ in 0..empty {
-                line.push('░');
-            }
-            line.push_str(progress_style::BAR_RIGHT);
-            line.push(' ');
-        }
-
-        if !variant.show_bar {
-            line.push_str(&percent_str);
-            line.push_str(" • ");
-        }
-        line.push_str(&counts_str);
-
-        if variant.show_elapsed {
-            line.push_str(" • ⏱️ ");
-            line.push_str(&elapsed_str);
-        }
-        if variant.show_eta {
-            line.push_str(" • ETA ");
-            line.push_str(eta_str);
-        }
-        if !message_text.is_empty() {
-            line.push_str(" • ");
-            line.push_str(&message_text);
-        }
-
-        line.push_str("\x1b[0m");
-        line.push_str(stats);
-
-        if measure_text_width(&line) <= terminal_width.saturating_sub(1).max(32) {
-            return line;
+        if let Some(l) = line {
+            return l;
         }
     }
 
+    fallback_coarse_line(color, prefix, percent, &percent_str, &counts_str, stats)
+}
+
+fn assemble_coarse_line(ctx: AssembleContext<'_>) -> Option<String> {
+    let color = "\x1b[32m";
+    let mut line = String::with_capacity(ctx.terminal_width + 32);
+    line.push_str(color);
+    line.push_str(ctx.prefix);
+    line.push(' ');
+
+    if ctx.variant.show_bar() {
+        let filled = crate::numeric_cast::f64_to_usize_sat(
+            ((ctx.percent / 100.0) * crate::numeric_cast::usize_to_f64(ctx.bar_width)).round(),
+        );
+        let empty = ctx.bar_width.saturating_sub(filled);
+        line.push_str(progress_style::BAR_LEFT);
+        for _ in 0..filled {
+            line.push('█');
+        }
+        for _ in 0..empty {
+            line.push('░');
+        }
+        line.push_str(progress_style::BAR_RIGHT);
+        line.push(' ');
+    }
+
+    if !ctx.variant.show_bar() {
+        line.push_str(ctx.percent_str);
+        line.push_str(" • ");
+    }
+    line.push_str(ctx.counts_str);
+
+    if ctx.variant.show_elapsed() {
+        line.push_str(" • ⏱️ ");
+        line.push_str(ctx.elapsed_str);
+    }
+    if ctx.variant.show_eta() {
+        line.push_str(" • ETA ");
+        line.push_str(ctx.eta_str);
+    }
+    if !ctx.message_text.is_empty() {
+        line.push_str(" • ");
+        line.push_str(ctx.message_text);
+    }
+
+    line.push_str("\x1b[0m");
+    line.push_str(ctx.stats);
+
+    if measure_text_width(&line) <= ctx.terminal_width.saturating_sub(1).max(32) {
+        Some(line)
+    } else {
+        None
+    }
+}
+
+fn fallback_coarse_line(
+    color: &str,
+    prefix: &str,
+    percent: f64,
+    percent_str: &str,
+    counts_str: &str,
+    stats: &str,
+) -> String {
     let mut final_line = format!("{color}{prefix} ");
     {
         use std::fmt::Write;
@@ -1500,9 +1568,7 @@ impl GlobalProgressManager {
             bar.enable_steady_tick(Duration::from_millis(8));
             bar.set_draw_target(ProgressDrawTarget::stderr_with_hz(120));
         }
-        self.main_bar = Some(bar);
-        #[allow(clippy::unwrap_used)]
-        self.main_bar.as_ref().unwrap()
+        self.main_bar.insert(bar)
     }
 
     /// Create a sub-spinner.
@@ -1525,9 +1591,7 @@ impl GlobalProgressManager {
             bar.enable_steady_tick(Duration::from_millis(8));
             bar.set_draw_target(ProgressDrawTarget::stderr_with_hz(120));
         }
-        self.sub_bar = Some(bar);
-        #[allow(clippy::unwrap_used)]
-        self.sub_bar.as_ref().unwrap()
+        self.sub_bar.insert(bar)
     }
 
     pub fn inc_main(&self) {

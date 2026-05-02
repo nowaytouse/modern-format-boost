@@ -95,10 +95,14 @@ pub fn ensure_parent_dir_exists(file_path: &Path) -> Result<()> {
 /// # Errors
 /// Returns an I/O error if the directory cannot be determined or created.
 pub fn get_user_project_cache_dir() -> anyhow::Result<PathBuf> {
-    let mut path = std::env::var("MFB_HOME_ROOT").map(PathBuf::from).or_else(|_| std::env::var("HOME").map(PathBuf::from)).or_else(|_| std::env::var("USERPROFILE").map(PathBuf::from)).unwrap_or_else(|_| {
-        // Fallback to project root .cache if HOME is missing
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-    });
+    let mut path = std::env::var("MFB_HOME_ROOT")
+        .map(PathBuf::from)
+        .or_else(|_| std::env::var("HOME").map(PathBuf::from))
+        .or_else(|_| std::env::var("USERPROFILE").map(PathBuf::from))
+        .unwrap_or_else(|_| {
+            // Fallback to project root .cache if HOME is missing
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+        });
 
     if path
         .file_name()

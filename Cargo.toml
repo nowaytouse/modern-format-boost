@@ -15,6 +15,10 @@ version = "0.11.2"
 edition = "2021"
 license = "MIT"
 authors = ["Modern Format Boost Contributors"]
+repository = "https://github.com/nowaytouse/modern-format-boost"
+readme = "README.md"
+keywords = ["media", "video", "image", "conversion", "performance"]
+categories = ["multimedia", "command-line-utilities"]
 
 [workspace.dependencies]
 # Core error handling

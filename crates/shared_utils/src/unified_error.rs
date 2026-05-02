@@ -133,20 +133,39 @@ impl UnifiedError {
     /// Get user-friendly error message with emoji indicators
     #[must_use]
     pub fn user_message(&self) -> String {
+        if let Some(msg) = self.io_user_message() {
+            return msg;
+        }
+        if let Some(msg) = self.media_user_message() {
+            return msg;
+        }
+        if let Some(msg) = self.ffmpeg_user_message() {
+            return msg;
+        }
+        if let Some(msg) = self.image_user_message() {
+            return msg;
+        }
+        if let Some(msg) = self.validation_user_message() {
+            return msg;
+        }
+        self.system_user_message()
+    }
+
+    fn io_user_message(&self) -> Option<String> {
         match self {
             Self::FileNotFound { path, operation } => {
                 let mut msg = format!("❌ File not found: {}", path.display());
                 if let Some(op) = operation {
                     let _ = write!(msg, "\n   Operation: {op}");
                 }
-                msg
+                Some(msg)
             }
             Self::DirectoryNotFound { path, operation } => {
                 let mut msg = format!("❌ Directory not found: {}", path.display());
                 if let Some(op) = operation {
                     let _ = write!(msg, "\n   Operation: {op}");
                 }
-                msg
+                Some(msg)
             }
             Self::FileReadError {
                 path,
@@ -157,7 +176,7 @@ impl UnifiedError {
                 if let Some(op) = operation {
                     let _ = write!(msg, "\n   Operation: {op}");
                 }
-                msg
+                Some(msg)
             }
             Self::FileWriteError {
                 path,
@@ -168,17 +187,28 @@ impl UnifiedError {
                 if let Some(op) = operation {
                     let _ = write!(msg, "\n   Operation: {op}");
                 }
-                msg
+                Some(msg)
             }
+            Self::Io(e) => Some(format!("❌ IO error: {e}")),
+            _ => None,
+        }
+    }
+
+    fn media_user_message(&self) -> Option<String> {
+        match self {
             Self::VideoFormatNotSupported(fmt) => {
-                format!("❌ Video format not supported: {fmt}")
+                Some(format!("❌ Video format not supported: {fmt}"))
             }
-            Self::VideoReadError(err) => {
-                format!("❌ Failed to read video: {err}")
-            }
-            Self::FFprobeError(err) => {
-                format!("❌ FFprobe failed: {err}")
-            }
+            Self::VideoReadError(err) => Some(format!("❌ Failed to read video: {err}")),
+            Self::FFprobeError(err) => Some(format!("❌ FFprobe failed: {err}")),
+            Self::ConversionError(err) => Some(format!("❌ Conversion failed: {err}")),
+            Self::AnalysisError(err) => Some(format!("❌ Analysis failed: {err}")),
+            _ => None,
+        }
+    }
+
+    fn ffmpeg_user_message(&self) -> Option<String> {
+        match self {
             Self::FFmpegError {
                 message,
                 stderr,
@@ -199,50 +229,29 @@ impl UnifiedError {
                 if !stderr.is_empty() {
                     let _ = write!(msg, "\n   Error output: {stderr}");
                 }
-                msg
+                Some(msg)
             }
-            Self::ConversionError(err) => {
-                format!("❌ Conversion failed: {err}")
-            }
-            Self::AnalysisError(err) => {
-                format!("❌ Analysis failed: {err}")
-            }
-            Self::GeneralError(err) => {
-                format!("❌ Error: {err}")
-            }
+            _ => None,
+        }
+    }
+
+    fn image_user_message(&self) -> Option<String> {
+        match self {
             Self::ImageFormatNotSupported(fmt) => {
-                format!("❌ Image format not supported: {fmt}")
+                Some(format!("❌ Image format not supported: {fmt}"))
             }
-            Self::ImageReadError(err) => {
-                format!("❌ Failed to read image: {err}")
-            }
-            Self::ImageAnalysisError(err) => {
-                format!("❌ Failed to analyze image: {err}")
-            }
-            Self::ImageProcessingError(err) => {
-                format!("❌ Image processing error: {err}")
-            }
-            Self::InvalidCrf(e) => {
-                format!("❌ Invalid CRF value: {e}")
-            }
-            Self::InvalidSsim(e) => {
-                format!("❌ Invalid SSIM value: {e}")
-            }
-            Self::IterationLimitExceeded(e) => {
-                format!("⚠️ Iteration limit exceeded: {e}")
-            }
-            Self::ToolNotFound {
-                tool_name,
-                operation,
-            } => {
-                let mut msg = format!(
-                    "❌ Tool not found: {tool_name}\n💡 Please ensure {tool_name} is installed and in PATH"
-                );
-                if let Some(op) = operation {
-                    let _ = write!(msg, "\n   Needed for: {op}");
-                }
-                msg
-            }
+            Self::ImageReadError(err) => Some(format!("❌ Failed to read image: {err}")),
+            Self::ImageAnalysisError(err) => Some(format!("❌ Failed to analyze image: {err}")),
+            Self::ImageProcessingError(err) => Some(format!("❌ Image processing error: {err}")),
+            _ => None,
+        }
+    }
+
+    fn validation_user_message(&self) -> Option<String> {
+        match self {
+            Self::InvalidCrf(e) => Some(format!("❌ Invalid CRF value: {e}")),
+            Self::InvalidSsim(e) => Some(format!("❌ Invalid SSIM value: {e}")),
+            Self::IterationLimitExceeded(e) => Some(format!("⚠️ Iteration limit exceeded: {e}")),
             Self::CompressionFailed {
                 input_size,
                 output_size,
@@ -257,7 +266,7 @@ impl UnifiedError {
                 if let Some(path) = file_path {
                     let _ = write!(msg, "\n   File: {}", path.display());
                 }
-                msg
+                Some(msg)
             }
             Self::QualityValidationFailed {
                 expected_ssim,
@@ -270,6 +279,24 @@ impl UnifiedError {
                 if let Some(path) = file_path {
                     let _ = write!(msg, "\n   File: {}", path.display());
                 }
+                Some(msg)
+            }
+            _ => None,
+        }
+    }
+
+    fn system_user_message(&self) -> String {
+        match self {
+            Self::ToolNotFound {
+                tool_name,
+                operation,
+            } => {
+                let mut msg = format!(
+                    "❌ Tool not found: {tool_name}\n💡 Please ensure {tool_name} is installed and in PATH"
+                );
+                if let Some(op) = operation {
+                    let _ = write!(msg, "\n   Needed for: {op}");
+                }
                 msg
             }
             Self::OutputExists { path, operation } => {
@@ -279,21 +306,12 @@ impl UnifiedError {
                 }
                 msg
             }
-            Self::Io(e) => {
-                format!("❌ IO error: {e}")
-            }
-            Self::NotImplemented(msg) => {
-                format!("❌ Not implemented: {msg}")
-            }
-            Self::SkipFile(msg) => {
-                format!("⏭️  Skip file: {msg}")
-            }
-            Self::ResultAnomaly(msg) => {
-                format!("❌ Result anomaly: {msg}")
-            }
-            Self::Other(e) => {
-                format!("❌ Error: {e}")
-            }
+            Self::NotImplemented(msg) => format!("❌ Not implemented: {msg}"),
+            Self::SkipFile(msg) => format!("⏭️  Skip file: {msg}"),
+            Self::ResultAnomaly(msg) => format!("❌ Result anomaly: {msg}"),
+            Self::GeneralError(err) => format!("❌ Error: {err}"),
+            Self::Other(e) => format!("❌ Error: {e}"),
+            _ => format!("❌ Unknown error: {self}"),
         }
     }
 
@@ -421,50 +439,52 @@ impl UnifiedError {
     }
 }
 
-impl fmt::Display for UnifiedError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl UnifiedError {
+    fn fmt_io_error(&self, f: &mut fmt::Formatter<'_>) -> Option<fmt::Result> {
         match self {
             Self::FileNotFound { path, operation } => {
-                write!(f, "File not found: {}", path.display())?;
+                let res = write!(f, "File not found: {}", path.display());
                 if let Some(op) = operation {
-                    write!(f, " (during: {op})")?;
+                    let _ = write!(f, " (during: {op})");
                 }
-                Ok(())
+                Some(res)
             }
             Self::DirectoryNotFound { path, operation } => {
-                write!(f, "Directory not found: {}", path.display())?;
+                let res = write!(f, "Directory not found: {}", path.display());
                 if let Some(op) = operation {
-                    write!(f, " (during: {op})")?;
+                    let _ = write!(f, " (during: {op})");
                 }
-                Ok(())
+                Some(res)
             }
             Self::FileReadError {
                 path,
                 source,
                 operation,
             } => {
-                write!(f, "Failed to read {}: {}", path.display(), source)?;
+                let res = write!(f, "Failed to read {}: {}", path.display(), source);
                 if let Some(op) = operation {
-                    write!(f, " (during: {op})")?;
+                    let _ = write!(f, " (during: {op})");
                 }
-                Ok(())
+                Some(res)
             }
             Self::FileWriteError {
                 path,
                 source,
                 operation,
             } => {
-                write!(f, "Failed to write {}: {}", path.display(), source)?;
+                let res = write!(f, "Failed to write {}: {}", path.display(), source);
                 if let Some(op) = operation {
-                    write!(f, " (during: {op})")?;
+                    let _ = write!(f, " (during: {op})");
                 }
-                Ok(())
+                Some(res)
             }
-            Self::VideoFormatNotSupported(fmt) => {
-                write!(f, "Video format not supported: {fmt}")
-            }
-            Self::VideoReadError(err) => write!(f, "Failed to read video: {err}"),
-            Self::FFprobeError(err) => write!(f, "FFprobe error: {err}"),
+            Self::Io(e) => Some(write!(f, "IO error: {e}")),
+            _ => None,
+        }
+    }
+
+    fn fmt_ffmpeg_error(&self, f: &mut fmt::Formatter<'_>) -> Option<fmt::Result> {
+        match self {
             Self::FFmpegError {
                 message,
                 stderr,
@@ -472,35 +492,83 @@ impl fmt::Display for UnifiedError {
                 command,
                 file_path,
             } => {
-                write!(f, "FFmpeg error: {message}")?;
+                if let Err(e) = write!(f, "FFmpeg error: {message}") {
+                    return Some(Err(e));
+                }
                 if let Some(code) = exit_code {
-                    write!(f, " (exit code: {code})")?;
+                    let _ = write!(f, " (exit code: {code})");
                 }
                 if let Some(path) = file_path {
-                    write!(f, "\n  File: {}", path.display())?;
+                    let _ = write!(f, "\n  File: {}", path.display());
                 }
                 if let Some(cmd) = command {
-                    write!(f, "\n  Command: {cmd}")?;
+                    let _ = write!(f, "\n  Command: {cmd}");
                 }
                 if !stderr.is_empty() {
-                    write!(f, "\n  Stderr: {stderr}")?;
+                    let _ = write!(f, "\n  Stderr: {stderr}");
                 }
-                Ok(())
+                Some(Ok(()))
             }
-            Self::ConversionError(err) => write!(f, "Conversion error: {err}"),
-            Self::AnalysisError(err) => write!(f, "Analysis error: {err}"),
-            Self::GeneralError(err) => write!(f, "General error: {err}"),
+            Self::FFprobeError(err) => Some(write!(f, "FFprobe error: {err}")),
+            _ => None,
+        }
+    }
+
+    fn fmt_image_error(&self, f: &mut fmt::Formatter<'_>) -> Option<fmt::Result> {
+        match self {
             Self::ImageFormatNotSupported(fmt) => {
-                write!(f, "Image format not supported: {fmt}")
+                Some(write!(f, "Image format not supported: {fmt}"))
             }
-            Self::ImageReadError(err) => write!(f, "Failed to read image: {err}"),
-            Self::ImageAnalysisError(err) => write!(f, "Failed to analyze image: {err}"),
-            Self::ImageProcessingError(err) => {
-                write!(f, "Image processing error: {err}")
+            Self::ImageReadError(err) => Some(write!(f, "Failed to read image: {err}")),
+            Self::ImageAnalysisError(err) => Some(write!(f, "Failed to analyze image: {err}")),
+            Self::ImageProcessingError(err) => Some(write!(f, "Image processing error: {err}")),
+            _ => None,
+        }
+    }
+
+    fn fmt_validation_error(&self, f: &mut fmt::Formatter<'_>) -> Option<fmt::Result> {
+        match self {
+            Self::InvalidCrf(e) => Some(write!(f, "Invalid CRF: {e}")),
+            Self::InvalidSsim(e) => Some(write!(f, "Invalid SSIM: {e}")),
+            Self::IterationLimitExceeded(e) => Some(write!(f, "{e}")),
+            Self::CompressionFailed {
+                input_size,
+                output_size,
+                file_path,
+            } => {
+                if let Err(e) = write!(
+                    f,
+                    "Compression failed: output ({output_size}) >= input ({input_size})"
+                ) {
+                    return Some(Err(e));
+                }
+                if let Some(path) = file_path {
+                    let _ = write!(f, "\n  File: {}", path.display());
+                }
+                Some(Ok(()))
             }
-            Self::InvalidCrf(e) => write!(f, "Invalid CRF: {e}"),
-            Self::InvalidSsim(e) => write!(f, "Invalid SSIM: {e}"),
-            Self::IterationLimitExceeded(e) => write!(f, "{e}"),
+            Self::QualityValidationFailed {
+                expected_ssim,
+                actual_ssim,
+                file_path,
+            } => {
+                if let Err(e) = write!(
+                    f,
+                    "Quality validation failed: expected SSIM >= {expected_ssim:.4}, got {actual_ssim:.4}"
+                ) {
+                    return Some(Err(e));
+                }
+                if let Some(path) = file_path {
+                    let _ = write!(f, "\n  File: {}", path.display());
+                }
+                Some(Ok(()))
+            }
+            _ => None,
+        }
+    }
+
+    fn fmt_system_error(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
             Self::ToolNotFound {
                 tool_name,
                 operation,
@@ -511,34 +579,6 @@ impl fmt::Display for UnifiedError {
                 }
                 Ok(())
             }
-            Self::CompressionFailed {
-                input_size,
-                output_size,
-                file_path,
-            } => {
-                write!(
-                    f,
-                    "Compression failed: output ({output_size}) >= input ({input_size})"
-                )?;
-                if let Some(path) = file_path {
-                    write!(f, "\n  File: {}", path.display())?;
-                }
-                Ok(())
-            }
-            Self::QualityValidationFailed {
-                expected_ssim,
-                actual_ssim,
-                file_path,
-            } => {
-                write!(
-                    f,
-                    "Quality validation failed: expected SSIM >= {expected_ssim:.4}, got {actual_ssim:.4}"
-                )?;
-                if let Some(path) = file_path {
-                    write!(f, "\n  File: {}", path.display())?;
-                }
-                Ok(())
-            }
             Self::OutputExists { path, operation } => {
                 write!(f, "Output exists: {}", path.display())?;
                 if let Some(op) = operation {
@@ -546,12 +586,35 @@ impl fmt::Display for UnifiedError {
                 }
                 Ok(())
             }
-            Self::Io(e) => write!(f, "IO error: {e}"),
             Self::NotImplemented(msg) => write!(f, "Not implemented: {msg}"),
             Self::SkipFile(msg) => write!(f, "Skip file: {msg}"),
             Self::ResultAnomaly(msg) => write!(f, "Result anomaly: {msg}"),
+            Self::VideoFormatNotSupported(fmt) => write!(f, "Video format not supported: {fmt}"),
+            Self::VideoReadError(err) => write!(f, "Failed to read video: {err}"),
+            Self::ConversionError(err) => write!(f, "Conversion error: {err}"),
+            Self::AnalysisError(err) => write!(f, "Analysis error: {err}"),
+            Self::GeneralError(err) => write!(f, "General error: {err}"),
             Self::Other(e) => write!(f, "{e}"),
+            _ => write!(f, "{self:?}"),
         }
+    }
+}
+
+impl fmt::Display for UnifiedError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(res) = self.fmt_io_error(f) {
+            return res;
+        }
+        if let Some(res) = self.fmt_ffmpeg_error(f) {
+            return res;
+        }
+        if let Some(res) = self.fmt_image_error(f) {
+            return res;
+        }
+        if let Some(res) = self.fmt_validation_error(f) {
+            return res;
+        }
+        self.fmt_system_error(f)
     }
 }
 

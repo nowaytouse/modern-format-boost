@@ -645,12 +645,16 @@ impl LoopThresholds {
         let duration_percentiles_available = reference.duration.p25.is_some()
             || reference.duration.p10.is_some()
             || reference.duration.p50.is_some();
-        let short_percentile = reference.duration.p25.or(reference.duration.p10).unwrap_or_else(|| {
-            reference
-                .collection
-                .duration_p90
-                .min(crate::constants::DEFAULT_LOOP_BASELINE_DURATION_SECS)
-        });
+        let short_percentile = reference
+            .duration
+            .p25
+            .or(reference.duration.p10)
+            .unwrap_or_else(|| {
+                reference
+                    .collection
+                    .duration_p90
+                    .min(crate::constants::DEFAULT_LOOP_BASELINE_DURATION_SECS)
+            });
         let median_scaled = reference
             .duration
             .p50

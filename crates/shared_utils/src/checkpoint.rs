@@ -1216,7 +1216,6 @@ mod tests {
 
     #[test]
     fn test_checkpoint_lock_acquire_release() {
-        #[allow(clippy::unwrap_used)]
         let (temp, _progress, guard) = setup_test_env().unwrap_or_else(|e| panic!("error: {e:?}"));
         let target = temp.path();
 
@@ -1329,7 +1328,6 @@ mod tests {
 
     #[test]
     fn test_full_workflow_with_interruption() {
-        #[allow(clippy::unwrap_used)]
         let (temp, _progress, guard) = setup_test_env().unwrap_or_else(|e| panic!("error: {e:?}"));
         let target = temp.path();
 

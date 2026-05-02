@@ -17,6 +17,10 @@ All notable changes to this project will be documented in this file.
   - Achieved 100% compliance with `clippy::pedantic` and `clippy::nursery` across the entire workspace (including `dev`, `img`, `vid`, and `shared_utils`).
   - Resolved final `too_many_lines` warnings in debug/test suites via explicit opt-ins.
   - Hardened numerical conversions with `cast_signed()` and optimized `Option`/`Result` handling with `unwrap_or_else` and `map_or_else`.
+  - **GPU Coarse Search**: Preserved monolithic architecture while resolving all non-line-count warnings under the most strict nightly lints.
+- **XMP Merger Fix**:
+  - **Unit Test Stability**: Fixed `test_extract_xmp_metadata_reports_exiftool_failure` by creating a physical empty file for the test case. This ensures the native parser executes and successfully triggers the ExifTool fallback error as intended, matching the hardened file-read checks.
+
 
 ### 🛡️ Nightly Dependency & Numerical Rigor (2026-05-02)
 

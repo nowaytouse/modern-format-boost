@@ -473,12 +473,10 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
         &precision,
     );
 
-    let color_space = probe
-        .color_space
-        .as_ref()
-        .map_or_else(|| ColorSpace::Unknown("unknown".to_string()), |s| {
-            ColorSpace::parse(s)
-        });
+    let color_space = probe.color_space.as_ref().map_or_else(
+        || ColorSpace::Unknown("unknown".to_string()),
+        |s| ColorSpace::parse(s),
+    );
 
     let quality_score = calculate_quality_score(
         &compression,

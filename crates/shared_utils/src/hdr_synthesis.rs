@@ -861,13 +861,25 @@ pub fn synthesize_hdr(
                 let b_srgb =
                     1.0983f32.mul_add(b_hdr, (-0.0197f32).mul_add(r_hdr, -(0.0786 * g_hdr)));
 
-                hdr_pixels[idx] = r_srgb.max(0.0);
-                hdr_pixels[idx + 1] = g_srgb.max(0.0);
-                hdr_pixels[idx + 2] = b_srgb.max(0.0);
+                if let Some(r) = hdr_pixels.get_mut(idx) {
+                    *r = r_srgb.max(0.0);
+                }
+                if let Some(g) = hdr_pixels.get_mut(idx + 1) {
+                    *g = g_srgb.max(0.0);
+                }
+                if let Some(b) = hdr_pixels.get_mut(idx + 2) {
+                    *b = b_srgb.max(0.0);
+                }
             } else {
-                hdr_pixels[idx] = r_hdr.max(0.0);
-                hdr_pixels[idx + 1] = g_hdr.max(0.0);
-                hdr_pixels[idx + 2] = b_hdr.max(0.0);
+                if let Some(r) = hdr_pixels.get_mut(idx) {
+                    *r = r_hdr.max(0.0);
+                }
+                if let Some(g) = hdr_pixels.get_mut(idx + 1) {
+                    *g = g_hdr.max(0.0);
+                }
+                if let Some(b) = hdr_pixels.get_mut(idx + 2) {
+                    *b = b_hdr.max(0.0);
+                }
             }
         }
     }

@@ -1749,7 +1749,6 @@ pub fn gpu_coarse_search_with_log(
     result
 }
 
-#[allow(clippy::too_many_lines)]
 fn gpu_coarse_search_with_log_impl(
     input: &std::path::Path,
     output: &std::path::Path,
@@ -2984,17 +2983,20 @@ fn gpu_coarse_search_with_log_impl(
         (None, None)
     };
 
-    let gpu_boundary_crf = quality_ceiling_info
-        .map(|(crf, _)| crf)
-        .map_or(last_tested_crf, |ceiling_crf| {
-            log_msg!("   🎯 GPU Quality Ceiling Detected!");
-            log_msg!("      └─ Ceiling CRF: {:.1} (PSNR plateau)", ceiling_crf);
-            log_msg!("      └─ Last tested CRF: {:.1}", last_tested_crf);
-            if !crate::float_compare::approx_eq_crf(ceiling_crf, last_tested_crf) {
-                log_msg!("      └─ Boundary = Ceiling (lower CRFs are bloated, no quality gain)");
-            }
-            ceiling_crf
-        });
+    let gpu_boundary_crf =
+        quality_ceiling_info
+            .map(|(crf, _)| crf)
+            .map_or(last_tested_crf, |ceiling_crf| {
+                log_msg!("   🎯 GPU Quality Ceiling Detected!");
+                log_msg!("      └─ Ceiling CRF: {:.1} (PSNR plateau)", ceiling_crf);
+                log_msg!("      └─ Last tested CRF: {:.1}", last_tested_crf);
+                if !crate::float_compare::approx_eq_crf(ceiling_crf, last_tested_crf) {
+                    log_msg!(
+                        "      └─ Boundary = Ceiling (lower CRFs are bloated, no quality gain)"
+                    );
+                }
+                ceiling_crf
+            });
 
     log_msg!("   ═══════════════════════════════════════════════════");
     if found {

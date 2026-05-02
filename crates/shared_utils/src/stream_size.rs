@@ -213,21 +213,27 @@ fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<StreamSiz
 
     let audio_stream = parsed.streams.iter().find(|s| s.codec_type == "audio");
 
-    let (video_stream_size, video_bitrate) = video_stream.and_then(|vs| vs.bit_rate.as_ref()).and_then(|br_str| br_str.parse::<u64>().ok()).map_or((0, None), |br| {
-        let size_rational = (Rational::from(br)
-            * crate::numeric_cast::f64_to_rational_loud(duration_secs, 0, "duration_secs"))
-            / Rational::from(8);
-        let size = crate::numeric_cast::f64_to_u64_sat(size_rational.to_f64());
-        (size, Some(br))
-    });
+    let (video_stream_size, video_bitrate) = video_stream
+        .and_then(|vs| vs.bit_rate.as_ref())
+        .and_then(|br_str| br_str.parse::<u64>().ok())
+        .map_or((0, None), |br| {
+            let size_rational = (Rational::from(br)
+                * crate::numeric_cast::f64_to_rational_loud(duration_secs, 0, "duration_secs"))
+                / Rational::from(8);
+            let size = crate::numeric_cast::f64_to_u64_sat(size_rational.to_f64());
+            (size, Some(br))
+        });
 
-    let (audio_stream_size, audio_bitrate) = audio_stream.and_then(|aus| aus.bit_rate.as_ref()).and_then(|br_str| br_str.parse::<u64>().ok()).map_or((0, None), |br| {
-        let size_rational = (Rational::from(br)
-            * crate::numeric_cast::f64_to_rational_loud(duration_secs, 0, "duration_secs"))
-            / Rational::from(8);
-        let size = crate::numeric_cast::f64_to_u64_sat(size_rational.to_f64());
-        (size, Some(br))
-    });
+    let (audio_stream_size, audio_bitrate) = audio_stream
+        .and_then(|aus| aus.bit_rate.as_ref())
+        .and_then(|br_str| br_str.parse::<u64>().ok())
+        .map_or((0, None), |br| {
+            let size_rational = (Rational::from(br)
+                * crate::numeric_cast::f64_to_rational_loud(duration_secs, 0, "duration_secs"))
+                / Rational::from(8);
+            let size = crate::numeric_cast::f64_to_u64_sat(size_rational.to_f64());
+            (size, Some(br))
+        });
 
     if video_stream_size == 0 {
         warn!(

@@ -33,7 +33,6 @@ fn resolve_debug_root() -> PathBuf {
 }
 
 #[test]
-#[allow(clippy::too_many_lines)]
 fn manual_debug_jxl_explorer_uses_copies_only() {
     if std::env::var("MFB_RUN_JXL_DEBUG_EXPLORER").is_err() {
         eprintln!(

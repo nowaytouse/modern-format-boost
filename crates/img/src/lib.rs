@@ -1,4 +1,3 @@
-#![allow(clippy::too_many_lines)]
 pub mod analyzer;
 pub mod constants;
 pub mod formats;

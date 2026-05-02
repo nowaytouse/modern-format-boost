@@ -294,7 +294,10 @@ pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualit
     // Prioritize precise CRF/QP from encoder tags over BPP heuristic
     let estimated_crf = encoder_params.map_or_else(
         || estimate_crf_from_bpp(bpp, codec_type),
-        |params| extract_crf_from_params(params).unwrap_or_else(|| estimate_crf_from_bpp(bpp, codec_type)),
+        |params| {
+            extract_crf_from_params(params)
+                .unwrap_or_else(|| estimate_crf_from_bpp(bpp, codec_type))
+        },
     );
 
     let confidence = calculate_video_confidence(

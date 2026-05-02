@@ -1223,7 +1223,7 @@ dependencies = [
 [[package]]
 name = "insta"
 version = "1.47.2"
-source = "git+https://github.com/mitsuhiko/insta.git#0ddf1e829337fe2a4cbb4b801d9fd78426a10fe0"
+source = "git+https://github.com/mitsuhiko/insta.git#c7b98b8d23846130ce769f86ec8c33b0f221d48e"
 dependencies = [
  "console",
  "once_cell",
@@ -1403,7 +1403,7 @@ dependencies = [
 [[package]]
 name = "libsqlite3-sys"
 version = "0.37.0"
-source = "git+https://github.com/rusqlite/rusqlite.git#63181d4cff680e2738b4618d9c422ed35eb23bd7"
+source = "git+https://github.com/rusqlite/rusqlite.git#6151b2f8ea13d3f2ad922ed9b96118dffe93d4da"
 dependencies = [
  "cc",
  "pkg-config",
@@ -2214,7 +2214,7 @@ dependencies = [
 [[package]]
 name = "rusqlite"
 version = "0.39.0"
-source = "git+https://github.com/rusqlite/rusqlite.git#63181d4cff680e2738b4618d9c422ed35eb23bd7"
+source = "git+https://github.com/rusqlite/rusqlite.git#6151b2f8ea13d3f2ad922ed9b96118dffe93d4da"
 dependencies = [
  "bitflags",
  "fallible-iterator 0.3.0",

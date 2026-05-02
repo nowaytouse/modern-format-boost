@@ -14,10 +14,6 @@ pub fn print_summary_report(
     output_bytes: u64,
     operation_name: &str,
 ) {
-    use crate::modern_ui::colors::{
-        BOLD, BRIGHT_CYAN, BRIGHT_GREEN, BRIGHT_RED, BRIGHT_YELLOW, DIM, MFB_BLUE, RESET,
-    };
-
     let reduction = if input_bytes > 0 {
         (1.0 - crate::numeric_cast::u64_to_f64(output_bytes)
             / crate::numeric_cast::u64_to_f64(input_bytes))
@@ -26,6 +22,16 @@ pub fn print_summary_report(
         0.0
     };
 
+    print_report_header(operation_name);
+    print_file_stats(result);
+    print_size_info(input_bytes, output_bytes, reduction);
+    print_time_info(result, duration);
+    print_error_summary(result);
+    print_pause_info(result);
+}
+
+fn print_report_header(operation_name: &str) {
+    use crate::modern_ui::colors::{BOLD, MFB_BLUE, RESET};
     println!();
     println!(
         "{MFB_BLUE}╭────────────────────────────────────────────────────────────────────────────╮{RESET}"
@@ -44,6 +50,12 @@ pub fn print_summary_report(
     println!(
         "{MFB_BLUE}├────────────────────────────────────────────────────────────────────────────┤{RESET}"
     );
+}
+
+fn print_file_stats(result: &BatchResult) {
+    use crate::modern_ui::colors::{
+        BRIGHT_CYAN, BRIGHT_GREEN, BRIGHT_RED, BRIGHT_YELLOW, MFB_BLUE, RESET,
+    };
     println!(
         "{}│{}  📁 Files Processed:    {:>10}                                         {}│{}",
         MFB_BLUE, RESET, result.total, MFB_BLUE, RESET
@@ -79,6 +91,10 @@ pub fn print_summary_report(
     println!(
         "{MFB_BLUE}├────────────────────────────────────────────────────────────────────────────┤{RESET}"
     );
+}
+
+fn print_size_info(input_bytes: u64, output_bytes: u64, reduction: f64) {
+    use crate::modern_ui::colors::{BRIGHT_GREEN, BRIGHT_YELLOW, DIM, MFB_BLUE, RESET};
     println!(
         "{}│{}  💾 Input Size:         {}{:>10}{}                                         {}│{}",
         MFB_BLUE,
@@ -111,6 +127,10 @@ pub fn print_summary_report(
     println!(
         "{MFB_BLUE}├────────────────────────────────────────────────────────────────────────────┤{RESET}"
     );
+}
+
+fn print_time_info(result: &BatchResult, duration: Duration) {
+    use crate::modern_ui::colors::{BRIGHT_CYAN, DIM, MFB_BLUE, RESET};
     println!(
         "{}│{}  ⏱️  Total Time:         {}{:>10}{}                                         {}│{}",
         MFB_BLUE,
@@ -132,7 +152,10 @@ pub fn print_summary_report(
     println!(
         "{MFB_BLUE}╰────────────────────────────────────────────────────────────────────────────╯{RESET}"
     );
+}
 
+fn print_error_summary(result: &BatchResult) {
+    use crate::modern_ui::colors::{BRIGHT_RED, DIM, RESET};
     if !result.errors.is_empty() {
         println!();
         println!("{BRIGHT_RED}❌ Errors encountered:{RESET}");
@@ -143,7 +166,10 @@ pub fn print_summary_report(
             println!("   {}{} → {}{}", DIM, path.display(), RESET, error);
         }
     }
+}
 
+fn print_pause_info(result: &BatchResult) {
+    use crate::modern_ui::colors::{BRIGHT_YELLOW, DIM, RESET};
     if let Some(pause) = &result.pause_info {
         println!();
         println!("{BRIGHT_YELLOW}⏸️ Batch Paused:{RESET}");

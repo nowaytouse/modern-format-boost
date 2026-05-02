@@ -613,23 +613,25 @@ pub fn convert_to_jxl(
                                     let ffmpeg_status = ffmpeg_proc.wait();
                                     let cjxl_status = cjxl_proc.wait();
 
-                                    let ffmpeg_stderr_str = ffmpeg_stderr_thread.map_or_else(String::new, |handle| {
-                                        handle.join().unwrap_or_else(|_| {
-                                            shared_utils::log_rare_error!(
-                                                "Background Thread",
-                                                "FFmpeg stderr thread panicked"
-                                            );
-                                            String::new()
-                                        })
-                                    });
-                                    let cjxl_stderr_str = cjxl_stderr_thread.map_or_else(String::new, |handle| {
-                                        handle.join().unwrap_or_else(|_| {
-                                            shared_utils::progress_mode::emit_stderr(
-                                                "   ⚠️ cjxl stderr thread panicked",
-                                            );
-                                            String::new()
-                                        })
-                                    });
+                                    let ffmpeg_stderr_str =
+                                        ffmpeg_stderr_thread.map_or_else(String::new, |handle| {
+                                            handle.join().unwrap_or_else(|_| {
+                                                shared_utils::log_rare_error!(
+                                                    "Background Thread",
+                                                    "FFmpeg stderr thread panicked"
+                                                );
+                                                String::new()
+                                            })
+                                        });
+                                    let cjxl_stderr_str =
+                                        cjxl_stderr_thread.map_or_else(String::new, |handle| {
+                                            handle.join().unwrap_or_else(|_| {
+                                                shared_utils::progress_mode::emit_stderr(
+                                                    "   ⚠️ cjxl stderr thread panicked",
+                                                );
+                                                String::new()
+                                            })
+                                        });
 
                                     let ffmpeg_ok = match ffmpeg_status {
                                         Ok(status) if status.success() => true,

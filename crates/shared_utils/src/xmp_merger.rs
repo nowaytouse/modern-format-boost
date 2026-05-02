@@ -835,8 +835,7 @@ impl XmpMerger {
             None
         };
 
-        let target_ext =
-            detected_ext.or_else(|| implied_ext.map(std::string::ToString::to_string));
+        let target_ext = detected_ext.or_else(|| implied_ext.map(std::string::ToString::to_string));
 
         let Some(original_ext) = target_ext else {
             return self.merge_xmp_core(xmp_path, media_path);
@@ -1346,10 +1345,11 @@ mod tests {
         }
 
         let temp_dir = TempDir::new().unwrap_or_else(|_| panic!("error"));
-        let missing_xmp = temp_dir.path().join("missing.xmp");
+        let empty_xmp = temp_dir.path().join("empty.xmp");
+        std::fs::write(&empty_xmp, "").unwrap();
         let _merger = XmpMerger::new(XmpMergerConfig::default());
 
-        let err = XmpMerger::extract_xmp_metadata(&missing_xmp)
+        let err = XmpMerger::extract_xmp_metadata(&empty_xmp)
             .err()
             .unwrap_or_else(|| anyhow::anyhow!("unknown error"));
         assert!(err

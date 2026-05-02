@@ -1310,64 +1310,63 @@ fn calculate_confidence_v3(analysis: &QualityAnalysis) -> f64 {
     (score / max_score).clamp(0.0, 1.0)
 }
 
-#[must_use]
-pub fn parse_source_codec(codec_str: &str) -> SourceCodec {
-    let codec_lower = codec_str.to_lowercase();
-
+fn parse_modern_codecs(codec_lower: &str) -> Option<SourceCodec> {
     if codec_lower.contains("vvc") || codec_lower.contains("h266") || codec_lower.contains("h.266")
     {
-        return SourceCodec::Vvc;
+        return Some(SourceCodec::Vvc);
     }
     if codec_lower.contains("av2") || codec_lower.contains("avm") {
-        return SourceCodec::Av2;
+        return Some(SourceCodec::Av2);
     }
-
     if codec_lower.contains("av1")
         || codec_lower.contains("svt")
         || codec_lower.contains("aom")
         || codec_lower.contains("libaom")
     {
-        return SourceCodec::Av1;
+        return Some(SourceCodec::Av1);
     }
     if codec_lower.contains("h265")
         || codec_lower.contains("hevc")
         || codec_lower.contains("x265")
         || codec_lower.contains("h.265")
     {
-        return SourceCodec::H265;
+        return Some(SourceCodec::H265);
     }
     if codec_lower.contains("vp9") {
-        return SourceCodec::Vp9;
+        return Some(SourceCodec::Vp9);
     }
     if codec_lower.contains("vp8") || codec_lower == "libvpx" {
-        return SourceCodec::Vp8;
+        return Some(SourceCodec::Vp8);
     }
     if codec_lower.contains("h264")
         || codec_lower.contains("avc")
         || codec_lower.contains("x264")
         || codec_lower.contains("h.264")
     {
-        return SourceCodec::H264;
+        return Some(SourceCodec::H264);
     }
+    None
+}
 
+fn parse_legacy_codecs(codec_lower: &str) -> Option<SourceCodec> {
     if codec_lower.contains("mpeg4")
         || codec_lower.contains("xvid")
         || codec_lower.contains("divx")
         || codec_lower.contains("mp4v")
     {
-        return SourceCodec::Mpeg4;
+        return Some(SourceCodec::Mpeg4);
     }
     if codec_lower.contains("mpeg2") || codec_lower == "mpeg2video" {
-        return SourceCodec::Mpeg2;
+        return Some(SourceCodec::Mpeg2);
     }
     if codec_lower.contains("mpeg1") || codec_lower == "mpeg1video" {
-        return SourceCodec::Mpeg1;
+        return Some(SourceCodec::Mpeg1);
     }
     if codec_lower.contains("wmv") || codec_lower.contains("vc1") || codec_lower.contains("vc-1") {
-        return SourceCodec::Wmv;
+        return Some(SourceCodec::Wmv);
     }
     if codec_lower.contains("theora") {
-        return SourceCodec::Theora;
+        return Some(SourceCodec::Theora);
     }
     if codec_lower.contains("rv10")
         || codec_lower.contains("rv20")
@@ -1375,100 +1374,108 @@ pub fn parse_source_codec(codec_str: &str) -> SourceCodec {
         || codec_lower.contains("rv40")
         || codec_lower.contains("realvideo")
     {
-        return SourceCodec::RealVideo;
+        return Some(SourceCodec::RealVideo);
     }
     if codec_lower.contains("flv") || codec_lower.contains("vp6") || codec_lower.contains("flashsv")
     {
-        return SourceCodec::FlashVideo;
+        return Some(SourceCodec::FlashVideo);
     }
+    None
+}
 
+fn parse_pro_and_lossless_codecs(codec_lower: &str) -> Option<SourceCodec> {
     if codec_lower.contains("prores") {
-        return SourceCodec::ProRes;
+        return Some(SourceCodec::ProRes);
     }
     if codec_lower.contains("dnxh") || codec_lower.contains("dnxhr") {
-        return SourceCodec::DnxHD;
+        return Some(SourceCodec::DnxHD);
     }
     if codec_lower.contains("mjpeg") || codec_lower.contains("motion jpeg") {
-        return SourceCodec::Mjpeg;
+        return Some(SourceCodec::Mjpeg);
     }
-
     if codec_lower.contains("ffv1") {
-        return SourceCodec::Ffv1;
+        return Some(SourceCodec::Ffv1);
     }
     if codec_lower.contains("utvideo") || codec_lower.contains("ut video") {
-        return SourceCodec::UtVideo;
+        return Some(SourceCodec::UtVideo);
     }
     if codec_lower.contains("huffyuv") || codec_lower.contains("ffvhuff") {
-        return SourceCodec::HuffYuv;
+        return Some(SourceCodec::HuffYuv);
     }
     if codec_lower.contains("rawvideo") || codec_lower == "raw" {
-        return SourceCodec::RawVideo;
+        return Some(SourceCodec::RawVideo);
     }
     if codec_lower.contains("lagarith") {
-        return SourceCodec::Lagarith;
+        return Some(SourceCodec::Lagarith);
     }
     if codec_lower.contains("magicyuv") {
-        return SourceCodec::MagicYuv;
+        return Some(SourceCodec::MagicYuv);
     }
+    None
+}
 
+fn parse_image_and_animated_codecs(codec_lower: &str) -> Option<SourceCodec> {
     if codec_lower.contains("gif") {
-        return SourceCodec::Gif;
+        return Some(SourceCodec::Gif);
     }
     if codec_lower.contains("apng") {
-        return SourceCodec::Apng;
+        return Some(SourceCodec::Apng);
     }
     if codec_lower.contains("webp") {
         if codec_lower.contains("anim") {
-            return SourceCodec::WebpAnimated;
+            return Some(SourceCodec::WebpAnimated);
         }
-        return SourceCodec::WebpStatic;
+        return Some(SourceCodec::WebpStatic);
     }
     if codec_lower.contains("jxl")
         || codec_lower.contains("jpeg xl")
         || codec_lower.contains("jpegxl")
         || codec_lower.contains("jpeg-xl")
     {
-        return SourceCodec::JpegXl;
+        return Some(SourceCodec::JpegXl);
     }
     if codec_lower.contains("avif") {
-        return SourceCodec::Avif;
+        return Some(SourceCodec::Avif);
     }
     if codec_lower.contains("heic") || codec_lower.contains("heif") {
-        return SourceCodec::Heic;
+        return Some(SourceCodec::Heic);
     }
     if codec_lower.contains("jpeg") || codec_lower.contains("jpg") {
-        return SourceCodec::Jpeg;
+        return Some(SourceCodec::Jpeg);
     }
     if codec_lower.contains("png") {
-        return SourceCodec::Png;
+        return Some(SourceCodec::Png);
     }
     if codec_lower.contains("bmp") || codec_lower.contains("bitmap") {
-        return SourceCodec::Bmp;
+        return Some(SourceCodec::Bmp);
     }
     if codec_lower.contains("tiff") || codec_lower.contains("tif") {
-        return SourceCodec::Tiff;
+        return Some(SourceCodec::Tiff);
+    }
+    None
+}
+
+#[must_use]
+pub fn parse_source_codec(codec_str: &str) -> SourceCodec {
+    let codec_lower = codec_str.to_lowercase();
+
+    if let Some(codec) = parse_modern_codecs(&codec_lower) {
+        return codec;
+    }
+    if let Some(codec) = parse_legacy_codecs(&codec_lower) {
+        return codec;
+    }
+    if let Some(codec) = parse_pro_and_lossless_codecs(&codec_lower) {
+        return codec;
+    }
+    if let Some(codec) = parse_image_and_animated_codecs(&codec_lower) {
+        return codec;
     }
 
     SourceCodec::Unknown
 }
 
-pub fn log_quality_analysis(
-    analysis: &QualityAnalysis,
-    result: &MatchedQuality,
-    encoder: EncoderType,
-) {
-    if !crate::progress_mode::is_verbose_mode() {
-        return;
-    }
-    let encoder_name = match encoder {
-        EncoderType::Av1 => "AV1",
-        EncoderType::Hevc => "HEVC",
-        EncoderType::Jxl => "JXL",
-    };
-
-    let d = &result.analysis_details;
-    let codec = parse_source_codec(&analysis.source_codec);
-
+fn log_analysis_header(encoder_name: &str, d: &AnalysisDetails) {
     eprintln!("   Quality Analysis v3.0 ({encoder_name}):");
     eprintln!(
         "      Mode: {:?} | Bias: {:?}",
@@ -1476,7 +1483,9 @@ pub fn log_quality_analysis(
     );
     eprintln!("      Confidence: {:.0}%", d.confidence * 100.0);
     eprintln!();
+}
 
+fn log_source_info(analysis: &QualityAnalysis, codec: SourceCodec, d: &AnalysisDetails) {
     eprintln!("      Source:");
     eprintln!(
         "         Codec: {} ({:?}, efficiency: {:.2})",
@@ -1496,7 +1505,9 @@ pub fn log_quality_analysis(
         analysis.bit_depth, d.color_depth_factor
     );
     eprintln!();
+}
 
+fn log_high_priority_factors(analysis: &QualityAnalysis, d: &AnalysisDetails) {
     eprintln!("      High Priority Factors:");
     eprintln!("         Raw BPP: {:.4}", d.raw_bpp);
     if let Some(vbr) = analysis.video_bitrate {
@@ -1531,7 +1542,9 @@ pub fn log_quality_analysis(
         }
     }
     eprintln!();
+}
 
+fn log_medium_priority_factors(analysis: &QualityAnalysis, d: &AnalysisDetails) {
     eprintln!("      Medium Priority Factors:");
     eprintln!("         Aspect factor: {:.2}", d.aspect_factor);
     eprintln!("         Complexity factor: {:.2}", d.complexity_factor);
@@ -1549,7 +1562,9 @@ pub fn log_quality_analysis(
     eprintln!("         Grain factor: {:.2}", d.grain_factor);
     eprintln!("         Alpha factor: {:.2}", d.alpha_factor);
     eprintln!();
+}
 
+fn log_result_info(analysis: &QualityAnalysis, result: &MatchedQuality, encoder: EncoderType) {
     eprintln!("      Result:");
     eprintln!("         Effective BPP: {:.4}", result.effective_bpp);
     if let Some(fps) = analysis.fps {
@@ -1567,6 +1582,30 @@ pub fn log_quality_analysis(
             eprintln!("         ✅ Calculated distance: {:.2}", result.distance);
         }
     }
+}
+
+pub fn log_quality_analysis(
+    analysis: &QualityAnalysis,
+    result: &MatchedQuality,
+    encoder: EncoderType,
+) {
+    if !crate::progress_mode::is_verbose_mode() {
+        return;
+    }
+    let encoder_name = match encoder {
+        EncoderType::Av1 => "AV1",
+        EncoderType::Hevc => "HEVC",
+        EncoderType::Jxl => "JXL",
+    };
+
+    let d = &result.analysis_details;
+    let codec = parse_source_codec(&analysis.source_codec);
+
+    log_analysis_header(encoder_name, d);
+    log_source_info(analysis, codec, d);
+    log_high_priority_factors(analysis, d);
+    log_medium_priority_factors(analysis, d);
+    log_result_info(analysis, result, encoder);
 }
 
 #[must_use]

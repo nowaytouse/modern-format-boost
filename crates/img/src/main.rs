@@ -129,7 +129,6 @@ enum Commands {
     },
 }
 
-#[allow(clippy::too_many_lines)]
 fn main() -> anyhow::Result<()> {
     if let Err(e) = shared_utils::init_ghost_mode() {
         eprintln!("⚠️ Failed to initialize Ghost Mode isolation: {e}");
@@ -663,7 +662,6 @@ fn convert_result_to_output(result: shared_utils::ConversionResult) -> Conversio
     }
 }
 
-#[allow(clippy::too_many_lines)]
 fn auto_convert_single_file(
     input: &Path,
     config: &AutoConvertConfig,
@@ -956,7 +954,6 @@ fn dispatch_static_conversion(
     })
 }
 
-#[allow(clippy::too_many_lines)]
 fn auto_convert_directory(
     input: &Path,
     config: &AutoConvertConfig,

@@ -311,9 +311,8 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
     }
 
     // AVIF: image crate fails on some variants (e.g. tachimanga output); fall back to ffprobe
-    let is_avif = crate::image_detection::detect_format_from_bytes(path).is_ok_and(|format| {
-        format == crate::image_detection::DetectedFormat::AVIF
-    });
+    let is_avif = crate::image_detection::detect_format_from_bytes(path)
+        .is_ok_and(|format| format == crate::image_detection::DetectedFormat::AVIF);
 
     if is_avif {
         if let Some(ext) = path.extension() {
