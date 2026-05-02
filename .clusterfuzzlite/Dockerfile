@@ -8,7 +8,10 @@ RUN apt-get update && apt-get install -y \
     libheif-dev \
     libchromaprint-dev \
     libjpeg-dev \
-    libpng-dev
+    libpng-dev \
+    libgmp-dev \
+    libmpfr-dev \
+    libmpc-dev
 
 COPY . $SRC/modern-format-boost
 WORKDIR $SRC/modern-format-boost
