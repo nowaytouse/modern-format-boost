@@ -526,7 +526,7 @@ fn build_exploration_plan(
 }
 
 fn near_best_margin(input_size: u64) -> u64 {
-    let margin = Rational::from(input_size) * Rational::from_f64(JXL_NEAR_BEST_MARGIN_RATIO).unwrap_or_else(|| Rational::from(0));
+    let margin = Rational::from(input_size) * crate::numeric_cast::f64_to_rational_loud(JXL_NEAR_BEST_MARGIN_RATIO, 0, "JXL_NEAR_BEST_MARGIN_RATIO");
     crate::numeric_cast::f64_to_u64_sat(margin.to_f64()).max(1)
 }
 

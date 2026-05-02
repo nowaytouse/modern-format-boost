@@ -920,7 +920,7 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
         let palette_density = {
             let num = Rational::from(u32::try_from(palette_size).unwrap_or(u32::MAX));
             let den_f = f64::from(u32::try_from(pixel_count).unwrap_or(u32::MAX)).sqrt();
-            (num / Rational::from_f64(den_f).unwrap_or_else(|| Rational::from(1))).to_f64()
+            (num / crate::numeric_cast::f64_to_rational_loud(den_f, 1, "palette_density_denominator")).to_f64()
         };
 
         if palette_size > 240 {

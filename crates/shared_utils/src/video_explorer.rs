@@ -87,7 +87,7 @@ pub const METADATA_MARGIN_PERCENT: f64 = crate::constants::METADATA_MARGIN_RATIO
 #[must_use]
 pub fn calculate_metadata_margin(input_size: u64) -> u64 {
     let percent_based = {
-        let margin = Rational::from(input_size) * Rational::from_f64(METADATA_MARGIN_PERCENT).unwrap_or_else(|| Rational::from(0));
+        let margin = Rational::from(input_size) * crate::numeric_cast::f64_to_rational_loud(METADATA_MARGIN_PERCENT, 0, "METADATA_MARGIN_PERCENT");
         crate::numeric_cast::f64_to_u64_sat(margin.to_f64())
     };
     percent_based.clamp(METADATA_MARGIN_MIN, METADATA_MARGIN_MAX)

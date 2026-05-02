@@ -650,11 +650,11 @@ fn evaluate_processing_recommendation(
     let codec_efficiency = source_codec.efficiency_factor();
 
     let resolution_factor = (Rational::from(width) * Rational::from(height)) / Rational::from(1920 * 1080);
-    let fps_factor = Rational::from_f64(fps).unwrap_or_else(|| Rational::from(1)) / Rational::from(30);
-    let codec_efficiency_r = Rational::from_f64(codec_efficiency).unwrap_or_else(|| Rational::from(1));
+    let fps_factor = crate::numeric_cast::f64_to_rational_loud(fps, 1, "fps") / Rational::from(30);
+    let codec_efficiency_r = crate::numeric_cast::f64_to_rational_loud(codec_efficiency, 1, "codec_efficiency");
 
     let base_bitrate_1080p30_h264 = 2500.0;
-    let expected_min_bitrate = (Rational::from_f64(base_bitrate_1080p30_h264).unwrap_or_else(|| Rational::from(0)) 
+    let expected_min_bitrate = (crate::numeric_cast::f64_to_rational_loud(base_bitrate_1080p30_h264, 0, "base_bitrate") 
         * resolution_factor * fps_factor * codec_efficiency_r).to_f64();
 
     let bpp_threshold_very_low = 0.05 / codec_efficiency;

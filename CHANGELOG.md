@@ -17,7 +17,11 @@ All notable changes to this project will be documented in this file.
   - Achieved near-zero warning compliance with `clippy::pedantic` lints across core crates.
   - **Arithmetic Safety**: Replaced manual absolute difference logic with `u64::abs_diff` for cleaner and safer code.
   - **Exhaustive Matching**: Resolved `match_wildcard_for_single_variants` and other pedantic warnings in `thread_manager.rs`.
-  - **Standardization**: Confirmed the architecture pattern: "Core calculation: Rational | UI/Display: f64".
+  - **Loud Error Reporting (Anti-Forgery Hardening)**
+  - Replaced all silent `unwrap_or_else` defaults (like `Rational::from(1)`) with `f64_to_rational_loud`.
+  - Precision anomalies, `NaN`, or `Infinity` inputs now trigger explicit `tracing::warn!` alerts with the specific variable name.
+  - Ensures compliance with the Quality Manifesto: "NO silent fallback - errors fail loudly".
+  - Centralized rational conversion safety in `numeric_cast::f64_to_rational_loud`.
 
 ### 📄 License & Compliance
 

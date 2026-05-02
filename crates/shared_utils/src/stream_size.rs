@@ -215,7 +215,7 @@ fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<StreamSiz
     let (video_stream_size, video_bitrate) = if let Some(vs) = video_stream {
         if let Some(br_str) = &vs.bit_rate {
             if let Ok(br) = br_str.parse::<u64>() {
-                let size_rational = (Rational::from(br) * Rational::from_f64(duration_secs).unwrap_or_else(|| Rational::from(0))) / Rational::from(8);
+                let size_rational = (Rational::from(br) * crate::numeric_cast::f64_to_rational_loud(duration_secs, 0, "duration_secs")) / Rational::from(8);
                 let size = crate::numeric_cast::f64_to_u64_sat(size_rational.to_f64());
                 (size, Some(br))
             } else {
@@ -231,7 +231,7 @@ fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<StreamSiz
     let (audio_stream_size, audio_bitrate) = if let Some(aus) = audio_stream {
         if let Some(br_str) = &aus.bit_rate {
             if let Ok(br) = br_str.parse::<u64>() {
-                let size_rational = (Rational::from(br) * Rational::from_f64(duration_secs).unwrap_or_else(|| Rational::from(0))) / Rational::from(8);
+                let size_rational = (Rational::from(br) * crate::numeric_cast::f64_to_rational_loud(duration_secs, 0, "duration_secs")) / Rational::from(8);
                 let size = crate::numeric_cast::f64_to_u64_sat(size_rational.to_f64());
                 (size, Some(br))
             } else {
@@ -304,7 +304,7 @@ pub fn get_output_video_stream_size(output_path: &Path) -> u64 {
 fn estimate_stream_sizes(path: &Path, total_file_size: u64) -> StreamSizeInfo {
     let overhead_percent = get_container_overhead_percent(path);
     let estimated_overhead = {
-        let overhead = Rational::from(total_file_size) * Rational::from_f64(overhead_percent).unwrap_or_else(|| Rational::from(0));
+        let overhead = Rational::from(total_file_size) * crate::numeric_cast::f64_to_rational_loud(overhead_percent, 0, "overhead_percent");
         crate::numeric_cast::f64_to_u64_sat(overhead.to_f64())
     };
     let estimated_video_size = total_file_size.saturating_sub(estimated_overhead);

@@ -958,19 +958,20 @@ fn calculate_effective_bpp_with_options(
     };
 
     let effective_bpp = {
-        let mut res = Rational::from_f64(raw_bpp).unwrap_or_else(|| Rational::from(0));
-        res *= Rational::from_f64(gop_factor).unwrap_or_else(|| Rational::from(1));
-        res *= Rational::from_f64(chroma_factor).unwrap_or_else(|| Rational::from(1));
-        res *= Rational::from_f64(hdr_factor).unwrap_or_else(|| Rational::from(1));
-        res *= Rational::from_f64(aspect_factor).unwrap_or_else(|| Rational::from(1));
-        res *= Rational::from_f64(complexity_factor).unwrap_or_else(|| Rational::from(1));
-        res *= Rational::from_f64(grain_factor).unwrap_or_else(|| Rational::from(1));
-        res *= Rational::from_f64(mode_adjustment).unwrap_or_else(|| Rational::from(1));
-        res *= Rational::from_f64(resolution_factor).unwrap_or_else(|| Rational::from(1));
-        res *= Rational::from_f64(alpha_factor).unwrap_or_else(|| Rational::from(1));
-        res /= Rational::from_f64(codec_factor).unwrap_or_else(|| Rational::from(1));
-        res /= Rational::from_f64(color_depth_factor).unwrap_or_else(|| Rational::from(1));
-        res /= Rational::from_f64(target_adjustment).unwrap_or_else(|| Rational::from(1));
+        use crate::numeric_cast::f64_to_rational_loud;
+        let mut res = f64_to_rational_loud(raw_bpp, 0, "raw_bpp");
+        res *= f64_to_rational_loud(gop_factor, 1, "gop_factor");
+        res *= f64_to_rational_loud(chroma_factor, 1, "chroma_factor");
+        res *= f64_to_rational_loud(hdr_factor, 1, "hdr_factor");
+        res *= f64_to_rational_loud(aspect_factor, 1, "aspect_factor");
+        res *= f64_to_rational_loud(complexity_factor, 1, "complexity_factor");
+        res *= f64_to_rational_loud(grain_factor, 1, "grain_factor");
+        res *= f64_to_rational_loud(mode_adjustment, 1, "mode_adjustment");
+        res *= f64_to_rational_loud(resolution_factor, 1, "resolution_factor");
+        res *= f64_to_rational_loud(alpha_factor, 1, "alpha_factor");
+        res /= f64_to_rational_loud(codec_factor, 1, "codec_factor");
+        res /= f64_to_rational_loud(color_depth_factor, 1, "color_depth_factor");
+        res /= f64_to_rational_loud(target_adjustment, 1, "target_adjustment");
         res.to_f64()
     };
 
@@ -1014,7 +1015,7 @@ fn calculate_raw_bpp(analysis: &QualityAnalysis, pixels: u64) -> Result<f64, Str
         if video_bitrate > 0 {
             if let Some(fps) = analysis.fps {
                 if fps > 0.0 {
-                    let bits_per_frame = Rational::from(video_bitrate) / Rational::from_f64(fps).unwrap_or_else(|| Rational::from(1));
+                    let bits_per_frame = Rational::from(video_bitrate) / crate::numeric_cast::f64_to_rational_loud(fps, 1, "fps");
                     return Ok((bits_per_frame / Rational::from(pixels)).to_f64());
                 }
             }

@@ -200,7 +200,10 @@ impl CompressionLevel {
             _ => 1.0,
         };
 
-        let adjusted_bpp = (Rational::from_f64(bpp).unwrap_or_else(|| Rational::from(0)) / Rational::from_f64(efficiency).unwrap_or_else(|| Rational::from(1))).to_f64();
+        use crate::numeric_cast::f64_to_rational_loud;
+        let bpp_r = f64_to_rational_loud(bpp, 0, "bpp");
+        let efficiency_r = f64_to_rational_loud(efficiency, 1, "efficiency");
+        let adjusted_bpp = (bpp_r / efficiency_r).to_f64();
 
         if adjusted_bpp > 1.0 {
             Self::VisuallyLossless
@@ -256,7 +259,7 @@ pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualit
 
     let effective_bitrate = video_bitrate.unwrap_or(total_bitrate);
     let bpp = {
-        let pixels_per_second = Rational::from(width) * Rational::from(height) * Rational::from_f64(fps).unwrap_or_else(|| Rational::from(1));
+        let pixels_per_second = Rational::from(width) * Rational::from(height) * crate::numeric_cast::f64_to_rational_loud(fps, 1, "fps");
         if pixels_per_second > 0 {
             let bits_per_second = Rational::from(u32::try_from(effective_bitrate).unwrap_or(u32::MAX));
             (bits_per_second / pixels_per_second).to_f64()
@@ -567,7 +570,9 @@ fn estimate_crf_from_bpp(bpp: f64, codec_type: VideoCodecType) -> u8 {
         _ => 1.0,
     };
 
-    let adjusted_bpp = (Rational::from_f64(bpp).unwrap_or_else(|| Rational::from(0)) / Rational::from_f64(efficiency).unwrap_or_else(|| Rational::from(1))).to_f64();
+    let bpp_r = crate::numeric_cast::f64_to_rational_loud(bpp, 0, "bpp");
+    let efficiency_r = crate::numeric_cast::f64_to_rational_loud(efficiency, 1, "efficiency");
+    let adjusted_bpp = (bpp_r / efficiency_r).to_f64();
 
     for &(threshold, crf) in crate::constants::DENSITY_TO_CRF_LUT {
         if adjusted_bpp > threshold {

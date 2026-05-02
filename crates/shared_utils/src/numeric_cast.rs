@@ -17,7 +17,21 @@
 //! let timestamp = unix_secs_i64();
 //! ```
 
+use rug::Rational;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tracing::warn;
+
+/// Convert f64 to Rational with loud warning on NaN/Inf.
+/// Prevents silent forgery of data as requested by the Quality Manifesto.
+pub fn f64_to_rational_loud(val: f64, default: i64, name: &str) -> Rational {
+    Rational::from_f64(val).unwrap_or_else(|| {
+        warn!(
+            "⚠️ [Precision Audit] {} is NaN or Infinite! Forging fallback to {} to prevent crash, but this indicates a upstream logic error.",
+            name, default
+        );
+        Rational::from(default)
+    })
+}
 
 mod raw {
     #![allow(
