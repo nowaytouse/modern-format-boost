@@ -48,27 +48,27 @@ impl FileSorter {
     pub fn sort(&self, files: Vec<PathBuf>) -> Vec<PathBuf> {
         match self.strategy {
             SortStrategy::None => files,
-            SortStrategy::SizeAscending => self.sort_by_size_ascending(files),
-            SortStrategy::SizeDescending => self.sort_by_size_descending(files),
-            SortStrategy::NameAscending => self.sort_by_name(files),
+            SortStrategy::SizeAscending => Self::sort_by_size_ascending(files),
+            SortStrategy::SizeDescending => Self::sort_by_size_descending(files),
+            SortStrategy::NameAscending => Self::sort_by_name(files),
         }
     }
 
-    fn sort_by_size_ascending(&self, files: Vec<PathBuf>) -> Vec<PathBuf> {
+    fn sort_by_size_ascending(files: Vec<PathBuf>) -> Vec<PathBuf> {
         let mut file_infos: Vec<FileInfo> = files.into_iter().filter_map(FileInfo::new).collect();
 
         file_infos.sort_by_key(|f| f.size);
         file_infos.into_iter().map(|f| f.path).collect()
     }
 
-    fn sort_by_size_descending(&self, files: Vec<PathBuf>) -> Vec<PathBuf> {
+    fn sort_by_size_descending(files: Vec<PathBuf>) -> Vec<PathBuf> {
         let mut file_infos: Vec<FileInfo> = files.into_iter().filter_map(FileInfo::new).collect();
 
         file_infos.sort_by_key(|f| std::cmp::Reverse(f.size));
         file_infos.into_iter().map(|f| f.path).collect()
     }
 
-    fn sort_by_name(&self, mut files: Vec<PathBuf>) -> Vec<PathBuf> {
+    fn sort_by_name(mut files: Vec<PathBuf>) -> Vec<PathBuf> {
         files.sort();
         files
     }

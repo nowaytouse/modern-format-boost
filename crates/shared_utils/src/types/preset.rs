@@ -17,7 +17,7 @@ pub enum EncoderPreset {
 
 impl EncoderPreset {
     #[must_use]
-    pub const fn x26x_name(&self) -> &'static str {
+    pub const fn x26x_name(self) -> &'static str {
         match self {
             Self::Ultrafast => "ultrafast",
             Self::Fast => "fast",
@@ -29,7 +29,7 @@ impl EncoderPreset {
     }
 
     #[must_use]
-    pub const fn ffmpeg_name(&self) -> &'static str {
+    pub const fn ffmpeg_name(self) -> &'static str {
         self.x26x_name()
     }
 
@@ -44,12 +44,12 @@ impl EncoderPreset {
     }
 
     #[must_use]
-    pub const fn hevc_name(&self) -> &'static str {
+    pub const fn hevc_name(self) -> &'static str {
         self.sanitize_hevc().x26x_name()
     }
 
     #[must_use]
-    pub const fn svtav1_preset(&self) -> u8 {
+    pub const fn svtav1_preset(self) -> u8 {
         match self {
             Self::Ultrafast => 12,
             Self::Fast => 8,
@@ -65,9 +65,7 @@ impl EncoderPreset {
 pub fn sanitize_hevc_preset_name(preset: &str) -> &'static str {
     match preset.trim().to_ascii_lowercase().as_str() {
         "slow" => "slow",
-        "slower" => "slower",
-        "veryslow" | "placebo" => "slower",
-        "ultrafast" | "superfast" | "veryfast" | "faster" | "fast" | "medium" => "medium",
+        "slower" | "veryslow" | "placebo" => "slower",
         _ => "medium",
     }
 }

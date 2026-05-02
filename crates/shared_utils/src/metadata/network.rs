@@ -7,13 +7,12 @@
 //! - `com.apple.metadata:kMDItemUserTags`   — Finder tags (copied)
 //! - `com.apple.quarantine`                 — quarantine flag (intentionally NOT copied)
 
-use std::io;
 use std::path::Path;
 
 /// Copy critical network/cloud xattrs from `src` to `dst`, then verify.
 /// `com.apple.quarantine` is intentionally skipped (security boundary).
 /// All errors are tolerated — missing xattr support on the filesystem is not fatal.
-pub fn preserve_network_metadata(src: &Path, dst: &Path) -> io::Result<()> {
+pub fn preserve_network_metadata(src: &Path, dst: &Path) {
     // Keys to copy (quarantine intentionally excluded)
     const COPY_KEYS: &[&str] = &[
         "com.apple.metadata:kMDItemWhereFroms",
@@ -67,6 +66,4 @@ pub fn preserve_network_metadata(src: &Path, dst: &Path) -> io::Result<()> {
             }
         }
     }
-
-    Ok(())
 }

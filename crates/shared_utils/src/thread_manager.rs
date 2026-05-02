@@ -80,7 +80,7 @@ pub fn calculate_optimal_threads(config: &ThreadConfig) -> usize {
     let memory_cap = match current_memory_profile() {
         X265MemoryProfile::LowMemory => 2,
         X265MemoryProfile::Moderate => 4,
-        _ => calculated,
+        X265MemoryProfile::Default => calculated,
     };
     calculated.min(memory_cap).max(1)
 }

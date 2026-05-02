@@ -94,7 +94,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     if let Err(e) =
-        shared_utils::logging::init_logging("vid", shared_utils::logging::LogConfig::default())
+        shared_utils::logging::init_logging("vid", &shared_utils::logging::LogConfig::default())
     {
         eprintln!("⚠️ Failed to initialize logging: {e}");
     }
@@ -277,7 +277,7 @@ fn main() -> anyhow::Result<()> {
             info!("");
 
             shared_utils::cli_runner::run_auto_command(
-                shared_utils::cli_runner::CliRunnerConfig {
+                &shared_utils::cli_runner::CliRunnerConfig {
                     input: input.clone(),
                     output: output.clone(),
                     recursive,

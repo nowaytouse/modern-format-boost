@@ -534,7 +534,7 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
         precision,
         tags: probe.tags,
         history: crate::common_utils::get_current_history(),
-        perception: Default::default(),
+        perception: crate::types::VisualPerception::default(),
         loop_count: probe.loop_count,
         frame_types: probe.frame_types,
         pts_deltas: probe.pts_deltas,

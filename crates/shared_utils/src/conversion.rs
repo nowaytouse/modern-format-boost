@@ -708,7 +708,7 @@ impl ConversionResult {
     pub fn success_video_explored(
         input: &Path,
         output: &Path,
-        metrics: VideoExplorationMetrics<'_>,
+        metrics: &VideoExplorationMetrics<'_>,
     ) -> Self {
         let reduction_pct = if metrics.input_size == 0 {
             0.0
@@ -1327,7 +1327,7 @@ impl SizeToleranceCheck<'_> {
         SizeDeltaSummary::from_sizes(self.input_size, self.output_size)
     }
 
-    const fn tolerance_bytes(&self) -> u64 {
+    pub const fn tolerance_bytes() -> u64 {
         crate::constants::DEFAULT_SIZE_TOLERANCE_BYTES
     }
 
@@ -1342,7 +1342,7 @@ impl SizeToleranceCheck<'_> {
 
     fn max_allowed_size(&self) -> u64 {
         if self.options.allow_size_tolerance && self.is_guard_active() {
-            self.input_size.saturating_add(self.tolerance_bytes())
+            self.input_size.saturating_add(Self::tolerance_bytes())
         } else if self.is_guard_active() {
             self.input_size
         } else {
@@ -1357,7 +1357,7 @@ impl SizeToleranceCheck<'_> {
 
         if self.options.compress && self.output_size >= self.input_size {
             let delta = self.delta();
-            if self.options.allow_size_tolerance && delta.increase_bytes < self.tolerance_bytes() {
+            if self.options.allow_size_tolerance && delta.increase_bytes < Self::tolerance_bytes() {
                 return None;
             }
             return Some(SizeGuardFailure::CompressionGoalMissed);
@@ -2264,22 +2264,23 @@ mod tests {
 
     #[test]
     fn test_success_video_explored_formatting() {
-        let input = Path::new("input.mov");
-        let output = Path::new("output.mp4");
+        let input_path = Path::new("input.mov");
+        let output_path = Path::new("output.mp4");
+        let metrics = VideoExplorationMetrics {
+            input_size: 1000,
+            output_size: 800,
+            codec_name: "HEVC",
+            crf: 23.5,
+            is_lossless: false,
+            iterations: 3,
+            ssim: Some(0.9985),
+            explored_from_crf: Some(21.0),
+            quality_label: Some("Medium"),
+        };
         let result = ConversionResult::success_video_explored(
-            input,
-            output,
-            VideoExplorationMetrics {
-                input_size: 1000,
-                output_size: 800,
-                codec_name: "HEVC",
-                crf: 23.5,
-                is_lossless: false,
-                iterations: 3,
-                ssim: Some(0.9985),
-                explored_from_crf: Some(21.0),
-                quality_label: Some("Medium"),
-            },
+            input_path,
+            output_path,
+            &metrics,
         );
 
         assert!(result.success);

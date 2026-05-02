@@ -171,7 +171,7 @@ impl XmpMerger {
         Some(paths)
     }
 
-    fn extract_xmp_metadata(&self, xmp_path: &Path) -> Result<XmpFile> {
+    fn extract_xmp_metadata(xmp_path: &Path) -> Result<XmpFile> {
         let output = crate::tool_builders::ExiftoolBuilder::new()
             .arg("-charset")
             .arg("filename=utf8")
@@ -235,7 +235,7 @@ impl XmpMerger {
             .all(|(part, &len)| part.len() == len && part.chars().all(|c| c.is_ascii_hexdigit()))
     }
 
-    fn find_direct_match(&self, xmp_path: &Path) -> Option<PathBuf> {
+    fn find_direct_match(xmp_path: &Path) -> Option<PathBuf> {
         let xmp_str = xmp_path.to_string_lossy();
         if xmp_str.to_lowercase().ends_with(".xmp") {
             let base = &xmp_str[..xmp_str.len() - 4];
@@ -491,7 +491,7 @@ impl XmpMerger {
         None
     }
 
-    fn find_by_xmp_metadata(&self, xmp_path: &Path, xmp_info: &XmpFile) -> Option<PathBuf> {
+    fn find_by_xmp_metadata(xmp_path: &Path, xmp_info: &XmpFile) -> Option<PathBuf> {
         let parent = xmp_path.parent()?;
 
         if let Some(ref derived) = xmp_info.derived_from {
@@ -591,7 +591,7 @@ impl XmpMerger {
             eprintln!("🔍 Finding match for: {}", xmp_path.display());
         }
 
-        if let Some(media) = self.find_direct_match(xmp_path) {
+        if let Some(media) = Self::find_direct_match(xmp_path) {
             if self.config.verbose {
                 eprintln!("  ✅ Strategy 1 (direct): {}", media.display());
             }
@@ -612,9 +612,9 @@ impl XmpMerger {
             return Ok((Some(media), "case_insensitive".to_string()));
         }
 
-        let xmp_info = self.extract_xmp_metadata(xmp_path)?;
+        let xmp_info = Self::extract_xmp_metadata(xmp_path)?;
 
-        if let Some(media) = self.find_by_xmp_metadata(xmp_path, &xmp_info) {
+        if let Some(media) = Self::find_by_xmp_metadata(xmp_path, &xmp_info) {
             if self.config.verbose {
                 eprintln!("  ✅ Strategy 3 (xmp_metadata): {}", media.display());
             }
@@ -683,8 +683,8 @@ impl XmpMerger {
     }
 
     fn merge_xmp_core(&self, xmp_path: &Path, media_path: &Path) -> Result<()> {
-        let original_timestamps = self.get_file_timestamps(media_path);
-        let xmp_timestamps = self.get_file_timestamps(xmp_path);
+        let original_timestamps = Self::get_file_timestamps(media_path);
+        let xmp_timestamps = Self::get_file_timestamps(xmp_path);
 
         let xmp_data = std::fs::read(xmp_path)
             .with_context(|| format!("Failed to read XMP file: {}", xmp_path.display()))?;
@@ -764,7 +764,7 @@ impl XmpMerger {
         }
 
         if self.config.preserve_timestamps {
-            self.restore_timestamps(media_path, &original_timestamps, &xmp_timestamps);
+            Self::restore_timestamps(media_path, original_timestamps, xmp_timestamps);
         }
 
         Ok(())
@@ -848,7 +848,7 @@ impl XmpMerger {
         }
     }
 
-    fn get_file_timestamps(&self, path: &Path) -> Option<(filetime::FileTime, filetime::FileTime)> {
+    fn get_file_timestamps(path: &Path) -> Option<(filetime::FileTime, filetime::FileTime)> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
@@ -871,13 +871,12 @@ impl XmpMerger {
     }
 
     fn restore_timestamps(
-        &self,
         media_path: &Path,
-        original: &Option<(filetime::FileTime, filetime::FileTime)>,
-        _xmp: &Option<(filetime::FileTime, filetime::FileTime)>,
+        original: Option<(filetime::FileTime, filetime::FileTime)>,
+        _xmp: Option<(filetime::FileTime, filetime::FileTime)>,
     ) {
         if let Some((atime, mtime)) = original {
-            if let Err(e) = filetime::set_file_times(media_path, *atime, *mtime) {
+            if let Err(e) = filetime::set_file_times(media_path, atime, mtime) {
                 eprintln!(
                     "⚠️ Failed to restore timestamp for {}: {}",
                     media_path.display(),
@@ -1092,7 +1091,7 @@ mod tests {
         fs::write(&xmp, "fake xmp").unwrap();
 
         let merger = XmpMerger::new(XmpMergerConfig::default());
-        let result = merger.find_direct_match(&xmp);
+        let result = XmpMerger::find_direct_match(&xmp);
 
         assert!(result.is_some());
         assert_eq!(result.unwrap(), jpg);
@@ -1273,7 +1272,7 @@ mod tests {
         };
 
         let merger = XmpMerger::new(XmpMergerConfig::default());
-        assert_eq!(merger.find_by_xmp_metadata(&xmp_path, &xmp_info), None);
+        assert_eq!(XmpMerger::find_by_xmp_metadata(&xmp_path, &xmp_info), None);
     }
 
     #[test]
@@ -1302,7 +1301,7 @@ mod tests {
         let missing_xmp = temp_dir.path().join("missing.xmp");
         let merger = XmpMerger::new(XmpMergerConfig::default());
 
-        let err = merger.extract_xmp_metadata(&missing_xmp).unwrap_err();
+        let err = XmpMerger::extract_xmp_metadata(&missing_xmp).unwrap_err();
         assert!(err
             .to_string()
             .contains("ExifTool metadata extraction failed"));

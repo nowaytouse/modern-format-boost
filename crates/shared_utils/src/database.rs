@@ -851,8 +851,7 @@ fn lookup_similar_samples_inner(
             let label_str: Option<String> = row.get(0);
             let label = match label_str.as_deref() {
                 Some("low") => LabelStatus::LoopStrong,
-                Some("high") => LabelStatus::LoopWeak,
-                Some("video") => LabelStatus::LoopWeak,
+                Some("high" | "video") => LabelStatus::LoopWeak,
                 Some("uncertain") => LabelStatus::Uncertain,
                 _ => LabelStatus::NotLabeled,
             };
@@ -1644,21 +1643,27 @@ fn compute_sample_vector(sample: &SampleRow, stats_map: &FeatureMap) -> Vec<f32>
         sample.temporal_bpp / get_std("temporal_bpp") * get_w("temporal_bpp").sqrt();
     let v_spatial_bpp = sample.spatial_bpp / get_std("spatial_bpp") * get_w("spatial_bpp").sqrt();
 
-    let sample_webp_ratio = sample.webp_compression_ratio.unwrap_or(0.0);
+    let sample_webp_ratio = crate::numeric_cast::option_f64_loud(sample.webp_compression_ratio, 0.0, "sample_webp_ratio");
     let v_wratio = sample_webp_ratio / get_std("webp_ratio") * get_w("webp_ratio").sqrt();
 
-    let v_lfreq =
-        sample.loop_frequency.unwrap_or(0.5) / get_std("loop_freq") * get_w("loop_freq").sqrt();
+    let v_lfreq = crate::numeric_cast::option_f64_loud(sample.loop_frequency, 0.5, "sample_loop_freq")
+        / get_std("loop_freq")
+        * get_w("loop_freq").sqrt();
     let v_laffin = sample_loop_affinity / get_std("loop_affin") * get_w("loop_affin").sqrt();
-    let v_cadence =
-        sample.cadence_score.unwrap_or(0.5) / get_std("cadence") * get_w("cadence").sqrt();
+    let v_cadence = crate::numeric_cast::option_f64_loud(sample.cadence_score, 0.5, "sample_cadence")
+        / get_std("cadence")
+        * get_w("cadence").sqrt();
 
-    let v_payload = sample.frame_payload_variation.unwrap_or(0.5) / get_std("payload_var")
+    let v_payload = crate::numeric_cast::option_f64_loud(sample.frame_payload_variation, 0.5, "sample_payload_var")
+        / get_std("payload_var")
         * get_w("payload_var").sqrt();
-    let v_delay = sample.frame_delay_variation.unwrap_or(0.5) / get_std("delay_var")
+    let v_delay = crate::numeric_cast::option_f64_loud(sample.frame_delay_variation, 0.5, "sample_delay_var")
+        / get_std("delay_var")
         * get_w("delay_var").sqrt();
 
-    let v_aspect = sample.aspect_ratio.unwrap_or(1.0) / get_std("aspect") * get_w("aspect").sqrt();
+    let v_aspect = crate::numeric_cast::option_f64_loud(sample.aspect_ratio, 1.0, "sample_aspect")
+        / get_std("aspect")
+        * get_w("aspect").sqrt();
     let v_pal = (sample.palette_size.map_or(256.0, f64::from) / 256.0) * get_w("p_depth").sqrt();
 
     let v_pdepth =
@@ -2209,7 +2214,7 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
         .map(|row| {
             let duration = row.get::<_, f64>(2);
             let frame_count = f64::from(u32::try_from(row.get::<_, i64>(3).max(0)).unwrap_or(0));
-            let fps = row.get::<_, Option<f64>>(5).unwrap_or(0.0);
+            let fps = crate::numeric_cast::option_f64_loud(row.get::<_, Option<f64>>(5), 0.0, "db_fps");
             let density = if duration > 0.05 {
                 frame_count / duration
             } else {
@@ -2231,7 +2236,7 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
                 gap,
                 row.get::<_, f64>(6),                         // temporal_bpp
                 row.get::<_, f64>(7),                         // spatial_bpp
-                row.get::<_, Option<f64>>(10).unwrap_or(1.0), // aspect
+                crate::numeric_cast::option_f64_loud(row.get::<_, Option<f64>>(10), 1.0, "db_aspect"), // aspect
                 row.get::<_, Option<f64>>(11).unwrap_or(0.5), // loop_freq
                 row.get::<_, Option<f64>>(12).unwrap_or(0.5), // cadence
                 row.get::<_, Option<f64>>(8).unwrap_or(0.5),  // payload_var
@@ -2240,7 +2245,7 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
                 row.get::<_, Option<f64>>(14).unwrap_or(0.5), // m_gini
                 row.get::<_, Option<f64>>(15).unwrap_or(0.5), // b_skew
                 row.get::<_, Option<f64>>(16).unwrap_or(0.5), // t_flat
-                row.get::<_, Option<f64>>(17).unwrap_or(1.0), // webp_ratio
+                crate::numeric_cast::option_f64_loud(row.get::<_, Option<f64>>(17), 1.0, "db_webp_ratio"), // webp_ratio
             ]
         })
         .collect();
@@ -2301,7 +2306,7 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
     for (idx, name) in names.iter().enumerate() {
         let values: Vec<f64> = all_data
             .iter()
-            .map(|v| v.get(idx).copied().unwrap_or(0.0))
+            .map(|v| crate::numeric_cast::option_f64_loud(v.get(idx).copied(), 0.0, "feature_matrix_entry"))
             .collect();
         feature_map
             .stats
@@ -2471,7 +2476,7 @@ pub fn recompute_all_features(conn: &mut Client) -> Result<()> {
             duration_secs: row.get(4),
             frame_count: u64::try_from(row.get::<_, i64>(5)).unwrap_or(0),
             file_size_bytes: u64::try_from(row.get::<_, i64>(6)).unwrap_or(0),
-            fps: row.get::<_, Option<f64>>(7).unwrap_or(0.0),
+            fps: crate::numeric_cast::option_f64_loud(row.get::<_, Option<f64>>(7), 0.0, "db_backfill_fps"),
             temporal_bpp: row.get(8),
             spatial_bpp: row.get(9),
             has_transparency: row.get(10),
@@ -2679,7 +2684,7 @@ pub fn query_feature_discriminative_power(
             feature_name: row.get(0),
             mean_loop_strong: row.get(1),
             mean_loop_weak: row.get(2),
-            discriminative_power: row.get::<_, Option<f64>>(3).unwrap_or(0.0),
+            discriminative_power: crate::numeric_cast::option_f64_loud(row.get::<_, Option<f64>>(3), 0.0, "discriminative_power"),
             sample_count: row.get(4),
         })
         .collect())

@@ -90,15 +90,15 @@ pub fn resolve_video_run_base_dir(
 ///
 /// # Errors
 /// Returns an error if command execution or file processing fails.
-pub fn run_auto_command<F, R>(config: CliRunnerConfig, converter: F) -> Result<()>
+pub fn run_auto_command<F, R>(config: &CliRunnerConfig, converter: F) -> Result<()>
 where
     F: Fn(&Path) -> Result<R> + Sync,
     R: CliProcessingResult,
 {
     if config.input.is_dir() {
-        process_directory(&config, converter)
+        process_directory(config, converter)
     } else {
-        process_single_file(&config, converter)
+        process_single_file(config, converter)
     }
 }
 

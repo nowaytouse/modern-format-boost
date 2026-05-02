@@ -860,7 +860,7 @@ impl VideoEncoder {
         &self,
         max_threads: usize,
         preset: EncoderPreset,
-        hdr_x265_params: Option<String>,
+        hdr_x265_params: Option<&str>,
         apple_compat: bool,
         x265_memory_profile: crate::x265_params::X265MemoryProfile,
     ) -> Vec<String> {
@@ -868,7 +868,7 @@ impl VideoEncoder {
             Self::Hevc => {
                 let x265_params = crate::x265_params::format_x265_params(
                     max_threads,
-                    hdr_x265_params.as_deref(),
+                    hdr_x265_params,
                     x265_memory_profile,
                 );
                 let mut args = vec![
@@ -1333,18 +1333,14 @@ impl VideoExplorer {
         };
 
         progress_line("Calculate SSIM...".to_string());
-        let ssim = match self.calculate_ssim() {
-            Ok(ssim) => ssim,
-            Err(err) => {
-                pb.suspend(|| {
-                    crate::log_eprintln!(
-                        "⚠️  SSIM calculation failed during size-only explore: {}",
-                        err
-                    );
-                });
-                None
-            }
-        };
+        let ssim = self.calculate_ssim();
+        if ssim.is_none() {
+            pb.suspend(|| {
+                crate::log_eprintln!(
+                    "⚠️  SSIM calculation failed during size-only explore"
+                );
+            });
+        }
         progress_done();
         // SSIM is computed from self.output_path; must match the encode just above (max_crf).
 
@@ -1653,7 +1649,7 @@ impl VideoExplorer {
 
             let quality = self.validate_quality()?;
             let context = format!("Compress+Quality validation at CRF {boundary:.1}");
-            let ssim = self.require_ssim_metric(quality.0, &context)?;
+            let ssim = Self::require_ssim_metric(quality.0, &context)?;
             cache.insert(boundary, (size, Some(ssim)));
 
             log_realtime!(
@@ -1681,7 +1677,7 @@ impl VideoExplorer {
             (
                 self.config.max_crf,
                 size,
-                self.require_ssim_metric(
+                Self::require_ssim_metric(
                     quality.0,
                     "Compress+Quality fallback validation at max CRF",
                 )?,
@@ -1797,7 +1793,7 @@ impl VideoExplorer {
         let (min_size, min_quality) =
             encode_cached(self.config.min_crf, &mut cache, &mut last_encoded_crf, self)?;
         iterations += 1;
-        let min_ssim = self.require_ssim_metric(
+        let min_ssim = Self::require_ssim_metric(
             min_quality.0,
             "Precise Quality-Match minimum-boundary validation",
         )?;
@@ -1817,7 +1813,7 @@ impl VideoExplorer {
         let (max_size, max_quality) =
             encode_cached(self.config.max_crf, &mut cache, &mut last_encoded_crf, self)?;
         iterations += 1;
-        let max_ssim = self.require_ssim_metric(
+        let max_ssim = Self::require_ssim_metric(
             max_quality.0,
             "Precise Quality-Match maximum-boundary validation",
         )?;
@@ -1849,7 +1845,6 @@ impl VideoExplorer {
             // encode per iteration. We may do 1–2 extra encodes over the whole Phase 2 vs.
             // full GSS; the tradeoff is lower code complexity and easier maintenance.
             log_realtime!("   📍 Phase 2: Phi-based single-point search (one eval per iteration; not full golden-section)");
-            log_realtime!("   📍 Phase 2: Phi-based single-point search (one eval per iteration; not full golden-section)");
 
             let mut low = self.config.min_crf;
             let mut high = self.config.max_crf;
@@ -1876,7 +1871,7 @@ impl VideoExplorer {
                     encode_cached(mid_rounded, &mut cache, &mut last_encoded_crf, self)?;
                 iterations += 1;
                 let context = format!("Precise Quality-Match search at CRF {mid_rounded:.1}");
-                let ssim = self.require_ssim_metric(quality.0, &context)?;
+                let ssim = Self::require_ssim_metric(quality.0, &context)?;
                 log_realtime!(
                     "      CRF {:.1}: SSIM {:.6}, Size {:+.1}%",
                     mid_rounded,
@@ -1917,7 +1912,7 @@ impl VideoExplorer {
                     iterations += 1;
                     let context =
                         format!("Precise Quality-Match fine-tune validation at CRF {crf:.1}");
-                    let ssim = self.require_ssim_metric(quality.0, &context)?;
+                    let ssim = Self::require_ssim_metric(quality.0, &context)?;
                     log_realtime!("      CRF {:.1}: SSIM {:.6}", crf, ssim);
 
                     if ssim > best_ssim + SSIM_EPSILON
@@ -1948,7 +1943,7 @@ impl VideoExplorer {
                         let context = format!(
                             "Precise Quality-Match secondary fine-tune validation at CRF {crf:.1}"
                         );
-                        let ssim = self.require_ssim_metric(quality.0, &context)?;
+                        let ssim = Self::require_ssim_metric(quality.0, &context)?;
                         log_realtime!("      CRF {:.1}: SSIM {:.6}", crf, ssim);
 
                         if ssim > best_ssim + 0.00001
@@ -2192,7 +2187,7 @@ impl VideoExplorer {
             progress_line("│ Computing SSIM... │".to_string());
             let (ssim_opt, psnr_opt, ms_ssim_opt) =
                 validate_ssim(best_crf, &mut quality_cache, self)?;
-            let ssim = self.require_ssim_metric(
+            let ssim = Self::require_ssim_metric(
                 ssim_opt,
                 "Precise Quality + Compression stage C verification",
             )?;
@@ -2461,7 +2456,7 @@ impl VideoExplorer {
 
         progress_line("│ Computing SSIM... │".to_string());
         let quality = validate_ssim(boundary_crf, &mut quality_cache, self)?;
-        let ssim = self.require_ssim_metric(
+        let ssim = Self::require_ssim_metric(
             quality.0,
             "Precise Quality + Compression boundary verification",
         )?;
@@ -2640,7 +2635,7 @@ impl VideoExplorer {
             let mut args = self.encoder.extra_args_with_preset(
                 self.max_threads,
                 self.preset,
-                self.hdr_x265_params.clone(),
+                self.hdr_x265_params.as_deref(),
                 self.apple_compat,
                 crate::x265_params::memory_profile_for_source(
                     self.source_codec_name.as_deref(),
@@ -2842,7 +2837,7 @@ impl VideoExplorer {
 
     fn validate_quality(&self) -> Result<(Option<f64>, Option<f64>, Option<f64>)> {
         let ssim = if self.config.quality_thresholds.validate_ssim {
-            self.calculate_ssim()?
+            self.calculate_ssim()
         } else {
             None
         };
@@ -2891,7 +2886,7 @@ impl VideoExplorer {
         Ok((ssim, psnr, ms_ssim))
     }
 
-    fn require_ssim_metric(&self, ssim: Option<f64>, context: &str) -> Result<f64> {
+    fn require_ssim_metric(ssim: Option<f64>, context: &str) -> Result<f64> {
         ssim.ok_or_else(|| anyhow::anyhow!("SSIM not measured during {context}"))
     }
 
@@ -2983,7 +2978,7 @@ impl VideoExplorer {
         }
     }
 
-    fn calculate_ssim(&self) -> Result<Option<f64>> {
+    fn calculate_ssim(&self) -> Option<f64> {
         eprint!("      📊 Calculating SSIM...");
         let _ = std::io::stderr().flush();
 
@@ -3003,7 +2998,7 @@ impl VideoExplorer {
                         ssim,
                         idx + 1
                     );
-                    return Ok(Some(ssim));
+                    return Some(ssim);
                 }
                 Ok(Some(ssim)) => {
                     crate::log_eprintln!(
@@ -3030,7 +3025,7 @@ impl VideoExplorer {
             filters.len()
         );
 
-        Ok(None)
+        None
     }
 
     fn try_ssim_with_filter(&self, filter: &str) -> Result<Option<f64>> {

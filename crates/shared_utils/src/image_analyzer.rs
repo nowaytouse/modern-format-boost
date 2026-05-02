@@ -307,7 +307,7 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
                 );
             }
         }
-        return analyze_jxl_image(path, file_size);
+        return Ok(analyze_jxl_image(path, file_size));
     }
 
     // AVIF: image crate fails on some variants (e.g. tachimanga output); fall back to ffprobe
@@ -328,7 +328,7 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
                 );
             }
         }
-        return analyze_avif_image(path, file_size);
+        return Ok(analyze_avif_image(path, file_size));
     }
 
     let mut reader = open_image_reader_with_magic_bytes(path)
@@ -357,7 +357,7 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
 
         // Fast-path: If it's a JPEG, skip decode() entirely.
         if format == ImageFormat::Jpeg {
-            return analyze_jpeg_fast_path(path, file_size);
+            return Ok(analyze_jpeg_fast_path(path, file_size));
         }
 
         let (is_valid, suggested) = match format {
@@ -419,9 +419,9 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
 
     let features = calculate_image_features(&img, file_size);
 
-    let jxl_indicator = generate_jxl_indicator(format, is_lossless, &jpeg_analysis, path);
+    let jxl_indicator = generate_jxl_indicator(format, is_lossless, jpeg_analysis.as_ref(), path);
 
-    let (psnr, ssim) = if let Some(ref jpeg) = jpeg_analysis {
+    let (psnr, ssim) = if let Some(jpeg) = jpeg_analysis.as_ref() {
         let estimated_psnr = estimate_psnr_from_quality(jpeg.estimated_quality);
         let estimated_ssim = estimate_ssim_from_quality(jpeg.estimated_quality);
         (Some(estimated_psnr), Some(estimated_ssim))
@@ -429,7 +429,7 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
         (None, None)
     };
 
-    let mut metadata = extract_metadata(path)?;
+    let mut metadata = extract_metadata(path);
 
     if extension_mismatch {
         metadata.insert("extension_mismatch".to_string(), "true".to_string());
@@ -479,7 +479,7 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
         hdr_info,
         precision,
         history: crate::common_utils::get_current_history(),
-        perception: Default::default(),
+        perception: VisualPerception::default(),
         analysis_error: None,
     })
 }
@@ -615,7 +615,7 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
         benefit: String::new(),
     };
 
-    let metadata = extract_metadata(path).unwrap_or_default();
+    let metadata = extract_metadata(path);
 
     // Extract HDR metadata using ffprobe
     let hdr_info = extract_hdr_info(path);
@@ -657,14 +657,14 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
             PrecisionMetadata::default()
         },
         history: crate::common_utils::get_current_history(),
-        perception: Default::default(),
+        perception: VisualPerception::default(),
         analysis_error,
     })
 }
 
 /// Specialized fast path for JPEG files to avoid expensive pixel decoding.
 /// JPEG->JXL transcoding only needs quantization tables, not raw pixels.
-fn analyze_jpeg_fast_path(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
+fn analyze_jpeg_fast_path(path: &Path, file_size: u64) -> ImageAnalysis {
     let jpeg_analysis = match analyze_jpeg_file(path) {
         Ok(analysis) => Some(analysis),
         Err(e) => {
@@ -700,9 +700,9 @@ fn analyze_jpeg_fast_path(path: &Path, file_size: u64) -> Result<ImageAnalysis> 
         }
     };
 
-    let mut metadata = extract_metadata(path).unwrap_or_default();
+    let mut metadata = extract_metadata(path);
 
-    if let Some(ref jpeg) = jpeg_analysis {
+    if let Some(jpeg) = jpeg_analysis.as_ref() {
         if !jpeg.is_complete {
             metadata.insert("is_truncated".to_string(), "true".to_string());
             log_eprintln!(
@@ -711,9 +711,9 @@ fn analyze_jpeg_fast_path(path: &Path, file_size: u64) -> Result<ImageAnalysis> 
             );
         }
     }
-    let jxl_indicator = generate_jxl_indicator(ImageFormat::Jpeg, false, &jpeg_analysis, path);
+    let jxl_indicator = generate_jxl_indicator(ImageFormat::Jpeg, false, jpeg_analysis.as_ref(), path);
 
-    let (psnr, ssim) = if let Some(ref jpeg) = jpeg_analysis {
+    let (psnr, ssim) = if let Some(jpeg) = jpeg_analysis.as_ref() {
         (
             Some(estimate_psnr_from_quality(jpeg.estimated_quality)),
             Some(estimate_ssim_from_quality(jpeg.estimated_quality)),
@@ -722,7 +722,7 @@ fn analyze_jpeg_fast_path(path: &Path, file_size: u64) -> Result<ImageAnalysis> 
         (None, None)
     };
 
-    Ok(ImageAnalysis {
+    ImageAnalysis {
         cache_version: 2,
         file_path: path.display().to_string(),
         format: "JPEG".to_string(),
@@ -752,15 +752,15 @@ fn analyze_jpeg_fast_path(path: &Path, file_size: u64) -> Result<ImageAnalysis> 
             ..Default::default()
         },
         history: crate::common_utils::get_current_history(),
-        perception: Default::default(),
+        perception: VisualPerception::default(),
         analysis_error: None,
-    })
+    }
 }
 
 fn generate_jxl_indicator(
     format: ImageFormat,
     is_lossless: bool,
-    jpeg_analysis: &Option<JpegQualityAnalysis>,
+    jpeg_analysis: Option<&JpegQualityAnalysis>,
     path: &Path,
 ) -> JxlIndicator {
     let file_path = path.display().to_string();
@@ -778,7 +778,7 @@ fn generate_jxl_indicator(
         },
         ImageFormat::Jpeg => {
             use crate::image_jpeg_analysis::is_ultra_hdr_jpeg_file;
-            if let Some(ref jpeg) = jpeg_analysis {
+            if let Some(jpeg) = jpeg_analysis {
                 let quality_info = format!("original quality Q={}", jpeg.estimated_quality);
 
                 // Check if it's an Ultra HDR JPEG (Google Gain Map)
@@ -1655,7 +1655,7 @@ fn is_jxl_file(path: &Path) -> bool {
     false
 }
 
-fn analyze_jxl_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
+fn analyze_jxl_image(path: &Path, file_size: u64) -> ImageAnalysis {
     use crate::image_detection::{detect_animation, DetectedFormat};
 
     let (width, height, has_alpha, color_depth) =
@@ -1685,7 +1685,7 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
             (0, 0, false, 8)
         };
 
-    let metadata = extract_metadata(path)?;
+    let metadata = extract_metadata(path);
 
     let is_lossless = crate::image_detection::detect_compression(
         &crate::image_detection::DetectedFormat::JXL,
@@ -1708,7 +1708,7 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
         None
     };
 
-    Ok(ImageAnalysis {
+    ImageAnalysis {
         cache_version: 1,
         file_path: path.display().to_string(),
         format: "JXL".to_string(),
@@ -1743,12 +1743,12 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
             PrecisionMetadata::default()
         },
         history: crate::common_utils::get_current_history(),
-        perception: Default::default(),
+        perception: VisualPerception::default(),
         analysis_error: None,
-    })
+    }
 }
 
-fn analyze_avif_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
+fn analyze_avif_image(path: &Path, file_size: u64) -> ImageAnalysis {
     use crate::image_detection::{
         detect_animation, detect_compression, CompressionType, DetectedFormat,
     };
@@ -1816,8 +1816,8 @@ fn analyze_avif_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
         None
     };
 
-    let metadata = extract_metadata(path).unwrap_or_default();
-    Ok(ImageAnalysis {
+    let metadata = extract_metadata(path);
+    ImageAnalysis {
         cache_version: 1,
         file_path: path.display().to_string(),
         format: "AVIF".to_string(),
@@ -1852,9 +1852,9 @@ fn analyze_avif_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
             PrecisionMetadata::default()
         },
         history: crate::common_utils::get_current_history(),
-        perception: Default::default(),
+        perception: VisualPerception::default(),
         analysis_error: None,
-    })
+    }
 }
 
 fn parse_jxlinfo_output(output: &str) -> (u32, u32, bool, u8) {
@@ -1894,7 +1894,7 @@ fn parse_jxlinfo_output(output: &str) -> (u32, u32, bool, u8) {
     (width, height, has_alpha, color_depth)
 }
 
-fn extract_metadata(path: &Path) -> Result<HashMap<String, String>> {
+fn extract_metadata(path: &Path) -> HashMap<String, String> {
     let mut metadata = HashMap::new();
 
     if let Some(filename) = path.file_name() {
@@ -1911,7 +1911,7 @@ fn extract_metadata(path: &Path) -> Result<HashMap<String, String>> {
         );
     }
 
-    Ok(metadata)
+    metadata
 }
 
 /// Extract HDR metadata from image using ffprobe.

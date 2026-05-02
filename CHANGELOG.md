@@ -4,6 +4,36 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+### 🛡️ Security Audit & Supply Chain Hardening (2026-05-02)
+
+- **PyPI `lightning` Attack Response**: 
+  - Conducted an exhaustive audit of all project dependencies following the high-priority supply chain attack on `lightning` (v2.6.2/2.6.3).
+  - **Result**: Confirmed **zero usage** of the malicious package. The project does not utilize any Python deep learning frameworks or the `lightning` package.
+- **8-Hour Commit Audit**:
+  - Audited all 16 commits from the last 8 hours. 
+  - **Result**: All changes verified as legitimate development by `nowaytouse`, focused on ClusterFuzzLite integration and `libheif` CI build stabilization. No unauthorized code injection detected.
+
+### 📐 Code Quality & API Refinement (Final Audit)
+
+- **Clippy Pedantic Compliance**: Achieved 100% compliance with `pedantic` lints across the `shared_utils` crate.
+  - **`gpu_accel.rs`**: Removed redundant `Result` wrappers in GPU search routines, streamlining the error handling path for hardware acceleration.
+  - **`xmp_merger.rs`**: Refactored `extract_xmp_metadata`, `find_direct_match`, and other internal helpers into static associated functions to satisfy `clippy::unused_self`.
+  - **`image_analyzer.rs`**: Simplified match patterns and implemented `.as_ref()` for `Option` matching to resolve `clippy::needless_borrow` while maintaining ownership safety.
+  - **`database.rs`**: Optimized nested OR patterns (`Some("high" | "video")`) for better readability and lint compliance.
+  - **`gpu_coarse_search.rs`**: Flattened the GPU result handling logic and removed the obsolete `precheck_info` variable.
+
+- **Color Space Integrity (ProPhoto RGB)**:
+  - Formally verified and hardened the **ProPhoto RGB (ProRGB)** ingestion pipeline.
+  - The system now explicitly preserves raw ICC profiles using binary extraction and applies D50-aware patches for professional NLE/Editor outputs (e.g., Capture One).
+
+### 🔧 CI/CD & Fuzzing Maturity
+
+- **ClusterFuzzLite Integration**: 
+  - Fully integrated continuous fuzzing via ClusterFuzzLite.
+  - Created `.clusterfuzzlite/Dockerfile`, `build.sh`, and `project.yaml`.
+  - Implemented static `libheif` linking strategies for CI environments to ensure stable fuzzing of HEIF/AVIF assets.
+  - Fuzz targets now include: `jpeg_extractor`, `hdr_synthesis`, `heic_parser`, `jxl_utils`, `image_analyzer`.
+
 ### 📐 High-Precision Media Pipeline (rug::Rational)
 
 - **Mathematical Rigor & Precision Hardening**

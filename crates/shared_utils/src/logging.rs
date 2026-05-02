@@ -515,7 +515,7 @@ impl LogConfig {
 ///
 /// # Errors
 /// Returns an error if initialization fails.
-pub fn init_logging(program_name: &str, config: LogConfig) -> Result<()> {
+pub fn init_logging(program_name: &str, config: &LogConfig) -> Result<()> {
     if std::env::var("FORCE_COLOR").is_ok() {
         console::set_colors_enabled(true);
         console::set_colors_enabled_stderr(true);

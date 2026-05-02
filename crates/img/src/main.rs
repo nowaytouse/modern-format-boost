@@ -131,7 +131,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     if let Err(e) =
-        shared_utils::logging::init_logging("img", shared_utils::logging::LogConfig::default())
+        shared_utils::logging::init_logging("img", &shared_utils::logging::LogConfig::default())
     {
         eprintln!("⚠️ Failed to initialize logging: {e}");
     }

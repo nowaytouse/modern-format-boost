@@ -187,6 +187,11 @@ pub struct VideoQualityInput<'a> {
 impl CompressionLevel {
     #[must_use]
     pub fn from_bpp(bpp: f64, codec_type: VideoCodecType) -> Self {
+        use crate::numeric_cast::f64_to_rational_loud;
+        if bpp <= 0.0 {
+            return Self::LowQuality;
+        }
+
         if codec_type == VideoCodecType::Lossless {
             return Self::Lossless;
         }
@@ -200,7 +205,6 @@ impl CompressionLevel {
             _ => 1.0,
         };
 
-        use crate::numeric_cast::f64_to_rational_loud;
         let bpp_r = f64_to_rational_loud(bpp, 0, "bpp");
         let efficiency_r = f64_to_rational_loud(efficiency, 1, "efficiency");
         let adjusted_bpp = (bpp_r / efficiency_r).to_f64();

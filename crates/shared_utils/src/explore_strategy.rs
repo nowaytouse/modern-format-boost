@@ -509,7 +509,7 @@ impl ExploreContext {
         for arg in self.encoder.extra_args_with_preset(
             self.max_threads,
             self.preset,
-            self.hdr_x265_params.clone(),
+            self.hdr_x265_params.as_deref(),
             self.apple_compat,
             crate::x265_params::memory_profile_for_source(
                 self.source_codec_name.as_deref(),

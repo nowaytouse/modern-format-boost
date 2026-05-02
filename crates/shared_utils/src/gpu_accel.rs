@@ -1687,7 +1687,7 @@ pub fn gpu_coarse_search(
     config: &GpuCoarseConfig,
     vf_args: &[String],
     progress_cb: Option<&dyn Fn(f32, u64)>,
-) -> anyhow::Result<GpuCoarseResult> {
+) -> GpuCoarseResult {
     gpu_coarse_search_with_log(
         input,
         output,
@@ -1713,7 +1713,7 @@ pub fn gpu_coarse_search_with_log(
     vf_args: &[String],
     progress_cb: Option<&dyn Fn(f32, u64)>,
     log_cb: Option<&dyn Fn(&str)>,
-) -> anyhow::Result<GpuCoarseResult> {
+) -> GpuCoarseResult {
     let result = gpu_coarse_search_with_log_impl(
         input,
         output,
@@ -1746,7 +1746,7 @@ fn gpu_coarse_search_with_log_impl(
     vf_args: &[String],
     progress_cb: Option<&dyn Fn(f32, u64)>,
     log_cb: Option<&dyn Fn(&str)>,
-) -> anyhow::Result<GpuCoarseResult> {
+) -> GpuCoarseResult {
     use anyhow::{bail, Context};
 
     const LARGE_FILE_THRESHOLD: u64 = 500 * 1024 * 1024;
@@ -1783,7 +1783,7 @@ fn gpu_coarse_search_with_log_impl(
         log_msg!("   ║  Skipping GPU coarse search, using CPU-only mode          ║");
         log_msg!("   ║  This may take longer but results will be accurate        ║");
         log_msg!("   ╚═══════════════════════════════════════════════════════════╝");
-        return Ok(GpuCoarseResult {
+        return GpuCoarseResult {
             gpu_boundary_crf: config.initial_crf,
             gpu_best_size: None,
             gpu_best_ssim: None,
@@ -1796,7 +1796,7 @@ fn gpu_coarse_search_with_log_impl(
             sample_input_size: input_size,
             quality_ceiling_crf: None,
             quality_ceiling_ssim: None,
-        });
+        };
     }
 
     let gpu_encoder = match encoder {
@@ -1815,7 +1815,7 @@ fn gpu_coarse_search_with_log_impl(
         log_msg!("   ║  Skipping GPU coarse search, using CPU-only mode          ║");
         log_msg!("   ║  This may take longer but results will be accurate        ║");
         log_msg!("   ╚═══════════════════════════════════════════════════════════╝");
-        return Ok(GpuCoarseResult {
+        return GpuCoarseResult {
             gpu_boundary_crf: config.initial_crf,
             gpu_best_size: None,
             gpu_best_ssim: None,
@@ -1828,7 +1828,7 @@ fn gpu_coarse_search_with_log_impl(
             sample_input_size: input_size,
             quality_ceiling_crf: None,
             quality_ceiling_ssim: None,
-        });
+        };
     };
 
     let skip_gpu_size_threshold: u64 = if config.ultimate_mode {
@@ -1868,7 +1868,7 @@ fn gpu_coarse_search_with_log_impl(
             format!("duration too short ({quick_duration:.1}s < {skip_gpu_duration_threshold:.1}s)")
         };
         log_msg!("   ⚡ Skip GPU: {} → CPU-only mode", reason);
-        return Ok(GpuCoarseResult {
+        return GpuCoarseResult {
             gpu_boundary_crf: config.initial_crf,
             gpu_best_size: None,
             gpu_best_ssim: None,
@@ -1881,7 +1881,7 @@ fn gpu_coarse_search_with_log_impl(
             sample_input_size: input_size,
             quality_ceiling_crf: None,
             quality_ceiling_ssim: None,
-        });
+        };
     }
 
     let is_large_file = input_size >= LARGE_FILE_THRESHOLD;
@@ -2025,7 +2025,7 @@ fn gpu_coarse_search_with_log_impl(
             "   ⚡ Warmup: max_crf={:.0} cannot compress → skip GPU search",
             config.max_crf
         );
-        return Ok(GpuCoarseResult {
+        return GpuCoarseResult {
             gpu_boundary_crf: config.max_crf,
             gpu_best_size: warmup_result.ok(),
             gpu_best_ssim: None,
@@ -2038,7 +2038,7 @@ fn gpu_coarse_search_with_log_impl(
             sample_input_size,
             quality_ceiling_crf: None,
             quality_ceiling_ssim: None,
-        });
+        };
     }
     log_msg!(
         "   🔥 Warmup: max_crf={:.0} can compress → continue search",
@@ -3072,7 +3072,7 @@ fn gpu_coarse_search_with_log_impl(
         }
     }
 
-    Ok(GpuCoarseResult {
+    GpuCoarseResult {
         gpu_boundary_crf,
         gpu_best_size: best_size,
         gpu_best_ssim: gpu_ssim,
@@ -3085,7 +3085,7 @@ fn gpu_coarse_search_with_log_impl(
         sample_input_size,
         quality_ceiling_crf,
         quality_ceiling_ssim: gpu_ssim,
-    })
+    }
 }
 
 /// Derives the CPU search range from a GPU coarse search result.

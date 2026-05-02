@@ -119,7 +119,7 @@ impl ParallelMsssimCalculator {
         let config = self.sampling_config.clone();
 
         let y_handle = thread::spawn(move || {
-            Self::calculate_channel(&orig_path, &conv_path, &config, "Y", y_monitor)
+            Self::calculate_channel(&orig_path, &conv_path, &config, "Y", &y_monitor)
         });
 
         let orig_path = self.original_path.clone();
@@ -127,7 +127,7 @@ impl ParallelMsssimCalculator {
         let config = self.sampling_config.clone();
 
         let u_handle = thread::spawn(move || {
-            Self::calculate_channel(&orig_path, &conv_path, &config, "U", u_monitor)
+            Self::calculate_channel(&orig_path, &conv_path, &config, "U", &u_monitor)
         });
 
         let orig_path = self.original_path.clone();
@@ -135,7 +135,7 @@ impl ParallelMsssimCalculator {
         let config = self.sampling_config.clone();
 
         let v_handle = thread::spawn(move || {
-            Self::calculate_channel(&orig_path, &conv_path, &config, "V", v_monitor)
+            Self::calculate_channel(&orig_path, &conv_path, &config, "V", &v_monitor)
         });
 
         let y_result = y_handle.join().map_err(|_| {
@@ -174,7 +174,7 @@ impl ParallelMsssimCalculator {
         converted_path: &Path,
         config: &SamplingConfig,
         channel: &str,
-        progress_monitor: Arc<MsssimProgressMonitor>,
+        progress_monitor: &Arc<MsssimProgressMonitor>,
     ) -> Result<f64, AppError> {
         let original_path_str = original_path.to_string_lossy();
         let converted_path_str = converted_path.to_string_lossy();

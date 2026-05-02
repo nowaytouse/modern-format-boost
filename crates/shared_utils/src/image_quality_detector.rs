@@ -181,7 +181,7 @@ pub fn analyze_image_quality(
         calculate_overall_complexity(edge_density, color_diversity, texture_variance, noise_level);
 
     let is_animated = frame_count > 1;
-    let content_type = classify_content_type(ClassifierInput {
+    let content_type = classify_content_type(&ClassifierInput {
         complexity,
         edge_density,
         color_diversity,
@@ -217,7 +217,7 @@ pub fn analyze_image_quality(
         confidence,
         precision,
         history: crate::common_utils::get_current_history(),
-        perception: Default::default(),
+        perception: crate::types::VisualPerception::default(),
     })
 }
 
@@ -567,8 +567,8 @@ pub(crate) fn calculate_overall_complexity(
         .clamp(0.0, 1.0)
 }
 
-fn classify_content_type(input: ClassifierInput) -> ImageContentType {
-    let ClassifierInput {
+fn classify_content_type(input: &ClassifierInput) -> ImageContentType {
+    let &ClassifierInput {
         complexity,
         edge_density,
         color_diversity,

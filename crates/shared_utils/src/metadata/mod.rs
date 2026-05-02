@@ -149,10 +149,8 @@ pub fn preserve_pro(src: &Path, dst: &Path) -> io::Result<()> {
         if let Err(e) = exif::preserve_internal_metadata(src, dst) {
             eprintln!("⚠️ [metadata] Internal metadata failed: {e}");
         }
-        // Network xattrs (WhereFroms, UserTags) — copy + verify
-        if let Err(e) = network::preserve_network_metadata(src, dst) {
-            eprintln!("⚠️ [metadata] Network metadata preservation failed: {e}");
-        }
+        // Network xattrs — copy + verify
+        network::preserve_network_metadata(src, dst);
 
         // Unix permission bits (copyfile covers STAT but be explicit)
         if let Ok(meta) = std::fs::metadata(src) {
@@ -174,9 +172,7 @@ pub fn preserve_pro(src: &Path, dst: &Path) -> io::Result<()> {
             eprintln!("⚠️ [metadata] Internal metadata failed: {}", e);
         }
         // Network xattrs — copy + verify
-        if let Err(e) = network::preserve_network_metadata(src, dst) {
-            eprintln!("⚠️ [metadata] Network metadata preservation failed: {}", e);
-        }
+        network::preserve_network_metadata(src, dst);
         // Platform-specific attributes
         #[cfg(target_os = "linux")]
         if let Err(e) = linux::preserve_linux_attributes(src, dst) {

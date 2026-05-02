@@ -301,7 +301,7 @@ impl SourceCodec {
     /// This is the "Tight Entry" mechanism that avoids relying on file extensions.
     #[must_use]
     pub fn identify_by_content(path: &std::path::Path) -> Option<Self> {
-        use std::io::Read;
+        use std::io::{Read, Seek, SeekFrom};
         let mut file = std::fs::File::open(path).ok()?;
         let mut header = [0u8; 64]; // Expanded to 64 bytes to capture VP8X and acTL chunks
         let n = file.read(&mut header).ok()?;
@@ -340,34 +340,31 @@ impl SourceCodec {
         // Deep APNG verification
         // 64 bytes is insufficient for PNG because large chunks (like iCCP or eXIf)
         // can push the acTL chunk far beyond the header. We use Seek to jump over chunk data.
-        if codec == Some(Self::Png) {
-            use std::io::{Seek, SeekFrom};
-            if file.seek(SeekFrom::Start(8)).is_ok() {
-                let mut chunk_header = [0u8; 8];
-                loop {
-                    if file.read_exact(&mut chunk_header).is_err() {
-                        break;
-                    }
-                    let length = u32::from_be_bytes([
-                        chunk_header[0],
-                        chunk_header[1],
-                        chunk_header[2],
-                        chunk_header[3],
-                    ]);
-                    let chunk_type = &chunk_header[4..8];
+        if codec == Some(Self::Png) && file.seek(SeekFrom::Start(8)).is_ok() {
+            let mut chunk_header = [0u8; 8];
+            loop {
+                if file.read_exact(&mut chunk_header).is_err() {
+                    break;
+                }
+                let length = u32::from_be_bytes([
+                    chunk_header[0],
+                    chunk_header[1],
+                    chunk_header[2],
+                    chunk_header[3],
+                ]);
+                let chunk_type = &chunk_header[4..8];
 
-                    if chunk_type == b"acTL" {
-                        codec = Some(Self::Apng);
-                        break;
-                    }
-                    if chunk_type == b"IDAT" {
-                        break; // Image data reached; no animation chunk present
-                    }
+                if chunk_type == b"acTL" {
+                    codec = Some(Self::Apng);
+                    break;
+                }
+                if chunk_type == b"IDAT" {
+                    break; // Image data reached; no animation chunk present
+                }
 
-                    // Seek past the chunk data and its 4-byte CRC
-                    if file.seek(SeekFrom::Current(i64::from(length) + 4)).is_err() {
-                        break;
-                    }
+                // Seek past the chunk data and its 4-byte CRC
+                if file.seek(SeekFrom::Current(i64::from(length) + 4)).is_err() {
+                    break;
                 }
             }
         }
@@ -447,9 +444,7 @@ impl SourceCodec {
                     return Some(Self::Heic)
                 }
                 b"avif" | b"avis" => return Some(Self::Avif),
-                b"mp41" | b"mp42" | b"isom" | b"iso2" => return Some(Self::H264), // Assuming H264 for MP4 container logic
-                b"qt  " => return Some(Self::H264),                               // QuickTime
-                _ => return Some(Self::H264), // Differentiate via ffprobe later
+                _ => return Some(Self::H264), // Assuming H264 (MP4/QT/etc.) - Differentiate via ffprobe later
             }
         }
 
@@ -891,12 +886,13 @@ pub fn calculate_jxl_distance_with_options(
     })
 }
 
-fn calculate_effective_bpp_with_options(
+pub fn calculate_effective_bpp_with_options(
     analysis: &QualityAnalysis,
     target_encoder: EncoderType,
     mode: MatchMode,
     bias: QualityBias,
 ) -> Result<(f64, AnalysisDetails), String> {
+    use crate::numeric_cast::f64_to_rational_loud;
     if analysis.width == 0 || analysis.height == 0 {
         return Err("❌ Invalid dimensions: width or height is 0".to_string());
     }
@@ -958,7 +954,6 @@ fn calculate_effective_bpp_with_options(
     };
 
     let effective_bpp = {
-        use crate::numeric_cast::f64_to_rational_loud;
         let mut res = f64_to_rational_loud(raw_bpp, 0, "raw_bpp");
         res *= f64_to_rational_loud(gop_factor, 1, "gop_factor");
         res *= f64_to_rational_loud(chroma_factor, 1, "chroma_factor");
@@ -1169,8 +1164,8 @@ fn calculate_aspect_factor(width: u32, height: u32) -> f64 {
 }
 
 fn calculate_complexity_factor(si: Option<f64>, ti: Option<f64>, raw_bpp: f64, pixels: u64) -> f64 {
-    if let (Some(spatial), Some(temporal)) = (si, ti) {
-        let si_ratio = spatial / 50.0;
+    if let (Some(si_val), Some(temporal)) = (si, ti) {
+        let si_ratio = si_val / 50.0;
         let ti_ratio = temporal / 20.0;
 
         let spatial_factor = if si_ratio > 1.3 {

@@ -94,7 +94,7 @@ pub fn init() {
     // Spawn the watcher thread (daemonized so it doesn't block process exit).
     if let Err(err) = std::thread::Builder::new()
         .name("ctrlc-watcher".into())
-        .spawn(move || watcher_thread(signal_received))
+        .spawn(move || watcher_thread(&signal_received))
     {
         eprintln!("  ⚠️  ctrlc_guard: failed to spawn Ctrl+C watcher thread: {err}");
     }
@@ -102,7 +102,7 @@ pub fn init() {
 
 // ─── Watcher thread ──────────────────────────────────────────────────────────
 
-fn watcher_thread(signal_flag: Arc<AtomicBool>) {
+fn watcher_thread(signal_flag: &Arc<AtomicBool>) {
     loop {
         // Poll at 100 ms intervals — very cheap, avoids condvar complexity.
         std::thread::sleep(Duration::from_millis(100));

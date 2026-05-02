@@ -855,7 +855,7 @@ fn loop_count_zero_bonus(meta: &LoopMeta, _thresholds: &LoopThresholds) -> f64 {
                 crate::constants::LOOP_COUNT_ZERO_BONUS_MAX,
             )
         }
-        _ => crate::constants::LOOP_COUNT_ZERO_BONUS_MIN,
+        DurationTier::DefinitivelyLong => crate::constants::LOOP_COUNT_ZERO_BONUS_MIN,
     }
 }
 
@@ -2338,11 +2338,9 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
         );
         let tree_only = evaluate_loop_tree(&mutable_meta, None);
         match &tree_only.verdict {
-            LoopIntentVerdict::LoopStrong(reason) | LoopIntentVerdict::LoopWeak(reason) => {
-                emit_stderr(&format!("💡 Tree-only Result: {reason}"));
-                return tree_only.verdict;
-            }
-            LoopIntentVerdict::Error(reason) => {
+            LoopIntentVerdict::LoopStrong(reason)
+            | LoopIntentVerdict::LoopWeak(reason)
+            | LoopIntentVerdict::Error(reason) => {
                 emit_stderr(&format!("💡 Tree-only Result: {reason}"));
                 return tree_only.verdict;
             }
@@ -2612,9 +2610,8 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
 
         let final_probability = match &verdict {
             LoopIntentVerdict::LoopStrong(_) => 1.0,
-            LoopIntentVerdict::LoopWeak(_) => 0.0,
+            LoopIntentVerdict::LoopWeak(_) | LoopIntentVerdict::Error(_) => 0.0,
             LoopIntentVerdict::Uncertain(_) => tree_probability,
-            LoopIntentVerdict::Error(_) => 0.0,
         };
 
         let record = LoopInferenceRecord {

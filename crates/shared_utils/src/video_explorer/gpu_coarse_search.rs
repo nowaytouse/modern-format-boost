@@ -458,8 +458,7 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
         final_output_preset,
     } = args;
 
-    let precheck_info = precheck::run_precheck(input)?;
-    let _compressibility = precheck_info.compressibility;
+    let _ = precheck::run_precheck(input)?;
     crate::log_eprintln!();
 
     let input_size = fs::metadata(input)
@@ -616,17 +615,14 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
             Some(&log_callback),
         );
 
-        let (final_crf, final_size) = match &gpu_result {
-            Ok(result) if result.found_boundary => {
-                (result.gpu_boundary_crf, result.gpu_best_size.unwrap_or(0))
-            }
-            _ => (gpu_config.max_crf, input_size),
+        let (final_crf, final_size) = if gpu_result.found_boundary {
+            (gpu_result.gpu_boundary_crf, gpu_result.gpu_best_size.unwrap_or(0))
+        } else {
+            (gpu_config.max_crf, input_size)
         };
         gpu_progress.finish_iteration(final_crf, final_size, None);
 
-        match gpu_result {
-            Ok(gpu_result) => {
-                if gpu_result.found_boundary {
+        if gpu_result.found_boundary {
                     let gpu_crf = gpu_result.gpu_boundary_crf;
                     let gpu_size = gpu_result.gpu_best_size.unwrap_or(input_size);
                     if let Some(gpu_encoder) = gpu_encoder {
@@ -780,28 +776,19 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
                             cpu_max,
                             cpu_start
                         );
-                        (cpu_min, cpu_max, cpu_start)
-                    } else {
-                        gpu_executed = false;
-                        crate::log_eprintln!(
-                            "⚠️  FALLBACK: GPU encoder became unavailable during calibration (using CPU-only search)"
-                        );
-                        (ABSOLUTE_MIN_CRF, max_crf, initial_crf)
-                    }
-                } else {
-                    crate::verbose_eprintln!(
-                        "GPU coarse search: no boundary found, using full CRF range for CPU search"
-                    );
-                    (ABSOLUTE_MIN_CRF, max_crf, initial_crf)
-                }
-            }
-            Err(e) => {
+                (cpu_min, cpu_max, cpu_start)
+            } else {
+                gpu_executed = false;
                 crate::log_eprintln!(
-                    "⚠️  FALLBACK: GPU coarse search failed: {} (falling back to CPU-only)",
-                    e
+                    "⚠️  FALLBACK: GPU encoder became unavailable during calibration (using CPU-only search)"
                 );
                 (ABSOLUTE_MIN_CRF, max_crf, initial_crf)
             }
+        } else {
+            crate::verbose_eprintln!(
+                "GPU coarse search: no boundary found, using full CRF range for CPU search"
+            );
+            (ABSOLUTE_MIN_CRF, max_crf, initial_crf)
         }
     } else {
         crate::log_eprintln!();
@@ -1244,7 +1231,7 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
                 (Some(ms), Some(ss)) => {
                     crate::log_eprintln!(
                         "   FUSION SCORE: {:.4}",
-                        evaluation.fusion_score.unwrap_or(0.0)
+                        crate::numeric_cast::option_f64_loud(evaluation.fusion_score, 0.0, "fusion_score_logging")
                     );
                     crate::log_eprintln!(
                         "      Formula: {:.1}×MS-SSIM + {:.1}×SSIM_All",
@@ -1818,7 +1805,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         for arg in encoder.extra_args_with_preset(
             max_threads,
             encode_preset,
-            adjusted_x265_params,
+            adjusted_x265_params.as_deref(),
             apple_compat,
             x265_memory_profile,
         ) {
@@ -4238,7 +4225,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         total_file_compressed && ssim_ok
     };
 
-    let ssim_val = ssim.unwrap_or(0.0);
+    let ssim_val = crate::numeric_cast::option_f64_loud(ssim, 0.0, "final_ssim");
 
     let sampling_coverage = 1.0;
 
@@ -4501,7 +4488,7 @@ fn run_hevc_gpu_search_to_output(
 ///
 /// # Errors
 /// Returns an error if exploration fails.
-pub fn explore_hevc_with_gpu(req: GpuSearchRequest) -> Result<ExploreResult> {
+pub fn explore_hevc_with_gpu(req: &GpuSearchRequest) -> Result<ExploreResult> {
     let (max_crf, _) = calculate_smart_thresholds(req.baseline_crf, VideoEncoder::Hevc);
     let screening_anchor = search_anchor_crf(req.baseline_crf, req.warm_start_crf, max_crf);
     let plan = hevc_preset_plan(req.preset, req.ultimate_mode);
@@ -4515,7 +4502,7 @@ pub fn explore_hevc_with_gpu(req: GpuSearchRequest) -> Result<ExploreResult> {
     }
 
     run_hevc_gpu_search(
-        &req,
+        req,
         plan.search_preset,
         plan.final_output_preset,
         screening_anchor,
@@ -4526,7 +4513,7 @@ pub fn explore_hevc_with_gpu(req: GpuSearchRequest) -> Result<ExploreResult> {
 ///
 /// # Errors
 /// Returns an error if exploration fails.
-pub fn explore_av1_with_gpu(req: GpuSearchRequest) -> Result<ExploreResult> {
+pub fn explore_av1_with_gpu(req: &GpuSearchRequest) -> Result<ExploreResult> {
     let (max_crf, min_ssim) = calculate_smart_thresholds(req.baseline_crf, VideoEncoder::Av1);
     let search_anchor_crf = if let Some(hint) = req.warm_start_crf {
         (hint - 2.0).max(ABSOLUTE_MIN_CRF)
@@ -4539,7 +4526,7 @@ pub fn explore_av1_with_gpu(req: GpuSearchRequest) -> Result<ExploreResult> {
         input: &req.input,
         output: &req.output,
         encoder: VideoEncoder::Av1,
-        vf_args: req.vf_args,
+        vf_args: req.vf_args.clone(),
         initial_crf: search_anchor_crf,
         max_crf,
         min_ssim,

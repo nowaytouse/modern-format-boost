@@ -684,8 +684,7 @@ fn parse_gainmap_from_xmp(xmp_str: &str) -> Option<GainMapParams> {
                     }
                 }
             }
-            Err(_) => break,
-            Ok(Event::Eof) => break,
+            Err(_) | Ok(Event::Eof) => break,
             _ => (),
         }
         buf.clear();

@@ -423,26 +423,24 @@ pub fn verify_output_completeness(
     let diff = crate::numeric_cast::usize_to_i64_sat(expected)
         - crate::numeric_cast::usize_to_i64_sat(actual);
 
-    let (passed, message) = if diff == 0 {
-        (
+    let (passed, message) = match diff.cmp(&0) {
+        std::cmp::Ordering::Equal => (
             true,
             format!("✅ Verification passed: {actual} files (no loss)"),
-        )
-    } else if diff > 0 {
-        (
+        ),
+        std::cmp::Ordering::Greater => (
             false,
             format!(
                 "❌ Verification FAILED: missing {diff} files! (expected {expected}, got {actual})"
             ),
-        )
-    } else {
-        (
+        ),
+        std::cmp::Ordering::Less => (
             true,
             format!(
                 "⚠️ Output has {} extra files (expected {}, got {})",
                 -diff, expected, actual
             ),
-        )
+        ),
     };
 
     VerifyResult {

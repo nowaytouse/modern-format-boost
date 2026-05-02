@@ -33,6 +33,18 @@ pub fn f64_to_rational_loud(val: f64, default: i64, name: &str) -> Rational {
     })
 }
 
+/// Convert Option<f64> to f64 with loud warning on None.
+/// Prevents silent forgery of data in database/analysis paths.
+pub fn option_f64_loud(val: Option<f64>, default: f64, name: &str) -> f64 {
+    val.unwrap_or_else(|| {
+        warn!(
+            "⚠️ [Precision Audit] Optional field '{}' is missing! Forging fallback to {} to prevent calculation failure.",
+            name, default
+        );
+        default
+    })
+}
+
 mod raw {
     #![allow(
         clippy::cast_possible_truncation,

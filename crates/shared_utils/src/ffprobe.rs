@@ -347,7 +347,7 @@ fn resolve_probe_duration(
     video_stream: &serde_json::Value,
     format_name: &str,
     path: &Path,
-) -> Result<f64, FFprobeError> {
+) -> f64 {
     let mut duration = if format_duration > 0.0 {
         format_duration
     } else {
@@ -368,7 +368,7 @@ fn resolve_probe_duration(
     }
 
     // Allow 0.0 duration for formats like headless GIFs where duration is not globally specified
-    Ok(duration)
+    duration
 }
 
 fn parse_required_u32_field(
@@ -555,7 +555,7 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         .as_array()
         .ok_or_else(|| FFprobeError::ParseError("No streams found".to_string()))?;
     let (stream_index, video_stream) = select_video_stream(streams)?;
-    let duration = resolve_probe_duration(format_duration, video_stream, &format_name, path)?;
+    let duration = resolve_probe_duration(format_duration, video_stream, &format_name, path);
     let video = parse_video_stream_fields(video_stream, &format_name, duration, path)?;
     let hdr = extract_hdr_side_data(&json);
     let audio = extract_audio_stream_fields(streams);

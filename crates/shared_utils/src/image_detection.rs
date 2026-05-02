@@ -69,7 +69,7 @@ use rug::Rational;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 /// Open an image with relaxed memory limits to handle very large JPEGs.
@@ -80,8 +80,9 @@ use std::path::Path;
 ///
 /// # Errors
 /// Returns an error if the image exceeds limits or is corrupted.
-pub fn open_image_with_limits(path: &Path) -> std::result::Result<DynamicImage, image::ImageError> {
+pub fn open_image_with_limits(path: &Path) -> Result<DynamicImage> {
     use image::Limits;
+    let _file = File::open(path)?;
     let mut limits = Limits::default();
     limits.max_alloc = Some(crate::constants::MAX_IMAGE_DECODE_ALLOC_BYTES);
 
@@ -115,7 +116,7 @@ pub fn open_image_with_limits(path: &Path) -> std::result::Result<DynamicImage, 
     }
 
     reader.limits(limits);
-    reader.decode()
+    reader.decode().map_err(ImgQualityError::from)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -590,7 +591,6 @@ pub fn parse_gif_precision_metadata(path: &Path) -> Result<PrecisionMetadata> {
     // If GCT exists, we skip it and look for LCT in image descriptors
     if has_gct {
         let gct_byte_size = 3 * gct_colors;
-        let _pos = 13 + gct_byte_size;
 
         // We can't easily scan the whole file for all LCTs without a full decoder,
         // but typically GCT is the primary source. If we need perfect accuracy,
@@ -871,7 +871,7 @@ pub fn analyze_png_quantization_from_bytes(data: &[u8]) -> Result<PngQuantizatio
 ///
 /// # Errors
 /// Returns an error if reading fails or the PNG structure is invalid.
-pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
+pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
     mut reader: R,
     path: Option<&Path>,
 ) -> Result<PngQuantizationAnalysis> {
@@ -1088,7 +1088,7 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
     }
 
     let expected_size = estimate_uncompressed_size(&png_info);
-    let actual_size = reader.seek(std::io::SeekFrom::End(0)).unwrap_or(0);
+    let actual_size = reader.seek(SeekFrom::End(0)).unwrap_or(0);
     let compression_ratio = if expected_size > 0 {
         f64::from(u32::try_from(actual_size).unwrap_or(u32::MAX))
             / f64::from(u32::try_from(expected_size).unwrap_or(u32::MAX))
@@ -1333,12 +1333,8 @@ struct PngQuantizationWeights {
 ///
 /// # Errors
 /// Returns an error if the PNG stream is invalid or corrupted.
-pub fn parse_png_structure<R: std::io::Read + std::io::Seek>(
-    mut reader: R,
-) -> Result<PngStructureInfo> {
-    use std::io::SeekFrom;
-
-    fn skip_bytes<R: std::io::Seek>(reader: &mut R, bytes: u64, context: &str) -> Result<()> {
+pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructureInfo> {
+    fn skip_bytes<R: Seek>(reader: &mut R, bytes: u64, context: &str) -> Result<()> {
         let offset = i64::try_from(bytes).map_err(|_| {
             ImgQualityError::AnalysisError(format!(
                 "PNG chunk too large to seek while parsing {context}"
@@ -1350,11 +1346,12 @@ pub fn parse_png_structure<R: std::io::Read + std::io::Seek>(
         Ok(())
     }
 
-    let mut sig = [0u8; 8];
+    let mut header = [0u8; 8];
+
     reader
-        .read_exact(&mut sig)
+        .read_exact(&mut header)
         .map_err(|_| ImgQualityError::AnalysisError("PNG too small".to_string()))?;
-    if sig != [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A] {
+    if header != [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A] {
         return Err(ImgQualityError::AnalysisError(
             "Invalid PNG signature".to_string(),
         ));

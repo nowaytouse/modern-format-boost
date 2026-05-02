@@ -61,10 +61,8 @@ pub fn color_info_to_cicp(info: &ColorInfo) -> Option<String> {
             // Infer from primaries
             if primaries == 9 {
                 9 // BT.2020
-            } else if primaries == 1 {
-                1 // BT.709
             } else {
-                0 // RGB/Identity for P3
+                i32::from(primaries == 1) // 1 for BT.709, 0 for RGB/Identity (P3)
             }
         }
     };
