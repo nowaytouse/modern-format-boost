@@ -20,6 +20,10 @@ All notable changes to this project will be documented in this file.
   - **GPU Coarse Search**: Preserved monolithic architecture while resolving all non-line-count warnings under the most strict nightly lints.
 - **XMP Merger Fix**:
   - **Unit Test Stability**: Fixed `test_extract_xmp_metadata_reports_exiftool_failure` by creating a physical empty file for the test case. This ensures the native parser executes and successfully triggers the ExifTool fallback error as intended, matching the hardened file-read checks.
+- **CI/CD & Cross-Compilation Hardening**:
+  - **macOS Cross-Compile Fix**: Enabled `force-cross` feature for `gmp-mpfr-sys` in `Cargo.toml` to allow building `x86_64` binaries on ARM64 macOS runners.
+  - **ClusterFuzzLite Stabilization**: Updated the ClusterFuzzLite Dockerfile to use the latest Rust nightly toolchain, resolving compatibility issues with `jpegxl-rs` requiring `rustc 1.92.0+`.
+
 
 
 ### 🛡️ Nightly Dependency & Numerical Rigor (2026-05-02)

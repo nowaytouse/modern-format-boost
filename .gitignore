@@ -164,3 +164,4 @@ img_clippy.txt
 
 .training_tmp/
 training_tmp/*.txt
+training_tmp
