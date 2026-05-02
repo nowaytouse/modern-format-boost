@@ -1979,7 +1979,7 @@ pub fn calculate_entropy(img: &DynamicImage) -> f64 {
     for &count in &histogram {
         if count > 0 {
             let p = f64::from(u32::try_from(count).unwrap_or(u32::MAX)) / total;
-            entropy -= p * p.log2();
+            entropy = p.mul_add(-p.log2(), entropy);
         }
     }
 
@@ -2018,7 +2018,7 @@ fn calculate_palette_index_entropy(img: &DynamicImage, palette_size: usize) -> (
     for &count in color_freq.values() {
         if count > 0 {
             let p = f64::from(u32::try_from(count).unwrap_or(u32::MAX)) / total;
-            entropy -= p * p.log2();
+            entropy = p.mul_add(-p.log2(), entropy);
         }
     }
 
@@ -2038,7 +2038,7 @@ fn calculate_rgb_entropy(img: &DynamicImage) -> f64 {
         for &count in hist {
             if count > 0 {
                 let p = f64::from(u32::try_from(count).unwrap_or(u32::MAX)) / total;
-                h -= p * p.log2();
+                h = p.mul_add(-p.log2(), h);
             }
         }
         h

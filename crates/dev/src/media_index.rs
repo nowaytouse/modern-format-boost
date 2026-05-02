@@ -120,10 +120,10 @@ impl MediaIndex {
                 row.blake3,
                 row.rel_path,
                 row.media_type,
-                row.width,
-                row.height,
+                i64::from(row.width),
+                i64::from(row.height),
                 row.format,
-                row.file_size,
+                row.file_size as i64,
                 row.has_hdr,
                 row.has_alpha,
                 row.duration,
@@ -167,14 +167,18 @@ impl MediaIndex {
             .conn
             .prepare("SELECT * FROM media_entries WHERE blake3 = ?1")?;
         let mut rows = stmt.query_map(params![blake3], |row| {
+            let width_raw: i64 = row.get(3)?;
+            let height_raw: i64 = row.get(4)?;
+            let file_size_raw: i64 = row.get(6)?;
+
             Ok(MediaIndexRow {
                 blake3: row.get(0)?,
                 rel_path: row.get(1)?,
                 media_type: row.get(2)?,
-                width: row.get(3)?,
-                height: row.get(4)?,
+                width: shared_utils::numeric_cast::i64_to_u32_sat(width_raw),
+                height: shared_utils::numeric_cast::i64_to_u32_sat(height_raw),
                 format: row.get(5)?,
-                file_size: row.get(6)?,
+                file_size: shared_utils::numeric_cast::i64_to_u64_sat(file_size_raw),
                 has_hdr: row.get(7)?,
                 has_alpha: row.get(8)?,
                 duration: row.get(9)?,
@@ -198,10 +202,10 @@ impl MediaIndex {
     /// # Errors
     /// Returns an error if the database query fails.
     pub fn count_records(&self) -> Result<usize> {
-        let count: usize =
+        let count_raw: i64 =
             self.conn
                 .query_row("SELECT COUNT(*) FROM media_entries", [], |row| row.get(0))?;
-        Ok(count)
+        Ok(shared_utils::numeric_cast::i64_to_usize_sat(count_raw))
     }
 
     /// Returns a raw statement for the inner connection.

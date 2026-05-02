@@ -292,16 +292,14 @@ pub fn init_terminal_logger(use_colors: bool, debug_mode: bool) {
 
 /// Get global terminal logger instance
 pub fn terminal_logger() -> &'static TerminalLogger {
-    if let Some(logger) = GLOBAL_LOGGER.get() {
-        logger
-    } else {
+    GLOBAL_LOGGER.get().unwrap_or_else(|| {
         if FALLBACK_LOGGER_WARNING.set(()).is_ok() {
             eprintln!(
                 "⚠️ [Terminal Logger] used before initialization; falling back to a plain logger"
             );
         }
         &FALLBACK_LOGGER
-    }
+    })
 }
 
 // ─── Convenience Macros ─────────────────────────────────────────────────────

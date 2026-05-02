@@ -53,9 +53,9 @@ quick-xml = { workspace = true }
 exr = { workspace = true }
 proptest = { workspace = true }
 serial_test = "3.4.0"
-jpegxl-sys = "0.12.1"
+jpegxl-sys = { workspace = true }
 arbitrary = { version = "1.4", features = ["derive"], optional = true }
-rug = "1.30.0"
+rug = { workspace = true }
 
 [[bin]]
 name = "train_knn"

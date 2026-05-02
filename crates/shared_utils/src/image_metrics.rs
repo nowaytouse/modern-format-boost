@@ -158,8 +158,8 @@ fn calculate_window_ssim(
     let mut mean_y = 0.0;
     for (i, row) in window.iter().enumerate() {
         for (j, &w) in row.iter().enumerate() {
-            mean_x += w * buf_x.get(i).and_then(|r| r.get(j)).copied().unwrap_or(0.0);
-            mean_y += w * buf_y.get(i).and_then(|r| r.get(j)).copied().unwrap_or(0.0);
+            mean_x = w.mul_add(buf_x.get(i).and_then(|r| r.get(j)).copied().unwrap_or(0.0), mean_x);
+            mean_y = w.mul_add(buf_y.get(i).and_then(|r| r.get(j)).copied().unwrap_or(0.0), mean_y);
         }
     }
 
@@ -170,9 +170,9 @@ fn calculate_window_ssim(
         for (j, &w) in row.iter().enumerate() {
             let dx = buf_x.get(i).and_then(|r| r.get(j)).copied().unwrap_or(0.0) - mean_x;
             let dy = buf_y.get(i).and_then(|r| r.get(j)).copied().unwrap_or(0.0) - mean_y;
-            var_x += w * dx * dx;
-            var_y += w * dy * dy;
-            cov_xy += w * dx * dy;
+            var_x = (w * dx).mul_add(dx, var_x);
+            var_y = (w * dy).mul_add(dy, var_y);
+            cov_xy = (w * dx).mul_add(dy, cov_xy);
         }
     }
 
@@ -202,9 +202,9 @@ fn calculate_ssim_simple(original: &DynamicImage, converted: &DynamicImage) -> O
         let y = f64::from(p_conv[0]);
         sum_x += x;
         total_sum_y += y;
-        sum_xx += x * x;
-        sum_yy += y * y;
-        products_sum_xy += x * y;
+        sum_xx = x.mul_add(x, sum_xx);
+        sum_yy = y.mul_add(y, sum_yy);
+        products_sum_xy = x.mul_add(y, products_sum_xy);
     }
 
     let mean_x = sum_x / n;

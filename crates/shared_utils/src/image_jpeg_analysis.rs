@@ -87,7 +87,7 @@ fn calculate_weighted_sse(table1: &[[u16; 8]; 8], table2: &[[u16; 8]; 8]) -> f64
     for ((row1, row2), weight_row) in table1.iter().zip(table2.iter()).zip(WEIGHTS.iter()) {
         for ((&lhs, &rhs), &weight) in row1.iter().zip(row2.iter()).zip(weight_row.iter()) {
             let diff = f64::from(lhs) - f64::from(rhs);
-            weighted_sse += weight * diff * diff;
+            weighted_sse = (weight * diff).mul_add(diff, weighted_sse);
             total_weight += weight;
         }
     }
@@ -100,7 +100,7 @@ fn calculate_sse(table1: &[[u16; 8]; 8], table2: &[[u16; 8]; 8]) -> f64 {
     for (row1, row2) in table1.iter().zip(table2.iter()) {
         for (&lhs, &rhs) in row1.iter().zip(row2.iter()) {
             let diff = f64::from(lhs) - f64::from(rhs);
-            sse += diff * diff;
+            sse = diff.mul_add(diff, sse);
         }
     }
     sse

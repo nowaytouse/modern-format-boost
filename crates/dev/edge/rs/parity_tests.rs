@@ -8,9 +8,7 @@ use shared_utils::tool_builders::*;
 use std::path::Path;
 
 fn get_arg(args: &[String], idx: usize) -> &str {
-    args.get(idx)
-        .map(String::as_str)
-        .unwrap_or_else(|| panic!("missing arg at index {idx}"))
+    args.get(idx).map_or_else(|| panic!("missing arg at index {idx}"), String::as_str)
 }
 
 #[test]

@@ -207,7 +207,7 @@ fn probe_video_streams(input: &Path) -> Vec<VideoStreamInfo> {
         .flatten()
         .filter(|stream| stream.get("codec_type").and_then(|v| v.as_str()) == Some("video"))
         .map(|stream| VideoStreamInfo {
-            index: stream.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
+            index: stream.get("index").and_then(serde_json::Value::as_u64).unwrap_or(0) as usize,
             frame_count: stream.get("nb_frames")
                 .and_then(|v| v.as_str())
                 .and_then(|value| value.parse::<u64>().ok())
@@ -438,7 +438,7 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
         }
 
         // Add to concat list
-        let duration_sec = frame_durations_ms.get((i - 1) as usize).copied().map(|d| f64::from(d) / 1000.0).unwrap_or(0.1);
+        let duration_sec = frame_durations_ms.get((i - 1) as usize).copied().map_or(0.1, |d| f64::from(d) / 1000.0);
         let _ = writeln!(
             concat_content,
             "file '{}'",

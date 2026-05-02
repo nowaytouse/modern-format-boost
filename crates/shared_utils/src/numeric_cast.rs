@@ -455,6 +455,15 @@ pub fn usize_to_i32_sat(v: usize) -> i32 {
     i32::try_from(v).unwrap_or(i32::MAX)
 }
 
+/// Saturating cast: `i64` → `u32`.
+///
+/// Negative values → `0`, > `u32::MAX` → `u32::MAX`.
+#[inline]
+#[must_use]
+pub fn i64_to_u32_sat(v: i64) -> u32 {
+    u32::try_from(v.clamp(0, i64::from(u32::MAX))).unwrap_or(0)
+}
+
 /// Saturating cast: `i64` → `u64`.
 ///
 /// Negative values → `0`.

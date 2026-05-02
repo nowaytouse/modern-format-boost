@@ -282,7 +282,7 @@ pub fn execute_conversion(
         } else {
             shared_utils::numeric_cast::f64_to_f32_lossy({
                 let ratio = Rational::from((s, detection.file_size.max(1)));
-                100.0 - (ratio.to_f64() * 100.0)
+                ratio.to_f64().mul_add(-100.0, 100.0)
             })
         }
     });

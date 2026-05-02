@@ -941,7 +941,7 @@ fn lookup_similar_samples_inner(
     let prior_strength = 2.0f64.mul_add(global_imbalance_ratio.ln_1p(), 3.0);
     let shrink = (eff_n / (eff_n + prior_strength)).clamp(0.0, 1.0);
     let keep_probability =
-        (local_keep_probability * shrink + global_keep_prior * (1.0 - shrink)).clamp(0.0, 1.0);
+        global_keep_prior.mul_add(1.0 - shrink, local_keep_probability * shrink).clamp(0.0, 1.0);
     let mean_distance: f64 = if distances.is_empty() {
         0.0
     } else {

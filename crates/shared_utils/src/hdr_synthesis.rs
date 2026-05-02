@@ -629,7 +629,7 @@ fn parse_gainmap_from_xmp(xmp_str: &str) -> Option<GainMapParams> {
                     if let Ok(val) = reader.read_text(e.name()) {
                         let text = reader
                             .decoder()
-                            .decode(val.as_bytes())
+                            .decode(val.as_ref())
                             .unwrap_or_default()
                             .to_string();
                         if let Ok(f) = text.parse::<f32>() {
@@ -641,7 +641,7 @@ fn parse_gainmap_from_xmp(xmp_str: &str) -> Option<GainMapParams> {
                     if let Ok(val) = reader.read_text(e.name()) {
                         let text = reader
                             .decoder()
-                            .decode(val.as_bytes())
+                            .decode(val.as_ref())
                             .unwrap_or_default()
                             .to_string();
                         if let Ok(f) = text.parse::<f32>() {
@@ -653,7 +653,7 @@ fn parse_gainmap_from_xmp(xmp_str: &str) -> Option<GainMapParams> {
                     if let Ok(val) = reader.read_text(e.name()) {
                         let text = reader
                             .decoder()
-                            .decode(val.as_bytes())
+                            .decode(val.as_ref())
                             .unwrap_or_default()
                             .to_string();
                         if let Ok(f) = text.parse::<f32>() {
@@ -665,7 +665,7 @@ fn parse_gainmap_from_xmp(xmp_str: &str) -> Option<GainMapParams> {
                     if let Ok(val) = reader.read_text(e.name()) {
                         let text = reader
                             .decoder()
-                            .decode(val.as_bytes())
+                            .decode(val.as_ref())
                             .unwrap_or_default()
                             .to_string();
                         if let Ok(f) = text.parse::<f32>() {
@@ -677,7 +677,7 @@ fn parse_gainmap_from_xmp(xmp_str: &str) -> Option<GainMapParams> {
                     if let Ok(val) = reader.read_text(e.name()) {
                         let text = reader
                             .decoder()
-                            .decode(val.as_bytes())
+                            .decode(val.as_ref())
                             .unwrap_or_default()
                             .to_string();
                         if let Ok(f) = text.parse::<f32>() {

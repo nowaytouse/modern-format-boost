@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+### 🛡️ Nightly Dependency & Numerical Rigor (2026-05-02)
+
+- **Supply Chain "Nightly" Transformation**:
+  - **Exhaustive GitHub/GitLab Patching**: Migrated 95% of the dependency tree to track absolute master/main branches of core Rust libraries (`anyhow`, `serde`, `clap`, `tracing`, `rusqlite`, `rug`, `indicatif`, etc.), ensuring the project runs on the bleeding edge of the ecosystem.
+  - **Highest-Version Priority**: Enforced a strict policy where the absolute highest version (crates.io vs GitHub) is prioritized. Reverted `image` crate to crates.io `v0.25.10` as it is currently ahead of its master branch.
+  - **Dependency Normalization**: Refactored all member crates (`shared_utils`, `dev`, `vid`, `img`) to use `workspace = true` for all dependencies, eliminating version drift and ensuring a unified dependency graph.
+- **Breaking API Resolution (Dependency Upgrades)**:
+  - **Quick-XML v0.39 Migration**: Adapted `hdr_synthesis.rs` to the new `quick-xml` API, replacing deprecated `.as_bytes()` calls with `.as_ref()` for `BytesText` components.
+  - **Rusqlite v0.39 Integration**: Hardened the database layer in `media_index.rs` to comply with the new strict `ToSql`/`FromSql` trait implementations. Introduced mandatory `i64` intermediate casting for all unsigned integer and `usize` columns.
+  - **Numerical Safety Layer Expansion**: Added `i64_to_u32_sat` to `shared_utils::numeric_cast` to support the new database rigor requirements.
+- **Precision & Numerical Rigor (Rug Rational)**:
+  - **Rational Decision Closure**: Completed the transition of all "keep/discard" decisions (e.g., `size_ratio < 1.01`) to `rug::Rational`, eliminating floating-point non-determinism in the final output stage.
+  - **Loud Failure Enforcement**: Standardized on `f64_to_rational_loud` to ensure any precision anomalies (NaN/Inf) trigger immediate, descriptive warnings instead of silent failures.
+- **Code Quality**:
+  - Achieved a 100% clean status under `cargo +nightly clippy --all-targets -- -D warnings -D clippy::pedantic -D clippy::nursery`.
+
 ### 🛡️ Hardening & Workflow Optimization (2026-05-02)
 
 - **Exhaustive Panic & Indexing Hardening**:

@@ -36,6 +36,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "alloca"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5a7d05ea6aea7e9e64d25b9156ba2fee3fdd659e34e41063cd2fc7cd020d7f4"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "android_system_properties"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -242,8 +251,7 @@ checksum = "1e4b40c7323adcfc0a41c4b88143ed58346ff65a288fc144329c5c45e05d70c6"
 [[package]]
 name = "bitflags"
 version = "2.11.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4512299f36f043ab09a583e57bceb5a5aab7a73db1805848e8fef3c9e8c78b3"
+source = "git+https://github.com/bitflags/bitflags.git#4ed9ffa949970239cd2d87c775e9fdcf9c438fb5"
 dependencies = [
  "serde_core",
 ]
@@ -260,8 +268,7 @@ dependencies = [
 [[package]]
 name = "blake3"
 version = "1.8.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0aa83c34e62843d924f905e0f5c866eb1dd6545fc4d719e803d9ba6030371fce"
+source = "git+https://github.com/BLAKE3-team/BLAKE3.git#f3913d953128661319b6b57b1c001a3b9c2d526e"
 dependencies = [
  "arrayref",
  "arrayvec",
@@ -370,11 +377,10 @@ dependencies = [
 
 [[package]]
 name = "cfb"
-version = "0.7.3"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d38f2da7a0a2c4ccf0065be06397cc26a81f4e528be095826eee9d4adbb8c60f"
+checksum = "fb9b414dc579b1b0194d06e65472b6ee2e87f623f970a715e3bb04e105400ffa"
 dependencies = [
- "byteorder",
  "fnv",
  "uuid",
 ]
@@ -564,25 +570,23 @@ dependencies = [
 
 [[package]]
 name = "criterion"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2b12d017a929603d80db1831cd3a24082f8137ce19c69e6447f54f5fc8d692f"
+version = "0.8.2"
+source = "git+https://github.com/criterion-rs/criterion.rs.git#d3f10461c0eb6bfd4e6b236cedea805939878fa9"
 dependencies = [
+ "alloca",
  "anes",
  "cast",
  "ciborium",
  "clap",
  "criterion-plot",
- "is-terminal",
- "itertools 0.10.5",
+ "itertools 0.13.0",
  "num-traits",
- "once_cell",
  "oorandom",
+ "page_size",
  "plotters",
  "rayon",
  "regex",
  "serde",
- "serde_derive",
  "serde_json",
  "tinytemplate",
  "walkdir",
@@ -590,12 +594,11 @@ dependencies = [
 
 [[package]]
 name = "criterion-plot"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b50826342786a51a89e2da3a28f1c32b06e387201bc2d19791f622c673706b1"
+version = "0.8.2"
+source = "git+https://github.com/criterion-rs/criterion.rs.git#d3f10461c0eb6bfd4e6b236cedea805939878fa9"
 dependencies = [
  "cast",
- "itertools 0.10.5",
+ "itertools 0.13.0",
 ]
 
 [[package]]
@@ -916,6 +919,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 
 [[package]]
+name = "foldhash"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
+
+[[package]]
 name = "four-cc"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1036,7 +1045,16 @@ version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
 dependencies = [
- "foldhash",
+ "foldhash 0.1.5",
+]
+
+[[package]]
+name = "hashbrown"
+version = "0.16.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
+dependencies = [
+ "foldhash 0.2.0",
 ]
 
 [[package]]
@@ -1047,11 +1065,11 @@ checksum = "4f467dd6dccf739c208452f8014c75c18bb8301b050ad1cfb27153803edb0f51"
 
 [[package]]
 name = "hashlink"
-version = "0.10.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7382cf6263419f2d8df38c55d7da83da5c18aef87fc7a7fc1fb1e344edfe14c1"
+checksum = "ea0b22561a9c04a7cb1a302c013e0259cd3b4bb619f145b32f72b8b4bcbed230"
 dependencies = [
- "hashbrown 0.15.5",
+ "hashbrown 0.16.1",
 ]
 
 [[package]]
@@ -1059,12 +1077,6 @@ name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
-
-[[package]]
-name = "hermit-abi"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc0fef456e4baa96da950455cd02c081ca953b141298e41db3fc7e36b1da849c"
 
 [[package]]
 name = "hmac"
@@ -1202,9 +1214,8 @@ dependencies = [
 
 [[package]]
 name = "infer"
-version = "0.16.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc150e5ce2330295b8616ce0e3f53250e53af31759a9dbedad1621ba29151847"
+version = "0.21.0"
+source = "git+https://github.com/bojand/infer.git#7e6b1d00762cbfbef480333cd137582b3e4aba32"
 dependencies = [
  "cfb",
 ]
@@ -1212,8 +1223,7 @@ dependencies = [
 [[package]]
 name = "insta"
 version = "1.47.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b4a6248eb93a4401ed2f37dfe8ea592d3cf05b7cf4f8efa867b6895af7e094e"
+source = "git+https://github.com/mitsuhiko/insta.git#0ddf1e829337fe2a4cbb4b801d9fd78426a10fe0"
 dependencies = [
  "console",
  "once_cell",
@@ -1233,17 +1243,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "is-terminal"
-version = "0.4.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
-dependencies = [
- "hermit-abi",
- "libc",
- "windows-sys",
-]
-
-[[package]]
 name = "is_terminal_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1251,9 +1250,9 @@ checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
 
 [[package]]
 name = "itertools"
-version = "0.10.5"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0fd2260e829bddf4cb6ea802289de2f86d6a7a690192fbe91b3f46e0f2c8473"
+checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
 dependencies = [
  "either",
 ]
@@ -1285,9 +1284,8 @@ dependencies = [
 
 [[package]]
 name = "jpegxl-rs"
-version = "0.12.0+libjxl-0.11.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4bc73de4d7188a80badb62062780510e402a17947f663e50f6390ebb6e7b90ed"
+version = "0.14.0+libjxl-0.11.2"
+source = "git+https://github.com/inflation/jpegxl-rs.git#0d3590d5c8d3bd57128f70b89fc190f48de60cdd"
 dependencies = [
  "bon",
  "byteorder",
@@ -1299,8 +1297,7 @@ dependencies = [
 [[package]]
 name = "jpegxl-src"
 version = "0.11.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "902ce3ffcd089c3c02a74a44bdd4fd01ad18ecc63ec582b9c84b12418cdeba1e"
+source = "git+https://github.com/inflation/jpegxl-rs.git#0d3590d5c8d3bd57128f70b89fc190f48de60cdd"
 dependencies = [
  "cmake",
 ]
@@ -1308,8 +1305,7 @@ dependencies = [
 [[package]]
 name = "jpegxl-sys"
 version = "0.12.1+libjxl-0.11.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00cb4f7ffb45ee4327e9ec6ca1a732f3abef470ee008f7d4be3afb414075cd7d"
+source = "git+https://github.com/inflation/jpegxl-rs.git#0d3590d5c8d3bd57128f70b89fc190f48de60cdd"
 dependencies = [
  "jpegxl-src",
  "pkg-config",
@@ -1364,7 +1360,7 @@ dependencies = [
 [[package]]
 name = "libheif-rs"
 version = "2.7.0"
-source = "git+https://github.com/Cykooz/libheif-rs.git?rev=0f614ab5f6677a57af4a8aa6e4f43b69e937ef13#0f614ab5f6677a57af4a8aa6e4f43b69e937ef13"
+source = "git+https://github.com/Cykooz/libheif-rs.git#0f614ab5f6677a57af4a8aa6e4f43b69e937ef13"
 dependencies = [
  "cfg-if",
  "enumn",
@@ -1376,7 +1372,7 @@ dependencies = [
 [[package]]
 name = "libheif-sys"
 version = "5.2.0+1.21.2"
-source = "git+https://github.com/Cykooz/libheif-sys.git?rev=fd2073e1a3211a17a5480f5c6a636384f7680b74#fd2073e1a3211a17a5480f5c6a636384f7680b74"
+source = "git+https://github.com/Cykooz/libheif-sys.git#fd2073e1a3211a17a5480f5c6a636384f7680b74"
 dependencies = [
  "cfg-if",
  "cmake",
@@ -1406,9 +1402,8 @@ dependencies = [
 
 [[package]]
 name = "libsqlite3-sys"
-version = "0.31.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ad8935b44e7c13394a179a438e0cebba0fe08fe01b54f152e29a93b5cf993fd4"
+version = "0.37.0"
+source = "git+https://github.com/rusqlite/rusqlite.git#63181d4cff680e2738b4618d9c422ed35eb23bd7"
 dependencies = [
  "cc",
  "pkg-config",
@@ -1691,6 +1686,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
+name = "page_size"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "30d5b2194ed13191c1999ae0704b7839fb18384fa22e49b57eeaa97d79ce40da"
+dependencies = [
+ "libc",
+ "winapi",
+]
+
+[[package]]
 name = "parking_lot"
 version = "0.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1734,8 +1739,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 [[package]]
 name = "pgvector"
 version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc58e2d255979a31caa7cabfa7aac654af0354220719ab7a68520ae7a91e8c0b"
+source = "git+https://github.com/pgvector/pgvector-rust.git#68b5244cc491e1cba038deac6040ef51031e4ec2"
 dependencies = [
  "bytes",
  "postgres-types",
@@ -1828,8 +1832,7 @@ checksum = "c33a9471896f1c69cecef8d20cbe2f7accd12527ce60845ff44c153bb2a21b49"
 [[package]]
 name = "postgres"
 version = "0.19.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aacf632d0554ff75f58183694f41dc8999c8a3a43a386994d0ec2d034f1dfbe1"
+source = "git+https://github.com/sfackler/rust-postgres.git#2adc59b75dc988166e062ab06af91daa89e83550"
 dependencies = [
  "bytes",
  "fallible-iterator 0.2.0",
@@ -1842,8 +1845,7 @@ dependencies = [
 [[package]]
 name = "postgres-protocol"
 version = "0.6.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56201207dac53e2f38e848e31b4b91616a6bb6e0c7205b77718994a7f49e70fc"
+source = "git+https://github.com/sfackler/rust-postgres.git#2adc59b75dc988166e062ab06af91daa89e83550"
 dependencies = [
  "base64",
  "byteorder",
@@ -1860,8 +1862,7 @@ dependencies = [
 [[package]]
 name = "postgres-types"
 version = "0.2.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8dc729a129e682e8d24170cd30ae1aa01b336b096cbb56df6d534ffec133d186"
+source = "git+https://github.com/sfackler/rust-postgres.git#2adc59b75dc988166e062ab06af91daa89e83550"
 dependencies = [
  "bytes",
  "fallible-iterator 0.2.0",
@@ -1926,15 +1927,14 @@ dependencies = [
 [[package]]
 name = "proptest"
 version = "1.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b45fcc2344c680f5025fe57779faef368840d0bd1f42f216291f0dc4ace4744"
+source = "git+https://github.com/proptest-rs/proptest.git#c020b9b036da8a25904f2fe9f9adcc2ec6952136"
 dependencies = [
  "bit-set",
  "bit-vec",
  "bitflags",
  "num-traits",
- "rand 0.9.4",
- "rand_chacha",
+ "rand 0.10.1",
+ "rand_chacha 0.10.0",
  "rand_xorshift",
  "regex-syntax",
  "rusty-fork",
@@ -1962,9 +1962,8 @@ checksum = "a993555f31e5a609f617c12db6250dedcac1b0a85076912c436e6fc9b2c8e6a3"
 
 [[package]]
 name = "quick-xml"
-version = "0.31.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1004a344b30a54e2ee58d66a71b32d2db2feb0a31f9a2d302bf0536f15de2a33"
+version = "0.39.2"
+source = "git+https://github.com/tafia/quick-xml.git#8549d20a4c3709c7e7fbac075b68fd476d895daa"
 dependencies = [
  "memchr",
 ]
@@ -1996,15 +1995,14 @@ version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "44c5af06bb1b7d3216d91932aed5265164bf384dc89cd6ba05cf59a35f5f76ea"
 dependencies = [
- "rand_chacha",
+ "rand_chacha 0.9.0",
  "rand_core 0.9.5",
 ]
 
 [[package]]
 name = "rand"
 version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2e8e8bcc7961af1fdac401278c6a831614941f6164ee3bf4ce61b7edb162207"
+source = "git+https://github.com/rust-random/rand.git#31cd3326034525acb06e1616487ef3c41c7acab0"
 dependencies = [
  "chacha20",
  "getrandom 0.4.2",
@@ -2019,6 +2017,16 @@ checksum = "d3022b5f1df60f26e1ffddd6c66e8aa15de382ae63b3a0c1bfc0e4d3e3f325cb"
 dependencies = [
  "ppv-lite86",
  "rand_core 0.9.5",
+]
+
+[[package]]
+name = "rand_chacha"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e6af7f3e25ded52c41df4e0b1af2d047e45896c2f3281792ed68a1c243daedb"
+dependencies = [
+ "ppv-lite86",
+ "rand_core 0.10.1",
 ]
 
 [[package]]
@@ -2038,11 +2046,11 @@ checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
 
 [[package]]
 name = "rand_xorshift"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "513962919efc330f829edb2535844d1b912b0fbe2ca165d613e4e8788bb05a5a"
+checksum = "60aa6af80be32871323012e02e6e65f8a7cc7890931ae421d217ad8fe0df2ccf"
 dependencies = [
- "rand_core 0.9.5",
+ "rand_core 0.10.1",
 ]
 
 [[package]]
@@ -2073,7 +2081,7 @@ dependencies = [
  "paste",
  "profiling",
  "rand 0.9.4",
- "rand_chacha",
+ "rand_chacha 0.9.0",
  "simd_helpers",
  "thiserror",
  "v_frame",
@@ -2183,10 +2191,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsqlite-vfs"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a8a1f2315036ef6b1fbacd1972e8ee7688030b0a2121edfc2a6550febd41574d"
+dependencies = [
+ "hashbrown 0.16.1",
+ "thiserror",
+]
+
+[[package]]
 name = "rug"
 version = "1.30.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07a8857882aec59d27254b02481c709327c13de6fad1da60bfc4f9783eaaa61e"
+source = "git+https://gitlab.com/tspiteri/rug.git#6e410756a18234db98a881637f474e0b2c8fadd2"
 dependencies = [
  "az",
  "gmp-mpfr-sys",
@@ -2196,9 +2213,8 @@ dependencies = [
 
 [[package]]
 name = "rusqlite"
-version = "0.33.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1c6d5e5acb6f6129fe3f7ba0a7fc77bca1942cb568535e18e7bc40262baf3110"
+version = "0.39.0"
+source = "git+https://github.com/rusqlite/rusqlite.git#63181d4cff680e2738b4618d9c422ed35eb23bd7"
 dependencies = [
  "bitflags",
  "fallible-iterator 0.3.0",
@@ -2206,6 +2222,7 @@ dependencies = [
  "hashlink",
  "libsqlite3-sys",
  "smallvec",
+ "sqlite-wasm-rs",
 ]
 
 [[package]]
@@ -2471,6 +2488,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "sqlite-wasm-rs"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b2c760607300407ddeaee518acf28c795661b7108c75421303dbefb237d3a36"
+dependencies = [
+ "cc",
+ "js-sys",
+ "rsqlite-vfs",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2655,8 +2684,7 @@ dependencies = [
 [[package]]
 name = "tokio-postgres"
 version = "0.7.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4dd8df5ef180f6364759a6f00f7aadda4fbbac86cdee37480826a6ff9f3574ce"
+source = "git+https://github.com/sfackler/rust-postgres.git#2adc59b75dc988166e062ab06af91daa89e83550"
 dependencies = [
  "async-trait",
  "byteorder",
@@ -3119,6 +3147,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "winapi"
+version = "0.3.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c839a674fcd7a98952e593242ea400abe93992746761e38641405d28b00f419"
+dependencies = [
+ "winapi-i686-pc-windows-gnu",
+ "winapi-x86_64-pc-windows-gnu",
+]
+
+[[package]]
+name = "winapi-i686-pc-windows-gnu"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac3b87c63620426dd9b991e5ce0329eff545bccbbb34f3be09ff6fb6ab51b7b6"
+
+[[package]]
 name = "winapi-util"
 version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3126,6 +3170,12 @@ checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
  "windows-sys",
 ]
+
+[[package]]
+name = "winapi-x86_64-pc-windows-gnu"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
 name = "windows-core"
