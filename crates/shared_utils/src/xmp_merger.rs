@@ -1,7 +1,7 @@
 use crate::path_safety::{exiftool_path_arg, safe_path_arg};
 use anyhow::{bail, Context, Result};
+use quick_xml::events::Event;
 use std::collections::HashMap;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
@@ -173,55 +173,95 @@ impl XmpMerger {
     }
 
     fn extract_xmp_metadata(xmp_path: &Path) -> Result<XmpFile> {
-        let output = crate::tool_builders::ExiftoolBuilder::new()
-            .arg("-charset")
-            .arg("filename=utf8")
-            .arg("-api")
-            .arg("windowsunicode=1")
-            .arg("-api")
-            .arg("LargeFileSupport=1")
-            .arg("-s3")
-            .arg("-DocumentID")
-            .arg("-DerivedFrom")
-            .arg("-Source")
-            .arg("-OriginalDocumentID")
-            .arg(exiftool_path_arg(xmp_path).as_ref())
-            .build()
-            .output()
-            .context("Failed to run exiftool")?;
+        let xmp_data = std::fs::read(xmp_path)
+            .with_context(|| format!("Failed to read XMP file: {}", xmp_path.display()))?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            let detail = if stderr.is_empty() {
-                format!("status {}", output.status)
-            } else {
-                stderr
-            };
-            bail!(
-                "ExifTool metadata extraction failed for {}: {}",
-                xmp_path.display(),
-                detail
-            );
+        let mut xmp_info = XmpFile {
+            path: xmp_path.to_path_buf(),
+            document_id: None,
+            derived_from: None,
+            source: None,
+        };
+
+        let mut reader = quick_xml::reader::Reader::from_reader(xmp_data.as_slice());
+        let mut buf = Vec::new();
+
+        loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(ref e) | Event::Empty(ref e)) => {
+                    for attr in e.attributes().flatten() {
+                        let local_name = attr.key.local_name();
+                        let name_ref = local_name.as_ref();
+
+                        if let Ok(val_cow) = attr.normalized_value(quick_xml::XmlVersion::V1_0) {
+                            if name_ref.windows(10).any(|w| w == b"DocumentID") {
+                                xmp_info.document_id = Some(val_cow.to_string());
+                            } else if name_ref.windows(11).any(|w| w == b"DerivedFrom") {
+                                xmp_info.derived_from = Some(val_cow.to_string());
+                            } else if name_ref.windows(6).any(|w| w == b"Source") {
+                                xmp_info.source = Some(val_cow.to_string());
+                            }
+                        }
+                    }
+                }
+                Ok(Event::Eof) => break,
+                Err(_) => break,
+                _ => (),
+            }
+            buf.clear();
         }
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let lines: Vec<&str> = stdout.lines().collect();
+        // Fallback to exiftool only if native parsing found nothing
+        if xmp_info.document_id.is_none() && xmp_info.derived_from.is_none() && xmp_info.source.is_none() {
+            let output = crate::tool_builders::ExiftoolBuilder::new()
+                .arg("-charset")
+                .arg("filename=utf8")
+                .arg("-api")
+                .arg("windowsunicode=1")
+                .arg("-api")
+                .arg("LargeFileSupport=1")
+                .arg("-s3")
+                .arg("-DocumentID")
+                .arg("-DerivedFrom")
+                .arg("-Source")
+                .arg("-OriginalDocumentID")
+                .arg(exiftool_path_arg(xmp_path).as_ref())
+                .build()
+                .output()
+                .context("Failed to run exiftool")?;
 
-        Ok(XmpFile {
-            path: xmp_path.to_path_buf(),
-            document_id: lines
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                let detail = if stderr.is_empty() {
+                    format!("status {}", output.status)
+                } else {
+                    stderr
+                };
+                bail!(
+                    "ExifTool metadata extraction failed for {}: {}",
+                    xmp_path.display(),
+                    detail
+                );
+            }
+
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let lines: Vec<&str> = stdout.lines().collect();
+
+            xmp_info.document_id = lines
                 .first()
                 .map(std::string::ToString::to_string)
-                .filter(|s| !s.is_empty()),
-            derived_from: lines
+                .filter(|s| !s.is_empty());
+            xmp_info.derived_from = lines
                 .get(1)
                 .map(std::string::ToString::to_string)
-                .filter(|s| !s.is_empty()),
-            source: lines
+                .filter(|s| !s.is_empty());
+            xmp_info.source = lines
                 .get(2)
                 .map(std::string::ToString::to_string)
-                .filter(|s| !s.is_empty()),
-        })
+                .filter(|s| !s.is_empty());
+        }
+
+        Ok(xmp_info)
     }
 
     fn is_uuid_filename(name: &str) -> bool {
@@ -687,8 +727,8 @@ impl XmpMerger {
         let original_timestamps = Self::get_file_timestamps(media_path);
         let xmp_timestamps = Self::get_file_timestamps(xmp_path);
 
-        let xmp_data = std::fs::read(xmp_path)
-            .with_context(|| format!("Failed to read XMP file: {}", xmp_path.display()))?;
+        let xmp_file = std::fs::File::open(xmp_path)
+            .with_context(|| format!("Failed to open XMP file: {}", xmp_path.display()))?;
 
         let mut builder = crate::tool_builders::ExiftoolBuilder::new();
         builder
@@ -740,9 +780,9 @@ impl XmpMerger {
             .take()
             .ok_or_else(|| anyhow::anyhow!("Failed to open stdin for exiftool"))?;
 
-        stdin
-            .write_all(&xmp_data)
-            .context("Failed to write XMP to exiftool stdin")?;
+        let mut reader = std::io::BufReader::new(xmp_file);
+        std::io::copy(&mut reader, &mut stdin)
+            .context("Failed to stream XMP to exiftool stdin")?;
         drop(stdin); // Close stdin to signal EOF
 
         let output = child

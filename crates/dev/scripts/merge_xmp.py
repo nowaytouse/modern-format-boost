@@ -396,13 +396,6 @@ def merge_xmp(xmp_path: Path, media_path: Path, strategy: str) -> bool:
     parent_dir = media_path.parent
     original_parent_times = get_timestamps(parent_dir)
 
-    try:
-        with open(xmp_path, "rb") as f:
-            xmp_data = f.read()
-    except Exception as e:
-        print(f"  {RED}❌ Failed to read XMP file: {e}{RESET}")
-        return False
-
     apple_compat = os.environ.get("MODERN_FORMAT_BOOST_APPLE_COMPAT") is not None
     is_jxl = media_path.suffix.lower() == ".jxl"
 
@@ -437,10 +430,11 @@ def merge_xmp(xmp_path: Path, media_path: Path, strategy: str) -> bool:
     )
 
     try:
-        process = subprocess.Popen(
-            cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-        )
-        stdout, stderr = process.communicate(input=xmp_data)
+        with open(xmp_path, "rb") as xmp_file:
+            process = subprocess.Popen(
+                cmd, stdin=xmp_file, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
+            stdout, stderr = process.communicate()
 
         if process.returncode != 0:
             err_msg = stderr.decode("utf-8", errors="replace").strip()
