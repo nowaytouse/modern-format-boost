@@ -43,7 +43,7 @@ fn test_cjxl_grayscale_icc_fallback() {
 
     use img::lossless_converter::{convert_to_jxl, ConvertOptions};
     let options = ConvertOptions {
-        verbose: true,
+        flags: shared_utils::conversion::ConvertFlags::VERBOSE,
         ..Default::default()
     };
 

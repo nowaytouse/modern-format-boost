@@ -54,7 +54,7 @@ console = "0.16.3"
 chrono  = { version = "0.4.44", features = ["serde"] }
 
 # Image processing
-image       = { version = "0.25.8", default-features = false, features = ["png", "jpeg", "webp", "gif", "tiff", "avif"] }
+image       = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif", "tiff", "avif"] }
 libheif-rs  = { version = "2.7.0", features = ["v1_21"] }
 mp4parse    = "0.14.0"
 
@@ -120,7 +120,6 @@ serde_derive = { git = "https://github.com/serde-rs/serde.git" }
 serde_json = { git = "https://github.com/serde-rs/json.git" }
 rayon = { git = "https://github.com/rayon-rs/rayon.git" }
 rayon-core = { git = "https://github.com/rayon-rs/rayon.git" }
-image = { git = "https://github.com/image-rs/image.git" }
 clap = { git = "https://github.com/clap-rs/clap.git" }
 indicatif = { git = "https://github.com/console-rs/indicatif.git" }
 

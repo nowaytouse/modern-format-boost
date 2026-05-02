@@ -1090,7 +1090,7 @@ mod tests {
         fs::write(&jpg, "fake jpg").unwrap();
         fs::write(&xmp, "fake xmp").unwrap();
 
-        let merger = XmpMerger::new(XmpMergerConfig::default());
+        let _merger = XmpMerger::new(XmpMergerConfig::default());
         let result = XmpMerger::find_direct_match(&xmp);
 
         assert!(result.is_some());
@@ -1271,7 +1271,7 @@ mod tests {
             source: None,
         };
 
-        let merger = XmpMerger::new(XmpMergerConfig::default());
+        let _merger = XmpMerger::new(XmpMergerConfig::default());
         assert_eq!(XmpMerger::find_by_xmp_metadata(&xmp_path, &xmp_info), None);
     }
 
@@ -1299,7 +1299,7 @@ mod tests {
 
         let temp_dir = TempDir::new().unwrap();
         let missing_xmp = temp_dir.path().join("missing.xmp");
-        let merger = XmpMerger::new(XmpMergerConfig::default());
+        let _merger = XmpMerger::new(XmpMergerConfig::default());
 
         let err = XmpMerger::extract_xmp_metadata(&missing_xmp).unwrap_err();
         assert!(err

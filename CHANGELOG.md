@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+### 🛡️ Core Stability & Code Quality Hardening (2026-05-02)
+
+- **Dependency Stabilization**:
+  - Reconciled `image` crate version inconsistencies across the workspace.
+  - Pinned the project to `image = "0.25.10"` to ensure API stability and resolve type mismatch build failures in the HDR synthesis module.
+- **Nightly Clippy Compliance (100% Clean)**:
+  - Achieved a 100% clean build under `cargo +nightly clippy --all-targets -- -D warnings`.
+  - Resolved `clippy::field_reassign_with_default` warnings by refactoring struct initializations to use struct literals (e.g., in `vid/src/conversion_api.rs`).
+  - Eliminated `unused_variables` warnings in `shared_utils/src/xmp_merger.rs` tests.
+  - Removed redundant type conversions (`f64::from`) in `img/src/main.rs` and other core modules.
+- **Media Pipeline Integrity**:
+  - Re-synchronized `ConvertOptions` initialization in development and debugging scripts (`jxl_explorer_debug.rs`, `test_cjxl_errors.rs`) to align with the new `bitflags` architecture.
+  - Fixed broken documentation tests in `shared_utils/src/logging.rs` by correcting function signatures to pass `LogConfig` by reference.
+- **HDR Synthesis Hardening**:
+  - Confirmed and verified `resize_exact` stability under `image v0.25.10` for HDR synthesis tasks, resolving previous compilation regressions.
+
 ### 📐 Configuration Refactor & Memory Optimization (2026-05-02)
 
 - **Bitflags-based Configuration System**: 

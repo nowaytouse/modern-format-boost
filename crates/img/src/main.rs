@@ -419,7 +419,7 @@ fn main() -> anyhow::Result<()> {
                             let res: Rational = ratio * Rational::from(10_000);
                             res.to_f64()
                         };
-                        let usage_percent = f64::from(permille) / 100.0;
+                        let usage_percent = permille / 100.0;
                         println!("\n💾 Storage Usage: {usage_percent:.1}% of 85 GB limit");
 
                         if usage_percent > 80.0 {

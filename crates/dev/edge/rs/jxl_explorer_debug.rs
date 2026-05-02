@@ -102,11 +102,15 @@ fn manual_debug_jxl_explorer_uses_copies_only() {
 
         let options = ConvertOptions {
             output_dir: Some(output_dir.clone()),
-            force: true,
-            explore: true,
-            match_quality: true,
-            compress: true,
-            ultimate: true,
+            flags: {
+                let mut f = shared_utils::conversion::ConvertFlags::empty();
+                f.set(shared_utils::conversion::ConvertFlags::FORCE, true);
+                f.set(shared_utils::conversion::ConvertFlags::EXPLORE, true);
+                f.set(shared_utils::conversion::ConvertFlags::MATCH_QUALITY, true);
+                f.set(shared_utils::conversion::ConvertFlags::COMPRESS, true);
+                f.set(shared_utils::conversion::ConvertFlags::ULTIMATE, true);
+                f
+            },
             input_format: Some(analysis.format.clone()),
             ..Default::default()
         };

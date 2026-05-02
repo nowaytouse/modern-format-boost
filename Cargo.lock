@@ -1122,18 +1122,17 @@ checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 
 [[package]]
 name = "image"
-version = "0.25.9"
-source = "git+https://github.com/image-rs/image.git#41f48c03263bc601fc7ca8ab54bbd786b029b429"
+version = "0.25.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "85ab80394333c02fe689eaf900ab500fbd0c2213da414687ebf995a65d5a6104"
 dependencies = [
  "bytemuck",
  "byteorder-lite",
  "color_quant",
  "gif",
  "image-webp",
- "jpeg-encoder",
  "moxcms",
  "num-traits",
- "pic-scale-safe",
  "png",
  "ravif",
  "rgb",
@@ -1283,12 +1282,6 @@ dependencies = [
  "getrandom 0.3.4",
  "libc",
 ]
-
-[[package]]
-name = "jpeg-encoder"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b0b36cbb4e6704f12f5b5d7b01dac593982c6550859ebd5a66fb15c9ea27fd5"
 
 [[package]]
 name = "jpegxl-rs"
@@ -1765,15 +1758,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e57fef6bc5981e38c2ce2d63bfa546861309f875b8a75f092d1d54ae2d64f266"
 dependencies = [
  "siphasher",
-]
-
-[[package]]
-name = "pic-scale-safe"
-version = "0.1.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "36e49f233e66b40ae5f26f5ccb7f43b8cf668a54231c13d33d0fa69b0b06969a"
-dependencies = [
- "num-traits",
 ]
 
 [[package]]

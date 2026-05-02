@@ -15,11 +15,13 @@ use tracing::{info, warn};
 fn convert_options_from_config(
     config: &ConversionConfig,
 ) -> shared_utils::conversion::ConvertOptions {
-    let mut opts = shared_utils::conversion::ConvertOptions::default();
-    opts.output_dir = config.output_dir.clone();
-    opts.base_dir = config.base_dir.clone();
-    opts.child_threads = config.child_threads;
-    opts.codec = config.codec;
+    let mut opts = shared_utils::conversion::ConvertOptions {
+        output_dir: config.output_dir.clone(),
+        base_dir: config.base_dir.clone(),
+        child_threads: config.child_threads,
+        codec: config.codec,
+        ..Default::default()
+    };
     
     opts.flags.set(shared_utils::conversion::ConvertFlags::FORCE, config.force());
     opts.flags.set(shared_utils::conversion::ConvertFlags::DELETE_ORIGINAL, config.delete_original());

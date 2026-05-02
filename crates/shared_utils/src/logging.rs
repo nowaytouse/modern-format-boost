@@ -14,7 +14,7 @@
 //!
 //! // Initialize logging system
 //! let config = LogConfig::default();
-//! init_logging("my_program", config).expect("Failed to initialize logging");
+//! init_logging("my_program", &config).expect("Failed to initialize logging");
 //!
 //! // Use tracing macros for logging
 //! info!("Program started");
