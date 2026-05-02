@@ -990,7 +990,8 @@ mod tests {
             let expected_calc = if result.total == 0 {
                 100.0
             } else {
-                (result.succeeded as f64 / result.total as f64) * 100.0
+                let p = u32::try_from((result.succeeded as u128 * 10_000) / result.total.max(1) as u128).unwrap_or(u32::MAX);
+                f64::from(p) / 100.0
             };
 
             assert!(

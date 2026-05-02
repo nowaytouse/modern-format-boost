@@ -57,10 +57,15 @@ fn print_inference_summary(conn: &mut postgres::Client) -> Result<()> {
     }
 
     println!("   Total inferences logged: {}", summary.total_records);
+    let permille = {
+        let ratio = rug::Rational::from(summary.layer7_fallback_count) / rug::Rational::from(summary.total_records.max(1));
+        let res: rug::Rational = ratio * rug::Rational::from(10_000);
+        res.to_f64()
+    };
     println!(
         "   Layer 7 fallbacks:       {} ({:.1}%)",
         summary.layer7_fallback_count,
-        summary.layer7_fallback_count as f64 / summary.total_records as f64 * 100.0
+        permille / 100.0
     );
 
     if let Some(avg_tree) = summary.avg_tree_probability {
@@ -76,15 +81,17 @@ fn print_inference_summary(conn: &mut postgres::Client) -> Result<()> {
     println!();
     println!("   Verdict Distribution:");
     for (verdict, count) in &summary.verdict_counts {
-        let pct = *count as f64 / summary.total_records as f64 * 100.0;
-        let bar = "█".repeat((pct / 5.0) as usize);
+        let ratio = rug::Rational::from(*count) / rug::Rational::from(summary.total_records.max(1));
+        let pct = ratio.to_f64() * 100.0;
+        let bar = "█".repeat(shared_utils::numeric_cast::f64_to_usize_sat(pct / 5.0));
         println!("     {verdict:<14} {count:>5} ({pct:>5.1}%) {bar}");
     }
 
     println!();
     println!("   Layer Exit Distribution:");
     for (layer, count) in &summary.layer_exit_counts {
-        let pct = *count as f64 / summary.total_records as f64 * 100.0;
+        let ratio = rug::Rational::from(*count) / rug::Rational::from(summary.total_records.max(1));
+        let pct = ratio.to_f64() * 100.0;
         println!("     {layer:<40} {count:>5} ({pct:>5.1}%)");
     }
 

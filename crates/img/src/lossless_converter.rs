@@ -10,6 +10,7 @@
 //! `convert_to_avif`, `convert_to_avif_lossless`, `convert_to_jxl_matched`.
 
 use crate::{ImgQualityError, Result};
+use rug::Rational;
 use shared_utils::image_jpeg_analysis::is_jpeg_complete;
 use std::fs;
 use std::path::Path;
@@ -51,7 +52,8 @@ fn finalize_with_size_check(
     extra_info: Option<String>,
 ) -> Result<ConversionResult> {
     let ratio = if input_size > 0 {
-        output_size as f64 / input_size as f64
+        let rat = rug::Rational::from((output_size, input_size));
+        rat.to_f64()
     } else {
         1.0
     };
@@ -721,36 +723,36 @@ pub fn convert_to_jxl(
                                             "JXL",
                                             Some("(ffmpeg fallback)".to_string()),
                                         );
-                                    } else {
-                                        let line = format!(
-                                            "   ❌ FFmpeg pipeline failed for file: {} (ffmpeg: {}, cjxl: {})",
-                                            input.display(),
-                                            if ffmpeg_ok { "✓" } else { "✗" },
-                                            if cjxl_ok { "✓" } else { "✗" }
-                                        );
-                                        shared_utils::progress_mode::emit_stderr(&line);
-                                        shared_utils::progress_mode::emit_stderr("   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline...");
-                                        if try_imagemagick_fallback_with_effort(
+                                    }
+
+                                    let line = format!(
+                                        "   ❌ FFmpeg pipeline failed for file: {} (ffmpeg: {}, cjxl: {})",
+                                        input.display(),
+                                        if ffmpeg_ok { "✓" } else { "✗" },
+                                        if cjxl_ok { "✓" } else { "✗" }
+                                    );
+                                    shared_utils::progress_mode::emit_stderr(&line);
+                                    shared_utils::progress_mode::emit_stderr("   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline...");
+                                    if try_imagemagick_fallback_with_effort(
+                                        input,
+                                        &temp_output,
+                                        actual_dist,
+                                        max_threads,
+                                        options.apple_compat,
+                                        actual_eff,
+                                    )
+                                    .is_ok()
+                                    {
+                                        return finalize_fallback_jxl(
                                             input,
                                             &temp_output,
-                                            actual_dist,
-                                            max_threads,
-                                            options.apple_compat,
-                                            actual_eff,
-                                        )
-                                        .is_ok()
-                                        {
-                                            return finalize_fallback_jxl(
-                                                input,
-                                                &temp_output,
-                                                &output,
-                                                input_size,
-                                                options,
-                                                "(imagemagick fallback)",
-                                            );
-                                        }
-                                        result
+                                            &output,
+                                            input_size,
+                                            options,
+                                            "(imagemagick fallback)",
+                                        );
                                     }
+                                    result
                                 }
                                 Err(e) => {
                                     let line = format!("   ❌ Failed to start cjxl process: {e}");
@@ -1720,7 +1722,8 @@ fn describe_jxl_finalist_pass(
     let ratio_pct = if input_size == 0 {
         100.0
     } else {
-        (finalist.output_size as f64 / input_size as f64) * 100.0
+        let ratio = Rational::from((finalist.output_size, input_size));
+        ratio.to_f64() * 100.0
     };
     let origin = if finalist.ladder_phase {
         "screened"
@@ -1831,7 +1834,8 @@ fn try_explore_ultimate_jxl_distance(
                     if input_size == 0 {
                         100.0
                     } else {
-                        (size as f64 / input_size as f64) * 100.0
+                        let ratio = Rational::from((size, input_size.max(1)));
+                        ratio.to_f64() * 100.0
                     }
                 ));
                 let replace_best = best_final.as_ref().is_none_or(|(best_idx, best_size, _)| {
@@ -1879,7 +1883,8 @@ fn try_explore_ultimate_jxl_distance(
             if input_size == 0 {
                 100.0
             } else {
-                (best_size as f64 / input_size as f64) * 100.0
+                let ratio = Rational::from((best_size, input_size));
+                ratio.to_f64() * 100.0
             }
         ));
         return Ok(None);
@@ -1943,7 +1948,8 @@ fn try_explore_ultimate_jxl_distance(
                     let pct = if input_size == 0 {
                         100.0
                     } else {
-                        (size as f64 / input_size as f64) * 100.0
+                        let ratio = Rational::from((size, input_size.max(1)));
+                        ratio.to_f64() * 100.0
                     };
 
                     if size < accepted_size {
@@ -1999,7 +2005,8 @@ fn try_explore_ultimate_jxl_distance(
         if input_size == 0 {
             100.0
         } else {
-            (accepted_size as f64 / input_size as f64) * 100.0
+            let ratio = Rational::from((accepted_size, input_size));
+            ratio.to_f64() * 100.0
         }
     ));
 
@@ -2028,7 +2035,8 @@ fn try_explore_ultimate_jxl_distance(
         if input_size == 0 {
             100.0
         } else {
-            (result.output_size as f64 / input_size as f64) * 100.0
+            let ratio = Rational::from((result.output_size, input_size));
+            ratio.to_f64() * 100.0
         }
     ));
     shared_utils::progress_mode::emit_stderr(&format!(
@@ -2037,7 +2045,8 @@ fn try_explore_ultimate_jxl_distance(
         if input_size == 0 {
             100.0
         } else {
-            (result.output_size as f64 / input_size as f64) * 100.0
+            let ratio = Rational::from((result.output_size, input_size));
+            ratio.to_f64() * 100.0
         },
         result.profile_label,
         result.pressure_stops

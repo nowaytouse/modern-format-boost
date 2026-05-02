@@ -602,12 +602,12 @@ impl DerivedLoopSignals {
         let i_count = meta.frame_types.iter().filter(|&&c| c == 'I').count();
         let total = meta.frame_types.len();
         let iframe_ratio = if total > 0 {
-            i_count as f64 / total as f64
+            crate::numeric_cast::usize_to_f64(i_count) / crate::numeric_cast::usize_to_f64(total)
         } else {
             0.5 // neutral when no frame type data
         };
         let bytes_per_frame = if meta.frame_count > 0 {
-            meta.file_size_bytes as f64 / meta.frame_count as f64
+            crate::numeric_cast::u64_to_f64(meta.file_size_bytes) / crate::numeric_cast::u64_to_f64(meta.frame_count)
         } else {
             0.0
         };
@@ -2094,9 +2094,9 @@ fn layer6_directional_arbitration(
     // A 10s @ 60fps loop has 600 frames — that's normal for high-fps animation, not a sign
     // of video-length content. Only penalize when fps < 24 (low-fps + many frames = truly long).
     if meta.frame_count > 500 && meta.duration_secs > 0.01 {
-        let fps = meta.frame_count as f64 / meta.duration_secs;
+        let fps = crate::numeric_cast::u64_to_f64(meta.frame_count) / meta.duration_secs;
         if fps < 24.0 {
-            let weight = ((meta.frame_count.saturating_sub(500)) as f64 / 2000.0).clamp(0.04, 0.14);
+            let weight = (crate::numeric_cast::u64_to_f64(meta.frame_count.saturating_sub(500)) / 2000.0).clamp(0.04, 0.14);
             arbitration.add_convert(
                 weight,
                 format!("high frame count {} @ {:.0}fps", meta.frame_count, fps),

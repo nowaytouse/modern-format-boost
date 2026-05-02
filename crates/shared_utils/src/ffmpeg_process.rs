@@ -540,7 +540,10 @@ mod prop_tests {
             let progress = parser.parse_line(&line);
 
             if current > 0 {
-                let expected = (current as f64 / total as f64).min(1.0);
+                let expected = {
+                    let p = u32::try_from((u128::from(current) * 10_000) / u128::from(total.max(1))).unwrap_or(u32::MAX);
+                    (f64::from(p) / 10_000.0).min(1.0)
+                };
                 prop_assert!(progress.is_some());
                 let actual = progress.unwrap();
                 prop_assert!((actual - expected).abs() < 0.001,

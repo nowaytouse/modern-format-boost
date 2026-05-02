@@ -447,7 +447,7 @@ fn parse_video_stream_fields(
                     {
                         let duration_secs = f64::from(duration_secs);
                         if duration_secs > 0.0 {
-                            avg_frame_rate = frame_count.max(1) as f64 / duration_secs;
+                            avg_frame_rate = crate::numeric_cast::u64_to_f64(frame_count.max(1)) / duration_secs;
                         }
                     }
                 }
@@ -479,7 +479,7 @@ fn parse_video_stream_fields(
         profile: video_stream["profile"].as_str().map(str::to_string),
         level: video_stream["level"]
             .as_u64()
-            .map(|level| format!("{:.1}", level as f64 / 10.0)),
+            .map(|level| format!("{:.1}", crate::numeric_cast::u64_to_f64(level) / 10.0)),
         max_b_frames,
         encoder_settings: video_stream["tags"]["x265-params"]
             .as_str()

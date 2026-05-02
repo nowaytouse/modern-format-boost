@@ -65,6 +65,7 @@
 
 use crate::img_errors::{ImgQualityError, Result};
 use image::{DynamicImage, GenericImageView, ImageReader, Rgba};
+use rug::Rational;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -392,12 +393,12 @@ pub fn detect_format_from_bytes(path: &Path) -> Result<DetectedFormat> {
 /// AVIF spec allows mif1 as major brand; without this, such files get routed to
 /// `detect_heic_compression` (hvcC lookup) which always fails → Err.
 fn resolve_mif1_from_compatible_brands(path: &Path, major_brand: &[u8]) -> DetectedFormat {
-    // Security: Read up to 1MB (1048576 bytes) to safely parse FTYP even if it has bloated metadata,
+    // Security: Read up to 1MB (1_048_576 bytes) to safely parse FTYP even if it has bloated metadata,
     // while still preventing OOM on multi-GB fake files.
     let Ok(mut file) = std::fs::File::open(path) else {
         return DetectedFormat::HEIC;
     };
-    let mut data = vec![0u8; 1048576];
+    let mut data = vec![0u8; 1_048_576];
     let read_len = std::io::Read::read(&mut file, &mut data).unwrap_or(0);
     if read_len == 0 {
         // Fallback: mif1 without readable file → HEIC (legacy behavior)
@@ -907,15 +908,20 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
         let is_large_image = pixel_count > 100_000;
         let is_medium_image = pixel_count > 10_000;
 
-        let colors_per_megapixel = ((f64::from(u32::try_from(palette_size).unwrap_or(u32::MAX)))
-            / (f64::from(u32::try_from(pixel_count).unwrap_or(u32::MAX)) / 1_000_000.0))
-            .min(1000.0);
+        let colors_per_megapixel = {
+            let num = Rational::from(u32::try_from(palette_size).unwrap_or(u32::MAX));
+            let den = Rational::from(u32::try_from(pixel_count).unwrap_or(u32::MAX)) / Rational::from(1_000_000);
+            (num / den).to_f64().min(1000.0)
+        };
 
         // Palette density: entries per sqrt(pixel_count).
         // Small image + small palette = normal (icon, pixel art).
         // Large image + small palette = quantization indicator.
-        let palette_density = f64::from(u32::try_from(palette_size).unwrap_or(u32::MAX))
-            / f64::from(u32::try_from(pixel_count).unwrap_or(u32::MAX)).sqrt();
+        let palette_density = {
+            let num = Rational::from(u32::try_from(palette_size).unwrap_or(u32::MAX));
+            let den_f = f64::from(u32::try_from(pixel_count).unwrap_or(u32::MAX)).sqrt();
+            (num / Rational::from_f64(den_f).unwrap_or_else(|| Rational::from(1))).to_f64()
+        };
 
         if palette_size > 240 {
             factors.large_palette = 0.95;
@@ -982,8 +988,8 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
                 let is_large_image = pixel_count > 100_000;
 
                 if let Some(palette_size) = png_info.palette_size {
-                    let usage_ratio = f64::from(u32::try_from(unique_colors).unwrap_or(u32::MAX))
-                        / f64::from(u32::try_from(palette_size).unwrap_or(u32::MAX));
+                    let usage_ratio = (Rational::from(u32::try_from(unique_colors).unwrap_or(u32::MAX))
+                        / Rational::from(u32::try_from(palette_size).unwrap_or(u32::MAX))).to_f64();
 
                     if is_large_image {
                         if usage_ratio > 0.8 {

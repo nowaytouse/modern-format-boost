@@ -4,6 +4,7 @@
 
 use crate::detection_api::{CompressionType, DetectedFormat, DetectionResult, ImageType};
 use crate::{ImgQualityError, Result};
+use rug::Rational;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -264,7 +265,10 @@ pub fn execute_conversion(
         if detection.file_size == 0 {
             0.0
         } else {
-            (100.0 * (1.0 - s as f64 / detection.file_size as f64)) as f32
+            shared_utils::numeric_cast::f64_to_f32_lossy({
+                let ratio = Rational::from((s, detection.file_size.max(1)));
+                100.0 - (ratio.to_f64() * 100.0)
+            })
         }
     });
 
@@ -546,7 +550,7 @@ mod tests {
             height: 1080,
             bit_depth: 8,
             has_alpha: false,
-            file_size: 100000,
+            file_size: 100_000,
             frame_count: 1,
             fps: None,
             duration: None,
@@ -572,7 +576,7 @@ mod tests {
             height: 480,
             bit_depth: 8,
             has_alpha: false,
-            file_size: 500000,
+            file_size: 500_000,
             frame_count: 30,
             fps: Some(10.0),
             duration: Some(3.0),

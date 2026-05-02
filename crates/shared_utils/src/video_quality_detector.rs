@@ -20,6 +20,7 @@ use crate::quality_matcher::{
     VideoAnalysisBuilder,
 };
 use crate::video_detection::VideoDetectionResult;
+use rug::Rational;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tracing::Level;
@@ -199,7 +200,7 @@ impl CompressionLevel {
             _ => 1.0,
         };
 
-        let adjusted_bpp = bpp / efficiency;
+        let adjusted_bpp = (Rational::from_f64(bpp).unwrap_or_else(|| Rational::from(0)) / Rational::from_f64(efficiency).unwrap_or_else(|| Rational::from(1))).to_f64();
 
         if adjusted_bpp > 1.0 {
             Self::VisuallyLossless
@@ -254,11 +255,14 @@ pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualit
     let skip_decision = should_skip_video_codec(codec);
 
     let effective_bitrate = video_bitrate.unwrap_or(total_bitrate);
-    let pixels_per_second = f64::from(width) * f64::from(height) * fps;
-    let bpp = if pixels_per_second > 0.0 {
-        f64::from(u32::try_from(effective_bitrate).unwrap_or(u32::MAX)) / pixels_per_second
-    } else {
-        0.0
+    let bpp = {
+        let pixels_per_second = Rational::from(width) * Rational::from(height) * Rational::from_f64(fps).unwrap_or_else(|| Rational::from(1));
+        if pixels_per_second > 0 {
+            let bits_per_second = Rational::from(u32::try_from(effective_bitrate).unwrap_or(u32::MAX));
+            (bits_per_second / pixels_per_second).to_f64()
+        } else {
+            0.0
+        }
     };
 
     let chroma = ChromaSubsampling::from_pix_fmt(pix_fmt);
@@ -563,7 +567,7 @@ fn estimate_crf_from_bpp(bpp: f64, codec_type: VideoCodecType) -> u8 {
         _ => 1.0,
     };
 
-    let adjusted_bpp = bpp / efficiency;
+    let adjusted_bpp = (Rational::from_f64(bpp).unwrap_or_else(|| Rational::from(0)) / Rational::from_f64(efficiency).unwrap_or_else(|| Rational::from(1))).to_f64();
 
     for &(threshold, crf) in crate::constants::DENSITY_TO_CRF_LUT {
         if adjusted_bpp > threshold {

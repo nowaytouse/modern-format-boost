@@ -22,6 +22,7 @@
 //! For terminology and comparator utilities, see the `candidate_comparator` module.
 
 use anyhow::{bail, Context, Result};
+use rug::Rational;
 use std::fmt::Write as _;
 use std::fs;
 use std::io::Write;
@@ -85,8 +86,10 @@ pub const METADATA_MARGIN_PERCENT: f64 = crate::constants::METADATA_MARGIN_RATIO
 #[inline]
 #[must_use]
 pub fn calculate_metadata_margin(input_size: u64) -> u64 {
-    let percent_based =
-        crate::numeric_cast::f64_to_u64_sat(input_size as f64 * METADATA_MARGIN_PERCENT);
+    let percent_based = {
+        let margin = Rational::from(input_size) * Rational::from_f64(METADATA_MARGIN_PERCENT).unwrap_or_else(|| Rational::from(0));
+        crate::numeric_cast::f64_to_u64_sat(margin.to_f64())
+    };
     percent_based.clamp(METADATA_MARGIN_MIN, METADATA_MARGIN_MAX)
 }
 
@@ -241,7 +244,7 @@ pub fn calculate_zero_gains_for_duration_and_range(
         1.0
     };
 
-    let scaled = crate::numeric_cast::f32_to_u32_sat((base as f32 * factor).round());
+    let scaled = crate::numeric_cast::f32_to_u32_sat((crate::numeric_cast::u32_to_f32(base) * factor).round());
     let min_gains = if ultimate_mode { 15 } else { 3 };
     scaled.max(min_gains)
 }
@@ -1312,7 +1315,7 @@ impl VideoExplorer {
             crate::log_eprintln!("┌ 🔍 Size-Only Explore ({:?})", self.encoder);
             crate::log_eprintln!(
                 "└ 📁 Input: {:.2} MB",
-                crate::numeric_cast::f64_to_f32_lossy(self.input_size as f64 / 1024.0 / 1024.0)
+                crate::numeric_cast::f64_to_f32_lossy(crate::numeric_cast::u64_to_f64(self.input_size) / 1024.0 / 1024.0)
             );
         });
 
@@ -1463,7 +1466,7 @@ impl VideoExplorer {
             crate::log_eprintln!("┌ 📦 Compress-Only ({:?})", self.encoder);
             crate::log_eprintln!(
                 "└ 📁 Input: {:.2} MB",
-                crate::numeric_cast::f64_to_f32_lossy(self.input_size as f64 / 1024.0 / 1024.0)
+                crate::numeric_cast::f64_to_f32_lossy(crate::numeric_cast::u64_to_f64(self.input_size) / 1024.0 / 1024.0)
             );
         });
         log.push(format!("📦 Compress-Only ({:?})", self.encoder));
@@ -1747,7 +1750,7 @@ impl VideoExplorer {
         log_realtime!(
             "   📁 Input: {} bytes ({:.2} MB)",
             self.input_size,
-            crate::numeric_cast::f64_to_f32_lossy(self.input_size as f64 / 1024.0 / 1024.0)
+            crate::numeric_cast::f64_to_f32_lossy(crate::numeric_cast::u64_to_f64(self.input_size) / 1024.0 / 1024.0)
         );
         log_realtime!(
             "   📐 CRF range: [{:.1}, {:.1}]",
@@ -2051,7 +2054,8 @@ impl VideoExplorer {
         macro_rules! log_progress {
             ($stage:expr, $crf:expr, $size:expr, $iter:expr) => {{
                 let size_pct = if self.input_size > 0 {
-                    (($size as f64 / (self.input_size.max(1) as f64)) - 1.0) * 100.0
+                    let permille = u32::try_from((u128::from($size) * 10_000) / u128::from(self.input_size.max(1))).unwrap_or(u32::MAX);
+                    (f64::from(permille) / 100.0) - 100.0
                 } else {
                     0.0
                 };
@@ -2103,7 +2107,7 @@ impl VideoExplorer {
         log_header!(
             "🔬 Precise Quality + Compression ({:?}) • Input: {:.2} MB",
             self.encoder,
-            crate::numeric_cast::f64_to_f32_lossy(self.input_size as f64 / 1024.0 / 1024.0)
+            crate::numeric_cast::f64_to_f32_lossy(crate::numeric_cast::u64_to_f64(self.input_size) / 1024.0 / 1024.0)
         );
         log_header!(
             "   Goal: Best SSIM + Output < Input • Range: [{:.1}, {:.1}]",
@@ -2201,7 +2205,7 @@ impl VideoExplorer {
             let saved = self.input_size - best_size;
             pb.finish_and_clear();
             crate::log_eprintln!("✅ Result: CRF {:.1} • SSIM {:.4} {} • {:+.1}% ({:.2} MB saved) • {} iter in {:.1}s",
-                best_crf, ssim, status, self.calc_change_pct(best_size), crate::numeric_cast::f64_to_f32_lossy(saved as f64 / 1024.0 / 1024.0), iterations, elapsed.as_secs_f64());
+                best_crf, ssim, status, self.calc_change_pct(best_size), crate::numeric_cast::f64_to_f32_lossy(crate::numeric_cast::u64_to_f64(saved) / 1024.0 / 1024.0), iterations, elapsed.as_secs_f64());
 
             return Ok(ExploreResult {
                 optimal_crf: best_crf,
@@ -2278,19 +2282,19 @@ impl VideoExplorer {
                 .take(WINDOW_SIZE)
                 .map(|(_, s)| {
                     f64::from(crate::numeric_cast::f64_to_f32_lossy(
-                        *s as f64 / input_size as f64,
+                        crate::numeric_cast::u64_to_f64(*s) / crate::numeric_cast::u64_to_f64(input_size),
                     ))
                 })
                 .collect();
             let mean = if recent.is_empty() {
                 0.0
             } else {
-                recent.iter().sum::<f64>() / recent.len() as f64
+                recent.iter().sum::<f64>() / crate::numeric_cast::usize_to_f64(recent.len())
             };
             if recent.is_empty() {
                 0.0
             } else {
-                recent.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / recent.len() as f64
+                recent.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / crate::numeric_cast::usize_to_f64(recent.len())
             }
         };
 
@@ -2298,7 +2302,8 @@ impl VideoExplorer {
             if prev == 0 {
                 return f64::MAX;
             }
-            ((curr as f64 - prev as f64) / (prev.max(1) as f64)).abs()
+            let diff = curr.abs_diff(prev);
+            (Rational::from(diff) / Rational::from(prev.max(1))).to_f64()
         };
 
         log_header!("   Stage A: Binary search (0.5 step)");
@@ -2477,7 +2482,7 @@ impl VideoExplorer {
             ssim,
             status,
             size_change_pct,
-            crate::numeric_cast::f64_to_f32_lossy(saved as f64 / 1024.0 / 1024.0),
+            crate::numeric_cast::f64_to_f32_lossy(crate::numeric_cast::u64_to_f64(saved) / 1024.0 / 1024.0),
             iterations,
             elapsed.as_secs_f64()
         );
@@ -2728,9 +2733,10 @@ impl VideoExplorer {
                 } else if let Some(val) = line.strip_prefix("speed=") {
                     last_speed = val.to_string();
                 } else if line == "progress=continue" || line == "progress=end" {
-                    let current_secs = f64::from(crate::numeric_cast::f64_to_f32_lossy(
-                        last_time_us as f64 / 1_000_000.0,
-                    ));
+                    let current_secs = f64::from(crate::numeric_cast::f64_to_f32_lossy({
+                        let millis = u32::try_from(last_time_us / 1_000).unwrap_or(u32::MAX);
+                        f64::from(millis) / 1_000.0
+                    }));
                     if let Some(total_duration) = duration_secs.filter(|d| *d > 0.0) {
                         let pct = (current_secs / total_duration * 100.0).min(100.0);
                         eprint!(
@@ -2820,7 +2826,8 @@ impl VideoExplorer {
         if self.input_size == 0 {
             return 0.0;
         }
-        (output_size as f64 / (self.input_size.max(1) as f64) - 1.0) * 100.0
+        let ratio = Rational::from(output_size) / Rational::from(self.input_size.max(1));
+        ((ratio - Rational::from(1)) * Rational::from(100)).to_f64()
     }
 
     #[inline]
@@ -4678,19 +4685,19 @@ mod tests {
                 .take(window_size)
                 .map(|s| {
                     f64::from(crate::numeric_cast::f64_to_f32_lossy(
-                        *s as f64 / input_size as f64,
+                        crate::numeric_cast::u64_to_f64(*s) / crate::numeric_cast::u64_to_f64(input_size),
                     ))
                 })
                 .collect();
             let mean = if recent.is_empty() {
                 0.0
             } else {
-                recent.iter().sum::<f64>() / recent.len() as f64
+                recent.iter().sum::<f64>() / crate::numeric_cast::usize_to_f64(recent.len())
             };
             if recent.is_empty() {
                 0.0
             } else {
-                recent.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / recent.len() as f64
+                recent.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / crate::numeric_cast::usize_to_f64(recent.len())
             }
         };
 
@@ -4718,7 +4725,7 @@ mod tests {
             if prev == 0 {
                 return f64::MAX;
             }
-            ((curr as f64 - prev as f64) / (prev.max(1) as f64)).abs()
+            ((crate::numeric_cast::u64_to_f64(curr) - crate::numeric_cast::u64_to_f64(prev)) / crate::numeric_cast::u64_to_f64(prev.max(1))).abs()
         };
 
         let small_change = calc_change_rate(1_000_000, 1_004_000);
@@ -5076,11 +5083,11 @@ mod prop_tests_v69 {
             frame_count in 1u64..1_000_000u64,
             fps in 1.0f64..240.0f64,
         ) {
-            let duration = frame_count as f64 / fps;
+            let duration = crate::numeric_cast::u64_to_f64(frame_count) / fps;
             prop_assert!(duration > 0.0, "Duration should be positive: {}", duration);
             let reconstructed_frames = (duration * fps).round();
             prop_assert!(
-                (reconstructed_frames - frame_count as f64).abs() < 1.0,
+                (reconstructed_frames - crate::numeric_cast::u64_to_f64(frame_count)).abs() < 1.0,
                 "duration * fps should approximate frame_count: {} * {} ≈ {}",
                 duration, fps, frame_count
             );

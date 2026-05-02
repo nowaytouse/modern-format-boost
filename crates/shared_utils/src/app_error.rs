@@ -229,7 +229,7 @@ impl AppError {
                 output_size,
                 file_path,
             } => {
-                let ratio = *output_size as f64 / *input_size as f64 * 100.0;
+                let ratio = crate::numeric_cast::u64_to_f64(*output_size) / crate::numeric_cast::u64_to_f64(*input_size) * 100.0;
                 let mut msg = format!(
                     "❌ Compression failed: output ({output_size} bytes) >= input ({input_size} bytes), ratio {ratio:.1}%"
                 );

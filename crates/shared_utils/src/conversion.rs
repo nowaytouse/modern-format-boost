@@ -610,7 +610,7 @@ impl ConversionResult {
         let size_reduction = if input_size == 0 {
             0.0
         } else {
-            (1.0 - (output_size as f64 / input_size as f64)) * 100.0
+            (1.0 - (crate::numeric_cast::u64_to_f64(output_size) / crate::numeric_cast::u64_to_f64(input_size))) * 100.0
         };
 
         Self {
@@ -641,7 +641,7 @@ impl ConversionResult {
         let reduction = if input_size == 0 {
             0.0
         } else {
-            1.0 - (output_size as f64 / input_size as f64)
+            1.0 - (crate::numeric_cast::u64_to_f64(output_size) / crate::numeric_cast::u64_to_f64(input_size))
         };
         let reduction_pct = reduction * 100.0;
 
@@ -713,7 +713,7 @@ impl ConversionResult {
         let reduction_pct = if metrics.input_size == 0 {
             0.0
         } else {
-            (1.0 - (metrics.output_size as f64 / metrics.input_size as f64)) * 100.0
+            (1.0 - (crate::numeric_cast::u64_to_f64(metrics.output_size) / crate::numeric_cast::u64_to_f64(metrics.input_size))) * 100.0
         };
 
         let message = metrics.format_message(reduction_pct);
@@ -968,7 +968,7 @@ pub fn calculate_size_reduction(input_size: u64, output_size: u64) -> f64 {
     if input_size == 0 {
         return 0.0;
     }
-    (1.0 - (output_size as f64 / input_size as f64)) * 100.0
+    (1.0 - (crate::numeric_cast::u64_to_f64(output_size) / crate::numeric_cast::u64_to_f64(input_size))) * 100.0
 }
 
 /// Pre-conversion check: tests duplicate and output-exists skip conditions.
@@ -1769,7 +1769,7 @@ mod tests {
 
         for (input, output, expected) in test_cases {
             let result = calculate_size_reduction(input, output);
-            let expected_calc = (1.0 - (output as f64 / input as f64)) * 100.0;
+            let expected_calc = (1.0 - (crate::numeric_cast::u64_to_f64(output) / crate::numeric_cast::u64_to_f64(input))) * 100.0;
 
             assert!(
                 (result - expected).abs() < 0.001,

@@ -19,7 +19,7 @@ impl CalibrationPoint {
         gpu_ssim: Option<f64>,
         base_offset: f32,
     ) -> Self {
-        let size_ratio = gpu_size as f64 / input_size as f64;
+        let size_ratio = crate::numeric_cast::u64_to_f64(gpu_size) / crate::numeric_cast::u64_to_f64(input_size);
 
         let (adjustment, confidence, reason) = if size_ratio < 0.95 {
             (
@@ -51,7 +51,7 @@ impl CalibrationPoint {
         if !crate::progress_mode::is_verbose_mode() {
             return;
         }
-        let size_ratio = self.gpu_size as f64 / input_size as f64;
+        let size_ratio = crate::numeric_cast::u64_to_f64(self.gpu_size) / crate::numeric_cast::u64_to_f64(input_size);
         let size_pct = (size_ratio - 1.0) * 100.0;
 
         eprintln!("┌─────────────────────────────────────────────────────");

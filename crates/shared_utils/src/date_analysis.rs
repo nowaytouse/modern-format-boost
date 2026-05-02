@@ -377,7 +377,7 @@ pub fn print_analysis(result: &DateAnalysisResult) {
         println!("\n📆 Distribution by Year:");
         let mut years: Vec<_> = result.by_year.iter().collect();
         years.sort_by_key(|&(y, _)| y);
-        let total = result.files_with_dates as f64;
+        let total = crate::numeric_cast::usize_to_f64(result.files_with_dates);
         for (year, count) in years {
             let pct = crate::numeric_cast::f64_to_usize_sat(
                 crate::numeric_cast::usize_to_f64(*count) / total * 100.0,

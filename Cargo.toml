@@ -85,6 +85,9 @@ quick-xml = "0.31.0"
 exr = "1.74.0"
 jpegxl-rs = { version = "0.12", default-features = false }
 
+# Precision arithmetic
+rug = "1.30.0"
+
 shared_utils = { path = "crates/shared_utils" }
 img = { path = "crates/img" }
 vid = { path = "crates/vid" }

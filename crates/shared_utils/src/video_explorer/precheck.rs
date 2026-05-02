@@ -3,6 +3,7 @@
 use crate::quality_matcher::parse_source_codec;
 use crate::unified_error::UnifiedError;
 use anyhow::{bail, Context, Result};
+use rug::Rational;
 use std::path::Path;
 use tracing::{error, info, warn};
 
@@ -302,8 +303,8 @@ fn bpp_from_precheck_json(json: &serde_json::Value, file_size: u64, input: &Path
     };
     let total_pixels = u64::from(width) * u64::from(height) * frame_count;
     if total_pixels > 0 {
-        Ok((crate::numeric_cast::u64_to_f64(bytes_for_bpp) * 8.0)
-            / crate::numeric_cast::u64_to_f64(total_pixels.max(1)))
+        let bpp = (Rational::from(bytes_for_bpp) * Rational::from(8)) / Rational::from(total_pixels.max(1));
+        Ok(bpp.to_f64())
     } else {
         bail!("Total pixels is 0, cannot calculate BPP")
     }
@@ -484,8 +485,7 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
     };
     let total_pixels = u64::from(width) * u64::from(height) * frame_count;
     let bpp = if total_pixels > 0 {
-        (crate::numeric_cast::u64_to_f64(bytes_for_bpp) * 8.0)
-            / crate::numeric_cast::u64_to_f64(total_pixels.max(1))
+        ((Rational::from(bytes_for_bpp) * Rational::from(8)) / Rational::from(total_pixels.max(1))).to_f64()
     } else {
         bail!("Total pixels is 0, cannot calculate BPP");
     };
@@ -649,12 +649,13 @@ fn evaluate_processing_recommendation(
     let source_codec = parse_source_codec(codec);
     let codec_efficiency = source_codec.efficiency_factor();
 
-    let resolution_factor = (f64::from(width) * f64::from(height)) / (1920.0 * 1080.0);
-    let fps_factor = fps / 30.0;
+    let resolution_factor = (Rational::from(width) * Rational::from(height)) / Rational::from(1920 * 1080);
+    let fps_factor = Rational::from_f64(fps).unwrap_or_else(|| Rational::from(1)) / Rational::from(30);
+    let codec_efficiency_r = Rational::from_f64(codec_efficiency).unwrap_or_else(|| Rational::from(1));
 
     let base_bitrate_1080p30_h264 = 2500.0;
-    let expected_min_bitrate =
-        base_bitrate_1080p30_h264 * resolution_factor * fps_factor * codec_efficiency;
+    let expected_min_bitrate = (Rational::from_f64(base_bitrate_1080p30_h264).unwrap_or_else(|| Rational::from(0)) 
+        * resolution_factor * fps_factor * codec_efficiency_r).to_f64();
 
     let bpp_threshold_very_low = 0.05 / codec_efficiency;
     let bpp_threshold_low = 0.10 / codec_efficiency;

@@ -126,7 +126,7 @@ impl SamplingConfig {
                 "   Frames: {} → {} (speedup: {:.1}x)",
                 self.total_frames,
                 self.sampled_frames,
-                self.total_frames as f64 / self.sampled_frames.max(1) as f64
+                crate::numeric_cast::u64_to_f64(self.total_frames) / crate::numeric_cast::u64_to_f64(self.sampled_frames.max(1))
             );
         }
     }

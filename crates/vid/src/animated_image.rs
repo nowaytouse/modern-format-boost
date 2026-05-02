@@ -390,7 +390,7 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
 
     if verbose {
         let avg_dur =
-            f64::from(frame_durations_ms.iter().sum::<u32>()) / frame_durations_ms.len() as f64;
+            f64::from(frame_durations_ms.iter().sum::<u32>()) / shared_utils::numeric_cast::usize_to_f64(frame_durations_ms.len());
         eprintln!("   📊 WebP: {frame_count} frames, ~{avg_dur:.1}ms/frame");
     }
 
@@ -630,7 +630,7 @@ fn is_static_animated_image(path: &Path) -> bool {
     }
     if let Ok(analysis) = shared_utils::image_analyzer::analyze_image(path) {
         if let Some(duration_secs) = analysis.duration_secs {
-            if duration_secs < shared_utils::constants::NEGLIGIBLE_DURATION_SECS as f32 {
+            if duration_secs < shared_utils::numeric_cast::f64_to_f32_lossy(shared_utils::constants::NEGLIGIBLE_DURATION_SECS) {
                 return true;
             }
         }
@@ -1281,7 +1281,7 @@ pub fn convert_to_mp4_matched(
 
     // Get duration and metadata for smart CRF initialization
     let probe = shared_utils::ffprobe::probe_video(input).ok();
-    let duration = probe.as_ref().map_or(0.0, |p| p.duration as f32);
+    let duration = probe.as_ref().map_or(0.0, |p| shared_utils::numeric_cast::f64_to_f32_lossy(p.duration));
 
     let is_safe_for_lossless = if is_gif && flag_mode.is_ultimate() {
         if let Some(p) = probe.as_ref() {
@@ -1404,7 +1404,13 @@ pub fn convert_to_mp4_matched(
     } else {
         1.0
     };
-    let max_allowed_size = (input_size as f64 * tolerance_ratio) as u64;
+    // We use Rational for precise max size calculation. tolerance_ratio (e.g. 1.05)
+    let max_allowed_size = {
+        let input_rat = rug::Rational::from(input_size);
+        let tol_rat = rug::Rational::from_f64(tolerance_ratio).unwrap_or_else(|| rug::Rational::from(1));
+        let res: rug::Rational = input_rat * tol_rat;
+        shared_utils::numeric_cast::f64_to_u64_sat(res.to_f64().round())
+    };
 
     // apple_compat mode: compatibility takes priority over file size.
     // However, if the source is already apple-compatible (like GIF/APNG), size guard stays active.
@@ -1415,7 +1421,10 @@ pub fn convert_to_mp4_matched(
 
     if is_guard_active && explore_result.output_size > max_allowed_size {
         let size_increase_pct =
-            ((explore_result.output_size as f64 / input_size as f64) - 1.0) * 100.0;
+            {
+                let ratio = rug::Rational::from((explore_result.output_size, input_size.max(1)));
+                (ratio.to_f64() - 1.0) * 100.0
+            };
         let codec_name = options.codec.as_str().to_uppercase();
         if let Err(e) = fs::remove_file(&temp_output) {
             eprintln!("⚠️ [cleanup] Failed to remove oversized {codec_name} output: {e}");
@@ -1530,7 +1539,7 @@ pub fn convert_to_mp4_matched(
             codec_name: options.codec.as_str(),
             crf: explore_result.optimal_crf,
             is_lossless: explore_result.optimal_crf
-                < shared_utils::constants::NEGLIGIBLE_DURATION_SECS as f32,
+                < shared_utils::numeric_cast::f64_to_f32_lossy(shared_utils::constants::NEGLIGIBLE_DURATION_SECS),
             iterations: explore_result.iterations,
             ssim: explore_result.ssim,
             explored_from_crf: Some(actual_initial_crf),
@@ -1892,7 +1901,7 @@ pub fn convert_to_gif_apple_compat(
 
         let fps = if probe_res.duration > 0.0 && extracted_count > 0 {
             // 100% data-driven: Actual extracted frames / Metadata total duration
-            extracted_count as f64 / probe_res.duration
+            shared_utils::numeric_cast::usize_to_f64(extracted_count) / probe_res.duration
         } else if probe_res.avg_frame_rate > 0.0 {
             // Use directly reported average frame rate
             probe_res.avg_frame_rate
@@ -1912,7 +1921,7 @@ pub fn convert_to_gif_apple_compat(
         let mut gifski_builder = shared_utils::GifskiBuilder::new();
         gifski_builder
             .output(&temp_output)
-            .fps(fps as f32)
+            .fps(shared_utils::numeric_cast::f64_to_f32_lossy(fps))
             .dimensions(width, height)
             .quality(100)
             .motion_quality(100)
@@ -1990,7 +1999,12 @@ pub fn convert_to_gif_apple_compat(
     } else {
         1.0
     };
-    let max_allowed_size = (input_size as f64 * tolerance_ratio) as u64;
+    let max_allowed_size = {
+        let input_rat = rug::Rational::from(input_size);
+        let tol_rat = rug::Rational::from_f64(tolerance_ratio).unwrap_or_else(|| rug::Rational::from(1));
+        let res: rug::Rational = input_rat * tol_rat;
+        shared_utils::numeric_cast::f64_to_u64_sat(res.to_f64().round())
+    };
 
     // apple_compat: compatibility takes priority — a playable GIF is always
     // better than a non-playable original (e.g. animated AVIF).
@@ -1998,7 +2012,10 @@ pub fn convert_to_gif_apple_compat(
     let is_guard_active = shared_utils::is_size_guard_active(&input_ext, options.apple_compat);
 
     if is_guard_active && output_size > max_allowed_size {
-        let size_increase_pct = ((output_size as f64 / input_size as f64) - 1.0) * 100.0;
+        let size_increase_pct = {
+            let ratio = rug::Rational::from((output_size, input_size.max(1)));
+            (ratio.to_f64() - 1.0) * 100.0
+        };
         if let Err(e) = fs::remove_file(&temp_output) {
             eprintln!("⚠️ [cleanup] Failed to remove oversized GIF output: {e}");
         }

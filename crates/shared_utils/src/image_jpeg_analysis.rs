@@ -968,7 +968,7 @@ fn gainmap_candidate_score(
     let length_penalty = if claimed_len == 0 {
         0.0
     } else {
-        (candidate_len.abs_diff(claimed_len) as f64 / claimed_len as f64) * 100.0
+        (crate::numeric_cast::usize_to_f64(candidate_len.abs_diff(claimed_len)) / crate::numeric_cast::usize_to_f64(claimed_len)) * 100.0
     };
     let repair_penalty = if repaired_eoi { 25.0 } else { 0.0 };
 
@@ -989,7 +989,7 @@ fn gainmap_raw_fallback_score(
     let length_penalty = if claimed_len == 0 {
         0.0
     } else {
-        (candidate_len.abs_diff(claimed_len) as f64 / claimed_len as f64) * 100.0
+        (crate::numeric_cast::usize_to_f64(candidate_len.abs_diff(claimed_len)) / crate::numeric_cast::usize_to_f64(claimed_len)) * 100.0
     };
     let repair_penalty = if repaired_eoi { 25.0 } else { 0.0 };
 

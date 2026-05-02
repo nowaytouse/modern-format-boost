@@ -233,7 +233,7 @@ pub fn memory_cap_hint() -> Option<&'static str> {
         X265MemoryProfile::Moderate => {
             Some("moderate RAM: parallelism trimmed to preserve headroom")
         }
-        _ => None,
+        X265MemoryProfile::Default => None,
     }
 }
 

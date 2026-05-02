@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use rug::Rational;
 
 use img::{calculate_psnr, calculate_ssim, psnr_quality_description, ssim_quality_description};
 use shared_utils::analysis_cache::AnalysisCache;
@@ -409,9 +410,12 @@ fn main() -> anyhow::Result<()> {
                             }
                         }
 
-                        let usage_percent = (stats.db_size_bytes as f64
-                            / shared_utils::analysis_cache::CACHE_SIZE_LIMIT_BYTES as f64)
-                            * 100.0;
+                        let permille = {
+                            let ratio = Rational::from(stats.db_size_bytes) / Rational::from(shared_utils::analysis_cache::CACHE_SIZE_LIMIT_BYTES.max(1));
+                            let res: Rational = ratio * Rational::from(10_000);
+                            res.to_f64()
+                        };
+                        let usage_percent = f64::from(permille) / 100.0;
                         println!("\n💾 Storage Usage: {usage_percent:.1}% of 85 GB limit");
 
                         if usage_percent > 80.0 {
@@ -514,16 +518,16 @@ fn verify_conversion(
     println!(
         "   Original size:  {} bytes ({:.2} KB)",
         original_analysis.file_size,
-        original_analysis.file_size as f64 / 1024.0
+        shared_utils::numeric_cast::u64_to_f64(original_analysis.file_size) / 1024.0
     );
     println!(
         "   Converted size: {} bytes ({:.2} KB)",
         converted_analysis.file_size,
-        converted_analysis.file_size as f64 / 1024.0
+        shared_utils::numeric_cast::u64_to_f64(converted_analysis.file_size) / 1024.0
     );
 
     let reduction =
-        100.0 * (1.0 - converted_analysis.file_size as f64 / original_analysis.file_size as f64);
+        100.0 * (1.0 - shared_utils::numeric_cast::u64_to_f64(converted_analysis.file_size) / shared_utils::numeric_cast::u64_to_f64(original_analysis.file_size));
     println!("   Size reduction: {reduction:.2}%");
 
     let orig_img = load_image_safe(original)?;
@@ -1060,8 +1064,8 @@ fn auto_convert_directory(
             if config.verbose {
                 println!(
                     "💾 Disk space OK: {:.2} GB available, {:.2} GB required",
-                    avail as f64 / (1024.0 * 1024.0 * 1024.0),
-                    required as f64 / (1024.0 * 1024.0 * 1024.0)
+                    f64::from(u32::try_from(avail / (1024 * 1024 * 1024)).unwrap_or(u32::MAX)),
+                    f64::from(u32::try_from(required / (1024 * 1024 * 1024)).unwrap_or(u32::MAX))
                 );
             }
         }

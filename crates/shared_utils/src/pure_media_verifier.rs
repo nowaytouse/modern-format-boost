@@ -8,14 +8,25 @@
 //! - As long as the pure video stream shrinks or increases slightly (less than the standard tolerance), it's considered a success, regardless of total file size.
 
 use crate::stream_size::StreamSizeInfo;
+use rug::Rational;
+
+#[inline]
+#[must_use]
+fn size_ratio_or_one(numerator: u64, denominator: u64) -> Rational {
+    if denominator == 0 {
+        return Rational::from(1);
+    }
+
+    Rational::from((numerator, denominator))
+}
 
 #[derive(Debug, Clone)]
 pub struct PureMediaVerifyResult {
     pub video_compressed: bool,
     pub input_video_size: u64,
     pub output_video_size: u64,
-    pub video_compression_ratio: f64,
-    pub total_compression_ratio: f64,
+    pub video_compression_ratio: Rational,
+    pub total_compression_ratio: Rational,
     pub container_overhead_diff: i64,
     pub input_container_overhead: u64,
     pub output_container_overhead: u64,
@@ -24,17 +35,17 @@ pub struct PureMediaVerifyResult {
 impl PureMediaVerifyResult {
     #[must_use]
     pub fn video_size_change_percent(&self) -> f64 {
-        (self.video_compression_ratio - 1.0) * 100.0
+        (self.video_compression_ratio.to_f64() - 1.0) * 100.0
     }
 
     #[must_use]
     pub fn total_size_change_percent(&self) -> f64 {
-        (self.total_compression_ratio - 1.0) * 100.0
+        (self.total_compression_ratio.to_f64() - 1.0) * 100.0
     }
 
     #[must_use]
     pub fn is_container_overhead_issue(&self) -> bool {
-        self.video_compressed && self.total_compression_ratio >= 1.0
+        self.video_compressed && self.total_compression_ratio >= 1
     }
 
     #[must_use]
@@ -77,17 +88,9 @@ pub fn verify_pure_media_compression(
         output_video < input_video
     };
 
-    let video_compression_ratio = if input_video > 0 {
-        output_video as f64 / input_video as f64
-    } else {
-        1.0
-    };
-
-    let total_compression_ratio = if input_info.total_file_size > 0 {
-        output_info.total_file_size as f64 / input_info.total_file_size as f64
-    } else {
-        1.0
-    };
+    let video_compression_ratio = size_ratio_or_one(output_video, input_video);
+    let total_compression_ratio =
+        size_ratio_or_one(output_info.total_file_size, input_info.total_file_size);
 
     let container_overhead_diff =
         crate::numeric_cast::u64_to_i64_sat(output_info.container_overhead)
@@ -122,12 +125,8 @@ pub const fn is_video_compressed(
 
 #[inline]
 #[must_use]
-pub fn video_compression_ratio(input_video_size: u64, output_video_size: u64) -> f64 {
-    if input_video_size > 0 {
-        output_video_size as f64 / input_video_size as f64
-    } else {
-        1.0
-    }
+pub fn video_compression_ratio(input_video_size: u64, output_video_size: u64) -> Rational {
+    size_ratio_or_one(output_video_size, input_video_size)
 }
 
 #[cfg(test)]
@@ -156,7 +155,7 @@ mod tests {
         let result = verify_pure_media_compression(&input, &output, false);
 
         assert!(result.video_compressed);
-        assert!(result.video_compression_ratio < 1.0);
+        assert!(result.video_compression_ratio < 1);
     }
 
     #[test]
@@ -167,7 +166,7 @@ mod tests {
         let result = verify_pure_media_compression(&input, &output, true);
 
         assert!(result.video_compressed); // Accepts because < tolerance increase
-        assert!(result.video_compression_ratio > 1.0);
+        assert!(result.video_compression_ratio > 1);
     }
 
     #[test]
@@ -182,7 +181,7 @@ mod tests {
         let result = verify_pure_media_compression(&input, &output, true);
 
         assert!(!result.video_compressed);
-        assert!(result.video_compression_ratio > 1.0);
+        assert!(result.video_compression_ratio > 1);
     }
 
     #[test]
@@ -194,7 +193,7 @@ mod tests {
 
         assert!(result.video_compressed);
         assert!(result.is_container_overhead_issue());
-        assert!(result.total_compression_ratio > 1.0);
+        assert!(result.total_compression_ratio > 1);
     }
 
     #[test]
@@ -210,10 +209,21 @@ mod tests {
 
     #[test]
     fn test_video_compression_ratio() {
-        assert!((video_compression_ratio(1000, 800) - 0.8).abs() < 0.001);
-        assert!((video_compression_ratio(1000, 1000) - 1.0).abs() < 0.001);
-        assert!((video_compression_ratio(1000, 1200) - 1.2).abs() < 0.001);
-        assert!((video_compression_ratio(0, 100) - 1.0).abs() < 0.001);
+        assert_eq!(video_compression_ratio(1000, 800), Rational::from((800, 1000)));
+        assert_eq!(video_compression_ratio(1000, 1000), Rational::from(1));
+        assert_eq!(video_compression_ratio(1000, 1200), Rational::from((1200, 1000)));
+        assert_eq!(video_compression_ratio(0, 100), Rational::from(1));
+    }
+
+    #[test]
+    fn test_large_sizes_use_integer_compression_decision() {
+        let input = make_stream_info((1_u64 << 53) + 1, 0, 0);
+        let output = make_stream_info(1_u64 << 53, 0, 0);
+
+        let result = verify_pure_media_compression(&input, &output, false);
+
+        assert!(result.video_compressed);
+        assert_eq!(result.input_video_size - result.output_video_size, 1);
     }
 }
 
@@ -260,14 +270,14 @@ mod prop_tests {
     proptest! {
         #[test]
         fn prop_compression_ratio_correct(
-            input_video in 1u64..1_000_000_000u64,
-            output_video in 1u64..1_000_000_000u64,
+            input_video in 1u32..1_000_000_000u32,
+            output_video in 1u32..1_000_000_000u32,
         ) {
-            let ratio = video_compression_ratio(input_video, output_video);
-            let expected = output_video as f64 / input_video as f64;
+            let ratio = video_compression_ratio(u64::from(input_video), u64::from(output_video));
+            let expected = Rational::from((output_video, input_video));
 
-            prop_assert!((ratio - expected).abs() < 0.0001,
-                "Compression ratio {} should be close to expected {}", ratio, expected);
+            prop_assert_eq!(ratio.clone(), expected.clone(),
+                "Compression ratio {} should be expected {}", ratio, expected);
         }
     }
 

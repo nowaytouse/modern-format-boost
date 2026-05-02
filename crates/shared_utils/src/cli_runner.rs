@@ -209,8 +209,8 @@ where
             // Reserve 1 GB headroom on top of total input size (temp files, partial encodes, etc.)
             let required = total_input_size.saturating_add(1024 * 1024 * 1024);
             if avail < required {
-                let avail_gb = avail as f64 / (1024.0 * 1024.0 * 1024.0);
-                let required_gb = required as f64 / (1024.0 * 1024.0 * 1024.0);
+                let avail_gb = crate::numeric_cast::u64_to_f64(avail) / (1024.0 * 1024.0 * 1024.0);
+                let required_gb = crate::numeric_cast::u64_to_f64(required) / (1024.0 * 1024.0 * 1024.0);
                 anyhow::bail!(
                     "❌ Insufficient disk space on output volume.\n\
                      💾 Available: {avail_gb:.2} GB\n\
@@ -220,8 +220,8 @@ where
             }
             info!(
                 "💾 Disk space OK: {:.2} GB available, {:.2} GB required",
-                avail as f64 / (1024.0 * 1024.0 * 1024.0),
-                required as f64 / (1024.0 * 1024.0 * 1024.0)
+                crate::numeric_cast::u64_to_f64(avail) / (1024.0 * 1024.0 * 1024.0),
+                crate::numeric_cast::u64_to_f64(required) / (1024.0 * 1024.0 * 1024.0)
             );
         }
     }

@@ -24,6 +24,7 @@ use crate::constants::{
     JXL_EXPLORE_BINARY_SEARCH_PRECISION, JXL_EXPLORE_CEILING, JXL_EXPLORE_FLOOR,
     JXL_EXPLORE_MAX_ITERATIONS,
 };
+use rug::Rational;
 use std::collections::HashSet;
 
 const JXL_FINALIST_LIMIT: usize = 8;
@@ -245,7 +246,7 @@ fn size_ratio(size: u64, input_size: u64) -> f64 {
     if input_size == 0 {
         1.0
     } else {
-        crate::numeric_cast::u64_to_f64(size) / crate::numeric_cast::u64_to_f64(input_size)
+        (Rational::from(size) / Rational::from(input_size)).to_f64()
     }
 }
 
@@ -257,8 +258,7 @@ fn improvement_ratio(previous_size: u64, current_size: u64, input_size: u64) -> 
     if input_size == 0 || current_size >= previous_size {
         0.0
     } else {
-        crate::numeric_cast::u64_to_f64(previous_size - current_size)
-            / crate::numeric_cast::u64_to_f64(input_size)
+        (Rational::from(previous_size - current_size) / Rational::from(input_size)).to_f64()
     }
 }
 
@@ -482,7 +482,7 @@ fn build_adaptive_ladder(
     let interpolation_start = band_min.min(target_distance_f64);
 
     for probe_idx in 1..=interpolation_budget {
-        let progress = probe_idx as f64 / interpolation_budget as f64;
+        let progress = crate::numeric_cast::usize_to_f64(probe_idx) / crate::numeric_cast::usize_to_f64(interpolation_budget);
         let candidate = if profile == JxlExplorationProfile::MicroAdjust {
             interpolate_plateau_distance(interpolation_start, target_distance_f64, progress)?
         } else {
@@ -526,10 +526,8 @@ fn build_exploration_plan(
 }
 
 fn near_best_margin(input_size: u64) -> u64 {
-    crate::numeric_cast::f64_to_u64_sat(
-        crate::numeric_cast::u64_to_f64(input_size) * JXL_NEAR_BEST_MARGIN_RATIO,
-    )
-    .max(1)
+    let margin = Rational::from(input_size) * Rational::from_f64(JXL_NEAR_BEST_MARGIN_RATIO).unwrap_or_else(|| Rational::from(0));
+    crate::numeric_cast::f64_to_u64_sat(margin.to_f64()).max(1)
 }
 
 fn near_best(size: u64, best_size: u64, input_size: u64) -> bool {

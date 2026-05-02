@@ -67,13 +67,13 @@ pub fn fmt_compress_status(compressed: bool) -> &'static str {
 
 pub fn fmt_size(bytes: u64) -> String {
     let (value, unit) = if bytes >= 1024 * 1024 * 1024 {
-        (bytes as f64 / 1024.0 / 1024.0 / 1024.0, "GB")
+        (shared_utils::numeric_cast::u64_to_f64(bytes) / 1024.0 / 1024.0 / 1024.0, "GB")
     } else if bytes >= 1024 * 1024 {
-        (bytes as f64 / 1024.0 / 1024.0, "MB")
+        (shared_utils::numeric_cast::u64_to_f64(bytes) / 1024.0 / 1024.0, "MB")
     } else if bytes >= 1024 {
-        (bytes as f64 / 1024.0, "KB")
+        (shared_utils::numeric_cast::u64_to_f64(bytes) / 1024.0, "KB")
     } else {
-        (bytes as f64, "B")
+        (shared_utils::numeric_cast::u64_to_f64(bytes), "B")
     };
     format!("{}", style(format!("{:.2} {}", value, unit)).blue())
 }
@@ -89,7 +89,7 @@ pub fn fmt_duration(secs: f64) -> String {
 }
 
 pub fn fmt_iterations(iter: u32, max: u32) -> String {
-    let ratio = iter as f64 / max as f64;
+    let ratio = f64::from(iter) / f64::from(max);
     if ratio <= 0.5 {
         format!("{}", style(format!("{}/{}", iter, max)).green())
     } else if ratio <= 0.8 {

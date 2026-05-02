@@ -1101,7 +1101,7 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
         crate::log_eprintln!("   ⚠️  Could not determine video duration");
     }
 
-    let ms_ssim_duration_threshold_secs = if ultimate_mode {
+    let ms_ssim_duration_threshold_secs: f64 = if ultimate_mode {
         VMAF_SKIP_THRESHOLD_ULTIMATE_SECS.into()
     } else {
         VMAF_SKIP_THRESHOLD_SECS.into()

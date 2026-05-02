@@ -32,7 +32,7 @@ impl DynamicCrfMapper {
         if gpu_size == 0 {
             return;
         }
-        let size_ratio = cpu_size as f64 / gpu_size as f64;
+        let size_ratio = crate::numeric_cast::u64_to_f64(cpu_size) / crate::numeric_cast::u64_to_f64(gpu_size);
         self.anchors.push(AnchorPoint {
             crf,
             gpu_size,
@@ -433,7 +433,7 @@ pub fn quick_calibrate(
         if gpu_size > 0 && cpu_size > 0 {
             mapper.add_anchor(*anchor_crf, gpu_size, cpu_size);
 
-            let ratio = cpu_size as f64 / gpu_size as f64;
+            let ratio = crate::numeric_cast::u64_to_f64(cpu_size) / crate::numeric_cast::u64_to_f64(gpu_size);
 
             crate::verbose_eprintln!("   ✅ Calibration successful at CRF {:.1}", anchor_crf);
             crate::verbose_eprintln!(
@@ -455,7 +455,7 @@ pub fn quick_calibrate(
     }
 
     {
-        let ratio = mapper.anchors[0].cpu_size as f64 / mapper.anchors[0].gpu_size as f64;
+        let ratio = crate::numeric_cast::u64_to_f64(mapper.anchors[0].cpu_size) / crate::numeric_cast::u64_to_f64(mapper.anchors[0].gpu_size);
         let offset = DynamicCrfMapper::calculate_offset_from_ratio(ratio);
         let gpu_size = mapper.anchors[0].gpu_size;
         let cpu_size = mapper.anchors[0].cpu_size;

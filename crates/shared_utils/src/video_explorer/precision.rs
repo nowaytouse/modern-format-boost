@@ -39,7 +39,7 @@ pub fn cache_key_to_crf(key: i32) -> f32 {
     if key <= 0 {
         return 0.0;
     }
-    key as f32 / CACHE_KEY_MULTIPLIER
+    crate::numeric_cast::i32_to_f32_lossy(key) / CACHE_KEY_MULTIPLIER
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

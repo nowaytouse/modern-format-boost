@@ -3,6 +3,7 @@
 //! Unified quality matching algorithm for all `modern_format_boost` tools.
 //! Calculates optimal encoding parameters (CRF/distance) based on input quality analysis.
 
+use rug::Rational;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -956,19 +957,22 @@ fn calculate_effective_bpp_with_options(
         MatchMode::Speed => 0.9,
     };
 
-    let effective_bpp = raw_bpp
-        * gop_factor
-        * chroma_factor
-        * hdr_factor
-        * aspect_factor
-        * complexity_factor
-        * grain_factor
-        * mode_adjustment
-        * resolution_factor
-        * alpha_factor
-        / codec_factor
-        / color_depth_factor
-        / target_adjustment;
+    let effective_bpp = {
+        let mut res = Rational::from_f64(raw_bpp).unwrap_or_else(|| Rational::from(0));
+        res *= Rational::from_f64(gop_factor).unwrap_or_else(|| Rational::from(1));
+        res *= Rational::from_f64(chroma_factor).unwrap_or_else(|| Rational::from(1));
+        res *= Rational::from_f64(hdr_factor).unwrap_or_else(|| Rational::from(1));
+        res *= Rational::from_f64(aspect_factor).unwrap_or_else(|| Rational::from(1));
+        res *= Rational::from_f64(complexity_factor).unwrap_or_else(|| Rational::from(1));
+        res *= Rational::from_f64(grain_factor).unwrap_or_else(|| Rational::from(1));
+        res *= Rational::from_f64(mode_adjustment).unwrap_or_else(|| Rational::from(1));
+        res *= Rational::from_f64(resolution_factor).unwrap_or_else(|| Rational::from(1));
+        res *= Rational::from_f64(alpha_factor).unwrap_or_else(|| Rational::from(1));
+        res /= Rational::from_f64(codec_factor).unwrap_or_else(|| Rational::from(1));
+        res /= Rational::from_f64(color_depth_factor).unwrap_or_else(|| Rational::from(1));
+        res /= Rational::from_f64(target_adjustment).unwrap_or_else(|| Rational::from(1));
+        res.to_f64()
+    };
 
     let confidence = calculate_confidence_v3(analysis);
 
@@ -1010,8 +1014,8 @@ fn calculate_raw_bpp(analysis: &QualityAnalysis, pixels: u64) -> Result<f64, Str
         if video_bitrate > 0 {
             if let Some(fps) = analysis.fps {
                 if fps > 0.0 {
-                    let bits_per_frame = crate::numeric_cast::u64_to_f64(video_bitrate) / fps;
-                    return Ok(bits_per_frame / crate::numeric_cast::u64_to_f64(pixels));
+                    let bits_per_frame = Rational::from(video_bitrate) / Rational::from_f64(fps).unwrap_or_else(|| Rational::from(1));
+                    return Ok((bits_per_frame / Rational::from(pixels)).to_f64());
                 }
             }
         }
@@ -1030,14 +1034,14 @@ fn calculate_raw_bpp(analysis: &QualityAnalysis, pixels: u64) -> Result<f64, Str
                 if total_frames == 0 {
                     return Err("❌ Cannot calculate bpp: total_frames is 0".to_string());
                 }
-                let bits_per_frame = crate::numeric_cast::u64_to_f64(analysis.file_size) * 8.0
-                    / crate::numeric_cast::u64_to_f64(total_frames);
-                return Ok(bits_per_frame / crate::numeric_cast::u64_to_f64(pixels));
+                let bits_per_frame = (Rational::from(analysis.file_size) * Rational::from(8))
+                    / Rational::from(total_frames);
+                return Ok((bits_per_frame / Rational::from(pixels)).to_f64());
             }
         }
         // BPP = bits per pixel; file_size is in bytes so multiply by 8
-        return Ok(crate::numeric_cast::u64_to_f64(analysis.file_size) * 8.0
-            / crate::numeric_cast::u64_to_f64(pixels));
+        return Ok(((Rational::from(analysis.file_size) * Rational::from(8))
+            / Rational::from(pixels)).to_f64());
     }
 
     Err("❌ Cannot calculate bpp: no video_bitrate, file_size, or bpp provided".to_string())

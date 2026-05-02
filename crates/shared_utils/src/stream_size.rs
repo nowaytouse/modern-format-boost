@@ -9,6 +9,7 @@
 //! - Calculate container overhead
 //! - Supports multiple extraction methods (direct ffprobe / bitrate calculation / estimation)
 
+use rug::Rational;
 use serde::Deserialize;
 use std::path::Path;
 use tracing::warn;
@@ -63,9 +64,8 @@ impl StreamSizeInfo {
         if self.total_file_size == 0 {
             return 0.0;
         }
-        crate::numeric_cast::u64_to_f64(self.container_overhead)
-            / crate::numeric_cast::u64_to_f64(self.total_file_size.max(1))
-            * 100.0
+        let ratio = Rational::from(self.container_overhead) / Rational::from(self.total_file_size.max(1));
+        (ratio * Rational::from(100)).to_f64()
     }
 
     #[must_use]
@@ -215,9 +215,8 @@ fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<StreamSiz
     let (video_stream_size, video_bitrate) = if let Some(vs) = video_stream {
         if let Some(br_str) = &vs.bit_rate {
             if let Ok(br) = br_str.parse::<u64>() {
-                let size = crate::numeric_cast::f64_to_u64_sat(
-                    crate::numeric_cast::u64_to_f64(br) * duration_secs / 8.0,
-                );
+                let size_rational = (Rational::from(br) * Rational::from_f64(duration_secs).unwrap_or_else(|| Rational::from(0))) / Rational::from(8);
+                let size = crate::numeric_cast::f64_to_u64_sat(size_rational.to_f64());
                 (size, Some(br))
             } else {
                 (0, None)
@@ -232,9 +231,8 @@ fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<StreamSiz
     let (audio_stream_size, audio_bitrate) = if let Some(aus) = audio_stream {
         if let Some(br_str) = &aus.bit_rate {
             if let Ok(br) = br_str.parse::<u64>() {
-                let size = crate::numeric_cast::f64_to_u64_sat(
-                    crate::numeric_cast::u64_to_f64(br) * duration_secs / 8.0,
-                );
+                let size_rational = (Rational::from(br) * Rational::from_f64(duration_secs).unwrap_or_else(|| Rational::from(0))) / Rational::from(8);
+                let size = crate::numeric_cast::f64_to_u64_sat(size_rational.to_f64());
                 (size, Some(br))
             } else {
                 (0, None)
@@ -305,9 +303,10 @@ pub fn get_output_video_stream_size(output_path: &Path) -> u64 {
 
 fn estimate_stream_sizes(path: &Path, total_file_size: u64) -> StreamSizeInfo {
     let overhead_percent = get_container_overhead_percent(path);
-    let estimated_overhead = crate::numeric_cast::f64_to_u64_sat(
-        crate::numeric_cast::u64_to_f64(total_file_size) * overhead_percent,
-    );
+    let estimated_overhead = {
+        let overhead = Rational::from(total_file_size) * Rational::from_f64(overhead_percent).unwrap_or_else(|| Rational::from(0));
+        crate::numeric_cast::f64_to_u64_sat(overhead.to_f64())
+    };
     let estimated_video_size = total_file_size.saturating_sub(estimated_overhead);
 
     StreamSizeInfo {

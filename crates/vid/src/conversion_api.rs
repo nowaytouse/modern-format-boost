@@ -926,7 +926,8 @@ pub fn auto_convert_with_cache(
             let output_size = result.output_size.unwrap_or(0);
             let output_path = result.output_path.unwrap_or_default();
             let size_ratio = if detection.file_size > 0 {
-                output_size as f64 / detection.file_size as f64
+                let ratio = rug::Rational::from((output_size, detection.file_size));
+                ratio.to_f64()
             } else {
                 1.0
             };
@@ -1158,7 +1159,8 @@ pub fn auto_convert_with_cache(
                 {
                     let total_file_compressed = explore_result.output_size < detection.file_size;
                     let total_size_ratio = if detection.file_size > 0 {
-                        explore_result.output_size as f64 / detection.file_size as f64
+                        let ratio = rug::Rational::from((explore_result.output_size, detection.file_size));
+                        ratio.to_f64()
                     } else {
                         1.0
                     };
@@ -1199,7 +1201,10 @@ pub fn auto_convert_with_cache(
                             },
                             input_size: detection.file_size,
                             output_size: explore_result.output_size,
-                            size_ratio: explore_result.output_size as f64 / detection.file_size as f64,
+                            size_ratio: {
+                                let ratio = rug::Rational::from((explore_result.output_size, detection.file_size.max(1)));
+                                ratio.to_f64()
+                            },
                             success: true,
                             message: format!(
                                 "Apple compat fallback: kept best-effort output (CRF {:.1}, {} iters); quality/size below target — file is HEVC and importable",
@@ -1351,7 +1356,10 @@ pub fn auto_convert_with_cache(
                     },
                     input_size: detection.file_size,
                     output_size: result.output_size,
-                    size_ratio: result.output_size as f64 / detection.file_size as f64,
+                    size_ratio: {
+                        let ratio = rug::Rational::from((result.output_size, detection.file_size.max(1)));
+                        ratio.to_f64()
+                    },
                     success: true,
                     message: format!(
                         "Apple compat fallback: kept best-effort output (CRF {:.1}, {} iters); {} below target — file is HEVC and importable",
@@ -1414,7 +1422,8 @@ pub fn auto_convert_with_cache(
 
     let total_file_compressed = actual_output_size < detection.file_size;
     let total_size_ratio = if detection.file_size > 0 {
-        actual_output_size as f64 / detection.file_size as f64
+        let ratio = rug::Rational::from((actual_output_size, detection.file_size));
+        ratio.to_f64()
     } else {
         1.0
     };
@@ -1547,7 +1556,10 @@ pub fn auto_convert_with_cache(
     }
 
     let output_size = actual_output_size;
-    let size_ratio = output_size as f64 / detection.file_size as f64;
+    let size_ratio = {
+        let ratio = rug::Rational::from((output_size, detection.file_size.max(1)));
+        ratio.to_f64()
+    };
 
     if config.should_delete_original() {
         if let Err(e) = shared_utils::conversion::safe_delete_original(
@@ -1714,7 +1726,7 @@ fn execute_lossless(
         info!(
             file = %detection.file_path,
             codec = %detection.codec.as_str(),
-            file_size_gb = detection.file_size as f64 / (1024.0 * 1024.0 * 1024.0),
+            file_size_gb = f64::from(u32::try_from(detection.file_size / (1024 * 1024)).unwrap_or(u32::MAX)) / 1024.0,
             "Applying low-memory x265 profile for large/high-fidelity source"
         );
     }

@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+### 📐 High-Precision Media Pipeline (rug::Rational)
+
+- **Mathematical Rigor & Precision Hardening**
+  - Migrated all critical media pipeline calculations from `f64` to `rug::Rational` to eliminate floating-point precision loss.
+  - **BPP & Bitrate**: Refactored Bits-Per-Pixel (BPP) and bitrate calculations in `video_quality_detector.rs`, `quality_matcher.rs`, and `precheck.rs`.
+  - **Adaptive Search**: Hardened convergence detection and change rate calculations in `video_explorer.rs` and `jxl_explorer.rs` using exact rational arithmetic.
+  - **Metadata Margins**: Transitioned overhead and metadata margin calculations in `stream_size.rs` and `video_explorer.rs` to `Rational` to ensure deterministic safety boundaries.
+  - **Image Analysis**: Migrated compression ratio and statistical anomaly scores in `image_analyzer.rs` and `image_detection.rs`.
+
+- **Clippy & Code Quality Hardening**
+  - Achieved near-zero warning compliance with `clippy::pedantic` lints across core crates.
+  - **Arithmetic Safety**: Replaced manual absolute difference logic with `u64::abs_diff` for cleaner and safer code.
+  - **Exhaustive Matching**: Resolved `match_wildcard_for_single_variants` and other pedantic warnings in `thread_manager.rs`.
+  - **Standardization**: Confirmed the architecture pattern: "Core calculation: Rational | UI/Display: f64".
+
 ### 📄 License & Compliance
 
 - **Enhanced license documentation with cargo-about**

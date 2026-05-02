@@ -5,6 +5,7 @@ use crate::image_jpeg_analysis::{analyze_jpeg_file, JpegQualityAnalysis};
 use crate::img_errors::{ImgQualityError, Result};
 use crate::log_eprintln;
 use crate::types::{ProcessHistory, VisualPerception};
+use rug::Rational;
 use image::{DynamicImage, GenericImageView, ImageFormat};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -885,7 +886,7 @@ fn calculate_image_features(img: &DynamicImage, file_size: u64) -> ImageFeatures
         * (u64::from(bits_per_channel) / 8);
 
     let compression_ratio = if raw_size > 0 {
-        crate::numeric_cast::u64_to_f64(file_size) / crate::numeric_cast::u64_to_f64(raw_size)
+        (Rational::from(file_size) / Rational::from(raw_size)).to_f64()
     } else {
         1.0
     };
@@ -1232,7 +1233,7 @@ fn get_animation_duration(path: &Path) -> Option<f32> {
             }
             // For a valid animated GIF without explicit duration metadata,
             // we fallback to 10fps (0.1s per frame) as a rough estimate
-            return Some((frame_count as f32) * 0.1);
+            return Some(crate::numeric_cast::u32_to_f32(frame_count) * 0.1);
         }
     }
 

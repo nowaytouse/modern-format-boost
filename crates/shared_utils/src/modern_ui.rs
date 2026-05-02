@@ -247,7 +247,9 @@ pub enum ProgressStyle {
 #[must_use]
 pub fn render_progress_bar(progress: f64, width: usize, style: ProgressStyle) -> String {
     let progress = progress.clamp(0.0, 1.0);
-    let filled = crate::numeric_cast::f64_to_usize_sat((progress * width as f64).round());
+    let filled = crate::numeric_cast::f64_to_usize_sat(
+        (progress * crate::numeric_cast::usize_to_f64(width)).round(),
+    );
     let empty = width.saturating_sub(filled);
 
     match style {
@@ -273,7 +275,8 @@ pub fn render_progress_bar(progress: f64, width: usize, style: ProgressStyle) ->
         ProgressStyle::Blocks => {
             let mut bar = String::new();
             for i in 0..width {
-                let pos = i as f64 / width as f64;
+                let pos = crate::numeric_cast::usize_to_f64(i)
+                    / crate::numeric_cast::usize_to_f64(width);
                 if pos < progress - 0.1 {
                     bar.push('█');
                 } else if pos < progress - 0.05 {
@@ -581,11 +584,20 @@ pub fn format_size(bytes: u64) -> String {
     const GB: u64 = MB * 1024;
 
     if bytes >= GB {
-        format!("{:.2} GB", bytes as f64 / GB as f64)
+        format!(
+            "{:.2} GB",
+            crate::numeric_cast::u64_to_f64(bytes) / crate::numeric_cast::u64_to_f64(GB)
+        )
     } else if bytes >= MB {
-        format!("{:.2} MB", bytes as f64 / MB as f64)
+        format!(
+            "{:.2} MB",
+            crate::numeric_cast::u64_to_f64(bytes) / crate::numeric_cast::u64_to_f64(MB)
+        )
     } else if bytes >= KB {
-        format!("{:.1} KB", bytes as f64 / KB as f64)
+        format!(
+            "{:.1} KB",
+            crate::numeric_cast::u64_to_f64(bytes) / crate::numeric_cast::u64_to_f64(KB)
+        )
     } else {
         format!("{bytes} B")
     }
@@ -634,9 +646,17 @@ pub fn format_size_diff(diff_bytes: i64) -> String {
     let sign = if diff_bytes >= 0 { "+" } else { "-" };
 
     if abs_diff >= MB {
-        format!("{}{:.1} MB", sign, abs_diff as f64 / MB as f64)
+        format!(
+            "{}{:.1} MB",
+            sign,
+            crate::numeric_cast::u64_to_f64(abs_diff) / crate::numeric_cast::u64_to_f64(MB)
+        )
     } else if abs_diff >= KB {
-        format!("{}{:.1} KB", sign, abs_diff as f64 / KB as f64)
+        format!(
+            "{}{:.1} KB",
+            sign,
+            crate::numeric_cast::u64_to_f64(abs_diff) / crate::numeric_cast::u64_to_f64(KB)
+        )
     } else {
         format!("{sign}{abs_diff} B")
     }

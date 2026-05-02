@@ -322,7 +322,7 @@ pub fn determine_compression_type(
     // BPP (Bits Per Pixel) thresholding for generic streams
     let pixels_per_second = f64::from(width) * f64::from(height) * fps;
     if pixels_per_second > 0.0 {
-        let bits_per_pixel = (bitrate as f64 * 8.0) / pixels_per_second;
+        let bits_per_pixel = (crate::numeric_cast::u64_to_f64(bitrate) * 8.0) / pixels_per_second;
         if bits_per_pixel > crate::constants::BPP_THRESHOLD_VISUALLY_LOSSLESS {
             return CompressionType::VisuallyLossless;
         } else if bits_per_pixel > crate::constants::BPP_THRESHOLD_HIGH_QUALITY {
@@ -453,7 +453,7 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
 
     let pixels_per_second = f64::from(probe.width) * f64::from(probe.height) * probe.frame_rate;
     let bits_per_pixel = if pixels_per_second > 0.0 {
-        (probe.bit_rate as f64) / pixels_per_second
+        crate::numeric_cast::u64_to_f64(probe.bit_rate) / pixels_per_second
     } else {
         0.0
     };

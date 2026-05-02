@@ -93,9 +93,6 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
                     frame_delays_cs.push(delay);
                     pos += 8;
                 }
-                0xF9 => {
-                    pos += 1;
-                }
                 0xFE | 0x01 => {
                     pos += 2;
                     pos = skip_sub_blocks(&buf, pos);
@@ -144,16 +141,16 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
 
     let frame_payload_variation = if frame_payload_sizes.len() >= 2 {
         let mean =
-            frame_payload_sizes.iter().sum::<usize>() as f64 / frame_payload_sizes.len() as f64;
+            crate::numeric_cast::usize_to_f64(frame_payload_sizes.iter().sum::<usize>()) / crate::numeric_cast::usize_to_f64(frame_payload_sizes.len());
         if mean > 0.0 {
             let variance = frame_payload_sizes
                 .iter()
                 .map(|&size| {
-                    let diff = size as f64 - mean;
+                    let diff = crate::numeric_cast::usize_to_f64(size) - mean;
                     diff * diff
                 })
                 .sum::<f64>()
-                / frame_payload_sizes.len() as f64;
+                / crate::numeric_cast::usize_to_f64(frame_payload_sizes.len());
             Some((variance.sqrt() / mean).clamp(0.0, 2.0))
         } else {
             None
@@ -164,7 +161,7 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
 
     let frame_delay_variation = if frame_delays_cs.len() >= 2 {
         let mean = frame_delays_cs.iter().map(|&d| f64::from(d)).sum::<f64>()
-            / frame_delays_cs.len() as f64;
+            / crate::numeric_cast::usize_to_f64(frame_delays_cs.len());
         if mean > 0.0 {
             let variance = frame_delays_cs
                 .iter()
@@ -173,7 +170,7 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
                     diff * diff
                 })
                 .sum::<f64>()
-                / frame_delays_cs.len() as f64;
+                / crate::numeric_cast::usize_to_f64(frame_delays_cs.len());
             Some((variance.sqrt() / mean).clamp(0.0, 2.0))
         } else {
             None
