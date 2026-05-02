@@ -18,6 +18,7 @@ use image::{DynamicImage, ImageBuffer};
 use libheif_rs::{ColorSpace, HeifContext, ImageHandle, ItemId, RgbChroma};
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
+use quick_xml::XmlVersion;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::path::Path;
@@ -575,13 +576,12 @@ fn parse_gainmap_params(handle: &ImageHandle) -> Option<GainMapParams> {
     }
 
     let xmp_data = handle.metadata(ids[0]).ok()?;
-    let xmp_str = String::from_utf8_lossy(&xmp_data);
-    parse_gainmap_from_xmp(&xmp_str)
+    parse_gainmap_from_xmp(&xmp_data)
 }
 
-fn parse_gainmap_from_xmp(xmp_str: &str) -> Option<GainMapParams> {
+fn parse_gainmap_from_xmp(xmp_data: &[u8]) -> Option<GainMapParams> {
     let mut params = GainMapParams::default();
-    let mut reader = Reader::from_str(xmp_str);
+    let mut reader = Reader::from_reader(xmp_data);
     let mut buf = Vec::new();
     let mut found_any = false;
 
@@ -591,98 +591,78 @@ fn parse_gainmap_from_xmp(xmp_str: &str) -> Option<GainMapParams> {
                 // 1. Check Attributes (Common for Google/Samsung/ISO)
                 for attr in e.attributes().flatten() {
                     let local_name = attr.key.local_name();
-                    let attr_name = String::from_utf8_lossy(local_name.as_ref());
-                    let attr_val = String::from_utf8_lossy(attr.value.as_ref());
-
-                    if let Ok(f) = attr_val.parse::<f32>() {
-                        match attr_name.as_ref() {
-                            n if n.contains("GainMapMax") => {
+                    
+                    // Zero-copy attribute parsing
+                    if let Ok(attr_val_cow) = attr.normalized_value(XmlVersion::V1_0) {
+                        if let Ok(f) = attr_val_cow.parse::<f32>() {
+                            let name_bytes = local_name.as_ref();
+                            if name_bytes.windows(10).any(|w| w == b"GainMapMax") {
                                 params.gain_map_max = f;
                                 found_any = true;
-                            }
-                            n if n.contains("GainMapMin") => {
+                            } else if name_bytes.windows(10).any(|w| w == b"GainMapMin") {
                                 params.gain_map_min = f;
                                 found_any = true;
-                            }
-                            n if n.contains("Gamma") => {
+                            } else if name_bytes.windows(5).any(|w| w == b"Gamma") {
                                 params.gamma = f;
                                 found_any = true;
-                            }
-                            n if n.contains("OffsetSDR") || n.contains("OffsetSdr") => {
+                            } else if name_bytes.windows(9).any(|w| w == b"OffsetSDR") || name_bytes.windows(9).any(|w| w == b"OffsetSdr") {
                                 params.offset_sdr = f;
                                 found_any = true;
-                            }
-                            n if n.contains("OffsetHDR") || n.contains("OffsetHdr") => {
+                            } else if name_bytes.windows(9).any(|w| w == b"OffsetHDR") || name_bytes.windows(9).any(|w| w == b"OffsetHdr") {
                                 params.offset_hdr = f;
                                 found_any = true;
                             }
-                            _ => (),
                         }
                     }
                 }
 
                 // 2. Check Child Elements (Common for Apple)
                 let name_bytes = e.name();
-                let name = String::from_utf8_lossy(name_bytes.as_ref());
+                let name_ref = name_bytes.as_ref();
 
-                if name.contains("GainMapMax") {
-                    if let Ok(val) = reader.read_text(e.name()) {
-                        let text = reader
-                            .decoder()
-                            .decode(val.as_ref())
-                            .unwrap_or_default()
-                            .to_string();
-                        if let Ok(f) = text.parse::<f32>() {
-                            params.gain_map_max = f;
-                            found_any = true;
+                if name_ref.windows(10).any(|w| w == b"GainMapMax") {
+                    if let Ok(val) = reader.read_text(name_bytes) {
+                        if let Ok(text_cow) = reader.decoder().decode(val.as_ref()) {
+                            if let Ok(f) = text_cow.parse::<f32>() {
+                                params.gain_map_max = f;
+                                found_any = true;
+                            }
                         }
                     }
-                } else if name.contains("GainMapMin") {
-                    if let Ok(val) = reader.read_text(e.name()) {
-                        let text = reader
-                            .decoder()
-                            .decode(val.as_ref())
-                            .unwrap_or_default()
-                            .to_string();
-                        if let Ok(f) = text.parse::<f32>() {
-                            params.gain_map_min = f;
-                            found_any = true;
+                } else if name_ref.windows(10).any(|w| w == b"GainMapMin") {
+                    if let Ok(val) = reader.read_text(name_bytes) {
+                        if let Ok(text_cow) = reader.decoder().decode(val.as_ref()) {
+                            if let Ok(f) = text_cow.parse::<f32>() {
+                                params.gain_map_min = f;
+                                found_any = true;
+                            }
                         }
                     }
-                } else if name.contains("OffsetSDR") || name.contains("OffsetSdr") {
-                    if let Ok(val) = reader.read_text(e.name()) {
-                        let text = reader
-                            .decoder()
-                            .decode(val.as_ref())
-                            .unwrap_or_default()
-                            .to_string();
-                        if let Ok(f) = text.parse::<f32>() {
-                            params.offset_sdr = f;
-                            found_any = true;
+                } else if name_ref.windows(9).any(|w| w == b"OffsetSDR") || name_ref.windows(9).any(|w| w == b"OffsetSdr") {
+                    if let Ok(val) = reader.read_text(name_bytes) {
+                        if let Ok(text_cow) = reader.decoder().decode(val.as_ref()) {
+                            if let Ok(f) = text_cow.parse::<f32>() {
+                                params.offset_sdr = f;
+                                found_any = true;
+                            }
                         }
                     }
-                } else if name.contains("OffsetHDR") || name.contains("OffsetHdr") {
-                    if let Ok(val) = reader.read_text(e.name()) {
-                        let text = reader
-                            .decoder()
-                            .decode(val.as_ref())
-                            .unwrap_or_default()
-                            .to_string();
-                        if let Ok(f) = text.parse::<f32>() {
-                            params.offset_hdr = f;
-                            found_any = true;
+                } else if name_ref.windows(9).any(|w| w == b"OffsetHDR") || name_ref.windows(9).any(|w| w == b"OffsetHdr") {
+                    if let Ok(val) = reader.read_text(name_bytes) {
+                        if let Ok(text_cow) = reader.decoder().decode(val.as_ref()) {
+                            if let Ok(f) = text_cow.parse::<f32>() {
+                                params.offset_hdr = f;
+                                found_any = true;
+                            }
                         }
                     }
-                } else if name.contains("Gamma") {
-                    if let Ok(val) = reader.read_text(e.name()) {
-                        let text = reader
-                            .decoder()
-                            .decode(val.as_ref())
-                            .unwrap_or_default()
-                            .to_string();
-                        if let Ok(f) = text.parse::<f32>() {
-                            params.gamma = f;
-                            found_any = true;
+                } else if name_ref.windows(5).any(|w| w == b"Gamma") {
+                    if let Ok(val) = reader.read_text(name_bytes) {
+                        if let Ok(text_cow) = reader.decoder().decode(val.as_ref()) {
+                            if let Ok(f) = text_cow.parse::<f32>() {
+                                params.gamma = f;
+                                found_any = true;
+                            }
                         }
                     }
                 }
@@ -963,8 +943,8 @@ fn parse_gainmap_params_from_jpeg_xmp(data: &[u8]) -> Option<GainMapParams> {
     use crate::image_jpeg_analysis::extract_xmp_from_jpeg_data;
 
     let xmp_blocks = extract_xmp_from_jpeg_data(data)?;
-    for xmp_str in xmp_blocks {
-        if let Some(params) = parse_gainmap_from_xmp(&xmp_str) {
+    for xmp_bytes in xmp_blocks {
+        if let Some(params) = parse_gainmap_from_xmp(xmp_bytes.as_bytes()) {
             return Some(params);
         }
     }
@@ -1002,7 +982,7 @@ mod tests {
                 </rdf:RDF>
             </xmpmeta>
         "#;
-        let params = parse_gainmap_from_xmp(xmp).unwrap_or_else(|| panic!("failed to parse gainmap"));
+        let params = parse_gainmap_from_xmp(xmp.as_bytes()).unwrap_or_else(|| panic!("failed to parse gainmap"));
         assert!(crate::float_compare::approx_eq_f64(
             f64::from(params.gain_map_max),
             3.0
@@ -1036,7 +1016,7 @@ mod tests {
                 </rdf:RDF>
             </xmpmeta>
         "#;
-        let params = parse_gainmap_from_xmp(xmp).unwrap_or_else(|| panic!("failed to parse gainmap"));
+        let params = parse_gainmap_from_xmp(xmp.as_bytes()).unwrap_or_else(|| panic!("failed to parse gainmap"));
         assert!(crate::float_compare::approx_eq_f64(
             f64::from(params.gain_map_max),
             4.5

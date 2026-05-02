@@ -43,13 +43,11 @@ fn beijing_time_now() -> String {
 }
 
 fn describe_thread_panic(payload: Box<dyn Any + Send + 'static>) -> String {
-    match payload.downcast::<String>() {
-        Ok(msg) => *msg,
-        Err(payload) => match payload.downcast::<&'static str>() {
-            Ok(msg) => (*msg).to_string(),
-            Err(_) => "non-string panic payload".to_string(),
-        },
-    }
+    payload.downcast::<String>().map(|msg| *msg).unwrap_or_else(|payload| {
+        payload
+            .downcast::<&'static str>()
+            .map_or_else(|_| "non-string panic payload".to_string(), |msg| (*msg).to_string())
+    })
 }
 
 struct StderrCapture {
@@ -254,6 +252,7 @@ fn release_gpu_slot() {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     *g = g.saturating_sub(1);
+    drop(g);
     GPU_CONCURRENCY_CVAR.notify_one();
 }
 
@@ -1212,7 +1211,7 @@ fn estimate_cpu_search_center_dynamic_impl(
         GpuType::None => 0.0,
     };
 
-    let adjustment = if let Some(potential) = compression_potential {
+    let adjustment = compression_potential.map_or(0.0, |potential| {
         if potential < 0.3 {
             0.3
         } else if potential > 0.7 {
@@ -1220,9 +1219,7 @@ fn estimate_cpu_search_center_dynamic_impl(
         } else {
             0.0
         }
-    } else {
-        0.0
-    };
+    });
 
     gpu_boundary + base_offset + adjustment
 }
@@ -2023,10 +2020,9 @@ fn gpu_coarse_search_with_log_impl(
     };
 
     let warmup_result = encode_warmup(config.max_crf);
-    let can_compress_at_max = match &warmup_result {
-        Ok(size) => *size < warmup_input_size,
-        Err(_) => true,
-    };
+    let can_compress_at_max = warmup_result
+        .as_ref()
+        .map_or(true, |size| *size < warmup_input_size);
 
     if !can_compress_at_max {
         log_msg!(

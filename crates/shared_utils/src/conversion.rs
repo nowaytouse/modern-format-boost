@@ -140,6 +140,7 @@ fn reserve_unique_output_path(input: &Path, candidate: PathBuf) -> PathBuf {
             }
             _ => {
                 reservations.insert(output_key, input_key);
+                drop(reservations);
                 return resolved;
             }
         }
@@ -218,10 +219,10 @@ pub fn load_processed_list(list_path: &Path) -> Result<(), Box<dyn std::error::E
         return Err(Box::new(err));
     }
 
-    let mut processed = PROCESSED_FILES
+    PROCESSED_FILES
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    processed.extend(loaded);
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .extend(loaded);
 
     Ok(())
 }
@@ -232,16 +233,19 @@ pub fn load_processed_list(list_path: &Path) -> Result<(), Box<dyn std::error::E
 ///
 /// Returns an error if the file cannot be written or serialized.
 pub fn save_processed_list(list_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let processed = PROCESSED_FILES
+    let processed_paths: Vec<String> = PROCESSED_FILES
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .cloned()
+        .collect();
     let mut file = fs::File::create(list_path)?;
     #[cfg(unix)]
     flock_exclusive(&file)?;
     #[cfg(unix)]
     let _flock_guard = ProcessedListLockGuard(std::os::unix::io::AsRawFd::as_raw_fd(&file));
 
-    for path in processed.iter() {
+    for path in processed_paths {
         writeln!(file, "{path}")?;
     }
     file.flush()?;
@@ -328,15 +332,9 @@ impl VideoExplorationMetrics<'_> {
             size_tag
         );
 
-        if let Some(q) = self.quality_label {
-            if q.is_empty() {
-                format!("✅ {core_msg}")
-            } else {
-                format!("✅ {q} | {core_msg}")
-            }
-        } else {
-            format!("✅ {core_msg}")
-        }
+        self.quality_label
+            .filter(|q| !q.is_empty())
+            .map_or_else(|| format!("✅ {core_msg}"), |q| format!("✅ {q} | {core_msg}"))
     }
 }
 
@@ -674,20 +672,14 @@ impl ConversionResult {
 
         // Message body (no ✅ here — caller already emits it).
         // Format: "✅ <FormatName> <Action>: -14.5%"
-        let core_msg = match extra_info {
-            Some(info) => format!("{format_name} {action} ({info}): {size_tag}"),
-            None => format!("{format_name} {action}: {size_tag}"),
-        };
+        let core_msg = extra_info.map_or_else(
+            || format!("{format_name} {action}: {size_tag}"),
+            |info| format!("{format_name} {action} ({info}): {size_tag}"),
+        );
 
-        let message = if let Some(q) = quality_label {
-            if q.is_empty() {
-                format!("✅ {core_msg}")
-            } else {
-                format!("✅ {q} | {core_msg}")
-            }
-        } else {
-            format!("✅ {core_msg}")
-        };
+        let message = quality_label
+            .filter(|q| !q.is_empty())
+            .map_or_else(|| format!("✅ {core_msg}"), |q| format!("✅ {q} | {core_msg}"));
 
         Self {
             success: true,
@@ -919,7 +911,7 @@ pub fn determine_output_path_with_base(
                 .strip_prefix(base_dir)
                 .unwrap_or(input)
                 .parent()
-                .unwrap_or(Path::new(""));
+                .unwrap_or_else(|| Path::new(""));
 
             let out_subdir = dir.join(rel_path);
             fs::create_dir_all(&out_subdir).map_err(|e| {

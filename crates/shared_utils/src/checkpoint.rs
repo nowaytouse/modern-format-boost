@@ -877,16 +877,19 @@ impl CheckpointManager {
 
     fn rewrite_progress_file(&self) -> io::Result<()> {
         let temp_path = self.progress_file.with_extension("txt.tmp");
-        let completed = self
+        let entries: Vec<_> = self
             .completed
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .values()
+            .cloned()
+            .collect();
         let mut file = File::create(&temp_path)?;
         let header = serde_json::to_string(&CheckpointRecord::Header(self.header.clone()))
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
         writeln!(file, "{header}")?;
-        for entry in completed.values() {
-            let line = serde_json::to_string(&CheckpointRecord::Entry(entry.clone()))
+        for entry in entries {
+            let line = serde_json::to_string(&CheckpointRecord::Entry(entry))
                 .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
             writeln!(file, "{line}")?;
         }

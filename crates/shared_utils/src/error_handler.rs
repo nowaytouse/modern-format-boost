@@ -172,19 +172,16 @@ pub fn install_panic_handler() {
 
     panic::set_hook(Box::new(move |panic_info| {
         let payload = panic_info.payload();
-        let message = if let Some(s) = payload.downcast_ref::<&str>() {
-            s.to_string()
-        } else if let Some(s) = payload.downcast_ref::<String>() {
-            s.clone()
-        } else {
-            "Unknown panic payload".to_string()
-        };
+        let message = payload
+            .downcast_ref::<&str>()
+            .map(|s| (*s).to_string())
+            .or_else(|| payload.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "Unknown panic payload".to_string());
 
-        let location = if let Some(loc) = panic_info.location() {
-            format!("{}:{}:{}", loc.file(), loc.line(), loc.column())
-        } else {
-            "Unknown location".to_string()
-        };
+        let location = panic_info.location().map_or_else(
+            || "Unknown location".to_string(),
+            |loc| format!("{}:{}:{}", loc.file(), loc.line(), loc.column()),
+        );
 
         eprintln!("💥 PANIC occurred!");
         eprintln!("   Message: {message}");

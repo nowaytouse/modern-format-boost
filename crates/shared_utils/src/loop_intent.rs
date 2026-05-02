@@ -1315,7 +1315,8 @@ fn apply_weak_heuristics(
     let bias_enabled = std::env::var(crate::constants::ENV_MODERN_FORMAT_CONVERT_BIAS)
         .map_or(true, |value| value == "1");
     let is_modern = crate::constants::MODERN_ANIMATED_EXTENSIONS.contains(&ext_lower.as_str());
-    if is_modern && bias_enabled && (meta.duration_secs > thresholds.modern_bias_duration_secs) {
+    let bias_threshold = thresholds.modern_bias_duration_secs;
+    if is_modern && bias_enabled && meta.duration_secs > bias_threshold {
         let master_like = meta.has_embedded_icc
             || meta.has_complex_color_profile
             || meta
