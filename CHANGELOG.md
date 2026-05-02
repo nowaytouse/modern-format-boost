@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+### 🛡️ Hardening & Workflow Optimization (2026-05-02)
+
+- **Workflow Stability**:
+  - **Non-fatal Empty Directory Handling**: Refactored the video processing runner to log a warning instead of bailing with a fatal error when no video files are found in a directory. This ensures that mixed-content batch jobs (e.g., images only) continue processing without interruption.
+- **Clippy Pedantic Compliance (Deep Hardening)**:
+  - **Type Safety**: Eliminated multiple `cast_possible_truncation` warnings in the video exploration logic by implementing safe `u8::try_from` conversions for iteration counters.
+  - **Performance Optimization**: Refactored the core `finalize_with_size_check` image finalization API to use `Option<&str>` instead of `Option<String>`, reducing heap allocations during high-volume batch processing.
+  - **Idiomatic Rust**: Resolved `needless_pass_by_value`, `items_after_statements`, and `needless_option_as_deref` warnings across the `img`, `vid`, and `shared_utils` crates.
+- **Maintenance**:
+  - Achieved a 100% clean `clippy::pedantic` status (excluding architectural `too_many_lines` debt) for the entire workspace.
+
 ### 🛡️ Core Stability & Code Quality Hardening (2026-05-02)
 
 - **Dependency Stabilization**:

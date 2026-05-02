@@ -40,6 +40,7 @@ struct Decision {
 }
 
 fn main() -> Result<()> {
+    use std::fmt::Write;
     let args = Args::parse();
     let index = MediaIndex::open(&args.db)?;
 
@@ -80,7 +81,6 @@ fn main() -> Result<()> {
             if left_dec.format != right_dec.format {
                 format_changes += 1;
                 diff = true;
-                use std::fmt::Write;
                 let _ = write!(
                     diff_msg,
                     "FORMAT: {} -> {}",

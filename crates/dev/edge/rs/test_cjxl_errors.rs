@@ -4,6 +4,7 @@ use std::process::Command;
 
 #[test]
 fn test_cjxl_grayscale_icc_fallback() {
+    use img::lossless_converter::{convert_to_jxl, ConvertOptions};
     // 1. Create a large enough grayscale PNG (to avoid the 500KB "small PNG" skip)
     let input = Path::new("test_grayscale_icc.png");
     let output = Path::new("test_grayscale_icc.jxl");
@@ -41,7 +42,6 @@ fn test_cjxl_grayscale_icc_fallback() {
     // Since we're in an integration test, we can call the binary or the library function.
     // Let's call the library function convert_to_jxl.
 
-    use img::lossless_converter::{convert_to_jxl, ConvertOptions};
     let options = ConvertOptions {
         flags: shared_utils::conversion::ConvertFlags::VERBOSE,
         ..Default::default()

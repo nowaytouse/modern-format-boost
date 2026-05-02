@@ -148,7 +148,7 @@ impl ExploreQualityFailureDecision {
             success: false,
             message: self.fail_message,
             final_crf: explore_result.optimal_crf,
-            exploration_attempts: explore_result.iterations as u8,
+            exploration_attempts: u8::try_from(explore_result.iterations).unwrap_or(u8::MAX),
             blake3: None,
         }
     }
@@ -219,7 +219,7 @@ impl FinalQualityGateFailureDecision {
             success: false,
             message: self.skip_message,
             final_crf: result.optimal_crf,
-            exploration_attempts: result.iterations as u8,
+            exploration_attempts: u8::try_from(result.iterations).unwrap_or(u8::MAX),
             blake3: None,
         }
     }
@@ -1213,7 +1213,7 @@ pub fn auto_convert_with_cache(
                                 explore_result.iterations
                             ),
                             final_crf: explore_result.optimal_crf,
-                            exploration_attempts: explore_result.iterations as u8,
+                            exploration_attempts: u8::try_from(explore_result.iterations).unwrap_or(u8::MAX),
                             blake3: None,
                         });
                     }
@@ -1239,7 +1239,7 @@ pub fn auto_convert_with_cache(
                 (
                     explore_result.output_size,
                     explore_result.optimal_crf,
-                    explore_result.iterations as u8,
+                    u8::try_from(explore_result.iterations).unwrap_or(u8::MAX),
                     Some(explore_result),
                 )
             }
@@ -1369,7 +1369,7 @@ pub fn auto_convert_with_cache(
                         decision.quality_summary
                     ),
                     final_crf: result.optimal_crf,
-                    exploration_attempts: result.iterations as u8,
+                    exploration_attempts: u8::try_from(result.iterations).unwrap_or(u8::MAX),
                     blake3: None,
                 });
             }

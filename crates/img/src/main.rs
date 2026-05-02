@@ -170,8 +170,8 @@ fn main() -> anyhow::Result<()> {
         }
         | Commands::RestoreTimestamps { source: input, .. }
         | Commands::LockCheck { input }
-        | Commands::PathHash { input } => Some(input),
-        Commands::IngestSamples { input, .. } => Some(input),
+        | Commands::PathHash { input }
+        | Commands::IngestSamples { input, .. } => Some(input),
         _ => None,
     };
 
@@ -399,12 +399,10 @@ fn main() -> anyhow::Result<()> {
                                 stats.algorithm_version_distribution.iter().collect();
                             versions.sort_by_key(|(v, _)| *v);
                             for (version, count) in versions {
-                                let marker = if *version < stats.current_algorithm_version {
-                                    "⚠️  (stale)"
-                                } else if *version == stats.current_algorithm_version {
-                                    "✅ (current)"
-                                } else {
-                                    "❓ (future)"
+                                let marker = match (*version).cmp(&stats.current_algorithm_version) {
+                                    std::cmp::Ordering::Less => "⚠️  (stale)",
+                                    std::cmp::Ordering::Equal => "✅ (current)",
+                                    std::cmp::Ordering::Greater => "❓ (future)",
                                 };
                                 println!("   v{version}: {count} records {marker}");
                             }
@@ -679,12 +677,12 @@ fn auto_convert_single_file(
     };
     let input = fixed_input.as_path();
 
-    let _label = input
+    let label = input
         .file_name()
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
-    shared_utils::progress_mode::set_log_context(&_label);
+    shared_utils::progress_mode::set_log_context(&label);
     let _log_guard = shared_utils::progress_mode::LogContextGuard;
 
     // Check for Live Photos first (before any analysis)
@@ -772,7 +770,7 @@ fn auto_convert_single_file(
         });
     }
 
-    let _pixel_analysis = if !analysis.is_animated && analysis.format != "JPEG" {
+    let pixel_analysis = if !analysis.is_animated && analysis.format != "JPEG" {
         shared_utils::image_quality_detector::analyze_image_quality_with_cache(
             input,
             config.cache.as_deref(),
@@ -780,7 +778,7 @@ fn auto_convert_single_file(
     } else {
         None
     };
-    if let Some(ref q) = _pixel_analysis {
+    if let Some(ref q) = pixel_analysis {
         shared_utils::log_media_info_for_image_quality(q, input);
     }
 
@@ -1199,45 +1197,44 @@ fn auto_convert_directory(
                                     );
                                 }
                                 continue;
+                            }
+                            // Classify as read/analysis failure only on unambiguous sentinel types
+                            let is_read_error = err_str.contains("Failed to open file")
+                                || err_str.contains("ImageReadError");
+
+                            if is_read_error {
+                                shared_utils::log_auto_error!(
+                                    "Image analysis",
+                                    "⚠️  Failed to read/analyze {}: {}. Original file will be preserved.",
+                                    path.display(),
+                                    e
+                                );
                             } else {
-                                // Classify as read/analysis failure only on unambiguous sentinel types
-                                let is_read_error = err_str.contains("Failed to open file")
-                                    || err_str.contains("ImageReadError");
+                                shared_utils::log_auto_error!(
+                                    "Image conversion",
+                                    "Failed {}: {}. Preserved original (Skipped conversion).",
+                                    path.display(),
+                                    e
+                                );
+                            }
 
-                                if is_read_error {
-                                    shared_utils::log_auto_error!(
-                                        "Image analysis",
-                                        "⚠️  Failed to read/analyze {}: {}. Original file will be preserved.",
+                            shared_utils::progress_mode::log_conversion_failure(path, &err_str);
+                            failed.fetch_add(1, Ordering::Relaxed);
+                            shared_utils::progress_mode::image_processed_failure();
+
+                            // Copy original file to output directory to prevent data loss
+                            if let Some(ref output_dir) = config.output_dir {
+                                if let Err(copy_err) = shared_utils::copy_on_skip_or_fail(
+                                    path,
+                                    Some(output_dir),
+                                    config.base_dir.as_deref(),
+                                    config.verbose,
+                                ) {
+                                    shared_utils::log_eprintln!(
+                                        "🚨 [CRITICAL] Failed to copy original after conversion failure ({}): {}. DATA LOSS RISK!",
                                         path.display(),
-                                        e
+                                        copy_err
                                     );
-                                } else {
-                                    shared_utils::log_auto_error!(
-                                        "Image conversion",
-                                        "Failed {}: {}. Preserved original (Skipped conversion).",
-                                        path.display(),
-                                        e
-                                    );
-                                }
-
-                                shared_utils::progress_mode::log_conversion_failure(path, &err_str);
-                                failed.fetch_add(1, Ordering::Relaxed);
-                                shared_utils::progress_mode::image_processed_failure();
-
-                                // Copy original file to output directory to prevent data loss
-                                if let Some(ref output_dir) = config.output_dir {
-                                    if let Err(copy_err) = shared_utils::copy_on_skip_or_fail(
-                                        path,
-                                        Some(output_dir),
-                                        config.base_dir.as_deref(),
-                                        config.verbose,
-                                    ) {
-                                        shared_utils::log_eprintln!(
-                                            "🚨 [CRITICAL] Failed to copy original after conversion failure ({}): {}. DATA LOSS RISK!",
-                                            path.display(),
-                                            copy_err
-                                        );
-                                    }
                                 }
                             }
                         }

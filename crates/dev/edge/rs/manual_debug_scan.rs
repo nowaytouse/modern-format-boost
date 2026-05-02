@@ -107,13 +107,13 @@ fn manual_debug_scan_debug_dir_only() {
         // Simple linear-congruential generator for deterministic-ish sampling
         let mut seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos() as u64);
+            .map_or(0, |d| (d.as_nanos() & 0xFFFF_FFFF_FFFF_FFFF) as u64);
         let mut picks: Vec<usize> = Vec::new();
         while picks.len() < sample_count {
             seed = seed
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
-            let idx = (seed as usize) % undecided.len();
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            let idx = usize::try_from(seed).unwrap_or(0) % undecided.len();
             if !picks.contains(&idx) {
                 picks.push(idx);
             }

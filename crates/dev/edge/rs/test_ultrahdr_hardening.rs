@@ -8,7 +8,7 @@ fn test_ultrahdr_absolute_offset_fallback() {
     // 2) APP1 XMP
     let xmp_content = b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF><rdf:Description hdrgm:GainMapMax=\"2.0\" xmlns:hdrgm=\"http://ns.adobe.com/hdr-gain-map/1.0/\"/></rdf:RDF></x:xmpmeta>";
     let xmp_hdr = b"http://ns.adobe.com/xap/1.0/\0";
-    let xmp_seg_len = (xmp_hdr.len() + xmp_content.len() + 2) as u16;
+    let xmp_seg_len = u16::try_from(xmp_hdr.len() + xmp_content.len() + 2).unwrap_or(0);
 
     data.push(0xFF);
     data.push(0xE1);
@@ -32,7 +32,7 @@ fn test_ultrahdr_absolute_offset_fallback() {
     mpf_payload.extend_from_slice(&1u32.to_be_bytes());
     mpf_payload.extend_from_slice(&2u32.to_be_bytes());
     // Entry 2: MPEntry (Tag 0xB002)
-    let mp_entry_val_offset = (mpf_payload.len() + 12 + 4) as u32;
+    let mp_entry_val_offset = u32::try_from(mpf_payload.len() + 12 + 4).unwrap_or(0);
     mpf_payload.extend_from_slice(&0xB002u16.to_be_bytes());
     mpf_payload.extend_from_slice(&7u16.to_be_bytes()); // UNDEFINED
     mpf_payload.extend_from_slice(&32u32.to_be_bytes()); // 2 images * 16 bytes
@@ -53,7 +53,7 @@ fn test_ultrahdr_absolute_offset_fallback() {
     mpf_payload.extend_from_slice(&absolute_offset.to_be_bytes());
     mpf_payload.extend_from_slice(&0u32.to_be_bytes()); // Deps
 
-    let mpf_seg_len = (mpf_id.len() + mpf_payload.len() + 2) as u16;
+    let mpf_seg_len = u16::try_from(mpf_id.len() + mpf_payload.len() + 2).unwrap_or(0);
     data.push(0xFF);
     data.push(0xE2);
     data.extend_from_slice(&mpf_seg_len.to_be_bytes());

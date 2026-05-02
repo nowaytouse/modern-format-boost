@@ -138,13 +138,14 @@ where
     );
 
     if files.is_empty() {
-        anyhow::bail!(
+        warn!(
             "No video files found in directory: {}\n\
              Supported video formats: {}\n\
              Use img for images",
             input.display(),
             SUPPORTED_VIDEO_EXTENSIONS.join(", ")
         );
+        return Ok(());
     }
 
     info!("Found {} video files to process", files.len());

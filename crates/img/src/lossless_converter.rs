@@ -49,7 +49,7 @@ fn finalize_with_size_check(
     output_size: u64,
     options: &ConvertOptions,
     format_label: &str,
-    extra_info: Option<String>,
+    extra_info: Option<&str>,
 ) -> Result<ConversionResult> {
     let ratio = if input_size > 0 {
         let rat = rug::Rational::from((output_size, input_size));
@@ -97,7 +97,7 @@ fn finalize_with_size_check(
         output,
         input_size,
         format_label,
-        extra_info.as_deref(),
+        extra_info,
         options,
     )
     .map_err(ImgQualityError::IoError)
@@ -126,7 +126,7 @@ fn finalize_fallback_jxl(
         output_size,
         options,
         "JXL",
-        Some(label.to_string()),
+        Some(label),
     )
 }
 
@@ -271,7 +271,7 @@ pub fn convert_ultrahdr_jpeg_to_jxl(
         output_size,
         options,
         "JXL (UltraHDR Synthesis ☀️)",
-        Some("Native HDR".to_string()),
+        Some("Native HDR"),
     )
     .map_err(|e| {
         ImgQualityError::ConversionError(format!("☢️ UltraHDR Synthesis Finalization Error: {e}"))
@@ -322,6 +322,7 @@ pub fn convert_to_jxl(
     distance: f32,
     hdr_info: Option<&shared_utils::ColorInfo>,
 ) -> Result<ConversionResult> {
+    use std::process::Stdio;
     // Validate input file
     if let Err(e) = shared_utils::conversion::validate_input_file(input) {
         return Err(ImgQualityError::ConversionError(e));
@@ -366,8 +367,8 @@ pub fn convert_to_jxl(
     let (actual_input, _temp_file_guard) = prepare_input_for_cjxl(input, options, hdr_info)?;
 
     // Extract ICC Profile from original input for preservation
-    let _icc_temp = shared_utils::jxl_utils::extract_icc_profile(input);
-    let icc_path = _icc_temp.as_ref().map(tempfile::NamedTempFile::path);
+    let icc_temp = shared_utils::jxl_utils::extract_icc_profile(input);
+    let icc_path = icc_temp.as_ref().map(tempfile::NamedTempFile::path);
 
     let max_threads = if options.child_threads > 0 {
         options.child_threads
@@ -435,8 +436,8 @@ pub fn convert_to_jxl(
                     "🔧 ICC PATCH:",
                     "ICC D50 rounding error detected, retrying with patched profile"
                 ));
-                let _patched_icc = shared_utils::jxl_utils::extract_icc_with_d50_patch(input);
-                let patched_icc_path = _patched_icc.as_ref().map(tempfile::NamedTempFile::path);
+                let patched_icc = shared_utils::jxl_utils::extract_icc_with_d50_patch(input);
+                let patched_icc_path = patched_icc.as_ref().map(tempfile::NamedTempFile::path);
                 let mut builder = shared_utils::CjxlBuilder::new();
                 builder
                     .input(&actual_input)
@@ -527,8 +528,6 @@ pub fn convert_to_jxl(
 
                 // Not a grayscale ICC error, or ImageMagick fallback failed
                 // Try FFmpeg pipeline as before
-                use std::process::Stdio;
-
                 tracing::warn!(
                     input = %input.display(),
                     cjxl_stderr = %stderr.trim(),
@@ -721,7 +720,7 @@ pub fn convert_to_jxl(
                                             output_size,
                                             options,
                                             "JXL",
-                                            Some("(ffmpeg fallback)".to_string()),
+                                            Some("(ffmpeg fallback)"),
                                         );
                                     }
 
@@ -903,7 +902,7 @@ pub fn convert_to_jxl(
                 final_output_size,
                 options,
                 "JXL",
-                extra_info,
+                extra_info.as_deref(),
             )
         }
         Ok(output_cmd) => {
@@ -937,8 +936,8 @@ fn run_cjxl_jpeg_transcode(
     allow_jpeg_reconstruction: Option<u8>,
     hdr_info: Option<&shared_utils::ColorInfo>,
 ) -> std::io::Result<std::process::Output> {
-    let _icc_temp = shared_utils::jxl_utils::extract_icc_profile(input);
-    let icc_path = _icc_temp.as_ref().map(tempfile::NamedTempFile::path);
+    let icc_temp = shared_utils::jxl_utils::extract_icc_profile(input);
+    let icc_path = icc_temp.as_ref().map(tempfile::NamedTempFile::path);
 
     let mut builder = shared_utils::CjxlBuilder::new();
     builder
@@ -1526,7 +1525,7 @@ pub fn convert_to_jxl_matched(
                 output_size,
                 options,
                 "Quality-matched JXL",
-                Some(extra),
+                Some(&extra),
             )
         }
         Ok(output_cmd) => {
@@ -1754,6 +1753,7 @@ fn try_explore_ultimate_jxl_distance(
     icc_path: Option<&Path>,
     hdr_info: Option<&shared_utils::ColorInfo>,
 ) -> Result<Option<shared_utils::jxl_explorer::JxlExploreResult>> {
+    const MAX_CONTINUED_ITERATIONS: u32 = 20;
     shared_utils::progress_mode::emit_stderr(
         "   🔬 Ultimate JXL exploration: screening with e7, promoting a shortlist, finalizing with e10",
     );
@@ -1911,7 +1911,6 @@ fn try_explore_ultimate_jxl_distance(
         );
         let mut test_distance = accepted_distance - step;
         let mut continued_iterations = 0u32;
-        const MAX_CONTINUED_ITERATIONS: u32 = 20;
 
         if test_distance >= floor {
             shared_utils::progress_mode::emit_stderr(&format!(

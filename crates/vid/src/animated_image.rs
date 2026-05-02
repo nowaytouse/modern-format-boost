@@ -321,6 +321,7 @@ fn extract_frames_for_gifski(
 
 /// Extract frames from animated WebP using webpmux and create APNG with correct timing
 fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Result<()> {
+    use std::fmt::Write;
     // Create temporary directory for frames
     let temp_dir = tempfile::Builder::new()
         .prefix("webp_frames_")
@@ -437,7 +438,6 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
         }
 
         // Add to concat list
-        use std::fmt::Write;
         let duration_sec = f64::from(frame_durations_ms[(i - 1) as usize]) / 1000.0;
         let _ = writeln!(
             concat_content,

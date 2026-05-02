@@ -49,9 +49,7 @@ fn main() -> Result<()> {
         let path = entry.path();
 
         // 1. Calculate BLAKE3
-        let b3 = if let Ok(h) = calculate_blake3(path) {
-            h
-        } else {
+        let Ok(b3) = calculate_blake3(path) else {
             errors += 1;
             continue;
         };

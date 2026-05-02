@@ -37,7 +37,7 @@ pub fn metadata_with_retry<P: AsRef<Path>>(path: P) -> std::io::Result<fs::Metad
     Err(last_err.unwrap())
 }
 
-fn main() -> std::io::Result<()> {
+fn main() {
     // 🎯 TARGET: THE ACTUAL PROBLEM FILE (COPIED)
     let target = "real_problem_file.gif";
 
@@ -56,6 +56,4 @@ fn main() -> std::io::Result<()> {
     }
 
     println!("\n💡 Analysis: If this succeeds now, it confirms the 'cscachefs' lock in the log was transient and our retry logic would have saved it.");
-
-    Ok(())
 }
