@@ -886,6 +886,10 @@ pub fn calculate_jxl_distance_with_options(
     })
 }
 
+/// Calculate effective bits per pixel with advanced options.
+///
+/// # Errors
+/// Returns an error message if calculation fails (e.g., missing or invalid dimensions).
 pub fn calculate_effective_bpp_with_options(
     analysis: &QualityAnalysis,
     target_encoder: EncoderType,

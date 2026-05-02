@@ -763,16 +763,27 @@ pub struct ConvertOptions {
 }
 
 impl ConvertOptions {
+    #[must_use]
     pub const fn force(&self) -> bool { self.flags.contains(ConvertFlags::FORCE) }
+    #[must_use]
     pub const fn delete_original(&self) -> bool { self.flags.contains(ConvertFlags::DELETE_ORIGINAL) }
+    #[must_use]
     pub const fn in_place(&self) -> bool { self.flags.contains(ConvertFlags::IN_PLACE) }
+    #[must_use]
     pub const fn explore(&self) -> bool { self.flags.contains(ConvertFlags::EXPLORE) }
+    #[must_use]
     pub const fn match_quality(&self) -> bool { self.flags.contains(ConvertFlags::MATCH_QUALITY) }
+    #[must_use]
     pub const fn apple_compat(&self) -> bool { self.flags.contains(ConvertFlags::APPLE_COMPAT) }
+    #[must_use]
     pub const fn compress(&self) -> bool { self.flags.contains(ConvertFlags::COMPRESS) }
+    #[must_use]
     pub const fn use_gpu(&self) -> bool { self.flags.contains(ConvertFlags::USE_GPU) }
+    #[must_use]
     pub const fn ultimate(&self) -> bool { self.flags.contains(ConvertFlags::ULTIMATE) }
+    #[must_use]
     pub const fn allow_size_tolerance(&self) -> bool { self.flags.contains(ConvertFlags::ALLOW_SIZE_TOLERANCE) }
+    #[must_use]
     pub const fn verbose(&self) -> bool { self.flags.contains(ConvertFlags::VERBOSE) }
 }
 

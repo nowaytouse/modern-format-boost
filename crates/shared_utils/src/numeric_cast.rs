@@ -23,6 +23,7 @@ use tracing::warn;
 
 /// Convert f64 to Rational with loud warning on NaN/Inf.
 /// Prevents silent forgery of data as requested by the Quality Manifesto.
+#[must_use]
 pub fn f64_to_rational_loud(val: f64, default: i64, name: &str) -> Rational {
     Rational::from_f64(val).unwrap_or_else(|| {
         warn!(
@@ -35,6 +36,7 @@ pub fn f64_to_rational_loud(val: f64, default: i64, name: &str) -> Rational {
 
 /// Convert Option<f64> to f64 with loud warning on None.
 /// Prevents silent forgery of data in database/analysis paths.
+#[must_use]
 pub fn option_f64_loud(val: Option<f64>, default: f64, name: &str) -> f64 {
     val.unwrap_or_else(|| {
         warn!(

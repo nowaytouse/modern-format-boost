@@ -1,3 +1,4 @@
+#![warn(clippy::pedantic)]
 //! Shared Utilities for `modern_format_boost` tools
 //!
 //! This crate provides common functionality shared across `img` and `vid`:

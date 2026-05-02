@@ -1679,6 +1679,7 @@ impl PsnrSsimMapper {
 ///
 /// # Errors
 /// Returns an `anyhow::Result` if search fails.
+#[must_use]
 pub fn gpu_coarse_search(
     input: &std::path::Path,
     output: &std::path::Path,
@@ -1704,6 +1705,7 @@ pub fn gpu_coarse_search(
 ///
 /// # Errors
 /// Returns an `anyhow::Result` if search fails.
+#[must_use]
 pub fn gpu_coarse_search_with_log(
     input: &std::path::Path,
     output: &std::path::Path,
