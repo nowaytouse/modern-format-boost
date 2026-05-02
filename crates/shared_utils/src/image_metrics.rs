@@ -320,10 +320,10 @@ mod tests {
         let img2 = img1.clone();
 
         let psnr = calculate_psnr(&img1, &img2);
-        assert!(psnr.unwrap().is_infinite());
+        assert!(psnr.unwrap_or_else(|| panic!("missing metric value")).is_infinite());
 
         let ssim = calculate_ssim(&img1, &img2);
-        assert!((ssim.unwrap() - 1.0).abs() < 0.01);
+        assert!((ssim.unwrap_or_else(|| panic!("missing metric value")) - 1.0).abs() < 0.01);
     }
 
     #[test]
@@ -343,11 +343,11 @@ mod tests {
 
         let psnr = calculate_psnr(&img1, &img2);
         assert!(psnr.is_some());
-        assert!(psnr.unwrap() < 10.0);
+        assert!(psnr.unwrap_or_else(|| panic!("missing metric value")) < 10.0);
 
         let ssim = calculate_ssim(&img1, &img2);
         assert!(ssim.is_some());
-        assert!(ssim.unwrap() < 0.1);
+        assert!(ssim.unwrap_or_else(|| panic!("missing metric value")) < 0.1);
     }
 
     #[test]
@@ -372,7 +372,7 @@ mod tests {
         let ssim = calculate_ssim(&img1, &img2);
         assert!(ssim.is_some());
         assert!(
-            (ssim.unwrap() - 1.0).abs() < 0.01,
+            (ssim.unwrap_or_else(|| panic!("missing metric value")) - 1.0).abs() < 0.01,
             "identical 8x8 should give SSIM ≈ 1, got {ssim:?}"
         );
     }
@@ -384,7 +384,7 @@ mod tests {
         }));
         let ssim = calculate_ssim(&img, &img);
         assert!(ssim.is_some());
-        assert!((ssim.unwrap() - 1.0).abs() < 1e-6);
+        assert!((ssim.unwrap_or_else(|| panic!("missing metric value")) - 1.0).abs() < 1e-6);
     }
 
     #[test]
@@ -398,7 +398,7 @@ mod tests {
         }));
         let result = calculate_ms_ssim(&img, &img);
         assert!(result.is_some());
-        assert!(result.unwrap() >= 0.99 && result.unwrap() <= 1.01);
+        assert!(result.unwrap_or_else(|| panic!("missing metric value")) >= 0.99 && result.unwrap_or_else(|| panic!("missing metric value")) <= 1.01);
     }
 
     #[test]

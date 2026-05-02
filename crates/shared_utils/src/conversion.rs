@@ -1872,7 +1872,7 @@ mod tests {
     fn test_removed_commit_temp_to_output_returns_error() {
         #[expect(deprecated, reason = "regression test for removed compatibility shim")]
         let err = commit_temp_to_output(Path::new("temp.tmp"), Path::new("out.mp4"), false)
-            .expect_err("removed API should return an error instead of panicking");
+            .err().unwrap_or_else(|| panic!("removed API should return an error instead of panicking"));
 
         assert_eq!(err.kind(), std::io::ErrorKind::Unsupported);
         assert!(
@@ -1884,16 +1884,16 @@ mod tests {
 
     #[test]
     fn test_commit_temp_to_output_with_metadata_accepts_in_place_output() {
-        let temp_dir = tempdir_in("/tmp").expect("create temp dir");
+        let temp_dir = tempdir_in("/tmp").unwrap_or_else(|e| panic!("create temp dir: {e:?}"));
         let output = temp_dir.path().join("already-final.jxl");
-        std::fs::write(&output, b"jxl").expect("write output");
+        std::fs::write(&output, b"jxl").unwrap_or_else(|e| panic!("write output: {e:?}"));
 
         let committed = commit_temp_to_output_with_metadata(&output, &output, false, None)
-            .expect("in-place commit should succeed");
+            .unwrap_or_else(|e| panic!("in-place commit should succeed: {e:?}"));
 
         assert!(committed);
         assert_eq!(
-            std::fs::read(&output).expect("read output"),
+            std::fs::read(&output).unwrap_or_else(|e| panic!("read output: {e:?}")),
             b"jxl",
             "in-place commit must not remove the synthesized file"
         );
@@ -1905,14 +1905,14 @@ mod tests {
 
         let tracked = std::env::temp_dir().join("mfb-processed-track.mp4");
         let tracked_canonical = tracked.display().to_string();
-        let mut list = NamedTempFile::new().expect("failed to create processed list");
+        let mut list = NamedTempFile::new().unwrap_or_else(|e| panic!("failed to create processed list: {e:?}"));
         list.write_all(tracked_canonical.as_bytes())
-            .expect("failed to write valid entry");
+            .unwrap_or_else(|e| panic!("failed to write valid entry: {e:?}"));
         list.write_all(b"\n\xff\n")
-            .expect("failed to write invalid utf8");
+            .unwrap_or_else(|e| panic!("failed to write invalid utf8: {e:?}"));
 
         let err = load_processed_list(list.path())
-            .expect_err("invalid utf8 should fail instead of partially loading state");
+            .err().unwrap_or_else(|| panic!("invalid utf8 should fail instead of partially loading state"));
         assert!(
             !is_already_processed(&tracked),
             "processed list should not be partially updated on read failure"
@@ -1927,7 +1927,7 @@ mod tests {
     #[test]
     fn test_validate_input_file_rejects_newlines() {
         let err = validate_input_file(Path::new("bad\nname.png"))
-            .expect_err("newline path should be rejected before filesystem access");
+            .err().unwrap_or_else(|| panic!("newline path should be rejected before filesystem access"));
         assert!(err.contains("PATH SECURITY ERROR"));
     }
 
@@ -1935,30 +1935,30 @@ mod tests {
     #[test]
     fn test_validate_output_path_allows_symlink_parent_when_parent_resolves() {
         use std::os::unix::fs::symlink;
-        let temp = tempfile::TempDir::new().expect("temp dir");
+        let temp = tempfile::TempDir::new().unwrap_or_else(|e| panic!("temp dir: {e:?}"));
         let real_dir = temp.path().join("real");
-        fs::create_dir_all(&real_dir).expect("real dir");
+        fs::create_dir_all(&real_dir).unwrap_or_else(|e| panic!("real dir: {e:?}"));
         let link_dir = temp.path().join("link");
-        symlink(&real_dir, &link_dir).expect("symlink");
+        symlink(&real_dir, &link_dir).unwrap_or_else(|e| panic!("symlink: {e:?}"));
 
         validate_output_path(&link_dir.join("out.jxl"), None)
-            .expect("symlinked parent directory should resolve safely");
+            .unwrap_or_else(|e| panic!("symlinked parent directory should resolve safely: {e:?}"));
     }
 
     #[cfg(unix)]
     #[test]
     fn test_validate_output_path_rejects_symlink_leaf() {
         use std::os::unix::fs::symlink;
-        let temp = tempfile::TempDir::new().expect("temp dir");
+        let temp = tempfile::TempDir::new().unwrap_or_else(|e| panic!("temp dir: {e:?}"));
         let real_dir = temp.path().join("real");
-        fs::create_dir_all(&real_dir).expect("real dir");
+        fs::create_dir_all(&real_dir).unwrap_or_else(|e| panic!("real dir: {e:?}"));
         let output = temp.path().join("out.jxl");
         let target = real_dir.join("target.jxl");
-        std::fs::write(&target, b"stub").expect("target");
-        symlink(&target, &output).expect("symlink leaf");
+        std::fs::write(&target, b"stub").unwrap_or_else(|e| panic!("target: {e:?}"));
+        symlink(&target, &output).unwrap_or_else(|e| panic!("symlink leaf: {e:?}"));
 
         let err = validate_output_path(&output, None)
-            .expect_err("symlink output leaf should still be rejected");
+            .err().unwrap_or_else(|| panic!("symlink output leaf should still be rejected"));
         assert!(err.contains("symbolic link"));
     }
 
@@ -1984,50 +1984,50 @@ mod tests {
 
     #[test]
     fn test_determine_output_path() {
-        let _lock = TEST_RESERVATION_LOCK.lock().unwrap();
+        let _lock = TEST_RESERVATION_LOCK.lock().unwrap_or_else(|e| panic!("{e:?}"));
         clear_reserved_output_paths();
-        let temp = tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let temp = tempdir_in(std::env::current_dir().unwrap_or_else(|e| panic!("{e:?}"))).unwrap_or_else(|e| panic!("{e:?}"));
         let input = temp.path().join("nested/image.png");
-        let output = determine_output_path(&input, "jxl", &None).unwrap();
+        let output = determine_output_path(&input, "jxl", &None).unwrap_or_else(|e| panic!("{e:?}"));
         assert_eq!(output, temp.path().join("nested/image.JXL"));
     }
 
     #[test]
     fn test_determine_output_path_with_dir() {
-        let _lock = TEST_RESERVATION_LOCK.lock().unwrap();
+        let _lock = TEST_RESERVATION_LOCK.lock().unwrap_or_else(|e| panic!("{e:?}"));
         clear_reserved_output_paths();
-        let temp = tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let temp = tempdir_in(std::env::current_dir().unwrap_or_else(|e| panic!("{e:?}"))).unwrap_or_else(|e| panic!("{e:?}"));
         let input = temp.path().join("nested/image.png");
         let output_dir = Some(temp.path().join("output"));
-        let output = determine_output_path(&input, "avif", &output_dir).unwrap();
+        let output = determine_output_path(&input, "avif", &output_dir).unwrap_or_else(|e| panic!("{e:?}"));
         assert_eq!(output, temp.path().join("output/image.AVIF"));
     }
 
     #[test]
     fn test_determine_output_path_various_extensions() {
-        let _lock = TEST_RESERVATION_LOCK.lock().unwrap();
+        let _lock = TEST_RESERVATION_LOCK.lock().unwrap_or_else(|e| panic!("{e:?}"));
         clear_reserved_output_paths();
-        let temp = tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let temp = tempdir_in(std::env::current_dir().unwrap_or_else(|e| panic!("{e:?}"))).unwrap_or_else(|e| panic!("{e:?}"));
         let input = temp.path().join("nested/video.mp4");
 
-        let webm = determine_output_path(&input, "webm", &None).unwrap();
+        let webm = determine_output_path(&input, "webm", &None).unwrap_or_else(|e| panic!("{e:?}"));
         assert_eq!(webm, temp.path().join("nested/video.WEBM"));
 
-        let mkv = determine_output_path(&input, "mkv", &None).unwrap();
+        let mkv = determine_output_path(&input, "mkv", &None).unwrap_or_else(|e| panic!("{e:?}"));
         assert_eq!(mkv, temp.path().join("nested/video.MKV"));
     }
 
     #[test]
     fn test_determine_output_path_disambiguates_batch_collisions() {
-        let _lock = TEST_RESERVATION_LOCK.lock().unwrap();
+        let _lock = TEST_RESERVATION_LOCK.lock().unwrap_or_else(|e| panic!("{e:?}"));
         clear_reserved_output_paths();
-        let temp = tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let temp = tempdir_in(std::env::current_dir().unwrap_or_else(|e| panic!("{e:?}"))).unwrap_or_else(|e| panic!("{e:?}"));
         let output_dir = Some(temp.path().join("output"));
         let first = temp.path().join("set_a/clip.mp4");
         let second = temp.path().join("set_b/clip.mp4");
 
-        let first_output = determine_output_path(&first, "gif", &output_dir).unwrap();
-        let second_output = determine_output_path(&second, "gif", &output_dir).unwrap();
+        let first_output = determine_output_path(&first, "gif", &output_dir).unwrap_or_else(|e| panic!("{e:?}"));
+        let second_output = determine_output_path(&second, "gif", &output_dir).unwrap_or_else(|e| panic!("{e:?}"));
 
         assert_eq!(first_output, temp.path().join("output/clip.GIF"));
         assert_eq!(second_output, temp.path().join("output/clip (1).GIF"));
@@ -2035,14 +2035,14 @@ mod tests {
 
     #[test]
     fn test_determine_output_path_keeps_same_reservation_for_same_input() {
-        let _lock = TEST_RESERVATION_LOCK.lock().unwrap();
+        let _lock = TEST_RESERVATION_LOCK.lock().unwrap_or_else(|e| panic!("{e:?}"));
         clear_reserved_output_paths();
-        let temp = tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let temp = tempdir_in(std::env::current_dir().unwrap_or_else(|e| panic!("{e:?}"))).unwrap_or_else(|e| panic!("{e:?}"));
         let output_dir = Some(temp.path().join("output"));
         let input = temp.path().join("nested/clip.mp4");
 
-        let first_output = determine_output_path(&input, "gif", &output_dir).unwrap();
-        let second_output = determine_output_path(&input, "gif", &output_dir).unwrap();
+        let first_output = determine_output_path(&input, "gif", &output_dir).unwrap_or_else(|e| panic!("{e:?}"));
+        let second_output = determine_output_path(&input, "gif", &output_dir).unwrap_or_else(|e| panic!("{e:?}"));
 
         assert_eq!(first_output, second_output);
         assert_eq!(first_output, temp.path().join("output/clip.GIF"));
@@ -2059,7 +2059,7 @@ mod tests {
         assert!(!result.skipped);
         assert_eq!(result.input_size, 1000);
         assert_eq!(result.output_size, Some(500));
-        assert!((result.size_reduction.unwrap() - 50.0).abs() < 0.1);
+        assert!((result.size_reduction.unwrap_or_else(|| panic!("missing size reduction")) - 50.0).abs() < 0.1);
         assert!(
             result.message.contains("encoding"),
             "expected 'encoding' in: {}",
@@ -2168,7 +2168,7 @@ mod tests {
         opts.flags.set(ConvertFlags::COMPRESS, true);
         opts.flags.set(ConvertFlags::USE_GPU, true);
 
-        let mode = opts.flag_mode().unwrap();
+        let mode = opts.flag_mode().unwrap_or_else(|e| panic!("{e:?}"));
         assert_eq!(
             mode,
             crate::flag_validator::FlagMode::PreciseQualityWithCompress
@@ -2184,7 +2184,7 @@ mod tests {
         opts.flags.set(ConvertFlags::COMPRESS, true);
         opts.flags.set(ConvertFlags::USE_GPU, false);
 
-        let mode = opts.flag_mode().unwrap();
+        let mode = opts.flag_mode().unwrap_or_else(|e| panic!("{e:?}"));
         assert_eq!(
             mode,
             crate::flag_validator::FlagMode::PreciseQualityWithCompress
@@ -2209,8 +2209,8 @@ mod tests {
         assert!(cpu_config.flag_mode().is_ok());
 
         assert_eq!(
-            gpu_config.flag_mode().unwrap(),
-            cpu_config.flag_mode().unwrap()
+            gpu_config.flag_mode().unwrap_or_else(|e| panic!("{e:?}")),
+            cpu_config.flag_mode().unwrap_or_else(|e| panic!("{e:?}"))
         );
     }
 
@@ -2252,7 +2252,7 @@ mod tests {
         assert!(opts.apple_compat());
         assert!(!opts.use_gpu());
 
-        let mode = opts.flag_mode().unwrap();
+        let mode = opts.flag_mode().unwrap_or_else(|e| panic!("{e:?}"));
         assert_eq!(
             mode,
             crate::flag_validator::FlagMode::PreciseQualityWithCompress

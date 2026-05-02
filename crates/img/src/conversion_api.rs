@@ -402,7 +402,7 @@ fn convert_to_jxl(
         .input(&input_abs)
         .output(&output_abs)
         .effort(shared_utils::constants::jxl_effort_for_mode(false))
-        .threads(max_threads as usize);
+        .threads(max_threads);
 
     if *format == DetectedFormat::JPEG {
         builder.lossless_jpeg(true);

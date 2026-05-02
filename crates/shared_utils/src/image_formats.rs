@@ -88,12 +88,12 @@ pub mod tiff {
         let mut ifd_count = 0u32;
         while ifd_offset != 0 && ifd_count < 100 {
             ifd_count += 1;
-            let ifd_pos = usize::try_from(ifd_offset).unwrap_or(usize::MAX);
+            let ifd_pos = crate::numeric_cast::u64_to_usize_sat(ifd_offset);
             let (num_entries, entries_start, entry_size, next_offset_pos) = if is_bigtiff {
                 if ifd_pos + 8 > data.len() {
                     break;
                 }
-                let n = usize::try_from(read_u64(ifd_pos)).unwrap_or(usize::MAX);
+                let n = crate::numeric_cast::u64_to_usize_sat(read_u64(ifd_pos));
                 (n, ifd_pos + 8, 20usize, ifd_pos + 8 + n * 20)
             } else {
                 if ifd_pos + 2 > data.len() {
@@ -231,13 +231,12 @@ pub mod webp {
 
         while pos + 8 <= data.len() {
             let chunk_id = data.get(pos..pos + 4).unwrap_or(&[]);
-            let chunk_size = usize::try_from(u32::from_le_bytes([
+            let chunk_size = crate::numeric_cast::u32_to_usize_sat(u32::from_le_bytes([
                 *data.get(pos + 4).unwrap_or(&0),
                 *data.get(pos + 5).unwrap_or(&0),
                 *data.get(pos + 6).unwrap_or(&0),
                 *data.get(pos + 7).unwrap_or(&0),
-            ]))
-            .unwrap_or(usize::MAX);
+            ]));
             let payload_start = pos + 8;
             let payload_end = (payload_start + chunk_size).min(data.len());
 
@@ -291,13 +290,12 @@ pub mod webp {
         while pos + 8 <= data.len() {
             let chunk_id = data.get(pos..pos + 4).unwrap_or(&[]);
             let chunk_size =
-                u32::from_le_bytes([
-                    *data.get(pos + 4).unwrap_or(&0),
-                    *data.get(pos + 5).unwrap_or(&0),
-                    *data.get(pos + 6).unwrap_or(&0),
-                    *data.get(pos + 7).unwrap_or(&0),
-                ])
-                    as usize; // TODO: manual fix needed for multi-line
+                    crate::numeric_cast::u32_to_usize_sat(u32::from_le_bytes([
+                        *data.get(pos + 4).unwrap_or(&0),
+                        *data.get(pos + 5).unwrap_or(&0),
+                        *data.get(pos + 6).unwrap_or(&0),
+                        *data.get(pos + 7).unwrap_or(&0),
+                    ]));
             let payload_start = pos + 8;
             let payload_end = (payload_start + chunk_size).min(data.len());
 
@@ -366,13 +364,12 @@ pub mod webp {
         let mut total_ms = 0u64;
         while pos + 8 <= data.len() {
             let chunk_id = data.get(pos..pos + 4).unwrap_or(&[]);
-            let chunk_size = usize::try_from(u32::from_le_bytes([
+            let chunk_size = crate::numeric_cast::u32_to_usize_sat(u32::from_le_bytes([
                 *data.get(pos + 4).unwrap_or(&0),
                 *data.get(pos + 5).unwrap_or(&0),
                 *data.get(pos + 6).unwrap_or(&0),
                 *data.get(pos + 7).unwrap_or(&0),
-            ]))
-            .unwrap_or(usize::MAX);
+            ]));
             let payload_start = pos + 8;
         // Strict bounds: if chunk_size is malformed, stop trusting RIFF traversal.
             if chunk_size > data.len().saturating_sub(payload_start) {
@@ -486,7 +483,7 @@ pub mod gif {
 
                     // Skip Image Data sub-blocks
                     while pos < data.len() {
-                        let block_size = usize::from(*data.get(pos).unwrap_or(&0)); // TODO: manual fix needed for multi-line
+                        let block_size = crate::numeric_cast::u8_to_usize_sat(*data.get(pos).unwrap_or(&0));
                         pos += 1;
                         if block_size == 0 {
                             break;
@@ -511,7 +508,7 @@ pub mod gif {
                     pos += 2;
                     // Skip Extension Data blocks
                     while pos < data.len() {
-                        let block_size = usize::from(*data.get(pos).unwrap_or(&0)); // TODO: manual fix needed for multi-line
+                        let block_size = crate::numeric_cast::u8_to_usize_sat(*data.get(pos).unwrap_or(&0));
                         pos += 1;
                         if block_size == 0 {
                             break;
@@ -550,7 +547,7 @@ pub mod gif {
     #[must_use]
     pub fn get_frame_count(path: &Path) -> usize {
         fs::read(path).map_or(0, |b| {
-            usize::try_from(count_frames_from_bytes(&b)).unwrap_or(0)
+            crate::numeric_cast::u32_to_usize_sat(count_frames_from_bytes(&b))
         })
     }
 }
@@ -623,7 +620,7 @@ pub mod avif {
                 if is_444 {
                     if let Some(pixi_data) = find_box_data_recursive(data, *b"pixi") {
                         if !pixi_data.is_empty() {
-                            let num_ch = usize::from(*pixi_data.first().unwrap_or(&0)); // TODO: manual fix needed for multi-line
+                            let num_ch = crate::numeric_cast::u8_to_usize_sat(*pixi_data.first().unwrap_or(&0));
                             if num_ch > 0 && pixi_data.len() > num_ch {
                                 let max_depth =
                                     pixi_data.get(1..=num_ch).unwrap_or(&[]).iter().copied().max().unwrap_or(0);

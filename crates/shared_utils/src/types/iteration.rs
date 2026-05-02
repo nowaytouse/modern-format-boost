@@ -136,7 +136,7 @@ mod tests {
         let mut guard = IterationGuard::new(5, "test");
 
         for i in 1..=5 {
-            assert_eq!(guard.increment().unwrap(), i);
+            assert_eq!(guard.increment().unwrap_or_else(|e| panic!("error: {e:?}")), i);
         }
 
         assert!(guard.increment().is_err());
@@ -147,7 +147,7 @@ mod tests {
         let mut guard = IterationGuard::new(10, "test");
 
         assert_eq!(guard.remaining(), 10);
-        guard.increment().unwrap();
+        guard.increment().unwrap_or_else(|e| panic!("error: {e:?}"));
         assert_eq!(guard.remaining(), 9);
     }
 
@@ -156,7 +156,7 @@ mod tests {
         let mut guard = IterationGuard::new(5, "test");
 
         for _ in 0..3 {
-            guard.increment().unwrap();
+            guard.increment().unwrap_or_else(|e| panic!("error: {e:?}"));
         }
         assert_eq!(guard.current(), 3);
 
@@ -204,7 +204,7 @@ mod tests {
         ));
 
         for _ in 0..50 {
-            guard.increment().unwrap();
+            guard.increment().unwrap_or_else(|e| panic!("error: {e:?}"));
         }
         assert!(crate::float_compare::approx_eq_f64(
             guard.progress_percent(),

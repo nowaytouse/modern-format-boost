@@ -2176,11 +2176,11 @@ mod tests {
             0x3B, // Trailer
         ];
 
-        let mut file = Builder::new().suffix(".gif").tempfile().unwrap();
-        file.write_all(gif_data).unwrap();
+        let mut file = Builder::new().suffix(".gif").tempfile().unwrap_or_else(|e| panic!("error: {e:?}"));
+        file.write_all(gif_data).unwrap_or_else(|e| panic!("error: {e:?}"));
 
         let verdict = assess_loop_intent_for_path(file.path())
-            .expect("short GIF should produce a loop-intent verdict");
+            .unwrap_or_else(|| panic!("short GIF should produce a loop-intent verdict"));
 
         assert!(
             verdict.is_keep_gif(),

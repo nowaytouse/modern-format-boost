@@ -753,21 +753,21 @@ mod tests {
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect();
 
-        assert_eq!(args[0], "-hide_banner");
-        assert_eq!(args[1], "-f");
-        assert_eq!(args[2], "lavfi");
-        assert_eq!(args[3], "-i");
-        assert_eq!(args[4], "nullsrc=s=128x128:d=0.1");
+        assert_eq!(args.first().unwrap_or_else(|| panic!("missing 0")), "-hide_banner");
+        assert_eq!(args.get(1).unwrap_or_else(|| panic!("missing 1")), "-f");
+        assert_eq!(args.get(2).unwrap_or_else(|| panic!("missing 2")), "lavfi");
+        assert_eq!(args.get(3).unwrap_or_else(|| panic!("missing 3")), "-i");
+        assert_eq!(args.get(4).unwrap_or_else(|| panic!("missing 4")), "nullsrc=s=128x128:d=0.1");
 
         let output_format_pos = args
             .iter()
             .rposition(|arg| arg == "-f")
-            .expect("output format flag should be present");
+            .unwrap_or_else(|| panic!("output format flag should be present"));
         assert!(
             output_format_pos > 3,
             "output format should stay after the input"
         );
-        assert_eq!(args[output_format_pos + 1], "null");
+        assert_eq!(args.get(output_format_pos + 1).unwrap_or_else(|| panic!("missing value")), "null");
     }
 
     #[test]

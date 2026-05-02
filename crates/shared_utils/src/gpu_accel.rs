@@ -3239,7 +3239,7 @@ mod tests {
             0.0, 0.5, 1.0, 10.0, 20.0, 30.0, 40.0, 50.0, 51.0, 60.0, 100.0,
         ] {
             let args = encoder.get_crf_args(crf);
-            let qv: f32 = args[1].parse().unwrap();
+            let qv: f32 = args.get(1).unwrap_or(&String::new()).parse().unwrap_or_else(|e| panic!("error: {e:?}"));
             assert!(qv >= 1.0, "q:v should be >= 1, got {qv} for CRF {crf}");
             assert!(qv <= 100.0, "q:v should be <= 100, got {qv} for CRF {crf}");
         }
@@ -3248,7 +3248,7 @@ mod tests {
     #[test]
     fn test_build_multi_segment_sampling_filter_for_long_videos() {
         let filter = build_multi_segment_sampling_filter(120.0, false)
-            .expect("long videos should use multi-segment sampling");
+            .unwrap_or_else(|| panic!("long videos should use multi-segment sampling"));
         assert!(filter.contains("between(t,0.0,15.0)"));
         assert!(filter.contains("between(t,30.0,45.0)"));
         assert!(filter.contains("between(t,60.0,75.0)"));
@@ -3268,7 +3268,7 @@ mod tests {
             diagnostics: vec![],
             last_probe: std::time::Instant::now()
                 .checked_sub(GPU_NEGATIVE_CACHE_TTL)
-                .expect("Time went backwards"),
+                .unwrap_or_else(|| panic!("Time went backwards")),
         };
         assert!(
             stale_negative.should_refresh(),
@@ -3294,7 +3294,7 @@ mod tests {
             diagnostics: vec![],
             last_probe: std::time::Instant::now()
                 .checked_sub(GPU_NEGATIVE_CACHE_TTL)
-                .expect("Time went backwards"),
+                .unwrap_or_else(|| panic!("Time went backwards")),
         };
         assert!(
             !fresh_positive.should_refresh(),
@@ -3339,7 +3339,7 @@ mod prop_tests {
             format_idx in 0usize..5
         ) {
             let formats = ["mp4", "mkv", "webm", "mov", "avi"];
-            let ext = formats[format_idx];
+            let ext = *formats.get(format_idx).unwrap_or(&"");
             let output = PathBuf::from(format!("/video/output.{ext}"));
             let temp_ext = derive_gpu_temp_extension(&output);
 

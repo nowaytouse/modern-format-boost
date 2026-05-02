@@ -30,7 +30,10 @@ use crate::jxl_builder::CjxlBuilder;
 fn read_native_u16_word(data: &[u8], word_index: usize) -> Option<u16> {
     let byte_index = word_index.checked_mul(2)?;
     let bytes = data.get(byte_index..byte_index + 2)?;
-    Some(u16::from_ne_bytes([bytes[0], bytes[1]]))
+    Some(u16::from_ne_bytes([
+        *bytes.first().unwrap_or(&0),
+        *bytes.get(1).unwrap_or(&0),
+    ]))
 }
 
 /// HDR intermediate format selection
@@ -503,9 +506,9 @@ fn decode_heif_handle(handle: &ImageHandle, color_space: ColorSpace) -> Result<D
                 for (x, y, pixel) in buffer.enumerate_pixels_mut() {
                     let offset = usize::try_from(y).unwrap_or(0) * r_plane.stride
                         + usize::try_from(x).unwrap_or(0) * 3;
-                    let r = r_plane.data[offset];
-                    let g = r_plane.data[offset + 1];
-                    let b = r_plane.data[offset + 2];
+                    let r = *r_plane.data.get(offset).unwrap_or(&0);
+                    let g = *r_plane.data.get(offset + 1).unwrap_or(&0);
+                    let b = *r_plane.data.get(offset + 2).unwrap_or(&0);
                     *pixel = image::Rgb([r, g, b]);
                 }
                 Ok(DynamicImage::ImageRgb8(buffer))
@@ -530,7 +533,7 @@ fn decode_heif_handle(handle: &ImageHandle, color_space: ColorSpace) -> Result<D
                 for (x, y, pixel) in buffer.enumerate_pixels_mut() {
                     let offset = usize::try_from(y).unwrap_or(0) * y_plane.stride
                         + usize::try_from(x).unwrap_or(0);
-                    let val = y_plane.data[offset];
+                    let val = *y_plane.data.get(offset).unwrap_or(&0);
                     *pixel = image::Luma([val]);
                 }
                 Ok(DynamicImage::ImageLuma8(buffer))
@@ -545,10 +548,10 @@ fn is_display_p3(data: &[u8]) -> bool {
 
     // 1. Check colr/nclx box (Common in HEIC/AVIF/JXL containers)
     if let Some(colr_data) = find_box_data_recursive(data, *b"colr") {
-        if colr_data.len() >= 11 && &colr_data[0..4] == b"nclx" {
+        if colr_data.len() >= 11 && colr_data.get(0..4) == Some(b"nclx") {
             // flavour: nclx
             // colour_primaries: bytes 8-9 (u16 BE)
-            let primaries = u16::from_be_bytes([colr_data[8], colr_data[9]]);
+            let primaries = u16::from_be_bytes([*colr_data.get(8).unwrap_or(&0), *colr_data.get(9).unwrap_or(&0)]);
             return primaries == 12; // 12 = Display P3, 1 = Rec.709/sRGB
         }
     }
@@ -557,7 +560,7 @@ fn is_display_p3(data: &[u8]) -> bool {
     // We search the whole buffer for the signature of Display P3 ICC profile
     let search_limit = 1024 * 1024; // limit search to first 1MB for performance
     let end = data.len().min(search_limit);
-    let slice = &data[..end];
+    let slice = data.get(..end).unwrap_or(&[]);
 
     // Check for common Display P3 signatures in ICC profiles
     slice.windows(10).any(|w| w == b"Display P3")
@@ -921,9 +924,9 @@ fn write_png16(pixels: &[f32], width: u32, height: u32, path: &Path) -> Result<(
 
     for (x, y, pixel) in buffer.enumerate_pixels_mut() {
         let idx = usize::try_from(y * width + x).unwrap_or(0) * 3;
-        let r = crate::numeric_cast::f32_to_u16_sat(linear_to_pq(pixels[idx]) * 65535.0);
-        let g = crate::numeric_cast::f32_to_u16_sat(linear_to_pq(pixels[idx + 1]) * 65535.0);
-        let b = crate::numeric_cast::f32_to_u16_sat(linear_to_pq(pixels[idx + 2]) * 65535.0);
+        let r = crate::numeric_cast::f32_to_u16_sat(linear_to_pq(*pixels.get(idx).unwrap_or(&0.0)) * 65535.0);
+        let g = crate::numeric_cast::f32_to_u16_sat(linear_to_pq(*pixels.get(idx + 1).unwrap_or(&0.0)) * 65535.0);
+        let b = crate::numeric_cast::f32_to_u16_sat(linear_to_pq(*pixels.get(idx + 2).unwrap_or(&0.0)) * 65535.0);
         *pixel = Rgb([r, g, b]);
     }
 
@@ -943,7 +946,11 @@ fn write_exr(pixels: &[f32], width: u32, height: u32, path: &Path) -> Result<()>
         usize::try_from(height).unwrap_or(0),
         |x, y| {
             let idx = (y * usize::try_from(width).unwrap_or(0) + x) * 3;
-            (pixels[idx], pixels[idx + 1], pixels[idx + 2])
+            (
+                *pixels.get(idx).unwrap_or(&0.0),
+                *pixels.get(idx + 1).unwrap_or(&0.0),
+                *pixels.get(idx + 2).unwrap_or(&0.0),
+            )
         },
     )
     .context("Failed to write EXR file")?;
@@ -995,7 +1002,7 @@ mod tests {
                 </rdf:RDF>
             </xmpmeta>
         "#;
-        let params = parse_gainmap_from_xmp(xmp).unwrap();
+        let params = parse_gainmap_from_xmp(xmp).unwrap_or_else(|| panic!("failed to parse gainmap"));
         assert!(crate::float_compare::approx_eq_f64(
             f64::from(params.gain_map_max),
             3.0
@@ -1029,7 +1036,7 @@ mod tests {
                 </rdf:RDF>
             </xmpmeta>
         "#;
-        let params = parse_gainmap_from_xmp(xmp).unwrap();
+        let params = parse_gainmap_from_xmp(xmp).unwrap_or_else(|| panic!("failed to parse gainmap"));
         assert!(crate::float_compare::approx_eq_f64(
             f64::from(params.gain_map_max),
             4.5

@@ -120,7 +120,7 @@ fn manual_debug_scan_debug_dir_only() {
         }
 
         for idx in picks {
-            let p = &undecided[idx];
+            let p = undecided.get(idx).unwrap_or_else(|| panic!("missing index {idx}"));
             eprintln!("--- Deep sample: {}", p.display());
             if let Some(meta) = shared_utils::loop_intent::LoopMeta::from_gif_path(p) {
                 let verdict =

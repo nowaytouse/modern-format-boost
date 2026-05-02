@@ -261,9 +261,9 @@ mod tests {
         let _ = crate::io_utils::safe_remove_file(&empty);
 
         let small = dir.join("quality_verifier_test_small");
-        let mut f = std::fs::File::create(&small).unwrap();
-        f.write_all(&[0u8; 64]).unwrap();
-        f.sync_all().unwrap();
+        let mut f = std::fs::File::create(&small).unwrap_or_else(|e| panic!("error: {e:?}"));
+        f.write_all(&[0u8; 64]).unwrap_or_else(|e| panic!("error: {e:?}"));
+        f.sync_all().unwrap_or_else(|e| panic!("error: {e:?}"));
         drop(f);
         let r = verify_output_file(&small, 32);
         assert!(r.is_ok());
@@ -305,8 +305,8 @@ mod tests {
         let input_copy = dir.join("enhanced_verify_test_input_copy");
         let output_copy = dir.join("enhanced_verify_test_output_copy");
         let minimal: [u8; 64] = [0u8; 64];
-        std::fs::write(&input_copy, minimal).unwrap();
-        std::fs::write(&output_copy, minimal).unwrap();
+        std::fs::write(&input_copy, minimal).unwrap_or_else(|e| panic!("error: {e:?}"));
+        std::fs::write(&output_copy, minimal).unwrap_or_else(|e| panic!("error: {e:?}"));
         let result = verify_after_encode(&input_copy, &output_copy, &VerifyOptions::strict_video());
         let _ = crate::io_utils::safe_remove_file(&input_copy);
         let _ = crate::io_utils::safe_remove_file(&output_copy);

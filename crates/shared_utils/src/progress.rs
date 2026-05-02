@@ -1243,7 +1243,7 @@ impl SmartProgressBar {
             bar.set_style(
                 ProgressStyle::default_bar()
                     .template(progress_style::BATCH_TEMPLATE)
-                    .expect("Invalid progress bar template")
+                    .unwrap_or_else(|_| ProgressStyle::default_bar())
                     .progress_chars(progress_style::PROGRESS_CHARS)
                     .tick_chars(progress_style::SPINNER_CHARS),
             );

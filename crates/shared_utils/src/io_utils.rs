@@ -160,7 +160,7 @@ pub fn tail_error_lines(stderr: &str, n: usize) -> String {
         return String::new();
     }
     let start = lines.len().saturating_sub(n);
-    lines[start..].join(" | ")
+    lines.get(start..).unwrap_or(&[]).join(" | ")
 }
 
 #[cfg(test)]

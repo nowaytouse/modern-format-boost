@@ -108,9 +108,9 @@ mod property_tests {
 
         #[test]
         fn crf_cache_key_round_trip_hevc(value in 0.0f32..51.0f32) {
-            let original = Crf::<HevcEncoder>::new(value).unwrap();
+            let original = Crf::<HevcEncoder>::new(value).unwrap_or_else(|e| panic!("error: {e:?}"));
             let key = original.to_cache_key();
-            let recovered = Crf::<HevcEncoder>::from_cache_key(key).unwrap();
+            let recovered = Crf::<HevcEncoder>::from_cache_key(key).unwrap_or_else(|e| panic!("error: {e:?}"));
 
             let diff = (original.value() - recovered.value()).abs();
             prop_assert!(diff < 0.01,
@@ -121,9 +121,9 @@ mod property_tests {
 
         #[test]
         fn crf_cache_key_round_trip_av1(value in 0.0f32..63.0f32) {
-            let original = Crf::<Av1Encoder>::new(value).unwrap();
+            let original = Crf::<Av1Encoder>::new(value).unwrap_or_else(|e| panic!("error: {e:?}"));
             let key = original.to_cache_key();
-            let recovered = Crf::<Av1Encoder>::from_cache_key(key).unwrap();
+            let recovered = Crf::<Av1Encoder>::from_cache_key(key).unwrap_or_else(|e| panic!("error: {e:?}"));
 
             let diff = (original.value() - recovered.value()).abs();
             prop_assert!(diff < 0.01,
@@ -154,14 +154,14 @@ mod property_tests {
 
         #[test]
         fn ssim_display_precision_property(value in 0.0f64..1.0f64) {
-            let ssim = Ssim::new(value).unwrap();
+            let ssim = Ssim::new(value).unwrap_or_else(|e| panic!("error: {e:?}"));
             let display = ssim.display();
 
             let parts: Vec<&str> = display.split('.').collect();
             prop_assert_eq!(parts.len(), 2, "Display should have decimal point");
-            prop_assert_eq!(parts[1].len(), 6,
+            prop_assert_eq!(parts.get(1).map_or(0, |p| p.len()), 6,
                 "Display '{}' should have 6 decimal places, got {}",
-                display, parts[1].len()
+                display, parts.get(1).map_or(0, |p| p.len())
             );
         }
     }
@@ -206,7 +206,7 @@ mod property_tests {
                 prop_assert!(ratio.is_some(),
                     "compression_ratio with non-zero original should be Some"
                 );
-                let r = ratio.unwrap();
+                let r = ratio.unwrap_or_else(|| panic!("missing ratio"));
                 prop_assert!(r >= 0.0,
                     "compression_ratio should be >= 0, got {}", r
                 );

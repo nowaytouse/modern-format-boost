@@ -6,7 +6,7 @@ fn test_headless_gif_regression_frame_count_and_loop_intent() {
 
     // 1. Verify the fallback logic in GifHeaderScan correctly catches payload size
     let scan = shared_utils::media_meta_utils::scan_gif_headers(dev_asset_path)
-        .expect("Failed to scan headless GIF");
+        .unwrap_or_else(|e| panic!("Failed to scan headless GIF: {e:?}"));
 
     // There were 7 images inside the standard_7f.gif
     assert_eq!(
@@ -16,14 +16,14 @@ fn test_headless_gif_regression_frame_count_and_loop_intent() {
 
     // 2. Assure duration and delay evaluations are handled smoothly (duration might be ~0 or None)
     assert!(
-        scan.duration_secs.is_none() || scan.duration_secs.unwrap() == 0.0,
+        scan.duration_secs.is_none() || scan.duration_secs.unwrap_or(0.0) == 0.0,
         "Headless GIF should correctly map to missing/zero duration"
     );
 
     // 3. Complete LoopMeta Pipeline checks
     // If the fast path executes, we expect it is parsed successfully and is considered a loop
     let meta = shared_utils::loop_intent::LoopMeta::from_gif_path(dev_asset_path)
-        .expect("LoopMeta from_gif_path must succeed for valid GIF without delays");
+        .unwrap_or_else(|| panic!("LoopMeta from_gif_path must succeed for valid GIF without delays"));
 
     assert_eq!(
         meta.frame_count, 7,

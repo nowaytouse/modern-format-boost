@@ -1179,8 +1179,8 @@ mod tests {
                     }
                 },
             )
-            .expect("exploration should succeed")
-            .expect("screening result should exist");
+            .unwrap_or_else(|e| panic!("exploration failed: {e:?}"))
+            .unwrap_or_else(|| panic!("screening result should exist"));
 
         assert_eq!(result.best_output_size, 90);
         assert!(result.best_distance > JXL_EXPLORE_FLOOR);
@@ -1211,7 +1211,7 @@ mod tests {
         // All probes always return 130 > input(100). No candidate beats the source.
         // With binary search, Phase 2 is skipped (no d_under). Result should be None.
         let result = screen_jxl_candidates(100, 140, |_distance| Ok(130))
-            .expect("exploration should not fail");
+            .unwrap_or_else(|e| panic!("error: {e:?}"));
 
         assert!(
             result.is_none(),
@@ -1233,8 +1233,8 @@ mod tests {
             };
             Ok(size)
         })
-        .expect("exploration should succeed")
-        .expect("screening result should exist");
+        .unwrap_or_else(|e| panic!("exploration failed: {e:?}"))
+        .unwrap_or_else(|| panic!("screening result should exist"));
 
         assert!(result.finalists.iter().any(|candidate| {
             candidate
@@ -1260,8 +1260,8 @@ mod tests {
             };
             Ok(size)
         })
-        .expect("exploration should succeed")
-        .expect("screening result should exist");
+        .unwrap_or_else(|e| panic!("exploration failed: {e:?}"))
+        .unwrap_or_else(|| panic!("screening result should exist"));
 
         // best_distance must be a below-source d
         assert!(result.best_output_size < 100);
@@ -1285,8 +1285,8 @@ mod tests {
             calls += 1;
             Ok(50) // Should never be called
         })
-        .expect("exploration should succeed")
-        .expect("screening result should exist");
+        .unwrap_or_else(|e| panic!("exploration failed: {e:?}"))
+        .unwrap_or_else(|| panic!("screening result should exist"));
 
         assert!((result.best_distance - JXL_EXPLORE_FLOOR).abs() < f32::EPSILON);
         assert_eq!(result.best_output_size, 90);
@@ -1303,8 +1303,8 @@ mod tests {
             probed.push(distance);
             Ok(if distance < 0.02 { 120 } else { 95 })
         })
-        .expect("exploration should succeed")
-        .expect("screening result should exist");
+        .unwrap_or_else(|e| panic!("exploration failed: {e:?}"))
+        .unwrap_or_else(|| panic!("screening result should exist"));
 
         assert!(!probed.is_empty());
         assert!(probed
@@ -1314,7 +1314,7 @@ mod tests {
 
     #[test]
     fn test_screening_rejects_distances_below_the_floor() {
-        let err = canonicalize_generated_distance(0.0009).expect_err("sub-floor values must fail");
+        let err = canonicalize_generated_distance(0.0009).err().unwrap_or_else(|| panic!("sub-floor values must fail"));
         assert!(err.contains("below the floor"));
     }
 
@@ -1326,13 +1326,13 @@ mod tests {
         let ceiling_ratio = 10.0;
 
         let micro_target =
-            target_distance_for_ratio(micro_ratio, exploration_profile(micro_ratio)).unwrap();
+            target_distance_for_ratio(micro_ratio, exploration_profile(micro_ratio)).unwrap_or_else(|_| panic!("failed to get target distance"));
         let boundary_target =
-            target_distance_for_ratio(boundary_ratio, exploration_profile(boundary_ratio)).unwrap();
+            target_distance_for_ratio(boundary_ratio, exploration_profile(boundary_ratio)).unwrap_or_else(|_| panic!("failed to get target distance"));
         let wide_target =
-            target_distance_for_ratio(wide_ratio, exploration_profile(wide_ratio)).unwrap();
+            target_distance_for_ratio(wide_ratio, exploration_profile(wide_ratio)).unwrap_or_else(|_| panic!("failed to get target distance"));
         let ceiling_target =
-            target_distance_for_ratio(ceiling_ratio, exploration_profile(ceiling_ratio)).unwrap();
+            target_distance_for_ratio(ceiling_ratio, exploration_profile(ceiling_ratio)).unwrap_or_else(|_| panic!("failed to get target distance"));
 
         assert!(micro_target > JXL_EXPLORE_FLOOR);
         {
@@ -1354,8 +1354,8 @@ mod tests {
 
     #[test]
     fn test_ceiling_sweep_uses_denser_phase_one_ladder() {
-        let micro_plan = build_exploration_plan(100, 102).expect("micro plan should build");
-        let ceiling_plan = build_exploration_plan(100, 600).expect("ceiling plan should build");
+        let micro_plan = build_exploration_plan(100, 102).unwrap_or_else(|e| panic!("failed to build plan: {e:?}"));
+        let ceiling_plan = build_exploration_plan(100, 600).unwrap_or_else(|e| panic!("failed to build plan: {e:?}"));
 
         assert!(ceiling_plan.ladder.len() > micro_plan.ladder.len());
         assert!(ceiling_plan.target_distance > micro_plan.target_distance);
@@ -1387,7 +1387,7 @@ mod tests {
         );
         let midpoint_ratio = midpoint_stops.exp2();
         let target =
-            target_distance_for_ratio(midpoint_ratio, exploration_profile(midpoint_ratio)).unwrap();
+            target_distance_for_ratio(midpoint_ratio, exploration_profile(midpoint_ratio)).unwrap_or_else(|_| panic!("failed to get target distance"));
 
         assert!(
             (target - 0.055).abs() < 0.01,
@@ -1408,7 +1408,7 @@ mod tests {
             probed.push(distance);
             Ok(1100) // always oversize
         })
-        .expect("exploration should succeed");
+        .unwrap_or_else(|e| panic!("exploration failed: {e:?}"));
 
         assert!(
             result.is_none(),
@@ -1432,8 +1432,8 @@ mod tests {
             };
             Ok(size)
         })
-        .expect("exploration should succeed")
-        .expect("screening result should exist");
+        .unwrap_or_else(|e| panic!("exploration failed: {e:?}"))
+        .unwrap_or_else(|| panic!("screening result should exist"));
 
         // Should NOT exhaust the full 50-iteration budget
         assert!(
@@ -1465,8 +1465,8 @@ mod tests {
             );
             Ok(size)
         })
-        .expect("exploration should succeed")
-        .expect("screening result should exist");
+        .unwrap_or_else(|e| panic!("exploration failed: {e:?}"))
+        .unwrap_or_else(|| panic!("screening result should exist"));
 
         // Must NOT exhaust the full budget
         assert!(
@@ -1490,7 +1490,7 @@ mod tests {
         // All probes return oversize — no candidate ever beats the source.
         // Expected result is None, not a fallback to d=0.001.
         let result = screen_jxl_candidates(100, 200, |_distance| Ok(150))
-            .expect("exploration should not error");
+            .unwrap_or_else(|e| panic!("error: {e:?}"));
 
         assert!(
             result.is_none(),
@@ -1509,8 +1509,8 @@ mod tests {
                 Ok(990) // below source
             }
         })
-        .expect("exploration should succeed")
-        .expect("screening result should exist");
+        .unwrap_or_else(|e| panic!("exploration failed: {e:?}"))
+        .unwrap_or_else(|| panic!("screening result should exist"));
 
         let precision = f64::from(JXL_EXPLORE_BINARY_SEARCH_PRECISION) * 2.0;
         assert!(

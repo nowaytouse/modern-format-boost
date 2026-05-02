@@ -362,10 +362,10 @@ mod prop_tests {
                 original.insert(key, value);
             }
 
-            let json = original.to_json().expect("Serialization should succeed");
+            let json = original.to_json().unwrap_or_else(|e| panic!("error: {e:?}"));
 
             let restored: LruCache<i32, i32> =
-                LruCache::from_json(&json).expect("Deserialization should succeed");
+                LruCache::from_json(&json).unwrap_or_else(|e| panic!("error: {e:?}"));
 
             assert_eq!(
                 original.len(),
@@ -386,7 +386,7 @@ mod prop_tests {
                 );
                 assert_eq!(
                     entry.value,
-                    restored_entry.unwrap().value,
+                    restored_entry.unwrap_or_else(|| panic!("missing entry")).value,
                     "Seed {seed}: Value mismatch for key {key}"
                 );
             }
@@ -411,8 +411,8 @@ mod prop_tests {
             let temp_dir = std::env::temp_dir();
             let temp_file = temp_dir.join(format!("test_corrupted_cache_{i}.json"));
 
-            let mut file = std::fs::File::create(&temp_file).unwrap();
-            file.write_all(corrupted.as_bytes()).unwrap();
+            let mut file = std::fs::File::create(&temp_file).unwrap_or_else(|e| panic!("error: {e:?}"));
+            file.write_all(corrupted.as_bytes()).unwrap_or_else(|e| panic!("error: {e:?}"));
 
             let cache: LruCache<i32, i32> = LruCache::load_from_file(&temp_file, 10);
             assert_eq!(

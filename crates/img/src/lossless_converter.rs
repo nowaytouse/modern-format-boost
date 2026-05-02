@@ -584,7 +584,7 @@ pub fn convert_to_jxl(
                                                 use std::io::Read;
                                                 let mut buf = String::with_capacity(64 * 1024);
                                                 if let Err(err) = stderr
-                                                    .take(crate::constants::STDERR_BUFFER_MAX as u64)
+                                                    .take(shared_utils::numeric_cast::usize_to_u64(crate::constants::STDERR_BUFFER_MAX))
                                                     .read_to_string(&mut buf)
                                                 {
                                                     let line = format!(
@@ -604,7 +604,7 @@ pub fn convert_to_jxl(
                                                 let mut buf = String::with_capacity(64 * 1024);
                                                 if let Err(err) = stderr
                                                     .take(
-                                                        crate::constants::STDERR_BUFFER_MAX as u64,
+                                                        shared_utils::numeric_cast::usize_to_u64(crate::constants::STDERR_BUFFER_MAX),
                                                     )
                                                     .read_to_string(&mut buf)
                                                 {
@@ -1843,7 +1843,7 @@ fn try_explore_ultimate_jxl_distance(
                         input_size,
                         finalist.distance,
                         size,
-                        screening.finalists[*best_idx].distance,
+                        screening.finalists.get(*best_idx).map_or(0.01, |f| f.distance),
                         *best_size,
                     ) == std::cmp::Ordering::Less
                 });
@@ -1890,7 +1890,9 @@ fn try_explore_ultimate_jxl_distance(
         return Ok(None);
     }
 
-    let best_candidate = &screening.finalists[best_idx];
+    let best_candidate = screening.finalists.get(best_idx).ok_or_else(|| {
+        ImgQualityError::ConversionError("Failed to find best JXL candidate in finalists".to_string())
+    })?;
     let _ = shared_utils::io_utils::safe_remove_file(temp_output);
     shared_utils::io_utils::robust_move(&best_path, temp_output)
         .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
@@ -2514,43 +2516,43 @@ mod tests {
 
     #[test]
     fn test_get_output_path() {
-        let tmp = tempdir().expect("create temp dir");
-        let root = std::fs::canonicalize(tmp.path()).expect("canonicalize temp dir");
+        let tmp = tempdir().unwrap_or_else(|e| panic!("create temp dir: {e:?}"));
+        let root = std::fs::canonicalize(tmp.path()).unwrap_or_else(|e| panic!("canonicalize: {e:?}"));
         let input_dir = root.join("path").join("to");
-        std::fs::create_dir_all(&input_dir).expect("create input dir");
+        std::fs::create_dir_all(&input_dir).unwrap_or_else(|e| panic!("create input dir: {e:?}"));
         let input = input_dir.join("image.png");
-        std::fs::write(&input, b"png").expect("create input file");
+        std::fs::write(&input, b"png").unwrap_or_else(|e| panic!("write input file: {e:?}"));
         let options = ConvertOptions {
             output_dir: None,
             base_dir: None,
             ..Default::default()
         };
-        let output = get_output_path(&input, "jxl", &options).unwrap();
+        let output = get_output_path(&input, "jxl", &options).unwrap_or_else(|e| panic!("error: {e:?}"));
         assert_eq!(output, input_dir.join("image.JXL"));
     }
 
     #[test]
     fn test_get_output_path_with_dir() {
-        let tmp = tempdir().expect("create temp dir");
-        let root = std::fs::canonicalize(tmp.path()).expect("canonicalize temp dir");
+        let tmp = tempdir().unwrap_or_else(|e| panic!("create temp dir: {e:?}"));
+        let root = std::fs::canonicalize(tmp.path()).unwrap_or_else(|e| panic!("canonicalize: {e:?}"));
         let input_dir = root.join("path").join("to");
-        std::fs::create_dir_all(&input_dir).expect("create input dir");
+        std::fs::create_dir_all(&input_dir).unwrap_or_else(|e| panic!("create input dir: {e:?}"));
         let input = input_dir.join("image.png");
-        std::fs::write(&input, b"png").expect("create input file");
+        std::fs::write(&input, b"png").unwrap_or_else(|e| panic!("write input file: {e:?}"));
         let output_dir = root.join("output");
         let options = ConvertOptions {
             output_dir: Some(output_dir.clone()),
             base_dir: None,
             ..Default::default()
         };
-        let output = get_output_path(&input, "avif", &options).unwrap();
+        let output = get_output_path(&input, "avif", &options).unwrap_or_else(|e| panic!("error: {e:?}"));
         assert_eq!(output, output_dir.join("image.AVIF"));
     }
 
     #[test]
     fn test_get_output_path_same_file_error() {
-        let tmp = tempdir().expect("create temp dir");
-        let root = std::fs::canonicalize(tmp.path()).expect("canonicalize temp dir");
+        let tmp = tempdir().unwrap_or_else(|e| panic!("create temp dir: {e:?}"));
+        let root = std::fs::canonicalize(tmp.path()).unwrap_or_else(|e| panic!("canonicalize: {e:?}"));
         let input = root.join("image.JXL");
         let options = ConvertOptions {
             output_dir: None,
@@ -2678,7 +2680,7 @@ mod tests {
         };
 
         let size = run_jxl_exploration_probe_with(0.2, &mut direct, &mut fallback)
-            .expect("fallback should recover the exploration probe");
+            .unwrap_or_else(|e| panic!("fallback should recover the exploration probe: {e:?}"));
 
         assert_eq!(size, 88);
         assert_eq!(direct_calls.get(), 1);
@@ -2700,7 +2702,7 @@ mod tests {
         };
 
         let size = run_jxl_exploration_probe_with(0.1, &mut direct, &mut fallback)
-            .expect("direct cjxl probe should win");
+            .unwrap_or_else(|e| panic!("direct cjxl probe should win: {e:?}"));
 
         assert_eq!(size, 77);
         assert_eq!(direct_calls.get(), 1);

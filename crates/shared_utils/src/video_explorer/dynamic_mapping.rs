@@ -70,9 +70,8 @@ impl DynamicCrfMapper {
         }
 
         // Multi-anchor interpolation (currently unused: quick_calibrate stops after first success).
-        let [p1, p2, ..] = match self.anchors[..] {
-            [ref a, ref b, ..] => [a, b],
-            _ => return ((gpu_crf + base_offset).clamp(10.0, max_crf), 0.5),
+        let [p1, p2, ..] = &self.anchors[..] else {
+            return ((gpu_crf + base_offset).clamp(10.0, max_crf), 0.5);
         };
 
         let offset1 = Self::calculate_offset_from_ratio(p1.size_ratio);

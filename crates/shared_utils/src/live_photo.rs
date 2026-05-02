@@ -68,15 +68,15 @@ mod tests {
 
     #[test]
     fn test_live_photo_detection() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
         let base_path = temp_dir.path();
 
         // Create a Live Photo pair
         let heic_path = base_path.join("IMG_1234.HEIC");
         let mov_path = base_path.join("IMG_1234.MOV");
 
-        File::create(&heic_path).unwrap();
-        File::create(&mov_path).unwrap();
+        File::create(&heic_path).unwrap_or_else(|e| panic!("error: {e:?}"));
+        File::create(&mov_path).unwrap_or_else(|e| panic!("error: {e:?}"));
 
         // Both files should be detected as Live Photo
         assert!(is_live_photo(&heic_path));
@@ -84,26 +84,26 @@ mod tests {
 
         // Single HEIC without MOV should not be Live Photo
         let single_heic = base_path.join("IMG_5678.HEIC");
-        File::create(&single_heic).unwrap();
+        File::create(&single_heic).unwrap_or_else(|e| panic!("error: {e:?}"));
         assert!(!is_live_photo(&single_heic));
 
         // Single MOV without HEIC should not be Live Photo
         let single_mov = base_path.join("VID_9999.MOV");
-        File::create(&single_mov).unwrap();
+        File::create(&single_mov).unwrap_or_else(|e| panic!("error: {e:?}"));
         assert!(!is_live_photo(&single_mov));
     }
 
     #[test]
     fn test_case_insensitive() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
         let base_path = temp_dir.path();
 
         // Test lowercase heic with uppercase MOV
         let heic_lower = base_path.join("IMG_0001.heic");
         let mov_upper = base_path.join("IMG_0001.MOV");
 
-        File::create(&heic_lower).unwrap();
-        File::create(&mov_upper).unwrap();
+        File::create(&heic_lower).unwrap_or_else(|e| panic!("error: {e:?}"));
+        File::create(&mov_upper).unwrap_or_else(|e| panic!("error: {e:?}"));
 
         assert!(is_live_photo(&heic_lower));
         assert!(is_live_photo(&mov_upper));

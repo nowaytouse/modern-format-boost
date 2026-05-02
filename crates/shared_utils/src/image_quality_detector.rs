@@ -243,8 +243,8 @@ fn calculate_edge_density(rgba: &[u8], width: u32, height: u32) -> f64 {
 
     let w = crate::numeric_cast::u32_to_usize_sat(width);
 
-    for y in (1..(height - 1) as usize).step_by(step) {
-        for x in (1..(width - 1) as usize).step_by(step) {
+    for y in (1..crate::numeric_cast::u32_to_usize_sat(height.saturating_sub(1))).step_by(step) {
+        for x in (1..crate::numeric_cast::u32_to_usize_sat(width.saturating_sub(1))).step_by(step) {
             let get_gray = |px: usize, py: usize| -> i32 {
                 let idx = (py * w + px) * 4;
                 let r = i32::from(rgba.get(idx).copied().unwrap_or(0));
@@ -334,8 +334,8 @@ fn calculate_texture_variance(rgba: &[u8], width: u32, height: u32) -> f64 {
     let mut variance_sum = 0.0;
     let mut sample_count = 0usize;
 
-    for y in (1..(height - 1) as usize).step_by(step) {
-        for x in (1..(width - 1) as usize).step_by(step) {
+    for y in (1..crate::numeric_cast::u32_to_usize_sat(height.saturating_sub(1))).step_by(step) {
+        for x in (1..crate::numeric_cast::u32_to_usize_sat(width.saturating_sub(1))).step_by(step) {
             let mut sum = 0i32;
             let mut sq_sum = 0i64;
 
@@ -393,8 +393,8 @@ fn calculate_noise_level(rgba: &[u8], width: u32, height: u32) -> f64 {
     let mut diff_sum = 0.0;
     let mut sample_count = 0usize;
 
-    for y in (0..(height - 1) as usize).step_by(step) {
-        for x in (0..(width - 1) as usize).step_by(step) {
+    for y in (0..crate::numeric_cast::u32_to_usize_sat(height.saturating_sub(1))).step_by(step) {
+        for x in (0..crate::numeric_cast::u32_to_usize_sat(width.saturating_sub(1))).step_by(step) {
             let idx = (y * crate::numeric_cast::u32_to_usize_sat(width) + x) * 4;
             let idx_right = idx + 4;
             let idx_down = idx + (crate::numeric_cast::u32_to_usize_sat(width) * 4);
@@ -455,8 +455,8 @@ fn calculate_sharpness(rgba: &[u8], width: u32, height: u32) -> f64 {
             / crate::constants::LUMA_DIVISOR
     };
 
-    for y in (1..(height - 1) as usize).step_by(step) {
-        for x in (1..(width - 1) as usize).step_by(step) {
+    for y in (1..crate::numeric_cast::u32_to_usize_sat(height.saturating_sub(1))).step_by(step) {
+        for x in (1..crate::numeric_cast::u32_to_usize_sat(width.saturating_sub(1))).step_by(step) {
             let center = get_gray(x, y);
             let top = get_gray(x, y - 1);
             let bottom = get_gray(x, y + 1);

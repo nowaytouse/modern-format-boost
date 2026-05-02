@@ -1547,8 +1547,8 @@ fn animated_exploration_three_segment_vf_prefix(dur: f64, ultimate_mode: bool) -
 /// Prepends `prefix` to the filter chain after `-vf`, or builds `-vf prefix` when no `-vf` pair exists.
 #[must_use]
 fn merge_vf_with_animated_exploration_prefix(vf_args: &[String], prefix: &str) -> Vec<String> {
-    if vf_args.len() >= 2 && vf_args[0] == "-vf" {
-        let merged = format!("{prefix},{}", vf_args[1]);
+    if vf_args.len() >= 2 && vf_args.first().is_some_and(|s| s == "-vf") {
+        let merged = format!("{prefix},{}", vf_args.get(1).unwrap_or(&String::new()));
         vec!["-vf".to_string(), merged]
     } else {
         vec!["-vf".to_string(), prefix.to_string()]
@@ -4857,7 +4857,7 @@ mod tests {
             },
         );
         assert!(eval.fusion_score.is_some());
-        assert!((eval.fusion_score.unwrap() - 0.95).abs() < 1e-6);
+        assert!((eval.fusion_score.unwrap_or_else(|| panic!("missing score")) - 0.95).abs() < 1e-6);
     }
 
     #[test]
@@ -4873,7 +4873,7 @@ mod tests {
             },
         );
         assert!(eval.fusion_score.is_some());
-        assert!((eval.fusion_score.unwrap() - 0.95).abs() < 1e-6);
+        assert!((eval.fusion_score.unwrap_or_else(|| panic!("missing score")) - 0.95).abs() < 1e-6);
     }
 
     #[test]

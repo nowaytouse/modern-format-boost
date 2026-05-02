@@ -413,7 +413,7 @@ fn resolve_mif1_from_compatible_brands(path: &Path, major_brand: &[u8]) -> Detec
 
     let box_size =
         usize::try_from(u32::from_be_bytes([
-            *data.get(0).unwrap_or(&0),
+            *data.first().unwrap_or(&0),
             *data.get(1).unwrap_or(&0),
             *data.get(2).unwrap_or(&0),
             *data.get(3).unwrap_or(&0),

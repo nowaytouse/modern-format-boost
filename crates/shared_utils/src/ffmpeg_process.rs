@@ -545,7 +545,7 @@ mod prop_tests {
                     (f64::from(p) / 10_000.0).min(1.0)
                 };
                 prop_assert!(progress.is_some());
-                let actual = progress.unwrap();
+                let actual = progress.unwrap_or_else(|| panic!("missing progress"));
                 prop_assert!((actual - expected).abs() < 0.001,
                     "Expected {}, got {} for frame {}/{}", expected, actual, current, total);
             }
@@ -566,7 +566,7 @@ mod prop_tests {
             if current_seconds > 0.0 {
                 let expected = (current_seconds / total_duration).min(1.0);
                 prop_assert!(progress.is_some());
-                let actual = progress.unwrap();
+                let actual = progress.unwrap_or_else(|| panic!("missing progress"));
                 prop_assert!((actual - expected).abs() < 0.01,
                     "Expected {}, got {} for time {}:{}:{}", expected, actual, hours, minutes, seconds);
             }

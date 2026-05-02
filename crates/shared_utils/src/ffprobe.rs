@@ -1046,7 +1046,7 @@ mod tests {
         ];
 
         for (input, expected, tolerance) in cases {
-            let result = parse_frame_rate(input).unwrap();
+            let result = parse_frame_rate(input).unwrap_or_else(|e| panic!("error: {e:?}"));
             assert!(
                 (result - expected).abs() < *tolerance,
                 "parse_frame_rate({input:?}): expected {expected}, got {result}"
@@ -1135,7 +1135,7 @@ mod tests {
                 }
             }
         });
-        let loop_count = extract_loop_count(&json_with_loop["format"]);
+        let loop_count = extract_loop_count(json_with_loop.get("format").unwrap_or(&serde_json::Value::Null));
         assert_eq!(loop_count, Some(5));
 
         let json_no_loop = serde_json::json!({
@@ -1143,7 +1143,7 @@ mod tests {
                 "tags": {}
             }
         });
-        let loop_count = extract_loop_count(&json_no_loop["format"]);
+        let loop_count = extract_loop_count(json_no_loop.get("format").unwrap_or(&serde_json::Value::Null));
         assert_eq!(loop_count, None);
     }
 }

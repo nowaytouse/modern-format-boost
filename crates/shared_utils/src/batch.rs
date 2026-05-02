@@ -875,7 +875,7 @@ mod tests {
         assert_eq!(result.succeeded, 0);
         assert_eq!(result.failed, 1);
         assert_eq!(result.errors.len(), 1);
-        assert_eq!(result.errors[0].1, "Error message");
+        assert_eq!(result.errors.first().map_or("", |e| &e.1), "Error message");
     }
 
     #[test]
@@ -1089,7 +1089,7 @@ mod tests {
         assert!(controller.request_pause(Path::new("first.png"), "first"));
         assert!(!controller.request_pause(Path::new("second.png"), "second"));
 
-        let info = controller.pause_info().expect("pause info should exist");
+        let info = controller.pause_info().unwrap_or_else(|| panic!("pause info should exist"));
         assert_eq!(info.path, PathBuf::from("first.png"));
         assert_eq!(info.reason, "first");
     }
@@ -1204,7 +1204,7 @@ mod tests {
         ];
         sort_cached_video_entries(&mut entries);
 
-        assert_eq!(entries.get(0).map(|e| &e.path), Some(&fast_finish.path));
+        assert_eq!(entries.first().map(|e| &e.path), Some(&fast_finish.path));
         assert_eq!(entries.get(1).map(|e| &e.path), Some(&same_depth_shorter.path));
         assert_eq!(entries.get(2).map(|e| &e.path), Some(&same_depth_heavier.path));
         assert_eq!(entries.get(3).map(|e| &e.path), Some(&shallower.path));

@@ -1069,8 +1069,8 @@ fn auto_convert_directory(
             if config.verbose {
                 println!(
                     "💾 Disk space OK: {:.2} GB available, {:.2} GB required",
-                    f64::from(u32::try_from(avail / (1024 * 1024 * 1024)).unwrap_or(u32::MAX)),
-                    f64::from(u32::try_from(required / (1024 * 1024 * 1024)).unwrap_or(u32::MAX))
+                    shared_utils::numeric_cast::u64_to_f64(avail) / (1024.0 * 1024.0 * 1024.0),
+                    shared_utils::numeric_cast::u64_to_f64(required) / (1024.0 * 1024.0 * 1024.0)
                 );
             }
         }
@@ -1087,7 +1087,7 @@ fn auto_convert_directory(
 
     shared_utils::progress_mode::enable_quiet_mode();
     let progress_bar = Arc::new(shared_utils::CoarseProgressBar::new(
-        total as u64,
+        shared_utils::numeric_cast::usize_to_u64(total),
         "Running",
     ));
 
@@ -1154,11 +1154,11 @@ fn auto_convert_directory(
                             let current = processed.fetch_add(1, Ordering::Relaxed) + 1;
                             shared_utils::progress_mode::write_progress_line_to_run_log(
                                 start_time.elapsed().as_secs(),
-                                current as u64,
-                                total as u64,
+                                shared_utils::numeric_cast::usize_to_u64(current),
+                                shared_utils::numeric_cast::usize_to_u64(total),
                                 &path.file_name().unwrap_or_default().to_string_lossy(),
                             );
-                            progress_bar.set(current as u64);
+                            progress_bar.set(shared_utils::numeric_cast::usize_to_u64(current));
                             continue;
                         }
                     }
@@ -1244,11 +1244,11 @@ fn auto_convert_directory(
                     let current = processed.fetch_add(1, Ordering::Relaxed) + 1;
                     shared_utils::progress_mode::write_progress_line_to_run_log(
                         start_time.elapsed().as_secs(),
-                        current as u64,
-                        total as u64,
+                        shared_utils::numeric_cast::usize_to_u64(current),
+                        shared_utils::numeric_cast::usize_to_u64(total),
                         &path.file_name().unwrap_or_default().to_string_lossy(),
                     );
-                    progress_bar.set(current as u64);
+                    progress_bar.set(shared_utils::numeric_cast::usize_to_u64(current));
                 });
             }
         });

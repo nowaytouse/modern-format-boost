@@ -34,7 +34,7 @@ pub fn metadata_with_retry<P: AsRef<Path>>(path: P) -> std::io::Result<fs::Metad
             }
         }
     }
-    Err(last_err.unwrap())
+    Err(last_err.unwrap_or_else(|| std::io::Error::other("unknown error")))
 }
 
 fn main() {

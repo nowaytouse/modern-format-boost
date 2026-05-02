@@ -9,13 +9,13 @@ fn classify_animated_webp_even_without_vp8x_in_first_64_bytes() {
 
     // Header-only classifier should see RIFF/WEBP but NOT VP8X => initial WebpStatic.
     // Content classifier must upgrade to WebpAnimated by scanning for ANIM/ANMF markers.
-    let header_codec = SourceCodec::identify_by_header(&bytes[..64]);
+    let header_codec = SourceCodec::identify_by_header(bytes.get(..64).unwrap_or(&[]));
     assert_eq!(header_codec, Some(SourceCodec::WebpStatic));
 
     // Write to a temp file to exercise identify_by_content (file-based deep verification).
-    let dir = tempfile::tempdir().expect("temp dir");
-    let path = dir.path().join("synthetic.webp");
-    std::fs::write(&path, &bytes).expect("write synthetic webp");
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("temp dir: {e:?}"));
+    let path = dir.path().join("animated.webp");
+    std::fs::write(&path, &bytes).unwrap_or_else(|e| panic!("write synthetic webp: {e:?}"));
 
     let content_codec = SourceCodec::identify_by_content(&path);
     assert_eq!(content_codec, Some(SourceCodec::WebpAnimated));

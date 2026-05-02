@@ -837,7 +837,7 @@ fn lookup_similar_samples_inner(
         .collect();
     if !candidate_distances.is_empty() {
         tracing::debug!(
-            top5 = ?&candidate_distances[..5.min(candidate_distances.len())],
+            top5 = ?candidate_distances.get(..5.min(candidate_distances.len())).unwrap_or(&[]),
             "KNN raw distance sample"
         );
     }
@@ -865,7 +865,7 @@ fn lookup_similar_samples_inner(
         .collect();
 
     let neighbor_count = adaptive_neighbor_count(candidates.len());
-    let neighbors = &candidates[..neighbor_count];
+    let neighbors = candidates.get(..neighbor_count).unwrap_or(&[]);
 
     let min_distance = neighbors.first().map_or(0.0, |(_, _, d)| *d);
     let radius = dynamic_neighbor_radius(neighbors);
@@ -995,7 +995,7 @@ fn lookup_similar_samples_inner(
         let idx = crate::numeric_cast::f64_to_usize_sat(
             (crate::numeric_cast::usize_to_f64(loop_durations.len()) * 0.90).floor(),
         );
-        Some(loop_durations[idx.min(loop_durations.len() - 1)])
+        Some(*loop_durations.get(idx.min(loop_durations.len().saturating_sub(1))).unwrap_or(&0.0))
     };
 
     Ok(Some(SampleMatch {
@@ -1588,7 +1588,7 @@ pub fn calculate_blake3_hex(path: &Path) -> Result<String> {
         if bytes_read == 0 {
             break;
         }
-        hasher.update(&buffer[..bytes_read]);
+        hasher.update(buffer.get(..bytes_read).unwrap_or(&[]));
     }
     Ok(hasher.finalize().to_hex().to_string())
 }
@@ -1862,10 +1862,11 @@ fn imbalance_ratio(keep_count: i64, weak_count: i64) -> f64 {
 fn dynamic_neighbor_radius(neighbors: &[(LabelStatus, f64, f64)]) -> f64 {
     let mut distances: Vec<f64> = neighbors.iter().map(|(_, _, d)| *d).collect();
     distances.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let q1 = distances[distances.len() / 4];
-    let q3 = distances[(distances.len() * 3) / 4];
+    let q1 = *distances.get(distances.len() / 4).unwrap_or(&0.0);
+    let q3 = *distances.get((distances.len() * 3) / 4).unwrap_or(&0.0);
     let iqr = (q3 - q1).max(0.06);
-    (distances[0] + iqr * 1.5).max(distances[0] + 0.08)
+    let d0 = *distances.first().unwrap_or(&0.0);
+    (d0 + iqr * 1.5).max(d0 + 0.08)
 }
 
 fn normalize_log_ratio(a: f64, b: f64, scale: f64) -> f64 {
@@ -1980,7 +1981,7 @@ pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -
     pb.set_style(
         ProgressStyle::default_bar()
             .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}")
-            .expect("Valid template")
+            .unwrap_or_else(|_| ProgressStyle::default_bar())
             .progress_chars("#>-"),
     );
 

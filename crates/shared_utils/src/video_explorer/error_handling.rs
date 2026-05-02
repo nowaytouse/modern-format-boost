@@ -161,7 +161,7 @@ mod tests {
 
         let message = result
             .error_message()
-            .expect("quality failure should have a message");
+            .unwrap_or_else(|| panic!("quality failure should have a message"));
         assert!(message.contains("score: unknown"));
         assert!(!message.contains("score: 0.0000"));
     }

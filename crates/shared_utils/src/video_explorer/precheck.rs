@@ -341,7 +341,10 @@ pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'s
     let json: serde_json::Value =
         serde_json::from_str(&json_str).context("ffprobe JSON parse failed")?;
 
-    let stream = json["streams"].get(0).context("No video stream")?;
+    let stream = json.get("streams")
+        .and_then(|s| s.as_array())
+        .and_then(|s| s.first())
+        .context("No video stream")?;
     let fps: f64 = parse_fps_from_stream(stream)
         .context("Could not determine FPS for duration calculation")?;
 

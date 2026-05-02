@@ -69,7 +69,9 @@ pub fn extract_icc_with_d50_patch(src: &Path) -> Option<tempfile::NamedTempFile>
             let d50_standard = [
                 0x00, 0x00, 0xf6, 0xd6, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0xd3, 0x2d,
             ];
-            icc_data[68..80].copy_from_slice(&d50_standard);
+            if let Some(slice) = icc_data.get_mut(68..80) {
+                slice.copy_from_slice(&d50_standard);
+            }
         }
         std::fs::write(temp_icc.path(), &icc_data).ok()?;
         Some(temp_icc)
@@ -805,14 +807,14 @@ pub fn strip_jpeg_tail_to_temp(
     }
 
     // Must start with SOI
-    if data[0] != 0xFF || data[1] != 0xD8 {
+    if data.get(0..2) != Some(&[0xFF, 0xD8]) {
         return Ok(None);
     }
 
     let last_eoi = data
         .windows(2)
         .enumerate()
-        .filter(|(_, w)| w[0] == 0xFF && w[1] == 0xD9)
+        .filter(|(_, w)| w == b"\xFF\xD9")
         .map(|(i, _)| i + 2) // i is FF, i+1 is D9, i+2 is the end of the marker (inclusive-slice-friendly index)
         .next_back();
 
@@ -826,7 +828,7 @@ pub fn strip_jpeg_tail_to_temp(
     }
 
     let temp = tempfile::Builder::new().suffix(".jpg").tempfile()?;
-    std::fs::write(temp.path(), &data[..end])?;
+    std::fs::write(temp.path(), data.get(..end).unwrap_or(&[]))?;
     let temp_path = temp.path().to_path_buf();
     Ok(Some((temp_path, temp)))
 }

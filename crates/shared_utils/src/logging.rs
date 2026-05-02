@@ -267,17 +267,17 @@ pub fn strip_ansi_str(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'[' {
+        if bytes.get(i) == Some(&0x1b) && bytes.get(i + 1) == Some(&b'[') {
             // Consume ESC [ <params> <final_byte>, where final is 0x40..=0x7E
             i += 2;
             while i < bytes.len() {
-                let b = bytes[i];
+                let b = *bytes.get(i).unwrap_or(&0);
                 i += 1;
                 if (0x40..=0x7e).contains(&b) {
                     break;
                 }
             }
-        } else if let Some(ch) = s[i..].chars().next() {
+        } else if let Some(ch) = s.get(i..).and_then(|sub| sub.chars().next()) {
             out.push(ch);
             i += ch.len_utf8();
         } else {
@@ -831,7 +831,7 @@ mod tests {
 
     #[test]
     fn test_log_config_builder() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
         let config = LogConfig::new()
             .with_log_dir(temp_dir.path())
             .with_max_file_size(50 * 1024 * 1024)
@@ -846,7 +846,7 @@ mod tests {
 
     #[test]
     fn test_init_logging_creates_log_file() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
         let _config = LogConfig::new().with_log_dir(temp_dir.path());
 
         assert!(temp_dir.path().exists());
@@ -854,19 +854,19 @@ mod tests {
 
     #[test]
     fn test_cleanup_old_logs() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
         let program_name = "test_program";
 
         for i in 0..10 {
             let file_path = temp_dir.path().join(format!("{program_name}.{i}.log"));
-            fs::write(&file_path, format!("log content {i}")).unwrap();
+            fs::write(&file_path, format!("log content {i}")).unwrap_or_else(|e| panic!("error: {e:?}"));
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
 
-        cleanup_old_logs(temp_dir.path(), program_name, 3).unwrap();
+        cleanup_old_logs(temp_dir.path(), program_name, 3).unwrap_or_else(|e| panic!("error: {e:?}"));
 
         let remaining_files: Vec<_> = fs::read_dir(temp_dir.path())
-            .unwrap()
+            .unwrap_or_else(|e| panic!("error: {e:?}"))
             .filter_map(std::result::Result::ok)
             .filter(|e| e.file_name().to_string_lossy().starts_with(program_name))
             .collect();
@@ -879,7 +879,7 @@ mod tests {
         let result = execute_external_command("echo", &["hello", "world"]);
 
         assert!(result.is_ok());
-        let result = result.unwrap();
+        let result = result.unwrap_or_else(|e| panic!("error: {e:?}"));
         assert_eq!(result.exit_code, Some(0));
         assert!(result.stdout.contains("hello"));
         assert!(
@@ -900,13 +900,13 @@ mod tests {
         let result = execute_external_command_checked("echo", &["test"]);
 
         assert!(result.is_ok());
-        let result = result.unwrap();
+        let result = result.unwrap_or_else(|e| panic!("error: {e:?}"));
         assert_eq!(result.exit_code, Some(0));
     }
 
     #[test]
     fn test_external_command_result_structure() {
-        let result = execute_external_command("echo", &["test"]).unwrap();
+        let result = execute_external_command("echo", &["test"]).unwrap_or_else(|e| panic!("error: {e:?}"));
 
         assert!(result.exit_code.is_some());
         assert!(!result.stdout.is_empty() || !result.stderr.is_empty());
@@ -926,7 +926,7 @@ mod tests {
 
     #[test]
     fn test_size_based_rotation() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
         let program_name = "test_rotate_program";
         let max_size = 500; // 500 bytes limit
 
@@ -936,12 +936,12 @@ mod tests {
         // Write enough to trigger rotation
         for i in 0..20 {
             let msg = format!("Log entry number {i} filling space\n");
-            appender.write_all(msg.as_bytes()).unwrap();
+            appender.write_all(msg.as_bytes()).unwrap_or_else(|e| panic!("error: {e:?}"));
         }
-        appender.flush().unwrap();
+        appender.flush().unwrap_or_else(|e| panic!("error: {e:?}"));
 
         let files: Vec<_> = fs::read_dir(temp_dir.path())
-            .unwrap()
+            .unwrap_or_else(|e| panic!("error: {e:?}"))
             .filter_map(std::result::Result::ok)
             .collect();
 

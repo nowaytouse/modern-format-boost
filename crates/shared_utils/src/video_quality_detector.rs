@@ -651,7 +651,7 @@ mod tests {
             color_space: Some("bt709"),
             file_size: 60_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         assert_eq!(result.width, 1920);
         assert_eq!(result.height, 1080);
@@ -679,7 +679,7 @@ mod tests {
             color_space: Some("bt2020nc"),
             file_size: 300_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         assert_eq!(result.codec_type, VideoCodecType::ModernEfficient);
         assert!(result.is_modern_codec);
@@ -706,7 +706,7 @@ mod tests {
             color_space: None,
             file_size: 56_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         assert_eq!(result.codec_type, VideoCodecType::ModernEfficient);
         assert!(
@@ -733,7 +733,7 @@ mod tests {
             color_space: Some("bt709"),
             file_size: 1_125_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         assert_eq!(result.codec_type, VideoCodecType::Intermediate);
         assert!(!result.should_skip, "ProRes should not be skipped");
@@ -759,7 +759,7 @@ mod tests {
             color_space: None,
             file_size: 750_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         assert_eq!(result.codec_type, VideoCodecType::Lossless);
         assert_eq!(result.compression_type, CompressionLevel::Lossless);
@@ -786,7 +786,7 @@ mod tests {
                 color_space: None,
                 file_size: 60_000_000,
             })
-            .unwrap();
+            .unwrap_or_else(|e| panic!("{e}"));
             assert!(
                 result.should_skip,
                 "{codec} skipped in normal mode (modern format)"
@@ -812,7 +812,7 @@ mod tests {
             color_space: None,
             file_size: 60_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
         assert!(!h264.should_skip, "H.264 should NOT be skipped");
 
         let mjpeg = analyze_video_quality(VideoQualityInput {
@@ -831,7 +831,7 @@ mod tests {
             color_space: None,
             file_size: 375_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
         assert!(!mjpeg.should_skip, "MJPEG should NOT be skipped");
 
         let prores = analyze_video_quality(VideoQualityInput {
@@ -850,7 +850,7 @@ mod tests {
             color_space: None,
             file_size: 1_125_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
         assert!(!prores.should_skip, "ProRes should NOT be skipped");
     }
 
@@ -924,7 +924,7 @@ mod tests {
             color_space: None,
             file_size: 60_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         let expected_bpp = 8_000_000.0 / (1920.0 * 1080.0 * 30.0);
         assert!(
@@ -953,7 +953,7 @@ mod tests {
             color_space: None,
             file_size: 75_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         let expected_bpp = 8_000_000.0 / (1920.0 * 1080.0 * 30.0);
         assert!(
@@ -982,7 +982,7 @@ mod tests {
             color_space: None,
             file_size: 1_500_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         assert_eq!(result.compression_type, CompressionLevel::Lossless);
     }
@@ -1005,7 +1005,7 @@ mod tests {
             color_space: None,
             file_size: 1_125_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         assert_eq!(result.compression_type, CompressionLevel::VisuallyLossless);
     }
@@ -1028,7 +1028,7 @@ mod tests {
             color_space: None,
             file_size: 60_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             result.compression_type == CompressionLevel::Standard
@@ -1056,7 +1056,7 @@ mod tests {
             color_space: None,
             file_size: 22_500_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         assert_eq!(
             result.compression_type,
@@ -1084,7 +1084,7 @@ mod tests {
             color_space: None,
             file_size: 150_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             result.estimated_crf <= 25,
@@ -1111,7 +1111,7 @@ mod tests {
             color_space: None,
             file_size: 7_500_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             result.estimated_crf >= 30,
@@ -1138,7 +1138,7 @@ mod tests {
             color_space: None,
             file_size: 1_500_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         assert_eq!(result.estimated_crf, 0, "Lossless should have CRF 0");
     }
@@ -1161,7 +1161,7 @@ mod tests {
             color_space: Some("bt2020nc"),
             file_size: 187_500_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         assert!(result.is_hdr, "BT.2020 should be detected as HDR");
     }
@@ -1184,7 +1184,7 @@ mod tests {
             color_space: Some("bt709"),
             file_size: 60_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         assert!(!result.is_hdr, "BT.709 should NOT be detected as HDR");
     }
@@ -1207,7 +1207,7 @@ mod tests {
             color_space: None,
             file_size: 60_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             !result.is_hdr,
@@ -1233,7 +1233,7 @@ mod tests {
             color_space: None,
             file_size: 60_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
         assert!(
             result.should_skip,
             "HEVC should be marked skip by should_skip_video_codec"
@@ -1258,7 +1258,7 @@ mod tests {
             color_space: None,
             file_size: 1_500_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
         assert!(!result.should_skip);
     }
 
@@ -1280,7 +1280,7 @@ mod tests {
             color_space: None,
             file_size: 1_125_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
         assert!(!result.should_skip);
         assert_eq!(result.codec_type, VideoCodecType::Intermediate);
     }
@@ -1303,7 +1303,7 @@ mod tests {
             color_space: None,
             file_size: 60_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
         assert!(!result.should_skip);
     }
 
@@ -1327,7 +1327,7 @@ mod tests {
         });
 
         assert!(result.is_err(), "Should fail on zero width");
-        assert!(result.unwrap_err().contains("Invalid dimensions"));
+        assert!(result.err().unwrap_or_default().contains("Invalid dimensions"));
     }
 
     #[test]
@@ -1350,7 +1350,7 @@ mod tests {
         });
 
         assert!(result.is_err(), "Should fail on zero height");
-        assert!(result.unwrap_err().contains("Invalid dimensions"));
+        assert!(result.err().unwrap_or_default().contains("Invalid dimensions"));
     }
 
     #[test]
@@ -1373,7 +1373,7 @@ mod tests {
         });
 
         assert!(result.is_err(), "Should fail on zero fps");
-        assert!(result.unwrap_err().contains("Invalid frame rate"));
+        assert!(result.err().unwrap_or_default().contains("Invalid frame rate"));
     }
 
     #[test]
@@ -1418,7 +1418,7 @@ mod tests {
         });
 
         assert!(result.is_err(), "Should fail on zero duration");
-        assert!(result.unwrap_err().contains("Invalid duration"));
+        assert!(result.err().unwrap_or_default().contains("Invalid duration"));
     }
 
     #[test]
@@ -1461,7 +1461,7 @@ mod tests {
             color_space: None,
             file_size: 750_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             result.bpp < 0.01,
@@ -1492,7 +1492,7 @@ mod tests {
             color_space: None,
             file_size: 3_750_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         assert!(result.bpp > 5.0, "Very high bitrate should have high BPP");
         assert!(
@@ -1520,7 +1520,7 @@ mod tests {
             color_space: None,
             file_size: 15_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         assert_eq!(result.width, 854);
         assert_eq!(result.height, 480);
@@ -1546,7 +1546,7 @@ mod tests {
             color_space: None,
             file_size: 37_500_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         assert_eq!(result.width, 1280);
         assert_eq!(result.height, 720);
@@ -1570,7 +1570,7 @@ mod tests {
             color_space: None,
             file_size: 187_500_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         assert_eq!(result.width, 3840);
         assert_eq!(result.height, 2160);
@@ -1595,7 +1595,7 @@ mod tests {
             color_space: None,
             file_size: 600_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         assert_eq!(result.width, 7680);
         assert_eq!(result.height, 4320);
@@ -1620,7 +1620,7 @@ mod tests {
             color_space: None,
             file_size: 60_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         assert_eq!(result.width, 1080);
         assert_eq!(result.height, 1920);
@@ -1645,7 +1645,7 @@ mod tests {
             color_space: None,
             file_size: 45_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         assert_eq!(result.width, 1080);
         assert_eq!(result.height, 1080);
@@ -1669,7 +1669,7 @@ mod tests {
             color_space: None,
             file_size: 60_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         assert!((result.fps - 24.0).abs() < 0.01);
         assert_eq!(result.frame_count, 1440);
@@ -1693,7 +1693,7 @@ mod tests {
             color_space: None,
             file_size: 112_500_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         assert!((result.fps - 60.0).abs() < 0.01);
         assert_eq!(result.frame_count, 3600);
@@ -1717,7 +1717,7 @@ mod tests {
             color_space: None,
             file_size: 93_750_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         assert!((result.fps - 120.0).abs() < 0.01);
         assert_eq!(result.frame_count, 3600);
@@ -1741,7 +1741,7 @@ mod tests {
             color_space: None,
             file_size: 60_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         assert!((result.fps - 29.97).abs() < 0.01);
     }
@@ -1764,7 +1764,7 @@ mod tests {
             color_space: None,
             file_size: 1_500_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(ffv1.codec_type, VideoCodecType::Lossless);
 
         let huffyuv = analyze_video_quality(VideoQualityInput {
@@ -1783,7 +1783,7 @@ mod tests {
             color_space: None,
             file_size: 2_250_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(huffyuv.codec_type, VideoCodecType::Lossless);
 
         let utvideo = analyze_video_quality(VideoQualityInput {
@@ -1802,7 +1802,7 @@ mod tests {
             color_space: None,
             file_size: 1_875_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(utvideo.codec_type, VideoCodecType::Lossless);
     }
 
@@ -1826,7 +1826,7 @@ mod tests {
                 color_space: None,
                 file_size: 60_000_000,
             })
-            .unwrap();
+            .unwrap_or_else(|e| panic!("{e}"));
             assert_eq!(
                 result.codec_type,
                 VideoCodecType::ModernEfficient,
@@ -1853,7 +1853,7 @@ mod tests {
             color_space: None,
             file_size: 1_125_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(prores.codec_type, VideoCodecType::Intermediate);
 
         let dnxhd = analyze_video_quality(VideoQualityInput {
@@ -1872,7 +1872,7 @@ mod tests {
             color_space: None,
             file_size: 900_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(dnxhd.codec_type, VideoCodecType::Intermediate);
     }
 
@@ -1894,7 +1894,7 @@ mod tests {
             color_space: None,
             file_size: 375_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(mjpeg.codec_type, VideoCodecType::Inefficient);
 
         let gif = analyze_video_quality(VideoQualityInput {
@@ -1913,7 +1913,7 @@ mod tests {
             color_space: None,
             file_size: 6_250_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(gif.codec_type, VideoCodecType::Inefficient);
     }
 
@@ -1935,7 +1935,7 @@ mod tests {
             color_space: None,
             file_size: 75_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         let without_vbr = analyze_video_quality(VideoQualityInput {
             codec: "h264",
@@ -1953,7 +1953,7 @@ mod tests {
             color_space: None,
             file_size: 75_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             with_vbr.confidence > without_vbr.confidence,
@@ -1981,7 +1981,7 @@ mod tests {
             color_space: None,
             file_size: 60_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         let without_gop = analyze_video_quality(VideoQualityInput {
             codec: "h264",
@@ -1999,7 +1999,7 @@ mod tests {
             color_space: None,
             file_size: 60_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             with_gop.confidence > without_gop.confidence,
@@ -2025,7 +2025,7 @@ mod tests {
             color_space: None,
             file_size: 120_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         let short = analyze_video_quality(VideoQualityInput {
             codec: "h264",
@@ -2043,7 +2043,7 @@ mod tests {
             color_space: None,
             file_size: 5_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             long.confidence >= short.confidence,
@@ -2069,14 +2069,14 @@ mod tests {
             color_space: Some("bt709"),
             file_size: 60_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         let qa = to_quality_analysis(&analysis);
 
         assert_eq!(qa.width, 1920);
         assert_eq!(qa.height, 1080);
-        assert!((qa.fps.unwrap() - 30.0).abs() < 0.01);
-        assert!((qa.duration_secs.unwrap() - 60.0).abs() < 0.01);
+        assert!((qa.fps.unwrap_or_else(|| panic!("missing fps")) - 30.0).abs() < 0.01);
+        assert!((qa.duration_secs.unwrap_or_else(|| panic!("missing duration")) - 60.0).abs() < 0.01);
         assert_eq!(qa.video_bitrate, Some(7_500_000));
     }
 
@@ -2098,7 +2098,7 @@ mod tests {
             color_space: Some("bt709"),
             file_size: 60_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         let result2 = analyze_video_quality(VideoQualityInput {
             codec: "h264",
@@ -2116,7 +2116,7 @@ mod tests {
             color_space: Some("bt709"),
             file_size: 60_000_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
             (result1.bpp - result2.bpp).abs() < 0.0001,
@@ -2153,7 +2153,7 @@ mod tests {
                 color_space: None,
                 file_size: bitrate * 60 / 8,
             })
-            .unwrap();
+            .unwrap_or_else(|e| panic!("{e}"));
 
             let expected = f64::from(u32::try_from(bitrate).unwrap_or(u32::MAX))
                 / (f64::from(w) * f64::from(h) * fps);
@@ -2195,7 +2195,7 @@ mod tests {
                 color_space: None,
                 file_size: 60_000_000,
             })
-            .unwrap();
+            .unwrap_or_else(|e| panic!("{e}"));
 
             assert_eq!(
                 result.frame_count, expected_frames,
@@ -2234,7 +2234,7 @@ mod tests {
                 color_space: None,
                 file_size: 60_000_000,
             })
-            .unwrap();
+            .unwrap_or_else(|e| panic!("{e}"));
 
             assert_eq!(
                 result.should_skip, expected_skip,
@@ -2270,7 +2270,7 @@ mod tests {
                 color_space: None,
                 file_size: 60_000_000,
             })
-            .unwrap();
+            .unwrap_or_else(|e| panic!("{e}"));
 
             assert!(
                 !result.should_skip,
@@ -2305,7 +2305,7 @@ mod tests {
             color_space: None,
             file_size: 7_500_000,
         })
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{e}"));
 
         assert_eq!(
             result.estimated_crf, 15,

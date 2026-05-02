@@ -905,7 +905,9 @@ fn calculate_entropy(img: &DynamicImage) -> f64 {
 
     let mut histogram = [0u64; 256];
     for &pixel in pixels {
-        histogram[usize::from(pixel)] += 1;
+        if let Some(h) = histogram.get_mut(usize::from(pixel)) {
+            *h += 1;
+        }
     }
 
     let total = crate::numeric_cast::usize_to_f64(pixels.len());
@@ -1104,7 +1106,7 @@ fn check_webp_animation(path: &Path) -> Result<bool> {
         let mut confirmed_frames = 0;
         let mut p = 0;
         while p + 8 < bytes.len() {
-            if &bytes[p..p + 4] == b"ANMF" {
+            if bytes.get(p..p + 4) == Some(b"ANMF") {
                 confirmed_frames += 1;
             }
             p += 1;
@@ -1138,8 +1140,8 @@ fn deep_research_gif_animation(bytes: &[u8], gce_hints: u32) -> bool {
     // GCE = [21 F9 04 ... 00]
     let mut confirmed = 0;
     let mut i = 0;
-    while i + 6 < bytes.len() {
-        if bytes[i..i + 3] == [0x21, 0xF9, 0x04] && bytes[i + 7] == 0x00 {
+    while i + 7 < bytes.len() {
+        if bytes.get(i..i + 3) == Some(&[0x21, 0xF9, 0x04]) && bytes.get(i + 7) == Some(&0x00) {
             confirmed += 1;
         }
         i += 1;
@@ -1155,7 +1157,7 @@ fn deep_research_png_animation(bytes: &[u8]) -> bool {
     let mut confirmed_fctl = 0;
     let mut i = 8; // skip signature
     while i + 8 < bytes.len() {
-        if &bytes[i + 4..i + 8] == b"fcTL" {
+        if bytes.get(i + 4..i + 8) == Some(b"fcTL") {
             confirmed_fctl += 1;
         }
         i += 1;
@@ -1305,13 +1307,13 @@ fn try_jxl_via_apng(path: &Path) -> Option<f32> {
     if probe_output.status.success() {
         let json_str = String::from_utf8_lossy(&probe_output.stdout);
         if let Ok(json) = serde_json::from_str::<serde_json::Value>(&json_str) {
-            if let Some(stream) = json["streams"].as_array().and_then(|s| s.first()) {
-                let nb_frames = stream["nb_read_frames"]
-                    .as_str()
+            if let Some(stream) = json.get("streams").and_then(|s| s.as_array()).and_then(|s| s.first()) {
+                let nb_frames = stream.get("nb_read_frames")
+                    .and_then(|v| v.as_str())
                     .and_then(|s| s.parse::<u64>().ok())
                     .unwrap_or(0);
 
-                let r_frame_rate = stream["r_frame_rate"].as_str().unwrap_or("0/1");
+                let r_frame_rate = stream.get("r_frame_rate").and_then(|v| v.as_str()).unwrap_or("0/1");
 
                 // Parse frame rate (format: "num/den")
                 let fps = if let Ok(rate) = crate::ffprobe::parse_frame_rate(r_frame_rate) {
@@ -1645,10 +1647,10 @@ fn pixel_fallback_lossless(path: &Path) -> bool {
 fn is_jxl_file(path: &Path) -> bool {
     // Rely strictly on magic bytes to avoid extension mismatch false positives
     if let Ok(bytes) = std::fs::read(path) {
-        if bytes.len() >= 2 && bytes[0] == 0xFF && bytes[1] == 0x0A {
+        if bytes.get(0..2) == Some(b"\xFF\x0A") {
             return true;
         }
-        if bytes.len() >= 12 && &bytes[4..8] == b"JXL " {
+        if bytes.len() >= 12 && bytes.get(4..8) == Some(b"JXL ") {
             return true;
         }
     }
@@ -1872,9 +1874,9 @@ fn parse_jxlinfo_output(output: &str) -> (u32, u32, bool, u8) {
         {
             let dims = dims.trim();
             let parts: Vec<&str> = dims.split('x').collect();
-            if parts.len() == 2 {
-                let w_str: String = parts[0].chars().filter(char::is_ascii_digit).collect();
-                let h_str: String = parts[1].chars().filter(char::is_ascii_digit).collect();
+            if let (Some(w_part), Some(h_part)) = (parts.first(), parts.get(1)) {
+                let w_str: String = w_part.chars().filter(char::is_ascii_digit).collect();
+                let h_str: String = h_part.chars().filter(char::is_ascii_digit).collect();
                 width = w_str.parse().unwrap_or(0);
                 height = h_str.parse().unwrap_or(0);
             }

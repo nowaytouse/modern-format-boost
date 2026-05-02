@@ -477,7 +477,7 @@ mod tests {
             eprintln!("ExifTool not available, skipping test");
             return;
         }
-        let _temp = TempDir::new().unwrap();
+        let _temp = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
         // ... (rest of test implementation)
     }
 
@@ -487,9 +487,9 @@ mod tests {
             eprintln!("ExifTool not available, skipping test");
             return;
         }
-        let temp = TempDir::new().unwrap();
+        let temp = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
         let complex_dir = temp.path().join("test dir/source/xiaohongshu");
-        fs::create_dir_all(&complex_dir).unwrap();
+        fs::create_dir_all(&complex_dir).unwrap_or_else(|e| panic!("error: {e:?}"));
 
         let src_path = complex_dir.join("src_image.png");
         let png_data = [
@@ -499,10 +499,10 @@ mod tests {
             0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xDD, 0x8D,
             0xB0, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
         ];
-        fs::write(&src_path, png_data).unwrap();
+        fs::write(&src_path, png_data).unwrap_or_else(|e| panic!("error: {e:?}"));
 
         let dst_path = complex_dir.join("dst_image.jpeg");
-        fs::write(&dst_path, png_data).unwrap();
+        fs::write(&dst_path, png_data).unwrap_or_else(|e| panic!("error: {e:?}"));
 
         let result = preserve_internal_metadata(&src_path, &dst_path);
 
@@ -520,7 +520,7 @@ mod tests {
         if !is_exiftool_available() {
             return;
         }
-        let temp = TempDir::new().unwrap();
+        let temp = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
         // Filename with % character that triggers interpolation if not escaped
         let src_path = temp.path().join("http%3A%2F%2Fimg.png");
         let png_data = [
@@ -530,10 +530,10 @@ mod tests {
             0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xDD, 0x8D,
             0xB0, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
         ];
-        fs::write(&src_path, png_data).unwrap();
+        fs::write(&src_path, png_data).unwrap_or_else(|e| panic!("error: {e:?}"));
 
         let dst_path = temp.path().join("output.png");
-        fs::write(&dst_path, png_data).unwrap();
+        fs::write(&dst_path, png_data).unwrap_or_else(|e| panic!("error: {e:?}"));
 
         let result = preserve_internal_metadata(&src_path, &dst_path);
 
@@ -559,16 +559,16 @@ mod tests {
         if !is_exiftool_available() {
             return;
         }
-        let temp = TempDir::new().unwrap();
+        let temp = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
         // Filename containing: URL encoded chars (%3A), Format strings (%d%f), and Shell-suspicious prefixes
         let evil_name = "http%3A%2F%2Ftest%d%f%e-@evil.jpg";
         let src_path = temp.path().join(evil_name);
 
         // Create an actual image file with these characters
-        fs::write(&src_path, [0xFF, 0xD8, 0xFF, 0xDB, 0x00, 0x00]).unwrap();
+        fs::write(&src_path, [0xFF, 0xD8, 0xFF, 0xDB, 0x00, 0x00]).unwrap_or_else(|e| panic!("error: {e:?}"));
 
         let dst_path = temp.path().join("output.jpg");
-        fs::write(&dst_path, [0xFF, 0xD8, 0xFF, 0xDB, 0x00, 0x00]).unwrap();
+        fs::write(&dst_path, [0xFF, 0xD8, 0xFF, 0xDB, 0x00, 0x00]).unwrap_or_else(|e| panic!("error: {e:?}"));
 
         let result = preserve_internal_metadata(&src_path, &dst_path);
 

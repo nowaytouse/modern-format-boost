@@ -164,7 +164,7 @@ mod tests {
 
     #[test]
     fn test_ssim_display_precision() {
-        let ssim = Ssim::new(0.123_456_789).unwrap();
+        let ssim = Ssim::new(0.123_456_789).unwrap_or_else(|e| panic!("error: {e:?}"));
         let display = ssim.display();
         assert_eq!(display, "0.123457");
         assert_eq!(display.len(), 8);
@@ -172,7 +172,7 @@ mod tests {
 
     #[test]
     fn test_ssim_meets_threshold() {
-        let ssim = Ssim::new(0.95).unwrap();
+        let ssim = Ssim::new(0.95).unwrap_or_else(|e| panic!("error: {e:?}"));
         assert!(ssim.meets_threshold(0.95));
         assert!(ssim.meets_threshold(0.94));
         assert!(!ssim.meets_threshold(0.96));
@@ -199,12 +199,12 @@ mod tests {
     #[test]
     fn test_ssim_quality_description() {
         assert_eq!(
-            Ssim::new(0.99).unwrap().quality_description(),
+            Ssim::new(0.99).unwrap_or_else(|e| panic!("error: {e:?}")).quality_description(),
             "Excellent (visually lossless)"
         );
-        assert_eq!(Ssim::new(0.95).unwrap().quality_description(), "Very Good");
-        assert_eq!(Ssim::new(0.90).unwrap().quality_description(), "Good");
-        assert_eq!(Ssim::new(0.80).unwrap().quality_description(), "Fair");
-        assert_eq!(Ssim::new(0.70).unwrap().quality_description(), "Poor");
+        assert_eq!(Ssim::new(0.95).unwrap_or_else(|e| panic!("error: {e:?}")).quality_description(), "Very Good");
+        assert_eq!(Ssim::new(0.90).unwrap_or_else(|e| panic!("error: {e:?}")).quality_description(), "Good");
+        assert_eq!(Ssim::new(0.80).unwrap_or_else(|e| panic!("error: {e:?}")).quality_description(), "Fair");
+        assert_eq!(Ssim::new(0.70).unwrap_or_else(|e| panic!("error: {e:?}")).quality_description(), "Poor");
     }
 }

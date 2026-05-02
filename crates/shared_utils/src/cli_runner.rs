@@ -232,7 +232,7 @@ where
     let total_files = files.len();
     let pause_controller = Arc::new(BatchPauseController::new());
     let fatal_stop = AtomicBool::new(false);
-    let progress_bar = Arc::new(crate::CoarseProgressBar::new(total_files as u64, "Running"));
+    let progress_bar = Arc::new(crate::CoarseProgressBar::new(crate::numeric_cast::usize_to_u64(total_files), "Running"));
     let thread_config = crate::thread_manager::get_balanced_thread_config(
         crate::thread_manager::WorkloadType::Video,
     );
@@ -310,7 +310,7 @@ where
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
                         .push((file.clone(), err.to_string()));
                     let current = processed.fetch_add(1, Ordering::Relaxed) + 1;
-                    progress_bar.set(current as u64);
+                    progress_bar.set(crate::numeric_cast::usize_to_u64(current));
                     return;
                 }
             };
@@ -333,7 +333,7 @@ where
                 }
                 skipped.fetch_add(1, Ordering::Relaxed);
                 let current = processed.fetch_add(1, Ordering::Relaxed) + 1;
-                progress_bar.set(current as u64);
+                progress_bar.set(crate::numeric_cast::usize_to_u64(current));
                 return;
             }
 
@@ -349,11 +349,11 @@ where
                     let current = processed.fetch_add(1, Ordering::Relaxed) + 1;
                     crate::progress_mode::write_progress_line_to_run_log(
                         start_time.elapsed().as_secs(),
-                        current as u64,
-                        total_files as u64,
+                        crate::numeric_cast::usize_to_u64(current),
+                        crate::numeric_cast::usize_to_u64(total_files),
                         &fixed.file_name().unwrap_or_default().to_string_lossy(),
                     );
-                    progress_bar.set(current as u64);
+                    progress_bar.set(crate::numeric_cast::usize_to_u64(current));
                     return;
                 }
             }
@@ -478,11 +478,11 @@ where
             let current = processed.fetch_add(1, Ordering::Relaxed) + 1;
             crate::progress_mode::write_progress_line_to_run_log(
                 start_time.elapsed().as_secs(),
-                current as u64,
-                total_files as u64,
+                crate::numeric_cast::usize_to_u64(current),
+                crate::numeric_cast::usize_to_u64(total_files),
                 &fixed.file_name().unwrap_or_default().to_string_lossy(),
             );
-            progress_bar.set(current as u64);
+            progress_bar.set(crate::numeric_cast::usize_to_u64(current));
         });
     });
 

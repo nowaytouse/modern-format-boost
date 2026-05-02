@@ -3,9 +3,9 @@ pub fn build_synthetic_animated_webp_without_vp8x_in_header() -> Vec<u8> {
     // Duration is a 24-bit little-endian integer at offset 12..15 in the ANMF payload.
     fn anmf_chunk(duration_ms: u32) -> Vec<u8> {
         let mut payload = vec![0u8; 16];
-        payload[12] = (duration_ms & 0xFF) as u8;
-        payload[13] = ((duration_ms >> 8) & 0xFF) as u8;
-        payload[14] = ((duration_ms >> 16) & 0xFF) as u8;
+        if let Some(b) = payload.get_mut(12) { *b = (duration_ms & 0xFF) as u8; }
+        if let Some(b) = payload.get_mut(13) { *b = ((duration_ms >> 8) & 0xFF) as u8; }
+        if let Some(b) = payload.get_mut(14) { *b = ((duration_ms >> 16) & 0xFF) as u8; }
         let mut out = Vec::new();
         out.extend_from_slice(b"ANMF");
         out.extend_from_slice(&u32::try_from(payload.len()).unwrap_or(0).to_le_bytes());

@@ -572,8 +572,8 @@ mod tests {
         let input_idx = args
             .iter()
             .position(|arg| arg == "--input")
-            .expect("x265 input arg should exist");
-        assert_eq!(args[input_idx + 1], "-");
+            .unwrap_or_else(|| panic!("x265 input arg should exist"));
+        assert_eq!(args.get(input_idx + 1).unwrap_or(&String::new()), "-");
     }
 
     #[test]
@@ -589,8 +589,8 @@ mod tests {
         let input_idx = args
             .iter()
             .position(|arg| arg == "--input")
-            .expect("x265 input arg should exist");
-        assert_eq!(args[input_idx + 1], "./-clip.y4m");
+            .unwrap_or_else(|| panic!("x265 input arg should exist"));
+        assert_eq!(args.get(input_idx + 1).unwrap_or(&String::new()), "./-clip.y4m");
     }
 }
 

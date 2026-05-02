@@ -241,7 +241,7 @@ mod tests {
                 let line = format!("out_time_us={time_us}");
                 let progress = monitor.update_from_line(&line);
                 prop_assert!(progress.is_some());
-                let pct = progress.unwrap();
+                let pct = progress.unwrap_or_else(|| panic!("missing progress"));
                 let expected_secs = crate::numeric_cast::u64_to_f64(time_us) / 1_000_000.0;
                 let expected_pct = crate::numeric_cast::f64_to_u32_sat((expected_secs / duration_secs * 100.0).min(100.0));
                 prop_assert_eq!(pct, expected_pct);

@@ -269,9 +269,9 @@ mod tests {
 
     #[test]
     fn test_crf_cache_key_round_trip() {
-        let original = Crf::<HevcEncoder>::new(23.5).unwrap();
+        let original = Crf::<HevcEncoder>::new(23.5).unwrap_or_else(|e| panic!("error: {e:?}"));
         let key = original.to_cache_key();
-        let recovered = Crf::<HevcEncoder>::from_cache_key(key).unwrap();
+        let recovered = Crf::<HevcEncoder>::from_cache_key(key).unwrap_or_else(|e| panic!("error: {e:?}"));
         assert!(original.approx_eq(&recovered));
     }
 
@@ -307,7 +307,7 @@ mod tests {
 
     #[test]
     fn test_crf_display() {
-        let crf = Crf::<HevcEncoder>::new(23.5).unwrap();
+        let crf = Crf::<HevcEncoder>::new(23.5).unwrap_or_else(|e| panic!("error: {e:?}"));
         assert_eq!(format!("{crf}"), "23.5");
         assert_eq!(format!("{crf:?}"), "Crf<HEVC>(23.50)");
     }

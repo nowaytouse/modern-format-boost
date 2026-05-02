@@ -613,23 +613,23 @@ mod tests {
 
     #[test]
     fn test_ensure_dir_exists() {
-        let temp = TempDir::new().unwrap();
+        let temp = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
         let nested = temp.path().join("a/b/c");
 
-        ensure_dir_exists(&nested).unwrap();
+        ensure_dir_exists(&nested).unwrap_or_else(|e| panic!("error: {e:?}"));
         assert!(nested.exists());
         assert!(nested.is_dir());
 
-        ensure_dir_exists(&nested).unwrap();
+        ensure_dir_exists(&nested).unwrap_or_else(|e| panic!("error: {e:?}"));
     }
 
     #[test]
     fn test_ensure_parent_dir_exists() {
-        let temp = TempDir::new().unwrap();
+        let temp = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
         let file_path = temp.path().join("a/b/c/file.txt");
 
-        ensure_parent_dir_exists(&file_path).unwrap();
-        assert!(file_path.parent().unwrap().exists());
+        ensure_parent_dir_exists(&file_path).unwrap_or_else(|e| panic!("error: {e:?}"));
+        assert!(file_path.parent().unwrap_or_else(|| panic!("missing parent")).exists());
     }
 
     #[test]
@@ -646,15 +646,15 @@ mod tests {
 
     #[test]
     fn test_copy_file_with_context() {
-        let temp = TempDir::new().unwrap();
+        let temp = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
         let source = temp.path().join("source.txt");
         let dest = temp.path().join("dest.txt");
 
-        fs::write(&source, "test content").unwrap();
+        fs::write(&source, "test content").unwrap_or_else(|e| panic!("error: {e:?}"));
 
-        let bytes = copy_file_with_context(&source, &dest).unwrap();
+        let bytes = copy_file_with_context(&source, &dest).unwrap_or_else(|e| panic!("error: {e:?}"));
         assert_eq!(bytes, 12);
-        assert_eq!(fs::read_to_string(&dest).unwrap(), "test content");
+        assert_eq!(fs::read_to_string(&dest).unwrap_or_else(|e| panic!("error: {e:?}")), "test content");
     }
 
     #[test]
@@ -724,7 +724,7 @@ mod tests {
         let mut cmd = Command::new("echo");
         cmd.arg("test");
 
-        let output = execute_command_with_logging(&mut cmd).unwrap();
+        let output = execute_command_with_logging(&mut cmd).unwrap_or_else(|e| panic!("error: {e:?}"));
         assert!(output.status.success());
 
         let stdout = String::from_utf8_lossy(&output.stdout);

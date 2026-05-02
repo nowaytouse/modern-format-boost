@@ -24,7 +24,7 @@ fn test_cjxl_grayscale_icc_fallback() {
             "test_grayscale_icc.png",
         ])
         .status()
-        .expect("magick failed to run");
+        .unwrap_or_else(|e| panic!("magick failed to run: {e:?}"));
     assert!(status.success());
 
     // 2. Assign an sRGB profile (RGB color space) to this grayscale image
@@ -58,7 +58,7 @@ fn test_cjxl_grayscale_icc_fallback() {
             let status = Command::new("jxlinfo")
                 .arg(output)
                 .status()
-                .expect("jxlinfo failed to run");
+                .unwrap_or_else(|e| panic!("jxlinfo failed to run: {e:?}"));
             assert!(status.success());
         }
         Err(e) => {

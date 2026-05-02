@@ -1067,61 +1067,61 @@ mod tests {
 
     #[test]
     fn test_find_xmp_files() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = TempDir::new().unwrap_or_else(|_| panic!("error"));
         let xmp1 = temp_dir.path().join("photo1.xmp");
         let xmp2 = temp_dir.path().join("photo2.jpg.xmp");
         let jpg = temp_dir.path().join("photo1.jpg");
 
-        fs::write(&xmp1, "").unwrap();
-        fs::write(&xmp2, "").unwrap();
-        fs::write(&jpg, "").unwrap();
+        fs::write(&xmp1, "").unwrap_or_else(|_| panic!("error"));
+        fs::write(&xmp2, "").unwrap_or_else(|_| panic!("error"));
+        fs::write(&jpg, "").unwrap_or_else(|_| panic!("error"));
 
         let merger = XmpMerger::new(XmpMergerConfig::default());
-        let xmp_files = merger.find_xmp_files(temp_dir.path()).unwrap();
+        let xmp_files = merger.find_xmp_files(temp_dir.path()).unwrap_or_else(|_| panic!("error"));
 
         assert_eq!(xmp_files.len(), 2);
     }
 
     #[test]
     fn test_direct_match_strategy() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = TempDir::new().unwrap_or_else(|_| panic!("error"));
         let jpg = temp_dir.path().join("photo.jpg");
         let xmp = temp_dir.path().join("photo.jpg.xmp");
 
-        fs::write(&jpg, "fake jpg").unwrap();
-        fs::write(&xmp, "fake xmp").unwrap();
+        fs::write(&jpg, "fake jpg").unwrap_or_else(|_| panic!("error"));
+        fs::write(&xmp, "fake xmp").unwrap_or_else(|_| panic!("error"));
 
         let _merger = XmpMerger::new(XmpMergerConfig::default());
         let result = XmpMerger::find_direct_match(&xmp);
 
         assert!(result.is_some());
-        assert_eq!(result.unwrap(), jpg);
+        assert_eq!(result.unwrap_or_else(|| panic!("error")), jpg);
     }
 
     #[test]
     fn test_same_name_different_ext_strategy() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = TempDir::new().unwrap_or_else(|_| panic!("error"));
         let jpg = temp_dir.path().join("photo.jpg");
         let xmp = temp_dir.path().join("photo.xmp");
 
-        fs::write(&jpg, "fake jpg").unwrap();
-        fs::write(&xmp, "fake xmp").unwrap();
+        fs::write(&jpg, "fake jpg").unwrap_or_else(|_| panic!("error"));
+        fs::write(&xmp, "fake xmp").unwrap_or_else(|_| panic!("error"));
 
         let merger = XmpMerger::new(XmpMergerConfig::default());
         let result = merger.find_same_name_different_ext(&xmp);
 
         assert!(result.is_some());
-        assert_eq!(result.unwrap(), jpg);
+        assert_eq!(result.unwrap_or_else(|| panic!("error")), jpg);
     }
 
     #[test]
     fn test_case_insensitive_match() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = TempDir::new().unwrap_or_else(|_| panic!("error"));
         let jpg = temp_dir.path().join("PHOTO.JPG");
         let xmp = temp_dir.path().join("photo.xmp");
 
-        fs::write(&jpg, "fake jpg").unwrap();
-        fs::write(&xmp, "fake xmp").unwrap();
+        fs::write(&jpg, "fake jpg").unwrap_or_else(|_| panic!("error"));
+        fs::write(&xmp, "fake xmp").unwrap_or_else(|_| panic!("error"));
 
         let merger = XmpMerger::new(XmpMergerConfig::default());
         let result = merger.find_case_insensitive(&xmp);
@@ -1131,12 +1131,12 @@ mod tests {
 
     #[test]
     fn test_fuzzy_match_special_chars() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = TempDir::new().unwrap_or_else(|_| panic!("error"));
         let jpg = temp_dir.path().join("photo (1).jpg");
         let xmp = temp_dir.path().join("photo(1).xmp");
 
-        fs::write(&jpg, "fake jpg").unwrap();
-        fs::write(&xmp, "fake xmp").unwrap();
+        fs::write(&jpg, "fake jpg").unwrap_or_else(|_| panic!("error"));
+        fs::write(&xmp, "fake xmp").unwrap_or_else(|_| panic!("error"));
 
         let merger = XmpMerger::new(XmpMergerConfig::default());
         let result = merger.find_fuzzy_match(&xmp);
@@ -1157,47 +1157,47 @@ mod tests {
 
     #[test]
     fn test_unicode_filename() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = TempDir::new().unwrap_or_else(|_| panic!("error"));
         let jpg = temp_dir.path().join("photo2024.jpg");
         let xmp = temp_dir.path().join("photo2024.xmp");
 
-        fs::write(&jpg, "fake jpg").unwrap();
-        fs::write(&xmp, "fake xmp").unwrap();
+        fs::write(&jpg, "fake jpg").unwrap_or_else(|_| panic!("error"));
+        fs::write(&xmp, "fake xmp").unwrap_or_else(|_| panic!("error"));
 
         let merger = XmpMerger::new(XmpMergerConfig::default());
         let result = merger.find_same_name_different_ext(&xmp);
 
         assert!(result.is_some());
-        assert_eq!(result.unwrap(), jpg);
+        assert_eq!(result.unwrap_or_else(|| panic!("error")), jpg);
     }
 
     #[test]
     fn test_spaces_in_filename() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = TempDir::new().unwrap_or_else(|_| panic!("error"));
         let jpg = temp_dir.path().join("my photo 2024.jpg");
         let xmp = temp_dir.path().join("my photo 2024.xmp");
 
-        fs::write(&jpg, "fake jpg").unwrap();
-        fs::write(&xmp, "fake xmp").unwrap();
+        fs::write(&jpg, "fake jpg").unwrap_or_else(|_| panic!("error"));
+        fs::write(&xmp, "fake xmp").unwrap_or_else(|_| panic!("error"));
 
         let merger = XmpMerger::new(XmpMergerConfig::default());
         let result = merger.find_same_name_different_ext(&xmp);
 
         assert!(result.is_some());
-        assert_eq!(result.unwrap(), jpg);
+        assert_eq!(result.unwrap_or_else(|| panic!("error")), jpg);
     }
 
     #[test]
     fn test_raw_format_match() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = TempDir::new().unwrap_or_else(|_| panic!("error"));
         let raw = temp_dir.path().join("DSC_0001.NEF");
         let xmp = temp_dir.path().join("DSC_0001.xmp");
 
-        fs::write(&raw, "fake raw").unwrap();
-        fs::write(&xmp, "fake xmp").unwrap();
+        fs::write(&raw, "fake raw").unwrap_or_else(|_| panic!("error"));
+        fs::write(&xmp, "fake xmp").unwrap_or_else(|_| panic!("error"));
 
         let merger = XmpMerger::new(XmpMergerConfig::default());
-        let (result, strategy) = merger.find_media_file(&xmp).unwrap();
+        let (result, strategy) = merger.find_media_file(&xmp).unwrap_or_else(|_| panic!("error"));
 
         assert!(result.is_some());
         assert!(strategy == "same_name" || strategy == "case_insensitive");
@@ -1210,7 +1210,7 @@ mod tests {
             return;
         }
 
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = TempDir::new().unwrap_or_else(|_| panic!("error"));
         let jpg_path = temp_dir.path().join("mismatch.jpg");
         let xmp_path = temp_dir.path().join("mismatch.xmp");
 
@@ -1221,7 +1221,7 @@ mod tests {
             0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xDD, 0x8D,
             0xB0, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
         ];
-        fs::write(&jpg_path, png_data).unwrap();
+        fs::write(&jpg_path, png_data).unwrap_or_else(|_| panic!("error"));
 
         let xmp_content = r"<?xpacket begin='﻿' id='W5M0MpCehiHzreSzNTczkc9d'?>
 <x:xmpmeta xmlns:x='adobe:ns:meta/' x:xmptk='Image::ExifTool 12.00'>
@@ -1237,7 +1237,7 @@ mod tests {
 </rdf:RDF>
 </x:xmpmeta>
 <?xpacket end='w'?>";
-        fs::write(&xmp_path, xmp_content).unwrap();
+        fs::write(&xmp_path, xmp_content).unwrap_or_else(|_| panic!("error"));
 
         let config = XmpMergerConfig {
             verbose: true,
@@ -1258,12 +1258,12 @@ mod tests {
 
     #[test]
     fn test_find_by_xmp_metadata_ignores_directory_candidate() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = TempDir::new().unwrap_or_else(|_| panic!("error"));
         let xmp_path = temp_dir.path().join("photo.xmp");
         let dir_candidate = temp_dir.path().join("photo.jpg");
 
-        fs::write(&xmp_path, "fake xmp").unwrap();
-        fs::create_dir(&dir_candidate).unwrap();
+        fs::write(&xmp_path, "fake xmp").unwrap_or_else(|_| panic!("error"));
+        fs::create_dir(&dir_candidate).unwrap_or_else(|_| panic!("error"));
 
         let xmp_info = XmpFile {
             path: xmp_path.clone(),
@@ -1278,16 +1278,16 @@ mod tests {
 
     #[test]
     fn test_merge_xmp_for_copied_file_ignores_directory_sidecar() {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = TempDir::new().unwrap_or_else(|_| panic!("error"));
         let input = temp_dir.path().join("photo.jpg");
         let dest = temp_dir.path().join("copy.jpg");
         let xmp_dir = temp_dir.path().join("photo.xmp");
 
-        fs::write(&input, "fake jpg").unwrap();
-        fs::write(&dest, "fake jpg").unwrap();
-        fs::create_dir(&xmp_dir).unwrap();
+        fs::write(&input, "fake jpg").unwrap_or_else(|_| panic!("error"));
+        fs::write(&dest, "fake jpg").unwrap_or_else(|_| panic!("error"));
+        fs::create_dir(&xmp_dir).unwrap_or_else(|_| panic!("error"));
 
-        let merged = merge_xmp_for_copied_file(&input, &dest).unwrap();
+        let merged = merge_xmp_for_copied_file(&input, &dest).unwrap_or_else(|_| panic!("error"));
         assert!(!merged);
     }
 
@@ -1298,11 +1298,11 @@ mod tests {
             return;
         }
 
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = TempDir::new().unwrap_or_else(|_| panic!("error"));
         let missing_xmp = temp_dir.path().join("missing.xmp");
         let _merger = XmpMerger::new(XmpMergerConfig::default());
 
-        let err = XmpMerger::extract_xmp_metadata(&missing_xmp).unwrap_err();
+        let err = XmpMerger::extract_xmp_metadata(&missing_xmp).err().unwrap_or_else(|| anyhow::anyhow!("unknown error"));
         assert!(err
             .to_string()
             .contains("ExifTool metadata extraction failed"));

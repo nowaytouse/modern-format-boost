@@ -56,24 +56,24 @@ fn manual_debug_jxl_explorer_uses_copies_only() {
         return;
     }
 
-    let temp = tempdir().expect("create temp dir for copied debug media");
+    let temp = tempdir().unwrap_or_else(|e| panic!("failed to create temp dir: {e:?}"));
     let input_dir = temp.path().join("inputs");
     let output_dir = temp.path().join("outputs");
     let mfb_home = temp.path().join("mfb_home");
-    fs::create_dir_all(&input_dir).expect("create copied-input dir");
-    fs::create_dir_all(&output_dir).expect("create output dir");
-    fs::create_dir_all(&mfb_home).expect("create isolated MFB home root");
+    fs::create_dir_all(&input_dir).unwrap_or_else(|e| panic!("failed to create inputs: {e:?}"));
+    fs::create_dir_all(&output_dir).unwrap_or_else(|e| panic!("failed to create outputs: {e:?}"));
+    fs::create_dir_all(&mfb_home).unwrap_or_else(|e| panic!("failed to create mfb_home: {e:?}"));
     std::env::set_var("MFB_HOME_ROOT", &mfb_home);
-    shared_utils::init_ghost_mode().expect("initialize MFB temp workspace for debug exploration");
+    shared_utils::init_ghost_mode().unwrap_or_else(|e| panic!("failed to init ghost mode: {e:?}"));
 
     let mut processed = 0usize;
 
     for sample in samples {
         let original_size = fs::metadata(&sample)
-            .expect("read original sample metadata")
+            .unwrap_or_else(|e| panic!("failed to read metadata: {e:?}"))
             .len();
-        let copied_input = input_dir.join(sample.file_name().expect("sample file name"));
-        fs::copy(&sample, &copied_input).expect("copy debug sample into temp workspace");
+        let copied_input = input_dir.join(sample.file_name().unwrap_or_else(|| panic!("missing file name")));
+        fs::copy(&sample, &copied_input).unwrap_or_else(|e| panic!("failed to copy: {e:?}"));
 
         let mut working_input = copied_input.clone();
         let ext = copied_input
@@ -91,14 +91,14 @@ fn manual_debug_jxl_explorer_uses_copies_only() {
                     .unwrap_or("sample")
             ));
             shared_utils::image_detection::open_image_with_limits(&copied_input)
-                .expect("decode copied JPEG for generated PNG fixture")
+                .unwrap_or_else(|e| panic!("failed to open image: {e:?}"))
                 .save(&generated_png)
-                .expect("save generated PNG fixture");
+                .unwrap_or_else(|e| panic!("failed to save png: {e:?}"));
             working_input = generated_png;
         }
 
         let analysis = shared_utils::image_analyzer::analyze_image(&working_input)
-            .expect("analyze working input");
+            .unwrap_or_else(|e| panic!("failed to analyze image: {e:?}"));
 
         let options = ConvertOptions {
             output_dir: Some(output_dir.clone()),
@@ -132,7 +132,7 @@ fn manual_debug_jxl_explorer_uses_copies_only() {
 
         assert_eq!(
             fs::metadata(&sample)
-                .expect("re-read original sample metadata after conversion")
+                .unwrap_or_else(|e| panic!("failed to re-read metadata: {e:?}"))
                 .len(),
             original_size,
             "original debug sample was modified: {}",

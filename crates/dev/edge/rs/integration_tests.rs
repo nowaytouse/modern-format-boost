@@ -63,7 +63,7 @@ mod integration_tests {
             manifest.display()
         );
 
-        let content = std::fs::read_to_string(&manifest).expect("Should read manifest");
+        let content = std::fs::read_to_string(&manifest).unwrap_or_else(|e| panic!("Should read manifest: {e:?}"));
 
         // Verify manifest contains specifications
         assert!(content.contains("H.264"), "Manifest should document H.264");

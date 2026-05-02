@@ -31,8 +31,8 @@ proptest! {
             chroma_subsampling,
         };
 
-        let serialized = serde_json::to_string(&meta).unwrap();
-        let deserialized: PrecisionMetadata = serde_json::from_str(&serialized).unwrap();
+        let serialized = serde_json::to_string(&meta).unwrap_or_else(|e| panic!("error: {e:?}"));
+        let deserialized: PrecisionMetadata = serde_json::from_str(&serialized).unwrap_or_else(|e| panic!("error: {e:?}"));
 
         prop_assert_eq!(meta.bit_depth, deserialized.bit_depth);
         prop_assert_eq!(meta.palette_size, deserialized.palette_size);

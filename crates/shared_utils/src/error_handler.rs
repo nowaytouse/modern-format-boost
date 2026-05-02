@@ -263,14 +263,14 @@ mod tests {
         let result: Result<i32, io::Error> = Ok(42);
         let with_context = add_context(result, "test operation");
         assert!(with_context.is_ok());
-        assert_eq!(with_context.unwrap(), 42);
+        assert_eq!(with_context.unwrap_or_else(|e| panic!("error: {e:?}")), 42);
 
         let result: Result<i32, io::Error> =
             Err(io::Error::new(io::ErrorKind::NotFound, "test error"));
         let with_context = add_context(result, "test operation");
         assert!(with_context.is_err());
 
-        let err_msg = format!("{}", with_context.unwrap_err());
+        let err_msg = format!("{}", with_context.err().unwrap_or_else(|| panic!("missing error")));
         assert!(err_msg.contains("test operation"));
     }
 
@@ -282,7 +282,7 @@ mod tests {
         let with_context = result.context_err("using ResultExt trait");
         assert!(with_context.is_err());
 
-        let err_msg = format!("{}", with_context.unwrap_err());
+        let err_msg = format!("{}", with_context.err().unwrap_or_else(|| panic!("missing error")));
         assert!(err_msg.contains("using ResultExt trait"));
     }
 

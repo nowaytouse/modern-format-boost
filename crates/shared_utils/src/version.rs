@@ -107,32 +107,20 @@ pub fn cache_algorithm_version() -> i32 {
 fn parse_version_to_code(version: &str, context: &str) -> i32 {
     let parts: Vec<&str> = version.split('.').collect();
 
-    let [major_str, minor_str, patch_str] = match parts[..] {
-        [maj, min, pat] => [maj, min, pat],
-        _ => panic!(
-            "FATAL [{context}]: Invalid version format: '{version}'. Expected format: 'major.minor.patch'"
-        ),
+    let [major_str, minor_str, patch_str] = parts[..] else {
+        panic!("FATAL [{context}]: Invalid version format: '{version}'. Expected format: 'major.minor.patch'");
     };
 
-    let major = major_str.parse::<i32>().unwrap_or_else(|e| {
-        panic!(
-            "FATAL [{}]: Failed to parse major version from '{}': {}",
-            context, major_str, e
-        );
+    let major: u32 = major_str.parse().unwrap_or_else(|e| {
+        panic!("FATAL [{context}]: Failed to parse major version from '{major_str}': {e}");
     });
 
-    let minor = minor_str.parse::<i32>().unwrap_or_else(|e| {
-        panic!(
-            "FATAL [{}]: Failed to parse minor version from '{}': {}",
-            context, minor_str, e
-        );
+    let minor: u32 = minor_str.parse().unwrap_or_else(|e| {
+        panic!("FATAL [{context}]: Failed to parse minor version from '{minor_str}': {e}");
     });
 
-    let patch = patch_str.parse::<i32>().unwrap_or_else(|e| {
-        panic!(
-            "FATAL [{}]: Failed to parse patch version from '{}': {}",
-            context, patch_str, e
-        );
+    let patch: u32 = patch_str.parse().unwrap_or_else(|e| {
+        panic!("FATAL [{context}]: Failed to parse patch version from '{patch_str}': {e}");
     });
 
     let version_code = major * 10000 + minor * 100 + patch;
@@ -144,7 +132,7 @@ fn parse_version_to_code(version: &str, context: &str) -> i32 {
         version
     );
 
-    version_code
+    crate::numeric_cast::u32_to_i32_sat(version_code)
 }
 
 /// 📋 Version Information - For display and debugging

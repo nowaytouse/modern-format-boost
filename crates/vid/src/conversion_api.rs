@@ -2412,7 +2412,7 @@ mod tests {
             tags: std::collections::HashMap::new(),
             ..Default::default()
         };
-        let crf = calculate_matched_crf(&det, &SelectedCodec::Hevc).unwrap();
+        let crf = calculate_matched_crf(&det, &SelectedCodec::Hevc).unwrap_or_else(|e| panic!("error: {e:?}"));
         assert!(
             (0.0..=35.0).contains(&crf),
             "CRF {crf:.1} should be in [0, 35]"
@@ -2468,7 +2468,7 @@ mod tests {
             tags: std::collections::HashMap::new(),
             ..Default::default()
         };
-        let crf = calculate_matched_crf(&det, &SelectedCodec::Hevc).unwrap();
+        let crf = calculate_matched_crf(&det, &SelectedCodec::Hevc).unwrap_or_else(|e| panic!("error: {e:?}"));
         assert!(
             (0.0..=22.0).contains(&crf),
             "High bitrate AV1 should get CRF <= 22, got {crf:.1}"
@@ -2699,7 +2699,7 @@ mod tests {
 
         // Verify the result
         assert!(hdr_x265_params_opt.is_some());
-        let final_params = hdr_x265_params_opt.unwrap();
+        let final_params = hdr_x265_params_opt.unwrap_or_else(|| panic!("missing params"));
         assert!(final_params.contains("hdr-opt=1"));
         assert!(final_params.contains("repeat-headers=1"));
         assert!(final_params.contains("dhdr10-info=/tmp/hdr10plus.json"));
@@ -2745,8 +2745,8 @@ mod tests {
     fn test_strategy_uses_current_input_path_for_native_gif_loop_intent() {
         use crate::detection_api::{CompressionType, DetectedCodec};
 
-        let mut gif = Builder::new().suffix(".gif").tempfile().unwrap();
-        gif.write_all(MINIMAL_TRANSPARENT_LOOP_GIF).unwrap();
+        let mut gif = Builder::new().suffix(".gif").tempfile().unwrap_or_else(|e| panic!("error: {e:?}"));
+        gif.write_all(MINIMAL_TRANSPARENT_LOOP_GIF).unwrap_or_else(|e| panic!("error: {e:?}"));
         let detection = crate::detection_api::VideoDetectionResult {
             file_path: "/stale/cache-hit.mp4".to_string(),
             format: "gif".into(),
@@ -2758,7 +2758,7 @@ mod tests {
             has_audio: false,
             frame_count: 2,
             fps: 10.0,
-            file_size: std::fs::metadata(gif.path()).unwrap().len(),
+            file_size: std::fs::metadata(gif.path()).unwrap_or_else(|e| panic!("error: {e:?}")).len(),
             ..Default::default()
         };
 
@@ -2782,8 +2782,8 @@ mod tests {
     fn test_strategy_uses_current_input_path_for_native_gif_loop_intent_apple_compat() {
         use crate::detection_api::{CompressionType, DetectedCodec};
 
-        let mut gif = Builder::new().suffix(".gif").tempfile().unwrap();
-        gif.write_all(MINIMAL_TRANSPARENT_LOOP_GIF).unwrap();
+        let mut gif = Builder::new().suffix(".gif").tempfile().unwrap_or_else(|e| panic!("error: {e:?}"));
+        gif.write_all(MINIMAL_TRANSPARENT_LOOP_GIF).unwrap_or_else(|e| panic!("error: {e:?}"));
         let detection = crate::detection_api::VideoDetectionResult {
             file_path: "/stale/cache-hit.mp4".to_string(),
             format: "gif".into(),
@@ -2795,7 +2795,7 @@ mod tests {
             has_audio: false,
             frame_count: 2,
             fps: 10.0,
-            file_size: std::fs::metadata(gif.path()).unwrap().len(),
+            file_size: std::fs::metadata(gif.path()).unwrap_or_else(|e| panic!("error: {e:?}")).len(),
             ..Default::default()
         };
 

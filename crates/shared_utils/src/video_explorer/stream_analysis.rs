@@ -441,17 +441,17 @@ mod tests {
     #[test]
     fn test_extract_ssim_value_typical() {
         let line = "SSIM Y:0.9876 U:0.9821 V:0.9790 All:0.9829";
-        assert!((extract_ssim_value(line, "Y:").unwrap() - 0.9876).abs() < 1e-4);
-        assert!((extract_ssim_value(line, "U:").unwrap() - 0.9821).abs() < 1e-4);
-        assert!((extract_ssim_value(line, "V:").unwrap() - 0.9790).abs() < 1e-4);
-        assert!((extract_ssim_value(line, "All:").unwrap() - 0.9829).abs() < 1e-4);
+        assert!((extract_ssim_value(line, "Y:").unwrap_or_else(|| panic!("missing ssim value")) - 0.9876).abs() < 1e-4);
+        assert!((extract_ssim_value(line, "U:").unwrap_or_else(|| panic!("missing ssim value")) - 0.9821).abs() < 1e-4);
+        assert!((extract_ssim_value(line, "V:").unwrap_or_else(|| panic!("missing ssim value")) - 0.9790).abs() < 1e-4);
+        assert!((extract_ssim_value(line, "All:").unwrap_or_else(|| panic!("missing ssim value")) - 0.9829).abs() < 1e-4);
     }
 
     #[test]
     fn test_extract_ssim_value_inf() {
         let line = "SSIM Y:inf U:inf V:inf All:inf";
-        assert!((extract_ssim_value(line, "Y:").unwrap() - 1.0).abs() < f64::EPSILON);
-        assert!((extract_ssim_value(line, "All:").unwrap() - 1.0).abs() < f64::EPSILON);
+        assert!((extract_ssim_value(line, "Y:").unwrap_or_else(|| panic!("missing ssim value")) - 1.0).abs() < f64::EPSILON);
+        assert!((extract_ssim_value(line, "All:").unwrap_or_else(|| panic!("missing ssim value")) - 1.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -463,7 +463,7 @@ mod tests {
     #[test]
     fn test_extract_ssim_value_perfect() {
         let line = "SSIM Y:1.000000 All:1.000000";
-        assert!((extract_ssim_value(line, "Y:").unwrap() - 1.0).abs() < 1e-6);
+        assert!((extract_ssim_value(line, "Y:").unwrap_or_else(|| panic!("missing ssim value")) - 1.0).abs() < 1e-6);
     }
 
     // ── parse_ssim_from_output ────────────────────────────────────────────
@@ -474,7 +474,7 @@ mod tests {
             "[Parsed_ssim_0 @ 0x1234] SSIM Y:0.9876 U:0.9821 V:0.9790 All:0.9829 (21.667260)\n";
         let result = parse_ssim_from_output(stderr);
         assert!(result.is_some());
-        assert!((result.unwrap() - 0.9829).abs() < 1e-4);
+        assert!((result.unwrap_or_else(|| panic!("missing ssim value")) - 0.9829).abs() < 1e-4);
     }
 
     #[test]
@@ -482,7 +482,7 @@ mod tests {
         let stderr = "SSIM Y:inf U:inf V:inf All:inf\n";
         let result = parse_ssim_from_output(stderr);
         assert!(result.is_some());
-        assert!((result.unwrap() - 1.0).abs() < f64::EPSILON);
+        assert!((result.unwrap_or_else(|| panic!("missing ssim value")) - 1.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -494,7 +494,7 @@ mod tests {
         );
         let result = parse_ssim_from_output(stderr);
         assert!(result.is_some());
-        assert!((result.unwrap() - 0.94).abs() < 1e-4);
+        assert!((result.unwrap_or_else(|| panic!("missing ssim value")) - 0.94).abs() < 1e-4);
     }
 
     #[test]

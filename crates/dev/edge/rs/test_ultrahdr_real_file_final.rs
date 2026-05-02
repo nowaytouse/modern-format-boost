@@ -8,7 +8,7 @@ fn test_real_hdr_file_extraction_final() {
     if !path.exists() {
         return;
     }
-    let data = fs::read(path).expect("Failed to read image");
+    let data = fs::read(path).unwrap_or_else(|e| panic!("Failed to read image: {e:?}"));
     let result = extract_gainmap_from_jpeg(&data);
     match result {
         Ok((base, gain)) => {

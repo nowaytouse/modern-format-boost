@@ -200,43 +200,43 @@ mod tests {
 
     #[test]
     fn test_smart_copy_preserves_structure() {
-        let temp = TempDir::new().unwrap();
+        let temp = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
         let base = temp.path().join("input");
         let output = temp.path().join("output");
 
-        fs::create_dir_all(base.join("photos/2024")).unwrap();
+        fs::create_dir_all(base.join("photos/2024")).unwrap_or_else(|e| panic!("error: {e:?}"));
         let source = base.join("photos/2024/test.txt");
-        fs::write(&source, "test").unwrap();
+        fs::write(&source, "test").unwrap_or_else(|e| panic!("error: {e:?}"));
 
-        let dest = smart_copy_with_structure(&source, &output, Some(&base), false).unwrap();
+        let dest = smart_copy_with_structure(&source, &output, Some(&base), false).unwrap_or_else(|e| panic!("error: {e:?}"));
 
         assert_eq!(dest, output.join("photos/2024/test.txt"));
         assert!(dest.exists());
-        assert_eq!(fs::read_to_string(&dest).unwrap(), "test");
+        assert_eq!(fs::read_to_string(&dest).unwrap_or_else(|e| panic!("error: {e:?}")), "test");
     }
 
     #[test]
     fn test_copy_on_skip_with_none() {
-        let temp = TempDir::new().unwrap();
+        let temp = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
         let source = temp.path().join("test.txt");
-        fs::write(&source, "test").unwrap();
+        fs::write(&source, "test").unwrap_or_else(|e| panic!("error: {e:?}"));
 
-        let result = copy_on_skip_or_fail(&source, None, None, false).unwrap();
+        let result = copy_on_skip_or_fail(&source, None, None, false).unwrap_or_else(|e| panic!("error: {e:?}"));
         assert!(result.is_none());
     }
 
     /// Content is video (MP4 ftyp+isom) but extension was wrong → corrected to .mp4.
     #[test]
     fn test_fix_extension_video_content_wrong_ext() {
-        let temp = TempDir::new().unwrap();
+        let temp = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
         // File named .jpg but content is MP4 (ftyp box, isom brand)
         let wrong_ext = temp.path().join("video.jpg");
         let mut header = [0u8; 32];
         header[4..8].copy_from_slice(b"ftyp");
         header[8..12].copy_from_slice(b"isom");
-        fs::write(&wrong_ext, header).unwrap();
+        fs::write(&wrong_ext, header).unwrap_or_else(|e| panic!("error: {e:?}"));
 
-        let fixed = fix_extension_if_mismatch(&wrong_ext).unwrap();
+        let fixed = fix_extension_if_mismatch(&wrong_ext).unwrap_or_else(|e| panic!("error: {e:?}"));
         assert_eq!(fixed.extension().and_then(|e| e.to_str()), Some("mp4"));
         assert!(fixed.exists());
         assert!(!wrong_ext.exists());
