@@ -18,7 +18,7 @@ pub use detection_api::{
 };
 pub use ffprobe::{probe_video, FFprobeResult};
 pub use shared_utils::conversion_types::{
-    ConversionConfig, ConversionOutput, ConversionStrategy, TargetVideoFormat,
+    ConfigFlags, ConversionConfig, ConversionOutput, ConversionStrategy, TargetVideoFormat,
 };
 
 pub use shared_utils::unified_error::{Result, VidQualityError};

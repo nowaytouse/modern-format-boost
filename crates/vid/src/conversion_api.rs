@@ -15,25 +15,24 @@ use tracing::{info, warn};
 fn convert_options_from_config(
     config: &ConversionConfig,
 ) -> shared_utils::conversion::ConvertOptions {
-    shared_utils::conversion::ConvertOptions {
-        force: config.force,
-        output_dir: config.output_dir.clone(),
-        base_dir: config.base_dir.clone(),
-        delete_original: config.delete_original,
-        in_place: config.in_place,
-        explore: config.explore_smaller,
-        match_quality: config.match_quality,
-        apple_compat: config.apple_compat,
-        compress: config.require_compression,
-        use_gpu: config.use_gpu,
-        ultimate: config.ultimate_mode,
-        allow_size_tolerance: config.allow_size_tolerance,
-        verbose: false,
-        child_threads: config.child_threads,
-        input_format: None,
-        quality_label: None,
-        codec: config.codec,
-    }
+    let mut opts = shared_utils::conversion::ConvertOptions::default();
+    opts.output_dir = config.output_dir.clone();
+    opts.base_dir = config.base_dir.clone();
+    opts.child_threads = config.child_threads;
+    opts.codec = config.codec;
+    
+    opts.flags.set(shared_utils::conversion::ConvertFlags::FORCE, config.force());
+    opts.flags.set(shared_utils::conversion::ConvertFlags::DELETE_ORIGINAL, config.delete_original());
+    opts.flags.set(shared_utils::conversion::ConvertFlags::IN_PLACE, config.in_place());
+    opts.flags.set(shared_utils::conversion::ConvertFlags::EXPLORE, config.explore_smaller());
+    opts.flags.set(shared_utils::conversion::ConvertFlags::MATCH_QUALITY, config.match_quality());
+    opts.flags.set(shared_utils::conversion::ConvertFlags::APPLE_COMPAT, config.apple_compat());
+    opts.flags.set(shared_utils::conversion::ConvertFlags::COMPRESS, config.require_compression());
+    opts.flags.set(shared_utils::conversion::ConvertFlags::USE_GPU, config.use_gpu());
+    opts.flags.set(shared_utils::conversion::ConvertFlags::ULTIMATE, config.ultimate_mode());
+    opts.flags.set(shared_utils::conversion::ConvertFlags::ALLOW_SIZE_TOLERANCE, config.allow_size_tolerance());
+    
+    opts
 }
 
 fn cleanup_output_file(path: &Path, context: &str) {
@@ -668,7 +667,7 @@ pub fn auto_convert_with_cache(
     let _log_guard = shared_utils::progress_mode::LogContextGuard;
 
     // Skip Live Photos in Apple compat mode
-    if config.apple_compat && shared_utils::is_live_photo(input) {
+    if config.apple_compat() && shared_utils::is_live_photo(input) {
         let reason = "Live Photo detected in Apple compat mode";
         shared_utils::progress_mode::video_skipped(reason);
 
@@ -783,8 +782,8 @@ pub fn auto_convert_with_cache(
     let strategy = determine_strategy_with_apple_compat(
         &detection,
         input,
-        config.apple_compat,
-        config.force,
+        config.apple_compat(),
+        config.force(),
         config.codec,
     );
 
@@ -798,7 +797,7 @@ pub fn auto_convert_with_cache(
     );
 
     // Enforcement check: if strategy resulted in skip due to AV1/Apple-compat conflict
-    if config.codec == SelectedCodec::Av1 && config.apple_compat {
+    if config.codec == SelectedCodec::Av1 && config.apple_compat() {
         info!("   ❌ Error: AV1 strategy does not support Apple compatibility.");
         info!("      Tip: remove --apple-compat or change codec to hevc.");
         std::process::exit(1);
@@ -859,7 +858,7 @@ pub fn auto_convert_with_cache(
     let source_is_gif = input_ext.eq_ignore_ascii_case("gif");
 
     let output_path = if input_ext.eq_ignore_ascii_case(target_ext)
-        || (config.apple_compat && input_ext.eq_ignore_ascii_case("mov"))
+        || (config.apple_compat() && input_ext.eq_ignore_ascii_case("mov"))
     {
         output_dir.join(format!("{stem}_hevc.{target_ext}"))
     } else {
@@ -872,7 +871,7 @@ pub fn auto_convert_with_cache(
     shared_utils::path_validator::check_input_output_conflict(input, &output_path)
         .map_err(|e| VidQualityError::ConversionError(e.to_string()))?;
 
-    if output_path.exists() && !config.force {
+    if output_path.exists() && !config.force() {
         shared_utils::progress_mode::video_skipped(&format!(
             "Output exists: {}",
             output_path.display()
@@ -913,8 +912,8 @@ pub fn auto_convert_with_cache(
                 &temp_path,
                 config.child_threads,
                 config.codec,
-                config.apple_compat,
-                config.ultimate_mode,
+                config.apple_compat(),
+                config.ultimate_mode(),
             )?;
             (size, 0.0, 0, None)
         }
@@ -967,7 +966,7 @@ pub fn auto_convert_with_cache(
             });
         }
         TargetVideoFormat::HevcMov | TargetVideoFormat::HevcMp4 | TargetVideoFormat::Av1Mp4 => {
-            if config.use_lossless {
+            if config.use_lossless() {
                 info!(
                     "   🚀 Using {} Lossless Mode (forced)",
                     config.codec.as_str().to_uppercase()
@@ -977,8 +976,8 @@ pub fn auto_convert_with_cache(
                     &temp_path,
                     config.child_threads,
                     config.codec,
-                    config.apple_compat,
-                    config.ultimate_mode,
+                    config.apple_compat(),
+                    config.ultimate_mode(),
                 )?;
                 (size, 0.0, 0, None)
             } else {
@@ -998,14 +997,14 @@ pub fn auto_convert_with_cache(
 
                 let flag_mode =
                     shared_utils::validate_flags_result_with_ultimate(shared_utils::FlagRequest {
-                        explore: config.explore_smaller,
-                        match_quality: config.match_quality,
-                        compress: config.require_compression,
-                        ultimate: config.ultimate_mode,
+                        explore: config.explore_smaller(),
+                        match_quality: config.match_quality(),
+                        compress: config.require_compression(),
+                        ultimate: config.ultimate_mode(),
                     })
                     .map_err(VidQualityError::ConversionError)?;
 
-                let use_gpu = config.use_gpu;
+                let use_gpu = config.use_gpu();
                 if !use_gpu {
                     let encoder_name = match config.codec {
                         SelectedCodec::Hevc => "libx265",
@@ -1105,19 +1104,19 @@ pub fn auto_convert_with_cache(
 
                 let explore_result = match config.codec {
                     SelectedCodec::Hevc => {
-                        shared_utils::explore_hevc_with_gpu(shared_utils::GpuSearchRequest {
+                        shared_utils::explore_hevc_with_gpu(&shared_utils::GpuSearchRequest {
                             input: input.to_path_buf(),
                             output: temp_path.clone(),
                             vf_args,
                             baseline_crf: predicted_crf,
                             warm_start_crf,
                             ultimate_mode: ultimate,
-                            force_ms_ssim_long: config.force_ms_ssim_long,
-                            allow_size_tolerance: config.allow_size_tolerance,
+                            force_ms_ssim_long: config.force_ms_ssim_long(),
+                            allow_size_tolerance: config.allow_size_tolerance(),
                             min_ssim: config.min_ssim,
                             max_threads: config.child_threads,
                             hdr_x265_params: hdr_x265_params_opt,
-                            apple_compat: config.apple_compat,
+                            apple_compat: config.apple_compat(),
                             preset: if ultimate {
                                 shared_utils::EncoderPreset::Slower
                             } else {
@@ -1126,19 +1125,19 @@ pub fn auto_convert_with_cache(
                         })
                     }
                     SelectedCodec::Av1 => {
-                        shared_utils::explore_av1_with_gpu(shared_utils::GpuSearchRequest {
+                        shared_utils::explore_av1_with_gpu(&shared_utils::GpuSearchRequest {
                             input: input.to_path_buf(),
                             output: temp_path.clone(),
                             vf_args,
                             baseline_crf: predicted_crf,
                             warm_start_crf,
                             ultimate_mode: ultimate,
-                            force_ms_ssim_long: config.force_ms_ssim_long,
-                            allow_size_tolerance: config.allow_size_tolerance,
+                            force_ms_ssim_long: config.force_ms_ssim_long(),
+                            allow_size_tolerance: config.allow_size_tolerance(),
                             min_ssim: config.min_ssim,
                             max_threads: config.child_threads,
                             hdr_x265_params: None,
-                            apple_compat: config.apple_compat,
+                            apple_compat: config.apple_compat(),
                             preset: if ultimate {
                                 shared_utils::EncoderPreset::Slower
                             } else {
@@ -1155,7 +1154,7 @@ pub fn auto_convert_with_cache(
 
                 // --- Explore phase: quality/SSIM or size did not meet target; decide whether to keep or discard output. ---
                 if !explore_result.quality_passed.is_passed()
-                    && (config.match_quality || config.explore_smaller)
+                    && (config.match_quality() || config.explore_smaller())
                 {
                     let total_file_compressed = explore_result.output_size < detection.file_size;
                     let total_size_ratio = if detection.file_size > 0 {
@@ -1166,7 +1165,7 @@ pub fn auto_convert_with_cache(
                     };
                     let decision = ExploreQualityFailureDecision::inspect_and_log(
                         &explore_result,
-                        config.ultimate_mode,
+                        config.ultimate_mode(),
                     );
                     decision.emit();
 
@@ -1176,8 +1175,8 @@ pub fn auto_convert_with_cache(
                             codec_str: detection.codec.as_str(),
                             total_file_compressed,
                             total_size_ratio,
-                            allow_size_tolerance: config.allow_size_tolerance,
-                            apple_compat: config.apple_compat,
+                            allow_size_tolerance: config.allow_size_tolerance(),
+                            apple_compat: config.apple_compat(),
                             source_is_gif,
                         },
                     ) {
@@ -1185,14 +1184,14 @@ pub fn auto_convert_with_cache(
                         shared_utils::conversion::commit_temp_to_output_with_metadata(
                             &temp_path,
                             &output_path,
-                            config.force,
+                            config.force(),
                             Some(input),
                         )?;
                         return Ok(ConversionOutput {
                             input_path: input.display().to_string(),
                             output_path: output_path.display().to_string(),
                             strategy: ConversionStrategy {
-                                target: hevc_delivery_target(config.apple_compat),
+                                target: hevc_delivery_target(config.apple_compat()),
                                 reason: "Apple compat fallback: best-effort HEVC kept (quality/size below target)".to_string(),
                                 command: String::new(),
                                 preserve_audio: detection.has_audio,
@@ -1300,7 +1299,7 @@ pub fn auto_convert_with_cache(
     if !shared_utils::conversion::commit_temp_to_output_with_metadata(
         &temp_path,
         &output_path,
-        config.force,
+        config.force(),
         Some(input),
     )
     .map_err(|e| {
@@ -1330,10 +1329,10 @@ pub fn auto_convert_with_cache(
     if let Some(ref result) = explore_result_opt {
         if result.ms_ssim_passed.is_failed() {
             let decision =
-                FinalQualityGateFailureDecision::inspect_and_log(result, config.ultimate_mode);
+                FinalQualityGateFailureDecision::inspect_and_log(result, config.ultimate_mode());
 
             // Only keep best-effort HEVC when source is Apple-incompatible (AV1/VP9/VVC/AV2).
-            if config.apple_compat
+            if config.apple_compat()
                 && !source_is_gif
                 && shared_utils::is_apple_incompatible_video_codec(detection.codec.as_str())
             {
@@ -1347,7 +1346,7 @@ pub fn auto_convert_with_cache(
                     input_path: input.display().to_string(),
                     output_path: output_path.display().to_string(),
                     strategy: ConversionStrategy {
-                        target: hevc_delivery_target(config.apple_compat),
+                        target: hevc_delivery_target(config.apple_compat()),
                         reason: "Apple compat fallback: best-effort HEVC kept (quality below target)".to_string(),
                         command: String::new(),
                         preserve_audio: detection.has_audio,
@@ -1408,7 +1407,7 @@ pub fn auto_convert_with_cache(
     let verify_result = shared_utils::verify_pure_media_compression(
         &input_stream_info,
         &output_stream_info,
-        config.allow_size_tolerance,
+        config.allow_size_tolerance(),
     );
 
     if metadata_delta > 0 || output_stream_info.container_overhead > 10000 {
@@ -1427,7 +1426,7 @@ pub fn auto_convert_with_cache(
     } else {
         1.0
     };
-    let total_within_tolerance = if config.allow_size_tolerance {
+    let total_within_tolerance = if config.allow_size_tolerance() {
         // Allow up to standard tolerance increase for container overhead
         actual_output_size
             <= detection
@@ -1438,7 +1437,7 @@ pub fn auto_convert_with_cache(
     };
 
     // --- require_compression phase: primary decision by total file size. ---
-    if config.require_compression && !total_within_tolerance {
+    if config.require_compression() && !total_within_tolerance {
         warn!("   ⚠️  COMPRESSION FAILED (total file comparison):");
         warn!(
             "   ⚠️  Total file: {} → {} ({:+.1}%)",
@@ -1461,8 +1460,8 @@ pub fn auto_convert_with_cache(
                 codec_str: detection.codec.as_str(),
                 total_file_compressed,
                 total_size_ratio,
-                allow_size_tolerance: config.allow_size_tolerance,
-                apple_compat: config.apple_compat,
+                allow_size_tolerance: config.allow_size_tolerance(),
+                apple_compat: config.apple_compat(),
                 source_is_gif,
             },
         ) {
@@ -1476,7 +1475,7 @@ pub fn auto_convert_with_cache(
                 input_path: input.display().to_string(),
                 output_path: output_path.display().to_string(),
                 strategy: ConversionStrategy {
-                    target: hevc_delivery_target(config.apple_compat),
+                    target: hevc_delivery_target(config.apple_compat()),
                     reason: "Apple compat fallback: best-effort HEVC kept (compression check failed)".to_string(),
                     command: String::new(),
                     preserve_audio: detection.has_audio,
@@ -1916,7 +1915,7 @@ mod tests {
     #[test]
     fn test_config_default_apple_compat() {
         let config = ConversionConfig::default();
-        assert!(!config.apple_compat, "Default apple_compat should be false");
+        assert!(!config.apple_compat(), "Default apple_compat should be false");
     }
 
     #[test]

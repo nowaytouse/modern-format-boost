@@ -68,6 +68,9 @@ flate2   = "1.1.9"
 # Signal handling
 ctrlc = "3.5.2"
 
+# Flags and Enums
+bitflags = { version = "2.8.0", features = ["serde"] }
+
 # Randomization
 rand = "0.10"
 
@@ -102,3 +105,37 @@ strip          = "symbols"
 
 [profile.dev]
 opt-level = 0
+
+
+[patch.crates-io]
+# Core libs from GitHub
+anyhow = { git = "https://github.com/dtolnay/anyhow.git" }
+thiserror = { git = "https://github.com/dtolnay/thiserror.git" }
+tracing = { git = "https://github.com/tokio-rs/tracing.git" }
+tracing-core = { git = "https://github.com/tokio-rs/tracing.git" }
+tracing-attributes = { git = "https://github.com/tokio-rs/tracing.git" }
+serde = { git = "https://github.com/serde-rs/serde.git" }
+serde_core = { git = "https://github.com/serde-rs/serde.git" }
+serde_derive = { git = "https://github.com/serde-rs/serde.git" }
+serde_json = { git = "https://github.com/serde-rs/json.git" }
+rayon = { git = "https://github.com/rayon-rs/rayon.git" }
+rayon-core = { git = "https://github.com/rayon-rs/rayon.git" }
+image = { git = "https://github.com/image-rs/image.git" }
+clap = { git = "https://github.com/clap-rs/clap.git" }
+indicatif = { git = "https://github.com/console-rs/indicatif.git" }
+
+# Media & Build libs
+libheif-sys = { git = "https://github.com/Cykooz/libheif-sys.git", rev = "fd2073e1a3211a17a5480f5c6a636384f7680b74" }
+libheif-rs = { git = "https://github.com/Cykooz/libheif-rs.git", rev = "0f614ab5f6677a57af4a8aa6e4f43b69e937ef13" }
+
+# Misc libs
+walkdir = { git = "https://github.com/BurntSushi/walkdir.git" }
+filetime = { git = "https://github.com/alexcrichton/filetime.git" }
+libc = { git = "https://github.com/rust-lang/libc.git" }
+log = { git = "https://github.com/rust-lang/log.git" }
+console = { git = "https://github.com/console-rs/console.git" }
+chrono = { git = "https://github.com/chronotope/chrono.git" }
+tempfile = { git = "https://github.com/Stebalien/tempfile.git" }
+ctrlc = { git = "https://github.com/Detegr/rust-ctrlc.git" }
+flate2 = { git = "https://github.com/rust-lang/flate2-rs.git" }
+rmp-serde = { git = "https://github.com/3Hren/msgpack-rust.git" }

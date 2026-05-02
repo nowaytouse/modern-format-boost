@@ -18,7 +18,7 @@ use std::path::Path;
 pub use shared_utils::conversion::{
     check_size_tolerance, clear_processed_list, determine_output_path_with_base,
     finalize_conversion, format_size_change, is_already_processed, load_processed_list,
-    mark_as_processed, save_processed_list, ConversionResult, ConvertOptions,
+    mark_as_processed, save_processed_list, ConversionResult, ConvertFlags, ConvertOptions,
 };
 
 fn copy_original_on_skip(input: &Path, options: &ConvertOptions) -> Option<std::path::PathBuf> {
@@ -26,7 +26,7 @@ fn copy_original_on_skip(input: &Path, options: &ConvertOptions) -> Option<std::
         input,
         options.output_dir.as_deref(),
         options.base_dir.as_deref(),
-        options.verbose,
+        options.verbose(),
     )
     .unwrap_or_default()
 }
@@ -73,7 +73,7 @@ fn finalize_with_size_check(
     if !shared_utils::conversion::commit_temp_to_output_with_metadata(
         temp_output,
         output,
-        options.force,
+        options.force(),
         Some(input),
     )? {
         return Ok(ConversionResult::skipped_exists(input, output));
@@ -146,14 +146,14 @@ pub fn convert_heic_gainmap_to_jxl(
         return Err(ImgQualityError::ConversionError(e));
     }
 
-    if !options.force && is_already_processed(input) {
+    if !options.force() && is_already_processed(input) {
         return Ok(ConversionResult::skipped_duplicate(input));
     }
 
     let input_size = fs::metadata(input)?.len();
     let output = get_output_path(input, "jxl", options)?;
 
-    if output.exists() && !options.force {
+    if output.exists() && !options.force() {
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
@@ -167,9 +167,9 @@ pub fn convert_heic_gainmap_to_jxl(
     shared_utils::hdr_synthesis::convert_heic_with_gainmap_to_jxl_hdr(
         input,
         &temp_output,
-        options.apple_compat,
+        options.apple_compat(),
         intermediate_format,
-        options.ultimate,
+        options.ultimate(),
     )
     .map_err(|e| {
         let msg = format!("☢️ HDR Synthesis Failure: {e}");
@@ -220,14 +220,14 @@ pub fn convert_ultrahdr_jpeg_to_jxl(
         return Err(ImgQualityError::ConversionError(e));
     }
 
-    if !options.force && is_already_processed(input) {
+    if !options.force() && is_already_processed(input) {
         return Ok(ConversionResult::skipped_duplicate(input));
     }
 
     let input_size = fs::metadata(input)?.len();
     let output = get_output_path(input, "jxl", options)?;
 
-    if output.exists() && !options.force {
+    if output.exists() && !options.force() {
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
@@ -238,9 +238,9 @@ pub fn convert_ultrahdr_jpeg_to_jxl(
     shared_utils::hdr_synthesis::convert_ultrahdr_jpeg_to_jxl_hdr(
         input,
         &temp_output,
-        options.apple_compat,
+        options.apple_compat(),
         shared_utils::hdr_synthesis::HdrIntermediateFormat::Png16,
-        options.ultimate,
+        options.ultimate(),
     )
     .map_err(|e| {
         let msg = format!("☢️ UltraHDR Synthesis Failure: {e}");
@@ -327,7 +327,7 @@ pub fn convert_to_jxl(
         return Err(ImgQualityError::ConversionError(e));
     }
 
-    if !options.force && is_already_processed(input) {
+    if !options.force() && is_already_processed(input) {
         return Ok(ConversionResult::skipped_duplicate(input));
     }
 
@@ -337,7 +337,7 @@ pub fn convert_to_jxl(
         if ext.to_string_lossy().to_lowercase() == "png"
             && input_size < crate::constants::SMALL_PNG_THRESHOLD_BYTES
         {
-            if options.verbose {
+            if options.verbose() {
                 eprintln!("⏭️  Skipped small PNG (< 500KB): {}", input.display());
             }
             copy_original_on_skip(input, options);
@@ -356,7 +356,7 @@ pub fn convert_to_jxl(
         fs::create_dir_all(parent)?;
     }
 
-    if output.exists() && !options.force {
+    if output.exists() && !options.force() {
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
@@ -383,9 +383,9 @@ pub fn convert_to_jxl(
         "Encoding JXL: calculating parameters"
     );
 
-    let actual_dist = shared_utils::constants::jxl_distance_for_mode(distance, options.ultimate);
-    let is_extreme_explore = options.ultimate && options.explore;
-    let actual_eff = jxl_screening_effort(options.ultimate, options.explore);
+    let actual_dist = shared_utils::constants::jxl_distance_for_mode(distance, options.ultimate());
+    let is_extreme_explore = options.ultimate() && options.explore();
+    let actual_eff = jxl_screening_effort(options.ultimate(), options.explore());
 
     let mut builder = shared_utils::CjxlBuilder::new();
     builder
@@ -394,13 +394,13 @@ pub fn convert_to_jxl(
         .distance(actual_dist)
         .effort(actual_eff)
         .threads(max_threads)
-        .apple_compat(options.apple_compat);
+        .apple_compat(options.apple_compat());
 
     // Add HDR metadata via CICP if available
     if let Some(hdr) = hdr_info {
         if let Some(cicp) = shared_utils::color_info_to_cicp(hdr) {
             builder.cicp(&cicp);
-            if options.verbose {
+            if options.verbose() {
                 eprintln!("   🌈 HDR detected: applying CICP {cicp}");
             }
         }
@@ -410,7 +410,7 @@ pub fn convert_to_jxl(
         builder.icc_profile(icc);
     }
 
-    if options.verbose {
+    if options.verbose() {
         eprintln!(
             "   🔧 Executing: cjxl -d {:.2} -e {} -j {} {} {}",
             actual_dist,
@@ -444,7 +444,7 @@ pub fn convert_to_jxl(
                     .distance(actual_dist)
                     .effort(actual_eff)
                     .threads(max_threads)
-                    .apple_compat(options.apple_compat);
+                    .apple_compat(options.apple_compat());
 
                 if let Some(hdr) = hdr_info {
                     if let Some(cicp) = shared_utils::color_info_to_cicp(hdr) {
@@ -494,7 +494,7 @@ pub fn convert_to_jxl(
                         &temp_output,
                         actual_dist,
                         max_threads,
-                        options.apple_compat,
+                        options.apple_compat(),
                         actual_eff,
                     )
                     .is_ok()
@@ -508,7 +508,7 @@ pub fn convert_to_jxl(
                         if !shared_utils::conversion::commit_temp_to_output_with_metadata(
                             &temp_output,
                             &output,
-                            options.force,
+                            options.force(),
                             Some(input),
                         )? {
                             return Ok(ConversionResult::skipped_exists(input, &output));
@@ -569,7 +569,7 @@ pub fn convert_to_jxl(
                                 .distance(actual_dist)
                                 .effort(actual_eff)
                                 .threads(max_threads)
-                                .apple_compat(options.apple_compat);
+                                .apple_compat(options.apple_compat());
 
                             let cjxl_result = cjxl_builder
                                 .build()
@@ -738,7 +738,7 @@ pub fn convert_to_jxl(
                                         &temp_output,
                                         actual_dist,
                                         max_threads,
-                                        options.apple_compat,
+                                        options.apple_compat(),
                                         actual_eff,
                                     )
                                     .is_ok()
@@ -771,7 +771,7 @@ pub fn convert_to_jxl(
                                         &temp_output,
                                         actual_dist,
                                         max_threads,
-                                        options.apple_compat,
+                                        options.apple_compat(),
                                         actual_eff,
                                     )
                                     .is_ok()
@@ -806,7 +806,7 @@ pub fn convert_to_jxl(
                                 &temp_output,
                                 actual_dist,
                                 max_threads,
-                                options.apple_compat,
+                                options.apple_compat(),
                                 actual_eff,
                             )
                             .is_ok()
@@ -837,7 +837,7 @@ pub fn convert_to_jxl(
                             &temp_output,
                             actual_dist,
                             max_threads,
-                            options.apple_compat,
+                            options.apple_compat(),
                             actual_eff,
                         )
                         .is_ok()
@@ -946,10 +946,10 @@ fn run_cjxl_jpeg_transcode(
         .output(temp_output)
         .lossless_jpeg(true)
         .effort(shared_utils::constants::jxl_effort_for_mode(
-            options.ultimate,
+            options.ultimate(),
         ))
         .threads(max_threads)
-        .apple_compat(options.apple_compat);
+        .apple_compat(options.apple_compat());
 
     if let Some(v) = allow_jpeg_reconstruction {
         builder.allow_jpeg_reconstruction(v != 0);
@@ -1030,7 +1030,7 @@ pub fn convert_jpeg_to_jxl(
         return Err(ImgQualityError::ConversionError(e));
     }
 
-    if !options.force && is_already_processed(input) {
+    if !options.force() && is_already_processed(input) {
         return Ok(ConversionResult::skipped_duplicate(input));
     }
 
@@ -1068,7 +1068,7 @@ pub fn convert_jpeg_to_jxl(
     let input_size = fs::metadata(input)?.len();
     let output = get_output_path(input, "jxl", options)?;
 
-    if output.exists() && !options.force {
+    if output.exists() && !options.force() {
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
@@ -1106,7 +1106,7 @@ pub fn convert_jpeg_to_jxl(
         let (source_to_use, _guard): (std::path::PathBuf, Option<tempfile::NamedTempFile>) =
             match shared_utils::jxl_utils::strip_jpeg_tail_to_temp(input) {
                 Ok(Some((cleaned, guard))) => {
-                    if options.verbose {
+                    if options.verbose() {
                         eprintln!("   🔧 Stripped JPEG tail; retrying with original cjxl flags");
                     }
                     (cleaned, Some(guard))
@@ -1189,8 +1189,8 @@ pub fn convert_jpeg_to_jxl(
             &temp_output,
             0.0,
             max_threads,
-            options.apple_compat,
-            options.ultimate,
+            options.apple_compat(),
+            options.ultimate(),
         ) {
             Ok(()) => commit_jpeg_to_jxl_success(
                 input,
@@ -1213,8 +1213,8 @@ pub fn convert_jpeg_to_jxl(
             &temp_output,
             0.0,
             max_threads,
-            options.apple_compat,
-            options.ultimate,
+            options.apple_compat(),
+            options.ultimate(),
         ) {
             Ok(()) => commit_jpeg_to_jxl_success(
                 input,
@@ -1261,14 +1261,14 @@ pub fn convert_to_avif(
         return Err(ImgQualityError::ConversionError(e));
     }
 
-    if !options.force && is_already_processed(input) {
+    if !options.force() && is_already_processed(input) {
         return Ok(ConversionResult::skipped_duplicate(input));
     }
 
     let input_size = fs::metadata(input)?.len();
     let output = get_output_path(input, "avif", options)?;
 
-    if output.exists() && !options.force {
+    if output.exists() && !options.force() {
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
@@ -1335,18 +1335,18 @@ pub fn convert_to_avif_lossless(
         return Err(ImgQualityError::ConversionError(e));
     }
 
-    if options.verbose {
+    if options.verbose() {
         eprintln!("⚠️  Mathematical lossless AVIF encoding - this will be SLOW!");
     }
 
-    if !options.force && is_already_processed(input) {
+    if !options.force() && is_already_processed(input) {
         return Ok(ConversionResult::skipped_duplicate(input));
     }
 
     let input_size = fs::metadata(input)?.len();
     let output = get_output_path(input, "avif", options)?;
 
-    if output.exists() && !options.force {
+    if output.exists() && !options.force() {
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
@@ -1450,7 +1450,7 @@ pub fn convert_to_jxl_matched(
         return Err(ImgQualityError::ConversionError(e));
     }
 
-    if !options.force && is_already_processed(input) {
+    if !options.force() && is_already_processed(input) {
         return Ok(ConversionResult::skipped_duplicate(input));
     }
 
@@ -1461,7 +1461,7 @@ pub fn convert_to_jxl_matched(
         fs::create_dir_all(parent)?;
     }
 
-    if output.exists() && !options.force {
+    if output.exists() && !options.force() {
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
@@ -1477,8 +1477,8 @@ pub fn convert_to_jxl_matched(
         shared_utils::thread_manager::get_optimal_threads()
     };
 
-    let actual_dist = shared_utils::constants::jxl_distance_for_mode(distance, options.ultimate);
-    let actual_eff = shared_utils::constants::jxl_effort_for_mode(options.ultimate);
+    let actual_dist = shared_utils::constants::jxl_distance_for_mode(distance, options.ultimate());
+    let actual_eff = shared_utils::constants::jxl_effort_for_mode(options.ultimate());
 
     let mut builder = shared_utils::CjxlBuilder::new();
     builder
@@ -1487,7 +1487,7 @@ pub fn convert_to_jxl_matched(
         .distance(actual_dist)
         .effort(actual_eff)
         .threads(max_threads)
-        .apple_compat(options.apple_compat);
+        .apple_compat(options.apple_compat());
 
     tracing::debug!(
         file = %input.display(),
@@ -1774,7 +1774,7 @@ fn try_explore_ultimate_jxl_distance(
                 distance,
                 screening_effort,
                 max_threads,
-                options.apple_compat,
+                options.apple_compat(),
                 icc_path,
                 hdr_info,
                 "Screening probe",
@@ -1822,7 +1822,7 @@ fn try_explore_ultimate_jxl_distance(
             finalist.distance,
             final_effort,
             max_threads,
-            options.apple_compat,
+            options.apple_compat(),
             icc_path,
             hdr_info,
             "Finalist encode",
@@ -1938,7 +1938,7 @@ fn try_explore_ultimate_jxl_distance(
                 candidate_distance,
                 final_effort,
                 max_threads,
-                options.apple_compat,
+                options.apple_compat(),
                 icc_path,
                 hdr_info,
                 "Continued exploration",
@@ -2077,7 +2077,7 @@ fn prepare_input_for_cjxl(
             let ext_lower = ext.to_lowercase();
             if ext_lower == "exr" || ext_lower == "hdr" {
                 is_float = true;
-                if options.verbose {
+                if options.verbose() {
                     tracing::warn!(input = %input.display(), "ffprobe float detection failed, using extension hint (EXR/HDR)");
                 }
             }
@@ -2094,7 +2094,7 @@ fn prepare_input_for_cjxl(
             let ext_lower = ext.to_lowercase();
             if ext_lower == "tif" || ext_lower == "tiff" || ext_lower == "dng" {
                 bit_depth = Some(16); // Safe assumption for these pro formats
-                if options.verbose {
+                if options.verbose() {
                     tracing::warn!(input = %input.display(), "ffprobe bit-depth detection failed, using extension hint (16-bit TIFF/DNG)");
                 }
             }
@@ -2110,13 +2110,13 @@ fn prepare_input_for_cjxl(
     };
     let intermediate_suffix = if is_float { ".exr" } else { ".png" };
 
-    if is_float && options.verbose {
+    if is_float && options.verbose() {
         use console::style;
         eprintln!(
             "   {} Source is 32-bit float (HDR), using OpenEXR intermediate format",
             style("🚀").cyan().bold()
         );
-    } else if is_high_bit_depth && options.verbose {
+    } else if is_high_bit_depth && options.verbose() {
         use console::style;
         eprintln!(
             "   {} Source is {}-bit, using 16-bit intermediate format",
@@ -2306,7 +2306,7 @@ fn prepare_input_for_cjxl(
             }
             let out = builder.build().output().map_err(ImgQualityError::IoError)?;
             if out.status.success() && temp_path.exists() {
-                if options.verbose {
+                if options.verbose() {
                     eprintln!("   ✅ TIFF detected, using ImageMagick to emit {label}");
                 }
                 Ok((temp_path, Some(temp_file)))
@@ -2341,7 +2341,7 @@ fn prepare_input_for_cjxl(
             }
             let out = builder.build().output().map_err(ImgQualityError::IoError)?;
             if out.status.success() && temp_path.exists() {
-                if options.verbose {
+                if options.verbose() {
                     eprintln!("   ✅ BMP detected, using ImageMagick to emit {label}");
                 }
                 Ok((temp_path, Some(temp_file)))

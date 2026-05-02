@@ -5,8 +5,8 @@ use tracing::info;
 use shared_utils::analysis_cache::AnalysisCache;
 use shared_utils::conversion_types::SelectedCodec;
 use vid::{
-    auto_convert_with_cache, detect_video, determine_strategy_with_apple_compat, ConversionConfig,
-    VidQualityError,
+    auto_convert_with_cache, detect_video, determine_strategy_with_apple_compat, ConfigFlags,
+    ConversionConfig, VidQualityError,
 };
 
 #[derive(Parser)]
@@ -192,23 +192,26 @@ fn main() -> anyhow::Result<()> {
             let config = ConversionConfig {
                 output_dir: output.clone(),
                 base_dir: base_dir.clone(),
-                force,
-                delete_original,
-                explore_smaller: explore,
-                use_lossless: false,
-                match_quality,
-                in_place,
-                apple_compat,
-                require_compression: compress,
-                use_gpu: true,
+                flags: {
+                    let mut f = ConfigFlags::empty();
+                    f.set(ConfigFlags::FORCE, force);
+                    f.set(ConfigFlags::DELETE_ORIGINAL, delete_original);
+                    f.set(ConfigFlags::EXPLORE_SMALLER, explore);
+                    f.set(ConfigFlags::MATCH_QUALITY, match_quality);
+                    f.set(ConfigFlags::IN_PLACE, in_place);
+                    f.set(ConfigFlags::APPLE_COMPAT, apple_compat);
+                    f.set(ConfigFlags::REQUIRE_COMPRESSION, compress);
+                    f.set(ConfigFlags::USE_GPU, true);
+                    f.set(ConfigFlags::FORCE_MS_SSIM_LONG, force_ms_ssim_long);
+                    f.set(ConfigFlags::ULTIMATE_MODE, ultimate);
+                    f.set(ConfigFlags::ALLOW_SIZE_TOLERANCE, allow_size_tolerance);
+                    f
+                },
                 min_ssim: 0.95,
-                force_ms_ssim_long,
-                ultimate_mode: ultimate,
                 child_threads: shared_utils::thread_manager::get_balanced_thread_config(
                     shared_utils::thread_manager::WorkloadType::Video,
                 )
                 .child_threads,
-                allow_size_tolerance,
                 codec: selected_codec,
             };
 

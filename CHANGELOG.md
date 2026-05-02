@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+### 📐 Configuration Refactor & Memory Optimization (2026-05-02)
+
+- **Bitflags-based Configuration System**: 
+  - Refactored `ConversionConfig` and `ConvertOptions` from multiple boolean fields to a centralized `bitflags` architecture across the entire workspace.
+  - **Memory Efficiency**: Reduced configuration memory footprint by packing boolean flags into bitsets.
+  - **Clippy Compliance**: Resolved several `clippy::too_many_arguments` and `clippy::type_complexity` warnings related to large struct definitions and function signatures.
+  - **API Standardization**: Implemented consistent accessor methods (e.g., `.force()`, `.apple_compat()`) to maintain a clean and semantic API while encapsulating bitwise logic.
+  - **Crate-specific Alignment**: Updated `shared_utils`, `vid`, and `img` crates to align with the new configuration patterns, including fixing missing dependencies and export paths.
+
 ### 🛡️ Security Audit & Supply Chain Hardening (2026-05-02)
 
 - **PyPI `lightning` Attack Response**: 

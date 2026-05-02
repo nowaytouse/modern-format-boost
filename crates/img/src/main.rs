@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use rug::Rational;
 
-use img::{calculate_psnr, calculate_ssim, psnr_quality_description, ssim_quality_description};
+use img::{calculate_psnr, calculate_ssim, psnr_quality_description, ssim_quality_description, ConfigFlags, ConvertFlags};
 use shared_utils::analysis_cache::AnalysisCache;
 use shared_utils::modern_ui::{colors, symbols};
 use shared_utils::quality_matcher::SourceCodec;
@@ -311,13 +311,17 @@ fn main() -> anyhow::Result<()> {
             let config = AutoConvertConfig {
                 output_dir: output,
                 base_dir,
-                force,
-                delete_original: should_delete,
+                flags: {
+                    let mut f = ConfigFlags::empty();
+                    f.set(ConfigFlags::FORCE, force);
+                    f.set(ConfigFlags::DELETE_ORIGINAL, should_delete);
+                    f.set(ConfigFlags::COMPRESS, compress);
+                    f.set(ConfigFlags::APPLE_COMPAT, apple_compat);
+                    f
+                },
                 in_place,
                 explore,
                 match_quality,
-                compress,
-                apple_compat,
                 use_gpu: true,
                 ultimate,
                 allow_size_tolerance,
@@ -598,13 +602,10 @@ fn load_image_safe(path: &std::path::Path) -> anyhow::Result<image::DynamicImage
 struct AutoConvertConfig {
     output_dir: Option<PathBuf>,
     base_dir: Option<PathBuf>,
-    force: bool,
-    delete_original: bool,
+    flags: ConfigFlags,
     in_place: bool,
     explore: bool,
     match_quality: bool,
-    compress: bool,
-    apple_compat: bool,
     use_gpu: bool,
     ultimate: bool,
     allow_size_tolerance: bool,
@@ -784,19 +785,23 @@ fn auto_convert_single_file(
     let quality_label = analysis.quality_summary();
 
     let options = ConvertOptions {
-        force: config.force,
         output_dir: config.output_dir.clone(),
         base_dir: config.base_dir.clone(),
-        delete_original: config.delete_original,
-        in_place: config.in_place,
-        explore: config.explore,
-        match_quality: config.match_quality,
-        compress: config.compress,
-        apple_compat: config.apple_compat,
-        use_gpu: config.use_gpu,
-        ultimate: config.ultimate,
-        allow_size_tolerance: config.allow_size_tolerance,
-        verbose: config.verbose,
+        flags: {
+            let mut f = ConvertFlags::empty();
+            f.set(ConvertFlags::FORCE, config.flags.contains(ConfigFlags::FORCE));
+            f.set(ConvertFlags::DELETE_ORIGINAL, config.flags.contains(ConfigFlags::DELETE_ORIGINAL));
+            f.set(ConvertFlags::IN_PLACE, config.in_place);
+            f.set(ConvertFlags::EXPLORE, config.explore);
+            f.set(ConvertFlags::MATCH_QUALITY, config.match_quality);
+            f.set(ConvertFlags::COMPRESS, config.flags.contains(ConfigFlags::COMPRESS));
+            f.set(ConvertFlags::APPLE_COMPAT, config.flags.contains(ConfigFlags::APPLE_COMPAT));
+            f.set(ConvertFlags::USE_GPU, config.use_gpu);
+            f.set(ConvertFlags::ULTIMATE, config.ultimate);
+            f.set(ConvertFlags::ALLOW_SIZE_TOLERANCE, config.allow_size_tolerance);
+            f.set(ConvertFlags::VERBOSE, config.verbose);
+            f
+        },
         child_threads: if config.child_threads > 0 {
             config.child_threads
         } else {
@@ -936,7 +941,7 @@ fn auto_convert_directory(
         }
     }
 
-    if config.delete_original || config.in_place {
+    if config.flags.contains(ConfigFlags::DELETE_ORIGINAL) || config.in_place {
         if let Err(e) = check_dangerous_directory(input) {
             eprintln!("{e}");
             std::process::exit(1);

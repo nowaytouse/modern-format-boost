@@ -658,12 +658,12 @@ fn skipped_static_animated(input: &Path, options: &ConvertOptions) -> Conversion
 /// Returns an error if the conversion fails or input is malformed.
 pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<ConversionResult> {
     use shared_utils::conversion_types::SelectedCodec;
-    if !options.force && is_already_processed(input) {
+    if !options.force() && is_already_processed(input) {
         return Ok(skipped_already_processed(input, options));
     }
 
     if is_static_animated_image(input) {
-        if options.verbose {
+        if options.verbose() {
             eprintln!(
                 "   ⏭️  Detected static animated image (1 frame), skipping video conversion: {}",
                 input.display()
@@ -691,18 +691,18 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
         .map(str::to_lowercase)
         .unwrap_or_default();
 
-    let ext = if options.apple_compat { "MOV" } else { "MP4" };
+    let ext = if options.apple_compat() { "MOV" } else { "MP4" };
     let output = get_output_path(input, ext, options)?;
 
     tracing::debug!(
         input = ?input.file_name().unwrap_or_default(),
         input_ext,
-        apple_compat = options.apple_compat,
+        apple_compat = options.apple_compat(),
         target_ext = %ext,
         "Starting animated image to video conversion"
     );
 
-    if output.exists() && !options.force {
+    if output.exists() && !options.force() {
         return Ok(skipped_output_exists(input, &output, input_size));
     }
 
@@ -716,7 +716,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
     // We must use webpmux to extract frames and create APNG with correct timing.
     let (actual_input, temp_apng_file): (std::path::PathBuf, Option<tempfile::NamedTempFile>) =
         if input_ext == "jxl" {
-            if options.verbose {
+            if options.verbose() {
                 eprintln!("   🔧 Detected JXL format, pre-converting to APNG (FFmpeg's jpegxl_anim decoder is incomplete)");
             }
 
@@ -747,7 +747,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
 
             match djxl_result {
                 Ok(output) if output.status.success() && temp_apng_path.exists() => {
-                    if options.verbose {
+                    if options.verbose() {
                         shared_utils::progress_mode::emit_stderr(
                             "   ✅ JXL → APNG conversion successful",
                         );
@@ -765,7 +765,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
                 }
             }
         } else if input_ext == shared_utils::constants::EXT_WEBP {
-            if options.verbose {
+            if options.verbose() {
                 eprintln!("   🔧 Detected WebP format, extracting frames with webpmux");
             }
 
@@ -790,7 +790,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
             let temp_apng_path = temp_apng.path().to_path_buf();
 
             // Extract WebP frames and create APNG with correct timing
-            match extract_webp_to_apng(input, &temp_apng_path, options.verbose) {
+            match extract_webp_to_apng(input, &temp_apng_path, options.verbose()) {
                 Ok(()) => (temp_apng_path, Some(temp_apng)),
                 Err(e) => {
                     tracing::warn!(input = %input.display(), error = %e, "WebP extraction failed");
@@ -805,7 +805,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
         } else if input_ext == shared_utils::constants::EXT_AVIF
             && has_probable_avif_alpha_stream(input)
         {
-            if options.verbose {
+            if options.verbose() {
                 eprintln!("   🔧 Detected AVIF auxiliary alpha stream, pre-converting to APNG");
             }
             let temp_apng = tempfile::Builder::new().suffix(".apng").tempfile()?;
@@ -855,7 +855,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
     let (v_codec, v_tag, codec_params_flag, codec_params) = match options.codec {
         SelectedCodec::Hevc => (
             shared_utils::constants::FFMPEG_ENCODER_X265,
-            if options.apple_compat {
+            if options.apple_compat() {
                 shared_utils::constants::FFMPEG_TAG_HVC1
             } else {
                 shared_utils::constants::FFMPEG_TAG_HEV1
@@ -903,7 +903,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
         .arg(shared_utils::constants::FFMPEG_ARG_PRESET)
         .arg(match options.codec {
             SelectedCodec::Hevc => {
-                if options.ultimate {
+                if options.ultimate() {
                     shared_utils::constants::FFMPEG_PRESET_SLOWER
                 } else {
                     shared_utils::constants::FFMPEG_PRESET_MEDIUM
@@ -945,7 +945,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
             if !shared_utils::conversion::commit_temp_to_output_with_metadata(
                 &temp_output,
                 &output,
-                options.force,
+                options.force(),
                 Some(input),
             )? {
                 return Ok(skipped_output_exists(input, &output, input_size));
@@ -1015,12 +1015,12 @@ pub fn convert_to_mp4_matched(
     has_alpha: bool,
 ) -> Result<ConversionResult> {
     use shared_utils::conversion_types::SelectedCodec;
-    if !options.force && is_already_processed(input) {
+    if !options.force() && is_already_processed(input) {
         return Ok(skipped_already_processed(input, options));
     }
 
     if is_static_animated_image(input) {
-        if options.verbose {
+        if options.verbose() {
             eprintln!(
                 "   ⏭️  Detected static animated image (1 frame), skipping video conversion: {}",
                 input.display()
@@ -1048,10 +1048,10 @@ pub fn convert_to_mp4_matched(
         .map(str::to_lowercase)
         .unwrap_or_default();
 
-    let ext = if options.apple_compat { "MOV" } else { "MP4" };
+    let ext = if options.apple_compat() { "MOV" } else { "MP4" };
     let output = get_output_path(input, ext, options)?;
 
-    if output.exists() && !options.force {
+    if output.exists() && !options.force() {
         return Ok(skipped_output_exists(input, &output, input_size));
     }
 
@@ -1062,7 +1062,7 @@ pub fn convert_to_mp4_matched(
     // Special handling for animated JXL/WebP: pre-convert to APNG
     let (actual_input, temp_apng_file): (std::path::PathBuf, Option<tempfile::NamedTempFile>) =
         if input_ext == "jxl" {
-            if options.verbose {
+            if options.verbose() {
                 eprintln!("   🔧 Detected JXL format, pre-converting to APNG (FFmpeg's jpegxl_anim decoder is incomplete)");
             }
             if which::which("djxl").is_err() {
@@ -1086,7 +1086,7 @@ pub fn convert_to_mp4_matched(
             let djxl_result = builder.build().output();
             match djxl_result {
                 Ok(output) if output.status.success() && temp_apng_path.exists() => {
-                    if options.verbose {
+                    if options.verbose() {
                         shared_utils::progress_mode::emit_stderr(
                             "   ✅ JXL → APNG conversion successful",
                         );
@@ -1104,7 +1104,7 @@ pub fn convert_to_mp4_matched(
                 }
             }
         } else if input_ext == shared_utils::constants::EXT_WEBP {
-            if options.verbose {
+            if options.verbose() {
                 eprintln!("   🔧 Detected WebP format, extracting frames with webpmux");
             }
 
@@ -1129,7 +1129,7 @@ pub fn convert_to_mp4_matched(
             let temp_apng_path = temp_apng.path().to_path_buf();
 
             // Extract WebP frames and create APNG with correct timing
-            match extract_webp_to_apng(input, &temp_apng_path, options.verbose) {
+            match extract_webp_to_apng(input, &temp_apng_path, options.verbose()) {
                 Ok(()) => (temp_apng_path, Some(temp_apng)),
                 Err(e) => {
                     tracing::warn!(input = %input.display(), error = %e, "WebP extraction failed");
@@ -1152,7 +1152,7 @@ pub fn convert_to_mp4_matched(
             let out = builder.build().output();
             out.is_ok_and(|o| String::from_utf8_lossy(&o.stdout).lines().count() > 1)
         } {
-            if options.verbose {
+            if options.verbose() {
                 eprintln!("   🔧 Detected transparent AVIF format, pre-converting to APNG to retain alpha explicitly");
             }
             let temp_apng = tempfile::Builder::new().suffix(".apng").tempfile()?;
@@ -1200,7 +1200,7 @@ pub fn convert_to_mp4_matched(
                     .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).lines().count() > 1);
 
                 if has_multiple_streams && probe.stream_index > 0 {
-                    if options.verbose {
+                    if options.verbose() {
                         eprintln!("   🔧 Multi-stream {} detected, converting stream {} to APNG ({} frames)", 
                             input_ext.to_uppercase(), probe.stream_index, probe.frame_count);
                     }
@@ -1233,7 +1233,7 @@ pub fn convert_to_mp4_matched(
 
                     match extract_result {
                         Ok(output) if output.status.success() && temp_stream_path.exists() => {
-                            if options.verbose {
+                            if options.verbose() {
                                 shared_utils::progress_mode::emit_stderr(
                                     "   ✅ Stream → APNG conversion successful",
                                 );
@@ -1241,7 +1241,7 @@ pub fn convert_to_mp4_matched(
                             (temp_stream_path, Some(temp_stream))
                         }
                         _ => {
-                            if options.verbose {
+                            if options.verbose() {
                                 eprintln!("   ⚠️  Stream conversion failed, using original file");
                             }
                             (actual_input, None)
@@ -1271,8 +1271,8 @@ pub fn convert_to_mp4_matched(
         .flag_mode()
         .map_err(VidQualityError::ConversionError)?;
 
-    let use_gpu = options.use_gpu;
-    if !use_gpu && options.verbose {
+    let use_gpu = options.use_gpu();
+    if !use_gpu && options.verbose() {
         eprintln!("   🖥️  CPU Mode: Using libx265 for higher SSIM (≥0.98)");
     }
 
@@ -1300,13 +1300,13 @@ pub fn convert_to_mp4_matched(
         // High-value artwork still maintains a 30s threshold to prevent overflow.
         actual_initial_crf = 0.0;
     } else if let Some(hint) = shared_utils::crf_constants::get_global_last_hit_crf_hevc() {
-        if options.verbose {
+        if options.verbose() {
             eprintln!("   💡 Using global last hit CRF: {hint:.1} (warm start)");
         }
         actual_initial_crf = hint;
     }
 
-    if options.verbose {
+    if options.verbose() {
         eprintln!(
             "   {} Mode: CRF {:.1} (based on input analysis/cache)",
             flag_mode.description_en(),
@@ -1317,7 +1317,7 @@ pub fn convert_to_mp4_matched(
     let explore_result = if flag_mode.is_ultimate() {
         match options.codec {
             SelectedCodec::Hevc => {
-                shared_utils::explore_hevc_with_gpu(shared_utils::GpuSearchRequest {
+                shared_utils::explore_hevc_with_gpu(&shared_utils::GpuSearchRequest {
                     input: final_input,
                     output: temp_output.clone(),
                     vf_args: vf_args.clone(),
@@ -1325,16 +1325,16 @@ pub fn convert_to_mp4_matched(
                     warm_start_crf: None,
                     ultimate_mode: true,
                     force_ms_ssim_long: false,
-                    allow_size_tolerance: options.allow_size_tolerance,
+                    allow_size_tolerance: options.allow_size_tolerance(),
                     min_ssim: 0.0, // calculated internally
                     max_threads: options.child_threads,
                     hdr_x265_params: None,
-                    apple_compat: options.apple_compat,
+                    apple_compat: options.apple_compat(),
                     preset: shared_utils::EncoderPreset::Slower,
                 })
             }
             SelectedCodec::Av1 => {
-                shared_utils::explore_av1_with_gpu(shared_utils::GpuSearchRequest {
+                shared_utils::explore_av1_with_gpu(&shared_utils::GpuSearchRequest {
                     input: final_input,
                     output: temp_output.clone(),
                     vf_args: vf_args.clone(),
@@ -1342,11 +1342,11 @@ pub fn convert_to_mp4_matched(
                     warm_start_crf: None,
                     ultimate_mode: true,
                     force_ms_ssim_long: false,
-                    allow_size_tolerance: options.allow_size_tolerance,
+                    allow_size_tolerance: options.allow_size_tolerance(),
                     min_ssim: 0.0, // calculated internally
                     max_threads: options.child_threads,
                     hdr_x265_params: None,
-                    apple_compat: options.apple_compat,
+                    apple_compat: options.apple_compat(),
                     preset: shared_utils::EncoderPreset::Slower,
                 })
             }
@@ -1354,7 +1354,7 @@ pub fn convert_to_mp4_matched(
     } else {
         match options.codec {
             SelectedCodec::Hevc => {
-                shared_utils::explore_hevc_with_gpu(shared_utils::GpuSearchRequest {
+                shared_utils::explore_hevc_with_gpu(&shared_utils::GpuSearchRequest {
                     input: final_input,
                     output: temp_output.clone(),
                     vf_args: vf_args.clone(),
@@ -1362,16 +1362,16 @@ pub fn convert_to_mp4_matched(
                     warm_start_crf: None,
                     ultimate_mode: false,
                     force_ms_ssim_long: false,
-                    allow_size_tolerance: options.allow_size_tolerance,
+                    allow_size_tolerance: options.allow_size_tolerance(),
                     min_ssim: 0.0, // calculated internally
                     max_threads: options.child_threads,
                     hdr_x265_params: None,
-                    apple_compat: options.apple_compat,
+                    apple_compat: options.apple_compat(),
                     preset: shared_utils::EncoderPreset::Medium,
                 })
             }
             SelectedCodec::Av1 => {
-                shared_utils::explore_av1_with_gpu(shared_utils::GpuSearchRequest {
+                shared_utils::explore_av1_with_gpu(&shared_utils::GpuSearchRequest {
                     input: final_input,
                     output: temp_output.clone(),
                     vf_args: vf_args.clone(),
@@ -1379,11 +1379,11 @@ pub fn convert_to_mp4_matched(
                     warm_start_crf: None,
                     ultimate_mode: false,
                     force_ms_ssim_long: false,
-                    allow_size_tolerance: options.allow_size_tolerance,
+                    allow_size_tolerance: options.allow_size_tolerance(),
                     min_ssim: 0.0, // calculated internally
                     max_threads: options.child_threads,
                     hdr_x265_params: None,
-                    apple_compat: options.apple_compat,
+                    apple_compat: options.apple_compat(),
                     preset: shared_utils::EncoderPreset::Medium,
                 })
             }
@@ -1399,7 +1399,7 @@ pub fn convert_to_mp4_matched(
         eprintln!("{log}");
     }
 
-    let tolerance_ratio = if options.allow_size_tolerance {
+    let tolerance_ratio = if options.allow_size_tolerance() {
         1.01
     } else {
         1.0
@@ -1416,7 +1416,7 @@ pub fn convert_to_mp4_matched(
     // However, if the source is already apple-compatible (like GIF/APNG), size guard stays active.
     // For definitive loop assets, compatibility/domain correctness beats size.
     // If loop intent says this should stay in the GIF domain, do not apply the size guard.
-    let is_guard_active = shared_utils::is_size_guard_active(&input_ext, options.apple_compat)
+    let is_guard_active = shared_utils::is_size_guard_active(&input_ext, options.apple_compat())
         && !is_gif_meme(input);
 
     if is_guard_active && explore_result.output_size > max_allowed_size {
@@ -1429,7 +1429,7 @@ pub fn convert_to_mp4_matched(
         if let Err(e) = fs::remove_file(&temp_output) {
             eprintln!("⚠️ [cleanup] Failed to remove oversized {codec_name} output: {e}");
         }
-        if options.allow_size_tolerance {
+        if options.allow_size_tolerance() {
             eprintln!(
                 "   ⏭️  Skipping: {codec_name} output larger than input by {size_increase_pct:.1}% (tolerance: 1.0%)"
             );
@@ -1456,7 +1456,7 @@ pub fn convert_to_mp4_matched(
     // (not because of actual quality degradation), still accept the HEVC output.
     // A larger-but-playable HEVC is always better than a non-playable original (e.g. AVIF).
     let quality_or_compat_ok = explore_result.quality_passed.is_passed()
-        || (options.apple_compat
+        || (options.apple_compat()
             && !flag_mode.is_ultimate()
             && explore_result.ssim.is_some_and(|s| s >= 0.90));
 
@@ -1510,7 +1510,7 @@ pub fn convert_to_mp4_matched(
     if !shared_utils::conversion::commit_temp_to_output_with_metadata(
         &temp_output,
         &output,
-        options.force,
+        options.force(),
         Some(input),
     )? {
         return Ok(skipped_output_exists(input, &output, input_size));
@@ -1533,7 +1533,7 @@ pub fn convert_to_mp4_matched(
     Ok(ConversionResult::success_video_explored(
         input,
         &output,
-        shared_utils::conversion::VideoExplorationMetrics {
+        &shared_utils::conversion::VideoExplorationMetrics {
             input_size,
             output_size: explore_result.output_size,
             codec_name: options.codec.as_str(),
@@ -1557,14 +1557,14 @@ pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result
         "⚠️  Mathematical lossless encoding (HEVC) - this will be SLOW and produce large files!"
     );
 
-    if !options.force && is_already_processed(input) {
+    if !options.force() && is_already_processed(input) {
         return Ok(skipped_already_processed(input, options));
     }
 
     let input_size = fs::metadata(input)?.len();
     let output = get_output_path(input, "mkv", options)?;
 
-    if output.exists() && !options.force {
+    if output.exists() && !options.force() {
         return Ok(skipped_output_exists(input, &output, input_size));
     }
 
@@ -1585,13 +1585,13 @@ pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result
         .vcodec(shared_utils::VideoCodec::Hevc)
         .x265_params(x265_params);
 
-    if options.ultimate {
+    if options.ultimate() {
         builder.preset(shared_utils::EncoderPreset::Slower);
     } else {
         builder.preset(shared_utils::EncoderPreset::Medium);
     }
 
-    if options.apple_compat {
+    if options.apple_compat() {
         builder.tag_video(shared_utils::constants::FFMPEG_TAG_HVC1);
     }
 
@@ -1613,7 +1613,7 @@ pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result
             if !shared_utils::conversion::commit_temp_to_output_with_metadata(
                 &temp_output,
                 &output,
-                options.force,
+                options.force(),
                 Some(input),
             )? {
                 return Ok(skipped_output_exists(input, &output, input_size));
@@ -1677,12 +1677,12 @@ pub fn convert_to_gif_apple_compat(
     input: &Path,
     options: &ConvertOptions,
 ) -> Result<ConversionResult> {
-    if !options.force && is_already_processed(input) {
+    if !options.force() && is_already_processed(input) {
         return Ok(skipped_already_processed(input, options));
     }
 
     if is_static_animated_image(input) {
-        if options.verbose {
+        if options.verbose() {
             eprintln!(
                 "   ⏭️  Detected static animated image (1 frame), skipping video conversion: {}",
                 input.display()
@@ -1715,7 +1715,7 @@ pub fn convert_to_gif_apple_compat(
         fs::create_dir_all(parent)?;
     }
 
-    if output.exists() && !options.force {
+    if output.exists() && !options.force() {
         return Ok(skipped_output_exists(input, &output, input_size));
     }
 
@@ -1729,7 +1729,7 @@ pub fn convert_to_gif_apple_compat(
     // We must use webpmux to extract frames and create APNG with correct timing.
     let (actual_input, temp_apng_file): (std::path::PathBuf, Option<tempfile::NamedTempFile>) =
         if input_ext == "jxl" {
-            if options.verbose {
+            if options.verbose() {
                 eprintln!("   🔧 Detected JXL format, pre-converting to APNG (FFmpeg's jpegxl_anim decoder is incomplete)");
             }
 
@@ -1762,7 +1762,7 @@ pub fn convert_to_gif_apple_compat(
 
             match djxl_result {
                 Ok(output) if output.status.success() && temp_apng_path.exists() => {
-                    if options.verbose {
+                    if options.verbose() {
                         shared_utils::progress_mode::emit_stderr(
                             "   ✅ JXL → APNG conversion successful",
                         );
@@ -1780,7 +1780,7 @@ pub fn convert_to_gif_apple_compat(
                 }
             }
         } else if input_ext == shared_utils::constants::EXT_WEBP {
-            if options.verbose {
+            if options.verbose() {
                 eprintln!("   🔧 Detected WebP format, extracting frames with webpmux");
             }
 
@@ -1805,7 +1805,7 @@ pub fn convert_to_gif_apple_compat(
             let temp_apng_path = temp_apng.path().to_path_buf();
 
             // Extract WebP frames and create APNG with correct timing
-            match extract_webp_to_apng(input, &temp_apng_path, options.verbose) {
+            match extract_webp_to_apng(input, &temp_apng_path, options.verbose()) {
                 Ok(()) => (temp_apng_path, Some(temp_apng)),
                 Err(e) => {
                     tracing::warn!(input = %input.display(), error = %e, "WebP extraction failed");
@@ -1818,7 +1818,7 @@ pub fn convert_to_gif_apple_compat(
                 }
             }
         } else if input_ext == "avif" && has_probable_avif_alpha_stream(input) {
-            if options.verbose {
+            if options.verbose() {
                 eprintln!("   🔧 Detected AVIF auxiliary alpha stream, pre-converting to APNG");
             }
             let temp_apng = tempfile::Builder::new().suffix(".apng").tempfile()?;
@@ -1878,7 +1878,7 @@ pub fn convert_to_gif_apple_compat(
         false
     } else {
         let (gifski_frames_dir, gifski_frames_path, extracted_count) =
-            match extract_frames_for_gifski(&actual_input, frame_stream_index, options.verbose) {
+            match extract_frames_for_gifski(&actual_input, frame_stream_index, options.verbose()) {
                 Ok(value) => value,
                 Err(e) => {
                     tracing::error!(
@@ -1914,7 +1914,7 @@ pub fn convert_to_gif_apple_compat(
              ));
         };
 
-        if options.verbose {
+        if options.verbose() {
             eprintln!("   🔧 GIF Encoding: Native speed ({} frames / {:.2}s duration) -> target speed: {:.3} FPS", 
                 extracted_count, probe_res.duration, fps);
         }
@@ -1994,7 +1994,7 @@ pub fn convert_to_gif_apple_compat(
         ));
     }
 
-    let tolerance_ratio = if options.allow_size_tolerance {
+    let tolerance_ratio = if options.allow_size_tolerance() {
         1.01
     } else {
         1.0
@@ -2009,7 +2009,7 @@ pub fn convert_to_gif_apple_compat(
     // apple_compat: compatibility takes priority — a playable GIF is always
     // better than a non-playable original (e.g. animated AVIF).
     // But if the source is already playable (like APNG or GIF), size guard stays active.
-    let is_guard_active = shared_utils::is_size_guard_active(&input_ext, options.apple_compat);
+    let is_guard_active = shared_utils::is_size_guard_active(&input_ext, options.apple_compat());
 
     if is_guard_active && output_size > max_allowed_size {
         let size_increase_pct = {
@@ -2019,7 +2019,7 @@ pub fn convert_to_gif_apple_compat(
         if let Err(e) = fs::remove_file(&temp_output) {
             eprintln!("⚠️ [cleanup] Failed to remove oversized GIF output: {e}");
         }
-        if options.allow_size_tolerance {
+        if options.allow_size_tolerance() {
             eprintln!(
                 "   ⏭️  Skipping: GIF output larger than input by {size_increase_pct:.1}% (tolerance: 1.0%)"
             );
@@ -2044,7 +2044,7 @@ pub fn convert_to_gif_apple_compat(
     if !shared_utils::conversion::commit_temp_to_output_with_metadata(
         &temp_output,
         &output,
-        options.force,
+        options.force(),
         Some(input),
     )? {
         return Ok(skipped_output_exists(input, &output, input_size));
@@ -2118,10 +2118,8 @@ mod tests {
 
     #[test]
     fn test_apple_compat_blocks_copying_incompatible_originals() {
-        let options = ConvertOptions {
-            apple_compat: true,
-            ..ConvertOptions::default()
-        };
+        let mut options = ConvertOptions::default();
+        options.flags.set(shared_utils::conversion::ConvertFlags::APPLE_COMPAT, true);
 
         assert!(!options.should_copy_original_on_skip(Path::new("/tmp/test.avif")));
         assert!(!options.should_copy_original_on_skip(Path::new("/tmp/test.webp")));

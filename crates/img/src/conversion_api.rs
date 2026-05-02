@@ -7,6 +7,7 @@ use crate::{ImgQualityError, Result};
 use rug::Rational;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use bitflags::bitflags;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TargetFormat {
@@ -23,18 +24,32 @@ pub struct ConversionStrategy {
     pub expected_reduction: f32,
 }
 
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default)]
+    pub struct ConfigFlags: u32 {
+        const FORCE = 1 << 0;
+        const DELETE_ORIGINAL = 1 << 1;
+        const PRESERVE_TIMESTAMPS = 1 << 2;
+        const PRESERVE_METADATA = 1 << 3;
+        const COMPRESS = 1 << 4;
+        const APPLE_COMPAT = 1 << 5;
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ConversionConfig {
     pub output_dir: Option<PathBuf>,
     pub base_dir: Option<PathBuf>,
-    pub force: bool,
-    pub delete_original: bool,
-    pub preserve_timestamps: bool,
-    pub preserve_metadata: bool,
-    /// When true, conversion is only accepted if output is strictly smaller than input (unchanged = goal not achieved).
-    pub compress: bool,
-    /// When true, JXL uses --`compress_boxes=0` for Apple compatibility.
-    pub apple_compat: bool,
+    pub flags: ConfigFlags,
+}
+
+impl ConversionConfig {
+    #[must_use] pub const fn force(&self) -> bool { self.flags.contains(ConfigFlags::FORCE) }
+    #[must_use] pub const fn delete_original(&self) -> bool { self.flags.contains(ConfigFlags::DELETE_ORIGINAL) }
+    #[must_use] pub const fn preserve_timestamps(&self) -> bool { self.flags.contains(ConfigFlags::PRESERVE_TIMESTAMPS) }
+    #[must_use] pub const fn preserve_metadata(&self) -> bool { self.flags.contains(ConfigFlags::PRESERVE_METADATA) }
+    #[must_use] pub const fn compress(&self) -> bool { self.flags.contains(ConfigFlags::COMPRESS) }
+    #[must_use] pub const fn apple_compat(&self) -> bool { self.flags.contains(ConfigFlags::APPLE_COMPAT) }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -204,7 +219,7 @@ pub fn execute_conversion(
     shared_utils::conversion::validate_output_path(&output_path, config.base_dir.as_deref())
         .map_err(ImgQualityError::ConversionError)?;
 
-    if output_path.exists() && !config.force {
+    if output_path.exists() && !config.force() {
         return Ok(ConversionOutput {
             original_path: detection.file_path.clone(),
             output_path: output_path.display().to_string(),
@@ -240,7 +255,7 @@ pub fn execute_conversion(
     if !shared_utils::conversion::commit_temp_to_output_with_metadata(
         &temp_path,
         &output_path,
-        config.force,
+        config.force(),
         Some(input_path),
     )
     .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?
@@ -273,7 +288,7 @@ pub fn execute_conversion(
     });
 
     // Compress mode: goal is strictly smaller; equal or larger = not achieved (keep original).
-    if config.compress {
+    if config.compress() {
         let out_size = output_size.unwrap_or(0);
         if out_size >= detection.file_size {
             cleanup_output_file(&output_path, "oversized output in compress mode");
@@ -299,15 +314,15 @@ pub fn execute_conversion(
         }
     }
 
-    if config.preserve_metadata {
+    if config.preserve_metadata() {
         preserve_metadata(input_path, &output_path);
     }
 
-    if config.preserve_timestamps {
+    if config.preserve_timestamps() {
         preserve_timestamps(input_path, &output_path);
     }
 
-    if config.delete_original {
+    if config.delete_original() {
         if let Err(e) = shared_utils::conversion::safe_delete_original(
             input_path,
             &output_path,
@@ -395,7 +410,7 @@ fn convert_to_jxl(
         builder.distance(0.0);
     }
 
-    if config.apple_compat {
+    if config.apple_compat() {
         builder.apple_compat(true);
     }
 
@@ -427,7 +442,7 @@ fn convert_to_jxl(
     }
 
     // Compress mode: only accept if output is strictly smaller than input
-    if config.compress {
+    if config.compress() {
         let input_size = shared_utils::io_utils::metadata_with_retry(input)
             .map_err(|e| ImgQualityError::ConversionError(format!("Failed to read input: {e}")))?
             .len();
@@ -500,7 +515,7 @@ fn convert_to_avif(
     }
 
     // Check compress mode: skip if output is not smaller than input
-    if config.compress {
+    if config.compress() {
         let input_size = std::fs::metadata(input)?.len();
         if output_size >= input_size {
             cleanup_output_file(output, "non-compressing AVIF output");

@@ -14,7 +14,7 @@ pub use analyzer::{analyze_image, ImageAnalysis};
 pub use constants::*;
 pub use heic_analysis::HeicAnalysis;
 pub use jpeg_analysis::JpegQualityAnalysis;
-pub use lossless_converter::{ConversionResult, ConvertOptions};
+pub use lossless_converter::{ConversionResult, ConvertFlags, ConvertOptions};
 pub use metrics::{
     calculate_ms_ssim, calculate_psnr, calculate_ssim, psnr_quality_description,
     ssim_quality_description,
@@ -22,7 +22,7 @@ pub use metrics::{
 pub use recommender::{get_recommendation, UpgradeRecommendation};
 
 pub use conversion_api::{
-    determine_strategy, smart_convert, ConversionConfig, ConversionOutput, TargetFormat,
+    determine_strategy, smart_convert, ConfigFlags, ConversionConfig, ConversionOutput, TargetFormat,
 };
 pub use detection_api::{
     detect_image, CompressionType, DetectedFormat, DetectionResult, ImageType,

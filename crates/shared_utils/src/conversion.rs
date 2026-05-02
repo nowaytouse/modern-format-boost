@@ -351,7 +351,7 @@ impl ConversionResult {
                 input,
                 options.output_dir.as_deref(),
                 options.base_dir.as_deref(),
-                options.verbose,
+                options.verbose(),
             )
             .ok()
             .flatten()
@@ -361,7 +361,7 @@ impl ConversionResult {
                 phase,
                 "Apple-compat fallback: not copying incompatible original"
             );
-            if options.verbose {
+            if options.verbose() {
                 eprintln!("   ⚠️  Apple compatibility mode: not copying incompatible original");
             }
             None
@@ -734,47 +734,58 @@ impl ConversionResult {
     }
 }
 
+bitflags::bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+    pub struct ConvertFlags: u32 {
+        const FORCE = 1 << 0;
+        const DELETE_ORIGINAL = 1 << 1;
+        const IN_PLACE = 1 << 2;
+        const EXPLORE = 1 << 3;
+        const MATCH_QUALITY = 1 << 4;
+        const APPLE_COMPAT = 1 << 5;
+        const COMPRESS = 1 << 6;
+        const USE_GPU = 1 << 7;
+        const ULTIMATE = 1 << 8;
+        const ALLOW_SIZE_TOLERANCE = 1 << 9;
+        const VERBOSE = 1 << 10;
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ConvertOptions {
-    pub force: bool,
+    pub flags: ConvertFlags,
     pub output_dir: Option<PathBuf>,
     pub base_dir: Option<PathBuf>,
-    pub delete_original: bool,
-    pub in_place: bool,
-    pub explore: bool,
-    pub match_quality: bool,
-    pub apple_compat: bool,
-    pub compress: bool,
-    pub use_gpu: bool,
-    pub ultimate: bool,
-    pub allow_size_tolerance: bool,
-    pub verbose: bool,
+    pub codec: SelectedCodec,
     pub child_threads: usize,
     pub input_format: Option<String>,
     pub quality_label: Option<String>,
-    pub codec: SelectedCodec,
+}
+
+impl ConvertOptions {
+    pub const fn force(&self) -> bool { self.flags.contains(ConvertFlags::FORCE) }
+    pub const fn delete_original(&self) -> bool { self.flags.contains(ConvertFlags::DELETE_ORIGINAL) }
+    pub const fn in_place(&self) -> bool { self.flags.contains(ConvertFlags::IN_PLACE) }
+    pub const fn explore(&self) -> bool { self.flags.contains(ConvertFlags::EXPLORE) }
+    pub const fn match_quality(&self) -> bool { self.flags.contains(ConvertFlags::MATCH_QUALITY) }
+    pub const fn apple_compat(&self) -> bool { self.flags.contains(ConvertFlags::APPLE_COMPAT) }
+    pub const fn compress(&self) -> bool { self.flags.contains(ConvertFlags::COMPRESS) }
+    pub const fn use_gpu(&self) -> bool { self.flags.contains(ConvertFlags::USE_GPU) }
+    pub const fn ultimate(&self) -> bool { self.flags.contains(ConvertFlags::ULTIMATE) }
+    pub const fn allow_size_tolerance(&self) -> bool { self.flags.contains(ConvertFlags::ALLOW_SIZE_TOLERANCE) }
+    pub const fn verbose(&self) -> bool { self.flags.contains(ConvertFlags::VERBOSE) }
 }
 
 impl Default for ConvertOptions {
     fn default() -> Self {
         Self {
-            force: false,
+            flags: ConvertFlags::empty(),
             output_dir: None,
             base_dir: None,
-            delete_original: false,
-            in_place: false,
-            explore: false,
-            match_quality: false,
-            apple_compat: false,
-            compress: false,
-            use_gpu: true,
-            ultimate: false,
-            allow_size_tolerance: true,
-            verbose: false,
+            codec: SelectedCodec::Hevc,
             child_threads: 0,
             input_format: None,
             quality_label: None,
-            codec: SelectedCodec::Hevc,
         }
     }
 }
@@ -782,7 +793,7 @@ impl Default for ConvertOptions {
 impl ConvertOptions {
     #[must_use]
     pub fn should_copy_original_on_skip(&self, input: &Path) -> bool {
-        if !self.apple_compat {
+        if !self.apple_compat() {
             return true;
         }
         let input_ext = input
@@ -795,7 +806,7 @@ impl ConvertOptions {
 
     #[must_use]
     pub const fn should_delete_original(&self) -> bool {
-        self.delete_original || self.in_place
+        self.delete_original() || self.in_place()
     }
 
     /// Determine the flag mode from options.
@@ -805,10 +816,10 @@ impl ConvertOptions {
     pub fn flag_mode(&self) -> Result<crate::flag_validator::FlagMode, String> {
         crate::flag_validator::validate_flags_result_with_ultimate(
             crate::flag_validator::FlagRequest {
-                explore: self.explore,
-                match_quality: self.match_quality,
-                compress: self.compress,
-                ultimate: self.ultimate,
+                explore: self.explore(),
+                match_quality: self.match_quality(),
+                compress: self.compress(),
+                ultimate: self.ultimate(),
             },
         )
     }
@@ -982,11 +993,11 @@ pub fn pre_conversion_check(
     output: &Path,
     options: &ConvertOptions,
 ) -> Option<ConversionResult> {
-    if !options.force && is_already_processed(input) {
+    if !options.force() && is_already_processed(input) {
         return Some(ConversionResult::skipped_duplicate(input));
     }
 
-    if output.exists() && !options.force {
+    if output.exists() && !options.force() {
         return Some(ConversionResult::skipped_exists(input, output));
     }
 
@@ -1337,11 +1348,11 @@ impl SizeToleranceCheck<'_> {
             .extension()
             .and_then(|ext| ext.to_str())
             .unwrap_or("");
-        crate::quality_matcher::is_size_guard_active(input_ext, self.options.apple_compat)
+        crate::quality_matcher::is_size_guard_active(input_ext, self.options.apple_compat())
     }
 
     fn max_allowed_size(&self) -> u64 {
-        if self.options.allow_size_tolerance && self.is_guard_active() {
+        if self.options.allow_size_tolerance() && self.is_guard_active() {
             self.input_size.saturating_add(Self::tolerance_bytes())
         } else if self.is_guard_active() {
             self.input_size
@@ -1355,9 +1366,9 @@ impl SizeToleranceCheck<'_> {
             return Some(SizeGuardFailure::ToleranceExceeded);
         }
 
-        if self.options.compress && self.output_size >= self.input_size {
+        if self.options.compress() && self.output_size >= self.input_size {
             let delta = self.delta();
-            if self.options.allow_size_tolerance && delta.increase_bytes < Self::tolerance_bytes() {
+            if self.options.allow_size_tolerance() && delta.increase_bytes < Self::tolerance_bytes() {
                 return None;
             }
             return Some(SizeGuardFailure::CompressionGoalMissed);
@@ -1375,7 +1386,7 @@ impl SizeToleranceCheck<'_> {
 
     fn reject_tolerance_exceeded(&self) -> ConversionResult {
         let delta = self.delta();
-        let mode = if self.options.allow_size_tolerance {
+        let mode = if self.options.allow_size_tolerance() {
             "tolerance: absolute (< 1_048_576 bytes increase)"
         } else {
             "strict mode: no tolerance"
@@ -2113,17 +2124,17 @@ mod tests {
     fn test_convert_options_default() {
         let opts = ConvertOptions::default();
 
-        assert!(!opts.force);
+        assert!(!opts.force());
         assert!(opts.output_dir.is_none());
-        assert!(!opts.delete_original);
-        assert!(!opts.in_place);
+        assert!(!opts.delete_original());
+        assert!(!opts.in_place());
         assert!(!opts.should_delete_original());
     }
 
     #[test]
     fn test_convert_options_delete_original() {
         let mut opts = ConvertOptions::default();
-        opts.delete_original = true;
+        opts.flags.set(ConvertFlags::DELETE_ORIGINAL, true);
 
         assert!(opts.should_delete_original());
     }
@@ -2131,7 +2142,7 @@ mod tests {
     #[test]
     fn test_convert_options_in_place() {
         let mut opts = ConvertOptions::default();
-        opts.in_place = true;
+        opts.flags.set(ConvertFlags::IN_PLACE, true);
 
         assert!(opts.should_delete_original());
     }
@@ -2139,49 +2150,49 @@ mod tests {
     #[test]
     fn test_flag_mode_with_gpu() {
         let mut opts = ConvertOptions::default();
-        opts.explore = true;
-        opts.match_quality = true;
-        opts.compress = true;
-        opts.use_gpu = true;
+        opts.flags.set(ConvertFlags::EXPLORE, true);
+        opts.flags.set(ConvertFlags::MATCH_QUALITY, true);
+        opts.flags.set(ConvertFlags::COMPRESS, true);
+        opts.flags.set(ConvertFlags::USE_GPU, true);
 
         let mode = opts.flag_mode().unwrap();
         assert_eq!(
             mode,
             crate::flag_validator::FlagMode::PreciseQualityWithCompress
         );
-        assert!(opts.use_gpu, "GPU should remain enabled");
+        assert!(opts.use_gpu(), "GPU should remain enabled");
     }
 
     #[test]
     fn test_flag_mode_with_cpu() {
         let mut opts = ConvertOptions::default();
-        opts.explore = true;
-        opts.match_quality = true;
-        opts.compress = true;
-        opts.use_gpu = false;
+        opts.flags.set(ConvertFlags::EXPLORE, true);
+        opts.flags.set(ConvertFlags::MATCH_QUALITY, true);
+        opts.flags.set(ConvertFlags::COMPRESS, true);
+        opts.flags.set(ConvertFlags::USE_GPU, false);
 
         let mode = opts.flag_mode().unwrap();
         assert_eq!(
             mode,
             crate::flag_validator::FlagMode::PreciseQualityWithCompress
         );
-        assert!(!opts.use_gpu, "CPU mode should remain disabled");
+        assert!(!opts.use_gpu(), "CPU mode should remain disabled");
     }
 
     #[test]
     fn test_only_recommended_flags_valid_with_gpu_cpu() {
         let mut gpu_config = ConvertOptions::default();
-        gpu_config.explore = true;
-        gpu_config.match_quality = true;
-        gpu_config.compress = true;
-        gpu_config.use_gpu = true;
+        gpu_config.flags.set(ConvertFlags::EXPLORE, true);
+        gpu_config.flags.set(ConvertFlags::MATCH_QUALITY, true);
+        gpu_config.flags.set(ConvertFlags::COMPRESS, true);
+        gpu_config.flags.set(ConvertFlags::USE_GPU, true);
         assert!(gpu_config.flag_mode().is_ok());
 
         let mut cpu_config = ConvertOptions::default();
-        cpu_config.explore = true;
-        cpu_config.match_quality = true;
-        cpu_config.compress = true;
-        cpu_config.use_gpu = false;
+        cpu_config.flags.set(ConvertFlags::EXPLORE, true);
+        cpu_config.flags.set(ConvertFlags::MATCH_QUALITY, true);
+        cpu_config.flags.set(ConvertFlags::COMPRESS, true);
+        cpu_config.flags.set(ConvertFlags::USE_GPU, false);
         assert!(cpu_config.flag_mode().is_ok());
 
         assert_eq!(
@@ -2201,9 +2212,9 @@ mod tests {
 
         for (explore, match_quality, compress) in invalid_combos {
             let mut opts = ConvertOptions::default();
-            opts.explore = explore;
-            opts.match_quality = match_quality;
-            opts.compress = compress;
+            opts.flags.set(ConvertFlags::EXPLORE, explore);
+            opts.flags.set(ConvertFlags::MATCH_QUALITY, match_quality);
+            opts.flags.set(ConvertFlags::COMPRESS, compress);
             assert!(
                 opts.flag_mode().is_err(),
                 "({explore}, {match_quality}, {compress}) should be invalid"
@@ -2214,19 +2225,19 @@ mod tests {
     #[test]
     fn test_convert_options_all_flags_enabled() {
         let mut opts = ConvertOptions::default();
-        opts.force = true;
-        opts.delete_original = true;
-        opts.in_place = true;
-        opts.explore = true;
-        opts.match_quality = true;
-        opts.compress = true;
-        opts.apple_compat = true;
-        opts.use_gpu = false;
+        opts.flags.set(ConvertFlags::FORCE, true);
+        opts.flags.set(ConvertFlags::DELETE_ORIGINAL, true);
+        opts.flags.set(ConvertFlags::IN_PLACE, true);
+        opts.flags.set(ConvertFlags::EXPLORE, true);
+        opts.flags.set(ConvertFlags::MATCH_QUALITY, true);
+        opts.flags.set(ConvertFlags::COMPRESS, true);
+        opts.flags.set(ConvertFlags::APPLE_COMPAT, true);
+        opts.flags.set(ConvertFlags::USE_GPU, false);
 
-        assert!(opts.force);
+        assert!(opts.force());
         assert!(opts.should_delete_original());
-        assert!(opts.apple_compat);
-        assert!(!opts.use_gpu);
+        assert!(opts.apple_compat());
+        assert!(!opts.use_gpu());
 
         let mode = opts.flag_mode().unwrap();
         assert_eq!(
@@ -2238,9 +2249,9 @@ mod tests {
     #[test]
     fn test_convert_options_invalid_flag_combination() {
         let mut opts = ConvertOptions::default();
-        opts.explore = true;
-        opts.match_quality = false;
-        opts.compress = true;
+        opts.flags.set(ConvertFlags::EXPLORE, true);
+        opts.flags.set(ConvertFlags::MATCH_QUALITY, false);
+        opts.flags.set(ConvertFlags::COMPRESS, true);
 
         let result = opts.flag_mode();
         assert!(
@@ -2252,9 +2263,9 @@ mod tests {
     #[test]
     fn test_explore_mode_returns_precise_quality_with_compression() {
         let mut opts = ConvertOptions::default();
-        opts.explore = true;
-        opts.match_quality = true;
-        opts.compress = true;
+        opts.flags.set(ConvertFlags::EXPLORE, true);
+        opts.flags.set(ConvertFlags::MATCH_QUALITY, true);
+        opts.flags.set(ConvertFlags::COMPRESS, true);
 
         assert_eq!(
             opts.explore_mode(),
