@@ -157,4 +157,4 @@ mutants.out/
 .venv_training/
 
 .training_tmp/
-training_tmp/
+training_tmp/*.txt
