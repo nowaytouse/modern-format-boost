@@ -629,6 +629,10 @@ struct AutoConvertConfig {
 }
 
 impl AutoConvertConfig {
+    const fn force(&self) -> bool { self.flags.contains(ConfigFlags::FORCE) }
+    const fn delete_original(&self) -> bool { self.flags.contains(ConfigFlags::DELETE_ORIGINAL) }
+    const fn compress(&self) -> bool { self.flags.contains(ConfigFlags::COMPRESS) }
+    const fn apple_compat(&self) -> bool { self.flags.contains(ConfigFlags::APPLE_COMPAT) }
     const fn in_place(&self) -> bool { self.flags.contains(ConfigFlags::IN_PLACE) }
     const fn explore(&self) -> bool { self.flags.contains(ConfigFlags::EXPLORE_SMALLER) }
     const fn match_quality(&self) -> bool { self.flags.contains(ConfigFlags::MATCH_QUALITY) }
@@ -814,15 +818,17 @@ fn auto_convert_single_file(
         flags: {
             // Batch flag construction using bitwise OR for optimal performance
             ConvertFlags::empty()
-                | if config.flags.contains(ConfigFlags::FORCE) { ConvertFlags::FORCE } else { ConvertFlags::empty() }
-                | if config.flags.contains(ConfigFlags::DELETE_ORIGINAL) { ConvertFlags::DELETE_ORIGINAL } else { ConvertFlags::empty() }
+                | if config.force() { ConvertFlags::FORCE } else { ConvertFlags::empty() }
+                | if config.delete_original() { ConvertFlags::DELETE_ORIGINAL } else { ConvertFlags::empty() }
                 | if config.in_place() { ConvertFlags::IN_PLACE } else { ConvertFlags::empty() }
                 | if config.explore() { ConvertFlags::EXPLORE } else { ConvertFlags::empty() }
                 | if config.match_quality() { ConvertFlags::MATCH_QUALITY } else { ConvertFlags::empty() }
-                | if config.flags.contains(ConfigFlags::COMPRESS) { ConvertFlags::COMPRESS } else { ConvertFlags::empty() }
-                | if config.flags.contains(ConfigFlags::APPLE_COMPAT) { ConvertFlags::APPLE_COMPAT } else { ConvertFlags::empty() }
+                | if config.compress() { ConvertFlags::COMPRESS } else { ConvertFlags::empty() }
+                | if config.apple_compat() { ConvertFlags::APPLE_COMPAT } else { ConvertFlags::empty() }
                 | if config.use_gpu() { ConvertFlags::USE_GPU } else { ConvertFlags::empty() }
                 | if config.ultimate() { ConvertFlags::ULTIMATE } else { ConvertFlags::empty() }
+                | if config.allow_size_tolerance() { ConvertFlags::ALLOW_SIZE_TOLERANCE } else { ConvertFlags::empty() }
+                | if config.verbose() { ConvertFlags::VERBOSE } else { ConvertFlags::empty() }
                 | if config.allow_size_tolerance() { ConvertFlags::ALLOW_SIZE_TOLERANCE } else { ConvertFlags::empty() }
                 | if config.verbose() { ConvertFlags::VERBOSE } else { ConvertFlags::empty() }
         },
@@ -967,7 +973,7 @@ fn auto_convert_directory(
         }
     }
 
-    if config.flags.contains(ConfigFlags::DELETE_ORIGINAL) || config.in_place() {
+    if config.delete_original() || config.in_place() {
         if let Err(e) = check_dangerous_directory(input) {
             eprintln!("{e}");
             std::process::exit(1);

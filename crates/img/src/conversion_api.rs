@@ -75,6 +75,34 @@ impl ConversionConfig {
     pub const fn apple_compat(&self) -> bool {
         self.flags.contains(ConfigFlags::APPLE_COMPAT)
     }
+    #[must_use]
+    pub const fn in_place(&self) -> bool {
+        self.flags.contains(ConfigFlags::IN_PLACE)
+    }
+    #[must_use]
+    pub const fn explore_smaller(&self) -> bool {
+        self.flags.contains(ConfigFlags::EXPLORE_SMALLER)
+    }
+    #[must_use]
+    pub const fn match_quality(&self) -> bool {
+        self.flags.contains(ConfigFlags::MATCH_QUALITY)
+    }
+    #[must_use]
+    pub const fn use_gpu(&self) -> bool {
+        self.flags.contains(ConfigFlags::USE_GPU)
+    }
+    #[must_use]
+    pub const fn ultimate_mode(&self) -> bool {
+        self.flags.contains(ConfigFlags::ULTIMATE_MODE)
+    }
+    #[must_use]
+    pub const fn allow_size_tolerance(&self) -> bool {
+        self.flags.contains(ConfigFlags::ALLOW_SIZE_TOLERANCE)
+    }
+    #[must_use]
+    pub const fn verbose(&self) -> bool {
+        self.flags.contains(ConfigFlags::VERBOSE)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
