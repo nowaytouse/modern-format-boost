@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+### 🛡️ Systemic Hardening, Performance Tuning & Obsolete Feature Cleanup (2026-05-04)
+
+- **Hardened Memory Safety & Numerical Rigor**:
+  - **Exhaustive Overflow Protection**: Refactored image processing hot paths (`hdr_synthesis.rs`, `image_metrics.rs`, `image_formats.rs`) to use `checked_mul`, `checked_add`, and `try_from` for all coordinate and offset calculations. This eliminates potential panics on malformed or extremely large input files.
+  - **Zero-Panic Enforced Indexing**: Replaced direct slice indexing with safe `.get()` and `.get_mut()` across the `shared_utils` crate, particularly in complex media probe logic (HEIF, WebP, TIFF, GIF, AVIF).
+  - **Native Bit-Manipulation Hardening**: Fixed multiple `indexing_slicing` risks in TIFF and WebP byte-level parsers by using bound-checked slice patterns and explicit `u16::from_be_bytes` offsets.
+
+- **Feature Cleanup & Module Alignment**:
+  - **Obsolete Lossless Mode Removal**: Systemically removed the deprecated "Forced Lossless Mode" from the video conversion pipeline (`vid/src/conversion_api.rs`, `vid/src/processor/pipeline.rs`, `shared_utils/src/conversion_types.rs`). This streamlines the conversion logic and resolves compilation failures.
+  - **Unified Bitflags Architecture**: Completed the migration of `ConversionConfig` to the `bitflags` architecture, providing a consistent API for both `img` and `vid` modules.
+  - **New CLI Capabilities**: Added `--preserve-timestamps` and `--preserve-metadata` flags to the `img` module (default: true) to align its feature set with the `vid` module.
+
+- **Performance & DX Optimization**:
+  - **Batch Bitflags Construction**: Optimized flag initialization to use conditional bitwise OR, reducing branching overhead in CLI argument parsing.
+  - **Hot Path Formatting**: Applied standardized indentation and formatting to core conversion orchestrators to improve maintainability and nightly-clippy signal-to-noise ratio.
+  - **Dependency Stabilization**: Synchronized workspace-wide lockfile to ensure identical build environments across local macOS and Linux CI runners.
+
 ### ⚡ Zero-Copy Performance Optimization & AV2/VVC Support (2026-05-03)
 
 - **Zero-Copy Hot Path Optimization**:

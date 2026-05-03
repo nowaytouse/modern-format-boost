@@ -29,62 +29,68 @@ pub mod tiff {
         }
 
         let version = if is_little_endian {
-            u16::from_le_bytes([*data.get(2).unwrap_or(&0), *data.get(3).unwrap_or(&0)])
+            u16::from_le_bytes([data[2], data[3]])
         } else {
-            u16::from_be_bytes([*data.get(2).unwrap_or(&0), *data.get(3).unwrap_or(&0)])
+            u16::from_be_bytes([data[2], data[3]])
         };
         let is_bigtiff = version == 0x002B;
 
-        let read_u16 = |off: usize| -> u16 {
-            let bytes = [
-                *data.get(off).unwrap_or(&0),
-                *data.get(off + 1).unwrap_or(&0),
-            ];
-            if is_little_endian {
+        let read_u16 = |off: usize| -> Option<u16> {
+            if off + 2 > data.len() {
+                return None;
+            }
+            let bytes = [data[off], data[off + 1]];
+            Some(if is_little_endian {
                 u16::from_le_bytes(bytes)
             } else {
                 u16::from_be_bytes(bytes)
-            }
+            })
         };
-        let read_u32 = |off: usize| -> u32 {
-            let bytes = [
-                *data.get(off).unwrap_or(&0),
-                *data.get(off + 1).unwrap_or(&0),
-                *data.get(off + 2).unwrap_or(&0),
-                *data.get(off + 3).unwrap_or(&0),
-            ];
-            if is_little_endian {
+        let read_u32 = |off: usize| -> Option<u32> {
+            if off + 4 > data.len() {
+                return None;
+            }
+            let bytes = [data[off], data[off + 1], data[off + 2], data[off + 3]];
+            Some(if is_little_endian {
                 u32::from_le_bytes(bytes)
             } else {
                 u32::from_be_bytes(bytes)
-            }
+            })
         };
-        let read_u64 = |off: usize| -> u64 {
+        let read_u64 = |off: usize| -> Option<u64> {
+            if off + 8 > data.len() {
+                return None;
+            }
             let bytes = [
-                *data.get(off).unwrap_or(&0),
-                *data.get(off + 1).unwrap_or(&0),
-                *data.get(off + 2).unwrap_or(&0),
-                *data.get(off + 3).unwrap_or(&0),
-                *data.get(off + 4).unwrap_or(&0),
-                *data.get(off + 5).unwrap_or(&0),
-                *data.get(off + 6).unwrap_or(&0),
-                *data.get(off + 7).unwrap_or(&0),
+                data[off],
+                data[off + 1],
+                data[off + 2],
+                data[off + 3],
+                data[off + 4],
+                data[off + 5],
+                data[off + 6],
+                data[off + 7],
             ];
-            if is_little_endian {
+            Some(if is_little_endian {
                 u64::from_le_bytes(bytes)
             } else {
                 u64::from_be_bytes(bytes)
-            }
+            })
         };
 
         let mut ifd_offset: u64 = if is_bigtiff {
             if data.len() < 16 {
-                // Fallback to lossless for corrupted BigTIFF files
                 return Ok(true);
             }
-            read_u64(8)
+            read_u64(8).ok_or_else(|| {
+                ImgQualityError::AnalysisError(
+                    "TIFF: failed to read BigTIFF IFD offset".to_string(),
+                )
+            })?
         } else {
-            u64::from(read_u32(4))
+            u64::from(read_u32(4).ok_or_else(|| {
+                ImgQualityError::AnalysisError("TIFF: failed to read IFD offset".to_string())
+            })?)
         };
 
         let mut ifd_count = 0u32;
@@ -95,13 +101,13 @@ pub mod tiff {
                 if ifd_pos + 8 > data.len() {
                     break;
                 }
-                let n = crate::numeric_cast::u64_to_usize_sat(read_u64(ifd_pos));
+                let n = crate::numeric_cast::u64_to_usize_sat(read_u64(ifd_pos).unwrap_or(0));
                 (n, ifd_pos + 8, 20usize, ifd_pos + 8 + n * 20)
             } else {
                 if ifd_pos + 2 > data.len() {
                     break;
                 }
-                let n = usize::from(read_u16(ifd_pos));
+                let n = usize::from(read_u16(ifd_pos).unwrap_or(0));
                 (n, ifd_pos + 2, 12usize, ifd_pos + 2 + n * 12)
             };
 
@@ -110,14 +116,16 @@ pub mod tiff {
                 if pos + entry_size > data.len() {
                     break;
                 }
-                if read_u16(pos) == 259 {
-                    let compression = if is_bigtiff {
-                        read_u16(pos + 12)
-                    } else {
-                        read_u16(pos + 8)
-                    };
-                    if compression == 6 || compression == 7 || compression == 50001 {
-                        return Ok(false);
+                if let Some(tag) = read_u16(pos) {
+                    if tag == 259 {
+                        let compression = if is_bigtiff {
+                            read_u16(pos + 12).unwrap_or(1)
+                        } else {
+                            read_u16(pos + 8).unwrap_or(1)
+                        };
+                        if compression == 6 || compression == 7 || compression == 50001 {
+                            return Ok(false);
+                        }
                     }
                 }
                 pos += entry_size;
@@ -127,12 +135,12 @@ pub mod tiff {
                 if next_offset_pos + 8 > data.len() {
                     break;
                 }
-                ifd_offset = read_u64(next_offset_pos);
+                ifd_offset = read_u64(next_offset_pos).unwrap_or(0);
             } else {
                 if next_offset_pos + 4 > data.len() {
                     break;
                 }
-                ifd_offset = u64::from(read_u32(next_offset_pos));
+                ifd_offset = u64::from(read_u32(next_offset_pos).unwrap_or(0));
             }
         }
         Ok(true)
@@ -235,31 +243,38 @@ pub mod webp {
         let mut found_any_frame = false;
 
         while pos + 8 <= data.len() {
-            let chunk_id = data.get(pos..pos + 4).unwrap_or(&[]);
+            if pos + 8 > data.len() {
+                break;
+            }
+            let chunk_id = &data[pos..pos + 4];
             let chunk_size = crate::numeric_cast::u32_to_usize_sat(u32::from_le_bytes([
-                *data.get(pos + 4).unwrap_or(&0),
-                *data.get(pos + 5).unwrap_or(&0),
-                *data.get(pos + 6).unwrap_or(&0),
-                *data.get(pos + 7).unwrap_or(&0),
+                data[pos + 4],
+                data[pos + 5],
+                data[pos + 6],
+                data[pos + 7],
             ]));
             let payload_start = pos + 8;
             let payload_end = (payload_start + chunk_size).min(data.len());
 
-            if chunk_id == b"ANMF" && payload_end > payload_start + 24 {
+            if chunk_id == b"ANMF"
+                && payload_start + 24 <= data.len()
+                && payload_end > payload_start + 24
+            {
                 found_any_frame = true;
                 // ANMF payload: 24 bytes header, then frame data sub-chunk
-                let frame_data = data.get(payload_start + 24..payload_end).unwrap_or(&[]);
-                if frame_data.len() >= 4 {
-                    // Check sub-chunk type: VP8L = lossless, VP8 = lossy
-                    let sub_chunk = frame_data.get(0..4).unwrap_or(&[]);
-                    if sub_chunk == b"VP8 " {
-                        return Ok(false); // Lossy
-                    } else if sub_chunk != b"VP8L" {
-                        // Unknown frame type in animated WebP — ambiguous
-                        return Err(ImgQualityError::AnalysisError(
-                            format!("Animated WebP: unknown frame chunk type {:?} at pos {}; cannot determine compression", 
-                            String::from_utf8_lossy(sub_chunk), payload_start + 24)
-                        ));
+                if let Some(frame_data) = data.get(payload_start + 24..payload_end) {
+                    if frame_data.len() >= 4 {
+                        // Check sub-chunk type: VP8L = lossless, VP8 = lossy
+                        let sub_chunk = &frame_data[0..4];
+                        if sub_chunk == b"VP8 " {
+                            return Ok(false); // Lossy
+                        } else if sub_chunk != b"VP8L" {
+                            // Unknown frame type in animated WebP — ambiguous
+                            return Err(ImgQualityError::AnalysisError(
+                                format!("Animated WebP: unknown frame chunk type {:?} at pos {}; cannot determine compression", 
+                                String::from_utf8_lossy(sub_chunk), payload_start + 24)
+                            ));
+                        }
                     }
                 }
             }
@@ -293,27 +308,28 @@ pub mod webp {
     pub fn estimate_quality_from_bytes(data: &[u8]) -> Result<u8> {
         let mut pos = 12; // skip RIFF + size + WEBP
         while pos + 8 <= data.len() {
-            let chunk_id = data.get(pos..pos + 4).unwrap_or(&[]);
+            let chunk_id = &data[pos..pos + 4];
             let chunk_size = crate::numeric_cast::u32_to_usize_sat(u32::from_le_bytes([
-                *data.get(pos + 4).unwrap_or(&0),
-                *data.get(pos + 5).unwrap_or(&0),
-                *data.get(pos + 6).unwrap_or(&0),
-                *data.get(pos + 7).unwrap_or(&0),
+                data[pos + 4],
+                data[pos + 5],
+                data[pos + 6],
+                data[pos + 7],
             ]));
             let payload_start = pos + 8;
-            let payload_end = (payload_start + chunk_size).min(data.len());
+            let chunk_end = (payload_start + chunk_size).min(data.len());
 
-            if chunk_id == b"VP8 " && payload_end > payload_start + 10 {
-                let vp8_data = data.get(payload_start..payload_end).unwrap_or(&[]);
-                if vp8_data.len() >= 11 && vp8_data.get(3..6).unwrap_or(&[]) == [0x9D, 0x01, 0x2A] {
-                    let y_ac_qi = *vp8_data.get(10).unwrap_or(&0) & 0x7F;
-                    let quality = crate::numeric_cast::u32_to_u8_sat(
-                        (u32::from(127 - y_ac_qi) * 100)
-                            .checked_div(127)
-                            .unwrap_or(0)
-                            .min(100),
-                    );
-                    return Ok(quality);
+            if chunk_id == b"VP8 " && payload_start + 11 <= data.len() {
+                if let Some(vp8_data) = data.get(payload_start..chunk_end) {
+                    if vp8_data.len() >= 11 && vp8_data.get(3..6) == Some(&[0x9D, 0x01, 0x2A]) {
+                        let y_ac_qi = vp8_data[10] & 0x7F;
+                        let quality = crate::numeric_cast::u32_to_u8_sat(
+                            (u32::from(127 - y_ac_qi) * 100)
+                                .checked_div(127)
+                                .unwrap_or(0)
+                                .min(100),
+                        );
+                        return Ok(quality);
+                    }
                 }
             }
             let padded = (chunk_size + 1) & !1;
@@ -379,12 +395,11 @@ pub mod webp {
             if chunk_size > data.len().saturating_sub(payload_start) {
                 break;
             }
-            let payload_end = payload_start + chunk_size;
             // ANMF frame header is 16 bytes. Duration is a 24-bit little-endian integer at offset 12..15.
-            if chunk_id == b"ANMF" && payload_end >= payload_start + 16 {
-                let duration_ms = u32::from(*data.get(payload_start + 12).unwrap_or(&0))
-                    | (u32::from(*data.get(payload_start + 13).unwrap_or(&0)) << 8)
-                    | (u32::from(*data.get(payload_start + 14).unwrap_or(&0)) << 16);
+            if chunk_id == b"ANMF" && payload_start + 15 <= data.len() {
+                let duration_ms = u32::from(data[payload_start + 12])
+                    | (u32::from(data[payload_start + 13]) << 8)
+                    | (u32::from(data[payload_start + 14]) << 16);
                 if duration_ms > 0 && duration_ms <= 60_000 {
                     total_ms += u64::from(duration_ms);
                 }
@@ -404,9 +419,9 @@ pub mod webp {
                 // duration is 24-bit LE at payload offset 12..15 => idx + 8 + 12..15
                 let dur_off = idx + 8 + 12;
                 if dur_off + 3 <= data.len() {
-                    let duration_ms = u32::from(*data.get(dur_off).unwrap_or(&0))
-                        | (u32::from(*data.get(dur_off + 1).unwrap_or(&0)) << 8)
-                        | (u32::from(*data.get(dur_off + 2).unwrap_or(&0)) << 16);
+                    let duration_ms = u32::from(data[dur_off])
+                        | (u32::from(data[dur_off + 1]) << 8)
+                        | (u32::from(data[dur_off + 2]) << 16);
                     if duration_ms > 0 && duration_ms <= 60_000 {
                         total_ms += u64::from(duration_ms);
                     }
@@ -448,7 +463,7 @@ pub mod gif {
         if pos + 7 > data.len() {
             return 0;
         }
-        let packed = *data.get(pos + 4).unwrap_or(&0);
+        let packed = data[pos + 4];
         let has_gct = (packed & 0x80) != 0;
         let gct_size = if has_gct {
             3 * (1 << ((packed & 0x07) + 1))
@@ -461,14 +476,17 @@ pub mod gif {
         let mut gce_count = 0u32; // Graphic Control Extension count
 
         while pos < data.len() {
-            match *data.get(pos).unwrap_or(&0) {
+            let Some(&byte) = data.get(pos) else {
+                break;
+            };
+            match byte {
                 0x2C => {
                     // Image Descriptor
                     image_descriptors += 1;
                     if pos + 10 > data.len() {
                         break;
                     }
-                    let img_packed = *data.get(pos + 9).unwrap_or(&0);
+                    let img_packed = data[pos + 9];
                     let local_palette_active = (img_packed & 0x80) != 0;
                     let lct_size = if local_palette_active {
                         3 * (1 << ((img_packed & 0x07) + 1))
@@ -477,7 +495,6 @@ pub mod gif {
                     };
                     pos += 10 + lct_size;
 
-                    // --- CRITICAL FIX ---
                     // After Image Descriptor and optional Local Color Table,
                     // there is exactly ONE byte for LZW Minimum Code Size.
                     // We must skip it before reading the first data sub-block size.
@@ -487,8 +504,7 @@ pub mod gif {
 
                     // Skip Image Data sub-blocks
                     while pos < data.len() {
-                        let block_size =
-                            crate::numeric_cast::u8_to_usize_sat(*data.get(pos).unwrap_or(&0));
+                        let block_size = crate::numeric_cast::u8_to_usize_sat(data[pos]);
                         pos += 1;
                         if block_size == 0 {
                             break;
@@ -505,7 +521,7 @@ pub mod gif {
                     if pos + 2 >= data.len() {
                         break;
                     }
-                    let label = *data.get(pos + 1).unwrap_or(&0);
+                    let label = data[pos + 1];
                     if label == 0xF9 {
                         gce_count += 1;
                     }
@@ -513,8 +529,7 @@ pub mod gif {
                     pos += 2;
                     // Skip Extension Data blocks
                     while pos < data.len() {
-                        let block_size =
-                            crate::numeric_cast::u8_to_usize_sat(*data.get(pos).unwrap_or(&0));
+                        let block_size = crate::numeric_cast::u8_to_usize_sat(data[pos]);
                         pos += 1;
                         if block_size == 0 {
                             break;
@@ -579,9 +594,9 @@ pub mod avif {
     /// Returns an error if the format cannot be identified or parsed.
     pub fn is_lossless_from_bytes(data: &[u8], path: &Path) -> Result<bool> {
         if let Some(av1c_data) = find_box_data_recursive(data, *b"av1C") {
-            if av1c_data.len() >= 4 {
-                let byte1 = *av1c_data.get(1).unwrap_or(&0);
-                let byte2 = *av1c_data.get(2).unwrap_or(&0);
+            if av1c_data.len() >= 3 {
+                let byte1 = av1c_data[1];
+                let byte2 = av1c_data[2];
 
                 let seq_profile = (byte1 >> 5) & 0x07;
                 let high_bitdepth = (byte2 >> 6) & 0x01;
@@ -605,10 +620,7 @@ pub mod avif {
                 // Dimension 2: colr Identity matrix (MC=0)
                 if let Some(colr_data) = find_box_data_recursive(data, *b"colr") {
                     if colr_data.len() >= 11 && colr_data.get(0..4) == Some(b"nclx") {
-                        let matrix_coefficients = u16::from_be_bytes([
-                            *colr_data.get(8).unwrap_or(&0),
-                            *colr_data.get(9).unwrap_or(&0),
-                        ]);
+                        let matrix_coefficients = u16::from_be_bytes([colr_data[8], colr_data[9]]);
                         if matrix_coefficients == 0 {
                             return Ok(true);
                         }
@@ -629,16 +641,11 @@ pub mod avif {
                 if is_444 {
                     if let Some(pixi_data) = find_box_data_recursive(data, *b"pixi") {
                         if !pixi_data.is_empty() {
-                            let num_ch = crate::numeric_cast::u8_to_usize_sat(
-                                *pixi_data.first().unwrap_or(&0),
-                            );
+                            let num_ch = crate::numeric_cast::u8_to_usize_sat(pixi_data[0]);
                             if num_ch > 0 && pixi_data.len() > num_ch {
                                 let max_depth = pixi_data
                                     .get(1..=num_ch)
-                                    .unwrap_or(&[])
-                                    .iter()
-                                    .copied()
-                                    .max()
+                                    .and_then(|slice| slice.iter().copied().max())
                                     .unwrap_or(0);
                                 if max_depth >= 12 {
                                     return Ok(true);

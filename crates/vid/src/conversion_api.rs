@@ -17,22 +17,66 @@ fn convert_options_from_config(
 ) -> shared_utils::conversion::ConvertOptions {
     use shared_utils::conversion::ConvertFlags;
     use shared_utils::conversion_types::ConfigFlags;
-    
+
     // Batch flag mapping using bitwise OR for optimal performance
     let flags = ConvertFlags::empty()
-        | if config.flags.contains(ConfigFlags::FORCE) { ConvertFlags::FORCE } else { ConvertFlags::empty() }
-        | if config.flags.contains(ConfigFlags::DELETE_ORIGINAL) { ConvertFlags::DELETE_ORIGINAL } else { ConvertFlags::empty() }
-        | if config.flags.contains(ConfigFlags::IN_PLACE) { ConvertFlags::IN_PLACE } else { ConvertFlags::empty() }
-        | if config.flags.contains(ConfigFlags::EXPLORE_SMALLER) { ConvertFlags::EXPLORE } else { ConvertFlags::empty() }
-        | if config.flags.contains(ConfigFlags::MATCH_QUALITY) { ConvertFlags::MATCH_QUALITY } else { ConvertFlags::empty() }
-        | if config.flags.contains(ConfigFlags::APPLE_COMPAT) { ConvertFlags::APPLE_COMPAT } else { ConvertFlags::empty() }
-        | if config.flags.contains(ConfigFlags::REQUIRE_COMPRESSION) { ConvertFlags::COMPRESS } else { ConvertFlags::empty() }
-        | if config.flags.contains(ConfigFlags::USE_GPU) { ConvertFlags::USE_GPU } else { ConvertFlags::empty() }
-        | if config.flags.contains(ConfigFlags::ULTIMATE_MODE) { ConvertFlags::ULTIMATE } else { ConvertFlags::empty() }
-        | if config.flags.contains(ConfigFlags::ALLOW_SIZE_TOLERANCE) { ConvertFlags::ALLOW_SIZE_TOLERANCE } else { ConvertFlags::empty() }
-        | if shared_utils::progress_mode::is_verbose_mode() { ConvertFlags::VERBOSE } else { ConvertFlags::empty() };
-    
-    // Note: USE_LOSSLESS and FORCE_MS_SSIM_LONG are accessed directly from config, not mapped to ConvertFlags
+        | if config.flags.contains(ConfigFlags::FORCE) {
+            ConvertFlags::FORCE
+        } else {
+            ConvertFlags::empty()
+        }
+        | if config.flags.contains(ConfigFlags::DELETE_ORIGINAL) {
+            ConvertFlags::DELETE_ORIGINAL
+        } else {
+            ConvertFlags::empty()
+        }
+        | if config.flags.contains(ConfigFlags::IN_PLACE) {
+            ConvertFlags::IN_PLACE
+        } else {
+            ConvertFlags::empty()
+        }
+        | if config.flags.contains(ConfigFlags::EXPLORE_SMALLER) {
+            ConvertFlags::EXPLORE
+        } else {
+            ConvertFlags::empty()
+        }
+        | if config.flags.contains(ConfigFlags::MATCH_QUALITY) {
+            ConvertFlags::MATCH_QUALITY
+        } else {
+            ConvertFlags::empty()
+        }
+        | if config.flags.contains(ConfigFlags::APPLE_COMPAT) {
+            ConvertFlags::APPLE_COMPAT
+        } else {
+            ConvertFlags::empty()
+        }
+        | if config.flags.contains(ConfigFlags::REQUIRE_COMPRESSION) {
+            ConvertFlags::COMPRESS
+        } else {
+            ConvertFlags::empty()
+        }
+        | if config.flags.contains(ConfigFlags::USE_GPU) {
+            ConvertFlags::USE_GPU
+        } else {
+            ConvertFlags::empty()
+        }
+        | if config.flags.contains(ConfigFlags::ULTIMATE_MODE) {
+            ConvertFlags::ULTIMATE
+        } else {
+            ConvertFlags::empty()
+        }
+        | if config.flags.contains(ConfigFlags::ALLOW_SIZE_TOLERANCE) {
+            ConvertFlags::ALLOW_SIZE_TOLERANCE
+        } else {
+            ConvertFlags::empty()
+        }
+        | if shared_utils::progress_mode::is_verbose_mode() {
+            ConvertFlags::VERBOSE
+        } else {
+            ConvertFlags::empty()
+        };
+
+    // Note: FORCE_MS_SSIM_LONG is accessed directly from config, not mapped to ConvertFlags
     // Note: VERBOSE is read from global progress_mode state (set via set_verbose_mode in main.rs)
 
     shared_utils::conversion::ConvertOptions {
@@ -988,292 +1032,270 @@ pub fn auto_convert_with_cache(
         | TargetVideoFormat::Av1Mp4
         | TargetVideoFormat::Av2Mp4
         | TargetVideoFormat::VvcMp4 => {
-            if config.use_lossless() {
-                info!(
-                    "   🚀 Using {} Lossless Mode (forced)",
-                    config.codec.as_str().to_uppercase()
-                );
-                let size = execute_lossless(
-                    &detection,
-                    &temp_path,
-                    config.child_threads,
-                    config.codec,
-                    config.apple_compat(),
-                    config.ultimate_mode(),
-                )?;
-                (size, 0.0, 0, None)
-            } else {
-                let vf_args = shared_utils::get_ffmpeg_dimension_args(
-                    detection.width,
-                    detection.height,
-                    false,
-                );
-                let input_path = Path::new(&detection.file_path);
+            let vf_args =
+                shared_utils::get_ffmpeg_dimension_args(detection.width, detection.height, false);
+            let input_path = Path::new(&detection.file_path);
 
-                // Log media info to log file only (for SSIM/quality context); not shown on terminal.
-                if let Ok(quality_analysis) =
-                    shared_utils::analyze_video_quality_from_detection(&detection)
-                {
-                    shared_utils::log_media_info_for_quality(&quality_analysis, input_path);
-                }
-
-                let flag_mode =
-                    shared_utils::validate_flags_result_with_ultimate(shared_utils::FlagRequest {
-                        explore: config.explore_smaller(),
-                        match_quality: config.match_quality(),
-                        compress: config.require_compression(),
-                        ultimate: config.ultimate_mode(),
-                    })
-                    .map_err(VidQualityError::ConversionError)?;
-
-                let use_gpu = config.use_gpu();
-                if !use_gpu {
-                    let encoder_name = match config.codec {
-                        SelectedCodec::Hevc => "libx265",
-                        SelectedCodec::Av1 => "libsvtav1",
-                        SelectedCodec::Av2 => "libaom-av2",
-                        SelectedCodec::Vvc => "libvvenc",
-                    };
-                    info!(
-                        "   🖥️  CPU Mode: Using {} for higher SSIM (≥0.95)",
-                        encoder_name
-                    );
-                }
-
-                let ultimate = flag_mode.is_ultimate();
-
-                let predicted_crf = calculate_matched_crf(&detection, &config.codec)?;
-                let warm_start_crf = if let Some(hint) = detection.precision.last_best_crf {
-                    info!("   💡 Using cached CRF hint: {:.1} (warm start only)", hint);
-                    Some(hint)
-                } else if let Some(hint) = detection.precision.last_best_effort_crf {
-                    info!(
-                        "   💡 Using cached best-effort CRF hint: {:.1} (warm start only)",
-                        hint
-                    );
-                    Some(hint)
-                } else if let Some(hint) = match config.codec {
-                    SelectedCodec::Hevc => {
-                        shared_utils::crf_constants::get_global_last_hit_crf_hevc()
-                    }
-                    SelectedCodec::Av1 => {
-                        shared_utils::crf_constants::get_global_last_hit_crf_av1()
-                    }
-                    SelectedCodec::Av2 | SelectedCodec::Vvc => None, // No global hints for experimental codecs yet
-                } {
-                    info!(
-                        "   💡 Using global last hit {} CRF: {:.1} (warm start only)",
-                        config.codec.as_str().to_uppercase(),
-                        hint
-                    );
-                    Some(hint)
-                } else {
-                    None
-                };
-                let search_crf = warm_start_crf.unwrap_or(predicted_crf);
-                info!(
-                    "   {} {}: base CRF {:.1} → search anchor {:.1}",
-                    if ultimate { "🔥" } else { "🔬" },
-                    flag_mode.description_en(),
-                    predicted_crf,
-                    search_crf
-                );
-                let mut hdr_x265_params = String::new();
-
-                // Inject DV RPU path and profile into x265 params when available
-                let dv_rpu = prepare_dv_rpu(&detection);
-                if let Some(ref dv) = dv_rpu {
-                    let _ = write!(
-                        hdr_x265_params,
-                        ":dolby-vision-rpu={}:dolby-vision-profile={}",
-                        dv.rpu_path.display(),
-                        dv.profile_str
-                    );
-                }
-
-                // Inject HDR10+ metadata into x265 params
-                let hdr10plus = prepare_hdr10plus_metadata(&detection);
-                if let Some(ref hdr) = hdr10plus {
-                    let _ = write!(hdr_x265_params, ":dhdr10-info={}", hdr.json_path.display());
-                }
-
-                let is_hdr_content = detection.bit_depth >= 10
-                    || detection.is_dolby_vision
-                    || detection.is_hdr10_plus
-                    || detection.mastering_display.is_some()
-                    || matches!(
-                        detection.color_transfer.as_deref(),
-                        Some("smpte2084" | "arib-std-b67")
-                    );
-
-                if is_hdr_content {
-                    hdr_x265_params.insert_str(0, ":hdr-opt=1:repeat-headers=1");
-                }
-
-                if let Some(ref md) = detection.mastering_display {
-                    if !md.is_empty() {
-                        let _ = write!(hdr_x265_params, ":master-display={md}");
-                    }
-                }
-                if let Some(ref cll) = detection.max_cll {
-                    if !cll.is_empty() {
-                        let _ = write!(hdr_x265_params, ":max-cll={cll}");
-                    }
-                }
-
-                let hdr_x265_params_opt = if hdr_x265_params.is_empty() {
-                    None
-                } else {
-                    Some(hdr_x265_params.trim_start_matches(':').to_string())
-                };
-
-                let explore_result = match config.codec {
-                    SelectedCodec::Hevc => {
-                        shared_utils::explore_hevc_with_gpu(&shared_utils::GpuSearchRequest {
-                            input: input.to_path_buf(),
-                            output: temp_path.clone(),
-                            vf_args,
-                            baseline_crf: predicted_crf,
-                            warm_start_crf,
-                            ultimate_mode: ultimate,
-                            force_ms_ssim_long: config.force_ms_ssim_long(),
-                            allow_size_tolerance: config.allow_size_tolerance(),
-                            min_ssim: config.min_ssim,
-                            max_threads: config.child_threads,
-                            hdr_x265_params: hdr_x265_params_opt,
-                            apple_compat: config.apple_compat(),
-                            preset: if ultimate {
-                                shared_utils::EncoderPreset::Slower
-                            } else {
-                                shared_utils::EncoderPreset::Medium
-                            },
-                        })
-                    }
-                    SelectedCodec::Av1 => {
-                        shared_utils::explore_av1_with_gpu(&shared_utils::GpuSearchRequest {
-                            input: input.to_path_buf(),
-                            output: temp_path.clone(),
-                            vf_args,
-                            baseline_crf: predicted_crf,
-                            warm_start_crf,
-                            ultimate_mode: ultimate,
-                            force_ms_ssim_long: config.force_ms_ssim_long(),
-                            allow_size_tolerance: config.allow_size_tolerance(),
-                            min_ssim: config.min_ssim,
-                            max_threads: config.child_threads,
-                            hdr_x265_params: None,
-                            apple_compat: config.apple_compat(),
-                            preset: if ultimate {
-                                shared_utils::EncoderPreset::Slower
-                            } else {
-                                shared_utils::EncoderPreset::Medium
-                            },
-                        })
-                    }
-                    SelectedCodec::Av2 | SelectedCodec::Vvc => {
-                        return Err(VidQualityError::GeneralError(format!(
-                            "{} encoding not yet implemented (experimental codec)",
-                            config.codec.as_str().to_uppercase()
-                        )));
-                    }
-                }
-                .map_err(|e| VidQualityError::ConversionError(e.to_string()))?;
-
-                for log_line in &explore_result.log {
-                    info!("{}", log_line);
-                }
-
-                // --- Explore phase: quality/SSIM or size did not meet target; decide whether to keep or discard output. ---
-                if !explore_result.quality_passed.is_passed()
-                    && (config.match_quality() || config.explore_smaller())
-                {
-                    let total_file_compressed = explore_result.output_size < detection.file_size;
-                    let total_size_ratio = if detection.file_size > 0 {
-                        let ratio =
-                            rug::Rational::from((explore_result.output_size, detection.file_size));
-                        ratio.to_f64()
-                    } else {
-                        1.0
-                    };
-                    let decision = ExploreQualityFailureDecision::inspect_and_log(
-                        &explore_result,
-                        config.ultimate_mode(),
-                    );
-                    decision.emit();
-
-                    // Keep/discard by total file size only (video stream is internal metric).
-                    if shared_utils::should_keep_apple_fallback_hevc_output(
-                        shared_utils::AppleFallbackKeepRequest {
-                            codec_str: detection.codec.as_str(),
-                            total_file_compressed,
-                            total_size_ratio,
-                            allow_size_tolerance: config.allow_size_tolerance(),
-                            apple_compat: config.apple_compat(),
-                            source_is_gif,
-                        },
-                    ) {
-                        warn!("   ⚠️  APPLE COMPAT FALLBACK: keeping best-effort HEVC output (CRF {:.1}, {} iters) to ensure iOS importability, despite missing quality/size targets", explore_result.optimal_crf, explore_result.iterations);
-                        shared_utils::conversion::commit_temp_to_output_with_metadata(
-                            &temp_path,
-                            &output_path,
-                            config.force(),
-                            Some(input),
-                        )?;
-                        return Ok(ConversionOutput {
-                            input_path: input.display().to_string(),
-                            output_path: output_path.display().to_string(),
-                            strategy: ConversionStrategy {
-                                target: hevc_delivery_target(config.apple_compat()),
-                                reason: "Apple compat fallback: best-effort HEVC kept (quality/size below target)".to_string(),
-                                command: String::new(),
-                                preserve_audio: detection.has_audio,
-                                crf: explore_result.optimal_crf,
-                                lossless: false,
-                            },
-                            input_size: detection.file_size,
-                            output_size: explore_result.output_size,
-                            size_ratio: {
-                                let ratio = rug::Rational::from((explore_result.output_size, detection.file_size.max(1)));
-                                ratio.to_f64()
-                            },
-                            success: true,
-                            message: format!(
-                                "Apple compat fallback: kept best-effort output (CRF {:.1}, {} iters); quality/size below target — file is HEVC and importable",
-                                explore_result.optimal_crf,
-                                explore_result.iterations
-                            ),
-                            final_crf: explore_result.optimal_crf,
-                            exploration_attempts: u8::try_from(explore_result.iterations).unwrap_or(u8::MAX),
-                            blake3: None,
-                        });
-                    }
-
-                    if let Err(e) = std::fs::remove_file(&temp_path) {
-                        warn!(
-                            "Failed to clean up temp file {}: {}",
-                            temp_path.display(),
-                            e
-                        );
-                    }
-                    shared_utils::copy_on_skip_or_fail(
-                        input,
-                        config.output_dir.as_deref(),
-                        config.base_dir.as_deref(),
-                        false,
-                    )
-                    .map_err(|e| VidQualityError::GeneralError(e.to_string()))?;
-
-                    return Ok(decision.into_skip_output(input, &detection, &explore_result));
-                }
-
-                (
-                    explore_result.output_size,
-                    explore_result.optimal_crf,
-                    u8::try_from(explore_result.iterations).unwrap_or(u8::MAX),
-                    Some(explore_result),
-                )
+            // Log media info to log file only (for SSIM/quality context); not shown on terminal.
+            if let Ok(quality_analysis) =
+                shared_utils::analyze_video_quality_from_detection(&detection)
+            {
+                shared_utils::log_media_info_for_quality(&quality_analysis, input_path);
             }
+
+            let flag_mode =
+                shared_utils::validate_flags_result_with_ultimate(shared_utils::FlagRequest {
+                    explore: config.explore_smaller(),
+                    match_quality: config.match_quality(),
+                    compress: config.require_compression(),
+                    ultimate: config.ultimate_mode(),
+                })
+                .map_err(VidQualityError::ConversionError)?;
+
+            let use_gpu = config.use_gpu();
+            if !use_gpu {
+                let encoder_name = match config.codec {
+                    SelectedCodec::Hevc => "libx265",
+                    SelectedCodec::Av1 => "libsvtav1",
+                    SelectedCodec::Av2 => "libaom-av2",
+                    SelectedCodec::Vvc => "libvvenc",
+                };
+                info!(
+                    "   🖥️  CPU Mode: Using {} for higher SSIM (≥0.95)",
+                    encoder_name
+                );
+            }
+
+            let ultimate = flag_mode.is_ultimate();
+
+            let predicted_crf = calculate_matched_crf(&detection, &config.codec)?;
+            let warm_start_crf = if let Some(hint) = detection.precision.last_best_crf {
+                info!("   💡 Using cached CRF hint: {:.1} (warm start only)", hint);
+                Some(hint)
+            } else if let Some(hint) = detection.precision.last_best_effort_crf {
+                info!(
+                    "   💡 Using cached best-effort CRF hint: {:.1} (warm start only)",
+                    hint
+                );
+                Some(hint)
+            } else if let Some(hint) = match config.codec {
+                SelectedCodec::Hevc => shared_utils::crf_constants::get_global_last_hit_crf_hevc(),
+                SelectedCodec::Av1 => shared_utils::crf_constants::get_global_last_hit_crf_av1(),
+                SelectedCodec::Av2 | SelectedCodec::Vvc => None, // No global hints for experimental codecs yet
+            } {
+                info!(
+                    "   💡 Using global last hit {} CRF: {:.1} (warm start only)",
+                    config.codec.as_str().to_uppercase(),
+                    hint
+                );
+                Some(hint)
+            } else {
+                None
+            };
+            let search_crf = warm_start_crf.unwrap_or(predicted_crf);
+            info!(
+                "   {} {}: base CRF {:.1} → search anchor {:.1}",
+                if ultimate { "🔥" } else { "🔬" },
+                flag_mode.description_en(),
+                predicted_crf,
+                search_crf
+            );
+            let mut hdr_x265_params = String::new();
+
+            // Inject DV RPU path and profile into x265 params when available
+            let dv_rpu = prepare_dv_rpu(&detection);
+            if let Some(ref dv) = dv_rpu {
+                let _ = write!(
+                    hdr_x265_params,
+                    ":dolby-vision-rpu={}:dolby-vision-profile={}",
+                    dv.rpu_path.display(),
+                    dv.profile_str
+                );
+            }
+
+            // Inject HDR10+ metadata into x265 params
+            let hdr10plus = prepare_hdr10plus_metadata(&detection);
+            if let Some(ref hdr) = hdr10plus {
+                let _ = write!(hdr_x265_params, ":dhdr10-info={}", hdr.json_path.display());
+            }
+
+            let is_hdr_content = detection.bit_depth >= 10
+                || detection.is_dolby_vision
+                || detection.is_hdr10_plus
+                || detection.mastering_display.is_some()
+                || matches!(
+                    detection.color_transfer.as_deref(),
+                    Some("smpte2084" | "arib-std-b67")
+                );
+
+            if is_hdr_content {
+                hdr_x265_params.insert_str(0, ":hdr-opt=1:repeat-headers=1");
+            }
+
+            if let Some(ref md) = detection.mastering_display {
+                if !md.is_empty() {
+                    let _ = write!(hdr_x265_params, ":master-display={md}");
+                }
+            }
+            if let Some(ref cll) = detection.max_cll {
+                if !cll.is_empty() {
+                    let _ = write!(hdr_x265_params, ":max-cll={cll}");
+                }
+            }
+
+            let hdr_x265_params_opt = if hdr_x265_params.is_empty() {
+                None
+            } else {
+                Some(hdr_x265_params.trim_start_matches(':').to_string())
+            };
+
+            let explore_result = match config.codec {
+                SelectedCodec::Hevc => {
+                    shared_utils::explore_hevc_with_gpu(&shared_utils::GpuSearchRequest {
+                        input: input.to_path_buf(),
+                        output: temp_path.clone(),
+                        vf_args,
+                        baseline_crf: predicted_crf,
+                        warm_start_crf,
+                        ultimate_mode: ultimate,
+                        force_ms_ssim_long: config.force_ms_ssim_long(),
+                        allow_size_tolerance: config.allow_size_tolerance(),
+                        min_ssim: config.min_ssim,
+                        max_threads: config.child_threads,
+                        hdr_x265_params: hdr_x265_params_opt,
+                        apple_compat: config.apple_compat(),
+                        preset: if ultimate {
+                            shared_utils::EncoderPreset::Slower
+                        } else {
+                            shared_utils::EncoderPreset::Medium
+                        },
+                    })
+                }
+                SelectedCodec::Av1 => {
+                    shared_utils::explore_av1_with_gpu(&shared_utils::GpuSearchRequest {
+                        input: input.to_path_buf(),
+                        output: temp_path.clone(),
+                        vf_args,
+                        baseline_crf: predicted_crf,
+                        warm_start_crf,
+                        ultimate_mode: ultimate,
+                        force_ms_ssim_long: config.force_ms_ssim_long(),
+                        allow_size_tolerance: config.allow_size_tolerance(),
+                        min_ssim: config.min_ssim,
+                        max_threads: config.child_threads,
+                        hdr_x265_params: None,
+                        apple_compat: config.apple_compat(),
+                        preset: if ultimate {
+                            shared_utils::EncoderPreset::Slower
+                        } else {
+                            shared_utils::EncoderPreset::Medium
+                        },
+                    })
+                }
+                SelectedCodec::Av2 | SelectedCodec::Vvc => {
+                    return Err(VidQualityError::GeneralError(format!(
+                        "{} encoding not yet implemented (experimental codec)",
+                        config.codec.as_str().to_uppercase()
+                    )));
+                }
+            }
+            .map_err(|e| VidQualityError::ConversionError(e.to_string()))?;
+
+            for log_line in &explore_result.log {
+                info!("{}", log_line);
+            }
+
+            // --- Explore phase: quality/SSIM or size did not meet target; decide whether to keep or discard output. ---
+            if !explore_result.quality_passed.is_passed()
+                && (config.match_quality() || config.explore_smaller())
+            {
+                let total_file_compressed = explore_result.output_size < detection.file_size;
+                let total_size_ratio = if detection.file_size > 0 {
+                    let ratio =
+                        rug::Rational::from((explore_result.output_size, detection.file_size));
+                    ratio.to_f64()
+                } else {
+                    1.0
+                };
+                let decision = ExploreQualityFailureDecision::inspect_and_log(
+                    &explore_result,
+                    config.ultimate_mode(),
+                );
+                decision.emit();
+
+                // Keep/discard by total file size only (video stream is internal metric).
+                if shared_utils::should_keep_apple_fallback_hevc_output(
+                    shared_utils::AppleFallbackKeepRequest {
+                        codec_str: detection.codec.as_str(),
+                        total_file_compressed,
+                        total_size_ratio,
+                        allow_size_tolerance: config.allow_size_tolerance(),
+                        apple_compat: config.apple_compat(),
+                        source_is_gif,
+                    },
+                ) {
+                    warn!("   ⚠️  APPLE COMPAT FALLBACK: keeping best-effort HEVC output (CRF {:.1}, {} iters) to ensure iOS importability, despite missing quality/size targets", explore_result.optimal_crf, explore_result.iterations);
+                    shared_utils::conversion::commit_temp_to_output_with_metadata(
+                        &temp_path,
+                        &output_path,
+                        config.force(),
+                        Some(input),
+                    )?;
+                    return Ok(ConversionOutput {
+                        input_path: input.display().to_string(),
+                        output_path: output_path.display().to_string(),
+                        strategy: ConversionStrategy {
+                            target: hevc_delivery_target(config.apple_compat()),
+                            reason: "Apple compat fallback: best-effort HEVC kept (quality/size below target)".to_string(),
+                            command: String::new(),
+                            preserve_audio: detection.has_audio,
+                            crf: explore_result.optimal_crf,
+                            lossless: false,
+                        },
+                        input_size: detection.file_size,
+                        output_size: explore_result.output_size,
+                        size_ratio: {
+                            let ratio = rug::Rational::from((explore_result.output_size, detection.file_size.max(1)));
+                            ratio.to_f64()
+                        },
+                        success: true,
+                        message: format!(
+                            "Apple compat fallback: kept best-effort output (CRF {:.1}, {} iters); quality/size below target — file is HEVC and importable",
+                            explore_result.optimal_crf,
+                            explore_result.iterations
+                        ),
+                        final_crf: explore_result.optimal_crf,
+                        exploration_attempts: u8::try_from(explore_result.iterations).unwrap_or(u8::MAX),
+                        blake3: None,
+                    });
+                }
+
+                if let Err(e) = std::fs::remove_file(&temp_path) {
+                    warn!(
+                        "Failed to clean up temp file {}: {}",
+                        temp_path.display(),
+                        e
+                    );
+                }
+                shared_utils::copy_on_skip_or_fail(
+                    input,
+                    config.output_dir.as_deref(),
+                    config.base_dir.as_deref(),
+                    false,
+                )
+                .map_err(|e| VidQualityError::GeneralError(e.to_string()))?;
+
+                return Ok(decision.into_skip_output(input, &detection, &explore_result));
+            }
+
+            (
+                explore_result.output_size,
+                explore_result.optimal_crf,
+                u8::try_from(explore_result.iterations).unwrap_or(u8::MAX),
+                Some(explore_result),
+            )
         }
+
         TargetVideoFormat::Ffv1Mkv => unreachable!("HEVC tool should not return AV1/FFV1 target"),
         TargetVideoFormat::Skip => unreachable!(),
     };

@@ -33,7 +33,6 @@ bitflags! {
         const FORCE = 1 << 0;
         const DELETE_ORIGINAL = 1 << 1;
         const EXPLORE_SMALLER = 1 << 2;
-        const USE_LOSSLESS = 1 << 3;
         const MATCH_QUALITY = 1 << 4;
         const IN_PLACE = 1 << 5;
         const REQUIRE_COMPRESSION = 1 << 6;
@@ -139,10 +138,6 @@ impl ConversionConfig {
     #[must_use]
     pub const fn explore_smaller(&self) -> bool {
         self.flags.contains(ConfigFlags::EXPLORE_SMALLER)
-    }
-    #[must_use]
-    pub const fn use_lossless(&self) -> bool {
-        self.flags.contains(ConfigFlags::USE_LOSSLESS)
     }
     #[must_use]
     pub const fn match_quality(&self) -> bool {

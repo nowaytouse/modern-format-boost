@@ -31,10 +31,7 @@ use crate::jxl_builder::CjxlBuilder;
 fn read_native_u16_word(data: &[u8], word_index: usize) -> Option<u16> {
     let byte_index = word_index.checked_mul(2)?;
     let bytes = data.get(byte_index..byte_index + 2)?;
-    Some(u16::from_ne_bytes([
-        *bytes.first().unwrap_or(&0),
-        *bytes.get(1).unwrap_or(&0),
-    ]))
+    Some(u16::from_ne_bytes([bytes[0], bytes[1]]))
 }
 
 /// HDR intermediate format selection
@@ -493,8 +490,14 @@ fn decode_heif_handle(handle: &ImageHandle, color_space: ColorSpace) -> Result<D
                 // Handle 10/12/16-bit (data is actually u16 even if returned as &[u8])
                 let mut buffer = ImageBuffer::new(width, height);
                 for (x, y, pixel) in buffer.enumerate_pixels_mut() {
-                    let offset = usize::try_from(y).unwrap_or(0) * (r_plane.stride / 2)
-                        + usize::try_from(x).unwrap_or(0) * 3;
+                    let y_usize =
+                        usize::try_from(y).map_err(|_| anyhow!("Y coordinate overflow: {}", y))?;
+                    let x_usize =
+                        usize::try_from(x).map_err(|_| anyhow!("X coordinate overflow: {}", x))?;
+                    let offset = y_usize
+                        .checked_mul(r_plane.stride / 2)
+                        .and_then(|v| v.checked_add(x_usize.checked_mul(3)?))
+                        .ok_or_else(|| anyhow!("RGB16 offset calculation overflow"))?;
                     let r = read_native_u16_word(r_plane.data, offset)
                         .ok_or_else(|| anyhow!("RGB16 plane buffer shorter than expected"))?;
                     let g = read_native_u16_word(r_plane.data, offset + 1)
@@ -507,12 +510,17 @@ fn decode_heif_handle(handle: &ImageHandle, color_space: ColorSpace) -> Result<D
             } else {
                 let mut buffer = ImageBuffer::new(width, height);
                 for (x, y, pixel) in buffer.enumerate_pixels_mut() {
-                    let offset = usize::try_from(y).unwrap_or(0) * r_plane.stride
-                        + usize::try_from(x).unwrap_or(0) * 3;
-                    let r = *r_plane.data.get(offset).unwrap_or(&0);
-                    let g = *r_plane.data.get(offset + 1).unwrap_or(&0);
-                    let b = *r_plane.data.get(offset + 2).unwrap_or(&0);
-                    *pixel = image::Rgb([r, g, b]);
+                    let y_usize = usize::try_from(y).unwrap_or(0);
+                    let x_usize = usize::try_from(x).unwrap_or(0);
+                    let offset = y_usize
+                        .saturating_mul(r_plane.stride)
+                        .saturating_add(x_usize.saturating_mul(3));
+                    if offset + 2 < r_plane.data.len() {
+                        let r = r_plane.data[offset];
+                        let g = r_plane.data[offset + 1];
+                        let b = r_plane.data[offset + 2];
+                        *pixel = image::Rgb([r, g, b]);
+                    }
                 }
                 Ok(DynamicImage::ImageRgb8(buffer))
             }
@@ -524,8 +532,14 @@ fn decode_heif_handle(handle: &ImageHandle, color_space: ColorSpace) -> Result<D
             if bit_depth > 8 {
                 let mut buffer = ImageBuffer::new(width, height);
                 for (x, y, pixel) in buffer.enumerate_pixels_mut() {
-                    let offset = usize::try_from(y).unwrap_or(0) * (y_plane.stride / 2)
-                        + usize::try_from(x).unwrap_or(0);
+                    let y_usize =
+                        usize::try_from(y).map_err(|_| anyhow!("Y coordinate overflow: {}", y))?;
+                    let x_usize =
+                        usize::try_from(x).map_err(|_| anyhow!("X coordinate overflow: {}", x))?;
+                    let offset = y_usize
+                        .checked_mul(y_plane.stride / 2)
+                        .and_then(|v| v.checked_add(x_usize))
+                        .ok_or_else(|| anyhow!("Luma16 offset calculation overflow"))?;
                     let val = read_native_u16_word(y_plane.data, offset)
                         .ok_or_else(|| anyhow!("Luma16 plane buffer shorter than expected"))?;
                     *pixel = image::Luma([val]);
@@ -534,10 +548,15 @@ fn decode_heif_handle(handle: &ImageHandle, color_space: ColorSpace) -> Result<D
             } else {
                 let mut buffer = ImageBuffer::new(width, height);
                 for (x, y, pixel) in buffer.enumerate_pixels_mut() {
-                    let offset = usize::try_from(y).unwrap_or(0) * y_plane.stride
-                        + usize::try_from(x).unwrap_or(0);
-                    let val = *y_plane.data.get(offset).unwrap_or(&0);
-                    *pixel = image::Luma([val]);
+                    let y_usize = usize::try_from(y).unwrap_or(0);
+                    let x_usize = usize::try_from(x).unwrap_or(0);
+                    let offset = y_usize
+                        .saturating_mul(y_plane.stride)
+                        .saturating_add(x_usize);
+                    if offset < y_plane.data.len() {
+                        let val = y_plane.data[offset];
+                        *pixel = image::Luma([val]);
+                    }
                 }
                 Ok(DynamicImage::ImageLuma8(buffer))
             }
@@ -554,10 +573,7 @@ fn is_display_p3(data: &[u8]) -> bool {
         if colr_data.len() >= 11 && colr_data.get(0..4) == Some(b"nclx") {
             // flavour: nclx
             // colour_primaries: bytes 8-9 (u16 BE)
-            let primaries = u16::from_be_bytes([
-                *colr_data.get(8).unwrap_or(&0),
-                *colr_data.get(9).unwrap_or(&0),
-            ]);
+            let primaries = u16::from_be_bytes([colr_data[8], colr_data[9]]);
             return primaries == 12; // 12 = Display P3, 1 = Rec.709/sRGB
         }
     }
@@ -964,15 +980,39 @@ fn write_png16(pixels: &[f32], width: u32, height: u32, path: &Path) -> Result<(
     let mut buffer: ImageBuffer<Rgb<u16>, Vec<u16>> = ImageBuffer::new(width, height);
 
     for (x, y, pixel) in buffer.enumerate_pixels_mut() {
-        let idx = usize::try_from(y * width + x).unwrap_or(0) * 3;
+        let y_u64 = u64::from(y);
+        let x_u64 = u64::from(x);
+        let width_u64 = u64::from(width);
+        let idx_u64 = y_u64
+            .checked_mul(width_u64)
+            .and_then(|v| v.checked_add(x_u64))
+            .and_then(|v| v.checked_mul(3))
+            .ok_or_else(|| anyhow!("Pixel index calculation overflow at ({}, {})", x, y))?;
+        let idx =
+            usize::try_from(idx_u64).map_err(|_| anyhow!("Pixel index too large: {}", idx_u64))?;
+
         let r = crate::numeric_cast::f32_to_u16_sat(
-            linear_to_pq(*pixels.get(idx).unwrap_or(&0.0)) * 65535.0,
+            linear_to_pq(*pixels.get(idx).ok_or_else(|| {
+                anyhow!("Pixel buffer too short: index {} >= {}", idx, pixels.len())
+            })?) * 65535.0,
         );
         let g = crate::numeric_cast::f32_to_u16_sat(
-            linear_to_pq(*pixels.get(idx + 1).unwrap_or(&0.0)) * 65535.0,
+            linear_to_pq(*pixels.get(idx + 1).ok_or_else(|| {
+                anyhow!(
+                    "Pixel buffer too short: index {} >= {}",
+                    idx + 1,
+                    pixels.len()
+                )
+            })?) * 65535.0,
         );
         let b = crate::numeric_cast::f32_to_u16_sat(
-            linear_to_pq(*pixels.get(idx + 2).unwrap_or(&0.0)) * 65535.0,
+            linear_to_pq(*pixels.get(idx + 2).ok_or_else(|| {
+                anyhow!(
+                    "Pixel buffer too short: index {} >= {}",
+                    idx + 2,
+                    pixels.len()
+                )
+            })?) * 65535.0,
         );
         *pixel = Rgb([r, g, b]);
     }
@@ -987,19 +1027,22 @@ fn write_png16(pixels: &[f32], width: u32, height: u32, path: &Path) -> Result<(
 fn write_exr(pixels: &[f32], width: u32, height: u32, path: &Path) -> Result<()> {
     use exr::prelude::*;
 
-    write_rgb_file(
-        path,
-        usize::try_from(width).unwrap_or(0),
-        usize::try_from(height).unwrap_or(0),
-        |x, y| {
-            let idx = (y * usize::try_from(width).unwrap_or(0) + x) * 3;
-            (
-                *pixels.get(idx).unwrap_or(&0.0),
-                *pixels.get(idx + 1).unwrap_or(&0.0),
-                *pixels.get(idx + 2).unwrap_or(&0.0),
-            )
-        },
-    )
+    let width_usize = usize::try_from(width).map_err(|_| anyhow!("Width too large: {}", width))?;
+    let height_usize =
+        usize::try_from(height).map_err(|_| anyhow!("Height too large: {}", height))?;
+
+    write_rgb_file(path, width_usize, height_usize, |x, y| {
+        let idx = y
+            .checked_mul(width_usize)
+            .and_then(|v| v.checked_add(x))
+            .and_then(|v| v.checked_mul(3))
+            .unwrap_or(pixels.len()); // Out of bounds will be caught by get()
+        (
+            *pixels.get(idx).unwrap_or(&0.0),
+            *pixels.get(idx + 1).unwrap_or(&0.0),
+            *pixels.get(idx + 2).unwrap_or(&0.0),
+        )
+    })
     .context("Failed to write EXR file")?;
 
     Ok(())

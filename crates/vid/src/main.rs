@@ -195,17 +195,57 @@ fn main() -> anyhow::Result<()> {
                 output_dir: output.clone(),
                 base_dir: base_dir.clone(),
                 flags: ConfigFlags::empty()
-                    | if force { ConfigFlags::FORCE } else { ConfigFlags::empty() }
-                    | if delete_original { ConfigFlags::DELETE_ORIGINAL } else { ConfigFlags::empty() }
-                    | if explore { ConfigFlags::EXPLORE_SMALLER } else { ConfigFlags::empty() }
-                    | if match_quality { ConfigFlags::MATCH_QUALITY } else { ConfigFlags::empty() }
-                    | if in_place { ConfigFlags::IN_PLACE } else { ConfigFlags::empty() }
-                    | if apple_compat { ConfigFlags::APPLE_COMPAT } else { ConfigFlags::empty() }
-                    | if compress { ConfigFlags::REQUIRE_COMPRESSION } else { ConfigFlags::empty() }
+                    | if force {
+                        ConfigFlags::FORCE
+                    } else {
+                        ConfigFlags::empty()
+                    }
+                    | if delete_original {
+                        ConfigFlags::DELETE_ORIGINAL
+                    } else {
+                        ConfigFlags::empty()
+                    }
+                    | if explore {
+                        ConfigFlags::EXPLORE_SMALLER
+                    } else {
+                        ConfigFlags::empty()
+                    }
+                    | if match_quality {
+                        ConfigFlags::MATCH_QUALITY
+                    } else {
+                        ConfigFlags::empty()
+                    }
+                    | if in_place {
+                        ConfigFlags::IN_PLACE
+                    } else {
+                        ConfigFlags::empty()
+                    }
+                    | if apple_compat {
+                        ConfigFlags::APPLE_COMPAT
+                    } else {
+                        ConfigFlags::empty()
+                    }
+                    | if compress {
+                        ConfigFlags::REQUIRE_COMPRESSION
+                    } else {
+                        ConfigFlags::empty()
+                    }
                     | ConfigFlags::USE_GPU
-                    | if force_ms_ssim_long { ConfigFlags::FORCE_MS_SSIM_LONG } else { ConfigFlags::empty() }
-                    | if ultimate { ConfigFlags::ULTIMATE_MODE } else { ConfigFlags::empty() }
-                    | if allow_size_tolerance { ConfigFlags::ALLOW_SIZE_TOLERANCE } else { ConfigFlags::empty() },
+                    | if force_ms_ssim_long {
+                        ConfigFlags::FORCE_MS_SSIM_LONG
+                    } else {
+                        ConfigFlags::empty()
+                    }
+                    | if ultimate {
+                        ConfigFlags::ULTIMATE_MODE
+                    } else {
+                        ConfigFlags::empty()
+                    }
+                    | if allow_size_tolerance {
+                        ConfigFlags::ALLOW_SIZE_TOLERANCE
+                    } else {
+                        ConfigFlags::empty()
+                    },
                 min_ssim: 0.95,
                 child_threads: shared_utils::thread_manager::get_balanced_thread_config(
                     shared_utils::thread_manager::WorkloadType::Video,

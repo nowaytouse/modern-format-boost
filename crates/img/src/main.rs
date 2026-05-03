@@ -74,6 +74,12 @@ enum Commands {
         #[arg(long)]
         no_allow_size_tolerance: bool,
 
+        #[arg(long, default_value_t = true)]
+        preserve_timestamps: bool,
+
+        #[arg(long, default_value_t = true)]
+        preserve_metadata: bool,
+
         #[arg(short, long)]
         verbose: bool,
 
@@ -214,6 +220,8 @@ fn main() -> anyhow::Result<()> {
             ultimate,
             allow_size_tolerance,
             no_allow_size_tolerance,
+            preserve_timestamps,
+            preserve_metadata,
             verbose,
 
             base_dir,
@@ -320,17 +328,67 @@ fn main() -> anyhow::Result<()> {
                 flags: {
                     // Batch flag construction using bitwise OR for optimal performance
                     ConfigFlags::empty()
-                        | if force { ConfigFlags::FORCE } else { ConfigFlags::empty() }
-                        | if should_delete { ConfigFlags::DELETE_ORIGINAL } else { ConfigFlags::empty() }
-                        | if compress { ConfigFlags::COMPRESS } else { ConfigFlags::empty() }
-                        | if apple_compat { ConfigFlags::APPLE_COMPAT } else { ConfigFlags::empty() }
-                        | if in_place { ConfigFlags::IN_PLACE } else { ConfigFlags::empty() }
-                        | if explore { ConfigFlags::EXPLORE_SMALLER } else { ConfigFlags::empty() }
-                        | if match_quality { ConfigFlags::MATCH_QUALITY } else { ConfigFlags::empty() }
+                        | if force {
+                            ConfigFlags::FORCE
+                        } else {
+                            ConfigFlags::empty()
+                        }
+                        | if should_delete {
+                            ConfigFlags::DELETE_ORIGINAL
+                        } else {
+                            ConfigFlags::empty()
+                        }
+                        | if preserve_timestamps {
+                            ConfigFlags::PRESERVE_TIMESTAMPS
+                        } else {
+                            ConfigFlags::empty()
+                        }
+                        | if preserve_metadata {
+                            ConfigFlags::PRESERVE_METADATA
+                        } else {
+                            ConfigFlags::empty()
+                        }
+                        | if compress {
+                            ConfigFlags::COMPRESS
+                        } else {
+                            ConfigFlags::empty()
+                        }
+                        | if apple_compat {
+                            ConfigFlags::APPLE_COMPAT
+                        } else {
+                            ConfigFlags::empty()
+                        }
+                        | if in_place {
+                            ConfigFlags::IN_PLACE
+                        } else {
+                            ConfigFlags::empty()
+                        }
+                        | if explore {
+                            ConfigFlags::EXPLORE_SMALLER
+                        } else {
+                            ConfigFlags::empty()
+                        }
+                        | if match_quality {
+                            ConfigFlags::MATCH_QUALITY
+                        } else {
+                            ConfigFlags::empty()
+                        }
                         | ConfigFlags::USE_GPU
-                        | if ultimate { ConfigFlags::ULTIMATE_MODE } else { ConfigFlags::empty() }
-                        | if allow_size_tolerance { ConfigFlags::ALLOW_SIZE_TOLERANCE } else { ConfigFlags::empty() }
-                        | if verbose { ConfigFlags::VERBOSE } else { ConfigFlags::empty() }
+                        | if ultimate {
+                            ConfigFlags::ULTIMATE_MODE
+                        } else {
+                            ConfigFlags::empty()
+                        }
+                        | if allow_size_tolerance {
+                            ConfigFlags::ALLOW_SIZE_TOLERANCE
+                        } else {
+                            ConfigFlags::empty()
+                        }
+                        | if verbose {
+                            ConfigFlags::VERBOSE
+                        } else {
+                            ConfigFlags::empty()
+                        }
                 },
                 child_threads: 0,
 
@@ -629,17 +687,39 @@ struct AutoConvertConfig {
 }
 
 impl AutoConvertConfig {
-    const fn force(&self) -> bool { self.flags.contains(ConfigFlags::FORCE) }
-    const fn delete_original(&self) -> bool { self.flags.contains(ConfigFlags::DELETE_ORIGINAL) }
-    const fn compress(&self) -> bool { self.flags.contains(ConfigFlags::COMPRESS) }
-    const fn apple_compat(&self) -> bool { self.flags.contains(ConfigFlags::APPLE_COMPAT) }
-    const fn in_place(&self) -> bool { self.flags.contains(ConfigFlags::IN_PLACE) }
-    const fn explore(&self) -> bool { self.flags.contains(ConfigFlags::EXPLORE_SMALLER) }
-    const fn match_quality(&self) -> bool { self.flags.contains(ConfigFlags::MATCH_QUALITY) }
-    const fn use_gpu(&self) -> bool { self.flags.contains(ConfigFlags::USE_GPU) }
-    const fn ultimate(&self) -> bool { self.flags.contains(ConfigFlags::ULTIMATE_MODE) }
-    const fn allow_size_tolerance(&self) -> bool { self.flags.contains(ConfigFlags::ALLOW_SIZE_TOLERANCE) }
-    const fn verbose(&self) -> bool { self.flags.contains(ConfigFlags::VERBOSE) }
+    const fn force(&self) -> bool {
+        self.flags.contains(ConfigFlags::FORCE)
+    }
+    const fn delete_original(&self) -> bool {
+        self.flags.contains(ConfigFlags::DELETE_ORIGINAL)
+    }
+    const fn compress(&self) -> bool {
+        self.flags.contains(ConfigFlags::COMPRESS)
+    }
+    const fn apple_compat(&self) -> bool {
+        self.flags.contains(ConfigFlags::APPLE_COMPAT)
+    }
+    const fn in_place(&self) -> bool {
+        self.flags.contains(ConfigFlags::IN_PLACE)
+    }
+    const fn explore(&self) -> bool {
+        self.flags.contains(ConfigFlags::EXPLORE_SMALLER)
+    }
+    const fn match_quality(&self) -> bool {
+        self.flags.contains(ConfigFlags::MATCH_QUALITY)
+    }
+    const fn use_gpu(&self) -> bool {
+        self.flags.contains(ConfigFlags::USE_GPU)
+    }
+    const fn ultimate(&self) -> bool {
+        self.flags.contains(ConfigFlags::ULTIMATE_MODE)
+    }
+    const fn allow_size_tolerance(&self) -> bool {
+        self.flags.contains(ConfigFlags::ALLOW_SIZE_TOLERANCE)
+    }
+    const fn verbose(&self) -> bool {
+        self.flags.contains(ConfigFlags::VERBOSE)
+    }
 }
 
 fn copy_original_if_adjacent_mode(input: &Path, config: &AutoConvertConfig) -> anyhow::Result<()> {
@@ -818,19 +898,71 @@ fn auto_convert_single_file(
         flags: {
             // Batch flag construction using bitwise OR for optimal performance
             ConvertFlags::empty()
-                | if config.force() { ConvertFlags::FORCE } else { ConvertFlags::empty() }
-                | if config.delete_original() { ConvertFlags::DELETE_ORIGINAL } else { ConvertFlags::empty() }
-                | if config.in_place() { ConvertFlags::IN_PLACE } else { ConvertFlags::empty() }
-                | if config.explore() { ConvertFlags::EXPLORE } else { ConvertFlags::empty() }
-                | if config.match_quality() { ConvertFlags::MATCH_QUALITY } else { ConvertFlags::empty() }
-                | if config.compress() { ConvertFlags::COMPRESS } else { ConvertFlags::empty() }
-                | if config.apple_compat() { ConvertFlags::APPLE_COMPAT } else { ConvertFlags::empty() }
-                | if config.use_gpu() { ConvertFlags::USE_GPU } else { ConvertFlags::empty() }
-                | if config.ultimate() { ConvertFlags::ULTIMATE } else { ConvertFlags::empty() }
-                | if config.allow_size_tolerance() { ConvertFlags::ALLOW_SIZE_TOLERANCE } else { ConvertFlags::empty() }
-                | if config.verbose() { ConvertFlags::VERBOSE } else { ConvertFlags::empty() }
-                | if config.allow_size_tolerance() { ConvertFlags::ALLOW_SIZE_TOLERANCE } else { ConvertFlags::empty() }
-                | if config.verbose() { ConvertFlags::VERBOSE } else { ConvertFlags::empty() }
+                | if config.force() {
+                    ConvertFlags::FORCE
+                } else {
+                    ConvertFlags::empty()
+                }
+                | if config.delete_original() {
+                    ConvertFlags::DELETE_ORIGINAL
+                } else {
+                    ConvertFlags::empty()
+                }
+                | if config.in_place() {
+                    ConvertFlags::IN_PLACE
+                } else {
+                    ConvertFlags::empty()
+                }
+                | if config.explore() {
+                    ConvertFlags::EXPLORE
+                } else {
+                    ConvertFlags::empty()
+                }
+                | if config.match_quality() {
+                    ConvertFlags::MATCH_QUALITY
+                } else {
+                    ConvertFlags::empty()
+                }
+                | if config.compress() {
+                    ConvertFlags::COMPRESS
+                } else {
+                    ConvertFlags::empty()
+                }
+                | if config.apple_compat() {
+                    ConvertFlags::APPLE_COMPAT
+                } else {
+                    ConvertFlags::empty()
+                }
+                | if config.use_gpu() {
+                    ConvertFlags::USE_GPU
+                } else {
+                    ConvertFlags::empty()
+                }
+                | if config.ultimate() {
+                    ConvertFlags::ULTIMATE
+                } else {
+                    ConvertFlags::empty()
+                }
+                | if config.allow_size_tolerance() {
+                    ConvertFlags::ALLOW_SIZE_TOLERANCE
+                } else {
+                    ConvertFlags::empty()
+                }
+                | if config.verbose() {
+                    ConvertFlags::VERBOSE
+                } else {
+                    ConvertFlags::empty()
+                }
+                | if config.allow_size_tolerance() {
+                    ConvertFlags::ALLOW_SIZE_TOLERANCE
+                } else {
+                    ConvertFlags::empty()
+                }
+                | if config.verbose() {
+                    ConvertFlags::VERBOSE
+                } else {
+                    ConvertFlags::empty()
+                }
         },
         child_threads: if config.child_threads > 0 {
             config.child_threads

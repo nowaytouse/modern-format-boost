@@ -89,8 +89,12 @@ pub fn calculate_ssim(original: &DynamicImage, converted: &DynamicImage) -> Opti
     let orig_gray = original.to_luma8();
     let conv_gray = converted.to_luma8();
 
-    let width = usize::try_from(w1).unwrap_or(0);
-    let height = usize::try_from(h1).unwrap_or(0);
+    let width = usize::try_from(w1)
+        .map_err(|_| anyhow::anyhow!("Width overflow: {}", w1))
+        .ok()?;
+    let height = usize::try_from(h1)
+        .map_err(|_| anyhow::anyhow!("Height overflow: {}", h1))
+        .ok()?;
 
     if width < WINDOW_SIZE || height < WINDOW_SIZE {
         return calculate_ssim_simple(original, converted);
@@ -131,24 +135,24 @@ fn calculate_window_ssim(
         for (j, _) in row.iter().enumerate() {
             let px = x + j;
             let py = y + i;
+            // px and py are guaranteed to be within image bounds by the valid_width/valid_height calculation
+            // However, we still need to convert usize -> u32 safely
+            // If the image dimensions fit in u32 (which they do, since w1/h1 are u32), then px/py will too
+            let Some(px_u32) = u32::try_from(px).ok() else {
+                continue; // Skip this pixel if conversion fails (shouldn't happen in practice)
+            };
+            let Some(py_u32) = u32::try_from(py).ok() else {
+                continue;
+            };
+
             if let Some(r) = buf_x.get_mut(i) {
                 if let Some(c) = r.get_mut(j) {
-                    *c = f64::from(
-                        orig.get_pixel(
-                            u32::try_from(px).unwrap_or(0),
-                            u32::try_from(py).unwrap_or(0),
-                        )[0],
-                    );
+                    *c = f64::from(orig.get_pixel(px_u32, py_u32)[0]);
                 }
             }
             if let Some(r) = buf_y.get_mut(i) {
                 if let Some(c) = r.get_mut(j) {
-                    *c = f64::from(
-                        conv.get_pixel(
-                            u32::try_from(px).unwrap_or(0),
-                            u32::try_from(py).unwrap_or(0),
-                        )[0],
-                    );
+                    *c = f64::from(conv.get_pixel(px_u32, py_u32)[0]);
                 }
             }
         }

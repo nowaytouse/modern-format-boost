@@ -233,25 +233,11 @@ impl<'a> VideoConversionPipeline<'a> {
         let temp_path = self.temp_path.as_ref().unwrap();
         let config = self.config;
 
-        if config.use_lossless() {
-            let size = crate::conversion_api::execute_lossless(
-                detection,
-                temp_path,
-                config.child_threads,
-                config.codec,
-                config.apple_compat(),
-                config.ultimate_mode(),
-            )?;
-            return Ok(ExecutionMetrics {
-                output_size: size,
-                final_crf: 0.0,
-                attempts: 0,
-                explore_result: None,
-            });
-        }
-
-        let vf_args =
-            shared_utils::get_ffmpeg_dimension_args(detection.width, detection.height, false);
+        let vf_args = shared_utils::get_ffmpeg_dimension_args(
+            detection.width,
+            detection.height,
+            false,
+        );
         let predicted_crf = crate::conversion_api::calculate_matched_crf(detection, &config.codec)?;
 
         let warm_start_crf = self.get_warm_start_crf(predicted_crf);
