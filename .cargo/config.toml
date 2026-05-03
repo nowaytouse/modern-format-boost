@@ -17,6 +17,8 @@ rustflags = [
 [target.'cfg(target_os = "macos")']
 rustflags = [
     "-C", "overflow-checks=on",
+    # Fix libstdc++ linking issue on macOS (use libc++ instead)
+    "-C", "link-arg=-lc++",
     # Enable Faster Linker (system default is usually fine on Sonoma+, 
     # but -C link-arg=-fuse-ld=lld can be added if lld is installed)
 ]
