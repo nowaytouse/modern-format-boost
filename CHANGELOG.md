@@ -139,6 +139,12 @@ All notable changes to this project will be documented in this file.
   - Ensures compliance with the Quality Manifesto: "NO silent fallback - errors fail loudly".
   - Centralized rational conversion safety in `numeric_cast::f64_to_rational_loud`.
 
+- **Improved Ctrl+C Guard reliability**
+  - Lowered confirmation prompt threshold from 4.5 minutes to 10 seconds, ensuring protection for all non-trivial tasks.
+  - Implemented "Double Ctrl+C" force-exit: pressing Ctrl+C again while the prompt is active now exits immediately.
+  - Fixed prompt message/logic discrepancy: Enter now correctly resumes processing, consistent with the `[y/N]` default.
+  - Cleaned up unused `START_EPOCH_NANOS` atomic state.
+
 ### 📄 Compliance & Documentation
 
 - **Reorganized license reports**
