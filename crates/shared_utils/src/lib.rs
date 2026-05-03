@@ -141,6 +141,8 @@ pub mod progress_mode;
 
 /// Global `Ctrl+C` handling and guard system.
 pub mod ctrlc_guard;
+#[cfg(test)]
+mod ctrlc_guard_tests;
 
 /// Unified progress bar interface.
 pub mod unified_progress;
