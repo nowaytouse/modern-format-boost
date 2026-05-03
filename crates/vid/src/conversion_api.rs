@@ -29,7 +29,11 @@ fn convert_options_from_config(
         | if config.flags.contains(ConfigFlags::REQUIRE_COMPRESSION) { ConvertFlags::COMPRESS } else { ConvertFlags::empty() }
         | if config.flags.contains(ConfigFlags::USE_GPU) { ConvertFlags::USE_GPU } else { ConvertFlags::empty() }
         | if config.flags.contains(ConfigFlags::ULTIMATE_MODE) { ConvertFlags::ULTIMATE } else { ConvertFlags::empty() }
-        | if config.flags.contains(ConfigFlags::ALLOW_SIZE_TOLERANCE) { ConvertFlags::ALLOW_SIZE_TOLERANCE } else { ConvertFlags::empty() };
+        | if config.flags.contains(ConfigFlags::ALLOW_SIZE_TOLERANCE) { ConvertFlags::ALLOW_SIZE_TOLERANCE } else { ConvertFlags::empty() }
+        | if shared_utils::progress_mode::is_verbose_mode() { ConvertFlags::VERBOSE } else { ConvertFlags::empty() };
+    
+    // Note: USE_LOSSLESS and FORCE_MS_SSIM_LONG are accessed directly from config, not mapped to ConvertFlags
+    // Note: VERBOSE is read from global progress_mode state (set via set_verbose_mode in main.rs)
 
     shared_utils::conversion::ConvertOptions {
         flags,
