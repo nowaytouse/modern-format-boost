@@ -273,16 +273,16 @@ enum AudioTranscodeStrategy {
 fn build_color_args_from_probe(probe: &crate::ffprobe::FFprobeResult) -> Vec<String> {
     let mut args: Vec<String> = Vec::new();
 
-    if let Some(ref cp) = probe.color_primaries {
+    if let Some(cp) = &probe.color_primaries {
         if !cp.is_empty() && cp != "unknown" {
             args.push("-color_primaries".to_string());
-            args.push(cp.clone());
+            args.push(cp.to_string());
         }
     }
-    if let Some(ref trc) = probe.color_transfer {
+    if let Some(trc) = &probe.color_transfer {
         if !trc.is_empty() && trc != "unknown" {
             args.push("-color_trc".to_string());
-            args.push(trc.clone());
+            args.push(trc.to_string());
         }
     }
     if let Some(ref cs) = probe.color_space {

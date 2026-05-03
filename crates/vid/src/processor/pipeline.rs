@@ -291,6 +291,12 @@ impl<'a> VideoConversionPipeline<'a> {
         let explore_result = match config.codec {
             SelectedCodec::Hevc => shared_utils::explore_hevc_with_gpu(&request),
             SelectedCodec::Av1 => shared_utils::explore_av1_with_gpu(&request),
+            SelectedCodec::Av2 | SelectedCodec::Vvc => {
+                return Err(VidQualityError::GeneralError(format!(
+                    "{} encoding not yet implemented (experimental codec)",
+                    config.codec.as_str().to_uppercase()
+                )));
+            }
         }
         .map_err(|e| VidQualityError::ConversionError(e.to_string()))?;
 
@@ -355,17 +361,17 @@ impl<'a> VideoConversionPipeline<'a> {
         )
         .map_err(|e| VidQualityError::GeneralError(e.to_string()))?;
 
-        Ok(ConversionOutput {
+        return Ok(ConversionOutput {
             input_path: self.input.display().to_string(),
             output_path: String::new(),
-            strategy: strategy.clone(),
+            strategy,
             input_size: detection.file_size,
             output_size: 0,
             size_ratio: 0.0,
             success: true,
             message: "Skipped".to_string(),
             ..Default::default()
-        })
+        });
     }
 
     // --- Internal Helpers ---

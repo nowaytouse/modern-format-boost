@@ -889,6 +889,12 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
             "-svtav1-params",
             format!("tune=0:film-grain=0:lp={max_threads}"),
         ),
+        SelectedCodec::Av2 | SelectedCodec::Vvc => {
+            return Err(VidQualityError::GeneralError(format!(
+                "{} encoding not yet implemented for animated images",
+                options.codec.as_str().to_uppercase()
+            )));
+        }
     };
 
     // Probe ORIGINAL input to get stream index for multi-stream files (animated AVIF/HEIC)
@@ -930,6 +936,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
                 }
             }
             SelectedCodec::Av1 => shared_utils::constants::FFMPEG_SVTAV1_DEFAULT_PRESET,
+            SelectedCodec::Av2 | SelectedCodec::Vvc => unreachable!("handled above"),
         })
         .arg(shared_utils::constants::FFMPEG_ARG_TAG_VIDEO)
         .arg(v_tag)
@@ -1370,6 +1377,12 @@ pub fn convert_to_mp4_matched(
                     preset: shared_utils::EncoderPreset::Slower,
                 })
             }
+            SelectedCodec::Av2 | SelectedCodec::Vvc => {
+                return Err(VidQualityError::GeneralError(format!(
+                    "{} encoding not yet implemented for animated images",
+                    options.codec.as_str().to_uppercase()
+                )));
+            }
         }
     } else {
         match options.codec {
@@ -1406,6 +1419,12 @@ pub fn convert_to_mp4_matched(
                     apple_compat: options.apple_compat(),
                     preset: shared_utils::EncoderPreset::Medium,
                 })
+            }
+            SelectedCodec::Av2 | SelectedCodec::Vvc => {
+                return Err(VidQualityError::GeneralError(format!(
+                    "{} encoding not yet implemented for animated images",
+                    options.codec.as_str().to_uppercase()
+                )));
             }
         }
     }
@@ -1523,6 +1542,10 @@ pub fn convert_to_mp4_matched(
                 shared_utils::crf_constants::update_global_last_hit_crf_av1(
                     explore_result.optimal_crf,
                 );
+            }
+            shared_utils::conversion_types::SelectedCodec::Av2
+            | shared_utils::conversion_types::SelectedCodec::Vvc => {
+                // No global CRF hints for experimental codecs yet
             }
         }
     }

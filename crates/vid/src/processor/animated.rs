@@ -234,6 +234,12 @@ impl<'a> AnimatedConversionPipeline<'a> {
         match self.options.codec {
             SelectedCodec::Hevc => shared_utils::explore_hevc_with_gpu(&request),
             SelectedCodec::Av1 => shared_utils::explore_av1_with_gpu(&request),
+            SelectedCodec::Av2 | SelectedCodec::Vvc => {
+                return Err(VidQualityError::GeneralError(format!(
+                    "{} encoding not yet implemented for animated images",
+                    self.options.codec.as_str().to_uppercase()
+                )));
+            }
         }
         .map_err(|e| VidQualityError::ConversionError(e.to_string()))
     }
@@ -383,6 +389,9 @@ impl<'a> AnimatedConversionPipeline<'a> {
                 SelectedCodec::Av1 => shared_utils::crf_constants::update_global_last_hit_crf_av1(
                     explore_result.optimal_crf,
                 ),
+                SelectedCodec::Av2 | SelectedCodec::Vvc => {
+                    // No global CRF hints for experimental codecs yet
+                }
             }
         }
 

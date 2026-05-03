@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+### ⚡ Zero-Copy Performance Optimization & AV2/VVC Support (2026-05-03)
+
+- **Zero-Copy Hot Path Optimization**:
+  - **Eliminated Unnecessary Clones**: Removed redundant `.clone()` calls in video conversion hot paths, reducing memory allocations during GPU search operations.
+  - **String Allocation Optimization**: Replaced `.clone()` with `.to_string()` for color metadata (primaries, transfer, colorspace) to avoid unnecessary reference counting overhead.
+  - **ConvertOptions Construction**: Optimized `convert_options_from_config()` to use conditional mapping instead of unconditional cloning for `output_dir` and `base_dir`.
+  - **Strategy Ownership**: Removed unnecessary `strategy.clone()` in skip output paths, transferring ownership directly.
+  - **Impact**: Reduced memory pressure in video encoding pipelines, particularly beneficial for batch processing and long-running conversions.
+
+- **AV2 and VVC Format Support (Experimental)**:
+  - Added `TargetVideoFormat::Av2Mp4` and `VvcMp4` enum variants for next-generation video codecs.
+  - Added `SelectedCodec::Av2` and `Vvc` enum variants with metadata (efficiency factors, min encoder versions).
+  - Implemented helper methods: `is_experimental()`, `is_cutting_edge()`, `min_encoder_version()`.
+  - Updated codec detection to recognize `av2`/`avm` and `vvc`/`h266` codec strings.
+  - Set efficiency factors: 0.35 for both (65% more efficient than H.264).
+  - **Note**: Encoding implementation pending - currently returns descriptive errors for experimental codecs.
+
 ### 🔧 Bug Fixes, Feature Restoration & Line-Count Mitigation (2026-05-03)
 
 - **Ctrl+C Guard Threshold Fix**: Corrected the confirmation prompt threshold from 270 seconds (4.5 minutes) to 10 seconds as documented in CHANGELOG. This ensures users get the confirmation prompt for all non-trivial tasks, preventing accidental termination during long-running operations.

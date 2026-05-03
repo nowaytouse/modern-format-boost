@@ -16,8 +16,8 @@ fn convert_options_from_config(
     config: &ConversionConfig,
 ) -> shared_utils::conversion::ConvertOptions {
     let mut opts = shared_utils::conversion::ConvertOptions {
-        output_dir: config.output_dir.clone(),
-        base_dir: config.base_dir.clone(),
+        output_dir: config.output_dir.as_ref().map(|p| p.to_path_buf()),
+        base_dir: config.base_dir.as_ref().map(|p| p.to_path_buf()),
         child_threads: config.child_threads,
         codec: config.codec,
         ..Default::default()
@@ -261,18 +261,18 @@ fn build_hdr_ffmpeg_args(detection: &VideoDetectionResult) -> Vec<String> {
     let mut args: Vec<String> = Vec::new();
 
     // -color_primaries
-    if let Some(ref cp) = detection.color_primaries {
+    if let Some(cp) = &detection.color_primaries {
         if !cp.is_empty() && cp != "unknown" {
             args.push("-color_primaries".to_string());
-            args.push(cp.clone());
+            args.push(cp.to_string());
         }
     }
 
     // -color_trc (transfer characteristics)
-    if let Some(ref trc) = detection.color_transfer {
+    if let Some(trc) = &detection.color_transfer {
         if !trc.is_empty() && trc != "unknown" {
             args.push("-color_trc".to_string());
-            args.push(trc.clone());
+            args.push(trc.to_string());
         }
     }
 
@@ -291,11 +291,11 @@ fn build_hdr_ffmpeg_args(detection: &VideoDetectionResult) -> Vec<String> {
     if let Some(cs) = cs_str {
         args.push("-colorspace".to_string());
         args.push(cs.to_string());
-    } else if let crate::detection_api::ColorSpace::Unknown(ref s) = detection.color_space {
+    } else if let crate::detection_api::ColorSpace::Unknown(s) = &detection.color_space {
         let is_rgb_colorspace = s == "gbr" || s == "rgb" || s == "gbrp";
         if !s.is_empty() && s != "unknown" && !is_rgb_colorspace {
             args.push("-colorspace".to_string());
-            args.push(s.clone());
+            args.push(s.to_string());
         }
     }
 
@@ -628,6 +628,8 @@ pub fn determine_strategy_with_apple_compat(
             let (target, reason_prefix) = match codec {
                 SelectedCodec::Hevc => (hevc_delivery_target(apple_compat), "HEVC"),
                 SelectedCodec::Av1 => (TargetVideoFormat::Av1Mp4, "AV1"),
+                SelectedCodec::Av2 => (TargetVideoFormat::Av2Mp4, "AV2"),
+                SelectedCodec::Vvc => (TargetVideoFormat::VvcMp4, "VVC"),
             };
             if result.archival_candidate || result.quality_score >= 90 {
                 (
@@ -872,12 +874,15 @@ pub fn auto_convert_with_cache(
                 .unwrap_or_else(|| Path::new(""));
             user_out.join(rel_path)
         } else {
-            config.output_dir.clone().unwrap_or_else(|| {
-                input
-                    .parent()
-                    .unwrap_or_else(|| Path::new("."))
-                    .to_path_buf()
-            })
+            config.output_dir.as_ref().map_or_else(
+                || {
+                    input
+                        .parent()
+                        .unwrap_or_else(|| Path::new("."))
+                        .to_path_buf()
+                },
+                |p| p.to_path_buf(),
+            )
         };
 
     std::fs::create_dir_all(&output_dir)?;
@@ -913,7 +918,7 @@ pub fn auto_convert_with_cache(
         return Ok(ConversionOutput {
             input_path: input.display().to_string(),
             output_path: String::new(),
-            strategy: strategy.clone(),
+            strategy,
             input_size: detection.file_size,
             output_size: 0,
             size_ratio: 1.0,
@@ -999,7 +1004,7 @@ pub fn auto_convert_with_cache(
                 blake3: None,
             });
         }
-        TargetVideoFormat::HevcMov | TargetVideoFormat::HevcMp4 | TargetVideoFormat::Av1Mp4 => {
+        TargetVideoFormat::HevcMov | TargetVideoFormat::HevcMp4 | TargetVideoFormat::Av1Mp4 | TargetVideoFormat::Av2Mp4 | TargetVideoFormat::VvcMp4 => {
             if config.use_lossless() {
                 info!(
                     "   🚀 Using {} Lossless Mode (forced)",
@@ -1043,6 +1048,8 @@ pub fn auto_convert_with_cache(
                     let encoder_name = match config.codec {
                         SelectedCodec::Hevc => "libx265",
                         SelectedCodec::Av1 => "libsvtav1",
+                        SelectedCodec::Av2 => "libaom-av2",
+                        SelectedCodec::Vvc => "libvvenc",
                     };
                     info!(
                         "   🖥️  CPU Mode: Using {} for higher SSIM (≥0.95)",
@@ -1069,6 +1076,7 @@ pub fn auto_convert_with_cache(
                     SelectedCodec::Av1 => {
                         shared_utils::crf_constants::get_global_last_hit_crf_av1()
                     }
+                    SelectedCodec::Av2 | SelectedCodec::Vvc => None, // No global hints for experimental codecs yet
                 } {
                     info!(
                         "   💡 Using global last hit {} CRF: {:.1} (warm start only)",
@@ -1178,6 +1186,12 @@ pub fn auto_convert_with_cache(
                                 shared_utils::EncoderPreset::Medium
                             },
                         })
+                    }
+                    SelectedCodec::Av2 | SelectedCodec::Vvc => {
+                        return Err(VidQualityError::GeneralError(format!(
+                            "{} encoding not yet implemented (experimental codec)",
+                            config.codec.as_str().to_uppercase()
+                        )));
                     }
                 }
                 .map_err(|e| VidQualityError::ConversionError(e.to_string()))?;
@@ -1292,6 +1306,9 @@ pub fn auto_convert_with_cache(
             }
             SelectedCodec::Av1 => {
                 shared_utils::crf_constants::update_global_last_hit_crf_av1(final_crf);
+            }
+            SelectedCodec::Av2 | SelectedCodec::Vvc => {
+                // No global CRF hints for experimental codecs yet
             }
         }
     }
@@ -1707,6 +1724,12 @@ pub fn calculate_matched_crf(
     let result = match codec {
         SelectedCodec::Hevc => shared_utils::calculate_hevc_crf(&analysis),
         SelectedCodec::Av1 => shared_utils::calculate_av1_crf(&analysis),
+        SelectedCodec::Av2 | SelectedCodec::Vvc => {
+            return Err(VidQualityError::GeneralError(format!(
+                "{} CRF calculation not yet implemented (experimental codec)",
+                codec.as_str().to_uppercase()
+            )));
+        }
     };
 
     match result {
@@ -1714,6 +1737,12 @@ pub fn calculate_matched_crf(
             let encoder = match codec {
                 SelectedCodec::Hevc => shared_utils::EncoderType::Hevc,
                 SelectedCodec::Av1 => shared_utils::EncoderType::Av1,
+                SelectedCodec::Av2 | SelectedCodec::Vvc => {
+                    return Err(VidQualityError::GeneralError(format!(
+                        "{} encoder type not yet implemented",
+                        codec.as_str().to_uppercase()
+                    )));
+                }
             };
             shared_utils::log_quality_analysis(&analysis, &result, encoder);
             Ok(result.crf)
@@ -1816,6 +1845,8 @@ fn execute_lossless(
     let encoder = match codec {
         SelectedCodec::Hevc => "libx265",
         SelectedCodec::Av1 => "libsvtav1",
+        SelectedCodec::Av2 => "libaom-av2",
+        SelectedCodec::Vvc => "libvvenc",
     };
 
     let input_arg = shared_utils::safe_path_arg(Path::new(&detection.file_path))
