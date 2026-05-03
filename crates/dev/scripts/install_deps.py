@@ -156,6 +156,9 @@ def main():
             "pgvector",  # Vector similarity search extension
             "chromaprint",  # Audio fingerprinting
             "libvmaf",  # Video quality metrics
+            "x264",  # H.264 encoder
+            "vvdec",  # VVC decoder
+            "vvenc",  # VVC encoder
         ]
 
         # Handle ffmpeg specially to avoid tap conflicts
@@ -194,6 +197,27 @@ def main():
             else:
                 print(f"Installing {dep}...")
                 run_cmd(f"brew install {dep}")
+
+        # --- macOS Linker Workaround for libstdc++ ---
+        print_c(BLUE, "🔧 Applying macOS linker workaround for libstdc++...")
+        tmp_lib_dir = ".tmp_lib"
+        if not os.path.exists(tmp_lib_dir):
+            os.makedirs(tmp_lib_dir)
+
+        # 1. Create libstdc++.tbd pointing to system libc++.tbd in the SDK
+        sdk_path = run_cmd("xcrun --show-sdk-path", capture_output=True).stdout.strip()
+        libcxx_tbd = os.path.join(sdk_path, "usr/lib/libc++.tbd")
+        target_tbd = os.path.join(tmp_lib_dir, "libstdc++.tbd")
+        if os.path.exists(libcxx_tbd):
+            run_cmd(f'ln -sf "{libcxx_tbd}" "{target_tbd}"')
+            print_c(GREEN, f"   ✅ Linked libstdc++.tbd -> {libcxx_tbd}")
+        else:
+            print_c(YELLOW, "   ⚠️  System libc++.tbd not found in SDK. Doctests might fail.")
+
+        # 2. Create libstdc++.dylib pointing to system libc++.dylib
+        target_dylib = os.path.join(tmp_lib_dir, "libstdc++.dylib")
+        run_cmd(f'ln -sf "/usr/lib/libc++.dylib" "{target_dylib}"')
+        print_c(GREEN, "   ✅ Linked libstdc++.dylib -> /usr/lib/libc++.dylib")
 
     elif OS_TYPE == "linux":
         print_c(YELLOW, "🐧 Detected Linux")
