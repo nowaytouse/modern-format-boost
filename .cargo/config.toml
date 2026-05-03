@@ -21,9 +21,13 @@ rustflags = [
     # libheif-sys tries to link libstdc++ but macOS uses libc++
     # Add .tmp_lib to library search path (contains libstdc++.tbd -> libc++.tbd symlink)
     "-L", ".tmp_lib",
-    # Add x264 library path for libheif
+    # Add missing video codec libraries for libheif
     "-L", "/opt/homebrew/opt/x264/lib",
+    "-L", "/opt/homebrew/opt/vvdec/lib",
+    "-L", "/opt/homebrew/opt/vvenc/lib",
     "-C", "link-arg=-lx264",
+    "-C", "link-arg=-lvvdec",
+    "-C", "link-arg=-lvvenc",
     # Enable Faster Linker (system default is usually fine on Sonoma+, 
     # but -C link-arg=-fuse-ld=lld can be added if lld is installed)
 ]
