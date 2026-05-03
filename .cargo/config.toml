@@ -13,23 +13,34 @@ rustflags = [
     "-C", "overflow-checks=on",
 ]
 
-# macOS-specific optimizations
-[target.'cfg(target_os = "macos")']
+# macOS ARM64 (Apple Silicon) optimizations
+[target.aarch64-apple-darwin]
 rustflags = [
     "-C", "overflow-checks=on",
     # Fix libstdc++ linking issue on macOS (use libc++ instead)
-    # libheif-sys tries to link libstdc++ but macOS uses libc++
-    # Add .tmp_lib to library search path (contains libstdc++.tbd -> libc++.tbd symlink)
     "-L", ".tmp_lib",
-    # Add missing video codec libraries for libheif
+    # Homebrew paths for ARM64
     "-L", "/opt/homebrew/opt/x264/lib",
     "-L", "/opt/homebrew/opt/vvdec/lib",
     "-L", "/opt/homebrew/opt/vvenc/lib",
     "-C", "link-arg=-lx264",
     "-C", "link-arg=-lvvdec",
     "-C", "link-arg=-lvvenc",
-    # Enable Faster Linker (system default is usually fine on Sonoma+, 
-    # but -C link-arg=-fuse-ld=lld can be added if lld is installed)
+]
+
+# macOS x86_64 (Intel) optimizations
+[target.x86_64-apple-darwin]
+rustflags = [
+    "-C", "overflow-checks=on",
+    # Fix libstdc++ linking issue on macOS (use libc++ instead)
+    "-L", ".tmp_lib",
+    # Homebrew paths for x86_64 (Intel)
+    "-L", "/usr/local/opt/x264/lib",
+    "-L", "/usr/local/opt/vvdec/lib",
+    "-L", "/usr/local/opt/vvenc/lib",
+    "-C", "link-arg=-lx264",
+    "-C", "link-arg=-lvvdec",
+    "-C", "link-arg=-lvvenc",
 ]
 
 # -----------------------------------------------------------------------------

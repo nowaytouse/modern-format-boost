@@ -21,6 +21,12 @@ All notable changes to this project will be documented in this file.
   - **Hot Path Formatting**: Applied standardized indentation and formatting to core conversion orchestrators to improve maintainability and nightly-clippy signal-to-noise ratio.
   - **Dependency Stabilization**: Synchronized workspace-wide lockfile to ensure identical build environments across local macOS and Linux CI runners.
 
+- **CI/CD & Cross-Compilation Hardening**:
+  - **macOS x86_64 Support**: Fixed the Intel macOS build on ARM64 runners by splitting `.cargo/config.toml` flags by architecture and correcting library search paths for `/usr/local` (Intel Homebrew).
+  - **Gmp-Mpfr-Sys Cross-Compile**: Enabled the `force-cross` feature for `gmp-mpfr-sys` to ensure stable compilation in cross-platform CI environments.
+  - **Fuzzing Environment Stabilization**: Hardened the ClusterFuzzLite Dockerfile with necessary build tools (`ninja-build`, `meson`, codec headers) to support the `ci-static-build` feature used in fuzzing.
+  - **GHA Environment Fix**: Removed the redundant `RUSTFLAGS` environment variable export in macOS workflows to prevent it from overriding the authoritative `.cargo/config.toml` settings.
+
 ### ⚡ Zero-Copy Performance Optimization & AV2/VVC Support (2026-05-03)
 
 - **Zero-Copy Hot Path Optimization**:

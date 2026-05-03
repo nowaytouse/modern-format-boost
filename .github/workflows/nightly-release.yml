@@ -31,7 +31,7 @@ jobs:
       - name: Install dependencies (ARM64)
         if: matrix.target == 'aarch64-apple-darwin'
         run: |
-          brew install ffmpeg jpeg-xl exiftool imagemagick webp libheif nasm dav1d gmp
+          brew install ffmpeg jpeg-xl exiftool imagemagick webp libheif nasm dav1d gmp x264 vvdec vvenc
           BREW_PREFIX=$(brew --prefix)
           echo "PKG_CONFIG_PATH=${BREW_PREFIX}/lib/pkgconfig:${BREW_PREFIX}/opt/dav1d/lib/pkgconfig:${BREW_PREFIX}/opt/jpeg-xl/lib/pkgconfig" >> "$GITHUB_ENV"
 
@@ -40,8 +40,8 @@ jobs:
           # Use system libc++ instead of libstdc++ to avoid linking issues
           mkdir -p .tmp_lib
           ln -sf /usr/lib/libc++.1.dylib .tmp_lib/libstdc++.dylib
-          echo "LIBRARY_PATH=$(pwd)/.tmp_lib:${LIBRARY_PATH:-}" >> "$GITHUB_ENV"
-          echo "RUSTFLAGS=-L $(pwd)/.tmp_lib" >> "$GITHUB_ENV"
+          # Note: We don't set RUSTFLAGS here because it would overwrite .cargo/config.toml
+          # .cargo/config.toml already contains "-L .tmp_lib"
 
       - name: Install dependencies (x86_64 Cross-compile)
         if: matrix.target == 'x86_64-apple-darwin'
@@ -50,7 +50,7 @@ jobs:
           if [ ! -f /usr/local/bin/brew ]; then
             arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" <<< ""
           fi
-          arch -x86_64 /usr/local/bin/brew install ffmpeg libheif dav1d jpeg-xl exiftool imagemagick webp nasm gmp
+          arch -x86_64 /usr/local/bin/brew install ffmpeg libheif dav1d jpeg-xl exiftool imagemagick webp nasm gmp x264 vvdec vvenc
 
           # Setup paths for cross-compilation
           echo "PKG_CONFIG_PATH=/usr/local/opt/libheif/lib/pkgconfig:/usr/local/opt/dav1d/lib/pkgconfig:/usr/local/opt/jpeg-xl/lib/pkgconfig:/usr/local/lib/pkgconfig" >> "$GITHUB_ENV"

@@ -5,7 +5,12 @@ RUN apt-get update && apt-get install -y \
     pkg-config \
     cmake \
     nasm \
-    libheif-dev \
+    ninja-build \
+    meson \
+    libde265-dev \
+    libx265-dev \
+    libaom-dev \
+    libdav1d-dev \
     libchromaprint-dev \
     libjpeg-dev \
     libpng-dev \
@@ -13,13 +18,10 @@ RUN apt-get update && apt-get install -y \
     libmpfr-dev \
     libmpc-dev
 
-# Update Rust toolchain to latest nightly to support jpegxl-rs @ 1.92.0+
+# Update Rust toolchain to latest nightly
 RUN rustup toolchain install nightly && \
     rustup component add rust-src --toolchain nightly
 ENV RUSTUP_TOOLCHAIN=nightly
-
-
-
 
 COPY . $SRC/modern-format-boost
 WORKDIR $SRC/modern-format-boost
