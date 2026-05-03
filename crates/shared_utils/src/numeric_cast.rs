@@ -10,11 +10,13 @@
 //! - **Zero `as` at call sites**: Callers use named functions instead of raw casts
 //!
 //! ## Usage
-//! ```ignore
-//! use crate::numeric_cast::{f64_to_u64_sat, unix_secs_i64};
+//! ```rust
+//! use shared_utils::numeric_cast::{f64_to_u64_sat, unix_secs_i64};
 //!
-//! let size = f64_to_u64_sat(estimated_bytes);
+//! let size = f64_to_u64_sat(1024.5);
+//! assert_eq!(size, 1024);
 //! let timestamp = unix_secs_i64();
+//! assert!(timestamp > 0);
 //! ```
 
 use rug::Rational;

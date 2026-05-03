@@ -14,22 +14,27 @@
 //!
 //! ## Usage Example
 //!
-//! ```ignore
+//! ```rust
 //! use shared_utils::ffmpeg_process::FfmpegProcess;
 //! use std::process::Command;
+//! use std::path::Path;
 //!
-//! let mut cmd = Command::new("ffmpeg");
-//! cmd.arg("-i").arg("input.mp4").arg("output.mp4");
+//! // Use a lightweight asset from the edge directory
+//! let input = Path::new("../../crates/dev/edge/videos/non_monotonic.mp4");
+//! if input.exists() {
+//!     let mut cmd = Command::new("ffmpeg");
+//!     cmd.arg("-y")
+//!        .arg("-i").arg(input)
+//!        .arg("-t").arg("0.1")
+//!        .arg("-f").arg("null")
+//!        .arg("-");
 //!
-//! let mut process = FfmpegProcess::spawn(&mut cmd)?;
+//!     let mut process = FfmpegProcess::spawn(&mut cmd).expect("Failed to spawn ffmpeg");
 //!
-//! // Read stdout progress
-//! if let Some(stdout) = process.stdout() {
-//!     // Handle progress...
+//!     // Wait for completion
+//!     let (status, stderr) = process.wait_with_output().expect("Failed to wait for ffmpeg");
+//!     assert!(status.success());
 //! }
-//!
-//! // Wait for completion
-//! let (status, stderr) = process.wait_with_output()?;
 //! ```
 
 use anyhow::{Context, Result};

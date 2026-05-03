@@ -24,12 +24,12 @@
 //! 5. **Preset**: Rank (prefer higher/slower)
 //!
 //! ## Usage Example
-//! ```ignore
-//! use shared_utils::explore_strategy::{create_strategy, ExploreContext};
+//! ```rust
+//! use shared_utils::explore_strategy::create_strategy;
+//! use shared_utils::video_explorer::ExploreMode;
 //!
 //! let strategy = create_strategy(ExploreMode::CompressOnly);
-//! let mut ctx = ExploreContext::new(...);
-//! let result = strategy.explore(&mut ctx)?;
+//! assert_eq!(strategy.name(), "CompressOnly");
 //! ```
 
 use anyhow::Result;
