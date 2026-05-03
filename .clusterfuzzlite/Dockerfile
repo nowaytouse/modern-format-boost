@@ -23,5 +23,5 @@ ENV RUSTUP_TOOLCHAIN=nightly
 
 COPY . $SRC/modern-format-boost
 WORKDIR $SRC/modern-format-boost
-COPY .clusterfuzzlite/build.sh $SRC/build.sh
-RUN chmod +x $SRC/build.sh
+COPY .clusterfuzzlite/build.py $SRC/build.py
+RUN chmod +x $SRC/build.py
