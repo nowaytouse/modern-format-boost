@@ -6,7 +6,7 @@ use std::path::PathBuf;
 pub enum TargetVideoFormat {
     Ffv1Mkv,
     Av1Mp4,
-    /// AV2 (AOMedia Video 2) - Next-generation codec, experimental
+    /// AV2 (`AOMedia` Video 2) - Next-generation codec, experimental
     Av2Mp4,
     /// VVC (H.266) - High efficiency codec, patent-encumbered
     VvcMp4,
@@ -22,7 +22,7 @@ pub enum SelectedCodec {
     #[default]
     Hevc,
     Av1,
-    /// AV2 (AOMedia Video 2) - Experimental, requires libaom 4.0+
+    /// AV2 (`AOMedia` Video 2) - Experimental, requires libaom 4.0+
     Av2,
     /// VVC (H.266) - High efficiency, patent-encumbered
     Vvc,

@@ -133,7 +133,7 @@ fn collect_vf_filters(vf_args: &[String]) -> Vec<String> {
             if arg == "-vf" {
                 if let Some(val) = vf_args.get(idx + 1) {
                     if !val.is_empty() {
-                        filters.push(val.to_string());
+                        filters.push(val.clone());
                         idx += 2;
                         continue;
                     }

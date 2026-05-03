@@ -16,8 +16,8 @@ fn convert_options_from_config(
     config: &ConversionConfig,
 ) -> shared_utils::conversion::ConvertOptions {
     let mut opts = shared_utils::conversion::ConvertOptions {
-        output_dir: config.output_dir.as_ref().map(|p| p.to_path_buf()),
-        base_dir: config.base_dir.as_ref().map(|p| p.to_path_buf()),
+        output_dir: config.output_dir.clone(),
+        base_dir: config.base_dir.clone(),
         child_threads: config.child_threads,
         codec: config.codec,
         ..Default::default()
@@ -264,7 +264,7 @@ fn build_hdr_ffmpeg_args(detection: &VideoDetectionResult) -> Vec<String> {
     if let Some(cp) = &detection.color_primaries {
         if !cp.is_empty() && cp != "unknown" {
             args.push("-color_primaries".to_string());
-            args.push(cp.to_string());
+            args.push(cp.clone());
         }
     }
 
@@ -272,7 +272,7 @@ fn build_hdr_ffmpeg_args(detection: &VideoDetectionResult) -> Vec<String> {
     if let Some(trc) = &detection.color_transfer {
         if !trc.is_empty() && trc != "unknown" {
             args.push("-color_trc".to_string());
-            args.push(trc.to_string());
+            args.push(trc.clone());
         }
     }
 
@@ -295,7 +295,7 @@ fn build_hdr_ffmpeg_args(detection: &VideoDetectionResult) -> Vec<String> {
         let is_rgb_colorspace = s == "gbr" || s == "rgb" || s == "gbrp";
         if !s.is_empty() && s != "unknown" && !is_rgb_colorspace {
             args.push("-colorspace".to_string());
-            args.push(s.to_string());
+            args.push(s.clone());
         }
     }
 
@@ -881,7 +881,7 @@ pub fn auto_convert_with_cache(
                         .unwrap_or_else(|| Path::new("."))
                         .to_path_buf()
                 },
-                |p| p.to_path_buf(),
+                std::clone::Clone::clone,
             )
         };
 

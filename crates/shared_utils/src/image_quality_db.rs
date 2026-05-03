@@ -110,10 +110,11 @@ pub fn init_quality_schema(conn: &mut Client) -> Result<()> {
         &[],
     )?;
 
-    apply_schema_migrations(conn)
+    apply_schema_migrations(conn);
+    Ok(())
 }
 
-fn apply_schema_migrations(conn: &mut Client) -> Result<()> {
+fn apply_schema_migrations(conn: &mut Client) {
     // Ensure exhaustive schema migration for existing tables
     let _ = conn.execute(
         "ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS entropy DOUBLE PRECISION",
@@ -177,8 +178,6 @@ fn apply_schema_migrations(conn: &mut Client) -> Result<()> {
         "ALTER TABLE quality_inference_log ALTER COLUMN final_verdict SET NOT NULL",
         &[],
     );
-
-    Ok(())
 }
 
 // ── Feature vector ───────────────────────────────────────────────────────────
