@@ -37,9 +37,11 @@ jobs:
 
       - name: Workaround for stdc++ on macOS
         run: |
-          mkdir -p /tmp/libstdcxx-fix
-          ln -s /usr/lib/libc++.1.dylib /tmp/libstdcxx-fix/libstdc++.dylib
-          echo "LIBRARY_PATH=/tmp/libstdcxx-fix:${LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+          # Use system libc++ instead of libstdc++ to avoid linking issues
+          mkdir -p .tmp_lib
+          ln -sf /usr/lib/libc++.1.dylib .tmp_lib/libstdc++.dylib
+          echo "LIBRARY_PATH=$(pwd)/.tmp_lib:${LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+          echo "RUSTFLAGS=-L $(pwd)/.tmp_lib" >> "$GITHUB_ENV"
 
       - name: Install dependencies (x86_64 Cross-compile)
         if: matrix.target == 'x86_64-apple-darwin'

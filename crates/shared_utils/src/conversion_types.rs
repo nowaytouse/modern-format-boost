@@ -6,6 +6,10 @@ use std::path::PathBuf;
 pub enum TargetVideoFormat {
     Ffv1Mkv,
     Av1Mp4,
+    /// AV2 (AOMedia Video 2) - Next-generation codec, experimental
+    Av2Mp4,
+    /// VVC (H.266) - High efficiency codec, patent-encumbered
+    VvcMp4,
     Gif,
     HevcLosslessMkv,
     HevcMov,
@@ -18,6 +22,10 @@ pub enum SelectedCodec {
     #[default]
     Hevc,
     Av1,
+    /// AV2 (AOMedia Video 2) - Experimental, requires libaom 4.0+
+    Av2,
+    /// VVC (H.266) - High efficiency, patent-encumbered
+    Vvc,
 }
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -43,6 +51,24 @@ impl SelectedCodec {
         match self {
             Self::Hevc => "hevc",
             Self::Av1 => "av1",
+            Self::Av2 => "av2",
+            Self::Vvc => "vvc",
+        }
+    }
+
+    /// Returns true if this codec is experimental/bleeding-edge
+    #[must_use]
+    pub const fn is_experimental(&self) -> bool {
+        matches!(self, Self::Av2 | Self::Vvc)
+    }
+
+    /// Returns the minimum encoder version required
+    #[must_use]
+    pub const fn min_encoder_version(&self) -> Option<&str> {
+        match self {
+            Self::Av2 => Some("libaom 4.0.0"),
+            Self::Vvc => Some("vvenc 1.9.0"),
+            _ => None,
         }
     }
 }
@@ -53,7 +79,7 @@ impl TargetVideoFormat {
         match self {
             Self::Ffv1Mkv | Self::HevcLosslessMkv => "MKV",
             Self::HevcMov => "MOV",
-            Self::Av1Mp4 | Self::HevcMp4 => "MP4",
+            Self::Av1Mp4 | Self::Av2Mp4 | Self::VvcMp4 | Self::HevcMp4 => "MP4",
             Self::Gif => "GIF",
             Self::Skip => "",
         }
@@ -64,12 +90,20 @@ impl TargetVideoFormat {
         match self {
             Self::Ffv1Mkv => "FFV1 MKV (Archival)",
             Self::Av1Mp4 => "AV1 MP4 (High Quality)",
+            Self::Av2Mp4 => "AV2 MP4 (Experimental)",
+            Self::VvcMp4 => "VVC MP4 (H.266)",
             Self::Gif => "GIF (Loop Asset)",
             Self::HevcLosslessMkv => "HEVC Lossless MKV (Archival)",
             Self::HevcMov => "HEVC MOV (Apple Compatible)",
             Self::HevcMp4 => "HEVC MP4 (High Quality)",
             Self::Skip => "Skip",
         }
+    }
+
+    /// Returns true if this format is experimental/bleeding-edge
+    #[must_use]
+    pub const fn is_experimental(&self) -> bool {
+        matches!(self, Self::Av2Mp4 | Self::VvcMp4)
     }
 }
 
