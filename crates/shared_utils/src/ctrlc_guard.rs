@@ -1,7 +1,7 @@
 //! Ctrl+C confirmation guard for long-running batch operations.
 //!
-//! After 4.5 minutes of processing, Ctrl+C shows a confirmation prompt instead of
-//! immediately exiting. This prevents accidental termination of large batch jobs.
+//! After 10 seconds of processing, Ctrl+C shows a confirmation prompt instead of
+//! immediately exiting. This prevents accidental termination of batch jobs.
 //!
 //! # Design
 //! - Signal handler is minimal: only sets an atomic flag and wakes a watcher thread
@@ -51,7 +51,7 @@ pub fn wait_if_prompt_active() {
 /// Initialize the Ctrl+C guard. Safe to call multiple times (idempotent).
 ///
 /// Spawns a background daemon thread that watches for Ctrl+C signals and
-/// presents a confirmation prompt after 4.5 minutes. The thread exits when
+/// presents a confirmation prompt after 10 seconds. The thread exits when
 /// the process exits (it is daemonized via `thread::Builder::spawn`).
 pub fn init() {
     // Idempotent: only install once.
@@ -108,13 +108,13 @@ fn watcher_thread(signal_flag: &Arc<AtomicBool>) {
 
         let elapsed_secs = START_INSTANT.get().map_or(0, |t| t.elapsed().as_secs());
 
-        if elapsed_secs < 270 {
-            // Under 4.5 minutes → exit immediately (user made a deliberate Ctrl+C).
+        if elapsed_secs < 10 {
+            // Under 10 seconds → exit immediately (user made a deliberate Ctrl+C).
             eprintln!("\n  ⚠️  Interrupted by user.");
             std::process::exit(130);
         }
 
-        // 4.5 minutes+: show confirmation prompt.
+        // 10 seconds+: show confirmation prompt.
         show_confirmation_prompt(elapsed_secs);
 
         // Clear the flag again in case multiple signals arrived while prompting.

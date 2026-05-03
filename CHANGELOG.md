@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### 🔧 Bug Fixes, Feature Restoration & Line-Count Mitigation (2026-05-03)
 
+- **Ctrl+C Guard Threshold Fix**: Corrected the confirmation prompt threshold from 270 seconds (4.5 minutes) to 10 seconds as documented in CHANGELOG. This ensures users get the confirmation prompt for all non-trivial tasks, preventing accidental termination during long-running operations.
 - **Database & GPU Search Restoration**: Reverted an incomplete refactoring attempt that broke PostgreSQL type casting and mistakenly deleted Phase 3/4 GPU fine-tuning logic. Restored the full `last_tested_crf` handoff boundary to ensure CPU tuning engages correctly.
 - **CI/CD Fixes**: Removed the `force-cross` feature flag from `gmp-mpfr-sys` in `Cargo.toml` to restore compatibility with Ubuntu-based ClusterFuzzLite ASAN/MSAN runners.
 - **Clippy Hardening**: Resolved over 35 `clippy::too_many_lines` warnings via surgical refactoring (e.g., extracting probe logic into `run_probe_checks`, database DDL into `apply_schema_migrations`) and targeted attributes for complex orchestrators to maintain 100% Clippy compliance without risking functional regressions.
