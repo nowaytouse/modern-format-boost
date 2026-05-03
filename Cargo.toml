@@ -132,13 +132,18 @@ rayon-core = { git = "https://github.com/rayon-rs/rayon.git" }
 clap = { git = "https://github.com/clap-rs/clap.git" }
 indicatif = { git = "https://github.com/console-rs/indicatif.git" }
 
+# Unify transitive dependencies to resolve version conflicts
+getrandom = { git = "https://github.com/rust-random/getrandom.git" }
+miniz_oxide = { git = "https://github.com/Frommi/miniz_oxide.git" }
+quick-error = { git = "https://github.com/tailhook/quick-error.git" }
+foldhash = { git = "https://github.com/orlp/foldhash.git" }
+hashbrown = { git = "https://github.com/rust-lang/hashbrown.git" }
+
 # Media & Build libs
 libheif-sys = { git = "https://github.com/Cykooz/libheif-sys.git" }
 libheif-rs = { git = "https://github.com/Cykooz/libheif-rs.git" }
 jpegxl-rs = { git = "https://github.com/inflation/jpegxl-rs.git" }
 jpegxl-sys = { git = "https://github.com/inflation/jpegxl-rs.git" }
-
-# Misc libs
 walkdir = { git = "https://github.com/BurntSushi/walkdir.git" }
 filetime = { git = "https://github.com/alexcrichton/filetime.git" }
 log = { git = "https://github.com/rust-lang/log.git" }
