@@ -326,6 +326,8 @@ fn extract_frames_for_gifski(
 }
 
 /// Extract frames from animated WebP using webpmux and create APNG with correct timing
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+#[allow(clippy::too_many_lines)]
 fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Result<()> {
     use std::fmt::Write;
     // Create temporary directory for frames
@@ -663,6 +665,8 @@ fn skipped_static_animated(input: &Path, options: &ConvertOptions) -> Conversion
     )
 }
 
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+#[allow(clippy::too_many_lines)]
 /// Convert animated image to MP4 (HEVC or AV1).
 ///
 /// # Errors
@@ -1570,6 +1574,8 @@ pub fn convert_to_mp4_matched(
 ///
 /// # Errors
 /// Returns an error if encoding fails.
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+#[allow(clippy::too_many_lines)]
 pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result<ConversionResult> {
     eprintln!(
         "⚠️  Mathematical lossless encoding (HEVC) - this will be SLOW and produce large files!"

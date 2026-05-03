@@ -10,6 +10,7 @@ pub mod tiff {
     ///
     /// # Errors
     /// Returns an error if the file is missing or the format is unsupported.
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
     #[allow(clippy::too_many_lines)]
     pub fn is_lossless(path: &Path) -> Result<bool> {
         crate::common_utils::validate_file_size_limit(path, 512 * 1024 * 1024)
@@ -768,6 +769,8 @@ pub mod jxl {
         }
     }
 
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+#[allow(clippy::too_many_lines)]
     fn parse_jxl_xyb_encoded(codestream: &[u8]) -> Option<bool> {
         let start = if codestream.get(0..2) == Some(b"\xFF\x0A") {
             2

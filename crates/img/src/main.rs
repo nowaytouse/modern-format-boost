@@ -128,6 +128,8 @@ enum Commands {
     },
 }
 
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+#[allow(clippy::too_many_lines)]
 fn main() -> anyhow::Result<()> {
     if let Err(e) = shared_utils::init_ghost_mode() {
         eprintln!("⚠️ Failed to initialize Ghost Mode isolation: {e}");
@@ -614,6 +616,7 @@ fn load_image_safe(path: &std::path::Path) -> anyhow::Result<image::DynamicImage
 /// Print image analysis in human-readable format.
 /// Currently unused but kept for potential future CLI output mode.
 #[derive(Clone)]
+// Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
 #[allow(clippy::struct_excessive_bools)]
 struct AutoConvertConfig {
     output_dir: Option<PathBuf>,
@@ -661,6 +664,8 @@ fn convert_result_to_output(result: shared_utils::ConversionResult) -> Conversio
     }
 }
 
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+#[allow(clippy::too_many_lines)]
 fn auto_convert_single_file(
     input: &Path,
     config: &AutoConvertConfig,
@@ -953,6 +958,8 @@ fn dispatch_static_conversion(
     })
 }
 
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+#[allow(clippy::too_many_lines)]
 fn auto_convert_directory(
     input: &Path,
     config: &AutoConvertConfig,

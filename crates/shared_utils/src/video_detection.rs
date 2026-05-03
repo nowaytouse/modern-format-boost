@@ -180,6 +180,7 @@ impl ColorSpace {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
+// Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
 #[allow(clippy::struct_excessive_bools)]
 pub struct VideoDetectionResult {
     pub file_path: String,
@@ -445,6 +446,7 @@ pub fn detect_video_with_cache(
 ///
 /// # Errors
 /// Returns `FFprobeError` if the file is invalid or ffprobe fails.
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
 #[allow(clippy::too_many_lines)]
 pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
     let probe = probe_video(path)?;

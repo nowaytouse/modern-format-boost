@@ -357,6 +357,7 @@ impl Hdr10PlusBuilder {
 
 /// Builder for constructing `x265` commands.
 #[derive(Debug, Default)]
+// Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
 #[allow(clippy::struct_excessive_bools)]
 pub struct X265Builder {
     input: Option<PathBuf>,

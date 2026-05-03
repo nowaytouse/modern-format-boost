@@ -1,54 +1,59 @@
-# Third-Party Licenses
+# Third Party Licenses
 
-This project, **Modern Format Boost**, is built upon various open-source libraries. Below is a summary of the licenses governing these dependencies.
+Modern Format Boost uses various open source dependencies. This document provides information about the licenses of these dependencies.
 
-## 📜 Summary of Licenses
+## License Summary
 
-| License                         | Count | Description                                             |
-| :------------------------------ | :---- | :------------------------------------------------------ |
-| **MIT / Apache-2.0**            | ~160  | The majority of the Rust ecosystem (Dual-licensed).     |
-| **MIT**                         | 55    | Common permissive license.                              |
-| **BSD-2-Clause / BSD-3-Clause** | 7     | Permissive licenses used by libraries like `rav1e`.     |
-| **MPL-2.0**                     | 1     | Mozilla Public License (used by `mp4parse`).            |
-| **Zlib**                        | 1     | Permissive license (used by `foldhash`).                |
-| **Unlicense**                   | 7     | Public domain-like (used by `walkdir`, `memchr`, etc.). |
+The project and its dependencies use the following licenses:
 
----
+- **MIT License** - Most Rust crates
+- **Apache-2.0** - Many Rust ecosystem crates
+- **Apache-2.0 WITH LLVM-exception** - LLVM-related dependencies
+- **BSD-2-Clause / BSD-3-Clause** - Various system libraries
+- **MPL-2.0** - Mozilla Public License dependencies
+- **GPL-3.0-or-later** - JPEG XL libraries (jpegxl-rs, jpegxl-sys)
+- **LGPL-2.1-or-later** - Some system interface libraries
+- **Zlib** - Compression libraries
+- **ISC** - Internet Systems Consortium license
+- **CC0-1.0** - Public domain equivalent
+- **Unicode-3.0** - Unicode data
+- **IJG** - Independent JPEG Group
+- **NCSA** - University of Illinois/NCSA
 
-## 📦 Detailed Dependency List
+## Important Notes
 
-The following list was generated using `cargo-license`.
+### GPL-3.0-or-later Dependencies
 
-### Apache-2.0 OR MIT (Dual Licensed)
+The following dependencies use GPL-3.0-or-later license:
+- **jpegxl-rs** - Rust bindings for JPEG XL
+- **jpegxl-sys** - Low-level JPEG XL system bindings
 
-_Used by the vast majority of core dependencies including: anyhow, chrono, clap, image, rayon, serde, etc._
+These are used for JPEG XL format support. If you distribute this software, you must comply with GPL-3.0-or-later terms for these components.
 
-### MIT
+## Detailed License Information
 
-- **img**, **vid**, **shared_utils** (This Project)
-- **built**, **console**, **indicatif**, **libheif-rs**, **tracing**, **which**, etc.
+For complete license texts and detailed attribution, see:
+- **docs/LICENSES.html** - Full HTML report with all license texts
+- **docs/LICENSES.json** - Machine-readable JSON format
+- **about.toml** - cargo-about configuration
 
-### BSD-2-Clause / BSD-3-Clause
+## Generating License Reports
 
-- **rav1e** (AV1 Encoder)
-- **av1-grain**
-- **ravif**
-- **exr**
+To regenerate license reports:
 
-### MPL-2.0 (Mozilla Public License 2.0)
+```bash
+# Install cargo-about
+cargo install cargo-about
 
-- **mp4parse**: Used for parsing MP4/MOV containers.
-  - _Note: MPL-2.0 is a file-level copyleft license. Changes to mp4parse itself must be disclosed, but the rest of this project remains under MIT._
+# Generate HTML report
+cargo about generate docs/licenses-template/licenses.hbs > docs/LICENSES.html
 
-### Zlib
+# Generate JSON report
+cargo about generate --format json about.toml > docs/LICENSES.json
+```
 
-- **foldhash**
-- **miniz_oxide** (via Apache-2.0/MIT/Zlib)
+## Compliance
 
----
+This project complies with all license requirements of its dependencies. All accepted licenses are listed in `about.toml` and verified using `cargo-about` and `cargo-deny`.
 
-## ⚖️ Compliance
-
-- **Permissive Use**: Most dependencies are under MIT, Apache 2.0, or BSD, which are highly permissive.
-- **Copyleft**: We do not use any GPL/LGPL dependencies that would require this project to change its license, ensuring it remains compatible with the MIT license.
-  Generated on: 2026-03-08
+For questions about licensing, please open an issue on the project repository.

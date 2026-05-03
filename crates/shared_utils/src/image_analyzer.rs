@@ -268,6 +268,7 @@ pub fn analyze_image_with_cache(
     Ok(analysis)
 }
 
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
 #[allow(clippy::too_many_lines)]
 fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
     if !path.exists() {
@@ -514,6 +515,7 @@ impl ImageAnalysis {
 
 /// # Errors
 /// Returns an error if HEIC analysis fails or file cannot be read.
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
 #[allow(clippy::too_many_lines)]
 fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
     debug!("analyze_heic_image called for {}", path.display());
@@ -1246,6 +1248,8 @@ fn get_animation_duration(path: &Path) -> Option<f32> {
     None
 }
 
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+#[allow(clippy::too_many_lines)]
 fn try_jxl_via_apng(path: &Path) -> Option<f32> {
     // Check if djxl is available
     if which::which("djxl").is_err() {
@@ -1758,6 +1762,8 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> ImageAnalysis {
     }
 }
 
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+#[allow(clippy::too_many_lines)]
 fn analyze_avif_image(path: &Path, file_size: u64) -> ImageAnalysis {
     use crate::image_detection::{
         detect_animation, detect_compression, CompressionType, DetectedFormat,

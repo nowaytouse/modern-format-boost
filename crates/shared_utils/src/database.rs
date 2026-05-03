@@ -329,6 +329,7 @@ impl Default for GlobalCollectionStats {
 }
 
 impl Default for LoopReferenceProfile {
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
     #[allow(clippy::too_many_lines)]
     fn default() -> Self {
         let collection = GlobalCollectionStats::default();
@@ -491,6 +492,7 @@ impl Default for LoopReferenceProfile {
 
 /// Row shape for GIF/video KNN features; some fields are stored for DB round-trip / future use.
 #[derive(Debug, Clone)]
+// Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
 #[allow(clippy::struct_excessive_bools)]
 struct SampleRow {
     _loss_tolerance: Option<String>,
@@ -772,6 +774,7 @@ fn check_gif_db_maturity(conn: &mut Client) -> bool {
         && video_equivalent_class >= crate::constants::MIN_GIF_SAMPLES_PER_CLASS
 }
 
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
 #[allow(clippy::too_many_lines)]
 fn lookup_similar_samples_inner(
     meta: &LoopMeta,
@@ -1111,6 +1114,7 @@ pub fn is_lossless_exploration_safe(meta: &LoopMeta, path: Option<&Path>) -> boo
 ///
 /// # Errors
 /// Returns an error if the database schema cannot be initialized or migrated.
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
 #[allow(clippy::too_many_lines)]
 pub fn init_schema(conn: &mut Client) -> Result<()> {
     if !DB_SCHEMA_INIT_LOGGED_ONCE.swap(true, std::sync::atomic::Ordering::Relaxed) {
@@ -1315,6 +1319,7 @@ fn seed_positive_dataset_if_needed(conn: &mut Client) -> Result<()> {
 /// Intermediate representation of a sample's metadata ready for database
 /// insertion. Contains all extracted features and classification labels.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
 #[allow(clippy::struct_excessive_bools)]
 pub struct SampleInsert {
     /// BLAKE3 hash of the file contents.
@@ -1606,6 +1611,7 @@ pub fn calculate_blake3_hex(path: &Path) -> Result<String> {
 /// Compute a 31-dimensional pgvector encoding for a sample using pre-calculated std deviations.
 /// This precisely bakes the weights and normalization terms from the old dynamically computed KNN
 /// into an L2-compatible vector, allowing `PostgreSQL`'s HNSW index to do the heavy lifting!
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
 #[allow(clippy::too_many_lines)]
 fn compute_sample_vector(sample: &SampleRow, stats_map: &FeatureMap) -> Vec<f32> {
     let sample_pixels = (f64::from(sample.width) * f64::from(sample.height)).max(1.0);
@@ -1964,6 +1970,7 @@ fn build_feature_stats(values: &[f64]) -> FeatureStats {
 ///
 /// # Panics
 /// Panics if the progress bar template is invalid.
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
 #[allow(clippy::too_many_lines)]
 pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -> Result<usize> {
     let mut conn = open_pg_client()?;
@@ -2165,6 +2172,7 @@ pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -
 ///
 /// # Errors
 /// Returns an error if the database queries fail.
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
 #[allow(clippy::too_many_lines)]
 pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
     emit_stderr("🏋️  Recomputing Global KNN Feature Statistics (Training Model)...");

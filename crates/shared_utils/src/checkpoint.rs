@@ -391,6 +391,8 @@ impl CheckpointManager {
         Ok(manager)
     }
 
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+#[allow(clippy::too_many_lines)]
     /// # Errors
     ///
     /// Returns an error if the lock file cannot be read.
@@ -728,6 +730,8 @@ impl CheckpointManager {
             .map_or_else(|| path.display().to_string(), String::from)
     }
 
+    // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+    #[allow(clippy::too_many_lines)]
     fn load_progress(progress_file: &Path) -> io::Result<LoadedCheckpointState> {
         if !progress_file.exists() {
             return Ok(LoadedCheckpointState::default());

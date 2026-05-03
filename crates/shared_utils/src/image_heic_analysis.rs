@@ -11,6 +11,7 @@ use std::path::Path;
 use tracing::debug;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
 #[allow(clippy::struct_excessive_bools)]
 pub struct HeicAnalysis {
     pub bit_depth: u8,
@@ -42,6 +43,7 @@ pub struct HeicAnalysis {
 ///
 /// # Errors
 /// Returns an error if the file cannot be read or libheif fails.
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
 #[allow(clippy::too_many_lines)]
 pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
     // Try find_box_data_recursive first, then fallback to direct magic byte search
@@ -371,6 +373,7 @@ fn parse_sps_rbsp_for_transquant_bypass(sps_payload: &[u8]) -> Option<bool> {
 ///
 /// # Errors
 /// Returns an error if the file is corrupted or analysis fails.
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
 #[allow(clippy::too_many_lines)]
 pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)> {
     let lib_heif = LibHeif::new();

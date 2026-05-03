@@ -326,6 +326,7 @@ fn stream_size_change_pct(output_size: u64, input_size: u64) -> f64 {
 
 /// Arguments for GPU-accelerated CRF exploration.
 #[derive(Debug, Clone)]
+// Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
 #[allow(clippy::struct_excessive_bools)]
 pub struct GpuSearchArgs<'a> {
     pub input: &'a Path,
@@ -347,6 +348,7 @@ pub struct GpuSearchArgs<'a> {
 
 /// A request for a GPU-backed video quality exploration.
 #[derive(Debug, Clone)]
+// Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
 #[allow(clippy::struct_excessive_bools)]
 pub struct GpuSearchRequest {
     pub input: std::path::PathBuf,
@@ -365,6 +367,7 @@ pub struct GpuSearchRequest {
 }
 
 /// Arguments for CPU fine-tuning phase.
+// Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
 #[allow(clippy::struct_excessive_bools)]
 struct FineTuneArgs<'a> {
     input: &'a Path,
@@ -444,6 +447,7 @@ pub(crate) fn format_quality_check_line(
 ///
 /// # Errors
 /// Returns an error if exploration fails.
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
 #[allow(clippy::too_many_lines)]
 pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<ExploreResult> {
     use crate::gpu_accel::{CrfMapping, GpuAccel, GpuCoarseConfig};
@@ -1556,6 +1560,7 @@ fn merge_vf_with_animated_exploration_prefix(vf_args: &[String], prefix: &str) -
     }
 }
 
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
 #[allow(clippy::too_many_lines)]
 fn cpu_fine_tune_from_gpu_boundary(
     args: FineTuneArgs<'_>,

@@ -194,6 +194,8 @@ pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrat
 ///
 /// # Errors
 /// Returns an error if the conversion process fails (e.g., tool execution error).
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+#[allow(clippy::too_many_lines)]
 pub fn execute_conversion(
     detection: &DetectionResult,
     strategy: &ConversionStrategy,

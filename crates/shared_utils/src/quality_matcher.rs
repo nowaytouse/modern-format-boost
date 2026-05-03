@@ -1207,6 +1207,8 @@ fn calculate_complexity_factor(si: Option<f64>, ti: Option<f64>, raw_bpp: f64, p
     }
 }
 
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+#[allow(clippy::too_many_lines)]
 fn calculate_confidence_v3(analysis: &QualityAnalysis) -> f64 {
     let mut score: f64 = 0.0;
     let mut max_score: f64 = 0.0;
@@ -1832,6 +1834,7 @@ pub fn is_apple_incompatible_video_codec(codec_str: &str) -> bool {
 }
 
 /// Predicate for keeping Apple-compat fallback HEVC output.
+// Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Copy)]
 pub struct AppleFallbackKeepRequest<'a> {

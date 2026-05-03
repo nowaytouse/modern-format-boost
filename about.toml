@@ -1,6 +1,6 @@
 # cargo-about configuration
 # License acceptance list aligned with deny.toml
-# Generated license reports: LICENSES.html, LICENSES.txt, LICENSES.json
+# Generated license reports: docs/LICENSES.html, docs/LICENSES.txt, docs/LICENSES.json
 
 accepted = [
     "MIT",

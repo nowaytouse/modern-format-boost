@@ -1749,6 +1749,7 @@ pub fn gpu_coarse_search_with_log(
     result
 }
 
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
 #[allow(clippy::too_many_lines)]
 fn gpu_coarse_search_with_log_impl(
     input: &std::path::Path,

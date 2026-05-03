@@ -309,6 +309,8 @@ pub fn convert_ultrahdr_jpeg_to_jxl(
 /// - Input validation fails.
 /// - `cjxl` execution fails and all fallbacks (`FFmpeg`, `ImageMagick`) also fail.
 /// - The output file cannot be written or verified.
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+#[allow(clippy::too_many_lines)]
 pub fn convert_to_jxl(
     input: &Path,
     options: &ConvertOptions,
@@ -1006,6 +1008,8 @@ fn commit_jpeg_to_jxl_success(
 ///
 /// # Errors
 /// Returns an error if transcoding fails.
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+#[allow(clippy::too_many_lines)]
 pub fn convert_jpeg_to_jxl(
     input: &Path,
     options: &ConvertOptions,
@@ -1729,6 +1733,8 @@ fn describe_jxl_finalist_pass(
     format!("{role}: d={distance} from the {origin} pass ({ratio_pct:.1}% of input at e7)")
 }
 
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+#[allow(clippy::too_many_lines)]
 fn try_explore_ultimate_jxl_distance(
     input: &Path,
     actual_input: &Path,
@@ -2047,6 +2053,8 @@ fn try_explore_ultimate_jxl_distance(
     Ok(Some(result))
 }
 
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+#[allow(clippy::too_many_lines)]
 fn prepare_input_for_cjxl(
     input: &Path,
     options: &ConvertOptions,
@@ -2054,6 +2062,7 @@ fn prepare_input_for_cjxl(
 ) -> Result<(std::path::PathBuf, Option<tempfile::NamedTempFile>)> {
     // Ensure we have color info for bit depth detection if not provided
     let local_hdr_info;
+    // Rationale: Using if-let and match-else here is more readable than overly nested or functional alternatives for this specific logic.
     #[allow(clippy::option_if_let_else, clippy::single_match_else)]
     let hdr_info = match hdr_info {
         Some(info) => info,

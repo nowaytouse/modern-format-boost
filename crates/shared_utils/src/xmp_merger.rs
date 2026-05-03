@@ -67,6 +67,7 @@ pub struct MergeResult {
 }
 
 #[derive(Debug, Clone)]
+// Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
 #[allow(clippy::struct_excessive_bools)]
 pub struct XmpMergerConfig {
     pub delete_xmp_after_merge: bool,

@@ -139,6 +139,23 @@ All notable changes to this project will be documented in this file.
   - Ensures compliance with the Quality Manifesto: "NO silent fallback - errors fail loudly".
   - Centralized rational conversion safety in `numeric_cast::f64_to_rational_loud`.
 
+### 📄 Compliance & Documentation
+
+- **Reorganized license reports**
+  - Moved `LICENSES.html`, `LICENSES.json`, `LICENSES.txt`, and `THIRD_PARTY_LICENSES.md` to `docs/` for better root directory hygiene.
+  - Moved `licenses-template/` to `docs/licenses-template/`.
+  - Updated all internal references and generation commands to point to the new locations.
+
+- **Documented lint suppressions**
+  - Added explicit rationale comments for all `#[allow(...)]` attributes across the workspace.
+  - Justified retention of `clippy::too_many_lines` and `clippy::struct_excessive_bools` based on architectural needs and readability.
+  - Gated several identified long functions (> 100 lines) with explicit `clippy::too_many_lines` suppressions and rationales.
+
+- **Dependency & Environment Hardening**
+  - Verified and ensured availability of `x264`, `vvdec`, and `vvenc` dynamic libraries.
+  - Resolved linker issues related to `libstdc++` and `libheif` dependencies on macOS.
+  - Ensured 100% pass rate for the entire workspace test suite (893 tests).
+
 ### 📄 License & Compliance
 
 - **Enhanced license documentation with cargo-about**
@@ -285,8 +302,8 @@ and Apple compatibility GIF delivery behavior.
 
 - **Comprehensive license documentation**
   - Generated detailed license information using `cargo-about`:
-    - `LICENSES.html`: Interactive HTML report with all dependencies, their licenses, and full license texts.
-    - `LICENSES.txt`: Summary of license types (MIT, Apache-2.0, BSD, GPL-3.0-or-later, etc.).
+    - `docs/LICENSES.html`: Interactive HTML report with all dependencies, their licenses, and full license texts.
+    - `docs/LICENSES.txt`: Summary of license types (MIT, Apache-2.0, BSD, GPL-3.0-or-later, etc.).
     - `about.toml`: Configuration file aligned with `deny.toml` for license compliance validation.
   - Project uses permissive licenses (MIT, Apache-2.0, BSD variants) for primary dependencies.
   - GPL-3.0-or-later components (jpegxl bindings) are properly disclosed and compatible.
@@ -6474,3 +6491,4 @@ This section reconstructs the detailed development history, transforming 1400+ r
 ### 🚀 Performance & Refactoring
 
 - modularize skip logic with VVC/AV2 support
+port

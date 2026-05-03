@@ -127,6 +127,7 @@ impl DurationTier {
 /// Populated by constructors (`from_video_detection`, `from_ffprobe_result`, `from_gif_path`).
 /// The tree itself is a pure function over this struct — no I/O, no side effects.
 #[derive(Debug, Clone, Default)]
+// Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
 #[allow(clippy::struct_excessive_bools)]
 pub struct LoopMeta {
     // ── Basic geometry ──
@@ -208,6 +209,8 @@ pub struct LoopMeta {
 }
 
 impl LoopMeta {
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+#[allow(clippy::too_many_lines)]
     /// Build `LoopMeta` from a full `VideoDetectionResult`.
     #[must_use]
     pub fn from_video_detection(detection: &VideoDetectionResult) -> Self {
@@ -315,6 +318,8 @@ impl LoopMeta {
         meta
     }
 
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+#[allow(clippy::too_many_lines)]
     /// Build `LoopMeta` from an `FFprobeResult` (used in pipelines without full detection).
     #[must_use]
     pub fn from_ffprobe_result(probe: &crate::ffprobe::FFprobeResult, path: &Path) -> Self {
@@ -577,6 +582,7 @@ impl LogOdds {
 }
 
 #[derive(Debug, Default, Clone, Copy)]
+// Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
 #[allow(clippy::struct_excessive_bools)]
 struct DerivedLoopSignals {
     scene_cut: bool,
@@ -933,6 +939,7 @@ fn evaluate_kinetics_and_physics(
     }
 }
 
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
 #[allow(clippy::too_many_lines)]
 fn apply_structural_signals(
     meta: &LoopMeta,
@@ -1112,6 +1119,7 @@ fn apply_structural_signals(
     }
 }
 
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
 #[allow(clippy::too_many_lines)]
 fn apply_weak_heuristics(
     meta: &LoopMeta,
@@ -1362,6 +1370,7 @@ fn finalize(verdict: LoopIntentVerdict, lo: LogOdds) -> TreeEvaluation {
 }
 
 #[must_use]
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
 #[allow(clippy::too_many_lines)]
 pub fn evaluate_loop_tree(
     meta: &LoopMeta,
@@ -1961,6 +1970,7 @@ impl DirectionalArbitration {
     }
 }
 
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
 #[allow(clippy::too_many_lines)]
 fn layer6_directional_arbitration(
     meta: &LoopMeta,
@@ -2245,6 +2255,7 @@ pub fn assess_loop_intent_from_probe(
 /// Returns an error if the underlying database fetches fail or the
 /// classification logic encounters an IO error during visual sampling.
 #[must_use]
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
 #[allow(clippy::too_many_lines)]
 pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> LoopIntentVerdict {
     use crate::database::{

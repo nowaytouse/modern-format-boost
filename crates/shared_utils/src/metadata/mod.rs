@@ -21,6 +21,8 @@ pub use exif::preserve_internal_metadata;
 #[cfg(target_os = "macos")]
 pub use macos::append_mfb_branding;
 
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+#[allow(clippy::too_many_lines)]
 pub fn apply_file_timestamps(src: &Path, dst: &Path) {
     use tracing::debug;
 

@@ -14,6 +14,7 @@ use tracing::{info, warn};
 pub const LONG_VIDEO_THRESHOLD: f32 = 300.0;
 
 #[derive(Debug, Clone)]
+// Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
 #[allow(clippy::struct_excessive_bools)]
 pub struct QualityThresholds {
     pub min_ssim: f64,

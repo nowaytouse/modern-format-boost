@@ -583,6 +583,7 @@ impl ExploreResult {
 
 /// Quality thresholds and validation flags for an exploration.
 #[derive(Debug, Clone)]
+// Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
 #[allow(clippy::struct_excessive_bools)]
 pub struct QualityThresholds {
     /// Minimum acceptable SSIM score.
@@ -1445,6 +1446,7 @@ impl VideoExplorer {
         })
     }
 
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
     #[allow(clippy::too_many_lines)]
     fn explore_compress_only(&self) -> Result<ExploreResult> {
         let mut log = Vec::new();
@@ -1599,6 +1601,7 @@ impl VideoExplorer {
         })
     }
 
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
     #[allow(clippy::too_many_lines)]
     fn explore_compress_with_quality(&self) -> Result<ExploreResult> {
         let mut log = Vec::new();
@@ -1741,6 +1744,7 @@ impl VideoExplorer {
         })
     }
 
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
     #[allow(clippy::too_many_lines)]
     fn explore_precise_quality_match(&self) -> Result<ExploreResult> {
         let mut log = Vec::new();
@@ -2036,6 +2040,7 @@ impl VideoExplorer {
         })
     }
 
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
     #[allow(clippy::too_many_lines)]
     fn explore_precise_quality_match_with_compression(&self) -> Result<ExploreResult> {
         let mut log = Vec::new();
@@ -2558,6 +2563,7 @@ impl VideoExplorer {
         result
     }
 
+// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
     #[allow(clippy::too_many_lines)]
     fn encode_with_ffmpeg(&self, crf: f32) -> Result<u64> {
         use std::io::{BufRead, BufReader, Write};
