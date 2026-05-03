@@ -329,7 +329,7 @@ impl Default for GlobalCollectionStats {
 }
 
 impl Default for LoopReferenceProfile {
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+    // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
     #[allow(clippy::too_many_lines)]
     fn default() -> Self {
         let collection = GlobalCollectionStats::default();

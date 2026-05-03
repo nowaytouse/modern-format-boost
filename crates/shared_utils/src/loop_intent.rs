@@ -209,8 +209,8 @@ pub struct LoopMeta {
 }
 
 impl LoopMeta {
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+    // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+    #[allow(clippy::too_many_lines)]
     /// Build `LoopMeta` from a full `VideoDetectionResult`.
     #[must_use]
     pub fn from_video_detection(detection: &VideoDetectionResult) -> Self {
@@ -318,8 +318,8 @@ impl LoopMeta {
         meta
     }
 
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+    // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+    #[allow(clippy::too_many_lines)]
     /// Build `LoopMeta` from an `FFprobeResult` (used in pipelines without full detection).
     #[must_use]
     pub fn from_ffprobe_result(probe: &crate::ffprobe::FFprobeResult, path: &Path) -> Self {

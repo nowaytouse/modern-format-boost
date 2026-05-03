@@ -212,8 +212,10 @@ fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<StreamSiz
     let video_stream = parsed.streams.iter().find(|s| s.codec_type == "video");
     let audio_stream = parsed.streams.iter().find(|s| s.codec_type == "audio");
 
-    let (video_stream_size, video_bitrate) = calculate_stream_size_and_bitrate(video_stream, duration_secs);
-    let (audio_stream_size, audio_bitrate) = calculate_stream_size_and_bitrate(audio_stream, duration_secs);
+    let (video_stream_size, video_bitrate) =
+        calculate_stream_size_and_bitrate(video_stream, duration_secs);
+    let (audio_stream_size, audio_bitrate) =
+        calculate_stream_size_and_bitrate(audio_stream, duration_secs);
 
     if video_stream_size == 0 {
         warn!(
@@ -238,7 +240,10 @@ fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<StreamSiz
     })
 }
 
-fn calculate_stream_size_and_bitrate(stream: Option<&FfprobeStreamInfo>, duration_secs: f64) -> (u64, Option<u64>) {
+fn calculate_stream_size_and_bitrate(
+    stream: Option<&FfprobeStreamInfo>,
+    duration_secs: f64,
+) -> (u64, Option<u64>) {
     stream
         .and_then(|s| s.bit_rate.as_ref())
         .and_then(|br_str| br_str.parse::<u64>().ok())

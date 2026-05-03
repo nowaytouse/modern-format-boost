@@ -404,8 +404,8 @@ impl FfmpegBuilder {
         );
     }
 
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+    // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+    #[allow(clippy::too_many_lines)]
     /// Construct the `std::process::Command`.
     #[must_use]
     pub fn build(&self) -> Command {

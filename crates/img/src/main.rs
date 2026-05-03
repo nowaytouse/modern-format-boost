@@ -323,15 +323,15 @@ fn main() -> anyhow::Result<()> {
                     f.set(ConfigFlags::DELETE_ORIGINAL, should_delete);
                     f.set(ConfigFlags::COMPRESS, compress);
                     f.set(ConfigFlags::APPLE_COMPAT, apple_compat);
+                    f.set(ConfigFlags::IN_PLACE, in_place);
+                    f.set(ConfigFlags::EXPLORE_SMALLER, explore);
+                    f.set(ConfigFlags::MATCH_QUALITY, match_quality);
+                    f.set(ConfigFlags::USE_GPU, true);
+                    f.set(ConfigFlags::ULTIMATE_MODE, ultimate);
+                    f.set(ConfigFlags::ALLOW_SIZE_TOLERANCE, allow_size_tolerance);
+                    f.set(ConfigFlags::VERBOSE, verbose);
                     f
                 },
-                in_place,
-                explore,
-                match_quality,
-                use_gpu: true,
-                ultimate,
-                allow_size_tolerance,
-                verbose,
                 child_threads: 0,
 
                 cache: cache.clone(),
@@ -622,17 +622,20 @@ struct AutoConvertConfig {
     output_dir: Option<PathBuf>,
     base_dir: Option<PathBuf>,
     flags: ConfigFlags,
-    in_place: bool,
-    explore: bool,
-    match_quality: bool,
-    use_gpu: bool,
-    ultimate: bool,
-    allow_size_tolerance: bool,
-    verbose: bool,
     child_threads: usize,
 
     cache: Option<Arc<AnalysisCache>>,
     codec: shared_utils::conversion_types::SelectedCodec,
+}
+
+impl AutoConvertConfig {
+    const fn in_place(&self) -> bool { self.flags.contains(ConfigFlags::IN_PLACE) }
+    const fn explore(&self) -> bool { self.flags.contains(ConfigFlags::EXPLORE_SMALLER) }
+    const fn match_quality(&self) -> bool { self.flags.contains(ConfigFlags::MATCH_QUALITY) }
+    const fn use_gpu(&self) -> bool { self.flags.contains(ConfigFlags::USE_GPU) }
+    const fn ultimate(&self) -> bool { self.flags.contains(ConfigFlags::ULTIMATE_MODE) }
+    const fn allow_size_tolerance(&self) -> bool { self.flags.contains(ConfigFlags::ALLOW_SIZE_TOLERANCE) }
+    const fn verbose(&self) -> bool { self.flags.contains(ConfigFlags::VERBOSE) }
 }
 
 fn copy_original_if_adjacent_mode(input: &Path, config: &AutoConvertConfig) -> anyhow::Result<()> {
@@ -640,7 +643,7 @@ fn copy_original_if_adjacent_mode(input: &Path, config: &AutoConvertConfig) -> a
         input,
         config.output_dir.as_deref(),
         config.base_dir.as_deref(),
-        config.verbose,
+        config.verbose(),
     )?;
     Ok(())
 }
@@ -818,9 +821,9 @@ fn auto_convert_single_file(
                 ConvertFlags::DELETE_ORIGINAL,
                 config.flags.contains(ConfigFlags::DELETE_ORIGINAL),
             );
-            f.set(ConvertFlags::IN_PLACE, config.in_place);
-            f.set(ConvertFlags::EXPLORE, config.explore);
-            f.set(ConvertFlags::MATCH_QUALITY, config.match_quality);
+            f.set(ConvertFlags::IN_PLACE, config.in_place());
+            f.set(ConvertFlags::EXPLORE, config.explore());
+            f.set(ConvertFlags::MATCH_QUALITY, config.match_quality());
             f.set(
                 ConvertFlags::COMPRESS,
                 config.flags.contains(ConfigFlags::COMPRESS),
@@ -829,13 +832,13 @@ fn auto_convert_single_file(
                 ConvertFlags::APPLE_COMPAT,
                 config.flags.contains(ConfigFlags::APPLE_COMPAT),
             );
-            f.set(ConvertFlags::USE_GPU, config.use_gpu);
-            f.set(ConvertFlags::ULTIMATE, config.ultimate);
+            f.set(ConvertFlags::USE_GPU, config.use_gpu());
+            f.set(ConvertFlags::ULTIMATE, config.ultimate());
             f.set(
                 ConvertFlags::ALLOW_SIZE_TOLERANCE,
-                config.allow_size_tolerance,
+                config.allow_size_tolerance(),
             );
-            f.set(ConvertFlags::VERBOSE, config.verbose);
+            f.set(ConvertFlags::VERBOSE, config.verbose());
             f
         },
         child_threads: if config.child_threads > 0 {
@@ -853,7 +856,7 @@ fn auto_convert_single_file(
     let output = convert_result_to_output(result);
 
     if output.skipped {
-        if config.verbose {
+        if config.verbose() {
             println!("⏭️ {}", output.message);
         }
     } else if output.is_jpeg_transcode() {
@@ -886,7 +889,7 @@ fn dispatch_static_conversion(
     };
 
     if let Some(ref q) = quality {
-        if config.verbose {
+        if config.verbose() {
             if let Some(reason) = q.fallback_reason.as_deref() {
                 println!(
                     "   🔭 Quality Score: {:.2} (BPP heuristic, reason: {reason})",
@@ -913,7 +916,7 @@ fn dispatch_static_conversion(
                     }
                 }
             }
-            if config.verbose {
+            if config.verbose() {
                 println!("🔄 Modern Lossless→JXL: {}", input.display());
             }
             convert_to_jxl(input, options, 0.0_f32, analysis.hdr_info.as_ref())?
@@ -930,19 +933,19 @@ fn dispatch_static_conversion(
                 )?);
             }
 
-            if config.verbose {
+            if config.verbose() {
                 println!("🔄 JPEG→JXL lossless transcode: {}", input.display());
             }
             convert_jpeg_to_jxl(input, options, analysis.hdr_info.as_ref())?
         }
         (_, true) => {
-            if config.verbose {
+            if config.verbose() {
                 println!("🔄 Legacy Lossless→JXL: {}", input.display());
             }
             convert_to_jxl(input, options, 0.0_f32, analysis.hdr_info.as_ref())?
         }
         _ => {
-            if config.verbose {
+            if config.verbose() {
                 println!(
                     "🔄 {} Lossy→JXL (Near-Lossless): {}",
                     match format.to_uppercase().as_str() {
@@ -979,7 +982,7 @@ fn auto_convert_directory(
         }
     }
 
-    if config.flags.contains(ConfigFlags::DELETE_ORIGINAL) || config.in_place {
+    if config.flags.contains(ConfigFlags::DELETE_ORIGINAL) || config.in_place() {
         if let Err(e) = check_dangerous_directory(input) {
             eprintln!("{e}");
             std::process::exit(1);
@@ -1033,7 +1036,7 @@ fn auto_convert_directory(
         return Ok(());
     }
 
-    if config.verbose {
+    if config.verbose() {
         println!("📂 Found {total} files to process");
         shared_utils::log_eprintln!(
             "⚡ Queue Strategy: deeper paths → fast JPEG/direct transcodes → smaller files → lower resolution"
@@ -1048,7 +1051,7 @@ fn auto_convert_directory(
         ) {
             Ok(cp) => {
                 if cp.is_resume_mode() {
-                    if config.verbose {
+                    if config.verbose() {
                         println!(
                             "📂 Resume: skipping {} already completed images",
                             cp.completed_count()
@@ -1061,7 +1064,7 @@ fn auto_convert_directory(
                 Some(cp)
             }
             Err(e) => {
-                if config.verbose {
+                if config.verbose() {
                     println!("⚠️ [checkpoint] Failed to initialize: {e}");
                 }
                 None
@@ -1104,7 +1107,7 @@ fn auto_convert_directory(
                 );
                 std::process::exit(1);
             }
-            if config.verbose {
+            if config.verbose() {
                 println!(
                     "💾 Disk space OK: {:.2} GB available, {:.2} GB required",
                     shared_utils::numeric_cast::u64_to_f64(avail) / (1024.0 * 1024.0 * 1024.0),
@@ -1153,7 +1156,7 @@ fn auto_convert_directory(
         }
     };
 
-    if config.verbose {
+    if config.verbose() {
         shared_utils::log_eprintln!(
             "🔧 Thread Strategy: {} parallel tasks x {} threads/task (CPU cores: {})",
             max_threads,
@@ -1268,7 +1271,7 @@ fn auto_convert_directory(
                                     path,
                                     Some(output_dir),
                                     config.base_dir.as_deref(),
-                                    config.verbose,
+                                    config.verbose(),
                                 ) {
                                     shared_utils::log_eprintln!(
                                         "🚨 [CRITICAL] Failed to copy original after conversion failure ({}): {}. DATA LOSS RISK!",

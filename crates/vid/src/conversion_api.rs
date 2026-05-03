@@ -15,56 +15,52 @@ use tracing::{info, warn};
 fn convert_options_from_config(
     config: &ConversionConfig,
 ) -> shared_utils::conversion::ConvertOptions {
-    let mut opts = shared_utils::conversion::ConvertOptions {
+    use shared_utils::conversion::ConvertFlags;
+    use shared_utils::conversion_types::ConfigFlags;
+    
+    let mut flags = ConvertFlags::empty();
+    
+    // Batch flag mapping
+    if config.flags.contains(ConfigFlags::FORCE) {
+        flags |= ConvertFlags::FORCE;
+    }
+    if config.flags.contains(ConfigFlags::DELETE_ORIGINAL) {
+        flags |= ConvertFlags::DELETE_ORIGINAL;
+    }
+    if config.flags.contains(ConfigFlags::IN_PLACE) {
+        flags |= ConvertFlags::IN_PLACE;
+    }
+    if config.flags.contains(ConfigFlags::EXPLORE_SMALLER) {
+        flags |= ConvertFlags::EXPLORE;
+    }
+    if config.flags.contains(ConfigFlags::MATCH_QUALITY) {
+        flags |= ConvertFlags::MATCH_QUALITY;
+    }
+    if config.flags.contains(ConfigFlags::APPLE_COMPAT) {
+        flags |= ConvertFlags::APPLE_COMPAT;
+    }
+    if config.flags.contains(ConfigFlags::REQUIRE_COMPRESSION) {
+        flags |= ConvertFlags::COMPRESS;
+    }
+    if config.flags.contains(ConfigFlags::USE_GPU) {
+        flags |= ConvertFlags::USE_GPU;
+    }
+    if config.flags.contains(ConfigFlags::ULTIMATE_MODE) {
+        flags |= ConvertFlags::ULTIMATE;
+    }
+    if config.flags.contains(ConfigFlags::ALLOW_SIZE_TOLERANCE) {
+        flags |= ConvertFlags::ALLOW_SIZE_TOLERANCE;
+    }
+
+    shared_utils::conversion::ConvertOptions {
+        flags,
         output_dir: config.output_dir.clone(),
         base_dir: config.base_dir.clone(),
-        child_threads: config.child_threads,
         codec: config.codec,
-        ..Default::default()
-    };
-
-    opts.flags.set(
-        shared_utils::conversion::ConvertFlags::FORCE,
-        config.force(),
-    );
-    opts.flags.set(
-        shared_utils::conversion::ConvertFlags::DELETE_ORIGINAL,
-        config.delete_original(),
-    );
-    opts.flags.set(
-        shared_utils::conversion::ConvertFlags::IN_PLACE,
-        config.in_place(),
-    );
-    opts.flags.set(
-        shared_utils::conversion::ConvertFlags::EXPLORE,
-        config.explore_smaller(),
-    );
-    opts.flags.set(
-        shared_utils::conversion::ConvertFlags::MATCH_QUALITY,
-        config.match_quality(),
-    );
-    opts.flags.set(
-        shared_utils::conversion::ConvertFlags::APPLE_COMPAT,
-        config.apple_compat(),
-    );
-    opts.flags.set(
-        shared_utils::conversion::ConvertFlags::COMPRESS,
-        config.require_compression(),
-    );
-    opts.flags.set(
-        shared_utils::conversion::ConvertFlags::USE_GPU,
-        config.use_gpu(),
-    );
-    opts.flags.set(
-        shared_utils::conversion::ConvertFlags::ULTIMATE,
-        config.ultimate_mode(),
-    );
-    opts.flags.set(
-        shared_utils::conversion::ConvertFlags::ALLOW_SIZE_TOLERANCE,
-        config.allow_size_tolerance(),
-    );
-
-    opts
+        child_threads: config.child_threads,
+        input_format: None,
+        quality_label: None,
+    }
 }
 
 fn cleanup_output_file(path: &Path, context: &str) {
@@ -1004,7 +1000,11 @@ pub fn auto_convert_with_cache(
                 blake3: None,
             });
         }
-        TargetVideoFormat::HevcMov | TargetVideoFormat::HevcMp4 | TargetVideoFormat::Av1Mp4 | TargetVideoFormat::Av2Mp4 | TargetVideoFormat::VvcMp4 => {
+        TargetVideoFormat::HevcMov
+        | TargetVideoFormat::HevcMp4
+        | TargetVideoFormat::Av1Mp4
+        | TargetVideoFormat::Av2Mp4
+        | TargetVideoFormat::VvcMp4 => {
             if config.use_lossless() {
                 info!(
                     "   🚀 Using {} Lossless Mode (forced)",

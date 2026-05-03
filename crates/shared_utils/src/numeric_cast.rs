@@ -48,7 +48,7 @@ pub fn option_f64_loud(val: Option<f64>, default: f64, name: &str) -> f64 {
 }
 
 mod raw {
-// Rationale: This lint suppression is retained to maintain architectural consistency and prevent over-engineering for the sake of strict compliance.
+    // Rationale: This lint suppression is retained to maintain architectural consistency and prevent over-engineering for the sake of strict compliance.
     #![allow(
         clippy::cast_possible_truncation,
         clippy::cast_precision_loss,
