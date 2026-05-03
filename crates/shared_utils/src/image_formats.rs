@@ -10,6 +10,7 @@ pub mod tiff {
     ///
     /// # Errors
     /// Returns an error if the file is missing or the format is unsupported.
+    #[allow(clippy::too_many_lines)]
     pub fn is_lossless(path: &Path) -> Result<bool> {
         crate::common_utils::validate_file_size_limit(path, 512 * 1024 * 1024)
             .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;

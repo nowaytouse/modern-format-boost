@@ -210,6 +210,7 @@ fn parse_side_data_list(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn extract_color_info(input: &Path) -> ColorInfo {
     let input_str = input.to_string_lossy();
 

@@ -212,6 +212,7 @@ fn spawn_log_thread(
     })
 }
 
+#[allow(clippy::too_many_lines)]
 fn encode_to_hevc(
     input: &Path,
     hevc_output: &Path,

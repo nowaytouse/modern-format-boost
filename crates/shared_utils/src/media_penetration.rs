@@ -164,55 +164,60 @@ pub fn detect_real_transparency(path: &Path, duration: Option<f64>) -> Penetrati
     // If sampling succeeded but found no transparency, do a full decode to be absolutely sure.
     // This catches cases where transparency only appears in specific frames.
     if sampling_succeeded && duration_val > 1.0 {
-        emit_stderr(
-            "   Transparency sampling found no variance, performing full decode verification...",
-        );
-
-        let output = match crate::ffmpeg_builder::FfmpegBuilder::new()
-            .input(path)
-            .arg("-vf")
-            .arg("alphaextract,stats")
-            .format("null")
-            .output_pipe()
-            .build()
-            .output()
-        {
-            Ok(out) => out,
-            Err(e) => {
-                emit_stderr(&format!(
-                    "⚠️  Full transparency decode failed: ffmpeg error ({e})"
-                ));
-                return PenetrationResult::Failed;
-            }
-        };
-
-        if !output.status.success() {
-            emit_stderr(&format!(
-                "⚠️  Full transparency decode failed: exit code {}",
-                output.status.code().unwrap_or(-1)
-            ));
-            return PenetrationResult::Failed;
-        }
-
-        let stderr = String::from_utf8_lossy(&output.stderr);
-
-        // Check all frames for any Min < 255
-        for line in stderr.lines() {
-            if let Some(idx) = line.find("lavfi.stats.0.Min:") {
-                let min_str = line[idx + 18..].split_whitespace().next().unwrap_or("");
-                if let Ok(min_val) = min_str.parse::<f64>() {
-                    if min_val < 255.0 {
-                        emit_stderr("   Full decode found transparency in at least one frame");
-                        return PenetrationResult::Verified(true);
-                    }
-                }
-            }
-        }
-
-        emit_stderr("   Full decode confirmed: all frames have opaque alpha (fake transparency)");
+        return run_full_decode_transparency(path);
     }
 
     PenetrationResult::Verified(found_transparency)
+}
+
+fn run_full_decode_transparency(path: &Path) -> PenetrationResult<bool> {
+    emit_stderr(
+        "   Transparency sampling found no variance, performing full decode verification...",
+    );
+
+    let output = match crate::ffmpeg_builder::FfmpegBuilder::new()
+        .input(path)
+        .arg("-vf")
+        .arg("alphaextract,stats")
+        .format("null")
+        .output_pipe()
+        .build()
+        .output()
+    {
+        Ok(out) => out,
+        Err(e) => {
+            emit_stderr(&format!(
+                "⚠️  Full transparency decode failed: ffmpeg error ({e})"
+            ));
+            return PenetrationResult::Failed;
+        }
+    };
+
+    if !output.status.success() {
+        emit_stderr(&format!(
+            "⚠️  Full transparency decode failed: exit code {}",
+            output.status.code().unwrap_or(-1)
+        ));
+        return PenetrationResult::Failed;
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Check all frames for any Min < 255
+    for line in stderr.lines() {
+        if let Some(idx) = line.find("lavfi.stats.0.Min:") {
+            let min_str = line[idx + 18..].split_whitespace().next().unwrap_or("");
+            if let Ok(min_val) = min_str.parse::<f64>() {
+                if min_val < 255.0 {
+                    emit_stderr("   Full decode found transparency in at least one frame");
+                    return PenetrationResult::Verified(true);
+                }
+            }
+        }
+    }
+
+    emit_stderr("   Full decode confirmed: all frames have opaque alpha (fake transparency)");
+    PenetrationResult::Verified(false)
 }
 
 /// Penetrating frame count detection: decode and count actual frames via ffmpeg summary.

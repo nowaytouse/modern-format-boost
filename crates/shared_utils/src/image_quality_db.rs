@@ -110,6 +110,10 @@ pub fn init_quality_schema(conn: &mut Client) -> Result<()> {
         &[],
     )?;
 
+    apply_schema_migrations(conn)
+}
+
+fn apply_schema_migrations(conn: &mut Client) -> Result<()> {
     // Ensure exhaustive schema migration for existing tables
     let _ = conn.execute(
         "ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS entropy DOUBLE PRECISION",
@@ -285,6 +289,7 @@ pub fn get_class_counts(conn: &mut Client) -> (i64, i64) {
 /// Returns `None` only for animated images.
 /// Returns a heuristic `QualityScore` (confidence = 0.0) when the DB is unavailable or empty.
 #[must_use]
+#[allow(clippy::too_many_lines)]
 pub fn lookup_image_quality(analysis: &ImageAnalysis) -> Option<QualityScore> {
     // Animated assets are handled by the GIF/Video pipeline, not this DB.
     if analysis.is_animated {

@@ -42,6 +42,7 @@ pub struct HeicAnalysis {
 ///
 /// # Errors
 /// Returns an error if the file cannot be read or libheif fails.
+#[allow(clippy::too_many_lines)]
 pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
     // Try find_box_data_recursive first, then fallback to direct magic byte search
     // This handles cases where boxes are inside full boxes (e.g. meta box with version/flags)
@@ -370,6 +371,7 @@ fn parse_sps_rbsp_for_transquant_bypass(sps_payload: &[u8]) -> Option<bool> {
 ///
 /// # Errors
 /// Returns an error if the file is corrupted or analysis fails.
+#[allow(clippy::too_many_lines)]
 pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)> {
     let lib_heif = LibHeif::new();
 

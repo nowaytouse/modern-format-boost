@@ -444,6 +444,7 @@ pub(crate) fn format_quality_check_line(
 ///
 /// # Errors
 /// Returns an error if exploration fails.
+#[allow(clippy::too_many_lines)]
 pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<ExploreResult> {
     use crate::gpu_accel::{CrfMapping, GpuAccel, GpuCoarseConfig};
     let GpuSearchArgs {
@@ -1555,6 +1556,7 @@ fn merge_vf_with_animated_exploration_prefix(vf_args: &[String], prefix: &str) -
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn cpu_fine_tune_from_gpu_boundary(
     args: FineTuneArgs<'_>,
     tracking: &mut TrackingState,

@@ -933,6 +933,7 @@ fn evaluate_kinetics_and_physics(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn apply_structural_signals(
     meta: &LoopMeta,
     derived: &DerivedLoopSignals,
@@ -1111,6 +1112,7 @@ fn apply_structural_signals(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn apply_weak_heuristics(
     meta: &LoopMeta,
     derived: &DerivedLoopSignals,
@@ -1360,6 +1362,7 @@ fn finalize(verdict: LoopIntentVerdict, lo: LogOdds) -> TreeEvaluation {
 }
 
 #[must_use]
+#[allow(clippy::too_many_lines)]
 pub fn evaluate_loop_tree(
     meta: &LoopMeta,
     reference_profile: Option<&LoopReferenceProfile>,
@@ -1958,6 +1961,7 @@ impl DirectionalArbitration {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn layer6_directional_arbitration(
     meta: &LoopMeta,
     thresholds: &LoopThresholds,
@@ -2241,6 +2245,7 @@ pub fn assess_loop_intent_from_probe(
 /// Returns an error if the underlying database fetches fail or the
 /// classification logic encounters an IO error during visual sampling.
 #[must_use]
+#[allow(clippy::too_many_lines)]
 pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> LoopIntentVerdict {
     use crate::database::{
         fetch_loop_reference_profile, log_inference_record, lookup_similar_samples, open_pg_client,

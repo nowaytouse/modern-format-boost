@@ -88,6 +88,7 @@ impl Default for GainMapParams {
 /// # Errors
 ///
 /// Returns an error if the HEIC file cannot be read, gainmap is missing, or synthesis fails.
+#[allow(clippy::too_many_lines)]
 pub fn convert_heic_with_gainmap_to_jxl_hdr(
     input: &Path,
     output: &Path,
@@ -696,6 +697,7 @@ fn parse_gainmap_from_xmp(xmp_data: &[u8]) -> Option<GainMapParams> {
 /// # Errors
 ///
 /// Returns an error if the images have incompatible dimensions or if memory allocation fails.
+#[allow(clippy::too_many_lines)]
 pub fn synthesize_hdr(
     sdr: &DynamicImage,
     gain: &DynamicImage,

@@ -175,6 +175,7 @@ fn build_calibration_filter_chain(
 ///
 /// # Panics
 /// Panics if the input file path is not a valid UTF-8 string.
+#[allow(clippy::too_many_lines)]
 pub fn quick_calibrate(
     input: &Path,
     input_size: u64,

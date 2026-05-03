@@ -744,6 +744,7 @@ fn finalize_screening_result(
 ///
 /// # Errors
 /// Returns `Err` if the `try_candidate` closure fails for any tested distance.
+#[allow(clippy::too_many_lines)]
 pub fn screen_jxl_candidates<F>(
     input_size: u64,
     initial_size: u64,

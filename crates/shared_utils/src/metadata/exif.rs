@@ -190,6 +190,7 @@ fn exiftool_error_message(output: &std::process::Output) -> Option<String> {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
     if !is_exiftool_available() {
         static WARNED: OnceLock<()> = OnceLock::new();

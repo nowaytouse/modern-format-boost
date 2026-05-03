@@ -1445,6 +1445,7 @@ impl VideoExplorer {
         })
     }
 
+    #[allow(clippy::too_many_lines)]
     fn explore_compress_only(&self) -> Result<ExploreResult> {
         let mut log = Vec::new();
         let mut cache: CrfCache<u64> = CrfCache::new();
@@ -1598,6 +1599,7 @@ impl VideoExplorer {
         })
     }
 
+    #[allow(clippy::too_many_lines)]
     fn explore_compress_with_quality(&self) -> Result<ExploreResult> {
         let mut log = Vec::new();
         let mut cache: CrfCache<(u64, Option<f64>)> = CrfCache::new();
@@ -1739,6 +1741,7 @@ impl VideoExplorer {
         })
     }
 
+    #[allow(clippy::too_many_lines)]
     fn explore_precise_quality_match(&self) -> Result<ExploreResult> {
         let mut log = Vec::new();
         let mut cache: CrfCache<(u64, (Option<f64>, Option<f64>, Option<f64>))> = CrfCache::new();
@@ -2033,6 +2036,7 @@ impl VideoExplorer {
         })
     }
 
+    #[allow(clippy::too_many_lines)]
     fn explore_precise_quality_match_with_compression(&self) -> Result<ExploreResult> {
         let mut log = Vec::new();
         let mut size_cache: CrfCache<u64> = CrfCache::new();
@@ -2554,6 +2558,7 @@ impl VideoExplorer {
         result
     }
 
+    #[allow(clippy::too_many_lines)]
     fn encode_with_ffmpeg(&self, crf: f32) -> Result<u64> {
         use std::io::{BufRead, BufReader, Write};
         use std::process::Stdio;

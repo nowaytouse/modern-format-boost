@@ -900,7 +900,7 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 [[package]]
 name = "flate2"
 version = "1.1.10"
-source = "git+https://github.com/rust-lang/flate2-rs.git#e4429c42918ece3697fd1d1fd3d4b53c78283b56"
+source = "git+https://github.com/rust-lang/flate2-rs.git#aa62dd4986d977a500e6916ef3bac89a97e75420"
 dependencies = [
  "crc32fast",
  "miniz_oxide 0.9.1",

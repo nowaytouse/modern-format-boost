@@ -141,68 +141,15 @@ pub fn verify_after_encode(
     let mut probe_failed = false;
 
     if options.require_duration_match || options.require_video_stream {
-        let input_probe = ffprobe::probe_video(input);
-        let output_probe = ffprobe::probe_video(output);
-
-        match (input_probe, output_probe) {
-            (Ok(ref inp), Ok(ref out)) => {
-                if options.require_video_stream {
-                    let has_video = !out.video_codec.is_empty() && out.video_codec != "unknown";
-                    has_video_stream = if has_video {
-                        CheckResult::Passed
-                    } else {
-                        CheckResult::Failed("No valid video stream in output".to_string())
-                    };
-                    if has_video {
-                        details.push(format!("Output has video stream: {}", out.video_codec));
-                    } else {
-                        details.push("Output has no valid video stream".to_string());
-                    }
-                }
-                if options.require_duration_match {
-                    let tol = options.duration_tolerance_secs.max(0.0);
-                    let diff = (inp.duration - out.duration).abs();
-                    let ok = diff <= tol;
-                    duration_match = if ok {
-                        CheckResult::Passed
-                    } else {
-                        CheckResult::Failed(format!(
-                            "Duration mismatch: {:.2}s vs {:.2}s (diff {:.2}s > tolerance {:.2}s)",
-                            inp.duration, out.duration, diff, tol
-                        ))
-                    };
-                    details.push(format!(
-                        "Duration: input {:.2}s, output {:.2}s, diff {:.2}s (tolerance {:.2}s) → {}",
-                        inp.duration,
-                        out.duration,
-                        diff,
-                        tol,
-                        if ok { "OK" } else { "MISMATCH" }
-                    ));
-                }
-            }
-            (Err(e), _) => {
-                probe_failed = true;
-                details.push(format!("Input probe failed: {e}"));
-                if options.require_duration_match {
-                    duration_match = CheckResult::Failed(format!("Input probe failed: {e}"));
-                }
-                if options.require_video_stream {
-                    has_video_stream = CheckResult::Failed(format!("Input probe failed: {e}"));
-                }
-            }
-            (_, Err(e)) => {
-                probe_failed = true;
-                details.push(format!("Output probe failed: {e}"));
-                if options.require_duration_match {
-                    duration_match = CheckResult::Failed(format!("Output probe failed: {e}"));
-                }
-                if options.require_video_stream {
-                    has_video_stream = CheckResult::Failed(format!("Output probe failed: {e}"));
-                }
-                details.push("Duration/stream not verified (probe unavailable)".to_string());
-            }
-        }
+        run_probe_checks(
+            input,
+            output,
+            options,
+            &mut duration_match,
+            &mut has_video_stream,
+            &mut probe_failed,
+            &mut details,
+        );
     }
 
     let failed = duration_match.is_failed() || has_video_stream.is_failed();
@@ -226,6 +173,79 @@ pub fn verify_after_encode(
         has_video_stream,
         message,
         details,
+    }
+}
+
+fn run_probe_checks(
+    input: &Path,
+    output: &Path,
+    options: &VerifyOptions,
+    duration_match: &mut CheckResult,
+    has_video_stream: &mut CheckResult,
+    probe_failed: &mut bool,
+    details: &mut Vec<String>,
+) {
+    let input_probe = ffprobe::probe_video(input);
+    let output_probe = ffprobe::probe_video(output);
+
+    match (input_probe, output_probe) {
+        (Ok(ref inp), Ok(ref out)) => {
+            if options.require_video_stream {
+                let has_video = !out.video_codec.is_empty() && out.video_codec != "unknown";
+                *has_video_stream = if has_video {
+                    CheckResult::Passed
+                } else {
+                    CheckResult::Failed("No valid video stream in output".to_string())
+                };
+                if has_video {
+                    details.push(format!("Output has video stream: {}", out.video_codec));
+                } else {
+                    details.push("Output has no valid video stream".to_string());
+                }
+            }
+            if options.require_duration_match {
+                let tol = options.duration_tolerance_secs.max(0.0);
+                let diff = (inp.duration - out.duration).abs();
+                let ok = diff <= tol;
+                *duration_match = if ok {
+                    CheckResult::Passed
+                } else {
+                    CheckResult::Failed(format!(
+                        "Duration mismatch: {:.2}s vs {:.2}s (diff {:.2}s > tolerance {:.2}s)",
+                        inp.duration, out.duration, diff, tol
+                    ))
+                };
+                details.push(format!(
+                    "Duration: input {:.2}s, output {:.2}s, diff {:.2}s (tolerance {:.2}s) → {}",
+                    inp.duration,
+                    out.duration,
+                    diff,
+                    tol,
+                    if ok { "OK" } else { "MISMATCH" }
+                ));
+            }
+        }
+        (Err(e), _) => {
+            *probe_failed = true;
+            details.push(format!("Input probe failed: {e}"));
+            if options.require_duration_match {
+                *duration_match = CheckResult::Failed(format!("Input probe failed: {e}"));
+            }
+            if options.require_video_stream {
+                *has_video_stream = CheckResult::Failed(format!("Input probe failed: {e}"));
+            }
+        }
+        (_, Err(e)) => {
+            *probe_failed = true;
+            details.push(format!("Output probe failed: {e}"));
+            if options.require_duration_match {
+                *duration_match = CheckResult::Failed(format!("Output probe failed: {e}"));
+            }
+            if options.require_video_stream {
+                *has_video_stream = CheckResult::Failed(format!("Output probe failed: {e}"));
+            }
+            details.push("Duration/stream not verified (probe unavailable)".to_string());
+        }
     }
 }
 

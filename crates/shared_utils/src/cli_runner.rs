@@ -102,6 +102,7 @@ where
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn process_directory<F, R>(config: &CliRunnerConfig, converter: F) -> Result<()>
 where
     F: Fn(&Path) -> Result<R> + Sync,

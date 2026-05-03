@@ -1167,6 +1167,7 @@ fn find_mpf_segment(data: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 /// Extract gainmap image data from MPF segment.
+#[allow(clippy::too_many_lines)]
 fn extract_gainmap_from_mpf(
     jpeg_data: &[u8],
     mpf_data: &[u8],

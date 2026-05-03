@@ -268,6 +268,7 @@ pub fn analyze_image_with_cache(
     Ok(analysis)
 }
 
+#[allow(clippy::too_many_lines)]
 fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
     if !path.exists() {
         return Err(ImgQualityError::ImageReadError(format!(
@@ -513,6 +514,7 @@ impl ImageAnalysis {
 
 /// # Errors
 /// Returns an error if HEIC analysis fails or file cannot be read.
+#[allow(clippy::too_many_lines)]
 fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
     debug!("analyze_heic_image called for {}", path.display());
     let (

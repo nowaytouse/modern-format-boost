@@ -1749,6 +1749,7 @@ pub fn gpu_coarse_search_with_log(
     result
 }
 
+#[allow(clippy::too_many_lines)]
 fn gpu_coarse_search_with_log_impl(
     input: &std::path::Path,
     output: &std::path::Path,

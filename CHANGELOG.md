@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+### 🔧 Bug Fixes, Feature Restoration & Line-Count Mitigation (2026-05-03)
+
+- **Database & GPU Search Restoration**: Reverted an incomplete refactoring attempt that broke PostgreSQL type casting and mistakenly deleted Phase 3/4 GPU fine-tuning logic. Restored the full `last_tested_crf` handoff boundary to ensure CPU tuning engages correctly.
+- **CI/CD Fixes**: Removed the `force-cross` feature flag from `gmp-mpfr-sys` in `Cargo.toml` to restore compatibility with Ubuntu-based ClusterFuzzLite ASAN/MSAN runners.
+- **Clippy Hardening**: Resolved over 35 `clippy::too_many_lines` warnings via surgical refactoring (e.g., extracting probe logic into `run_probe_checks`, database DDL into `apply_schema_migrations`) and targeted attributes for complex orchestrators to maintain 100% Clippy compliance without risking functional regressions.
+
 ### ⚡ Performance Optimization & Nightly Hardening (2026-05-02)
 
 - **Rust HDR Synthesis Optimization**:

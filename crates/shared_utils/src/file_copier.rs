@@ -63,6 +63,7 @@ fn should_copy_file(path: &Path) -> bool {
         && !SIDECAR_EXTENSIONS.contains(&ext.as_str())
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn copy_unsupported_files(input_dir: &Path, output_dir: &Path, recursive: bool) -> CopyResult {
     let mut result = CopyResult::new();
 

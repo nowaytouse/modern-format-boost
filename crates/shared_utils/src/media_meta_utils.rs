@@ -22,6 +22,7 @@ pub struct GifHeaderScan {
 ///
 /// # Errors
 /// Returns an error if the file cannot be read or if the `GIF` header is malformed.
+#[allow(clippy::too_many_lines)]
 pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
     let buf = std::fs::read(path)?;
     let n = buf.len();

@@ -882,6 +882,7 @@ pub fn analyze_png_quantization_from_bytes(data: &[u8]) -> Result<PngQuantizatio
 ///
 /// # Errors
 /// Returns an error if reading fails or the PNG structure is invalid.
+#[allow(clippy::too_many_lines)]
 pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
     mut reader: R,
     path: Option<&Path>,
@@ -1352,6 +1353,7 @@ struct PngQuantizationWeights {
 ///
 /// # Errors
 /// Returns an error if the PNG stream is invalid or corrupted.
+#[allow(clippy::too_many_lines)]
 pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructureInfo> {
     fn skip_bytes<R: Seek>(reader: &mut R, bytes: u64, context: &str) -> Result<()> {
         let offset = i64::try_from(bytes).map_err(|_| {
@@ -1812,6 +1814,7 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn detect_gradient_banding(img: &DynamicImage) -> f64 {
     let rgba = img.to_rgba8();
     let (width, height) = rgba.dimensions();
@@ -2088,6 +2091,7 @@ fn calculate_rgb_entropy(img: &DynamicImage) -> f64 {
 ///
 /// # Errors
 /// Returns an error if the file cannot be read, the format is unrecognized, or analysis fails.
+#[allow(clippy::too_many_lines)]
 pub fn detect_image(path: &Path) -> Result<DetectionResult> {
     let file_size = std::fs::metadata(path)?.len();
 

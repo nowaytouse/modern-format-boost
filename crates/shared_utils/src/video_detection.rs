@@ -445,6 +445,7 @@ pub fn detect_video_with_cache(
 ///
 /// # Errors
 /// Returns `FFprobeError` if the file is invalid or ffprobe fails.
+#[allow(clippy::too_many_lines)]
 pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
     let probe = probe_video(path)?;
 

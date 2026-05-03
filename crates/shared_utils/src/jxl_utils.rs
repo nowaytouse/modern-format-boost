@@ -264,6 +264,7 @@ pub struct ModeLockedImagemagickCjxlPipelineRequest<'a> {
 ///
 /// # Errors
 /// Returns an error if the pipeline fails.
+#[allow(clippy::too_many_lines)]
 fn run_imagemagick_cjxl_pipeline_with_effort(
     request: ImagemagickCjxlPipelineRequest<'_>,
 ) -> std::result::Result<(), (bool, bool, String)> {
@@ -487,6 +488,7 @@ pub fn run_imagemagick_cjxl_pipeline(
 ///
 /// # Errors
 /// Returns an I/O error if conversion fails.
+#[allow(clippy::too_many_lines)]
 pub fn try_imagemagick_fallback_with_effort(
     input: &Path,
     output: &Path,

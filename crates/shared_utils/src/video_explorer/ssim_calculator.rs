@@ -42,6 +42,7 @@ fn resolve_common_metric_dimensions(input: &Path, output: &Path) -> Option<(u32,
 }
 
 /// `max_duration_min`: skip MS-SSIM when video longer than this (e.g. 5.0 normal, 25.0 ultimate).
+#[allow(clippy::too_many_lines)]
 #[must_use]
 pub fn calculate_ms_ssim_yuv(
     input: &Path,
