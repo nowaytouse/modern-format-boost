@@ -18,39 +18,18 @@ fn convert_options_from_config(
     use shared_utils::conversion::ConvertFlags;
     use shared_utils::conversion_types::ConfigFlags;
     
-    let mut flags = ConvertFlags::empty();
-    
-    // Batch flag mapping
-    if config.flags.contains(ConfigFlags::FORCE) {
-        flags |= ConvertFlags::FORCE;
-    }
-    if config.flags.contains(ConfigFlags::DELETE_ORIGINAL) {
-        flags |= ConvertFlags::DELETE_ORIGINAL;
-    }
-    if config.flags.contains(ConfigFlags::IN_PLACE) {
-        flags |= ConvertFlags::IN_PLACE;
-    }
-    if config.flags.contains(ConfigFlags::EXPLORE_SMALLER) {
-        flags |= ConvertFlags::EXPLORE;
-    }
-    if config.flags.contains(ConfigFlags::MATCH_QUALITY) {
-        flags |= ConvertFlags::MATCH_QUALITY;
-    }
-    if config.flags.contains(ConfigFlags::APPLE_COMPAT) {
-        flags |= ConvertFlags::APPLE_COMPAT;
-    }
-    if config.flags.contains(ConfigFlags::REQUIRE_COMPRESSION) {
-        flags |= ConvertFlags::COMPRESS;
-    }
-    if config.flags.contains(ConfigFlags::USE_GPU) {
-        flags |= ConvertFlags::USE_GPU;
-    }
-    if config.flags.contains(ConfigFlags::ULTIMATE_MODE) {
-        flags |= ConvertFlags::ULTIMATE;
-    }
-    if config.flags.contains(ConfigFlags::ALLOW_SIZE_TOLERANCE) {
-        flags |= ConvertFlags::ALLOW_SIZE_TOLERANCE;
-    }
+    // Batch flag mapping using bitwise OR for optimal performance
+    let flags = ConvertFlags::empty()
+        | if config.flags.contains(ConfigFlags::FORCE) { ConvertFlags::FORCE } else { ConvertFlags::empty() }
+        | if config.flags.contains(ConfigFlags::DELETE_ORIGINAL) { ConvertFlags::DELETE_ORIGINAL } else { ConvertFlags::empty() }
+        | if config.flags.contains(ConfigFlags::IN_PLACE) { ConvertFlags::IN_PLACE } else { ConvertFlags::empty() }
+        | if config.flags.contains(ConfigFlags::EXPLORE_SMALLER) { ConvertFlags::EXPLORE } else { ConvertFlags::empty() }
+        | if config.flags.contains(ConfigFlags::MATCH_QUALITY) { ConvertFlags::MATCH_QUALITY } else { ConvertFlags::empty() }
+        | if config.flags.contains(ConfigFlags::APPLE_COMPAT) { ConvertFlags::APPLE_COMPAT } else { ConvertFlags::empty() }
+        | if config.flags.contains(ConfigFlags::REQUIRE_COMPRESSION) { ConvertFlags::COMPRESS } else { ConvertFlags::empty() }
+        | if config.flags.contains(ConfigFlags::USE_GPU) { ConvertFlags::USE_GPU } else { ConvertFlags::empty() }
+        | if config.flags.contains(ConfigFlags::ULTIMATE_MODE) { ConvertFlags::ULTIMATE } else { ConvertFlags::empty() }
+        | if config.flags.contains(ConfigFlags::ALLOW_SIZE_TOLERANCE) { ConvertFlags::ALLOW_SIZE_TOLERANCE } else { ConvertFlags::empty() };
 
     shared_utils::conversion::ConvertOptions {
         flags,

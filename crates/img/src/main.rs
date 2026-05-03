@@ -318,19 +318,19 @@ fn main() -> anyhow::Result<()> {
                 output_dir: output,
                 base_dir,
                 flags: {
-                    let mut f = ConfigFlags::empty();
-                    f.set(ConfigFlags::FORCE, force);
-                    f.set(ConfigFlags::DELETE_ORIGINAL, should_delete);
-                    f.set(ConfigFlags::COMPRESS, compress);
-                    f.set(ConfigFlags::APPLE_COMPAT, apple_compat);
-                    f.set(ConfigFlags::IN_PLACE, in_place);
-                    f.set(ConfigFlags::EXPLORE_SMALLER, explore);
-                    f.set(ConfigFlags::MATCH_QUALITY, match_quality);
-                    f.set(ConfigFlags::USE_GPU, true);
-                    f.set(ConfigFlags::ULTIMATE_MODE, ultimate);
-                    f.set(ConfigFlags::ALLOW_SIZE_TOLERANCE, allow_size_tolerance);
-                    f.set(ConfigFlags::VERBOSE, verbose);
-                    f
+                    // Batch flag construction using bitwise OR for optimal performance
+                    ConfigFlags::empty()
+                        | if force { ConfigFlags::FORCE } else { ConfigFlags::empty() }
+                        | if should_delete { ConfigFlags::DELETE_ORIGINAL } else { ConfigFlags::empty() }
+                        | if compress { ConfigFlags::COMPRESS } else { ConfigFlags::empty() }
+                        | if apple_compat { ConfigFlags::APPLE_COMPAT } else { ConfigFlags::empty() }
+                        | if in_place { ConfigFlags::IN_PLACE } else { ConfigFlags::empty() }
+                        | if explore { ConfigFlags::EXPLORE_SMALLER } else { ConfigFlags::empty() }
+                        | if match_quality { ConfigFlags::MATCH_QUALITY } else { ConfigFlags::empty() }
+                        | ConfigFlags::USE_GPU
+                        | if ultimate { ConfigFlags::ULTIMATE_MODE } else { ConfigFlags::empty() }
+                        | if allow_size_tolerance { ConfigFlags::ALLOW_SIZE_TOLERANCE } else { ConfigFlags::empty() }
+                        | if verbose { ConfigFlags::VERBOSE } else { ConfigFlags::empty() }
                 },
                 child_threads: 0,
 
@@ -812,34 +812,19 @@ fn auto_convert_single_file(
         output_dir: config.output_dir.clone(),
         base_dir: config.base_dir.clone(),
         flags: {
-            let mut f = ConvertFlags::empty();
-            f.set(
-                ConvertFlags::FORCE,
-                config.flags.contains(ConfigFlags::FORCE),
-            );
-            f.set(
-                ConvertFlags::DELETE_ORIGINAL,
-                config.flags.contains(ConfigFlags::DELETE_ORIGINAL),
-            );
-            f.set(ConvertFlags::IN_PLACE, config.in_place());
-            f.set(ConvertFlags::EXPLORE, config.explore());
-            f.set(ConvertFlags::MATCH_QUALITY, config.match_quality());
-            f.set(
-                ConvertFlags::COMPRESS,
-                config.flags.contains(ConfigFlags::COMPRESS),
-            );
-            f.set(
-                ConvertFlags::APPLE_COMPAT,
-                config.flags.contains(ConfigFlags::APPLE_COMPAT),
-            );
-            f.set(ConvertFlags::USE_GPU, config.use_gpu());
-            f.set(ConvertFlags::ULTIMATE, config.ultimate());
-            f.set(
-                ConvertFlags::ALLOW_SIZE_TOLERANCE,
-                config.allow_size_tolerance(),
-            );
-            f.set(ConvertFlags::VERBOSE, config.verbose());
-            f
+            // Batch flag construction using bitwise OR for optimal performance
+            ConvertFlags::empty()
+                | if config.flags.contains(ConfigFlags::FORCE) { ConvertFlags::FORCE } else { ConvertFlags::empty() }
+                | if config.flags.contains(ConfigFlags::DELETE_ORIGINAL) { ConvertFlags::DELETE_ORIGINAL } else { ConvertFlags::empty() }
+                | if config.in_place() { ConvertFlags::IN_PLACE } else { ConvertFlags::empty() }
+                | if config.explore() { ConvertFlags::EXPLORE } else { ConvertFlags::empty() }
+                | if config.match_quality() { ConvertFlags::MATCH_QUALITY } else { ConvertFlags::empty() }
+                | if config.flags.contains(ConfigFlags::COMPRESS) { ConvertFlags::COMPRESS } else { ConvertFlags::empty() }
+                | if config.flags.contains(ConfigFlags::APPLE_COMPAT) { ConvertFlags::APPLE_COMPAT } else { ConvertFlags::empty() }
+                | if config.use_gpu() { ConvertFlags::USE_GPU } else { ConvertFlags::empty() }
+                | if config.ultimate() { ConvertFlags::ULTIMATE } else { ConvertFlags::empty() }
+                | if config.allow_size_tolerance() { ConvertFlags::ALLOW_SIZE_TOLERANCE } else { ConvertFlags::empty() }
+                | if config.verbose() { ConvertFlags::VERBOSE } else { ConvertFlags::empty() }
         },
         child_threads: if config.child_threads > 0 {
             config.child_threads

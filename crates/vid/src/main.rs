@@ -194,21 +194,18 @@ fn main() -> anyhow::Result<()> {
             let config = ConversionConfig {
                 output_dir: output.clone(),
                 base_dir: base_dir.clone(),
-                flags: {
-                    let mut f = ConfigFlags::empty();
-                    f.set(ConfigFlags::FORCE, force);
-                    f.set(ConfigFlags::DELETE_ORIGINAL, delete_original);
-                    f.set(ConfigFlags::EXPLORE_SMALLER, explore);
-                    f.set(ConfigFlags::MATCH_QUALITY, match_quality);
-                    f.set(ConfigFlags::IN_PLACE, in_place);
-                    f.set(ConfigFlags::APPLE_COMPAT, apple_compat);
-                    f.set(ConfigFlags::REQUIRE_COMPRESSION, compress);
-                    f.set(ConfigFlags::USE_GPU, true);
-                    f.set(ConfigFlags::FORCE_MS_SSIM_LONG, force_ms_ssim_long);
-                    f.set(ConfigFlags::ULTIMATE_MODE, ultimate);
-                    f.set(ConfigFlags::ALLOW_SIZE_TOLERANCE, allow_size_tolerance);
-                    f
-                },
+                flags: ConfigFlags::empty()
+                    | if force { ConfigFlags::FORCE } else { ConfigFlags::empty() }
+                    | if delete_original { ConfigFlags::DELETE_ORIGINAL } else { ConfigFlags::empty() }
+                    | if explore { ConfigFlags::EXPLORE_SMALLER } else { ConfigFlags::empty() }
+                    | if match_quality { ConfigFlags::MATCH_QUALITY } else { ConfigFlags::empty() }
+                    | if in_place { ConfigFlags::IN_PLACE } else { ConfigFlags::empty() }
+                    | if apple_compat { ConfigFlags::APPLE_COMPAT } else { ConfigFlags::empty() }
+                    | if compress { ConfigFlags::REQUIRE_COMPRESSION } else { ConfigFlags::empty() }
+                    | ConfigFlags::USE_GPU
+                    | if force_ms_ssim_long { ConfigFlags::FORCE_MS_SSIM_LONG } else { ConfigFlags::empty() }
+                    | if ultimate { ConfigFlags::ULTIMATE_MODE } else { ConfigFlags::empty() }
+                    | if allow_size_tolerance { ConfigFlags::ALLOW_SIZE_TOLERANCE } else { ConfigFlags::empty() },
                 min_ssim: 0.95,
                 child_threads: shared_utils::thread_manager::get_balanced_thread_config(
                     shared_utils::thread_manager::WorkloadType::Video,

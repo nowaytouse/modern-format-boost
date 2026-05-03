@@ -33,6 +33,13 @@ bitflags! {
         const PRESERVE_METADATA = 1 << 3;
         const COMPRESS = 1 << 4;
         const APPLE_COMPAT = 1 << 5;
+        const IN_PLACE = 1 << 6;
+        const EXPLORE_SMALLER = 1 << 7;
+        const MATCH_QUALITY = 1 << 8;
+        const USE_GPU = 1 << 9;
+        const ULTIMATE_MODE = 1 << 10;
+        const ALLOW_SIZE_TOLERANCE = 1 << 11;
+        const VERBOSE = 1 << 12;
     }
 }
 
