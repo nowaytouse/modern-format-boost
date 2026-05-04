@@ -25,6 +25,19 @@ RUN rustup toolchain install nightly && \
     rustup component add rust-src --toolchain nightly
 ENV RUSTUP_TOOLCHAIN=nightly
 
+# Set environment variables for gmp-mpfr-sys
+ENV GMP_MPFR_SYS_CHECK=0
+ENV GMP_DIR=/usr
+ENV MPFR_DIR=/usr
+ENV MPC_DIR=/usr
+ENV GMP_LIB_DIR=/usr/lib/x86_64-linux-gnu
+ENV GMP_INCLUDE_DIR=/usr/include
+ENV MPFR_LIB_DIR=/usr/lib/x86_64-linux-gnu
+ENV MPFR_INCLUDE_DIR=/usr/include
+ENV MPC_LIB_DIR=/usr/lib/x86_64-linux-gnu
+ENV MPC_INCLUDE_DIR=/usr/include
+ENV ABI=64
+
 COPY . $SRC/modern-format-boost
 WORKDIR $SRC/modern-format-boost
 COPY .clusterfuzzlite/build.py $SRC/build.py
