@@ -40,12 +40,18 @@ jobs:
         run: |
           # Use system libc++ instead of libstdc++ to avoid linking issues
           mkdir -p .tmp_lib
-          # Link to SDK libc++.tbd and system libc++.dylib for maximum compatibility
+          # ARM64: Link to SDK libc++.tbd and system libc++.dylib
           SDK_PATH=$(xcrun --show-sdk-path)
           ln -sf "${SDK_PATH}/usr/lib/libc++.tbd" .tmp_lib/libstdc++.tbd
           ln -sf /usr/lib/libc++.dylib .tmp_lib/libstdc++.dylib
-          # Note: We don't set RUSTFLAGS here because it would overwrite .cargo/config.toml
-          # .cargo/config.toml already contains "-L .tmp_lib"
+          
+          # x86_64: If we are cross-compiling, we might need the x86 SDK path
+          if [ "${{ matrix.target }}" = "x86_64-apple-darwin" ]; then
+             X86_SDK_PATH=$(xcrun --sdk macosx --show-sdk-path)
+             mkdir -p .tmp_lib_x86
+             ln -sf "${X86_SDK_PATH}/usr/lib/libc++.tbd" .tmp_lib_x86/libstdc++.tbd
+             ln -sf /usr/lib/libc++.dylib .tmp_lib_x86/libstdc++.dylib
+          fi
 
       - name: Install dependencies (x86_64 Cross-compile)
         if: matrix.target == 'x86_64-apple-darwin'

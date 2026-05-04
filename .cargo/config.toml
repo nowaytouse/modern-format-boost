@@ -18,7 +18,7 @@ rustflags = [
 rustflags = [
     "-C", "overflow-checks=on",
     # Fix libstdc++ linking issue on macOS (use libc++ instead)
-    "-L", ".tmp_lib",
+    "-L", ".tmp_lib", "-L", ".tmp_lib_x86",
     # Homebrew paths for ARM64
     "-L", "/opt/homebrew/opt/x264/lib",
     "-L", "/opt/homebrew/opt/vvdec/lib",
@@ -34,7 +34,7 @@ rustflags = [
 rustflags = [
     "-C", "overflow-checks=on",
     # Fix libstdc++ linking issue on macOS (use libc++ instead)
-    "-L", ".tmp_lib",
+    "-L", ".tmp_lib", "-L", ".tmp_lib_x86",
     # Homebrew paths for x86_64 (Intel) - Standard and specific overrides
     "-L", "/usr/local/lib",
     "-L", "/usr/local/opt/x264/lib",
