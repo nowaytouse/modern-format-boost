@@ -11,18 +11,23 @@ categories.workspace = true
 description = "High-performance video and animated media converter"
 
 [dependencies]
-rug = { workspace = true }
-gmp-mpfr-sys = { workspace = true }
+rug = { workspace = true, optional = true }
+gmp-mpfr-sys = { workspace = true, optional = true }
 
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 rayon = { workspace = true }
 anyhow = { workspace = true }
-shared_utils.workspace = true
+shared_utils = { path = "../shared_utils", default-features = false }
 tempfile = { workspace = true }
 tracing = { workspace = true }
 which = { workspace = true }
+
+[features]
+default = ["shared_utils/default", "high-precision"]
+high-precision = ["dep:rug", "dep:gmp-mpfr-sys", "shared_utils/high-precision"]
+system-gmp = ["dep:gmp-mpfr-sys", "gmp-mpfr-sys/use-system-libs", "shared_utils/system-gmp"]
 
 [lints]
 workspace = true

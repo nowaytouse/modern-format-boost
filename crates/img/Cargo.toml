@@ -29,6 +29,7 @@ bitflags = { workspace = true }
 [features]
 default = ["v1_21"]
 v1_21 = ["shared_utils/v1_21"]
+system-gmp = ["gmp-mpfr-sys/use-system-libs", "shared_utils/system-gmp", "vid/system-gmp"]
 
 [lints]
 workspace = true

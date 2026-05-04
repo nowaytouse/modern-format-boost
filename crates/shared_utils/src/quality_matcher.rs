@@ -3,6 +3,7 @@
 //! Unified quality matching algorithm for all `modern_format_boost` tools.
 //! Calculates optimal encoding parameters (CRF/distance) based on input quality analysis.
 
+#[cfg(feature = "high-precision")]
 use rug::Rational;
 use serde::{Deserialize, Serialize};
 
@@ -891,7 +892,6 @@ pub fn calculate_effective_bpp_with_options(
     mode: MatchMode,
     bias: QualityBias,
 ) -> Result<(f64, AnalysisDetails), String> {
-    use crate::numeric_cast::f64_to_rational_loud;
     if analysis.width == 0 || analysis.height == 0 {
         return Err("❌ Invalid dimensions: width or height is 0".to_string());
     }
@@ -953,20 +953,41 @@ pub fn calculate_effective_bpp_with_options(
     };
 
     let effective_bpp = {
-        let mut res = f64_to_rational_loud(raw_bpp, 0, "raw_bpp");
-        res *= f64_to_rational_loud(gop_factor, 1, "gop_factor");
-        res *= f64_to_rational_loud(chroma_factor, 1, "chroma_factor");
-        res *= f64_to_rational_loud(hdr_factor, 1, "hdr_factor");
-        res *= f64_to_rational_loud(aspect_factor, 1, "aspect_factor");
-        res *= f64_to_rational_loud(complexity_factor, 1, "complexity_factor");
-        res *= f64_to_rational_loud(grain_factor, 1, "grain_factor");
-        res *= f64_to_rational_loud(mode_adjustment, 1, "mode_adjustment");
-        res *= f64_to_rational_loud(resolution_factor, 1, "resolution_factor");
-        res *= f64_to_rational_loud(alpha_factor, 1, "alpha_factor");
-        res /= f64_to_rational_loud(codec_factor, 1, "codec_factor");
-        res /= f64_to_rational_loud(color_depth_factor, 1, "color_depth_factor");
-        res /= f64_to_rational_loud(target_adjustment, 1, "target_adjustment");
-        res.to_f64()
+        #[cfg(feature = "high-precision")]
+        {
+            use crate::numeric_cast::f64_to_rational_loud;
+            let mut res = f64_to_rational_loud(raw_bpp, 0, "raw_bpp");
+            res *= f64_to_rational_loud(gop_factor, 1, "gop_factor");
+            res *= f64_to_rational_loud(chroma_factor, 1, "chroma_factor");
+            res *= f64_to_rational_loud(hdr_factor, 1, "hdr_factor");
+            res *= f64_to_rational_loud(aspect_factor, 1, "aspect_factor");
+            res *= f64_to_rational_loud(complexity_factor, 1, "complexity_factor");
+            res *= f64_to_rational_loud(grain_factor, 1, "grain_factor");
+            res *= f64_to_rational_loud(mode_adjustment, 1, "mode_adjustment");
+            res *= f64_to_rational_loud(resolution_factor, 1, "resolution_factor");
+            res *= f64_to_rational_loud(alpha_factor, 1, "alpha_factor");
+            res /= f64_to_rational_loud(codec_factor, 1, "codec_factor");
+            res /= f64_to_rational_loud(color_depth_factor, 1, "color_depth_factor");
+            res /= f64_to_rational_loud(target_adjustment, 1, "target_adjustment");
+            res.to_f64()
+        }
+        #[cfg(not(feature = "high-precision"))]
+        {
+            let mut res = raw_bpp;
+            res *= gop_factor;
+            res *= chroma_factor;
+            res *= hdr_factor;
+            res *= aspect_factor;
+            res *= complexity_factor;
+            res *= grain_factor;
+            res *= mode_adjustment;
+            res *= resolution_factor;
+            res *= alpha_factor;
+            res /= codec_factor;
+            res /= color_depth_factor;
+            res /= target_adjustment;
+            res
+        }
     };
 
     let confidence = calculate_confidence_v3(analysis);
@@ -1009,9 +1030,17 @@ fn calculate_raw_bpp(analysis: &QualityAnalysis, pixels: u64) -> Result<f64, Str
         if video_bitrate > 0 {
             if let Some(fps) = analysis.fps {
                 if fps > 0.0 {
-                    let bits_per_frame = Rational::from(video_bitrate)
-                        / crate::numeric_cast::f64_to_rational_loud(fps, 1, "fps");
-                    return Ok((bits_per_frame / Rational::from(pixels)).to_f64());
+                    #[cfg(feature = "high-precision")]
+                    {
+                        let bits_per_frame = Rational::from(video_bitrate)
+                            / crate::numeric_cast::f64_to_rational_loud(fps, 1, "fps");
+                        return Ok((bits_per_frame / Rational::from(pixels)).to_f64());
+                    }
+                    #[cfg(not(feature = "high-precision"))]
+                    {
+                        let bits_per_frame = crate::numeric_cast::u64_to_f64(video_bitrate) / fps;
+                        return Ok(bits_per_frame / crate::numeric_cast::u64_to_f64(pixels));
+                    }
                 }
             }
         }
@@ -1030,15 +1059,33 @@ fn calculate_raw_bpp(analysis: &QualityAnalysis, pixels: u64) -> Result<f64, Str
                 if total_frames == 0 {
                     return Err("❌ Cannot calculate bpp: total_frames is 0".to_string());
                 }
-                let bits_per_frame = (Rational::from(analysis.file_size) * Rational::from(8))
-                    / Rational::from(total_frames);
-                return Ok((bits_per_frame / Rational::from(pixels)).to_f64());
+                #[cfg(feature = "high-precision")]
+                {
+                    let bits_per_frame = (Rational::from(analysis.file_size) * Rational::from(8))
+                        / Rational::from(total_frames);
+                    return Ok((bits_per_frame / Rational::from(pixels)).to_f64());
+                }
+                #[cfg(not(feature = "high-precision"))]
+                {
+                    let bits_per_frame = (crate::numeric_cast::u64_to_f64(analysis.file_size)
+                        * 8.0)
+                        / crate::numeric_cast::u64_to_f64(total_frames);
+                    return Ok(bits_per_frame / crate::numeric_cast::u64_to_f64(pixels));
+                }
             }
         }
         // BPP = bits per pixel; file_size is in bytes so multiply by 8
-        return Ok(((Rational::from(analysis.file_size) * Rational::from(8))
-            / Rational::from(pixels))
-        .to_f64());
+        #[cfg(feature = "high-precision")]
+        {
+            return Ok(((Rational::from(analysis.file_size) * Rational::from(8))
+                / Rational::from(pixels))
+            .to_f64());
+        }
+        #[cfg(not(feature = "high-precision"))]
+        {
+            return Ok((crate::numeric_cast::u64_to_f64(analysis.file_size) * 8.0)
+                / crate::numeric_cast::u64_to_f64(pixels));
+        }
     }
 
     Err("❌ Cannot calculate bpp: no video_bitrate, file_size, or bpp provided".to_string())

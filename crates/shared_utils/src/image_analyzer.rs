@@ -6,6 +6,7 @@ use crate::img_errors::{ImgQualityError, Result};
 use crate::log_eprintln;
 use crate::types::{ProcessHistory, VisualPerception};
 use image::{DynamicImage, GenericImageView, ImageFormat};
+#[cfg(feature = "high-precision")]
 use rug::Rational;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -892,7 +893,14 @@ fn calculate_image_features(img: &DynamicImage, file_size: u64) -> ImageFeatures
         * (u64::from(bits_per_channel) / 8);
 
     let compression_ratio = if raw_size > 0 {
-        (Rational::from(file_size) / Rational::from(raw_size)).to_f64()
+        #[cfg(feature = "high-precision")]
+        {
+            (Rational::from(file_size) / Rational::from(raw_size)).to_f64()
+        }
+        #[cfg(not(feature = "high-precision"))]
+        {
+            crate::numeric_cast::u64_to_f64(file_size) / crate::numeric_cast::u64_to_f64(raw_size)
+        }
     } else {
         1.0
     };

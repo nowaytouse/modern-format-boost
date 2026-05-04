@@ -1445,11 +1445,20 @@ pub fn convert_to_mp4_matched(
     };
     // We use Rational for precise max size calculation. tolerance_ratio (e.g. 1.05)
     let max_allowed_size = {
-        let input_rat = rug::Rational::from(input_size);
-        let tol_rat =
-            rug::Rational::from_f64(tolerance_ratio).unwrap_or_else(|| rug::Rational::from(1));
-        let res: rug::Rational = input_rat * tol_rat;
-        shared_utils::numeric_cast::f64_to_u64_sat(res.to_f64().round())
+        #[cfg(feature = "high-precision")]
+        {
+            let input_rat = rug::Rational::from(input_size);
+            let tol_rat =
+                rug::Rational::from_f64(tolerance_ratio).unwrap_or_else(|| rug::Rational::from(1));
+            let res: rug::Rational = input_rat * tol_rat;
+            shared_utils::numeric_cast::f64_to_u64_sat(res.to_f64().round())
+        }
+        #[cfg(not(feature = "high-precision"))]
+        {
+            shared_utils::numeric_cast::f64_to_u64_sat(
+                (shared_utils::numeric_cast::u64_to_f64(input_size) * tolerance_ratio).round(),
+            )
+        }
     };
 
     // apple_compat mode: compatibility takes priority over file size.

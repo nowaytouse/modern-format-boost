@@ -24,6 +24,7 @@ use crate::constants::{
     JXL_EXPLORE_BINARY_SEARCH_PRECISION, JXL_EXPLORE_CEILING, JXL_EXPLORE_FLOOR,
     JXL_EXPLORE_MAX_ITERATIONS,
 };
+#[cfg(feature = "high-precision")]
 use rug::Rational;
 use std::collections::HashSet;
 
@@ -246,7 +247,14 @@ fn size_ratio(size: u64, input_size: u64) -> f64 {
     if input_size == 0 {
         1.0
     } else {
-        (Rational::from(size) / Rational::from(input_size)).to_f64()
+        #[cfg(feature = "high-precision")]
+        {
+            (Rational::from(size) / Rational::from(input_size)).to_f64()
+        }
+        #[cfg(not(feature = "high-precision"))]
+        {
+            crate::numeric_cast::u64_to_f64(size) / crate::numeric_cast::u64_to_f64(input_size)
+        }
     }
 }
 
@@ -258,7 +266,15 @@ fn improvement_ratio(previous_size: u64, current_size: u64, input_size: u64) -> 
     if input_size == 0 || current_size >= previous_size {
         0.0
     } else {
-        (Rational::from(previous_size - current_size) / Rational::from(input_size)).to_f64()
+        #[cfg(feature = "high-precision")]
+        {
+            (Rational::from(previous_size - current_size) / Rational::from(input_size)).to_f64()
+        }
+        #[cfg(not(feature = "high-precision"))]
+        {
+            crate::numeric_cast::u64_to_f64(previous_size - current_size)
+                / crate::numeric_cast::u64_to_f64(input_size)
+        }
     }
 }
 
@@ -527,13 +543,23 @@ fn build_exploration_plan(
 }
 
 fn near_best_margin(input_size: u64) -> u64 {
-    let margin = Rational::from(input_size)
-        * crate::numeric_cast::f64_to_rational_loud(
-            JXL_NEAR_BEST_MARGIN_RATIO,
-            0,
-            "JXL_NEAR_BEST_MARGIN_RATIO",
-        );
-    crate::numeric_cast::f64_to_u64_sat(margin.to_f64()).max(1)
+    #[cfg(feature = "high-precision")]
+    {
+        let margin = Rational::from(input_size)
+            * crate::numeric_cast::f64_to_rational_loud(
+                JXL_NEAR_BEST_MARGIN_RATIO,
+                0,
+                "JXL_NEAR_BEST_MARGIN_RATIO",
+            );
+        crate::numeric_cast::f64_to_u64_sat(margin.to_f64()).max(1)
+    }
+    #[cfg(not(feature = "high-precision"))]
+    {
+        crate::numeric_cast::f64_to_u64_sat(
+            crate::numeric_cast::u64_to_f64(input_size) * JXL_NEAR_BEST_MARGIN_RATIO,
+        )
+        .max(1)
+    }
 }
 
 fn near_best(size: u64, best_size: u64, input_size: u64) -> bool {

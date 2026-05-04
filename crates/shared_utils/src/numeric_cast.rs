@@ -19,7 +19,7 @@
 //! assert!(timestamp > 0);
 //! ```
 
-use rug::Rational;
+use crate::Rational;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::warn;
 

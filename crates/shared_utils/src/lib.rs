@@ -23,6 +23,144 @@
     clippy::items_after_statements
 )]
 
+#[cfg(feature = "high-precision")]
+pub use rug::Rational;
+
+#[cfg(not(feature = "high-precision"))]
+extern crate self as rug;
+
+#[cfg(not(feature = "high-precision"))]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub struct Rational(f64);
+
+#[cfg(not(feature = "high-precision"))]
+impl Rational {
+    #[must_use]
+    pub fn from_f64(value: f64) -> Option<Self> {
+        value.is_finite().then_some(Self(value))
+    }
+
+    #[must_use]
+    pub const fn to_f64(self) -> f64 {
+        self.0
+    }
+}
+
+#[cfg(not(feature = "high-precision"))]
+impl std::fmt::Display for Rational {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[cfg(not(feature = "high-precision"))]
+macro_rules! impl_rational_from_int {
+    ($($ty:ty),+ $(,)?) => {
+        $(
+            impl From<$ty> for Rational {
+                fn from(value: $ty) -> Self {
+                    Self(value as f64)
+                }
+            }
+        )+
+    };
+}
+
+#[cfg(not(feature = "high-precision"))]
+impl_rational_from_int!(u8, u16, u32, u64, usize, i8, i16, i32, i64, isize);
+
+#[cfg(not(feature = "high-precision"))]
+macro_rules! impl_rational_cmp_int {
+    ($($ty:ty),+ $(,)?) => {
+        $(
+            impl PartialEq<$ty> for Rational {
+                fn eq(&self, other: &$ty) -> bool {
+                    self.0 == *other as f64
+                }
+            }
+
+            impl PartialOrd<$ty> for Rational {
+                fn partial_cmp(&self, other: &$ty) -> Option<std::cmp::Ordering> {
+                    self.0.partial_cmp(&(*other as f64))
+                }
+            }
+        )+
+    };
+}
+
+#[cfg(not(feature = "high-precision"))]
+impl_rational_cmp_int!(u8, u16, u32, u64, usize, i8, i16, i32, i64, isize);
+
+#[cfg(not(feature = "high-precision"))]
+macro_rules! impl_rational_from_pair {
+    ($(($num:ty, $den:ty)),+ $(,)?) => {
+        $(
+            impl From<($num, $den)> for Rational {
+                fn from((numerator, denominator): ($num, $den)) -> Self {
+                    if denominator == 0 {
+                        Self(1.0)
+                    } else {
+                        Self(numerator as f64 / denominator as f64)
+                    }
+                }
+            }
+        )+
+    };
+}
+
+#[cfg(not(feature = "high-precision"))]
+impl_rational_from_pair!((u64, u64), (u32, u32), (usize, usize), (i32, i32));
+
+#[cfg(not(feature = "high-precision"))]
+macro_rules! impl_rational_op {
+    ($trait:ident, $method:ident, $op:tt) => {
+        impl std::ops::$trait for Rational {
+            type Output = Self;
+
+            fn $method(self, rhs: Self) -> Self::Output {
+                Self(self.0 $op rhs.0)
+            }
+        }
+    };
+}
+
+#[cfg(not(feature = "high-precision"))]
+impl_rational_op!(Add, add, +);
+#[cfg(not(feature = "high-precision"))]
+impl_rational_op!(Sub, sub, -);
+#[cfg(not(feature = "high-precision"))]
+impl_rational_op!(Mul, mul, *);
+#[cfg(not(feature = "high-precision"))]
+impl_rational_op!(Div, div, /);
+
+#[cfg(not(feature = "high-precision"))]
+impl std::ops::AddAssign for Rational {
+    fn add_assign(&mut self, rhs: Self) {
+        self.0 += rhs.0;
+    }
+}
+
+#[cfg(not(feature = "high-precision"))]
+impl std::ops::SubAssign for Rational {
+    fn sub_assign(&mut self, rhs: Self) {
+        self.0 -= rhs.0;
+    }
+}
+
+#[cfg(not(feature = "high-precision"))]
+impl std::ops::MulAssign for Rational {
+    fn mul_assign(&mut self, rhs: Self) {
+        self.0 *= rhs.0;
+    }
+}
+
+#[cfg(not(feature = "high-precision"))]
+impl std::ops::DivAssign for Rational {
+    fn div_assign(&mut self, rhs: Self) {
+        self.0 /= rhs.0;
+    }
+}
+
 /// Cache system for analysis results.
 pub mod analysis_cache;
 /// Batch processing engine for handling multiple files.

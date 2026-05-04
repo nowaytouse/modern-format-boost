@@ -66,20 +66,6 @@ def main() -> int:
     os.environ["LIBHEIF_STATIC"] = "1"
     os.environ["LIBHEIF_SYS_STATIC"] = "1"
 
-    # Tell gmp-mpfr-sys to use system libraries and skip checks
-    os.environ["GMP_MPFR_SYS_CHECK"] = "0"
-    os.environ["GMP_LIB_DIR"] = "/usr/lib/x86_64-linux-gnu"
-    os.environ["GMP_INCLUDE_DIR"] = "/usr/include"
-    os.environ["MPFR_LIB_DIR"] = "/usr/lib/x86_64-linux-gnu"
-    os.environ["MPFR_INCLUDE_DIR"] = "/usr/include"
-    os.environ["MPC_LIB_DIR"] = "/usr/lib/x86_64-linux-gnu"
-    os.environ["MPC_INCLUDE_DIR"] = "/usr/include"
-
-    # If gmp-mpfr-sys still decides to build from source (e.g. static linking requested),
-    # ensure assembly is disabled to avoid linker errors with sanitizers.
-    os.environ["GMP_CONFIGURE"] = "--disable-assembly --with-pic"
-    os.environ["MPFR_CONFIGURE"] = "--disable-assembly --with-pic"
-
     # Filter out fuzzer sanitize flags from C/C++ flags
     if "CFLAGS" in os.environ:
         os.environ["CFLAGS"] = filter_sanitizer_flags(os.environ["CFLAGS"]) + " -gdwarf-4"
