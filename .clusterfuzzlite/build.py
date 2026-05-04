@@ -82,9 +82,9 @@ def main() -> int:
 
     # Filter out fuzzer sanitize flags from C/C++ flags
     if "CFLAGS" in os.environ:
-        os.environ["CFLAGS"] = filter_sanitizer_flags(os.environ["CFLAGS"])
+        os.environ["CFLAGS"] = filter_sanitizer_flags(os.environ["CFLAGS"]) + " -gdwarf-4"
     if "CXXFLAGS" in os.environ:
-        os.environ["CXXFLAGS"] = filter_sanitizer_flags(os.environ["CXXFLAGS"])
+        os.environ["CXXFLAGS"] = filter_sanitizer_flags(os.environ["CXXFLAGS"]) + " -gdwarf-4"
 
     # Navigate to the fuzzing crate
     fuzz_dir = Path("crates/dev/fuzz")
