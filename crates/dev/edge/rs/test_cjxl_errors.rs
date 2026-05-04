@@ -1,18 +1,16 @@
-use std::fs;
-use std::path::Path;
 use std::process::Command;
+use tempfile::tempdir;
 
 #[test]
 fn test_cjxl_grayscale_icc_fallback() {
     use img::lossless_converter::{convert_to_jxl, ConvertOptions};
+
+    // Use a temporary directory to avoid conflicts
+    let tmp_dir = tempdir().expect("Failed to create temp dir");
+    let input = tmp_dir.path().join("test_grayscale_icc.png");
+    let output = tmp_dir.path().join("test_grayscale_icc.jxl");
+
     // 1. Create a large enough grayscale PNG (to avoid the 500KB "small PNG" skip)
-    let input = Path::new("test_grayscale_icc.png");
-    let output = Path::new("test_grayscale_icc.jxl");
-
-    // Cleanup
-    let _ = fs::remove_file(input);
-    let _ = fs::remove_file(output);
-
     // Create 1024x1024 grayscale PNG with noise to ensure it's > 500KB
     let status = Command::new("magick")
         .args([
@@ -21,33 +19,32 @@ fn test_cjxl_grayscale_icc_fallback() {
             "xc:gray",
             "+noise",
             "random",
-            "test_grayscale_icc.png",
+            input.to_str().unwrap(),
         ])
         .status()
         .unwrap_or_else(|e| panic!("magick failed to run: {e:?}"));
-    assert!(status.success());
+    assert!(status.success(), "Failed to create initial noise PNG");
 
     // 2. Assign an sRGB profile (RGB color space) to this grayscale image
     // This often triggers the libpng warning when cjxl reads it.
-    let _ = Command::new("magick")
+    let status = Command::new("magick")
         .args([
-            "test_grayscale_icc.png",
+            input.to_str().unwrap(),
             "-colorspace",
             "sRGB",
-            "test_grayscale_icc.png",
+            input.to_str().unwrap(),
         ])
-        .status();
+        .status()
+        .expect("Failed to run second magick command");
+    assert!(status.success(), "Failed to modify PNG colorspace");
 
     // 3. Try to run the tool's conversion logic
-    // Since we're in an integration test, we can call the binary or the library function.
-    // Let's call the library function convert_to_jxl.
-
     let options = ConvertOptions {
         flags: shared_utils::conversion::ConvertFlags::VERBOSE,
         ..Default::default()
     };
 
-    let result = convert_to_jxl(input, &options, 0.1, None);
+    let result = convert_to_jxl(&input, &options, 0.1, None);
 
     match result {
         Ok(_) => {
@@ -56,19 +53,15 @@ fn test_cjxl_grayscale_icc_fallback() {
 
             // Verify it's a valid JXL
             let status = Command::new("jxlinfo")
-                .arg(output)
+                .arg(&output)
                 .status()
                 .unwrap_or_else(|e| panic!("jxlinfo failed to run: {e:?}"));
             assert!(status.success());
         }
         Err(e) => {
-            // If it failed, check if it's because cjxl is NOT installed
-            // But we checked it earlier.
             panic!("❌ Conversion failed despite fallback logic: {e}");
         }
     }
 
-    // Cleanup
-    let _ = fs::remove_file(input);
-    let _ = fs::remove_file(output);
+    // tmp_dir is automatically cleaned up when dropped
 }
