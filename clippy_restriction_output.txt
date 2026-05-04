@@ -1,0 +1,85 @@
+[1m[92m   Compiling[0m shared_utils v0.11.2 (/Users/nyamiiko/Downloads/GitHub/modern_format_boost/crates/shared_utils)
+[1m[92m   Compiling[0m vid v0.11.2 (/Users/nyamiiko/Downloads/GitHub/modern_format_boost/crates/vid)
+[1m[92m   Compiling[0m img v0.11.2 (/Users/nyamiiko/Downloads/GitHub/modern_format_boost/crates/img)
+[1m[92m   Compiling[0m dev v0.11.2 (/Users/nyamiiko/Downloads/GitHub/modern_format_boost/crates/dev)
+[1m[33mwarning[0m[1m: `clippy::restriction` is not meant to be enabled as a group[0m
+  [1m[94m|[0m
+  [1m[94m= [0m[1mnote[0m: because of the command line `--warn clippy::restriction`
+  [1m[94m= [0m[1mhelp[0m: enable the restriction lints you need individually
+  [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#blanket_clippy_restriction_lints
+  [1m[94m= [0m[1mnote[0m: `#[warn(clippy::blanket_clippy_restriction_lints)]` on by default
+
+[1m[33mwarning[0m[1m: used `unwrap()` on a `Result` value[0m
+ [1m[94m--> [0mcrates/vid/build.rs:4:28
+  [1m[94m|[0m
+[1m[94m4[0m [1m[94m|[0m         let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+  [1m[94m|[0m                            [1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+  [1m[94m|[0m
+  [1m[94m= [0m[1mnote[0m: if this value is an `Err`, it will panic
+  [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#unwrap_used
+  [1m[94m= [0m[1mnote[0m: `-W clippy::unwrap-used` implied by `-W clippy::restriction`
+  [1m[94m= [0m[1mhelp[0m: to override `-W clippy::restriction` add `#[allow(clippy::unwrap_used)]`
+
+[1m[33mwarning[0m[1m: used `unwrap()` on a `Result` value[0m
+ [1m[94m--> [0mcrates/dev/build.rs:4:28
+  [1m[94m|[0m
+[1m[94m4[0m [1m[94m|[0m         let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+  [1m[94m|[0m                            [1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+  [1m[94m|[0m
+  [1m[94m= [0m[1mnote[0m: if this value is an `Err`, it will panic
+  [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#unwrap_used
+  [1m[94m= [0m[1mnote[0m: `-W clippy::unwrap-used` implied by `-W clippy::restriction`
+  [1m[94m= [0m[1mhelp[0m: to override `-W clippy::restriction` add `#[allow(clippy::unwrap_used)]`
+
+[1m[33mwarning[0m[1m: used `unwrap()` on a `Result` value[0m
+ [1m[94m--> [0mcrates/img/build.rs:7:28
+  [1m[94m|[0m
+[1m[94m7[0m [1m[94m|[0m         let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+  [1m[94m|[0m                            [1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+  [1m[94m|[0m
+  [1m[94m= [0m[1mnote[0m: if this value is an `Err`, it will panic
+  [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#unwrap_used
+  [1m[94m= [0m[1mnote[0m: `-W clippy::unwrap-used` implied by `-W clippy::restriction`
+  [1m[94m= [0m[1mhelp[0m: to override `-W clippy::restriction` add `#[allow(clippy::unwrap_used)]`
+
+[1m[33mwarning[0m[1m: used `unwrap()` on a `Result` value[0m
+ [1m[94m--> [0mcrates/shared_utils/build.rs:4:28
+  [1m[94m|[0m
+[1m[94m4[0m [1m[94m|[0m         let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+  [1m[94m|[0m                            [1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+  [1m[94m|[0m
+  [1m[94m= [0m[1mnote[0m: if this value is an `Err`, it will panic
+  [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#unwrap_used
+  [1m[94m= [0m[1mnote[0m: `-W clippy::unwrap-used` implied by `-W clippy::restriction`
+  [1m[94m= [0m[1mhelp[0m: to override `-W clippy::restriction` add `#[allow(clippy::unwrap_used)]`
+
+[1m[33mwarning[0m[1m: consider bringing this path into scope with the `use` keyword[0m
+ [1m[94m--> [0mcrates/shared_utils/build.rs:4:28
+  [1m[94m|[0m
+[1m[94m4[0m [1m[94m|[0m         let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+  [1m[94m|[0m                            [1m[33m^^^^^^^^^^^^^[0m
+  [1m[94m|[0m
+  [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#absolute_paths
+  [1m[94m= [0m[1mnote[0m: `-W clippy::absolute-paths` implied by `-W clippy::restriction`
+  [1m[94m= [0m[1mhelp[0m: to override `-W clippy::restriction` add `#[allow(clippy::absolute_paths)]`
+
+[1m[33mwarning[0m[1m: consider bringing this path into scope with the `use` keyword[0m
+ [1m[94m--> [0mcrates/dev/build.rs:4:28
+  [1m[94m|[0m
+[1m[94m4[0m [1m[94m|[0m         let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+  [1m[94m|[0m                            [1m[33m^^^^^^^^^^^^^[0m
+  [1m[94m|[0m
+  [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#absolute_paths
+  [1m[94m= [0m[1mnote[0m: `-W clippy::absolute-paths` implied by `-W clippy::restriction`
+  [1m[94m= [0m[1mhelp[0m: to override `-W clippy::restriction` add `#[allow(clippy::absolute_paths)]`
+
+[1m[33mwarning[0m[1m: consider bringing this path into scope with the `use` keyword[0m
+ [1m[94m--> [0mcrates/img/build.rs:7:28
+  [1m[94m|[0m
+[1m[94m7[0m [1m[94m|[0m         let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+  [1m[94m|[0m                            [1m[33m^^^^^^^^^^^^^[0m
+  [1m[94m|[0m
+  [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#absolute_paths
+  [1m[94m= [0m[1mnote[0m: `-W clippy::absolute-paths` implied by `-W clippy::restriction`
+  [1m[94m= [0m[1mhelp[0m: to override `-W clippy::restriction` add `#[allow(clippy::absolute_paths)]`
+

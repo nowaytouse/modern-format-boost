@@ -1,11 +1,12 @@
 fn main() {
     // macOS Homebrew and Linker Workarounds
     if cfg!(target_os = "macos") {
-        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
+            .expect("CARGO_MANIFEST_DIR environment variable should be set by Cargo");
         let workspace_root = std::path::Path::new(&manifest_dir)
             .parent()
             .and_then(|p| p.parent())
-            .unwrap();
+            .expect("Could not find workspace root from manifest directory");
 
         // Link to the .tmp_lib directory which contains the libstdc++ -> libc++ workaround
         let tmp_lib = workspace_root.join(".tmp_lib");

@@ -79,9 +79,7 @@ def main() -> int:
 
     sanitizer = os.environ.get("SANITIZER", "address")
     # ClusterFuzzLite expects fuzz targets in $GITHUB_WORKSPACE/out
-    # Don't rely on OUT env var as the action may override it
-    workspace = os.environ.get("GITHUB_WORKSPACE", "/github/workspace")
-    out_dir = Path(workspace) / "out"
+    out_dir = Path(os.environ.get("GITHUB_WORKSPACE", "/github/workspace")) / "out"
 
     print(f"Sanitizer: {sanitizer}")
 
