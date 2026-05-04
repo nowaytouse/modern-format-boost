@@ -13,6 +13,7 @@ rustflags = [
     "-C", "overflow-checks=on",
 ]
 
+
 [env]
 MACOSX_DEPLOYMENT_TARGET = "26.0"
 CMAKE_PREFIX_PATH = "/opt/homebrew/opt/aom:/opt/homebrew/opt/libjpeg-turbo:/opt/homebrew"
