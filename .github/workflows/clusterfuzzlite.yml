@@ -22,15 +22,21 @@ jobs:
         uses: google/clusterfuzzlite/actions/build_fuzzers@v1
         with:
           language: rust
+          storage-repo: https://github.com/${{ github.repository }}
+          storage-repo-branch: clusterfuzzlite-data
         env:
           # Disable libjxl internal fuzzers to avoid sanitizer conflicts
           JPEGXL_CMAKE_FLAGS: "-DJPEGXL_ENABLE_FUZZERS=OFF"
+          # Ensure fuzz targets are output to correct directory
+          CARGO_TARGET_DIR: ${{ github.workspace }}/build-out
       - name: Run Fuzzers
         uses: google/clusterfuzzlite/actions/run_fuzzers@v1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           fuzzing-seconds: 600
           mode: "pr"
+          storage-repo: https://github.com/${{ github.repository }}
+          storage-repo-branch: clusterfuzzlite-data
 
   Batch:
     if: github.event_name == 'push' || github.event_name == 'schedule'
@@ -42,12 +48,18 @@ jobs:
         uses: google/clusterfuzzlite/actions/build_fuzzers@v1
         with:
           language: rust
+          storage-repo: https://github.com/${{ github.repository }}
+          storage-repo-branch: clusterfuzzlite-data
         env:
           # Disable libjxl internal fuzzers to avoid sanitizer conflicts
           JPEGXL_CMAKE_FLAGS: "-DJPEGXL_ENABLE_FUZZERS=OFF"
+          # Ensure fuzz targets are output to correct directory
+          CARGO_TARGET_DIR: ${{ github.workspace }}/build-out
       - name: Run Fuzzers
         uses: google/clusterfuzzlite/actions/run_fuzzers@v1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           fuzzing-seconds: 3600
           mode: "batch"
+          storage-repo: https://github.com/${{ github.repository }}
+          storage-repo-branch: clusterfuzzlite-data
