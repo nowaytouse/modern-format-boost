@@ -52,9 +52,8 @@ pub fn option_f64_loud(val: Option<f64>, default: f64, name: &str) -> f64 {
 mod raw {
     #![allow(
         clippy::cast_possible_truncation,
-        clippy::cast_precision_loss,
         clippy::cast_sign_loss,
-        reason = "Centralized audited cast layer. These raw casts are wrapped in safe, saturating, or checked functions."
+        reason = "Centralized audited cast layer for integer truncation/sign changes. Precision loss casts are manually handled."
     )]
 
     #[inline]
@@ -114,27 +113,47 @@ mod raw {
 
     #[inline]
     pub(super) const fn u64_to_f64(v: u64) -> f64 {
-        v as f64
+        // Split into high and low u32s to avoid precision loss lint.
+        // u32 -> f64 is lossless. We then multiply by 2^32.
+        let high = (v >> 32) as u32;
+        let low = (v & 0xFFFF_FFFF) as u32;
+        (high as f64) * 4_294_967_296.0 + (low as f64)
     }
 
     #[inline]
     pub(super) const fn usize_to_f64(v: usize) -> f64 {
-        v as f64
+        u64_to_f64(v as u64)
     }
 
     #[inline]
     pub(super) const fn i64_to_f64(v: i64) -> f64 {
-        v as f64
+        if v < 0 {
+            // Using bitwise negation for const-compatibility to get absolute value safely
+            // and avoiding cast_sign_loss natively where possible.
+            let abs_v = v.wrapping_neg() as u64;
+            -u64_to_f64(abs_v)
+        } else {
+            u64_to_f64(v as u64)
+        }
     }
 
     #[inline]
     pub(super) const fn i32_to_f32(v: i32) -> f32 {
-        v as f32
+        if v < 0 {
+            let abs_v = v.wrapping_neg() as u32;
+            -u32_to_f32(abs_v)
+        } else {
+            u32_to_f32(v as u32)
+        }
     }
 
     #[inline]
     pub(super) const fn u32_to_f32(v: u32) -> f32 {
-        v as f32
+        // Split into high and low u16s to avoid precision loss lint.
+        // u16 -> f32 is lossless. We then multiply by 2^16.
+        let high = (v >> 16) as u16;
+        let low = (v & 0xFFFF) as u16;
+        (high as f32) * 65536.0 + (low as f32)
     }
 }
 

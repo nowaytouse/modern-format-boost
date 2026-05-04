@@ -66,66 +66,7 @@ macro_rules! impl_rational_from_int_lossless {
     };
 }
 
-#[cfg(not(feature = "high-precision"))]
-macro_rules! impl_rational_from_int_lossy {
-    ($($ty:ty),+ $(,)?) => {
-        $(
-            impl From<$ty> for Rational {
-                fn from(value: $ty) -> Self {
-                    Self(crate::numeric_cast::i64_to_f64(value as i64))
-                }
-            }
-        )+
-    };
-}
-
-#[cfg(not(feature = "high-precision"))]
-impl_rational_from_int_lossless!(u8, u16, u32, i8, i16, i32);
-#[cfg(not(feature = "high-precision"))]
-impl_rational_from_int_lossy!(u64, usize, i64, isize);
-
-#[cfg(not(feature = "high-precision"))]
-macro_rules! impl_rational_cmp_int_lossless {
-    ($($ty:ty),+ $(,)?) => {
-        $(
-            impl PartialEq<$ty> for Rational {
-                fn eq(&self, other: &$ty) -> bool {
-                    self.0 == f64::from(*other)
-                }
-            }
-
-            impl PartialOrd<$ty> for Rational {
-                fn partial_cmp(&self, other: &$ty) -> Option<std::cmp::Ordering> {
-                    self.0.partial_cmp(&f64::from(*other))
-                }
-            }
-        )+
-    };
-}
-
-#[cfg(not(feature = "high-precision"))]
-macro_rules! impl_rational_cmp_int_lossy {
-    ($($ty:ty),+ $(,)?) => {
-        $(
-            impl PartialEq<$ty> for Rational {
-                fn eq(&self, other: &$ty) -> bool {
-                    self.0 == crate::numeric_cast::i64_to_f64(*other as i64)
-                }
-            }
-
-            impl PartialOrd<$ty> for Rational {
-                fn partial_cmp(&self, other: &$ty) -> Option<std::cmp::Ordering> {
-                    self.0.partial_cmp(&crate::numeric_cast::i64_to_f64(*other as i64))
-                }
-            }
-        )+
-    };
-}
-
-#[cfg(not(feature = "high-precision"))]
-impl_rational_cmp_int_lossless!(u8, u16, u32, i8, i16, i32);
-#[cfg(not(feature = "high-precision"))]
-impl_rational_cmp_int_lossy!(u64, usize, i64, isize);
+// Removed impl_rational_from_int_lossy and impl_rational_cmp_int_lossy to prevent silent precision loss on 64-bit integers.
 
 #[cfg(not(feature = "high-precision"))]
 macro_rules! impl_rational_from_pair {
