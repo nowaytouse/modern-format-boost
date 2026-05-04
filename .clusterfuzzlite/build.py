@@ -29,20 +29,40 @@ def find_and_copy_targets(out_dir: Path) -> None:
     ]
 
     print(f"Copying fuzz targets to {out_dir}...")
-    target_dir = Path("target")
+    
+    # In a workspace, the target directory might be at the root or local to the fuzz crate
+    search_paths = [
+        Path("target"),
+        Path("../../../target"),
+    ]
 
     for target_name in targets:
-        # Find the binary in target directory
-        found = list(target_dir.rglob(target_name))
-        if found:
-            for binary in found:
-                if binary.is_file() and os.access(binary, os.X_OK):
-                    dest = out_dir / target_name
-                    dest.write_bytes(binary.read_bytes())
-                    dest.chmod(0o755)
-                    print(f"  Copied {target_name}")
-                    break
-        else:
+        found_any = False
+        for target_dir in search_paths:
+            if not target_dir.exists():
+                continue
+                
+            # Search for the binary in target directory
+            # cargo-fuzz often puts things in target/<triple>/release/
+            found = list(target_dir.rglob(target_name))
+            if found:
+                for binary in found:
+                    # Filter out non-files or things in build directories
+                    if binary.is_file() and os.access(binary, os.X_OK):
+                        # Avoid matching things like "incremental" or "build" subdirs if possible
+                        if "incremental" in str(binary) or "build" in str(binary):
+                            continue
+                            
+                        dest = out_dir / target_name
+                        dest.write_bytes(binary.read_bytes())
+                        dest.chmod(0o755)
+                        print(f"  Copied {target_name} from {binary}")
+                        found_any = True
+                        break
+            if found_any:
+                break
+        
+        if not found_any:
             print(f"  Warning: {target_name} not found", file=sys.stderr)
 
     # List what was copied
