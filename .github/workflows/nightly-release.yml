@@ -32,9 +32,9 @@ jobs:
 
       - name: Install dependencies (Homebrew)
         run: |
-          brew install ffmpeg jpeg-xl exiftool imagemagick webp libheif nasm dav1d gmp x264 vvdec vvenc
+          brew install ffmpeg jpeg-xl exiftool imagemagick webp libheif nasm dav1d
           BREW_PREFIX=$(brew --prefix)
-          echo "PKG_CONFIG_PATH=${BREW_PREFIX}/lib/pkgconfig:${BREW_PREFIX}/opt/dav1d/lib/pkgconfig:${BREW_PREFIX}/opt/jpeg-xl/lib/pkgconfig:${BREW_PREFIX}/opt/x264/lib/pkgconfig:${BREW_PREFIX}/opt/vvdec/lib/pkgconfig:${BREW_PREFIX}/opt/vvenc/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=${BREW_PREFIX}/lib/pkgconfig:${BREW_PREFIX}/opt/dav1d/lib/pkgconfig:${BREW_PREFIX}/opt/jpeg-xl/lib/pkgconfig" >> "$GITHUB_ENV"
 
       - name: Workaround for stdc++ on macOS
         run: |

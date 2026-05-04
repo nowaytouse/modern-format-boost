@@ -10,16 +10,11 @@ RUN apt-get update && apt-get install -y \
     libheif-dev \
     libde265-dev \
     libx265-dev \
-    libx264-dev \
-    libvmaf-dev \
     libaom-dev \
     libdav1d-dev \
     libchromaprint-dev \
     libjpeg-dev \
     libpng-dev \
-    libgmp-dev \
-    libmpfr-dev \
-    libmpc-dev
 
 # Update Rust toolchain to latest nightly
 RUN rustup toolchain install nightly && \
