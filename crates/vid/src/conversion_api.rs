@@ -498,6 +498,7 @@ const fn hevc_delivery_target(apple_compat: bool) -> TargetVideoFormat {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn determine_strategy_with_apple_compat(
     result: &VideoDetectionResult,
     input: &Path,
@@ -702,6 +703,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
 ///
 /// # Errors
 /// Returns an error if video detection fails, strategy cannot be determined, or conversion execution fails.
+#[allow(clippy::too_many_lines)]
 pub fn auto_convert_with_cache(
     input: &Path,
     config: &ConversionConfig,
@@ -1757,6 +1759,7 @@ pub fn calculate_matched_crf(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn execute_lossless(
     detection: &VideoDetectionResult,
     output: &Path,

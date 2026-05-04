@@ -116,7 +116,9 @@ jobs:
           echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
 
       - name: Build release binaries
-        run: cargo build --release --target x86_64-unknown-linux-gnu -p img -p vid
+        run: |
+          cargo build --release --target x86_64-unknown-linux-gnu -p img -p vid \
+            --features img/system-gmp,vid/system-gmp,shared_utils/system-gmp
 
       - name: Package binaries
         run: |

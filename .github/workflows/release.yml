@@ -149,15 +149,14 @@ jobs:
           echo "PKG_CONFIG_PATH=$root\installed\x64-windows-static\lib\pkgconfig" >> $env:GITHUB_ENV
           echo "VCPKGRS_TRIPLET=x64-windows-static" >> $env:GITHUB_ENV
           echo "VCPKGRS_DYNAMIC=0" >> $env:GITHUB_ENV
+          echo "INCLUDE=$root\installed\x64-windows-static\include" >> $env:GITHUB_ENV
+          echo "LIB=$root\installed\x64-windows-static\lib" >> $env:GITHUB_ENV
 
       # ── Build ──────────────────────────────────────────────────────────────
       - name: Build release binaries
         shell: bash
         run: |
-          FEATURES=()
-          if [[ "${{ runner.os }}" == "macOS" ]]; then
-            FEATURES=(--features img/system-gmp,vid/system-gmp,shared_utils/system-gmp)
-          fi
+          FEATURES=(--features img/system-gmp,vid/system-gmp,shared_utils/system-gmp)
 
           cargo build --release --target ${{ matrix.target }} \
             -p vid -p img "${FEATURES[@]}"

@@ -54,11 +54,25 @@ impl std::fmt::Display for Rational {
 }
 
 #[cfg(not(feature = "high-precision"))]
-macro_rules! impl_rational_from_int {
+macro_rules! impl_rational_from_int_lossless {
     ($($ty:ty),+ $(,)?) => {
         $(
             impl From<$ty> for Rational {
                 fn from(value: $ty) -> Self {
+                    Self(f64::from(value))
+                }
+            }
+        )+
+    };
+}
+
+#[cfg(not(feature = "high-precision"))]
+macro_rules! impl_rational_from_int_lossy {
+    ($($ty:ty),+ $(,)?) => {
+        $(
+            impl From<$ty> for Rational {
+                fn from(value: $ty) -> Self {
+                    #[allow(clippy::cast_precision_loss)]
                     Self(value as f64)
                 }
             }
@@ -67,21 +81,23 @@ macro_rules! impl_rational_from_int {
 }
 
 #[cfg(not(feature = "high-precision"))]
-impl_rational_from_int!(u8, u16, u32, u64, usize, i8, i16, i32, i64, isize);
+impl_rational_from_int_lossless!(u8, u16, u32, i8, i16, i32);
+#[cfg(not(feature = "high-precision"))]
+impl_rational_from_int_lossy!(u64, usize, i64, isize);
 
 #[cfg(not(feature = "high-precision"))]
-macro_rules! impl_rational_cmp_int {
+macro_rules! impl_rational_cmp_int_lossless {
     ($($ty:ty),+ $(,)?) => {
         $(
             impl PartialEq<$ty> for Rational {
                 fn eq(&self, other: &$ty) -> bool {
-                    self.0 == *other as f64
+                    self.0 == f64::from(*other)
                 }
             }
 
             impl PartialOrd<$ty> for Rational {
                 fn partial_cmp(&self, other: &$ty) -> Option<std::cmp::Ordering> {
-                    self.0.partial_cmp(&(*other as f64))
+                    self.0.partial_cmp(&f64::from(*other))
                 }
             }
         )+
@@ -89,7 +105,30 @@ macro_rules! impl_rational_cmp_int {
 }
 
 #[cfg(not(feature = "high-precision"))]
-impl_rational_cmp_int!(u8, u16, u32, u64, usize, i8, i16, i32, i64, isize);
+macro_rules! impl_rational_cmp_int_lossy {
+    ($($ty:ty),+ $(,)?) => {
+        $(
+            impl PartialEq<$ty> for Rational {
+                fn eq(&self, other: &$ty) -> bool {
+                    #[allow(clippy::cast_precision_loss)]
+                    { self.0 == *other as f64 }
+                }
+            }
+
+            impl PartialOrd<$ty> for Rational {
+                fn partial_cmp(&self, other: &$ty) -> Option<std::cmp::Ordering> {
+                    #[allow(clippy::cast_precision_loss)]
+                    { self.0.partial_cmp(&(*other as f64)) }
+                }
+            }
+        )+
+    };
+}
+
+#[cfg(not(feature = "high-precision"))]
+impl_rational_cmp_int_lossless!(u8, u16, u32, i8, i16, i32);
+#[cfg(not(feature = "high-precision"))]
+impl_rational_cmp_int_lossy!(u64, usize, i64, isize);
 
 #[cfg(not(feature = "high-precision"))]
 macro_rules! impl_rational_from_pair {

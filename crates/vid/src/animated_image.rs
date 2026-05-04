@@ -1035,6 +1035,7 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
 ///
 /// # Errors
 /// Returns an error if matching or encoding fails.
+#[allow(clippy::too_many_lines)]
 pub fn convert_to_mp4_matched(
     input: &Path,
     options: &ConvertOptions,
@@ -1719,6 +1720,7 @@ pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result
 ///
 /// # Errors
 /// Returns an error if encoding fails.
+#[allow(clippy::too_many_lines)]
 pub fn convert_to_gif_apple_compat(
     input: &Path,
     options: &ConvertOptions,

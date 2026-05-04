@@ -886,6 +886,7 @@ pub fn calculate_jxl_distance_with_options(
 ///
 /// # Errors
 /// Returns an error message if calculation fails (e.g., missing or invalid dimensions).
+#[allow(clippy::too_many_lines)]
 pub fn calculate_effective_bpp_with_options(
     analysis: &QualityAnalysis,
     target_encoder: EncoderType,

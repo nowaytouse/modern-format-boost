@@ -1,14 +1,14 @@
 // Build script for img
 // Dynamically detect system library paths for dav1d and libheif
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     // macOS Homebrew and Linker Workarounds
     if cfg!(target_os = "macos") {
-        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")?;
         let workspace_root = std::path::Path::new(&manifest_dir)
             .parent()
             .and_then(|p| p.parent())
-            .unwrap();
+            .ok_or("Could not find workspace root from manifest directory")?;
 
         // Link to the .tmp_lib directory which contains the libstdc++ -> libc++ workaround
         let tmp_lib = workspace_root.join(".tmp_lib");
@@ -34,4 +34,5 @@ fn main() {
         // Ensure we link to libc++ specifically on macOS
         println!("cargo:rustc-link-lib=c++");
     }
+    Ok(())
 }
