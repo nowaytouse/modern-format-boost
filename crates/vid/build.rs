@@ -1,6 +1,3 @@
-// Build script for img
-// Dynamically detect system library paths for dav1d and libheif
-
 fn main() {
     // macOS Homebrew and Linker Workarounds
     if cfg!(target_os = "macos") {
@@ -23,14 +20,7 @@ fn main() {
             "/usr/local/lib"
         };
         println!("cargo:rustc-link-search=native={homebrew_lib}");
-
-        let homebrew_opt = if cfg!(target_arch = "aarch64") {
-            "/opt/homebrew/opt"
-        } else {
-            "/usr/local/opt"
-        };
-        println!("cargo:rustc-link-search=native={homebrew_opt}/libheif/lib");
-
+        
         // Ensure we link to libc++ specifically on macOS
         println!("cargo:rustc-link-lib=c++");
     }
