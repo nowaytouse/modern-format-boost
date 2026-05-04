@@ -92,6 +92,11 @@ def main() -> int:
     # Build all fuzz targets with the requested sanitizer
     print(f"Building fuzz targets with sanitizer: {sanitizer}...")
 
+    # Set RUSTFLAGS to increase stack size for fuzzers
+    # This helps prevent stack overflows in recursive box scanning
+    rust_flags = os.environ.get("RUSTFLAGS", "")
+    os.environ["RUSTFLAGS"] = f"{rust_flags} -C link-args=-Wl,-z,stack-size=16777216"
+
     try:
         subprocess.run(
             [

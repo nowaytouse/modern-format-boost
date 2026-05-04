@@ -1,3 +1,4 @@
+#![allow(clippy::multiple_crate_versions)]
 pub mod analyzer;
 pub mod constants;
 pub mod formats;

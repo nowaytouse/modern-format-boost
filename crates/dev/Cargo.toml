@@ -106,3 +106,7 @@ name = "quality_benches"
 path = "benches/quality_benches.rs"
 harness = false
 
+[lints]
+workspace = true
+
+

@@ -50,3 +50,6 @@ name = "image_analyzer"
 path = "fuzz_targets/image_analyzer.rs"
 test = false
 doc = false
+
+[lints]
+workspace = true

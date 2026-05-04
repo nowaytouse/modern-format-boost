@@ -9,6 +9,7 @@ members = [
 resolver = "2"
 
 [workspace.lints.clippy]
+multiple_crate_versions = "allow"
 
 [workspace.package]
 version = "0.11.2"

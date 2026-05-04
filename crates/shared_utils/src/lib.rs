@@ -1,4 +1,5 @@
 //! Shared Utilities for `modern_format_boost` tools
+#![allow(clippy::multiple_crate_versions)]
 //!
 //! This crate provides common functionality shared across `img` and `vid`:
 //! - Progress bar with ETA

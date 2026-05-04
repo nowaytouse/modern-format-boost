@@ -90,10 +90,10 @@ pub fn calculate_ssim(original: &DynamicImage, converted: &DynamicImage) -> Opti
     let conv_gray = converted.to_luma8();
 
     let width = usize::try_from(w1)
-        .map_err(|_| anyhow::anyhow!("Width overflow: {}", w1))
+        .map_err(|_| anyhow::anyhow!("Width overflow: {w1}"))
         .ok()?;
     let height = usize::try_from(h1)
-        .map_err(|_| anyhow::anyhow!("Height overflow: {}", h1))
+        .map_err(|_| anyhow::anyhow!("Height overflow: {h1}"))
         .ok()?;
 
     if width < WINDOW_SIZE || height < WINDOW_SIZE {

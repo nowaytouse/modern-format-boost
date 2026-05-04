@@ -598,6 +598,11 @@ pub fn is_heic_file(path: &Path) -> bool {
 /// Returns `None` if no XMP data is found.
 #[must_use]
 pub fn extract_xmp_from_heic_data(data: &[u8]) -> Option<String> {
+    // 🛡️ Security: Limit total data size to 100MB for XMP scanning to prevent timeouts
+    if data.len() > 100 * 1024 * 1024 {
+        return None;
+    }
+
     // XMP packet starts with <?xpacket begin or <x:xmpmeta or <rdf:RDF
     let markers: &[&[u8]] = &[b"<?xpacket begin", b"<x:xmpmeta", b"<rdf:RDF"];
     for marker in markers {

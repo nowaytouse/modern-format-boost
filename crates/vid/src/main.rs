@@ -1,3 +1,4 @@
+#![allow(clippy::multiple_crate_versions)]
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tracing::info;

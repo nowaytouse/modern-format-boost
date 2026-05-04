@@ -491,9 +491,9 @@ fn decode_heif_handle(handle: &ImageHandle, color_space: ColorSpace) -> Result<D
                 let mut buffer = ImageBuffer::new(width, height);
                 for (x, y, pixel) in buffer.enumerate_pixels_mut() {
                     let y_usize =
-                        usize::try_from(y).map_err(|_| anyhow!("Y coordinate overflow: {}", y))?;
+                        usize::try_from(y).map_err(|_| anyhow!("Y coordinate overflow: {y}"))?;
                     let x_usize =
-                        usize::try_from(x).map_err(|_| anyhow!("X coordinate overflow: {}", x))?;
+                        usize::try_from(x).map_err(|_| anyhow!("X coordinate overflow: {x}"))?;
                     let offset = y_usize
                         .checked_mul(r_plane.stride / 2)
                         .and_then(|v| v.checked_add(x_usize.checked_mul(3)?))
@@ -533,9 +533,9 @@ fn decode_heif_handle(handle: &ImageHandle, color_space: ColorSpace) -> Result<D
                 let mut buffer = ImageBuffer::new(width, height);
                 for (x, y, pixel) in buffer.enumerate_pixels_mut() {
                     let y_usize =
-                        usize::try_from(y).map_err(|_| anyhow!("Y coordinate overflow: {}", y))?;
+                        usize::try_from(y).map_err(|_| anyhow!("Y coordinate overflow: {y}"))?;
                     let x_usize =
-                        usize::try_from(x).map_err(|_| anyhow!("X coordinate overflow: {}", x))?;
+                        usize::try_from(x).map_err(|_| anyhow!("X coordinate overflow: {x}"))?;
                     let offset = y_usize
                         .checked_mul(y_plane.stride / 2)
                         .and_then(|v| v.checked_add(x_usize))
@@ -987,9 +987,9 @@ fn write_png16(pixels: &[f32], width: u32, height: u32, path: &Path) -> Result<(
             .checked_mul(width_u64)
             .and_then(|v| v.checked_add(x_u64))
             .and_then(|v| v.checked_mul(3))
-            .ok_or_else(|| anyhow!("Pixel index calculation overflow at ({}, {})", x, y))?;
+            .ok_or_else(|| anyhow!("Pixel index calculation overflow at ({x}, {y})"))?;
         let idx =
-            usize::try_from(idx_u64).map_err(|_| anyhow!("Pixel index too large: {}", idx_u64))?;
+            usize::try_from(idx_u64).map_err(|_| anyhow!("Pixel index too large: {idx_u64}"))?;
 
         let r = crate::numeric_cast::f32_to_u16_sat(
             linear_to_pq(*pixels.get(idx).ok_or_else(|| {
@@ -1027,9 +1027,9 @@ fn write_png16(pixels: &[f32], width: u32, height: u32, path: &Path) -> Result<(
 fn write_exr(pixels: &[f32], width: u32, height: u32, path: &Path) -> Result<()> {
     use exr::prelude::*;
 
-    let width_usize = usize::try_from(width).map_err(|_| anyhow!("Width too large: {}", width))?;
+    let width_usize = usize::try_from(width).map_err(|_| anyhow!("Width too large: {width}"))?;
     let height_usize =
-        usize::try_from(height).map_err(|_| anyhow!("Height too large: {}", height))?;
+        usize::try_from(height).map_err(|_| anyhow!("Height too large: {height}"))?;
 
     write_rgb_file(path, width_usize, height_usize, |x, y| {
         let idx = y

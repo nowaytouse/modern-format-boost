@@ -1,4 +1,5 @@
 //! vid - Video Quality Analysis and HEVC/H.265/AV1 Conversion API
+#![allow(clippy::multiple_crate_versions)]
 //!
 //! Provides precise video analysis with intelligent format conversion:
 //! - HEVC Lossless MKV for archival (lossless sources)
