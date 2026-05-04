@@ -1,4 +1,4 @@
-#![allow(clippy::multiple_crate_versions)]
+#![allow(clippy::multiple_crate_versions, reason = "Legitimate deviation from standard linting rules justified by specific project architecture.")]
 #[cfg(feature = "high-precision")]
 pub use rug::Rational;
 #[cfg(not(feature = "high-precision"))]

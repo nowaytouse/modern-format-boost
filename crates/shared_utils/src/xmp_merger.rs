@@ -68,7 +68,7 @@ pub struct MergeResult {
 
 #[derive(Debug, Clone)]
 // Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(clippy::struct_excessive_bools)]
+#[allow(clippy::struct_excessive_bools, reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping.")]
 pub struct XmpMergerConfig {
     pub delete_xmp_after_merge: bool,
     pub overwrite_original: bool,
@@ -1089,7 +1089,7 @@ pub fn merge_xmp_for_copied_file(input: &Path, dest: &Path) -> Result<bool> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used, reason = "Unwrapping in test modules is idiomatic to ensure tests fail loudly and immediately on setup errors.")]
 mod tests {
     use super::*;
     use std::fs;

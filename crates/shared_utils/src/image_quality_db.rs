@@ -289,7 +289,7 @@ pub fn get_class_counts(conn: &mut Client) -> (i64, i64) {
 /// Returns a heuristic `QualityScore` (confidence = 0.0) when the DB is unavailable or empty.
 #[must_use]
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 pub fn lookup_image_quality(analysis: &ImageAnalysis) -> Option<QualityScore> {
     // Animated assets are handled by the GIF/Video pipeline, not this DB.
     if analysis.is_animated {

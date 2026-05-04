@@ -34,7 +34,7 @@ impl UnifiedProgressBar {
             bar.set_style(
                 ProgressStyle::default_bar()
                     .template(templates::BATCH)
-                    .unwrap_or_else(|_| ProgressStyle::default_bar())
+                    .expect("Invalid progress bar template")
                     .progress_chars(templates::PROGRESS_CHARS)
                     .tick_chars(templates::SPINNER_CHARS),
             );
@@ -63,7 +63,7 @@ impl UnifiedProgressBar {
             bar.set_style(
                 ProgressStyle::default_bar()
                     .template(templates::EXPLORE)
-                    .unwrap_or_else(|_| ProgressStyle::default_bar())
+                    .expect("Invalid progress bar template")
                     .progress_chars(templates::PROGRESS_CHARS)
                     .tick_chars(templates::SPINNER_CHARS),
             );

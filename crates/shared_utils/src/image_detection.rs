@@ -266,7 +266,7 @@ pub struct DetectionResult {
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 /// Detect image format by inspecting magic bytes.
 ///
 /// # Errors
@@ -885,7 +885,7 @@ pub fn analyze_png_quantization_from_bytes(data: &[u8]) -> Result<PngQuantizatio
 /// # Errors
 /// Returns an error if reading fails or the PNG structure is invalid.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
     mut reader: R,
     path: Option<&Path>,
@@ -1365,7 +1365,7 @@ struct PngQuantizationWeights {
 /// # Errors
 /// Returns an error if the PNG stream is invalid or corrupted.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructureInfo> {
     fn skip_bytes<R: Seek>(reader: &mut R, bytes: u64, context: &str) -> Result<()> {
         let offset = i64::try_from(bytes).map_err(|_| {
@@ -1827,7 +1827,7 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 fn detect_gradient_banding(img: &DynamicImage) -> f64 {
     let rgba = img.to_rgba8();
     let (width, height) = rgba.dimensions();
@@ -2105,7 +2105,7 @@ fn calculate_rgb_entropy(img: &DynamicImage) -> f64 {
 /// # Errors
 /// Returns an error if the file cannot be read, the format is unrecognized, or analysis fails.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 pub fn detect_image(path: &Path) -> Result<DetectionResult> {
     let file_size = std::fs::metadata(path)?.len();
 
@@ -2524,7 +2524,7 @@ fn detect_ico_compression(path: &Path) -> Result<CompressionType> {
 /// compression. Parts separated by empty name; all parts end with two consecutive empty names.
 /// Any lossy part → Lossy overall.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 fn detect_exr_compression(path: &Path) -> Result<CompressionType> {
     crate::common_utils::validate_file_size_limit(path, 512 * 1024 * 1024)
         .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;

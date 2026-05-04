@@ -419,7 +419,7 @@ pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'s
 /// # Errors
 /// Returns an error if information gathering fails.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
     let file_size = crate::io_utils::metadata_with_retry(input)
         .context("Failed to read file metadata")?
@@ -583,7 +583,7 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
 
 /// Caller must pass lowercase codec (e.g. from `get_video_info`).
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 fn evaluate_processing_recommendation(
     codec: &str,
     width: u32,

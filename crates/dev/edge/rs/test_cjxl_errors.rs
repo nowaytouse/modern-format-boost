@@ -1,4 +1,4 @@
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used, reason = "Unwrapping in test modules is idiomatic to ensure tests fail loudly and immediately on setup errors.")]
 use std::process::Command;
 use tempfile::tempdir;
 

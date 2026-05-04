@@ -327,7 +327,7 @@ fn stream_size_change_pct(output_size: u64, input_size: u64) -> f64 {
 /// Arguments for GPU-accelerated CRF exploration.
 #[derive(Debug, Clone)]
 // Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(clippy::struct_excessive_bools)]
+#[allow(clippy::struct_excessive_bools, reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping.")]
 pub struct GpuSearchArgs<'a> {
     pub input: &'a Path,
     pub output: &'a Path,
@@ -349,7 +349,7 @@ pub struct GpuSearchArgs<'a> {
 /// A request for a GPU-backed video quality exploration.
 #[derive(Debug, Clone)]
 // Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(clippy::struct_excessive_bools)]
+#[allow(clippy::struct_excessive_bools, reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping.")]
 pub struct GpuSearchRequest {
     pub input: std::path::PathBuf,
     pub output: std::path::PathBuf,
@@ -368,7 +368,7 @@ pub struct GpuSearchRequest {
 
 /// Arguments for CPU fine-tuning phase.
 // Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(clippy::struct_excessive_bools)]
+#[allow(clippy::struct_excessive_bools, reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping.")]
 struct FineTuneArgs<'a> {
     input: &'a Path,
     output: &'a Path,
@@ -448,7 +448,7 @@ pub(crate) fn format_quality_check_line(
 /// # Errors
 /// Returns an error if exploration fails.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<ExploreResult> {
     use crate::gpu_accel::{CrfMapping, GpuAccel, GpuCoarseConfig};
     let GpuSearchArgs {
@@ -1561,7 +1561,7 @@ fn merge_vf_with_animated_exploration_prefix(vf_args: &[String], prefix: &str) -
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 fn cpu_fine_tune_from_gpu_boundary(
     args: FineTuneArgs<'_>,
     tracking: &mut TrackingState,

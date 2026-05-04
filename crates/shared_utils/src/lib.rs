@@ -1,5 +1,5 @@
 //! Shared Utilities for `modern_format_boost` tools
-#![allow(clippy::multiple_crate_versions)]
+#![allow(clippy::multiple_crate_versions, reason = "Legitimate deviation from standard linting rules justified by specific project architecture.")]
 //!
 //! This crate provides common functionality shared across `img` and `vid`:
 //! - Progress bar with ETA

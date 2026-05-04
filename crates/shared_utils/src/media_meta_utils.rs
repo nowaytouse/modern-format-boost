@@ -23,7 +23,7 @@ pub struct GifHeaderScan {
 /// # Errors
 /// Returns an error if the file cannot be read or if the `GIF` header is malformed.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
     let buf = std::fs::read(path)?;
     let n = buf.len();

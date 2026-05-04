@@ -86,7 +86,7 @@ impl Default for GainMapParams {
 ///
 /// Returns an error if the HEIC file cannot be read, gainmap is missing, or synthesis fails.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 pub fn convert_heic_with_gainmap_to_jxl_hdr(
     input: &Path,
     output: &Path,
@@ -601,7 +601,7 @@ fn parse_gainmap_params(handle: &ImageHandle) -> Option<GainMapParams> {
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 fn parse_gainmap_from_xmp(xmp_data: &[u8]) -> Option<GainMapParams> {
     let mut params = GainMapParams::default();
     let mut reader = Reader::from_reader(xmp_data);
@@ -717,7 +717,7 @@ fn parse_gainmap_from_xmp(xmp_data: &[u8]) -> Option<GainMapParams> {
 ///
 /// Returns an error if the images have incompatible dimensions or if memory allocation fails.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 pub fn synthesize_hdr(
     sdr: &DynamicImage,
     gain: &DynamicImage,

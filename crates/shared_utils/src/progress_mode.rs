@@ -437,7 +437,7 @@ fn stderr_is_tty() -> bool {
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 /// Emit a line to stderr (and to run log when configured).
 ///
 /// * When stderr **is a TTY**: ANSI colour codes are forwarded as-is.

@@ -27,7 +27,7 @@ use tracing::Level;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 // Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(clippy::struct_excessive_bools)]
+#[allow(clippy::struct_excessive_bools, reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping.")]
 pub struct VideoQualityAnalysis {
     pub width: u32,
     pub height: u32,
@@ -224,7 +224,7 @@ impl CompressionLevel {
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 /// Analyze video quality (codec type, bpp, content type, compression level, etc.).
 ///
 /// # Errors

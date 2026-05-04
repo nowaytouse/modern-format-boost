@@ -310,7 +310,7 @@ pub fn convert_ultrahdr_jpeg_to_jxl(
 /// - `cjxl` execution fails and all fallbacks (`FFmpeg`, `ImageMagick`) also fail.
 /// - The output file cannot be written or verified.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 pub fn convert_to_jxl(
     input: &Path,
     options: &ConvertOptions,
@@ -1009,7 +1009,7 @@ fn commit_jpeg_to_jxl_success(
 /// # Errors
 /// Returns an error if transcoding fails.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 pub fn convert_jpeg_to_jxl(
     input: &Path,
     options: &ConvertOptions,
@@ -1025,7 +1025,7 @@ pub fn convert_jpeg_to_jxl(
     }
 
     // Check for corruption early
-    if !is_jpeg_complete(&std::fs::read(input).unwrap_or_default()) {
+    if !is_jpeg_complete(&std::fs::read(input)?) {
         return Err(ImgQualityError::ConversionError(
             "JPEG is truncated or missing EOI".to_string(),
         ));
@@ -1165,7 +1165,7 @@ pub fn convert_jpeg_to_jxl(
     {
         // For truncated JPEGs, the ImageMagick fallback often "repairs" them but results in
         // large JXL files that we eventually discard. We skip fallback if it's incomplete.
-        if !is_jpeg_complete(&std::fs::read(input).unwrap_or_default()) {
+        if !is_jpeg_complete(&std::fs::read(input)?) {
             shared_utils::progress_mode::emit_stderr(
                 "   ⚠️  [Corruption] JPEG file is truncated or missing EOI, skipping expensive fallback.",
             );
@@ -1734,7 +1734,7 @@ fn describe_jxl_finalist_pass(
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 fn try_explore_ultimate_jxl_distance(
     input: &Path,
     actual_input: &Path,
@@ -2054,7 +2054,7 @@ fn try_explore_ultimate_jxl_distance(
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 fn prepare_input_for_cjxl(
     input: &Path,
     options: &ConvertOptions,
@@ -2063,7 +2063,7 @@ fn prepare_input_for_cjxl(
     // Ensure we have color info for bit depth detection if not provided
     let local_hdr_info;
     // Rationale: Using if-let and match-else here is more readable than overly nested or functional alternatives for this specific logic.
-    #[allow(clippy::option_if_let_else, clippy::single_match_else)]
+    #[allow(clippy::option_if_let_else, clippy::single_match_else, reason = "Preserving if-let structure to maintain clear linear control flow during complex state transitions.")]
     let hdr_info = match hdr_info {
         Some(info) => info,
         None => {

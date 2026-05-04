@@ -1168,7 +1168,7 @@ fn find_mpf_segment(data: &[u8]) -> Result<Vec<u8>, String> {
 
 /// Extract gainmap image data from MPF segment.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 fn extract_gainmap_from_mpf(
     jpeg_data: &[u8],
     mpf_data: &[u8],

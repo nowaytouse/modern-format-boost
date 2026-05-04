@@ -1750,7 +1750,7 @@ pub fn gpu_coarse_search_with_log(
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 fn gpu_coarse_search_with_log_impl(
     input: &std::path::Path,
     output: &std::path::Path,

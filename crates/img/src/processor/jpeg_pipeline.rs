@@ -53,7 +53,7 @@ impl<'a> JpegToJxlPipeline<'a> {
             return Err(ImgQualityError::ConversionError(e));
         }
 
-        if !is_jpeg_complete(&fs::read(self.input).unwrap_or_default()) {
+        if !is_jpeg_complete(&std::fs::read(self.input)?) {
             return Err(ImgQualityError::ConversionError(
                 "JPEG is truncated or missing EOI".to_string(),
             ));

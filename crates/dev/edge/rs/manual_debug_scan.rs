@@ -8,7 +8,7 @@
 use walkdir::WalkDir;
 
 #[test]
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 fn manual_debug_scan_debug_dir_only() {
     // Disabled by default to avoid accidental scans of private media.
     if std::env::var("MFB_RUN_DEBUG_SCAN").is_err() {

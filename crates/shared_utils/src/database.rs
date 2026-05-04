@@ -330,7 +330,7 @@ impl Default for GlobalCollectionStats {
 
 impl Default for LoopReferenceProfile {
     // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
     fn default() -> Self {
         let collection = GlobalCollectionStats::default();
         let pixels_min = f64::from(collection.width_min) * f64::from(collection.height_min);
@@ -493,7 +493,7 @@ impl Default for LoopReferenceProfile {
 /// Row shape for GIF/video KNN features; some fields are stored for DB round-trip / future use.
 #[derive(Debug, Clone)]
 // Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(clippy::struct_excessive_bools)]
+#[allow(clippy::struct_excessive_bools, reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping.")]
 struct SampleRow {
     _loss_tolerance: Option<String>,
     width: u32,
@@ -633,7 +633,7 @@ pub fn fetch_global_collection_stats(conn: &mut Client) -> Result<GlobalCollecti
         || Ok(GlobalCollectionStats::default()),
         |row| {
             let json: String = row.get(0);
-            Ok(serde_json::from_str(&json).unwrap_or_default())
+            Ok(serde_json::from_str(&json)?)
         },
     )
 }
@@ -644,22 +644,24 @@ pub fn fetch_global_collection_stats(conn: &mut Client) -> Result<GlobalCollecti
 /// # Errors
 /// Returns an error if the underlying database fetches fail.
 pub fn fetch_loop_reference_profile(conn: &mut Client) -> Result<LoopReferenceProfile> {
-    let collection = fetch_global_collection_stats(conn).unwrap_or_default();
+    let collection = fetch_global_collection_stats(conn)?;
     let feature_map = fetch_feature_map(conn)?;
     Ok(build_loop_reference_profile(collection, &feature_map))
 }
 
 fn fetch_feature_map(conn: &mut Client) -> Result<FeatureMap> {
-    Ok(conn
-        .query_opt(
-            "SELECT value FROM sample_metadata WHERE key = $1",
-            &[&STATS_KEY],
-        )?
-        .map(|row| {
+    let row_opt = conn.query_opt(
+        "SELECT value FROM sample_metadata WHERE key = $1",
+        &[&STATS_KEY],
+    )?;
+    
+    match row_opt {
+        Some(row) => {
             let value: String = row.get(0);
-            serde_json::from_str(&value).unwrap_or_default()
-        })
-        .unwrap_or_default())
+            Ok(serde_json::from_str(&value)?)
+        }
+        None => Ok(FeatureMap::default()),
+    }
 }
 
 fn build_loop_reference_profile(
@@ -775,7 +777,7 @@ fn check_gif_db_maturity(conn: &mut Client) -> bool {
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 fn lookup_similar_samples_inner(
     meta: &LoopMeta,
     _path: Option<&Path>,
@@ -1115,7 +1117,7 @@ pub fn is_lossless_exploration_safe(meta: &LoopMeta, path: Option<&Path>) -> boo
 /// # Errors
 /// Returns an error if the database schema cannot be initialized or migrated.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 pub fn init_schema(conn: &mut Client) -> Result<()> {
     if !DB_SCHEMA_INIT_LOGGED_ONCE.swap(true, std::sync::atomic::Ordering::Relaxed) {
         tracing::debug!("Initializing Database Schema (PostgreSQL + pgvector)");
@@ -1320,7 +1322,7 @@ fn seed_positive_dataset_if_needed(conn: &mut Client) -> Result<()> {
 /// insertion. Contains all extracted features and classification labels.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 // Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(clippy::struct_excessive_bools)]
+#[allow(clippy::struct_excessive_bools, reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping.")]
 pub struct SampleInsert {
     /// BLAKE3 hash of the file contents.
     file_hash: String,
@@ -1612,7 +1614,7 @@ pub fn calculate_blake3_hex(path: &Path) -> Result<String> {
 /// This precisely bakes the weights and normalization terms from the old dynamically computed KNN
 /// into an L2-compatible vector, allowing `PostgreSQL`'s HNSW index to do the heavy lifting!
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 fn compute_sample_vector(sample: &SampleRow, stats_map: &FeatureMap) -> Vec<f32> {
     let sample_pixels = (f64::from(sample.width) * f64::from(sample.height)).max(1.0);
 
@@ -1971,7 +1973,7 @@ fn build_feature_stats(values: &[f64]) -> FeatureStats {
 /// # Panics
 /// Panics if the progress bar template is invalid.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -> Result<usize> {
     let mut conn = open_pg_client()?;
 
@@ -2010,7 +2012,7 @@ pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -
     pb.set_style(
         ProgressStyle::default_bar()
             .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}")
-            .unwrap_or_else(|_| ProgressStyle::default_bar())
+            .expect("Invalid progress bar template")
             .progress_chars("#>-"),
     );
 
@@ -2173,7 +2175,7 @@ pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -
 /// # Errors
 /// Returns an error if the database queries fail.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
     emit_stderr("🏋️  Recomputing Global KNN Feature Statistics (Training Model)...");
 

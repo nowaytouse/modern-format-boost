@@ -186,7 +186,7 @@ impl StreamType {
 /// Builder for constructing `ffmpeg` commands.
 #[derive(Debug, Default, Clone)]
 // Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(clippy::struct_excessive_bools)]
+#[allow(clippy::struct_excessive_bools, reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping.")]
 pub struct FfmpegBuilder {
     inputs: Vec<PathBuf>,
     output_target: Option<OutputTarget>,
@@ -405,7 +405,7 @@ impl FfmpegBuilder {
     }
 
     // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
     /// Construct the `std::process::Command`.
     #[must_use]
     pub fn build(&self) -> Command {
@@ -536,7 +536,7 @@ impl FfmpegBuilder {
 /// Builder for constructing `ffprobe` commands.
 #[derive(Debug, Default)]
 // Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(clippy::struct_excessive_bools)]
+#[allow(clippy::struct_excessive_bools, reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping.")]
 pub struct FfprobeBuilder {
     input: Option<PathBuf>,
     show_streams: bool,

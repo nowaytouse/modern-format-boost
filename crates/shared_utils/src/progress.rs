@@ -831,7 +831,7 @@ impl FixedBottomProgress {
         bar.set_style(
             ProgressStyle::default_bar()
                 .template(progress_style::BATCH_TEMPLATE)
-                .unwrap_or_else(|_| ProgressStyle::default_bar())
+                .expect("Invalid progress bar template")
                 .progress_chars(progress_style::PROGRESS_CHARS)
                 .tick_chars(progress_style::SPINNER_CHARS),
         );
@@ -1206,7 +1206,7 @@ pub fn create_professional_spinner(prefix: &str) -> ProgressBar {
         pb.set_style(
             ProgressStyle::default_spinner()
                 .template(progress_style::SPINNER_TEMPLATE)
-                .unwrap_or_else(|_| ProgressStyle::default_spinner())
+                .expect("Invalid spinner template")
                 .tick_chars(progress_style::SPINNER_CHARS),
         );
         pb.set_prefix(prefix.to_string());
@@ -1232,7 +1232,7 @@ pub fn create_progress_bar(total: u64, prefix: &str) -> ProgressBar {
         pb.set_style(
             ProgressStyle::default_bar()
                 .template("{spinner:.green} {prefix:.cyan.bold} ▕{bar:35.green/black}▏ {percent:>3}% • {pos}/{len} • {msg}")
-                .unwrap_or_else(|_| ProgressStyle::default_bar())
+                .expect("Invalid progress bar template")
                 .progress_chars(progress_style::PROGRESS_CHARS)
                 .tick_chars(progress_style::SPINNER_CHARS),
         );
@@ -1257,7 +1257,7 @@ pub fn create_detailed_progress_bar(total: u64, prefix: &str) -> ProgressBar {
         pb.set_style(
             ProgressStyle::default_bar()
                 .template(progress_style::BATCH_TEMPLATE)
-                .unwrap_or_else(|_| ProgressStyle::default_bar())
+                .expect("Invalid progress bar template")
                 .progress_chars(progress_style::PROGRESS_CHARS)
                 .tick_chars(progress_style::SPINNER_CHARS),
         );
@@ -1282,7 +1282,7 @@ pub fn create_compact_progress_bar(total: u64, prefix: &str) -> ProgressBar {
         pb.set_style(
             ProgressStyle::default_bar()
                 .template(progress_style::COMPACT_TEMPLATE)
-                .unwrap_or_else(|_| ProgressStyle::default_bar())
+                .expect("Invalid progress bar template")
                 .progress_chars(progress_style::PROGRESS_CHARS),
         );
         pb.set_prefix(prefix.to_string());
@@ -1321,7 +1321,7 @@ impl SmartProgressBar {
             bar.set_style(
                 ProgressStyle::default_bar()
                     .template(progress_style::BATCH_TEMPLATE)
-                    .unwrap_or_else(|_| ProgressStyle::default_bar())
+                    .expect("Invalid progress bar template")
                     .progress_chars(progress_style::PROGRESS_CHARS)
                     .tick_chars(progress_style::SPINNER_CHARS),
             );
@@ -1411,7 +1411,7 @@ pub fn create_spinner(message: &str) -> ProgressBar {
         spinner.set_style(
             ProgressStyle::default_spinner()
                 .template("{spinner:.green} {msg}")
-                .unwrap_or_else(|_| ProgressStyle::default_spinner())
+                .expect("Invalid spinner template")
                 .tick_chars(progress_style::SPINNER_CHARS),
         );
         spinner.set_message(message.to_string());
@@ -1560,7 +1560,7 @@ impl GlobalProgressManager {
             bar.set_style(
                 ProgressStyle::default_bar()
                     .template(progress_style::BATCH_TEMPLATE)
-                    .unwrap_or_else(|_| ProgressStyle::default_bar())
+                    .expect("Invalid progress bar template")
                     .progress_chars(progress_style::PROGRESS_CHARS)
                     .tick_chars(progress_style::SPINNER_CHARS),
             );
@@ -1584,7 +1584,7 @@ impl GlobalProgressManager {
             bar.set_style(
                 ProgressStyle::default_spinner()
                     .template(SUB_SPINNER_TEMPLATE)
-                    .unwrap_or_else(|_| ProgressStyle::default_spinner())
+                    .expect("Invalid spinner template")
                     .tick_chars(progress_style::SPINNER_CHARS),
             );
             bar.set_prefix(prefix.to_string());

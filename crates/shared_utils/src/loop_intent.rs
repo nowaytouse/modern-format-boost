@@ -128,7 +128,7 @@ impl DurationTier {
 /// The tree itself is a pure function over this struct — no I/O, no side effects.
 #[derive(Debug, Clone, Default)]
 // Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(clippy::struct_excessive_bools)]
+#[allow(clippy::struct_excessive_bools, reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping.")]
 pub struct LoopMeta {
     // ── Basic geometry ──
     pub duration_secs: f64,
@@ -210,7 +210,7 @@ pub struct LoopMeta {
 
 impl LoopMeta {
     // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
     /// Build `LoopMeta` from a full `VideoDetectionResult`.
     #[must_use]
     pub fn from_video_detection(detection: &VideoDetectionResult) -> Self {
@@ -319,7 +319,7 @@ impl LoopMeta {
     }
 
     // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
     /// Build `LoopMeta` from an `FFprobeResult` (used in pipelines without full detection).
     #[must_use]
     pub fn from_ffprobe_result(probe: &crate::ffprobe::FFprobeResult, path: &Path) -> Self {
@@ -583,7 +583,7 @@ impl LogOdds {
 
 #[derive(Debug, Default, Clone, Copy)]
 // Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(clippy::struct_excessive_bools)]
+#[allow(clippy::struct_excessive_bools, reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping.")]
 struct DerivedLoopSignals {
     scene_cut: bool,
     localized_motion: bool,
@@ -940,7 +940,7 @@ fn evaluate_kinetics_and_physics(
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 fn apply_structural_signals(
     meta: &LoopMeta,
     derived: &DerivedLoopSignals,
@@ -1120,7 +1120,7 @@ fn apply_structural_signals(
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 fn apply_weak_heuristics(
     meta: &LoopMeta,
     derived: &DerivedLoopSignals,
@@ -1371,7 +1371,7 @@ fn finalize(verdict: LoopIntentVerdict, lo: LogOdds) -> TreeEvaluation {
 
 #[must_use]
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 pub fn evaluate_loop_tree(
     meta: &LoopMeta,
     reference_profile: Option<&LoopReferenceProfile>,
@@ -1971,7 +1971,7 @@ impl DirectionalArbitration {
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 fn layer6_directional_arbitration(
     meta: &LoopMeta,
     thresholds: &LoopThresholds,
@@ -2256,7 +2256,7 @@ pub fn assess_loop_intent_from_probe(
 /// classification logic encounters an IO error during visual sampling.
 #[must_use]
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> LoopIntentVerdict {
     use crate::database::{
         fetch_loop_reference_profile, log_inference_record, lookup_similar_samples, open_pg_client,

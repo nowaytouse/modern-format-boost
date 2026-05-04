@@ -103,7 +103,7 @@ where
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 fn process_directory<F, R>(config: &CliRunnerConfig, converter: F) -> Result<()>
 where
     F: Fn(&Path) -> Result<R> + Sync,

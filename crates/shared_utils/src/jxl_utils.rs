@@ -265,7 +265,7 @@ pub struct ModeLockedImagemagickCjxlPipelineRequest<'a> {
 /// # Errors
 /// Returns an error if the pipeline fails.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 fn run_imagemagick_cjxl_pipeline_with_effort(
     request: ImagemagickCjxlPipelineRequest<'_>,
 ) -> std::result::Result<(), (bool, bool, String)> {
@@ -490,7 +490,7 @@ pub fn run_imagemagick_cjxl_pipeline(
 /// # Errors
 /// Returns an I/O error if conversion fails.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 pub fn try_imagemagick_fallback_with_effort(
     input: &Path,
     output: &Path,

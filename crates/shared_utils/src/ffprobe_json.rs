@@ -211,7 +211,7 @@ fn parse_side_data_list(
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
 pub fn extract_color_info(input: &Path) -> ColorInfo {
     let input_str = input.to_string_lossy();
 

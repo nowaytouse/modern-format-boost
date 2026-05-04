@@ -116,11 +116,13 @@ static CLASSIFIER_RULES: std::sync::OnceLock<Vec<ClassifierRule>> = std::sync::O
 fn get_classifier_rules() -> &'static [ClassifierRule] {
     CLASSIFIER_RULES.get_or_init(|| {
         let json = include_str!("image_classifiers.json");
-        let wrapper: serde_json::Value = serde_json::from_str(json).unwrap_or_default();
+        let wrapper: serde_json::Value = serde_json::from_str(json)
+            .expect("embedded image_classifiers.json is malformed");
         wrapper
             .get("classifiers")
             .map_or_else(Vec::new, |rules_array| {
-                serde_json::from_value(rules_array.clone()).unwrap_or_default()
+                serde_json::from_value(rules_array.clone())
+                    .expect("embedded image_classifiers.json 'classifiers' array is malformed")
             })
     })
 }
