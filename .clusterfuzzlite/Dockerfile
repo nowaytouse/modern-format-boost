@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y \
     nasm \
     ninja-build \
     meson \
+    libheif-dev \
     libde265-dev \
     libx265-dev \
     libx264-dev \

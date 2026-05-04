@@ -11,15 +11,17 @@ env:
 jobs:
   build-macos:
     name: Build (macOS ${{ matrix.arch }})
-    runs-on: macos-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - arch: arm64
             target: aarch64-apple-darwin
+            os: macos-latest
           - arch: x86_64
             target: x86_64-apple-darwin
+            os: macos-13
     steps:
       - uses: actions/checkout@v4
 
@@ -28,47 +30,19 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install dependencies (ARM64)
-        if: matrix.target == 'aarch64-apple-darwin'
+      - name: Install dependencies (Homebrew)
         run: |
           brew install ffmpeg jpeg-xl exiftool imagemagick webp libheif nasm dav1d gmp x264 vvdec vvenc
           BREW_PREFIX=$(brew --prefix)
-          # Comprehensive PKG_CONFIG_PATH including all possible codec locations
           echo "PKG_CONFIG_PATH=${BREW_PREFIX}/lib/pkgconfig:${BREW_PREFIX}/opt/dav1d/lib/pkgconfig:${BREW_PREFIX}/opt/jpeg-xl/lib/pkgconfig:${BREW_PREFIX}/opt/x264/lib/pkgconfig:${BREW_PREFIX}/opt/vvdec/lib/pkgconfig:${BREW_PREFIX}/opt/vvenc/lib/pkgconfig" >> "$GITHUB_ENV"
 
       - name: Workaround for stdc++ on macOS
         run: |
           # Use system libc++ instead of libstdc++ to avoid linking issues
           mkdir -p .tmp_lib
-          # ARM64: Link to SDK libc++.tbd and system libc++.dylib
           SDK_PATH=$(xcrun --show-sdk-path)
           ln -sf "${SDK_PATH}/usr/lib/libc++.tbd" .tmp_lib/libstdc++.tbd
           ln -sf /usr/lib/libc++.dylib .tmp_lib/libstdc++.dylib
-          
-          # x86_64: If we are cross-compiling, we might need the x86 SDK path
-          if [ "${{ matrix.target }}" = "x86_64-apple-darwin" ]; then
-             X86_SDK_PATH=$(xcrun --sdk macosx --show-sdk-path)
-             mkdir -p .tmp_lib_x86
-             ln -sf "${X86_SDK_PATH}/usr/lib/libc++.tbd" .tmp_lib_x86/libstdc++.tbd
-             ln -sf /usr/lib/libc++.dylib .tmp_lib_x86/libstdc++.dylib
-          fi
-
-      - name: Install dependencies (x86_64 Cross-compile)
-        if: matrix.target == 'x86_64-apple-darwin'
-        run: |
-          # Install Homebrew for x86_64 under Rosetta 2
-          if [ ! -f /usr/local/bin/brew ]; then
-            arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" <<< ""
-          fi
-          arch -x86_64 /usr/local/bin/brew install ffmpeg libheif dav1d jpeg-xl exiftool imagemagick webp nasm gmp x264 vvdec vvenc
-
-          # Setup paths for cross-compilation (Intel prefix is /usr/local)
-          echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/opt/libheif/lib/pkgconfig:/usr/local/opt/dav1d/lib/pkgconfig:/usr/local/opt/jpeg-xl/lib/pkgconfig:/usr/local/opt/x264/lib/pkgconfig:/usr/local/opt/vvdec/lib/pkgconfig:/usr/local/opt/vvenc/lib/pkgconfig" >> "$GITHUB_ENV"
-          echo "PKG_CONFIG_ALLOW_CROSS=1" >> "$GITHUB_ENV"
-          echo "LIBRARY_PATH=/usr/local/lib:${LIBRARY_PATH:-}" >> "$GITHUB_ENV"
-          echo "CC=clang" >> "$GITHUB_ENV"
-          echo "CFLAGS=-target x86_64-apple-darwin" >> "$GITHUB_ENV"
-          echo "CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER=clang" >> "$GITHUB_ENV"
 
       - name: Build release binaries
         run: cargo build --release --target ${{ matrix.target }} -p img -p vid
@@ -88,126 +62,6 @@ jobs:
         with:
           name: modern-format-boost-${{ matrix.target }}
           path: modern-format-boost-${{ matrix.target }}.tar.gz
-
   build-linux:
     name: Build (Linux x86_64)
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install dependencies (apt)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config clang cmake nasm ninja-build meson \
-            libde265-dev libx265-dev libaom-dev \
-            libturbojpeg0-dev libpng-dev ffmpeg libimage-exiftool-perl imagemagick webp \
-            libgmp-dev libmpfr-dev libmpc-dev
-
-      - name: Build dav1d 1.5.1 from source
-        run: |
-          cd /tmp
-          curl -fsSL https://code.videolan.org/videolan/dav1d/-/archive/1.5.1/dav1d-1.5.1.tar.gz -o dav1d.tar.gz
-          tar xzf dav1d.tar.gz
-          cd dav1d-1.5.1
-          meson setup build --buildtype=release --prefix=/usr/local -Denable_tools=false -Denable_tests=false
-          ninja -C build
-          sudo ninja -C build install
-          sudo ldconfig
-
-      - name: Build libheif 1.21.0 from source
-        run: |
-          cd /tmp
-          curl -fsSL https://github.com/strukturag/libheif/releases/download/v1.21.0/libheif-1.21.0.tar.gz -o libheif.tar.gz
-          tar xzf libheif.tar.gz
-          cd libheif-1.21.0
-          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DWITH_EXAMPLES=OFF -DWITH_TESTING=OFF
-          cmake --build build --parallel
-          sudo cmake --install build
-          sudo ldconfig
-
-      - name: Set Environment Variables
-        run: |
-          echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig" >> "$GITHUB_ENV"
-
-      - name: Build release binaries
-        run: cargo build --release
-
-      - name: Package binaries
-        run: |
-          mkdir -p dist
-          cp target/release/img dist/
-          cp target/release/vid dist/
-          cp -r crates/dev/scripts dist/
-          cp LICENSE README.md CHANGELOG.md dist/
-          cd dist
-          tar czf ../modern-format-boost-x86_64-unknown-linux-gnu.tar.gz *
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: modern-format-boost-x86_64-unknown-linux-gnu
-          path: modern-format-boost-x86_64-unknown-linux-gnu.tar.gz
-
-  release:
-    name: Create Nightly Release
-    needs: [build-macos, build-linux]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Get version from Cargo.toml
-        id: version
-        run: |
-          VERSION=$(grep -m1 'version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Version: $VERSION"
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: List artifacts
-        run: find artifacts -type f | sort
-
-      - name: Delete existing nightly release (if exists)
-        run: gh release delete nightly --yes --cleanup-tag || true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Create nightly release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: nightly
-          name: "🌙 Nightly v${{ steps.version.outputs.version }}"
-          body: |
-            ## 🌙 Nightly Release — v${{ steps.version.outputs.version }}
-
-            > ⚠️ This is an automated nightly build from the `nightly` branch.
-            > It uses bleeding-edge GitHub source dependencies and may contain untested features.
-            > For stable builds, use the `main` branch releases.
-
-            ### 📦 Downloads
-
-            | Platform | Architecture | File |
-            |----------|-------------|------|
-            | macOS | ARM64 (Apple Silicon) | `modern-format-boost-aarch64-apple-darwin.tar.gz` |
-            | macOS | x86_64 (Intel) | `modern-format-boost-x86_64-apple-darwin.tar.gz` |
-            | Linux | x86_64 | `modern-format-boost-x86_64-unknown-linux-gnu.tar.gz` |
-
-            ### 📋 What's Included
-
-            - `img` — Image optimization (→ JXL / HEVC / AV1)
-            - `vid` — Video optimization (→ HEVC / AV1)
-            - `crates/dev/scripts/` — Full Python automation suite
-
-            ---
-            *Built from commit ${{ github.sha }} on ${{ github.event.head_commit.timestamp || 'nightly branch' }}*
-          prerelease: true
-          files: |
-            artifacts/**/*.tar.gz
