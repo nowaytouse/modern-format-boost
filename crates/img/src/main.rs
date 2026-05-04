@@ -14,7 +14,7 @@ use shared_utils::{
     BatchResult,
 };
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -465,9 +465,9 @@ fn main() -> anyhow::Result<()> {
                             for (version, count) in versions {
                                 let marker = match (*version).cmp(&stats.current_algorithm_version)
                                 {
-                                    std::cmp::Ordering::Less => "⚠️  (stale)",
-                                    std::cmp::Ordering::Equal => "✅ (current)",
-                                    std::cmp::Ordering::Greater => "❓ (future)",
+                                    core::cmp::Ordering::Less => "⚠️  (stale)",
+                                    core::cmp::Ordering::Equal => "✅ (current)",
+                                    core::cmp::Ordering::Greater => "❓ (future)",
                                 };
                                 println!("   v{version}: {count} records {marker}");
                             }
@@ -1246,8 +1246,8 @@ fn auto_convert_directory(
     let failed = AtomicUsize::new(0);
     let ignored = AtomicUsize::new(0);
     let processed = AtomicUsize::new(0);
-    let actual_input_bytes = std::sync::atomic::AtomicU64::new(0);
-    let actual_output_bytes = std::sync::atomic::AtomicU64::new(0);
+    let actual_input_bytes = core::sync::atomic::AtomicU64::new(0);
+    let actual_output_bytes = core::sync::atomic::AtomicU64::new(0);
     let pause_controller = Arc::new(BatchPauseController::new());
 
     shared_utils::progress_mode::enable_quiet_mode();
@@ -1285,7 +1285,7 @@ fn auto_convert_directory(
             "🔧 Thread Strategy: {} parallel tasks x {} threads/task (CPU cores: {})",
             max_threads,
             child_threads,
-            std::thread::available_parallelism().map_or(4, std::num::NonZero::get)
+            std::thread::available_parallelism().map_or(4, core::num::NonZero::get)
         );
         if let Some(hint) = shared_utils::thread_manager::memory_cap_hint() {
             shared_utils::log_eprintln!("   💡 {}", hint);

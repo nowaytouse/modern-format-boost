@@ -61,6 +61,7 @@ impl CacheStatistics {
 
 pub const CACHE_SIZE_LIMIT_BYTES: u64 = 85 * 1024 * 1024 * 1024; // 85 GB
 
+/// Opens a connection to the `PostgreSQL` database.
 fn open_pg_client() -> Result<Client> {
     crate::database::open_pg_client()
 }
@@ -68,14 +69,20 @@ fn open_pg_client() -> Result<Client> {
 /// 🏷️ File Signature for robust change detection
 #[derive(Debug, Clone, PartialEq)]
 struct FileSignature {
+    /// Last modification time in nanoseconds since UNIX epoch.
     mtime: i64,
+    /// Status change time (Unix) or last write time (Windows).
     ctime: i64,
+    /// Birth/creation time in nanoseconds since UNIX epoch.
     btime: i64,
+    /// Last access time in nanoseconds since UNIX epoch.
     atime: i64,
+    /// File size in bytes.
     size: i64,
 }
 
 impl FileSignature {
+    /// Extracts a file signature from the given path.
     pub fn from_path(path: &Path) -> Result<Self> {
         #[cfg(unix)]
         use std::os::unix::fs::MetadataExt;
@@ -134,6 +141,7 @@ impl AnalysisCache {
         Ok(Self {})
     }
 
+    /// Initializes the database schema if it doesn't exist.
     fn init_schema(client: &mut Client) -> Result<()> {
         let schema_sql = include_str!("sql/analysis_cache_pg.sql");
         client
@@ -159,6 +167,7 @@ impl AnalysisCache {
         Ok(())
     }
 
+    /// Deletes entries that were created with an older version of the analysis algorithm.
     fn invalidate_old_algorithm_entries(client: &mut Client) -> Result<()> {
         let tables = ["analysis_records", "quality_records", "video_records"];
         let mut total_invalidated = 0;
@@ -630,6 +639,7 @@ impl AnalysisCache {
     }
 }
 
+/// Calculates the BLAKE3 hash of a file's entire content.
 fn calculate_blake3(path: &Path) -> Result<blake3::Hash> {
     let mut file = std::fs::File::open(path)?;
     let mut hasher = Hasher::new();
@@ -644,6 +654,7 @@ fn calculate_blake3(path: &Path) -> Result<blake3::Hash> {
     Ok(hasher.finalize())
 }
 
+/// Calculates a quick content fingerprint using the first 64KB of a file.
 fn calculate_content_fingerprint(path: &Path) -> Result<[u8; 32]> {
     let mut file = std::fs::File::open(path)?;
     let mut hasher = Hasher::new();
@@ -653,6 +664,7 @@ fn calculate_content_fingerprint(path: &Path) -> Result<[u8; 32]> {
     Ok(*hasher.finalize().as_bytes())
 }
 
+/// Calculates a CRC32 checksum for data integrity verification.
 fn calculate_checksum(data: &[u8]) -> u32 {
     let mut hasher = crc32fast::Hasher::new();
     hasher.update(data);

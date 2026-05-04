@@ -7,7 +7,7 @@ use shared_utils::jxl_utils::{is_grayscale_icc_cjxl_error, is_icc_rounding_error
 // However, we can fuzz the error parsers which involve complex string matching.
 
 fuzz_target!(|data: &[u8]| {
-    if let Ok(s) = std::str::from_utf8(data) {
+    if let Ok(s) = core::str::from_utf8(data) {
         let _ = is_icc_rounding_error(s);
         let _ = is_grayscale_icc_cjxl_error(s);
     }

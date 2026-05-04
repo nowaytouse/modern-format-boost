@@ -862,7 +862,7 @@ fn lookup_similar_samples_inner(
                 Some("uncertain") => LabelStatus::Uncertain,
                 _ => LabelStatus::NotLabeled,
             };
-            (
+            return (
                 label,                // label status
                 row.get::<_, f64>(1), // duration_secs
                 row.get::<_, f64>(2), // dist

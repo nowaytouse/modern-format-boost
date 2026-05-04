@@ -138,21 +138,21 @@ fn calculate_window_ssim(
             // px and py are guaranteed to be within image bounds by the valid_width/valid_height calculation
             // However, we still need to convert usize -> u32 safely
             // If the image dimensions fit in u32 (which they do, since w1/h1 are u32), then px/py will too
-            let Some(px_u32) = u32::try_from(px).ok() else {
+            let Some(pixel_x) = u32::try_from(px).ok() else {
                 continue; // Skip this pixel if conversion fails (shouldn't happen in practice)
             };
-            let Some(py_u32) = u32::try_from(py).ok() else {
+            let Some(pixel_y) = u32::try_from(py).ok() else {
                 continue;
             };
 
             if let Some(r) = buf_x.get_mut(i) {
                 if let Some(c) = r.get_mut(j) {
-                    *c = f64::from(orig.get_pixel(px_u32, py_u32)[0]);
+                    *c = f64::from(orig.get_pixel(pixel_x, pixel_y)[0]);
                 }
             }
             if let Some(r) = buf_y.get_mut(i) {
                 if let Some(c) = r.get_mut(j) {
-                    *c = f64::from(conv.get_pixel(px_u32, py_u32)[0]);
+                    *c = f64::from(conv.get_pixel(pixel_x, pixel_y)[0]);
                 }
             }
         }

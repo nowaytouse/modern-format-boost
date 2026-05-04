@@ -40,7 +40,7 @@ struct Decision {
 }
 
 fn main() -> Result<()> {
-    use std::fmt::Write;
+    use core::fmt::Write;
     let args = Args::parse();
     let index = MediaIndex::open(&args.db)?;
 

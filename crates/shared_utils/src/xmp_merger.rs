@@ -194,7 +194,7 @@ impl XmpMerger {
                         let local_name = attr.key.local_name();
                         let name_ref = local_name.as_ref();
 
-                        if let Ok(val_cow) = attr.normalized_value(quick_xml::XmlVersion::V1_0) {
+                        if let Ok(val_cow) = attr.normalized_value(quick_xml::XmlVersion::Explicit1_0) {
                             if name_ref.windows(10).any(|w| w == b"DocumentID") {
                                 xmp_info.document_id = Some(val_cow.to_string());
                             } else if name_ref.windows(11).any(|w| w == b"DerivedFrom") {

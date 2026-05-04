@@ -64,11 +64,10 @@ impl<K: Hash + Eq + Clone, V: Clone> LruCache<K, V> {
     }
 
     pub fn get(&mut self, key: &K) -> Option<&V> {
-        if let Some(entry) = self.entries.get_mut(key) {
+        {
+            let entry = self.entries.get_mut(key)?;
             entry.touch();
             Some(&entry.value)
-        } else {
-            None
         }
     }
 

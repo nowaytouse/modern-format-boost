@@ -616,7 +616,7 @@ fn parse_gainmap_from_xmp(xmp_data: &[u8]) -> Option<GainMapParams> {
                     let local_name = attr.key.local_name();
 
                     // Zero-copy attribute parsing
-                    if let Ok(attr_val_cow) = attr.normalized_value(XmlVersion::V1_0) {
+                    if let Ok(attr_val_cow) = attr.normalized_value(XmlVersion::Explicit1_0) {
                         if let Ok(f) = attr_val_cow.parse::<f32>() {
                             let name_bytes = local_name.as_ref();
                             if name_bytes.windows(10).any(|w| w == b"GainMapMax") {

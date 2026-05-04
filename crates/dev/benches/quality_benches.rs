@@ -1,7 +1,7 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use shared_utils::image_detection::PrecisionMetadata;
 use shared_utils::image_quality_detector::analyze_image_quality;
-use std::hint::black_box;
+use core::hint::black_box;
 
 fn bench_quality_analysis(c: &mut Criterion) {
     let width = 1000u32;

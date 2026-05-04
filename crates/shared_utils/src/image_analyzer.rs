@@ -1010,9 +1010,9 @@ fn detect_color_space(img: &DynamicImage) -> String {
 
 fn is_animated_format(path: &Path, format: ImageFormat) -> Result<bool> {
     match format {
-        ImageFormat::Gif => Ok(check_gif_animation(path)?),
-        ImageFormat::WebP => Ok(check_webp_animation(path)?),
-        ImageFormat::Png => Ok(check_png_animation(path)?),
+        ImageFormat::Gif => check_gif_animation(path),
+        ImageFormat::WebP => check_webp_animation(path),
+        ImageFormat::Png => check_png_animation(path),
         _ => Ok(false),
     }
 }

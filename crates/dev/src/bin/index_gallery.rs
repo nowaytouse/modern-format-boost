@@ -43,7 +43,7 @@ fn main() -> Result<()> {
 
     for entry in WalkDir::new(&args.gallery_path)
         .into_iter()
-        .filter_map(|e: std::result::Result<walkdir::DirEntry, walkdir::Error>| e.ok())
+        .filter_map(|e: core::result::Result<walkdir::DirEntry, walkdir::Error>| e.ok())
         .filter(|e: &walkdir::DirEntry| e.file_type().is_file())
     {
         let path = entry.path();

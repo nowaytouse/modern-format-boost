@@ -95,7 +95,7 @@ jpegxl-rs = { version = "0.14.0", default-features = false, features = ["vendore
 
 # Precision arithmetic
 rug = "1.30.0"
-gmp-mpfr-sys = { version = "1.7.1" }
+gmp-mpfr-sys = { version = "1.7.1", features = ["force-cross"] }
 
 # JXL low-level
 jpegxl-sys = "0.12.1"

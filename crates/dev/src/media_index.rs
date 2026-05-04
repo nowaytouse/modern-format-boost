@@ -215,7 +215,7 @@ impl MediaIndex {
     pub fn conn_prepare(
         &self,
         sql: &str,
-    ) -> std::result::Result<rusqlite::Statement<'_>, rusqlite::Error> {
+    ) -> core::result::Result<rusqlite::Statement<'_>, rusqlite::Error> {
         self.conn.prepare(sql)
     }
 

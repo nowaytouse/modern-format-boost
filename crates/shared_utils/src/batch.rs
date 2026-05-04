@@ -280,7 +280,7 @@ impl BatchPauseController {
     }
 
     pub fn pause_info(&self) -> Option<BatchPauseInfo> {
-        self.info
+        return self.info
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()

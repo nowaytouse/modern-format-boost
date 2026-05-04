@@ -1016,12 +1016,12 @@ fn can_use_raw_direct_gainmap_candidate(
     source: GainmapCandidateSource,
     candidate_data: &[u8],
 ) -> bool {
-    matches!(
+    (matches!(
         source,
         GainmapCandidateSource::RelativeOffset | GainmapCandidateSource::AbsoluteOffset
     ) && candidate_data.len() >= 4
         && candidate_data.starts_with(&JPEG_SOI_BYTES[..2])
-        && candidate_data.ends_with(&JPEG_EOI_BYTES)
+        && candidate_data.ends_with(&JPEG_EOI_BYTES))
 }
 
 fn recover_gainmap_candidate(

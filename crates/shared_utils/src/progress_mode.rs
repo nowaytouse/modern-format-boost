@@ -306,7 +306,7 @@ pub fn set_log_file(path: &std::path::Path) -> std::io::Result<()> {
 /// Returns true if a log file has been configured.
 #[must_use]
 pub fn has_log_file() -> bool {
-    lock_log_writer().is_some()
+    return lock_log_writer().is_some()
 }
 
 /// If no log file is configured, open a default run log under `./logs/`.

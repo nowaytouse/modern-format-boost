@@ -99,7 +99,7 @@ impl StderrCapture {
     }
 
     fn get_lines(&self) -> Vec<String> {
-        self.lines
+        return self.lines
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
@@ -488,7 +488,7 @@ impl GpuAccel {
     }
 
     fn cached_state() -> CachedGpuAccel {
-        GPU_ACCEL
+        return GPU_ACCEL
             .get_or_init(|| Mutex::new(CachedGpuAccel::probe_now()))
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
