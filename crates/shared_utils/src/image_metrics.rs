@@ -89,12 +89,8 @@ pub fn calculate_ssim(original: &DynamicImage, converted: &DynamicImage) -> Opti
     let orig_gray = original.to_luma8();
     let conv_gray = converted.to_luma8();
 
-    let width = usize::try_from(w1)
-        .map_err(|_| anyhow::anyhow!("Width overflow: {w1}"))
-        .ok()?;
-    let height = usize::try_from(h1)
-        .map_err(|_| anyhow::anyhow!("Height overflow: {h1}"))
-        .ok()?;
+    let width = crate::numeric_cast::u32_to_usize_sat(w1);
+    let height = crate::numeric_cast::u32_to_usize_sat(h1);
 
     if width < WINDOW_SIZE || height < WINDOW_SIZE {
         return calculate_ssim_simple(original, converted);
@@ -136,15 +132,8 @@ fn calculate_window_ssim(
             let px = x + j;
             let py = y + i;
             // px and py are guaranteed to be within image bounds by the valid_width/valid_height calculation
-            // However, we still need to convert usize -> u32 safely
-            // If the image dimensions fit in u32 (which they do, since w1/h1 are u32), then px/py will too
-            let Some(pixel_x) = u32::try_from(px).ok() else {
-                continue; // Skip this pixel if conversion fails (shouldn't happen in practice)
-            };
-            let Some(pixel_y) = u32::try_from(py).ok() else {
-                continue;
-            };
-
+            let pixel_x = crate::numeric_cast::usize_to_u32_sat(px);
+            let pixel_y = crate::numeric_cast::usize_to_u32_sat(py);
             if let Some(r) = buf_x.get_mut(i) {
                 if let Some(c) = r.get_mut(j) {
                     *c = f64::from(orig.get_pixel(pixel_x, pixel_y)[0]);

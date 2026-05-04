@@ -2828,8 +2828,8 @@ static MEME_KEYWORDS_CACHE: OnceLock<Vec<String>> = OnceLock::new();
 fn get_meme_keywords() -> &'static [String] {
     MEME_KEYWORDS_CACHE.get_or_init(|| {
         let json_str = include_str!("meme_keywords.json");
-        let languages: HashMap<String, Vec<String>> =
-            serde_json::from_str(json_str).unwrap_or_default();
+        let languages: HashMap<String, Vec<String>> = serde_json::from_str(json_str)
+            .expect("embedded meme_keywords.json is malformed — binary is corrupt");
         let mut all_keywords = Vec::new();
         for list in languages.values() {
             all_keywords.extend(list.clone());

@@ -842,7 +842,7 @@ mod tests {
 
     fn write_test_image(path: &Path, width: u32, height: u32, format: ImageFormat) {
         let image = RgbImage::from_pixel(width, height, Rgb([128, 96, 64]));
-        let _ = image.save_with_format(path, format);
+        image.save_with_format(path, format).expect("failed to write test image");
     }
 
     #[test]

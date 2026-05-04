@@ -425,136 +425,166 @@ impl AppError {
 
 impl AppError {
     fn fmt_io_error(&self, f: &mut fmt::Formatter<'_>) -> Option<fmt::Result> {
-        match self {
-            Self::FileNotFound { path, operation } => {
-                let res = write!(f, "File not found: {}", path.display());
-                if let Some(op) = operation {
-                    let _ = write!(f, " (during: {op})");
+        let fmt_closure = |f: &mut fmt::Formatter<'_>| -> fmt::Result {
+            match self {
+                Self::FileNotFound { path, operation } => {
+                    write!(f, "File not found: {}", path.display())?;
+                    if let Some(op) = operation {
+                        write!(f, " (during: {op})")?;
+                    }
+                    Ok(())
                 }
-                Some(res)
-            }
-            Self::DirectoryNotFound { path, operation } => {
-                let res = write!(f, "Directory not found: {}", path.display());
-                if let Some(op) = operation {
-                    let _ = write!(f, " (during: {op})");
+                Self::DirectoryNotFound { path, operation } => {
+                    write!(f, "Directory not found: {}", path.display())?;
+                    if let Some(op) = operation {
+                        write!(f, " (during: {op})")?;
+                    }
+                    Ok(())
                 }
-                Some(res)
-            }
-            Self::FileReadError {
-                path,
-                source,
-                operation,
-            } => {
-                let res = write!(f, "Failed to read {}: {}", path.display(), source);
-                if let Some(op) = operation {
-                    let _ = write!(f, " (during: {op})");
+                Self::FileReadError {
+                    path,
+                    source,
+                    operation,
+                } => {
+                    write!(f, "Failed to read {}: {}", path.display(), source)?;
+                    if let Some(op) = operation {
+                        write!(f, " (during: {op})")?;
+                    }
+                    Ok(())
                 }
-                Some(res)
-            }
-            Self::FileWriteError {
-                path,
-                source,
-                operation,
-            } => {
-                let res = write!(f, "Failed to write {}: {}", path.display(), source);
-                if let Some(op) = operation {
-                    let _ = write!(f, " (during: {op})");
+                Self::FileWriteError {
+                    path,
+                    source,
+                    operation,
+                } => {
+                    write!(f, "Failed to write {}: {}", path.display(), source)?;
+                    if let Some(op) = operation {
+                        write!(f, " (during: {op})")?;
+                    }
+                    Ok(())
                 }
-                Some(res)
+                Self::Io(e) => write!(f, "IO error: {e}"),
+                _ => unreachable!(),
             }
-            Self::Io(e) => Some(write!(f, "IO error: {e}")),
-            _ => None,
+        };
+
+        if matches!(
+            self,
+            Self::FileNotFound { .. }
+                | Self::DirectoryNotFound { .. }
+                | Self::FileReadError { .. }
+                | Self::FileWriteError { .. }
+                | Self::Io(_)
+        ) {
+            Some(fmt_closure(f))
+        } else {
+            None
         }
     }
 
     fn fmt_ffmpeg_error(&self, f: &mut fmt::Formatter<'_>) -> Option<fmt::Result> {
-        match self {
-            Self::FfmpegError {
-                message,
-                stderr,
-                exit_code,
-                command,
-                file_path,
-            } => {
-                if let Err(e) = write!(f, "FFmpeg error: {message}") {
-                    return Some(Err(e));
+        let fmt_closure = |f: &mut fmt::Formatter<'_>| -> fmt::Result {
+            match self {
+                Self::FfmpegError {
+                    message,
+                    stderr,
+                    exit_code,
+                    command,
+                    file_path,
+                } => {
+                    write!(f, "FFmpeg error: {message}")?;
+                    if let Some(code) = exit_code {
+                        write!(f, " (exit code: {code})")?;
+                    }
+                    if let Some(path) = file_path {
+                        write!(f, "\n  File: {}", path.display())?;
+                    }
+                    if let Some(cmd) = command {
+                        write!(f, "\n  Command: {cmd}")?;
+                    }
+                    if !stderr.is_empty() {
+                        write!(f, "\n  Stderr: {stderr}")?;
+                    }
+                    Ok(())
                 }
-                if let Some(code) = exit_code {
-                    let _ = write!(f, " (exit code: {code})");
+                Self::FfprobeError {
+                    message,
+                    stderr,
+                    command,
+                    file_path,
+                } => {
+                    write!(f, "FFprobe error: {message}")?;
+                    if let Some(path) = file_path {
+                        write!(f, "\n  File: {}", path.display())?;
+                    }
+                    if let Some(cmd) = command {
+                        write!(f, "\n  Command: {cmd}")?;
+                    }
+                    if !stderr.is_empty() {
+                        write!(f, "\n  Stderr: {stderr}")?;
+                    }
+                    Ok(())
                 }
-                if let Some(path) = file_path {
-                    let _ = write!(f, "\n  File: {}", path.display());
-                }
-                if let Some(cmd) = command {
-                    let _ = write!(f, "\n  Command: {cmd}");
-                }
-                if !stderr.is_empty() {
-                    let _ = write!(f, "\n  Stderr: {stderr}");
-                }
-                Some(Ok(()))
+                _ => unreachable!(),
             }
-            Self::FfprobeError {
-                message,
-                stderr,
-                command,
-                file_path,
-            } => {
-                if let Err(e) = write!(f, "FFprobe error: {message}") {
-                    return Some(Err(e));
-                }
-                if let Some(path) = file_path {
-                    let _ = write!(f, "\n  File: {}", path.display());
-                }
-                if let Some(cmd) = command {
-                    let _ = write!(f, "\n  Command: {cmd}");
-                }
-                if !stderr.is_empty() {
-                    let _ = write!(f, "\n  Stderr: {stderr}");
-                }
-                Some(Ok(()))
-            }
-            _ => None,
+        };
+
+        if matches!(self, Self::FfmpegError { .. } | Self::FfprobeError { .. }) {
+            Some(fmt_closure(f))
+        } else {
+            None
         }
     }
 
     fn fmt_validation_error(&self, f: &mut fmt::Formatter<'_>) -> Option<fmt::Result> {
-        match self {
-            Self::InvalidCrf(e) => Some(write!(f, "Invalid CRF: {e}")),
-            Self::InvalidSsim(e) => Some(write!(f, "Invalid SSIM: {e}")),
-            Self::IterationLimitExceeded(e) => Some(write!(f, "{e}")),
-            Self::CompressionFailed {
-                input_size,
-                output_size,
-                file_path,
-            } => {
-                if let Err(e) = write!(
-                    f,
-                    "Compression failed: output ({output_size}) >= input ({input_size})"
-                ) {
-                    return Some(Err(e));
+        let fmt_closure = |f: &mut fmt::Formatter<'_>| -> fmt::Result {
+            match self {
+                Self::InvalidCrf(e) => write!(f, "Invalid CRF: {e}"),
+                Self::InvalidSsim(e) => write!(f, "Invalid SSIM: {e}"),
+                Self::IterationLimitExceeded(e) => write!(f, "{e}"),
+                Self::CompressionFailed {
+                    input_size,
+                    output_size,
+                    file_path,
+                } => {
+                    write!(
+                        f,
+                        "Compression failed: output ({output_size}) >= input ({input_size})"
+                    )?;
+                    if let Some(path) = file_path {
+                        write!(f, "\n  File: {}", path.display())?;
+                    }
+                    Ok(())
                 }
-                if let Some(path) = file_path {
-                    let _ = write!(f, "\n  File: {}", path.display());
+                Self::QualityValidationFailed {
+                    expected_ssim,
+                    actual_ssim,
+                    file_path,
+                } => {
+                    write!(
+                        f,
+                        "Quality validation failed: expected SSIM >= {expected_ssim:.4}, got {actual_ssim:.4}"
+                    )?;
+                    if let Some(path) = file_path {
+                        write!(f, "\n  File: {}", path.display())?;
+                    }
+                    Ok(())
                 }
-                Some(Ok(()))
+                _ => unreachable!(),
             }
-            Self::QualityValidationFailed {
-                expected_ssim,
-                actual_ssim,
-                file_path,
-            } => {
-                if let Err(e) = write!(
-                    f,
-                    "Quality validation failed: expected SSIM >= {expected_ssim:.4}, got {actual_ssim:.4}"
-                ) {
-                    return Some(Err(e));
-                }
-                if let Some(path) = file_path {
-                    let _ = write!(f, "\n  File: {}", path.display());
-                }
-                Some(Ok(()))
-            }
-            _ => None,
+        };
+
+        if matches!(
+            self,
+            Self::InvalidCrf(_)
+                | Self::InvalidSsim(_)
+                | Self::IterationLimitExceeded(_)
+                | Self::CompressionFailed { .. }
+                | Self::QualityValidationFailed { .. }
+        ) {
+            Some(fmt_closure(f))
+        } else {
+            None
         }
     }
 

@@ -293,7 +293,7 @@ impl<'a> VideoConversionPipeline<'a> {
         Ok(ExecutionMetrics {
             output_size: explore_result.output_size,
             final_crf: explore_result.optimal_crf,
-            attempts: u8::try_from(explore_result.iterations).unwrap_or(u8::MAX),
+            attempts: u8::try_from(explore_result.iterations).expect("exploration iterations exceeded 255 - infinite loop detected"),
             explore_result: Some(explore_result),
         })
     }
