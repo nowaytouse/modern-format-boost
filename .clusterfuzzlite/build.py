@@ -75,6 +75,11 @@ def main() -> int:
     os.environ["MPC_LIB_DIR"] = "/usr/lib/x86_64-linux-gnu"
     os.environ["MPC_INCLUDE_DIR"] = "/usr/include"
 
+    # If gmp-mpfr-sys still decides to build from source (e.g. static linking requested),
+    # ensure assembly is disabled to avoid linker errors with sanitizers.
+    os.environ["GMP_CONFIGURE"] = "--disable-assembly --with-pic"
+    os.environ["MPFR_CONFIGURE"] = "--disable-assembly --with-pic"
+
     # Filter out fuzzer sanitize flags from C/C++ flags
     if "CFLAGS" in os.environ:
         os.environ["CFLAGS"] = filter_sanitizer_flags(os.environ["CFLAGS"])

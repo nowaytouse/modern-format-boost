@@ -23,10 +23,5 @@ fn main() {
 
         // Ensure we link to libc++ specifically on macOS
         println!("cargo:rustc-link-lib=c++");
-
-        // Transitive dependencies for libheif on macOS (Homebrew)
-        println!("cargo:rustc-link-lib=x264");
-        println!("cargo:rustc-link-lib=vvenc");
-        println!("cargo:rustc-link-lib=vvdec");
     }
 }
