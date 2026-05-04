@@ -26,6 +26,7 @@ rustflags = [
     "-C", "link-arg=-lx264",
     "-C", "link-arg=-lvvdec",
     "-C", "link-arg=-lvvenc",
+    "-C", "link-arg=-lc++",
 ]
 
 # macOS x86_64 (Intel) optimizations
@@ -34,13 +35,15 @@ rustflags = [
     "-C", "overflow-checks=on",
     # Fix libstdc++ linking issue on macOS (use libc++ instead)
     "-L", ".tmp_lib",
-    # Homebrew paths for x86_64 (Intel)
+    # Homebrew paths for x86_64 (Intel) - Standard and specific overrides
+    "-L", "/usr/local/lib",
     "-L", "/usr/local/opt/x264/lib",
     "-L", "/usr/local/opt/vvdec/lib",
     "-L", "/usr/local/opt/vvenc/lib",
     "-C", "link-arg=-lx264",
     "-C", "link-arg=-lvvdec",
     "-C", "link-arg=-lvvenc",
+    "-C", "link-arg=-lc++",
 ]
 
 # -----------------------------------------------------------------------------

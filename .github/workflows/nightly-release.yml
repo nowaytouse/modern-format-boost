@@ -33,13 +33,17 @@ jobs:
         run: |
           brew install ffmpeg jpeg-xl exiftool imagemagick webp libheif nasm dav1d gmp x264 vvdec vvenc
           BREW_PREFIX=$(brew --prefix)
-          echo "PKG_CONFIG_PATH=${BREW_PREFIX}/lib/pkgconfig:${BREW_PREFIX}/opt/dav1d/lib/pkgconfig:${BREW_PREFIX}/opt/jpeg-xl/lib/pkgconfig" >> "$GITHUB_ENV"
+          # Comprehensive PKG_CONFIG_PATH including all possible codec locations
+          echo "PKG_CONFIG_PATH=${BREW_PREFIX}/lib/pkgconfig:${BREW_PREFIX}/opt/dav1d/lib/pkgconfig:${BREW_PREFIX}/opt/jpeg-xl/lib/pkgconfig:${BREW_PREFIX}/opt/x264/lib/pkgconfig:${BREW_PREFIX}/opt/vvdec/lib/pkgconfig:${BREW_PREFIX}/opt/vvenc/lib/pkgconfig" >> "$GITHUB_ENV"
 
       - name: Workaround for stdc++ on macOS
         run: |
           # Use system libc++ instead of libstdc++ to avoid linking issues
           mkdir -p .tmp_lib
-          ln -sf /usr/lib/libc++.1.dylib .tmp_lib/libstdc++.dylib
+          # Link to SDK libc++.tbd and system libc++.dylib for maximum compatibility
+          SDK_PATH=$(xcrun --show-sdk-path)
+          ln -sf "${SDK_PATH}/usr/lib/libc++.tbd" .tmp_lib/libstdc++.tbd
+          ln -sf /usr/lib/libc++.dylib .tmp_lib/libstdc++.dylib
           # Note: We don't set RUSTFLAGS here because it would overwrite .cargo/config.toml
           # .cargo/config.toml already contains "-L .tmp_lib"
 
@@ -52,8 +56,8 @@ jobs:
           fi
           arch -x86_64 /usr/local/bin/brew install ffmpeg libheif dav1d jpeg-xl exiftool imagemagick webp nasm gmp x264 vvdec vvenc
 
-          # Setup paths for cross-compilation
-          echo "PKG_CONFIG_PATH=/usr/local/opt/libheif/lib/pkgconfig:/usr/local/opt/dav1d/lib/pkgconfig:/usr/local/opt/jpeg-xl/lib/pkgconfig:/usr/local/lib/pkgconfig" >> "$GITHUB_ENV"
+          # Setup paths for cross-compilation (Intel prefix is /usr/local)
+          echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/opt/libheif/lib/pkgconfig:/usr/local/opt/dav1d/lib/pkgconfig:/usr/local/opt/jpeg-xl/lib/pkgconfig:/usr/local/opt/x264/lib/pkgconfig:/usr/local/opt/vvdec/lib/pkgconfig:/usr/local/opt/vvenc/lib/pkgconfig" >> "$GITHUB_ENV"
           echo "PKG_CONFIG_ALLOW_CROSS=1" >> "$GITHUB_ENV"
           echo "LIBRARY_PATH=/usr/local/lib:${LIBRARY_PATH:-}" >> "$GITHUB_ENV"
           echo "CC=clang" >> "$GITHUB_ENV"

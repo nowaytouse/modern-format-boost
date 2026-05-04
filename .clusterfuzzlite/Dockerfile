@@ -9,6 +9,8 @@ RUN apt-get update && apt-get install -y \
     meson \
     libde265-dev \
     libx265-dev \
+    libx264-dev \
+    libvmaf-dev \
     libaom-dev \
     libdav1d-dev \
     libchromaprint-dev \
