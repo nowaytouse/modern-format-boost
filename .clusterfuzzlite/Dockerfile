@@ -2,7 +2,8 @@ FROM gcr.io/oss-fuzz-base/base-builder-rust
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
-    pkg-config \n    m4 \
+    pkg-config \
+    m4 \
     cmake \
     nasm \
     ninja-build \
@@ -15,6 +16,9 @@ RUN apt-get update && apt-get install -y \
     libchromaprint-dev \
     libjpeg-dev \
     libpng-dev \
+    libgmp-dev \
+    libmpfr-dev \
+    libmpc-dev
 
 # Update Rust toolchain to latest nightly
 RUN rustup toolchain install nightly && \
