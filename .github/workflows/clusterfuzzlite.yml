@@ -27,8 +27,8 @@ jobs:
         env:
           # Disable libjxl internal fuzzers to avoid sanitizer conflicts
           JPEGXL_CMAKE_FLAGS: "-DJPEGXL_ENABLE_FUZZERS=OFF"
-          # Ensure fuzz targets are output to correct directory
-          CARGO_TARGET_DIR: ${{ github.workspace }}/build-out
+          # Ensure fuzz targets are output to correct directory for ClusterFuzzLite
+          OUT: ${{ github.workspace }}/out
       - name: Run Fuzzers
         uses: google/clusterfuzzlite/actions/run_fuzzers@v1
         with:
@@ -53,8 +53,8 @@ jobs:
         env:
           # Disable libjxl internal fuzzers to avoid sanitizer conflicts
           JPEGXL_CMAKE_FLAGS: "-DJPEGXL_ENABLE_FUZZERS=OFF"
-          # Ensure fuzz targets are output to correct directory
-          CARGO_TARGET_DIR: ${{ github.workspace }}/build-out
+          # Ensure fuzz targets are output to correct directory for ClusterFuzzLite
+          OUT: ${{ github.workspace }}/out
       - name: Run Fuzzers
         uses: google/clusterfuzzlite/actions/run_fuzzers@v1
         with:
