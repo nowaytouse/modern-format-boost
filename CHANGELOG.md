@@ -6,6 +6,12 @@ All notable changes to this project will be documented in this file.
 
 ### 🛡️ Systemic Hardening, Performance Tuning & Obsolete Feature Cleanup (2026-05-04)
 
+- **macOS Environment & Toolchain Stabilization**:
+  - **Linker Warning Fix (Deployment Target)**: Resolved persistent "building for macOS-11.0, but linking with dylib built for newer version" warnings by setting `MACOSX_DEPLOYMENT_TARGET = "26.0"` in `.cargo/config.toml`.
+  - **Libstdc++ Linking Fix**: Repaired the `.tmp_lib/libstdc++.dylib` and `.tbd` symlinks to correctly point to the SDK's `libc++.tbd`, resolving linking failures on modern macOS versions.
+  - **Nightly Toolchain Enforcement**: Introduced `rust-toolchain.toml` with `channel = "nightly"` to ensure consistent use of the nightly compiler across all development environments.
+  - **Dependency Synchronization**: Synchronized all workspace dependencies under the nightly toolchain and applied `cargo fmt` to the entire codebase.
+
 - **Hardened Memory Safety & Numerical Rigor**:
   - **Exhaustive Overflow Protection**: Refactored image processing hot paths (`hdr_synthesis.rs`, `image_metrics.rs`, `image_formats.rs`) to use `checked_mul`, `checked_add`, and `try_from` for all coordinate and offset calculations. This eliminates potential panics on malformed or extremely large input files.
   - **Zero-Panic Enforced Indexing**: Replaced direct slice indexing with safe `.get()` and `.get_mut()` across the `shared_utils` crate, particularly in complex media probe logic (HEIF, WebP, TIFF, GIF, AVIF).

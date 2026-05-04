@@ -13,6 +13,9 @@ rustflags = [
     "-C", "overflow-checks=on",
 ]
 
+[env]
+MACOSX_DEPLOYMENT_TARGET = "26.0"
+
 # macOS ARM64 (Apple Silicon) optimizations
 [target.aarch64-apple-darwin]
 rustflags = [
