@@ -203,6 +203,9 @@ mod tests {
         let result = verify_pure_media_compression(&input, &output, false);
 
         assert!(result.video_compressed);
+        #[cfg(feature = "high-precision")]
+        assert!(result.video_compression_ratio < 1);
+        #[cfg(not(feature = "high-precision"))]
         assert!(result.video_compression_ratio < 1.0);
     }
 
@@ -214,6 +217,9 @@ mod tests {
         let result = verify_pure_media_compression(&input, &output, true);
 
         assert!(result.video_compressed); // Accepts because < tolerance increase
+        #[cfg(feature = "high-precision")]
+        assert!(result.video_compression_ratio > 1);
+        #[cfg(not(feature = "high-precision"))]
         assert!(result.video_compression_ratio > 1.0);
     }
 
@@ -229,6 +235,9 @@ mod tests {
         let result = verify_pure_media_compression(&input, &output, true);
 
         assert!(!result.video_compressed);
+        #[cfg(feature = "high-precision")]
+        assert!(result.video_compression_ratio > 1);
+        #[cfg(not(feature = "high-precision"))]
         assert!(result.video_compression_ratio > 1.0);
     }
 
@@ -241,6 +250,9 @@ mod tests {
 
         assert!(result.video_compressed);
         assert!(result.is_container_overhead_issue());
+        #[cfg(feature = "high-precision")]
+        assert!(result.total_compression_ratio > 1);
+        #[cfg(not(feature = "high-precision"))]
         assert!(result.total_compression_ratio > 1.0);
     }
 

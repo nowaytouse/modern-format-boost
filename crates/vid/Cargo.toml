@@ -25,7 +25,7 @@ tracing = { workspace = true }
 which = { workspace = true }
 
 [features]
-default = ["shared_utils/default"]
+default = ["shared_utils/default", "high-precision"]
 high-precision = ["dep:rug", "dep:gmp-mpfr-sys", "shared_utils/high-precision"]
 system-gmp = ["dep:gmp-mpfr-sys", "gmp-mpfr-sys/use-system-libs", "shared_utils/system-gmp"]
 

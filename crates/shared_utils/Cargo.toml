@@ -75,7 +75,7 @@ name = "train_quality"
 path = "src/bin/train_quality.rs"
 
 [features]
-default = ["v1_21", "jpegxl-ffi"]
+default = ["v1_21", "jpegxl-ffi", "high-precision"]
 v1_21 = ["libheif-rs/v1_21"]
 jpegxl-ffi = ["dep:jpegxl-rs"]
 ci-static-build = ["libheif-rs/embedded-libheif", "v1_21"]

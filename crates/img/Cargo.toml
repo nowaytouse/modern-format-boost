@@ -27,7 +27,7 @@ tracing = { workspace = true }
 bitflags = { workspace = true }
 
 [features]
-default = ["v1_21", "shared_utils/default", "vid/default"]
+default = ["v1_21", "shared_utils/default", "vid/default", "high-precision"]
 v1_21 = ["shared_utils/v1_21"]
 high-precision = ["dep:rug", "dep:gmp-mpfr-sys", "shared_utils/high-precision", "vid/high-precision"]
 system-gmp = ["dep:gmp-mpfr-sys", "gmp-mpfr-sys/use-system-libs", "shared_utils/system-gmp", "vid/system-gmp"]
