@@ -78,8 +78,8 @@ def main() -> int:
     print("Building fuzz targets for Modern Format Boost...")
 
     sanitizer = os.environ.get("SANITIZER", "address")
-    # ClusterFuzzLite expects fuzz targets in $GITHUB_WORKSPACE/out
-    out_dir = Path(os.environ.get("GITHUB_WORKSPACE", "/github/workspace")) / "out"
+    # ClusterFuzzLite sets OUT env var - must use it (may be build-out or out)
+    out_dir = Path(os.environ.get("OUT", "/github/workspace/out"))
 
     print(f"Sanitizer: {sanitizer}")
 
