@@ -50,11 +50,11 @@ pub fn option_f64_loud(val: Option<f64>, default: f64, name: &str) -> f64 {
 }
 
 mod raw {
-    // Rationale: This lint suppression is retained to maintain architectural consistency and prevent over-engineering for the sake of strict compliance.
     #![allow(
         clippy::cast_possible_truncation,
         clippy::cast_precision_loss,
-        clippy::cast_sign_loss
+        clippy::cast_sign_loss,
+        reason = "Centralized audited cast layer. These raw casts are wrapped in safe, saturating, or checked functions."
     )]
 
     #[inline]

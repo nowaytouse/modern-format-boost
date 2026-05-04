@@ -72,8 +72,7 @@ macro_rules! impl_rational_from_int_lossy {
         $(
             impl From<$ty> for Rational {
                 fn from(value: $ty) -> Self {
-                    #[allow(clippy::cast_precision_loss)]
-                    Self(value as f64)
+                    Self(crate::numeric_cast::i64_to_f64(value as i64))
                 }
             }
         )+
@@ -110,15 +109,13 @@ macro_rules! impl_rational_cmp_int_lossy {
         $(
             impl PartialEq<$ty> for Rational {
                 fn eq(&self, other: &$ty) -> bool {
-                    #[allow(clippy::cast_precision_loss)]
-                    { self.0 == *other as f64 }
+                    self.0 == crate::numeric_cast::i64_to_f64(*other as i64)
                 }
             }
 
             impl PartialOrd<$ty> for Rational {
                 fn partial_cmp(&self, other: &$ty) -> Option<std::cmp::Ordering> {
-                    #[allow(clippy::cast_precision_loss)]
-                    { self.0.partial_cmp(&(*other as f64)) }
+                    self.0.partial_cmp(&crate::numeric_cast::i64_to_f64(*other as i64))
                 }
             }
         )+
@@ -139,7 +136,7 @@ macro_rules! impl_rational_from_pair {
                     if denominator == 0 {
                         Self(1.0)
                     } else {
-                        Self(numerator as f64 / denominator as f64)
+                        Self(crate::numeric_cast::i64_to_f64(numerator as i64) / crate::numeric_cast::i64_to_f64(denominator as i64))
                     }
                 }
             }
