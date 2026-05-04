@@ -1,8 +1,8 @@
-//! 🗄️ Image Analysis Cache - PostgreSQL Backend
+//! 🗄️ Image Analysis Cache - `PostgreSQL` Backend
 //!
 //! 🔥 v3.0: Enhanced cache with content fingerprint + integrity verification
 //!
-//! Provides a highly efficient, persistent cache for image analysis results using PostgreSQL and `MessagePack`.
+//! Provides a highly efficient, persistent cache for image analysis results using `PostgreSQL` and `MessagePack`.
 //! This ensures that expensive operations like pixel-based entropy calculation, deep HEIC/AVIF parsing,
 //! and quantization detection are only performed once per file content.
 
