@@ -5,9 +5,8 @@
 //! - HEVC Lossless MKV for archival (lossless sources)
 //! - HEVC MP4 or MOV for delivery, depending on compatibility mode
 
-#[cfg(not(feature = "high-precision"))]
-extern crate self as rug;
-
+#[cfg(feature = "high-precision")]
+pub use rug::Rational;
 #[cfg(not(feature = "high-precision"))]
 pub use shared_utils::Rational;
 

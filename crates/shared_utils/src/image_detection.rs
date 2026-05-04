@@ -64,8 +64,8 @@
 //! **Error propagation**: AVIF/HEIC/JXL `Err` propagates via `?` in `analyze_heic_image`, `analyze_jxl_image`, and `detect_lossless`; conversion path fails loudly with path in message.
 
 use crate::img_errors::{ImgQualityError, Result};
-use image::{DynamicImage, GenericImageView, ImageReader, Rgba};
 use crate::Rational;
+use image::{DynamicImage, GenericImageView, ImageReader, Rgba};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -936,7 +936,7 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
         let palette_density = {
             let num = Rational::from(u32::try_from(palette_size).unwrap_or(u32::MAX));
             let den_f = f64::from(u32::try_from(pixel_count).unwrap_or(u32::MAX)).sqrt();
-            
+
             #[cfg(feature = "high-precision")]
             {
                 (num / crate::numeric_cast::f64_to_rational_loud(
@@ -1017,9 +1017,10 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
                 let is_large_image = pixel_count > 100_000;
 
                 if let Some(palette_size) = png_info.palette_size {
-                    let usage_ratio = (Rational::from(u32::try_from(unique_colors).unwrap_or(u32::MAX))
-                        / Rational::from(u32::try_from(palette_size).unwrap_or(u32::MAX)))
-                    .to_f64();
+                    let usage_ratio =
+                        (Rational::from(u32::try_from(unique_colors).unwrap_or(u32::MAX))
+                            / Rational::from(u32::try_from(palette_size).unwrap_or(u32::MAX)))
+                        .to_f64();
 
                     if is_large_image {
                         if usage_ratio > 0.8 {

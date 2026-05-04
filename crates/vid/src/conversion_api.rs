@@ -1,7 +1,7 @@
 //! Executes video conversions based on detection results (HEVC and AV1 support).
 
 use crate::detection_api::VideoDetectionResult;
-use crate::{Result, VidQualityError};
+use crate::{Rational, Result, VidQualityError};
 
 use shared_utils::analysis_cache::AnalysisCache;
 use shared_utils::conversion_types::{
@@ -987,7 +987,7 @@ pub fn auto_convert_with_cache(
             let output_size = result.output_size.unwrap_or(0);
             let output_path = result.output_path.unwrap_or_default();
             let size_ratio = if detection.file_size > 0 {
-                let ratio = rug::Rational::from((output_size, detection.file_size));
+                let ratio = Rational::from((output_size, detection.file_size));
                 ratio.to_f64()
             } else {
                 1.0
@@ -1211,8 +1211,7 @@ pub fn auto_convert_with_cache(
             {
                 let total_file_compressed = explore_result.output_size < detection.file_size;
                 let total_size_ratio = if detection.file_size > 0 {
-                    let ratio =
-                        rug::Rational::from((explore_result.output_size, detection.file_size));
+                    let ratio = Rational::from((explore_result.output_size, detection.file_size));
                     ratio.to_f64()
                 } else {
                     1.0
@@ -1255,7 +1254,7 @@ pub fn auto_convert_with_cache(
                         input_size: detection.file_size,
                         output_size: explore_result.output_size,
                         size_ratio: {
-                            let ratio = rug::Rational::from((explore_result.output_size, detection.file_size.max(1)));
+                            let ratio = Rational::from((explore_result.output_size, detection.file_size.max(1)));
                             ratio.to_f64()
                         },
                         success: true,
@@ -1413,7 +1412,7 @@ pub fn auto_convert_with_cache(
                     input_size: detection.file_size,
                     output_size: result.output_size,
                     size_ratio: {
-                        let ratio = rug::Rational::from((result.output_size, detection.file_size.max(1)));
+                        let ratio = Rational::from((result.output_size, detection.file_size.max(1)));
                         ratio.to_f64()
                     },
                     success: true,
@@ -1478,7 +1477,7 @@ pub fn auto_convert_with_cache(
 
     let total_file_compressed = actual_output_size < detection.file_size;
     let total_size_ratio = if detection.file_size > 0 {
-        let ratio = rug::Rational::from((actual_output_size, detection.file_size));
+        let ratio = Rational::from((actual_output_size, detection.file_size));
         ratio.to_f64()
     } else {
         1.0
@@ -1613,7 +1612,7 @@ pub fn auto_convert_with_cache(
 
     let output_size = actual_output_size;
     let size_ratio = {
-        let ratio = rug::Rational::from((output_size, detection.file_size.max(1)));
+        let ratio = Rational::from((output_size, detection.file_size.max(1)));
         ratio.to_f64()
     };
 

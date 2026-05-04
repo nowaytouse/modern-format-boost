@@ -9,8 +9,8 @@
 //! Covered paths: `convert_to_jxl`, `convert_jpeg_to_jxl` (including fallback),
 //! `convert_to_avif`, `convert_to_avif_lossless`, `convert_to_jxl_matched`.
 
+use crate::Rational;
 use crate::{ImgQualityError, Result};
-use rug::Rational;
 use shared_utils::image_jpeg_analysis::is_jpeg_complete;
 use std::fs;
 use std::path::Path;
@@ -52,7 +52,7 @@ fn finalize_with_size_check(
     extra_info: Option<&str>,
 ) -> Result<ConversionResult> {
     let ratio = if input_size > 0 {
-        let rat = rug::Rational::from((output_size, input_size));
+        let rat = Rational::from((output_size, input_size));
         rat.to_f64()
     } else {
         1.0

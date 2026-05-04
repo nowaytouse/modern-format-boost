@@ -1,6 +1,6 @@
 //! - `vid`: all video encoding (including animated image → video)
 
-use crate::{Result, VidQualityError};
+use crate::{Rational, Result, VidQualityError};
 use shared_utils::conversion::{ConversionResult, ConvertOptions};
 use std::fs;
 use std::path::Path;
@@ -1445,20 +1445,10 @@ pub fn convert_to_mp4_matched(
     };
     // We use Rational for precise max size calculation. tolerance_ratio (e.g. 1.05)
     let max_allowed_size = {
-        #[cfg(feature = "high-precision")]
-        {
-            let input_rat = rug::Rational::from(input_size);
-            let tol_rat =
-                rug::Rational::from_f64(tolerance_ratio).unwrap_or_else(|| rug::Rational::from(1));
-            let res: rug::Rational = input_rat * tol_rat;
-            shared_utils::numeric_cast::f64_to_u64_sat(res.to_f64().round())
-        }
-        #[cfg(not(feature = "high-precision"))]
-        {
-            shared_utils::numeric_cast::f64_to_u64_sat(
-                (shared_utils::numeric_cast::u64_to_f64(input_size) * tolerance_ratio).round(),
-            )
-        }
+        let input_rat = Rational::from(input_size);
+        let tol_rat = Rational::from_f64(tolerance_ratio).unwrap_or_else(|| Rational::from(1));
+        let res: Rational = input_rat * tol_rat;
+        shared_utils::numeric_cast::f64_to_u64_sat(res.to_f64().round())
     };
 
     // apple_compat mode: compatibility takes priority over file size.
@@ -1470,7 +1460,7 @@ pub fn convert_to_mp4_matched(
 
     if is_guard_active && explore_result.output_size > max_allowed_size {
         let size_increase_pct = {
-            let ratio = rug::Rational::from((explore_result.output_size, input_size.max(1)));
+            let ratio = Rational::from((explore_result.output_size, input_size.max(1)));
             (ratio.to_f64() - 1.0) * 100.0
         };
         let codec_name = options.codec.as_str().to_uppercase();
@@ -2056,10 +2046,9 @@ pub fn convert_to_gif_apple_compat(
         1.0
     };
     let max_allowed_size = {
-        let input_rat = rug::Rational::from(input_size);
-        let tol_rat =
-            rug::Rational::from_f64(tolerance_ratio).unwrap_or_else(|| rug::Rational::from(1));
-        let res: rug::Rational = input_rat * tol_rat;
+        let input_rat = Rational::from(input_size);
+        let tol_rat = Rational::from_f64(tolerance_ratio).unwrap_or_else(|| Rational::from(1));
+        let res: Rational = input_rat * tol_rat;
         shared_utils::numeric_cast::f64_to_u64_sat(res.to_f64().round())
     };
 
@@ -2070,7 +2059,7 @@ pub fn convert_to_gif_apple_compat(
 
     if is_guard_active && output_size > max_allowed_size {
         let size_increase_pct = {
-            let ratio = rug::Rational::from((output_size, input_size.max(1)));
+            let ratio = Rational::from((output_size, input_size.max(1)));
             (ratio.to_f64() - 1.0) * 100.0
         };
         if let Err(e) = fs::remove_file(&temp_output) {

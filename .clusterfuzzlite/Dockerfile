@@ -15,7 +15,9 @@ RUN apt-get update && apt-get install -y \
     libaom-dev \
     libchromaprint-dev \
     libjpeg-dev \
-    libpng-dev
+    libturbojpeg0-dev \
+    libpng-dev \
+    libnuma-dev
 
 # Update Rust toolchain to latest nightly
 RUN rustup toolchain install nightly && \

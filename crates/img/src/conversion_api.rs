@@ -3,9 +3,9 @@
 //! Transforms images based on detection results.
 
 use crate::detection_api::{CompressionType, DetectedFormat, DetectionResult, ImageType};
+use crate::Rational;
 use crate::{ImgQualityError, Result};
 use bitflags::bitflags;
-use rug::Rational;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 

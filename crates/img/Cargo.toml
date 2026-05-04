@@ -11,25 +11,26 @@ categories.workspace = true
 description = "High-performance image format converter and analyzer"
 
 [dependencies]
-rug = { workspace = true }
-gmp-mpfr-sys = { workspace = true }
+rug = { workspace = true, optional = true }
+gmp-mpfr-sys = { workspace = true, optional = true }
 
 clap = { workspace = true }
 image = { workspace = true }
 serde = { workspace = true }
 rayon = { workspace = true }
 anyhow = { workspace = true }
-shared_utils = { workspace = true }
-vid = { path = "../vid" }
+shared_utils = { path = "../shared_utils", default-features = false }
+vid = { path = "../vid", default-features = false }
 tempfile = { workspace = true }
 console = { workspace = true }
 tracing = { workspace = true }
 bitflags = { workspace = true }
 
 [features]
-default = ["v1_21"]
+default = ["v1_21", "shared_utils/default", "vid/default"]
 v1_21 = ["shared_utils/v1_21"]
-system-gmp = ["gmp-mpfr-sys/use-system-libs", "shared_utils/system-gmp", "vid/system-gmp"]
+high-precision = ["dep:rug", "dep:gmp-mpfr-sys", "shared_utils/high-precision", "vid/high-precision"]
+system-gmp = ["dep:gmp-mpfr-sys", "gmp-mpfr-sys/use-system-libs", "shared_utils/system-gmp", "vid/system-gmp"]
 
 [lints]
 workspace = true

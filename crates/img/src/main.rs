@@ -1,6 +1,6 @@
 #![allow(clippy::multiple_crate_versions)]
 use clap::{Parser, Subcommand};
-use rug::Rational;
+use img::Rational;
 
 use img::{
     calculate_psnr, calculate_ssim, psnr_quality_description, ssim_quality_description,

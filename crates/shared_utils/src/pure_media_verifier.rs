@@ -203,7 +203,7 @@ mod tests {
         let result = verify_pure_media_compression(&input, &output, false);
 
         assert!(result.video_compressed);
-        assert!(result.video_compression_ratio < 1);
+        assert!(result.video_compression_ratio < 1.0);
     }
 
     #[test]
@@ -214,7 +214,7 @@ mod tests {
         let result = verify_pure_media_compression(&input, &output, true);
 
         assert!(result.video_compressed); // Accepts because < tolerance increase
-        assert!(result.video_compression_ratio > 1);
+        assert!(result.video_compression_ratio > 1.0);
     }
 
     #[test]
@@ -229,7 +229,7 @@ mod tests {
         let result = verify_pure_media_compression(&input, &output, true);
 
         assert!(!result.video_compressed);
-        assert!(result.video_compression_ratio > 1);
+        assert!(result.video_compression_ratio > 1.0);
     }
 
     #[test]
@@ -241,7 +241,7 @@ mod tests {
 
         assert!(result.video_compressed);
         assert!(result.is_container_overhead_issue());
-        assert!(result.total_compression_ratio > 1);
+        assert!(result.total_compression_ratio > 1.0);
     }
 
     #[test]

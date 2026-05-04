@@ -1,4 +1,9 @@
 #![allow(clippy::multiple_crate_versions)]
+#[cfg(feature = "high-precision")]
+pub use rug::Rational;
+#[cfg(not(feature = "high-precision"))]
+pub use shared_utils::Rational;
+
 pub mod analyzer;
 pub mod constants;
 pub mod formats;

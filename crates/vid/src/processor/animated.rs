@@ -1,4 +1,4 @@
-use crate::VidQualityError;
+use crate::{Rational, VidQualityError};
 use shared_utils::constants::ANIMATION_CLIP_THRESHOLD_SECS;
 use shared_utils::conversion::{ConversionResult, ConvertOptions};
 use shared_utils::conversion_types::SelectedCodec;
@@ -288,10 +288,10 @@ impl<'a> AnimatedConversionPipeline<'a> {
             1.0
         };
         let max_allowed_size = {
-            let input_rat = rug::Rational::from(input_size);
+            let input_rat = Rational::from(input_size);
             let tol_rat =
-                rug::Rational::from_f64(tolerance_ratio).unwrap_or_else(|| rug::Rational::from(1));
-            let res: rug::Rational = input_rat * tol_rat;
+                Rational::from_f64(tolerance_ratio).unwrap_or_else(|| Rational::from(1));
+            let res: Rational = input_rat * tol_rat;
             shared_utils::numeric_cast::f64_to_u64_sat(res.to_f64().round())
         };
 
@@ -307,7 +307,7 @@ impl<'a> AnimatedConversionPipeline<'a> {
 
         if is_guard_active && result.output_size > max_allowed_size {
             let size_increase_pct =
-                (rug::Rational::from((result.output_size, input_size.max(1))).to_f64() - 1.0)
+                (Rational::from((result.output_size, input_size.max(1))).to_f64() - 1.0)
                     * 100.0;
             let codec_name = self.options.codec.as_str().to_uppercase();
 
