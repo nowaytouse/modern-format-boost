@@ -66,7 +66,8 @@ def main() -> int:
     os.environ["LIBHEIF_STATIC"] = "1"
     os.environ["LIBHEIF_SYS_STATIC"] = "1"
 
-    # Tell gmp-mpfr-sys to use system libraries
+    # Tell gmp-mpfr-sys to use system libraries and skip checks
+    os.environ["GMP_MPFR_SYS_CHECK"] = "0"
     os.environ["GMP_LIB_DIR"] = "/usr/lib/x86_64-linux-gnu"
     os.environ["GMP_INCLUDE_DIR"] = "/usr/include"
     os.environ["MPFR_LIB_DIR"] = "/usr/lib/x86_64-linux-gnu"
