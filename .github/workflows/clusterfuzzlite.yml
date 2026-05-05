@@ -37,8 +37,6 @@ jobs:
         env:
           # Disable libjxl internal fuzzers to avoid sanitizer conflicts
           JPEGXL_CMAKE_FLAGS: "-DJPEGXL_ENABLE_FUZZERS=OFF"
-          # Ensure fuzz targets are output to correct directory for ClusterFuzzLite
-          OUT: ${{ github.workspace }}/out
           # Use stable Rust for better compatibility
           RUST_TOOLCHAIN: stable
         continue-on-error: false
@@ -74,8 +72,6 @@ jobs:
         env:
           # Disable libjxl internal fuzzers to avoid sanitizer conflicts
           JPEGXL_CMAKE_FLAGS: "-DJPEGXL_ENABLE_FUZZERS=OFF"
-          # Ensure fuzz targets are output to correct directory for ClusterFuzzLite
-          OUT: ${{ github.workspace }}/out
           # Use stable Rust for better compatibility
           RUST_TOOLCHAIN: stable
         continue-on-error: false
