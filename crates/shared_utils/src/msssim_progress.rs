@@ -38,8 +38,8 @@ impl MsssimProgressMonitor {
             if let Ok(time_us) = val.parse::<u64>() {
                 self.current_time_us.store(time_us, Ordering::Relaxed);
 
-                let current_secs = crate::numeric_cast::u64_to_f64(time_us) / 1_000_000.0;
-                let progress_pct = if self.duration_secs > 0.0 {
+                let current_secs = crate::numeric_cast::u64_to_f64(time_us) / 1_000_000.0_f64;
+                let progress_pct = if self.duration_secs > 0.0_f64 {
                     crate::numeric_cast::f64_to_u32_sat(
                         (current_secs / self.duration_secs * 100.0).min(100.0),
                     )
@@ -57,14 +57,14 @@ impl MsssimProgressMonitor {
     pub fn print_progress(&self, channel: &str, progress_pct: u32) {
         let current_secs =
             crate::numeric_cast::u64_to_f64(self.current_time_us.load(Ordering::Relaxed))
-                / 1_000_000.0;
+                / 1_000_000.0_f64;
 
         let elapsed = self.start_time.elapsed().as_secs_f64();
         let eta_secs = if progress_pct > 0 {
-            let total_estimated = elapsed * 100.0 / f64::from(progress_pct);
+            let total_estimated = elapsed * 100.0_f64 / f64::from(progress_pct);
             (total_estimated - elapsed).max(0.0)
         } else {
-            0.0
+            0.0_f64
         };
 
         eprintln!(
@@ -89,7 +89,7 @@ impl MsssimProgressMonitor {
     pub fn current_progress(&self) -> u32 {
         let current_secs =
             crate::numeric_cast::u64_to_f64(self.current_time_us.load(Ordering::Relaxed))
-                / 1_000_000.0;
+                / 1_000_000.0_f64;
         if self.duration_secs > 0.0 {
             crate::numeric_cast::f64_to_u32_sat(
                 (current_secs / self.duration_secs * 100.0).min(100.0),
@@ -207,9 +207,9 @@ mod tests {
         monitor.store_channel_score("U", 0.9543);
         monitor.store_channel_score("V", 0.9321);
 
-        assert_eq!(monitor.get_channel_score("Y"), Some(0.9876));
-        assert_eq!(monitor.get_channel_score("U"), Some(0.9543));
-        assert_eq!(monitor.get_channel_score("V"), Some(0.9321));
+        assert_eq!(monitor.get_channel_score("Y"), Some(0.987_6_f64));
+        assert_eq!(monitor.get_channel_score("U"), Some(0.954_3_f64));
+        assert_eq!(monitor.get_channel_score("V"), Some(0.932_1_f64));
         assert_eq!(monitor.get_channel_score("A"), None);
     }
 
@@ -236,13 +236,13 @@ mod tests {
         proptest! {
             #[test]
             fn prop_progress_parsing_correctness(time_us in 0u64..1_000_000_000u64) {
-                let duration_secs = 100.0;
+                let duration_secs = 100.0_f64;
                 let monitor = MsssimProgressMonitor::new(duration_secs, 2500);
                 let line = format!("out_time_us={time_us}");
                 let progress = monitor.update_from_line(&line);
                 prop_assert!(progress.is_some());
                 let pct = progress.unwrap_or_else(|| panic!("missing progress"));
-                let expected_secs = crate::numeric_cast::u64_to_f64(time_us) / 1_000_000.0;
+                let expected_secs = crate::numeric_cast::u64_to_f64(time_us) / 1_000_000.0_f64;
                 let expected_pct = crate::numeric_cast::f64_to_u32_sat((expected_secs / duration_secs * 100.0).min(100.0));
                 prop_assert_eq!(pct, expected_pct);
             }

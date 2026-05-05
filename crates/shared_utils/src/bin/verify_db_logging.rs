@@ -42,8 +42,8 @@ fn main() {
     // 3. Create mock LoopInferenceRecord
     let record = LoopInferenceRecord {
         tree_probability: 0.85,
-        knn_keep_probability: Some(0.92),
-        knn_confidence: Some(0.78),
+        knn_keep_probability: Some(0.92_f64),
+        knn_confidence: Some(0.78_f64),
         knn_neighbor_count: Some(15),
         final_probability: 0.88,
         final_verdict: "LoopStrong".to_string(),

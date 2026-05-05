@@ -52,9 +52,9 @@ pub fn memory_pressure_level() -> Option<MemoryPressure> {
     let ratio =
         crate::numeric_cast::u64_to_f64(available_mb) / crate::numeric_cast::u64_to_f64(total_mb);
     // More conservative thresholds to prevent OOM during cjxl/ImageMagick operations
-    let level = if ratio >= 0.30 && available_mb >= 3072 {
+    let level = if ratio >= 0.30_f64 && available_mb >= 3072 {
         MemoryPressure::Low
-    } else if ratio >= 0.15 || available_mb >= 1536 {
+    } else if ratio >= 0.15_f64 || available_mb >= 1536 {
         MemoryPressure::Normal
     } else {
         MemoryPressure::High

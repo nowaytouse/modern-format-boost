@@ -455,25 +455,25 @@ mod tests {
             (extract_ssim_value(line, "Y:").unwrap_or_else(|| panic!("missing ssim value"))
                 - 0.9876)
                 .abs()
-                < 1e-4
+                < 1e-4_f64
         );
         assert!(
             (extract_ssim_value(line, "U:").unwrap_or_else(|| panic!("missing ssim value"))
                 - 0.9821)
                 .abs()
-                < 1e-4
+                < 1e-4_f64
         );
         assert!(
             (extract_ssim_value(line, "V:").unwrap_or_else(|| panic!("missing ssim value"))
                 - 0.9790)
                 .abs()
-                < 1e-4
+                < 1e-4_f64
         );
         assert!(
             (extract_ssim_value(line, "All:").unwrap_or_else(|| panic!("missing ssim value"))
                 - 0.9829)
                 .abs()
-                < 1e-4
+                < 1e-4_f64
         );
     }
 
@@ -505,7 +505,7 @@ mod tests {
         assert!(
             (extract_ssim_value(line, "Y:").unwrap_or_else(|| panic!("missing ssim value")) - 1.0)
                 .abs()
-                < 1e-6
+                < 1e-6_f64
         );
     }
 
@@ -517,7 +517,7 @@ mod tests {
             "[Parsed_ssim_0 @ 0x1234] SSIM Y:0.9876 U:0.9821 V:0.9790 All:0.9829 (21.667260)\n";
         let result = parse_ssim_from_output(stderr);
         assert!(result.is_some());
-        assert!((result.unwrap_or_else(|| panic!("missing ssim value")) - 0.9829).abs() < 1e-4);
+        assert!((result.unwrap_or_else(|| panic!("missing ssim value")) - 0.9829).abs() < 1e-4_f64);
     }
 
     #[test]
@@ -539,7 +539,7 @@ mod tests {
         );
         let result = parse_ssim_from_output(stderr);
         assert!(result.is_some());
-        assert!((result.unwrap_or_else(|| panic!("missing ssim value")) - 0.94).abs() < 1e-4);
+        assert!((result.unwrap_or_else(|| panic!("missing ssim value")) - 0.94).abs() < 1e-4_f64);
     }
 
     #[test]

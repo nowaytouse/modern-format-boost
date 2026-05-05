@@ -231,10 +231,6 @@ pub fn detect_real_extension(path: &Path) -> Option<&'static str> {
 ///
 /// # Errors
 /// Returns an error if the file cannot be read.
-#[allow(
-    clippy::missing_panics_doc,
-    reason = "Explicit panic on data corruption is intended and documented inline."
-)]
 pub fn calculate_blake3_hash(path: &Path) -> Result<String> {
     use std::io::Read;
     let mut file = std::fs::File::open(path)?;
@@ -246,11 +242,15 @@ pub fn calculate_blake3_hash(path: &Path) -> Result<String> {
         if bytes_read == 0 {
             break;
         }
-        hasher.update(
-            buffer
-                .get(..bytes_read)
-                .expect("Required byte slice missing (out of bounds)"),
-        );
+        if let Some(slice) = buffer.get(..bytes_read) {
+            hasher.update(slice);
+        } else {
+            // This should never happen since bytes_read <= buffer.len()
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Invalid byte slice length"
+            ).into());
+        }
     }
 
     Ok(hasher.finalize().to_hex().to_string())

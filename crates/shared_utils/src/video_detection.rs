@@ -326,8 +326,8 @@ pub fn determine_compression_type(
 
     // BPP (Bits Per Pixel) thresholding for generic streams
     let pixels_per_second = f64::from(width) * f64::from(height) * fps;
-    if pixels_per_second > 0.0 {
-        let bits_per_pixel = (crate::numeric_cast::u64_to_f64(bitrate) * 8.0) / pixels_per_second;
+    if pixels_per_second > 0.0_f64 {
+        let bits_per_pixel = (crate::numeric_cast::u64_to_f64(bitrate) * 8.0_f64) / pixels_per_second;
         if bits_per_pixel > crate::constants::BPP_THRESHOLD_VISUALLY_LOSSLESS {
             return CompressionType::VisuallyLossless;
         } else if bits_per_pixel > crate::constants::BPP_THRESHOLD_HIGH_QUALITY {
@@ -461,10 +461,10 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
     let has_b_frames = probe.has_b_frames();
 
     let pixels_per_second = f64::from(probe.width) * f64::from(probe.height) * probe.frame_rate;
-    let bits_per_pixel = if pixels_per_second > 0.0 {
+    let bits_per_pixel = if pixels_per_second > 0.0_f64 {
         crate::numeric_cast::u64_to_f64(probe.bit_rate) / pixels_per_second
     } else {
-        0.0
+        0.0_f64
     };
 
     let precision = extract_video_precision(
@@ -600,8 +600,8 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
 
     // Interlace detection is expensive, so we only run it for "gray zone" assets (4s to 18s)
     // where loop intent might be ambiguous, and only if it's not a native gif/webp.
-    if result.duration_secs >= 4.0
-        && result.duration_secs <= 18.0
+    if result.duration_secs >= 4.0_f64
+        && result.duration_secs <= 18.0_f64
         && result.format != "gif"
         && result.format != "webp"
     {

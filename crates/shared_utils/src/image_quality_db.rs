@@ -208,7 +208,7 @@ fn get_quality_features(analysis: &ImageAnalysis) -> pgvector::Vector {
     let aspect_ratio = if analysis.height > 0 {
         f64::from(analysis.width) / f64::from(analysis.height)
     } else {
-        1.0
+        1.0_f64
     };
 
     pgvector::Vector::from(vec![
@@ -239,7 +239,7 @@ fn bpp_heuristic_score(analysis: &ImageAnalysis) -> f64 {
     // Scale: entropy [0, 8 bits max], spatial_bpp typical range [0.05, 20.0].
     let entropy_score = (analysis.features.entropy / 8.0).clamp(0.0, 1.0);
     let bpp_score = (1.0 - (spatial_bpp / 20.0).clamp(0.0, 1.0)).max(0.0);
-    let lossless_bonus = if analysis.is_lossless { 0.1 } else { 0.0 };
+    let lossless_bonus = if analysis.is_lossless { 0.1_f64 } else { 0.0_f64 };
 
     (entropy_score * 0.5 + bpp_score * 0.5 + lossless_bonus).clamp(0.0, 1.0)
 }
@@ -410,15 +410,15 @@ pub fn lookup_image_quality(analysis: &ImageAnalysis) -> Option<QualityScore> {
     // Factor = Total / (NumClasses * ClassCount)
     let high_factor = if high_total > 0 {
         crate::numeric_cast::i64_to_f64(total_db_samples)
-            / (2.0 * crate::numeric_cast::i64_to_f64(high_total))
+            / (2.0_f64 * crate::numeric_cast::i64_to_f64(high_total))
     } else {
-        1.0
+        1.0_f64
     };
     let low_factor = if low_total > 0 {
         crate::numeric_cast::i64_to_f64(total_db_samples)
-            / (2.0 * crate::numeric_cast::i64_to_f64(low_total))
+            / (2.0_f64 * crate::numeric_cast::i64_to_f64(low_total))
     } else {
-        1.0
+        1.0_f64
     };
 
     for row in rows {
@@ -426,7 +426,7 @@ pub fn lookup_image_quality(analysis: &ImageAnalysis) -> Option<QualityScore> {
         let distance: f64 = row.get(1);
 
         // Inverse Distance Weighting (IDW)
-        let mut weight = 1.0f64 / (distance + 0.01);
+        let mut weight = 1.0f64 / (distance + 0.01_f64);
 
         if label.contains("high") {
             weight *= high_factor;
@@ -437,7 +437,7 @@ pub fn lookup_image_quality(analysis: &ImageAnalysis) -> Option<QualityScore> {
         total_weight += weight;
     }
 
-    if total_weight <= 0.0 {
+    if total_weight <= 0.0_f64 {
         emit_stderr(
             "  ⚠️ Static image KNN produced zero usable weight — using heuristic score only",
         );
@@ -464,7 +464,7 @@ pub fn lookup_image_quality(analysis: &ImageAnalysis) -> Option<QualityScore> {
         knn_confidence: Some(knn_confidence),
         knn_neighbor_count: Some(total_count),
         bpp_fallback_score: Some(bpp_score),
-        final_verdict: if knn_score >= 0.5 {
+        final_verdict: if knn_score >= 0.5_f64 {
             "high".to_string()
         } else {
             "low".to_string()
@@ -496,7 +496,7 @@ pub fn log_quality_inference_record(
     let aspect_ratio = if analysis.height > 0 {
         f64::from(analysis.width) / f64::from(analysis.height)
     } else {
-        1.0
+        1.0_f64
     };
 
     let file_hash: Option<String> =

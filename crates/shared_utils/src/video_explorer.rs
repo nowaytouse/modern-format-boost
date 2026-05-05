@@ -419,11 +419,11 @@ impl ConfidenceBreakdown {
             return;
         }
         let overall = self.overall();
-        let grade = if overall >= 0.9 {
+        let grade = if overall >= 0.9_f64 {
             "Excellent"
-        } else if overall >= 0.75 {
+        } else if overall >= 0.75_f64 {
             "Good"
-        } else if overall >= 0.5 {
+        } else if overall >= 0.5_f64 {
             "Fair"
         } else {
             "Low"
@@ -432,23 +432,23 @@ impl ConfidenceBreakdown {
         crate::log_eprintln!("┌─────────────────────────────────────────────────────");
         crate::log_eprintln!("│ Confidence Report");
         crate::log_eprintln!("├─────────────────────────────────────────────────────");
-        crate::log_eprintln!("│ Overall Confidence: {:.0}% ({})", overall * 100.0, grade);
+        crate::log_eprintln!("│ Overall Confidence: {:.0}% ({})", overall * 100.0_f64, grade);
         crate::log_eprintln!("├─────────────────────────────────────────────────────");
         crate::log_eprintln!(
             "│ Sampling Coverage: {:.0}% (weight 30%)",
-            self.sampling_coverage * 100.0
+            self.sampling_coverage * 100.0_f64
         );
         crate::log_eprintln!(
             "│ Prediction Accuracy: {:.0}% (weight 30%)",
-            self.prediction_accuracy * 100.0
+            self.prediction_accuracy * 100.0_f64
         );
         crate::log_eprintln!(
             "│ Safety Margin: {:.0}% (weight 20%)",
-            self.margin_safety * 100.0
+            self.margin_safety * 100.0_f64
         );
         crate::log_eprintln!(
             "│ SSIM Reliability: {:.0}% (weight 20%)",
-            self.ssim_confidence * 100.0
+            self.ssim_confidence * 100.0_f64
         );
         crate::log_eprintln!("└─────────────────────────────────────────────────────");
     }
@@ -1050,7 +1050,7 @@ impl TransparencyReport {
     pub fn print_summary(&self) {
         crate::log_eprintln!("└────┴──────────────┴───────────┴─────────────┴─────────────┴──────────┴────────────────────┘");
 
-        let elapsed = self.start_time.map_or(0.0, |t| t.elapsed().as_secs_f64());
+        let elapsed = self.start_time.map_or(0.0_f64, |t| t.elapsed().as_secs_f64());
         let total_iterations = self.iterations.len();
 
         crate::log_eprintln!();
@@ -1928,7 +1928,7 @@ impl VideoExplorer {
                     best_ssim = ssim;
                 }
 
-                if prev_ssim - ssim > SSIM_PLATEAU_THRESHOLD * 2.0 {
+                if prev_ssim - ssim > SSIM_PLATEAU_THRESHOLD * 2.0_f64 {
                     high = mid_rounded;
                     log_realtime!("      ↓ SSIM drop, narrowing to [{:.1}, {:.1}]", low, high);
                 } else {
@@ -1986,8 +1986,8 @@ impl VideoExplorer {
                         let ssim = Self::require_ssim_metric(quality.0, &context)?;
                         log_realtime!("      CRF {:.1}: SSIM {:.6}", crf, ssim);
 
-                        if ssim > best_ssim + 0.00001
-                            || (ssim >= best_ssim - 0.00001 && crf > best_crf)
+                        if ssim > best_ssim + 0.000_01_f64
+                            || (ssim >= best_ssim - 0.000_01_f64 && crf > best_crf)
                         {
                             best_crf = crf;
                             best_size = size;
@@ -2013,13 +2013,13 @@ impl VideoExplorer {
 
         let size_change_pct = self.calc_change_pct(final_size);
 
-        let status = if best_ssim >= 0.9999 {
+        let status = if best_ssim >= 0.999_9_f64 {
             "✅ Near-Lossless"
-        } else if best_ssim >= 0.999 {
+        } else if best_ssim >= 0.999_f64 {
             "✅ Excellent"
-        } else if best_ssim >= 0.99 {
+        } else if best_ssim >= 0.99_f64 {
             "✅ Very Good"
-        } else if best_ssim >= 0.98 {
+        } else if best_ssim >= 0.98_f64 {
             "✅ Good"
         } else {
             "✅ Acceptable"
@@ -2098,9 +2098,9 @@ impl VideoExplorer {
                         (u128::from($size) * 10_000) / u128::from(self.input_size.max(1)),
                     )
                     .expect("Value overflowed or is missing, cannot process ratio");
-                    (f64::from(permille) / 100.0) - 100.0
+                    (f64::from(permille) / 100.0_f64) - 100.0_f64
                 } else {
-                    0.0
+                    0.0_f64
                 };
                 let compress_icon = if $size < target_size {
                     "💾"
@@ -2333,12 +2333,12 @@ impl VideoExplorer {
                 })
                 .collect();
             let mean = if recent.is_empty() {
-                0.0
+                0.0_f64
             } else {
                 recent.iter().sum::<f64>() / crate::numeric_cast::usize_to_f64(recent.len())
             };
             if recent.is_empty() {
-                0.0
+                0.0_f64
             } else {
                 recent.iter().map(|x| (x - mean).powi(2)).sum::<f64>()
                     / crate::numeric_cast::usize_to_f64(recent.len())
@@ -2398,8 +2398,8 @@ impl VideoExplorer {
                 progress_done();
                 log_header!(
                     "   ⚡ Early exit: change rate negligible {:.4}% < {:.4}% (after {} iterations)",
-                    change_rate * 100.0,
-                    CHANGE_RATE_THRESHOLD * 100.0,
+                    change_rate * 100.0_f64,
+                    CHANGE_RATE_THRESHOLD * 100.0_f64,
                     iterations
                 );
                 break;
@@ -2443,7 +2443,7 @@ impl VideoExplorer {
                     let rate = calc_change_rate(prev, size);
                     if rate < CHANGE_RATE_THRESHOLD {
                         progress_done();
-                        log_header!("   ⚡ Early termination: Δ{:.3}%", rate * 100.0);
+                        log_header!("   ⚡ Early termination: Δ{:.3}%", rate * 100.0_f64);
                         break;
                     }
                 }
@@ -2485,7 +2485,7 @@ impl VideoExplorer {
                         let rate = calc_change_rate(prev, size);
                         if rate < CHANGE_RATE_THRESHOLD {
                             progress_done();
-                            log_header!("   ⚡ Early termination: Δ{:.3}%", rate * 100.0);
+                            log_header!("   ⚡ Early termination: Δ{:.3}%", rate * 100.0_f64);
                             break;
                         }
                     }
@@ -2797,7 +2797,7 @@ impl VideoExplorer {
                             .expect("Value overflowed or is missing, cannot process ratio");
                         f64::from(millis) / 1_000.0
                     }));
-                    if let Some(total_duration) = duration_secs.filter(|d| *d > 0.0) {
+                    if let Some(total_duration) = duration_secs.filter(|d| *d > 0.0_f64) {
                         let pct = (current_secs / total_duration * 100.0).min(100.0);
                         eprint!(
                             "\r      ⏳ {} {:.1}% | {:.1}s/{:.1}s | {:.0}fps | {}   ",
@@ -2935,10 +2935,10 @@ impl VideoExplorer {
 
             if should_skip {
                 if let Some(d) = duration {
-                    let threshold_min = ms_ssim_skip_threshold_secs / 60.0;
+                    let threshold_min = ms_ssim_skip_threshold_secs / 60.0_f64;
                     crate::log_eprintln!(
                         "   ⚠️  Quality verification: long video ({:.1}min > {:.0}min), MS-SSIM skipped.",
-                        d / 60.0,
+                        d / 60.0_f64,
                         threshold_min
                     );
                     crate::log_eprintln!("   Use --force-ms-ssim-long to enable.");
@@ -3187,9 +3187,9 @@ impl VideoExplorer {
                     ANIMATED_IMAGE_EXPLORATION_SEGMENT_FRACTION
                 };
                 let start_end = dur * segment_pct;
-                let mid_start = dur * (0.5 - segment_pct / 2.0);
-                let mid_end = dur * (0.5 + segment_pct / 2.0);
-                let tail_start = dur * (1.0 - segment_pct);
+                let mid_start = dur * (0.5_f64 - segment_pct / 2.0_f64);
+                let mid_end = dur * (0.5_f64 + segment_pct / 2.0_f64);
+                let tail_start = dur * (1.0_f64 - segment_pct);
 
                 let pct_label = crate::numeric_cast::f64_to_u32_sat(segment_pct * 100.0);
                 crate::log_eprintln!(
@@ -3695,13 +3695,13 @@ pub fn calculate_smart_thresholds(initial_crf: f32, encoder: VideoEncoder) -> (f
     let max_crf = (initial_crf + headroom).min(max_crf_cap);
 
     let min_ssim = if initial_crf < 20.0 {
-        0.95
+        0.95_f64
     } else if initial_crf < 30.0 {
         let t = (initial_crf - 20.0) / 10.0;
-        0.95 - f64::from(t) * 0.03
+        0.95_f64 - f64::from(t) * 0.03_f64
     } else {
         let t = ((initial_crf - 30.0) / 20.0).min(1.0);
-        0.92 - f64::from(t) * 0.04
+        0.92_f64 - f64::from(t) * 0.04_f64
     };
 
     (max_crf, min_ssim.clamp(0.85, 0.98))
@@ -4113,12 +4113,12 @@ mod tests {
             true
         };
 
-        assert!(check(Some(0.96), None));
-        assert!(check(Some(0.95), None));
-        assert!(check(Some(0.99), Some(30.0)));
+        assert!(check(Some(0.96_f64), None));
+        assert!(check(Some(0.95_f64), None));
+        assert!(check(Some(0.99_f64), Some(30.0_f64)));
 
-        assert!(!check(Some(0.94), None));
-        assert!(!check(None, Some(40.0)));
+        assert!(!check(Some(0.94_f64), None));
+        assert!(!check(None, Some(40.0_f64)));
     }
 
     #[test]
@@ -4150,13 +4150,13 @@ mod tests {
             true
         };
 
-        assert!(check(Some(0.96), Some(36.0)));
+        assert!(check(Some(0.96_f64), Some(36.0_f64)));
 
-        assert!(!check(Some(0.96), Some(34.0)));
+        assert!(!check(Some(0.96_f64), Some(34.0_f64)));
 
-        assert!(!check(Some(0.94), Some(36.0)));
+        assert!(!check(Some(0.94_f64), Some(36.0_f64)));
 
-        assert!(!check(Some(0.94), Some(34.0)));
+        assert!(!check(Some(0.94_f64), Some(34.0_f64)));
     }
 
     #[test]
@@ -4176,10 +4176,10 @@ mod tests {
             "Ultra fine step should be 0.25"
         );
         assert_eq!(SSIM_DISPLAY_PRECISION, 4);
-        assert!((SSIM_COMPARE_EPSILON - 0.0001).abs() < 1e-10);
-        assert!((DEFAULT_MIN_SSIM - 0.95).abs() < 1e-10);
-        assert!((HIGH_QUALITY_MIN_SSIM - 0.98).abs() < 1e-10);
-        assert!((ACCEPTABLE_MIN_SSIM - 0.90).abs() < 1e-10);
+        assert!((SSIM_COMPARE_EPSILON - 0.0001).abs() < 1e-10_f64);
+        assert!((DEFAULT_MIN_SSIM - 0.95).abs() < 1e-10_f64);
+        assert!((HIGH_QUALITY_MIN_SSIM - 0.98).abs() < 1e-10_f64);
+        assert!((ACCEPTABLE_MIN_SSIM - 0.90).abs() < 1e-10_f64);
     }
 
     #[test]
@@ -4240,13 +4240,13 @@ mod tests {
             true
         };
 
-        assert!(check(Some(0.96), Some(90.0)));
+        assert!(check(Some(0.96_f64), Some(90.0_f64)));
 
-        assert!(!check(Some(0.96), Some(80.0)));
+        assert!(!check(Some(0.96_f64), Some(80.0_f64)));
 
-        assert!(!check(Some(0.94), Some(90.0)));
+        assert!(!check(Some(0.94_f64), Some(90.0_f64)));
 
-        assert!(!check(Some(0.96), None));
+        assert!(!check(Some(0.96_f64), None));
     }
 
     #[test]
@@ -4255,17 +4255,17 @@ mod tests {
         let test_values: [f64; 7] = [18.0, 18.5, 19.0, 19.5, 20.0, 20.5, 21.0];
 
         for &crf in &test_values {
-            let rounded = (crf * 2.0).round() / 2.0;
+            let rounded = (crf * 2.0).round() / 2.0_f64;
             assert!(
-                (rounded - crf).abs() < 0.01,
+                (rounded - crf).abs() < 0.01_f64,
                 "CRF {crf} should round to {rounded} with 0.5 step"
             );
         }
 
-        assert!((((23.3_f64 * 2.0).round() / 2.0) - 23.5).abs() < 0.01);
-        assert!((((23.7_f64 * 2.0).round() / 2.0) - 23.5).abs() < 0.01);
-        assert!((((23.2_f64 * 2.0).round() / 2.0) - 23.0).abs() < 0.01);
-        assert!((((23.8_f64 * 2.0).round() / 2.0) - 24.0).abs() < 0.01);
+        assert!((((23.3_f64 * 2.0).round() / 2.0) - 23.5).abs() < 0.01_f64);
+        assert!((((23.7_f64 * 2.0).round() / 2.0) - 23.5).abs() < 0.01_f64);
+        assert!((((23.2_f64 * 2.0).round() / 2.0) - 23.0).abs() < 0.01_f64);
+        assert!((((23.8_f64 * 2.0).round() / 2.0) - 24.0).abs() < 0.01_f64);
     }
 
     #[test]
@@ -4356,7 +4356,7 @@ mod tests {
         let (max_crf, min_ssim) = calculate_smart_thresholds(18.0, VideoEncoder::Hevc);
 
         assert!(
-            min_ssim >= 0.93,
+            min_ssim >= 0.93_f64,
             "High quality source should have strict SSIM >= 0.93, got {min_ssim}"
         );
 
@@ -4376,11 +4376,11 @@ mod tests {
         let (max_crf, min_ssim) = calculate_smart_thresholds(35.0, VideoEncoder::Hevc);
 
         assert!(
-            min_ssim <= 0.92,
+            min_ssim <= 0.92_f64,
             "Low quality source should have relaxed SSIM <= 0.92, got {min_ssim}"
         );
         assert!(
-            min_ssim >= 0.85,
+            min_ssim >= 0.85_f64,
             "SSIM should not go below 0.85, got {min_ssim}"
         );
 
@@ -4422,7 +4422,7 @@ mod tests {
             "HEVC max_crf should be capped at 40, got {max_crf}"
         );
         assert!(
-            min_ssim >= 0.85,
+            min_ssim >= 0.85_f64,
             "min_ssim should not go below 0.85, got {min_ssim}"
         );
     }
@@ -4433,7 +4433,7 @@ mod tests {
         let (max_crf, min_ssim) = calculate_smart_thresholds(10.0, VideoEncoder::Hevc);
 
         assert!(
-            min_ssim >= 0.94,
+            min_ssim >= 0.94_f64,
             "Very high quality should have strict SSIM >= 0.94, got {min_ssim}"
         );
 
@@ -4449,20 +4449,20 @@ mod tests {
         let mut prev_max_crf = 0.0_f32;
         let mut prev_min_ssim = 1.0_f64;
 
-        for crf in (10..=40).step_by(2) {
+        for crf in (10_i32..=40_i32).step_by(2) {
             let (max_crf, min_ssim) = calculate_smart_thresholds(
                 crate::numeric_cast::f64_to_f32_lossy(f64::from(crf)),
                 VideoEncoder::Hevc,
             );
 
-            if crf > 10 {
+            if crf > 10_i32 {
                 assert!(
                     max_crf >= prev_max_crf - 0.5,
                     "max_crf should be monotonically increasing: {prev_max_crf} -> {max_crf} at CRF {crf}"
                 );
 
                 assert!(
-                    min_ssim <= prev_min_ssim + 0.01,
+                    min_ssim <= prev_min_ssim + 0.01_f64,
                     "min_ssim should be monotonically decreasing: {prev_min_ssim} -> {min_ssim} at CRF {crf}"
                 );
             }
@@ -4478,11 +4478,11 @@ mod tests {
         let target_ssim = 0.9999_f64;
 
         assert!(
-            target_ssim > 0.999,
+            target_ssim > 0.999_f64,
             "Target SSIM should be > 0.999 for near-lossless"
         );
         assert!(
-            target_ssim < 1.0,
+            target_ssim < 1.0_f64,
             "Target SSIM should be < 1.0 (1.0 is mathematically lossless)"
         );
 
@@ -4545,27 +4545,27 @@ mod tests {
         assert!(very_good_threshold > good_threshold);
 
         let grade = |ssim: f64| -> &'static str {
-            if ssim >= 0.9999 {
+            if ssim >= 0.999_9_f64 {
                 "Near-Lossless"
-            } else if ssim >= 0.999 {
+            } else if ssim >= 0.999_f64 {
                 "Excellent"
-            } else if ssim >= 0.99 {
+            } else if ssim >= 0.99_f64 {
                 "Very Good"
-            } else if ssim >= 0.98 {
+            } else if ssim >= 0.98_f64 {
                 "Good"
-            } else if ssim >= 0.95 {
+            } else if ssim >= 0.95_f64 {
                 "Acceptable"
             } else {
                 "Below threshold"
             }
         };
 
-        assert_eq!(grade(0.9999), "Near-Lossless");
-        assert_eq!(grade(0.9995), "Excellent");
-        assert_eq!(grade(0.995), "Very Good");
-        assert_eq!(grade(0.985), "Good");
-        assert_eq!(grade(0.96), "Acceptable");
-        assert_eq!(grade(0.94), "Below threshold");
+        assert_eq!(grade(0.999_9_f64), "Near-Lossless");
+        assert_eq!(grade(0.999_5_f64), "Excellent");
+        assert_eq!(grade(0.995_f64), "Very Good");
+        assert_eq!(grade(0.985_f64), "Good");
+        assert_eq!(grade(0.96_f64), "Acceptable");
+        assert_eq!(grade(0.94_f64), "Below threshold");
     }
 
     #[test]
@@ -4580,27 +4580,27 @@ mod tests {
         ];
 
         let mut best_ssim = 0.0_f64;
-        let mut plateau_count = 0;
+        let mut plateau_count = 0_i32;
 
         for &(_crf, ssim) in &ssim_values {
             if ssim > best_ssim {
                 best_ssim = ssim;
-                plateau_count = 0;
+                plateau_count = 0_i32;
             } else {
-                plateau_count += 1;
+                plateau_count += 1_i32;
             }
 
-            if plateau_count >= 2 {
+            if plateau_count >= 2_i32 {
                 break;
             }
         }
 
         assert!(
-            plateau_count >= 2,
+            plateau_count >= 2_i32,
             "Should detect plateau after 2 non-improvements"
         );
         assert!(
-            (best_ssim - 0.9856).abs() < 0.0001,
+            (best_ssim - 0.9856).abs() < 0.000_1_f64,
             "Best SSIM should be 0.9856"
         );
     }
@@ -4630,7 +4630,7 @@ mod tests {
         let source_ssim = 0.9200_f64;
         let target_ssim = 0.9999_f64;
 
-        let ssim_ceiling = source_ssim + 0.05;
+        let ssim_ceiling = source_ssim + 0.05_f64;
 
         assert!(
             ssim_ceiling < target_ssim,
@@ -4643,11 +4643,11 @@ mod tests {
     fn test_v4_crf_cache_mechanism() {
         let mut cache: std::collections::HashMap<i32, f64> = std::collections::HashMap::new();
 
-        cache.insert(precision::crf_to_cache_key(20.0), 0.9850);
-        cache.insert(precision::crf_to_cache_key(20.1), 0.9855);
-        cache.insert(precision::crf_to_cache_key(20.5), 0.9860);
-        cache.insert(precision::crf_to_cache_key(20.05), 0.9852);
-        cache.insert(precision::crf_to_cache_key(20.45), 0.9858);
+        cache.insert(precision::crf_to_cache_key(20.0), 0.985_0_f64);
+        cache.insert(precision::crf_to_cache_key(20.1), 0.985_5_f64);
+        cache.insert(precision::crf_to_cache_key(20.5), 0.986_0_f64);
+        cache.insert(precision::crf_to_cache_key(20.05), 0.985_2_f64);
+        cache.insert(precision::crf_to_cache_key(20.45), 0.985_8_f64);
 
         assert!(cache.contains_key(&precision::crf_to_cache_key(20.0)));
         assert!(cache.contains_key(&precision::crf_to_cache_key(20.1)));
@@ -4664,17 +4664,17 @@ mod tests {
         assert!(!cache.contains_key(&precision::crf_to_cache_key(20.75)));
         assert!(!cache.contains_key(&precision::crf_to_cache_key(19.75)));
 
-        assert_eq!(precision::crf_to_cache_key(20.0), 2000);
-        assert_eq!(precision::crf_to_cache_key(20.1), 2010);
-        assert_eq!(precision::crf_to_cache_key(20.5), 2050);
-        assert_eq!(precision::crf_to_cache_key(20.05), 2005);
-        assert_eq!(precision::crf_to_cache_key(20.15), 2015);
+        assert_eq!(precision::crf_to_cache_key(20.0), 2_000_i32);
+        assert_eq!(precision::crf_to_cache_key(20.1), 2_010_i32);
+        assert_eq!(precision::crf_to_cache_key(20.5), 2_050_i32);
+        assert_eq!(precision::crf_to_cache_key(20.05), 2_005_i32);
+        assert_eq!(precision::crf_to_cache_key(20.15), 2_015_i32);
     }
 
     #[test]
 
     fn test_v4_no_iteration_limit() {
-        let range = 51.0_f64 - 0.0;
+        let range = 51.0_f64 - 0.0_f64;
         let phase1 = crate::numeric_cast::f64_to_u32_sat((range / 1.0_f64).ceil());
         let phase2 = crate::numeric_cast::f64_to_u32_sat((4.0_f64 / 0.5_f64).ceil());
         let phase3 = crate::numeric_cast::f64_to_u32_sat((1.0_f64 / 0.1_f64).ceil());
@@ -4700,7 +4700,7 @@ mod tests {
         assert!(animation_convergence_rate > live_action_convergence_rate);
         assert!(live_action_convergence_rate > high_detail_convergence_rate);
 
-        let target_improvement = 0.9999 - 0.9900;
+        let target_improvement = 0.999_9_f64 - 0.990_0_f64;
 
         let animation_crf_drop = target_improvement / animation_convergence_rate;
         let live_action_crf_drop = target_improvement / live_action_convergence_rate;
@@ -4726,7 +4726,7 @@ mod tests {
 
         let epsilon = SSIM_COMPARE_EPSILON;
         assert!(
-            (epsilon - 0.0001).abs() < 1e-10,
+            (epsilon - 0.0001).abs() < 1e-10_f64,
             "SSIM compare epsilon should be 0.0001"
         );
     }
@@ -4754,12 +4754,12 @@ mod tests {
                 })
                 .collect();
             let mean = if recent.is_empty() {
-                0.0
+                0.0_f64
             } else {
                 recent.iter().sum::<f64>() / crate::numeric_cast::usize_to_f64(recent.len())
             };
             if recent.is_empty() {
-                0.0
+                0.0_f64
             } else {
                 recent.iter().map(|x| (x - mean).powi(2)).sum::<f64>()
                     / crate::numeric_cast::usize_to_f64(recent.len())
@@ -4986,16 +4986,16 @@ mod tests {
     fn test_crf_to_cache_key_precision() {
         use precision::crf_to_cache_key;
 
-        assert_eq!(crf_to_cache_key(20.0), 2000);
-        assert_eq!(crf_to_cache_key(20.1), 2010);
-        assert_eq!(crf_to_cache_key(20.5), 2050);
+        assert_eq!(crf_to_cache_key(20.0), 2_000_i32);
+        assert_eq!(crf_to_cache_key(20.1), 2_010_i32);
+        assert_eq!(crf_to_cache_key(20.5), 2_050_i32);
 
-        assert_eq!(crf_to_cache_key(0.0), 0);
-        assert_eq!(crf_to_cache_key(51.0), 5100);
-        assert_eq!(crf_to_cache_key(63.0), 6300);
+        assert_eq!(crf_to_cache_key(0.0), 0_i32);
+        assert_eq!(crf_to_cache_key(51.0), 5_100_i32);
+        assert_eq!(crf_to_cache_key(63.0), 6_300_i32);
 
-        assert_eq!(crf_to_cache_key(20.05), 2005);
-        assert_eq!(crf_to_cache_key(20.04), 2004);
+        assert_eq!(crf_to_cache_key(20.05), 2_005_i32);
+        assert_eq!(crf_to_cache_key(20.04), 2_004_i32);
     }
 
     #[test]
@@ -5151,10 +5151,10 @@ mod prop_tests_v69 {
             fps in 1.0f64..240.0f64,
         ) {
             let duration = crate::numeric_cast::u64_to_f64(frame_count) / fps;
-            prop_assert!(duration > 0.0, "Duration should be positive: {}", duration);
+            prop_assert!(duration > 0.0_f64, "Duration should be positive: {}", duration);
             let reconstructed_frames = (duration * fps).round();
             prop_assert!(
-                (reconstructed_frames - crate::numeric_cast::u64_to_f64(frame_count)).abs() < 1.0,
+                (reconstructed_frames - crate::numeric_cast::u64_to_f64(frame_count)).abs() < 1.0_f64,
                 "duration * fps should approximate frame_count: {} * {} ≈ {}",
                 duration, fps, frame_count
             );

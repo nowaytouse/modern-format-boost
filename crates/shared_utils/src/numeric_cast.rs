@@ -115,7 +115,7 @@ mod raw {
     pub(super) const fn u64_to_f64(v: u64) -> f64 {
         // Split into high and low u32s to avoid precision loss lint.
         // u32 -> f64 is lossless. We then multiply by 2^32.
-        let high = (v >> 32) as u32;
+        let high = (v >> 32_i32) as u32;
         let low = (v & 0xFFFF_FFFF) as u32;
         (high as f64) * 4_294_967_296.0 + (low as f64)
     }
@@ -151,7 +151,7 @@ mod raw {
     pub(super) const fn u32_to_f32(v: u32) -> f32 {
         // Split into high and low u16s to avoid precision loss lint.
         // u16 -> f32 is lossless. We then multiply by 2^16.
-        let high = (v >> 16) as u16;
+        let high = (v >> 16_i32) as u16;
         let low = (v & 0xFFFF) as u16;
         (high as f32) * 65536.0 + (low as f32)
     }
@@ -168,7 +168,7 @@ mod raw {
 #[inline]
 #[must_use]
 pub fn f64_to_u64_sat(v: f64) -> u64 {
-    if v.is_nan() || v < 0.0 {
+    if v.is_nan() || v < 0.0_f64 {
         return 0;
     }
     raw::f64_to_u64(v)
@@ -181,7 +181,7 @@ pub fn f64_to_u64_sat(v: f64) -> u64 {
 #[inline]
 #[must_use]
 pub fn f64_to_u32_sat(v: f64) -> u32 {
-    if v.is_nan() || v < 0.0 {
+    if v.is_nan() || v < 0.0_f64 {
         return 0;
     }
     raw::f64_to_u32(v)
@@ -194,7 +194,7 @@ pub fn f64_to_u32_sat(v: f64) -> u32 {
 #[inline]
 #[must_use]
 pub fn f64_to_usize_sat(v: f64) -> usize {
-    if v.is_nan() || v < 0.0 {
+    if v.is_nan() || v < 0.0_f64 {
         return 0;
     }
     raw::f64_to_usize(v)
@@ -233,7 +233,7 @@ pub fn f64_to_u32_checked(v: f64) -> Option<u32> {
 #[inline]
 #[must_use]
 pub fn f64_to_u16_sat(v: f64) -> u16 {
-    if v.is_nan() || v < 0.0 {
+    if v.is_nan() || v < 0.0_f64 {
         return 0;
     }
     raw::f64_to_u16(v)
@@ -246,7 +246,7 @@ pub fn f64_to_u16_sat(v: f64) -> u16 {
 #[inline]
 #[must_use]
 pub fn f64_to_u8_sat(v: f64) -> u8 {
-    if v.is_nan() || v < 0.0 {
+    if v.is_nan() || v < 0.0_f64 {
         return 0;
     }
     raw::f64_to_u8(v)
@@ -765,20 +765,20 @@ mod tests {
 
     #[test]
     fn f64_to_i32_normal() {
-        assert_eq!(f64_to_i32_sat(42.0), 42);
-        assert_eq!(f64_to_i32_sat(-42.0), -42);
+        assert_eq!(f64_to_i32_sat(42.0), 42_i32);
+        assert_eq!(f64_to_i32_sat(-42.0), -42_i32);
     }
 
     #[test]
     fn f64_to_i32_edge_cases() {
-        assert_eq!(f64_to_i32_sat(f64::NAN), 0);
+        assert_eq!(f64_to_i32_sat(f64::NAN), 0_i32);
         assert_eq!(f64_to_i32_sat(3_000_000_000.0), i32::MAX);
         assert_eq!(f64_to_i32_sat(-3_000_000_000.0), i32::MIN);
     }
 
     #[test]
     fn f32_to_i32_edge_cases() {
-        assert_eq!(f32_to_i32_sat(f32::NAN), 0);
+        assert_eq!(f32_to_i32_sat(f32::NAN), 0_i32);
         assert_eq!(f32_to_i32_sat(f32::INFINITY), i32::MAX);
         assert_eq!(f32_to_i32_sat(f32::NEG_INFINITY), i32::MIN);
     }

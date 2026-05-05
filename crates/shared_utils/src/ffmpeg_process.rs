@@ -269,7 +269,7 @@ impl FfmpegProgressParser {
         }
 
         if let Some(total) = self.total_duration {
-            if total > 0.0 && self.current_time > 0.0 {
+            if total > 0.0_f64 && self.current_time > 0.0_f64 {
                 return Some((self.current_time / total).min(1.0));
             }
         }
@@ -502,7 +502,7 @@ Conversion failed!
     fn test_progress_parser_frame() {
         let mut parser = FfmpegProgressParser::new(Some(1000));
         let progress = parser.parse_line("frame=  500");
-        assert_eq!(progress, Some(0.5));
+        assert_eq!(progress, Some(0.5_f64));
         assert_eq!(parser.current_frame(), 500);
     }
 
@@ -510,15 +510,15 @@ Conversion failed!
     fn test_progress_parser_time() {
         let mut parser = FfmpegProgressParser::with_duration(120.0);
         let progress = parser.parse_line("time=00:01:00.00");
-        assert_eq!(progress, Some(0.5));
-        assert!((parser.current_time() - 60.0).abs() < 0.01);
+        assert_eq!(progress, Some(0.5_f64));
+        assert!((parser.current_time() - 60.0).abs() < 0.01_f64);
     }
 
     #[test]
     fn test_progress_parser_fps() {
         let mut parser = FfmpegProgressParser::new(None);
         parser.parse_line("fps=29.97");
-        assert!((parser.current_fps() - 29.97).abs() < 0.01);
+        assert!((parser.current_fps() - 29.97).abs() < 0.01_f64);
     }
 
     #[test]
@@ -551,7 +551,7 @@ mod prop_tests {
                 };
                 prop_assert!(progress.is_some());
                 let actual = progress.unwrap_or_else(|| panic!("missing progress"));
-                prop_assert!((actual - expected).abs() < 0.001,
+                prop_assert!((actual - expected).abs() < 0.001_f64,
                     "Expected {}, got {} for frame {}/{}", expected, actual, current, total);
             }
         }
@@ -561,7 +561,7 @@ mod prop_tests {
             hours in 0u32..24,
             minutes in 0u32..60,
             seconds in 0u32..60,
-            total_duration in 1.0f64..86400.0
+            total_duration in 1.0f64..86_400.0_f64
         ) {
             let mut parser = FfmpegProgressParser::with_duration(total_duration);
             let line = format!("time={hours:02}:{minutes:02}:{seconds:02}.00");
@@ -572,7 +572,7 @@ mod prop_tests {
                 let expected = (current_seconds / total_duration).min(1.0);
                 prop_assert!(progress.is_some());
                 let actual = progress.unwrap_or_else(|| panic!("missing progress"));
-                prop_assert!((actual - expected).abs() < 0.01,
+                prop_assert!((actual - expected).abs() < 0.01_f64,
                     "Expected {}, got {} for time {}:{}:{}", expected, actual, hours, minutes, seconds);
             }
         }

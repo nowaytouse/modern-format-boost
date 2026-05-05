@@ -194,7 +194,7 @@ mod tests {
         let input = FileSize::new(1000);
 
         let ratio = output.compression_ratio(input);
-        assert_eq!(ratio, Some(0.5));
+        assert_eq!(ratio, Some(0.5_f64));
 
         let zero = FileSize::ZERO;
         assert_eq!(output.compression_ratio(zero), None);
@@ -237,10 +237,10 @@ mod tests {
         let input = FileSize::new(1000);
 
         let change = output.size_change_percent(input);
-        assert_eq!(change, Some(-20.0));
+        assert_eq!(change, Some(-20.0_f64));
 
         let larger = FileSize::new(1200);
         let change = larger.size_change_percent(input);
-        assert_eq!(change, Some(20.0));
+        assert_eq!(change, Some(20.0_f64));
     }
 }

@@ -193,7 +193,7 @@ impl CompressionLevel {
     #[must_use]
     pub fn from_bpp(bpp: f64, codec_type: VideoCodecType) -> Self {
         use crate::numeric_cast::f64_to_rational_loud;
-        if bpp <= 0.0 {
+        if bpp <= 0.0_f64 {
             return Self::LowQuality;
         }
 
@@ -205,9 +205,9 @@ impl CompressionLevel {
         }
 
         let efficiency = match codec_type {
-            VideoCodecType::ModernEfficient => 0.6,
-            VideoCodecType::Inefficient => 2.0,
-            _ => 1.0,
+            VideoCodecType::ModernEfficient => 0.6_f64,
+            VideoCodecType::Inefficient => 2.0_f64,
+            _ => 1.0_f64,
         };
 
         let bpp_r = f64_to_rational_loud(bpp, 0, "bpp");
@@ -260,10 +260,10 @@ pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualit
     if width == 0 || height == 0 {
         return Err("❌ Invalid dimensions: width or height is 0".to_string());
     }
-    if fps <= 0.0 {
+    if fps <= 0.0_f64 {
         return Err("❌ Invalid frame rate: fps must be > 0".to_string());
     }
-    if duration_secs <= 0.0 {
+    if duration_secs <= 0.0_f64 {
         return Err("❌ Invalid duration: must be > 0".to_string());
     }
 
@@ -280,14 +280,14 @@ pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualit
         let pixels_per_second = Rational::from(width)
             * Rational::from(height)
             * crate::numeric_cast::f64_to_rational_loud(fps, 1, "fps");
-        if pixels_per_second > 0 {
+        if pixels_per_second > 0_i32 {
             let bits_per_second = Rational::from(
                 u32::try_from(effective_bitrate)
                     .expect("Value overflowed or is missing, cannot process ratio"),
             );
             (bits_per_second / pixels_per_second).to_f64()
         } else {
-            0.0
+            0.0_f64
         }
     };
 
@@ -367,10 +367,10 @@ pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualit
 pub fn analyze_video_quality_from_detection(
     detection: &VideoDetectionResult,
 ) -> Result<VideoQualityAnalysis, String> {
-    if detection.duration_secs <= 0.0 {
+    if detection.duration_secs <= 0.0_f64 {
         return Err("Invalid duration: must be > 0".to_string());
     }
-    if detection.fps <= 0.0 {
+    if detection.fps <= 0.0_f64 {
         return Err("Invalid frame rate: fps must be > 0".to_string());
     }
     analyze_video_quality(VideoQualityInput {
@@ -513,24 +513,24 @@ fn estimate_content_type(
     let is_screen_res = (width == 1920 && height == 1080)
         || (width == 2560 && height == 1440)
         || (width == 3840 && height == 2160);
-    if is_screen_res && bpp < 0.1 {
+    if is_screen_res && bpp < 0.1_f64 {
         return VideoContentType::ScreenRecording;
     }
 
-    if bpp < 0.05 {
+    if bpp < 0.05_f64 {
         return VideoContentType::Animation;
     }
 
-    if codec_type == VideoCodecType::Intermediate && bpp > 0.5 {
+    if codec_type == VideoCodecType::Intermediate && bpp > 0.5_f64 {
         return VideoContentType::FilmGrain;
     }
 
     let is_1080_or_720 = (width == 1920 && height == 1080) || (width == 1280 && height == 720);
-    if fps >= 50.0 && is_1080_or_720 && (0.08..=0.5).contains(&bpp) {
+    if fps >= 50.0_f64 && is_1080_or_720 && (0.08_f64..=0.5_f64).contains(&bpp) {
         return VideoContentType::Gaming;
     }
 
-    if (0.05..=0.6).contains(&bpp) && codec_type != VideoCodecType::Intermediate {
+    if (0.05_f64..=0.6_f64).contains(&bpp) && codec_type != VideoCodecType::Intermediate {
         return VideoContentType::LiveAction;
     }
 
@@ -592,7 +592,7 @@ fn estimate_crf_from_bpp(bpp: f64, codec_type: VideoCodecType) -> u8 {
         VideoCodecType::ModernEfficient => crate::constants::MODERN_EFFICIENT_CODEC_FACTOR,
         VideoCodecType::Intermediate => crate::constants::INTERMEDIATE_CODEC_FACTOR,
         VideoCodecType::Inefficient => crate::constants::INEFFICIENT_CODEC_FACTOR,
-        _ => 1.0,
+        _ => 1.0_f64,
     };
 
     let bpp_r = crate::numeric_cast::f64_to_rational_loud(bpp, 0, "bpp");
@@ -678,7 +678,7 @@ mod tests {
         assert_eq!(result.codec_type, VideoCodecType::Legacy);
         assert!(!result.is_modern_codec);
         assert!(!result.should_skip);
-        assert!(result.bpp > 0.0);
+        assert!(result.bpp > 0.0_f64);
     }
 
     #[test]
@@ -758,7 +758,7 @@ mod tests {
         assert_eq!(result.codec_type, VideoCodecType::Intermediate);
         assert!(!result.should_skip, "ProRes should not be skipped");
         assert_eq!(result.chroma, ChromaSubsampling::Yuv422);
-        assert!(result.bpp > 1.0, "ProRes should have high BPP");
+        assert!(result.bpp > 1.0_f64, "ProRes should have high BPP");
     }
 
     #[test]
@@ -916,8 +916,8 @@ mod tests {
 
     #[test]
     fn test_chroma_quality_factor() {
-        assert!((ChromaSubsampling::Yuv420.quality_factor() - 1.0).abs() < 0.01);
-        assert!(ChromaSubsampling::Yuv422.quality_factor() > 1.0);
+        assert!((ChromaSubsampling::Yuv420.quality_factor() - 1.0).abs() < 0.01_f64);
+        assert!(ChromaSubsampling::Yuv422.quality_factor() > 1.0_f64);
         assert!(
             ChromaSubsampling::Yuv444.quality_factor() > ChromaSubsampling::Yuv422.quality_factor()
         );
@@ -946,9 +946,9 @@ mod tests {
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
-        let expected_bpp = 8_000_000.0 / (1920.0 * 1080.0 * 30.0);
+        let expected_bpp = 8_000_000.0_f64 / (1_920.0_f64 * 1_080.0_f64 * 30.0_f64);
         assert!(
-            (result.bpp - expected_bpp).abs() < 0.001,
+            (result.bpp - expected_bpp).abs() < 0.001_f64,
             "BPP calculation error: expected {}, got {}",
             expected_bpp,
             result.bpp
@@ -975,9 +975,9 @@ mod tests {
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
-        let expected_bpp = 8_000_000.0 / (1920.0 * 1080.0 * 30.0);
+        let expected_bpp = 8_000_000.0_f64 / (1_920.0_f64 * 1_080.0_f64 * 30.0_f64);
         assert!(
-            (result.bpp - expected_bpp).abs() < 0.001,
+            (result.bpp - expected_bpp).abs() < 0.001_f64,
             "Should use video_bitrate for BPP: expected {}, got {}",
             expected_bpp,
             result.bpp
@@ -1496,7 +1496,7 @@ mod tests {
         .unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
-            result.bpp < 0.01,
+            result.bpp < 0.01_f64,
             "Very low bitrate should have very low BPP"
         );
         assert_eq!(result.compression_type, CompressionLevel::LowQuality);
@@ -1526,7 +1526,7 @@ mod tests {
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
-        assert!(result.bpp > 5.0, "Very high bitrate should have high BPP");
+        assert!(result.bpp > 5.0_f64, "Very high bitrate should have high BPP");
         assert!(
             result.compression_type == CompressionLevel::VisuallyLossless
                 || result.compression_type == CompressionLevel::HighQuality,
@@ -1556,8 +1556,8 @@ mod tests {
 
         assert_eq!(result.width, 854);
         assert_eq!(result.height, 480);
-        let expected_bpp = 2_000_000.0 / (854.0 * 480.0 * 30.0);
-        assert!((result.bpp - expected_bpp).abs() < 0.001);
+        let expected_bpp = 2_000_000.0_f64 / (854.0_f64 * 480.0_f64 * 30.0_f64);
+        assert!((result.bpp - expected_bpp).abs() < 0.001_f64);
     }
 
     #[test]
@@ -1703,7 +1703,7 @@ mod tests {
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
-        assert!((result.fps - 24.0).abs() < 0.01);
+        assert!((result.fps - 24.0).abs() < 0.01_f64);
         assert_eq!(result.frame_count, 1440);
     }
 
@@ -1727,7 +1727,7 @@ mod tests {
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
-        assert!((result.fps - 60.0).abs() < 0.01);
+        assert!((result.fps - 60.0).abs() < 0.01_f64);
         assert_eq!(result.frame_count, 3600);
     }
 
@@ -1751,7 +1751,7 @@ mod tests {
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
-        assert!((result.fps - 120.0).abs() < 0.01);
+        assert!((result.fps - 120.0).abs() < 0.01_f64);
         assert_eq!(result.frame_count, 3600);
     }
 
@@ -1775,7 +1775,7 @@ mod tests {
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
-        assert!((result.fps - 29.97).abs() < 0.01);
+        assert!((result.fps - 29.97).abs() < 0.01_f64);
     }
 
     #[test]
@@ -2107,13 +2107,13 @@ mod tests {
 
         assert_eq!(qa.width, 1920);
         assert_eq!(qa.height, 1080);
-        assert!((qa.fps.unwrap_or_else(|| panic!("missing fps")) - 30.0).abs() < 0.01);
+        assert!((qa.fps.unwrap_or_else(|| panic!("missing fps")) - 30.0).abs() < 0.01_f64);
         assert!(
             (qa.duration_secs
                 .unwrap_or_else(|| panic!("missing duration"))
                 - 60.0)
                 .abs()
-                < 0.01
+                < 0.01_f64
         );
         assert_eq!(qa.video_bitrate, Some(7_500_000));
     }
@@ -2157,7 +2157,7 @@ mod tests {
         .unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
-            (result1.bpp - result2.bpp).abs() < 0.0001,
+            (result1.bpp - result2.bpp).abs() < 0.000_1_f64,
             "Same input should produce same BPP"
         );
         assert_eq!(result1.codec_type, result2.codec_type);
@@ -2168,10 +2168,10 @@ mod tests {
     #[test]
     fn test_strict_bpp_formula() {
         let test_cases = [
-            (1920, 1080, 30.0, 8_000_000u64),
-            (3840, 2160, 30.0, 25_000_000u64),
-            (1280, 720, 60.0, 5_000_000u64),
-            (854, 480, 24.0, 2_000_000u64),
+            (1920, 1080, 30.0_f64, 8_000_000u64),
+            (3840, 2160, 30.0_f64, 25_000_000u64),
+            (1280, 720, 60.0_f64, 5_000_000u64),
+            (854, 480, 24.0_f64, 2_000_000u64),
         ];
 
         for (w, h, fps, bitrate) in test_cases {
@@ -2198,7 +2198,7 @@ mod tests {
                     .expect("Value overflowed or is missing, cannot process ratio"),
             ) / (f64::from(w) * f64::from(h) * fps);
             assert!(
-                (result.bpp - expected).abs() < 0.0001,
+                (result.bpp - expected).abs() < 0.000_1_f64,
                 "STRICT: BPP for {}x{}@{}fps@{}bps: expected {}, got {}",
                 w,
                 h,
@@ -2213,9 +2213,9 @@ mod tests {
     #[test]
     fn test_strict_frame_count() {
         let test_cases = [
-            (30.0, 60.0, 1800u64),
-            (24.0, 120.0, 2880u64),
-            (60.0, 30.0, 1800u64),
+            (30.0_f64, 60.0_f64, 1800u64),
+            (24.0_f64, 120.0_f64, 2880u64),
+            (60.0_f64, 30.0_f64, 1800u64),
         ];
 
         for (fps, duration, expected_frames) in test_cases {
@@ -2361,7 +2361,7 @@ mod property_tests {
 
     proptest! {
         #[test]
-        fn test_crf_monotonicity(bpp1 in 0.01..10.0f64, bpp2 in 0.01..10.0f64) {
+        fn test_crf_monotonicity(bpp1 in 0.01_f64..10.0f64, bpp2 in 0.01_f64..10.0f64) {
             let crf1 = estimate_crf_from_bpp(bpp1, VideoCodecType::ModernEfficient);
             let crf2 = estimate_crf_from_bpp(bpp2, VideoCodecType::ModernEfficient);
 

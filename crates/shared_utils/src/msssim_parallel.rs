@@ -317,8 +317,8 @@ mod tests {
                     total_frames: 1000,
                 };
 
-                let expected = (y + u + v) / 3.0;
-                prop_assert!((result.combined_score - expected).abs() < 1e-10);
+                let expected = (y + u + v) / 3.0_f64;
+                prop_assert!((result.combined_score - expected).abs() < 1e-10_f64);
             }
 
             #[test]
@@ -367,10 +367,10 @@ mod tests {
 
                 let speedup = crate::numeric_cast::u64_to_f64(total_frames) / crate::numeric_cast::u64_to_f64(sampled_frames.max(1));
 
-                prop_assert!(speedup >= 1.0);
+                prop_assert!(speedup >= 1.0_f64);
 
                 let expected = crate::numeric_cast::u64_to_f64(total_frames) / crate::numeric_cast::u64_to_f64(sampled_frames);
-                prop_assert!((speedup - expected).abs() < 1e-10);
+                prop_assert!((speedup - expected).abs() < 1e-10_f64);
             }
         }
     }

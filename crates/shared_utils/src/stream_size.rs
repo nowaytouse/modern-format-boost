@@ -200,7 +200,7 @@ fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<StreamSiz
         .and_then(|d| d.parse::<f64>().ok())
         .expect("Required floating point value missing");
 
-    if duration_secs <= 0.0 {
+    if duration_secs <= 0.0_f64 {
         warn!(
             path = %path.display(),
             duration = duration_secs,
@@ -250,7 +250,7 @@ fn calculate_stream_size_and_bitrate(
         .map_or((0, None), |br| {
             let size_rational = (Rational::from(br)
                 * crate::numeric_cast::f64_to_rational_loud(duration_secs, 0, "duration_secs"))
-                / Rational::from(8);
+                / Rational::from(8_i32);
             let size = crate::numeric_cast::f64_to_u64_sat(size_rational.to_f64());
             (size, Some(br))
         })
@@ -318,9 +318,9 @@ mod tests {
 
     #[test]
     fn test_extraction_method_confidence() {
-        assert!(ExtractionMethod::FfprobeDirect.confidence() > 0.95);
-        assert!(ExtractionMethod::BitrateCalculation.confidence() > 0.85);
-        assert!(ExtractionMethod::Estimated.confidence() > 0.65);
+        assert!(ExtractionMethod::FfprobeDirect.confidence() > 0.95_f64);
+        assert!(ExtractionMethod::BitrateCalculation.confidence() > 0.85_f64);
+        assert!(ExtractionMethod::Estimated.confidence() > 0.65_f64);
     }
 
     #[test]
@@ -357,7 +357,7 @@ mod tests {
         };
 
         assert_eq!(info.pure_media_size(), 1100);
-        assert!((info.container_overhead_percent() - 8.33).abs() < 0.1);
+        assert!((info.container_overhead_percent() - 8.33).abs() < 0.1_f64);
         assert!(!info.is_overhead_excessive());
     }
 
@@ -481,9 +481,9 @@ mod prop_tests {
             };
 
             let calculated_percent = info.container_overhead_percent();
-            let expected_percent = crate::numeric_cast::u64_to_f64(overhead) / crate::numeric_cast::u64_to_f64(total_size.max(1)) * 100.0;
+            let expected_percent = crate::numeric_cast::u64_to_f64(overhead) / crate::numeric_cast::u64_to_f64(total_size.max(1)) * 100.0_f64;
 
-            prop_assert!((calculated_percent - expected_percent).abs() < 0.01,
+            prop_assert!((calculated_percent - expected_percent).abs() < 0.01_f64,
                 "Calculated percentage {} should be close to expected {}", calculated_percent, expected_percent);
         }
     }

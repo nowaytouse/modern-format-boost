@@ -330,7 +330,7 @@ fn fallback_coarse_line(
     let mut final_line = format!("{color}{prefix} ");
     {
         use std::fmt::Write;
-        if percent < 100.0 {
+        if percent < 100.0_f64 {
             write!(final_line, "{percent_str} • ").expect("String formatting should not fail");
         }
         write!(final_line, "{counts_str}\x1b[0m{stats}")
@@ -631,10 +631,10 @@ impl DetailedCoarseProgressBar {
         let size_pct = if self.input_size > 0 {
             ((crate::numeric_cast::u64_to_f64(size)
                 / crate::numeric_cast::u64_to_f64(self.input_size))
-                - 1.0)
-                * 100.0
+                - 1.0_f64)
+                * 100.0_f64
         } else {
-            0.0
+            0.0_f64
         };
 
         let icon = if size < self.input_size {
@@ -740,17 +740,17 @@ impl DetailedCoarseProgressBar {
         let size_pct = if self.input_size > 0 {
             ((crate::numeric_cast::u64_to_f64(final_size)
                 / crate::numeric_cast::u64_to_f64(self.input_size))
-                - 1.0)
-                * 100.0
+                - 1.0_f64)
+                * 100.0_f64
         } else {
-            0.0
+            0.0_f64
         };
 
         let ssim_str = final_ssim
             .map(|s| format!("SSIM {s:.4}"))
             .unwrap_or_default();
 
-        let icon = if size_pct < 0.0 { "✅" } else { "⚠️" };
+        let icon = if size_pct < 0.0_f64 { "✅" } else { "⚠️" };
         let iter = self.current_iteration.load(Ordering::Relaxed);
 
         let bar_width: usize = progress_style::BAR_WIDTH;
@@ -1035,15 +1035,15 @@ impl ExploreProgress {
         let stage = self.stage.lock().map(|s| s.clone()).unwrap_or_default();
         let iter = self.iterations.load(Ordering::Relaxed);
         let best_crf = self.best_crf.lock().map_or(0.0, |c| *c);
-        let best_ssim = self.best_ssim.lock().map_or(0.0, |s| *s);
+        let best_ssim = self.best_ssim.lock().map_or(0.0_f64, |s| *s);
 
         let size_change = if self.input_size > 0 {
             ((crate::numeric_cast::u64_to_f64(size)
                 / crate::numeric_cast::u64_to_f64(self.input_size))
-                - 1.0)
-                * 100.0
+                - 1.0_f64)
+                * 100.0_f64
         } else {
-            0.0
+            0.0_f64
         };
 
         let elapsed = self.start_time.elapsed();
@@ -1067,10 +1067,10 @@ impl ExploreProgress {
         let size_change = if self.input_size > 0 {
             ((crate::numeric_cast::u64_to_f64(result_size)
                 / crate::numeric_cast::u64_to_f64(self.input_size))
-                - 1.0)
-                * 100.0
+                - 1.0_f64)
+                * 100.0_f64
         } else {
-            0.0
+            0.0_f64
         };
         let elapsed = self.start_time.elapsed();
         let iter = self.iterations.load(Ordering::Relaxed);
@@ -1186,7 +1186,7 @@ impl ExploreLogger {
             eprintln!(
                 "   💾 Saved: {} ({:.2} MB)",
                 format_bytes(saved),
-                crate::numeric_cast::u64_to_f64(saved) / 1024.0 / 1024.0
+                crate::numeric_cast::u64_to_f64(saved) / 1_024.0_f64 / 1_024.0_f64
             );
         }
         eprintln!(
@@ -1383,7 +1383,7 @@ impl SmartProgressBar {
 }
 
 fn format_eta(seconds: f64) -> String {
-    if seconds.is_nan() || seconds.is_infinite() || seconds < 0.0 {
+    if seconds.is_nan() || seconds.is_infinite() || seconds < 0.0_f64 {
         return "unknown".to_string();
     }
 

@@ -438,7 +438,7 @@ impl BatchResult {
         }
     }
 
-    pub fn success(&mut self) {
+    pub const fn success(&mut self) {
         self.total = self.total.saturating_add(1);
         self.succeeded = self.succeeded.saturating_add(1);
     }
@@ -449,7 +449,7 @@ impl BatchResult {
         self.errors.push((path, error));
     }
 
-    pub fn skip(&mut self) {
+    pub const fn skip(&mut self) {
         self.total = self.total.saturating_add(1);
         self.skipped = self.skipped.saturating_add(1);
     }
@@ -1231,7 +1231,7 @@ mod tests {
     fn test_success_rate_empty() {
         let result = BatchResult::new();
         assert!(
-            (result.success_rate() - 100.0).abs() < 0.01,
+            (result.success_rate() - 100.0).abs() < 0.01_f64,
             "Empty batch should have 100% success rate"
         );
     }
@@ -1239,11 +1239,11 @@ mod tests {
     #[test]
     fn test_success_rate_all_success() {
         let mut result = BatchResult::new();
-        for _ in 0..10 {
+        for _ in 0_i32..10_i32 {
             result.success();
         }
         assert!(
-            (result.success_rate() - 100.0).abs() < 0.01,
+            (result.success_rate() - 100.0).abs() < 0.01_f64,
             "All success should be 100%"
         );
     }
@@ -1251,11 +1251,11 @@ mod tests {
     #[test]
     fn test_success_rate_all_fail() {
         let mut result = BatchResult::new();
-        for i in 0..10 {
+        for i in 0_i32..10_i32 {
             result.fail(PathBuf::from(format!("file{i}.png")), "Error".to_string());
         }
         assert!(
-            (result.success_rate() - 0.0).abs() < 0.01,
+            (result.success_rate() - 0.0).abs() < 0.01_f64,
             "All fail should be 0%"
         );
     }
@@ -1267,7 +1267,7 @@ mod tests {
         result.fail(PathBuf::from("test.png"), "Error".to_string());
 
         assert!(
-            (result.success_rate() - 50.0).abs() < 0.01,
+            (result.success_rate() - 50.0).abs() < 0.01_f64,
             "1 success, 1 fail should be 50%, got {}",
             result.success_rate()
         );
@@ -1282,7 +1282,7 @@ mod tests {
         result.skip();
 
         assert!(
-            (result.success_rate() - 50.0).abs() < 0.01,
+            (result.success_rate() - 50.0).abs() < 0.01_f64,
             "2 success, 2 skipped should be 50%, got {}",
             result.success_rate()
         );
@@ -1291,43 +1291,43 @@ mod tests {
     #[test]
     fn test_strict_success_rate_formula() {
         let test_cases = [
-            (10, 0, 0, 100.0),
-            (5, 5, 0, 50.0),
-            (3, 1, 0, 75.0),
-            (1, 3, 0, 25.0),
-            (0, 10, 0, 0.0),
-            (7, 2, 1, 70.0),
+            (10_i32, 0_i32, 0_i32, 100.0_f64),
+            (5_i32, 5_i32, 0_i32, 50.0_f64),
+            (3_i32, 1_i32, 0_i32, 75.0_f64),
+            (1_i32, 3_i32, 0_i32, 25.0_f64),
+            (0_i32, 10_i32, 0_i32, 0.0_f64),
+            (7_i32, 2_i32, 1_i32, 70.0_f64),
         ];
 
         for (success, fail, skip, expected) in test_cases {
             let mut result = BatchResult::new();
-            for _ in 0..success {
+            for _ in 0_i32..success {
                 result.success();
             }
-            for i in 0..fail {
+            for i in 0_i32..fail {
                 result.fail(PathBuf::from(format!("f{i}.png")), "E".to_string());
             }
-            for _ in 0..skip {
+            for _ in 0_i32..skip {
                 result.skip();
             }
 
             let rate = result.success_rate();
             let expected_calc = if result.total == 0 {
-                100.0
+                100.0_f64
             } else {
                 let p = u32::try_from(
                     (result.succeeded as u128 * 10_000) / result.total.max(1) as u128,
                 )
                 .expect("Value overflowed or is missing, cannot process ratio");
-                f64::from(p) / 100.0
+                f64::from(p) / 100.0_f64
             };
 
             assert!(
-                (rate - expected).abs() < 0.001,
+                (rate - expected).abs() < 0.001_f64,
                 "STRICT: {success}s/{fail}f/{skip}k expected {expected}%, got {rate}%"
             );
             assert!(
-                (rate - expected_calc).abs() < 0.0001,
+                (rate - expected_calc).abs() < 0.000_1_f64,
                 "STRICT: Formula mismatch"
             );
         }
@@ -1337,16 +1337,16 @@ mod tests {
     fn test_strict_large_numbers() {
         let mut result = BatchResult::new();
 
-        for _ in 0..500_000 {
+        for _ in 0_i32..500_000_i32 {
             result.success();
         }
-        for i in 0..500_000 {
+        for i in 0_i32..500_000_i32 {
             result.fail(PathBuf::from(format!("f{i}.png")), "E".to_string());
         }
 
         assert_eq!(result.total, 1_000_000);
         assert!(
-            (result.success_rate() - 50.0).abs() < 0.001,
+            (result.success_rate() - 50.0).abs() < 0.001_f64,
             "STRICT: Large batch should calculate correctly"
         );
     }
@@ -1362,8 +1362,8 @@ mod tests {
         let rate2 = result.success_rate();
         let rate3 = result.success_rate();
 
-        assert!((rate1 - rate2).abs() < 1e-7);
-        assert!((rate2 - rate3).abs() < 1e-7);
+        assert!((rate1 - rate2).abs() < 1e-7_f64);
+        assert!((rate2 - rate3).abs() < 1e-7_f64);
     }
 
     #[test]
@@ -1500,8 +1500,8 @@ mod tests {
             size: 160,
             relative_depth: 2,
             pixel_count: Some(640 * 360),
-            duration_secs: Some(4.0),
-            frame_rate: Some(24.0),
+            duration_secs: Some(4.0_f64),
+            frame_rate: Some(24.0_f64),
             estimated_work: Some(640 * 360 * 96),
         };
         let shallower = CachedVideoSortEntry {
@@ -1509,8 +1509,8 @@ mod tests {
             size: 500,
             relative_depth: 1,
             pixel_count: Some(320 * 240),
-            duration_secs: Some(2.0),
-            frame_rate: Some(24.0),
+            duration_secs: Some(2.0_f64),
+            frame_rate: Some(24.0_f64),
             estimated_work: Some(320 * 240 * 48),
         };
         let same_depth_shorter = CachedVideoSortEntry {
@@ -1518,8 +1518,8 @@ mod tests {
             size: 220,
             relative_depth: 2,
             pixel_count: Some(1280 * 720),
-            duration_secs: Some(2.0),
-            frame_rate: Some(24.0),
+            duration_secs: Some(2.0_f64),
+            frame_rate: Some(24.0_f64),
             estimated_work: Some(1280 * 720 * 48),
         };
         let same_depth_heavier = CachedVideoSortEntry {
@@ -1527,8 +1527,8 @@ mod tests {
             size: 80,
             relative_depth: 2,
             pixel_count: Some(1920 * 1080),
-            duration_secs: Some(6.0),
-            frame_rate: Some(60.0),
+            duration_secs: Some(6.0_f64),
+            frame_rate: Some(60.0_f64),
             estimated_work: Some(1920 * 1080 * 360),
         };
 

@@ -167,7 +167,7 @@ fn show_confirmation_prompt(elapsed_secs: u64) {
         };
         // Wait up to 10,000 milliseconds for input
         let res = unsafe { libc::poll(&raw mut pfd, 1, 10_000) };
-        if res > 0 && (pfd.revents & libc::POLLIN) != 0 {
+        if res > 0_i32 && (pfd.revents & libc::POLLIN) != 0 {
             let mut line = String::new();
             if io::stdin().read_line(&mut line).is_ok() {
                 let answer = line.trim().to_ascii_lowercase();

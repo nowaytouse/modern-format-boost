@@ -430,7 +430,7 @@ fn run_imagemagick_cjxl_pipeline_with_effort(
                     crate::progress_mode::emit_stderr(&format!("   📋 cjxl stderr: {cjxl_stderr}"));
                 } else if let Some(code) = exit_code {
                     // [HARDENING] Try to provide more context if stderr is empty
-                    if code == 1 {
+                    if code == 1_i32 {
                         crate::progress_mode::emit_stderr(
                             "   💡 Tip: Exit code 1 often indicates ICC mismatch or malformed metadata.",
                         );

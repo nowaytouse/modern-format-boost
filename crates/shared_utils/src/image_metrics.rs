@@ -18,10 +18,10 @@ const C2: f64 = (K2 * L) * (K2 * L);
 const WINDOW_SIZE: usize = 11;
 
 fn get_gaussian_window() -> [[f64; WINDOW_SIZE]; WINDOW_SIZE] {
-    let sigma = 1.5;
+    let sigma = 1.5_f64;
     let mut window = [[0.0f64; WINDOW_SIZE]; WINDOW_SIZE];
     let center = crate::numeric_cast::usize_to_f64(WINDOW_SIZE / 2);
-    let mut sum = 0.0;
+    let mut sum = 0.0_f64;
 
     for (i, row) in window.iter_mut().enumerate() {
         for (j, cell) in row.iter_mut().enumerate() {
@@ -67,13 +67,13 @@ pub fn calculate_psnr(original: &DynamicImage, converted: &DynamicImage) -> Opti
         .sum();
 
     let pixel_count = crate::numeric_cast::usize_to_f64(orig_pixels.len());
-    let mse = mse_sum / (3.0 * pixel_count);
+    let mse = mse_sum / (3.0_f64 * pixel_count);
 
-    if mse < 1e-10 {
+    if mse < 1e-10_f64 {
         return Some(f64::INFINITY);
     }
 
-    let psnr = 10.0 * (L * L / mse).log10();
+    let psnr = 10.0_f64 * (L * L / mse).log10();
     Some(psnr)
 }
 
@@ -147,8 +147,8 @@ fn calculate_window_ssim(
         }
     }
 
-    let mut mean_x = 0.0;
-    let mut mean_y = 0.0;
+    let mut mean_x = 0.0_f64;
+    let mut mean_y = 0.0_f64;
     for (i, row) in window.iter().enumerate() {
         for (j, &w) in row.iter().enumerate() {
             mean_x = w.mul_add(
@@ -170,9 +170,9 @@ fn calculate_window_ssim(
         }
     }
 
-    let mut var_x = 0.0;
-    let mut var_y = 0.0;
-    let mut cov_xy = 0.0;
+    let mut var_x = 0.0_f64;
+    let mut var_y = 0.0_f64;
+    let mut cov_xy = 0.0_f64;
     for (i, row) in window.iter().enumerate() {
         for (j, &w) in row.iter().enumerate() {
             let dx = buf_x
@@ -194,6 +194,7 @@ fn calculate_window_ssim(
     }
 
     let numerator = (2.0 * mean_x).mul_add(mean_y, C1) * 2.0f64.mul_add(cov_xy, C2);
+    #[allow(clippy::suboptimal_flops)] // Simple sum of squares, mul_add would reduce readability
     let denominator = (mean_x * mean_x + mean_y * mean_y + C1) * (var_x + var_y + C2);
 
     numerator / denominator
@@ -204,7 +205,7 @@ fn calculate_ssim_simple(original: &DynamicImage, converted: &DynamicImage) -> O
     let conv_gray = converted.to_luma8();
 
     let n = f64::from(orig_gray.width() * orig_gray.height());
-    if n < 2.0 {
+    if n < 2.0_f64 {
         return None;
     }
 
@@ -227,14 +228,14 @@ fn calculate_ssim_simple(original: &DynamicImage, converted: &DynamicImage) -> O
     let mean_x = sum_x / n;
     let mean_y = total_sum_y / n;
     // Unbiased variance/covariance (Wang et al. sample estimator; consistent with windowed path).
-    let n1 = n - 1.0;
+    let n1 = n - 1.0_f64;
     let var_x = (n * mean_x).mul_add(-mean_x, sum_xx) / n1;
     let var_y = (n * mean_y).mul_add(-mean_y, sum_yy) / n1;
     let cov_xy = (n * mean_x).mul_add(-mean_y, products_sum_xy) / n1;
 
     let numerator = (2.0 * mean_x).mul_add(mean_y, C1) * 2.0f64.mul_add(cov_xy, C2);
     let denominator = (mean_y.mul_add(mean_y, mean_x.powi(2)) + C1) * (var_x + var_y + C2);
-    if denominator < 1e-10 {
+    if denominator < 1e-10_f64 {
         return Some(1.0);
     }
     Some(numerator / denominator)
@@ -247,12 +248,12 @@ fn calculate_ssim_simple(original: &DynamicImage, converted: &DynamicImage) -> O
 )]
 pub fn calculate_ms_ssim(original: &DynamicImage, converted: &DynamicImage) -> Option<f64> {
     let scales = 5;
-    let weights = [0.0448, 0.2856, 0.3001, 0.2363, 0.1333];
+    let weights = [0.044_8_f64, 0.285_6_f64, 0.300_1_f64, 0.236_3_f64, 0.133_3_f64];
 
     let mut orig = original.clone();
     let mut conv = converted.clone();
-    let mut ms_ssim = 1.0;
-    let mut used_weight_sum = 0.0;
+    let mut ms_ssim = 1.0_f64;
+    let mut used_weight_sum = 0.0_f64;
 
     for (i, &weight) in weights.iter().enumerate().take(scales) {
         let (w, h) = orig.dimensions();
@@ -286,7 +287,7 @@ pub fn calculate_ms_ssim(original: &DynamicImage, converted: &DynamicImage) -> O
     }
 
     // Normalize by actual weight sum so result stays in [0, 1] when only a subset of scales run.
-    if used_weight_sum < 1e-10 {
+    if used_weight_sum < 1e-10_f64 {
         return None;
     }
     Some(ms_ssim.powf(1.0 / used_weight_sum))
@@ -348,14 +349,14 @@ mod tests {
             .is_infinite());
 
         let ssim = calculate_ssim(&img1, &img2);
-        assert!((ssim.unwrap_or_else(|| panic!("missing metric value")) - 1.0).abs() < 0.01);
+        assert!((ssim.unwrap_or_else(|| panic!("missing metric value")) - 1.0).abs() < 0.01_f64);
     }
 
     #[test]
     fn test_gaussian_window() {
         let window = get_gaussian_window();
         let sum: f64 = window.iter().flat_map(|row| row.iter()).sum();
-        assert!((sum - 1.0).abs() < 1e-10);
+        assert!((sum - 1.0).abs() < 1e-10_f64);
     }
 
     #[test]
@@ -368,11 +369,11 @@ mod tests {
 
         let psnr = calculate_psnr(&img1, &img2);
         assert!(psnr.is_some());
-        assert!(psnr.unwrap_or_else(|| panic!("missing metric value")) < 10.0);
+        assert!(psnr.unwrap_or_else(|| panic!("missing metric value")) < 10.0_f64);
 
         let ssim = calculate_ssim(&img1, &img2);
         assert!(ssim.is_some());
-        assert!(ssim.unwrap_or_else(|| panic!("missing metric value")) < 0.1);
+        assert!(ssim.unwrap_or_else(|| panic!("missing metric value")) < 0.1_f64);
     }
 
     #[test]
@@ -397,7 +398,7 @@ mod tests {
         let ssim = calculate_ssim(&img1, &img2);
         assert!(ssim.is_some());
         assert!(
-            (ssim.unwrap_or_else(|| panic!("missing metric value")) - 1.0).abs() < 0.01,
+            (ssim.unwrap_or_else(|| panic!("missing metric value")) - 1.0).abs() < 0.01_f64,
             "identical 8x8 should give SSIM ≈ 1, got {ssim:?}"
         );
     }
@@ -409,7 +410,7 @@ mod tests {
         }));
         let ssim = calculate_ssim(&img, &img);
         assert!(ssim.is_some());
-        assert!((ssim.unwrap_or_else(|| panic!("missing metric value")) - 1.0).abs() < 1e-6);
+        assert!((ssim.unwrap_or_else(|| panic!("missing metric value")) - 1.0).abs() < 1e-6_f64);
     }
 
     #[test]
@@ -424,8 +425,8 @@ mod tests {
         let result = calculate_ms_ssim(&img, &img);
         assert!(result.is_some());
         assert!(
-            result.unwrap_or_else(|| panic!("missing metric value")) >= 0.99
-                && result.unwrap_or_else(|| panic!("missing metric value")) <= 1.01
+            result.unwrap_or_else(|| panic!("missing metric value")) >= 0.99_f64
+                && result.unwrap_or_else(|| panic!("missing metric value")) <= 1.01_f64
         );
     }
 

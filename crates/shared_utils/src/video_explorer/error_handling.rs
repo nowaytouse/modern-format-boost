@@ -156,7 +156,7 @@ mod tests {
             attempted_crf: 23.0,
             reason: "SSIM not measured".to_string(),
             actual_score: None,
-            target_score: 0.99,
+            target_score: 0.99_f64,
         };
 
         let message = result

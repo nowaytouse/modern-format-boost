@@ -154,12 +154,12 @@ fn detect_vfr_enhanced(
     avg_frame_rate: f64,
     format_name: &str,
 ) -> bool {
-    if r_frame_rate <= 0.0 || avg_frame_rate <= 0.0 {
+    if r_frame_rate <= 0.0_f64 || avg_frame_rate <= 0.0_f64 {
         return false;
     }
 
     // Slow-motion detection (separate logic for reliability)
-    if (format_name.contains("mov") || format_name.contains("mp4")) && avg_frame_rate >= 60.0 {
+    if (format_name.contains("mov") || format_name.contains("mp4")) && avg_frame_rate >= 60.0_f64 {
         // Check for Apple's slow-mo tag (most reliable indicator)
         if video_stream
             .get("tags")
@@ -170,7 +170,7 @@ fn detect_vfr_enhanced(
         }
 
         // Check for significant frame rate ratio (recording vs playback)
-        if r_frame_rate / avg_frame_rate > 2.0 {
+        if r_frame_rate / avg_frame_rate > 2.0_f64 {
             return true;
         }
     }
@@ -449,7 +449,7 @@ fn resolve_probe_duration(
     format_name: &str,
     path: &Path,
 ) -> f64 {
-    let mut duration = if format_duration > 0.0 {
+    let mut duration = if format_duration > 0.0_f64 {
         format_duration
     } else {
         parse_f64_string_field(&video_stream["duration"])
@@ -458,11 +458,11 @@ fn resolve_probe_duration(
 
     // Root fix: ffprobe often reports 0/N/A duration for animated WebP (`webp_pipe`).
     // Loop-intent logic requires a real duration; derive it from ANMF frame durations.
-    if duration <= 0.0 && format_name.contains("webp") {
+    if duration <= 0.0_f64 && format_name.contains("webp") {
         if let Ok(data) = std::fs::read(path) {
             if let Some(native_dur) = crate::image_formats::webp::duration_secs_from_bytes(&data) {
                 let native_dur = f64::from(native_dur);
-                if native_dur > 0.0 {
+                if native_dur > 0.0_f64 {
                     duration = native_dur;
                 }
             }
@@ -567,12 +567,12 @@ fn parse_video_stream_fields(
                 if native_frames > 1 {
                     frame_count = native_frames;
                 }
-                if duration <= 0.0 {
+                if duration <= 0.0_f64 {
                     if let Some(duration_secs) =
                         crate::image_formats::webp::duration_secs_from_bytes(&data)
                     {
                         let duration_secs = f64::from(duration_secs);
-                        if duration_secs > 0.0 {
+                        if duration_secs > 0.0_f64 {
                             avg_frame_rate =
                                 crate::numeric_cast::u64_to_f64(frame_count.max(1)) / duration_secs;
                         }
@@ -610,7 +610,7 @@ fn parse_video_stream_fields(
         profile: video_stream["profile"].as_str().map(str::to_string),
         level: video_stream["level"]
             .as_u64()
-            .map(|level| format!("{:.1}", crate::numeric_cast::u64_to_f64(level) / 10.0)),
+            .map(|level| format!("{:.1}", crate::numeric_cast::u64_to_f64(level) / 10.0_f64)),
         max_b_frames,
         encoder_settings: video_stream.get("tags").and_then(|tags| {
             tags.get("x265-params")
@@ -1167,14 +1167,14 @@ pub fn parse_frame_rate(s: &str) -> Result<f64, FFprobeError> {
                 .parse::<f64>()
                 .map_err(|e| FFprobeError::ParseError(format!("Invalid denominator: {e}")))?;
 
-            if den == 0.0 {
+            if den == 0.0_f64 {
                 return Err(FFprobeError::ParseError(
                     "Frame rate denominator cannot be zero".to_string(),
                 ));
             }
 
             let rate = num / den;
-            if rate >= 0.0 {
+            if rate >= 0.0_f64 {
                 return Ok(rate);
             }
         }
@@ -1301,7 +1301,7 @@ mod tests {
         let deltas = extract_pts_deltas(&json);
         assert_eq!(deltas.len(), 3);
         for delta in &deltas {
-            assert!((delta - 0.04).abs() < 0.001);
+            assert!((delta - 0.04).abs() < 0.001_f64);
         }
     }
 

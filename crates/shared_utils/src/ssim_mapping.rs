@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 #[inline]
 #[must_use]
 pub fn psnr_to_ssim_estimate(psnr_db: f64) -> f64 {
-    if psnr_db.is_nan() || psnr_db <= 0.0 {
+    if psnr_db.is_nan() || psnr_db <= 0.0_f64 {
         return 0.0;
     }
     // Heuristic: SSIM ≈ 1 - 10^(-PSNR/10) maps power-domain PSNR to a [0,1) quality
@@ -186,13 +186,13 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing predicted value"))
                 - 0.95)
                 .abs()
-                < 0.001
+                < 0.001_f64
         );
 
         let predicted = mapping
             .predict_ssim(35.0)
             .unwrap_or_else(|| panic!("missing predicted value"));
-        assert!((predicted - 0.925).abs() < 0.001);
+        assert!((predicted - 0.925).abs() < 0.001_f64);
     }
 
     #[test]
@@ -223,7 +223,7 @@ mod tests {
                 .ssim
                 - 0.91)
                 .abs()
-                < 0.001
+                < 0.001_f64
         );
     }
 
@@ -245,7 +245,7 @@ mod tests {
                 .ssim
                 - 0.92)
                 .abs()
-                < 0.001
+                < 0.001_f64
         );
     }
 
@@ -268,7 +268,7 @@ mod tests {
             .predict_ssim(35.0)
             .unwrap_or_else(|| panic!("prediction should exist"));
         assert!(predicted.is_finite());
-        assert!((predicted - 0.92).abs() < 0.001);
+        assert!((predicted - 0.92).abs() < 0.001_f64);
     }
 }
 
@@ -282,13 +282,13 @@ mod prop_tests {
 
         #[test]
         fn prop_linear_interpolation_correctness(
-            p1_psnr in 20.0..30.0_f64,
-            p2_psnr in 35.0..45.0_f64,
-            p3_psnr in 50.0..60.0_f64,
-            p1_ssim in 0.85..0.92_f64,
-            p2_ssim in 0.93..0.96_f64,
-            p3_ssim in 0.97..0.995_f64,
-            query_ratio in 0.0..1.0_f64,
+            p1_psnr in 20.0_f64..30.0_f64,
+            p2_psnr in 35.0_f64..45.0_f64,
+            p3_psnr in 50.0_f64..60.0_f64,
+            p1_ssim in 0.85_f64..0.92_f64,
+            p2_ssim in 0.93_f64..0.96_f64,
+            p3_ssim in 0.97_f64..0.995_f64,
+            query_ratio in 0.0_f64..1.0_f64,
         ) {
             let mut mapping = PsnrSsimMapping::new();
             mapping.insert(p1_psnr, p1_ssim);
@@ -299,7 +299,7 @@ mod prop_tests {
             let predicted = mapping.predict_ssim(query_psnr).unwrap_or_else(|| panic!("missing predicted value"));
 
             let expected = query_ratio.mul_add(p2_ssim - p1_ssim, p1_ssim);
-            prop_assert!((predicted - expected).abs() < 0.0001,
+            prop_assert!((predicted - expected).abs() < 0.000_1_f64,
                 "Interpolation error: predicted={}, expected={}", predicted, expected);
         }
     }
@@ -309,9 +309,9 @@ mod prop_tests {
 
         #[test]
         fn prop_mapping_correction(
-            psnr in 30.0..50.0_f64,
-            initial_ssim in 0.90..0.95_f64,
-            actual_ssim in 0.95..0.99_f64,
+            psnr in 30.0_f64..50.0_f64,
+            initial_ssim in 0.90_f64..0.95_f64,
+            actual_ssim in 0.95_f64..0.99_f64,
         ) {
             let mut mapping = PsnrSsimMapping::new();
             mapping.insert(psnr, initial_ssim);
@@ -320,7 +320,7 @@ mod prop_tests {
 
             let points = mapping.get_points();
             prop_assert_eq!(points.len(), 1, "Should update existing point");
-            prop_assert!((points.first().unwrap_or(&MappingPoint { psnr: 0.0, ssim: 0.0 }).ssim - actual_ssim).abs() < 0.001,
+            prop_assert!((points.first().unwrap_or(&MappingPoint { psnr: 0.0, ssim: 0.0 }).ssim - actual_ssim).abs() < 0.001_f64,
                 "SSIM should be updated to actual value");
         }
     }

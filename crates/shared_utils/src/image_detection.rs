@@ -535,7 +535,7 @@ pub fn detect_animation(path: &Path, format: &DetectedFormat) -> Result<(bool, u
     if crate::ffprobe::is_ffprobe_available() {
         if let Ok(probe) = crate::ffprobe::probe_video(path) {
             let probe_frames = u32::try_from(probe.frame_count).unwrap_or(1);
-            if probe.frame_rate > 0.0 {
+            if probe.frame_rate > 0.0_f64 {
                 fps = Some(crate::numeric_cast::f64_to_f32_lossy(probe.frame_rate));
             }
 
@@ -543,7 +543,7 @@ pub fn detect_animation(path: &Path, format: &DetectedFormat) -> Result<(bool, u
                 return Ok((true, probe_frames, fps));
             } else if probe_frames == 1 {
                 return Ok((false, 1, fps));
-            } else if probe.duration > 0.1 && probe.format_name.contains("video") {
+            } else if probe.duration > 0.1_f64 && probe.format_name.contains("video") {
                 return Ok((true, 0, fps));
             }
         }
@@ -893,7 +893,7 @@ fn detect_png_compression(path: &Path) -> Result<CompressionType> {
             } else {
                 "Lossless"
             },
-            analysis.confidence * 100.0,
+            analysis.confidence * 100.0_f64,
             analysis.explanation
         ));
     }
@@ -956,16 +956,16 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
         let is_medium_image = pixel_count > 10_000;
 
         if png_info.has_trns {
-            factors.indexed_with_alpha = 0.98;
+            factors.indexed_with_alpha = 0.98_f64;
             explanations.push("Indexed PNG with alpha (tRNS) - definite quantization".to_string());
         } else if is_large_image {
-            factors.indexed_with_alpha = 0.75;
+            factors.indexed_with_alpha = 0.75_f64;
             explanations.push(format!(
                 "Large indexed PNG ({}x{}) - likely quantized",
                 png_info.width, png_info.height
             ));
         } else {
-            factors.indexed_with_alpha = if is_medium_image { 0.45 } else { 0.15 };
+            factors.indexed_with_alpha = if is_medium_image { 0.45_f64 } else { 0.15_f64 };
         }
     }
 
@@ -982,7 +982,7 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
             let den = Rational::from(
                 u32::try_from(pixel_count)
                     .expect("Value overflowed or is missing, cannot process ratio"),
-            ) / Rational::from(1_000_000);
+            ) / Rational::from(1_000_000_i32);
             (num / den).to_f64().min(1000.0)
         };
 
@@ -1016,38 +1016,38 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
         };
 
         if palette_size > 240 {
-            factors.large_palette = 0.95;
+            factors.large_palette = 0.95_f64;
             explanations.push(format!(
                 "Near-max palette ({palette_size} colors) - definitely quantized"
             ));
         } else if palette_size > 200 {
-            factors.large_palette = 0.85;
+            factors.large_palette = 0.85_f64;
             explanations.push(format!(
                 "Large palette ({palette_size} colors) - likely quantized"
             ));
         } else if is_large_image && palette_size > 64 {
-            factors.large_palette = 0.80;
+            factors.large_palette = 0.80_f64;
             explanations.push(format!(
                 "Large image ({}x{}) with limited palette ({} colors) - quantization indicator",
                 png_info.width, png_info.height, palette_size
             ));
         } else if is_large_image && palette_size > 32 {
-            factors.large_palette = 0.60;
+            factors.large_palette = 0.60_f64;
             explanations.push(format!(
                 "Large image with small palette ({palette_size} colors)"
             ));
         } else if is_medium_image && palette_size > 128 {
-            factors.large_palette = 0.50;
-        } else if palette_size <= 16 && palette_density > 0.5 {
+            factors.large_palette = 0.50_f64;
+        } else if palette_size <= 16 && palette_density > 0.5_f64 {
             // Small palette on small image — likely intentional (pixel art, icon)
-            factors.large_palette = 0.0;
-        } else if palette_size <= 32 && palette_density > 0.3 {
-            factors.large_palette = 0.1;
+            factors.large_palette = 0.0_f64;
+        } else if palette_size <= 32 && palette_density > 0.3_f64 {
+            factors.large_palette = 0.1_f64;
         } else {
-            factors.large_palette = if palette_density < 0.5 { 0.3 } else { 0.15 };
+            factors.large_palette = if palette_density < 0.5_f64 { 0.3_f64 } else { 0.15_f64 };
         }
 
-        if is_large_image && colors_per_megapixel < 50.0 {
+        if is_large_image && colors_per_megapixel < 50.0_f64 {
             factors.large_palette = factors.large_palette.max(0.70);
             if !explanations.iter().any(|e| e.contains("colors/MP")) {
                 explanations.push(format!(
@@ -1058,7 +1058,7 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
     }
 
     if let Some(ref tool) = png_info.detected_tool {
-        factors.tool_signature = 1.0;
+        factors.tool_signature = 1.0_f64;
         detected_tool = Some(tool.clone());
         explanations.push(format!("Tool signature detected: {tool}"));
     }
@@ -1068,7 +1068,7 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
             if let Ok(img) = open_image_with_limits(p) {
                 let dithering_score = detect_dithering_pattern(&img);
                 factors.dithering_detected = dithering_score;
-                if dithering_score > 0.5 {
+                if dithering_score > 0.5_f64 {
                     explanations.push(format!(
                         "Dithering pattern detected (score: {dithering_score:.2})"
                     ));
@@ -1090,26 +1090,26 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
                     .to_f64();
 
                     if is_large_image {
-                        if usage_ratio > 0.8 {
-                            factors.color_count_anomaly = 0.85;
+                        if usage_ratio > 0.8_f64 {
+                            factors.color_count_anomaly = 0.85_f64;
                             explanations.push(format!(
                                 "Large image using {:.0}% of {} color palette",
-                                usage_ratio * 100.0,
+                                usage_ratio * 100.0_f64,
                                 palette_size
                             ));
-                        } else if usage_ratio > 0.5 {
-                            factors.color_count_anomaly = 0.70;
+                        } else if usage_ratio > 0.5_f64 {
+                            factors.color_count_anomaly = 0.70_f64;
                         } else {
-                            factors.color_count_anomaly = 0.50;
+                            factors.color_count_anomaly = 0.50_f64;
                         }
-                    } else if usage_ratio > 0.9 && palette_size > 200 {
-                        factors.color_count_anomaly = 0.8;
+                    } else if usage_ratio > 0.9_f64 && palette_size > 200 {
+                        factors.color_count_anomaly = 0.8_f64;
                         explanations.push(format!(
                             "High palette utilization ({:.0}%)",
-                            usage_ratio * 100.0
+                            usage_ratio * 100.0_f64
                         ));
-                    } else if usage_ratio > 0.7 && palette_size > 128 {
-                        factors.color_count_anomaly = 0.5;
+                    } else if usage_ratio > 0.7_f64 && palette_size > 128 {
+                        factors.color_count_anomaly = 0.5_f64;
                     }
                 }
 
@@ -1132,7 +1132,7 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
 
                 let banding_score = detect_gradient_banding(&img);
                 factors.gradient_banding = banding_score;
-                if banding_score > 0.5 {
+                if banding_score > 0.5_f64 {
                     explanations.push(format!(
                         "Gradient banding detected (score: {banding_score:.2})"
                     ));
@@ -1140,7 +1140,7 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
 
                 let freq_score = detect_color_frequency_distribution(&img);
                 factors.color_frequency_distribution = freq_score;
-                if freq_score > 0.5 {
+                if freq_score > 0.5_f64 {
                     explanations.push(format!(
                         "Color frequency concentrated (score: {freq_score:.2}) — quantization indicator"
                     ));
@@ -1151,7 +1151,7 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
                         let e = calculate_rgb_entropy(&img);
                         let ps = 256.0f64;
                         let me = ps.log2();
-                        let ratio = if me > 0.0 { e / me } else { 0.0 };
+                        let ratio = if me > 0.0_f64 { e / me } else { 0.0_f64 };
                         (e, me, ratio)
                     },
                     |p_size| {
@@ -1161,25 +1161,25 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
                 );
                 let palette_size =
                     f64::from(u16::try_from(png_info.palette_size.unwrap_or(256)).unwrap_or(256));
-                if palette_size >= 64.0 && entropy_ratio < 0.6 && pixel_count > 10_000 {
+                if palette_size >= 64.0_f64 && entropy_ratio < 0.6_f64 && pixel_count > 10_000 {
                     factors.entropy_anomaly = (0.6 - entropy_ratio).mul_add(0.5, 0.5);
                     factors.entropy_anomaly = factors.entropy_anomaly.clamp(0.0, 0.75);
-                    if factors.entropy_anomaly > 0.4 {
+                    if factors.entropy_anomaly > 0.4_f64 {
                         explanations.push(format!(
                             "Low palette entropy ratio ({:.2}, max {:.2}) — quantization indicator",
-                            entropy_ratio, 1.0
+                            entropy_ratio, 1.0_f64
                         ));
                     }
-                } else if palette_size >= 128.0 && entropy < 5.0 && pixel_count > 10_000 {
+                } else if palette_size >= 128.0_f64 && entropy < 5.0_f64 && pixel_count > 10_000 {
                     factors.entropy_anomaly = (5.0 - entropy).mul_add(0.08, 0.5);
                     factors.entropy_anomaly = factors.entropy_anomaly.clamp(0.0, 0.7);
-                    if factors.entropy_anomaly > 0.4 {
+                    if factors.entropy_anomaly > 0.4_f64 {
                         explanations.push(format!(
                             "Low entropy ({entropy:.2} vs max {max_entropy:.2}) — quantization indicator"
                         ));
                     }
-                } else if palette_size >= 64.0 && entropy_ratio < 0.5 && pixel_count > 5_000 {
-                    factors.entropy_anomaly = 0.35;
+                } else if palette_size >= 64.0_f64 && entropy_ratio < 0.5_f64 && pixel_count > 5_000 {
+                    factors.entropy_anomaly = 0.35_f64;
                 }
             }
         }
@@ -1198,17 +1198,17 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
                 .expect("Value overflowed or is missing, cannot process ratio"),
         )
     } else {
-        1.0
+        1.0_f64
     };
 
     if png_info.color_type == 3
-        && compression_ratio < 0.15
+        && compression_ratio < 0.15_f64
         && png_info.width * png_info.height > 100_000
     {
-        factors.size_efficiency_anomaly = 0.6;
+        factors.size_efficiency_anomaly = 0.6_f64;
         explanations.push(format!(
             "Unusually efficient compression ({:.1}%)",
-            compression_ratio * 100.0
+            compression_ratio * 100.0_f64
         ));
     }
 
@@ -1227,14 +1227,13 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
         + factors.color_count_anomaly
         + factors.gradient_banding
         + factors.color_frequency_distribution)
-        / 4.0;
+        / 4.0_f64;
 
     let heuristic_score = f64::midpoint(factors.size_efficiency_anomaly, factors.entropy_anomaly);
 
     let final_score = heuristic_score.mul_add(
         weights.heuristic,
-        structural_score.mul_add(weights.structural, metadata_score * weights.metadata)
-            + statistical_score * weights.statistical,
+        statistical_score.mul_add(weights.statistical, structural_score.mul_add(weights.structural, metadata_score * weights.metadata)),
     );
 
     if std::env::var("IMGQUALITY_DEBUG").is_ok() {
@@ -1297,12 +1296,12 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
                 let rgb_entropy = calculate_rgb_entropy(&img);
                 let max_entropy = 8.0f64;
                 let entropy_ratio = rgb_entropy / max_entropy;
-                let entropy_signal = if entropy_ratio < 0.55 && pixel_count > 10_000 {
-                    0.70
-                } else if entropy_ratio < 0.65 && pixel_count > 10_000 {
-                    0.40
+                let entropy_signal = if entropy_ratio < 0.55_f64 && pixel_count > 10_000 {
+                    0.70_f64
+                } else if entropy_ratio < 0.65_f64 && pixel_count > 10_000 {
+                    0.40_f64
                 } else {
-                    0.0
+                    0.0_f64
                 };
 
                 // Signal 3: gradient banding
@@ -1330,7 +1329,7 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
 
                 let strong_signals = [freq_signal, entropy_signal, banding_signal]
                     .iter()
-                    .filter(|&&s| s >= 0.50)
+                    .filter(|&&s| s >= 0.50_f64)
                     .count();
 
                 if std::env::var("IMGQUALITY_DEBUG").is_ok() {
@@ -1340,7 +1339,7 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
                 }
 
                 if strong_signals >= 2 {
-                    let tc_score = (freq_signal + entropy_signal + banding_signal) / 3.0;
+                    let tc_score = (freq_signal + entropy_signal + banding_signal) / 3.0_f64;
                     return Ok(PngQuantizationAnalysis {
                         is_quantized: true,
                         confidence: 0.70 + tc_score * 0.15,
@@ -1384,14 +1383,14 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
     // Conservative strategy: only mark as lossy when confidence is high.
     // Gray zone without tool signature → treat as lossless to avoid
     // false positives (e.g. natural palette art misclassified as quantized).
-    let (is_quantized, confidence) = if final_score >= 0.70 {
+    let (is_quantized, confidence) = if final_score >= 0.70_f64 {
         (true, (final_score - 0.70).mul_add(0.33, 0.9))
     } else if final_score >= LOSSY_THRESHOLD {
         (true, (final_score - LOSSY_THRESHOLD).mul_add(1.0, 0.7))
     } else if final_score >= crate::constants::PNG_QUANT_THRESHOLD_LOW {
         // Gray zone: no tool signature → lossless (conservative)
         (false, (LOSSY_THRESHOLD - final_score).mul_add(1.0, 0.5))
-    } else if final_score >= 0.30 {
+    } else if final_score >= 0.30_f64 {
         (false, (LOSSY_THRESHOLD - final_score).mul_add(1.0, 0.5))
     } else {
         (false, (0.30 - final_score).mul_add(0.67, 0.8))
@@ -1655,15 +1654,15 @@ fn detect_dithering_pattern(img: &DynamicImage) -> f64 {
                 rgba.get_pixel(x + 1, y + 1),
             ];
 
-            let mut alternations = 0;
+            let mut alternations = 0_i32;
             for neighbor in &neighbors {
                 let diff = color_difference(*center, **neighbor);
-                if diff > 30.0 && diff < 100.0 {
-                    alternations += 1;
+                if diff > 30.0_f64 && diff < 100.0_f64 {
+                    alternations += 1_i32;
                 }
             }
 
-            if alternations >= 3 {
+            if alternations >= 3_i32 {
                 high_freq_count += 1;
             }
             total_comparisons += 1;
@@ -1698,7 +1697,7 @@ fn detect_dithering_pattern(img: &DynamicImage) -> f64 {
             let c11 = rgba.get_pixel(x + 1, y + 1);
             let diag_diff = color_difference(*c00, *c11) + color_difference(*c10, *c01);
             let cross_diff = color_difference(*c00, *c10) + color_difference(*c00, *c01);
-            if cross_diff > 40.0 && diag_diff < cross_diff * 0.5 {
+            if cross_diff > 40.0_f64 && diag_diff < cross_diff * 0.5_f64 {
                 bayer_count += 1;
             }
             bayer_total += 1;
@@ -1714,7 +1713,7 @@ fn detect_dithering_pattern(img: &DynamicImage) -> f64 {
         )) * 4.0)
             .min(1.0)
     } else {
-        0.0
+        0.0_f64
     };
 
     floyd_steinberg_score.max(bayer_score)
@@ -1730,9 +1729,9 @@ fn color_difference(a: Rgba<u8>, b: Rgba<u8>) -> f64 {
     let dg = f64::from(a[1]) - f64::from(b[1]);
     let db = f64::from(a[2]) - f64::from(b[2]);
     // Weights shift with mean red: redder pixels → more red weight, bluer → more blue weight
-    let wr = 2.0 + rmean / 256.0;
-    let wg = 4.0;
-    let wb = 2.0 + (255.0 - rmean) / 256.0;
+    let wr = 2.0_f64 + rmean / 256.0_f64;
+    let wg = 4.0_f64;
+    let wb = 2.0_f64 + (255.0_f64 - rmean) / 256.0_f64;
     (wb * db)
         .mul_add(db, (wr * dr).mul_add(dr, wg * dg * dg))
         .sqrt()
@@ -1769,10 +1768,10 @@ fn sample_unique_color_count(img: &DynamicImage, max_samples: usize) -> usize {
         for x in (0..width).step_by(usize::try_from(step).unwrap_or(1)) {
             let p = rgba.get_pixel(x, y);
             // 5-bit per channel quantization (approximate palette bins)
-            let r5 = p[0] >> 3;
-            let g5 = p[1] >> 3;
-            let b5 = p[2] >> 3;
-            let key = (u32::from(r5) << 16) | (u32::from(g5) << 8) | u32::from(b5);
+            let r5 = p[0] >> 3_i32;
+            let g5 = p[1] >> 3_i32;
+            let b5 = p[2] >> 3_i32;
+            let key = (u32::from(r5) << 16_i32) | (u32::from(g5) << 8_i32) | u32::from(b5);
             set.insert(key);
             sampled += 1;
             if sampled >= max_samples {
@@ -1813,7 +1812,7 @@ fn analyze_color_distribution(img: &DynamicImage, _palette_size: Option<usize>) 
         *state = state
             .wrapping_mul(6_364_136_223_846_793_005)
             .wrapping_add(1);
-        u32::try_from(*state >> 32).expect("Failed to parse integer or missing required value")
+        u32::try_from(*state >> 32_i32).expect("Failed to parse integer or missing required value")
     };
 
     for by in 0..grid_size {
@@ -1968,7 +1967,7 @@ fn detect_gradient_banding(img: &DynamicImage) -> f64 {
     // Per-channel detection weighted by human visual sensitivity (G > R > B).
     // Grayscale projection loses hue info — red vs blue map to similar luma,
     // causing missed banding in single-channel gradients.
-    let channel_weights = [0.30f64, 0.59, 0.11]; // R, G, B
+    let channel_weights = [0.30f64, 0.59_f64, 0.11_f64]; // R, G, B
     let mut total_score = 0.0f64;
 
     for (ch, &weight) in channel_weights.iter().enumerate() {
@@ -1995,7 +1994,7 @@ fn detect_gradient_banding(img: &DynamicImage) -> f64 {
                 } else if gradient_length > 20 {
                     if step_count > 0 {
                         let step_ratio = f64::from(step_count) / f64::from(gradient_length);
-                        if step_ratio > 0.08 && step_ratio < 0.5 {
+                        if step_ratio > 0.08_f64 && step_ratio < 0.5_f64 {
                             banding_score += step_ratio;
                             gradient_regions += 1;
                         }
@@ -2011,7 +2010,7 @@ fn detect_gradient_banding(img: &DynamicImage) -> f64 {
         let ch_score = if gradient_regions > 0 {
             (banding_score / f64::from(gradient_regions)).min(1.0)
         } else {
-            0.0
+            0.0_f64
         };
         total_score += ch_score * weight;
     }
@@ -2045,7 +2044,7 @@ fn detect_gradient_banding(img: &DynamicImage) -> f64 {
                     }
                 } else if grad_len > 20 && steps > 0 {
                     let r = f64::from(steps) / f64::from(grad_len);
-                    if r > 0.08 && r < 0.5 {
+                    if r > 0.08_f64 && r < 0.5_f64 {
                         diag_banding += r;
                         diag_regions += 1;
                     }
@@ -2079,7 +2078,7 @@ fn detect_gradient_banding(img: &DynamicImage) -> f64 {
                     }
                 } else if grad_len > 20 && steps > 0 {
                     let r = f64::from(steps) / f64::from(grad_len);
-                    if r > 0.08 && r < 0.5 {
+                    if r > 0.08_f64 && r < 0.5_f64 {
                         diag_banding += r;
                         diag_regions += 1;
                     }
@@ -2097,7 +2096,7 @@ fn detect_gradient_banding(img: &DynamicImage) -> f64 {
     let diag_score = if diag_regions > 0 {
         (diag_banding / f64::from(diag_regions)).min(1.0)
     } else {
-        0.0
+        0.0_f64
     };
 
     // Combine: per-channel horizontal (70%) + diagonal luma (30%)
@@ -2146,7 +2145,7 @@ pub fn calculate_entropy(img: &DynamicImage) -> f64 {
         u32::try_from(gray.pixels().count())
             .expect("Value overflowed or is missing, cannot process ratio"),
     );
-    let mut entropy = 0.0;
+    let mut entropy = 0.0_f64;
 
     for &count in &histogram {
         if count > 0 {
@@ -2177,7 +2176,7 @@ fn calculate_palette_index_entropy(img: &DynamicImage, palette_size: usize) -> (
         u32::try_from(u64::from(width) * u64::from(height))
             .expect("Value overflowed or is missing, cannot process ratio"),
     );
-    if total == 0.0 || palette_size == 0 {
+    if total == 0.0_f64 || palette_size == 0 {
         return (0.0, 0.0, 0.0);
     }
 
@@ -2191,7 +2190,7 @@ fn calculate_palette_index_entropy(img: &DynamicImage, palette_size: usize) -> (
     }
 
     // Compute entropy over the frequency distribution of distinct colors
-    let mut entropy = 0.0;
+    let mut entropy = 0.0_f64;
     for &count in color_freq.values() {
         if count > 0 {
             let p = f64::from(
@@ -2205,10 +2204,10 @@ fn calculate_palette_index_entropy(img: &DynamicImage, palette_size: usize) -> (
         u32::try_from(palette_size).expect("Value overflowed or is missing, cannot process ratio"),
     )
     .log2();
-    let ratio = if max_entropy > 0.0 {
+    let ratio = if max_entropy > 0.0_f64 {
         entropy / max_entropy
     } else {
-        0.0
+        0.0_f64
     };
 
     (entropy, max_entropy, ratio)
@@ -2216,7 +2215,7 @@ fn calculate_palette_index_entropy(img: &DynamicImage, palette_size: usize) -> (
 
 fn calculate_rgb_entropy(img: &DynamicImage) -> f64 {
     fn channel_entropy(hist: &[u64; 256], total: f64) -> f64 {
-        let mut h = 0.0;
+        let mut h = 0.0_f64;
         for &count in hist {
             if count > 0 {
                 let p = f64::from(
@@ -2457,16 +2456,16 @@ fn estimate_lossy_quality_fallback(
     }
 
     // Heuristic v2: Multi-factor quality estimation
-    let raw_bpp = crate::numeric_cast::u64_to_f64(file_size) * 8.0
+    let raw_bpp = crate::numeric_cast::u64_to_f64(file_size) * 8.0_f64
         / crate::numeric_cast::u64_to_f64(pixels.max(1))
         / f64::from(frame_count.max(1));
 
     // Format efficiency multiplier (relative to JPEG)
     // AVIF/HEIC ~ 3.0x, WebP ~ 1.5x
     let efficiency_factor = match format {
-        DetectedFormat::AVIF | DetectedFormat::HEIC | DetectedFormat::HEIF => 3.0,
-        DetectedFormat::WebP => 1.5,
-        _ => 1.0,
+        DetectedFormat::AVIF | DetectedFormat::HEIC | DetectedFormat::HEIF => 3.0_f64,
+        DetectedFormat::WebP => 1.5_f64,
+        _ => 1.0_f64,
     };
 
     // Entropy compensation:
@@ -2735,15 +2734,15 @@ fn detect_exr_compression(path: &Path) -> Result<CompressionType> {
             .get(7)
             .expect("Required metadata byte missing (out of bounds)"),
     ]);
-    let is_multipart = (version & (1 << 9)) != 0;
+    let is_multipart = (version & (1 << 9_i32)) != 0;
 
     let mut pos = 8; // skip magic + version
     let mut found_any_compression = false;
-    let mut part_count = 0;
+    let mut part_count = 0_i32;
 
     // Scan all parts (single-part = 1 iteration, multi-part = multiple)
     loop {
-        part_count += 1;
+        part_count += 1_i32;
 
         // Scan attributes in this part: each is name\0 + type\0 + size(u32 LE) + value
         // Empty name terminates the part header

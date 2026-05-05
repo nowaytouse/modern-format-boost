@@ -1855,27 +1855,27 @@ mod tests {
     fn test_strict_size_reduction_formula() {
         let test_cases = [
             (1000u64, 500u64, 50.0f64),
-            (1000, 250, 75.0),
-            (1000, 100, 90.0),
-            (1000, 900, 10.0),
-            (1000, 1000, 0.0),
-            (1000, 2000, -100.0),
-            (1000, 1500, -50.0),
+            (1000, 250, 75.0_f64),
+            (1000, 100, 90.0_f64),
+            (1000, 900, 10.0_f64),
+            (1000, 1000, 0.0_f64),
+            (1000, 2000, -100.0_f64),
+            (1000, 1500, -50.0_f64),
         ];
 
         for (input, output, expected) in test_cases {
             let result = calculate_size_reduction(input, output);
-            let expected_calc = (1.0
+            let expected_calc = (1.0_f64
                 - (crate::numeric_cast::u64_to_f64(output)
                     / crate::numeric_cast::u64_to_f64(input)))
-                * 100.0;
+                * 100.0_f64;
 
             assert!(
-                (result - expected).abs() < 0.001,
+                (result - expected).abs() < 0.001_f64,
                 "STRICT: {input}->{output}  expected {expected}, got {result}"
             );
             assert!(
-                (result - expected_calc).abs() < 0.0001,
+                (result - expected_calc).abs() < 0.000_1_f64,
                 "STRICT: Formula mismatch for {input}->{output}"
             );
         }
@@ -1885,13 +1885,13 @@ mod tests {
     fn test_strict_large_file_sizes() {
         let reduction = calculate_size_reduction(10_000_000_000, 5_000_000_000);
         assert!(
-            (reduction - 50.0).abs() < 0.001,
+            (reduction - 50.0).abs() < 0.001_f64,
             "STRICT: 10GB->5GB should be exactly 50%, got {reduction}"
         );
 
         let reduction = calculate_size_reduction(100_000_000_000, 25_000_000_000);
         assert!(
-            (reduction - 75.0).abs() < 0.001,
+            (reduction - 75.0).abs() < 0.001_f64,
             "STRICT: 100GB->25GB should be exactly 75%, got {reduction}"
         );
     }
@@ -1900,7 +1900,7 @@ mod tests {
     fn test_strict_small_file_sizes() {
         let reduction = calculate_size_reduction(100, 50);
         assert!(
-            (reduction - 50.0).abs() < 0.001,
+            (reduction - 50.0).abs() < 0.001_f64,
             "STRICT: 100->50 bytes should be exactly 50%, got {reduction}"
         );
     }
@@ -2166,7 +2166,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing size reduction"))
                 - 50.0)
                 .abs()
-                < 0.1
+                < 0.1_f64
         );
         assert!(
             result.message.contains("encoding"),
@@ -2237,7 +2237,7 @@ mod tests {
         assert!(result.success);
         assert!(!result.skipped);
         assert_eq!(result.output_path.as_deref(), Some("/test/output.mp4"));
-        assert_eq!(result.size_reduction, Some(50.0));
+        assert_eq!(result.size_reduction, Some(50.0_f64));
         assert_eq!(result.outcome(), ConversionOutcome::Converted);
     }
 
@@ -2407,7 +2407,7 @@ mod tests {
             crf: 23.5,
             is_lossless: false,
             iterations: 3,
-            ssim: Some(0.9985),
+            ssim: Some(0.998_5_f64),
             explored_from_crf: Some(21.0),
             quality_label: Some("Medium"),
         };

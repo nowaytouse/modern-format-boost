@@ -369,14 +369,14 @@ pub fn restore_directory_timestamps<S>(
 ) where
     S: std::hash::BuildHasher,
 {
-    let mut failed_count = 0;
-    let mut total_count = 0;
+    let mut failed_count = 0_i32;
+    let mut total_count = 0_i32;
 
     for (path, (atime, mtime)) in saved {
         if path.exists() && path.is_dir() {
-            total_count += 1;
+            total_count += 1_i32;
             if let Err(e) = filetime::set_file_times(path, *atime, *mtime) {
-                failed_count += 1;
+                failed_count += 1_i32;
                 eprintln!(
                     "⚠️  Failed to restore directory timestamp for {}: {}",
                     path.display(),
@@ -386,7 +386,7 @@ pub fn restore_directory_timestamps<S>(
         }
     }
 
-    if failed_count > 0 {
+    if failed_count > 0_i32 {
         eprintln!(
             "⚠️  TIMESTAMP VERIFICATION: {failed_count}/{total_count} directories failed (possible filesystem protection or network mount)"
         );
@@ -404,16 +404,16 @@ pub fn apply_saved_timestamps_to_dst<S>(
 ) where
     S: std::hash::BuildHasher,
 {
-    let mut failed_count = 0;
-    let mut total_count = 0;
+    let mut failed_count = 0_i32;
+    let mut total_count = 0_i32;
 
     for (src_path, (atime, mtime)) in saved {
         if let Ok(rel_path) = src_path.strip_prefix(src_root) {
             let dst_path = dst_root.join(rel_path);
             if dst_path.exists() && dst_path.is_dir() {
-                total_count += 1;
+                total_count += 1_i32;
                 if let Err(e) = filetime::set_file_times(&dst_path, *atime, *mtime) {
-                    failed_count += 1;
+                    failed_count += 1_i32;
                     eprintln!(
                         "⚠️  Failed to apply directory timestamp to {}: {}",
                         dst_path.display(),
@@ -424,7 +424,7 @@ pub fn apply_saved_timestamps_to_dst<S>(
         }
     }
 
-    if failed_count > 0 {
+    if failed_count > 0_i32 {
         eprintln!(
             "⚠️  TIMESTAMP VERIFICATION: {failed_count}/{total_count} destination directories failed (possible filesystem protection or network mount)"
         );

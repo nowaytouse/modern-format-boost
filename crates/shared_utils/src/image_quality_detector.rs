@@ -177,7 +177,7 @@ pub fn analyze_image_quality(
 
     let noise_level =
         if precision.is_lossless_deterministic && (precision.bit_depth.unwrap_or(8) >= 10) {
-            0.0
+            0.0_f64
         } else {
             calculate_noise_level(rgba_data, width, height)
         };
@@ -399,7 +399,7 @@ fn calculate_texture_variance(rgba: &[u8], width: u32, height: u32) -> f64 {
         2
     };
 
-    let mut variance_sum = 0.0;
+    let mut variance_sum = 0.0_f64;
     let mut sample_count = 0usize;
 
     for y in (1..crate::numeric_cast::u32_to_usize_sat(height.saturating_sub(1))).step_by(step) {
@@ -407,8 +407,8 @@ fn calculate_texture_variance(rgba: &[u8], width: u32, height: u32) -> f64 {
             let mut sum = 0i32;
             let mut sq_sum = 0i64;
 
-            for dy in -1i32..=1 {
-                for dx in -1i32..=1 {
+            for dy in -1i32..=1_i32 {
+                for dx in -1i32..=1_i32 {
                     let px = crate::numeric_cast::i32_to_usize_sat(
                         crate::numeric_cast::usize_to_i32_sat(x) + dx,
                     );
@@ -421,25 +421,25 @@ fn calculate_texture_variance(rgba: &[u8], width: u32, height: u32) -> f64 {
                         rgba.get(idx)
                             .copied()
                             .expect("Failed to parse integer or missing required value"),
-                    ) * 299
+                    ) * 299_i32
                         + i32::from(
                             rgba.get(idx + 1)
                                 .copied()
                                 .expect("Failed to parse integer or missing required value"),
-                        ) * 587
+                        ) * 587_i32
                         + i32::from(
                             rgba.get(idx + 2)
                                 .copied()
                                 .expect("Failed to parse integer or missing required value"),
-                        ) * 114)
-                        / 1000;
+                        ) * 114_i32)
+                        / 1_000_i32;
                     sum += gray;
                     sq_sum += i64::from(gray) * i64::from(gray);
                 }
             }
 
-            let mean = f64::from(sum) / 9.0;
-            let variance = (crate::numeric_cast::i64_to_f64(sq_sum) / 9.0) - (mean * mean);
+            let mean = f64::from(sum) / 9.0_f64;
+            let variance = mean.mul_add(-mean, crate::numeric_cast::i64_to_f64(sq_sum) / 9.0_f64);
             variance_sum += variance.sqrt();
             sample_count += 1;
         }
@@ -482,7 +482,7 @@ fn calculate_noise_level(rgba: &[u8], width: u32, height: u32) -> f64 {
         1
     };
 
-    let mut diff_sum = 0.0;
+    let mut diff_sum = 0.0_f64;
     let mut sample_count = 0usize;
 
     for y in (0..crate::numeric_cast::u32_to_usize_sat(height.saturating_sub(1))).step_by(step) {
@@ -504,7 +504,7 @@ fn calculate_noise_level(rgba: &[u8], width: u32, height: u32) -> f64 {
                     rgba.get(idx + 2)
                         .copied()
                         .expect("Failed to parse integer or missing required value"),
-                )) / 3;
+                )) / 3_i32;
                 let right = (i32::from(
                     rgba.get(idx_right)
                         .copied()
@@ -517,7 +517,7 @@ fn calculate_noise_level(rgba: &[u8], width: u32, height: u32) -> f64 {
                     rgba.get(idx_right + 2)
                         .copied()
                         .expect("Failed to parse integer or missing required value"),
-                )) / 3;
+                )) / 3_i32;
                 let down = (i32::from(
                     rgba.get(idx_down)
                         .copied()
@@ -530,7 +530,7 @@ fn calculate_noise_level(rgba: &[u8], width: u32, height: u32) -> f64 {
                     rgba.get(idx_down + 2)
                         .copied()
                         .expect("Failed to parse integer or missing required value"),
-                )) / 3;
+                )) / 3_i32;
 
                 diff_sum += f64::from((curr - right).abs());
                 diff_sum += f64::from((curr - down).abs());
@@ -576,7 +576,7 @@ fn calculate_sharpness(rgba: &[u8], width: u32, height: u32) -> f64 {
         1
     };
 
-    let mut laplacian_sum = 0.0;
+    let mut laplacian_sum = 0.0_f64;
     let mut sample_count = 0usize;
 
     let get_gray = |x: usize, y: usize| -> i32 {
@@ -743,7 +743,7 @@ pub(crate) fn calculate_overall_complexity(
             + crate::constants::IMAGE_COMPLEXITY_WEIGHT_COLOR
             - 1.0)
             .abs()
-            < 1e-6,
+            < 1e-6_f64,
         "Image complexity weights must sum to 1.0"
     );
 
@@ -902,10 +902,10 @@ pub(crate) fn calculate_analysis_confidence(
     {
         confidence += crate::constants::IMAGE_CONFIDENCE_INCREMENT;
     }
-    if edge_density > 0.01 && edge_density < 0.9 {
+    if edge_density > 0.01_f64 && edge_density < 0.9_f64 {
         confidence += crate::constants::IMAGE_CONFIDENCE_INCREMENT;
     }
-    if color_diversity > 0.01 && color_diversity < 0.99 {
+    if color_diversity > 0.01_f64 && color_diversity < 0.99_f64 {
         confidence += crate::constants::IMAGE_CONFIDENCE_INCREMENT;
     }
 
@@ -1022,14 +1022,14 @@ mod property_tests {
     proptest! {
         #[test]
         fn test_complexity_range(
-            edge in 0.0..2.0f64,
-            div in 0.0..2.0f64,
-            tex in 0.0..2.0f64,
-            noise in 0.0..2.0f64
+            edge in 0.0_f64..2.0f64,
+            div in 0.0_f64..2.0f64,
+            tex in 0.0_f64..2.0f64,
+            noise in 0.0_f64..2.0f64
         ) {
             let score = calculate_overall_complexity(edge, div, tex, noise);
             prop_assert!(
-                (0.0..=1.0).contains(&score),
+                (0.0_f64..=1.0_f64).contains(&score),
                 "Complexity score must be in [0, 1] (got {})",
                 score
             );
@@ -1039,12 +1039,12 @@ mod property_tests {
         fn test_confidence_range(
             pixels in 0..10_000_000u64,
             size in 0..500_000_000u64,
-            edge in 0.0..1.5f64,
-            div in 0.0..1.5f64
+            edge in 0.0_f64..1.5f64,
+            div in 0.0_f64..1.5f64
         ) {
             let conf = calculate_analysis_confidence(pixels, size, edge, div);
             prop_assert!(
-                (0.0..=1.0).contains(&conf),
+                (0.0_f64..=1.0_f64).contains(&conf),
                 "Confidence must be in [0, 1] (got {})",
                 conf
             );

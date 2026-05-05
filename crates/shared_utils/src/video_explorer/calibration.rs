@@ -22,18 +22,18 @@ impl CalibrationPoint {
         let size_ratio =
             crate::numeric_cast::u64_to_f64(gpu_size) / crate::numeric_cast::u64_to_f64(input_size);
 
-        let (adjustment, confidence, reason) = if size_ratio < 0.95 {
+        let (adjustment, confidence, reason) = if size_ratio < 0.95_f64 {
             (
                 1.0,
-                0.85,
+                0.85_f64,
                 "GPU compression margin large, CPU can be more aggressive",
             )
-        } else if size_ratio < 1.0 {
-            (0.5, 0.90, "GPU barely compressed, CPU slight adjustment")
-        } else if size_ratio < 1.05 {
-            (-0.5, 0.80, "GPU slightly oversize, CPU needs lower CRF")
+        } else if size_ratio < 1.0_f64 {
+            (0.5, 0.90_f64, "GPU barely compressed, CPU slight adjustment")
+        } else if size_ratio < 1.05_f64 {
+            (-0.5, 0.80_f64, "GPU slightly oversize, CPU needs lower CRF")
         } else {
-            (-1.0, 0.70, "GPU not compressed, CPU needs lower CRF")
+            (-1.0, 0.70_f64, "GPU not compressed, CPU needs lower CRF")
         };
 
         let predicted_cpu_crf = (gpu_crf + base_offset + adjustment).clamp(10.0, 51.0);
@@ -54,7 +54,7 @@ impl CalibrationPoint {
         }
         let size_ratio = crate::numeric_cast::u64_to_f64(self.gpu_size)
             / crate::numeric_cast::u64_to_f64(input_size);
-        let size_pct = (size_ratio - 1.0) * 100.0;
+        let size_pct = (size_ratio - 1.0_f64) * 100.0_f64;
 
         eprintln!("┌─────────────────────────────────────────────────────");
         eprintln!("│ GPU→CPU Calibration Report");
@@ -67,7 +67,7 @@ impl CalibrationPoint {
             eprintln!("│ GPU SSIM: {ssim:.4}");
         }
         eprintln!("│ Predicted CPU Start: CRF {:.1}", self.predicted_cpu_crf);
-        eprintln!("│ Confidence: {:.0}%", self.confidence * 100.0);
+        eprintln!("│ Confidence: {:.0}%", self.confidence * 100.0_f64);
         eprintln!("│ Reason: {}", self.reason);
         eprintln!("└─────────────────────────────────────────────────────");
     }

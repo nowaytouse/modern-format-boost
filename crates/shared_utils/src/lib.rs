@@ -1,6 +1,6 @@
 //! Shared Utilities for `modern_format_boost` tools
 #![deny(clippy::unwrap_used)]
-#![deny(clippy::panic)]
+#![cfg_attr(not(test), deny(clippy::panic))]
 #![allow(
     clippy::multiple_crate_versions,
     reason = "Legitimate deviation from standard linting rules justified by specific project architecture."

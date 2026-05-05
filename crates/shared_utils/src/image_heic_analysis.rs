@@ -128,7 +128,7 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
             let bit_depth_luma = ((*hvcc_data
                 .get(17)
                 .expect("Required metadata byte missing (out of bounds)")
-                >> 5)
+                >> 5_i32)
                 & 0x07)
                 + 8;
             let bit_depth_chroma = (*hvcc_data
@@ -229,7 +229,7 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
             }
 
             // Dimension 4: Check profile compatibility flags — bit 4 = RExt compatible
-            if (compat_flags & (1 << (31 - 4))) != 0 {
+            if (compat_flags & (1 << (31_i32 - 4_i32))) != 0 {
                 if chroma_format_idc == 3 {
                     return Ok(true);
                 }
@@ -361,7 +361,7 @@ fn parse_sps_rbsp_for_transquant_bypass(sps_payload: &[u8]) -> Option<bool> {
                         .expect("Required metadata byte missing (out of bounds)")
                         >> bit_offset)
                         & 1;
-                    value = (value << 1) | u32::from(bit);
+                    value = (value << 1_i32) | u32::from(bit);
                 }
             }
             self.bit_pos += n;
@@ -404,7 +404,7 @@ fn parse_sps_rbsp_for_transquant_bypass(sps_payload: &[u8]) -> Option<bool> {
     reader.read_ue()?; // pic_height_in_luma_samples
     if reader.read_bits(1)? == 1 {
         // conformance_window_flag
-        for _ in 0..4 {
+        for _ in 0_i32..4_i32 {
             reader.read_ue()?;
         }
     }
@@ -592,7 +592,7 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
     }
 
     let image_count = ctx.image_ids().len();
-    let has_auxiliary = handle.number_of_depth_images() > 0;
+    let has_auxiliary = handle.number_of_depth_images() > 0_i32;
 
     // Detect gainmap and vendor-specific metadata from XMP in raw HEIC data
     let xmp_str = extract_xmp_from_heic_data(&data);

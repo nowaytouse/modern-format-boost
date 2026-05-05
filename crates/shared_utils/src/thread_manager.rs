@@ -104,9 +104,9 @@ fn current_memory_profile() -> X265MemoryProfile {
 fn reserve_headroom_cores(total_cores: usize, profile: X265MemoryProfile) -> usize {
     let upper = total_cores.saturating_sub(1).max(1);
     let (fraction, min_reserved, max_reserved) = match profile {
-        X265MemoryProfile::Default => (0.15, 1, 2),
-        X265MemoryProfile::Moderate => (0.25, 2, 4),
-        X265MemoryProfile::LowMemory => (0.40, 3, 6),
+        X265MemoryProfile::Default => (0.15_f64, 1, 2),
+        X265MemoryProfile::Moderate => (0.25_f64, 2, 4),
+        X265MemoryProfile::LowMemory => (0.40_f64, 3, 6),
     };
     let calculated = crate::numeric_cast::f64_to_usize_sat(
         (crate::numeric_cast::usize_to_f64(total_cores) * fraction).ceil(),

@@ -162,7 +162,7 @@ mod tests {
 
     #[test]
     fn test_approx_eq_symmetry() {
-        let values = [0.0, 1.0, -1.0, 0.5, 100.0, -100.0, 1e-7, 1e-5];
+        let values = [0.0_f64, 1.0_f64, -1.0_f64, 0.5_f64, 100.0_f64, -100.0_f64, 1e-7_f64, 1e-5_f64];
         for &a in &values {
             for &b in &values {
                 assert_eq!(
@@ -177,14 +177,14 @@ mod tests {
     #[test]
     fn test_approx_eq_reflexivity() {
         let values = [
-            0.0,
-            1.0,
-            -1.0,
-            0.5,
-            100.0,
-            -100.0,
+            0.0_f64,
+            1.0_f64,
+            -1.0_f64,
+            0.5_f64,
+            100.0_f64,
+            -100.0_f64,
             f64::MIN_POSITIVE,
-            f64::MAX / 2.0,
+            f64::MAX / 2.0_f64,
         ];
         for &a in &values {
             assert!(approx_eq_f64(a, a), "Reflexivity failed for {a}");

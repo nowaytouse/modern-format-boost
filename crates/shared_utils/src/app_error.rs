@@ -707,7 +707,7 @@ mod tests {
         let error = AppError::FfmpegError {
             message: "test".to_string(),
             stderr: String::new(),
-            exit_code: Some(1),
+            exit_code: Some(1_i32),
             command: None,
             file_path: None,
         };
@@ -781,7 +781,7 @@ mod tests {
         let error = AppError::FfmpegError {
             message: "encoding failed".to_string(),
             stderr: String::new(),
-            exit_code: Some(1),
+            exit_code: Some(1_i32),
             command: None,
             file_path: None,
         };

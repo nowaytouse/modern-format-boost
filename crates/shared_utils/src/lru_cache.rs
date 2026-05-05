@@ -230,48 +230,48 @@ mod tests {
     fn test_basic_operations() {
         let mut cache: LruCache<i32, String> = LruCache::new(3);
 
-        cache.insert(1, "one".to_string());
-        cache.insert(2, "two".to_string());
-        cache.insert(3, "three".to_string());
+        cache.insert(1_i32, "one".to_string());
+        cache.insert(2_i32, "two".to_string());
+        cache.insert(3_i32, "three".to_string());
 
         assert_eq!(cache.len(), 3);
-        assert_eq!(cache.get(&1), Some(&"one".to_string()));
-        assert_eq!(cache.get(&2), Some(&"two".to_string()));
-        assert_eq!(cache.get(&3), Some(&"three".to_string()));
+        assert_eq!(cache.get(&1_i32), Some(&"one".to_string()));
+        assert_eq!(cache.get(&2_i32), Some(&"two".to_string()));
+        assert_eq!(cache.get(&3_i32), Some(&"three".to_string()));
     }
 
     #[test]
     fn test_eviction() {
         let mut cache: LruCache<i32, String> = LruCache::new(2);
 
-        cache.insert(1, "one".to_string());
+        cache.insert(1_i32, "one".to_string());
         std::thread::sleep(std::time::Duration::from_millis(5));
-        cache.insert(2, "two".to_string());
+        cache.insert(2_i32, "two".to_string());
 
-        cache.insert(3, "three".to_string());
+        cache.insert(3_i32, "three".to_string());
 
         assert_eq!(cache.len(), 2);
-        assert_eq!(cache.get(&1), None);
-        assert_eq!(cache.get(&2), Some(&"two".to_string()));
-        assert_eq!(cache.get(&3), Some(&"three".to_string()));
+        assert_eq!(cache.get(&1_i32), None);
+        assert_eq!(cache.get(&2_i32), Some(&"two".to_string()));
+        assert_eq!(cache.get(&3_i32), Some(&"three".to_string()));
     }
 
     #[test]
     fn test_lru_order() {
         let mut cache: LruCache<i32, String> = LruCache::new(2);
 
-        cache.insert(1, "one".to_string());
+        cache.insert(1_i32, "one".to_string());
         std::thread::sleep(std::time::Duration::from_millis(10));
-        cache.insert(2, "two".to_string());
+        cache.insert(2_i32, "two".to_string());
 
         std::thread::sleep(std::time::Duration::from_millis(10));
-        let _ = cache.get(&1);
+        let _ = cache.get(&1_i32);
 
-        cache.insert(3, "three".to_string());
+        cache.insert(3_i32, "three".to_string());
 
-        assert_eq!(cache.get(&1), Some(&"one".to_string()));
-        assert_eq!(cache.get(&2), None);
-        assert_eq!(cache.get(&3), Some(&"three".to_string()));
+        assert_eq!(cache.get(&1_i32), Some(&"one".to_string()));
+        assert_eq!(cache.get(&2_i32), None);
+        assert_eq!(cache.get(&3_i32), Some(&"three".to_string()));
     }
 }
 
@@ -319,31 +319,31 @@ mod prop_tests {
             let capacity = 3usize;
             let mut cache: LruCache<i32, String> = LruCache::new(capacity);
 
-            cache.insert(1, "first".to_string());
+            cache.insert(1_i32, "first".to_string());
             std::thread::sleep(std::time::Duration::from_millis(5));
-            cache.insert(2, "second".to_string());
+            cache.insert(2_i32, "second".to_string());
             std::thread::sleep(std::time::Duration::from_millis(5));
-            cache.insert(3, "third".to_string());
+            cache.insert(3_i32, "third".to_string());
 
             std::thread::sleep(std::time::Duration::from_millis(5));
-            let _ = cache.get(&1);
+            let _ = cache.get(&1_i32);
 
-            cache.insert(4, "fourth".to_string());
+            cache.insert(4_i32, "fourth".to_string());
 
             assert!(
-                cache.get(&1).is_some(),
+                cache.get(&1_i32).is_some(),
                 "Seed {seed}: Entry 1 should be kept (recently accessed)"
             );
             assert!(
-                cache.get(&2).is_none(),
+                cache.get(&2_i32).is_none(),
                 "Seed {seed}: Entry 2 should be evicted (oldest)"
             );
             assert!(
-                cache.get(&3).is_some(),
+                cache.get(&3_i32).is_some(),
                 "Seed {seed}: Entry 3 should be kept"
             );
             assert!(
-                cache.get(&4).is_some(),
+                cache.get(&4_i32).is_some(),
                 "Seed {seed}: Entry 4 should be kept (just inserted)"
             );
         }

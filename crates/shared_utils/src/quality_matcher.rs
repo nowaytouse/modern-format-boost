@@ -715,7 +715,7 @@ pub fn calculate_av1_crf_with_options(
     let (mut effective_bpp, details) =
         calculate_effective_bpp_with_options(analysis, EncoderType::Av1, mode, bias)?;
 
-    if effective_bpp <= 0.0 {
+    if effective_bpp <= 0.0_f64 {
         return Err(format!(
             "❌ Cannot calculate AV1 CRF: effective_bpp is {} (must be > 0)\n\
              💡 Possible causes:\n\
@@ -738,9 +738,9 @@ pub fn calculate_av1_crf_with_options(
     // Defensive clamp so formula inputs are always in a safe range; final CRF clamp [15, 40] remains the safeguard.
     effective_bpp = effective_bpp.clamp(SAFE_BPP_MIN, SAFE_BPP_MAX);
 
-    let crf_float = if effective_bpp < 0.03 {
+    let crf_float = if effective_bpp < 0.03_f64 {
         35.0_f64.min(6.0f64.mul_add(-(effective_bpp * 100.0).max(0.001).log2(), 50.0))
-    } else if effective_bpp > 2.0 {
+    } else if effective_bpp > 2.0_f64 {
         18.0_f64.max(6.0f64.mul_add(-(effective_bpp * 100.0).log2(), 50.0))
     } else {
         6.0f64.mul_add(-(effective_bpp * 100.0).log2(), 50.0)
@@ -749,12 +749,12 @@ pub fn calculate_av1_crf_with_options(
     let crf_with_content = crf_float + f64::from(details.content_type_adjustment);
 
     let crf_with_bias = match bias {
-        QualityBias::Conservative => crf_with_content - 2.0,
+        QualityBias::Conservative => crf_with_content - 2.0_f64,
         QualityBias::Balanced => crf_with_content,
-        QualityBias::Aggressive => crf_with_content + 2.0,
+        QualityBias::Aggressive => crf_with_content + 2.0_f64,
     };
 
-    let crf_rounded = (crf_with_bias * 2.0).round() / 2.0;
+    let crf_rounded = (crf_with_bias * 2.0).round() / 2.0_f64;
     // Last line of defense: guarantee CRF in valid range regardless of extreme BPP or content/bias.
     let crf = (crate::numeric_cast::f64_to_f32_lossy(crf_rounded))
         .clamp(AV1_CRF_CLAMP_MIN, AV1_CRF_CLAMP_MAX);
@@ -787,7 +787,7 @@ pub fn calculate_hevc_crf_with_options(
     let (mut effective_bpp, details) =
         calculate_effective_bpp_with_options(analysis, EncoderType::Hevc, mode, bias)?;
 
-    if effective_bpp <= 0.0 {
+    if effective_bpp <= 0.0_f64 {
         return Err(format!(
             "❌ Cannot calculate HEVC CRF: effective_bpp is {} (must be > 0)\n\
              💡 Possible causes:\n\
@@ -809,9 +809,9 @@ pub fn calculate_hevc_crf_with_options(
     }
     effective_bpp = effective_bpp.clamp(SAFE_BPP_MIN, SAFE_BPP_MAX);
 
-    let crf_float = if effective_bpp < 0.02 {
+    let crf_float = if effective_bpp < 0.02_f64 {
         35.0_f64.min(5.0f64.mul_add(-(effective_bpp * 100.0).max(0.001).log2(), 46.0))
-    } else if effective_bpp > 2.0 {
+    } else if effective_bpp > 2.0_f64 {
         15.0_f64.max(5.0f64.mul_add(-(effective_bpp * 100.0).log2(), 46.0))
     } else {
         5.0f64.mul_add(-(effective_bpp * 100.0).log2(), 46.0)
@@ -820,12 +820,12 @@ pub fn calculate_hevc_crf_with_options(
     let crf_with_content = crf_float + f64::from(details.content_type_adjustment);
 
     let crf_with_bias = match bias {
-        QualityBias::Conservative => crf_with_content - 2.0,
+        QualityBias::Conservative => crf_with_content - 2.0_f64,
         QualityBias::Balanced => crf_with_content,
-        QualityBias::Aggressive => crf_with_content + 2.0,
+        QualityBias::Aggressive => crf_with_content + 2.0_f64,
     };
 
-    let crf_rounded = (crf_with_bias * 2.0).round() / 2.0;
+    let crf_rounded = (crf_with_bias * 2.0).round() / 2.0_f64;
     let crf = (crate::numeric_cast::f64_to_f32_lossy(crf_rounded))
         .clamp(HEVC_CRF_CLAMP_MIN, HEVC_CRF_CLAMP_MAX);
 
@@ -881,7 +881,7 @@ pub fn calculate_jxl_distance_with_options(
     let (effective_bpp, details) =
         calculate_effective_bpp_with_options(analysis, EncoderType::Jxl, mode, bias)?;
 
-    if effective_bpp <= 0.0 {
+    if effective_bpp <= 0.0_f64 {
         return Err(format!(
             "❌ Cannot calculate JXL distance: effective_bpp is {} (must be > 0)\n\
              💡 Possible causes:\n\
@@ -961,7 +961,7 @@ pub fn calculate_effective_bpp_with_options(
 
     let resolution_factor = calculate_resolution_factor(pixels);
 
-    let alpha_factor = if analysis.has_alpha { 0.9 } else { 1.0 };
+    let alpha_factor = if analysis.has_alpha { 0.9_f64 } else { 1.0_f64 };
 
     let color_depth_factor = calculate_color_depth_factor(analysis.bit_depth, source_codec);
 
@@ -975,21 +975,21 @@ pub fn calculate_effective_bpp_with_options(
     );
 
     let grain_factor = if analysis.has_film_grain == Some(true) {
-        1.20
+        1.20_f64
     } else {
-        1.0
+        1.0_f64
     };
 
     let target_adjustment = match target_encoder {
-        EncoderType::Av1 => 0.5,
-        EncoderType::Hevc => 0.7,
-        EncoderType::Jxl => 0.8,
+        EncoderType::Av1 => 0.5_f64,
+        EncoderType::Hevc => 0.7_f64,
+        EncoderType::Jxl => 0.8_f64,
     };
 
     let mode_adjustment = match mode {
-        MatchMode::Quality => 1.0,
-        MatchMode::Size => 0.8,
-        MatchMode::Speed => 0.9,
+        MatchMode::Quality => 1.0_f64,
+        MatchMode::Size => 0.8_f64,
+        MatchMode::Speed => 0.9_f64,
     };
 
     let effective_bpp = {
@@ -1057,7 +1057,7 @@ pub fn calculate_effective_bpp_with_options(
 }
 
 fn calculate_raw_bpp(analysis: &QualityAnalysis, pixels: u64) -> Result<f64, String> {
-    if analysis.bpp > 0.0 {
+    if analysis.bpp > 0.0_f64 {
         return Ok(analysis.bpp);
     }
 
@@ -1069,7 +1069,7 @@ fn calculate_raw_bpp(analysis: &QualityAnalysis, pixels: u64) -> Result<f64, Str
     if let Some(video_bitrate) = analysis.video_bitrate {
         if video_bitrate > 0 {
             if let Some(fps) = analysis.fps {
-                if fps > 0.0 {
+                if fps > 0.0_f64 {
                     #[cfg(feature = "high-precision")]
                     {
                         let bits_per_frame = Rational::from(video_bitrate)
@@ -1088,11 +1088,11 @@ fn calculate_raw_bpp(analysis: &QualityAnalysis, pixels: u64) -> Result<f64, Str
 
     if analysis.file_size > 0 {
         if let Some(duration) = analysis.duration_secs {
-            if duration > 0.0 {
+            if duration > 0.0_f64 {
                 let fps = analysis
                     .fps
                     .ok_or_else(|| "Missing FPS for BPP calculation".to_string())?;
-                if fps <= 0.0 {
+                if fps <= 0.0_f64 {
                     return Err("❌ Cannot calculate bpp: FPS is 0 or negative".to_string());
                 }
                 let total_frames = crate::numeric_cast::f64_to_u64_sat(duration * fps);
@@ -1101,7 +1101,7 @@ fn calculate_raw_bpp(analysis: &QualityAnalysis, pixels: u64) -> Result<f64, Str
                 }
                 #[cfg(feature = "high-precision")]
                 {
-                    let bits_per_frame = (Rational::from(analysis.file_size) * Rational::from(8))
+                    let bits_per_frame = (Rational::from(analysis.file_size) * Rational::from(8_i32))
                         / Rational::from(total_frames);
                     return Ok((bits_per_frame / Rational::from(pixels)).to_f64());
                 }
@@ -1133,19 +1133,19 @@ fn calculate_raw_bpp(analysis: &QualityAnalysis, pixels: u64) -> Result<f64, Str
 
 fn calculate_gop_factor(gop_size: Option<u32>, b_frames: u8) -> f64 {
     let gop_base = match gop_size {
-        Some(1) => 0.70,
-        Some(2..=10) => 0.85,
-        Some(11..=50) | None => 1.0,
-        Some(51..=150) => 1.15,
-        Some(151..=300) => 1.20,
-        Some(_) => 1.25,
+        Some(1) => 0.70_f64,
+        Some(2..=10) => 0.85_f64,
+        Some(11..=50) | None => 1.0_f64,
+        Some(51..=150) => 1.15_f64,
+        Some(151..=300) => 1.20_f64,
+        Some(_) => 1.25_f64,
     };
 
     let b_pyramid_bonus = match b_frames {
-        0 => 1.0,
-        1 => 1.05,
-        2 => 1.08,
-        _ => 1.12,
+        0 => 1.0_f64,
+        1 => 1.05_f64,
+        2 => 1.08_f64,
+        _ => 1.12_f64,
     };
 
     gop_base * b_pyramid_bonus
@@ -1155,13 +1155,13 @@ fn calculate_chroma_factor(pix_fmt: Option<&str>) -> f64 {
     pix_fmt.map_or(1.0, |fmt| {
         let fmt_lower = fmt.to_lowercase();
         if fmt_lower.contains("444") {
-            1.15
+            1.15_f64
         } else if fmt_lower.contains("422") {
-            1.05
+            1.05_f64
         } else if fmt_lower.contains("rgb") || fmt_lower.contains("gbr") {
-            1.20
+            1.20_f64
         } else {
-            1.0
+            1.0_f64
         }
     })
 }
@@ -1213,7 +1213,7 @@ fn calculate_codec_efficiency(codec: SourceCodec, preset: Option<&str>) -> f64 {
 }
 
 fn calculate_resolution_factor(pixels: u64) -> f64 {
-    let megapixels = crate::numeric_cast::u64_to_f64(pixels) / 1_000_000.0;
+    let megapixels = crate::numeric_cast::u64_to_f64(pixels) / 1_000_000.0_f64;
     if megapixels > 8.0 {
         0.05f64.mul_add((8.0 / megapixels).min(1.0), 0.80)
     } else if megapixels > 2.0 {
@@ -1250,36 +1250,36 @@ fn calculate_aspect_factor(width: u32, height: u32) -> f64 {
 
 fn calculate_complexity_factor(si: Option<f64>, ti: Option<f64>, raw_bpp: f64, pixels: u64) -> f64 {
     if let (Some(si_val), Some(temporal)) = (si, ti) {
-        let si_ratio = si_val / 50.0;
-        let ti_ratio = temporal / 20.0;
+        let si_ratio = si_val / 50.0_f64;
+        let ti_ratio = temporal / 20.0_f64;
 
-        let spatial_factor = if si_ratio > 1.3 {
-            1.15
-        } else if si_ratio < 0.7 {
-            0.85
+        let spatial_factor = if si_ratio > 1.3_f64 {
+            1.15_f64
+        } else if si_ratio < 0.7_f64 {
+            0.85_f64
         } else {
-            1.0
+            1.0_f64
         };
 
-        let temporal_factor = if ti_ratio > 1.5 {
-            1.10
-        } else if ti_ratio < 0.5 {
-            0.90
+        let temporal_factor = if ti_ratio > 1.5_f64 {
+            1.10_f64
+        } else if ti_ratio < 0.5_f64 {
+            0.90_f64
         } else {
-            1.0
+            1.0_f64
         };
 
         return spatial_factor * temporal_factor;
     }
 
     let expected_bpp = if pixels > 8_000_000 {
-        0.15
+        0.15_f64
     } else if pixels > 2_000_000 {
-        0.20
+        0.20_f64
     } else if pixels > 500_000 {
-        0.30
+        0.30_f64
     } else {
-        0.50
+        0.50_f64
     };
 
     let ratio = raw_bpp / expected_bpp;
@@ -1303,98 +1303,98 @@ fn calculate_confidence_v3(analysis: &QualityAnalysis) -> f64 {
     let mut score: f64 = 0.0;
     let mut max_score: f64 = 0.0;
 
-    max_score += 25.0;
+    max_score += 25.0_f64;
     if analysis.width > 0 && analysis.height > 0 {
-        score += 25.0;
+        score += 25.0_f64;
     }
 
-    max_score += 20.0;
+    max_score += 20.0_f64;
     if analysis.file_size > 0 || analysis.video_bitrate.is_some() {
-        score += 20.0;
+        score += 20.0_f64;
     }
 
-    max_score += 10.0;
-    if analysis.bpp > 0.0 {
-        score += 10.0;
+    max_score += 10.0_f64;
+    if analysis.bpp > 0.0_f64 {
+        score += 10.0_f64;
     }
 
-    max_score += 8.0;
+    max_score += 8.0_f64;
     let codec = parse_source_codec(&analysis.source_codec);
     if codec != SourceCodec::Unknown {
-        score += 8.0;
+        score += 8.0_f64;
     }
 
-    max_score += 5.0;
+    max_score += 5.0_f64;
     if analysis.video_bitrate.is_some() {
-        score += 5.0;
+        score += 5.0_f64;
     }
 
-    max_score += 4.0;
+    max_score += 4.0_f64;
     if analysis.gop_size.is_some() {
-        score += 4.0;
+        score += 4.0_f64;
     }
 
-    max_score += 3.0;
+    max_score += 3.0_f64;
     if analysis.b_frame_count.is_some() {
-        score += 3.0;
+        score += 3.0_f64;
     }
 
-    max_score += 3.0;
+    max_score += 3.0_f64;
     if analysis.pix_fmt.is_some() {
-        score += 3.0;
+        score += 3.0_f64;
     }
 
-    max_score += 3.0;
+    max_score += 3.0_f64;
     if analysis.is_hdr.is_some() || analysis.color_space.is_some() {
-        score += 3.0;
+        score += 3.0_f64;
     }
 
-    max_score += 2.0;
+    max_score += 2.0_f64;
     if analysis.content_type.is_some() {
-        score += 2.0;
+        score += 2.0_f64;
     }
 
-    max_score += 3.0;
+    max_score += 3.0_f64;
     if analysis.spatial_complexity.is_some() && analysis.temporal_complexity.is_some() {
-        score += 3.0;
+        score += 3.0_f64;
     }
 
-    max_score += 4.0;
+    max_score += 4.0_f64;
     if analysis.duration_secs.is_some() {
-        score += 4.0;
+        score += 4.0_f64;
     }
 
-    max_score += 4.0;
+    max_score += 4.0_f64;
     if analysis.fps.is_some() {
-        score += 4.0;
+        score += 4.0_f64;
     }
 
-    max_score += 3.0;
+    max_score += 3.0_f64;
     if analysis.estimated_quality.is_some() {
-        score += 3.0;
+        score += 3.0_f64;
     }
 
-    max_score += 3.0;
+    max_score += 3.0_f64;
     if analysis.bit_depth > 0 {
-        score += 3.0;
+        score += 3.0_f64;
     }
 
     if let (Some(fps), Some(duration)) = (analysis.fps, analysis.duration_secs) {
-        if fps > 0.0 && duration > 0.0 && (1.0..=240.0).contains(&fps) {
-            score += 2.0;
-            max_score += 2.0;
+        if fps > 0.0_f64 && duration > 0.0_f64 && (1.0_f64..=240.0_f64).contains(&fps) {
+            score += 2.0_f64;
+            max_score += 2.0_f64;
         }
     }
 
     if let (Some(video_bitrate), Some(fps)) = (analysis.video_bitrate, analysis.fps) {
         let pixels = u64::from(analysis.width) * u64::from(analysis.height);
-        if pixels > 0 && video_bitrate > 0 && fps > 0.0 {
+        if pixels > 0 && video_bitrate > 0 && fps > 0.0_f64 {
             // Use u64 throughout to prevent saturation at 4 Gbps (u32::MAX = ~4.3 Gbps)
             let bpp_estimate = crate::numeric_cast::u64_to_f64(video_bitrate)
                 / (crate::numeric_cast::u64_to_f64(pixels) * fps);
-            if (0.01..=5.0).contains(&bpp_estimate) {
-                score += 2.0;
-                max_score += 2.0;
+            if (0.01_f64..=5.0_f64).contains(&bpp_estimate) {
+                score += 2.0_f64;
+                max_score += 2.0_f64;
             }
         }
     }
@@ -1573,7 +1573,7 @@ fn log_analysis_header(encoder_name: &str, d: &AnalysisDetails) {
         "      Mode: {:?} | Bias: {:?}",
         d.match_mode, d.quality_bias
     );
-    eprintln!("      Confidence: {:.0}%", d.confidence * 100.0);
+    eprintln!("      Confidence: {:.0}%", d.confidence * 100.0_f64);
     eprintln!();
 }
 
@@ -1722,18 +1722,18 @@ pub fn from_video_detection(
     let pixels_per_frame = f64::from(width) * f64::from(height);
     let pixels_per_second = pixels_per_frame * fps;
 
-    let bpp = if pixels_per_second > 0.0 && bitrate > 0 {
+    let bpp = if pixels_per_second > 0.0_f64 && bitrate > 0 {
         (f64::from(
             u32::try_from(bitrate).expect("Value overflowed or is missing, cannot process ratio"),
         )) / pixels_per_second
     } else {
-        if pixels_per_second <= 0.0 {
+        if pixels_per_second <= 0.0_f64 {
             eprintln!("   ⚠️  Warning: pixels_per_second is {pixels_per_second} for {file_path}");
         }
         if bitrate == 0 {
             eprintln!("   ⚠️  Warning: bitrate is 0 for {file_path}");
         }
-        0.0
+        0.0_f64
     };
 
     QualityAnalysis {
@@ -1790,7 +1790,7 @@ impl VideoAnalysisBuilder {
     pub fn video_bitrate(mut self, bitrate: u64) -> Self {
         self.analysis.video_bitrate = Some(bitrate);
         if let (Some(fps), w, h) = (self.analysis.fps, self.analysis.width, self.analysis.height) {
-            if fps > 0.0 && w > 0 && h > 0 {
+            if fps > 0.0_f64 && w > 0 && h > 0 {
                 let pixels = f64::from(w) * f64::from(h);
                 self.analysis.bpp = (crate::numeric_cast::u64_to_f64(bitrate) / fps) / pixels;
             }
@@ -2041,9 +2041,9 @@ pub fn from_image_analysis(
     let pixels = u64::from(width) * u64::from(height);
 
     let bpp = if let (Some(duration), Some(frame_rate)) = (duration_secs, fps) {
-        if duration > 0.0 && frame_rate > 0.0 {
+        if duration > 0.0_f64 && frame_rate > 0.0_f64 {
             let total_frames = crate::numeric_cast::f64_to_u64_sat(duration * frame_rate);
-            let bits_per_frame = crate::numeric_cast::u64_to_f64(file_size) * 8.0
+            let bits_per_frame = crate::numeric_cast::u64_to_f64(file_size) * 8.0_f64
                 / crate::numeric_cast::u64_to_f64(total_frames.max(1));
             bits_per_frame / crate::numeric_cast::u64_to_f64(pixels.max(1))
         } else {
@@ -2084,8 +2084,8 @@ mod tests {
             has_b_frames: true,
             bit_depth: 8,
             has_alpha: false,
-            duration_secs: Some(60.0),
-            fps: Some(30.0),
+            duration_secs: Some(60.0_f64),
+            fps: Some(30.0_f64),
             file_size: 100_000_000,
             estimated_quality: None,
             ..Default::default()
@@ -2094,7 +2094,7 @@ mod tests {
         let result = calculate_av1_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
         // Updated: AV1 CRF range is now 0.0-51.0 (not 15.0-40.0) after removing artificial constraints
         assert!(result.crf >= 0.0 && result.crf <= 51.0);
-        assert!(result.analysis_details.confidence > 0.5);
+        assert!(result.analysis_details.confidence > 0.5_f64);
     }
 
     #[test]
@@ -2107,8 +2107,8 @@ mod tests {
             has_b_frames: false,
             bit_depth: 8,
             has_alpha: false,
-            duration_secs: Some(5.0),
-            fps: Some(10.0),
+            duration_secs: Some(5.0_f64),
+            fps: Some(10.0_f64),
             file_size: 5_000_000,
             estimated_quality: None,
             ..Default::default()
@@ -2154,23 +2154,23 @@ mod tests {
 
     #[test]
     fn test_gop_factor() {
-        assert!(calculate_gop_factor(Some(1), 0) < 0.8);
-        assert!(calculate_gop_factor(Some(250), 3) > 1.3);
-        assert!((calculate_gop_factor(Some(30), 2) - 1.08).abs() < 0.1);
+        assert!(calculate_gop_factor(Some(1), 0) < 0.8_f64);
+        assert!(calculate_gop_factor(Some(250), 3) > 1.3_f64);
+        assert!((calculate_gop_factor(Some(30), 2) - 1.08).abs() < 0.1_f64);
     }
 
     #[test]
     fn test_chroma_factor() {
-        assert!((calculate_chroma_factor(Some("yuv420p")) - 1.0).abs() < 0.01);
-        assert!(calculate_chroma_factor(Some("yuv444p")) > 1.1);
-        assert!(calculate_chroma_factor(Some("rgb24")) > 1.1);
+        assert!((calculate_chroma_factor(Some("yuv420p")) - 1.0).abs() < 0.01_f64);
+        assert!(calculate_chroma_factor(Some("yuv444p")) > 1.1_f64);
+        assert!(calculate_chroma_factor(Some("rgb24")) > 1.1_f64);
     }
 
     #[test]
     fn test_hdr_factor() {
-        assert!((calculate_hdr_factor(None, Some("bt709")) - 1.0).abs() < 0.01);
-        assert!(calculate_hdr_factor(Some(true), None) > 1.2);
-        assert!(calculate_hdr_factor(None, Some("bt2020nc")) > 1.1);
+        assert!((calculate_hdr_factor(None, Some("bt709")) - 1.0).abs() < 0.01_f64);
+        assert!(calculate_hdr_factor(Some(true), None) > 1.2_f64);
+        assert!(calculate_hdr_factor(None, Some("bt2020nc")) > 1.1_f64);
     }
 
     #[test]
@@ -2181,8 +2181,8 @@ mod tests {
             width: 1920,
             height: 1080,
             file_size: 100_000_000,
-            fps: Some(30.0),
-            duration_secs: Some(60.0),
+            fps: Some(30.0_f64),
+            duration_secs: Some(60.0_f64),
             ..Default::default()
         };
 
@@ -2252,7 +2252,7 @@ mod tests {
         assert!(SourceCodec::Vvc.efficiency_factor() < SourceCodec::Av1.efficiency_factor());
         assert!(SourceCodec::Av2.efficiency_factor() <= SourceCodec::Vvc.efficiency_factor());
 
-        assert!(SourceCodec::Gif.efficiency_factor() > 2.0);
+        assert!(SourceCodec::Gif.efficiency_factor() > 2.0_f64);
     }
 
     #[test]
@@ -2265,8 +2265,8 @@ mod tests {
             has_b_frames: true,
             bit_depth: 8,
             has_alpha: false,
-            duration_secs: Some(60.0),
-            fps: Some(30.0),
+            duration_secs: Some(60.0_f64),
+            fps: Some(30.0_f64),
             file_size: 100_000_000,
             estimated_quality: Some(85),
             video_bitrate: Some(5_000_000),
@@ -2276,7 +2276,7 @@ mod tests {
             ..Default::default()
         };
         let result = calculate_av1_crf(&complete).unwrap_or_else(|e| panic!("{e}"));
-        assert!(result.analysis_details.confidence > 0.8);
+        assert!(result.analysis_details.confidence > 0.8_f64);
 
         let minimal = QualityAnalysis {
             bpp: 0.0,
@@ -2293,7 +2293,7 @@ mod tests {
             ..Default::default()
         };
         let result = calculate_av1_crf(&minimal).unwrap_or_else(|e| panic!("{e}"));
-        assert!(result.analysis_details.confidence < 0.7);
+        assert!(result.analysis_details.confidence < 0.7_f64);
     }
 
     #[test]
@@ -2366,7 +2366,7 @@ mod tests {
         );
 
         assert!(
-            result.effective_bpp > 0.05 && result.effective_bpp < 2.0,
+            result.effective_bpp > 0.05_f64 && result.effective_bpp < 2.0_f64,
             "Effective BPP out of range: {}",
             result.effective_bpp
         );
@@ -2415,7 +2415,7 @@ mod tests {
         let crf_diff = crate::numeric_cast::f32_to_i32_sat(anim_result.crf)
             - crate::numeric_cast::f32_to_i32_sat(base_result.crf);
         assert!(
-            (2..=6).contains(&crf_diff),
+            (2_i32..=6_i32).contains(&crf_diff),
             "Animation CRF adjustment: expected +2 to +6, got {crf_diff:+}"
         );
     }
@@ -2449,7 +2449,7 @@ mod tests {
         );
 
         assert!(
-            grain_result.analysis_details.grain_factor > 1.1,
+            grain_result.analysis_details.grain_factor > 1.1_f64,
             "Grain factor should be > 1.1: {}",
             grain_result.analysis_details.grain_factor
         );
@@ -2533,12 +2533,12 @@ mod tests {
         let gop_result = calculate_av1_crf(&long_gop).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
-            intra_result.analysis_details.gop_factor < 0.8,
+            intra_result.analysis_details.gop_factor < 0.8_f64,
             "All-intra GOP factor should be < 0.8: {}",
             intra_result.analysis_details.gop_factor
         );
         assert!(
-            gop_result.analysis_details.gop_factor > 1.2,
+            gop_result.analysis_details.gop_factor > 1.2_f64,
             "Long GOP factor should be > 1.2: {}",
             gop_result.analysis_details.gop_factor
         );
@@ -2588,7 +2588,7 @@ mod tests {
         let ultrawide_result = calculate_av1_crf(&ultrawide).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
-            ultrawide_result.analysis_details.aspect_factor > 1.0,
+            ultrawide_result.analysis_details.aspect_factor > 1.0_f64,
             "Ultra-wide should have aspect factor > 1.0: {}",
             ultrawide_result.analysis_details.aspect_factor
         );
@@ -2693,7 +2693,7 @@ mod tests {
             result.analysis_details.confidence
         );
         assert!(
-            result.analysis_details.confidence < 0.9,
+            result.analysis_details.confidence < 0.9_f64,
             "Sparse JPEG metadata should not be reported as fixed 0.9 confidence, got {}",
             result.analysis_details.confidence
         );
@@ -2727,8 +2727,8 @@ mod tests {
             width: 640,
             height: 480,
             bit_depth: 8,
-            duration_secs: Some(5.0),
-            fps: Some(10.0),
+            duration_secs: Some(5.0_f64),
+            fps: Some(10.0_f64),
             file_size: 5_000_000,
             ..Default::default()
         };
@@ -2742,7 +2742,7 @@ mod tests {
         );
 
         assert!(
-            result.analysis_details.codec_factor > 2.0,
+            result.analysis_details.codec_factor > 2.0_f64,
             "GIF codec factor should be > 2.0: {}",
             result.analysis_details.codec_factor
         );
@@ -2765,7 +2765,7 @@ mod tests {
             "Same input should produce same CRF"
         );
         assert!(
-            (result1.effective_bpp - result2.effective_bpp).abs() < 0.0001,
+            (result1.effective_bpp - result2.effective_bpp).abs() < 0.000_1_f64,
             "Same input should produce same effective BPP"
         );
     }
@@ -2952,7 +2952,7 @@ mod tests {
         let result = calculate_av1_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
-            result.analysis_details.gop_factor < 0.9,
+            result.analysis_details.gop_factor < 0.9_f64,
             "EDGE: Short GOP factor should be < 0.9, got {}",
             result.analysis_details.gop_factor
         );
@@ -2970,7 +2970,7 @@ mod tests {
         let result = calculate_av1_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
-            result.analysis_details.gop_factor > 1.3,
+            result.analysis_details.gop_factor > 1.3_f64,
             "EDGE: Max B-frames GOP factor should be > 1.3, got {}",
             result.analysis_details.gop_factor
         );
@@ -2990,7 +2990,7 @@ mod tests {
         let result = calculate_av1_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
-            result.analysis_details.hdr_factor > 1.1,
+            result.analysis_details.hdr_factor > 1.1_f64,
             "EDGE: HDR factor should be > 1.1, got {}",
             result.analysis_details.hdr_factor
         );
@@ -3014,7 +3014,7 @@ mod tests {
         let result = calculate_av1_crf(&analysis).unwrap_or_else(|e| panic!("{e}"));
 
         assert!(
-            result.analysis_details.chroma_factor > 1.1,
+            result.analysis_details.chroma_factor > 1.1_f64,
             "EDGE: RGB chroma factor should be > 1.1, got {}",
             result.analysis_details.chroma_factor
         );
@@ -3473,7 +3473,7 @@ fn test_apple_compat_hevc_crf_4k_hdr() {
         result.crf
     );
     assert!(
-        result.analysis_details.hdr_factor > 1.0,
+        result.analysis_details.hdr_factor > 1.0_f64,
         "HDR factor should increase effective BPP (>1.0), got {:.2}",
         result.analysis_details.hdr_factor
     );
@@ -3483,7 +3483,7 @@ fn test_apple_compat_hevc_crf_4k_hdr() {
 fn test_apple_compat_codec_efficiency() {
     assert!(SourceCodec::Av1.efficiency_factor() < SourceCodec::Vp9.efficiency_factor());
     assert!(
-        (SourceCodec::Vp9.efficiency_factor() - SourceCodec::H265.efficiency_factor()).abs() < 0.1
+        (SourceCodec::Vp9.efficiency_factor() - SourceCodec::H265.efficiency_factor()).abs() < 0.1_f64
     );
     assert!(SourceCodec::Vvc.efficiency_factor() < SourceCodec::Av1.efficiency_factor());
 }
@@ -3506,7 +3506,7 @@ fn test_h264_to_hevc_crf_1080p_8mbps() {
         result.crf
     );
     assert!(
-        (result.analysis_details.codec_factor - 1.0).abs() < 0.2,
+        (result.analysis_details.codec_factor - 1.0).abs() < 0.2_f64,
         "H.264 codec factor should be ~1.0"
     );
 }

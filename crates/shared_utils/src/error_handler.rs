@@ -145,11 +145,11 @@ pub fn report_error<E: std::error::Error + ?Sized>(error: &E) {
     tracing::error!("Error occurred: {}", error);
 
     let mut source = error.source();
-    let mut level = 1;
+    let mut level = 1_i32;
     while let Some(err) = source {
         tracing::error!("  Caused by (level {}): {}", level, err);
         source = err.source();
-        level += 1;
+        level += 1_i32;
     }
 }
 
@@ -257,10 +257,10 @@ mod tests {
 
     #[test]
     fn test_add_context() {
-        let result: Result<i32, io::Error> = Ok(42);
+        let result: Result<i32, io::Error> = Ok(42_i32);
         let with_context = add_context(result, "test operation");
         assert!(with_context.is_ok());
-        assert_eq!(with_context.unwrap_or_else(|e| panic!("error: {e:?}")), 42);
+        assert_eq!(with_context.unwrap_or_else(|e| panic!("error: {e:?}")), 42_i32);
 
         let result: Result<i32, io::Error> =
             Err(io::Error::new(io::ErrorKind::NotFound, "test error"));

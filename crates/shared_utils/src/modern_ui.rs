@@ -372,7 +372,7 @@ impl ExploreProgressState {
         self.ssim = ssim;
         self.iteration += 1;
 
-        if size_pct < 0.0 {
+        if size_pct < 0.0_f64 {
             self.best_crf = Some(crf);
         }
 
@@ -389,7 +389,7 @@ impl ExploreProgressState {
 
         let elapsed = self.start_time.elapsed().as_secs_f64();
 
-        let (_size_icon, size_color) = if self.size_pct < 0.0 {
+        let (_size_icon, size_color) = if self.size_pct < 0.0_f64 {
             (SAVE, BRIGHT_GREEN)
         } else {
             (WARNING, BRIGHT_YELLOW)
@@ -437,14 +437,14 @@ impl ExploreProgressState {
         eprint!("\r\x1b[K");
 
         let (ssim_str, ssim_rating) = match final_ssim {
-            Some(s) if s >= 0.99 => (format!("SSIM {s:.4}"), format!("{SUCCESS} Excellent")),
-            Some(s) if s >= 0.98 => (format!("SSIM {s:.4}"), format!("{SUCCESS} Very Good")),
-            Some(s) if s >= 0.95 => (format!("SSIM {s:.4}"), format!("{CHECK}  Good")),
+            Some(s) if s >= 0.99_f64 => (format!("SSIM {s:.4}"), format!("{SUCCESS} Excellent")),
+            Some(s) if s >= 0.98_f64 => (format!("SSIM {s:.4}"), format!("{SUCCESS} Very Good")),
+            Some(s) if s >= 0.95_f64 => (format!("SSIM {s:.4}"), format!("{CHECK}  Good")),
             Some(s) => (format!("SSIM {s:.4}"), format!("{WARNING}  Fair")),
             None => (String::new(), String::new()),
         };
 
-        let size_str = if final_size_pct < 0.0 {
+        let size_str = if final_size_pct < 0.0_f64 {
             format!("{BRIGHT_GREEN}{final_size_pct:+.1}%{RESET} {SAVE}")
         } else {
             format!("{BRIGHT_YELLOW}{final_size_pct:+.1}%{RESET}")

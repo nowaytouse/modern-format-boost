@@ -894,7 +894,7 @@ fn lookup_similar_samples_inner(
     let neighbor_count = adaptive_neighbor_count(candidates.len());
     let neighbors = &candidates[..neighbor_count.min(candidates.len())];
 
-    let min_distance = neighbors.first().map_or(0.0, |(_, _, d)| *d);
+    let min_distance = neighbors.first().map_or(0.0_f64, |(_, _, d)| *d);
     let radius = dynamic_neighbor_radius(neighbors);
 
     let (low_count, high_count, video_count) = get_class_counts(&mut conn);
@@ -920,9 +920,9 @@ fn lookup_similar_samples_inner(
         "KNN balance context"
     );
 
-    let mut weighted_keep = 0.0;
-    let mut total_weight = 0.0;
-    let mut weight_squares_sum = 0.0;
+    let mut weighted_keep = 0.0_f64;
+    let mut total_weight = 0.0_f64;
+    let mut weight_squares_sum = 0.0_f64;
     let mut distances: Vec<f64> = Vec::new();
     let mut loop_durations: Vec<f64> = Vec::new();
 
@@ -932,27 +932,27 @@ fn lookup_similar_samples_inner(
         }
 
         let relative_distance = (*distance - min_distance).max(0.0);
-        let distance_weight = 1.0 / (relative_distance * relative_distance).mul_add(3.0, 1.0);
+        let distance_weight = 1.0_f64 / (relative_distance * relative_distance).mul_add(3.0, 1.0);
 
         let class_weight = match label {
             LabelStatus::LoopStrong => w_quality,
             LabelStatus::LoopWeak => w_video,
-            _ => 1.0,
+            _ => 1.0_f64,
         };
 
         let final_weight = distance_weight * class_weight;
 
         let prob = match label {
-            LabelStatus::LoopStrong => 1.0, // Loop intent (Meme/Sticker/Video sticker)
-            LabelStatus::LoopWeak => 0.0,   // Non-loop intent (Clip/Record/Long Video)
-            _ => 0.5,                       // Uncertain/Fallback
+            LabelStatus::LoopStrong => 1.0_f64, // Loop intent (Meme/Sticker/Video sticker)
+            LabelStatus::LoopWeak => 0.0_f64,   // Non-loop intent (Clip/Record/Long Video)
+            _ => 0.5_f64,                       // Uncertain/Fallback
         };
 
-        if prob >= 0.5 {
+        if prob >= 0.5_f64 {
             loop_durations.push(*duration_secs);
         }
 
-        weighted_keep += prob * final_weight;
+        weighted_keep = prob.mul_add(final_weight, weighted_keep);
         total_weight += final_weight;
         weight_squares_sum += final_weight * final_weight;
         distances.push(*distance);
@@ -988,11 +988,11 @@ fn lookup_similar_samples_inner(
 
     // Confidence: how tightly clustered the neighbors are.
     // High std_dev relative to mean → low confidence (mixed signals).
-    let mut confidence = if mean_distance > 1e-6 {
+    let mut confidence = if mean_distance > 1e-6_f64 {
         (1.0f64 - (std_dev_distance / mean_distance)).clamp(0.0, 1.0)
     } else {
         // All neighbors at distance ≈0 → exact match level confidence
-        1.0
+        1.0_f64
     };
     // Penalize confidence under severe class imbalance and low effective sample size.
     let balance_penalty = (1.0 / global_imbalance_ratio.sqrt()).clamp(0.45, 1.0);
@@ -1026,7 +1026,7 @@ fn lookup_similar_samples_inner(
         Some(
             *loop_durations
                 .get(idx.min(loop_durations.len().saturating_sub(1)))
-                .unwrap_or(&0.0),
+                .unwrap_or(&0.0_f64),
         )
     };
 
@@ -1459,7 +1459,7 @@ fn determine_loss_tolerance(
     }
 
     // 2. Exact markers for "high loss tolerance" (meme / heavily compressed social)
-    if temporal_bpp < 0.03 {
+    if temporal_bpp < 0.03_f64 {
         return "high".to_string();
     }
 
@@ -1684,9 +1684,9 @@ fn compute_sample_vector(sample: &SampleRow, stats_map: &FeatureMap) -> Vec<f32>
     let sample_frame_gap =
         sample.duration_secs / crate::numeric_cast::u64_to_f64(sample.frame_count.max(1));
 
-    let sample_audio_score = if sample.is_native_gif { 1.0 } else { 0.55 };
+    let sample_audio_score = if sample.is_native_gif { 1.0_f64 } else { 0.55_f64 };
     // We normalize fps against a baseline 30fps for the database encoded vector. Target queries will normalize identically.
-    let baseline_fps = 30.0;
+    let baseline_fps = 30.0_f64;
     let sample_fps_score: f64 = (1.0_f64
         - normalize_log_ratio(sample.fps.max(1e-3), baseline_fps, 1.2))
     .clamp(0.0_f64, 1.0_f64);
@@ -1695,19 +1695,19 @@ fn compute_sample_vector(sample: &SampleRow, stats_map: &FeatureMap) -> Vec<f32>
             0.10,
             sample
                 .loop_frequency
-                .unwrap_or(0.5)
-                .mul_add(0.45, sample.cadence_score.unwrap_or(0.5) * 0.25)
-                + sample_audio_score * 0.20,
+                .unwrap_or(0.5_f64)
+                .mul_add(0.45, sample.cadence_score.unwrap_or(0.5_f64) * 0.25)
+                .mul_add(0.20, sample_audio_score),
         )
         .clamp(0.0, 1.0);
 
-    let get_std = |f: &str| stats_map.stats.get(f).map_or(1.0, |s| s.std_dev).max(1e-6);
+    let get_std = |f: &str| stats_map.stats.get(f).map_or(1.0_f64, |s| s.std_dev).max(1e-6);
     let get_w = |f: &str| {
         stats_map
             .stats
             .get(f)
             .and_then(|s| s.weight)
-            .unwrap_or(1.0)
+            .unwrap_or(1.0_f64)
             .max(0.01)
     };
 
@@ -1756,39 +1756,39 @@ fn compute_sample_vector(sample: &SampleRow, stats_map: &FeatureMap) -> Vec<f32>
     let v_aspect = crate::numeric_cast::option_f64_loud(sample.aspect_ratio, 1.0, "sample_aspect")
         / get_std("aspect")
         * get_w("aspect").sqrt();
-    let v_pal = (sample.palette_size.map_or(256.0, f64::from) / 256.0) * get_w("p_depth").sqrt();
+    let v_pal = (sample.palette_size.map_or(256.0_f64, f64::from) / 256.0_f64) * get_w("p_depth").sqrt();
 
     let v_pdepth =
-        sample.palette_depth.unwrap_or(0.5) / get_std("p_depth") * get_w("p_depth").sqrt();
-    let v_mgini = sample.motion_gini.unwrap_or(0.5) / get_std("m_gini") * get_w("m_gini").sqrt();
-    let v_bskew = sample.block_skew.unwrap_or(0.5) / get_std("b_skew") * get_w("b_skew").sqrt();
+        sample.palette_depth.unwrap_or(0.5_f64) / get_std("p_depth") * get_w("p_depth").sqrt();
+    let v_mgini = sample.motion_gini.unwrap_or(0.5_f64) / get_std("m_gini") * get_w("m_gini").sqrt();
+    let v_bskew = sample.block_skew.unwrap_or(0.5_f64) / get_std("b_skew") * get_w("b_skew").sqrt();
     let v_tflat =
-        sample.temporal_flatness.unwrap_or(0.5) / get_std("t_flat") * get_w("t_flat").sqrt();
+        sample.temporal_flatness.unwrap_or(0.5_f64) / get_std("t_flat") * get_w("t_flat").sqrt();
     let v_lclose =
-        sample.loop_closure_score.unwrap_or(0.5) / get_std("l_close") * get_w("l_close").sqrt();
+        sample.loop_closure_score.unwrap_or(0.5_f64) / get_std("l_close") * get_w("l_close").sqrt();
     let v_mperiod =
-        sample.motion_periodicity.unwrap_or(0.5) / get_std("m_period") * get_w("m_period").sqrt();
+        sample.motion_periodicity.unwrap_or(0.5_f64) / get_std("m_period") * get_w("m_period").sqrt();
     let v_tjitter =
-        sample.temporal_jitter.unwrap_or(0.5) / get_std("t_jitter") * get_w("t_jitter").sqrt();
+        sample.temporal_jitter.unwrap_or(0.5_f64) / get_std("t_jitter") * get_w("t_jitter").sqrt();
 
     // Directory context
     let v_directory_meme =
-        sample.directory_loop_intent_score.unwrap_or(0.5) * get_w("dir_meme").sqrt();
+        sample.directory_loop_intent_score.unwrap_or(0.5_f64) * get_w("dir_meme").sqrt();
 
     // Categorical variables (weight mapped so diff^2 = penalty weight)
     // If w = penalty weight, v = sqrt(w)/2. If diff is `sqrt(w)`, squared diff is `w`.
     // Wait: If true is w/2 and false is -w/2, diff is w. Squared diff is w^2!
     // To get a penalty of W added to the SUM OF SQUARES, we need diff^2 = W. Thus diff = sqrt(W).
     // So true mapped to sqrt(W)/2, false to -sqrt(W)/2.
-    let cat = |val: bool, w: f64| if val { w.sqrt() / 2.0 } else { -w.sqrt() / 2.0 };
+    let cat = |val: bool, w: f64| if val { w.sqrt() / 2.0_f64 } else { -w.sqrt() / 2.0_f64 };
 
-    let v_meme = cat(sample.is_meme_platform, 1.2);
-    let v_name = cat(sample.is_human_semantic_name, 0.8);
-    let v_native = cat(sample.is_native_gif, 0.6);
-    let v_hv = cat(sample.is_high_value_source, 1.5);
-    let v_trans = cat(sample.has_transparency, 1.5);
-    let v_icc = cat(sample.has_embedded_icc, 1.2 / 2.0);
-    let v_complex = cat(sample.has_complex_color_profile, 1.2 / 2.0);
+    let v_meme = cat(sample.is_meme_platform, 1.2_f64);
+    let v_name = cat(sample.is_human_semantic_name, 0.8_f64);
+    let v_native = cat(sample.is_native_gif, 0.6_f64);
+    let v_hv = cat(sample.is_high_value_source, 1.5_f64);
+    let v_trans = cat(sample.has_transparency, 1.5_f64);
+    let v_icc = cat(sample.has_embedded_icc, 1.2_f64 / 2.0_f64);
+    let v_complex = cat(sample.has_complex_color_profile, 1.2_f64 / 2.0_f64);
 
     vec![
         crate::numeric_cast::f64_to_f32_lossy(v_pix),
@@ -1937,7 +1937,7 @@ fn smoothed_keep_prior(keep_count: i64, weak_count: i64) -> f64 {
 }
 
 fn effective_sample_size(weight_squares_sum: f64, total_weight: f64) -> f64 {
-    if weight_squares_sum <= 1e-9 || total_weight <= 1e-9 {
+    if weight_squares_sum <= 1e-9_f64 || total_weight <= 1e-9_f64 {
         return 0.0;
     }
     (total_weight * total_weight / weight_squares_sum).max(0.0)
@@ -1952,15 +1952,15 @@ fn imbalance_ratio(keep_count: i64, weak_count: i64) -> f64 {
 fn dynamic_neighbor_radius(neighbors: &[(LabelStatus, f64, f64)]) -> f64 {
     let mut distances: Vec<f64> = neighbors.iter().map(|(_, _, d)| *d).collect();
     distances.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let q1 = *distances.get(distances.len() / 4).unwrap_or(&0.0);
-    let q3 = *distances.get((distances.len() * 3) / 4).unwrap_or(&0.0);
+    let q1 = *distances.get(distances.len() / 4).unwrap_or(&0.0_f64);
+    let q3 = *distances.get((distances.len() * 3) / 4).unwrap_or(&0.0_f64);
     let iqr = (q3 - q1).max(0.06);
-    let d0 = *distances.first().unwrap_or(&0.0);
+    let d0 = *distances.first().unwrap_or(&0.0_f64);
     (d0 + iqr * 1.5).max(d0 + 0.08)
 }
 
 fn normalize_log_ratio(a: f64, b: f64, scale: f64) -> f64 {
-    if a <= 0.0 || b <= 0.0 || scale <= 0.0 {
+    if a <= 0.0_f64 || b <= 0.0_f64 || scale <= 0.0_f64 {
         return 1.0;
     }
     ((a.ln() - b.ln()).abs() / scale).clamp(0.0, 1.0)
@@ -1995,7 +1995,7 @@ fn build_feature_stats(values: &[f64]) -> FeatureStats {
     }
 
     let mean = if values.is_empty() {
-        0.0
+        0.0_f64
     } else {
         values.iter().sum::<f64>() / crate::numeric_cast::usize_to_f64(values.len())
     };
@@ -2260,7 +2260,7 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
             "   🛠️  Found {} samples with outdated feature metrics. Refreshing integrity...",
             broken_rows.len()
         ));
-        let mut fixed_count = 0;
+        let mut fixed_count = 0_i32;
         for row in broken_rows {
             let file_hash: String = row.get(0);
             let source_path: Option<String> = row.get(1);
@@ -2284,12 +2284,12 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
                             ],
                         )?;
 
-                        fixed_count += 1;
+                        fixed_count += 1_i32;
                     }
                 }
             }
         }
-        if fixed_count > 0 {
+        if fixed_count > 0_i32 {
             emit_stderr(&format!(
                 "   ✅ Refreshed feature integrity for {fixed_count} labeled samples."
             ));
@@ -2323,12 +2323,12 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
             let frame_count = f64::from(crate::numeric_cast::i64_to_u32_sat(row.get::<_, i64>(3)));
             let fps =
                 crate::numeric_cast::option_f64_loud(row.get::<_, Option<f64>>(5), 0.0, "db_fps");
-            let density = if duration > 0.05 {
+            let density = if duration > 0.05_f64 {
                 frame_count / duration
             } else {
                 fps
             };
-            let gap = if frame_count > 0.0 {
+            let gap = if frame_count > 0.0_f64 {
                 duration / frame_count
             } else {
                 duration
@@ -2349,14 +2349,14 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
                     1.0,
                     "db_aspect",
                 ), // aspect
-                row.get::<_, Option<f64>>(11).unwrap_or(0.5), // loop_freq
-                row.get::<_, Option<f64>>(12).unwrap_or(0.5), // cadence
-                row.get::<_, Option<f64>>(8).unwrap_or(0.5), // payload_var
-                row.get::<_, Option<f64>>(9).unwrap_or(0.5), // delay_var
-                row.get::<_, Option<f64>>(13).unwrap_or(0.5), // p_depth
-                row.get::<_, Option<f64>>(14).unwrap_or(0.5), // m_gini
-                row.get::<_, Option<f64>>(15).unwrap_or(0.5), // b_skew
-                row.get::<_, Option<f64>>(16).unwrap_or(0.5), // t_flat
+                row.get::<_, Option<f64>>(11).unwrap_or(0.5_f64), // loop_freq
+                row.get::<_, Option<f64>>(12).unwrap_or(0.5_f64), // cadence
+                row.get::<_, Option<f64>>(8).unwrap_or(0.5_f64), // payload_var
+                row.get::<_, Option<f64>>(9).unwrap_or(0.5_f64), // delay_var
+                row.get::<_, Option<f64>>(13).unwrap_or(0.5_f64), // p_depth
+                row.get::<_, Option<f64>>(14).unwrap_or(0.5_f64), // m_gini
+                row.get::<_, Option<f64>>(15).unwrap_or(0.5_f64), // b_skew
+                row.get::<_, Option<f64>>(16).unwrap_or(0.5_f64), // t_flat
                 crate::numeric_cast::option_f64_loud(
                     row.get::<_, Option<f64>>(17),
                     1.0,
@@ -2592,7 +2592,7 @@ pub fn recompute_all_features(conn: &mut Client) -> Result<()> {
     let mut tx = conn.transaction()?;
     let stmt = tx.prepare("UPDATE samples SET features = $1::vector WHERE file_hash = $2")?;
 
-    let mut updated_count = 0;
+    let mut updated_count = 0_i32;
     for row in &sample_rows {
         let file_hash: String = row.get(0);
         let sample = SampleRow {
@@ -2642,7 +2642,7 @@ pub fn recompute_all_features(conn: &mut Client) -> Result<()> {
         let vec_data = compute_sample_vector(&sample, &feature_map);
         let pg_vector = pgvector::Vector::from(vec_data);
         tx.execute(&stmt, &[&pg_vector, &file_hash])?;
-        updated_count += 1;
+        updated_count += 1_i32;
     }
     tx.commit()?;
     emit_stderr(&format!(
@@ -3083,7 +3083,7 @@ mod tests {
 
     fn base_meta() -> LoopMeta {
         let frames = 24;
-        let duration = 2.0;
+        let duration = 2.0_f64;
         let size = 120_000;
         LoopMeta {
             duration_secs: duration,
@@ -3159,25 +3159,25 @@ mod tests {
             has_embedded_icc: false,
             has_complex_color_profile: false,
             palette_size: Some(64),
-            frame_payload_variation: Some(0.35),
-            frame_delay_variation: Some(0.55),
-            aspect_ratio: Some(1.0),
+            frame_payload_variation: Some(0.35_f64),
+            frame_delay_variation: Some(0.55_f64),
+            aspect_ratio: Some(1.0_f64),
             _total_pixels: Some(90000),
-            loop_frequency: Some(0.8),
+            loop_frequency: Some(0.8_f64),
             is_meme_platform: true,
             is_human_semantic_name: true,
-            cadence_score: Some(0.9),
-            directory_loop_intent_score: Some(1.0),
+            cadence_score: Some(0.9_f64),
+            directory_loop_intent_score: Some(1.0_f64),
             is_high_value_source: true,
             is_native_gif: true,
-            palette_depth: Some(0.8),
-            motion_gini: Some(0.7),
-            block_skew: Some(0.6),
-            temporal_flatness: Some(0.9),
-            loop_closure_score: Some(0.88),
-            motion_periodicity: Some(0.78),
-            temporal_jitter: Some(0.92),
-            webp_compression_ratio: Some(0.9),
+            palette_depth: Some(0.8_f64),
+            motion_gini: Some(0.7_f64),
+            block_skew: Some(0.6_f64),
+            temporal_flatness: Some(0.9_f64),
+            loop_closure_score: Some(0.88_f64),
+            motion_periodicity: Some(0.78_f64),
+            temporal_jitter: Some(0.92_f64),
+            webp_compression_ratio: Some(0.9_f64),
             _labeled_by: Some("cli_ingest".to_string()),
         };
         let far = SampleRow {
@@ -3194,25 +3194,25 @@ mod tests {
             has_embedded_icc: true,
             has_complex_color_profile: true,
             palette_size: Some(256),
-            frame_payload_variation: Some(0.05),
-            frame_delay_variation: Some(0.02),
-            aspect_ratio: Some(1.78),
+            frame_payload_variation: Some(0.05_f64),
+            frame_delay_variation: Some(0.02_f64),
+            aspect_ratio: Some(1.78_f64),
             _total_pixels: Some(2_073_600),
-            loop_frequency: Some(0.1),
+            loop_frequency: Some(0.1_f64),
             is_meme_platform: false,
             is_human_semantic_name: false,
-            cadence_score: Some(0.1),
-            directory_loop_intent_score: Some(0.5),
+            cadence_score: Some(0.1_f64),
+            directory_loop_intent_score: Some(0.5_f64),
             is_high_value_source: false,
             is_native_gif: false,
-            palette_depth: Some(0.1),
-            motion_gini: Some(0.2),
-            block_skew: Some(0.1),
-            temporal_flatness: Some(0.1),
-            loop_closure_score: Some(0.15),
-            motion_periodicity: Some(0.20),
-            temporal_jitter: Some(0.18),
-            webp_compression_ratio: Some(0.1),
+            palette_depth: Some(0.1_f64),
+            motion_gini: Some(0.2_f64),
+            block_skew: Some(0.1_f64),
+            temporal_flatness: Some(0.1_f64),
+            loop_closure_score: Some(0.15_f64),
+            motion_periodicity: Some(0.20_f64),
+            temporal_jitter: Some(0.18_f64),
+            webp_compression_ratio: Some(0.1_f64),
             _labeled_by: Some("cli_ingest".to_string()),
         };
         let (tbpp, sbpp) = bpp_from_meta(&meta);
@@ -3239,18 +3239,18 @@ mod tests {
     #[test]
     fn resolved_duration_secs_recovers_from_zero_probe_duration() {
         let mut meta = base_meta();
-        meta.duration_secs = 0.0;
+        meta.duration_secs = 0.0_f64;
         meta.frame_count = 800;
-        meta.fps = 10.0;
-        assert!((resolved_duration_secs(&meta) - 80.0).abs() < 0.01);
+        meta.fps = 10.0_f64;
+        assert!((resolved_duration_secs(&meta) - 80.0).abs() < 0.01_f64);
     }
 
     #[test]
     fn feature_stats_capture_percentiles() {
-        let stats = build_feature_stats(&[1.0, 2.0, 3.0, 4.0, 5.0]);
-        assert_eq!(stats.p10, Some(1.4));
-        assert_eq!(stats.p50, Some(3.0));
-        assert_eq!(stats.p90, Some(4.6));
+        let stats = build_feature_stats(&[1.0_f64, 2.0_f64, 3.0_f64, 4.0_f64, 5.0_f64]);
+        assert_eq!(stats.p10, Some(1.4_f64));
+        assert_eq!(stats.p50, Some(3.0_f64));
+        assert_eq!(stats.p90, Some(4.6_f64));
     }
 
     #[test]
@@ -3279,7 +3279,7 @@ mod tests {
             expected_spatial
         ));
         assert!(
-            (temporal_bpp - legacy_buggy_temporal).abs() > 1.0,
+            (temporal_bpp - legacy_buggy_temporal).abs() > 1.0_f64,
             "temporal_bpp should use per-frame density, not multiply by frame count"
         );
     }
@@ -3288,8 +3288,8 @@ mod tests {
     fn balance_weight_is_damped_under_extreme_imbalance() {
         let minority_weight = class_balance_weight(2_000, 10);
         let majority_weight = class_balance_weight(2_000, 1_990);
-        assert!(minority_weight <= 1.50);
-        assert!(majority_weight >= 0.67);
+        assert!(minority_weight <= 1.50_f64);
+        assert!(majority_weight >= 0.67_f64);
         assert!(minority_weight > majority_weight);
     }
 
@@ -3297,8 +3297,8 @@ mod tests {
     fn smoothed_prior_avoids_extreme_zeros_and_ones() {
         let all_keep = smoothed_keep_prior(100, 0);
         let all_weak = smoothed_keep_prior(0, 100);
-        assert!(all_keep < 1.0 && all_keep > 0.95);
-        assert!(all_weak > 0.0 && all_weak < 0.05);
+        assert!(all_keep < 1.0_f64 && all_keep > 0.95_f64);
+        assert!(all_weak > 0.0_f64 && all_weak < 0.05_f64);
     }
 
     #[test]
@@ -3319,11 +3319,11 @@ mod tests {
                 mean: 6.0,
                 std_dev: 2.0,
                 weight: None,
-                p10: Some(1.0),
-                p25: Some(2.0),
-                p50: Some(5.0),
-                p75: Some(8.0),
-                p90: Some(10.0),
+                p10: Some(1.0_f64),
+                p25: Some(2.0_f64),
+                p50: Some(5.0_f64),
+                p75: Some(8.0_f64),
+                p90: Some(10.0_f64),
             },
         );
         feature_map.stats.insert(
@@ -3331,17 +3331,17 @@ mod tests {
             FeatureStats {
                 mean: 14.0,
                 std_dev: 3.0,
-                p10: Some(8.0),
-                p25: Some(10.0),
-                p50: Some(14.0),
-                p75: Some(18.0),
-                p90: Some(22.0),
+                p10: Some(8.0_f64),
+                p25: Some(10.0_f64),
+                p50: Some(14.0_f64),
+                p75: Some(18.0_f64),
+                p90: Some(22.0_f64),
                 weight: None,
             },
         );
 
         let profile = build_loop_reference_profile(GlobalCollectionStats::default(), &feature_map);
-        assert_eq!(profile.duration.p25, Some(2.0));
+        assert_eq!(profile.duration.p25, Some(2.0_f64));
         assert!(crate::float_compare::approx_eq_f64(profile.fps.mean, 14.0));
         assert_eq!(profile.top_keywords, vec!["meme".to_string()]);
     }

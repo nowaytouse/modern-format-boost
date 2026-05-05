@@ -529,10 +529,10 @@ pub fn check_pts_integrity(input: &Path) -> PtsIntegrity {
         if let Ok(pts) = line.trim().parse::<f64>() {
             if let Some(last) = last_pts {
                 // Large epsilon for floating point comparison issues
-                if pts < last - 1e-4 {
+                if pts < last - 1e-4_f64 {
                     has_backwards = true;
                     break;
-                } else if (pts - last).abs() < 1e-4 {
+                } else if (pts - last).abs() < 1e-4_f64 {
                     has_duplicates = true;
                 }
             }

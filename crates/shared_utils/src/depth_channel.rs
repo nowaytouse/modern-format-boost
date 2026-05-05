@@ -178,7 +178,7 @@ fn decode_depth_handle(handle: &ImageHandle) -> Result<DynamicImage> {
             height,
             |x, y| {
                 let val = buffer.get_pixel(x, y)[0];
-                Luma([u16::from(val) << 8 | u16::from(val)])
+                Luma([u16::from(val) << 8_i32 | u16::from(val)])
             },
         )))
     }

@@ -1402,7 +1402,7 @@ mod tests {
         let (temp, _progress, guard) = setup_test_env().unwrap_or_else(|e| panic!("error: {e:?}"));
         let target = temp.path();
 
-        let files: Vec<PathBuf> = (1..=5)
+        let files: Vec<PathBuf> = (1_i32..=5_i32)
             .map(|i| {
                 let path = target.join(format!("video{i}.mp4"));
                 fs::write(&path, format!("content {i}")).unwrap_or_else(|e| panic!("error: {e:?}"));
@@ -1439,22 +1439,22 @@ mod tests {
                 .acquire_lock()
                 .unwrap_or_else(|e| panic!("error: {e:?}"));
 
-            let mut processed = 0;
-            let mut skipped = 0;
+            let mut processed = 0_i32;
+            let mut skipped = 0_i32;
 
             for file in &files {
                 if checkpoint.is_completed(file) {
-                    skipped += 1;
+                    skipped += 1_i32;
                     continue;
                 }
                 checkpoint
                     .mark_completed(file)
                     .unwrap_or_else(|e| panic!("error: {e:?}"));
-                processed += 1;
+                processed += 1_i32;
             }
 
-            assert_eq!(skipped, 2);
-            assert_eq!(processed, 3);
+            assert_eq!(skipped, 2_i32);
+            assert_eq!(processed, 3_i32);
             assert_eq!(checkpoint.completed_count(), 5);
 
             checkpoint

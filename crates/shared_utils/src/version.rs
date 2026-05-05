@@ -113,15 +113,15 @@ fn parse_version_to_code(version: &str, context: &str) -> i32 {
 
     let major: u32 = major_str
         .parse()
-        .expect("FATAL [{context}]: Failed to parse major version");
+        .expect("FATAL [{{context}}]: Failed to parse major version");
 
     let minor: u32 = minor_str
         .parse()
-        .expect("FATAL [{context}]: Failed to parse minor version");
+        .expect("FATAL [{{context}}]: Failed to parse minor version");
 
     let patch: u32 = patch_str
         .parse()
-        .expect("FATAL [{context}]: Failed to parse patch version");
+        .expect("FATAL [{{context}}]: Failed to parse patch version");
 
     let version_code = major * 10000 + minor * 100 + patch;
 
@@ -175,12 +175,12 @@ mod tests {
 
     #[test]
     fn test_version_parsing() {
-        assert_eq!(parse_version_to_code("0.11.2", "Test"), 1102);
-        assert_eq!(parse_version_to_code("0.11.1", "Test"), 1101);
-        assert_eq!(parse_version_to_code("0.11.0", "Test"), 1100);
-        assert_eq!(parse_version_to_code("0.10.102", "Test"), 1102);
-        assert_eq!(parse_version_to_code("1.2.3", "Test"), 10203);
-        assert_eq!(parse_version_to_code("10.20.30", "Test"), 102_030);
+        assert_eq!(parse_version_to_code("0.11.2", "Test"), 1_102_i32);
+        assert_eq!(parse_version_to_code("0.11.1", "Test"), 1_101_i32);
+        assert_eq!(parse_version_to_code("0.11.0", "Test"), 1_100_i32);
+        assert_eq!(parse_version_to_code("0.10.102", "Test"), 1_102_i32);
+        assert_eq!(parse_version_to_code("1.2.3", "Test"), 10_203_i32);
+        assert_eq!(parse_version_to_code("10.20.30", "Test"), 102_030_i32);
     }
 
     #[test]
@@ -199,7 +199,7 @@ mod tests {
     fn test_version_info() {
         let info = VersionInfo::current();
         assert!(!info.program_version.is_empty());
-        assert!(info.cache_algorithm_version > 0);
+        assert!(info.cache_algorithm_version > 0_i32);
         assert_eq!(info.cache_schema_version, CACHE_SCHEMA_VERSION);
     }
 }

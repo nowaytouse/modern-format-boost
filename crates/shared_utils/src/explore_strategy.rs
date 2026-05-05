@@ -839,7 +839,7 @@ impl ExploreStrategy for PreciseQualityMatchWithCompressionStrategy {
         };
 
         let mut best_crf = compress_boundary;
-        let mut best_ssim = 0.0;
+        let mut best_ssim = 0.0_f64;
         let mut best_size = boundary_size;
         let mut iterations = boundary_iter;
 

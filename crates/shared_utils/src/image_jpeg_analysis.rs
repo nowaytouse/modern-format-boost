@@ -51,8 +51,8 @@ const IJG_CHROMINANCE_BASE: [[u16; 8]; 8] = [
 fn generate_standard_qt(quality: u8, base_table: &[[u16; 8]; 8]) -> [[u16; 8]; 8] {
     let q = f64::from(quality.clamp(1, 100));
 
-    let scale = if q < 50.0 {
-        5000.0 / q
+    let scale = if q < 50.0_f64 {
+        5_000.0_f64 / q
     } else {
         2.0f64.mul_add(-q, 200.0)
     };
@@ -61,7 +61,7 @@ fn generate_standard_qt(quality: u8, base_table: &[[u16; 8]; 8]) -> [[u16; 8]; 8
 
     for (row, base_row) in result.iter_mut().zip(base_table.iter()) {
         for (cell, &base_value) in row.iter_mut().zip(base_row.iter()) {
-            let value = ((scale * f64::from(base_value)) + 50.0) / 100.0;
+            let value = ((scale * f64::from(base_value)) + 50.0_f64) / 100.0_f64;
             *cell = crate::numeric_cast::f64_to_u16_sat(value.floor().clamp(1.0, 255.0));
         }
     }
@@ -81,8 +81,8 @@ fn calculate_weighted_sse(table1: &[[u16; 8]; 8], table2: &[[u16; 8]; 8]) -> f64
         [0.3, 0.25, 0.2, 0.15, 0.1, 0.08, 0.05, 0.03],
     ];
 
-    let mut weighted_sse = 0.0;
-    let mut total_weight = 0.0;
+    let mut weighted_sse = 0.0_f64;
+    let mut total_weight = 0.0_f64;
 
     for ((row1, row2), weight_row) in table1.iter().zip(table2.iter()).zip(WEIGHTS.iter()) {
         for ((&lhs, &rhs), &weight) in row1.iter().zip(row2.iter()).zip(weight_row.iter()) {
@@ -96,7 +96,7 @@ fn calculate_weighted_sse(table1: &[[u16; 8]; 8], table2: &[[u16; 8]; 8]) -> f64
 }
 
 fn calculate_sse(table1: &[[u16; 8]; 8], table2: &[[u16; 8]; 8]) -> f64 {
-    let mut sse = 0.0;
+    let mut sse = 0.0_f64;
     for (row1, row2) in table1.iter().zip(table2.iter()) {
         for (&lhs, &rhs) in row1.iter().zip(row2.iter()) {
             let diff = f64::from(lhs) - f64::from(rhs);
@@ -141,7 +141,7 @@ fn estimate_quality_precise(
             second_best_quality = q;
         }
 
-        if sse == 0.0 {
+        if sse == 0.0_f64 {
             return QualityEstimate {
                 quality: q,
                 sse: 0.0,
@@ -152,12 +152,12 @@ fn estimate_quality_precise(
         }
     }
 
-    let interpolated = if second_min_sse > min_sse && min_sse > 0.0 {
+    let interpolated = if second_min_sse > min_sse && min_sse > 0.0_f64 {
         let ratio = min_sse / (min_sse + second_min_sse);
         let direction = if second_best_quality > best_quality {
-            1.0
+            1.0_f64
         } else {
-            -1.0
+            -1.0_f64
         };
         (direction * ratio).mul_add(0.5, f64::from(best_quality))
     } else {
@@ -201,12 +201,12 @@ fn calculate_confidence(
         return 0.98;
     }
 
-    let luma_confidence = 1.0 / luma_estimate.weighted_sse.mul_add(0.01, 1.0);
+    let luma_confidence = 1.0_f64 / luma_estimate.weighted_sse.mul_add(0.01, 1.0);
 
     chroma_estimate.map_or_else(
         || luma_confidence.clamp(0.0, 1.0),
         |chroma| {
-            let chroma_confidence = 1.0 / chroma.weighted_sse.mul_add(0.01, 1.0);
+            let chroma_confidence = 1.0_f64 / chroma.weighted_sse.mul_add(0.01, 1.0);
             0.7f64
                 .mul_add(luma_confidence, 0.3 * chroma_confidence)
                 .clamp(0.0, 1.0)
@@ -232,32 +232,32 @@ fn detect_encoder(
     let luma = tables.first()?;
 
     if let Some(c_sse) = chroma_sse {
-        if (720.0..735.0).contains(&luma_sse) && (5.0..12.0).contains(&c_sse) {
+        if (720.0_f64..735.0_f64).contains(&luma_sse) && (5.0_f64..12.0_f64).contains(&c_sse) {
             return Some("Apple iOS Camera (high quality)".to_string());
         }
-        if (150.0..165.0).contains(&luma_sse) && (2.0..10.0).contains(&c_sse) {
+        if (150.0_f64..165.0_f64).contains(&luma_sse) && (2.0_f64..10.0_f64).contains(&c_sse) {
             return Some("Apple iOS Camera (very high quality)".to_string());
         }
     }
 
     if luma[0][0] <= 2 && luma[0][1] <= 2 && luma[1][0] <= 2 {
-        if luma_sse < 100.0 {
+        if luma_sse < 100.0_f64 {
             return Some("Adobe Photoshop (highest quality)".to_string());
         }
         return Some("Adobe Photoshop".to_string());
     }
 
     if let Some(c_sse) = chroma_sse {
-        if (200.0..400.0).contains(&luma_sse) && (10.0..50.0).contains(&c_sse) {
+        if (200.0_f64..400.0_f64).contains(&luma_sse) && (10.0_f64..50.0_f64).contains(&c_sse) {
             return Some("Android Camera".to_string());
         }
     }
 
-    if (500.0..700.0).contains(&luma_sse) {
+    if (500.0_f64..700.0_f64).contains(&luma_sse) {
         return Some("Samsung Camera".to_string());
     }
 
-    if luma_sse > 1000.0 {
+    if luma_sse > 1_000.0_f64 {
         return Some("Non-standard encoder (highly custom)".to_string());
     }
 
@@ -319,7 +319,7 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
             *data
                 .get(pos)
                 .expect("Required metadata byte missing (out of bounds)"),
-        ) << 8)
+        ) << 8_i32)
             | usize::from(
                 *data
                     .get(pos + 1)
@@ -338,7 +338,7 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
                 let pq_tq = *data
                     .get(seg_pos)
                     .expect("Required metadata byte missing (out of bounds)");
-                let precision = (pq_tq >> 4) & 0x0F;
+                let precision = (pq_tq >> 4_i32) & 0x0F;
                 seg_pos += 1;
 
                 let mut table = [[0u16; 8]; 8];
@@ -371,7 +371,7 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
                                 *data
                                     .get(seg_pos)
                                     .expect("Required metadata byte missing (out of bounds)"),
-                            ) << 8)
+                            ) << 8_i32)
                                 | u16::from(
                                     *data
                                         .get(seg_pos + 1)
@@ -481,7 +481,7 @@ pub fn analyze_jpeg_quality(data: &[u8]) -> Result<JpegQualityAnalysis, String> 
         _ => "Low quality (visible compression artifacts)".to_string(),
     };
 
-    let is_high_quality_original = final_quality >= 90 && is_standard_table && confidence >= 0.95;
+    let is_high_quality_original = final_quality >= 90 && is_standard_table && confidence >= 0.95_f64;
     let is_complete = is_jpeg_complete(data);
 
     let analysis = JpegQualityAnalysis {
@@ -807,7 +807,7 @@ pub fn extract_gainmap_from_jpeg(data: &[u8]) -> Result<(DynamicImage, DynamicIm
     // Validate gainmap aspect ratio matches base image
     let gainmap_aspect = f64::from(gainmap_dims.0) / f64::from(gainmap_dims.1);
     let aspect_diff = (base_aspect - gainmap_aspect).abs();
-    if aspect_diff > 0.01 {
+    if aspect_diff > 0.01_f64 {
         warn!(
             "Aspect ratio mismatch: base={:.4} ({}x{}), gainmap={:.4} ({}x{}). \
              Difference: {:.4}. This may indicate incorrect gainmap extraction.",
@@ -1045,20 +1045,20 @@ fn gainmap_candidate_score(
     repaired_eoi: bool,
 ) -> f64 {
     let source_weight = match source {
-        GainmapCandidateSource::RelativeOffset => 4_000.0,
-        GainmapCandidateSource::AbsoluteOffset => 3_500.0,
-        GainmapCandidateSource::NearbyScan => 2_500.0,
-        GainmapCandidateSource::TailScan => 1_500.0,
+        GainmapCandidateSource::RelativeOffset => 4_000.0_f64,
+        GainmapCandidateSource::AbsoluteOffset => 3_500.0_f64,
+        GainmapCandidateSource::NearbyScan => 2_500.0_f64,
+        GainmapCandidateSource::TailScan => 1_500.0_f64,
     };
-    let aspect_penalty = aspect_diff.expect("Required floating point value missing") * 10_000.0;
+    let aspect_penalty = aspect_diff.expect("Required floating point value missing") * 10_000.0_f64;
     let length_penalty = if claimed_len == 0 {
-        0.0
+        0.0_f64
     } else {
         (crate::numeric_cast::usize_to_f64(candidate_len.abs_diff(claimed_len))
             / crate::numeric_cast::usize_to_f64(claimed_len))
-            * 100.0
+            * 100.0_f64
     };
-    let repair_penalty = if repaired_eoi { 25.0 } else { 0.0 };
+    let repair_penalty = if repaired_eoi { 25.0_f64 } else { 0.0_f64 };
 
     source_weight - aspect_penalty - length_penalty - repair_penalty
 }
@@ -1070,18 +1070,18 @@ fn gainmap_raw_fallback_score(
     repaired_eoi: bool,
 ) -> f64 {
     let source_weight = match source {
-        GainmapCandidateSource::RelativeOffset => 200.0,
-        GainmapCandidateSource::AbsoluteOffset => 150.0,
-        GainmapCandidateSource::NearbyScan | GainmapCandidateSource::TailScan => 0.0,
+        GainmapCandidateSource::RelativeOffset => 200.0_f64,
+        GainmapCandidateSource::AbsoluteOffset => 150.0_f64,
+        GainmapCandidateSource::NearbyScan | GainmapCandidateSource::TailScan => 0.0_f64,
     };
     let length_penalty = if claimed_len == 0 {
-        0.0
+        0.0_f64
     } else {
         (crate::numeric_cast::usize_to_f64(candidate_len.abs_diff(claimed_len))
             / crate::numeric_cast::usize_to_f64(claimed_len))
-            * 100.0
+            * 100.0_f64
     };
-    let repair_penalty = if repaired_eoi { 25.0 } else { 0.0 };
+    let repair_penalty = if repaired_eoi { 25.0_f64 } else { 0.0_f64 };
 
     source_weight - length_penalty - repair_penalty
 }
@@ -1701,7 +1701,7 @@ mod tests {
         let estimate = estimate_quality_precise(&qt, &IJG_LUMINANCE_BASE);
         let confidence = calculate_confidence(&estimate, None);
         assert!(
-            confidence >= 0.98,
+            confidence >= 0.98_f64,
             "Confidence should be high for exact match"
         );
     }

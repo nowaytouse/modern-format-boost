@@ -15,11 +15,11 @@ pub fn print_summary_report(
     operation_name: &str,
 ) {
     let reduction = if input_bytes > 0 {
-        (1.0 - crate::numeric_cast::u64_to_f64(output_bytes)
+        (1.0_f64 - crate::numeric_cast::u64_to_f64(output_bytes)
             / crate::numeric_cast::u64_to_f64(input_bytes))
-            * 100.0
+            * 100.0_f64
     } else {
-        0.0
+        0.0_f64
     };
 
     print_report_header(operation_name);
@@ -79,7 +79,7 @@ fn print_file_stats(result: &BatchResult) {
         );
     }
 
-    let rate_color = if result.success_rate() > 90.0 {
+    let rate_color = if result.success_rate() > 90.0_f64 {
         BRIGHT_GREEN
     } else {
         BRIGHT_YELLOW
@@ -106,7 +106,7 @@ fn print_size_info(input_bytes: u64, output_bytes: u64, reduction: f64) {
         RESET
     );
 
-    let out_color = if reduction > 0.0 {
+    let out_color = if reduction > 0.0_f64 {
         BRIGHT_GREEN
     } else {
         BRIGHT_YELLOW
@@ -193,9 +193,9 @@ pub fn print_health_report(passed: usize, failed: usize, warnings: usize) {
     let total = passed + failed + warnings;
     let health_rate = if total > 0 {
         (crate::numeric_cast::usize_to_f64(passed) / crate::numeric_cast::usize_to_f64(total))
-            * 100.0
+            * 100.0_f64
     } else {
-        100.0
+        100.0_f64
     };
 
     println!();
@@ -263,63 +263,63 @@ mod tests {
     fn test_size_reduction_formula() {
         let input = 1000u64;
         let output = 500u64;
-        let expected_reduction = (1.0
+        let expected_reduction = (1.0_f64
             - crate::numeric_cast::u64_to_f64(output) / crate::numeric_cast::u64_to_f64(input))
-            * 100.0;
-        assert!((expected_reduction - 50.0).abs() < 0.01);
+            * 100.0_f64;
+        assert!((expected_reduction - 50.0).abs() < 0.01_f64);
 
         let input = 1000u64;
         let output = 250u64;
-        let expected_reduction = (1.0
+        let expected_reduction = (1.0_f64
             - crate::numeric_cast::u64_to_f64(output) / crate::numeric_cast::u64_to_f64(input))
-            * 100.0;
-        assert!((expected_reduction - 75.0).abs() < 0.01);
+            * 100.0_f64;
+        assert!((expected_reduction - 75.0).abs() < 0.01_f64);
 
         let input = 1000u64;
         let output = 1000u64;
-        let expected_reduction = (1.0
+        let expected_reduction = (1.0_f64
             - crate::numeric_cast::u64_to_f64(output) / crate::numeric_cast::u64_to_f64(input))
-            * 100.0;
-        assert!((expected_reduction - 0.0).abs() < 0.01);
+            * 100.0_f64;
+        assert!((expected_reduction - 0.0).abs() < 0.01_f64);
 
         let input = 500u64;
         let output = 1000u64;
-        let expected_reduction = (1.0
+        let expected_reduction = (1.0_f64
             - crate::numeric_cast::u64_to_f64(output) / crate::numeric_cast::u64_to_f64(input))
-            * 100.0;
-        assert!((expected_reduction - (-100.0)).abs() < 0.01);
+            * 100.0_f64;
+        assert!((expected_reduction - (-100.0)).abs() < 0.01_f64);
     }
 
     #[test]
     fn test_health_rate_formula() {
-        let passed = 10;
-        let failed = 0;
-        let warnings = 0;
+        let passed = 10_i32;
+        let failed = 0_i32;
+        let warnings = 0_i32;
         let total = passed + failed + warnings;
-        let health_rate = if total > 0 {
-            (f64::from(passed) / f64::from(total)) * 100.0
+        let health_rate = if total > 0_i32 {
+            (f64::from(passed) / f64::from(total)) * 100.0_f64
         } else {
-            100.0
+            100.0_f64
         };
-        assert!((health_rate - 100.0).abs() < 0.01);
+        assert!((health_rate - 100.0).abs() < 0.01_f64);
 
-        let passed = 5;
-        let failed = 5;
-        let warnings = 0;
+        let passed = 5_i32;
+        let failed = 5_i32;
+        let warnings = 0_i32;
         let total = passed + failed + warnings;
-        let health_rate = (f64::from(passed) / f64::from(total)) * 100.0;
-        assert!((health_rate - 50.0).abs() < 0.01);
+        let health_rate = (f64::from(passed) / f64::from(total)) * 100.0_f64;
+        assert!((health_rate - 50.0).abs() < 0.01_f64);
 
-        let passed = 0;
-        let failed = 0;
-        let warnings = 0;
+        let passed = 0_i32;
+        let failed = 0_i32;
+        let warnings = 0_i32;
         let total = passed + failed + warnings;
-        let health_rate = if total > 0 {
-            (f64::from(passed) / f64::from(total)) * 100.0
+        let health_rate = if total > 0_i32 {
+            (f64::from(passed) / f64::from(total)) * 100.0_f64
         } else {
-            100.0
+            100.0_f64
         };
-        assert!((health_rate - 100.0).abs() < 0.01);
+        assert!((health_rate - 100.0).abs() < 0.01_f64);
     }
 
     #[test]
@@ -328,7 +328,7 @@ mod tests {
         let duration = Duration::from_secs(100);
         let avg_time = duration.as_secs_f64() / crate::numeric_cast::usize_to_f64(total_files);
         assert!(
-            (avg_time - 10.0).abs() < 0.001,
+            (avg_time - 10.0).abs() < 0.001_f64,
             "STRICT: 100s / 10 files = 10s/file, got {avg_time}"
         );
 
@@ -336,7 +336,7 @@ mod tests {
         let duration = Duration::from_secs(9);
         let avg_time = duration.as_secs_f64() / crate::numeric_cast::usize_to_f64(total_files);
         assert!(
-            (avg_time - 3.0).abs() < 0.001,
+            (avg_time - 3.0).abs() < 0.001_f64,
             "STRICT: 9s / 3 files = 3s/file, got {avg_time}"
         );
     }

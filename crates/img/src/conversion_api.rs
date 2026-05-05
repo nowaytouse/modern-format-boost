@@ -409,7 +409,7 @@ pub fn execute_conversion(
         let src_val = detection.file_size as i128;
         let diff_bytes = out_val - src_val;
 
-        let size_diff = shared_utils::modern_ui::format_size_diff(diff_bytes);
+        let size_diff = shared_utils::modern_ui::format_size_diff(diff_bytes as i64);
         format!("✅ JXL {action}: {size_diff}")
     };
 

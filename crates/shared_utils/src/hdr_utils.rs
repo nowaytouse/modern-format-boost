@@ -21,15 +21,15 @@ use std::path::{Path, PathBuf};
 pub fn color_info_to_cicp(info: &ColorInfo) -> Option<String> {
     // Map color primaries to CICP code
     let primaries = match info.color_primaries.as_deref() {
-        Some("bt709") => 1,
-        Some("bt2020") => 9,
-        Some("smpte432" | "display-p3") => 12, // DCI-P3 / Display P3
+        Some("bt709") => 1_i32,
+        Some("bt2020") => 9_i32,
+        Some("smpte432" | "display-p3") => 12_i32, // DCI-P3 / Display P3
         _ => {
             // If no primaries but has HDR transfer, assume BT.2020
             if info.color_transfer.as_deref() == Some("smpte2084")
                 || info.color_transfer.as_deref() == Some("arib-std-b67")
             {
-                9
+                9_i32
             } else {
                 return None;
             }
@@ -38,14 +38,14 @@ pub fn color_info_to_cicp(info: &ColorInfo) -> Option<String> {
 
     // Map transfer function to CICP code
     let transfer = match info.color_transfer.as_deref() {
-        Some("smpte2084") => 16,    // PQ (HDR10)
-        Some("arib-std-b67") => 18, // HLG
-        Some("bt709") => 1,
-        Some("srgb" | "iec61966-2-1") => 13,
+        Some("smpte2084") => 16_i32,    // PQ (HDR10)
+        Some("arib-std-b67") => 18_i32, // HLG
+        Some("bt709") => 1_i32,
+        Some("srgb" | "iec61966-2-1") => 13_i32,
         _ => {
             // If no transfer but has wide-gamut primaries, assume PQ
-            if primaries == 9 {
-                16
+            if primaries == 9_i32 {
+                16_i32
             } else {
                 return None;
             }
@@ -54,15 +54,15 @@ pub fn color_info_to_cicp(info: &ColorInfo) -> Option<String> {
 
     // Map color space (matrix coefficients) to CICP code
     let matrix = match info.color_space.as_deref() {
-        Some("bt2020nc" | "bt2020-ncl") => 9,
-        Some("bt709") => 1,
-        Some("rgb" | "gbr") => 0, // Identity/RGB
+        Some("bt2020nc" | "bt2020-ncl") => 9_i32,
+        Some("bt709") => 1_i32,
+        Some("rgb" | "gbr") => 0_i32, // Identity/RGB
         _ => {
             // Infer from primaries
-            if primaries == 9 {
-                9 // BT.2020
+            if primaries == 9_i32 {
+                9_i32 // BT.2020
             } else {
-                i32::from(primaries == 1) // 1 for BT.709, 0 for RGB/Identity (P3)
+                i32::from(primaries == 1_i32) // 1 for BT.709, 0 for RGB/Identity (P3)
             }
         }
     };

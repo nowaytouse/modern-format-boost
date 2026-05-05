@@ -98,10 +98,10 @@ impl UnifiedProgressBar {
         let size_pct = if self.input_size > 0 {
             ((crate::numeric_cast::u64_to_f64(size)
                 / crate::numeric_cast::u64_to_f64(self.input_size))
-                - 1.0)
-                * 100.0
+                - 1.0_f64)
+                * 100.0_f64
         } else {
-            0.0
+            0.0_f64
         };
         let ssim_str = ssim.map_or_else(|| "N/A".to_string(), |s| format!("SSIM {s:.4}"));
         self.bar
@@ -115,10 +115,10 @@ impl UnifiedProgressBar {
         let size_pct = if self.input_size > 0 {
             ((crate::numeric_cast::u64_to_f64(final_size)
                 / crate::numeric_cast::u64_to_f64(self.input_size))
-                - 1.0)
-                * 100.0
+                - 1.0_f64)
+                * 100.0_f64
         } else {
-            0.0
+            0.0_f64
         };
         let ssim_str = final_ssim
             .map(|s| format!("SSIM {s:.4}"))

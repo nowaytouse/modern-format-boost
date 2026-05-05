@@ -61,13 +61,13 @@ fn print_inference_summary(conn: &mut postgres::Client) -> Result<()> {
     let permille = {
         let ratio = Rational::from(summary.layer7_fallback_count)
             / Rational::from(summary.total_records.max(1));
-        let res = ratio * Rational::from(10_000);
+        let res = ratio * Rational::from(10_000_i32);
         res.to_f64()
     };
     println!(
         "   Layer 7 fallbacks:       {} ({:.1}%)",
         summary.layer7_fallback_count,
-        permille / 100.0
+        permille / 100.0_f64
     );
 
     if let Some(avg_tree) = summary.avg_tree_probability {
@@ -84,7 +84,7 @@ fn print_inference_summary(conn: &mut postgres::Client) -> Result<()> {
     println!("   Verdict Distribution:");
     for (verdict, count) in &summary.verdict_counts {
         let ratio = Rational::from(*count) / Rational::from(summary.total_records.max(1));
-        let pct = ratio.to_f64() * 100.0;
+        let pct = ratio.to_f64() * 100.0_f64;
         let bar = "█".repeat(shared_utils::numeric_cast::f64_to_usize_sat(pct / 5.0));
         println!("     {verdict:<14} {count:>5} ({pct:>5.1}%) {bar}");
     }
@@ -93,7 +93,7 @@ fn print_inference_summary(conn: &mut postgres::Client) -> Result<()> {
     println!("   Layer Exit Distribution:");
     for (layer, count) in &summary.layer_exit_counts {
         let ratio = Rational::from(*count) / Rational::from(summary.total_records.max(1));
-        let pct = ratio.to_f64() * 100.0;
+        let pct = ratio.to_f64() * 100.0_f64;
         println!("     {layer:<40} {count:>5} ({pct:>5.1}%)");
     }
 
@@ -133,9 +133,9 @@ fn print_discriminative_power(conn: &mut postgres::Client) -> Result<()> {
             .mean_loop_weak
             .map_or_else(|| "   N/A".to_string(), |v| format!("{v:>12.4}"));
 
-        let indicator = if f.discriminative_power.abs() > 0.5 {
+        let indicator = if f.discriminative_power.abs() > 0.5_f64 {
             "★"
-        } else if f.discriminative_power.abs() > 0.2 {
+        } else if f.discriminative_power.abs() > 0.2_f64 {
             "○"
         } else {
             "·"
@@ -151,11 +151,11 @@ fn print_discriminative_power(conn: &mut postgres::Client) -> Result<()> {
     println!();
     let strong_features: Vec<_> = features
         .iter()
-        .filter(|f| f.discriminative_power.abs() > 0.5)
+        .filter(|f| f.discriminative_power.abs() > 0.5_f64)
         .collect();
     let weak_features: Vec<_> = features
         .iter()
-        .filter(|f| f.discriminative_power.abs() < 0.1)
+        .filter(|f| f.discriminative_power.abs() < 0.1_f64)
         .collect();
 
     if !strong_features.is_empty() {

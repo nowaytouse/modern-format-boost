@@ -908,7 +908,7 @@ fn calculate_image_features(img: &DynamicImage, file_size: u64) -> ImageFeatures
             crate::numeric_cast::u64_to_f64(file_size) / crate::numeric_cast::u64_to_f64(raw_size)
         }
     } else {
-        1.0
+        1.0_f64
     };
 
     let entropy = calculate_entropy(img);
@@ -931,7 +931,7 @@ fn calculate_entropy(img: &DynamicImage) -> f64 {
     }
 
     let total = crate::numeric_cast::usize_to_f64(pixels.len());
-    let mut entropy = 0.0;
+    let mut entropy = 0.0_f64;
 
     for &count in &histogram {
         if count > 0 {
@@ -1123,16 +1123,16 @@ fn check_webp_animation(path: &Path) -> Result<bool> {
     if (has_anim || has_anmf) && structural_count <= 1 {
         // [Disagreement] Internal Deep Research
         // Count consistent animation frame chunks (ANMF for WebP Extended)
-        let mut confirmed_frames = 0;
+        let mut confirmed_frames = 0_i32;
         let mut p = 0;
         while p + 8 < bytes.len() {
             if bytes.get(p..p + 4) == Some(b"ANMF") {
-                confirmed_frames += 1;
+                confirmed_frames += 1_i32;
             }
             p += 1;
         }
 
-        if confirmed_frames > 1 {
+        if confirmed_frames > 1_i32 {
             log_eprintln!("🎞️  [Deep Research: WebP] Structural scan missed frames, but internal byte-research confirmed {} ANMF chunks: {}", confirmed_frames, path.display());
             return Ok(true);
         }
@@ -1158,11 +1158,11 @@ fn deep_research_gif_animation(bytes: &[u8], gce_hints: u32) -> bool {
 
     // Look for GCE patterns and verify if they are followed by valid block terminators
     // GCE = [21 F9 04 ... 00]
-    let mut confirmed = 0;
+    let mut confirmed = 0_i32;
     let mut i = 0;
     while i + 7 < bytes.len() {
         if bytes.get(i..i + 3) == Some(&[0x21, 0xF9, 0x04]) && bytes.get(i + 7) == Some(&0x00) {
-            confirmed += 1;
+            confirmed += 1_i32;
         }
         i += 1;
     }
@@ -1174,11 +1174,11 @@ fn deep_research_gif_animation(bytes: &[u8], gce_hints: u32) -> bool {
 /// Validates if fcTL/acTL markers are consistent.
 fn deep_research_png_animation(bytes: &[u8]) -> bool {
     // APNG uses fcTL (Frame Control Chunk)
-    let mut confirmed_fctl = 0;
+    let mut confirmed_fctl = 0_i32;
     let mut i = 8; // skip signature
     while i + 8 < bytes.len() {
         if bytes.get(i + 4..i + 8) == Some(b"fcTL") {
-            confirmed_fctl += 1;
+            confirmed_fctl += 1_i32;
         }
         i += 1;
     }
@@ -1535,7 +1535,7 @@ pub fn get_animation_duration_and_frames_imagemagick(path: &Path) -> Option<(f64
         return None;
     }
 
-    let duration_secs = f64::from(total_cs) / 100.0;
+    let duration_secs = f64::from(total_cs) / 100.0_f64;
     log_eprintln!(
         "📊  [Duration Fallback] ImageMagick animation detected: {} frames, {:.2}s ({})",
         frame_count,
@@ -1982,8 +1982,8 @@ mod tests {
 
         assert!(psnr_high > psnr_mid);
         assert!(psnr_mid > psnr_low);
-        assert!(psnr_high >= 40.0);
-        assert!(psnr_low >= 25.0);
+        assert!(psnr_high >= 40.0_f64);
+        assert!(psnr_low >= 25.0_f64);
     }
 
     #[test]
@@ -1994,8 +1994,8 @@ mod tests {
 
         assert!(ssim_high > ssim_mid);
         assert!(ssim_mid > ssim_low);
-        assert!(ssim_high >= 0.95);
-        assert!(ssim_low >= 0.70);
+        assert!(ssim_high >= 0.95_f64);
+        assert!(ssim_low >= 0.70_f64);
     }
 
     #[test]

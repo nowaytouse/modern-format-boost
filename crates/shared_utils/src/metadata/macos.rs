@@ -37,7 +37,7 @@ pub fn copy_native_metadata(src: &Path, dst: &Path) -> io::Result<()> {
             COPYFILE_FLAGS,
         )
     };
-    if ret < 0 {
+    if ret < 0_i32 {
         return Err(io::Error::last_os_error());
     }
     Ok(())
@@ -115,7 +115,7 @@ pub fn get_added_time(path: &Path) -> io::Result<std::time::SystemTime> {
             0,
         )
     };
-    if ret != 0 {
+    if ret != 0_i32 {
         return Err(io::Error::last_os_error());
     }
     let duration = std::time::Duration::new(
@@ -163,7 +163,7 @@ fn set_time_attr(path: &Path, time: std::time::SystemTime, attr: u32) -> io::Res
             0,
         )
     };
-    if ret != 0 {
+    if ret != 0_i32 {
         return Err(io::Error::last_os_error());
     }
     Ok(())

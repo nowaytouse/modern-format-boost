@@ -59,7 +59,7 @@ fn main() -> Result<()> {
     println!("🎨 Training Static Image Quality Model...");
     println!("📂 Input: {} (Label: {:?}", cli.input.display(), cli.label);
 
-    let mut count = 0;
+    let mut count = 0_i32;
     let supported_extensions = [
         "jpg", "jpeg", "jpe", "png", "webp", "gif", "tiff", "tif", "bmp", "ico", "avif", "heic",
         "heif", "hif", "jxl",
@@ -83,7 +83,7 @@ fn main() -> Result<()> {
             {
                 eprintln!("⚠️ Failed to ingest {}: {}", path.display(), e);
             } else {
-                count += 1;
+                count += 1_i32;
             }
         }
     }

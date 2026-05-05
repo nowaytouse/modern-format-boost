@@ -57,7 +57,7 @@ pub fn detect_audio_silence(path: &Path) -> PenetrationResult<bool> {
     if !output.status.success() {
         emit_stderr(&format!(
             "⚠️  Audio penetration failed: ffmpeg exit code {}",
-            output.status.code().unwrap_or(-1)
+            output.status.code().unwrap_or(-1_i32)
         ));
         return PenetrationResult::Failed;
     }
@@ -92,13 +92,13 @@ pub fn detect_audio_silence(path: &Path) -> PenetrationResult<bool> {
 pub fn detect_real_transparency(path: &Path, duration: Option<f64>) -> PenetrationResult<bool> {
     // Phase 1: Stratified Sampling (fast check)
     // Sample up to 3 points in time to catch most cases efficiently.
-    let duration_val = duration.unwrap_or(1.0);
-    let sample_points = if duration_val <= 1.0 {
-        vec![0.0]
-    } else if duration_val <= 5.0 {
-        vec![0.0, duration_val * 0.5]
+    let duration_val = duration.unwrap_or(1.0_f64);
+    let sample_points = if duration_val <= 1.0_f64 {
+        vec![0.0_f64]
+    } else if duration_val <= 5.0_f64 {
+        vec![0.0_f64, duration_val * 0.5_f64]
     } else {
-        vec![0.0, duration_val * 0.5, duration_val - 0.1]
+        vec![0.0_f64, duration_val * 0.5_f64, duration_val - 0.1_f64]
     };
 
     let mut found_transparency = false;
@@ -142,7 +142,7 @@ pub fn detect_real_transparency(path: &Path, duration: Option<f64>) -> Penetrati
             if let Some(idx) = line.find("lavfi.stats.0.Min:") {
                 let min_str = line[idx + 18..].split_whitespace().next().unwrap_or("");
                 if let Ok(min_val) = min_str.parse::<f64>() {
-                    if min_val < 255.0 {
+                    if min_val < 255.0_f64 {
                         found_transparency = true;
                         break;
                     }
@@ -163,7 +163,7 @@ pub fn detect_real_transparency(path: &Path, duration: Option<f64>) -> Penetrati
     // Phase 2: Full Decode Verification (for suspicious cases)
     // If sampling succeeded but found no transparency, do a full decode to be absolutely sure.
     // This catches cases where transparency only appears in specific frames.
-    if sampling_succeeded && duration_val > 1.0 {
+    if sampling_succeeded && duration_val > 1.0_f64 {
         return run_full_decode_transparency(path);
     }
 
@@ -196,7 +196,7 @@ fn run_full_decode_transparency(path: &Path) -> PenetrationResult<bool> {
     if !output.status.success() {
         emit_stderr(&format!(
             "⚠️  Full transparency decode failed: exit code {}",
-            output.status.code().unwrap_or(-1)
+            output.status.code().unwrap_or(-1_i32)
         ));
         return PenetrationResult::Failed;
     }
@@ -208,7 +208,7 @@ fn run_full_decode_transparency(path: &Path) -> PenetrationResult<bool> {
         if let Some(idx) = line.find("lavfi.stats.0.Min:") {
             let min_str = line[idx + 18..].split_whitespace().next().unwrap_or("");
             if let Ok(min_val) = min_str.parse::<f64>() {
-                if min_val < 255.0 {
+                if min_val < 255.0_f64 {
                     emit_stderr("   Full decode found transparency in at least one frame");
                     return PenetrationResult::Verified(true);
                 }
@@ -465,7 +465,7 @@ mod tests {
 
     #[test]
     fn test_penetration_result_is_verified() {
-        assert!(PenetrationResult::Verified(42).is_verified());
+        assert!(PenetrationResult::Verified(42_i32).is_verified());
         assert!(!PenetrationResult::Failed::<i32>.is_verified());
         assert!(!PenetrationResult::Skipped::<i32>.is_verified());
     }

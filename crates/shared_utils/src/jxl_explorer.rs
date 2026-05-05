@@ -265,11 +265,11 @@ fn trim_decimal_string(mut raw: String) -> String {
 /// Formatted string representation
 fn format_scalar_for_log(value: f64) -> String {
     let normalized = value.max(0.0);
-    let raw = if normalized >= 0.99 {
+    let raw = if normalized >= 0.99_f64 {
         format!("{normalized:.8}")
-    } else if normalized < 0.01 {
+    } else if normalized < 0.01_f64 {
         format!("{normalized:.6}")
-    } else if normalized < 0.1 {
+    } else if normalized < 0.1_f64 {
         format!("{normalized:.4}")
     } else {
         format!("{normalized:.3}")
@@ -852,11 +852,11 @@ where
     // Condition A (Hard Constraint): If d=0.001 is already safe (<= 100% size), stop exploring.
     // Quality is already safe and beneficial, so further exploration cost is not worth it.
     let ratio = size_ratio(initial_size, input_size);
-    if ratio <= 1.0 {
+    if ratio <= 1.0_f64 {
         log.push(format!(
             "Early exit: the required floor d={} is already safe ({:.1}% of input)",
             format_distance_for_log(initial_distance),
-            ratio * 100.0
+            ratio * 100.0_f64
         ));
         return Ok(Some(finalize_screening_result(
             input_size,
@@ -931,7 +931,7 @@ where
             .map_or(initial_size, |candidate| candidate.output_size);
         let size = try_candidate(candidate_distance)?;
         iterations += 1;
-        let delta_pct = improvement_ratio(previous_size, size, input_size) * 100.0;
+        let delta_pct = improvement_ratio(previous_size, size, input_size) * 100.0_f64;
         let trend = if size < previous_size { "↓" } else { "→" };
         let status = if near_boundary(size, input_size) {
             "near break-even"
@@ -1361,9 +1361,9 @@ mod tests {
     #[test]
     fn test_screening_early_exit_on_safe_initial_result() {
         // Condition A: d=0.001 is safe (90 <= 100), should exit immediately
-        let mut calls = 0;
+        let mut calls = 0_i32;
         let result = screen_jxl_candidates(100, 90, |_distance| {
-            calls += 1;
+            calls += 1_i32;
             Ok(50) // Should never be called
         })
         .unwrap_or_else(|e| panic!("exploration failed: {e:?}"))
@@ -1372,7 +1372,7 @@ mod tests {
         assert!((result.best_distance - JXL_EXPLORE_FLOOR).abs() < f32::EPSILON);
         assert_eq!(result.best_output_size, 90);
         assert_eq!(result.iterations, 1);
-        assert_eq!(calls, 0); // No further probes
+        assert_eq!(calls, 0_i32); // No further probes
         assert!(result.log.iter().any(|line| line.contains("Early exit")));
     }
 
@@ -1403,10 +1403,10 @@ mod tests {
 
     #[test]
     fn test_target_distance_growth_is_bounded_by_profile_band() {
-        let micro_ratio = 1.02;
-        let boundary_ratio = 1.35;
-        let wide_ratio = 2.0;
-        let ceiling_ratio = 10.0;
+        let micro_ratio = 1.02_f64;
+        let boundary_ratio = 1.35_f64;
+        let wide_ratio = 2.0_f64;
+        let ceiling_ratio = 10.0_f64;
 
         let micro_target = target_distance_for_ratio(micro_ratio, exploration_profile(micro_ratio))
             .unwrap_or_else(|_| panic!("failed to get target distance"));
@@ -1599,12 +1599,12 @@ mod tests {
         .unwrap_or_else(|e| panic!("exploration failed: {e:?}"))
         .unwrap_or_else(|| panic!("screening result should exist"));
 
-        let precision = f64::from(JXL_EXPLORE_BINARY_SEARCH_PRECISION) * 2.0;
+        let precision = f64::from(JXL_EXPLORE_BINARY_SEARCH_PRECISION) * 2.0_f64;
         assert!(
-            f64::from(result.best_distance) <= 0.04 + precision,
+            f64::from(result.best_distance) <= 0.04_f64 + precision,
             "best_distance={} should converge to <= 0.04 + precision ({})",
             result.best_distance,
-            0.04 + precision
+            0.04_f64 + precision
         );
         assert!(result.best_output_size < 1000);
     }

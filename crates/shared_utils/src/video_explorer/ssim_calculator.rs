@@ -67,12 +67,12 @@ pub fn calculate_ms_ssim_yuv(
 
     let duration = super::stream_analysis::get_video_duration(input).unwrap_or_else(|| {
         eprintln!("   ⚠️  Cannot determine video duration, using full calculation");
-        60.0
+        60.0_f64
     });
-    let duration_min = duration / 60.0;
+    let duration_min = duration / 60.0_f64;
 
     // Caller sets max_duration_min (e.g. 5 min normal, 25 min ultimate) to control skip threshold.
-    let (sample_rate, should_calculate) = if duration_min <= 1.0 {
+    let (sample_rate, should_calculate) = if duration_min <= 1.0_f64 {
         (1, true)
     } else if duration_min <= max_duration_min {
         (3, true)
@@ -180,7 +180,7 @@ pub fn calculate_ms_ssim_yuv(
     // so Y contributes 4/6 of the signal and each chroma plane contributes 1/6.
     // If not, use Y-only (still perceptually dominant and meaningful).
     let (u_val, v_val, weighted_avg) = if let (Some(u), Some(v)) = (u_ms_ssim, v_ms_ssim) {
-        let avg = (y_ms_ssim.mul_add(4.0, u) + v) / 6.0;
+        let avg = (y_ms_ssim.mul_add(4.0, u) + v) / 6.0_f64;
         (u, v, avg)
     } else {
         eprintln!("      ℹ️  Using Y-only MS-SSIM (chroma channels unavailable)");
@@ -343,7 +343,7 @@ pub fn calculate_ms_ssim(input: &Path, output: &Path) -> Option<f64> {
             // non-zero exit code even when it successfully computed the metric.
             if let Some(ms_ssim) = parse_ms_ssim_from_json(&stdout) {
                 let clamped = ms_ssim.clamp(0.0, 1.0);
-                if (ms_ssim - clamped).abs() > 0.0001 {
+                if (ms_ssim - clamped).abs() > 0.000_1_f64 {
                     eprintln!(
                         "   ⚠️  MS-SSIM raw value {ms_ssim:.6} out of range, clamped to {clamped:.4}"
                     );
@@ -354,7 +354,7 @@ pub fn calculate_ms_ssim(input: &Path, output: &Path) -> Option<f64> {
 
             if let Some(ms_ssim) = parse_ms_ssim_from_legacy(&stderr) {
                 let clamped = ms_ssim.clamp(0.0, 1.0);
-                if (ms_ssim - clamped).abs() > 0.0001 {
+                if (ms_ssim - clamped).abs() > 0.000_1_f64 {
                     eprintln!(
                         "   ⚠️  MS-SSIM raw value {ms_ssim:.6} out of range, clamped to {clamped:.4}"
                     );
@@ -687,7 +687,7 @@ fn parse_psnr_average_y_from_stderr(stderr: &str) -> Option<f64> {
                     .unwrap_or(after.len());
                 if end > 0 {
                     if let Ok(v) = after[..end].parse::<f64>() {
-                        if v.is_finite() && v > 0.0 {
+                        if v.is_finite() && v > 0.0_f64 {
                             return Some(v);
                         }
                     }
@@ -704,7 +704,7 @@ fn parse_psnr_average_y_from_stderr(stderr: &str) -> Option<f64> {
                     .unwrap_or(after.len());
                 if end > 0 {
                     if let Ok(v) = after[..end].parse::<f64>() {
-                        if v.is_finite() && v > 0.0 {
+                        if v.is_finite() && v > 0.0_f64 {
                             return Some(v);
                         }
                     }
@@ -788,7 +788,7 @@ mod tests {
         let result = parse_vmaf_mean_from_json(json);
         assert!(result.is_some(), "Should parse vmaf mean from typical JSON");
         let v = result.unwrap_or_else(|| panic!("missing value"));
-        assert!((v - 94.123).abs() < 1e-6, "Expected 94.123, got {v}");
+        assert!((v - 94.123).abs() < 1e-6_f64, "Expected 94.123, got {v}");
     }
 
     #[test]
@@ -824,7 +824,7 @@ mod tests {
         let json = r#"{"pooled_metrics": {"vmaf": {"mean": 0.5}}}"#;
         let result = parse_vmaf_mean_from_json(json);
         assert!(result.is_some());
-        assert!((result.unwrap_or_else(|| panic!("missing value")) - 0.5).abs() < 1e-6);
+        assert!((result.unwrap_or_else(|| panic!("missing value")) - 0.5).abs() < 1e-6_f64);
     }
 
     // ── parse_cambi_mean_from_json ────────────────────────────────────────────
@@ -845,7 +845,7 @@ mod tests {
         let result = parse_cambi_mean_from_json(json);
         assert!(result.is_some(), "Should parse cambi mean");
         let v = result.unwrap_or_else(|| panic!("missing value"));
-        assert!((v - 7.456).abs() < 1e-6, "Expected 7.456, got {v}");
+        assert!((v - 7.456).abs() < 1e-6_f64, "Expected 7.456, got {v}");
     }
 
     #[test]
@@ -872,7 +872,7 @@ mod tests {
         let json = r#"{"pooled_metrics": {"cambi": {"mean": 42.789}}}"#;
         let result = parse_cambi_mean_from_json(json);
         assert!(result.is_some());
-        assert!((result.unwrap_or_else(|| panic!("missing value")) - 42.789).abs() < 1e-6);
+        assert!((result.unwrap_or_else(|| panic!("missing value")) - 42.789).abs() < 1e-6_f64);
     }
 
     // ── parse_psnr_average_y_from_stderr ─────────────────────────────────────
@@ -885,7 +885,7 @@ mod tests {
         let result = parse_psnr_average_y_from_stderr(stderr);
         assert!(result.is_some(), "Should parse PSNR from standard line");
         let v = result.unwrap_or_else(|| panic!("missing value"));
-        assert!((v - 41.234).abs() < 1e-3, "Expected y:41.234, got {v}");
+        assert!((v - 41.234).abs() < 1e-3_f64, "Expected y:41.234, got {v}");
     }
 
     #[test]
@@ -895,7 +895,7 @@ mod tests {
         let result = parse_psnr_average_y_from_stderr(stderr);
         assert!(result.is_some());
         // Should pick y:38.5, not average:37.0
-        assert!((result.unwrap_or_else(|| panic!("missing value")) - 38.5).abs() < 1e-3);
+        assert!((result.unwrap_or_else(|| panic!("missing value")) - 38.5).abs() < 1e-3_f64);
     }
 
     #[test]
@@ -904,7 +904,7 @@ mod tests {
         let stderr = "PSNR average:39.12 min:37.0 max:41.0\n";
         let result = parse_psnr_average_y_from_stderr(stderr);
         assert!(result.is_some());
-        assert!((result.unwrap_or_else(|| panic!("missing value")) - 39.12).abs() < 1e-3);
+        assert!((result.unwrap_or_else(|| panic!("missing value")) - 39.12).abs() < 1e-3_f64);
     }
 
     #[test]
@@ -931,7 +931,7 @@ mod tests {
         );
         let result = parse_psnr_average_y_from_stderr(stderr);
         assert!(result.is_some());
-        assert!((result.unwrap_or_else(|| panic!("missing value")) - 44.1).abs() < 1e-3);
+        assert!((result.unwrap_or_else(|| panic!("missing value")) - 44.1).abs() < 1e-3_f64);
     }
 
     #[test]
@@ -988,7 +988,7 @@ mod tests {
             r#"{"pooled_metrics": {"float_ms_ssim": {"min": 0.95, "max": 0.99, "mean": 0.9712}}}"#;
         let r = parse_ms_ssim_from_json(json);
         assert!(r.is_some());
-        assert!((r.unwrap_or_else(|| panic!("missing value")) - 0.9712).abs() < 1e-6);
+        assert!((r.unwrap_or_else(|| panic!("missing value")) - 0.9712).abs() < 1e-6_f64);
     }
 
     #[test]
@@ -996,7 +996,7 @@ mod tests {
         let json = r#"{"pooled_metrics": {"float_ms_ssim": {"mean": 1.0}}}"#;
         assert!(
             (parse_ms_ssim_from_json(json).unwrap_or_else(|| panic!("missing value")) - 1.0).abs()
-                < 1e-6
+                < 1e-6_f64
         );
     }
 
@@ -1005,7 +1005,7 @@ mod tests {
         let json = r#"{"pooled_metrics": {"float_ms_ssim": {"mean": 1}}}"#;
         assert!(
             (parse_ms_ssim_from_json(json).unwrap_or_else(|| panic!("missing value")) - 1.0).abs()
-                < 1e-6
+                < 1e-6_f64
         );
     }
 
@@ -1034,7 +1034,7 @@ mod tests {
         assert!(
             (parse_ms_ssim_from_legacy(s).unwrap_or_else(|| panic!("missing value")) - 0.9856)
                 .abs()
-                < 1e-4
+                < 1e-4_f64
         );
     }
 
@@ -1044,7 +1044,7 @@ mod tests {
         assert!(
             (parse_ms_ssim_from_legacy(s).unwrap_or_else(|| panic!("missing value")) - 0.9732)
                 .abs()
-                < 1e-4
+                < 1e-4_f64
         );
     }
 
@@ -1053,7 +1053,7 @@ mod tests {
         let s = "float_ms_ssim score: 0.9900\n";
         assert!(
             (parse_ms_ssim_from_legacy(s).unwrap_or_else(|| panic!("missing value")) - 0.99).abs()
-                < 1e-4
+                < 1e-4_f64
         );
     }
 
@@ -1092,7 +1092,7 @@ mod tests {
             (parse_psnr_average_y_from_stderr(s).unwrap_or_else(|| panic!("missing value"))
                 - 99.999)
                 .abs()
-                < 1e-3
+                < 1e-3_f64
         );
     }
 
@@ -1102,7 +1102,7 @@ mod tests {
         assert!(
             (parse_psnr_average_y_from_stderr(s).unwrap_or_else(|| panic!("missing value")) - 25.5)
                 .abs()
-                < 1e-3
+                < 1e-3_f64
         );
     }
 
@@ -1128,7 +1128,7 @@ mod tests {
         let json = r#"{  "pooled_metrics" :  {  "vmaf" :  {  "mean" :  96.5  }  }  }"#;
         let r = parse_vmaf_mean_from_json(json);
         assert!(r.is_some());
-        assert!((r.unwrap_or_else(|| panic!("missing value")) - 96.5).abs() < 1e-6);
+        assert!((r.unwrap_or_else(|| panic!("missing value")) - 96.5).abs() < 1e-6_f64);
     }
 
     #[test]
@@ -1137,7 +1137,7 @@ mod tests {
         assert!(
             (parse_vmaf_mean_from_json(json).unwrap_or_else(|| panic!("missing value")) - 100.0)
                 .abs()
-                < 1e-6
+                < 1e-6_f64
         );
     }
 
@@ -1148,7 +1148,7 @@ mod tests {
         let json = r#"{"pooled_metrics": {"cambi": {"mean": 0.01}}}"#;
         let r = parse_cambi_mean_from_json(json);
         assert!(r.is_some());
-        assert!((r.unwrap_or_else(|| panic!("missing value")) - 0.01).abs() < 1e-6);
+        assert!((r.unwrap_or_else(|| panic!("missing value")) - 0.01).abs() < 1e-6_f64);
     }
 
     #[test]

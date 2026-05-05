@@ -397,7 +397,7 @@ impl UpstreamToolLogger {
 
     /// Logs tool exit code
     pub fn log_exit(&self, exit_code: i32) {
-        if exit_code == 0 {
+        if exit_code == 0_i32 {
             tracing::debug!("[{}] exited with code 0", self.tool_name);
         } else {
             eprintln!(

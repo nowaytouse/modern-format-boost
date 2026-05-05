@@ -439,8 +439,8 @@ pub mod webp {
             // ANMF frame header is 16 bytes. Duration is a 24-bit little-endian integer at offset 12..15.
             if chunk_id == b"ANMF" && payload_start + 15 <= data.len() {
                 let duration_ms = u32::from(data[payload_start + 12])
-                    | (u32::from(data[payload_start + 13]) << 8)
-                    | (u32::from(data[payload_start + 14]) << 16);
+                    | (u32::from(data[payload_start + 13]) << 8_i32)
+                    | (u32::from(data[payload_start + 14]) << 16_i32);
                 if duration_ms > 0 && duration_ms <= 60_000 {
                     total_ms += u64::from(duration_ms);
                 }
@@ -461,8 +461,8 @@ pub mod webp {
                 let dur_off = idx + 8 + 12;
                 if dur_off + 3 <= data.len() {
                     let duration_ms = u32::from(data[dur_off])
-                        | (u32::from(data[dur_off + 1]) << 8)
-                        | (u32::from(data[dur_off + 2]) << 16);
+                        | (u32::from(data[dur_off + 1]) << 8_i32)
+                        | (u32::from(data[dur_off + 2]) << 16_i32);
                     if duration_ms > 0 && duration_ms <= 60_000 {
                         total_ms += u64::from(duration_ms);
                     }
@@ -643,12 +643,12 @@ pub mod avif {
                 let byte1 = av1c_data[1];
                 let byte2 = av1c_data[2];
 
-                let seq_profile = (byte1 >> 5) & 0x07;
-                let high_bitdepth = (byte2 >> 6) & 0x01;
-                let twelve_bit = (byte2 >> 5) & 0x01;
-                let monochrome = (byte2 >> 4) & 0x01;
-                let chroma_subsampling_x = (byte2 >> 3) & 0x01;
-                let chroma_subsampling_y = (byte2 >> 2) & 0x01;
+                let seq_profile = (byte1 >> 5_i32) & 0x07;
+                let high_bitdepth = (byte2 >> 6_i32) & 0x01;
+                let twelve_bit = (byte2 >> 5_i32) & 0x01;
+                let monochrome = (byte2 >> 4_i32) & 0x01;
+                let chroma_subsampling_x = (byte2 >> 3_i32) & 0x01;
+                let chroma_subsampling_y = (byte2 >> 2_i32) & 0x01;
 
                 let is_444 = chroma_subsampling_x == 0 && chroma_subsampling_y == 0;
                 let is_420 = chroma_subsampling_x == 1 && chroma_subsampling_y == 1;

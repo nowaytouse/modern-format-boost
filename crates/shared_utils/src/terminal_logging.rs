@@ -258,17 +258,17 @@ impl TerminalLogger {
         let percent = if old > 0 {
             let permille = u32::try_from((u128::from(new) * 10_000) / u128::from(old))
                 .expect("Value overflowed or is missing, cannot process ratio");
-            (f64::from(permille) / 100.0) - 100.0
+            (f64::from(permille) / 100.0_f64) - 100.0_f64
         } else {
-            0.0
+            0.0_f64
         };
 
-        let sign = if percent >= 0.0 { "+" } else { "" };
+        let sign = if percent >= 0.0_f64 { "+" } else { "" };
         let percent_str = format!("{sign}{percent:.1}%");
 
-        let change_color = if percent < 0.0 {
+        let change_color = if percent < 0.0_f64 {
             self.success(&percent_str)
-        } else if percent > 5.0 {
+        } else if percent > 5.0_f64 {
             self.error(&percent_str)
         } else {
             self.warning(&percent_str)

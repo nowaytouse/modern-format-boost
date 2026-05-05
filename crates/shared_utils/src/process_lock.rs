@@ -88,7 +88,7 @@ pub fn acquire_dir_lock(dir_path: &Path) -> Result<File> {
     // SAFETY: Using libc directly for lightweight advisory locking.
     let result = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
 
-    if result != 0 {
+    if result != 0_i32 {
         let err = std::io::Error::last_os_error();
         if err.raw_os_error() == Some(libc::EWOULDBLOCK) {
             return Err(anyhow!(

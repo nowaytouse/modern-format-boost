@@ -88,7 +88,7 @@ impl DynamicCrfMapper {
         };
 
         let interpolated_offset = offset1 + t * (offset2 - offset1);
-        let confidence = 0.85;
+        let confidence = 0.85_f64;
 
         (
             (gpu_crf + interpolated_offset).clamp(10.0, max_crf),
@@ -552,7 +552,7 @@ mod tests {
 
         let filter = build_calibration_filter_chain(
             &vf_args,
-            Some(120.0),
+            Some(120.0_f64),
             false,
             &["pad=ceil(iw/2)*2:ceil(ih/2)*2:0:0".to_string()],
         );
@@ -566,7 +566,7 @@ mod tests {
         let vf_args = vec!["-vf".to_string(), "scale=1280:720".to_string()];
 
         assert_eq!(
-            build_calibration_filter_chain(&vf_args, Some(10.0), false, &[]),
+            build_calibration_filter_chain(&vf_args, Some(10.0_f64), false, &[]),
             "scale=1280:720"
         );
     }

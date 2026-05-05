@@ -152,72 +152,72 @@ mod tests {
     fn test_compare_quality_desc() {
         // Higher quality is better (returns Less for min_by semantics)
         assert_eq!(
-            compare_quality_desc(Some(0.95), Some(0.90), 1e-4),
+            compare_quality_desc(Some(0.95_f64), Some(0.90_f64), 1e-4),
             Ordering::Less
         );
         assert_eq!(
-            compare_quality_desc(Some(0.90), Some(0.95), 1e-4),
+            compare_quality_desc(Some(0.90_f64), Some(0.95_f64), 1e-4),
             Ordering::Greater
         );
 
         // Within epsilon is equal
         assert_eq!(
-            compare_quality_desc(Some(0.95), Some(0.95 + 1e-5), 1e-4),
+            compare_quality_desc(Some(0.95_f64), Some(0.95_f64 + 1e-5_f64), 1e-4),
             Ordering::Equal
         );
 
         // None is treated as worst case (0.0) - value always wins over None
         assert_eq!(
-            compare_quality_desc(None, Some(0.95), 1e-4),
+            compare_quality_desc(None, Some(0.95_f64), 1e-4),
             Ordering::Greater
         );
-        assert_eq!(compare_quality_desc(Some(0.95), None, 1e-4), Ordering::Less);
+        assert_eq!(compare_quality_desc(Some(0.95_f64), None, 1e-4), Ordering::Less);
         assert_eq!(compare_quality_desc(None, None, 1e-4), Ordering::Equal);
 
         // Transitivity: if A > B and B > None, then A > None
         assert_eq!(
-            compare_quality_desc(Some(0.95), Some(0.90), 1e-4),
+            compare_quality_desc(Some(0.95_f64), Some(0.90_f64), 1e-4),
             Ordering::Less
         );
-        assert_eq!(compare_quality_desc(Some(0.90), None, 1e-4), Ordering::Less);
-        assert_eq!(compare_quality_desc(Some(0.95), None, 1e-4), Ordering::Less);
+        assert_eq!(compare_quality_desc(Some(0.90_f64), None, 1e-4), Ordering::Less);
+        assert_eq!(compare_quality_desc(Some(0.95_f64), None, 1e-4), Ordering::Less);
     }
 
     #[test]
     fn test_compare_quality_asc() {
         // Lower is better (returns Less for min_by semantics)
         assert_eq!(
-            compare_quality_asc(Some(0.01), Some(0.05), 1e-4),
+            compare_quality_asc(Some(0.01_f64), Some(0.05_f64), 1e-4),
             Ordering::Less
         );
         assert_eq!(
-            compare_quality_asc(Some(0.05), Some(0.01), 1e-4),
+            compare_quality_asc(Some(0.05_f64), Some(0.01_f64), 1e-4),
             Ordering::Greater
         );
 
         // None is treated as worst case (infinity) - value always wins over None
         assert_eq!(
-            compare_quality_asc(None, Some(0.05), 1e-4),
+            compare_quality_asc(None, Some(0.05_f64), 1e-4),
             Ordering::Greater
         );
-        assert_eq!(compare_quality_asc(Some(0.05), None, 1e-4), Ordering::Less);
+        assert_eq!(compare_quality_asc(Some(0.05_f64), None, 1e-4), Ordering::Less);
         assert_eq!(compare_quality_asc(None, None, 1e-4), Ordering::Equal);
 
         // Transitivity: if A < B and B < None, then A < None
         assert_eq!(
-            compare_quality_asc(Some(0.01), Some(0.05), 1e-4),
+            compare_quality_asc(Some(0.01_f64), Some(0.05_f64), 1e-4),
             Ordering::Less
         );
-        assert_eq!(compare_quality_asc(Some(0.05), None, 1e-4), Ordering::Less);
-        assert_eq!(compare_quality_asc(Some(0.01), None, 1e-4), Ordering::Less);
+        assert_eq!(compare_quality_asc(Some(0.05_f64), None, 1e-4), Ordering::Less);
+        assert_eq!(compare_quality_asc(Some(0.01_f64), None, 1e-4), Ordering::Less);
     }
 
     #[test]
     fn test_compare_quality_pair_desc() {
         // Pair (0.90, 0.95) has floor 0.90, pair (0.85, 0.92) has floor 0.85
         // Higher floor is better (returns Less for min_by semantics)
-        let left = Some((0.90, 0.95));
-        let right = Some((0.85, 0.92));
+        let left = Some((0.90_f64, 0.95_f64));
+        let right = Some((0.85_f64, 0.92_f64));
         assert_eq!(compare_quality_pair_desc(left, right, 1e-4), Ordering::Less);
     }
 
@@ -266,9 +266,9 @@ mod tests {
     #[test]
     fn test_transitivity_quality_desc() {
         // Transitivity test: ensures None is consistently treated as worst case
-        let high = Some(0.95);
-        let medium = Some(0.85);
-        let low = Some(0.75);
+        let high = Some(0.95_f64);
+        let medium = Some(0.85_f64);
+        let low = Some(0.75_f64);
         let none = None;
 
         // Verify ordering: high > medium > low > none
@@ -288,9 +288,9 @@ mod tests {
     #[test]
     fn test_transitivity_quality_asc() {
         // Transitivity test: ensures None is consistently treated as worst case (infinity)
-        let low = Some(0.01);
-        let medium = Some(0.05);
-        let high = Some(0.10);
+        let low = Some(0.01_f64);
+        let medium = Some(0.05_f64);
+        let high = Some(0.10_f64);
         let none = None;
 
         // Verify ordering: low < medium < high < none

@@ -139,7 +139,7 @@ mod property_tests {
         #[test]
         fn ssim_validation_property(value in -2.0f64..2.0f64) {
             let result = Ssim::new(value);
-            let in_range = (0.0..=1.0).contains(&value);
+            let in_range = (0.0_f64..=1.0_f64).contains(&value);
             prop_assert_eq!(result.is_ok(), in_range,
                 "SSIM {} should be {} but was {}",
                 value,
@@ -207,7 +207,7 @@ mod property_tests {
                     "compression_ratio with non-zero original should be Some"
                 );
                 let r = ratio.unwrap_or_else(|| panic!("missing ratio"));
-                prop_assert!(r >= 0.0,
+                prop_assert!(r >= 0.0_f64,
                     "compression_ratio should be >= 0, got {}", r
                 );
             }

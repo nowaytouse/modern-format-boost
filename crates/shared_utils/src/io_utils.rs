@@ -21,7 +21,7 @@ pub fn metadata_with_retry<P: AsRef<Path>>(path: P) -> std::io::Result<fs::Metad
     let p = path.as_ref();
     let mut last_err = None;
 
-    for i in 0..3 {
+    for i in 0_i32..3_i32 {
         match fs::metadata(p) {
             Ok(m) => return Ok(m),
             Err(e) => {
@@ -31,7 +31,7 @@ pub fn metadata_with_retry<P: AsRef<Path>>(path: P) -> std::io::Result<fs::Metad
                 }
 
                 last_err = Some(e);
-                if i < 2 {
+                if i < 2_i32 {
                     std::thread::sleep(std::time::Duration::from_millis(100));
                 }
             }
@@ -117,7 +117,7 @@ pub fn robust_move(src: &Path, dst: &Path) -> std::io::Result<()> {
     if let Err(e) = std::fs::rename(src, dst) {
         // EXDEV (OS Error 18) indicates "Cross-device link"
         if e.kind() == std::io::ErrorKind::InvalidInput
-            || e.raw_os_error() == Some(18)
+            || e.raw_os_error() == Some(18_i32)
             || e.to_string().to_lowercase().contains("crosses devices")
         {
             let staging = dst.extension().and_then(|e| e.to_str()).map_or_else(

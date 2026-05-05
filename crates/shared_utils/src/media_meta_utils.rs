@@ -112,7 +112,7 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
                                                     buf.get(sub_pos + 2).copied().expect("Failed to parse integer or missing required value"),
                                                 ) | (u16::from(
                                                     buf.get(sub_pos + 3).copied().expect("Failed to parse integer or missing required value"),
-                                                ) << 8),
+                                                ) << 8_i32),
                                             );
                                         }
                                         }
@@ -147,7 +147,7 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
                             buf.get(pos + 5)
                                 .copied()
                                 .expect("Failed to parse integer or missing required value"),
-                        ) << 8);
+                        ) << 8_i32);
                         frame_delays_cs.push(delay);
                         pos += 8;
                     }
@@ -204,7 +204,7 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
     let frame_payload_variation = if frame_payload_sizes.len() >= 2 {
         let mean = crate::numeric_cast::usize_to_f64(frame_payload_sizes.iter().sum::<usize>())
             / crate::numeric_cast::usize_to_f64(frame_payload_sizes.len());
-        if mean > 0.0 {
+        if mean > 0.0_f64 {
             let variance = frame_payload_sizes
                 .iter()
                 .map(|&size| {
@@ -224,7 +224,7 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
     let frame_delay_variation = if frame_delays_cs.len() >= 2 {
         let mean = frame_delays_cs.iter().map(|&d| f64::from(d)).sum::<f64>()
             / crate::numeric_cast::usize_to_f64(frame_delays_cs.len());
-        if mean > 0.0 {
+        if mean > 0.0_f64 {
             let variance = frame_delays_cs
                 .iter()
                 .map(|&delay| {
@@ -244,7 +244,7 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
     let total_duration_secs = if frame_delays_cs.is_empty() {
         None
     } else {
-        Some(frame_delays_cs.iter().map(|&d| f64::from(d)).sum::<f64>() / 100.0)
+        Some(frame_delays_cs.iter().map(|&d| f64::from(d)).sum::<f64>() / 100.0_f64)
     };
 
     let frame_count_calculated = std::cmp::max(

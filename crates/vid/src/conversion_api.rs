@@ -797,7 +797,7 @@ pub fn auto_convert_with_cache(
                     "Animated-image reconciliation corrected frame_count before vid static isolation"
                 );
                 detection.frame_count = corrected;
-                if detection.duration_secs <= 0.0 {
+                if detection.duration_secs <= 0.0_f64 {
                     if let Some(dur) = image_det.duration {
                         if dur > 0.0 {
                             detection.duration_secs = f64::from(dur);
@@ -1006,14 +1006,14 @@ pub fn auto_convert_with_cache(
                 let ratio = Rational::from((output_size, detection.file_size));
                 ratio.to_f64()
             } else {
-                1.0
+                1.0_f64
             };
 
             info!(
                 "   ✅ GIF Recovery Complete: {} → {} ({:.1}% of original)",
                 shared_utils::format_bytes(detection.file_size),
                 shared_utils::format_bytes(output_size),
-                size_ratio * 100.0
+                size_ratio * 100.0_f64
             );
 
             // Update cache hint for successful GIF recovery
@@ -1234,7 +1234,7 @@ pub fn auto_convert_with_cache(
                     let ratio = Rational::from((explore_result.output_size, detection.file_size));
                     ratio.to_f64()
                 } else {
-                    1.0
+                    1.0_f64
                 };
                 let decision = ExploreQualityFailureDecision::inspect_and_log(
                     &explore_result,
@@ -1501,7 +1501,7 @@ pub fn auto_convert_with_cache(
         let ratio = Rational::from((actual_output_size, detection.file_size));
         ratio.to_f64()
     } else {
-        1.0
+        1.0_f64
     };
     let total_within_tolerance = if config.allow_size_tolerance() {
         // Allow up to standard tolerance increase for container overhead
@@ -1622,7 +1622,7 @@ pub fn auto_convert_with_cache(
         });
     }
 
-    if verify_result.video_compressed && verify_result.total_compression_ratio >= 1.0 {
+    if verify_result.video_compressed && verify_result.total_compression_ratio >= 1.0_f64 {
         tracing::debug!(
             "video stream shrank ({:+.1}%) but total file grew ({:+.1}%) due to container overhead diff {:+}B",
             verify_result.video_size_change_percent(),
@@ -1649,7 +1649,7 @@ pub fn auto_convert_with_cache(
         }
     }
 
-    info!("   ✅ Complete: {:.1}% of original", size_ratio * 100.0);
+    info!("   ✅ Complete: {:.1}% of original", size_ratio * 100.0_f64);
 
     Ok(ConversionOutput {
         input_path: input.display().to_string(),
@@ -1817,7 +1817,7 @@ fn execute_lossless(
         info!(
             file = %detection.file_path,
             codec = %detection.codec.as_str(),
-            file_size_gb = f64::from(u32::try_from(detection.file_size / (1024 * 1024)).expect("Value overflowed or is missing, cannot process ratio")) / 1024.0,
+            file_size_gb = f64::from(u32::try_from(detection.file_size / (1024 * 1024)).expect("Value overflowed or is missing, cannot process ratio")) / 1_024.0_f64,
             "Applying low-memory x265 profile for large/high-fidelity source"
         );
     }
@@ -2998,7 +2998,7 @@ mod tests {
                 quality_passed: shared_utils::types::CheckResult::Failed(
                     "Total file not smaller than input".to_string(),
                 ),
-                ssim: Some(0.99),
+                ssim: Some(0.99_f64),
                 actual_min_ssim: 0.95,
                 input_video_stream_size: 1_000_000,
                 output_video_stream_size: 1_100_000,

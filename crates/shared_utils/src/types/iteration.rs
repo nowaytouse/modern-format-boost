@@ -158,7 +158,7 @@ mod tests {
     fn test_iteration_guard_reset() {
         let mut guard = IterationGuard::new(5, "test");
 
-        for _ in 0..3 {
+        for _ in 0_i32..3_i32 {
             guard.increment().unwrap_or_else(|e| panic!("error: {e:?}"));
         }
         assert_eq!(guard.current(), 3);
@@ -206,7 +206,7 @@ mod tests {
             0.0
         ));
 
-        for _ in 0..50 {
+        for _ in 0_i32..50_i32 {
             guard.increment().unwrap_or_else(|e| panic!("error: {e:?}"));
         }
         assert!(crate::float_compare::approx_eq_f64(

@@ -693,12 +693,12 @@ pub fn log_external_tool(
     let command = format!("{} {}", tool_name, args.join(" "));
 
     match exit_code {
-        Some(0) => {
+        Some(0_i32) => {
             tracing::debug!(
                 tool = tool_name,
                 command = %command,
                 duration_secs = duration.as_secs_f64(),
-                exit_code = 0,
+                exit_code = 0_i32,
                 "External tool completed successfully"
             );
             tracing::debug!(
@@ -793,7 +793,7 @@ pub fn execute_external_command_checked(
 ) -> Result<ExternalCommandResult> {
     let result = execute_external_command(tool_name, args)?;
 
-    if result.exit_code != Some(0) {
+    if result.exit_code != Some(0_i32) {
         let command_str = format!("{} {}", tool_name, args.join(" "));
         anyhow::bail!(
             "Command failed with exit code {:?}: {}\nSTDERR: {}",
@@ -876,7 +876,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap_or_else(|e| panic!("error: {e:?}"));
         let program_name = "test_program";
 
-        for i in 0..10 {
+        for i in 0_i32..10_i32 {
             let file_path = temp_dir.path().join(format!("{program_name}.{i}.log"));
             fs::write(&file_path, format!("log content {i}"))
                 .unwrap_or_else(|e| panic!("error: {e:?}"));
@@ -901,7 +901,7 @@ mod tests {
 
         assert!(result.is_ok());
         let result = result.unwrap_or_else(|e| panic!("error: {e:?}"));
-        assert_eq!(result.exit_code, Some(0));
+        assert_eq!(result.exit_code, Some(0_i32));
         assert!(result.stdout.contains("hello"));
         assert!(
             result.duration.as_secs() <= 10,
@@ -922,7 +922,7 @@ mod tests {
 
         assert!(result.is_ok());
         let result = result.unwrap_or_else(|e| panic!("error: {e:?}"));
-        assert_eq!(result.exit_code, Some(0));
+        assert_eq!(result.exit_code, Some(0_i32));
     }
 
     #[test]
@@ -941,7 +941,7 @@ mod tests {
             "test_tool",
             &["arg1", "arg2"],
             "test output",
-            Some(0),
+            Some(0_i32),
             std::time::Duration::from_secs(1),
         );
     }
@@ -956,7 +956,7 @@ mod tests {
             SizeRotatingAppender::new(temp_dir.path().to_path_buf(), program_name, max_size);
 
         // Write enough to trigger rotation
-        for i in 0..20 {
+        for i in 0_i32..20_i32 {
             let msg = format!("Log entry number {i} filling space\n");
             appender
                 .write_all(msg.as_bytes())

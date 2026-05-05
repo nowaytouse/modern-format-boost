@@ -458,7 +458,7 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
         let duration_sec = frame_durations_ms
             .get((i - 1) as usize)
             .copied()
-            .map_or(0.1, |d| f64::from(d) / 1000.0);
+            .map_or(0.1_f64, |d| f64::from(d) / 1_000.0_f64);
         let _ = writeln!(
             concat_content,
             "file '{}'",
@@ -1455,14 +1455,14 @@ pub fn convert_to_mp4_matched(
     }
 
     let tolerance_ratio = if options.allow_size_tolerance() {
-        1.01
+        1.01_f64
     } else {
-        1.0
+        1.0_f64
     };
     // We use Rational for precise max size calculation. tolerance_ratio (e.g. 1.05)
     let max_allowed_size = {
         let input_rat = Rational::from(input_size);
-        let tol_rat = Rational::from_f64(tolerance_ratio).unwrap_or_else(|| Rational::from(1));
+        let tol_rat = Rational::from_f64(tolerance_ratio).unwrap_or_else(|| Rational::from(1_i32));
         let res: Rational = input_rat * tol_rat;
         shared_utils::numeric_cast::f64_to_u64_sat(res.to_f64().round())
     };
@@ -1477,7 +1477,7 @@ pub fn convert_to_mp4_matched(
     if is_guard_active && explore_result.output_size > max_allowed_size {
         let size_increase_pct = {
             let ratio = Rational::from((explore_result.output_size, input_size.max(1)));
-            (ratio.to_f64() - 1.0) * 100.0
+            (ratio.to_f64() - 1.0_f64) * 100.0_f64
         };
         let codec_name = options.codec.as_str().to_uppercase();
         if let Err(e) = fs::remove_file(&temp_output) {
@@ -1512,7 +1512,7 @@ pub fn convert_to_mp4_matched(
     let quality_or_compat_ok = explore_result.quality_passed.is_passed()
         || (options.apple_compat()
             && !flag_mode.is_ultimate()
-            && explore_result.ssim.is_some_and(|s| s >= 0.90));
+            && explore_result.ssim.is_some_and(|s| s >= 0.90_f64));
 
     if !quality_or_compat_ok {
         let decision = AnimatedQualityFailureDecision::inspect_and_log(
@@ -1968,13 +1968,13 @@ pub fn convert_to_gif_apple_compat(
             VidQualityError::ConversionError(format!("Failed to probe source for FPS: {e}"))
         })?;
 
-        let fps = if probe_res.duration > 0.0 && extracted_count > 0 {
+        let fps = if probe_res.duration > 0.0_f64 && extracted_count > 0 {
             // 100% data-driven: Actual extracted frames / Metadata total duration
             shared_utils::numeric_cast::usize_to_f64(extracted_count) / probe_res.duration
-        } else if probe_res.avg_frame_rate > 0.0 {
+        } else if probe_res.avg_frame_rate > 0.0_f64 {
             // Use directly reported average frame rate
             probe_res.avg_frame_rate
-        } else if probe_res.frame_rate > 0.0 {
+        } else if probe_res.frame_rate > 0.0_f64 {
             // Use directly reported r_frame_rate
             probe_res.frame_rate
         } else {
@@ -2064,13 +2064,13 @@ pub fn convert_to_gif_apple_compat(
     }
 
     let tolerance_ratio = if options.allow_size_tolerance() {
-        1.01
+        1.01_f64
     } else {
-        1.0
+        1.0_f64
     };
     let max_allowed_size = {
         let input_rat = Rational::from(input_size);
-        let tol_rat = Rational::from_f64(tolerance_ratio).unwrap_or_else(|| Rational::from(1));
+        let tol_rat = Rational::from_f64(tolerance_ratio).unwrap_or_else(|| Rational::from(1_i32));
         let res: Rational = input_rat * tol_rat;
         shared_utils::numeric_cast::f64_to_u64_sat(res.to_f64().round())
     };
@@ -2083,7 +2083,7 @@ pub fn convert_to_gif_apple_compat(
     if is_guard_active && output_size > max_allowed_size {
         let size_increase_pct = {
             let ratio = Rational::from((output_size, input_size.max(1)));
-            (ratio.to_f64() - 1.0) * 100.0
+            (ratio.to_f64() - 1.0_f64) * 100.0_f64
         };
         if let Err(e) = fs::remove_file(&temp_output) {
             eprintln!("⚠️ [cleanup] Failed to remove oversized GIF output: {e}");
@@ -2206,7 +2206,7 @@ mod tests {
                 quality_passed: shared_utils::types::CheckResult::Failed(
                     "Total file not smaller than input".to_string(),
                 ),
-                ssim: Some(0.99),
+                ssim: Some(0.99_f64),
                 actual_min_ssim: 0.95,
                 input_video_stream_size: 1_000_000,
                 output_video_stream_size: 1_100_000,

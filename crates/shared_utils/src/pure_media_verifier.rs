@@ -204,7 +204,7 @@ mod tests {
 
         assert!(result.video_compressed);
         #[cfg(feature = "high-precision")]
-        assert!(result.video_compression_ratio < 1);
+        assert!(result.video_compression_ratio < 1_i32);
         #[cfg(not(feature = "high-precision"))]
         assert!(result.video_compression_ratio < 1.0);
     }
@@ -218,7 +218,7 @@ mod tests {
 
         assert!(result.video_compressed); // Accepts because < tolerance increase
         #[cfg(feature = "high-precision")]
-        assert!(result.video_compression_ratio > 1);
+        assert!(result.video_compression_ratio > 1_i32);
         #[cfg(not(feature = "high-precision"))]
         assert!(result.video_compression_ratio > 1.0);
     }
@@ -236,7 +236,7 @@ mod tests {
 
         assert!(!result.video_compressed);
         #[cfg(feature = "high-precision")]
-        assert!(result.video_compression_ratio > 1);
+        assert!(result.video_compression_ratio > 1_i32);
         #[cfg(not(feature = "high-precision"))]
         assert!(result.video_compression_ratio > 1.0);
     }
@@ -251,7 +251,7 @@ mod tests {
         assert!(result.video_compressed);
         assert!(result.is_container_overhead_issue());
         #[cfg(feature = "high-precision")]
-        assert!(result.total_compression_ratio > 1);
+        assert!(result.total_compression_ratio > 1_i32);
         #[cfg(not(feature = "high-precision"))]
         assert!(result.total_compression_ratio > 1.0);
     }
@@ -273,14 +273,14 @@ mod tests {
         {
             assert_eq!(
                 video_compression_ratio(1000, 800),
-                Rational::from((800, 1000))
+                Rational::from((800_i32, 1_000_i32))
             );
-            assert_eq!(video_compression_ratio(1000, 1000), Rational::from(1));
+            assert_eq!(video_compression_ratio(1000, 1000), Rational::from(1_i32));
             assert_eq!(
                 video_compression_ratio(1000, 1200),
-                Rational::from((1200, 1000))
+                Rational::from((1_200_i32, 1_000_i32))
             );
-            assert_eq!(video_compression_ratio(0, 100), Rational::from(1));
+            assert_eq!(video_compression_ratio(0, 100), Rational::from(1_i32));
         }
         #[cfg(not(feature = "high-precision"))]
         {
