@@ -7,7 +7,11 @@ on:
   schedule:
     - cron: "0 0 * * *" # Daily
 
-permissions: read-all
+permissions:
+  contents: read
+  actions: read
+  security-events: write
+  pull-requests: write
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -21,17 +25,23 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Build Fuzzers
         uses: google/clusterfuzzlite/actions/build_fuzzers@v1
         with:
           language: rust
           storage-repo: https://github.com/${{ github.repository }}
           storage-repo-branch: clusterfuzzlite-data
+          sanitizers: address,undefined
         env:
           # Disable libjxl internal fuzzers to avoid sanitizer conflicts
           JPEGXL_CMAKE_FLAGS: "-DJPEGXL_ENABLE_FUZZERS=OFF"
           # Ensure fuzz targets are output to correct directory for ClusterFuzzLite
           OUT: ${{ github.workspace }}/out
+          # Use stable Rust for better compatibility
+          RUST_TOOLCHAIN: stable
+        continue-on-error: false
       - name: Run Fuzzers
         uses: google/clusterfuzzlite/actions/run_fuzzers@v1
         with:
@@ -40,24 +50,36 @@ jobs:
           mode: "pr"
           storage-repo: https://github.com/${{ github.repository }}
           storage-repo-branch: clusterfuzzlite-data
+          sanitizers: address,undefined
+        continue-on-error: false
+        timeout-minutes: 15
 
   Batch:
     if: github.event_name == 'push' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ github.workflow }}-batch-${{ github.sha }}
+      cancel-in-progress: false
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Build Fuzzers
         uses: google/clusterfuzzlite/actions/build_fuzzers@v1
         with:
           language: rust
           storage-repo: https://github.com/${{ github.repository }}
           storage-repo-branch: clusterfuzzlite-data
+          sanitizers: address,undefined
         env:
           # Disable libjxl internal fuzzers to avoid sanitizer conflicts
           JPEGXL_CMAKE_FLAGS: "-DJPEGXL_ENABLE_FUZZERS=OFF"
           # Ensure fuzz targets are output to correct directory for ClusterFuzzLite
           OUT: ${{ github.workspace }}/out
+          # Use stable Rust for better compatibility
+          RUST_TOOLCHAIN: stable
+        continue-on-error: false
       - name: Run Fuzzers
         uses: google/clusterfuzzlite/actions/run_fuzzers@v1
         with:
@@ -66,3 +88,6 @@ jobs:
           mode: "batch"
           storage-repo: https://github.com/${{ github.repository }}
           storage-repo-branch: clusterfuzzlite-data
+          sanitizers: address,undefined
+        continue-on-error: false
+        timeout-minutes: 90

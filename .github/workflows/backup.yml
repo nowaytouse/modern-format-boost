@@ -1,0 +1,105 @@
+name: Backup and Health Check
+
+on:
+  schedule:
+    - cron: "0 6 * * *" # Daily at 6 AM UTC
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/**'
+      - 'Cargo.toml'
+      - 'rust-toolchain.toml'
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  health-check:
+    name: Repository Health Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: ${{ github.workflow }}-health-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-health-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-health-
+
+      - name: Check code formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy lints
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Check if workspace builds
+        run: cargo check --workspace --all-features
+
+      - name: Test core functionality
+        run: cargo test --workspace --lib --all-features --no-fail-fast
+
+  dependency-check:
+    name: Dependency Security Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: ${{ github.workflow }}-deps-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run security audit
+        run: cargo audit --deny warnings
+
+  workflow-validation:
+    name: Workflow Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: ${{ github.workflow }}-validation-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install actionlint
+        run: |
+          curl -fsSL https://github.com/rhysd/actionlint/releases/download/v1.6.26/actionlint_Linux_x86_64.tar.gz | tar xz
+          sudo mv actionlint /usr/local/bin/
+
+      - name: Validate workflow files
+        run: actionlint -color
+
+      - name: Check workflow syntax
+        run: |
+          find .github/workflows -name "*.yml" -o -name "*.yaml" | xargs -I {} sh -c 'echo "Checking {}" && yamllint {} || true'
