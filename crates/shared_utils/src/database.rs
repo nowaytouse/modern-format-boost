@@ -9,6 +9,7 @@
 use crate::loop_intent::LoopMeta;
 use crate::media_meta_utils::scan_gif_headers;
 use crate::progress_mode::emit_stderr;
+use crate::Rational;
 use anyhow::{Context, Result};
 use blake3::Hasher;
 use indicatif::{ProgressBar, ProgressStyle};
