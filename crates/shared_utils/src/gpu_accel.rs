@@ -31,6 +31,12 @@ use std::thread::{self, JoinHandle};
 
 use crate::explore_strategy::CrfCache;
 
+/// Gets the current Beijing time (UTC+8) as a formatted string.
+///
+/// Used for logging and debugging with a consistent timezone reference.
+///
+/// # Returns
+/// Formatted Beijing time string
 fn beijing_time_now() -> String {
     // UTC+8 (28800 seconds) is always a valid fixed offset
     let beijing = FixedOffset::east_opt(8 * 3600).unwrap_or_else(|| {
@@ -42,6 +48,16 @@ fn beijing_time_now() -> String {
         .to_string()
 }
 
+/// Describes a thread panic payload for logging.
+///
+/// Attempts to extract a string message from the panic payload.
+/// Falls back to a generic description if the payload is not a string.
+///
+/// # Arguments
+/// * `payload` - The panic payload from the thread
+///
+/// # Returns
+/// String description of the panic
 fn describe_thread_panic(payload: Box<dyn Any + Send + 'static>) -> String {
     payload.downcast::<String>().map_or_else(
         |payload| {
@@ -124,6 +140,16 @@ pub const GPU_SEGMENT_DURATION_ULTIMATE: f32 = 13.0;
 /// Number of segments to sample in multi-segment GPU probing.
 pub const GPU_SAMPLE_SEGMENTS: usize = 5;
 
+/// Collects video filter arguments from `FFmpeg` command line arguments.
+///
+/// Parses the argument array to find -vf options and extracts
+/// the corresponding filter strings for GPU acceleration analysis.
+///
+/// # Arguments
+/// * `vf_args` - Array of `FFmpeg` command line arguments
+///
+/// # Returns
+/// Vector of video filter strings
 fn collect_vf_filters(vf_args: &[String]) -> Vec<String> {
     let mut filters = Vec::new();
     let mut idx = 0;
@@ -144,6 +170,17 @@ fn collect_vf_filters(vf_args: &[String]) -> Vec<String> {
     filters
 }
 
+/// Builds a multi-segment sampling filter for GPU acceleration testing.
+///
+/// Creates a filter that samples multiple segments throughout the video
+/// to test GPU performance more comprehensively than single-point sampling.
+///
+/// # Arguments
+/// * `duration` - Total video duration in seconds
+/// * `ultimate_mode` - Whether to use ultimate mode settings
+///
+/// # Returns
+/// Filter string for multi-segment sampling, or None if video is too short
 #[must_use]
 pub(crate) fn build_multi_segment_sampling_filter(
     duration: f64,
@@ -176,6 +213,18 @@ pub(crate) fn build_multi_segment_sampling_filter(
     ))
 }
 
+/// Builds video filter arguments for GPU acceleration sampling.
+///
+/// Combines multi-segment sampling filters with existing video filters
+/// to create comprehensive `FFmpeg` arguments for GPU performance testing.
+///
+/// # Arguments
+/// * `vf_args` - Existing video filter arguments
+/// * `duration` - Total video duration in seconds
+/// * `ultimate_mode` - Whether to use ultimate mode settings
+///
+/// # Returns
+/// Vector of `FFmpeg` arguments with sampling filters
 fn build_sampling_vf_args(vf_args: &[String], duration: f64, ultimate_mode: bool) -> Vec<String> {
     let mut filters = Vec::new();
     if let Some(prefix) = build_multi_segment_sampling_filter(duration, ultimate_mode) {
@@ -239,6 +288,10 @@ fn gpu_concurrency_max() -> usize {
 static GPU_CONCURRENCY_CURRENT: Mutex<usize> = Mutex::new(0);
 static GPU_CONCURRENCY_CVAR: Condvar = Condvar::new();
 
+/// Acquires a GPU processing slot, blocking if necessary.
+///
+/// Waits until the number of active GPU processes is below the maximum
+/// concurrency limit, then increments the counter.
 fn acquire_gpu_slot() {
     let max = gpu_concurrency_max();
     let mut g = GPU_CONCURRENCY_CURRENT
@@ -252,6 +305,10 @@ fn acquire_gpu_slot() {
     *g += 1;
 }
 
+/// Releases a GPU processing slot and notifies waiting threads.
+///
+/// Decrements the active GPU process counter and wakes up
+/// one thread that may be waiting for a slot.
 fn release_gpu_slot() {
     let mut g = GPU_CONCURRENCY_CURRENT
         .lock()
@@ -282,6 +339,17 @@ fn vaapi_device_path() -> &'static str {
         .as_str()
 }
 
+/// Creates a temporary extension string for GPU processing files.
+///
+/// Uses the original file extension with a custom suffix to create
+/// temporary filenames for GPU acceleration testing.
+///
+/// # Arguments
+/// * `output` - The output file path
+/// * `suffix` - The suffix to use (e.g., `"gpu_temp"`, `"warmup"`)
+///
+/// # Returns
+/// Temporary extension string
 fn temp_extension_for(output: &std::path::Path, suffix: &str) -> String {
     let ext = output.extension().and_then(|e| e.to_str()).unwrap_or("MP4");
     format!("{suffix}.{ext}")
@@ -894,6 +962,12 @@ impl GpuAccel {
     }
 }
 
+/// Gets the list of available video encoders from `FFmpeg`.
+///
+/// Executes `ffmpeg -encoders` and filters for video encoders (lines starting with " V").
+///
+/// # Returns
+/// Vector of available video encoder names, or error string if command fails
 fn get_available_encoders() -> Result<Vec<String>, String> {
     match crate::ffmpeg_builder::FfmpegBuilder::list_encoders() {
         Ok(stdout) => Ok(stdout
@@ -905,6 +979,16 @@ fn get_available_encoders() -> Result<Vec<String>, String> {
     }
 }
 
+/// Summarizes `FFmpeg` failure output to a single line.
+///
+/// Extracts the most relevant error information from `FFmpeg` output
+/// to provide concise error messages in GPU acceleration results.
+///
+/// # Arguments
+/// * `text` - The `FFmpeg` error output text
+///
+/// # Returns
+/// Summarized error message
 fn summarize_ffmpeg_failure_line(text: &str) -> String {
     let lines: Vec<&str> = text
         .lines()
@@ -945,6 +1029,17 @@ fn summarize_ffmpeg_failure_line(text: &str) -> String {
     )
 }
 
+/// Summarizes `FFmpeg` failure output from stdout and stderr.
+///
+/// Prioritizes stderr output for error messages, falls back to stdout
+/// if stderr doesn't contain recognizable error patterns.
+///
+/// # Arguments
+/// * `stdout` - The stdout bytes from `FFmpeg`
+/// * `stderr` - The stderr bytes from `FFmpeg`
+///
+/// # Returns
+/// Summarized error message
 fn summarize_ffmpeg_failure_output(stdout: &[u8], stderr: &[u8]) -> String {
     let stderr = String::from_utf8_lossy(stderr);
     let stdout = String::from_utf8_lossy(stdout);
@@ -956,6 +1051,16 @@ fn summarize_ffmpeg_failure_output(stdout: &[u8], stderr: &[u8]) -> String {
     }
 }
 
+/// Tests a GPU encoder with a sample video segment.
+///
+/// Runs `FFmpeg` with the specified encoder on a short video segment
+/// to verify that the encoder works correctly on the current system.
+///
+/// # Arguments
+/// * `encoder` - The GPU encoder to test
+///
+/// # Returns
+/// Ok(()) if successful, or error string if encoding fails
 fn test_encoder(encoder: &GpuEncoder) -> Result<(), String> {
     let mid_crf = f32::midpoint(
         f32::from(encoder.crf_range.0),
@@ -1014,6 +1119,17 @@ fn test_encoder(encoder: &GpuEncoder) -> Result<(), String> {
     Err(last_err)
 }
 
+/// Estimates bitrate from CRF value for a given codec.
+///
+/// Uses codec-specific formulas to estimate the bitrate that would
+/// correspond to a given CRF value for rough performance calculations.
+///
+/// # Arguments
+/// * `crf` - The CRF value
+/// * `codec` - The codec name (e.g., "h264", "hevc", "av1")
+///
+/// # Returns
+/// Estimated bitrate in kbps
 fn crf_to_estimated_bitrate(crf: f32, codec: &str) -> u32 {
     let base_bitrate = match codec {
         "av1" => 4000,
@@ -1204,6 +1320,18 @@ pub fn is_quality_better(
     improvement > 0.005
 }
 
+/// Estimates the optimal CPU search center point dynamically.
+///
+/// Calculates the starting CRF value for CPU encoding based on GPU results,
+/// compression potential, and GPU type-specific offsets.
+///
+/// # Arguments
+/// * `gpu_boundary` - The GPU's optimal CRF boundary
+/// * `gpu_type` - The type of GPU encoder used
+/// * `compression_potential` - Optional compression ratio potential
+///
+/// # Returns
+/// Estimated optimal CRF for CPU encoding
 fn estimate_cpu_search_center_dynamic_impl(
     gpu_boundary: f32,
     gpu_type: GpuType,
@@ -1470,6 +1598,17 @@ impl Default for GpuCoarseConfig {
     }
 }
 
+/// Calculates PSNR (Peak Signal-to-Noise Ratio) between two videos.
+///
+/// Uses `FFmpeg` to compute PSNR as a quality metric for comparing
+/// encoded output with the original input video.
+///
+/// # Arguments
+/// * `input` - Path to the original input video
+/// * `output` - Path to the encoded output video
+///
+/// # Returns
+/// PSNR value, or error string if calculation fails
 fn calculate_psnr_fast(input: &str, output: &str) -> Result<f64, String> {
     let psnr_output = crate::tool_builders::FfmpegBuilder::new()
         .input(std::path::Path::new(input))
@@ -1751,8 +1890,28 @@ pub fn gpu_coarse_search_with_log(
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
+/// Performs GPU coarse search with detailed logging.
+///
+/// Implements the main GPU acceleration testing logic with comprehensive
+/// logging and progress reporting. Tests multiple CRF values to find
+/// the optimal GPU encoding settings.
+///
+/// # Arguments
+/// * `input` - Input video file path
+/// * `output` - Output directory path
+/// * `encoder` - Encoder name to test
+/// * `input_size` - Size of input file in bytes
+/// * `config` - Coarse search configuration
+/// * `vf_args` - Video filter arguments
+/// * `progress_cb` - Optional progress callback
+/// * `log_cb` - Optional logging callback
+///
+/// # Returns
+/// GPU coarse search results with optimal settings
+#[allow(clippy::too_many_lines)]
+#[allow(clippy::complexity)]
 #[allow(
-    clippy::too_many_lines,
+    clippy::cognitive_complexity,
     reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
 )]
 fn gpu_coarse_search_with_log_impl(

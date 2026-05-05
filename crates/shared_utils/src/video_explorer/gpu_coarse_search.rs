@@ -4150,7 +4150,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                         final_full_size = test_size;
                         // Throw away the backup (we have a new best)
                         std::fs::remove_file(&backup_path).unwrap_or_else(|e| {
-                            tracing::warn!("Non-fatal cleanup/fallback operation failed: {}", e)
+                            tracing::warn!("Non-fatal cleanup/fallback operation failed: {}", e);
                         });
                         consecutive_failures = 0; // Reset patience
                     } else {
@@ -4174,7 +4174,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                             );
                         }
                         std::fs::remove_file(output).unwrap_or_else(|e| {
-                            tracing::warn!("Non-fatal cleanup/fallback operation failed: {}", e)
+                            tracing::warn!("Non-fatal cleanup/fallback operation failed: {}", e);
                         }); // remove the oversized one
                         let _ = std::fs::rename(&backup_path, output); // restore best
                     }
@@ -4193,7 +4193,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                         RESET
                     );
                     std::fs::remove_file(output).unwrap_or_else(|e| {
-                        tracing::warn!("Non-fatal cleanup/fallback operation failed: {}", e)
+                        tracing::warn!("Non-fatal cleanup/fallback operation failed: {}", e);
                     });
                     let _ = std::fs::rename(&backup_path, output);
                     break;

@@ -170,7 +170,7 @@ impl AnalysisCache {
     /// Deletes entries that were created with an older version of the analysis algorithm.
     fn invalidate_old_algorithm_entries(client: &mut Client) -> Result<()> {
         let tables = ["analysis_records", "quality_records", "video_records"];
-        let mut total_invalidated = 0;
+        let mut total_invalidated: i64 = 0;
         let current_version = cache_algorithm_version();
 
         for table in &tables {
@@ -181,7 +181,7 @@ impl AnalysisCache {
                 )
                 .map(u64::cast_signed)?;
 
-            total_invalidated += count;
+            total_invalidated = total_invalidated.saturating_add(count);
         }
 
         if total_invalidated > 0 {
@@ -641,7 +641,8 @@ impl AnalysisCache {
             for row in rows {
                 let v: i32 = row.get(0);
                 let c: i64 = row.get(1);
-                *version_dist.entry(v).or_insert(0) += c;
+                let entry = version_dist.entry(v).or_insert(0i64);
+                *entry = entry.saturating_add(c);
             }
         }
 

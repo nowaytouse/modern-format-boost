@@ -52,9 +52,22 @@ fn get_central_progress_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     PathBuf::from(home).join(".mfb_progress")
 }
+/// Timeout in seconds for considering a lock file as stale.
+///
+/// After this duration, a lock file is considered abandoned and can be
+/// safely overridden. Default is 24 hours.
 const LOCK_STALE_TIMEOUT_SECS: u64 = 24 * 60 * 60;
+
+/// Current version of the checkpoint file format.
+///
+/// Increment this when the checkpoint structure changes to invalidate
+/// old checkpoint files and force regeneration.
 const CHECKPOINT_FORMAT_VERSION: u32 = 2;
 
+/// Gets the current Unix timestamp in seconds.
+///
+/// # Returns
+/// Current time as seconds since Unix epoch
 fn current_unix_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -62,12 +75,22 @@ fn current_unix_secs() -> u64 {
         .as_secs()
 }
 
+/// Represents a single file entry in a checkpoint.
+///
+/// Stores essential metadata about a file to detect changes between runs.
+/// This enables efficient incremental processing by comparing current
+/// file state with the checkpointed state.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct CheckpointEntry {
+    /// Relative path to the file from the checkpoint root.
     path: String,
+    /// File size in bytes.
     size: i64,
+    /// Last modification time in Unix seconds.
     mtime: i64,
+    /// Creation time in Unix seconds.
     ctime: i64,
+    /// Birth time in Unix seconds (if available).
     btime: i64,
 }
 
@@ -185,16 +208,33 @@ impl LockInfo {
     }
 }
 
+/// Gets the start time of the current process.
+///
+/// # Returns
+/// Process start time in Unix seconds, or None if unavailable
 #[cfg(unix)]
 fn get_process_start_time() -> Option<u64> {
     get_process_start_time_for_pid(std::process::id())
 }
 
+/// Gets the start time of the current process (non-Unix fallback).
+///
+/// On non-Unix systems, returns current time as approximation.
+///
+/// # Returns
+/// Process start time approximation in Unix seconds
 #[cfg(not(unix))]
 fn get_process_start_time() -> Option<u64> {
     Some(current_unix_secs())
 }
 
+/// Gets the start time of a specific process by PID.
+///
+/// # Arguments
+/// * `pid` - Process ID to query
+///
+/// # Returns
+/// Process start time in Unix seconds, or None if unavailable
 #[cfg(unix)]
 fn get_process_start_time_for_pid(pid: u32) -> Option<u64> {
     for field in ["etimes", "etime"] {
@@ -248,6 +288,13 @@ fn get_process_start_time_for_pid(pid: u32) -> Option<u64> {
     None
 }
 
+/// Checks if a ps field is unsupported based on stderr output.
+///
+/// # Arguments
+/// * `stderr` - The stderr output from ps command
+///
+/// # Returns
+/// `true` if the field is unsupported, `false` otherwise
 #[cfg(unix)]
 fn ps_field_unsupported(stderr: &str) -> bool {
     let lower = stderr.to_ascii_lowercase();
@@ -256,6 +303,13 @@ fn ps_field_unsupported(stderr: &str) -> bool {
         || lower.contains("invalid keyword")
 }
 
+/// Parses ps etime output to Unix seconds.
+///
+/// # Arguments
+/// * `raw` - The raw etime output from ps command
+///
+/// # Returns
+/// Unix seconds, or None if parsing fails
 #[cfg(unix)]
 fn parse_ps_etime_to_secs(raw: &str) -> Option<u64> {
     let trimmed = raw.trim();
@@ -289,6 +343,13 @@ fn get_process_start_time_for_pid(_pid: u32) -> Option<u64> {
     None
 }
 
+/// Gets the hostname of the current machine.
+///
+/// Uses system commands to retrieve the hostname, with fallbacks for different platforms.
+/// Returns "unknown" if hostname cannot be determined or is not valid UTF-8.
+///
+/// # Returns
+/// Hostname string, or "unknown" if unavailable
 fn get_hostname() -> String {
     #[cfg(unix)]
     {

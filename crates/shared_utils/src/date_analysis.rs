@@ -244,6 +244,17 @@ pub fn analyze_directory(
     })
 }
 
+/// Extracts and analyzes the best date from EXIF data.
+///
+/// Collects all available date fields from EXIF data, analyzes their reliability,
+/// and determines the most accurate creation date for the file.
+///
+/// # Arguments
+/// * `item` - The EXIF data output from the file
+/// * `config` - Configuration for date analysis preferences
+///
+/// # Returns
+/// File date information with the best available date and metadata
 fn extract_best_date(item: &ExiftoolOutput, config: &DateAnalysisConfig) -> FileDateInfo {
     let filename = item.file_name.clone().unwrap_or_default();
     let path = item.source_file.clone().unwrap_or_default();
@@ -310,6 +321,17 @@ fn extract_best_date(item: &ExiftoolOutput, config: &DateAnalysisConfig) -> File
     }
 }
 
+/// Parses a date string into a `NaiveDateTime` using multiple formats.
+///
+/// Attempts to parse the date string using various common EXIF date formats.
+/// Handles timezone offsets and different separators.
+///
+/// # Arguments
+/// * `date_str` - The date string to parse
+/// * `config` - Configuration for date parsing preferences
+///
+/// # Returns
+/// Parsed datetime, or None if parsing fails
 fn parse_date(date_str: &str, config: &DateAnalysisConfig) -> Option<NaiveDateTime> {
     if date_str.is_empty() || date_str == "-" || date_str.starts_with("0000") {
         return None;

@@ -14,7 +14,7 @@ def main() -> int:
     out_dir = Path(os.environ.get("OUT", "target/x86_64-unknown-linux-gnu/release"))
 
     fuzz_dir = src_dir / "modern-format-boost" / "crates" / "dev" / "fuzz"
-    
+
     if not fuzz_dir.exists():
         print(f"Error: Fuzz directory not found: {fuzz_dir}", file=sys.stderr)
         return 1

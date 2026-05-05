@@ -212,7 +212,9 @@ def main():
             run_cmd(f'ln -sf "{libcxx_tbd}" "{target_tbd}"')
             print_c(GREEN, f"   ✅ Linked libstdc++.tbd -> {libcxx_tbd}")
         else:
-            print_c(YELLOW, "   ⚠️  System libc++.tbd not found in SDK. Doctests might fail.")
+            print_c(
+                YELLOW, "   ⚠️  System libc++.tbd not found in SDK. Doctests might fail."
+            )
 
         # 2. Create libstdc++.dylib pointing to system libc++.dylib
         target_dylib = os.path.join(tmp_lib_dir, "libstdc++.dylib")

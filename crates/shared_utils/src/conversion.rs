@@ -55,7 +55,7 @@ pub fn next_temp_output_suffix() -> String {
         .as_nanos();
     let pid = u128::from(std::process::id());
     let counter = u128::from(TEMP_OUTPUT_COUNTER.fetch_add(1, Ordering::Relaxed));
-    let mut value = timestamp ^ (pid << 32) ^ counter;
+    let mut value = timestamp ^ (pid << 32u128) ^ counter;
     let mut suffix = [b'0'; 10];
 
     for slot in suffix.iter_mut().rev() {
@@ -100,6 +100,15 @@ pub fn clear_processed_list() {
     processed.clear();
 }
 
+/// Generates a stable key for a path by canonicalizing it.
+///
+/// If canonicalization fails, falls back to the original path.
+///
+/// # Arguments
+/// * `path` - The path to generate a key for
+///
+/// # Returns
+/// Stable string representation of the path
 fn stable_path_key(path: &Path) -> String {
     path.canonicalize()
         .unwrap_or_else(|_| path.to_path_buf())
@@ -107,6 +116,14 @@ fn stable_path_key(path: &Path) -> String {
         .to_string()
 }
 
+/// Creates a path with a collision suffix to avoid filename conflicts.
+///
+/// # Arguments
+/// * `path` - The original path
+/// * `collision_index` - The collision index to append
+///
+/// # Returns
+/// New path with collision suffix
 fn path_with_collision_suffix(path: &Path, collision_index: usize) -> PathBuf {
     let stem = path
         .file_stem()
@@ -122,6 +139,16 @@ fn path_with_collision_suffix(path: &Path, collision_index: usize) -> PathBuf {
         .join(file_name)
 }
 
+/// Reserves a unique output path to avoid conflicts.
+///
+/// Uses a reservation system to ensure no two inputs map to the same output.
+///
+/// # Arguments
+/// * `input` - The input file path
+/// * `candidate` - The desired output path
+///
+/// # Returns
+/// Unique output path that doesn't conflict
 fn reserve_unique_output_path(input: &Path, candidate: PathBuf) -> PathBuf {
     let input_key = stable_path_key(input);
     let mut reservations = RESERVED_OUTPUT_PATHS
@@ -162,6 +189,13 @@ fn clear_reserved_output_paths() {
 
 pub use crate::checkpoint::{safe_delete_original, verify_output_integrity};
 
+/// Acquires an exclusive file lock using Unix flock.
+///
+/// # Arguments
+/// * `file` - The file to lock
+///
+/// # Returns
+/// Ok(()) if lock acquired, or IO error if failed
 #[cfg(unix)]
 fn flock_exclusive(file: &fs::File) -> std::io::Result<()> {
     use std::os::unix::io::AsRawFd;
@@ -294,8 +328,8 @@ pub struct VideoExplorationMetrics<'a> {
 impl VideoExplorationMetrics<'_> {
     #[must_use]
     pub fn format_message(&self, reduction_pct: f64) -> String {
-        let reduction = reduction_pct / 100.0;
-        let size_tag = if reduction >= 0.0 {
+        let reduction = reduction_pct / 100.0_f64;
+        let size_tag = if reduction >= 0.0_f64 {
             format!("\x1b[1;32m-{reduction_pct:.1}%\x1b[0m")
         } else {
             let diff_bytes = i128::from(self.output_size) - i128::from(self.input_size);
@@ -607,11 +641,12 @@ impl ConversionResult {
         message: String,
     ) -> Self {
         let size_reduction = if input_size == 0 {
-            0.0
+            0.0_f64
         } else {
-            (1.0 - (crate::numeric_cast::u64_to_f64(output_size)
-                / crate::numeric_cast::u64_to_f64(input_size)))
-                * 100.0
+            (1.0_f64
+                - (crate::numeric_cast::u64_to_f64(output_size)
+                    / crate::numeric_cast::u64_to_f64(input_size)))
+                * 100.0_f64
         };
 
         Self {
@@ -640,15 +675,16 @@ impl ConversionResult {
         quality_label: Option<&str>,
     ) -> Self {
         let reduction = if input_size == 0 {
-            0.0
+            0.0_f64
         } else {
-            1.0 - (crate::numeric_cast::u64_to_f64(output_size)
-                / crate::numeric_cast::u64_to_f64(input_size))
+            1.0_f64
+                - (crate::numeric_cast::u64_to_f64(output_size)
+                    / crate::numeric_cast::u64_to_f64(input_size))
         };
-        let reduction_pct = reduction * 100.0;
+        let reduction_pct = reduction * 100.0_f64;
 
         // Build size-change suffix: "-14.5%" (saved) or "+2.1MB" (grew) with ANSI colors
-        let size_tag = if reduction >= 0.0 {
+        let size_tag = if reduction >= 0.0_f64 {
             format!("\x1b[1;32m-{reduction_pct:.1}%\x1b[0m")
         } else {
             let diff_bytes = i128::from(output_size) - i128::from(input_size);
@@ -708,11 +744,12 @@ impl ConversionResult {
         metrics: &VideoExplorationMetrics<'_>,
     ) -> Self {
         let reduction_pct = if metrics.input_size == 0 {
-            0.0
+            0.0_f64
         } else {
-            (1.0 - (crate::numeric_cast::u64_to_f64(metrics.output_size)
-                / crate::numeric_cast::u64_to_f64(metrics.input_size)))
-                * 100.0
+            (1.0_f64
+                - (crate::numeric_cast::u64_to_f64(metrics.output_size)
+                    / crate::numeric_cast::u64_to_f64(metrics.input_size)))
+                * 100.0_f64
         };
 
         let message = metrics.format_message(reduction_pct);
@@ -989,12 +1026,13 @@ pub fn determine_output_path_with_base(
 #[must_use]
 pub fn format_size_change(input_size: u64, output_size: u64) -> String {
     let reduction = if input_size == 0 {
-        0.0
+        0.0_f64
     } else {
-        1.0 - (crate::numeric_cast::u64_to_f64(output_size)
-            / crate::numeric_cast::u64_to_f64(input_size))
+        1.0_f64
+            - (crate::numeric_cast::u64_to_f64(output_size)
+                / crate::numeric_cast::u64_to_f64(input_size))
     };
-    let reduction_pct = reduction * 100.0;
+    let reduction_pct = reduction * 100.0_f64;
 
     if reduction >= 0.0 {
         format!("size reduced {reduction_pct:.1}%")
@@ -1440,7 +1478,7 @@ impl SizeToleranceCheck<'_> {
     fn reject_compression_goal(&self) -> ConversionResult {
         let delta = self.delta();
 
-        if delta.change_pct.abs() < 0.01 {
+        if delta.change_pct.abs() < 0.01_f64 {
             crate::log_eprintln!(
                 "   🗑️  {} output deleted: {}",
                 self.format_label,
@@ -1709,6 +1747,16 @@ pub fn validate_output_path(output: &Path, _base_dir: Option<&Path>) -> Result<(
     Ok(())
 }
 
+/// Ensures that the parent directory of an output path can be resolved.
+///
+/// Validates that the output path's parent directory exists and is accessible.
+/// Converts relative paths to absolute paths for validation.
+///
+/// # Arguments
+/// * `path` - The output file path to validate
+///
+/// # Returns
+/// Ok(()) if parent directory is accessible, or error message string
 fn ensure_output_parent_resolves(path: &Path) -> Result<(), String> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()

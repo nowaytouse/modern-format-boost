@@ -331,12 +331,12 @@ impl ExploreContext {
     #[must_use]
     pub fn size_change_pct(&self, output_size: u64) -> f64 {
         if self.input_size == 0 {
-            return 0.0;
+            return 0.0_f64;
         }
         ((crate::numeric_cast::u64_to_f64(output_size)
             / crate::numeric_cast::u64_to_f64(self.input_size))
-            - 1.0)
-            * 100.0
+            - 1.0_f64)
+            * 100.0_f64
     }
 
     #[inline]
@@ -394,11 +394,11 @@ impl ExploreContext {
         let mut best_size = u64::MAX;
         let mut iterations = 0u32;
 
-        while high - low > 0.5 && iterations < max_iter {
+        while high - low > 0.5_f32 && iterations < max_iter {
             let mid = f32::midpoint(low, high);
             self.progress_update(&format!("Binary search CRF {mid:.1}..."));
             let size = self.encode(mid)?;
-            iterations += 1;
+            iterations = iterations.saturating_add(1);
 
             if size < self.input_size {
                 best_crf = mid;
@@ -430,7 +430,7 @@ impl ExploreContext {
         let mut low = low;
         let mut high = high;
         let mut best_crf = self.config.initial_crf;
-        let mut best_ssim = 0.0f64;
+        let mut best_ssim = 0.0_f64;
         let mut best_size = self.encode(self.config.initial_crf)?;
         let mut iterations = 0u32;
 
@@ -440,13 +440,13 @@ impl ExploreContext {
                 best_ssim = result.value;
             }
         }
-        iterations += 1;
+        iterations = iterations.saturating_add(1);
 
-        while high - low > 1.0 && iterations < max_iter {
+        while high - low > 1.0_f32 && iterations < max_iter {
             let mid = f32::midpoint(low, high);
             self.progress_update(&format!("Binary search CRF {mid:.1}..."));
             let size = self.encode(mid)?;
-            iterations += 1;
+            iterations = iterations.saturating_add(1);
 
             if let Ok(result) = self.calculate_ssim(mid) {
                 if result.value >= min_ssim {
@@ -468,7 +468,11 @@ impl ExploreContext {
     }
 
     pub fn log_final_result(&mut self, crf: f32, ssim: Option<f64>, size_change_pct: f64) {
-        let status = if size_change_pct < 0.1 { "✅" } else { "❌" };
+        let status = if size_change_pct < 0.1_f64 {
+            "✅"
+        } else {
+            "❌"
+        };
         match ssim {
             Some(s) => self.log(format!(
                 "📊 RESULT: {status} CRF {crf:.1}, SSIM {s:.4}, {size_change_pct:+.1}%"
@@ -610,14 +614,14 @@ impl ExploreContext {
     fn parse_ssim(stderr: &str) -> Option<f64> {
         for line in stderr.lines() {
             if let Some(pos) = line.find("All:") {
-                let value_str = &line[pos + 4..];
+                let value_str = &line[pos.saturating_add(4)..];
                 let value_str = value_str.trim_start();
                 let end = value_str
                     .find(|c: char| !c.is_numeric() && c != '.')
                     .unwrap_or(value_str.len());
                 if end > 0 {
                     if let Ok(ssim) = value_str[..end].parse::<f64>() {
-                        if (0.0..=1.0).contains(&ssim) {
+                        if (0.0_f64..=1.0_f64).contains(&ssim) {
                             return Some(ssim);
                         }
                     }
@@ -645,7 +649,7 @@ impl ExploreContext {
             let stderr = String::from_utf8_lossy(&out.stderr);
             for line in stderr.lines() {
                 if let Some(pos) = line.find("average:") {
-                    let value_str = &line[pos + 8..];
+                    let value_str = &line[pos.saturating_add(8)..];
                     let value_str = value_str.trim_start();
                     let end = value_str
                         .find(|c: char| !c.is_numeric() && c != '.' && c != '-')
@@ -708,7 +712,7 @@ impl ExploreStrategy for SizeOnlyStrategy {
             } else {
                 CheckResult::Failed("Total file size not compressed".into())
             },
-            0.7,
+            0.7_f64,
         ))
     }
 
@@ -754,7 +758,7 @@ impl ExploreStrategy for QualityMatchStrategy {
             } else {
                 CheckResult::Failed("SSIM below target".into())
             },
-            0.6,
+            0.6_f64,
         ))
     }
 

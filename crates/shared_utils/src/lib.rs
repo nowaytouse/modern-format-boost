@@ -1,4 +1,6 @@
 //! Shared Utilities for `modern_format_boost` tools
+#![deny(clippy::unwrap_used)]
+#![deny(clippy::panic)]
 #![allow(
     clippy::multiple_crate_versions,
     reason = "Legitimate deviation from standard linting rules justified by specific project architecture."
@@ -90,6 +92,9 @@ macro_rules! impl_rational_from_pair {
 
 #[cfg(not(feature = "high-precision"))]
 impl_rational_from_pair!((u64, u64), (u32, u32), (usize, usize), (i32, i32));
+
+#[cfg(not(feature = "high-precision"))]
+impl_rational_from_int_lossless!(i64, u64, i32, u32, usize, u8);
 
 #[cfg(not(feature = "high-precision"))]
 macro_rules! impl_rational_op {

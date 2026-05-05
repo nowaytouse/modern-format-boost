@@ -212,6 +212,16 @@ struct VideoStreamFields {
     is_variable_frame_rate: bool,
 }
 
+/// Validates that a path is suitable for `FFprobe` analysis.
+///
+/// Checks that the path exists and is a file, not a directory.
+/// Returns appropriate errors for invalid targets.
+///
+/// # Arguments
+/// * `path` - The path to validate
+///
+/// # Returns
+/// Ok(()) if valid, or `FFprobeError` with details
 fn validate_probe_target(path: &Path) -> Result<(), FFprobeError> {
     if !path.exists() {
         return Err(FFprobeError::ExecutionFailed(format!(
@@ -230,6 +240,16 @@ fn validate_probe_target(path: &Path) -> Result<(), FFprobeError> {
     Ok(())
 }
 
+/// Runs `FFprobe` with `JSON` output for detailed media analysis.
+///
+/// Executes `FFprobe` with comprehensive options to extract format,
+/// stream, and frame information in JSON format.
+///
+/// # Arguments
+/// * `path` - The media file to probe
+///
+/// # Returns
+/// `JSON` output from `FFprobe`, or `FFprobeError` if execution fails
 fn run_ffprobe_json(path: &Path) -> Result<serde_json::Value, FFprobeError> {
     let output = crate::ffmpeg_builder::FfprobeBuilder::new()
         .input(path)
@@ -261,14 +281,35 @@ fn run_ffprobe_json(path: &Path) -> Result<serde_json::Value, FFprobeError> {
     serde_json::from_str(&json_str).map_err(|e| FFprobeError::ParseError(e.to_string()))
 }
 
+/// Parses a string field from JSON as u64.
+///
+/// # Arguments
+/// * `value` - The JSON value to parse
+///
+/// # Returns
+/// Parsed u64 value, or None if parsing fails
 fn parse_u64_string_field(value: &serde_json::Value) -> Option<u64> {
     value.as_str().and_then(|s| s.parse::<u64>().ok())
 }
 
+/// Parses a string field from JSON as f64.
+///
+/// # Arguments
+/// * `value` - The JSON value to parse
+///
+/// # Returns
+/// Parsed f64 value, or None if parsing fails
 fn parse_f64_string_field(value: &serde_json::Value) -> Option<f64> {
     value.as_str().and_then(|s| s.parse::<f64>().ok())
 }
 
+/// Parses a string field from JSON, filtering out empty and "unknown" values.
+///
+/// # Arguments
+/// * `value` - The JSON value to parse
+///
+/// # Returns
+/// Filtered string value, or None if empty/unknown
 fn parse_optional_known_string(value: &serde_json::Value) -> Option<String> {
     value
         .as_str()
@@ -276,6 +317,16 @@ fn parse_optional_known_string(value: &serde_json::Value) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Collects string tags from a JSON tags object.
+///
+/// Extracts all key-value pairs from a JSON object representing tags,
+/// filtering for string values only.
+///
+/// # Arguments
+/// * `tags_value` - The JSON value containing tags
+///
+/// # Returns
+/// `HashMap` of tag key-value pairs
 fn collect_string_tags(tags_value: &serde_json::Value) -> HashMap<String, String> {
     let mut tags = HashMap::new();
     if let Some(tags_obj) = tags_value.as_object() {
@@ -288,6 +339,16 @@ fn collect_string_tags(tags_value: &serde_json::Value) -> HashMap<String, String
     tags
 }
 
+/// Parses the format information from `FFprobe` `JSON` output.
+///
+/// Extracts format-level metadata including format name, duration,
+/// bit rate, and other format-specific information.
+///
+/// # Arguments
+/// * `format` - The format `JSON` object from `FFprobe`
+///
+/// # Returns
+/// Parsed format information, or `FFprobeError` if parsing fails
 fn parse_probe_format(format: &serde_json::Value) -> Result<ProbeFormatInfo, FFprobeError> {
     let format_name = format["format_name"]
         .as_str()
@@ -307,6 +368,16 @@ fn parse_probe_format(format: &serde_json::Value) -> Result<ProbeFormatInfo, FFp
     })
 }
 
+/// Selects the primary video stream from available streams.
+///
+/// Filters streams to find video streams and selects the most appropriate one.
+/// Returns an error if no video stream is found.
+///
+/// # Arguments
+/// * `streams` - Array of stream `JSON` objects from `FFprobe`
+///
+/// # Returns
+/// Tuple of (`stream_index`, `stream_json`) for the selected video stream
 fn select_video_stream<'a>(
     streams: &'a [serde_json::Value],
 ) -> Result<(usize, &'a serde_json::Value), FFprobeError> {
@@ -359,6 +430,19 @@ fn select_video_stream<'a>(
     Ok((actual_index, stream))
 }
 
+/// Resolves the accurate duration from format and stream information.
+///
+/// Uses format duration as primary source, falls back to stream duration.
+/// Applies format-specific corrections and fallbacks for different container types.
+///
+/// # Arguments
+/// * `format_duration` - Duration from format information
+/// * `video_stream` - The video stream JSON object
+/// * `format_name` - The container format name
+/// * `path` - The file path for debugging
+///
+/// # Returns
+/// Resolved duration in seconds
 fn resolve_probe_duration(
     format_duration: f64,
     video_stream: &serde_json::Value,
@@ -389,6 +473,17 @@ fn resolve_probe_duration(
     duration
 }
 
+/// Parses a required u32 field from video stream JSON.
+///
+/// Attempts to parse the specified field as `u32`, with fallback to `coded_width`/`coded_height`
+/// for width/height fields. Returns an error if the field is missing or invalid.
+///
+/// # Arguments
+/// * `video_stream` - The video stream JSON object
+/// * `field_name` - The field name to parse
+///
+/// # Returns
+/// Parsed `u32` value, or `FFprobeError` if parsing fails
 fn parse_required_u32_field(
     video_stream: &serde_json::Value,
     field_name: &str,
@@ -410,6 +505,19 @@ fn parse_required_u32_field(
         .map_err(|_| FFprobeError::ParseError(format!("Invalid {field_name}: {raw_value}")))
 }
 
+/// Parses all video stream fields into a structured `VideoStreamFields`.
+///
+/// Extracts codec information, dimensions, frame rates, bit rates,
+/// and other video-specific metadata from the video stream JSON.
+///
+/// # Arguments
+/// * `video_stream` - The video stream JSON object
+/// * `format_name` - The container format name
+/// * `duration` - The resolved video duration
+/// * `path` - The file path for debugging
+///
+/// # Returns
+/// Parsed video stream fields, or `FFprobeError` if parsing fails
 fn parse_video_stream_fields(
     video_stream: &serde_json::Value,
     format_name: &str,
@@ -522,6 +630,16 @@ fn parse_video_stream_fields(
     })
 }
 
+/// Extracts audio stream information from available streams.
+///
+/// Searches for the first audio stream and extracts codec, bit rate,
+/// sample rate, channel layout, and other audio-specific metadata.
+///
+/// # Arguments
+/// * `streams` - Array of stream `JSON` objects from `FFprobe`
+///
+/// # Returns
+/// Audio information struct with extracted fields
 fn extract_audio_stream_fields(streams: &[serde_json::Value]) -> FFprobeAudioInfo {
     let Some(audio_stream) = streams
         .iter()
@@ -542,6 +660,16 @@ fn extract_audio_stream_fields(streams: &[serde_json::Value]) -> FFprobeAudioInf
     }
 }
 
+/// Extracts subtitle stream information from available streams.
+///
+/// Searches for the first subtitle stream and extracts codec information.
+/// Returns default info if no subtitle stream is found.
+///
+/// # Arguments
+/// * `streams` - Array of stream `JSON` objects from `FFprobe`
+///
+/// # Returns
+/// Subtitle information struct with extracted fields
 fn extract_subtitle_stream_fields(streams: &[serde_json::Value]) -> FFprobeSubtitleInfo {
     let Some(subtitle_stream) = streams
         .iter()
@@ -672,6 +800,16 @@ fn extract_loop_count(format: &serde_json::Value) -> Option<u16> {
     None
 }
 
+/// Extracts frame picture types from `FFprobe` frame data.
+///
+/// Parses the frames array to collect picture type characters
+/// (I, P, B frames) for analysis of video compression patterns.
+///
+/// # Arguments
+/// * `json` - The `JSON` response from `FFprobe` containing frame data
+///
+/// # Returns
+/// Vector of picture type characters
 fn extract_frame_types(json: &serde_json::Value) -> Vec<char> {
     let mut types = Vec::new();
     if let Some(frames) = json["frames"].as_array() {
@@ -686,6 +824,16 @@ fn extract_frame_types(json: &serde_json::Value) -> Vec<char> {
     types
 }
 
+/// Extracts PTS (Presentation Timestamp) deltas from frame data.
+///
+/// Calculates the time differences between consecutive frames
+/// to analyze frame timing patterns and detect variable frame rates.
+///
+/// # Arguments
+/// * `json` - The `JSON` response from `FFprobe` containing frame data
+///
+/// # Returns
+/// Vector of time deltas between consecutive frames
 fn extract_pts_deltas(json: &serde_json::Value) -> Vec<f64> {
     let mut deltas = Vec::new();
     let mut last_pts: Option<f64> = None;
@@ -704,6 +852,16 @@ fn extract_pts_deltas(json: &serde_json::Value) -> Vec<f64> {
     deltas
 }
 
+/// Extracts packet sizes from frame data.
+///
+/// Parses the frames array to collect packet sizes for each frame.
+/// Used to analyze data size patterns and compression efficiency.
+///
+/// # Arguments
+/// * `json` - The `JSON` response from `FFprobe` containing frame data
+///
+/// # Returns
+/// Vector of packet sizes in bytes
 fn extract_pkt_sizes(json: &serde_json::Value) -> Vec<u64> {
     let mut sizes = Vec::new();
     if let Some(frames) = json["frames"].as_array() {

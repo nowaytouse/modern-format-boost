@@ -126,18 +126,18 @@ pub fn robust_move(src: &Path, dst: &Path) -> std::io::Result<()> {
             );
             if staging.exists() {
                 std::fs::remove_file(&staging).unwrap_or_else(|e| {
-                    tracing::warn!("Non-fatal cleanup/fallback operation failed: {}", e)
+                    tracing::warn!("Non-fatal cleanup/fallback operation failed: {}", e);
                 });
             }
             if let Err(copy_err) = std::fs::copy(src, &staging) {
                 std::fs::remove_file(&staging).unwrap_or_else(|e| {
-                    tracing::warn!("Non-fatal cleanup/fallback operation failed: {}", e)
+                    tracing::warn!("Non-fatal cleanup/fallback operation failed: {}", e);
                 });
                 return Err(copy_err);
             }
             if let Err(rename_err) = std::fs::rename(&staging, dst) {
                 std::fs::remove_file(&staging).unwrap_or_else(|e| {
-                    tracing::warn!("Non-fatal cleanup/fallback operation failed: {}", e)
+                    tracing::warn!("Non-fatal cleanup/fallback operation failed: {}", e);
                 });
                 return Err(rename_err);
             }

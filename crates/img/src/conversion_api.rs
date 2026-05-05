@@ -404,10 +404,11 @@ pub fn execute_conversion(
     let message = if reduction >= 0.0 {
         format!("✅ JXL {action}: -{reduction:.1}%")
     } else {
-        let diff_bytes = output_size
-            .expect("Failed to parse integer or missing required value")
-            .cast_signed()
-            - detection.file_size.cast_signed();
+        let out_val =
+            output_size.expect("Failed to parse integer or missing required value") as i128;
+        let src_val = detection.file_size as i128;
+        let diff_bytes = out_val - src_val;
+
         let size_diff = shared_utils::modern_ui::format_size_diff(diff_bytes);
         format!("✅ JXL {action}: {size_diff}")
     };

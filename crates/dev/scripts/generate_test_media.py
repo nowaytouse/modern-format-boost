@@ -4,7 +4,6 @@
 This script creates synthetic media files needed for testing.
 """
 
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -46,9 +45,20 @@ def main() -> int:
 
     images = [
         (
-            ["-f", "lavfi", "-i", "color=c=blue:s=1920x1080:d=1",
-             "-f", "lavfi", "-i", "sine=f=1000:d=1",
-             "-c:v", "png", "-c:a", "pcm_s16le"],
+            [
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=blue:s=1920x1080:d=1",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=f=1000:d=1",
+                "-c:v",
+                "png",
+                "-c:a",
+                "pcm_s16le",
+            ],
             str(images_dir / "test_image_1080p.png"),
         ),
         (
@@ -75,52 +85,164 @@ def main() -> int:
 
     videos = [
         (
-            ["-f", "lavfi", "-i", "color=c=blue:s=1280x720:d=10",
-             "-f", "lavfi", "-i", "sine=f=440:d=10",
-             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-             "-c:a", "aac", "-b:a", "128k"],
+            [
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=blue:s=1280x720:d=10",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=f=440:d=10",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-crf",
+                "23",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "128k",
+            ],
             str(videos_dir / "test_h264_10s.mp4"),
         ),
         (
-            ["-f", "lavfi", "-i", "color=c=green:s=1920x1080:d=5",
-             "-f", "lavfi", "-i", "sine=f=880:d=5",
-             "-c:v", "libvpx-vp9", "-preset", "fast", "-crf", "28",
-             "-c:a", "libopus", "-b:a", "128k"],
+            [
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=green:s=1920x1080:d=5",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=f=880:d=5",
+                "-c:v",
+                "libvpx-vp9",
+                "-preset",
+                "fast",
+                "-crf",
+                "28",
+                "-c:a",
+                "libopus",
+                "-b:a",
+                "128k",
+            ],
             str(videos_dir / "test_vp9_5s.webm"),
         ),
         (
-            ["-f", "lavfi", "-i", "color=c=red:s=1920x1080:d=8",
-             "-f", "lavfi", "-i", "sine=f=660:d=8",
-             "-c:v", "libx265", "-preset", "fast", "-crf", "28",
-             "-c:a", "aac", "-b:a", "128k"],
+            [
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=red:s=1920x1080:d=8",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=f=660:d=8",
+                "-c:v",
+                "libx265",
+                "-preset",
+                "fast",
+                "-crf",
+                "28",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "128k",
+            ],
             str(videos_dir / "test_hevc_8s.mp4"),
         ),
         (
-            ["-f", "lavfi", "-i", "color=c=yellow:s=1920x1080:d=6",
-             "-f", "lavfi", "-i", "sine=f=1000:d=6",
-             "-c:v", "libaom-av1", "-preset", "4", "-crf", "30",
-             "-c:a", "libopus", "-b:a", "128k"],
+            [
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=yellow:s=1920x1080:d=6",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=f=1000:d=6",
+                "-c:v",
+                "libaom-av1",
+                "-preset",
+                "4",
+                "-crf",
+                "30",
+                "-c:a",
+                "libopus",
+                "-b:a",
+                "128k",
+            ],
             str(videos_dir / "test_av1_6s.mkv"),
         ),
         (
-            ["-f", "lavfi", "-i", "color=c=cyan:s=1920x1080:d=15",
-             "-f", "lavfi", "-i", "sine=f=1200:d=15",
-             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18",
-             "-c:a", "aac", "-b:a", "192k"],
+            [
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=cyan:s=1920x1080:d=15",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=f=1200:d=15",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-crf",
+                "18",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+            ],
             str(videos_dir / "test_hq_source_15s.mp4"),
         ),
         (
-            ["-f", "lavfi", "-i", "color=c=magenta:s=640x480:d=12",
-             "-f", "lavfi", "-i", "sine=f=500:d=12",
-             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "35",
-             "-c:a", "aac", "-b:a", "64k"],
+            [
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=magenta:s=640x480:d=12",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=f=500:d=12",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-crf",
+                "35",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "64k",
+            ],
             str(videos_dir / "test_lq_source_12s.mp4"),
         ),
         (
-            ["-f", "lavfi", "-i", "color=c=white:s=1280x720:d=2",
-             "-f", "lavfi", "-i", "sine=f=800:d=2",
-             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-             "-c:a", "aac", "-b:a", "128k"],
+            [
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=white:s=1280x720:d=2",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=f=800:d=2",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-crf",
+                "23",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "128k",
+            ],
             str(videos_dir / "test_short_2s.mp4"),
         ),
     ]
@@ -135,9 +257,18 @@ def main() -> int:
 
     gifs = [
         (
-            ["-f", "lavfi", "-i", "color=c=red:s=640x480:d=2",
-             "-f", "lavfi", "-i", "sine=f=440:d=2",
-             "-vf", "fps=10,scale=640:480:flags=lanczos"],
+            [
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=red:s=640x480:d=2",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=f=440:d=2",
+                "-vf",
+                "fps=10,scale=640:480:flags=lanczos",
+            ],
             str(gifs_dir / "test_simple.gif"),
         ),
         (
@@ -152,7 +283,7 @@ def main() -> int:
     # ========================================================================
     # MEDIA SPECIFICATIONS
     # ========================================================================
-    manifest_content = '''# Test Media Manifest
+    manifest_content = """# Test Media Manifest
 
 This directory contains synthetic test media files for unit testing the video_explorer module.
 
@@ -301,7 +432,7 @@ python3 generate_test_media.py
 - Synthetic media (colored frames + sine wave audio) ensures reproducible, fast generation
 - All durations and specifications are optimized for unit test execution speed
 - No external media files needed for basic test coverage
-'''
+"""
 
     manifest_path = test_dir / "MEDIA_MANIFEST.md"
     manifest_path.write_text(manifest_content)

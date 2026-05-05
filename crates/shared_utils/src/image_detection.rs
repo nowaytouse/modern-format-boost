@@ -2167,7 +2167,7 @@ pub fn calculate_entropy(img: &DynamicImage) -> f64 {
 /// Palette-index frequency entropy for indexed PNG.
 ///
 /// Counts how many pixels use each palette index (`0..palette_size`), computes
-/// Shannon entropy H = -Σ freq[i]*log2(freq[i]), and returns (H, `max_H`, ratio).
+/// Shannon entropy H = -Σ freq\[i\]*log2(freq\[i\]), and returns (H, `max_H`, ratio).
 /// Quantized images have uneven palette usage (few dominant entries) → low ratio.
 /// Natural palette art uses entries more uniformly → ratio close to 1.0.
 fn calculate_palette_index_entropy(img: &DynamicImage, palette_size: usize) -> (f64, f64, f64) {
@@ -2629,7 +2629,7 @@ fn detect_heic_compression(path: &Path) -> Result<CompressionType> {
 
 /// Detect ICO compression by inspecting embedded image entries.
 ///
-/// ICO directory: header[6] + entries[16 each]. Each entry has an offset to image data.
+/// ICO directory: header\[6\] + entries[16 each]. Each entry has an offset to image data.
 /// If image data starts with PNG magic → recursively check PNG quantization.
 /// Any quantized PNG entry → Lossy. Otherwise → Lossless.
 fn detect_ico_compression(path: &Path) -> Result<CompressionType> {

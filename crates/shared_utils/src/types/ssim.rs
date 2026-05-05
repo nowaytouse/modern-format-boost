@@ -6,9 +6,9 @@ use std::fmt;
 
 pub use crate::float_compare::SSIM_EPSILON;
 
-pub const SSIM_MIN: f64 = 0.0;
+pub const SSIM_MIN: f64 = 0.0_f64;
 
-pub const SSIM_MAX: f64 = 1.0;
+pub const SSIM_MAX: f64 = 1.0_f64;
 
 pub const SSIM_DISPLAY_PRECISION: usize = 6;
 
@@ -37,9 +37,9 @@ impl std::error::Error for SsimError {}
 pub struct Ssim(f64);
 
 impl Ssim {
-    pub const PERFECT: Self = Self(1.0);
+    pub const PERFECT: Self = Self(1.0_f64);
 
-    pub const ZERO: Self = Self(0.0);
+    pub const ZERO: Self = Self(0.0_f64);
 
     /// Create a new SSIM value.
     ///
@@ -83,7 +83,7 @@ impl Ssim {
     #[must_use]
     pub const fn clamped(value: f64) -> Self {
         let clamped = if value.is_nan() || value.is_infinite() {
-            0.0
+            0.0_f64
         } else {
             value.clamp(SSIM_MIN, SSIM_MAX)
         };
@@ -92,18 +92,18 @@ impl Ssim {
 
     #[must_use]
     pub fn as_percent(&self) -> String {
-        format!("{:.2}%", self.0 * 100.0)
+        format!("{:.2}%", self.0 * 100.0_f64)
     }
 
     #[must_use]
     pub fn quality_description(&self) -> &'static str {
-        if self.0 >= 0.99 {
+        if self.0 >= 0.99_f64 {
             "Excellent (visually lossless)"
-        } else if self.0 >= 0.95 {
+        } else if self.0 >= 0.95_f64 {
             "Very Good"
-        } else if self.0 >= 0.90 {
+        } else if self.0 >= 0.90_f64 {
             "Good"
-        } else if self.0 >= 0.80 {
+        } else if self.0 >= 0.80_f64 {
             "Fair"
         } else {
             "Poor"
@@ -141,18 +141,18 @@ mod tests {
 
     #[test]
     fn test_ssim_valid_range() {
-        assert!(Ssim::new(0.0).is_ok());
-        assert!(Ssim::new(1.0).is_ok());
-        assert!(Ssim::new(0.5).is_ok());
-        assert!(Ssim::new(0.95).is_ok());
+        assert!(Ssim::new(0.0_f64).is_ok());
+        assert!(Ssim::new(1.0_f64).is_ok());
+        assert!(Ssim::new(0.5_f64).is_ok());
+        assert!(Ssim::new(0.95_f64).is_ok());
     }
 
     #[test]
     fn test_ssim_invalid_range() {
-        assert!(Ssim::new(-0.1).is_err());
-        assert!(Ssim::new(1.1).is_err());
-        assert!(Ssim::new(-1.0).is_err());
-        assert!(Ssim::new(2.0).is_err());
+        assert!(Ssim::new(-0.1_f64).is_err());
+        assert!(Ssim::new(1.1_f64).is_err());
+        assert!(Ssim::new(-1.0_f64).is_err());
+        assert!(Ssim::new(2.0_f64).is_err());
     }
 
     #[test]
@@ -172,58 +172,61 @@ mod tests {
 
     #[test]
     fn test_ssim_meets_threshold() {
-        let ssim = Ssim::new(0.95).unwrap_or_else(|e| panic!("error: {e:?}"));
-        assert!(ssim.meets_threshold(0.95));
-        assert!(ssim.meets_threshold(0.94));
-        assert!(!ssim.meets_threshold(0.96));
+        let ssim = Ssim::new(0.95_f64).unwrap_or_else(|e| panic!("error: {e:?}"));
+        assert!(ssim.meets_threshold(0.95_f64));
+        assert!(ssim.meets_threshold(0.94_f64));
+        assert!(!ssim.meets_threshold(0.96_f64));
     }
 
     #[test]
     fn test_ssim_clamped() {
-        let clamped = Ssim::clamped(1.5);
-        assert!(crate::float_compare::approx_eq_f64(clamped.value(), 1.0));
+        let clamped = Ssim::clamped(1.5_f64);
+        assert!(crate::float_compare::approx_eq_f64(
+            clamped.value(),
+            1.0_f64
+        ));
 
-        let clamped_neg = Ssim::clamped(-0.5);
+        let clamped_neg = Ssim::clamped(-0.5_f64);
         assert!(crate::float_compare::approx_eq_f64(
             clamped_neg.value(),
-            0.0
+            0.0_f64
         ));
 
         let clamped_nan = Ssim::clamped(f64::NAN);
         assert!(crate::float_compare::approx_eq_f64(
             clamped_nan.value(),
-            0.0
+            0.0_f64
         ));
     }
 
     #[test]
     fn test_ssim_quality_description() {
         assert_eq!(
-            Ssim::new(0.99)
+            Ssim::new(0.99_f64)
                 .unwrap_or_else(|e| panic!("error: {e:?}"))
                 .quality_description(),
             "Excellent (visually lossless)"
         );
         assert_eq!(
-            Ssim::new(0.95)
+            Ssim::new(0.95_f64)
                 .unwrap_or_else(|e| panic!("error: {e:?}"))
                 .quality_description(),
             "Very Good"
         );
         assert_eq!(
-            Ssim::new(0.90)
+            Ssim::new(0.90_f64)
                 .unwrap_or_else(|e| panic!("error: {e:?}"))
                 .quality_description(),
             "Good"
         );
         assert_eq!(
-            Ssim::new(0.80)
+            Ssim::new(0.80_f64)
                 .unwrap_or_else(|e| panic!("error: {e:?}"))
                 .quality_description(),
             "Fair"
         );
         assert_eq!(
-            Ssim::new(0.70)
+            Ssim::new(0.70_f64)
                 .unwrap_or_else(|e| panic!("error: {e:?}"))
                 .quality_description(),
             "Poor"

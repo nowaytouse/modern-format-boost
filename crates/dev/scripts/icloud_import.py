@@ -44,7 +44,7 @@ def acquire_import_lock():
         lock_file = open(lock_path, "w")
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         return lock_file
-    except (IOError, OSError):
+    except OSError:
         return None
 
 
@@ -54,7 +54,7 @@ def release_import_lock(lock_file):
         try:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
             lock_file.close()
-        except (IOError, OSError):
+        except OSError:
             pass
 
 

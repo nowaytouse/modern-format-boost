@@ -183,6 +183,16 @@ impl JxlExplorationProfile {
     }
 }
 
+/// Calculates pressure stops for oversized images.
+///
+/// Uses logarithmic scaling to determine how much pressure should
+/// be applied to reduce file size for very large images.
+///
+/// # Arguments
+/// * `initial_ratio` - The initial compression ratio
+///
+/// # Returns
+/// Pressure stop value for oversized images
 fn oversize_pressure_stops(initial_ratio: f64) -> f64 {
     initial_ratio.max(1.0).log2()
 }
@@ -207,10 +217,30 @@ pub const fn clamp_explore_distance(distance: f32) -> f32 {
     distance.clamp(JXL_EXPLORE_FLOOR, JXL_EXPLORE_CEILING)
 }
 
+/// Converts a distance value to a hashable key.
+///
+/// Uses the raw bits of the clamped distance value to create
+/// a key suitable for use in hash maps and sets.
+///
+/// # Arguments
+/// * `distance` - The distance value to convert
+///
+/// # Returns
+/// Hashable distance key
 const fn distance_key(distance: f32) -> DistanceKey {
     clamp_explore_distance(distance).to_bits()
 }
 
+/// Trims trailing zeros and decimal point from a string.
+///
+/// Removes unnecessary trailing zeros from decimal strings
+/// to create cleaner, more readable numeric representations.
+///
+/// # Arguments
+/// * `raw` - The raw string to trim
+///
+/// # Returns
+/// Cleaned string without trailing zeros
 fn trim_decimal_string(mut raw: String) -> String {
     if raw.contains('.') {
         while raw.ends_with('0') {
@@ -223,6 +253,16 @@ fn trim_decimal_string(mut raw: String) -> String {
     raw
 }
 
+/// Formats a scalar value for logging with appropriate precision.
+///
+/// Uses different precision levels based on the magnitude of the value
+/// to provide readable output while maintaining accuracy.
+///
+/// # Arguments
+/// * `value` - The scalar value to format
+///
+/// # Returns
+/// Formatted string representation
 fn format_scalar_for_log(value: f64) -> String {
     let normalized = value.max(0.0);
     let raw = if normalized >= 0.99 {

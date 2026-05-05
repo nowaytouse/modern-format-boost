@@ -112,6 +112,7 @@ lto            = true
 opt-level      = 3
 codegen-units  = 1
 strip          = "symbols"
+overflow-checks = true
 
 [profile.dev]
 opt-level = 0

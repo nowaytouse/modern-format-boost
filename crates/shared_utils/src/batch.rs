@@ -16,55 +16,119 @@ use std::time::UNIX_EPOCH;
 use tracing::{debug, warn};
 use walkdir::{DirEntry, WalkDir};
 
+/// Schema version for the path tree cache format.
+/// Increment this when the cache structure changes to invalidate old caches.
 const PATH_TREE_CACHE_SCHEMA_VERSION: u32 = 1;
+
+/// Directory name for storing path tree cache files.
 const PATH_TREE_CACHE_DIR: &str = "path_tree";
 
+/// Cached state information for a directory in the path tree.
+///
+/// Stores the directory path and its last modification time to detect
+/// when the directory structure has changed and the cache needs to be updated.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CachedDirectoryState {
+    /// The absolute path to the directory.
     path: PathBuf,
+    /// The last modification time of the directory in Unix seconds.
     modified_unix_secs: u64,
 }
 
+/// Cached entry for an image file in the sorted path tree.
+///
+/// Contains metadata needed for efficient sorting and processing of images
+/// in batch operations. This information is cached to avoid repeated filesystem
+/// and metadata lookups.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CachedImageSortEntry {
+    /// The absolute path to the image file.
     path: PathBuf,
+    /// File size in bytes.
     size: u64,
+    /// Depth relative to the root directory (0 = root).
     relative_depth: usize,
+    /// Priority value for format-based sorting (lower = higher priority).
     format_priority: u8,
+    /// Total number of pixels (width × height) if available.
     pixel_count: Option<u64>,
 }
 
+/// Complete snapshot of the image tree structure and metadata.
+///
+/// This represents the cached state of all directories and files in a path tree,
+/// including the configuration parameters used to generate it. The snapshot
+/// can be serialized and deserialized to persist the cache between runs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CachedImageTreeSnapshot {
+    /// The schema version of this cache format.
     schema_version: u32,
+    /// The root directory path for this tree.
     root: PathBuf,
+    /// Whether this tree was built recursively.
     recursive: bool,
+    /// File extensions that were included in this tree.
     extensions: Vec<String>,
+    /// Cached state information for all directories.
     directories: Vec<CachedDirectoryState>,
+    /// Cached metadata for all image files.
     files: Vec<CachedImageSortEntry>,
 }
 
+/// Cached entry for a video file in the sorted path tree.
+///
+/// Contains metadata needed for efficient sorting and processing of videos
+/// in batch operations. This information is cached to avoid repeated filesystem
+/// and video metadata lookups.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CachedVideoSortEntry {
+    /// The absolute path to the video file.
     path: PathBuf,
+    /// File size in bytes.
     size: u64,
+    /// Depth relative to the root directory (0 = root).
     relative_depth: usize,
+    /// Total number of pixels (width × height) if available.
     pixel_count: Option<u64>,
+    /// Video duration in seconds if available.
     duration_secs: Option<f64>,
+    /// Video frame rate if available.
     frame_rate: Option<f64>,
+    /// Estimated processing work units based on video complexity.
     estimated_work: Option<u64>,
 }
 
+/// Complete snapshot of the video tree structure and metadata.
+///
+/// This represents the cached state of all directories and video files in a path tree,
+/// including the configuration parameters used to generate it. The snapshot
+/// can be serialized and deserialized to persist the cache between runs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CachedVideoTreeSnapshot {
+    /// The schema version of this cache format.
     schema_version: u32,
+    /// The root directory path for this tree.
     root: PathBuf,
+    /// Whether this tree was built recursively.
     recursive: bool,
+    /// File extensions that were included in this tree.
     extensions: Vec<String>,
+    /// Cached state information for all directories.
     directories: Vec<CachedDirectoryState>,
+    /// Cached metadata for all video files.
     files: Vec<CachedVideoSortEntry>,
 }
 
+/// Checks if a directory entry is safe to process in batch operations.
+///
+/// This function validates symlinks to ensure they don't point to dangerous
+/// locations. Unresolvable symlinks are also considered unsafe.
+///
+/// # Arguments
+/// * `entry` - The directory entry to check
+///
+/// # Returns
+/// `true` if the entry is safe, `false` otherwise
 fn is_safe_entry(entry: &DirEntry) -> bool {
     if entry.path_is_symlink() {
         if let Ok(canonical) = entry.path().canonicalize() {
@@ -207,7 +271,7 @@ pub fn calculate_directory_size_by_extensions(
                     continue;
                 }
                 match crate::io_utils::metadata_with_retry(entry.path()) {
-                    Ok(metadata) => total += metadata.len(),
+                    Ok(metadata) => total = total.saturating_add(metadata.len()),
                     Err(err) => {
                         warn!(
                             path = %entry.path().display(),
@@ -237,14 +301,28 @@ pub const IMAGE_EXTENSIONS: &[&str] = &[
 pub const ANIMATED_EXTENSIONS: &[&str] = &["gif", "webp", "png"];
 
 #[derive(Debug, Clone)]
+/// Information about why a batch operation was paused.
+///
+/// Contains the path where the pause occurred and a human-readable reason.
+/// This information can be displayed to users to help them understand
+/// why processing was interrupted.
 pub struct BatchPauseInfo {
+    /// The file path where the pause occurred.
     pub path: PathBuf,
+    /// Human-readable explanation for the pause.
     pub reason: String,
 }
 
+/// Controller for managing pause/resume functionality in batch operations.
+///
+/// Provides thread-safe pause controls with atomic operations and
+/// optional pause information. This allows batch operations to be
+/// gracefully interrupted and resumed while maintaining context.
 #[derive(Debug, Default)]
 pub struct BatchPauseController {
+    /// Atomic flag indicating if the batch is currently paused.
     paused: AtomicBool,
+    /// Optional information about the current pause state.
     info: Mutex<Option<BatchPauseInfo>>,
 }
 
@@ -254,10 +332,25 @@ impl BatchPauseController {
         Self::default()
     }
 
+    /// Checks if the batch operation is currently paused.
+    ///
+    /// # Returns
+    /// `true` if paused, `false` otherwise
     pub fn is_paused(&self) -> bool {
         self.paused.load(Ordering::Relaxed)
     }
 
+    /// Requests to pause the batch operation at the current file.
+    ///
+    /// This method is thread-safe and will only set the pause state once.
+    /// If the batch is already paused, this returns `false`.
+    ///
+    /// # Arguments
+    /// * `path` - The file path where the pause is being requested
+    /// * `reason` - Human-readable reason for the pause
+    ///
+    /// # Returns
+    /// `true` if this call newly set the pause state, `false` if already paused
     pub fn request_pause(&self, path: &Path, reason: impl Into<String>) -> bool {
         let reason = reason.into();
         let newly_paused = self
@@ -279,6 +372,10 @@ impl BatchPauseController {
         newly_paused
     }
 
+    /// Gets the current pause information if the batch is paused.
+    ///
+    /// # Returns
+    /// `Some(BatchPauseInfo)` if paused, `None` if not paused
     pub fn pause_info(&self) -> Option<BatchPauseInfo> {
         return self
             .info
@@ -341,20 +438,20 @@ impl BatchResult {
         }
     }
 
-    pub const fn success(&mut self) {
-        self.total += 1;
-        self.succeeded += 1;
+    pub fn success(&mut self) {
+        self.total = self.total.saturating_add(1);
+        self.succeeded = self.succeeded.saturating_add(1);
     }
 
     pub fn fail(&mut self, path: PathBuf, error: String) {
-        self.total += 1;
-        self.failed += 1;
+        self.total = self.total.saturating_add(1);
+        self.failed = self.failed.saturating_add(1);
         self.errors.push((path, error));
     }
 
-    pub const fn skip(&mut self) {
-        self.total += 1;
-        self.skipped += 1;
+    pub fn skip(&mut self) {
+        self.total = self.total.saturating_add(1);
+        self.skipped = self.skipped.saturating_add(1);
     }
 
     pub fn pause(&mut self, path: PathBuf, reason: String, remaining: usize) {
@@ -381,6 +478,16 @@ impl Default for BatchResult {
     }
 }
 
+/// Normalizes and deduplicates file extensions.
+///
+/// Converts all extensions to lowercase, sorts them alphabetically,
+/// and removes duplicates to ensure consistent processing.
+///
+/// # Arguments
+/// * `extensions` - Slice of file extension strings
+///
+/// # Returns
+/// Vector of normalized, unique extensions
 fn normalized_extensions(extensions: &[&str]) -> Vec<String> {
     let mut normalized: Vec<String> = extensions
         .iter()
@@ -391,6 +498,13 @@ fn normalized_extensions(extensions: &[&str]) -> Vec<String> {
     normalized
 }
 
+/// Gets the last modification time of a path in Unix seconds.
+///
+/// # Arguments
+/// * `path` - The file or directory path
+///
+/// # Returns
+/// Last modification time as Unix seconds, or 0 if unavailable
 fn path_modified_unix_secs(path: &Path) -> u64 {
     fs::metadata(path)
         .and_then(|metadata| metadata.modified())
@@ -399,6 +513,14 @@ fn path_modified_unix_secs(path: &Path) -> u64 {
         .map_or(0, |duration| duration.as_secs())
 }
 
+/// Calculates the relative depth of a path from the root directory.
+///
+/// # Arguments
+/// * `root` - The root directory path
+/// * `path` - The path to calculate depth for
+///
+/// # Returns
+/// Number of directory levels from root (0 = same level as root)
 fn relative_depth_from_root(root: &Path, path: &Path) -> usize {
     path.strip_prefix(root)
         .ok()
@@ -406,6 +528,16 @@ fn relative_depth_from_root(root: &Path, path: &Path) -> usize {
         .map_or(0, |parent| parent.components().count())
 }
 
+/// Determines the format priority for an image file.
+///
+/// Lower numbers indicate higher priority for sorting.
+/// This is used to prefer certain formats over others in batch operations.
+///
+/// # Arguments
+/// * `path` - The image file path
+///
+/// # Returns
+/// Priority value (0 = highest priority, 6 = lowest)
 fn format_priority_for_image(path: &Path) -> u8 {
     match crate::common_utils::get_extension_lowercase(path).as_str() {
         "jpg" | "jpeg" | "jpe" | "jfif" => 0,
@@ -418,12 +550,29 @@ fn format_priority_for_image(path: &Path) -> u8 {
     }
 }
 
+/// Gets the pixel count (width × height) of an image file.
+///
+/// # Arguments
+/// * `path` - The image file path
+///
+/// # Returns
+/// Total pixel count, or None if the image cannot be read
 fn image_pixel_count(path: &Path) -> Option<u64> {
     image::image_dimensions(path)
         .ok()
         .map(|(width, height)| u64::from(width).saturating_mul(u64::from(height)))
 }
 
+/// Converts a floating-point value to a sortable ordinal key.
+///
+/// Multiplies by 1000 and rounds to preserve 3 decimal places of precision.
+/// Non-finite or negative values are mapped to the maximum value.
+///
+/// # Arguments
+/// * `value` - The floating-point value to convert
+///
+/// # Returns
+/// Sortable ordinal key for comparison
 fn float_ord_key(value: f64) -> u64 {
     if value.is_finite() && value >= 0.0 {
         crate::numeric_cast::f64_to_u64_sat((value * 1000.0).round())
@@ -432,6 +581,17 @@ fn float_ord_key(value: f64) -> u64 {
     }
 }
 
+/// Compares two cached image sort entries for ordering.
+///
+/// Implements the sorting logic for batch operations based on multiple criteria:
+/// depth, format priority, size, and pixel count.
+///
+/// # Arguments
+/// * `left` - First sort entry
+/// * `right` - Second sort entry
+///
+/// # Returns
+/// Ordering comparison result
 fn compare_image_sort_entries(
     left: &CachedImageSortEntry,
     right: &CachedImageSortEntry,
@@ -449,10 +609,25 @@ fn compare_image_sort_entries(
         .then_with(|| left.path.cmp(&right.path))
 }
 
+/// Sorts cached image entries using the comparison function.
+///
+/// # Arguments
+/// * `entries` - Mutable slice of cached image entries to sort
 fn sort_cached_image_entries(entries: &mut [CachedImageSortEntry]) {
     entries.sort_by(compare_image_sort_entries);
 }
 
+/// Builds a cached image entry from file metadata.
+///
+/// Collects all necessary information for an image file to be used in
+/// batch sorting operations.
+///
+/// # Arguments
+/// * `root` - The root directory path
+/// * `path` - The image file path
+///
+/// # Returns
+/// Cached image entry, or None if metadata cannot be read
 fn build_cached_image_entry(root: &Path, path: &Path) -> Option<CachedImageSortEntry> {
     let metadata = fs::metadata(path).ok()?;
     Some(CachedImageSortEntry {
@@ -464,6 +639,10 @@ fn build_cached_image_entry(root: &Path, path: &Path) -> Option<CachedImageSortE
     })
 }
 
+/// Gets or creates the project cache directory for path trees.
+///
+/// # Returns
+/// Path to the cache directory, or IO error if creation fails
 fn project_cache_dir() -> io::Result<PathBuf> {
     let dir = crate::common_utils::get_user_project_cache_dir()
         .map_err(io::Error::other)?
@@ -472,6 +651,19 @@ fn project_cache_dir() -> io::Result<PathBuf> {
     Ok(dir)
 }
 
+/// Generates the cache file path for a path tree configuration.
+///
+/// Creates a unique filename based on the directory path, extensions,
+/// and other configuration parameters to ensure cache isolation.
+///
+/// # Arguments
+/// * `dir` - The root directory path
+/// * `extensions` - File extensions included in the tree
+/// * `recursive` - Whether the tree is recursive
+/// * `media_kind` - Type of media (e.g., "image", "video")
+///
+/// # Returns
+/// Path to the cache file, or IO error if hashing fails
 fn path_tree_cache_file(
     dir: &Path,
     extensions: &[&str],
@@ -490,6 +682,18 @@ fn path_tree_cache_file(
     Ok(project_cache_dir()?.join(file_name))
 }
 
+/// Loads a cached image tree snapshot from disk.
+///
+/// Attempts to read and deserialize a previously cached image tree.
+/// Returns None if the cache file doesn't exist, is corrupted, or schema version mismatch.
+///
+/// # Arguments
+/// * `dir` - The root directory path
+/// * `extensions` - File extensions included in the tree
+/// * `recursive` - Whether the tree is recursive
+///
+/// # Returns
+/// Cached image tree snapshot, or None if loading fails
 fn load_cached_image_tree(
     dir: &Path,
     extensions: &[&str],
@@ -500,6 +704,16 @@ fn load_cached_image_tree(
     serde_json::from_str(&content).ok()
 }
 
+/// Saves a cached image tree snapshot to disk.
+///
+/// Serializes and writes the image tree snapshot to the cache file.
+/// Creates the cache directory if it doesn't exist.
+///
+/// # Arguments
+/// * `snapshot` - The image tree snapshot to save
+///
+/// # Returns
+/// Ok(()) if successful, or IO error if writing fails
 fn save_cached_image_tree(snapshot: &CachedImageTreeSnapshot) -> io::Result<()> {
     let cache_file = path_tree_cache_file(
         &snapshot.root,
@@ -511,6 +725,18 @@ fn save_cached_image_tree(snapshot: &CachedImageTreeSnapshot) -> io::Result<()> 
     fs::write(cache_file, content)
 }
 
+/// Loads a cached video tree snapshot from disk.
+///
+/// Attempts to read and deserialize a previously cached video tree.
+/// Returns None if the cache file doesn't exist, is corrupted, or schema version mismatch.
+///
+/// # Arguments
+/// * `dir` - The root directory path
+/// * `extensions` - File extensions included in the tree
+/// * `recursive` - Whether the tree is recursive
+///
+/// # Returns
+/// Cached video tree snapshot, or None if loading fails
 fn load_cached_video_tree(
     dir: &Path,
     extensions: &[&str],
@@ -521,6 +747,16 @@ fn load_cached_video_tree(
     serde_json::from_str(&content).ok()
 }
 
+/// Saves a cached video tree snapshot to disk.
+///
+/// Serializes and writes the video tree snapshot to the cache file.
+/// Creates the cache directory if it doesn't exist.
+///
+/// # Arguments
+/// * `snapshot` - The video tree snapshot to save
+///
+/// # Returns
+/// Ok(()) if successful, or IO error if writing fails
 fn save_cached_video_tree(snapshot: &CachedVideoTreeSnapshot) -> io::Result<()> {
     let cache_file = path_tree_cache_file(
         &snapshot.root,
@@ -532,6 +768,19 @@ fn save_cached_video_tree(snapshot: &CachedVideoTreeSnapshot) -> io::Result<()> 
     fs::write(cache_file, content)
 }
 
+/// Validates that a cached image tree snapshot matches the expected configuration.
+///
+/// Checks schema version, root directory, recursive flag, and extensions
+/// to ensure the cache is still valid for the current request.
+///
+/// # Arguments
+/// * `snapshot` - The cached snapshot to validate
+/// * `dir` - The expected root directory
+/// * `extensions` - The expected file extensions
+/// * `recursive` - The expected recursive flag
+///
+/// # Returns
+/// `true` if the cache is valid, `false` otherwise
 fn validate_cached_image_tree(
     snapshot: &CachedImageTreeSnapshot,
     dir: &Path,
@@ -556,6 +805,19 @@ fn validate_cached_image_tree(
     })
 }
 
+/// Validates that a cached video tree snapshot matches the expected configuration.
+///
+/// Checks schema version, root directory, recursive flag, and extensions
+/// to ensure the cache is still valid for the current request.
+///
+/// # Arguments
+/// * `snapshot` - The cached snapshot to validate
+/// * `dir` - The expected root directory
+/// * `extensions` - The expected file extensions
+/// * `recursive` - The expected recursive flag
+///
+/// # Returns
+/// `true` if the cache is valid, `false` otherwise
 fn validate_cached_video_tree(
     snapshot: &CachedVideoTreeSnapshot,
     dir: &Path,
@@ -580,6 +842,18 @@ fn validate_cached_video_tree(
     })
 }
 
+/// Scans the filesystem to create a fresh image tree snapshot.
+///
+/// Walks the directory tree, collecting metadata for all directories
+/// and image files matching the specified extensions.
+///
+/// # Arguments
+/// * `dir` - The root directory to scan
+/// * `extensions` - File extensions to include
+/// * `recursive` - Whether to scan recursively
+///
+/// # Returns
+/// Complete image tree snapshot with current filesystem state
 fn scan_image_tree_snapshot(
     dir: &Path,
     extensions: &[&str],
@@ -656,6 +930,16 @@ fn scan_image_tree_snapshot(
     }
 }
 
+/// Probes video file to extract priority data for sorting.
+///
+/// Extracts pixel count, duration, frame rate, and estimated work
+/// to determine video processing priority in batch operations.
+///
+/// # Arguments
+/// * `path` - The video file path to probe
+///
+/// # Returns
+/// Tuple of (`pixel_count`, `duration_secs`, `frame_rate`, `estimated_work`)
 fn video_probe_priority_data(path: &Path) -> (Option<u64>, Option<f64>, Option<f64>, Option<u64>) {
     let Ok(probe) = crate::probe_video(path) else {
         return (None, None, None, None);
@@ -667,13 +951,13 @@ fn video_probe_priority_data(path: &Path) -> (Option<u64>, Option<f64>, Option<f
         None
     };
 
-    let duration_secs = if probe.duration.is_finite() && probe.duration > 0.0 {
+    let duration_secs = if probe.duration.is_finite() && probe.duration > 0.0_f64 {
         Some(probe.duration)
     } else {
         None
     };
 
-    let frame_rate = if probe.frame_rate.is_finite() && probe.frame_rate > 0.0 {
+    let frame_rate = if probe.frame_rate.is_finite() && probe.frame_rate > 0.0_f64 {
         Some(probe.frame_rate)
     } else {
         None
@@ -683,7 +967,7 @@ fn video_probe_priority_data(path: &Path) -> (Option<u64>, Option<f64>, Option<f
         Some(probe.frame_count)
     } else if let (Some(duration), Some(fps)) = (duration_secs, frame_rate) {
         Some(crate::numeric_cast::f64_to_u64_sat(
-            (duration * fps).round().max(1.0),
+            (duration * fps).round().max(1.0_f64),
         ))
     } else {
         None
@@ -696,6 +980,17 @@ fn video_probe_priority_data(path: &Path) -> (Option<u64>, Option<f64>, Option<f
     (pixel_count, duration_secs, frame_rate, estimated_work)
 }
 
+/// Compares two cached video sort entries for ordering.
+///
+/// Implements the sorting logic for batch operations based on multiple criteria:
+/// depth, estimated work, duration, and other video-specific metrics.
+///
+/// # Arguments
+/// * `left` - First sort entry
+/// * `right` - Second sort entry
+///
+/// # Returns
+/// Ordering comparison result
 fn compare_video_sort_entries(
     left: &CachedVideoSortEntry,
     right: &CachedVideoSortEntry,
@@ -727,10 +1022,25 @@ fn compare_video_sort_entries(
         .then_with(|| left.path.cmp(&right.path))
 }
 
+/// Sorts cached video entries using the comparison function.
+///
+/// # Arguments
+/// * `entries` - Mutable slice of cached video entries to sort
 fn sort_cached_video_entries(entries: &mut [CachedVideoSortEntry]) {
     entries.sort_by(compare_video_sort_entries);
 }
 
+/// Builds a cached video entry from file metadata and probe data.
+///
+/// Collects all necessary information for a video file to be used in
+/// batch sorting operations, including probing for video-specific metrics.
+///
+/// # Arguments
+/// * `root` - The root directory path
+/// * `path` - The video file path
+///
+/// # Returns
+/// Cached video entry, or None if metadata cannot be read
 fn build_cached_video_entry(root: &Path, path: &Path) -> Option<CachedVideoSortEntry> {
     let metadata = fs::metadata(path).ok()?;
     let (pixel_count, duration_secs, frame_rate, estimated_work) = video_probe_priority_data(path);
@@ -745,6 +1055,18 @@ fn build_cached_video_entry(root: &Path, path: &Path) -> Option<CachedVideoSortE
     })
 }
 
+/// Scans the filesystem to create a fresh video tree snapshot.
+///
+/// Walks the directory tree, collecting metadata for all directories
+/// and video files matching the specified extensions.
+///
+/// # Arguments
+/// * `dir` - The root directory to scan
+/// * `extensions` - File extensions to include
+/// * `recursive` - Whether to scan recursively
+///
+/// # Returns
+/// Complete video tree snapshot with current filesystem state
 fn scan_video_tree_snapshot(
     dir: &Path,
     extensions: &[&str],

@@ -108,20 +108,20 @@ fn parse_version_to_code(version: &str, context: &str) -> i32 {
     let parts: Vec<&str> = version.split('.').collect();
 
     let [major_str, minor_str, patch_str] = parts[..] else {
-        panic!("FATAL [{context}]: Invalid version format: '{version}'. Expected format: 'major.minor.patch'");
+        unreachable!("FATAL [{context}]: Invalid version format: '{version}'. Expected format: 'major.minor.patch'");
     };
 
-    let major: u32 = major_str.parse().unwrap_or_else(|e| {
-        panic!("FATAL [{context}]: Failed to parse major version from '{major_str}': {e}");
-    });
+    let major: u32 = major_str
+        .parse()
+        .expect("FATAL [{context}]: Failed to parse major version");
 
-    let minor: u32 = minor_str.parse().unwrap_or_else(|e| {
-        panic!("FATAL [{context}]: Failed to parse minor version from '{minor_str}': {e}");
-    });
+    let minor: u32 = minor_str
+        .parse()
+        .expect("FATAL [{context}]: Failed to parse minor version");
 
-    let patch: u32 = patch_str.parse().unwrap_or_else(|e| {
-        panic!("FATAL [{context}]: Failed to parse patch version from '{patch_str}': {e}");
-    });
+    let patch: u32 = patch_str
+        .parse()
+        .expect("FATAL [{context}]: Failed to parse patch version");
 
     let version_code = major * 10000 + minor * 100 + patch;
 

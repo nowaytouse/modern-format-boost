@@ -598,7 +598,7 @@ fn get_max_threads(options: &ConvertOptions) -> usize {
 
 #[must_use]
 pub fn is_high_quality_animated(width: u32, height: u32) -> bool {
-    let total_pixels = u64::from(width) * u64::from(height);
+    let total_pixels = u64::from(width).saturating_mul(u64::from(height));
     width >= shared_utils::constants::HQ_HD_WIDTH
         || height >= shared_utils::constants::HQ_HD_HEIGHT
         || total_pixels >= shared_utils::constants::HQ_PIX_COUNT_HD

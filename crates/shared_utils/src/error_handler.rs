@@ -135,11 +135,11 @@ pub fn report_error<E: std::error::Error + ?Sized>(error: &E) {
     eprintln!("🔥 ERROR: {error}");
 
     let mut source = error.source();
-    let mut level = 1;
+    let mut level = 1usize;
     while let Some(err) = source {
         eprintln!("   {level}. Caused by: {err}");
         source = err.source();
-        level += 1;
+        level += 1usize;
     }
 
     tracing::error!("Error occurred: {}", error);

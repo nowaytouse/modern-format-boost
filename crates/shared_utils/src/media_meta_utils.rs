@@ -70,7 +70,7 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
     if has_gct {
         let gct_size =
             palette_size.expect("Failed to parse integer or missing required value") as usize * 3;
-        pos += gct_size;
+        pos = pos.saturating_add(gct_size);
     }
 
     while pos + 2 < buf.len() {
@@ -120,7 +120,7 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
                                 }
                             }
                         }
-                        pos += 3 + block_size;
+                        pos = pos.saturating_add(3).saturating_add(block_size);
                         pos = skip_sub_blocks(&buf, pos);
                     }
                     0xF9 if pos + 7 < buf.len()
@@ -171,7 +171,7 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
                 pos += 10;
                 if (packed & 0x80) != 0 {
                     let lct_size_pow = usize::from(packed & 0x07);
-                    let lct_size = 3 * (1usize << (lct_size_pow + 1));
+                    let lct_size = 3usize.saturating_mul(1usize << lct_size_pow.saturating_add(1));
                     if pos + lct_size > buf.len() {
                         break;
                     }

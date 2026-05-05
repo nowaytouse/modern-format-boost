@@ -231,7 +231,7 @@ pub fn convert_heic_with_gainmap_to_jxl_hdr(
     if !status.success() {
         if tmp_file.exists() {
             std::fs::remove_file(&tmp_file).unwrap_or_else(|e| {
-                tracing::warn!("Non-fatal cleanup/fallback operation failed: {}", e)
+                tracing::warn!("Non-fatal cleanup/fallback operation failed: {}", e);
             });
         }
         return Err(anyhow!(
@@ -258,7 +258,7 @@ pub fn convert_heic_with_gainmap_to_jxl_hdr(
     // 9. Cleanup
     if tmp_file.exists() {
         std::fs::remove_file(&tmp_file).unwrap_or_else(|e| {
-            tracing::warn!("Non-fatal cleanup/fallback operation failed: {}", e)
+            tracing::warn!("Non-fatal cleanup/fallback operation failed: {}", e);
         });
     }
 
@@ -376,7 +376,7 @@ pub fn convert_ultrahdr_jpeg_to_jxl_hdr(
     if !status.success() {
         if tmp_file.exists() {
             std::fs::remove_file(&tmp_file).unwrap_or_else(|e| {
-                tracing::warn!("Non-fatal cleanup/fallback operation failed: {}", e)
+                tracing::warn!("Non-fatal cleanup/fallback operation failed: {}", e);
             });
         }
         return Err(anyhow!(
@@ -387,7 +387,7 @@ pub fn convert_ultrahdr_jpeg_to_jxl_hdr(
     // 8. Cleanup
     if tmp_file.exists() {
         std::fs::remove_file(&tmp_file).unwrap_or_else(|e| {
-            tracing::warn!("Non-fatal cleanup/fallback operation failed: {}", e)
+            tracing::warn!("Non-fatal cleanup/fallback operation failed: {}", e);
         });
     }
 

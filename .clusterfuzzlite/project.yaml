@@ -1,6 +1,6 @@
-main_repo: 'https://github.com/nowaytouse/modern-format-boost'
+main_repo: "https://github.com/nowaytouse/modern-format-boost"
 language: rust
-primary_contact: 'nowaytouse@users.noreply.github.com'
+primary_contact: "nowaytouse@users.noreply.github.com"
 # Sanitizers to use.
 sanitizers:
   - address

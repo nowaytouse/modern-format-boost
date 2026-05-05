@@ -25,6 +25,7 @@ The project and its dependencies use the following licenses:
 ### GPL-3.0-or-later Dependencies
 
 The following dependencies use GPL-3.0-or-later license:
+
 - **jpegxl-rs** - Rust bindings for JPEG XL
 - **jpegxl-sys** - Low-level JPEG XL system bindings
 
@@ -33,6 +34,7 @@ These are used for JPEG XL format support. If you distribute this software, you 
 ## Detailed License Information
 
 For complete license texts and detailed attribution, see:
+
 - **docs/LICENSES.html** - Full HTML report with all license texts
 - **docs/LICENSES.json** - Machine-readable JSON format
 - **about.toml** - cargo-about configuration

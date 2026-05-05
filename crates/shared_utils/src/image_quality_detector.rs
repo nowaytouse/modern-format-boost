@@ -113,6 +113,13 @@ impl ThresholdRange {
 
 static CLASSIFIER_RULES: std::sync::OnceLock<Vec<ClassifierRule>> = std::sync::OnceLock::new();
 
+/// Gets the classifier rules for image quality detection.
+///
+/// Loads and parses the embedded `image_classifiers.json` file
+/// to provide classification rules for different image types.
+///
+/// # Returns
+/// Static slice of classifier rules
 fn get_classifier_rules() -> &'static [ClassifierRule] {
     CLASSIFIER_RULES.get_or_init(|| {
         let json = include_str!("image_classifiers.json");
@@ -222,6 +229,18 @@ pub fn analyze_image_quality(
     })
 }
 
+/// Calculates the edge density of an image.
+///
+/// Analyzes the image to detect edges and calculates the density
+/// of edge pixels as a measure of image complexity and detail.
+///
+/// # Arguments
+/// * `rgba` - RGBA image data as bytes
+/// * `width` - Image width in pixels
+/// * `height` - Image height in pixels
+///
+/// # Returns
+/// Edge density value (0.0 to 1.0)
 fn calculate_edge_density(rgba: &[u8], width: u32, height: u32) -> f64 {
     if width < 3 || height < 3 {
         return 0.0;
@@ -289,6 +308,18 @@ fn calculate_edge_density(rgba: &[u8], width: u32, height: u32) -> f64 {
     (raw_density * crate::constants::IMAGE_EDGE_DENSITY_MULTIPLIER).min(1.0)
 }
 
+/// Calculates the color diversity of an image.
+///
+/// Analyzes the image to measure the variety and distribution of colors.
+/// Higher diversity indicates more complex and potentially higher quality images.
+///
+/// # Arguments
+/// * `rgba` - RGBA image data as bytes
+/// * `width` - Image width in pixels
+/// * `height` - Image height in pixels
+///
+/// # Returns
+/// Color diversity value (0.0 to 1.0)
 fn calculate_color_diversity(rgba: &[u8], width: u32, height: u32) -> f64 {
     use std::collections::HashSet;
 
@@ -339,6 +370,18 @@ fn calculate_color_diversity(rgba: &[u8], width: u32, height: u32) -> f64 {
     (crate::numeric_cast::usize_to_f64(colors.len()) / max_colors).min(1.0)
 }
 
+/// Calculates the texture variance of an image.
+///
+/// Analyzes local pixel variations to measure texture complexity.
+/// Higher variance indicates more detailed and textured images.
+///
+/// # Arguments
+/// * `rgba` - RGBA image data as bytes
+/// * `width` - Image width in pixels
+/// * `height` - Image height in pixels
+///
+/// # Returns
+/// Texture variance value (0.0 to 1.0)
 fn calculate_texture_variance(rgba: &[u8], width: u32, height: u32) -> f64 {
     if width < 3 || height < 3 {
         return 0.0;
@@ -410,6 +453,18 @@ fn calculate_texture_variance(rgba: &[u8], width: u32, height: u32) -> f64 {
     (avg_std / crate::constants::IMAGE_TEXTURE_VAR_NORMALIZATION).min(1.0)
 }
 
+/// Calculates the noise level of an image.
+///
+/// Analyzes pixel variations to estimate the amount of noise present.
+/// Lower noise levels generally indicate higher image quality.
+///
+/// # Arguments
+/// * `rgba` - RGBA image data as bytes
+/// * `width` - Image width in pixels
+/// * `height` - Image height in pixels
+///
+/// # Returns
+/// Noise level value (0.0 to 1.0, lower is better)
 fn calculate_noise_level(rgba: &[u8], width: u32, height: u32) -> f64 {
     if width < 2 || height < 2 {
         return 0.0;
@@ -492,6 +547,18 @@ fn calculate_noise_level(rgba: &[u8], width: u32, height: u32) -> f64 {
     (avg_diff / crate::constants::IMAGE_NOISE_NORMALIZATION).min(1.0)
 }
 
+/// Calculates the sharpness of an image.
+///
+/// Analyzes edge strength and focus to estimate image sharpness.
+/// Higher sharpness values indicate clearer, more focused images.
+///
+/// # Arguments
+/// * `rgba` - RGBA image data as bytes
+/// * `width` - Image width in pixels
+/// * `height` - Image height in pixels
+///
+/// # Returns
+/// Sharpness value (0.0 to 1.0, higher is better)
 fn calculate_sharpness(rgba: &[u8], width: u32, height: u32) -> f64 {
     if width < 3 || height < 3 {
         return 0.0;
@@ -556,6 +623,18 @@ fn calculate_sharpness(rgba: &[u8], width: u32, height: u32) -> f64 {
     (avg_laplacian / crate::constants::IMAGE_SHARPNESS_NORMALIZATION).min(1.0)
 }
 
+/// Calculates the contrast of an image.
+///
+/// Analyzes the distribution of pixel intensities to estimate contrast.
+/// Higher contrast values indicate better dynamic range and image quality.
+///
+/// # Arguments
+/// * `rgba` - RGBA image data as bytes
+/// * `width` - Image width in pixels
+/// * `height` - Image height in pixels
+///
+/// # Returns
+/// Contrast value (0.0 to 1.0, higher is better)
 fn calculate_contrast(rgba: &[u8], width: u32, height: u32) -> f64 {
     let pixels = crate::numeric_cast::u32_to_usize_sat(width)
         * crate::numeric_cast::u32_to_usize_sat(height);
@@ -612,6 +691,16 @@ fn calculate_contrast(rgba: &[u8], width: u32, height: u32) -> f64 {
     (std_dev / crate::constants::IMAGE_CONTRAST_NORMALIZATION).min(1.0)
 }
 
+/// Detects if an image uses the alpha channel.
+///
+/// Samples the alpha channel to determine if the image has
+/// any transparency (alpha values less than 255).
+///
+/// # Arguments
+/// * `rgba` - RGBA image data as bytes
+///
+/// # Returns
+/// `true` if alpha channel is used, `false` otherwise
 fn detect_alpha_usage(rgba: &[u8]) -> bool {
     for i in (0..rgba.len()).step_by(crate::constants::IMAGE_ALPHA_SAMPLING_STEP) {
         let alpha_idx = i + 3;
@@ -628,6 +717,19 @@ fn detect_alpha_usage(rgba: &[u8]) -> bool {
     false
 }
 
+/// Calculates the overall image complexity from individual metrics.
+///
+/// Combines edge density, color diversity, texture variance, and noise level
+/// using weighted averages to produce a single complexity score.
+///
+/// # Arguments
+/// * `edge_density` - Edge density metric (0.0 to 1.0)
+/// * `color_diversity` - Color diversity metric (0.0 to 1.0)
+/// * `texture_variance` - Texture variance metric (0.0 to 1.0)
+/// * `noise_level` - Noise level metric (0.0 to 1.0)
+///
+/// # Returns
+/// Overall complexity score (0.0 to 1.0)
 pub(crate) fn calculate_overall_complexity(
     edge_density: f64,
     color_diversity: f64,
@@ -659,6 +761,16 @@ pub(crate) fn calculate_overall_complexity(
         .clamp(0.0, 1.0)
 }
 
+/// Classifies the content type of an image based on quality metrics.
+///
+/// Uses a rule-based classifier system to determine if the image is
+/// likely to be a photo, screenshot, graphic, or other content type.
+///
+/// # Arguments
+/// * `input` - Classifier input with all image quality metrics
+///
+/// # Returns
+/// Classified image content type
 fn classify_content_type(input: &ClassifierInput) -> ImageContentType {
     let &ClassifierInput {
         complexity,
@@ -758,6 +870,20 @@ fn classify_content_type(input: &ClassifierInput) -> ImageContentType {
     )
 }
 
+/// Calculates the confidence level for image quality analysis.
+///
+/// Determines how reliable the quality metrics are based on image size,
+/// file size, and metric consistency. Larger images with consistent
+/// metrics get higher confidence scores.
+///
+/// # Arguments
+/// * `pixels` - Total number of pixels in the image
+/// * `file_size` - File size in bytes
+/// * `edge_density` - Edge density metric
+/// * `color_diversity` - Color diversity metric
+///
+/// # Returns
+/// Confidence level (0.0 to 1.0)
 pub(crate) fn calculate_analysis_confidence(
     pixels: u64,
     file_size: u64,
@@ -831,6 +957,16 @@ pub fn analyze_image_quality_with_cache(
     Some(analysis)
 }
 
+/// Analyzes image quality from a file path.
+///
+/// Internal function that loads an image from disk and performs
+/// quality analysis using the core analysis engine.
+///
+/// # Arguments
+/// * `path` - Path to the image file
+///
+/// # Returns
+/// Image quality analysis results, or None if loading fails
 fn analyze_image_quality_from_path_internal(path: &Path) -> Option<ImageQualityAnalysis> {
     let img = open(path).ok()?;
     let (width, height) = img.dimensions();

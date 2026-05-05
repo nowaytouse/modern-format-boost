@@ -138,11 +138,11 @@ pub fn format_duration_compact(duration: Duration) -> String {
 /// 28 chars fits filenames up to ~24 chars + brackets + space separator.
 const LOG_TAG_WIDTH: usize = 28;
 
-/// Max visible chars for the filename displayed inside [brackets].
-/// With `LOG_TAG_WIDTH=28`, tag=[prefix] uses prefix+2 bytes, max prefix = 25.
+/// Max visible chars for the filename displayed inside \[brackets\].
+/// With `LOG_TAG_WIDTH=28`, tag=\[prefix\] uses prefix+2 bytes, max prefix = 25.
 const LOG_PREFIX_MAX_DISPLAY: usize = 25;
 
-/// Prefix for periodic statistics lines — emoji instead of [Info] to avoid
+/// Prefix for periodic statistics lines — emoji instead of \[Info\] to avoid
 /// confusion with log severity levels. Followed by a fixed-width space pad so
 /// the message body aligns with regular file-tag lines.
 /// Display width: 1 emoji (2 cells on most terminals) + spaces to reach `LOG_TAG_WIDTH`.

@@ -541,7 +541,7 @@ impl LoopMeta {
                 if let Ok(bytes) = std::fs::read(&temp_frame) {
                     // Remove the temporary file immediately; keep bytes in-memory only.
                     std::fs::remove_file(&temp_frame).unwrap_or_else(|e| {
-                        tracing::warn!("Non-fatal cleanup/fallback operation failed: {}", e)
+                        tracing::warn!("Non-fatal cleanup/fallback operation failed: {}", e);
                     });
 
                     // Cache the PNG bytes for potential reuse in Tier 3 visual heuristics.
@@ -2528,7 +2528,7 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
                                     tracing::warn!(
                                         "Non-fatal cleanup/fallback operation failed: {}",
                                         e
-                                    )
+                                    );
                                 });
                                 if let Ok(img) = image::load_from_memory(&bytes) {
                                     img_opt = Some(img);
@@ -3584,7 +3584,11 @@ mod tests {
 
         let meta = LoopMeta::from_gif_path(file.path())
             .expect("valid GIF header should produce loop metadata");
-        assert_eq!(meta.duration_secs, 0.0);
+        assert!(
+            (meta.duration_secs - 0.0).abs() < f64::EPSILON,
+            "Expected duration_secs to be approximately 0.0, got {}",
+            meta.duration_secs
+        );
         assert_eq!(meta.frame_count, 1);
     }
 

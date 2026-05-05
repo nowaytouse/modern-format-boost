@@ -36,7 +36,7 @@ pub fn f64_to_rational_loud(val: f64, default: i64, name: &str) -> Rational {
     })
 }
 
-/// Convert Option<f64> to f64 with loud warning on None.
+/// Convert `Option<f64>` to `f64` with loud warning on None.
 /// Prevents silent forgery of data in database/analysis paths.
 #[must_use]
 pub fn option_f64_loud(val: Option<f64>, default: f64, name: &str) -> f64 {

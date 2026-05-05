@@ -4,7 +4,35 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
-### 🛡️ Systemic Quality Audit & Regression Remediation (2026-05-05)
+## 🔧 Comprehensive System Update & Documentation Refresh (2026-05-05)
+
+- **Codebase Analysis & Documentation**:
+  - **Pipeline Architecture Documentation**: Completed comprehensive analysis of `VideoConversionPipeline` in `crates/vid/src/processor/pipeline.rs`, documenting its role as the core video conversion orchestrator
+  - **Git History Research**: Traced pipeline file origins to commit `7281159d` (2026-05-03), revealing its creation during major refactoring and feature restoration
+  - **Usage Pattern Verification**: Confirmed active usage through `auto_convert_with_cache()` function call chain from main application
+
+- **Fuzz Testing Infrastructure Migration**:
+  - **OSS-Fuzz to ClusterFuzzLite Transition**: Migrated fuzz testing infrastructure from `crates/dev/oss-fuzz/` to `.clusterfuzzlite/` directory
+  - **Updated Build Configuration**: Synchronized build scripts and project YAML files for new fuzz testing framework
+  - **Legacy Cleanup**: Removed obsolete OSS-Fuzz Dockerfile and configuration files
+
+- **Documentation & Licensing Updates**:
+  - **Third-Party Licenses**: Refreshed all licensing documentation (`LICENSES.html`, `LICENSES.json`, `LICENSES.txt`, `THIRD_PARTY_LICENSES.md`)
+  - **Project Metadata**: Updated `about.toml` and `Cargo.toml` with latest project information
+  - **Dependency Security**: Updated `deny.toml` with latest security advisories and license compliance rules
+
+- **Development Tools & Scripts**:
+  - **Script Optimization**: Enhanced media generation, iCloud import, and dependency installation scripts
+  - **Code Cleanup**: Removed obsolete test scripts and unused development utilities from `crates/dev/scripts/useless/`
+  - **New Documentation**: Added comprehensive documentation in `crates/dev/Docs/` directory
+
+- **Core Library Enhancements**:
+  - **Analysis Cache Improvements**: Enhanced database caching mechanisms in `shared_utils/src/analysis_cache.rs`
+  - **Video Processing Optimizations**: Refined video detection, exploration, and GPU acceleration components
+  - **Image Processing Updates**: Improved image detection, quality analysis, and format conversion logic
+  - **Error Handling**: Strengthened error propagation and recovery mechanisms across all modules
+
+## 🛡️ Systemic Quality Audit & Regression Remediation (2026-05-05)
 
 - **Remediation of Silent Error Handling (Anti-Shrinkage Audit)**:
   - **Eliminated "Clippy-Bypassing" Silence**: Performed a workspace-wide audit to identify and remove deceptive error suppressions (`let _ = write!`, `.unwrap_or(0)`, `.ok()`) introduced during recent linter compliance passes.
@@ -99,9 +127,6 @@ All notable changes to this project will be documented in this file.
   - **macOS Cross-Compile Fix**: Enabled `force-cross` feature for `gmp-mpfr-sys` in `Cargo.toml` to allow building `x86_64` binaries on ARM64 macOS runners.
   - **ClusterFuzzLite Stabilization**: Updated the ClusterFuzzLite Dockerfile to use the latest Rust nightly toolchain and added the `rust-src` component, resolving compatibility issues with `jpegxl-rs` and enabling sanitizer-based fuzz building.
 
-
-
-
 ### 🛡️ Nightly Dependency & Numerical Rigor (2026-05-02)
 
 - **Supply Chain "Nightly" Transformation**:
@@ -152,7 +177,7 @@ All notable changes to this project will be documented in this file.
 
 ### 📐 Configuration Refactor & Memory Optimization (2026-05-02)
 
-- **Bitflags-based Configuration System**: 
+- **Bitflags-based Configuration System**:
   - Refactored `ConversionConfig` and `ConvertOptions` from multiple boolean fields to a centralized `bitflags` architecture across the entire workspace.
   - **Memory Efficiency**: Reduced configuration memory footprint by packing boolean flags into bitsets.
   - **Clippy Compliance**: Resolved several `clippy::too_many_arguments` and `clippy::type_complexity` warnings related to large struct definitions and function signatures.
@@ -161,11 +186,11 @@ All notable changes to this project will be documented in this file.
 
 ### 🛡️ Security Audit & Supply Chain Hardening (2026-05-02)
 
-- **PyPI `lightning` Attack Response**: 
+- **PyPI `lightning` Attack Response**:
   - Conducted an exhaustive audit of all project dependencies following the high-priority supply chain attack on `lightning` (v2.6.2/2.6.3).
   - **Result**: Confirmed **zero usage** of the malicious package. The project does not utilize any Python deep learning frameworks or the `lightning` package.
 - **8-Hour Commit Audit**:
-  - Audited all 16 commits from the last 8 hours. 
+  - Audited all 16 commits from the last 8 hours.
   - **Result**: All changes verified as legitimate development by `nowaytouse`, focused on ClusterFuzzLite integration and `libheif` CI build stabilization. No unauthorized code injection detected.
 
 ### 📐 Code Quality & API Refinement (Final Audit)
@@ -183,7 +208,7 @@ All notable changes to this project will be documented in this file.
 
 ### 🔧 CI/CD & Fuzzing Maturity
 
-- **ClusterFuzzLite Integration**: 
+- **ClusterFuzzLite Integration**:
   - Fully integrated continuous fuzzing via ClusterFuzzLite.
   - Created `.clusterfuzzlite/Dockerfile`, `build.sh`, and `project.yaml`.
   - Implemented static `libheif` linking strategies for CI environments to ensure stable fuzzing of HEIF/AVIF assets.
@@ -352,23 +377,24 @@ All notable changes to this project will be documented in this file.
   - Supports seamless hand-off from "Collect" or "In-Place" modes to iCloud import.
 
 ### 🛡️ Safety & UX Enhancements
-21: 
+
+21:
 22: - **Human-Like Pacing**: Introduced intentional delays (`time.sleep`) across all key scripts to prevent "rushed" execution and improve system stability feedback.
 23: - **Mandatory 'y' Confirmation**: Implemented explicit confirmation prompts for all high-risk or core operations (Import, Cleanup, Training). Operations now require a lowercase 'y' to proceed, preventing accidental triggers.
 24: - **Interactive Hardening**: Refined the `drag_and_drop_processor.py` maintenance menu with inline confirmation before launching external cleanup tools.
-25: 
+25:
 26: ### 🛠️ Maintenance & Database Management
-21: 
+21:
 22: - **Refactored `database_manager.py`**
-23:   - **Removed "Clean Database" feature**: Eliminated redundancy as the functionality is covered by the dedicated cache cleaning scripts.
-24:   - **Menu Renumbering**: Optimized the interactive menu for better clarity (1-4 for core tasks).
-25:   - **Integrated "Return to Home"**: Added option 5 to seamlessly return to the main processor interface.
-26: 
+23: - **Removed "Clean Database" feature**: Eliminated redundancy as the functionality is covered by the dedicated cache cleaning scripts.
+24: - **Menu Renumbering**: Optimized the interactive menu for better clarity (1-4 for core tasks).
+25: - **Integrated "Return to Home"**: Added option 5 to seamlessly return to the main processor interface.
+26:
 27: - **Enhanced `icloud_import.py` (User Assisted)**
-28:   - **Dual Import Modes**: Added support for "Optimized Import" (with ✨ prefix and organized albums) and "Simple Import".
-29:   - **Concurrency Safety**: Implemented a global file-based lock (`~/.icloud_import.lock`) to prevent race conditions during multiple import tasks.
-30:   - **Tool Discovery**: Improved `osxphotos` binary path resolution (system PATH + common Homebrew/local paths).
-31: 
+28: - **Dual Import Modes**: Added support for "Optimized Import" (with ✨ prefix and organized albums) and "Simple Import".
+29: - **Concurrency Safety**: Implemented a global file-based lock (`~/.icloud_import.lock`) to prevent race conditions during multiple import tasks.
+30: - **Tool Discovery**: Improved `osxphotos` binary path resolution (system PATH + common Homebrew/local paths).
+31:
 32: ### 🚀 iCloud Photo Import Integration (Initial Release)
 
 This section documents the full chain of fixes and refactors completed in the last few hours
@@ -514,10 +540,11 @@ This release focuses on building a robust, high-quality "Fusion Database" for me
   - **Root Cause**: `img` completely ignores Live Photo `.HEIC` files (expecting `vid` to handle them to avoid splitting the pair). When `vid` processed the directory, it collected the `.HEIC`, detected `frame_count = 1`, and skipped it. Because the `copy_on_skip_or_fail` fallback was removed to prevent output clutter, neither tool copied the `.HEIC` file to the output directory.
   - **Fix**: Upgraded `vid`'s static isolation logic to act as the custodian for Live Photos. If `vid` isolates a 1-frame image, it now explicitly checks `is_live_photo()`. If true, `vid` safely copies the file to the output directory, preserving the complete pair.
 - **Static `.JXL` File Omission**: Fixed a bug where `.jxl` files present in the source directory were entirely omitted from the output.
-  - **Root Cause**: `"jxl"` was correctly listed in `SUPPORTED_IMAGE_EXTENSIONS` (so `copy_unsupported_files` ignored it), but it was mistakenly omitted from `IMAGE_EXTENSIONS_FOR_CONVERT` (so `img` ignored it too). 
+  - **Root Cause**: `"jxl"` was correctly listed in `SUPPORTED_IMAGE_EXTENSIONS` (so `copy_unsupported_files` ignored it), but it was mistakenly omitted from `IMAGE_EXTENSIONS_FOR_CONVERT` (so `img` ignored it too).
   - **Fix**: Added `"jxl"` to the convert collection array. `img` now correctly collects it, analyzes it, instantly marks it as "Already Optimal", and safely copies it to the output directory.
 - **Standalone `img` Data Loss**: Fixed a pipeline gap where running `img` independently (without subsequently running `vid`) resulted in the loss of all non-media files (PDFs, TXT, etc.).
   - **Fix**: Brought absolute parity to `img` by implementing the `copy_unsupported_files` and `verify_output_completeness` phases at the end of its batch loop, matching `vid`'s behavior perfectly.
+
 ### 🛡️ Verification & Security Hardening
 
 - **Content Hash Verification** (`verify.py`): Added SHA-256 partial hashing (first 64KB) to collision detection.
@@ -840,8 +867,9 @@ which has no causal basis — MP4 `loop_count` is unreliable at any duration (no
 loop field), while GIF NETSCAPE2.0 is authoritative at any duration.
 
 Replaced with container-aware fixed trust levels:
+
 | Container | Trust | Rationale |
-|-----------|-------|-----------|
+| :--- | :--- | :--- |
 | GIF | 1.0 | NETSCAPE2.0 extension is authoritative |
 | WebP/APNG | 0.85 | ANIM chunk / acTL have real loop fields |
 | AVIF | 0.6 | Loop semantics exist but less standardized |
@@ -1166,7 +1194,7 @@ evidence should be stronger than the linear sum.
 - **Profile Anchor Distances**: Per-profile anchor arrays ensure mandatory probe points at perceptual boundaries, independent of adaptive interpolation.
 - **Scalar Log Formatting**: `format_scalar_for_log()` and `trim_decimal_string()` utilities provide clean, zero-trimmed distance strings for all log output.
 
-### 📦 Dependency Updates
+### 📦 Initial Dependencies
 
 - **Refactored `ConversionResult` API**: Grouped video exploration metrics into a structured `VideoExplorationMetrics` object to eliminate the "too many arguments" code smell and decoupled complex message formatting logic from the result container.
 - **Zero-Warning Workspace Enforcement**: Resolved persistent `clippy::float_cmp` violations across the video/JXL exploration logic and global constants, achieving a 100% warning-free state under strict `-D warnings`.
@@ -1224,7 +1252,7 @@ evidence should be stronger than the linear sum.
 - **Near-Lossless JXL for Lossy Sources**: Changed lossy PNG/GIF/JPEG fallback conversion from `distance=0.1` to `distance=0.001`, resulting in mathematically near-lossless output recognized by the JXL encoder's lossless threshold.
 - **Animated/Live Photo Terminology**: Replaced `[SKIP]` with `[IGNORE]` in progress output for animated GIF/WebP and Live Photo detection, clarifying that these are intentionally excluded (handled by `vid`) rather than skipped due to quality/format constraints.
 
-### 🔧 Code Quality
+### 🛠️ Refactoring
 
 - **Unified Candidate Comparator Module**: Extracted shared comparison logic from `gpu_coarse_search.rs` into new `candidate_comparator.rs` — `compare_pass_gate`, `compare_quality_desc/asc`, `compare_quality_pair_desc`, `compare_size_asc`, `compare_crf_asc`, `compare_distance_desc`. Used by both HEVC ultimate selection and available for JXL/future explorers. Eliminates ~40 lines of duplicated comparator code.
 - **Eliminated Repetitive ConversionResult Construction**: Replaced ~60+ instances of verbose `ConversionResult { ignored: false, success: ..., ... }` struct literals across `animated_image.rs` and `conversion.rs` with concise factory method calls. Reduced per-call-site lines from ~15-20 to ~5-8, improving readability and reducing error surface.
@@ -1289,7 +1317,7 @@ evidence should be stronger than the linear sum.
 - **Benchmark Compile Check**: Added `cargo bench --no-run` to catch benchmark bitrot without full execution cost.
 - **Help Text Update**: `--no-expensive` now mentions mutants alongside bloat, hack, llvm-cov.
 
-### 📦 Dependency Updates
+### 📦 Infrastructure Updates
 
 - **Cargo.toml**: Added `insta` and `criterion` from GitHub sources to workspace dev dependencies.
 - **Workspace Members**: Added `fuzz` crate to workspace members list.
@@ -6566,4 +6594,4 @@ This section reconstructs the detailed development history, transforming 1400+ r
 ### 🚀 Performance & Refactoring
 
 - modularize skip logic with VVC/AV2 support
-port
+  port

@@ -9,5 +9,5 @@ RUN apt-get update && apt-get install -y \
 COPY . $SRC/modern-format-boost
 WORKDIR $SRC/modern-format-boost
 
-COPY crates/dev/oss-fuzz/build.py $SRC/build.py
+COPY crates/dev/fuzz/oss-fuzz/build.py $SRC/build.py
 RUN chmod +x $SRC/build.py

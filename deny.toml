@@ -23,6 +23,7 @@ allow = [
     "IJG",
     "Unicode-3.0",
     "GPL-3.0-or-later",
+    "LGPL-3.0-or-later",
 ]
 confidence-threshold = 0.8
 
@@ -73,4 +74,14 @@ allow-git = [
     "https://github.com/dtolnay/syn",
     "https://github.com/dtolnay/quote",
     "https://github.com/dtolnay/proc-macro2",
+    "https://github.com/Cykooz/libheif-sys",
+    "https://github.com/Frommi/miniz_oxide",
+    "https://github.com/bitflags/bitflags",
+    "https://github.com/criterion-rs/criterion.rs",
+    "https://github.com/inflation/jpegxl-rs",
+    "https://github.com/orlp/foldhash",
+    "https://github.com/pgvector/pgvector-rust",
+    "https://github.com/sfackler/rust-postgres",
+    "https://github.com/tailhook/quick-error",
+    "https://gitlab.com/tspiteri/rug",
 ]

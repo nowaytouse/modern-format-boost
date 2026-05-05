@@ -572,7 +572,7 @@ fn copy_dir_xattrs(src: &Path, dst: &Path) {
     }
 }
 
-/// Fallback: try exiv2 to merge XMP into the destination (exiv2 -i expects sidecar named <stem>.xmp beside image).
+/// Fallback: try exiv2 to merge XMP into the destination (exiv2 -i expects sidecar named \\<stem\\>.xmp beside image).
 /// Returns true if exiv2 merge succeeded. No fake success; only when exiv2 actually succeeds do we return true.
 fn try_merge_xmp_exiv2(xmp_path: &Path, dst: &Path) -> bool {
     let Some(parent) = dst.parent() else {

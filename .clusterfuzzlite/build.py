@@ -13,8 +13,8 @@ from pathlib import Path
 
 def filter_sanitizer_flags(flags: str) -> str:
     """Remove fuzzer sanitizer flags from compiler flags."""
-    flags = re.sub(r'-fsanitize=fuzzer-no-link\s*', '', flags)
-    flags = re.sub(r'-fsanitize=fuzzer\s*', '', flags)
+    flags = re.sub(r"-fsanitize=fuzzer-no-link\s*", "", flags)
+    flags = re.sub(r"-fsanitize=fuzzer\s*", "", flags)
     return flags.strip()
 
 
@@ -29,7 +29,7 @@ def find_and_copy_targets(out_dir: Path) -> None:
     ]
 
     print(f"Copying fuzz targets to {out_dir}...")
-    
+
     # In a workspace, the target directory might be at the root or local to the fuzz crate
     search_paths = [
         Path("target"),
@@ -41,7 +41,7 @@ def find_and_copy_targets(out_dir: Path) -> None:
         for target_dir in search_paths:
             if not target_dir.exists():
                 continue
-                
+
             # Search for the binary in target directory
             # cargo-fuzz often puts things in target/<triple>/release/
             found = list(target_dir.rglob(target_name))
@@ -52,7 +52,7 @@ def find_and_copy_targets(out_dir: Path) -> None:
                         # Avoid matching things like "incremental" or "build" subdirs if possible
                         if "incremental" in str(binary) or "build" in str(binary):
                             continue
-                            
+
                         dest = out_dir / target_name
                         dest.write_bytes(binary.read_bytes())
                         dest.chmod(0o755)
@@ -61,7 +61,7 @@ def find_and_copy_targets(out_dir: Path) -> None:
                         break
             if found_any:
                 break
-        
+
         if not found_any:
             print(f"  Warning: {target_name} not found", file=sys.stderr)
 
@@ -89,9 +89,13 @@ def main() -> int:
 
     # Filter out fuzzer sanitize flags from C/C++ flags
     if "CFLAGS" in os.environ:
-        os.environ["CFLAGS"] = filter_sanitizer_flags(os.environ["CFLAGS"]) + " -gdwarf-4"
+        os.environ["CFLAGS"] = (
+            filter_sanitizer_flags(os.environ["CFLAGS"]) + " -gdwarf-4"
+        )
     if "CXXFLAGS" in os.environ:
-        os.environ["CXXFLAGS"] = filter_sanitizer_flags(os.environ["CXXFLAGS"]) + " -gdwarf-4"
+        os.environ["CXXFLAGS"] = (
+            filter_sanitizer_flags(os.environ["CXXFLAGS"]) + " -gdwarf-4"
+        )
 
     # Navigate to the fuzzing crate
     fuzz_dir = Path("crates/dev/fuzz")
