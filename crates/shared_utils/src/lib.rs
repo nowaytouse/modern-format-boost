@@ -64,7 +64,7 @@ macro_rules! impl_rational_from_int_lossless {
         $(
             impl From<$ty> for Rational {
                 fn from(value: $ty) -> Self {
-                    Self(f64::from(value))
+                    Self(value as f64)
                 }
             }
         )+

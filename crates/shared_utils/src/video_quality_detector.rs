@@ -280,7 +280,7 @@ pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualit
         let pixels_per_second = Rational::from(width)
             * Rational::from(height)
             * crate::numeric_cast::f64_to_rational_loud(fps, 1, "fps");
-        if pixels_per_second > 0_i32 {
+        if pixels_per_second > Rational::from(0_i32) {
             let bits_per_second = Rational::from(
                 u32::try_from(effective_bitrate)
                     .expect("Value overflowed or is missing, cannot process ratio"),

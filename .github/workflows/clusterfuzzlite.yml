@@ -33,7 +33,7 @@ jobs:
           language: rust
           storage-repo: https://github.com/${{ github.repository }}
           storage-repo-branch: clusterfuzzlite-data
-          sanitizers: address,undefined
+          sanitizer: address
         env:
           # Disable libjxl internal fuzzers to avoid sanitizer conflicts
           JPEGXL_CMAKE_FLAGS: "-DJPEGXL_ENABLE_FUZZERS=OFF"
@@ -50,7 +50,7 @@ jobs:
           mode: "pr"
           storage-repo: https://github.com/${{ github.repository }}
           storage-repo-branch: clusterfuzzlite-data
-          sanitizers: address,undefined
+          sanitizer: address
         continue-on-error: false
 
   Batch:
@@ -70,7 +70,7 @@ jobs:
           language: rust
           storage-repo: https://github.com/${{ github.repository }}
           storage-repo-branch: clusterfuzzlite-data
-          sanitizers: address,undefined
+          sanitizer: address
         env:
           # Disable libjxl internal fuzzers to avoid sanitizer conflicts
           JPEGXL_CMAKE_FLAGS: "-DJPEGXL_ENABLE_FUZZERS=OFF"
@@ -87,5 +87,5 @@ jobs:
           mode: "batch"
           storage-repo: https://github.com/${{ github.repository }}
           storage-repo-branch: clusterfuzzlite-data
-          sanitizers: address,undefined
+          sanitizer: address
         continue-on-error: false
