@@ -1510,11 +1510,7 @@ fn determine_loss_tolerance(
 /// derived features like temporal/spatial BPP. Returns `None` if the
 /// file cannot be probed.
 #[must_use]
-pub fn sample_from_path(
-    path: &Path,
-    labeled_by: &str,
-    label_override: Option<&str>,
-) -> Option<SampleInsert> {
+fn gather_sample_metadata(path: &Path) -> Option<LoopMeta> {
     let probe = match crate::probe_video(path) {
         Ok(probe) => probe,
         Err(e) => {
@@ -1547,6 +1543,15 @@ pub fn sample_from_path(
             "sample metadata refinement failed; storing probe-level features"
         );
     }
+    Some(meta)
+}
+
+pub fn sample_from_path(
+    path: &Path,
+    labeled_by: &str,
+    label_override: Option<&str>,
+) -> Option<SampleInsert> {
+    let mut meta = gather_sample_metadata(path)?;
 
     let (temporal_bpp, spatial_bpp) = bpp_from_meta(&meta);
 
@@ -1671,36 +1676,10 @@ pub fn calculate_blake3_hex(path: &Path) -> Result<String> {
 /// Compute a 31-dimensional pgvector encoding for a sample using pre-calculated std deviations.
 /// This precisely bakes the weights and normalization terms from the old dynamically computed KNN
 /// into an L2-compatible vector, allowing `PostgreSQL`'s HNSW index to do the heavy lifting!
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(
-    clippy::too_many_lines,
-    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
-)]
-fn compute_sample_vector(sample: &SampleRow, stats_map: &FeatureMap) -> Vec<f32> {
-    let sample_pixels = (f64::from(sample.width) * f64::from(sample.height)).max(1.0);
-
-    let sample_frame_density =
-        crate::numeric_cast::u64_to_f64(sample.frame_count) / sample.duration_secs.max(0.05);
-    let sample_frame_gap =
-        sample.duration_secs / crate::numeric_cast::u64_to_f64(sample.frame_count.max(1));
-
-    let sample_audio_score = if sample.is_native_gif { 1.0_f64 } else { 0.55_f64 };
-    // We normalize fps against a baseline 30fps for the database encoded vector. Target queries will normalize identically.
-    let baseline_fps = 30.0_f64;
-    let sample_fps_score: f64 = (1.0_f64
-        - normalize_log_ratio(sample.fps.max(1e-3), baseline_fps, 1.2))
-    .clamp(0.0_f64, 1.0_f64);
-    let sample_loop_affinity = sample_fps_score
-        .mul_add(
-            0.10,
-            sample
-                .loop_frequency
-                .unwrap_or(0.5_f64)
-                .mul_add(0.45, sample.cadence_score.unwrap_or(0.5_f64) * 0.25)
-                .mul_add(0.20, sample_audio_score),
-        )
-        .clamp(0.0, 1.0);
-
+fn calculate_continuous_features(
+    sample: &SampleRow,
+    stats_map: &FeatureMap,
+) -> (f64, f64, f64, f64, f64, f64, f64, f64) {
     let get_std = |f: &str| stats_map.stats.get(f).map_or(1.0_f64, |s| s.std_dev).max(1e-6);
     let get_w = |f: &str| {
         stats_map
@@ -1711,19 +1690,39 @@ fn compute_sample_vector(sample: &SampleRow, stats_map: &FeatureMap) -> Vec<f32>
             .max(0.01)
     };
 
-    // Continuous standardizations (Scaled by sqrt(weight) since target_query <-> sample squares it)
-    let v_pix = sample_pixels / get_std("pixels") * get_w("pixels").sqrt();
-    let v_dur = sample.duration_secs / get_std("duration") * get_w("duration").sqrt();
-    let v_frm = crate::numeric_cast::u64_to_f64(sample.frame_count) / get_std("frame_count")
-        * get_w("frame_count").sqrt();
-    let v_fsize = crate::numeric_cast::u64_to_f64(sample.file_size_bytes)
-        / get_std("file_size_bytes")
-        * get_w("file_size_bytes").sqrt();
-    let v_dens = sample_frame_density / get_std("density") * get_w("density").sqrt();
-    let v_gap = sample_frame_gap / get_std("gap") * get_w("gap").sqrt();
-    let v_temporal_bpp =
-        sample.temporal_bpp / get_std("temporal_bpp") * get_w("temporal_bpp").sqrt();
-    let v_spatial_bpp = sample.spatial_bpp / get_std("spatial_bpp") * get_w("spatial_bpp").sqrt();
+    let sample_pixels = (f64::from(sample.width) * f64::from(sample.height)).max(1.0);
+    let sample_frame_density =
+        crate::numeric_cast::u64_to_f64(sample.frame_count) / sample.duration_secs.max(0.05);
+    let sample_frame_gap =
+        sample.duration_secs / crate::numeric_cast::u64_to_f64(sample.frame_count.max(1));
+
+    (
+        sample_pixels / get_std("pixels") * get_w("pixels").sqrt(),
+        sample.duration_secs / get_std("duration") * get_w("duration").sqrt(),
+        crate::numeric_cast::u64_to_f64(sample.frame_count) / get_std("frame_count")
+            * get_w("frame_count").sqrt(),
+        crate::numeric_cast::u64_to_f64(sample.file_size_bytes) / get_std("file_size_bytes")
+            * get_w("file_size_bytes").sqrt(),
+        sample_frame_density / get_std("density") * get_w("density").sqrt(),
+        sample_frame_gap / get_std("gap") * get_w("gap").sqrt(),
+        sample.temporal_bpp / get_std("temporal_bpp") * get_w("temporal_bpp").sqrt(),
+        sample.spatial_bpp / get_std("spatial_bpp") * get_w("spatial_bpp").sqrt(),
+    )
+}
+
+fn calculate_discrete_features(
+    sample: &SampleRow,
+    stats_map: &FeatureMap,
+) -> (f64, f64, f64, f64, f64, f64, f64) {
+    let get_std = |f: &str| stats_map.stats.get(f).map_or(1.0_f64, |s| s.std_dev).max(1e-6);
+    let get_w = |f: &str| {
+        stats_map
+            .stats
+            .get(f)
+            .and_then(|s| s.weight)
+            .unwrap_or(1.0_f64)
+            .max(0.01)
+    };
 
     let sample_webp_ratio = crate::numeric_cast::option_f64_loud(
         sample.webp_compression_ratio,
@@ -1736,7 +1735,6 @@ fn compute_sample_vector(sample: &SampleRow, stats_map: &FeatureMap) -> Vec<f32>
         crate::numeric_cast::option_f64_loud(sample.loop_frequency, 0.5, "sample_loop_freq")
             / get_std("loop_freq")
             * get_w("loop_freq").sqrt();
-    let v_laffin = sample_loop_affinity / get_std("loop_affin") * get_w("loop_affin").sqrt();
     let v_cadence =
         crate::numeric_cast::option_f64_loud(sample.cadence_score, 0.5, "sample_cadence")
             / get_std("cadence")
@@ -1758,6 +1756,61 @@ fn compute_sample_vector(sample: &SampleRow, stats_map: &FeatureMap) -> Vec<f32>
         * get_w("aspect").sqrt();
     let v_pal = (sample.palette_size.map_or(256.0_f64, f64::from) / 256.0_f64) * get_w("p_depth").sqrt();
 
+    (v_wratio, v_lfreq, v_cadence, v_payload, v_delay, v_aspect, v_pal)
+}
+
+fn calculate_categorical_features(sample: &SampleRow) -> (f64, f64, f64, f64, f64, f64, f64) {
+    let cat = |val: bool, w: f64| if val { w.sqrt() / 2.0_f64 } else { -w.sqrt() / 2.0_f64 };
+
+    (
+        cat(sample.is_meme_platform, 1.2_f64),
+        cat(sample.is_human_semantic_name, 0.8_f64),
+        cat(sample.is_native_gif, 0.6_f64),
+        cat(sample.is_high_value_source, 1.5_f64),
+        cat(sample.has_transparency, 1.5_f64),
+        cat(sample.has_embedded_icc, 1.2_f64 / 2.0_f64),
+        cat(sample.has_complex_color_profile, 1.2_f64 / 2.0_f64),
+    )
+}
+
+fn compute_sample_vector(sample: &SampleRow, stats_map: &FeatureMap) -> Vec<f32> {
+    let (v_pix, v_dur, v_frm, v_fsize, v_dens, v_gap, v_temporal_bpp, v_spatial_bpp) =
+        calculate_continuous_features(sample, stats_map);
+
+    let (v_wratio, v_lfreq, v_cadence, v_payload, v_delay, v_aspect, v_pal) =
+        calculate_discrete_features(sample, stats_map);
+
+    let (v_meme, v_name, v_native, v_hv, v_trans, v_icc, v_complex) =
+        calculate_categorical_features(sample);
+
+    let get_std = |f: &str| stats_map.stats.get(f).map_or(1.0_f64, |s| s.std_dev).max(1e-6);
+    let get_w = |f: &str| {
+        stats_map
+            .stats
+            .get(f)
+            .and_then(|s| s.weight)
+            .unwrap_or(1.0_f64)
+            .max(0.01)
+    };
+
+    let sample_audio_score = if sample.is_native_gif { 1.0_f64 } else { 0.55_f64 };
+    let baseline_fps = 30.0_f64;
+    let sample_fps_score: f64 = (1.0_f64
+        - normalize_log_ratio(sample.fps.max(1e-3), baseline_fps, 1.2))
+    .clamp(0.0_f64, 1.0_f64);
+    let sample_loop_affinity = sample_fps_score
+        .mul_add(
+            0.10,
+            sample
+                .loop_frequency
+                .unwrap_or(0.5_f64)
+                .mul_add(0.45, sample.cadence_score.unwrap_or(0.5_f64) * 0.25)
+                .mul_add(0.20, sample_audio_score),
+        )
+        .clamp(0.0, 1.0);
+
+    let v_laffin = sample_loop_affinity / get_std("loop_affin") * get_w("loop_affin").sqrt();
+
     let v_pdepth =
         sample.palette_depth.unwrap_or(0.5_f64) / get_std("p_depth") * get_w("p_depth").sqrt();
     let v_mgini = sample.motion_gini.unwrap_or(0.5_f64) / get_std("m_gini") * get_w("m_gini").sqrt();
@@ -1774,21 +1827,6 @@ fn compute_sample_vector(sample: &SampleRow, stats_map: &FeatureMap) -> Vec<f32>
     // Directory context
     let v_directory_meme =
         sample.directory_loop_intent_score.unwrap_or(0.5_f64) * get_w("dir_meme").sqrt();
-
-    // Categorical variables (weight mapped so diff^2 = penalty weight)
-    // If w = penalty weight, v = sqrt(w)/2. If diff is `sqrt(w)`, squared diff is `w`.
-    // Wait: If true is w/2 and false is -w/2, diff is w. Squared diff is w^2!
-    // To get a penalty of W added to the SUM OF SQUARES, we need diff^2 = W. Thus diff = sqrt(W).
-    // So true mapped to sqrt(W)/2, false to -sqrt(W)/2.
-    let cat = |val: bool, w: f64| if val { w.sqrt() / 2.0_f64 } else { -w.sqrt() / 2.0_f64 };
-
-    let v_meme = cat(sample.is_meme_platform, 1.2_f64);
-    let v_name = cat(sample.is_human_semantic_name, 0.8_f64);
-    let v_native = cat(sample.is_native_gif, 0.6_f64);
-    let v_hv = cat(sample.is_high_value_source, 1.5_f64);
-    let v_trans = cat(sample.has_transparency, 1.5_f64);
-    let v_icc = cat(sample.has_embedded_icc, 1.2_f64 / 2.0_f64);
-    let v_complex = cat(sample.has_complex_color_profile, 1.2_f64 / 2.0_f64);
 
     vec![
         crate::numeric_cast::f64_to_f32_lossy(v_pix),

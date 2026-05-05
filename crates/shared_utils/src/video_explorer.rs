@@ -2017,9 +2017,9 @@ impl VideoExplorer {
             "✅ Near-Lossless"
         } else if best_ssim >= 0.999_f64 {
             "✅ Excellent"
-        } else if best_ssim >= 0.99_f64 {
-            "✅ Very Good"
         } else if best_ssim >= 0.98_f64 {
+            "✅ Very Good"
+        } else if best_ssim >= 0.93_f64 {
             "✅ Good"
         } else {
             "✅ Acceptable"
@@ -2961,9 +2961,9 @@ impl VideoExplorer {
     fn ssim_status_label(ssim: f64) -> &'static str {
         if ssim >= 0.999 {
             "Excellent"
-        } else if ssim >= 0.99 {
-            "Very good"
         } else if ssim >= 0.98 {
+            "Very good"
+        } else if ssim >= 0.93 {
             "Good"
         } else {
             "Acceptable"
@@ -4549,11 +4549,11 @@ mod tests {
                 "Near-Lossless"
             } else if ssim >= 0.999_f64 {
                 "Excellent"
-            } else if ssim >= 0.99_f64 {
-                "Very Good"
             } else if ssim >= 0.98_f64 {
+                "Very Good"
+            } else if ssim >= 0.93_f64 {
                 "Good"
-            } else if ssim >= 0.95_f64 {
+            } else if ssim >= 0.89_f64 {
                 "Acceptable"
             } else {
                 "Below threshold"
@@ -4562,10 +4562,10 @@ mod tests {
 
         assert_eq!(grade(0.999_9_f64), "Near-Lossless");
         assert_eq!(grade(0.999_5_f64), "Excellent");
-        assert_eq!(grade(0.995_f64), "Very Good");
-        assert_eq!(grade(0.985_f64), "Good");
-        assert_eq!(grade(0.96_f64), "Acceptable");
-        assert_eq!(grade(0.94_f64), "Below threshold");
+        assert_eq!(grade(0.985_f64), "Very Good");
+        assert_eq!(grade(0.94_f64), "Good");
+        assert_eq!(grade(0.90_f64), "Acceptable");
+        assert_eq!(grade(0.80_f64), "Below threshold");
     }
 
     #[test]

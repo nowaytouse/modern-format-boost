@@ -97,16 +97,18 @@ impl Ssim {
 
     #[must_use]
     pub fn quality_description(&self) -> &'static str {
-        if self.0 >= 0.99_f64 {
-            "Excellent (visually lossless)"
-        } else if self.0 >= 0.95_f64 {
-            "Very Good"
-        } else if self.0 >= 0.90_f64 {
-            "Good"
-        } else if self.0 >= 0.80_f64 {
-            "Fair"
+        if self.0 >= 0.999_f64 {
+            "Identical"
+        } else if self.0 >= 0.98_f64 {
+            "Excellent - virtually lossless"
+        } else if self.0 >= 0.93_f64 {
+            "Very good - minimal visible difference"
+        } else if self.0 >= 0.89_f64 {
+            "Good - acceptable quality"
+        } else if self.0 >= 0.82_f64 {
+            "Fair - noticeable degradation"
         } else {
-            "Poor"
+            "Poor - significant quality loss"
         }
     }
 }
@@ -202,34 +204,40 @@ mod tests {
     #[test]
     fn test_ssim_quality_description() {
         assert_eq!(
-            Ssim::new(0.99_f64)
+            Ssim::new(0.999_f64)
                 .unwrap_or_else(|e| panic!("error: {e:?}"))
                 .quality_description(),
-            "Excellent (visually lossless)"
+            "Identical"
         );
         assert_eq!(
-            Ssim::new(0.95_f64)
+            Ssim::new(0.98_f64)
                 .unwrap_or_else(|e| panic!("error: {e:?}"))
                 .quality_description(),
-            "Very Good"
+            "Excellent - virtually lossless"
         );
         assert_eq!(
-            Ssim::new(0.90_f64)
+            Ssim::new(0.93_f64)
                 .unwrap_or_else(|e| panic!("error: {e:?}"))
                 .quality_description(),
-            "Good"
+            "Very good - minimal visible difference"
         );
         assert_eq!(
-            Ssim::new(0.80_f64)
+            Ssim::new(0.89_f64)
                 .unwrap_or_else(|e| panic!("error: {e:?}"))
                 .quality_description(),
-            "Fair"
+            "Good - acceptable quality"
+        );
+        assert_eq!(
+            Ssim::new(0.82_f64)
+                .unwrap_or_else(|e| panic!("error: {e:?}"))
+                .quality_description(),
+            "Fair - noticeable degradation"
         );
         assert_eq!(
             Ssim::new(0.70_f64)
                 .unwrap_or_else(|e| panic!("error: {e:?}"))
                 .quality_description(),
-            "Poor"
+            "Poor - significant quality loss"
         );
     }
 }

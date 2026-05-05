@@ -5,6 +5,7 @@
 //! - PSNR: Peak Signal-to-Noise Ratio with parallel MSE calculation
 //! - SSIM: Structural Similarity Index with 11x11 Gaussian window (Wang et al. 2004)
 
+use crate::types::ssim::Ssim;
 use image::{DynamicImage, GenericImageView, GrayImage};
 use rayon::prelude::*;
 
@@ -312,25 +313,24 @@ pub fn psnr_quality_description(psnr: f64) -> &'static str {
 
 #[must_use]
 pub fn ssim_quality_description(ssim: f64) -> &'static str {
-    if ssim >= 0.999 {
-        "Identical"
-    } else if ssim >= 0.98 {
-        "Excellent - virtually lossless"
-    } else if ssim >= 0.95 {
-        "Very good - minimal visible difference"
-    } else if ssim >= 0.90 {
-        "Good - acceptable quality"
-    } else if ssim >= 0.85 {
-        "Fair - noticeable degradation"
-    } else {
-        "Poor - significant quality loss"
-    }
+    Ssim::clamped(ssim).quality_description()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use image::RgbImage;
+
+    #[test]
+    fn test_ssim_quality_description() {
+        assert_eq!(ssim_quality_description(1.0), "Identical");
+        assert_eq!(ssim_quality_description(0.999), "Identical");
+        assert_eq!(ssim_quality_description(0.98), "Excellent - virtually lossless");
+        assert_eq!(ssim_quality_description(0.93), "Very good - minimal visible difference");
+        assert_eq!(ssim_quality_description(0.89), "Good - acceptable quality");
+        assert_eq!(ssim_quality_description(0.82), "Fair - noticeable degradation");
+        assert_eq!(ssim_quality_description(0.5), "Poor - significant quality loss");
+    }
 
     #[test]
     fn test_identical_images() {
