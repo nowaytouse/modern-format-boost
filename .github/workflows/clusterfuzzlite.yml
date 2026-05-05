@@ -29,14 +29,12 @@ jobs:
           fetch-depth: 0
       - name: Create output directory symlink
         run: |
-          # Create the actual build-out directory
+          # Create both directories
           mkdir -p ${{ github.workspace }}/build-out
+          mkdir -p ${{ github.workspace }}/out
           
-          # Create symlink from out to build-out
-          ln -sf ${{ github.workspace }}/build-out ${{ github.workspace }}/out
-          
-          # Verify the symlink exists
-          ls -la ${{ github.workspace }}/out
+          # After build, copy targets to both locations
+          echo "Will copy fuzz targets to both build-out and out directories"
       - name: Build Fuzzers
         uses: google/clusterfuzzlite/actions/build_fuzzers@v1
         with:
@@ -47,10 +45,18 @@ jobs:
         env:
           # Disable libjxl internal fuzzers to avoid sanitizer conflicts
           JPEGXL_CMAKE_FLAGS: "-DJPEGXL_ENABLE_FUZZERS=OFF"
-          # ClusterFuzzLite expects fuzz targets in 'out' directory
-          OUT: ${{ github.workspace }}/out
           # Use stable Rust for better compatibility
           RUST_TOOLCHAIN: stable
+      - name: Copy fuzz targets to both directories
+        run: |
+          # Copy from build-out to out directory
+          if [ -d "${{ github.workspace }}/build-out" ]; then
+            cp -r ${{ github.workspace }}/build-out/* ${{ github.workspace }}/out/
+            echo "Copied fuzz targets to out directory"
+            ls -la ${{ github.workspace }}/out/
+          else
+            echo "build-out directory not found"
+          fi
         continue-on-error: false
       - name: Run Fuzzers
         uses: google/clusterfuzzlite/actions/run_fuzzers@v1
@@ -76,14 +82,12 @@ jobs:
           fetch-depth: 0
       - name: Create output directory symlink
         run: |
-          # Create the actual build-out directory
+          # Create both directories
           mkdir -p ${{ github.workspace }}/build-out
+          mkdir -p ${{ github.workspace }}/out
           
-          # Create symlink from out to build-out
-          ln -sf ${{ github.workspace }}/build-out ${{ github.workspace }}/out
-          
-          # Verify the symlink exists
-          ls -la ${{ github.workspace }}/out
+          # After build, copy targets to both locations
+          echo "Will copy fuzz targets to both build-out and out directories"
       - name: Build Fuzzers
         uses: google/clusterfuzzlite/actions/build_fuzzers@v1
         with:
@@ -94,10 +98,18 @@ jobs:
         env:
           # Disable libjxl internal fuzzers to avoid sanitizer conflicts
           JPEGXL_CMAKE_FLAGS: "-DJPEGXL_ENABLE_FUZZERS=OFF"
-          # ClusterFuzzLite expects fuzz targets in 'out' directory
-          OUT: ${{ github.workspace }}/out
           # Use stable Rust for better compatibility
           RUST_TOOLCHAIN: stable
+      - name: Copy fuzz targets to both directories
+        run: |
+          # Copy from build-out to out directory
+          if [ -d "${{ github.workspace }}/build-out" ]; then
+            cp -r ${{ github.workspace }}/build-out/* ${{ github.workspace }}/out/
+            echo "Copied fuzz targets to out directory"
+            ls -la ${{ github.workspace }}/out/
+          else
+            echo "build-out directory not found"
+          fi
         continue-on-error: false
       - name: Run Fuzzers
         uses: google/clusterfuzzlite/actions/run_fuzzers@v1
