@@ -74,6 +74,15 @@ impl std::fmt::Display for Rational {
 }
 
 #[cfg(not(feature = "high-precision"))]
+impl std::ops::Neg for Rational {
+    type Output = Self;
+    
+    fn neg(self) -> Self {
+        Self(-self.0)
+    }
+}
+
+#[cfg(not(feature = "high-precision"))]
 macro_rules! impl_rational_from_int_lossless {
     ($($ty:ty),+ $(,)?) => {
         $(
