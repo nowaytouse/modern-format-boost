@@ -5,6 +5,7 @@
 //! - PSNR: Peak Signal-to-Noise Ratio with parallel MSE calculation
 //! - SSIM: Structural Similarity Index with 11x11 Gaussian window (Wang et al. 2004)
 
+use crate::Rational;
 use crate::types::ssim::Ssim;
 use image::{DynamicImage, GenericImageView, GrayImage};
 use rayon::prelude::*;
@@ -68,7 +69,7 @@ pub fn calculate_psnr(original: &DynamicImage, converted: &DynamicImage) -> Opti
         .sum();
 
     let pixel_count = crate::numeric_cast::usize_to_f64(orig_pixels.len());
-    let mse = mse_sum / (3.0_f64 * pixel_count);
+    let mse = (Rational::from_f64(mse_sum).unwrap_or(Rational::from(0)) / (Rational::from(3) * Rational::from_f64(pixel_count).unwrap_or(Rational::from(1)))).to_f64();
 
     if mse < 1e-10_f64 {
         return Some(f64::INFINITY);
@@ -115,7 +116,7 @@ pub fn calculate_ssim(original: &DynamicImage, converted: &DynamicImage) -> Opti
         return None;
     }
     let count = crate::numeric_cast::usize_to_f64(positions.len());
-    Some(ssim_sum / count)
+    Some((Rational::from_f64(ssim_sum).unwrap_or(Rational::from(0)) / Rational::from_f64(count).unwrap_or(Rational::from(1))).to_f64())
 }
 
 fn calculate_window_ssim(
@@ -205,41 +206,47 @@ fn calculate_ssim_simple(original: &DynamicImage, converted: &DynamicImage) -> O
     let orig_gray = original.to_luma8();
     let conv_gray = converted.to_luma8();
 
-    let n = f64::from(orig_gray.width() * orig_gray.height());
-    if n < 2.0_f64 {
+    let n_u64 = u64::from(orig_gray.width()) * u64::from(orig_gray.height());
+    if n_u64 < 2 {
         return None;
     }
 
     // Single-pass: compute sum_x, total_sum_y, sum_xx, sum_yy, products_sum_xy (no Vec allocation).
-    let mut sum_x = 0.0f64;
-    let mut total_sum_y = 0.0f64;
-    let mut sum_xx = 0.0f64;
-    let mut sum_yy = 0.0f64;
-    let mut products_sum_xy = 0.0f64;
+    let mut sum_x = Rational::from(0);
+    let mut total_sum_y = Rational::from(0);
+    let mut sum_xx = Rational::from(0);
+    let mut sum_yy = Rational::from(0);
+    let mut products_sum_xy = Rational::from(0);
     for (p_orig, p_conv) in orig_gray.pixels().zip(conv_gray.pixels()) {
-        let x = f64::from(p_orig[0]);
-        let y = f64::from(p_conv[0]);
-        sum_x += x;
-        total_sum_y += y;
-        sum_xx = x.mul_add(x, sum_xx);
-        sum_yy = y.mul_add(y, sum_yy);
-        products_sum_xy = x.mul_add(y, products_sum_xy);
+        let x = u64::from(p_orig[0]);
+        let y = u64::from(p_conv[0]);
+        sum_x += Rational::from(x);
+        total_sum_y += Rational::from(y);
+        sum_xx += Rational::from(x * x);
+        sum_yy += Rational::from(y * y);
+        products_sum_xy += Rational::from(x * y);
     }
 
-    let mean_x = sum_x / n;
-    let mean_y = total_sum_y / n;
+    let n = Rational::from(n_u64);
+    let mean_x = sum_x.clone() / n.clone();
+    let mean_y = total_sum_y.clone() / n.clone();
     // Unbiased variance/covariance (Wang et al. sample estimator; consistent with windowed path).
-    let n1 = n - 1.0_f64;
-    let var_x = (n * mean_x).mul_add(-mean_x, sum_xx) / n1;
-    let var_y = (n * mean_y).mul_add(-mean_y, sum_yy) / n1;
-    let cov_xy = (n * mean_x).mul_add(-mean_y, products_sum_xy) / n1;
+    let n1 = n.clone() - Rational::from(1);
+    let var_x = (sum_xx.clone() - (n.clone() * mean_x.clone() * mean_x.clone())) / n1.clone();
+    let var_y = (sum_yy.clone() - (n.clone() * mean_y.clone() * mean_y.clone())) / n1.clone();
+    let cov_xy = (products_sum_xy - (n * mean_x.clone() * mean_y.clone())) / n1;
 
-    let numerator = (2.0 * mean_x).mul_add(mean_y, C1) * 2.0f64.mul_add(cov_xy, C2);
-    let denominator = (mean_y.mul_add(mean_y, mean_x.powi(2)) + C1) * (var_x + var_y + C2);
-    if denominator < 1e-10_f64 {
+    let c1_rat = Rational::from_f64(C1).unwrap_or(Rational::from(0));
+    let c2_rat = Rational::from_f64(C2).unwrap_or(Rational::from(0));
+
+    let numerator = (Rational::from(2) * mean_x.clone() * mean_y.clone() + c1_rat.clone()) * (Rational::from(2) * cov_xy + c2_rat.clone());
+    let denominator = (mean_x * mean_x + mean_y * mean_y + c1_rat) * (var_x + var_y + c2_rat);
+    
+    let den_abs = if denominator > Rational::from(0) { denominator.clone() } else { -denominator.clone() };
+    if den_abs < Rational::from_f64(1e-10).unwrap_or(Rational::from(0)) {
         return Some(1.0);
     }
-    Some(numerator / denominator)
+    Some((numerator / denominator).to_f64())
 }
 
 #[must_use]

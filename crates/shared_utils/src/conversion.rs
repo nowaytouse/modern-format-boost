@@ -27,6 +27,7 @@
 use crate::constants::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE;
 use crate::conversion_types::SelectedCodec;
 use crate::modern_ui::{colors, symbols};
+use crate::Rational;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -1028,9 +1029,7 @@ pub fn format_size_change(input_size: u64, output_size: u64) -> String {
     let reduction = if input_size == 0 {
         0.0_f64
     } else {
-        1.0_f64
-            - (crate::numeric_cast::u64_to_f64(output_size)
-                / crate::numeric_cast::u64_to_f64(input_size))
+        (Rational::from(1) - (Rational::from(output_size) / Rational::from(input_size))).to_f64()
     };
     let reduction_pct = reduction * 100.0_f64;
 
@@ -1049,9 +1048,9 @@ pub fn calculate_size_reduction(input_size: u64, output_size: u64) -> f64 {
     if input_size == 0 {
         return 0.0;
     }
-    (1.0 - (crate::numeric_cast::u64_to_f64(output_size)
-        / crate::numeric_cast::u64_to_f64(input_size)))
-        * 100.0
+    ((Rational::from(1) - (Rational::from(output_size) / Rational::from(input_size)))
+        * Rational::from(100))
+    .to_f64()
 }
 
 /// Pre-conversion check: tests duplicate and output-exists skip conditions.

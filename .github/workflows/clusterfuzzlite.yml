@@ -29,8 +29,14 @@ jobs:
           fetch-depth: 0
       - name: Create output directory symlink
         run: |
-          mkdir -p ${{ github.workspace }}/out
-          ln -sf ${{ github.workspace }}/build-out ${{ github.workspace }}/out || true
+          # Create the actual build-out directory
+          mkdir -p ${{ github.workspace }}/build-out
+          
+          # Create symlink from out to build-out
+          ln -sf ${{ github.workspace }}/build-out ${{ github.workspace }}/out
+          
+          # Verify the symlink exists
+          ls -la ${{ github.workspace }}/out
       - name: Build Fuzzers
         uses: google/clusterfuzzlite/actions/build_fuzzers@v1
         with:
@@ -70,8 +76,14 @@ jobs:
           fetch-depth: 0
       - name: Create output directory symlink
         run: |
-          mkdir -p ${{ github.workspace }}/out
-          ln -sf ${{ github.workspace }}/build-out ${{ github.workspace }}/out || true
+          # Create the actual build-out directory
+          mkdir -p ${{ github.workspace }}/build-out
+          
+          # Create symlink from out to build-out
+          ln -sf ${{ github.workspace }}/build-out ${{ github.workspace }}/out
+          
+          # Verify the symlink exists
+          ls -la ${{ github.workspace }}/out
       - name: Build Fuzzers
         uses: google/clusterfuzzlite/actions/build_fuzzers@v1
         with:

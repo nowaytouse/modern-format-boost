@@ -1347,10 +1347,14 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
                 }
 
                 if strong_signals >= 2 {
-                    let tc_score = (freq_signal + entropy_signal + banding_signal) / 3.0_f64;
+                    let tc_score = (Rational::from_f64(freq_signal).unwrap_or(Rational::from(0))
+                        + Rational::from_f64(entropy_signal).unwrap_or(Rational::from(0))
+                        + Rational::from_f64(banding_signal).unwrap_or(Rational::from(0)))
+                        / Rational::from(3);
+                    let tc_score_f = tc_score.to_f64();
                     return Ok(PngQuantizationAnalysis {
                         is_quantized: true,
-                        confidence: 0.70 + tc_score * 0.15,
+                        confidence: 0.70 + tc_score_f * 0.15,
                         factor_scores: factors,
                         detected_tool: None,
                         explanation: format!(

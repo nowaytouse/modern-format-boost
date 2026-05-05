@@ -12,6 +12,7 @@
 
 use crate::image_analyzer::ImageAnalysis;
 use crate::progress_mode::emit_stderr;
+use crate::Rational;
 use anyhow::{Context, Result};
 use postgres::Client;
 use serde::{Deserialize, Serialize};
@@ -389,8 +390,8 @@ pub fn lookup_image_quality(analysis: &ImageAnalysis) -> Option<QualityScore> {
         return Some(bpp);
     };
 
-    let mut total_weight = 0.0f64;
-    let mut high_weight = 0.0f64;
+    let mut total_weight = Rational::from(0);
+    let mut high_weight = Rational::from(0);
     let total_count = rows.len();
 
     if total_count == 0 {
@@ -413,16 +414,14 @@ pub fn lookup_image_quality(analysis: &ImageAnalysis) -> Option<QualityScore> {
 
     // Factor = Total / (NumClasses * ClassCount)
     let high_factor = if high_total > 0 {
-        crate::numeric_cast::i64_to_f64(total_db_samples)
-            / (2.0_f64 * crate::numeric_cast::i64_to_f64(high_total))
+        Rational::from(total_db_samples) / (Rational::from(2) * Rational::from(high_total))
     } else {
-        1.0_f64
+        Rational::from(1)
     };
     let low_factor = if low_total > 0 {
-        crate::numeric_cast::i64_to_f64(total_db_samples)
-            / (2.0_f64 * crate::numeric_cast::i64_to_f64(low_total))
+        Rational::from(total_db_samples) / (Rational::from(2) * Rational::from(low_total))
     } else {
-        1.0_f64
+        Rational::from(1)
     };
 
     for row in rows {
@@ -430,18 +429,18 @@ pub fn lookup_image_quality(analysis: &ImageAnalysis) -> Option<QualityScore> {
         let distance: f64 = row.get(1);
 
         // Inverse Distance Weighting (IDW)
-        let mut weight = 1.0f64 / (distance + 0.01_f64);
+        let mut weight = Rational::from(1) / (Rational::from_f64(distance).unwrap_or(Rational::from(0)) + Rational::from_f64(0.01).unwrap_or(Rational::from(1)));
 
         if label.contains("high") {
-            weight *= high_factor;
-            high_weight += weight;
+            weight *= high_factor.clone();
+            high_weight += weight.clone();
         } else {
-            weight *= low_factor;
+            weight *= low_factor.clone();
         }
         total_weight += weight;
     }
 
-    if total_weight <= 0.0_f64 {
+    if total_weight.clone() <= Rational::from(0) {
         emit_stderr(
             "  ⚠️ Static image KNN produced zero usable weight — using heuristic score only",
         );
@@ -457,10 +456,10 @@ pub fn lookup_image_quality(analysis: &ImageAnalysis) -> Option<QualityScore> {
         return Some(bpp);
     }
 
-    let knn_score = high_weight / total_weight;
-    let knn_confidence = (crate::numeric_cast::usize_to_f64(total_count)
-        / crate::numeric_cast::i64_to_f64(target_k.max(1)))
-    .min(1.0);
+    let knn_score = (high_weight / total_weight).to_f64();
+    let knn_confidence = (Rational::from(total_count) / Rational::from(target_k.max(1)))
+        .to_f64()
+        .min(1.0);
     let bpp_score = bpp_heuristic_score(analysis);
 
     let record = QualityInferenceRecord {

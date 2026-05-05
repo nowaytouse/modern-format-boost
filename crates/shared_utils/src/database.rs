@@ -920,9 +920,9 @@ fn lookup_similar_samples_inner(
         "KNN balance context"
     );
 
-    let mut weighted_keep = 0.0_f64;
-    let mut total_weight = 0.0_f64;
-    let mut weight_squares_sum = 0.0_f64;
+    let mut weighted_keep = Rational::from(0);
+    let mut total_weight = Rational::from(0);
+    let mut weight_squares_sum = Rational::from(0);
     let mut distances: Vec<f64> = Vec::new();
     let mut loop_durations: Vec<f64> = Vec::new();
 
@@ -932,29 +932,32 @@ fn lookup_similar_samples_inner(
         }
 
         let relative_distance = (*distance - min_distance).max(0.0);
-        let distance_weight = 1.0_f64 / (relative_distance * relative_distance).mul_add(3.0, 1.0);
+        let distance_weight = Rational::from_f64(
+            1.0_f64 / (relative_distance * relative_distance).mul_add(3.0, 1.0),
+        )
+        .unwrap_or_else(|| Rational::from(1));
 
         let class_weight = match label {
-            LabelStatus::LoopStrong => w_quality,
-            LabelStatus::LoopWeak => w_video,
-            _ => 1.0_f64,
+            LabelStatus::LoopStrong => Rational::from_f64(w_quality).unwrap_or_else(|| Rational::from(1)),
+            LabelStatus::LoopWeak => Rational::from_f64(w_video).unwrap_or_else(|| Rational::from(1)),
+            _ => Rational::from(1),
         };
 
         let final_weight = distance_weight * class_weight;
 
         let prob = match label {
-            LabelStatus::LoopStrong => 1.0_f64, // Loop intent (Meme/Sticker/Video sticker)
-            LabelStatus::LoopWeak => 0.0_f64,   // Non-loop intent (Clip/Record/Long Video)
-            _ => 0.5_f64,                       // Uncertain/Fallback
+            LabelStatus::LoopStrong => Rational::from(1), // Loop intent (Meme/Sticker/Video sticker)
+            LabelStatus::LoopWeak => Rational::from(0),   // Non-loop intent (Clip/Record/Long Video)
+            _ => Rational::from((1, 2)),                  // Uncertain/Fallback
         };
 
-        if prob >= 0.5_f64 {
+        if prob >= Rational::from((1, 2)) {
             loop_durations.push(*duration_secs);
         }
 
-        weighted_keep = prob.mul_add(final_weight, weighted_keep);
-        total_weight += final_weight;
-        weight_squares_sum += final_weight * final_weight;
+        weighted_keep += prob * final_weight.clone();
+        total_weight += final_weight.clone();
+        weight_squares_sum += final_weight.clone() * final_weight;
         distances.push(*distance);
     }
 
@@ -962,8 +965,10 @@ fn lookup_similar_samples_inner(
         return Ok(None);
     }
 
-    let local_keep_probability = weighted_keep / total_weight.max(1e-6);
-    let eff_n = effective_sample_size(weight_squares_sum, total_weight);
+    let min_weight = Rational::from_f64(1e-6).unwrap_or(Rational::from(1));
+    let divisor = if total_weight > min_weight { total_weight.clone() } else { min_weight };
+    let local_keep_probability = (weighted_keep / divisor).to_f64();
+    let eff_n = effective_sample_size(weight_squares_sum.to_f64(), total_weight.to_f64());
     // With higher imbalance, require stronger local evidence before moving away from global prior.
     let prior_strength = 2.0f64.mul_add(global_imbalance_ratio.ln_1p(), 3.0);
     let shrink = (eff_n / (eff_n + prior_strength)).clamp(0.0, 1.0);

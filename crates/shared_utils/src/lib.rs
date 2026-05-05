@@ -49,6 +49,21 @@ impl Rational {
     pub const fn to_f64(self) -> f64 {
         self.0
     }
+
+    #[must_use]
+    pub fn mul_add(self, a: Self, b: Self) -> Self {
+        Self(self.0.mul_add(a.0, b.0))
+    }
+
+    #[must_use]
+    pub fn abs(self) -> Self {
+        Self(self.0.abs())
+    }
+
+    #[must_use]
+    pub fn max(self, other: Self) -> Self {
+        Self(self.0.max(other.0))
+    }
 }
 
 #[cfg(not(feature = "high-precision"))]
