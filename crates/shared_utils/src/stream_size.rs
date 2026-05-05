@@ -198,7 +198,7 @@ fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<StreamSiz
         .duration
         .as_ref()
         .and_then(|d| d.parse::<f64>().ok())
-        .unwrap_or(0.0);
+        .expect("Required floating point value missing");
 
     if duration_secs <= 0.0 {
         warn!(

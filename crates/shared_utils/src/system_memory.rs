@@ -193,8 +193,8 @@ fn get_memory_linux() -> (u64, u64) {
             "Missing expected memory fields in /proc/meminfo"
         );
     }
-    let available = mem_available.unwrap_or(0);
-    let total = mem_total.unwrap_or(0);
+    let available = mem_available.expect("Failed to parse integer or missing required value");
+    let total = mem_total.expect("Failed to parse integer or missing required value");
     (available, total)
 }
 

@@ -248,12 +248,16 @@ impl TerminalLogger {
     }
 
     /// Prints size change
+    #[allow(
+        clippy::missing_panics_doc,
+        reason = "Explicit panic on data corruption is intended and documented inline."
+    )]
     pub fn print_size_change(&self, old: u64, new: u64) {
         let old_str = self.format_size(old);
         let new_str = self.format_size(new);
         let percent = if old > 0 {
-            let permille =
-                u32::try_from((u128::from(new) * 10_000) / u128::from(old)).unwrap_or(u32::MAX);
+            let permille = u32::try_from((u128::from(new) * 10_000) / u128::from(old))
+                .expect("Value overflowed or is missing, cannot process ratio");
             (f64::from(permille) / 100.0) - 100.0
         } else {
             0.0

@@ -152,11 +152,19 @@ fn calculate_window_ssim(
     for (i, row) in window.iter().enumerate() {
         for (j, &w) in row.iter().enumerate() {
             mean_x = w.mul_add(
-                buf_x.get(i).and_then(|r| r.get(j)).copied().unwrap_or(0.0),
+                buf_x
+                    .get(i)
+                    .and_then(|r| r.get(j))
+                    .copied()
+                    .expect("Required floating point value missing"),
                 mean_x,
             );
             mean_y = w.mul_add(
-                buf_y.get(i).and_then(|r| r.get(j)).copied().unwrap_or(0.0),
+                buf_y
+                    .get(i)
+                    .and_then(|r| r.get(j))
+                    .copied()
+                    .expect("Required floating point value missing"),
                 mean_y,
             );
         }
@@ -167,8 +175,18 @@ fn calculate_window_ssim(
     let mut cov_xy = 0.0;
     for (i, row) in window.iter().enumerate() {
         for (j, &w) in row.iter().enumerate() {
-            let dx = buf_x.get(i).and_then(|r| r.get(j)).copied().unwrap_or(0.0) - mean_x;
-            let dy = buf_y.get(i).and_then(|r| r.get(j)).copied().unwrap_or(0.0) - mean_y;
+            let dx = buf_x
+                .get(i)
+                .and_then(|r| r.get(j))
+                .copied()
+                .expect("Required floating point value missing")
+                - mean_x;
+            let dy = buf_y
+                .get(i)
+                .and_then(|r| r.get(j))
+                .copied()
+                .expect("Required floating point value missing")
+                - mean_y;
             var_x = (w * dx).mul_add(dx, var_x);
             var_y = (w * dy).mul_add(dy, var_y);
             cov_xy = (w * dx).mul_add(dy, cov_xy);
@@ -223,6 +241,10 @@ fn calculate_ssim_simple(original: &DynamicImage, converted: &DynamicImage) -> O
 }
 
 #[must_use]
+#[allow(
+    clippy::missing_panics_doc,
+    reason = "Explicit panic on data corruption is intended and documented inline."
+)]
 pub fn calculate_ms_ssim(original: &DynamicImage, converted: &DynamicImage) -> Option<f64> {
     let scales = 5;
     let weights = [0.0448, 0.2856, 0.3001, 0.2363, 0.1333];
@@ -234,8 +256,10 @@ pub fn calculate_ms_ssim(original: &DynamicImage, converted: &DynamicImage) -> O
 
     for (i, &weight) in weights.iter().enumerate().take(scales) {
         let (w, h) = orig.dimensions();
-        if w < u32::try_from(WINDOW_SIZE).unwrap_or(u32::MAX)
-            || h < u32::try_from(WINDOW_SIZE).unwrap_or(u32::MAX)
+        if w < u32::try_from(WINDOW_SIZE)
+            .expect("Value overflowed or is missing, cannot process ratio")
+            || h < u32::try_from(WINDOW_SIZE)
+                .expect("Value overflowed or is missing, cannot process ratio")
         {
             break;
         }

@@ -15,7 +15,10 @@ pub const LONG_VIDEO_THRESHOLD: f32 = 300.0;
 
 #[derive(Debug, Clone)]
 // Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(clippy::struct_excessive_bools, reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping.")]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping."
+)]
 pub struct QualityThresholds {
     pub min_ssim: f64,
     pub min_psnr: f64,
@@ -348,6 +351,10 @@ fn is_valid_ssim_value(ssim: f64) -> bool {
 ///
 /// # Errors
 /// Returns an error if the frame-count ffprobe command fails to spawn.
+#[allow(
+    clippy::missing_panics_doc,
+    reason = "Explicit panic on data corruption is intended and documented inline."
+)]
 pub fn check_lossless_integrity(
     input: &Path,
     output: &Path,
@@ -377,8 +384,10 @@ pub fn check_lossless_integrity(
                 // For animated images (GIF/WebP), frame counts often decrease due to
                 // FFmpeg's VFR-to-CFR alignment (merging frames into the same slot).
                 // We pivot to duration validation: if the timeline remains intact, the data is OK.
-                let i_dur = get_video_duration(input).unwrap_or(0.0);
-                let o_dur = get_video_duration(output).unwrap_or(0.0);
+                let i_dur =
+                    get_video_duration(input).expect("Required floating point value missing");
+                let o_dur =
+                    get_video_duration(output).expect("Required floating point value missing");
 
                 let dur_ratio = if i_dur > 0.0 { o_dur / i_dur } else { 1.0 };
 

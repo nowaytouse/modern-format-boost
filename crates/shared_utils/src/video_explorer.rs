@@ -593,7 +593,10 @@ impl ExploreResult {
 /// Quality thresholds and validation flags for an exploration.
 #[derive(Debug, Clone)]
 // Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(clippy::struct_excessive_bools, reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping.")]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping."
+)]
 pub struct QualityThresholds {
     /// Minimum acceptable SSIM score.
     pub min_ssim: f64,
@@ -1419,7 +1422,7 @@ impl VideoExplorer {
             |ssim| format!("SSIM: {ssim:.4}"),
         );
         if let Some(vmaf) = quality.2 {
-            let _ = write!(quality_str, ", MS-SSIM: {vmaf:.2}");
+            write!(quality_str, ", MS-SSIM: {vmaf:.2}").expect("String formatting should not fail");
         }
         log.push(format!(
             "   CRF {}: {} bytes ({:+.1}%), {}",
@@ -1456,7 +1459,10 @@ impl VideoExplorer {
     }
 
     // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-    #[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+    )]
     fn explore_compress_only(&self) -> Result<ExploreResult> {
         let mut log = Vec::new();
         let mut cache: CrfCache<u64> = CrfCache::new();
@@ -1611,7 +1617,10 @@ impl VideoExplorer {
     }
 
     // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-    #[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+    )]
     fn explore_compress_with_quality(&self) -> Result<ExploreResult> {
         let mut log = Vec::new();
         let mut cache: CrfCache<(u64, Option<f64>)> = CrfCache::new();
@@ -1754,7 +1763,10 @@ impl VideoExplorer {
     }
 
     // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-    #[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+    )]
     fn explore_precise_quality_match(&self) -> Result<ExploreResult> {
         let mut log = Vec::new();
         let mut cache: CrfCache<(u64, (Option<f64>, Option<f64>, Option<f64>))> = CrfCache::new();
@@ -2050,7 +2062,10 @@ impl VideoExplorer {
     }
 
     // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-    #[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+    )]
     fn explore_precise_quality_match_with_compression(&self) -> Result<ExploreResult> {
         let mut log = Vec::new();
         let mut size_cache: CrfCache<u64> = CrfCache::new();
@@ -2082,7 +2097,7 @@ impl VideoExplorer {
                     let permille = u32::try_from(
                         (u128::from($size) * 10_000) / u128::from(self.input_size.max(1)),
                     )
-                    .unwrap_or(u32::MAX);
+                    .expect("Value overflowed or is missing, cannot process ratio");
                     (f64::from(permille) / 100.0) - 100.0
                 } else {
                     0.0
@@ -2502,7 +2517,10 @@ impl VideoExplorer {
 
         progress_done();
 
-        let final_size = size_cache.get(boundary_crf).copied().unwrap_or(0);
+        let final_size = size_cache
+            .get(boundary_crf)
+            .copied()
+            .expect("Failed to parse integer or missing required value");
 
         let size_change_pct = self.calc_change_pct(final_size);
         let status = Self::ssim_status_label(ssim);
@@ -2573,7 +2591,10 @@ impl VideoExplorer {
     }
 
     // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-    #[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+    )]
     fn encode_with_ffmpeg(&self, crf: f32) -> Result<u64> {
         use std::io::{BufRead, BufReader, Write};
         use std::process::Stdio;
@@ -2772,7 +2793,8 @@ impl VideoExplorer {
                     last_speed = val.to_string();
                 } else if line == "progress=continue" || line == "progress=end" {
                     let current_secs = f64::from(crate::numeric_cast::f64_to_f32_lossy({
-                        let millis = u32::try_from(last_time_us / 1_000).unwrap_or(u32::MAX);
+                        let millis = u32::try_from(last_time_us / 1_000)
+                            .expect("Value overflowed or is missing, cannot process ratio");
                         f64::from(millis) / 1_000.0
                     }));
                     if let Some(total_duration) = duration_secs.filter(|d| *d > 0.0) {

@@ -299,8 +299,10 @@ fn parse_probe_format(format: &serde_json::Value) -> Result<ProbeFormatInfo, FFp
     Ok(ProbeFormatInfo {
         format_name,
         size,
-        bit_rate: parse_u64_string_field(&format["bit_rate"]).unwrap_or(0),
-        duration: parse_f64_string_field(&format["duration"]).unwrap_or(0.0),
+        bit_rate: parse_u64_string_field(&format["bit_rate"])
+            .expect("Failed to parse integer or missing required value"),
+        duration: parse_f64_string_field(&format["duration"])
+            .expect("Required floating point value missing"),
         tags: collect_string_tags(&format["tags"]),
     })
 }
@@ -321,7 +323,14 @@ fn select_video_stream<'a>(
     }
 
     let has_valid_dimensions = |stream: &serde_json::Value| -> bool {
-        stream["width"].as_u64().unwrap_or(0) > 0 && stream["height"].as_u64().unwrap_or(0) > 0
+        stream["width"]
+            .as_u64()
+            .expect("Failed to parse integer or missing required value")
+            > 0
+            && stream["height"]
+                .as_u64()
+                .expect("Failed to parse integer or missing required value")
+                > 0
     };
 
     let (fallback_index, stream) = if video_streams.len() > 1 {
@@ -330,7 +339,8 @@ fn select_video_stream<'a>(
             .max_by_key(|(_, stream)| {
                 (
                     u8::from(has_valid_dimensions(stream)),
-                    parse_u64_string_field(&stream["nb_frames"]).unwrap_or(0),
+                    parse_u64_string_field(&stream["nb_frames"])
+                        .expect("Failed to parse integer or missing required value"),
                 )
             })
             .ok_or_else(|| FFprobeError::ParseError("No video stream found".to_string()))?
@@ -358,7 +368,8 @@ fn resolve_probe_duration(
     let mut duration = if format_duration > 0.0 {
         format_duration
     } else {
-        parse_f64_string_field(&video_stream["duration"]).unwrap_or(0.0)
+        parse_f64_string_field(&video_stream["duration"])
+            .expect("Required floating point value missing")
     };
 
     // Root fix: ffprobe often reports 0/N/A duration for animated WebP (`webp_pipe`).
@@ -468,8 +479,12 @@ fn parse_video_stream_fields(
         .filter(|value| !value.trim().is_empty())
         .unwrap_or("unknown")
         .to_string();
-    let max_b_frames =
-        u8::try_from(video_stream["has_b_frames"].as_i64().unwrap_or(0)).unwrap_or(0);
+    let max_b_frames = u8::try_from(
+        video_stream["has_b_frames"]
+            .as_i64()
+            .expect("Failed to parse integer or missing required value"),
+    )
+    .expect("Failed to parse integer or missing required value");
 
     Ok(VideoStreamFields {
         video_codec,
@@ -563,7 +578,10 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         bit_rate,
         duration: format_duration,
         tags,
-    } = parse_probe_format(json.get("format").unwrap_or(&serde_json::Value::Null))?;
+    } = parse_probe_format(
+        json.get("format")
+            .expect("Required JSON field missing or malformed"),
+    )?;
     let streams = json
         .get("streams")
         .and_then(serde_json::Value::as_array)
@@ -604,7 +622,10 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         is_variable_frame_rate: video.is_variable_frame_rate,
         stream_index,
         tags,
-        loop_count: extract_loop_count(json.get("format").unwrap_or(&serde_json::Value::Null)),
+        loop_count: extract_loop_count(
+            json.get("format")
+                .expect("Required JSON field missing or malformed"),
+        ),
         frame_types: extract_frame_types(&json),
         pts_deltas: extract_pts_deltas(&json),
         pkt_sizes: extract_pkt_sizes(&json),
@@ -739,11 +760,16 @@ fn extract_hdr_side_data(json: &serde_json::Value) -> FFprobeHdrInfo {
 
             // Parse DOVI configuration record fields
             if let Some(profile) = sd["dv_profile"].as_u64() {
-                dolby_vision.profile = Some(u8::try_from(profile).unwrap_or(0));
+                dolby_vision.profile = Some(
+                    u8::try_from(profile)
+                        .expect("Failed to parse integer or missing required value"),
+                );
             }
             if let Some(compat_id) = sd["dv_bl_signal_compatibility_id"].as_u64() {
-                dolby_vision.bl_signal_compatibility_id =
-                    Some(u8::try_from(compat_id).unwrap_or(0));
+                dolby_vision.bl_signal_compatibility_id = Some(
+                    u8::try_from(compat_id)
+                        .expect("Failed to parse integer or missing required value"),
+                );
             }
         }
 
@@ -1146,7 +1172,7 @@ mod tests {
         let loop_count = extract_loop_count(
             json_with_loop
                 .get("format")
-                .unwrap_or(&serde_json::Value::Null),
+                .expect("Required JSON field missing or malformed"),
         );
         assert_eq!(loop_count, Some(5));
 
@@ -1158,7 +1184,7 @@ mod tests {
         let loop_count = extract_loop_count(
             json_no_loop
                 .get("format")
-                .unwrap_or(&serde_json::Value::Null),
+                .expect("Required JSON field missing or malformed"),
         );
         assert_eq!(loop_count, None);
     }

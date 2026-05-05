@@ -58,7 +58,7 @@ impl<'a> VideoConversionPipeline<'a> {
     pub fn run(mut self) -> Result<ConversionOutput> {
         self.initialize()?;
 
-        if let Some(output) = self.handle_initial_skips() {
+        if let Some(output) = self.handle_initial_skips()? {
             return Ok(output);
         }
 
@@ -86,21 +86,22 @@ impl<'a> VideoConversionPipeline<'a> {
         Ok(())
     }
 
-    fn handle_initial_skips(&self) -> Option<ConversionOutput> {
+    fn handle_initial_skips(&self) -> Result<Option<ConversionOutput>> {
         if self.config.apple_compat() && shared_utils::is_live_photo(self.input) {
             let reason = "Live Photo detected in Apple compat mode";
             shared_utils::progress_mode::video_skipped(reason);
 
             let file_size = std::fs::metadata(self.input).map_or(0, |m| m.len());
 
-            let _ = shared_utils::copy_on_skip_or_fail(
+            shared_utils::copy_on_skip_or_fail(
                 self.input,
                 self.config.output_dir.as_deref(),
                 self.config.base_dir.as_deref(),
                 false,
-            );
+            )
+            .map_err(|e| VidQualityError::ConversionError(e.to_string()))?;
 
-            return Some(ConversionOutput {
+            return Ok(Some(ConversionOutput {
                 input_path: self.input.display().to_string(),
                 output_path: String::new(),
                 strategy: ConversionStrategy {
@@ -119,9 +120,9 @@ impl<'a> VideoConversionPipeline<'a> {
                 final_crf: 0.0,
                 exploration_attempts: 0,
                 blake3: None,
-            });
+            }));
         }
-        None
+        Ok(None)
     }
 
     fn analyze_and_plan(&mut self) -> Result<()> {
@@ -293,7 +294,7 @@ impl<'a> VideoConversionPipeline<'a> {
         Ok(ExecutionMetrics {
             output_size: explore_result.output_size,
             final_crf: explore_result.optimal_crf,
-            attempts: u8::try_from(explore_result.iterations).expect("exploration iterations exceeded 255 - infinite loop detected"),
+            attempts: shared_utils::numeric_cast::u32_to_u8_sat(explore_result.iterations),
             explore_result: Some(explore_result),
         })
     }

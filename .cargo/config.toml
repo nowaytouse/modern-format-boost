@@ -17,6 +17,10 @@ rustflags = [
 [env]
 MACOSX_DEPLOYMENT_TARGET = "26.0"
 CMAKE_PREFIX_PATH = "/opt/homebrew/opt/aom:/opt/homebrew/opt/libjpeg-turbo:/opt/homebrew"
+C_INCLUDE_PATH = "/opt/homebrew/include:/usr/local/include"
+CPLUS_INCLUDE_PATH = "/opt/homebrew/include:/usr/local/include"
+LIBRARY_PATH = "/opt/homebrew/lib:/usr/local/lib"
+PKG_CONFIG_PATH = "/opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig"
 
 # macOS ARM64 (Apple Silicon) optimizations
 [target.aarch64-apple-darwin]

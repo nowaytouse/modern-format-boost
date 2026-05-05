@@ -211,12 +211,12 @@ fn probe_video_streams(input: &Path) -> Vec<VideoStreamInfo> {
                 .get("index")
                 .and_then(serde_json::Value::as_u64)
                 .and_then(|v| usize::try_from(v).ok())
-                .unwrap_or(0),
+                .expect("Failed to parse integer or missing required value"),
             frame_count: stream
                 .get("nb_frames")
                 .and_then(|v| v.as_str())
                 .and_then(|value| value.parse::<u64>().ok())
-                .unwrap_or(0),
+                .expect("Failed to parse integer or missing required value"),
             pix_fmt: stream
                 .get("pix_fmt")
                 .and_then(|v| v.as_str())
@@ -327,7 +327,10 @@ fn extract_frames_for_gifski(
 
 /// Extract frames from animated WebP using webpmux and create APNG with correct timing
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Result<()> {
     use std::fmt::Write;
     // Create temporary directory for frames
@@ -361,7 +364,10 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
     for line in info_str.lines() {
         if line.contains("Number of frames:") {
             if let Some(count_str) = line.split(':').nth(1) {
-                frame_count = count_str.trim().parse::<u32>().unwrap_or(0);
+                frame_count = count_str
+                    .trim()
+                    .parse::<u32>()
+                    .expect("Failed to parse integer or missing required value");
             }
         } else if line.contains("No.: width height") {
             parsing_frames = true;
@@ -384,7 +390,10 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
     // Fallback if mismatch: pad missing frames with the last parsed delay so
     // the animation keeps local continuity near the tail, rather than copying
     // the first frame's delay across every unparsed frame.
-    if u32::try_from(frame_durations_ms.len()).unwrap_or(u32::MAX) != frame_count {
+    if u32::try_from(frame_durations_ms.len())
+        .expect("Value overflowed or is missing, cannot process ratio")
+        != frame_count
+    {
         let pad = *frame_durations_ms.last().unwrap_or(&100);
         frame_durations_ms.resize(usize::try_from(frame_count).unwrap_or(usize::MAX), pad);
     }
@@ -666,7 +675,10 @@ fn skipped_static_animated(input: &Path, options: &ConvertOptions) -> Conversion
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 /// Convert animated image to MP4 (HEVC or AV1).
 ///
 /// # Errors
@@ -1035,7 +1047,10 @@ pub fn convert_to_mp4(input: &Path, options: &ConvertOptions) -> Result<Conversi
 ///
 /// # Errors
 /// Returns an error if matching or encoding fails.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 pub fn convert_to_mp4_matched(
     input: &Path,
     options: &ConvertOptions,
@@ -1598,7 +1613,10 @@ pub fn convert_to_mp4_matched(
 /// # Errors
 /// Returns an error if encoding fails.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result<ConversionResult> {
     eprintln!(
         "⚠️  Mathematical lossless encoding (HEVC) - this will be SLOW and produce large files!"
@@ -1720,7 +1738,10 @@ pub fn convert_to_mkv_lossless(input: &Path, options: &ConvertOptions) -> Result
 ///
 /// # Errors
 /// Returns an error if encoding fails.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 pub fn convert_to_gif_apple_compat(
     input: &Path,
     options: &ConvertOptions,

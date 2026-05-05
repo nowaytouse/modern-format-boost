@@ -327,7 +327,10 @@ fn stream_size_change_pct(output_size: u64, input_size: u64) -> f64 {
 /// Arguments for GPU-accelerated CRF exploration.
 #[derive(Debug, Clone)]
 // Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(clippy::struct_excessive_bools, reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping.")]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping."
+)]
 pub struct GpuSearchArgs<'a> {
     pub input: &'a Path,
     pub output: &'a Path,
@@ -349,7 +352,10 @@ pub struct GpuSearchArgs<'a> {
 /// A request for a GPU-backed video quality exploration.
 #[derive(Debug, Clone)]
 // Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(clippy::struct_excessive_bools, reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping.")]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping."
+)]
 pub struct GpuSearchRequest {
     pub input: std::path::PathBuf,
     pub output: std::path::PathBuf,
@@ -368,7 +374,10 @@ pub struct GpuSearchRequest {
 
 /// Arguments for CPU fine-tuning phase.
 // Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(clippy::struct_excessive_bools, reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping.")]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping."
+)]
 struct FineTuneArgs<'a> {
     input: &'a Path,
     output: &'a Path,
@@ -448,7 +457,14 @@ pub(crate) fn format_quality_check_line(
 /// # Errors
 /// Returns an error if exploration fails.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
+#[allow(
+    clippy::missing_panics_doc,
+    reason = "Explicit panic on data corruption is intended and documented inline."
+)]
 pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<ExploreResult> {
     use crate::gpu_accel::{CrfMapping, GpuAccel, GpuCoarseConfig};
     let GpuSearchArgs {
@@ -629,7 +645,9 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
         let (final_crf, final_size) = if gpu_result.found_boundary {
             (
                 gpu_result.gpu_boundary_crf,
-                gpu_result.gpu_best_size.unwrap_or(0),
+                gpu_result
+                    .gpu_best_size
+                    .expect("Failed to parse integer or missing required value"),
             )
         } else {
             (gpu_config.max_crf, input_size)
@@ -1553,7 +1571,10 @@ fn animated_exploration_three_segment_vf_prefix(dur: f64, ultimate_mode: bool) -
 #[must_use]
 fn merge_vf_with_animated_exploration_prefix(vf_args: &[String], prefix: &str) -> Vec<String> {
     if vf_args.len() >= 2 && vf_args.first().is_some_and(|s| s == "-vf") {
-        let merged = format!("{prefix},{}", vf_args.get(1).unwrap_or(&String::new()));
+        let merged = format!(
+            "{prefix},{}",
+            vf_args.get(1).expect("Required string property missing")
+        );
         vec!["-vf".to_string(), merged]
     } else {
         vec!["-vf".to_string(), prefix.to_string()]
@@ -1561,7 +1582,10 @@ fn merge_vf_with_animated_exploration_prefix(vf_args: &[String], prefix: &str) -
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 fn cpu_fine_tune_from_gpu_boundary(
     args: FineTuneArgs<'_>,
     tracking: &mut TrackingState,
@@ -1675,7 +1699,9 @@ fn cpu_fine_tune_from_gpu_boundary(
                 .and_then(|info| info.audio.codec.as_ref())
                 .map(|s| s.to_lowercase())
                 .unwrap_or_default();
-            let audio_bitrate = probe_info.and_then(|info| info.audio.bit_rate).unwrap_or(0);
+            let audio_bitrate = probe_info
+                .and_then(|info| info.audio.bit_rate)
+                .expect("Failed to parse integer or missing required value");
 
             let incompatible = audio_codec.contains("opus")
                 || audio_codec.contains("vorbis")
@@ -1795,7 +1821,8 @@ fn cpu_fine_tune_from_gpu_boundary(
                         if !updated.is_empty() {
                             updated.push(':');
                         }
-                        let _ = write!(updated, "master-display={md}");
+                        write!(updated, "master-display={md}")
+                            .expect("String formatting should not fail");
                     }
                 }
                 if let Some(ref cll) = probe.hdr.max_cll {
@@ -1803,7 +1830,8 @@ fn cpu_fine_tune_from_gpu_boundary(
                         if !updated.is_empty() {
                             updated.push(':');
                         }
-                        let _ = write!(updated, "max-cll={cll}");
+                        write!(updated, "max-cll={cll}")
+                            .expect("String formatting should not fail");
                     }
                 }
                 if updated != existing {
@@ -2516,7 +2544,9 @@ fn cpu_fine_tune_from_gpu_boundary(
                     if let (Some(v), Some((u, v_score))) = (vmaf, psnr_uv) {
                         metrics_measured = true;
                         let chroma_avg = f64::midpoint(u, v_score);
-                        let prev_best_vmaf = tracking.best_vmaf.unwrap_or(0.0);
+                        let prev_best_vmaf = tracking
+                            .best_vmaf
+                            .expect("Required floating point value missing");
                         let prev_best_psnr = tracking
                             .best_psnr_uv
                             .map_or(0.0, |(u, v)| f64::midpoint(u, v));
@@ -2742,12 +2772,17 @@ fn cpu_fine_tune_from_gpu_boundary(
                 wall_hits += 1;
 
                 let _total_file_diff = crate::format_size_diff(
-                    i64::try_from(size).unwrap_or(0) - i64::try_from(input_size).unwrap_or(0),
+                    i64::try_from(size).expect("Failed to parse integer or missing required value")
+                        - i64::try_from(input_size)
+                            .expect("Failed to parse integer or missing required value"),
                 );
 
                 // Calculate new_step first for phase_info
-                let curve_step =
-                    initial_step * DECAY_FACTOR.powi(i32::try_from(wall_hits).unwrap_or(0));
+                let curve_step = initial_step
+                    * DECAY_FACTOR.powi(
+                        i32::try_from(wall_hits)
+                            .expect("Failed to parse integer or missing required value"),
+                    );
                 let new_step = if curve_step < 1.0 {
                     MIN_STEP
                 } else {
@@ -3127,7 +3162,9 @@ fn cpu_fine_tune_from_gpu_boundary(
                     let chroma_avg = f64::midpoint(u, v_score);
 
                     // Track best metrics to check for improvement
-                    let prev_best_vmaf = tracking.best_vmaf.unwrap_or(0.0);
+                    let prev_best_vmaf = tracking
+                        .best_vmaf
+                        .expect("Required floating point value missing");
                     let prev_best_psnr = tracking
                         .best_psnr_uv
                         .map_or(0.0, |(u, v)| f64::midpoint(u, v));
@@ -3331,7 +3368,9 @@ fn cpu_fine_tune_from_gpu_boundary(
 
                     if let (Some(v), Some((u, v_score))) = (vmaf, psnr_uv) {
                         let chroma_avg = f64::midpoint(u, v_score);
-                        let prev_best_vmaf = tracking.best_vmaf.unwrap_or(0.0);
+                        let prev_best_vmaf = tracking
+                            .best_vmaf
+                            .expect("Required floating point value missing");
                         let prev_best_psnr = tracking
                             .best_psnr_uv
                             .map_or(0.0, |(u, v)| f64::midpoint(u, v));
@@ -3647,7 +3686,8 @@ fn cpu_fine_tune_from_gpu_boundary(
                 );
 
                 let mut current_best = best;
-                let mut current_best_size = best_size.unwrap_or(0);
+                let mut current_best_size =
+                    best_size.expect("Failed to parse integer or missing required value");
                 let mut test_crf = best - current_step;
                 let mut fine_failures = 0;
                 let mut last_size_pct = if input_size > 0 {
@@ -4109,7 +4149,9 @@ fn cpu_fine_tune_from_gpu_boundary(
                         final_crf = test_crf;
                         final_full_size = test_size;
                         // Throw away the backup (we have a new best)
-                        let _ = std::fs::remove_file(&backup_path);
+                        std::fs::remove_file(&backup_path).unwrap_or_else(|e| {
+                            tracing::warn!("Non-fatal cleanup/fallback operation failed: {}", e)
+                        });
                         consecutive_failures = 0; // Reset patience
                     } else {
                         consecutive_failures += 1;
@@ -4131,7 +4173,9 @@ fn cpu_fine_tune_from_gpu_boundary(
                                 RESET
                             );
                         }
-                        let _ = std::fs::remove_file(output); // remove the oversized one
+                        std::fs::remove_file(output).unwrap_or_else(|e| {
+                            tracing::warn!("Non-fatal cleanup/fallback operation failed: {}", e)
+                        }); // remove the oversized one
                         let _ = std::fs::rename(&backup_path, output); // restore best
                     }
 
@@ -4148,7 +4192,9 @@ fn cpu_fine_tune_from_gpu_boundary(
                         e,
                         RESET
                     );
-                    let _ = std::fs::remove_file(output);
+                    std::fs::remove_file(output).unwrap_or_else(|e| {
+                        tracing::warn!("Non-fatal cleanup/fallback operation failed: {}", e)
+                    });
                     let _ = std::fs::rename(&backup_path, output);
                     break;
                 }

@@ -103,7 +103,10 @@ where
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 fn process_directory<F, R>(config: &CliRunnerConfig, converter: F) -> Result<()>
 where
     F: Fn(&Path) -> Result<R> + Sync,
@@ -661,7 +664,9 @@ where
         info!(
             "   Output: {} ({} bytes)",
             out_path,
-            result.output_size().unwrap_or(0)
+            result
+                .output_size()
+                .expect("Failed to parse integer or missing required value")
         );
     }
     info!("   Result: {}", result.message());

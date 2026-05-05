@@ -12,7 +12,10 @@ use tracing::debug;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 // Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(clippy::struct_excessive_bools, reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping.")]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping."
+)]
 pub struct HeicAnalysis {
     pub bit_depth: u8,
     pub codec: String,
@@ -44,7 +47,14 @@ pub struct HeicAnalysis {
 /// # Errors
 /// Returns an error if the file cannot be read or libheif fails.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
+#[allow(
+    clippy::missing_panics_doc,
+    reason = "Explicit panic on data corruption is intended and documented inline."
+)]
 pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
     // Try find_box_data_recursive first, then fallback to direct magic byte search
     // This handles cases where boxes are inside full boxes (e.g. meta box with version/flags)
@@ -78,8 +88,14 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
         debug!("   hvcc_data.len: {}", hvcc_data.len());
 
         if hvcc_data.len() >= 20 {
-            let profile_idc = *hvcc_data.get(1).unwrap_or(&0) & 0x1F;
-            let chroma_format_idc = *hvcc_data.get(16).unwrap_or(&0) & 0x03;
+            let profile_idc = *hvcc_data
+                .get(1)
+                .expect("Required metadata byte missing (out of bounds)")
+                & 0x1F;
+            let chroma_format_idc = *hvcc_data
+                .get(16)
+                .expect("Required metadata byte missing (out of bounds)")
+                & 0x03;
 
             debug!(
                 "   profile_idc: {}, chroma_format_idc: {}",
@@ -88,18 +104,38 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
 
             // Bytes 2-5: general_profile_compatibility_flags (32 bits)
             let compat_flags = u32::from_be_bytes([
-                *hvcc_data.get(2).unwrap_or(&0),
-                *hvcc_data.get(3).unwrap_or(&0),
-                *hvcc_data.get(4).unwrap_or(&0),
-                *hvcc_data.get(5).unwrap_or(&0),
+                *hvcc_data
+                    .get(2)
+                    .expect("Required metadata byte missing (out of bounds)"),
+                *hvcc_data
+                    .get(3)
+                    .expect("Required metadata byte missing (out of bounds)"),
+                *hvcc_data
+                    .get(4)
+                    .expect("Required metadata byte missing (out of bounds)"),
+                *hvcc_data
+                    .get(5)
+                    .expect("Required metadata byte missing (out of bounds)"),
             ]);
 
             // HEVCDecoderConfigurationRecord fixed fields:
             //   [16] chromaFormatIdc (low 2 bits)
             //   [17] bitDepthLumaMinus8 (high 3 bits) + reserved (2 bits) + bitDepthChromaMinus8 (low 3 bits)
-            let chroma_format_idc = *hvcc_data.get(16).unwrap_or(&0) & 0x03; // 0=mono, 1=4:2:0, 2=4:2:2, 3=4:4:4
-            let bit_depth_luma = ((*hvcc_data.get(17).unwrap_or(&0) >> 5) & 0x07) + 8;
-            let bit_depth_chroma = (*hvcc_data.get(17).unwrap_or(&0) & 0x07) + 8;
+            let chroma_format_idc = *hvcc_data
+                .get(16)
+                .expect("Required metadata byte missing (out of bounds)")
+                & 0x03; // 0=mono, 1=4:2:0, 2=4:2:2, 3=4:4:4
+            let bit_depth_luma = ((*hvcc_data
+                .get(17)
+                .expect("Required metadata byte missing (out of bounds)")
+                >> 5)
+                & 0x07)
+                + 8;
+            let bit_depth_chroma = (*hvcc_data
+                .get(17)
+                .expect("Required metadata byte missing (out of bounds)")
+                & 0x07)
+                + 8;
 
             // Dimension 0: chromaFormatIdc — direct chroma subsampling
             // 4:2:0 (1) or 4:2:2 (2) → definitively lossy (HEVC lossless requires 4:4:4)
@@ -122,8 +158,12 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
                     .and_then(|colr_data| {
                         if colr_data.len() >= 11 && colr_data.get(0..4) == Some(b"nclx") {
                             Some(u16::from_be_bytes([
-                                *colr_data.get(8).unwrap_or(&0),
-                                *colr_data.get(9).unwrap_or(&0),
+                                *colr_data
+                                    .get(8)
+                                    .expect("Required metadata byte missing (out of bounds)"),
+                                *colr_data
+                                    .get(9)
+                                    .expect("Required metadata byte missing (out of bounds)"),
                             ]))
                         } else {
                             None
@@ -143,17 +183,21 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
                             None
                         } else {
                             let num_ch = crate::numeric_cast::u8_to_usize_sat(
-                                *pixi_data.first().unwrap_or(&0),
+                                *pixi_data
+                                    .first()
+                                    .expect("Required metadata byte missing (out of bounds)"),
                             );
                             if num_ch > 0 && pixi_data.len() > num_ch {
                                 Some(
                                     pixi_data
                                         .get(1..=num_ch)
-                                        .unwrap_or(&[])
+                                        .expect("Required byte slice missing (out of bounds)")
                                         .iter()
                                         .copied()
                                         .max()
-                                        .unwrap_or(0),
+                                        .expect(
+                                            "Failed to parse integer or missing required value",
+                                        ),
                                 )
                             } else {
                                 None
@@ -224,16 +268,27 @@ fn parse_sps_for_transquant_bypass_flag(hvcc_data: &[u8]) -> Option<bool> {
     if hvcc_data.len() < 25 {
         return None;
     }
-    let num_nalu_arrays = crate::numeric_cast::u8_to_usize_sat(*hvcc_data.get(24).unwrap_or(&0));
+    let num_nalu_arrays = crate::numeric_cast::u8_to_usize_sat(
+        *hvcc_data
+            .get(24)
+            .expect("Required metadata byte missing (out of bounds)"),
+    );
     let mut pos = 25;
     for _ in 0..num_nalu_arrays {
         if pos + 3 > hvcc_data.len() {
             return None;
         }
-        let nal_unit_type = *hvcc_data.get(pos).unwrap_or(&0) & 0x3F;
+        let nal_unit_type = *hvcc_data
+            .get(pos)
+            .expect("Required metadata byte missing (out of bounds)")
+            & 0x3F;
         let num_nalus = crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([
-            *hvcc_data.get(pos + 1).unwrap_or(&0),
-            *hvcc_data.get(pos + 2).unwrap_or(&0),
+            *hvcc_data
+                .get(pos + 1)
+                .expect("Required metadata byte missing (out of bounds)"),
+            *hvcc_data
+                .get(pos + 2)
+                .expect("Required metadata byte missing (out of bounds)"),
         ]));
         pos += 3;
         if nal_unit_type == 33 {
@@ -242,14 +297,20 @@ fn parse_sps_for_transquant_bypass_flag(hvcc_data: &[u8]) -> Option<bool> {
                     return None;
                 }
                 let nal_unit_length = crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([
-                    *hvcc_data.get(pos).unwrap_or(&0),
-                    *hvcc_data.get(pos + 1).unwrap_or(&0),
+                    *hvcc_data
+                        .get(pos)
+                        .expect("Required metadata byte missing (out of bounds)"),
+                    *hvcc_data
+                        .get(pos + 1)
+                        .expect("Required metadata byte missing (out of bounds)"),
                 ]));
                 pos += 2;
                 if pos + nal_unit_length > hvcc_data.len() {
                     return None;
                 }
-                let sps_payload = hvcc_data.get(pos..pos + nal_unit_length).unwrap_or(&[]);
+                let sps_payload = hvcc_data
+                    .get(pos..pos + nal_unit_length)
+                    .expect("Required byte slice missing (out of bounds)");
                 pos += nal_unit_length;
                 if sps_payload.len() < 3 {
                     continue;
@@ -262,8 +323,12 @@ fn parse_sps_for_transquant_bypass_flag(hvcc_data: &[u8]) -> Option<bool> {
                     return None;
                 }
                 let nal_unit_length = crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([
-                    *hvcc_data.get(pos).unwrap_or(&0),
-                    *hvcc_data.get(pos + 1).unwrap_or(&0),
+                    *hvcc_data
+                        .get(pos)
+                        .expect("Required metadata byte missing (out of bounds)"),
+                    *hvcc_data
+                        .get(pos + 1)
+                        .expect("Required metadata byte missing (out of bounds)"),
                 ]));
                 pos += 2 + nal_unit_length;
             }
@@ -290,7 +355,12 @@ fn parse_sps_rbsp_for_transquant_bypass(sps_payload: &[u8]) -> Option<bool> {
                 let byte_pos = (self.bit_pos + i) / 8;
                 let bit_offset = 7 - ((self.bit_pos + i) % 8);
                 if byte_pos < self.data.len() {
-                    let bit = (*self.data.get(byte_pos).unwrap_or(&0) >> bit_offset) & 1;
+                    let bit = (*self
+                        .data
+                        .get(byte_pos)
+                        .expect("Required metadata byte missing (out of bounds)")
+                        >> bit_offset)
+                        & 1;
                     value = (value << 1) | u32::from(bit);
                 }
             }
@@ -318,7 +388,9 @@ fn parse_sps_rbsp_for_transquant_bypass(sps_payload: &[u8]) -> Option<bool> {
     if sps_payload.len() < 3 {
         return None;
     }
-    let rbsp = sps_payload.get(2..).unwrap_or(&[]);
+    let rbsp = sps_payload
+        .get(2..)
+        .expect("Required byte slice missing (out of bounds)");
     let mut reader = BitReader::new(rbsp);
     reader.read_bits(4)?; // sps_video_parameter_set_id
     let max_sub_layers = reader.read_bits(3)?;
@@ -374,7 +446,14 @@ fn parse_sps_rbsp_for_transquant_bypass(sps_payload: &[u8]) -> Option<bool> {
 /// # Errors
 /// Returns an error if the file is corrupted or analysis fails.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
+#[allow(
+    clippy::missing_panics_doc,
+    reason = "Explicit panic on data corruption is intended and documented inline."
+)]
 pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)> {
     let lib_heif = LibHeif::new();
 
@@ -421,7 +500,9 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
                 // Fallback 1: Try to find ftyp box manually
                 if let Some(pos) = data.windows(4).position(|w| w == b"ftyp") {
                     if pos >= 4 {
-                        let sliced_data = data.get(pos - 4..).unwrap_or(&[]);
+                        let sliced_data = data
+                            .get(pos - 4..)
+                            .expect("Required byte slice missing (out of bounds)");
                         if matches!(ctx.read_bytes(sliced_data), Ok(())) {
                             return Ok(());
                         }
@@ -483,12 +564,20 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
     if let Some(colr_data) = find_box_data_recursive(&data, *b"colr") {
         if colr_data.len() >= 11 && colr_data.get(0..4) == Some(b"nclx") {
             let primaries = u16::from_be_bytes([
-                *colr_data.get(4).unwrap_or(&0),
-                *colr_data.get(5).unwrap_or(&0),
+                *colr_data
+                    .get(4)
+                    .expect("Required metadata byte missing (out of bounds)"),
+                *colr_data
+                    .get(5)
+                    .expect("Required metadata byte missing (out of bounds)"),
             ]);
             let transfer = u16::from_be_bytes([
-                *colr_data.get(6).unwrap_or(&0),
-                *colr_data.get(7).unwrap_or(&0),
+                *colr_data
+                    .get(6)
+                    .expect("Required metadata byte missing (out of bounds)"),
+                *colr_data
+                    .get(7)
+                    .expect("Required metadata byte missing (out of bounds)"),
             ]);
             if primaries == 9 && (transfer == 16 || transfer == 18) {
                 is_hdr = true;
@@ -597,6 +686,10 @@ pub fn is_heic_file(path: &Path) -> bool {
 ///
 /// Returns `None` if no XMP data is found.
 #[must_use]
+#[allow(
+    clippy::missing_panics_doc,
+    reason = "Explicit panic on data corruption is intended and documented inline."
+)]
 pub fn extract_xmp_from_heic_data(data: &[u8]) -> Option<String> {
     // 🛡️ Security: Limit total data size to 100MB for XMP scanning to prevent timeouts
     if data.len() > 100 * 1024 * 1024 {
@@ -609,9 +702,12 @@ pub fn extract_xmp_from_heic_data(data: &[u8]) -> Option<String> {
         if let Some(start) = data.windows(marker.len()).position(|w| w == *marker) {
             // XMP is always UTF-8; grab up to 64 KB from the start marker
             let end = (start + 65536).min(data.len());
-            return String::from_utf8_lossy(data.get(start..end).unwrap_or(&[]))
-                .into_owned()
-                .into();
+            return String::from_utf8_lossy(
+                data.get(start..end)
+                    .expect("Required byte slice missing (out of bounds)"),
+            )
+            .into_owned()
+            .into();
         }
     }
     None
@@ -624,10 +720,18 @@ fn find_box_payload_by_magic(data: &[u8], box_type: [u8; 4]) -> Option<&[u8]> {
     if let Some(pos) = data.windows(4).position(|w| w == box_type) {
         if pos >= 4 {
             let size = crate::numeric_cast::u32_to_usize_sat(u32::from_be_bytes([
-                *data.get(pos - 4).unwrap_or(&0),
-                *data.get(pos - 3).unwrap_or(&0),
-                *data.get(pos - 2).unwrap_or(&0),
-                *data.get(pos - 1).unwrap_or(&0),
+                *data
+                    .get(pos - 4)
+                    .expect("Required metadata byte missing (out of bounds)"),
+                *data
+                    .get(pos - 3)
+                    .expect("Required metadata byte missing (out of bounds)"),
+                *data
+                    .get(pos - 2)
+                    .expect("Required metadata byte missing (out of bounds)"),
+                *data
+                    .get(pos - 1)
+                    .expect("Required metadata byte missing (out of bounds)"),
             ]));
             if size >= 8 && pos + size - 4 <= data.len() {
                 return data.get(pos + 4..pos - 4 + size);

@@ -282,7 +282,7 @@ fn bpp_from_precheck_json(json: &serde_json::Value, file_size: u64, input: &Path
         .as_str()
         .and_then(|s| s.parse().ok())
         .or_else(|| stream["nb_frames"].as_u64())
-        .unwrap_or(0);
+        .expect("Failed to parse integer or missing required value");
     let (duration, fps, frame_count_raw) =
         parse_duration_from_precheck_json(json, fps, frame_count_raw, input)?;
     let fps = fps_sanitise_for_validation(fps, duration, frame_count_raw);
@@ -319,6 +319,10 @@ fn bpp_from_precheck_json(json: &serde_json::Value, file_size: u64, input: &Path
 ///
 /// # Errors
 /// Returns an error if duration detection fails.
+#[allow(
+    clippy::missing_panics_doc,
+    reason = "Explicit panic on data corruption is intended and documented inline."
+)]
 pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'static str)> {
     let output = crate::tool_builders::FfprobeBuilder::new()
         .input(input)
@@ -358,7 +362,7 @@ pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'s
         .and_then(|s| s.get("nb_frames"))
         .and_then(serde_json::Value::as_str)
         .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
+        .expect("Failed to parse integer or missing required value");
 
     let stream_duration: Option<f64> = json
         .get("streams")
@@ -419,7 +423,14 @@ pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'s
 /// # Errors
 /// Returns an error if information gathering fails.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
+#[allow(
+    clippy::missing_panics_doc,
+    reason = "Explicit panic on data corruption is intended and documented inline."
+)]
 pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
     let file_size = crate::io_utils::metadata_with_retry(input)
         .context("Failed to read file metadata")?
@@ -462,7 +473,7 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
         .as_str()
         .and_then(|s| s.parse().ok())
         .or_else(|| stream["nb_frames"].as_u64())
-        .unwrap_or(0);
+        .expect("Failed to parse integer or missing required value");
 
     let (duration, fps, frame_count_raw) =
         parse_duration_from_precheck_json(&json, fps, frame_count_raw, input)?;
@@ -583,7 +594,10 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
 
 /// Caller must pass lowercase codec (e.g. from `get_video_info`).
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 fn evaluate_processing_recommendation(
     codec: &str,
     width: u32,

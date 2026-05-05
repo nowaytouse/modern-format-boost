@@ -811,7 +811,7 @@ impl ConvertOptions {
 impl Default for ConvertOptions {
     fn default() -> Self {
         Self {
-            flags: ConvertFlags::empty(),
+            flags: ConvertFlags::USE_GPU | ConvertFlags::ALLOW_SIZE_TOLERANCE,
             output_dir: None,
             base_dir: None,
             codec: SelectedCodec::Hevc,
@@ -2202,6 +2202,8 @@ mod tests {
         assert!(!opts.delete_original());
         assert!(!opts.in_place());
         assert!(!opts.should_delete_original());
+        assert!(opts.use_gpu());
+        assert!(opts.allow_size_tolerance());
     }
 
     #[test]

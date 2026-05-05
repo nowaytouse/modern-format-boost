@@ -16,7 +16,11 @@ fn test_headless_gif_regression_frame_count_and_loop_intent() {
 
     // 2. Assure duration and delay evaluations are handled smoothly (duration might be ~0 or None)
     assert!(
-        scan.duration_secs.is_none() || scan.duration_secs.unwrap_or(0.0) == 0.0,
+        scan.duration_secs.is_none()
+            || scan
+                .duration_secs
+                .expect("Required floating point value missing")
+                == 0.0,
         "Headless GIF should correctly map to missing/zero duration"
     );
 

@@ -306,7 +306,7 @@ pub fn set_log_file(path: &std::path::Path) -> std::io::Result<()> {
 /// Returns true if a log file has been configured.
 #[must_use]
 pub fn has_log_file() -> bool {
-    return lock_log_writer().is_some()
+    return lock_log_writer().is_some();
 }
 
 /// If no log file is configured, open a default run log under `./logs/`.
@@ -437,7 +437,10 @@ fn stderr_is_tty() -> bool {
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 /// Emit a line to stderr (and to run log when configured).
 ///
 /// * When stderr **is a TTY**: ANSI colour codes are forwarded as-is.
@@ -964,10 +967,12 @@ fn format_video_stats_line(
     let vid_msg = if vid_ok > 0 || vid_fail > 0 || vid_skip > 0 {
         let mut v_stat = format!("{}V:{}{}✓", colors::MFB_PURPLE, colors::MFB_GREEN, vid_ok);
         if vid_skip > 0 {
-            let _ = write!(v_stat, "{}{}{}s", colors::DIM, colors::MFB_YELLOW, vid_skip);
+            write!(v_stat, "{}{}{}s", colors::DIM, colors::MFB_YELLOW, vid_skip)
+                .expect("String formatting should not fail");
         }
         if vid_fail > 0 {
-            let _ = write!(v_stat, "{}{}{}✗", colors::DIM, colors::MFB_RED, vid_fail);
+            write!(v_stat, "{}{}{}✗", colors::DIM, colors::MFB_RED, vid_fail)
+                .expect("String formatting should not fail");
         }
         v_stat.push_str(colors::RESET);
         v_stat
@@ -1041,10 +1046,12 @@ fn format_xmp_jxl_images_line(
             images_ok
         );
         if img_skip > 0 {
-            let _ = write!(i_stat, "{}{}{}s", colors::DIM, colors::MFB_YELLOW, img_skip);
+            write!(i_stat, "{}{}{}s", colors::DIM, colors::MFB_YELLOW, img_skip)
+                .expect("String formatting should not fail");
         }
         if img_fail > 0 {
-            let _ = write!(i_stat, "{}{}{}✗", colors::DIM, colors::MFB_RED, img_fail);
+            write!(i_stat, "{}{}{}✗", colors::DIM, colors::MFB_RED, img_fail)
+                .expect("String formatting should not fail");
         }
         i_stat.push_str(colors::RESET);
         i_stat
@@ -1132,7 +1139,8 @@ pub fn xmp_merge_finalize() {
                     format!("Videos: {vid_ok} OK")
                 };
                 if vid_skip > 0 {
-                    let _ = write!(vid_part, " ({vid_skip} skipped)");
+                    write!(vid_part, " ({vid_skip} skipped)")
+                        .expect("String formatting should not fail");
                 }
                 parts.push(vid_part);
             }
@@ -1180,7 +1188,8 @@ pub fn xmp_merge_finalize() {
                 format!("Images: {images_ok} OK")
             };
             if img_skip > 0 {
-                let _ = write!(img_part, " ({img_skip} skipped)");
+                write!(img_part, " ({img_skip} skipped)")
+                    .expect("String formatting should not fail");
             }
             parts.push(img_part);
         }

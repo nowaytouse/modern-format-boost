@@ -27,7 +27,10 @@ use tracing::Level;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 // Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(clippy::struct_excessive_bools, reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping.")]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping."
+)]
 pub struct VideoQualityAnalysis {
     pub width: u32,
     pub height: u32,
@@ -224,11 +227,18 @@ impl CompressionLevel {
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 /// Analyze video quality (codec type, bpp, content type, compression level, etc.).
 ///
 /// # Errors
 /// Returns an error if video quality analysis fails due to invalid parameters.
+#[allow(
+    clippy::missing_panics_doc,
+    reason = "Explicit panic on data corruption is intended and documented inline."
+)]
 pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualityAnalysis, String> {
     let VideoQualityInput {
         codec,
@@ -271,8 +281,10 @@ pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualit
             * Rational::from(height)
             * crate::numeric_cast::f64_to_rational_loud(fps, 1, "fps");
         if pixels_per_second > 0 {
-            let bits_per_second =
-                Rational::from(u32::try_from(effective_bitrate).unwrap_or(u32::MAX));
+            let bits_per_second = Rational::from(
+                u32::try_from(effective_bitrate)
+                    .expect("Value overflowed or is missing, cannot process ratio"),
+            );
             (bits_per_second / pixels_per_second).to_f64()
         } else {
             0.0
@@ -557,13 +569,13 @@ fn calculate_quality_score(
                 );
                 0
             });
-            u8::try_from(t.clamp(0, 5)).unwrap_or(0)
+            u8::try_from(t.clamp(0, 5)).expect("Failed to parse integer or missing required value")
         }
         CompressionLevel::HighQuality => {
             let t = crate::numeric_cast::f64_to_u32_sat(
                 ((bpp - 0.3).clamp(0.0, 0.2) / 0.2 * 3.0).round(),
             );
-            u8::try_from(t.clamp(0, 3)).unwrap_or(0)
+            u8::try_from(t.clamp(0, 3)).expect("Failed to parse integer or missing required value")
         }
         _ => 0,
     };
@@ -2181,8 +2193,10 @@ mod tests {
             })
             .unwrap_or_else(|e| panic!("{e}"));
 
-            let expected = f64::from(u32::try_from(bitrate).unwrap_or(u32::MAX))
-                / (f64::from(w) * f64::from(h) * fps);
+            let expected = f64::from(
+                u32::try_from(bitrate)
+                    .expect("Value overflowed or is missing, cannot process ratio"),
+            ) / (f64::from(w) * f64::from(h) * fps);
             assert!(
                 (result.bpp - expected).abs() < 0.0001,
                 "STRICT: BPP for {}x{}@{}fps@{}bps: expected {}, got {}",

@@ -81,11 +81,12 @@ fn main() -> Result<()> {
             if left_dec.format != right_dec.format {
                 format_changes += 1;
                 diff = true;
-                let _ = write!(
+                write!(
                     diff_msg,
                     "FORMAT: {} -> {}",
                     left_dec.format, right_dec.format
-                );
+                )
+                .expect("String formatting should not fail");
             }
 
             if left_dec.params_json != right_dec.params_json {

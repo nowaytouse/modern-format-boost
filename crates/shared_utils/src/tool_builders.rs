@@ -358,7 +358,10 @@ impl Hdr10PlusBuilder {
 /// Builder for constructing `x265` commands.
 #[derive(Debug, Default)]
 // Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(clippy::struct_excessive_bools, reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping.")]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping."
+)]
 pub struct X265Builder {
     input: Option<PathBuf>,
     output: Option<PathBuf>,
@@ -574,7 +577,11 @@ mod tests {
             .iter()
             .position(|arg| arg == "--input")
             .unwrap_or_else(|| panic!("x265 input arg should exist"));
-        assert_eq!(args.get(input_idx + 1).unwrap_or(&String::new()), "-");
+        assert_eq!(
+            args.get(input_idx + 1)
+                .expect("Required string property missing"),
+            "-"
+        );
     }
 
     #[test]
@@ -592,7 +599,8 @@ mod tests {
             .position(|arg| arg == "--input")
             .unwrap_or_else(|| panic!("x265 input arg should exist"));
         assert_eq!(
-            args.get(input_idx + 1).unwrap_or(&String::new()),
+            args.get(input_idx + 1)
+                .expect("Required string property missing"),
             "./-clip.y4m"
         );
     }

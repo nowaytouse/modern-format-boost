@@ -270,7 +270,10 @@ pub fn analyze_image_with_cache(
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
     if !path.exists() {
         return Err(ImgQualityError::ImageReadError(format!(
@@ -517,7 +520,10 @@ impl ImageAnalysis {
 /// # Errors
 /// Returns an error if HEIC analysis fails or file cannot be read.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
     debug!("analyze_heic_image called for {}", path.display());
     let (
@@ -1257,7 +1263,10 @@ fn get_animation_duration(path: &Path) -> Option<f32> {
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 fn try_jxl_via_apng(path: &Path) -> Option<f32> {
     // Check if djxl is available
     if which::which("djxl").is_err() {
@@ -1332,7 +1341,7 @@ fn try_jxl_via_apng(path: &Path) -> Option<f32> {
                     .get("nb_read_frames")
                     .and_then(|v| v.as_str())
                     .and_then(|s| s.parse::<u64>().ok())
-                    .unwrap_or(0);
+                    .expect("Failed to parse integer or missing required value");
 
                 let r_frame_rate = stream
                     .get("r_frame_rate")
@@ -1771,7 +1780,10 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> ImageAnalysis {
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 fn analyze_avif_image(path: &Path, file_size: u64) -> ImageAnalysis {
     use crate::image_detection::{
         detect_animation, detect_compression, CompressionType, DetectedFormat,
@@ -1899,8 +1911,12 @@ fn parse_jxlinfo_output(output: &str) -> (u32, u32, bool, u8) {
             if let (Some(w_part), Some(h_part)) = (parts.first(), parts.get(1)) {
                 let w_str: String = w_part.chars().filter(char::is_ascii_digit).collect();
                 let h_str: String = h_part.chars().filter(char::is_ascii_digit).collect();
-                width = w_str.parse().unwrap_or(0);
-                height = h_str.parse().unwrap_or(0);
+                width = w_str
+                    .parse()
+                    .expect("Failed to parse integer or missing required value");
+                height = h_str
+                    .parse()
+                    .expect("Failed to parse integer or missing required value");
             }
         }
 

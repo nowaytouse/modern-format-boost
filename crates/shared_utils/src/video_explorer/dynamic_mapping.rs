@@ -176,7 +176,10 @@ fn build_calibration_filter_chain(
 /// # Panics
 /// Panics if the input file path is not a valid UTF-8 string.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 pub fn quick_calibrate(
     input: &Path,
     input_size: u64,

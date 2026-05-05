@@ -201,7 +201,8 @@ impl ExploreQualityFailureDecision {
             success: false,
             message: self.fail_message,
             final_crf: explore_result.optimal_crf,
-            exploration_attempts: u8::try_from(explore_result.iterations).expect("exploration iterations exceeded 255 - infinite loop detected"),
+            exploration_attempts: u8::try_from(explore_result.iterations)
+                .expect("exploration iterations exceeded 255 - infinite loop detected"),
             blake3: None,
         }
     }
@@ -272,7 +273,8 @@ impl FinalQualityGateFailureDecision {
             success: false,
             message: self.skip_message,
             final_crf: result.optimal_crf,
-            exploration_attempts: u8::try_from(result.iterations).expect("exploration iterations exceeded 255 - infinite loop detected"),
+            exploration_attempts: u8::try_from(result.iterations)
+                .expect("exploration iterations exceeded 255 - infinite loop detected"),
             blake3: None,
         }
     }
@@ -498,7 +500,10 @@ const fn hevc_delivery_target(apple_compat: bool) -> TargetVideoFormat {
     }
 }
 
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 pub fn determine_strategy_with_apple_compat(
     result: &VideoDetectionResult,
     input: &Path,
@@ -703,7 +708,14 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
 ///
 /// # Errors
 /// Returns an error if video detection fails, strategy cannot be determined, or conversion execution fails.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
+#[allow(
+    clippy::missing_panics_doc,
+    reason = "Explicit panic on data corruption is intended and documented inline."
+)]
 pub fn auto_convert_with_cache(
     input: &Path,
     config: &ConversionConfig,
@@ -986,7 +998,9 @@ pub fn auto_convert_with_cache(
                 input,
                 &convert_options_from_config(config),
             )?;
-            let output_size = result.output_size.unwrap_or(0);
+            let output_size = result
+                .output_size
+                .expect("Failed to parse integer or missing required value");
             let output_path = result.output_path.unwrap_or_default();
             let size_ratio = if detection.file_size > 0 {
                 let ratio = Rational::from((output_size, detection.file_size));
@@ -1107,18 +1121,20 @@ pub fn auto_convert_with_cache(
             // Inject DV RPU path and profile into x265 params when available
             let dv_rpu = prepare_dv_rpu(&detection);
             if let Some(ref dv) = dv_rpu {
-                let _ = write!(
+                write!(
                     hdr_x265_params,
                     ":dolby-vision-rpu={}:dolby-vision-profile={}",
                     dv.rpu_path.display(),
                     dv.profile_str
-                );
+                )
+                .expect("String formatting should not fail");
             }
 
             // Inject HDR10+ metadata into x265 params
             let hdr10plus = prepare_hdr10plus_metadata(&detection);
             if let Some(ref hdr) = hdr10plus {
-                let _ = write!(hdr_x265_params, ":dhdr10-info={}", hdr.json_path.display());
+                write!(hdr_x265_params, ":dhdr10-info={}", hdr.json_path.display())
+                    .expect("String formatting should not fail");
             }
 
             let is_hdr_content = detection.bit_depth >= 10
@@ -1136,12 +1152,14 @@ pub fn auto_convert_with_cache(
 
             if let Some(ref md) = detection.mastering_display {
                 if !md.is_empty() {
-                    let _ = write!(hdr_x265_params, ":master-display={md}");
+                    write!(hdr_x265_params, ":master-display={md}")
+                        .expect("String formatting should not fail");
                 }
             }
             if let Some(ref cll) = detection.max_cll {
                 if !cll.is_empty() {
-                    let _ = write!(hdr_x265_params, ":max-cll={cll}");
+                    write!(hdr_x265_params, ":max-cll={cll}")
+                        .expect("String formatting should not fail");
                 }
             }
 
@@ -1292,7 +1310,8 @@ pub fn auto_convert_with_cache(
             (
                 explore_result.output_size,
                 explore_result.optimal_crf,
-                u8::try_from(explore_result.iterations).expect("exploration iterations exceeded 255 - infinite loop detected"),
+                u8::try_from(explore_result.iterations)
+                    .expect("exploration iterations exceeded 255 - infinite loop detected"),
                 Some(explore_result),
             )
         }
@@ -1759,7 +1778,10 @@ pub fn calculate_matched_crf(
     }
 }
 
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 fn execute_lossless(
     detection: &VideoDetectionResult,
     output: &Path,
@@ -1795,7 +1817,7 @@ fn execute_lossless(
         info!(
             file = %detection.file_path,
             codec = %detection.codec.as_str(),
-            file_size_gb = f64::from(u32::try_from(detection.file_size / (1024 * 1024)).unwrap_or(u32::MAX)) / 1024.0,
+            file_size_gb = f64::from(u32::try_from(detection.file_size / (1024 * 1024)).expect("Value overflowed or is missing, cannot process ratio")) / 1024.0,
             "Applying low-memory x265 profile for large/high-fidelity source"
         );
     }
@@ -2751,7 +2773,8 @@ mod tests {
 
         // Simulate prepare_hdr10plus_metadata success
         let mock_json_path = PathBuf::from("/tmp/hdr10plus.json");
-        let _ = write!(hdr_x265_params, ":dhdr10-info={}", mock_json_path.display());
+        write!(hdr_x265_params, ":dhdr10-info={}", mock_json_path.display())
+            .expect("String formatting should not fail");
 
         let is_hdr_content = detection.bit_depth >= 10
             || detection.is_dolby_vision

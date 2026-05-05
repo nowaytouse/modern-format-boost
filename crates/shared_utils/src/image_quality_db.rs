@@ -110,74 +110,87 @@ pub fn init_quality_schema(conn: &mut Client) -> Result<()> {
         &[],
     )?;
 
-    apply_schema_migrations(conn);
+    apply_schema_migrations(conn)?;
     Ok(())
 }
 
-fn apply_schema_migrations(conn: &mut Client) {
+fn apply_schema_migrations(conn: &mut Client) -> Result<()> {
     // Ensure exhaustive schema migration for existing tables
-    let _ = conn.execute(
+    conn.execute(
         "ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS entropy DOUBLE PRECISION",
         &[],
-    );
-    let _ = conn.execute("ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS compression_ratio DOUBLE PRECISION", &[]);
-    let _ = conn.execute(
+    )?;
+    conn.execute(
+        "ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS compression_ratio DOUBLE PRECISION",
+        &[],
+    )?;
+    conn.execute(
         "ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS spatial_bpp DOUBLE PRECISION",
         &[],
-    );
-    let _ = conn.execute(
+    )?;
+    conn.execute(
         "ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS log_pixels DOUBLE PRECISION",
         &[],
-    );
-    let _ = conn.execute(
+    )?;
+    conn.execute(
         "ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS aspect_ratio DOUBLE PRECISION",
         &[],
-    );
-    let _ = conn.execute(
+    )?;
+    conn.execute(
         "ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS is_lossless BOOLEAN",
         &[],
-    );
-    let _ = conn.execute(
+    )?;
+    conn.execute(
         "ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS knn_score DOUBLE PRECISION",
         &[],
-    );
-    let _ = conn.execute("ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS knn_confidence DOUBLE PRECISION", &[]);
-    let _ = conn.execute(
+    )?;
+    conn.execute(
+        "ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS knn_confidence DOUBLE PRECISION",
+        &[],
+    )?;
+    conn.execute(
         "ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS knn_neighbor_count INTEGER",
         &[],
-    );
-    let _ = conn.execute("ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS bpp_fallback_score DOUBLE PRECISION", &[]);
-    let _ = conn.execute("ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS final_verdict TEXT DEFAULT 'low'", &[]);
+    )?;
+    conn.execute(
+        "ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS bpp_fallback_score DOUBLE PRECISION",
+        &[],
+    )?;
+    conn.execute(
+        "ALTER TABLE quality_inference_log ADD COLUMN IF NOT EXISTS final_verdict TEXT DEFAULT 'low'",
+        &[],
+    )?;
 
     // Remove legacy defaults/constraints that silently collapsed unknown KNN fields into zero.
-    let _ = conn.execute(
+    conn.execute(
         "ALTER TABLE quality_inference_log ALTER COLUMN knn_score DROP DEFAULT",
         &[],
-    );
-    let _ = conn.execute(
+    )?;
+    conn.execute(
         "ALTER TABLE quality_inference_log ALTER COLUMN knn_confidence DROP DEFAULT",
         &[],
-    );
-    let _ = conn.execute(
+    )?;
+    conn.execute(
         "ALTER TABLE quality_inference_log ALTER COLUMN knn_neighbor_count DROP DEFAULT",
         &[],
-    );
-    let _ = conn.execute(
+    )?;
+    conn.execute(
         "ALTER TABLE quality_inference_log ALTER COLUMN knn_score DROP NOT NULL",
         &[],
-    );
-    let _ = conn.execute(
+    )?;
+    conn.execute(
         "ALTER TABLE quality_inference_log ALTER COLUMN knn_confidence DROP NOT NULL",
         &[],
-    );
-    let _ = conn.execute(
+    )?;
+    conn.execute(
         "ALTER TABLE quality_inference_log ALTER COLUMN knn_neighbor_count DROP NOT NULL",
         &[],
-    );
-    let _ = conn.execute(
+    )?;
+    conn.execute(
         "ALTER TABLE quality_inference_log ALTER COLUMN final_verdict SET NOT NULL",
         &[],
-    );
+    )?;
+    Ok(())
 }
 
 // ── Feature vector ───────────────────────────────────────────────────────────
@@ -289,7 +302,10 @@ pub fn get_class_counts(conn: &mut Client) -> (i64, i64) {
 /// Returns a heuristic `QualityScore` (confidence = 0.0) when the DB is unavailable or empty.
 #[must_use]
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 pub fn lookup_image_quality(analysis: &ImageAnalysis) -> Option<QualityScore> {
     // Animated assets are handled by the GIF/Video pipeline, not this DB.
     if analysis.is_animated {
@@ -541,6 +557,10 @@ pub fn log_quality_inference_record(
 ///
 /// # Errors
 /// Returns an error if the sample cannot be ingested.
+#[allow(
+    clippy::missing_panics_doc,
+    reason = "Explicit panic on data corruption is intended and documented inline."
+)]
 pub fn ingest_quality_sample(
     conn: &mut Client,
     path: &Path,
@@ -557,9 +577,10 @@ pub fn ingest_quality_sample(
     }
 
     let file_hash = crate::common_utils::calculate_blake3_hash(path)?;
-    let total_pixels = i64::from(analysis.width) * i64::from(analysis.height);
+    let total_pixels_u64 = u64::from(analysis.width).saturating_mul(u64::from(analysis.height));
+    let total_pixels = crate::numeric_cast::u64_to_i64_sat(total_pixels_u64);
     let spatial_bpp = crate::numeric_cast::u64_to_f64(analysis.file_size)
-        / crate::numeric_cast::i64_to_f64(total_pixels).max(1.0);
+        / crate::numeric_cast::u64_to_f64(total_pixels_u64).max(1.0);
     let features = get_quality_features(&analysis);
 
     conn.execute(
@@ -575,9 +596,9 @@ pub fn ingest_quality_sample(
             &file_hash,
             &path.to_string_lossy().to_string(),
             &analysis.format,
-            &(i32::try_from(analysis.width).unwrap_or(0)),
-            &(i32::try_from(analysis.height).unwrap_or(0)),
-            &(i64::try_from(analysis.file_size).unwrap_or(0)),
+            &crate::numeric_cast::u32_to_i32_sat(analysis.width),
+            &crate::numeric_cast::u32_to_i32_sat(analysis.height),
+            &crate::numeric_cast::u64_to_i64_sat(analysis.file_size),
             &analysis.features.entropy,
             &analysis.features.compression_ratio,
             &spatial_bpp,

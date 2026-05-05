@@ -128,7 +128,10 @@ impl DurationTier {
 /// The tree itself is a pure function over this struct — no I/O, no side effects.
 #[derive(Debug, Clone, Default)]
 // Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(clippy::struct_excessive_bools, reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping.")]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping."
+)]
 pub struct LoopMeta {
     // ── Basic geometry ──
     pub duration_secs: f64,
@@ -210,7 +213,10 @@ pub struct LoopMeta {
 
 impl LoopMeta {
     // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-    #[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+    )]
     /// Build `LoopMeta` from a full `VideoDetectionResult`.
     #[must_use]
     pub fn from_video_detection(detection: &VideoDetectionResult) -> Self {
@@ -319,7 +325,10 @@ impl LoopMeta {
     }
 
     // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-    #[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+    )]
     /// Build `LoopMeta` from an `FFprobeResult` (used in pipelines without full detection).
     #[must_use]
     pub fn from_ffprobe_result(probe: &crate::ffprobe::FFprobeResult, path: &Path) -> Self {
@@ -427,6 +436,10 @@ impl LoopMeta {
 
     /// Build `LoopMeta` from a `GIF` file using header-level scanning (fast, no `ffprobe`).
     #[must_use]
+    #[allow(
+        clippy::missing_panics_doc,
+        reason = "Explicit panic on data corruption is intended and documented inline."
+    )]
     pub fn from_gif_path(path: &Path) -> Option<Self> {
         let scan = crate::media_meta_utils::scan_gif_headers(path).ok()?;
 
@@ -527,7 +540,9 @@ impl LoopMeta {
             if let Some(temp_frame) = extract_frame_to_temp(path) {
                 if let Ok(bytes) = std::fs::read(&temp_frame) {
                     // Remove the temporary file immediately; keep bytes in-memory only.
-                    let _ = std::fs::remove_file(&temp_frame);
+                    std::fs::remove_file(&temp_frame).unwrap_or_else(|e| {
+                        tracing::warn!("Non-fatal cleanup/fallback operation failed: {}", e)
+                    });
 
                     // Cache the PNG bytes for potential reuse in Tier 3 visual heuristics.
                     self.cached_frame_png = Some(bytes.clone());
@@ -583,7 +598,10 @@ impl LogOdds {
 
 #[derive(Debug, Default, Clone, Copy)]
 // Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(clippy::struct_excessive_bools, reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping.")]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping."
+)]
 struct DerivedLoopSignals {
     scene_cut: bool,
     localized_motion: bool,
@@ -940,7 +958,10 @@ fn evaluate_kinetics_and_physics(
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 fn apply_structural_signals(
     meta: &LoopMeta,
     derived: &DerivedLoopSignals,
@@ -1120,7 +1141,10 @@ fn apply_structural_signals(
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 fn apply_weak_heuristics(
     meta: &LoopMeta,
     derived: &DerivedLoopSignals,
@@ -1371,7 +1395,10 @@ fn finalize(verdict: LoopIntentVerdict, lo: LogOdds) -> TreeEvaluation {
 
 #[must_use]
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 pub fn evaluate_loop_tree(
     meta: &LoopMeta,
     reference_profile: Option<&LoopReferenceProfile>,
@@ -1971,7 +1998,10 @@ impl DirectionalArbitration {
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 fn layer6_directional_arbitration(
     meta: &LoopMeta,
     thresholds: &LoopThresholds,
@@ -2256,7 +2286,10 @@ pub fn assess_loop_intent_from_probe(
 /// classification logic encounters an IO error during visual sampling.
 #[must_use]
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> LoopIntentVerdict {
     use crate::database::{
         fetch_loop_reference_profile, log_inference_record, lookup_similar_samples, open_pg_client,
@@ -2491,7 +2524,12 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
                             }
                         } else if let Some(temp_frame) = extract_frame_to_temp(p) {
                             if let Ok(bytes) = std::fs::read(&temp_frame) {
-                                let _ = std::fs::remove_file(&temp_frame);
+                                std::fs::remove_file(&temp_frame).unwrap_or_else(|e| {
+                                    tracing::warn!(
+                                        "Non-fatal cleanup/fallback operation failed: {}",
+                                        e
+                                    )
+                                });
                                 if let Ok(img) = image::load_from_memory(&bytes) {
                                     img_opt = Some(img);
                                 }
@@ -3024,7 +3062,7 @@ fn detect_scene_cut(pkt_sizes: &[u64]) -> bool {
     }
     let inner = pkt_sizes
         .get(1..pkt_sizes.len().saturating_sub(1))
-        .unwrap_or(&[]);
+        .expect("Required byte slice missing (out of bounds)");
     let mut baseline = inner.to_vec();
     baseline.sort_unstable();
     let median = baseline
@@ -3056,7 +3094,14 @@ fn extract_frame_to_temp(path: &Path) -> Option<std::path::PathBuf> {
         .duration_since(UNIX_EPOCH)
         .ok()?
         .as_nanos();
-    let rand_seed = std::process::id() ^ (u32::try_from(timestamp).unwrap_or(u32::MAX));
+    let timestamp_bytes = timestamp.to_le_bytes();
+    let rand_seed = std::process::id()
+        ^ u32::from_le_bytes([
+            timestamp_bytes[0],
+            timestamp_bytes[1],
+            timestamp_bytes[2],
+            timestamp_bytes[3],
+        ]);
 
     let temp_dir = std::env::temp_dir();
     let temp_path = temp_dir.join(format!("mfb_frame_{timestamp:x}_{rand_seed:x}.png"));
@@ -3219,6 +3264,10 @@ pub fn should_use_gif_fast_path(path: &std::path::Path) -> bool {
 ///
 /// # Errors
 /// Returns an error if the `FFmpeg` command fails or the output cannot be parsed.
+#[allow(
+    clippy::missing_panics_doc,
+    reason = "Explicit panic on data corruption is intended and documented inline."
+)]
 pub fn deep_refine_meta(meta: &mut LoopMeta, path: &std::path::Path) -> anyhow::Result<()> {
     // 1. Extract Temporal Flatness (YDIF)
     let output = crate::ffmpeg_builder::FfmpegBuilder::new()
@@ -3265,9 +3314,21 @@ pub fn deep_refine_meta(meta: &mut LoopMeta, path: &std::path::Path) -> anyhow::
     if thumb_output.status.success() && thumb_output.stdout.len() >= 64 * 64 * 3 {
         let mut quantized = std::collections::HashSet::new();
         for chunk in thumb_output.stdout.chunks_exact(3) {
-            let r = chunk.first().copied().unwrap_or(0) >> 3;
-            let g = chunk.get(1).copied().unwrap_or(0) >> 3;
-            let b = chunk.get(2).copied().unwrap_or(0) >> 3;
+            let r = chunk
+                .first()
+                .copied()
+                .expect("Failed to parse integer or missing required value")
+                >> 3;
+            let g = chunk
+                .get(1)
+                .copied()
+                .expect("Failed to parse integer or missing required value")
+                >> 3;
+            let b = chunk
+                .get(2)
+                .copied()
+                .expect("Failed to parse integer or missing required value")
+                >> 3;
             quantized.insert((r, g, b));
         }
         meta.palette_depth = Some(palette_depth_score(quantized.len()));
@@ -3491,6 +3552,40 @@ mod tests {
             filename_loop_intent_score: 0.5,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn gif_fast_path_handles_missing_frame_delays_without_panic() {
+        let file = tempfile::Builder::new()
+            .suffix(".gif")
+            .tempfile()
+            .expect("test temp gif should be created");
+        let gif_without_graphic_control_extension = [
+            b"GIF89a".as_slice(),
+            &[
+                0x01, 0x00, 0x01, 0x00, // Logical screen size 1x1
+                0x80, 0x00, 0x00, // Global color table, background, aspect
+                0x00, 0x00, 0x00, // Color 0
+                0xFF, 0xFF, 0xFF, // Color 1
+                0x2C, // Image descriptor
+                0x00, 0x00, 0x00, 0x00, // Left/top
+                0x01, 0x00, 0x01, 0x00, // Image size 1x1
+                0x00, // No local color table
+                0x02, // LZW min code size
+                0x02, 0x4C, 0x01, // Image data
+                0x00, // Sub-block terminator
+                0x3B, // Trailer
+            ],
+        ]
+        .concat();
+
+        std::fs::write(file.path(), gif_without_graphic_control_extension)
+            .expect("test gif should be written");
+
+        let meta = LoopMeta::from_gif_path(file.path())
+            .expect("valid GIF header should produce loop metadata");
+        assert_eq!(meta.duration_secs, 0.0);
+        assert_eq!(meta.frame_count, 1);
     }
 
     fn verdict_with_profile(meta: &LoopMeta, profile: &LoopReferenceProfile) -> LoopIntentVerdict {

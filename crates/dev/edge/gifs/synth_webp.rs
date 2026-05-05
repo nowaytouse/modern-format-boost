@@ -14,7 +14,11 @@ pub fn build_synthetic_animated_webp_without_vp8x_in_header() -> Vec<u8> {
         }
         let mut out = Vec::new();
         out.extend_from_slice(b"ANMF");
-        out.extend_from_slice(&u32::try_from(payload.len()).unwrap_or(0).to_le_bytes());
+        out.extend_from_slice(
+            &u32::try_from(payload.len())
+                .expect("Failed to parse integer or missing required value")
+                .to_le_bytes(),
+        );
         out.extend_from_slice(&payload);
         // RIFF chunks are padded to even size (payload len 16 already even)
         out
@@ -33,13 +37,21 @@ pub fn build_synthetic_animated_webp_without_vp8x_in_header() -> Vec<u8> {
     // while keeping valid RIFF chunk structure (id + size + payload).
     let junk_payload = vec![0u8; 80];
     bytes.extend_from_slice(b"JUNK");
-    bytes.extend_from_slice(&u32::try_from(junk_payload.len()).unwrap_or(0).to_le_bytes());
+    bytes.extend_from_slice(
+        &u32::try_from(junk_payload.len())
+            .expect("Failed to parse integer or missing required value")
+            .to_le_bytes(),
+    );
     bytes.extend_from_slice(&junk_payload);
 
     // Insert ANIM chunk (with a small payload)
     let anim_payload = vec![0u8; 16];
     bytes.extend_from_slice(b"ANIM");
-    bytes.extend_from_slice(&u32::try_from(anim_payload.len()).unwrap_or(0).to_le_bytes());
+    bytes.extend_from_slice(
+        &u32::try_from(anim_payload.len())
+            .expect("Failed to parse integer or missing required value")
+            .to_le_bytes(),
+    );
     bytes.extend_from_slice(&anim_payload);
 
     bytes.extend_from_slice(&anmf_chunk(100));

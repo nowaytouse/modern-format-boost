@@ -99,12 +99,13 @@ impl StderrCapture {
     }
 
     fn get_lines(&self) -> Vec<String> {
-        return self.lines
+        return self
+            .lines
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
             .cloned()
-            .collect()
+            .collect();
     }
 }
 
@@ -492,7 +493,7 @@ impl GpuAccel {
             .get_or_init(|| Mutex::new(CachedGpuAccel::probe_now()))
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+            .clone();
     }
 
     fn store_cached_state(state: CachedGpuAccel) {
@@ -1750,7 +1751,10 @@ pub fn gpu_coarse_search_with_log(
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 fn gpu_coarse_search_with_log_impl(
     input: &std::path::Path,
     output: &std::path::Path,
@@ -2372,7 +2376,10 @@ fn gpu_coarse_search_with_log_impl(
 
     let probe_results = if skip_parallel {
         log_msg!("   ⚡ Skip parallel probe (large file mode)");
-        let test_crf = probe_crfs.first().copied().unwrap_or(0.0);
+        let test_crf = probe_crfs
+            .first()
+            .copied()
+            .expect("Required floating point value missing");
         log_msg!("   🔄 [GPU] Testing CRF {:.0} (anchor point)...", test_crf);
         let single_result = encode_gpu(test_crf);
         if let Ok(size) = &single_result {
@@ -2386,9 +2393,18 @@ fn gpu_coarse_search_with_log_impl(
     } else {
         log_msg!(
             "   🚀 [GPU] Parallel probe: CRF {:.0}, {:.0}, {:.0}",
-            probe_crfs.first().copied().unwrap_or(0.0),
-            probe_crfs.get(1).copied().unwrap_or(0.0),
-            probe_crfs.get(2).copied().unwrap_or(0.0)
+            probe_crfs
+                .first()
+                .copied()
+                .expect("Required floating point value missing"),
+            probe_crfs
+                .get(1)
+                .copied()
+                .expect("Required floating point value missing"),
+            probe_crfs
+                .get(2)
+                .copied()
+                .expect("Required floating point value missing")
         );
         encode_parallel(&probe_crfs)
     };
@@ -2405,20 +2421,35 @@ fn gpu_coarse_search_with_log_impl(
         }
     }
 
-    let initial_result = probe_results
-        .iter()
-        .find(|(c, _)| (*c - probe_crfs.first().copied().unwrap_or(0.0)).abs() < 0.1);
+    let initial_result = probe_results.iter().find(|(c, _)| {
+        (*c - probe_crfs
+            .first()
+            .copied()
+            .expect("Required floating point value missing"))
+        .abs()
+            < 0.1
+    });
     let max_result = if probe_crfs.len() > 1 {
-        probe_results
-            .iter()
-            .find(|(c, _)| (*c - probe_crfs.get(1).copied().unwrap_or(0.0)).abs() < 0.1)
+        probe_results.iter().find(|(c, _)| {
+            (*c - probe_crfs
+                .get(1)
+                .copied()
+                .expect("Required floating point value missing"))
+            .abs()
+                < 0.1
+        })
     } else {
         None
     };
     let min_result = if probe_crfs.len() > 2 {
-        probe_results
-            .iter()
-            .find(|(c, _)| (*c - probe_crfs.get(2).copied().unwrap_or(0.0)).abs() < 0.1)
+        probe_results.iter().find(|(c, _)| {
+            (*c - probe_crfs
+                .get(2)
+                .copied()
+                .expect("Required floating point value missing"))
+            .abs()
+                < 0.1
+        })
     } else {
         None
     };
@@ -2497,12 +2528,14 @@ fn gpu_coarse_search_with_log_impl(
             );
 
             let mut stagnation_count = 0u32;
-            let mut last_size = best_size.unwrap_or(0);
+            let mut last_size =
+                best_size.expect("Failed to parse integer or missing required value");
             let mut current_step = initial_step;
             let mut wall_hits: u32 = 0;
             let mut test_crf = boundary_low + current_step;
             let mut last_compressible_crf = boundary_low;
-            let mut last_compressible_size = best_size.unwrap_or(0);
+            let mut last_compressible_size =
+                best_size.expect("Failed to parse integer or missing required value");
 
             while test_crf <= config.max_crf && iterations < max_iterations_limit {
                 let cached = size_cache.get(test_crf).copied();
@@ -2722,7 +2755,10 @@ fn gpu_coarse_search_with_log_impl(
         while lo < hi && iterations < max_iterations_limit && binary_iter < max_binary_iter {
             binary_iter += 1;
             let mid = lo + (hi - lo) / 2;
-            let test_crf = f32::from(u16::try_from(mid.max(0)).unwrap_or(0));
+            let test_crf = f32::from(
+                u16::try_from(mid.max(0))
+                    .expect("Failed to parse integer or missing required value"),
+            );
 
             if let Some(&cached_size) = size_cache.get(test_crf) {
                 if cached_size < sample_input_size {
@@ -3223,7 +3259,7 @@ mod tests {
             let args = encoder.get_crf_args(crf);
             let qv: f32 = args
                 .get(1)
-                .unwrap_or(&String::new())
+                .expect("Required string property missing")
                 .parse()
                 .unwrap_or_else(|e| panic!("error: {e:?}"));
             assert!(qv >= 1.0, "q:v should be >= 1, got {qv} for CRF {crf}");

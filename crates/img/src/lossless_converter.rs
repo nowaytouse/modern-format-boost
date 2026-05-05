@@ -13,7 +13,7 @@ use crate::Rational;
 use crate::{ImgQualityError, Result};
 use shared_utils::image_jpeg_analysis::is_jpeg_complete;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub use shared_utils::conversion::{
     check_size_tolerance, clear_processed_list, determine_output_path_with_base,
@@ -21,14 +21,14 @@ pub use shared_utils::conversion::{
     mark_as_processed, save_processed_list, ConversionResult, ConvertFlags, ConvertOptions,
 };
 
-fn copy_original_on_skip(input: &Path, options: &ConvertOptions) -> Option<std::path::PathBuf> {
+fn copy_original_on_skip(input: &Path, options: &ConvertOptions) -> Result<Option<PathBuf>> {
     shared_utils::copy_on_skip_or_fail(
         input,
         options.output_dir.as_deref(),
         options.base_dir.as_deref(),
         options.verbose(),
     )
-    .unwrap_or_default()
+    .map_err(|e| ImgQualityError::ConversionError(e.to_string()))
 }
 
 fn cleanup_temp_output(temp_output: &Path, _input: &Path) {
@@ -310,7 +310,10 @@ pub fn convert_ultrahdr_jpeg_to_jxl(
 /// - `cjxl` execution fails and all fallbacks (`FFmpeg`, `ImageMagick`) also fail.
 /// - The output file cannot be written or verified.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 pub fn convert_to_jxl(
     input: &Path,
     options: &ConvertOptions,
@@ -336,7 +339,7 @@ pub fn convert_to_jxl(
             if options.verbose() {
                 eprintln!("⏭️  Skipped small PNG (< 500KB): {}", input.display());
             }
-            copy_original_on_skip(input, options);
+            copy_original_on_skip(input, options)?;
             mark_as_processed(input);
             return Ok(ConversionResult::skipped_custom(
                 input,
@@ -1009,7 +1012,10 @@ fn commit_jpeg_to_jxl_success(
 /// # Errors
 /// Returns an error if transcoding fails.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 pub fn convert_jpeg_to_jxl(
     input: &Path,
     options: &ConvertOptions,
@@ -1039,7 +1045,7 @@ pub fn convert_jpeg_to_jxl(
         ));
 
         let input_size = fs::metadata(input)?.len();
-        copy_original_on_skip(input, options);
+        copy_original_on_skip(input, options)?;
         mark_as_processed(input);
         return Ok(ConversionResult::skipped_custom(
             input,
@@ -1734,7 +1740,10 @@ fn describe_jxl_finalist_pass(
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 fn try_explore_ultimate_jxl_distance(
     input: &Path,
     actual_input: &Path,
@@ -2054,7 +2063,10 @@ fn try_explore_ultimate_jxl_distance(
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 fn prepare_input_for_cjxl(
     input: &Path,
     options: &ConvertOptions,
@@ -2063,7 +2075,11 @@ fn prepare_input_for_cjxl(
     // Ensure we have color info for bit depth detection if not provided
     let local_hdr_info;
     // Rationale: Using if-let and match-else here is more readable than overly nested or functional alternatives for this specific logic.
-    #[allow(clippy::option_if_let_else, clippy::single_match_else, reason = "Preserving if-let structure to maintain clear linear control flow during complex state transitions.")]
+    #[allow(
+        clippy::option_if_let_else,
+        clippy::single_match_else,
+        reason = "Preserving if-let structure to maintain clear linear control flow during complex state transitions."
+    )]
     let hdr_info = match hdr_info {
         Some(info) => info,
         None => {

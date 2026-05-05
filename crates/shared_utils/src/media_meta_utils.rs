@@ -23,7 +23,14 @@ pub struct GifHeaderScan {
 /// # Errors
 /// Returns an error if the file cannot be read or if the `GIF` header is malformed.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
+#[allow(
+    clippy::missing_panics_doc,
+    reason = "Explicit panic on data corruption is intended and documented inline."
+)]
 pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
     let buf = std::fs::read(path)?;
     let n = buf.len();
@@ -33,13 +40,18 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
     }
 
     // GIF87a / GIF89a magic check
-    let magic = buf.get(0..6).unwrap_or(&[]);
+    let magic = buf
+        .get(0..6)
+        .expect("Required byte slice missing (out of bounds)");
     if magic != b"GIF87a" && magic != b"GIF89a" {
         return Ok(GifHeaderScan::default());
     }
 
     // Logical Screen Descriptor: byte 10 = packed field
-    let packed = buf.get(10).copied().unwrap_or(0);
+    let packed = buf
+        .get(10)
+        .copied()
+        .expect("Failed to parse integer or missing required value");
     let has_gct = (packed & 0x80) != 0;
     let palette_size: Option<u32> = if has_gct {
         let n = u32::from(packed & 0x07);
@@ -56,66 +68,106 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
     let mut pos = 13usize;
 
     if has_gct {
-        let gct_size = palette_size.unwrap_or(0) as usize * 3;
+        let gct_size =
+            palette_size.expect("Failed to parse integer or missing required value") as usize * 3;
         pos += gct_size;
     }
 
     while pos + 2 < buf.len() {
-        match buf.get(pos).copied().unwrap_or(0) {
-            0x21 if pos + 1 < buf.len() => match buf.get(pos + 1).copied().unwrap_or(0) {
-                0xFF => {
-                    let block_size = buf.get(pos + 2).copied().unwrap_or(0) as usize;
-                    if block_size == 11 && pos + 3 + block_size <= buf.len() {
-                        if let Ok(vendor) = std::str::from_utf8(
-                            buf.get(pos + 3..pos + 3 + block_size).unwrap_or(&[]),
-                        ) {
-                            if !vendor.is_empty() {
-                                app_extensions.push(vendor.to_owned());
-                                if vendor == "NETSCAPE2.0" {
-                                    let sub_pos = pos + 3 + block_size;
-                                    if sub_pos + 3 < buf.len() {
-                                        let sub_size = buf.get(sub_pos).copied().unwrap_or(0);
-                                        if sub_size >= 3
-                                            && buf.get(sub_pos + 1).copied().unwrap_or(0) == 0x01
+        match buf
+            .get(pos)
+            .copied()
+            .expect("Failed to parse integer or missing required value")
+        {
+            0x21 if pos + 1 < buf.len() => {
+                match buf
+                    .get(pos + 1)
+                    .copied()
+                    .expect("Failed to parse integer or missing required value")
+                {
+                    0xFF => {
+                        let block_size = buf
+                            .get(pos + 2)
+                            .copied()
+                            .expect("Failed to parse integer or missing required value")
+                            as usize;
+                        if block_size == 11 && pos + 3 + block_size <= buf.len() {
+                            if let Ok(vendor) = std::str::from_utf8(
+                                buf.get(pos + 3..pos + 3 + block_size)
+                                    .expect("Required byte slice missing (out of bounds)"),
+                            ) {
+                                if !vendor.is_empty() {
+                                    app_extensions.push(vendor.to_owned());
+                                    if vendor == "NETSCAPE2.0" {
+                                        let sub_pos = pos + 3 + block_size;
+                                        if sub_pos + 3 < buf.len() {
+                                            let sub_size = buf.get(sub_pos).copied().expect(
+                                                "Failed to parse integer or missing required value",
+                                            );
+                                            if sub_size >= 3
+                                            && buf.get(sub_pos + 1).copied().expect("Failed to parse integer or missing required value") == 0x01
                                         {
                                             loop_count = Some(
                                                 u16::from(
-                                                    buf.get(sub_pos + 2).copied().unwrap_or(0),
+                                                    buf.get(sub_pos + 2).copied().expect("Failed to parse integer or missing required value"),
                                                 ) | (u16::from(
-                                                    buf.get(sub_pos + 3).copied().unwrap_or(0),
+                                                    buf.get(sub_pos + 3).copied().expect("Failed to parse integer or missing required value"),
                                                 ) << 8),
                                             );
+                                        }
                                         }
                                     }
                                 }
                             }
                         }
+                        pos += 3 + block_size;
+                        pos = skip_sub_blocks(&buf, pos);
                     }
-                    pos += 3 + block_size;
-                    pos = skip_sub_blocks(&buf, pos);
-                }
-                0xF9 if pos + 7 < buf.len() && buf.get(pos + 2).copied().unwrap_or(0) == 0x04 => {
-                    if buf.get(pos + 3).copied().unwrap_or(0) & 0x01 != 0 {
-                        has_transparency = true;
+                    0xF9 if pos + 7 < buf.len()
+                        && buf
+                            .get(pos + 2)
+                            .copied()
+                            .expect("Failed to parse integer or missing required value")
+                            == 0x04 =>
+                    {
+                        if buf
+                            .get(pos + 3)
+                            .copied()
+                            .expect("Failed to parse integer or missing required value")
+                            & 0x01
+                            != 0
+                        {
+                            has_transparency = true;
+                        }
+                        let delay = u16::from(
+                            buf.get(pos + 4)
+                                .copied()
+                                .expect("Failed to parse integer or missing required value"),
+                        ) | (u16::from(
+                            buf.get(pos + 5)
+                                .copied()
+                                .expect("Failed to parse integer or missing required value"),
+                        ) << 8);
+                        frame_delays_cs.push(delay);
+                        pos += 8;
                     }
-                    let delay = u16::from(buf.get(pos + 4).copied().unwrap_or(0))
-                        | (u16::from(buf.get(pos + 5).copied().unwrap_or(0)) << 8);
-                    frame_delays_cs.push(delay);
-                    pos += 8;
+                    0xFE | 0x01 => {
+                        pos += 2;
+                        pos = skip_sub_blocks(&buf, pos);
+                    }
+                    _ => {
+                        pos += 1;
+                    }
                 }
-                0xFE | 0x01 => {
-                    pos += 2;
-                    pos = skip_sub_blocks(&buf, pos);
-                }
-                _ => {
-                    pos += 1;
-                }
-            },
+            }
             0x2C => {
                 if pos + 10 >= buf.len() {
                     break;
                 }
-                let packed = buf.get(pos + 9).copied().unwrap_or(0);
+                let packed = buf
+                    .get(pos + 9)
+                    .copied()
+                    .expect("Failed to parse integer or missing required value");
                 pos += 10;
                 if (packed & 0x80) != 0 {
                     let lct_size_pow = usize::from(packed & 0x07);
@@ -196,8 +248,10 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
     };
 
     let frame_count_calculated = std::cmp::max(
-        u32::try_from(frame_payload_sizes.len()).unwrap_or(u32::MAX),
-        u32::try_from(frame_delays_cs.len()).unwrap_or(u32::MAX),
+        u32::try_from(frame_payload_sizes.len())
+            .expect("Value overflowed or is missing, cannot process ratio"),
+        u32::try_from(frame_delays_cs.len())
+            .expect("Value overflowed or is missing, cannot process ratio"),
     );
     let frame_count_calculated = if frame_count_calculated == 0 {
         1

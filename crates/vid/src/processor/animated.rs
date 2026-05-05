@@ -312,7 +312,7 @@ impl<'a> AnimatedConversionPipeline<'a> {
             let codec_name = self.options.codec.as_str().to_uppercase();
 
             if let Some(ref path) = self.temp_output {
-                let _ = fs::remove_file(path);
+                fs::remove_file(path).unwrap_or_else(|e| tracing::warn!("Non-fatal cleanup/fallback operation failed: {}", e));
             }
 
             eprintln!(
@@ -412,11 +412,11 @@ impl<'a> AnimatedConversionPipeline<'a> {
         shared_utils::conversion::mark_as_processed(self.input);
 
         if self.options.should_delete_original() {
-            let _ = shared_utils::conversion::safe_delete_original(
+            shared_utils::conversion::safe_delete_original(
                 self.input,
                 output_path,
                 shared_utils::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
-            );
+            )?;
         }
 
         Ok(ConversionResult::success_video_explored(

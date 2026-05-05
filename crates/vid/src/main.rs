@@ -1,4 +1,7 @@
-#![allow(clippy::multiple_crate_versions, reason = "Legitimate deviation from standard linting rules justified by specific project architecture.")]
+#![allow(
+    clippy::multiple_crate_versions,
+    reason = "Legitimate deviation from standard linting rules justified by specific project architecture."
+)]
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tracing::info;
@@ -90,7 +93,10 @@ enum Commands {
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 fn main() -> anyhow::Result<()> {
     if let Err(e) = shared_utils::init_ghost_mode() {
         eprintln!("⚠️ Failed to initialize Ghost Mode isolation: {e}");

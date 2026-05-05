@@ -125,14 +125,20 @@ pub fn robust_move(src: &Path, dst: &Path) -> std::io::Result<()> {
                 |ext| dst.with_extension(format!("{ext}.mfb-tmp")),
             );
             if staging.exists() {
-                let _ = std::fs::remove_file(&staging);
+                std::fs::remove_file(&staging).unwrap_or_else(|e| {
+                    tracing::warn!("Non-fatal cleanup/fallback operation failed: {}", e)
+                });
             }
             if let Err(copy_err) = std::fs::copy(src, &staging) {
-                let _ = std::fs::remove_file(&staging);
+                std::fs::remove_file(&staging).unwrap_or_else(|e| {
+                    tracing::warn!("Non-fatal cleanup/fallback operation failed: {}", e)
+                });
                 return Err(copy_err);
             }
             if let Err(rename_err) = std::fs::rename(&staging, dst) {
-                let _ = std::fs::remove_file(&staging);
+                std::fs::remove_file(&staging).unwrap_or_else(|e| {
+                    tracing::warn!("Non-fatal cleanup/fallback operation failed: {}", e)
+                });
                 return Err(rename_err);
             }
             std::fs::remove_file(src)?;
@@ -150,6 +156,10 @@ pub fn robust_move(src: &Path, dst: &Path) -> std::io::Result<()> {
 /// the tail of the actually-informative lines so error messages include the
 /// root-cause diagnostic.
 #[must_use]
+#[allow(
+    clippy::missing_panics_doc,
+    reason = "Explicit panic on data corruption is intended and documented inline."
+)]
 pub fn tail_error_lines(stderr: &str, n: usize) -> String {
     let lines: Vec<&str> = stderr
         .lines()
@@ -160,7 +170,10 @@ pub fn tail_error_lines(stderr: &str, n: usize) -> String {
         return String::new();
     }
     let start = lines.len().saturating_sub(n);
-    lines.get(start..).unwrap_or(&[]).join(" | ")
+    lines
+        .get(start..)
+        .expect("Required byte slice missing (out of bounds)")
+        .join(" | ")
 }
 
 #[cfg(test)]

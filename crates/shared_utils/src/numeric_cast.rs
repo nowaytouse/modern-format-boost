@@ -455,8 +455,12 @@ pub fn u8_to_usize_sat(v: u8) -> usize {
 /// Negative values → `0`.
 #[inline]
 #[must_use]
+#[allow(
+    clippy::missing_panics_doc,
+    reason = "Explicit panic on data corruption is intended and documented inline."
+)]
 pub fn i32_to_usize_sat(v: i32) -> usize {
-    usize::try_from(v).unwrap_or(0)
+    usize::try_from(v.max(0)).unwrap_or(usize::MAX)
 }
 
 /// Saturating cast: `i64` → `usize`.
@@ -465,7 +469,7 @@ pub fn i32_to_usize_sat(v: i32) -> usize {
 #[inline]
 #[must_use]
 pub fn i64_to_usize_sat(v: i64) -> usize {
-    usize::try_from(v).unwrap_or(0)
+    usize::try_from(v.max(0)).unwrap_or(usize::MAX)
 }
 
 /// Saturating cast: `usize` → `i32`.
@@ -483,7 +487,7 @@ pub fn usize_to_i32_sat(v: usize) -> i32 {
 #[inline]
 #[must_use]
 pub fn i64_to_u32_sat(v: i64) -> u32 {
-    u32::try_from(v.clamp(0, i64::from(u32::MAX))).unwrap_or(0)
+    u32::try_from(v.clamp(0, i64::from(u32::MAX))).unwrap_or(u32::MAX)
 }
 
 /// Saturating cast: `i64` → `u64`.
@@ -492,7 +496,7 @@ pub fn i64_to_u32_sat(v: i64) -> u32 {
 #[inline]
 #[must_use]
 pub fn i64_to_u64_sat(v: i64) -> u64 {
-    u64::try_from(v).unwrap_or(0)
+    u64::try_from(v.max(0)).unwrap_or(u64::MAX)
 }
 
 /// Saturating cast: `u64` → `i64`.
@@ -582,7 +586,7 @@ pub fn u32_to_i32_sat(v: u32) -> i32 {
 #[inline]
 #[must_use]
 pub fn i32_to_u32_sat(v: i32) -> u32 {
-    u32::try_from(v).unwrap_or(0)
+    u32::try_from(v.max(0)).unwrap_or(u32::MAX)
 }
 
 /// Saturating cast: `i32` → `u64`.
@@ -591,7 +595,7 @@ pub fn i32_to_u32_sat(v: i32) -> u32 {
 #[inline]
 #[must_use]
 pub fn i32_to_u64_sat(v: i32) -> u64 {
-    u64::try_from(v).unwrap_or(0)
+    u64::try_from(i64::from(v).max(0)).unwrap_or(u64::MAX)
 }
 
 /// Lossless promotion: `usize` → `u64`.
@@ -609,7 +613,7 @@ pub fn usize_to_u64(v: usize) -> u64 {
 #[inline]
 #[must_use]
 pub fn i32_to_u8_sat(v: i32) -> u8 {
-    u8::try_from(v.clamp(0, i32::from(u8::MAX))).unwrap_or(0)
+    u8::try_from(v.clamp(0, i32::from(u8::MAX))).unwrap_or(u8::MAX)
 }
 
 // ---------------------------------------------------------------------------

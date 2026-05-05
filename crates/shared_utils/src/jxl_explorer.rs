@@ -771,7 +771,10 @@ fn finalize_screening_result(
 /// # Errors
 /// Returns `Err` if the `try_candidate` closure fails for any tested distance.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 pub fn screen_jxl_candidates<F>(
     input_size: u64,
     initial_size: u64,

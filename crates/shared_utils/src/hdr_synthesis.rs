@@ -86,7 +86,10 @@ impl Default for GainMapParams {
 ///
 /// Returns an error if the HEIC file cannot be read, gainmap is missing, or synthesis fails.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 pub fn convert_heic_with_gainmap_to_jxl_hdr(
     input: &Path,
     output: &Path,
@@ -227,7 +230,9 @@ pub fn convert_heic_with_gainmap_to_jxl_hdr(
 
     if !status.success() {
         if tmp_file.exists() {
-            let _ = std::fs::remove_file(&tmp_file);
+            std::fs::remove_file(&tmp_file).unwrap_or_else(|e| {
+                tracing::warn!("Non-fatal cleanup/fallback operation failed: {}", e)
+            });
         }
         return Err(anyhow!(
             "cjxl encoding failed with status {status} during HDR synthesis; dynamic range parameters might be invalid"
@@ -252,7 +257,9 @@ pub fn convert_heic_with_gainmap_to_jxl_hdr(
 
     // 9. Cleanup
     if tmp_file.exists() {
-        let _ = std::fs::remove_file(&tmp_file);
+        std::fs::remove_file(&tmp_file).unwrap_or_else(|e| {
+            tracing::warn!("Non-fatal cleanup/fallback operation failed: {}", e)
+        });
     }
 
     Ok(())
@@ -368,7 +375,9 @@ pub fn convert_ultrahdr_jpeg_to_jxl_hdr(
 
     if !status.success() {
         if tmp_file.exists() {
-            let _ = std::fs::remove_file(&tmp_file);
+            std::fs::remove_file(&tmp_file).unwrap_or_else(|e| {
+                tracing::warn!("Non-fatal cleanup/fallback operation failed: {}", e)
+            });
         }
         return Err(anyhow!(
             "cjxl encoding failed with status {status} during UltraHDR JPEG HDR synthesis"
@@ -377,7 +386,9 @@ pub fn convert_ultrahdr_jpeg_to_jxl_hdr(
 
     // 8. Cleanup
     if tmp_file.exists() {
-        let _ = std::fs::remove_file(&tmp_file);
+        std::fs::remove_file(&tmp_file).unwrap_or_else(|e| {
+            tracing::warn!("Non-fatal cleanup/fallback operation failed: {}", e)
+        });
     }
 
     info!(
@@ -510,8 +521,10 @@ fn decode_heif_handle(handle: &ImageHandle, color_space: ColorSpace) -> Result<D
             } else {
                 let mut buffer = ImageBuffer::new(width, height);
                 for (x, y, pixel) in buffer.enumerate_pixels_mut() {
-                    let y_usize = usize::try_from(y).unwrap_or(0);
-                    let x_usize = usize::try_from(x).unwrap_or(0);
+                    let y_usize = usize::try_from(y)
+                        .expect("Failed to parse integer or missing required value");
+                    let x_usize = usize::try_from(x)
+                        .expect("Failed to parse integer or missing required value");
                     let offset = y_usize
                         .saturating_mul(r_plane.stride)
                         .saturating_add(x_usize.saturating_mul(3));
@@ -548,8 +561,10 @@ fn decode_heif_handle(handle: &ImageHandle, color_space: ColorSpace) -> Result<D
             } else {
                 let mut buffer = ImageBuffer::new(width, height);
                 for (x, y, pixel) in buffer.enumerate_pixels_mut() {
-                    let y_usize = usize::try_from(y).unwrap_or(0);
-                    let x_usize = usize::try_from(x).unwrap_or(0);
+                    let y_usize = usize::try_from(y)
+                        .expect("Failed to parse integer or missing required value");
+                    let x_usize = usize::try_from(x)
+                        .expect("Failed to parse integer or missing required value");
                     let offset = y_usize
                         .saturating_mul(y_plane.stride)
                         .saturating_add(x_usize);
@@ -582,7 +597,9 @@ fn is_display_p3(data: &[u8]) -> bool {
     // We search the whole buffer for the signature of Display P3 ICC profile
     let search_limit = 1024 * 1024; // limit search to first 1MB for performance
     let end = data.len().min(search_limit);
-    let slice = data.get(..end).unwrap_or(&[]);
+    let slice = data
+        .get(..end)
+        .expect("Required byte slice missing (out of bounds)");
 
     // Check for common Display P3 signatures in ICC profiles
     slice.windows(10).any(|w| w == b"Display P3")
@@ -601,7 +618,10 @@ fn parse_gainmap_params(handle: &ImageHandle) -> Option<GainMapParams> {
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 fn parse_gainmap_from_xmp(xmp_data: &[u8]) -> Option<GainMapParams> {
     let mut params = GainMapParams::default();
     let mut reader = Reader::from_reader(xmp_data);
@@ -717,7 +737,10 @@ fn parse_gainmap_from_xmp(xmp_data: &[u8]) -> Option<GainMapParams> {
 ///
 /// Returns an error if the images have incompatible dimensions or if memory allocation fails.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 pub fn synthesize_hdr(
     sdr: &DynamicImage,
     gain: &DynamicImage,

@@ -145,10 +145,11 @@ fn show_confirmation_prompt(elapsed_secs: u64) {
             out,
             "  \x1b[2mPress Enter to exit, or wait 10 s to resume automatically.\x1b[0m"
         );
-        let _ = write!(
+        write!(
             out,
             "  \x1b[1mConfirm exit? [y/N]\x1b[0m (auto-resume in 10 s): "
-        );
+        )
+        .expect("String formatting should not fail");
         let _ = out.flush();
     }
 

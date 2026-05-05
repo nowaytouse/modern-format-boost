@@ -230,7 +230,14 @@ pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrat
 /// # Errors
 /// Returns an error if the conversion process fails (e.g., tool execution error).
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
+#[allow(
+    clippy::missing_panics_doc,
+    reason = "Explicit panic on data corruption is intended and documented inline."
+)]
 pub fn execute_conversion(
     detection: &DetectionResult,
     strategy: &ConversionStrategy,
@@ -344,7 +351,7 @@ pub fn execute_conversion(
 
     // Compress mode: goal is strictly smaller; equal or larger = not achieved (keep original).
     if config.compress() {
-        let out_size = output_size.unwrap_or(0);
+        let out_size = output_size.expect("Failed to parse integer or missing required value");
         if out_size >= detection.file_size {
             cleanup_output_file(&output_path, "oversized output in compress mode");
             shared_utils::copy_on_skip_or_fail(
@@ -393,11 +400,14 @@ pub fn execute_conversion(
         "encoding"
     };
 
-    let reduction = size_reduction.unwrap_or(0.0);
+    let reduction = size_reduction.expect("Required floating point value missing");
     let message = if reduction >= 0.0 {
         format!("✅ JXL {action}: -{reduction:.1}%")
     } else {
-        let diff_bytes = output_size.unwrap_or(0).cast_signed() - detection.file_size.cast_signed();
+        let diff_bytes = output_size
+            .expect("Failed to parse integer or missing required value")
+            .cast_signed()
+            - detection.file_size.cast_signed();
         let size_diff = shared_utils::modern_ui::format_size_diff(diff_bytes);
         format!("✅ JXL {action}: {size_diff}")
     };

@@ -4,8 +4,28 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+### 🛡️ Systemic Quality Audit & Regression Remediation (2026-05-05)
+
+- **Remediation of Silent Error Handling (Anti-Shrinkage Audit)**:
+  - **Eliminated "Clippy-Bypassing" Silence**: Performed a workspace-wide audit to identify and remove deceptive error suppressions (`let _ = write!`, `.unwrap_or(0)`, `.ok()`) introduced during recent linter compliance passes.
+  - **Restored Error Visibility**: Replaced over 100 instances of silent fallback with explicit `.expect("...")` calls containing technical justifications, restoring the program's ability to fail loudly and correctly on malformed data.
+  - **Decision Tree Recovery**: Repaired the `LoopMeta` decision tree logic where missing metadata signals were being silently ignored, restoring the integrity of the loop detection algorithm.
+
+- **Numerical Integrity & Stability Hardening**:
+  - **Repaired "Deceptive" Saturating Casts**: Fixed a critical regression in `numeric_cast.rs` where functions named `_sat` were internally using `expect()`, potentially causing panics on valid edge-case data. All casts now use true saturating logic (e.g., `v.max(0)`).
+  - **Nightly Pedantic Compliance**: Achieved 100% `clippy::pedantic` cleanliness on `nightly-2026-05-05` without compromising functionality. All remaining `missing_panics_doc` warnings were resolved with explicit `# Panics` sections or audited justifications.
+
+- **Developer Experience & Tooling Automation**:
+  - **Interactive Database Maintenance**: Introduced `database_manager.py`, an interactive CLI tool for exploring and maintaining the media quality database.
+  - **iCloud Import Hardening**: Added mutual exclusion file locks and dual import modes (Standard/Album-preserved) to `icloud_import.py` to prevent data corruption during concurrent imports.
+  - **Automatic macOS Dependency Discovery**: Updated `.cargo/config.toml` and `.envrc` to automatically inject Homebrew paths (`C_INCLUDE_PATH`, `LIBRARY_PATH`, `PKG_CONFIG_PATH`). This eliminates the need for manual environment variable exports when compiling C-linked crates like `libheif-sys` and `jpegxl-sys`.
+  - **Cleanup Environment**: Centralized all audit-related scripts and logs to `.cache/`, ensuring the workspace root remains clean and free of temporary artifacts.
+
 ### 🛡️ Systemic Hardening, Performance Tuning & Obsolete Feature Cleanup (2026-05-04)
 
+- **Architectural Refactoring & Pipeline Modernization**:
+  - **Video Processing Pipelines**: Refactored the `vid` crate core into structured `VideoConversionPipeline` and `AnimatedConversionPipeline` classes, improving state encapsulation and error propagation.
+  - **Animated Format Extraction**: Implemented native `JXL → APNG` (via `djxl`) and `WebP → APNG` (via `webpmux`) extraction paths in the animated image pipeline to bypass FFmpeg decoder limitations.
 - **macOS Environment & Toolchain Stabilization**:
   - **Linker Warning Fix (Deployment Target)**: Resolved persistent "building for macOS-11.0, but linking with dylib built for newer version" warnings by setting `MACOSX_DEPLOYMENT_TARGET = "26.0"` in `.cargo/config.toml`.
   - **Libstdc++ Linking Fix**: Repaired the `.tmp_lib/libstdc++.dylib` and `.tbd` symlinks to correctly point to the SDK's `libc++.tbd`, resolving linking failures on modern macOS versions.
@@ -28,6 +48,8 @@ All notable changes to this project will be documented in this file.
   - **Dependency Stabilization**: Synchronized workspace-wide lockfile to ensure identical build environments across local macOS and Linux CI runners.
 
 - **CI/CD & Cross-Compilation Hardening**:
+  - **ClusterFuzzLite Integration**: Implemented a comprehensive `build.py` script for ClusterFuzzLite to automate fuzzer binary compilation and output path management.
+  - **CI Output Path Fix**: Resolved GHA environment issues by explicitly mapping ClusterFuzzLite output to `GITHUB_WORKSPACE/out`.
   - **macOS x86_64 Support**: Fixed the Intel macOS build on ARM64 runners by splitting `.cargo/config.toml` flags by architecture and correcting library search paths for `/usr/local` (Intel Homebrew).
   - **Gmp-Mpfr-Sys Cross-Compile**: Enabled the `force-cross` feature for `gmp-mpfr-sys` to ensure stable compilation in cross-platform CI environments.
   - **Fuzzing Environment Stabilization**: Hardened the ClusterFuzzLite Dockerfile with necessary build tools (`ninja-build`, `meson`, codec headers) to support the `ci-static-build` feature used in fuzzing.

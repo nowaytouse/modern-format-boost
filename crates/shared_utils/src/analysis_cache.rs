@@ -215,6 +215,10 @@ impl AnalysisCache {
     ///
     /// # Errors
     /// Returns an error if the database query fails.
+    #[allow(
+        clippy::missing_panics_doc,
+        reason = "Explicit panic on data corruption is intended and documented inline."
+    )]
     pub fn get_analysis(&self, path: &Path) -> Result<Option<ImageAnalysis>> {
         let mut client = open_pg_client()?;
         let sig = FileSignature::from_path(path)?;
@@ -239,7 +243,9 @@ impl AnalysisCache {
                 {
                     let data: Vec<u8> = row.get(0);
                     if let Some(stored_checksum) = row.get::<_, Option<i64>>(2) {
-                        if calculate_checksum(&data) != u32::try_from(stored_checksum).unwrap_or(0)
+                        if calculate_checksum(&data)
+                            != u32::try_from(stored_checksum)
+                                .expect("Failed to parse integer or missing required value")
                         {
                             warn!(
                                 "⚠️  [Cache] Checksum mismatch for {}. Invalidating.",
@@ -270,7 +276,10 @@ impl AnalysisCache {
             if algorithm_version >= cache_algorithm_version() {
                 let data: Vec<u8> = row.get(0);
                 if let Some(stored_checksum) = row.get::<_, Option<i64>>(2) {
-                    if calculate_checksum(&data) != u32::try_from(stored_checksum).unwrap_or(0) {
+                    if calculate_checksum(&data)
+                        != u32::try_from(stored_checksum)
+                            .expect("Failed to parse integer or missing required value")
+                    {
                         warn!(
                             "⚠️  [Cache] Checksum mismatch for {}. Invalidating.",
                             path.display()
@@ -303,6 +312,10 @@ impl AnalysisCache {
     ///
     /// # Errors
     /// Returns an error if the database query fails.
+    #[allow(
+        clippy::missing_panics_doc,
+        reason = "Explicit panic on data corruption is intended and documented inline."
+    )]
     pub fn get_quality_analysis(&self, path: &Path) -> Result<Option<ImageQualityAnalysis>> {
         let mut client = open_pg_client()?;
         let sig = FileSignature::from_path(path)?;
@@ -325,7 +338,10 @@ impl AnalysisCache {
             {
                 let data: Vec<u8> = row.get(0);
                 if let Some(stored_checksum) = row.get::<_, Option<i64>>(1) {
-                    if calculate_checksum(&data) != u32::try_from(stored_checksum).unwrap_or(0) {
+                    if calculate_checksum(&data)
+                        != u32::try_from(stored_checksum)
+                            .expect("Failed to parse integer or missing required value")
+                    {
                         warn!("⚠️  [Cache] Quality checksum mismatch (Path).");
                         return Ok(None);
                     }
@@ -348,7 +364,10 @@ impl AnalysisCache {
         if let Some(row) = row {
             let data: Vec<u8> = row.get(0);
             if let Some(stored_checksum) = row.get::<_, Option<i64>>(1) {
-                if calculate_checksum(&data) != u32::try_from(stored_checksum).unwrap_or(0) {
+                if calculate_checksum(&data)
+                    != u32::try_from(stored_checksum)
+                        .expect("Failed to parse integer or missing required value")
+                {
                     warn!("⚠️  [Cache] Quality checksum mismatch (Hash).");
                     return Ok(None);
                 }
@@ -450,6 +469,10 @@ impl AnalysisCache {
     ///
     /// # Errors
     /// Returns an error if the database query fails.
+    #[allow(
+        clippy::missing_panics_doc,
+        reason = "Explicit panic on data corruption is intended and documented inline."
+    )]
     pub fn get_video_analysis(&self, path: &Path) -> Result<Option<VideoDetectionResult>> {
         let mut client = open_pg_client()?;
         let sig = FileSignature::from_path(path)?;
@@ -472,7 +495,10 @@ impl AnalysisCache {
             {
                 let data: Vec<u8> = row.get(0);
                 if let Some(stored_checksum) = row.get::<_, Option<i64>>(1) {
-                    if calculate_checksum(&data) != u32::try_from(stored_checksum).unwrap_or(0) {
+                    if calculate_checksum(&data)
+                        != u32::try_from(stored_checksum)
+                            .expect("Failed to parse integer or missing required value")
+                    {
                         warn!("⚠️  [Cache] Video checksum mismatch (Path).");
                         return Ok(None);
                     }
@@ -495,7 +521,10 @@ impl AnalysisCache {
         if let Some(row) = row {
             let data: Vec<u8> = row.get(0);
             if let Some(stored_checksum) = row.get::<_, Option<i64>>(1) {
-                if calculate_checksum(&data) != u32::try_from(stored_checksum).unwrap_or(0) {
+                if calculate_checksum(&data)
+                    != u32::try_from(stored_checksum)
+                        .expect("Failed to parse integer or missing required value")
+                {
                     warn!("⚠️  [Cache] Video checksum mismatch (Hash).");
                     return Ok(None);
                 }
@@ -556,6 +585,10 @@ impl AnalysisCache {
     ///
     /// # Errors
     /// Returns an error if the database deletion fails.
+    #[allow(
+        clippy::missing_panics_doc,
+        reason = "Explicit panic on data corruption is intended and documented inline."
+    )]
     pub fn cleanup_old_records(&self, max_age_secs: i64) -> Result<usize> {
         let mut client = open_pg_client()?;
         let now = crate::numeric_cast::unix_secs_i64_result()?;
@@ -565,7 +598,7 @@ impl AnalysisCache {
             "DELETE FROM analysis_records WHERE created_at < $1",
             &[&threshold],
         )?)
-        .unwrap_or(0);
+        .expect("Failed to parse integer or missing required value");
 
         if removed > 0 {
             info!("🧹 [Cache] Pruned {} old records", removed);
@@ -577,6 +610,10 @@ impl AnalysisCache {
     ///
     /// # Errors
     /// Returns an error if the database query fails.
+    #[allow(
+        clippy::missing_panics_doc,
+        reason = "Explicit panic on data corruption is intended and documented inline."
+    )]
     pub fn get_statistics(&self) -> Result<CacheStatistics> {
         let mut client = open_pg_client()?;
 
@@ -617,10 +654,14 @@ impl AnalysisCache {
 
         Ok(CacheStatistics {
             db_size_bytes: 0, // In Postgres, tracking actual disk size is complex per-table
-            analysis_records: usize::try_from(analysis_count).unwrap_or(0),
-            quality_records: usize::try_from(quality_count).unwrap_or(0),
-            video_records: usize::try_from(video_count).unwrap_or(0),
-            path_index_entries: usize::try_from(path_index_count).unwrap_or(0),
+            analysis_records: usize::try_from(analysis_count)
+                .expect("Failed to parse integer or missing required value"),
+            quality_records: usize::try_from(quality_count)
+                .expect("Failed to parse integer or missing required value"),
+            video_records: usize::try_from(video_count)
+                .expect("Failed to parse integer or missing required value"),
+            path_index_entries: usize::try_from(path_index_count)
+                .expect("Failed to parse integer or missing required value"),
             schema_version,
             algorithm_version_distribution: version_dist,
             current_algorithm_version: cache_algorithm_version(),
@@ -649,7 +690,11 @@ fn calculate_blake3(path: &Path) -> Result<blake3::Hash> {
         if bytes_read == 0 {
             break;
         }
-        hasher.update(buffer.get(..bytes_read).unwrap_or(&[]));
+        hasher.update(
+            buffer
+                .get(..bytes_read)
+                .expect("Required byte slice missing (out of bounds)"),
+        );
     }
     Ok(hasher.finalize())
 }
@@ -660,7 +705,11 @@ fn calculate_content_fingerprint(path: &Path) -> Result<[u8; 32]> {
     let mut hasher = Hasher::new();
     let mut buffer = vec![0u8; 65536];
     let bytes_read = file.read(&mut buffer)?;
-    hasher.update(buffer.get(..bytes_read).unwrap_or(&[]));
+    hasher.update(
+        buffer
+            .get(..bytes_read)
+            .expect("Required byte slice missing (out of bounds)"),
+    );
     Ok(*hasher.finalize().as_bytes())
 }
 

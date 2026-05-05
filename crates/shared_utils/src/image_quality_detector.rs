@@ -116,8 +116,8 @@ static CLASSIFIER_RULES: std::sync::OnceLock<Vec<ClassifierRule>> = std::sync::O
 fn get_classifier_rules() -> &'static [ClassifierRule] {
     CLASSIFIER_RULES.get_or_init(|| {
         let json = include_str!("image_classifiers.json");
-        let wrapper: serde_json::Value = serde_json::from_str(json)
-            .expect("embedded image_classifiers.json is malformed");
+        let wrapper: serde_json::Value =
+            serde_json::from_str(json).expect("embedded image_classifiers.json is malformed");
         wrapper
             .get("classifiers")
             .map_or_else(Vec::new, |rules_array| {
@@ -248,9 +248,21 @@ fn calculate_edge_density(rgba: &[u8], width: u32, height: u32) -> f64 {
         for x in (1..crate::numeric_cast::u32_to_usize_sat(width.saturating_sub(1))).step_by(step) {
             let get_gray = |px: usize, py: usize| -> i32 {
                 let idx = (py * w + px) * 4;
-                let r = i32::from(rgba.get(idx).copied().unwrap_or(0));
-                let g = i32::from(rgba.get(idx + 1).copied().unwrap_or(0));
-                let b = i32::from(rgba.get(idx + 2).copied().unwrap_or(0));
+                let r = i32::from(
+                    rgba.get(idx)
+                        .copied()
+                        .expect("Failed to parse integer or missing required value"),
+                );
+                let g = i32::from(
+                    rgba.get(idx + 1)
+                        .copied()
+                        .expect("Failed to parse integer or missing required value"),
+                );
+                let b = i32::from(
+                    rgba.get(idx + 2)
+                        .copied()
+                        .expect("Failed to parse integer or missing required value"),
+                );
                 (r * crate::constants::LUMA_COEFF_R
                     + g * crate::constants::LUMA_COEFF_G
                     + b * crate::constants::LUMA_COEFF_B)
@@ -299,9 +311,21 @@ fn calculate_color_diversity(rgba: &[u8], width: u32, height: u32) -> f64 {
     for i in (0..pixels).step_by(step) {
         let idx = i * 4;
         if idx + 2 < rgba.len() {
-            let r = rgba.get(idx).copied().unwrap_or(0) / quantize_step;
-            let g = rgba.get(idx + 1).copied().unwrap_or(0) / quantize_step;
-            let b = rgba.get(idx + 2).copied().unwrap_or(0) / quantize_step;
+            let r = rgba
+                .get(idx)
+                .copied()
+                .expect("Failed to parse integer or missing required value")
+                / quantize_step;
+            let g = rgba
+                .get(idx + 1)
+                .copied()
+                .expect("Failed to parse integer or missing required value")
+                / quantize_step;
+            let b = rgba
+                .get(idx + 2)
+                .copied()
+                .expect("Failed to parse integer or missing required value")
+                / quantize_step;
             colors.insert((r, g, b));
             sample_count += 1;
         }
@@ -350,9 +374,21 @@ fn calculate_texture_variance(rgba: &[u8], width: u32, height: u32) -> f64 {
                     );
                     let idx = (py * crate::numeric_cast::u32_to_usize_sat(width) + px) * 4;
 
-                    let gray = (i32::from(rgba.get(idx).copied().unwrap_or(0)) * 299
-                        + i32::from(rgba.get(idx + 1).copied().unwrap_or(0)) * 587
-                        + i32::from(rgba.get(idx + 2).copied().unwrap_or(0)) * 114)
+                    let gray = (i32::from(
+                        rgba.get(idx)
+                            .copied()
+                            .expect("Failed to parse integer or missing required value"),
+                    ) * 299
+                        + i32::from(
+                            rgba.get(idx + 1)
+                                .copied()
+                                .expect("Failed to parse integer or missing required value"),
+                        ) * 587
+                        + i32::from(
+                            rgba.get(idx + 2)
+                                .copied()
+                                .expect("Failed to parse integer or missing required value"),
+                        ) * 114)
                         / 1000;
                     sum += gray;
                     sq_sum += i64::from(gray) * i64::from(gray);
@@ -401,18 +437,45 @@ fn calculate_noise_level(rgba: &[u8], width: u32, height: u32) -> f64 {
             let idx_down = idx + (crate::numeric_cast::u32_to_usize_sat(width) * 4);
 
             if idx_down + 2 < rgba.len() {
-                let curr = (i32::from(rgba.get(idx).copied().unwrap_or(0))
-                    + i32::from(rgba.get(idx + 1).copied().unwrap_or(0))
-                    + i32::from(rgba.get(idx + 2).copied().unwrap_or(0)))
-                    / 3;
-                let right = (i32::from(rgba.get(idx_right).copied().unwrap_or(0))
-                    + i32::from(rgba.get(idx_right + 1).copied().unwrap_or(0))
-                    + i32::from(rgba.get(idx_right + 2).copied().unwrap_or(0)))
-                    / 3;
-                let down = (i32::from(rgba.get(idx_down).copied().unwrap_or(0))
-                    + i32::from(rgba.get(idx_down + 1).copied().unwrap_or(0))
-                    + i32::from(rgba.get(idx_down + 2).copied().unwrap_or(0)))
-                    / 3;
+                let curr = (i32::from(
+                    rgba.get(idx)
+                        .copied()
+                        .expect("Failed to parse integer or missing required value"),
+                ) + i32::from(
+                    rgba.get(idx + 1)
+                        .copied()
+                        .expect("Failed to parse integer or missing required value"),
+                ) + i32::from(
+                    rgba.get(idx + 2)
+                        .copied()
+                        .expect("Failed to parse integer or missing required value"),
+                )) / 3;
+                let right = (i32::from(
+                    rgba.get(idx_right)
+                        .copied()
+                        .expect("Failed to parse integer or missing required value"),
+                ) + i32::from(
+                    rgba.get(idx_right + 1)
+                        .copied()
+                        .expect("Failed to parse integer or missing required value"),
+                ) + i32::from(
+                    rgba.get(idx_right + 2)
+                        .copied()
+                        .expect("Failed to parse integer or missing required value"),
+                )) / 3;
+                let down = (i32::from(
+                    rgba.get(idx_down)
+                        .copied()
+                        .expect("Failed to parse integer or missing required value"),
+                ) + i32::from(
+                    rgba.get(idx_down + 1)
+                        .copied()
+                        .expect("Failed to parse integer or missing required value"),
+                ) + i32::from(
+                    rgba.get(idx_down + 2)
+                        .copied()
+                        .expect("Failed to parse integer or missing required value"),
+                )) / 3;
 
                 diff_sum += f64::from((curr - right).abs());
                 diff_sum += f64::from((curr - down).abs());
@@ -451,9 +514,21 @@ fn calculate_sharpness(rgba: &[u8], width: u32, height: u32) -> f64 {
 
     let get_gray = |x: usize, y: usize| -> i32 {
         let idx = (y * crate::numeric_cast::u32_to_usize_sat(width) + x) * 4;
-        (i32::from(rgba.get(idx).copied().unwrap_or(0)) * crate::constants::LUMA_COEFF_R
-            + i32::from(rgba.get(idx + 1).copied().unwrap_or(0)) * crate::constants::LUMA_COEFF_G
-            + i32::from(rgba.get(idx + 2).copied().unwrap_or(0)) * crate::constants::LUMA_COEFF_B)
+        (i32::from(
+            rgba.get(idx)
+                .copied()
+                .expect("Failed to parse integer or missing required value"),
+        ) * crate::constants::LUMA_COEFF_R
+            + i32::from(
+                rgba.get(idx + 1)
+                    .copied()
+                    .expect("Failed to parse integer or missing required value"),
+            ) * crate::constants::LUMA_COEFF_G
+            + i32::from(
+                rgba.get(idx + 2)
+                    .copied()
+                    .expect("Failed to parse integer or missing required value"),
+            ) * crate::constants::LUMA_COEFF_B)
             / crate::constants::LUMA_DIVISOR
     };
 
@@ -501,12 +576,21 @@ fn calculate_contrast(rgba: &[u8], width: u32, height: u32) -> f64 {
     for i in (0..pixels).step_by(step) {
         let idx = i * 4;
         if idx + 2 < rgba.len() {
-            let gray = (u64::from(rgba.get(idx).copied().unwrap_or(0))
-                * crate::numeric_cast::i32_to_u64_sat(crate::constants::LUMA_COEFF_R)
-                + u64::from(rgba.get(idx + 1).copied().unwrap_or(0))
-                    * crate::numeric_cast::i32_to_u64_sat(crate::constants::LUMA_COEFF_G)
-                + u64::from(rgba.get(idx + 2).copied().unwrap_or(0))
-                    * crate::numeric_cast::i32_to_u64_sat(crate::constants::LUMA_COEFF_B))
+            let gray = (u64::from(
+                rgba.get(idx)
+                    .copied()
+                    .expect("Failed to parse integer or missing required value"),
+            ) * crate::numeric_cast::i32_to_u64_sat(crate::constants::LUMA_COEFF_R)
+                + u64::from(
+                    rgba.get(idx + 1)
+                        .copied()
+                        .expect("Failed to parse integer or missing required value"),
+                ) * crate::numeric_cast::i32_to_u64_sat(crate::constants::LUMA_COEFF_G)
+                + u64::from(
+                    rgba.get(idx + 2)
+                        .copied()
+                        .expect("Failed to parse integer or missing required value"),
+                ) * crate::numeric_cast::i32_to_u64_sat(crate::constants::LUMA_COEFF_B))
                 / crate::numeric_cast::i32_to_u64_sat(crate::constants::LUMA_DIVISOR);
             sum += gray;
             sq_sum += gray * gray;
@@ -531,7 +615,13 @@ fn calculate_contrast(rgba: &[u8], width: u32, height: u32) -> f64 {
 fn detect_alpha_usage(rgba: &[u8]) -> bool {
     for i in (0..rgba.len()).step_by(crate::constants::IMAGE_ALPHA_SAMPLING_STEP) {
         let alpha_idx = i + 3;
-        if alpha_idx < rgba.len() && rgba.get(alpha_idx).copied().unwrap_or(0) < 255 {
+        if alpha_idx < rgba.len()
+            && rgba
+                .get(alpha_idx)
+                .copied()
+                .expect("Failed to parse integer or missing required value")
+                < 255
+        {
             return true;
         }
     }

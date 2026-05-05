@@ -330,7 +330,10 @@ impl Default for GlobalCollectionStats {
 
 impl Default for LoopReferenceProfile {
     // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-    #[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+    )]
     fn default() -> Self {
         let collection = GlobalCollectionStats::default();
         let pixels_min = f64::from(collection.width_min) * f64::from(collection.height_min);
@@ -493,7 +496,10 @@ impl Default for LoopReferenceProfile {
 /// Row shape for GIF/video KNN features; some fields are stored for DB round-trip / future use.
 #[derive(Debug, Clone)]
 // Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(clippy::struct_excessive_bools, reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping.")]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping."
+)]
 struct SampleRow {
     _loss_tolerance: Option<String>,
     width: u32,
@@ -614,7 +620,17 @@ pub fn report_db_status() {
 /// database is too immature for reliable KNN.
 #[must_use]
 pub fn lookup_similar_samples(meta: &LoopMeta, path: Option<&Path>) -> Option<SampleMatch> {
-    lookup_similar_samples_inner(meta, path).ok().flatten()
+    match lookup_similar_samples_inner(meta, path) {
+        Ok(result) => result,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                path = %path.map(|p| p.display().to_string()).unwrap_or_default(),
+                "similar sample lookup failed; falling back to heuristic-only decision"
+            );
+            None
+        }
+    }
 }
 
 /// Retrieve aggregate collection statistics from the metadata table.
@@ -654,7 +670,7 @@ fn fetch_feature_map(conn: &mut Client) -> Result<FeatureMap> {
         "SELECT value FROM sample_metadata WHERE key = $1",
         &[&STATS_KEY],
     )?;
-    
+
     match row_opt {
         Some(row) => {
             let value: String = row.get(0);
@@ -777,7 +793,10 @@ fn check_gif_db_maturity(conn: &mut Client) -> bool {
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 fn lookup_similar_samples_inner(
     meta: &LoopMeta,
     _path: Option<&Path>,
@@ -845,7 +864,7 @@ fn lookup_similar_samples_inner(
         .collect();
     if !candidate_distances.is_empty() {
         tracing::debug!(
-            top5 = ?candidate_distances.get(..5.min(candidate_distances.len())).unwrap_or(&[]),
+            top5 = ?&candidate_distances[..5.min(candidate_distances.len())],
             "KNN raw distance sample"
         );
     }
@@ -868,12 +887,12 @@ fn lookup_similar_samples_inner(
                 label,                // label status
                 row.get::<_, f64>(1), // duration_secs
                 row.get::<_, f64>(2), // dist
-            )
+            );
         })
         .collect();
 
     let neighbor_count = adaptive_neighbor_count(candidates.len());
-    let neighbors = candidates.get(..neighbor_count).unwrap_or(&[]);
+    let neighbors = &candidates[..neighbor_count.min(candidates.len())];
 
     let min_distance = neighbors.first().map_or(0.0, |(_, _, d)| *d);
     let radius = dynamic_neighbor_radius(neighbors);
@@ -1069,7 +1088,13 @@ pub fn is_lossless_exploration_safe(meta: &LoopMeta, path: Option<&Path>) -> boo
 
     let mut current_meta = meta.clone();
     if let Some(p) = path {
-        let _ = crate::loop_intent::deep_refine_meta(&mut current_meta, p);
+        if let Err(e) = crate::loop_intent::deep_refine_meta(&mut current_meta, p) {
+            tracing::warn!(
+                error = %e,
+                path = %p.display(),
+                "lossless exploration metadata refinement failed; using existing metadata"
+            );
+        }
     }
     current_meta.duration_secs = resolved_duration_secs(&current_meta);
 
@@ -1117,7 +1142,10 @@ pub fn is_lossless_exploration_safe(meta: &LoopMeta, path: Option<&Path>) -> boo
 /// # Errors
 /// Returns an error if the database schema cannot be initialized or migrated.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 pub fn init_schema(conn: &mut Client) -> Result<()> {
     if !DB_SCHEMA_INIT_LOGGED_ONCE.swap(true, std::sync::atomic::Ordering::Relaxed) {
         tracing::debug!("Initializing Database Schema (PostgreSQL + pgvector)");
@@ -1174,24 +1202,24 @@ pub fn init_schema(conn: &mut Client) -> Result<()> {
     )?;
 
     // Ensure older databases upgrade their schema
-    let _ = conn.execute(
+    conn.execute(
         "ALTER TABLE samples DROP COLUMN IF EXISTS features CASCADE",
         &[],
-    );
-    let _ = conn.execute("ALTER TABLE samples ADD COLUMN features vector(31)", &[]);
+    )?;
+    conn.execute("ALTER TABLE samples ADD COLUMN features vector(31)", &[])?;
 
-    let _ = conn.execute(
+    conn.execute(
         "ALTER TABLE samples ADD COLUMN IF NOT EXISTS loop_closure_score DOUBLE PRECISION",
         &[],
-    );
-    let _ = conn.execute(
+    )?;
+    conn.execute(
         "ALTER TABLE samples ADD COLUMN IF NOT EXISTS motion_periodicity DOUBLE PRECISION",
         &[],
-    );
-    let _ = conn.execute(
+    )?;
+    conn.execute(
         "ALTER TABLE samples ADD COLUMN IF NOT EXISTS temporal_jitter DOUBLE PRECISION",
         &[],
-    );
+    )?;
 
     // The HNSW index for high-performance vector retrieval
     conn.execute(
@@ -1229,22 +1257,22 @@ pub fn init_schema(conn: &mut Client) -> Result<()> {
     )?;
 
     // Migration for existing tables
-    let _ = conn.execute(
+    conn.execute(
         "ALTER TABLE inference_log ADD COLUMN IF NOT EXISTS layer_exit TEXT DEFAULT 'Unknown'",
         &[],
-    );
-    let _ = conn.execute(
+    )?;
+    conn.execute(
         "ALTER TABLE inference_log ADD COLUMN IF NOT EXISTS signal_snapshot JSONB DEFAULT '{}'",
         &[],
-    );
-    let _ = conn.execute(
+    )?;
+    conn.execute(
         "ALTER TABLE inference_log ALTER COLUMN layer_exit SET NOT NULL",
         &[],
-    );
-    let _ = conn.execute(
+    )?;
+    conn.execute(
         "ALTER TABLE inference_log ALTER COLUMN signal_snapshot SET NOT NULL",
         &[],
-    );
+    )?;
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_samples_lookup
          ON samples(loss_tolerance, width, height, duration_secs, has_transparency)",
@@ -1257,20 +1285,20 @@ pub fn init_schema(conn: &mut Client) -> Result<()> {
         &[],
     )?;
 
-    let _ = conn.execute(
+    conn.execute(
         "ALTER TABLE samples ADD COLUMN IF NOT EXISTS directory_loop_intent_score DOUBLE PRECISION DEFAULT 0.5",
         &[],
-    );
+    )?;
 
-    let _ = conn.execute(
+    conn.execute(
         "ALTER TABLE samples ADD COLUMN IF NOT EXISTS webp_compression_ratio DOUBLE PRECISION",
         &[],
-    );
+    )?;
 
-    let _ = conn.execute(
+    conn.execute(
         "ALTER TABLE samples ADD COLUMN IF NOT EXISTS loop_verdict TEXT",
         &[],
-    );
+    )?;
 
     emit_stderr("✅ Database Schema Ready.");
     Ok(())
@@ -1298,11 +1326,7 @@ fn seed_positive_dataset_if_needed(conn: &mut Client) -> Result<()> {
 
     // Seed default dataset shipped with the binary (PostgreSQL-native SQL)
     let default_sql = include_str!("./sql/default_samples.sql");
-    tx.batch_execute(default_sql).unwrap_or_else(|e| {
-        emit_stderr(&format!(
-            "⚠️  Failed to seed default GIF value dataset: {e}"
-        ));
-    });
+    tx.batch_execute(default_sql)?;
 
     tx.execute(
         "INSERT INTO sample_metadata (key, value) VALUES ($1, 'done')
@@ -1314,15 +1338,17 @@ fn seed_positive_dataset_if_needed(conn: &mut Client) -> Result<()> {
     emit_stderr("✅ Training Dataset successfully imported.");
 
     // Recalculate stats based on the newly seeded data
-    let _ = refresh_feature_stats(conn);
-    Ok(())
+    refresh_feature_stats(conn)
 }
 
 /// Intermediate representation of a sample's metadata ready for database
 /// insertion. Contains all extracted features and classification labels.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 // Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(clippy::struct_excessive_bools, reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping.")]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping."
+)]
 pub struct SampleInsert {
     /// BLAKE3 hash of the file contents.
     file_hash: String,
@@ -1489,7 +1515,17 @@ pub fn sample_from_path(
     labeled_by: &str,
     label_override: Option<&str>,
 ) -> Option<SampleInsert> {
-    let probe = crate::probe_video(path).ok()?;
+    let probe = match crate::probe_video(path) {
+        Ok(probe) => probe,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                path = %path.display(),
+                "sample probe failed; skipping training sample"
+            );
+            return None;
+        }
+    };
     let mut meta = LoopMeta::from_ffprobe_result(&probe, path);
     if let Ok(scan) = scan_gif_headers(path) {
         meta.palette_size = scan.palette_size;
@@ -1504,7 +1540,13 @@ pub fn sample_from_path(
     }
 
     // Call deep refinement to populate palette_depth, temporal_flatness, etc.
-    let _ = crate::loop_intent::deep_refine_meta(&mut meta, path);
+    if let Err(e) = crate::loop_intent::deep_refine_meta(&mut meta, path) {
+        tracing::warn!(
+            error = %e,
+            path = %path.display(),
+            "sample metadata refinement failed; storing probe-level features"
+        );
+    }
 
     let (temporal_bpp, spatial_bpp) = bpp_from_meta(&meta);
 
@@ -1547,8 +1589,20 @@ pub fn sample_from_path(
     let is_native_gif = meta.is_native_gif;
     let is_high_value_source = loss_tolerance == "low";
 
+    let file_hash = match calculate_blake3_hex(path) {
+        Ok(hash) => hash,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                path = %path.display(),
+                "sample hashing failed; skipping training sample"
+            );
+            return None;
+        }
+    };
+
     Some(SampleInsert {
-        file_hash: calculate_blake3_hex(path).ok()?,
+        file_hash,
         source_path: path.display().to_string(),
         file_name: meta.file_name.clone(),
         source_ext: meta.source_extension.clone(),
@@ -1596,6 +1650,10 @@ pub fn sample_from_path(
 ///
 /// # Errors
 /// Returns an error if the file cannot be opened or read.
+#[allow(
+    clippy::missing_panics_doc,
+    reason = "Explicit panic on data corruption is intended and documented inline."
+)]
 pub fn calculate_blake3_hex(path: &Path) -> Result<String> {
     let mut file = std::fs::File::open(path)?;
     let mut hasher = Hasher::new();
@@ -1605,7 +1663,7 @@ pub fn calculate_blake3_hex(path: &Path) -> Result<String> {
         if bytes_read == 0 {
             break;
         }
-        hasher.update(buffer.get(..bytes_read).unwrap_or(&[]));
+        hasher.update(&buffer[..bytes_read]);
     }
     Ok(hasher.finalize().to_hex().to_string())
 }
@@ -1614,7 +1672,10 @@ pub fn calculate_blake3_hex(path: &Path) -> Result<String> {
 /// This precisely bakes the weights and normalization terms from the old dynamically computed KNN
 /// into an L2-compatible vector, allowing `PostgreSQL`'s HNSW index to do the heavy lifting!
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 fn compute_sample_vector(sample: &SampleRow, stats_map: &FeatureMap) -> Vec<f32> {
     let sample_pixels = (f64::from(sample.width) * f64::from(sample.height)).max(1.0);
 
@@ -1973,7 +2034,10 @@ fn build_feature_stats(values: &[f64]) -> FeatureStats {
 /// # Panics
 /// Panics if the progress bar template is invalid.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -> Result<usize> {
     let mut conn = open_pg_client()?;
 
@@ -2039,7 +2103,7 @@ pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -
 
     println!("💾 Persisting {} samples to database...", samples.len());
 
-    let initial_feature_map = fetch_feature_map(&mut conn).unwrap_or_default();
+    let initial_feature_map = fetch_feature_map(&mut conn)?;
     let mut tx = conn.transaction()?;
     let mut count = 0;
 
@@ -2102,12 +2166,12 @@ pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -
     )?;
 
     for sample in samples {
-        let palette_size_i32 = sample.palette_size.map(|v| i32::try_from(v).unwrap_or(0));
-        let total_pixels_i64 = i64::try_from(sample.total_pixels).unwrap_or(0);
-        let frame_count_i64 = i64::try_from(sample.frame_count).unwrap_or(0);
-        let file_size_i64 = i64::try_from(sample.file_size_bytes).unwrap_or(0);
-        let width_i32 = i32::try_from(sample.width).unwrap_or(0);
-        let height_i32 = i32::try_from(sample.height).unwrap_or(0);
+        let palette_size_i32 = sample.palette_size.map(crate::numeric_cast::u32_to_i32_sat);
+        let total_pixels_i64 = crate::numeric_cast::u64_to_i64_sat(sample.total_pixels);
+        let frame_count_i64 = crate::numeric_cast::u64_to_i64_sat(sample.frame_count);
+        let file_size_i64 = crate::numeric_cast::u64_to_i64_sat(sample.file_size_bytes);
+        let width_i32 = crate::numeric_cast::u32_to_i32_sat(sample.width);
+        let height_i32 = crate::numeric_cast::u32_to_i32_sat(sample.height);
 
         let sample_row = SampleRow::from(sample.clone());
         let vec_data = compute_sample_vector(&sample_row, &initial_feature_map);
@@ -2175,7 +2239,14 @@ pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -
 /// # Errors
 /// Returns an error if the database queries fail.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
+#[allow(
+    clippy::missing_panics_doc,
+    reason = "Explicit panic on data corruption is intended and documented inline."
+)]
 pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
     emit_stderr("🏋️  Recomputing Global KNN Feature Statistics (Training Model)...");
 
@@ -2197,7 +2268,7 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
                 let path = Path::new(&path_str);
                 if path.exists() {
                     if let Some(sample) = sample_from_path(path, "integrity_refresh", None) {
-                        let _ = conn.execute(
+                        conn.execute(
                             "UPDATE samples SET 
                                 motion_gini = $1, 
                                 directory_loop_intent_score = $2,
@@ -2211,7 +2282,7 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
                                 &sample.palette_depth,
                                 &file_hash,
                             ],
-                        );
+                        )?;
 
                         fixed_count += 1;
                     }
@@ -2249,7 +2320,7 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
         .iter()
         .map(|row| {
             let duration = row.get::<_, f64>(2);
-            let frame_count = f64::from(u32::try_from(row.get::<_, i64>(3).max(0)).unwrap_or(0));
+            let frame_count = f64::from(crate::numeric_cast::i64_to_u32_sat(row.get::<_, i64>(3)));
             let fps =
                 crate::numeric_cast::option_f64_loud(row.get::<_, Option<f64>>(5), 0.0, "db_fps");
             let density = if duration > 0.05 {
@@ -2451,21 +2522,21 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
             .and_then(|stats| stats.p90)
             .unwrap_or(dur_avg),
 
-        size_min: f64::from(u32::try_from(size_min_i64.max(0)).unwrap_or(0)),
+        size_min: crate::numeric_cast::i64_to_f64(size_min_i64.max(0)),
         size_avg,
-        size_max: f64::from(u32::try_from(size_max_i64.max(0)).unwrap_or(0)),
+        size_max: crate::numeric_cast::i64_to_f64(size_max_i64.max(0)),
 
         bitrate_min: bitrate_row.get(0),
         bitrate_avg: bitrate_row.get(1),
         bitrate_max: bitrate_row.get(2),
 
-        width_min: u32::try_from(w_min_i32).unwrap_or(0),
+        width_min: crate::numeric_cast::i32_to_u32_sat(w_min_i32),
         width_avg: w_avg,
-        width_max: u32::try_from(w_max_i32).unwrap_or(0),
+        width_max: crate::numeric_cast::i32_to_u32_sat(w_max_i32),
 
-        height_min: u32::try_from(h_min_i32).unwrap_or(0),
+        height_min: crate::numeric_cast::i32_to_u32_sat(h_min_i32),
         height_avg: h_avg,
-        height_max: u32::try_from(h_max_i32).unwrap_or(0),
+        height_max: crate::numeric_cast::i32_to_u32_sat(h_max_i32),
 
         aspect_min,
         aspect_avg,
@@ -2493,6 +2564,10 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
 ///
 /// # Errors
 /// Returns an error if the database transaction or query fails.
+#[allow(
+    clippy::missing_panics_doc,
+    reason = "Explicit panic on data corruption is intended and documented inline."
+)]
 pub fn recompute_all_features(conn: &mut Client) -> Result<()> {
     let feature_map = fetch_feature_map(conn)?;
 
@@ -2522,11 +2597,11 @@ pub fn recompute_all_features(conn: &mut Client) -> Result<()> {
         let file_hash: String = row.get(0);
         let sample = SampleRow {
             _loss_tolerance: row.get(1),
-            width: u32::try_from(row.get::<_, i32>(2)).unwrap_or(0),
-            height: u32::try_from(row.get::<_, i32>(3)).unwrap_or(0),
+            width: crate::numeric_cast::i32_to_u32_sat(row.get::<_, i32>(2)),
+            height: crate::numeric_cast::i32_to_u32_sat(row.get::<_, i32>(3)),
             duration_secs: row.get(4),
-            frame_count: u64::try_from(row.get::<_, i64>(5)).unwrap_or(0),
-            file_size_bytes: u64::try_from(row.get::<_, i64>(6)).unwrap_or(0),
+            frame_count: crate::numeric_cast::i64_to_u64_sat(row.get::<_, i64>(5)),
+            file_size_bytes: crate::numeric_cast::i64_to_u64_sat(row.get::<_, i64>(6)),
             fps: crate::numeric_cast::option_f64_loud(
                 row.get::<_, Option<f64>>(7),
                 0.0,
@@ -2539,14 +2614,14 @@ pub fn recompute_all_features(conn: &mut Client) -> Result<()> {
             has_complex_color_profile: row.get(12),
             palette_size: row
                 .get::<_, Option<i32>>(13)
-                .map(|v| u32::try_from(v).unwrap_or(0)),
+                .map(crate::numeric_cast::i32_to_u32_sat),
             frame_payload_variation: row.get(14),
             frame_delay_variation: row.get(15),
             aspect_ratio: row.get(16),
             _labeled_by: row.get(17),
             _total_pixels: row
                 .get::<_, Option<i64>>(18)
-                .map(|v| u64::try_from(v).unwrap_or(0)),
+                .map(crate::numeric_cast::i64_to_u64_sat),
             loop_frequency: row.get(19),
             is_meme_platform: row.get(20),
             is_human_semantic_name: row.get(21),
@@ -2621,6 +2696,10 @@ fn build_signal_snapshot(meta: &LoopMeta) -> Value {
 /// Fails silently -- never blocks the pipeline. Called after every
 /// verdict to build the feedback loop. Stores the meta snapshot,
 /// tree/KNN probabilities, final verdict, and layer exit information.
+#[allow(
+    clippy::missing_panics_doc,
+    reason = "Explicit panic on data corruption is intended and documented inline."
+)]
 pub fn log_inference_record(
     conn: &mut Client,
     meta: &LoopMeta,
@@ -2633,7 +2712,7 @@ pub fn log_inference_record(
 
     let knn_neighbor_count_i32 = record
         .knn_neighbor_count
-        .map(|n| i32::try_from(n).unwrap_or(0));
+        .map(crate::numeric_cast::usize_to_i32_sat);
 
     // Explicit type binding for ToSql stability
     let duration_secs = meta.duration_secs;
@@ -3035,10 +3114,18 @@ mod tests {
             loop_count: None,
             has_audio: false,
             audio_is_silent: Some(true), // GIFs never have audio
-            frame_types: vec!['P'; usize::try_from(frames).unwrap_or(0)],
+            frame_types: vec![
+                'P';
+                usize::try_from(frames)
+                    .expect("Failed to parse integer or missing required value")
+            ],
             pts_deltas: vec![
-                duration / f64::from(u32::try_from(frames).unwrap_or(u32::MAX));
-                usize::try_from(frames).unwrap_or(0)
+                duration
+                    / f64::from(u32::try_from(frames).expect(
+                        "Value overflowed or is missing, cannot process ratio"
+                    ));
+                usize::try_from(frames)
+                    .expect("Failed to parse integer or missing required value")
             ],
             mv_magnitudes: Vec::new(),
             cached_frame_png: None,

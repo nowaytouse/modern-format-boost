@@ -129,14 +129,14 @@ impl Visit for FieldVisitor<'_, '_> {
             let msg = format!("{value:?}");
             // Strip quotes from Debug format of string
             let msg = msg.trim_start_matches('"').trim_end_matches('"');
-            let _ = write!(self.writer, "{msg}");
+            write!(self.writer, "{msg}").expect("String formatting should not fail");
             self.has_message = true;
         } else {
             if !self.is_first || self.has_message {
-                let _ = write!(self.writer, " ");
+                write!(self.writer, " ").expect("String formatting should not fail");
             }
 
-            let _ = write!(
+            write!(
                 self.writer,
                 "{}{}={}{:?}{}",
                 colors::DIM,
@@ -144,7 +144,8 @@ impl Visit for FieldVisitor<'_, '_> {
                 colors::RESET,
                 value,
                 colors::RESET
-            );
+            )
+            .expect("String formatting should not fail");
             self.is_first = false;
         }
     }
@@ -271,6 +272,10 @@ impl<'a> MakeWriter<'a> for RunLogMaker {
 /// including SGR colour codes (`ESC[…m`), cursor-movement codes, and others.
 /// Non-escape characters (including multi-byte UTF-8) are passed through unchanged.
 #[must_use]
+#[allow(
+    clippy::missing_panics_doc,
+    reason = "Explicit panic on data corruption is intended and documented inline."
+)]
 pub fn strip_ansi_str(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = String::with_capacity(s.len());
@@ -280,7 +285,9 @@ pub fn strip_ansi_str(s: &str) -> String {
             // Consume ESC [ <params> <final_byte>, where final is 0x40..=0x7E
             i += 2;
             while i < bytes.len() {
-                let b = *bytes.get(i).unwrap_or(&0);
+                let b = *bytes
+                    .get(i)
+                    .expect("Required metadata byte missing (out of bounds)");
                 i += 1;
                 if (0x40..=0x7e).contains(&b) {
                     break;

@@ -266,7 +266,10 @@ pub struct DetectionResult {
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 /// Detect image format by inspecting magic bytes.
 ///
 /// # Errors
@@ -402,7 +405,8 @@ fn resolve_mif1_from_compatible_brands(path: &Path, major_brand: &[u8]) -> Detec
         return DetectedFormat::HEIC;
     };
     let mut data = vec![0u8; 1_048_576];
-    let read_len = std::io::Read::read(&mut file, &mut data).unwrap_or(0);
+    let read_len = std::io::Read::read(&mut file, &mut data)
+        .expect("Failed to parse integer or missing required value");
     if read_len == 0 {
         // Fallback: mif1 without readable file → HEIC (legacy behavior)
         return DetectedFormat::HEIC;
@@ -414,12 +418,20 @@ fn resolve_mif1_from_compatible_brands(path: &Path, major_brand: &[u8]) -> Detec
     }
 
     let box_size = usize::try_from(u32::from_be_bytes([
-        *data.first().unwrap_or(&0),
-        *data.get(1).unwrap_or(&0),
-        *data.get(2).unwrap_or(&0),
-        *data.get(3).unwrap_or(&0),
+        *data
+            .first()
+            .expect("Required metadata byte missing (out of bounds)"),
+        *data
+            .get(1)
+            .expect("Required metadata byte missing (out of bounds)"),
+        *data
+            .get(2)
+            .expect("Required metadata byte missing (out of bounds)"),
+        *data
+            .get(3)
+            .expect("Required metadata byte missing (out of bounds)"),
     ]))
-    .unwrap_or(0);
+    .expect("Failed to parse integer or missing required value");
     let ftyp_end = box_size.min(data.len());
 
     // compatible_brands start at offset 16 (after size[4] + "ftyp"[4] + major_brand[4] + minor_version[4])
@@ -427,7 +439,9 @@ fn resolve_mif1_from_compatible_brands(path: &Path, major_brand: &[u8]) -> Detec
         return DetectedFormat::HEIC;
     }
 
-    let compat_data = data.get(16..ftyp_end).unwrap_or(&[]);
+    let compat_data = data
+        .get(16..ftyp_end)
+        .expect("Required byte slice missing (out of bounds)");
     let mut brand_heic_found = false;
     let mut format_heif_detected = false;
 
@@ -465,6 +479,10 @@ fn resolve_mif1_from_compatible_brands(path: &Path, major_brand: &[u8]) -> Detec
 ///
 /// # Errors
 /// Returns an error if the file cannot be read or parsed.
+#[allow(
+    clippy::missing_panics_doc,
+    reason = "Explicit panic on data corruption is intended and documented inline."
+)]
 pub fn detect_animation(path: &Path, format: &DetectedFormat) -> Result<(bool, u32, Option<f32>)> {
     // 🚀 Stage 1: Native Fast-Path for Simple Formats
     // GIF, WebP, and PNG have simple, deterministic byte-level frame structures.
@@ -535,7 +553,12 @@ pub fn detect_animation(path: &Path, format: &DetectedFormat) -> Result<(bool, u
         if matches!(format, DetectedFormat::AVIF | DetectedFormat::JXL) {
             if let Some(explicit_count) = crate::ffprobe::get_frame_count(path) {
                 if explicit_count > 1 {
-                    return Ok((true, u32::try_from(explicit_count).unwrap_or(0), fps));
+                    return Ok((
+                        true,
+                        u32::try_from(explicit_count)
+                            .expect("Failed to parse integer or missing required value"),
+                        fps,
+                    ));
                 }
                 return Ok((false, 1, fps));
             }
@@ -570,6 +593,10 @@ pub fn detect_animation(path: &Path, format: &DetectedFormat) -> Result<(bool, u
 ///
 /// # Errors
 /// Returns an error if the GIF file is invalid or cannot be read.
+#[allow(
+    clippy::missing_panics_doc,
+    reason = "Explicit panic on data corruption is intended and documented inline."
+)]
 pub fn parse_gif_precision_metadata(path: &Path) -> Result<PrecisionMetadata> {
     let mut file = File::open(path)?;
     let mut header = [0u8; 13];
@@ -611,10 +638,15 @@ pub fn parse_gif_precision_metadata(path: &Path) -> Result<PrecisionMetadata> {
         let mut current_pos = 13 + gct_byte_size;
 
         while current_pos + 10 < data.len() {
-            match *data.get(current_pos).unwrap_or(&0) {
+            match *data
+                .get(current_pos)
+                .expect("Required metadata byte missing (out of bounds)")
+            {
                 0x2C => {
                     // Image Descriptor
-                    let packed_img = *data.get(current_pos + 9).unwrap_or(&0);
+                    let packed_img = *data
+                        .get(current_pos + 9)
+                        .expect("Required metadata byte missing (out of bounds)");
                     let local_color_table_flag = (packed_img & 0x80) != 0;
                     if local_color_table_flag {
                         let lct_size_exp = packed_img & 0x07;
@@ -626,7 +658,11 @@ pub fn parse_gif_precision_metadata(path: &Path) -> Result<PrecisionMetadata> {
                     }
                     // Skip image data blocks
                     while current_pos < data.len() && data.get(current_pos) != Some(&0) {
-                        let block_size = usize::from(*data.get(current_pos).unwrap_or(&0));
+                        let block_size = usize::from(
+                            *data
+                                .get(current_pos)
+                                .expect("Required metadata byte missing (out of bounds)"),
+                        );
                         current_pos += block_size + 1;
                     }
                     current_pos += 1;
@@ -638,7 +674,11 @@ pub fn parse_gif_precision_metadata(path: &Path) -> Result<PrecisionMetadata> {
                     }
                     current_pos += 2;
                     while current_pos < data.len() && data.get(current_pos) != Some(&0) {
-                        let block_size = usize::from(*data.get(current_pos).unwrap_or(&0));
+                        let block_size = usize::from(
+                            *data
+                                .get(current_pos)
+                                .expect("Required metadata byte missing (out of bounds)"),
+                        );
                         current_pos += block_size + 1;
                     }
                     current_pos += 1;
@@ -656,6 +696,10 @@ pub fn parse_gif_precision_metadata(path: &Path) -> Result<PrecisionMetadata> {
 /// Returns true if the ISOBMFF file (AVIF/HEIC/HEIF) is an image sequence (animated).
 /// Checks `major_brand` and `compatible_brands` for known sequence brand codes.
 #[must_use]
+#[allow(
+    clippy::missing_panics_doc,
+    reason = "Explicit panic on data corruption is intended and documented inline."
+)]
 pub fn is_isobmff_animated_sequence(path: &Path) -> bool {
     // Sequence brands: avis=AVIF sequence, msf1=multi-sample ftyp (used by animated HEIC/AVIF)
     const SEQUENCE_BRANDS: &[&[u8]] = &[b"avis", b"msf1"];
@@ -684,7 +728,7 @@ pub fn is_isobmff_animated_sequence(path: &Path) -> bool {
     let ftyp_box_size = usize::try_from(u32::from_be_bytes([
         header[0], header[1], header[2], header[3],
     ]))
-    .unwrap_or(0);
+    .expect("Failed to parse integer or missing required value");
     if !(16..=4096).contains(&ftyp_box_size) {
         return false;
     }
@@ -885,7 +929,14 @@ pub fn analyze_png_quantization_from_bytes(data: &[u8]) -> Result<PngQuantizatio
 /// # Errors
 /// Returns an error if reading fails or the PNG structure is invalid.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
+#[allow(
+    clippy::missing_panics_doc,
+    reason = "Explicit panic on data corruption is intended and documented inline."
+)]
 pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
     mut reader: R,
     path: Option<&Path>,
@@ -924,9 +975,14 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
         let is_medium_image = pixel_count > 10_000;
 
         let colors_per_megapixel = {
-            let num = Rational::from(u32::try_from(palette_size).unwrap_or(u32::MAX));
-            let den = Rational::from(u32::try_from(pixel_count).unwrap_or(u32::MAX))
-                / Rational::from(1_000_000);
+            let num = Rational::from(
+                u32::try_from(palette_size)
+                    .expect("Value overflowed or is missing, cannot process ratio"),
+            );
+            let den = Rational::from(
+                u32::try_from(pixel_count)
+                    .expect("Value overflowed or is missing, cannot process ratio"),
+            ) / Rational::from(1_000_000);
             (num / den).to_f64().min(1000.0)
         };
 
@@ -934,8 +990,15 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
         // Small image + small palette = normal (icon, pixel art).
         // Large image + small palette = quantization indicator.
         let palette_density = {
-            let num = Rational::from(u32::try_from(palette_size).unwrap_or(u32::MAX));
-            let den_f = f64::from(u32::try_from(pixel_count).unwrap_or(u32::MAX)).sqrt();
+            let num = Rational::from(
+                u32::try_from(palette_size)
+                    .expect("Value overflowed or is missing, cannot process ratio"),
+            );
+            let den_f = f64::from(
+                u32::try_from(pixel_count)
+                    .expect("Value overflowed or is missing, cannot process ratio"),
+            )
+            .sqrt();
 
             #[cfg(feature = "high-precision")]
             {
@@ -1017,10 +1080,14 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
                 let is_large_image = pixel_count > 100_000;
 
                 if let Some(palette_size) = png_info.palette_size {
-                    let usage_ratio =
-                        (Rational::from(u32::try_from(unique_colors).unwrap_or(u32::MAX))
-                            / Rational::from(u32::try_from(palette_size).unwrap_or(u32::MAX)))
-                        .to_f64();
+                    let usage_ratio = (Rational::from(
+                        u32::try_from(unique_colors)
+                            .expect("Value overflowed or is missing, cannot process ratio"),
+                    ) / Rational::from(
+                        u32::try_from(palette_size)
+                            .expect("Value overflowed or is missing, cannot process ratio"),
+                    ))
+                    .to_f64();
 
                     if is_large_image {
                         if usage_ratio > 0.8 {
@@ -1119,10 +1186,17 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
     }
 
     let expected_size = estimate_uncompressed_size(&png_info);
-    let actual_size = reader.seek(SeekFrom::End(0)).unwrap_or(0);
+    let actual_size = reader
+        .seek(SeekFrom::End(0))
+        .expect("Failed to parse integer or missing required value");
     let compression_ratio = if expected_size > 0 {
-        f64::from(u32::try_from(actual_size).unwrap_or(u32::MAX))
-            / f64::from(u32::try_from(expected_size).unwrap_or(u32::MAX))
+        f64::from(
+            u32::try_from(actual_size)
+                .expect("Value overflowed or is missing, cannot process ratio"),
+        ) / f64::from(
+            u32::try_from(expected_size)
+                .expect("Value overflowed or is missing, cannot process ratio"),
+        )
     } else {
         1.0
     };
@@ -1365,7 +1439,14 @@ struct PngQuantizationWeights {
 /// # Errors
 /// Returns an error if the PNG stream is invalid or corrupted.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
+#[allow(
+    clippy::missing_panics_doc,
+    reason = "Explicit panic on data corruption is intended and documented inline."
+)]
 pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructureInfo> {
     fn skip_bytes<R: Seek>(reader: &mut R, bytes: u64, context: &str) -> Result<()> {
         let offset = i64::try_from(bytes).map_err(|_| {
@@ -1452,7 +1533,11 @@ pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructure
 
         match chunk_type {
             b"PLTE" if color_type == 3 => {
-                palette_size = Some(usize::try_from(chunk_len).unwrap_or(0) / 3);
+                palette_size = Some(
+                    usize::try_from(chunk_len)
+                        .expect("Failed to parse integer or missing required value")
+                        / 3,
+                );
                 skip_bytes(&mut reader, chunk_len + 4, "PLTE chunk")?;
             }
             b"tRNS" => {
@@ -1461,7 +1546,12 @@ pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructure
             }
             b"tEXt" | b"iTXt" | b"zTXt" if detected_tool.is_none() => {
                 has_text_chunks = true;
-                let mut payload = vec![0u8; usize::try_from(chunk_len).unwrap_or(0)];
+                let mut payload = vec![
+                    0u8;
+                    usize::try_from(chunk_len).expect(
+                        "Failed to parse integer or missing required value"
+                    )
+                ];
                 reader.read_exact(&mut payload).map_err(|e| {
                     ImgQualityError::AnalysisError(format!(
                         "Failed to read PNG text chunk payload: {e}"
@@ -1470,8 +1560,11 @@ pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructure
                 if chunk_type == b"zTXt" {
                     // zTXt: keyword\0 + compression_method(1) + compressed_text
                     if let Some(null_pos) = payload.iter().position(|&b| b == 0) {
-                        let keyword =
-                            String::from_utf8_lossy(payload.get(..null_pos).unwrap_or(&[]));
+                        let keyword = String::from_utf8_lossy(
+                            payload
+                                .get(..null_pos)
+                                .expect("Required byte slice missing (out of bounds)"),
+                        );
                         for &(pattern, tool_name) in signatures {
                             if keyword.contains(pattern) {
                                 detected_tool = Some(tool_name.to_string());
@@ -1479,7 +1572,9 @@ pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructure
                             }
                         }
                         if detected_tool.is_none() && null_pos + 2 < payload.len() {
-                            let compressed = payload.get(null_pos + 2..).unwrap_or(&[]);
+                            let compressed = payload
+                                .get(null_pos + 2..)
+                                .expect("Required byte slice missing (out of bounds)");
                             let mut decompressed = Vec::new();
                             if flate2::read::ZlibDecoder::new(compressed)
                                 .read_to_end(&mut decompressed)
@@ -1579,8 +1674,13 @@ fn detect_dithering_pattern(img: &DynamicImage) -> f64 {
         return 0.0;
     }
 
-    let dithering_ratio = f64::from(u32::try_from(high_freq_count).unwrap_or(u32::MAX))
-        / f64::from(u32::try_from(total_comparisons).unwrap_or(u32::MAX));
+    let dithering_ratio = f64::from(
+        u32::try_from(high_freq_count)
+            .expect("Value overflowed or is missing, cannot process ratio"),
+    ) / f64::from(
+        u32::try_from(total_comparisons)
+            .expect("Value overflowed or is missing, cannot process ratio"),
+    );
 
     let floyd_steinberg_score = (dithering_ratio * 5.0).min(1.0);
 
@@ -1605,9 +1705,13 @@ fn detect_dithering_pattern(img: &DynamicImage) -> f64 {
         }
     }
     let bayer_score = if bayer_total > 0 {
-        ((f64::from(u32::try_from(bayer_count).unwrap_or(u32::MAX))
-            / f64::from(u32::try_from(bayer_total).unwrap_or(u32::MAX)))
-            * 4.0)
+        ((f64::from(
+            u32::try_from(bayer_count)
+                .expect("Value overflowed or is missing, cannot process ratio"),
+        ) / f64::from(
+            u32::try_from(bayer_total)
+                .expect("Value overflowed or is missing, cannot process ratio"),
+        )) * 4.0)
             .min(1.0)
     } else {
         0.0
@@ -1647,8 +1751,12 @@ fn sample_unique_color_count(img: &DynamicImage, max_samples: usize) -> usize {
 
     let total = u64::from(width) * u64::from(height);
     let step = crate::numeric_cast::f64_to_u32_sat(
-        (f64::from(u32::try_from(total).unwrap_or(u32::MAX))
-            / f64::from(u32::try_from(max_samples).unwrap_or(u32::MAX)))
+        (f64::from(
+            u32::try_from(total).expect("Value overflowed or is missing, cannot process ratio"),
+        ) / f64::from(
+            u32::try_from(max_samples)
+                .expect("Value overflowed or is missing, cannot process ratio"),
+        ))
         .sqrt()
         .ceil(),
     );
@@ -1688,7 +1796,8 @@ fn analyze_color_distribution(img: &DynamicImage, _palette_size: Option<usize>) 
     let mut color_set: HashMap<[u8; 4], u32> = HashMap::new();
 
     let (width, height) = rgba.dimensions();
-    let total_pixels = usize::try_from(width * height).unwrap_or(0);
+    let total_pixels =
+        usize::try_from(width * height).expect("Failed to parse integer or missing required value");
 
     // Target ~50k samples, distributed across a grid of blocks
     let target_samples: usize = 50_000;
@@ -1704,7 +1813,7 @@ fn analyze_color_distribution(img: &DynamicImage, _palette_size: Option<usize>) 
         *state = state
             .wrapping_mul(6_364_136_223_846_793_005)
             .wrapping_add(1);
-        u32::try_from(*state >> 32).unwrap_or(0)
+        u32::try_from(*state >> 32).expect("Failed to parse integer or missing required value")
     };
 
     for by in 0..grid_size {
@@ -1715,8 +1824,8 @@ fn analyze_color_distribution(img: &DynamicImage, _palette_size: Option<usize>) 
             let y1 = ((by + 1) * block_h).min(height);
             let current_block_width = x1 - x0;
             let current_block_height = y1 - y0;
-            let block_pixels =
-                usize::try_from(current_block_width * current_block_height).unwrap_or(0);
+            let block_pixels = usize::try_from(current_block_width * current_block_height)
+                .expect("Failed to parse integer or missing required value");
             if block_pixels == 0 {
                 continue;
             }
@@ -1752,7 +1861,9 @@ fn analyze_color_distribution(img: &DynamicImage, _palette_size: Option<usize>) 
 fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
     let rgba = img.to_rgba8();
     let (width, height) = rgba.dimensions();
-    let total_pixels = usize::try_from(width).unwrap_or(0) * usize::try_from(height).unwrap_or(0);
+    let total_pixels = usize::try_from(width)
+        .expect("Failed to parse integer or missing required value")
+        * usize::try_from(height).expect("Failed to parse integer or missing required value");
     if total_pixels < 100 {
         return 0.0;
     }
@@ -1762,12 +1873,21 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
     // step-based sampling always hits the same spatial columns/rows.
     let target_samples: usize = 50_000.min(total_pixels);
     let block_size = crate::numeric_cast::f64_to_usize_sat(
-        (f64::from(u32::try_from(total_pixels).unwrap_or(u32::MAX))
-            / f64::from(u32::try_from(target_samples).unwrap_or(u32::MAX)))
+        (f64::from(
+            u32::try_from(total_pixels)
+                .expect("Value overflowed or is missing, cannot process ratio"),
+        ) / f64::from(
+            u32::try_from(target_samples)
+                .expect("Value overflowed or is missing, cannot process ratio"),
+        ))
         .max(1.0),
     );
-    let blocks_x = usize::try_from(width).unwrap_or(0).div_ceil(block_size);
-    let blocks_y = usize::try_from(height).unwrap_or(0).div_ceil(block_size);
+    let blocks_x = usize::try_from(width)
+        .expect("Failed to parse integer or missing required value")
+        .div_ceil(block_size);
+    let blocks_y = usize::try_from(height)
+        .expect("Failed to parse integer or missing required value")
+        .div_ceil(block_size);
 
     let mut color_freq: std::collections::HashMap<[u8; 4], u32> = std::collections::HashMap::new();
     let mut sampled = 0u64;
@@ -1776,10 +1896,10 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
         for bx in 0..blocks_x {
             // Pick a pixel near the center of each block (deterministic, no RNG needed)
             let px = u32::try_from(bx * block_size + block_size / 2)
-                .unwrap_or(u32::MAX)
+                .expect("Value overflowed or is missing, cannot process ratio")
                 .min(width.saturating_sub(1));
             let py = u32::try_from(by * block_size + block_size / 2)
-                .unwrap_or(u32::MAX)
+                .expect("Value overflowed or is missing, cannot process ratio")
                 .min(height.saturating_sub(1));
             let pixel = rgba.get_pixel(px, py);
             let key = [pixel[0], pixel[1], pixel[2], pixel[3]];
@@ -1797,7 +1917,9 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
 
     // How many distinct colors cover 85% of sampled pixels?
     let target = crate::numeric_cast::f64_to_u64_sat(
-        f64::from(u32::try_from(sampled).unwrap_or(u32::MAX)) * 0.85,
+        f64::from(
+            u32::try_from(sampled).expect("Value overflowed or is missing, cannot process ratio"),
+        ) * 0.85,
     );
     let mut cumulative = 0u64;
     let mut colors_for_85pct = 0usize;
@@ -1810,8 +1932,12 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
     }
 
     // Low ratio = few colors dominate = quantized
-    let coverage_ratio = f64::from(u32::try_from(colors_for_85pct).unwrap_or(u32::MAX))
-        / f64::from(u32::try_from(freqs.len()).unwrap_or(u32::MAX));
+    let coverage_ratio = f64::from(
+        u32::try_from(colors_for_85pct)
+            .expect("Value overflowed or is missing, cannot process ratio"),
+    ) / f64::from(
+        u32::try_from(freqs.len()).expect("Value overflowed or is missing, cannot process ratio"),
+    );
 
     if coverage_ratio < 0.05 {
         0.85
@@ -1827,7 +1953,10 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 fn detect_gradient_banding(img: &DynamicImage) -> f64 {
     let rgba = img.to_rgba8();
     let (width, height) = rgba.dimensions();
@@ -1993,22 +2122,37 @@ fn estimate_uncompressed_size(info: &PngStructureInfo) -> u64 {
 }
 
 #[must_use]
+#[allow(
+    clippy::missing_panics_doc,
+    reason = "Explicit panic on data corruption is intended and documented inline."
+)]
 pub fn calculate_entropy(img: &DynamicImage) -> f64 {
     let gray = img.to_luma8();
     let mut histogram = [0u64; 256];
 
     for pixel in gray.pixels() {
-        if let Some(h) = histogram.get_mut(usize::from(pixel.0.first().copied().unwrap_or(0))) {
+        if let Some(h) = histogram.get_mut(usize::from(
+            pixel
+                .0
+                .first()
+                .copied()
+                .expect("Failed to parse integer or missing required value"),
+        )) {
             *h += 1;
         }
     }
 
-    let total = f64::from(u32::try_from(gray.pixels().count()).unwrap_or(u32::MAX));
+    let total = f64::from(
+        u32::try_from(gray.pixels().count())
+            .expect("Value overflowed or is missing, cannot process ratio"),
+    );
     let mut entropy = 0.0;
 
     for &count in &histogram {
         if count > 0 {
-            let p = f64::from(u32::try_from(count).unwrap_or(u32::MAX)) / total;
+            let p = f64::from(
+                u32::try_from(count).expect("Value overflowed or is missing, cannot process ratio"),
+            ) / total;
             entropy = p.mul_add(-p.log2(), entropy);
         }
     }
@@ -2029,7 +2173,10 @@ pub fn calculate_entropy(img: &DynamicImage) -> f64 {
 fn calculate_palette_index_entropy(img: &DynamicImage, palette_size: usize) -> (f64, f64, f64) {
     let rgba = img.to_rgba8();
     let (width, height) = rgba.dimensions();
-    let total = f64::from(u32::try_from(u64::from(width) * u64::from(height)).unwrap_or(u32::MAX));
+    let total = f64::from(
+        u32::try_from(u64::from(width) * u64::from(height))
+            .expect("Value overflowed or is missing, cannot process ratio"),
+    );
     if total == 0.0 || palette_size == 0 {
         return (0.0, 0.0, 0.0);
     }
@@ -2047,12 +2194,17 @@ fn calculate_palette_index_entropy(img: &DynamicImage, palette_size: usize) -> (
     let mut entropy = 0.0;
     for &count in color_freq.values() {
         if count > 0 {
-            let p = f64::from(u32::try_from(count).unwrap_or(u32::MAX)) / total;
+            let p = f64::from(
+                u32::try_from(count).expect("Value overflowed or is missing, cannot process ratio"),
+            ) / total;
             entropy = p.mul_add(-p.log2(), entropy);
         }
     }
 
-    let max_entropy = f64::from(u32::try_from(palette_size).unwrap_or(u32::MAX)).log2();
+    let max_entropy = f64::from(
+        u32::try_from(palette_size).expect("Value overflowed or is missing, cannot process ratio"),
+    )
+    .log2();
     let ratio = if max_entropy > 0.0 {
         entropy / max_entropy
     } else {
@@ -2067,7 +2219,10 @@ fn calculate_rgb_entropy(img: &DynamicImage) -> f64 {
         let mut h = 0.0;
         for &count in hist {
             if count > 0 {
-                let p = f64::from(u32::try_from(count).unwrap_or(u32::MAX)) / total;
+                let p = f64::from(
+                    u32::try_from(count)
+                        .expect("Value overflowed or is missing, cannot process ratio"),
+                ) / total;
                 h = p.mul_add(-p.log2(), h);
             }
         }
@@ -2091,7 +2246,10 @@ fn calculate_rgb_entropy(img: &DynamicImage) -> f64 {
         }
     }
 
-    let total = f64::from(u32::try_from(rgba.pixels().count()).unwrap_or(u32::MAX));
+    let total = f64::from(
+        u32::try_from(rgba.pixels().count())
+            .expect("Value overflowed or is missing, cannot process ratio"),
+    );
 
     let er = channel_entropy(&hist_r, total);
     let eg = channel_entropy(&hist_g, total);
@@ -2105,7 +2263,10 @@ fn calculate_rgb_entropy(img: &DynamicImage) -> f64 {
 /// # Errors
 /// Returns an error if the file cannot be read, the format is unrecognized, or analysis fails.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 pub fn detect_image(path: &Path) -> Result<DetectionResult> {
     let file_size = std::fs::metadata(path)?.len();
 
@@ -2362,10 +2523,18 @@ pub(crate) fn parse_apng_frames(data: &[u8]) -> (bool, u32) {
 
         // Read chunk length (big-endian)
         let length = u32::from_be_bytes([
-            *data.get(pos).unwrap_or(&0),
-            *data.get(pos + 1).unwrap_or(&0),
-            *data.get(pos + 2).unwrap_or(&0),
-            *data.get(pos + 3).unwrap_or(&0),
+            *data
+                .get(pos)
+                .expect("Required metadata byte missing (out of bounds)"),
+            *data
+                .get(pos + 1)
+                .expect("Required metadata byte missing (out of bounds)"),
+            *data
+                .get(pos + 2)
+                .expect("Required metadata byte missing (out of bounds)"),
+            *data
+                .get(pos + 3)
+                .expect("Required metadata byte missing (out of bounds)"),
         ]);
         pos += 4;
 
@@ -2374,7 +2543,9 @@ pub(crate) fn parse_apng_frames(data: &[u8]) -> (bool, u32) {
         }
 
         // Read chunk type
-        let chunk_type = data.get(pos..pos + 4).unwrap_or(&[]);
+        let chunk_type = data
+            .get(pos..pos + 4)
+            .expect("Required byte slice missing (out of bounds)");
         pos += 4;
 
         // Check if this is acTL chunk
@@ -2382,10 +2553,18 @@ pub(crate) fn parse_apng_frames(data: &[u8]) -> (bool, u32) {
             if pos + 4 <= data.len() {
                 // Read num_frames (first 4 bytes of acTL data)
                 let num_frames = u32::from_be_bytes([
-                    *data.get(pos).unwrap_or(&0),
-                    *data.get(pos + 1).unwrap_or(&0),
-                    *data.get(pos + 2).unwrap_or(&0),
-                    *data.get(pos + 3).unwrap_or(&0),
+                    *data
+                        .get(pos)
+                        .expect("Required metadata byte missing (out of bounds)"),
+                    *data
+                        .get(pos + 1)
+                        .expect("Required metadata byte missing (out of bounds)"),
+                    *data
+                        .get(pos + 2)
+                        .expect("Required metadata byte missing (out of bounds)"),
+                    *data
+                        .get(pos + 3)
+                        .expect("Required metadata byte missing (out of bounds)"),
                 ]);
                 return (num_frames > 1, num_frames.max(1));
             }
@@ -2393,7 +2572,8 @@ pub(crate) fn parse_apng_frames(data: &[u8]) -> (bool, u32) {
         }
 
         // Skip chunk data and CRC
-        pos += usize::try_from(length).unwrap_or(0) + 4;
+        pos +=
+            usize::try_from(length).expect("Failed to parse integer or missing required value") + 4;
     }
 
     (false, 1)
@@ -2467,7 +2647,8 @@ fn detect_ico_compression(path: &Path) -> Result<CompressionType> {
 
     // Each directory entry is 16 bytes, starting at offset 6
     for i in 0..image_count {
-        let entry_offset = 6 + u64::try_from(i).unwrap_or(0) * 16;
+        let entry_offset =
+            6 + u64::try_from(i).expect("Failed to parse integer or missing required value") * 16;
         file.seek(SeekFrom::Start(entry_offset))
             .map_err(ImgQualityError::IoError)?;
 
@@ -2524,7 +2705,10 @@ fn detect_ico_compression(path: &Path) -> Result<CompressionType> {
 /// compression. Parts separated by empty name; all parts end with two consecutive empty names.
 /// Any lossy part → Lossy overall.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 fn detect_exr_compression(path: &Path) -> Result<CompressionType> {
     crate::common_utils::validate_file_size_limit(path, 512 * 1024 * 1024)
         .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
@@ -2538,10 +2722,18 @@ fn detect_exr_compression(path: &Path) -> Result<CompressionType> {
 
     // Check version field for multi-part flag (bit 9)
     let version = u32::from_le_bytes([
-        *data.get(4).unwrap_or(&0),
-        *data.get(5).unwrap_or(&0),
-        *data.get(6).unwrap_or(&0),
-        *data.get(7).unwrap_or(&0),
+        *data
+            .get(4)
+            .expect("Required metadata byte missing (out of bounds)"),
+        *data
+            .get(5)
+            .expect("Required metadata byte missing (out of bounds)"),
+        *data
+            .get(6)
+            .expect("Required metadata byte missing (out of bounds)"),
+        *data
+            .get(7)
+            .expect("Required metadata byte missing (out of bounds)"),
     ]);
     let is_multipart = (version & (1 << 9)) != 0;
 
@@ -2564,7 +2756,9 @@ fn detect_exr_compression(path: &Path) -> Result<CompressionType> {
             if pos >= data.len() {
                 break;
             }
-            let name = data.get(name_start..pos).unwrap_or(&[]);
+            let name = data
+                .get(name_start..pos)
+                .expect("Required byte slice missing (out of bounds)");
             pos += 1; // skip null terminator
 
             // Empty name = end of this part's header
@@ -2586,15 +2780,25 @@ fn detect_exr_compression(path: &Path) -> Result<CompressionType> {
                 break;
             }
             let value_size = crate::numeric_cast::u32_to_usize_sat(u32::from_le_bytes([
-                *data.get(pos).unwrap_or(&0),
-                *data.get(pos + 1).unwrap_or(&0),
-                *data.get(pos + 2).unwrap_or(&0),
-                *data.get(pos + 3).unwrap_or(&0),
+                *data
+                    .get(pos)
+                    .expect("Required metadata byte missing (out of bounds)"),
+                *data
+                    .get(pos + 1)
+                    .expect("Required metadata byte missing (out of bounds)"),
+                *data
+                    .get(pos + 2)
+                    .expect("Required metadata byte missing (out of bounds)"),
+                *data
+                    .get(pos + 3)
+                    .expect("Required metadata byte missing (out of bounds)"),
             ]));
             pos += 4;
 
             if name == b"compression" && value_size >= 1 && pos < data.len() {
-                let compression = *data.get(pos).unwrap_or(&0);
+                let compression = *data
+                    .get(pos)
+                    .expect("Required metadata byte missing (out of bounds)");
                 found_any_compression = true;
 
                 if std::env::var("IMGQUALITY_VERBOSE").is_ok() {
@@ -2677,13 +2881,15 @@ fn detect_jp2_compression(path: &Path) -> Result<CompressionType> {
         0
     } else {
         // JP2 container — find jp2c box
-        find_jp2c_offset(&data).unwrap_or(0)
+        find_jp2c_offset(&data).expect("Failed to parse integer or missing required value")
     };
 
     // Scan for COD and COC markers in the codestream header area
     // COD/COC must appear before the first tile-part, so limit scan to first 4KB of codestream
     let scan_end = (cs_start + 4096).min(data.len());
-    let cs = data.get(cs_start..scan_end).unwrap_or(&[]);
+    let cs = data
+        .get(cs_start..scan_end)
+        .expect("Required byte slice missing (out of bounds)");
 
     let (cod_wavelet, coc_wavelets) = find_jp2_wavelets(cs);
 
@@ -2740,12 +2946,22 @@ fn find_jp2c_offset(data: &[u8]) -> Option<usize> {
     let mut pos = 0;
     while pos + 8 <= data.len() {
         let size = crate::numeric_cast::u32_to_usize_sat(u32::from_be_bytes([
-            *data.get(pos).unwrap_or(&0),
-            *data.get(pos + 1).unwrap_or(&0),
-            *data.get(pos + 2).unwrap_or(&0),
-            *data.get(pos + 3).unwrap_or(&0),
+            *data
+                .get(pos)
+                .expect("Required metadata byte missing (out of bounds)"),
+            *data
+                .get(pos + 1)
+                .expect("Required metadata byte missing (out of bounds)"),
+            *data
+                .get(pos + 2)
+                .expect("Required metadata byte missing (out of bounds)"),
+            *data
+                .get(pos + 3)
+                .expect("Required metadata byte missing (out of bounds)"),
         ]));
-        let box_type = data.get(pos + 4..pos + 8).unwrap_or(&[]);
+        let box_type = data
+            .get(pos + 4..pos + 8)
+            .expect("Required byte slice missing (out of bounds)");
 
         if box_type == b"jp2c" {
             return Some(pos + 8);
@@ -2758,14 +2974,30 @@ fn find_jp2c_offset(data: &[u8]) -> Option<usize> {
                 break;
             }
             let ext = crate::numeric_cast::u64_to_usize_sat(u64::from_be_bytes([
-                *data.get(pos + 8).unwrap_or(&0),
-                *data.get(pos + 9).unwrap_or(&0),
-                *data.get(pos + 10).unwrap_or(&0),
-                *data.get(pos + 11).unwrap_or(&0),
-                *data.get(pos + 12).unwrap_or(&0),
-                *data.get(pos + 13).unwrap_or(&0),
-                *data.get(pos + 14).unwrap_or(&0),
-                *data.get(pos + 15).unwrap_or(&0),
+                *data
+                    .get(pos + 8)
+                    .expect("Required metadata byte missing (out of bounds)"),
+                *data
+                    .get(pos + 9)
+                    .expect("Required metadata byte missing (out of bounds)"),
+                *data
+                    .get(pos + 10)
+                    .expect("Required metadata byte missing (out of bounds)"),
+                *data
+                    .get(pos + 11)
+                    .expect("Required metadata byte missing (out of bounds)"),
+                *data
+                    .get(pos + 12)
+                    .expect("Required metadata byte missing (out of bounds)"),
+                *data
+                    .get(pos + 13)
+                    .expect("Required metadata byte missing (out of bounds)"),
+                *data
+                    .get(pos + 14)
+                    .expect("Required metadata byte missing (out of bounds)"),
+                *data
+                    .get(pos + 15)
+                    .expect("Required metadata byte missing (out of bounds)"),
             ]));
             pos += ext;
         } else if size < 8 {
@@ -2792,7 +3024,9 @@ fn find_jp2_wavelets(cs: &[u8]) -> (Option<u8>, Vec<(u16, u8)>) {
             pos += 1;
             continue;
         }
-        let marker = *cs.get(pos + 1).unwrap_or(&0);
+        let marker = *cs
+            .get(pos + 1)
+            .expect("Required metadata byte missing (out of bounds)");
 
         // SOC (FF 4F) — no length field
         if marker == 0x4F {
@@ -2807,8 +3041,10 @@ fn find_jp2_wavelets(cs: &[u8]) -> (Option<u8>, Vec<(u16, u8)>) {
         // COD marker (FF 52)
         if marker == 0x52 && pos + 4 <= cs.len() {
             let seg_len = crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([
-                *cs.get(pos + 2).unwrap_or(&0),
-                *cs.get(pos + 3).unwrap_or(&0),
+                *cs.get(pos + 2)
+                    .expect("Required metadata byte missing (out of bounds)"),
+                *cs.get(pos + 3)
+                    .expect("Required metadata byte missing (out of bounds)"),
             ]));
             // COD segment: Scod(1) + SGcod(4) + SPcod(variable)
             // SPcod starts at offset 5 within segment data
@@ -2817,7 +3053,9 @@ fn find_jp2_wavelets(cs: &[u8]) -> (Option<u8>, Vec<(u16, u8)>) {
             // segment_data starts at pos+4, so transform is at pos+4+9 = pos+13
             let transform_offset = pos + 4 + 9;
             if transform_offset < cs.len() && seg_len >= 10 {
-                let wavelet = *cs.get(transform_offset).unwrap_or(&0);
+                let wavelet = *cs
+                    .get(transform_offset)
+                    .expect("Required metadata byte missing (out of bounds)");
                 if wavelet <= 1 {
                     cod_wavelet = Some(wavelet);
                 }
@@ -2827,8 +3065,10 @@ fn find_jp2_wavelets(cs: &[u8]) -> (Option<u8>, Vec<(u16, u8)>) {
         // COC marker (FF 53) — component-specific coding style
         if marker == 0x53 && pos + 4 <= cs.len() {
             let seg_len = crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([
-                *cs.get(pos + 2).unwrap_or(&0),
-                *cs.get(pos + 3).unwrap_or(&0),
+                *cs.get(pos + 2)
+                    .expect("Required metadata byte missing (out of bounds)"),
+                *cs.get(pos + 3)
+                    .expect("Required metadata byte missing (out of bounds)"),
             ]));
             // COC segment: Ccoc(1 or 2 bytes) + Scoc(1) + SPcoc(variable)
             // For images with < 257 components, Ccoc is 1 byte; otherwise 2 bytes
@@ -2839,8 +3079,13 @@ fn find_jp2_wavelets(cs: &[u8]) -> (Option<u8>, Vec<(u16, u8)>) {
             let transform_offset = spcoc_offset + 1 + 4; // SPcoc[4] = transform
 
             if component_offset < cs.len() && transform_offset < cs.len() && seg_len >= 7 {
-                let component = u16::from(*cs.get(component_offset).unwrap_or(&0));
-                let wavelet = *cs.get(transform_offset).unwrap_or(&0);
+                let component = u16::from(
+                    *cs.get(component_offset)
+                        .expect("Required metadata byte missing (out of bounds)"),
+                );
+                let wavelet = *cs
+                    .get(transform_offset)
+                    .expect("Required metadata byte missing (out of bounds)");
                 if wavelet <= 1 {
                     coc_wavelets.push((component, wavelet));
                 }
@@ -2852,8 +3097,10 @@ fn find_jp2_wavelets(cs: &[u8]) -> (Option<u8>, Vec<(u16, u8)>) {
             break;
         }
         let seg_len = crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([
-            *cs.get(pos + 2).unwrap_or(&0),
-            *cs.get(pos + 3).unwrap_or(&0),
+            *cs.get(pos + 2)
+                .expect("Required metadata byte missing (out of bounds)"),
+            *cs.get(pos + 3)
+                .expect("Required metadata byte missing (out of bounds)"),
         ]));
         pos += 2 + seg_len;
     }

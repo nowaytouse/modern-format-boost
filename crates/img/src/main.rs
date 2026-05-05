@@ -1,7 +1,11 @@
-#![allow(clippy::multiple_crate_versions, reason = "Legitimate deviation from standard linting rules justified by specific project architecture.")]
+#![allow(
+    clippy::multiple_crate_versions,
+    reason = "Legitimate deviation from standard linting rules justified by specific project architecture."
+)]
 use clap::{Parser, Subcommand};
 use img::Rational;
 
+use core::sync::atomic::{AtomicUsize, Ordering};
 use img::{
     calculate_psnr, calculate_ssim, psnr_quality_description, ssim_quality_description,
     ConfigFlags, ConvertFlags,
@@ -14,7 +18,6 @@ use shared_utils::{
     BatchResult,
 };
 use std::path::{Path, PathBuf};
-use core::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -136,7 +139,10 @@ enum Commands {
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 fn main() -> anyhow::Result<()> {
     if let Err(e) = shared_utils::init_ghost_mode() {
         eprintln!("⚠️ Failed to initialize Ghost Mode isolation: {e}");
@@ -676,7 +682,10 @@ fn load_image_safe(path: &std::path::Path) -> anyhow::Result<image::DynamicImage
 /// Currently unused but kept for potential future CLI output mode.
 #[derive(Clone)]
 // Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(clippy::struct_excessive_bools, reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping.")]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping."
+)]
 struct AutoConvertConfig {
     output_dir: Option<PathBuf>,
     base_dir: Option<PathBuf>,
@@ -753,7 +762,10 @@ fn convert_result_to_output(result: shared_utils::ConversionResult) -> Conversio
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 fn auto_convert_single_file(
     input: &Path,
     config: &AutoConvertConfig,
@@ -1086,7 +1098,10 @@ fn dispatch_static_conversion(
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 fn auto_convert_directory(
     input: &Path,
     config: &AutoConvertConfig,

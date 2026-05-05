@@ -139,12 +139,11 @@ impl PsnrSsimMapping {
                     None
                 }
             }
-            (None, Some(_))
-                if self.points.len() >= 2 => {
-                    let p1 = self.points.first()?;
-                    let p2 = self.points.get(1)?;
-                    Some(Self::interpolate_or_clamp(p1, p2, psnr))
-                }
+            (None, Some(_)) if self.points.len() >= 2 => {
+                let p1 = self.points.first()?;
+                let p2 = self.points.get(1)?;
+                Some(Self::interpolate_or_clamp(p1, p2, psnr))
+            }
             _ => None,
         }
     }

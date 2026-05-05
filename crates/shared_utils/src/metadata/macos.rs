@@ -120,7 +120,8 @@ pub fn get_added_time(path: &Path) -> io::Result<std::time::SystemTime> {
     }
     let duration = std::time::Duration::new(
         crate::numeric_cast::i64_to_u64_sat(buf.added_time.tv_sec),
-        u32::try_from(buf.added_time.tv_nsec).unwrap_or(0),
+        u32::try_from(buf.added_time.tv_nsec)
+            .expect("Failed to parse integer or missing required value"),
     );
     Ok(std::time::SystemTime::UNIX_EPOCH + duration)
 }

@@ -546,7 +546,7 @@ mod prop_tests {
 
             if current > 0 {
                 let expected = {
-                    let p = u32::try_from((u128::from(current) * 10_000) / u128::from(total.max(1))).unwrap_or(u32::MAX);
+                    let p = u32::try_from((u128::from(current) * 10_000) / u128::from(total.max(1))).expect("Value overflowed or is missing, cannot process ratio");
                     (f64::from(p) / 10_000.0).min(1.0)
                 };
                 prop_assert!(progress.is_some());

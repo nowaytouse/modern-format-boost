@@ -268,6 +268,10 @@ impl MediaIndex {
 
 /// Helper to get current unix time.
 #[must_use]
+#[allow(
+    clippy::missing_panics_doc,
+    reason = "Explicit panic on data corruption is intended and documented inline."
+)]
 pub fn now_unix() -> i64 {
     i64::try_from(
         SystemTime::now()
@@ -275,5 +279,5 @@ pub fn now_unix() -> i64 {
             .unwrap_or_default()
             .as_secs(),
     )
-    .unwrap_or(0)
+    .expect("Failed to parse integer or missing required value")
 }

@@ -8,7 +8,10 @@
 use walkdir::WalkDir;
 
 #[test]
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 fn manual_debug_scan_debug_dir_only() {
     // Disabled by default to avoid accidental scans of private media.
     if std::env::var("MFB_RUN_DEBUG_SCAN").is_err() {
@@ -114,7 +117,9 @@ fn manual_debug_scan_debug_dir_only() {
             seed = seed
                 .wrapping_mul(6_364_136_223_846_793_005)
                 .wrapping_add(1_442_695_040_888_963_407);
-            let idx = usize::try_from(seed).unwrap_or(0) % undecided.len();
+            let idx = usize::try_from(seed)
+                .expect("Failed to parse integer or missing required value")
+                % undecided.len();
             if !picks.contains(&idx) {
                 picks.push(idx);
             }

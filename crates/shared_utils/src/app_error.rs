@@ -143,14 +143,14 @@ impl AppError {
             Self::FileNotFound { path, operation } => {
                 let mut msg = format!("❌ File not found: {}", path.display());
                 if let Some(op) = operation {
-                    let _ = write!(msg, "\n   Operation: {op}");
+                    write!(msg, "\n   Operation: {op}").expect("String formatting should not fail");
                 }
                 Some(msg)
             }
             Self::DirectoryNotFound { path, operation } => {
                 let mut msg = format!("❌ Directory not found: {}", path.display());
                 if let Some(op) = operation {
-                    let _ = write!(msg, "\n   Operation: {op}");
+                    write!(msg, "\n   Operation: {op}").expect("String formatting should not fail");
                 }
                 Some(msg)
             }
@@ -161,7 +161,7 @@ impl AppError {
             } => {
                 let mut msg = format!("❌ Failed to read file {}: {}", path.display(), source);
                 if let Some(op) = operation {
-                    let _ = write!(msg, "\n   Operation: {op}");
+                    write!(msg, "\n   Operation: {op}").expect("String formatting should not fail");
                 }
                 Some(msg)
             }
@@ -172,7 +172,7 @@ impl AppError {
             } => {
                 let mut msg = format!("❌ Failed to write file {}: {}", path.display(), source);
                 if let Some(op) = operation {
-                    let _ = write!(msg, "\n   Operation: {op}");
+                    write!(msg, "\n   Operation: {op}").expect("String formatting should not fail");
                 }
                 Some(msg)
             }
@@ -195,13 +195,15 @@ impl AppError {
                     .unwrap_or_default();
                 let mut msg = format!("❌ FFmpeg failed{code_str}: {message}");
                 if let Some(path) = file_path {
-                    let _ = write!(msg, "\n   File: {}", path.display());
+                    write!(msg, "\n   File: {}", path.display())
+                        .expect("String formatting should not fail");
                 }
                 if let Some(cmd) = command {
-                    let _ = write!(msg, "\n   Command: {cmd}");
+                    write!(msg, "\n   Command: {cmd}").expect("String formatting should not fail");
                 }
                 if !stderr.is_empty() {
-                    let _ = write!(msg, "\n   Error output: {stderr}");
+                    write!(msg, "\n   Error output: {stderr}")
+                        .expect("String formatting should not fail");
                 }
                 Some(msg)
             }
@@ -213,13 +215,15 @@ impl AppError {
             } => {
                 let mut msg = format!("❌ FFprobe failed: {message}");
                 if let Some(path) = file_path {
-                    let _ = write!(msg, "\n   File: {}", path.display());
+                    write!(msg, "\n   File: {}", path.display())
+                        .expect("String formatting should not fail");
                 }
                 if let Some(cmd) = command {
-                    let _ = write!(msg, "\n   Command: {cmd}");
+                    write!(msg, "\n   Command: {cmd}").expect("String formatting should not fail");
                 }
                 if !stderr.is_empty() {
-                    let _ = write!(msg, "\n   Error output: {stderr}");
+                    write!(msg, "\n   Error output: {stderr}")
+                        .expect("String formatting should not fail");
                 }
                 Some(msg)
             }
@@ -244,7 +248,8 @@ impl AppError {
                     "❌ Compression failed: output ({output_size} bytes) >= input ({input_size} bytes), ratio {ratio:.1}%"
                 );
                 if let Some(path) = file_path {
-                    let _ = write!(msg, "\n   File: {}", path.display());
+                    write!(msg, "\n   File: {}", path.display())
+                        .expect("String formatting should not fail");
                 }
                 Some(msg)
             }
@@ -257,7 +262,8 @@ impl AppError {
                     "❌ Quality validation failed: expected SSIM >= {expected_ssim:.4}, actual {actual_ssim:.4}"
                 );
                 if let Some(path) = file_path {
-                    let _ = write!(msg, "\n   File: {}", path.display());
+                    write!(msg, "\n   File: {}", path.display())
+                        .expect("String formatting should not fail");
                 }
                 Some(msg)
             }
@@ -275,14 +281,15 @@ impl AppError {
                     "❌ Tool not found: {tool_name}\n💡 Please ensure {tool_name} is installed and in PATH"
                 );
                 if let Some(op) = operation {
-                    let _ = write!(msg, "\n   Needed for: {op}");
+                    write!(msg, "\n   Needed for: {op}")
+                        .expect("String formatting should not fail");
                 }
                 msg
             }
             Self::OutputExists { path, operation } => {
                 let mut msg = format!("⏭️ Output file exists: {}", path.display());
                 if let Some(op) = operation {
-                    let _ = write!(msg, "\n   Operation: {op}");
+                    write!(msg, "\n   Operation: {op}").expect("String formatting should not fail");
                 }
                 msg
             }

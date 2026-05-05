@@ -297,6 +297,10 @@ impl SourceCodec {
     /// Identifies the file format based on internal magic bytes.
     /// This is the "Tight Entry" mechanism that avoids relying on file extensions.
     #[must_use]
+    #[allow(
+        clippy::missing_panics_doc,
+        reason = "Explicit panic on data corruption is intended and documented inline."
+    )]
     pub fn identify_by_content(path: &std::path::Path) -> Option<Self> {
         use std::io::{Read, Seek, SeekFrom};
         let mut file = std::fs::File::open(path).ok()?;
@@ -306,7 +310,11 @@ impl SourceCodec {
             return None;
         }
 
-        let mut codec = Self::identify_by_header(header.get(..n).unwrap_or(&[]));
+        let mut codec = Self::identify_by_header(
+            header
+                .get(..n)
+                .expect("Required byte slice missing (out of bounds)"),
+        );
 
         // Deep WebP animation verification
         // Some WebP files (notably Safari exports) may not place `VP8X` within the first 64 bytes
@@ -319,13 +327,21 @@ impl SourceCodec {
         {
             const SCAN_LIMIT: usize = 1024 * 1024; // 1 MiB cap (safe & fast)
             let mut buf = Vec::with_capacity(SCAN_LIMIT);
-            buf.extend_from_slice(header.get(..n).unwrap_or(&[]));
+            buf.extend_from_slice(
+                header
+                    .get(..n)
+                    .expect("Required byte slice missing (out of bounds)"),
+            );
 
             let remaining = SCAN_LIMIT.saturating_sub(n);
             if remaining > 0 {
                 let mut extra = vec![0u8; remaining];
                 if let Ok(read_n) = file.read(&mut extra) {
-                    buf.extend_from_slice(extra.get(..read_n).unwrap_or(&[]));
+                    buf.extend_from_slice(
+                        extra
+                            .get(..read_n)
+                            .expect("Required byte slice missing (out of bounds)"),
+                    );
                 }
             }
 
@@ -344,12 +360,22 @@ impl SourceCodec {
                     break;
                 }
                 let length = u32::from_be_bytes([
-                    *chunk_header.first().unwrap_or(&0),
-                    *chunk_header.get(1).unwrap_or(&0),
-                    *chunk_header.get(2).unwrap_or(&0),
-                    *chunk_header.get(3).unwrap_or(&0),
+                    *chunk_header
+                        .first()
+                        .expect("Required metadata byte missing (out of bounds)"),
+                    *chunk_header
+                        .get(1)
+                        .expect("Required metadata byte missing (out of bounds)"),
+                    *chunk_header
+                        .get(2)
+                        .expect("Required metadata byte missing (out of bounds)"),
+                    *chunk_header
+                        .get(3)
+                        .expect("Required metadata byte missing (out of bounds)"),
                 ]);
-                let chunk_type = chunk_header.get(4..8).unwrap_or(&[]);
+                let chunk_type = chunk_header
+                    .get(4..8)
+                    .expect("Required byte slice missing (out of bounds)");
 
                 if chunk_type == b"acTL" {
                     codec = Some(Self::Apng);
@@ -371,6 +397,10 @@ impl SourceCodec {
 
     /// Identifies format from a byte slice (header).
     #[must_use]
+    #[allow(
+        clippy::missing_panics_doc,
+        reason = "Explicit panic on data corruption is intended and documented inline."
+    )]
     pub fn identify_by_header(header: &[u8]) -> Option<Self> {
         if header.len() < 2 {
             return None;
@@ -414,12 +444,16 @@ impl SourceCodec {
 
         // 2. RIFF Containers (WebP, AVI)
         if header.starts_with(b"RIFF") && header.len() >= 12 {
-            let brand = header.get(8..12).unwrap_or(&[]);
+            let brand = header
+                .get(8..12)
+                .expect("Required byte slice missing (out of bounds)");
             if brand == b"WEBP" {
                 // Check for VP8X extended header which contains the animation flag
                 if header.len() >= 21 && header.get(12..16) == Some(b"VP8X") {
                     // The animation flag is the 2nd bit of the flags byte at offset 20
-                    let flags = *header.get(20).unwrap_or(&0);
+                    let flags = *header
+                        .get(20)
+                        .expect("Required metadata byte missing (out of bounds)");
                     if (flags & 0x02) != 0 {
                         return Some(Self::WebpAnimated);
                     }
@@ -434,7 +468,9 @@ impl SourceCodec {
         // 3. ISO Base Media File Format (MP4, MOV, HEIC, AVIF)
         // [Any 4 bytes] + "ftyp"
         if header.len() >= 12 && header.get(4..8) == Some(b"ftyp") {
-            let brand = header.get(8..12).unwrap_or(&[]);
+            let brand = header
+                .get(8..12)
+                .expect("Required byte slice missing (out of bounds)");
             match brand {
                 b"heic" | b"heix" | b"heim" | b"heis" | b"mif1" | b"msf1" => {
                     return Some(Self::Heic)
@@ -886,7 +922,10 @@ pub fn calculate_jxl_distance_with_options(
 ///
 /// # Errors
 /// Returns an error message if calculation fails (e.g., missing or invalid dimensions).
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 pub fn calculate_effective_bpp_with_options(
     analysis: &QualityAnalysis,
     target_encoder: EncoderType,
@@ -1256,7 +1295,10 @@ fn calculate_complexity_factor(si: Option<f64>, ti: Option<f64>, raw_bpp: f64, p
 }
 
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(clippy::too_many_lines, reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead.")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
+)]
 fn calculate_confidence_v3(analysis: &QualityAnalysis) -> f64 {
     let mut score: f64 = 0.0;
     let mut max_score: f64 = 0.0;
@@ -1571,7 +1613,9 @@ fn log_high_priority_factors(analysis: &QualityAnalysis, d: &AnalysisDetails) {
         eprintln!(
             "            └─ GOP size: {}, B-frames: {}",
             gop,
-            analysis.b_frame_count.unwrap_or(0)
+            analysis
+                .b_frame_count
+                .expect("Failed to parse integer or missing required value")
         );
     }
     eprintln!("         Chroma factor: {:.2}", d.chroma_factor);
@@ -1659,6 +1703,10 @@ pub fn log_quality_analysis(
 }
 
 #[must_use]
+#[allow(
+    clippy::missing_panics_doc,
+    reason = "Explicit panic on data corruption is intended and documented inline."
+)]
 pub fn from_video_detection(
     file_path: &str,
     codec: &str,
@@ -1675,7 +1723,9 @@ pub fn from_video_detection(
     let pixels_per_second = pixels_per_frame * fps;
 
     let bpp = if pixels_per_second > 0.0 && bitrate > 0 {
-        (f64::from(u32::try_from(bitrate).unwrap_or(u32::MAX))) / pixels_per_second
+        (f64::from(
+            u32::try_from(bitrate).expect("Value overflowed or is missing, cannot process ratio"),
+        )) / pixels_per_second
     } else {
         if pixels_per_second <= 0.0 {
             eprintln!("   ⚠️  Warning: pixels_per_second is {pixels_per_second} for {file_path}");
@@ -1883,7 +1933,10 @@ pub fn is_apple_incompatible_video_codec(codec_str: &str) -> bool {
 
 /// Predicate for keeping Apple-compat fallback HEVC output.
 // Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(clippy::struct_excessive_bools, reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping.")]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping."
+)]
 #[derive(Debug, Clone, Copy)]
 pub struct AppleFallbackKeepRequest<'a> {
     pub codec_str: &'a str,

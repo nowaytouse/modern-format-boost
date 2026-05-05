@@ -280,10 +280,11 @@ impl BatchPauseController {
     }
 
     pub fn pause_info(&self) -> Option<BatchPauseInfo> {
-        return self.info
+        return self
+            .info
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+            .clone();
     }
 }
 
@@ -842,7 +843,9 @@ mod tests {
 
     fn write_test_image(path: &Path, width: u32, height: u32, format: ImageFormat) {
         let image = RgbImage::from_pixel(width, height, Rgb([128, 96, 64]));
-        image.save_with_format(path, format).expect("failed to write test image");
+        image
+            .save_with_format(path, format)
+            .expect("failed to write test image");
     }
 
     #[test]
@@ -993,7 +996,7 @@ mod tests {
                 let p = u32::try_from(
                     (result.succeeded as u128 * 10_000) / result.total.max(1) as u128,
                 )
-                .unwrap_or(u32::MAX);
+                .expect("Value overflowed or is missing, cannot process ratio");
                 f64::from(p) / 100.0
             };
 
