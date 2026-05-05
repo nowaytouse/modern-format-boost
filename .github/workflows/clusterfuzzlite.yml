@@ -52,7 +52,6 @@ jobs:
           storage-repo-branch: clusterfuzzlite-data
           sanitizers: address,undefined
         continue-on-error: false
-        timeout-minutes: 15
 
   Batch:
     if: github.event_name == 'push' || github.event_name == 'schedule'
@@ -90,4 +89,3 @@ jobs:
           storage-repo-branch: clusterfuzzlite-data
           sanitizers: address,undefined
         continue-on-error: false
-        timeout-minutes: 90
