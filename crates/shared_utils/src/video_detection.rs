@@ -327,7 +327,8 @@ pub fn determine_compression_type(
     // BPP (Bits Per Pixel) thresholding for generic streams
     let pixels_per_second = f64::from(width) * f64::from(height) * fps;
     if pixels_per_second > 0.0_f64 {
-        let bits_per_pixel = (crate::numeric_cast::u64_to_f64(bitrate) * 8.0_f64) / pixels_per_second;
+        let bits_per_pixel =
+            (crate::numeric_cast::u64_to_f64(bitrate) * 8.0_f64) / pixels_per_second;
         if bits_per_pixel > crate::constants::BPP_THRESHOLD_VISUALLY_LOSSLESS {
             return CompressionType::VisuallyLossless;
         } else if bits_per_pixel > crate::constants::BPP_THRESHOLD_HIGH_QUALITY {

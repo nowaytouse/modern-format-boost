@@ -1101,7 +1101,8 @@ fn calculate_raw_bpp(analysis: &QualityAnalysis, pixels: u64) -> Result<f64, Str
                 }
                 #[cfg(feature = "high-precision")]
                 {
-                    let bits_per_frame = (Rational::from(analysis.file_size) * Rational::from(8_i32))
+                    let bits_per_frame = (Rational::from(analysis.file_size)
+                        * Rational::from(8_i32))
                         / Rational::from(total_frames);
                     return Ok((bits_per_frame / Rational::from(pixels)).to_f64());
                 }
@@ -3483,7 +3484,8 @@ fn test_apple_compat_hevc_crf_4k_hdr() {
 fn test_apple_compat_codec_efficiency() {
     assert!(SourceCodec::Av1.efficiency_factor() < SourceCodec::Vp9.efficiency_factor());
     assert!(
-        (SourceCodec::Vp9.efficiency_factor() - SourceCodec::H265.efficiency_factor()).abs() < 0.1_f64
+        (SourceCodec::Vp9.efficiency_factor() - SourceCodec::H265.efficiency_factor()).abs()
+            < 0.1_f64
     );
     assert!(SourceCodec::Vvc.efficiency_factor() < SourceCodec::Av1.efficiency_factor());
 }

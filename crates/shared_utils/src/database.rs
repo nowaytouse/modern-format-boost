@@ -1680,7 +1680,13 @@ fn calculate_continuous_features(
     sample: &SampleRow,
     stats_map: &FeatureMap,
 ) -> (f64, f64, f64, f64, f64, f64, f64, f64) {
-    let get_std = |f: &str| stats_map.stats.get(f).map_or(1.0_f64, |s| s.std_dev).max(1e-6);
+    let get_std = |f: &str| {
+        stats_map
+            .stats
+            .get(f)
+            .map_or(1.0_f64, |s| s.std_dev)
+            .max(1e-6)
+    };
     let get_w = |f: &str| {
         stats_map
             .stats
@@ -1714,7 +1720,13 @@ fn calculate_discrete_features(
     sample: &SampleRow,
     stats_map: &FeatureMap,
 ) -> (f64, f64, f64, f64, f64, f64, f64) {
-    let get_std = |f: &str| stats_map.stats.get(f).map_or(1.0_f64, |s| s.std_dev).max(1e-6);
+    let get_std = |f: &str| {
+        stats_map
+            .stats
+            .get(f)
+            .map_or(1.0_f64, |s| s.std_dev)
+            .max(1e-6)
+    };
     let get_w = |f: &str| {
         stats_map
             .stats
@@ -1754,13 +1766,22 @@ fn calculate_discrete_features(
     let v_aspect = crate::numeric_cast::option_f64_loud(sample.aspect_ratio, 1.0, "sample_aspect")
         / get_std("aspect")
         * get_w("aspect").sqrt();
-    let v_pal = (sample.palette_size.map_or(256.0_f64, f64::from) / 256.0_f64) * get_w("p_depth").sqrt();
+    let v_pal =
+        (sample.palette_size.map_or(256.0_f64, f64::from) / 256.0_f64) * get_w("p_depth").sqrt();
 
-    (v_wratio, v_lfreq, v_cadence, v_payload, v_delay, v_aspect, v_pal)
+    (
+        v_wratio, v_lfreq, v_cadence, v_payload, v_delay, v_aspect, v_pal,
+    )
 }
 
 fn calculate_categorical_features(sample: &SampleRow) -> (f64, f64, f64, f64, f64, f64, f64) {
-    let cat = |val: bool, w: f64| if val { w.sqrt() / 2.0_f64 } else { -w.sqrt() / 2.0_f64 };
+    let cat = |val: bool, w: f64| {
+        if val {
+            w.sqrt() / 2.0_f64
+        } else {
+            -w.sqrt() / 2.0_f64
+        }
+    };
 
     (
         cat(sample.is_meme_platform, 1.2_f64),
@@ -1783,7 +1804,13 @@ fn compute_sample_vector(sample: &SampleRow, stats_map: &FeatureMap) -> Vec<f32>
     let (v_meme, v_name, v_native, v_hv, v_trans, v_icc, v_complex) =
         calculate_categorical_features(sample);
 
-    let get_std = |f: &str| stats_map.stats.get(f).map_or(1.0_f64, |s| s.std_dev).max(1e-6);
+    let get_std = |f: &str| {
+        stats_map
+            .stats
+            .get(f)
+            .map_or(1.0_f64, |s| s.std_dev)
+            .max(1e-6)
+    };
     let get_w = |f: &str| {
         stats_map
             .stats
@@ -1793,7 +1820,11 @@ fn compute_sample_vector(sample: &SampleRow, stats_map: &FeatureMap) -> Vec<f32>
             .max(0.01)
     };
 
-    let sample_audio_score = if sample.is_native_gif { 1.0_f64 } else { 0.55_f64 };
+    let sample_audio_score = if sample.is_native_gif {
+        1.0_f64
+    } else {
+        0.55_f64
+    };
     let baseline_fps = 30.0_f64;
     let sample_fps_score: f64 = (1.0_f64
         - normalize_log_ratio(sample.fps.max(1e-3), baseline_fps, 1.2))
@@ -1813,14 +1844,15 @@ fn compute_sample_vector(sample: &SampleRow, stats_map: &FeatureMap) -> Vec<f32>
 
     let v_pdepth =
         sample.palette_depth.unwrap_or(0.5_f64) / get_std("p_depth") * get_w("p_depth").sqrt();
-    let v_mgini = sample.motion_gini.unwrap_or(0.5_f64) / get_std("m_gini") * get_w("m_gini").sqrt();
+    let v_mgini =
+        sample.motion_gini.unwrap_or(0.5_f64) / get_std("m_gini") * get_w("m_gini").sqrt();
     let v_bskew = sample.block_skew.unwrap_or(0.5_f64) / get_std("b_skew") * get_w("b_skew").sqrt();
     let v_tflat =
         sample.temporal_flatness.unwrap_or(0.5_f64) / get_std("t_flat") * get_w("t_flat").sqrt();
     let v_lclose =
         sample.loop_closure_score.unwrap_or(0.5_f64) / get_std("l_close") * get_w("l_close").sqrt();
-    let v_mperiod =
-        sample.motion_periodicity.unwrap_or(0.5_f64) / get_std("m_period") * get_w("m_period").sqrt();
+    let v_mperiod = sample.motion_periodicity.unwrap_or(0.5_f64) / get_std("m_period")
+        * get_w("m_period").sqrt();
     let v_tjitter =
         sample.temporal_jitter.unwrap_or(0.5_f64) / get_std("t_jitter") * get_w("t_jitter").sqrt();
 

@@ -481,7 +481,8 @@ pub fn analyze_jpeg_quality(data: &[u8]) -> Result<JpegQualityAnalysis, String> 
         _ => "Low quality (visible compression artifacts)".to_string(),
     };
 
-    let is_high_quality_original = final_quality >= 90 && is_standard_table && confidence >= 0.95_f64;
+    let is_high_quality_original =
+        final_quality >= 90 && is_standard_table && confidence >= 0.95_f64;
     let is_complete = is_jpeg_complete(data);
 
     let analysis = JpegQualityAnalysis {

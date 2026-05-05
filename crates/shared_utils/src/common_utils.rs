@@ -248,8 +248,9 @@ pub fn calculate_blake3_hash(path: &Path) -> Result<String> {
             // This should never happen since bytes_read <= buffer.len()
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "Invalid byte slice length"
-            ).into());
+                "Invalid byte slice length",
+            )
+            .into());
         }
     }
 

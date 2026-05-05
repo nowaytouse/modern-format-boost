@@ -1526,7 +1526,10 @@ mod tests {
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
-        assert!(result.bpp > 5.0_f64, "Very high bitrate should have high BPP");
+        assert!(
+            result.bpp > 5.0_f64,
+            "Very high bitrate should have high BPP"
+        );
         assert!(
             result.compression_type == CompressionLevel::VisuallyLossless
                 || result.compression_type == CompressionLevel::HighQuality,

@@ -1983,7 +1983,8 @@ fn cpu_fine_tune_from_gpu_boundary(
                 } else if let Some(val) = line.strip_prefix("speed=") {
                     last_speed = val.trim().to_string();
                 } else if line == "progress=continue" || line == "progress=end" {
-                    let current_secs = crate::numeric_cast::i64_to_f64(last_time_us) / 1_000_000.0_f64;
+                    let current_secs =
+                        crate::numeric_cast::i64_to_f64(last_time_us) / 1_000_000.0_f64;
                     if progress_duration_secs > 0.0_f64 {
                         let pct = (current_secs / progress_duration_secs * 100.0).min(100.0);
                         eprint!(
@@ -2578,8 +2579,9 @@ fn cpu_fine_tune_from_gpu_boundary(
                             failure_credibility = 0.0_f64;
                         }
 
-                        quality_plateau =
-                            (v > 97.0_f64 || chroma_avg > 47.0_f64) && !vmaf_improved && !psnr_improved;
+                        quality_plateau = (v > 97.0_f64 || chroma_avg > 47.0_f64)
+                            && !vmaf_improved
+                            && !psnr_improved;
                     }
 
                     if current_step <= MIN_STEP + 0.01 {
@@ -4900,7 +4902,9 @@ mod tests {
             },
         );
         assert!(eval.fusion_score.is_some());
-        assert!((eval.fusion_score.unwrap_or_else(|| panic!("missing score")) - 0.95).abs() < 1e-6_f64);
+        assert!(
+            (eval.fusion_score.unwrap_or_else(|| panic!("missing score")) - 0.95).abs() < 1e-6_f64
+        );
     }
 
     #[test]
@@ -4916,7 +4920,9 @@ mod tests {
             },
         );
         assert!(eval.fusion_score.is_some());
-        assert!((eval.fusion_score.unwrap_or_else(|| panic!("missing score")) - 0.95).abs() < 1e-6_f64);
+        assert!(
+            (eval.fusion_score.unwrap_or_else(|| panic!("missing score")) - 0.95).abs() < 1e-6_f64
+        );
     }
 
     #[test]

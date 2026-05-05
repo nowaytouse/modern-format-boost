@@ -1200,7 +1200,7 @@ dependencies = [
 [[package]]
 name = "indicatif"
 version = "0.18.4"
-source = "git+https://github.com/console-rs/indicatif.git#53a6fc28f0a88c607a1e31b068c66c792f4ab763"
+source = "git+https://github.com/console-rs/indicatif.git#aacb5aecdde1a5d2e993960d8871fd77e043508c"
 dependencies = [
  "console",
  "portable-atomic",

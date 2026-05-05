@@ -2310,22 +2310,24 @@ fn gpu_coarse_search_with_log_impl(
                                         * 100.0)
                                         .min(100.0);
                                     let elapsed_secs = start_time.elapsed().as_secs_f64();
-                                    let eta =
-                                        if pct > 0.1_f64 && current_secs > 0.0_f64 && elapsed_secs > 0.0_f64 {
-                                            let speed = current_secs / elapsed_secs;
-                                            if speed > 0.0_f64 {
-                                                crate::numeric_cast::f64_to_u64_sat(
-                                                    ((f64::from(actual_sample_duration)
-                                                        - current_secs)
-                                                        / speed)
-                                                        .max(0.0),
-                                                )
-                                            } else {
-                                                0
-                                            }
+                                    let eta = if pct > 0.1_f64
+                                        && current_secs > 0.0_f64
+                                        && elapsed_secs > 0.0_f64
+                                    {
+                                        let speed = current_secs / elapsed_secs;
+                                        if speed > 0.0_f64 {
+                                            crate::numeric_cast::f64_to_u64_sat(
+                                                ((f64::from(actual_sample_duration)
+                                                    - current_secs)
+                                                    / speed)
+                                                    .max(0.0),
+                                            )
                                         } else {
                                             0
-                                        };
+                                        }
+                                    } else {
+                                        0
+                                    };
                                     let speed = if current_secs > 0.0_f64 {
                                         start_time.elapsed().as_secs_f64() / current_secs
                                     } else {
@@ -2635,8 +2637,9 @@ fn gpu_coarse_search_with_log_impl(
                     log_msg!(
                         "   📊 max_crf {:.0} is better: {:.1}% smaller",
                         config.max_crf,
-                        (1.0_f64 - crate::numeric_cast::u64_to_f64(*max_size)
-                            / crate::numeric_cast::u64_to_f64(*initial_size))
+                        (1.0_f64
+                            - crate::numeric_cast::u64_to_f64(*max_size)
+                                / crate::numeric_cast::u64_to_f64(*initial_size))
                             * 100.0_f64
                     );
                 }

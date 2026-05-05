@@ -404,7 +404,8 @@ pub fn execute_conversion(
     let message = if reduction >= 0.0 {
         format!("✅ JXL {action}: -{reduction:.1}%")
     } else {
-        let out_val = i128::from(output_size.expect("Failed to parse integer or missing required value"));
+        let out_val =
+            i128::from(output_size.expect("Failed to parse integer or missing required value"));
         let src_val = i128::from(detection.file_size);
         let diff_bytes = out_val - src_val;
 

@@ -1044,7 +1044,11 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
         } else if palette_size <= 32 && palette_density > 0.3_f64 {
             factors.large_palette = 0.1_f64;
         } else {
-            factors.large_palette = if palette_density < 0.5_f64 { 0.3_f64 } else { 0.15_f64 };
+            factors.large_palette = if palette_density < 0.5_f64 {
+                0.3_f64
+            } else {
+                0.15_f64
+            };
         }
 
         if is_large_image && colors_per_megapixel < 50.0_f64 {
@@ -1178,7 +1182,8 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
                             "Low entropy ({entropy:.2} vs max {max_entropy:.2}) — quantization indicator"
                         ));
                     }
-                } else if palette_size >= 64.0_f64 && entropy_ratio < 0.5_f64 && pixel_count > 5_000 {
+                } else if palette_size >= 64.0_f64 && entropy_ratio < 0.5_f64 && pixel_count > 5_000
+                {
                     factors.entropy_anomaly = 0.35_f64;
                 }
             }
@@ -1233,7 +1238,10 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
 
     let final_score = heuristic_score.mul_add(
         weights.heuristic,
-        statistical_score.mul_add(weights.statistical, structural_score.mul_add(weights.structural, metadata_score * weights.metadata)),
+        statistical_score.mul_add(
+            weights.statistical,
+            structural_score.mul_add(weights.structural, metadata_score * weights.metadata),
+        ),
     );
 
     if std::env::var("IMGQUALITY_DEBUG").is_ok() {

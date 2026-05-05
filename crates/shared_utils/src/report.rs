@@ -15,8 +15,9 @@ pub fn print_summary_report(
     operation_name: &str,
 ) {
     let reduction = if input_bytes > 0 {
-        (1.0_f64 - crate::numeric_cast::u64_to_f64(output_bytes)
-            / crate::numeric_cast::u64_to_f64(input_bytes))
+        (1.0_f64
+            - crate::numeric_cast::u64_to_f64(output_bytes)
+                / crate::numeric_cast::u64_to_f64(input_bytes))
             * 100.0_f64
     } else {
         0.0_f64

@@ -176,7 +176,8 @@ fn parse_rational_fps(value: &serde_json::Value) -> Option<f64> {
 fn parse_fps_from_stream(stream: &serde_json::Value) -> Option<f64> {
     let avg = parse_rational_fps(&stream["avg_frame_rate"])
         .filter(|&v| v > 0.0_f64 && v.is_finite() && v <= FPS_THRESHOLD_INVALID);
-    let r_fps = parse_rational_fps(&stream["r_frame_rate"]).filter(|&v| v > 0.0_f64 && v.is_finite());
+    let r_fps =
+        parse_rational_fps(&stream["r_frame_rate"]).filter(|&v| v > 0.0_f64 && v.is_finite());
     avg.or(r_fps)
 }
 
@@ -490,7 +491,8 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
         .map_or_else(
             || {
                 if duration > 0.0_f64 {
-                    (crate::numeric_cast::u64_to_f64(file_size) * 8.0_f64) / (duration * 1_000.0_f64)
+                    (crate::numeric_cast::u64_to_f64(file_size) * 8.0_f64)
+                        / (duration * 1_000.0_f64)
                 } else {
                     0.0_f64
                 }
@@ -514,8 +516,9 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
     };
     let total_pixels = u64::from(width) * u64::from(height) * frame_count;
     let bpp = if total_pixels > 0 {
-        ((Rational::from(bytes_for_bpp) * Rational::from(8_i32)) / Rational::from(total_pixels.max(1)))
-            .to_f64()
+        ((Rational::from(bytes_for_bpp) * Rational::from(8_i32))
+            / Rational::from(total_pixels.max(1)))
+        .to_f64()
     } else {
         bail!("Total pixels is 0, cannot calculate BPP");
     };
@@ -686,7 +689,8 @@ fn evaluate_processing_recommendation(
 
     let resolution_factor =
         (Rational::from(width) * Rational::from(height)) / Rational::from(1_920_i32 * 1_080_i32);
-    let fps_factor = crate::numeric_cast::f64_to_rational_loud(fps, 1, "fps") / Rational::from(30_i32);
+    let fps_factor =
+        crate::numeric_cast::f64_to_rational_loud(fps, 1, "fps") / Rational::from(30_i32);
     let codec_efficiency_r =
         crate::numeric_cast::f64_to_rational_loud(codec_efficiency, 1, "codec_efficiency");
 

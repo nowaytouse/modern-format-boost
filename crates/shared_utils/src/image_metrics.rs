@@ -249,7 +249,13 @@ fn calculate_ssim_simple(original: &DynamicImage, converted: &DynamicImage) -> O
 )]
 pub fn calculate_ms_ssim(original: &DynamicImage, converted: &DynamicImage) -> Option<f64> {
     let scales = 5;
-    let weights = [0.044_8_f64, 0.285_6_f64, 0.300_1_f64, 0.236_3_f64, 0.133_3_f64];
+    let weights = [
+        0.044_8_f64,
+        0.285_6_f64,
+        0.300_1_f64,
+        0.236_3_f64,
+        0.133_3_f64,
+    ];
 
     let mut orig = original.clone();
     let mut conv = converted.clone();
@@ -325,11 +331,23 @@ mod tests {
     fn test_ssim_quality_description() {
         assert_eq!(ssim_quality_description(1.0), "Identical");
         assert_eq!(ssim_quality_description(0.999), "Identical");
-        assert_eq!(ssim_quality_description(0.98), "Excellent - virtually lossless");
-        assert_eq!(ssim_quality_description(0.93), "Very good - minimal visible difference");
+        assert_eq!(
+            ssim_quality_description(0.98),
+            "Excellent - virtually lossless"
+        );
+        assert_eq!(
+            ssim_quality_description(0.93),
+            "Very good - minimal visible difference"
+        );
         assert_eq!(ssim_quality_description(0.89), "Good - acceptable quality");
-        assert_eq!(ssim_quality_description(0.82), "Fair - noticeable degradation");
-        assert_eq!(ssim_quality_description(0.5), "Poor - significant quality loss");
+        assert_eq!(
+            ssim_quality_description(0.82),
+            "Fair - noticeable degradation"
+        );
+        assert_eq!(
+            ssim_quality_description(0.5),
+            "Poor - significant quality loss"
+        );
     }
 
     #[test]

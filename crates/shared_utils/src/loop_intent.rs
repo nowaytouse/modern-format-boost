@@ -483,7 +483,9 @@ impl LoopMeta {
 
         let mut meta = Self {
             duration_secs: scan.duration_secs.unwrap_or(0.0_f64),
-            duration_tier: Some(DurationTier::from_secs(scan.duration_secs.unwrap_or(0.0_f64))),
+            duration_tier: Some(DurationTier::from_secs(
+                scan.duration_secs.unwrap_or(0.0_f64),
+            )),
             width,
             height,
             fps,
@@ -2107,7 +2109,11 @@ fn layer6_directional_arbitration(
     }
 
     if is_video {
-        let delta = if short_silent_asset { 0.04_f64 } else { 0.08_f64 };
+        let delta = if short_silent_asset {
+            0.04_f64
+        } else {
+            0.08_f64
+        };
         arbitration.add_convert(delta, "video container");
     }
     if meta.width > 0 && meta.height > 0 && is_near_16_by_9(meta.width, meta.height) {
@@ -2131,7 +2137,11 @@ fn layer6_directional_arbitration(
     // absent from Layer 6. High frame counts (>500) are extremely rare in animated images.
     let has_audible_audio = meta.has_audio && !meta.audio_is_silent.unwrap_or(false);
     if has_audible_audio {
-        let audio_weight = if short_silent_asset { 0.08_f64 } else { 0.22_f64 };
+        let audio_weight = if short_silent_asset {
+            0.08_f64
+        } else {
+            0.22_f64
+        };
         arbitration.add_convert(audio_weight, "audible audio track");
     }
     // Frame density normalization: avoid penalizing high-fps short loops (e.g. Live2D 60fps).

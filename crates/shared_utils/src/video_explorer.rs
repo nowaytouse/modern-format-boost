@@ -432,7 +432,11 @@ impl ConfidenceBreakdown {
         crate::log_eprintln!("┌─────────────────────────────────────────────────────");
         crate::log_eprintln!("│ Confidence Report");
         crate::log_eprintln!("├─────────────────────────────────────────────────────");
-        crate::log_eprintln!("│ Overall Confidence: {:.0}% ({})", overall * 100.0_f64, grade);
+        crate::log_eprintln!(
+            "│ Overall Confidence: {:.0}% ({})",
+            overall * 100.0_f64,
+            grade
+        );
         crate::log_eprintln!("├─────────────────────────────────────────────────────");
         crate::log_eprintln!(
             "│ Sampling Coverage: {:.0}% (weight 30%)",
@@ -1050,7 +1054,9 @@ impl TransparencyReport {
     pub fn print_summary(&self) {
         crate::log_eprintln!("└────┴──────────────┴───────────┴─────────────┴─────────────┴──────────┴────────────────────┘");
 
-        let elapsed = self.start_time.map_or(0.0_f64, |t| t.elapsed().as_secs_f64());
+        let elapsed = self
+            .start_time
+            .map_or(0.0_f64, |t| t.elapsed().as_secs_f64());
         let total_iterations = self.iterations.len();
 
         crate::log_eprintln!();

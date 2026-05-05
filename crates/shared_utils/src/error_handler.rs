@@ -260,7 +260,10 @@ mod tests {
         let result: Result<i32, io::Error> = Ok(42_i32);
         let with_context = add_context(result, "test operation");
         assert!(with_context.is_ok());
-        assert_eq!(with_context.unwrap_or_else(|e| panic!("error: {e:?}")), 42_i32);
+        assert_eq!(
+            with_context.unwrap_or_else(|e| panic!("error: {e:?}")),
+            42_i32
+        );
 
         let result: Result<i32, io::Error> =
             Err(io::Error::new(io::ErrorKind::NotFound, "test error"));

@@ -171,7 +171,10 @@ mod tests {
             compare_quality_desc(None, Some(0.95_f64), 1e-4),
             Ordering::Greater
         );
-        assert_eq!(compare_quality_desc(Some(0.95_f64), None, 1e-4), Ordering::Less);
+        assert_eq!(
+            compare_quality_desc(Some(0.95_f64), None, 1e-4),
+            Ordering::Less
+        );
         assert_eq!(compare_quality_desc(None, None, 1e-4), Ordering::Equal);
 
         // Transitivity: if A > B and B > None, then A > None
@@ -179,8 +182,14 @@ mod tests {
             compare_quality_desc(Some(0.95_f64), Some(0.90_f64), 1e-4),
             Ordering::Less
         );
-        assert_eq!(compare_quality_desc(Some(0.90_f64), None, 1e-4), Ordering::Less);
-        assert_eq!(compare_quality_desc(Some(0.95_f64), None, 1e-4), Ordering::Less);
+        assert_eq!(
+            compare_quality_desc(Some(0.90_f64), None, 1e-4),
+            Ordering::Less
+        );
+        assert_eq!(
+            compare_quality_desc(Some(0.95_f64), None, 1e-4),
+            Ordering::Less
+        );
     }
 
     #[test]
@@ -200,7 +209,10 @@ mod tests {
             compare_quality_asc(None, Some(0.05_f64), 1e-4),
             Ordering::Greater
         );
-        assert_eq!(compare_quality_asc(Some(0.05_f64), None, 1e-4), Ordering::Less);
+        assert_eq!(
+            compare_quality_asc(Some(0.05_f64), None, 1e-4),
+            Ordering::Less
+        );
         assert_eq!(compare_quality_asc(None, None, 1e-4), Ordering::Equal);
 
         // Transitivity: if A < B and B < None, then A < None
@@ -208,8 +220,14 @@ mod tests {
             compare_quality_asc(Some(0.01_f64), Some(0.05_f64), 1e-4),
             Ordering::Less
         );
-        assert_eq!(compare_quality_asc(Some(0.05_f64), None, 1e-4), Ordering::Less);
-        assert_eq!(compare_quality_asc(Some(0.01_f64), None, 1e-4), Ordering::Less);
+        assert_eq!(
+            compare_quality_asc(Some(0.05_f64), None, 1e-4),
+            Ordering::Less
+        );
+        assert_eq!(
+            compare_quality_asc(Some(0.01_f64), None, 1e-4),
+            Ordering::Less
+        );
     }
 
     #[test]

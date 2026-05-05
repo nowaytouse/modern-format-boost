@@ -29,7 +29,11 @@ impl CalibrationPoint {
                 "GPU compression margin large, CPU can be more aggressive",
             )
         } else if size_ratio < 1.0_f64 {
-            (0.5, 0.90_f64, "GPU barely compressed, CPU slight adjustment")
+            (
+                0.5,
+                0.90_f64,
+                "GPU barely compressed, CPU slight adjustment",
+            )
         } else if size_ratio < 1.05_f64 {
             (-0.5, 0.80_f64, "GPU slightly oversize, CPU needs lower CRF")
         } else {
