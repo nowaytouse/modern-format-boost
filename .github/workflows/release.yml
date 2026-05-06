@@ -40,7 +40,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.1.7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -48,7 +48,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Cache Rust build
-        uses: actions/cache@v4
+        uses: actions/cache@v4.0.2
         with:
           path: |
             ~/.cargo/registry/index
@@ -140,10 +140,15 @@ jobs:
       # ── Windows ────────────────────────────────────────────────────────────
       - name: Cache vcpkg packages (Windows)
         if: runner.os == 'Windows'
-        uses: actions/cache@v4
+        uses: actions/cache@v4.0.2
         with:
-          path: C:\vcpkg\packages
-          key: vcpkg-x64-windows-libheif-dav1d-${{ hashFiles('.github/workflows/release.yml') }}
+          path: |
+            C:\vcpkg\installed
+            C:\vcpkg\packages
+          key: vcpkg-x64-windows-static-${{ hashFiles('.github/workflows/release.yml', '**/Cargo.lock') }}
+          restore-keys: |
+            vcpkg-x64-windows-static-
+            vcpkg-x64-windows-
 
       - name: Install dependencies (Windows)
         if: runner.os == 'Windows'
@@ -197,7 +202,7 @@ jobs:
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
 
       - name: Upload artifact (inter-job)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.3.4
         with:
           name: ${{ matrix.artifact_name }}
           path: ModernFormatBoost-*-${{ matrix.artifact_name }}.zip
@@ -211,10 +216,10 @@ jobs:
     if: always() && !cancelled()
     steps:
       - name: Checkout (for CHANGELOG)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.1.7
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v4.1.8
         with:
           path: release-assets
           merge-multiple: true
@@ -242,7 +247,7 @@ jobs:
           fi
 
       - name: Create / update GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v2.0.8
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
