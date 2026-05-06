@@ -193,12 +193,23 @@ fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<StreamSiz
         }
     };
 
-    let duration_secs = parsed
+    // Duration is required for bitrate-based size estimation. If absent or unparseable,
+    // fall through to estimation rather than panicking or using a fictitious value.
+    let duration_secs = match parsed
         .format
         .duration
         .as_ref()
         .and_then(|d| d.parse::<f64>().ok())
-        .expect("Required floating point value missing");
+    {
+        Some(d) => d,
+        None => {
+            warn!(
+                path = %path.display(),
+                "ffprobe stream-size: format duration missing or unparseable; falling back to estimation"
+            );
+            return None;
+        }
+    };
 
     if duration_secs <= 0.0_f64 {
         warn!(

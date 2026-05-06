@@ -193,8 +193,16 @@ fn get_memory_linux() -> (u64, u64) {
             "Missing expected memory fields in /proc/meminfo"
         );
     }
-    let available = mem_available.expect("Failed to parse integer or missing required value");
-    let total = mem_total.expect("Failed to parse integer or missing required value");
+    // If either field was missing after the warn! above, return (0, 0) so callers
+    // see `total_mb == 0` and degrade gracefully (memory_pressure_level returns None).
+    let available = mem_available.unwrap_or_else(|| {
+        warn!("MemAvailable missing from /proc/meminfo; reporting 0 MB available");
+        0
+    });
+    let total = mem_total.unwrap_or_else(|| {
+        warn!("MemTotal missing from /proc/meminfo; reporting 0 MB total");
+        0
+    });
     (available, total)
 }
 

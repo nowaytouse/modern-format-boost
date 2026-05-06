@@ -1245,7 +1245,7 @@ pub fn convert_to_mp4_matched(
                 if has_multiple_streams && probe.stream_index > 0 {
                     if options.verbose() {
                         eprintln!("   🔧 Multi-stream {} detected, converting stream {} to APNG ({} frames)", 
-                            input_ext.to_uppercase(), probe.stream_index, probe.frame_count);
+                            input_ext.to_uppercase(), probe.stream_index, probe.frame_count.unwrap_or(0));
                     }
 
                     // Create temporary APNG file

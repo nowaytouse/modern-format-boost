@@ -9,6 +9,7 @@
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
+use tracing::warn;
 
 /// ANSI color and styling constants for terminal output.
 pub mod colors {
@@ -216,13 +217,15 @@ const SPINNER_DOTS: &[&str] = &["*", ".", "o", "O"];
 static SPINNER_FRAME: AtomicU64 = AtomicU64::new(0);
 
 /// Returns the next spinner animation frame (rotating through dash, slash, pipe, backslash).
-#[allow(
-    clippy::missing_panics_doc,
-    reason = "Explicit panic on data corruption is intended and documented inline."
-)]
 pub fn spinner_frame() -> &'static str {
-    let frame = usize::try_from(SPINNER_FRAME.fetch_add(1, Ordering::Relaxed))
-        .expect("Failed to parse integer or missing required value");
+    let frame = match usize::try_from(SPINNER_FRAME.fetch_add(1, Ordering::Relaxed)) {
+        Ok(f) => f,
+        Err(_) => {
+            warn!("☢️ [ANOMALY] Spinner frame counter overflowed; resetting to 0");
+            SPINNER_FRAME.store(0, Ordering::Relaxed);
+            0
+        }
+    };
     SPINNER_FRAMES
         .get(frame % SPINNER_FRAMES.len())
         .copied()
@@ -230,13 +233,15 @@ pub fn spinner_frame() -> &'static str {
 }
 
 /// Returns the next spinner dots animation frame (rotating through asterisk, dot, small o, capital O).
-#[allow(
-    clippy::missing_panics_doc,
-    reason = "Explicit panic on data corruption is intended and documented inline."
-)]
 pub fn spinner_dots() -> &'static str {
-    let frame = usize::try_from(SPINNER_FRAME.fetch_add(1, Ordering::Relaxed))
-        .expect("Failed to parse integer or missing required value");
+    let frame = match usize::try_from(SPINNER_FRAME.fetch_add(1, Ordering::Relaxed)) {
+        Ok(f) => f,
+        Err(_) => {
+            warn!("☢️ [ANOMALY] Spinner frame counter overflowed; resetting to 0");
+            SPINNER_FRAME.store(0, Ordering::Relaxed);
+            0
+        }
+    };
     SPINNER_DOTS
         .get(frame % SPINNER_DOTS.len())
         .copied()

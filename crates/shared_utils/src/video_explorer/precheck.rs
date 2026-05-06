@@ -279,11 +279,20 @@ fn bpp_from_precheck_json(json: &serde_json::Value, file_size: u64, input: &Path
         .context("Missing or invalid video height")?;
     let fps =
         parse_fps_from_stream(stream).context("Could not determine FPS for BPP calculation")?;
+    // `nb_frames` may be absent or non-numeric for image containers (e.g. WebP, APNG).
+    // 0 is the correct initial value here — downstream `parse_duration_from_precheck_json`
+    // re-derives frame_count from duration*fps when nb_frames == 0.
     let frame_count_raw: u64 = stream["nb_frames"]
         .as_str()
         .and_then(|s| s.parse().ok())
         .or_else(|| stream["nb_frames"].as_u64())
-        .expect("Failed to parse integer or missing required value");
+        .unwrap_or_else(|| {
+            tracing::warn!(
+                path = %input.display(),
+                "ffprobe bpp_from_precheck_json: nb_frames absent or non-numeric; using 0 (will re-derive from duration)"
+            );
+            0
+        });
     let (duration, fps, frame_count_raw) =
         parse_duration_from_precheck_json(json, fps, frame_count_raw, input)?;
     let fps = fps_sanitise_for_validation(fps, duration, frame_count_raw);
@@ -320,10 +329,6 @@ fn bpp_from_precheck_json(json: &serde_json::Value, file_size: u64, input: &Path
 ///
 /// # Errors
 /// Returns an error if duration detection fails.
-#[allow(
-    clippy::missing_panics_doc,
-    reason = "Explicit panic on data corruption is intended and documented inline."
-)]
 pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'static str)> {
     let output = crate::tool_builders::FfprobeBuilder::new()
         .input(input)
@@ -357,13 +362,21 @@ pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'s
     let fps: f64 = parse_fps_from_stream(stream)
         .context("Could not determine FPS for duration calculation")?;
 
+    // `nb_frames` may be absent for some containers; 0 causes duration fallback to
+    // format.duration or frame_count/fps path, both of which are correct.
     let frame_count: u64 = json
         .get("streams")
         .and_then(|s| s.get(0))
         .and_then(|s| s.get("nb_frames"))
         .and_then(serde_json::Value::as_str)
         .and_then(|s| s.parse().ok())
-        .expect("Failed to parse integer or missing required value");
+        .unwrap_or_else(|| {
+            tracing::warn!(
+                path = %input.display(),
+                "detect_duration_comprehensive: nb_frames absent or non-numeric; using 0"
+            );
+            0
+        });
 
     let stream_duration: Option<f64> = json
         .get("streams")
@@ -428,10 +441,6 @@ pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'s
     clippy::too_many_lines,
     reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
 )]
-#[allow(
-    clippy::missing_panics_doc,
-    reason = "Explicit panic on data corruption is intended and documented inline."
-)]
 pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
     let file_size = crate::io_utils::metadata_with_retry(input)
         .context("Failed to read file metadata")?
@@ -470,11 +479,18 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
     };
 
     let fps = parse_fps_from_stream(stream).context("Could not determine FPS for video info")?;
+    // `nb_frames` may be absent for image containers; 0 triggers re-derivation from duration*fps.
     let frame_count_raw: u64 = stream["nb_frames"]
         .as_str()
         .and_then(|s| s.parse().ok())
         .or_else(|| stream["nb_frames"].as_u64())
-        .expect("Failed to parse integer or missing required value");
+        .unwrap_or_else(|| {
+            tracing::warn!(
+                path = %input.display(),
+                "get_video_info: nb_frames absent or non-numeric; using 0 (will re-derive from duration)"
+            );
+            0
+        });
 
     let (duration, fps, frame_count_raw) =
         parse_duration_from_precheck_json(&json, fps, frame_count_raw, input)?;

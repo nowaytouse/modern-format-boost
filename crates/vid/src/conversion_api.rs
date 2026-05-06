@@ -779,7 +779,7 @@ pub fn auto_convert_with_cache(
     // Internal judgment reconciliation:
     // If vid sees single-frame on a format that can be animated, re-check with image_detection
     // (which includes structural + penetration animation verification) before static isolation.
-    if detection.frame_count <= 1
+    if detection.frame_count.unwrap_or(0) <= 1
         && shared_utils::quality_matcher::SourceCodec::identify_by_content(input)
             .is_some_and(|codec| codec.can_be_animated())
     {
@@ -787,16 +787,16 @@ pub fn auto_convert_with_cache(
             if matches!(
                 image_det.image_type,
                 shared_utils::image_detection::ImageType::Animated
-            ) || image_det.frame_count > 1
+            ) || image_det.frame_count.unwrap_or(0) > 1
             {
-                let corrected = u64::from(image_det.frame_count.max(2));
+                let corrected = u64::from(image_det.frame_count.unwrap_or(0).max(2));
                 tracing::warn!(
                     file = %input.display(),
-                    vid_frame_count = detection.frame_count,
+                    vid_frame_count = detection.frame_count.unwrap_or(0),
                     image_frame_count = corrected,
                     "Animated-image reconciliation corrected frame_count before vid static isolation"
                 );
-                detection.frame_count = corrected;
+                detection.frame_count = Some(corrected);
                 if detection.duration_secs <= 0.0_f64 {
                     if let Some(dur) = image_det.duration {
                         if dur > 0.0 {
@@ -809,7 +809,7 @@ pub fn auto_convert_with_cache(
     }
 
     // --- Strict Animated Isolation: Ignore static images in vid ---
-    if detection.frame_count <= 1 {
+    if detection.frame_count.unwrap_or(0) <= 1 {
         let reason = "Static image detected (1 frame) - vid ignores static media (handled by img)";
         shared_utils::progress_mode::video_skipped(reason);
 
@@ -2025,7 +2025,7 @@ mod tests {
             compression: crate::detection_api::CompressionType::Standard,
             width: 1920,
             height: 1080,
-            frame_count: 1800,
+            frame_count: Some(1800),
             fps: 30.0,
             duration_secs: 60.0,
             bit_depth: 8,
@@ -2078,7 +2078,7 @@ mod tests {
             compression: crate::detection_api::CompressionType::Standard,
             width: 1920,
             height: 1080,
-            frame_count: 1800,
+            frame_count: Some(1800),
             fps: 30.0,
             duration_secs: 60.0,
             bit_depth: 8,
@@ -2142,7 +2142,7 @@ mod tests {
             compression: crate::detection_api::CompressionType::Standard,
             width: 1920,
             height: 1080,
-            frame_count: 1800,
+            frame_count: Some(1800),
             fps: 30.0,
             duration_secs: 60.0,
             bit_depth: 8,
@@ -2208,7 +2208,7 @@ mod tests {
             compression: crate::detection_api::CompressionType::Standard,
             width: 1920,
             height: 1080,
-            frame_count: 1800,
+            frame_count: Some(1800),
             fps: 30.0,
             duration_secs: 60.0,
             bit_depth: 8,
@@ -2277,7 +2277,7 @@ mod tests {
                 compression: CompressionType::Standard,
                 width: 1920,
                 height: 1080,
-                frame_count: 1800,
+                frame_count: Some(1800),
                 fps: 30.0,
                 duration_secs: 60.0,
                 bit_depth: 8,
@@ -2358,7 +2358,7 @@ mod tests {
             compression: CompressionType::Standard,
             width: 1920,
             height: 1080,
-            frame_count: 1800,
+            frame_count: Some(1800),
             fps: 30.0,
             duration_secs: 60.0,
             bit_depth: 8,
@@ -2414,7 +2414,7 @@ mod tests {
             compression: CompressionType::Standard,
             width: 3840,
             height: 2160,
-            frame_count: 3600,
+            frame_count: Some(3600),
             fps: 60.0,
             duration_secs: 60.0,
             bit_depth: 10,
@@ -2473,7 +2473,7 @@ mod tests {
             compression: CompressionType::Standard,
             width: 1920,
             height: 1080,
-            frame_count: 1800,
+            frame_count: Some(1800),
             fps: 30.0,
             duration_secs: 60.0,
             bit_depth: 8,
@@ -2530,7 +2530,7 @@ mod tests {
             compression: CompressionType::VisuallyLossless,
             width: 3840,
             height: 2160,
-            frame_count: 3600,
+            frame_count: Some(3600),
             fps: 60.0,
             duration_secs: 60.0,
             bit_depth: 10,
@@ -2583,7 +2583,7 @@ mod tests {
             compression: CompressionType::Lossless,
             width: 1920,
             height: 1080,
-            frame_count: 900,
+            frame_count: Some(900),
             fps: 30.0,
             duration_secs: 30.0,
             bit_depth: 10,
@@ -2643,7 +2643,7 @@ mod tests {
             compression: CompressionType::VisuallyLossless,
             width: 1920,
             height: 1080,
-            frame_count: 1800,
+            frame_count: Some(1800),
             fps: 30.0,
             duration_secs: 60.0,
             bit_depth: 10,
@@ -2703,7 +2703,7 @@ mod tests {
             compression: CompressionType::Standard,
             width: 1280,
             height: 720,
-            frame_count: 900,
+            frame_count: Some(900),
             fps: 30.0,
             duration_secs: 30.0,
             bit_depth: 8,
@@ -2816,7 +2816,7 @@ mod tests {
             height: 512,
             duration_secs: 2.0,
             has_audio: false,
-            frame_count: 50,
+            frame_count: Some(50),
             fps: 25.0,
             file_size: 500_000,
             ..Default::default()
@@ -2858,7 +2858,7 @@ mod tests {
             height: 1,
             duration_secs: 0.2,
             has_audio: false,
-            frame_count: 2,
+            frame_count: Some(2),
             fps: 10.0,
             file_size: std::fs::metadata(gif.path())
                 .unwrap_or_else(|e| panic!("error: {e:?}"))
@@ -2901,7 +2901,7 @@ mod tests {
             height: 1,
             duration_secs: 0.2,
             has_audio: false,
-            frame_count: 2,
+            frame_count: Some(2),
             fps: 10.0,
             file_size: std::fs::metadata(gif.path())
                 .unwrap_or_else(|e| panic!("error: {e:?}"))
@@ -2936,7 +2936,7 @@ mod tests {
             height: 512,
             duration_secs: 0.0,
             has_audio: false,
-            frame_count: 12,
+            frame_count: Some(12),
             fps: 0.0,
             file_size: 500_000,
             ..Default::default()
@@ -2974,7 +2974,7 @@ mod tests {
             height: 720,
             duration_secs: shared_utils::constants::EXTREME_LONG_ABSOLUTE_LIMIT_SECS + 5.0,
             has_audio: false,
-            frame_count: 600,
+            frame_count: Some(600),
             fps: 30.0,
             file_size: 5_000_000,
             ..Default::default()

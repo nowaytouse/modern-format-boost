@@ -18,6 +18,7 @@ use std::sync::{
     Arc, Mutex,
 };
 use std::time::{Duration, Instant};
+use tracing::warn;
 
 static PROGRESS_STDERR_LOCK: Mutex<()> = Mutex::new(());
 static ACTIVE_PROGRESS_LINE: Mutex<Option<String>> = Mutex::new(None);
@@ -647,7 +648,10 @@ impl DetailedCoarseProgressBar {
 
         let best_crf = f32::from_bits(
             u32::try_from(self.best_crf.load(Ordering::Relaxed))
-                .expect("Failed to parse integer or missing required value"),
+                .unwrap_or_else(|_| {
+                    warn!("☢️ [ANOMALY] Progress position overflowed usize; using 0");
+                    0
+                }),
         );
         let best_str = if best_crf > 0.0 {
             format!("Best: {best_crf:.1}")
@@ -714,7 +718,10 @@ impl DetailedCoarseProgressBar {
         let iter = self.current_iteration.load(Ordering::Relaxed);
         let crf = f32::from_bits(
             u32::try_from(self.current_crf.load(Ordering::Relaxed))
-                .expect("Failed to parse integer or missing required value"),
+                .unwrap_or_else(|_| {
+                    warn!("☢️ [ANOMALY] Progress total overflowed usize; using 0");
+                    0
+                }),
         );
         let size = self.current_size.load(Ordering::Relaxed);
         let ssim = if self.has_ssim.load(Ordering::Relaxed) {

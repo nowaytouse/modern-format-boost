@@ -193,7 +193,7 @@ pub struct VideoDetectionResult {
     pub compression: CompressionType,
     pub width: u32,
     pub height: u32,
-    pub frame_count: u64,
+    pub frame_count: Option<u64>,
     pub fps: f64,
     pub duration_secs: f64,
     pub bit_depth: u8,
@@ -383,7 +383,7 @@ pub fn detect_video_with_cache(
     cache: Option<&crate::analysis_cache::AnalysisCache>,
 ) -> Result<VideoDetectionResult, FFprobeError> {
     let should_refresh_cached_result = |cached: &VideoDetectionResult| -> bool {
-        if cached.frame_count > 1 {
+        if cached.frame_count.unwrap_or(0) > 1 {
             return false;
         }
 
@@ -400,7 +400,7 @@ pub fn detect_video_with_cache(
         else {
             return false;
         };
-        is_animated && native_frames > 1
+        is_animated && native_frames.unwrap_or(0) > 1
     };
 
     if let Some(cache) = cache {
@@ -462,8 +462,19 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
     let has_b_frames = probe.has_b_frames();
 
     let pixels_per_second = f64::from(probe.width) * f64::from(probe.height) * probe.frame_rate;
+
+    // `bit_rate` is absent for image containers probed via ffprobe (e.g. WebP).
+    // Warn at the boundary; downstream logic uses 0 where a bitrate is needed.
+    let format_bit_rate: u64 = probe.bit_rate.unwrap_or_else(|| {
+        tracing::warn!(
+            path = %path.display(),
+            "ffprobe reported no container bit_rate; using 0 for compression heuristics"
+        );
+        0
+    });
+
     let bits_per_pixel = if pixels_per_second > 0.0_f64 {
-        crate::numeric_cast::u64_to_f64(probe.bit_rate) / pixels_per_second
+        crate::numeric_cast::u64_to_f64(format_bit_rate) / pixels_per_second
     } else {
         0.0_f64
     };
@@ -476,7 +487,7 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
 
     let compression = determine_compression_type(
         &codec,
-        probe.bit_rate,
+        format_bit_rate,
         probe.width,
         probe.height,
         probe.frame_rate,
@@ -491,7 +502,7 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
     let quality_score = calculate_quality_score(
         &compression,
         probe.bit_depth,
-        probe.bit_rate,
+        format_bit_rate,
         probe.width,
         probe.height,
     );
@@ -515,7 +526,7 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
         bit_depth: probe.bit_depth,
         pix_fmt: probe.pix_fmt,
         color_space,
-        bitrate: probe.bit_rate,
+        bitrate: format_bit_rate,
         has_audio: probe.audio.present,
         audio_codec: probe.audio.codec.clone(),
         file_size: probe.size,
@@ -583,18 +594,19 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
         }
     }
 
-    if result.frame_count <= 1 || result.frame_count > 50000 {
+    let fc_val = result.frame_count.unwrap_or(0);
+    if fc_val <= 1 || fc_val > 50000 {
         if let crate::media_penetration::PenetrationResult::Verified(real_count) =
-            crate::media_penetration::detect_real_frame_count(path, result.frame_count)
+            crate::media_penetration::detect_real_frame_count(path, fc_val)
         {
-            if real_count != result.frame_count {
+            if real_count != fc_val {
                 crate::progress_mode::emit_stderr(&format!(
                     "⚠️  [{}] Frame count mismatch: metadata={}, actual={}, correcting",
                     path.file_name().and_then(|n| n.to_str()).unwrap_or("?"),
-                    result.frame_count,
+                    fc_val,
                     real_count
                 ));
-                result.frame_count = real_count;
+                result.frame_count = Some(real_count);
             }
         }
     }

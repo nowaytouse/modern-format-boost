@@ -506,7 +506,7 @@ struct SampleRow {
     width: u32,
     height: u32,
     duration_secs: f64,
-    frame_count: u64,
+    frame_count: Option<u64>,
     file_size_bytes: u64,
     fps: f64,
     temporal_bpp: f64,
@@ -1073,12 +1073,13 @@ fn lossless_duration_limit_for_keep_prob(keep_prob: f64) -> f32 {
 
 #[must_use]
 fn resolved_duration_secs(meta: &LoopMeta) -> f64 {
+    let fc = meta.frame_count.unwrap_or(0);
     if meta.duration_secs > 0.11 {
         meta.duration_secs
-    } else if meta.frame_count > 1 && meta.fps > 0.1 {
-        crate::numeric_cast::u64_to_f64(meta.frame_count) / meta.fps
+    } else if fc > 1 && meta.fps > 0.1 {
+        crate::numeric_cast::u64_to_f64(fc) / meta.fps
     } else {
-        crate::numeric_cast::u64_to_f64(meta.frame_count.max(1)) / 12.0
+        crate::numeric_cast::u64_to_f64(fc.max(1)) / 12.0
     }
 }
 
@@ -1371,7 +1372,7 @@ pub struct SampleInsert {
     /// Total animation duration in seconds.
     duration_secs: f64,
     /// Total number of frames.
-    frame_count: u64,
+    frame_count: Option<u64>,
     /// File size in bytes.
     file_size_bytes: u64,
     /// Frames per second.
@@ -1661,10 +1662,6 @@ pub fn sample_from_path(
 ///
 /// # Errors
 /// Returns an error if the file cannot be opened or read.
-#[allow(
-    clippy::missing_panics_doc,
-    reason = "Explicit panic on data corruption is intended and documented inline."
-)]
 pub fn calculate_blake3_hex(path: &Path) -> Result<String> {
     let mut file = std::fs::File::open(path)?;
     let mut hasher = Hasher::new();
@@ -1703,15 +1700,16 @@ fn calculate_continuous_features(
     };
 
     let sample_pixels = (f64::from(sample.width) * f64::from(sample.height)).max(1.0);
+    let fc = sample.frame_count.unwrap_or(0);
     let sample_frame_density =
-        crate::numeric_cast::u64_to_f64(sample.frame_count) / sample.duration_secs.max(0.05);
+        crate::numeric_cast::u64_to_f64(fc) / sample.duration_secs.max(0.05);
     let sample_frame_gap =
-        sample.duration_secs / crate::numeric_cast::u64_to_f64(sample.frame_count.max(1));
+        sample.duration_secs / crate::numeric_cast::u64_to_f64(fc.max(1));
 
     (
         sample_pixels / get_std("pixels") * get_w("pixels").sqrt(),
         sample.duration_secs / get_std("duration") * get_w("duration").sqrt(),
-        crate::numeric_cast::u64_to_f64(sample.frame_count) / get_std("frame_count")
+        crate::numeric_cast::u64_to_f64(fc) / get_std("frame_count")
             * get_w("frame_count").sqrt(),
         crate::numeric_cast::u64_to_f64(sample.file_size_bytes) / get_std("file_size_bytes")
             * get_w("file_size_bytes").sqrt(),
@@ -1957,7 +1955,7 @@ fn sample_row_from_meta(meta: &LoopMeta, temporal_bpp: f64, spatial_bpp: f64) ->
 fn bpp_from_meta(meta: &LoopMeta) -> (f64, f64) {
     let pixel_count = (f64::from(meta.width) * f64::from(meta.height)).max(1.0);
     let file_size = crate::numeric_cast::u64_to_f64(meta.file_size_bytes);
-    let frame_count = crate::numeric_cast::u64_to_f64(meta.frame_count.max(1));
+    let frame_count = crate::numeric_cast::u64_to_f64(meta.frame_count.unwrap_or(0).max(1));
 
     (
         file_size / (pixel_count * frame_count),
@@ -2166,7 +2164,7 @@ pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -
             pb.inc(1);
             if let Some(s) = &res {
                 // Exclude static images: only multi-frame content is valuable for loop intent training
-                if s.frame_count <= 1 {
+                if s.frame_count.unwrap_or(0) <= 1 {
                     return None;
                 }
                 pb.set_message(format!("Learn: {}", s.file_name.as_deref().unwrap_or("?")));
@@ -2244,7 +2242,7 @@ pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -
     for sample in samples {
         let palette_size_i32 = sample.palette_size.map(crate::numeric_cast::u32_to_i32_sat);
         let total_pixels_i64 = crate::numeric_cast::u64_to_i64_sat(sample.total_pixels);
-        let frame_count_i64 = crate::numeric_cast::u64_to_i64_sat(sample.frame_count);
+        let frame_count_i64 = crate::numeric_cast::u64_to_i64_sat(sample.frame_count.unwrap_or(0));
         let file_size_i64 = crate::numeric_cast::u64_to_i64_sat(sample.file_size_bytes);
         let width_i32 = crate::numeric_cast::u32_to_i32_sat(sample.width);
         let height_i32 = crate::numeric_cast::u32_to_i32_sat(sample.height);
@@ -2318,10 +2316,6 @@ pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -
 #[allow(
     clippy::too_many_lines,
     reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
-)]
-#[allow(
-    clippy::missing_panics_doc,
-    reason = "Explicit panic on data corruption is intended and documented inline."
 )]
 pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
     emit_stderr("🏋️  Recomputing Global KNN Feature Statistics (Training Model)...");
@@ -2676,7 +2670,7 @@ pub fn recompute_all_features(conn: &mut Client) -> Result<()> {
             width: crate::numeric_cast::i32_to_u32_sat(row.get::<_, i32>(2)),
             height: crate::numeric_cast::i32_to_u32_sat(row.get::<_, i32>(3)),
             duration_secs: row.get(4),
-            frame_count: crate::numeric_cast::i64_to_u64_sat(row.get::<_, i64>(5)),
+            frame_count: Some(crate::numeric_cast::i64_to_u64_sat(row.get::<_, i64>(5))),
             file_size_bytes: crate::numeric_cast::i64_to_u64_sat(row.get::<_, i64>(6)),
             fps: crate::numeric_cast::option_f64_loud(
                 row.get::<_, Option<f64>>(7),
@@ -3167,7 +3161,7 @@ mod tests {
             width: 320,
             height: 320,
             fps: 12.0,
-            frame_count: frames,
+            frame_count: Some(frames),
             file_size_bytes: size,
             file_name: None,
             palette_size: Some(64),
@@ -3226,7 +3220,7 @@ mod tests {
             width: 300,
             height: 300,
             duration_secs: 2.2,
-            frame_count: 24,
+            frame_count: Some(24),
             file_size_bytes: 125_000,
             fps: 12.0,
             temporal_bpp: 0.05,
@@ -3261,7 +3255,7 @@ mod tests {
             width: 1920,
             height: 1080,
             duration_secs: 20.0,
-            frame_count: 600,
+            frame_count: Some(600),
             file_size_bytes: 20_000_000,
             fps: 30.0,
             temporal_bpp: 0.4,
@@ -3316,7 +3310,7 @@ mod tests {
     fn resolved_duration_secs_recovers_from_zero_probe_duration() {
         let mut meta = base_meta();
         meta.duration_secs = 0.0_f64;
-        meta.frame_count = 800;
+        meta.frame_count = Some(800);
         meta.fps = 10.0_f64;
         assert!((resolved_duration_secs(&meta) - 80.0).abs() < 0.01_f64);
     }
@@ -3334,16 +3328,16 @@ mod tests {
         let mut meta = base_meta();
         meta.width = 1200;
         meta.height = 1200;
-        meta.frame_count = 36;
+        meta.frame_count = Some(36);
         meta.file_size_bytes = 2_391_699;
 
         let (temporal_bpp, spatial_bpp) = bpp_from_meta(&meta);
         let pixel_count = f64::from(meta.width) * f64::from(meta.height);
         let expected_temporal = crate::numeric_cast::u64_to_f64(meta.file_size_bytes)
-            / (pixel_count * crate::numeric_cast::u64_to_f64(meta.frame_count));
+            / (pixel_count * crate::numeric_cast::u64_to_f64(meta.frame_count.unwrap_or(1)));
         let legacy_buggy_temporal = crate::numeric_cast::u64_to_f64(meta.file_size_bytes)
             / pixel_count
-            * crate::numeric_cast::u64_to_f64(meta.frame_count);
+            * crate::numeric_cast::u64_to_f64(meta.frame_count.unwrap_or(1));
         let expected_spatial = crate::numeric_cast::u64_to_f64(meta.file_size_bytes) / pixel_count;
 
         assert!(crate::float_compare::approx_eq_f64(

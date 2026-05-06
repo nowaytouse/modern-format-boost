@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## 🛡️ Numeric Safety Hardening & Metadata Robustness (2026-05-06)
+
+- **Centralized Numeric Cast Safety**:
+  - **Audit-Driven Casting**: Introduced `shared_utils::numeric_cast` module as the single source of truth for all numeric conversions, replacing raw `as` casts and fragile `try_from().expect()` calls.
+  - **Saturating Semantics**: Implemented saturating logic for all critical conversions (e.g., `i64_to_u32_sat`), ensuring system stability even when encountering corrupt or malicious media metadata.
+  - **Nan/Infinite Protection**: Added "loud" conversion helpers (e.g., `f64_to_rational_loud`) that warn on invalid floating-point values while providing safe fallbacks.
+
+- **Metadata Handling Robustness**:
+  - **Optional Frame Counts**: Refactored `frame_count` across `shared_utils`, `vid`, and `img` crates from raw integers to `Option<u64>/Option<u32>`, enabling explicit handling of media streams with unknown or degenerate frame counts.
+  - **FFprobe Parsing Resilience**: Enhanced JSON parsing logic in `video_explorer` and `ffprobe` modules to gracefully handle missing or non-numeric `nb_frames` fields.
+  - **Improved Reconciliation**: Refined the reconciliation logic between video and image detection for animated formats, ensuring consistent frame count derivation.
+
+- **HEVC/HEIC Analysis Refinement**:
+  - **NAL Unit Parsing Fix**: Corrected a bug in HEIC NAL unit skipping logic where the search position was not properly updated, preventing potential infinite loops or mis-parsing of malformed boxes.
+  - **HDR/DV Detection Security**: Hardened `colr` box parsing with bounds-checked indexing and proper `Result` propagation, eliminating potential panics during HDR/Dolby Vision metadata extraction.
+
+- **Verification & Test Suite Updates**:
+  - **Comprehensive Test Refactoring**: Updated over 50 unit tests across the workspace to align with the new `Option`-based metadata types and saturating cast semantics.
+  - **Full Suite Validation**: Verified all changes against the complete test suite (905 tests passed), ensuring no regressions in quality scoring or conversion strategy logic.
+
 ## 🔧 Precision Enhancement & Quality Metrics Unification (2026-05-05)
 
 - **Numeric Precision Improvements**:

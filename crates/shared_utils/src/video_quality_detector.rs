@@ -37,7 +37,7 @@ pub struct VideoQualityAnalysis {
     pub file_size: u64,
     pub duration_secs: f64,
     pub fps: f64,
-    pub frame_count: u64,
+    pub frame_count: Option<u64>,
 
     pub codec: String,
     pub codec_type: VideoCodecType,
@@ -187,6 +187,7 @@ pub struct VideoQualityInput<'a> {
     pub gop_size: Option<u32>,
     pub color_space: Option<&'a str>,
     pub file_size: u64,
+    pub frame_count: Option<u64>,
 }
 
 impl CompressionLevel {
@@ -235,10 +236,6 @@ impl CompressionLevel {
 ///
 /// # Errors
 /// Returns an error if video quality analysis fails due to invalid parameters.
-#[allow(
-    clippy::missing_panics_doc,
-    reason = "Explicit panic on data corruption is intended and documented inline."
-)]
 pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualityAnalysis, String> {
     let VideoQualityInput {
         codec,
@@ -255,6 +252,7 @@ pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualit
         gop_size,
         color_space,
         file_size,
+        frame_count: input_frame_count,
     } = input;
 
     if width == 0 || height == 0 {
@@ -267,7 +265,7 @@ pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualit
         return Err("❌ Invalid duration: must be > 0".to_string());
     }
 
-    let frame_count = crate::numeric_cast::f64_to_u64_sat(duration_secs * fps);
+
 
     let source_codec = parse_source_codec(codec);
     let codec_type = VideoCodecType::from_source_codec(source_codec);
@@ -281,9 +279,16 @@ pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualit
             * Rational::from(height)
             * crate::numeric_cast::f64_to_rational_loud(fps, 1, "fps");
         if pixels_per_second > Rational::from(0_i32) {
+            // effective_bitrate is u64; Rational::from requires i64 or smaller.
+            // Saturate to i64::MAX for astronomically large bitrates (>9 Pbps).
             let bits_per_second = Rational::from(
-                u32::try_from(effective_bitrate)
-                    .expect("Value overflowed or is missing, cannot process ratio"),
+                i64::try_from(effective_bitrate).unwrap_or_else(|_| {
+                    tracing::warn!(
+                        effective_bitrate,
+                        "analyze_video_quality: effective_bitrate exceeds i64::MAX; saturating for BPP calc"
+                    );
+                    i64::MAX
+                }),
             );
             (bits_per_second / pixels_per_second).to_f64()
         } else {
@@ -319,7 +324,7 @@ pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualit
         video_bitrate.is_some(),
         gop_size.is_some(),
         duration_secs,
-        frame_count,
+        input_frame_count,
     );
 
     Ok(VideoQualityAnalysis {
@@ -328,7 +333,7 @@ pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualit
         file_size,
         duration_secs,
         fps,
-        frame_count,
+        frame_count: input_frame_count,
         codec: codec.to_string(),
         codec_type,
         is_modern_codec: is_modern,
@@ -388,6 +393,7 @@ pub fn analyze_video_quality_from_detection(
         gop_size: None,
         color_space: Some(detection.color_space.as_str()),
         file_size: detection.file_size,
+        frame_count: detection.frame_count,
     })
 }
 
@@ -437,7 +443,7 @@ pub fn log_media_info_for_quality(analysis: &VideoQualityAnalysis, input_path: &
             analysis.height,
             analysis.fps,
             analysis.duration_secs,
-            analysis.frame_count
+            analysis.frame_count.unwrap_or(0)
         ),
     );
     write_to_log_at_level(
@@ -569,13 +575,17 @@ fn calculate_quality_score(
                 );
                 0
             });
-            u8::try_from(t.clamp(0, 5)).expect("Failed to parse integer or missing required value")
+            // t is clamped to 0..=5, always fits u8.
+            #[allow(clippy::cast_possible_truncation)]
+            { t.clamp(0, 5) as u8 }
         }
         CompressionLevel::HighQuality => {
             let t = crate::numeric_cast::f64_to_u32_sat(
                 ((bpp - 0.3).clamp(0.0, 0.2) / 0.2 * 3.0).round(),
             );
-            u8::try_from(t.clamp(0, 3)).expect("Failed to parse integer or missing required value")
+            // t is clamped to 0..=3, always fits u8.
+            #[allow(clippy::cast_possible_truncation)]
+            { t.clamp(0, 3) as u8 }
         }
         _ => 0,
     };
@@ -611,7 +621,7 @@ fn calculate_video_confidence(
     has_video_bitrate: bool,
     has_gop_size: bool,
     duration: f64,
-    frame_count: u64,
+    frame_count: Option<u64>,
 ) -> f64 {
     let mut confidence: f64 = crate::constants::VIDEO_CONFIDENCE_BASE;
 
@@ -627,7 +637,7 @@ fn calculate_video_confidence(
         confidence += crate::constants::VIDEO_CONFIDENCE_DURATION_BONUS;
     }
 
-    if frame_count > crate::constants::VIDEO_CONFIDENCE_FRAMES_THRESHOLD {
+    if frame_count.unwrap_or(0) > crate::constants::VIDEO_CONFIDENCE_FRAMES_THRESHOLD {
         confidence += crate::constants::VIDEO_CONFIDENCE_FRAMES_BONUS;
     }
 
@@ -670,6 +680,7 @@ mod tests {
             gop_size: Some(60),
             color_space: Some("bt709"),
             file_size: 60_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
@@ -698,6 +709,7 @@ mod tests {
             gop_size: Some(60),
             color_space: Some("bt2020nc"),
             file_size: 300_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
@@ -725,6 +737,7 @@ mod tests {
             gop_size: Some(120),
             color_space: None,
             file_size: 56_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
@@ -752,6 +765,7 @@ mod tests {
             gop_size: Some(1),
             color_space: Some("bt709"),
             file_size: 1_125_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
@@ -778,6 +792,7 @@ mod tests {
             gop_size: Some(1),
             color_space: None,
             file_size: 750_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
@@ -805,7 +820,8 @@ mod tests {
                 gop_size: None,
                 color_space: None,
                 file_size: 60_000_000,
-            })
+                frame_count: None,
+        })
             .unwrap_or_else(|e| panic!("{e}"));
             assert!(
                 result.should_skip,
@@ -831,6 +847,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 60_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
         assert!(!h264.should_skip, "H.264 should NOT be skipped");
@@ -850,6 +867,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 375_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
         assert!(!mjpeg.should_skip, "MJPEG should NOT be skipped");
@@ -869,6 +887,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 1_125_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
         assert!(!prores.should_skip, "ProRes should NOT be skipped");
@@ -943,6 +962,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 60_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
@@ -972,6 +992,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 75_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
@@ -1001,6 +1022,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 1_500_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
@@ -1024,6 +1046,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 1_125_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
@@ -1047,6 +1070,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 60_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
@@ -1075,6 +1099,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 22_500_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
@@ -1103,6 +1128,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 150_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
@@ -1130,6 +1156,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 7_500_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
@@ -1157,6 +1184,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 1_500_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
@@ -1180,6 +1208,7 @@ mod tests {
             gop_size: None,
             color_space: Some("bt2020nc"),
             file_size: 187_500_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
@@ -1203,6 +1232,7 @@ mod tests {
             gop_size: None,
             color_space: Some("bt709"),
             file_size: 60_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
@@ -1226,6 +1256,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 60_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
@@ -1252,6 +1283,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 60_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
         assert!(
@@ -1277,6 +1309,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 1_500_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
         assert!(!result.should_skip);
@@ -1299,6 +1332,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 1_125_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
         assert!(!result.should_skip);
@@ -1322,6 +1356,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 60_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
         assert!(!result.should_skip);
@@ -1344,6 +1379,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 60_000_000,
+            frame_count: None,
         });
 
         assert!(result.is_err(), "Should fail on zero width");
@@ -1370,6 +1406,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 60_000_000,
+            frame_count: None,
         });
 
         assert!(result.is_err(), "Should fail on zero height");
@@ -1396,6 +1433,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 60_000_000,
+            frame_count: None,
         });
 
         assert!(result.is_err(), "Should fail on zero fps");
@@ -1422,6 +1460,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 60_000_000,
+            frame_count: None,
         });
 
         assert!(result.is_err(), "Should fail on negative fps");
@@ -1444,6 +1483,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 60_000_000,
+            frame_count: None,
         });
 
         assert!(result.is_err(), "Should fail on zero duration");
@@ -1470,6 +1510,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 60_000_000,
+            frame_count: None,
         });
 
         assert!(result.is_err(), "Should fail on negative duration");
@@ -1492,6 +1533,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 750_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
@@ -1523,6 +1565,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 3_750_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
@@ -1554,6 +1597,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 15_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
@@ -1580,6 +1624,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 37_500_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
@@ -1604,6 +1649,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 187_500_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
@@ -1629,6 +1675,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 600_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
@@ -1654,6 +1701,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 60_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
@@ -1679,6 +1727,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 45_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
@@ -1703,11 +1752,12 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 60_000_000,
+            frame_count: Some(1440),
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
         assert!((result.fps - 24.0).abs() < 0.01_f64);
-        assert_eq!(result.frame_count, 1440);
+        assert_eq!(result.frame_count, Some(1440));
     }
 
     #[test]
@@ -1727,11 +1777,12 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 112_500_000,
+            frame_count: Some(3600),
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
         assert!((result.fps - 60.0).abs() < 0.01_f64);
-        assert_eq!(result.frame_count, 3600);
+        assert_eq!(result.frame_count, Some(3600));
     }
 
     #[test]
@@ -1751,11 +1802,12 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 93_750_000,
+            frame_count: Some(3600),
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
         assert!((result.fps - 120.0).abs() < 0.01_f64);
-        assert_eq!(result.frame_count, 3600);
+        assert_eq!(result.frame_count, Some(3600));
     }
 
     #[test]
@@ -1775,6 +1827,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 60_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
@@ -1798,6 +1851,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 1_500_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(ffv1.codec_type, VideoCodecType::Lossless);
@@ -1817,6 +1871,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 2_250_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(huffyuv.codec_type, VideoCodecType::Lossless);
@@ -1836,6 +1891,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 1_875_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(utvideo.codec_type, VideoCodecType::Lossless);
@@ -1860,7 +1916,8 @@ mod tests {
                 gop_size: None,
                 color_space: None,
                 file_size: 60_000_000,
-            })
+                frame_count: None,
+        })
             .unwrap_or_else(|e| panic!("{e}"));
             assert_eq!(
                 result.codec_type,
@@ -1887,6 +1944,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 1_125_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(prores.codec_type, VideoCodecType::Intermediate);
@@ -1906,6 +1964,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 900_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(dnxhd.codec_type, VideoCodecType::Intermediate);
@@ -1928,6 +1987,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 375_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(mjpeg.codec_type, VideoCodecType::Inefficient);
@@ -1947,6 +2007,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 6_250_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(gif.codec_type, VideoCodecType::Inefficient);
@@ -1969,6 +2030,7 @@ mod tests {
             gop_size: Some(60),
             color_space: None,
             file_size: 75_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
@@ -1987,6 +2049,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 75_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
@@ -2015,6 +2078,7 @@ mod tests {
             gop_size: Some(60),
             color_space: None,
             file_size: 60_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
@@ -2033,6 +2097,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 60_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
@@ -2059,6 +2124,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 120_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
@@ -2077,6 +2143,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 5_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
@@ -2103,6 +2170,7 @@ mod tests {
             gop_size: Some(60),
             color_space: Some("bt709"),
             file_size: 60_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
@@ -2138,6 +2206,7 @@ mod tests {
             gop_size: Some(60),
             color_space: Some("bt709"),
             file_size: 60_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
@@ -2156,6 +2225,7 @@ mod tests {
             gop_size: Some(60),
             color_space: Some("bt709"),
             file_size: 60_000_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 
@@ -2193,7 +2263,8 @@ mod tests {
                 gop_size: None,
                 color_space: None,
                 file_size: bitrate * 60 / 8,
-            })
+                frame_count: None,
+        })
             .unwrap_or_else(|e| panic!("{e}"));
 
             let expected = f64::from(
@@ -2237,12 +2308,13 @@ mod tests {
                 gop_size: None,
                 color_space: None,
                 file_size: 60_000_000,
-            })
+                frame_count: Some(expected_frames),
+        })
             .unwrap_or_else(|e| panic!("{e}"));
 
             assert_eq!(
-                result.frame_count, expected_frames,
-                "STRICT: Frame count for {}fps * {}s: expected {}, got {}",
+                result.frame_count, Some(expected_frames),
+                "STRICT: Frame count for {}fps * {}s: expected {:?}, got {:?}",
                 fps, duration, expected_frames, result.frame_count
             );
         }
@@ -2276,7 +2348,8 @@ mod tests {
                 gop_size: None,
                 color_space: None,
                 file_size: 60_000_000,
-            })
+                frame_count: None,
+        })
             .unwrap_or_else(|e| panic!("{e}"));
 
             assert_eq!(
@@ -2312,7 +2385,8 @@ mod tests {
                 gop_size: None,
                 color_space: None,
                 file_size: 60_000_000,
-            })
+                frame_count: None,
+        })
             .unwrap_or_else(|e| panic!("{e}"));
 
             assert!(
@@ -2347,6 +2421,7 @@ mod tests {
             gop_size: None,
             color_space: None,
             file_size: 7_500_000,
+            frame_count: None,
         })
         .unwrap_or_else(|e| panic!("{e}"));
 

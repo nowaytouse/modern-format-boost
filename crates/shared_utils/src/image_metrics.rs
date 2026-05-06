@@ -153,22 +153,10 @@ fn calculate_window_ssim(
     let mut mean_y = 0.0_f64;
     for (i, row) in window.iter().enumerate() {
         for (j, &w) in row.iter().enumerate() {
-            mean_x = w.mul_add(
-                buf_x
-                    .get(i)
-                    .and_then(|r| r.get(j))
-                    .copied()
-                    .expect("Required floating point value missing"),
-                mean_x,
-            );
-            mean_y = w.mul_add(
-                buf_y
-                    .get(i)
-                    .and_then(|r| r.get(j))
-                    .copied()
-                    .expect("Required floating point value missing"),
-                mean_y,
-            );
+            // Bounds guaranteed: buf_x/buf_y are [WINDOW_SIZE][WINDOW_SIZE],
+            // i and j iterate over the same window dimensions.
+            mean_x = w.mul_add(buf_x[i][j], mean_x);
+            mean_y = w.mul_add(buf_y[i][j], mean_y);
         }
     }
 
@@ -177,18 +165,8 @@ fn calculate_window_ssim(
     let mut cov_xy = 0.0_f64;
     for (i, row) in window.iter().enumerate() {
         for (j, &w) in row.iter().enumerate() {
-            let dx = buf_x
-                .get(i)
-                .and_then(|r| r.get(j))
-                .copied()
-                .expect("Required floating point value missing")
-                - mean_x;
-            let dy = buf_y
-                .get(i)
-                .and_then(|r| r.get(j))
-                .copied()
-                .expect("Required floating point value missing")
-                - mean_y;
+            let dx = buf_x[i][j] - mean_x;
+            let dy = buf_y[i][j] - mean_y;
             var_x = (w * dx).mul_add(dx, var_x);
             var_y = (w * dy).mul_add(dy, var_y);
             cov_xy = (w * dx).mul_add(dy, cov_xy);
@@ -240,7 +218,8 @@ fn calculate_ssim_simple(original: &DynamicImage, converted: &DynamicImage) -> O
     let c2_rat = Rational::from_f64(C2).unwrap_or(Rational::from(0));
 
     let numerator = (Rational::from(2) * mean_x.clone() * mean_y.clone() + c1_rat.clone()) * (Rational::from(2) * cov_xy + c2_rat.clone());
-    let denominator = (mean_x * mean_x + mean_y * mean_y + c1_rat) * (var_x + var_y + c2_rat);
+    // mean_x and mean_y each appear twice — clone for the squared terms to avoid move.
+    let denominator = (mean_x.clone() * mean_x + mean_y.clone() * mean_y + c1_rat) * (var_x + var_y + c2_rat);
     
     let den_abs = if denominator > Rational::from(0) { denominator.clone() } else { -denominator.clone() };
     if den_abs < Rational::from_f64(1e-10).unwrap_or(Rational::from(0)) {
@@ -271,11 +250,9 @@ pub fn calculate_ms_ssim(original: &DynamicImage, converted: &DynamicImage) -> O
 
     for (i, &weight) in weights.iter().enumerate().take(scales) {
         let (w, h) = orig.dimensions();
-        if w < u32::try_from(WINDOW_SIZE)
-            .expect("Value overflowed or is missing, cannot process ratio")
-            || h < u32::try_from(WINDOW_SIZE)
-                .expect("Value overflowed or is missing, cannot process ratio")
-        {
+        // WINDOW_SIZE = 11, always fits u32; saturating cast is equivalent.
+        let window_u32 = crate::numeric_cast::usize_to_u32_sat(WINDOW_SIZE);
+        if w < window_u32 || h < window_u32 {
             break;
         }
 

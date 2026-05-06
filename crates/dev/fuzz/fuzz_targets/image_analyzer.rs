@@ -41,7 +41,7 @@ fuzz_target!(|data: &[u8]| {
         rgba_data,
         file_size,
         &format,
-        frame_count,
+        Some(frame_count),
         PrecisionMetadata::default(),
     );
 });

@@ -109,16 +109,14 @@ pub mod tiff {
                     break;
                 }
                 let n = crate::numeric_cast::u64_to_usize_sat(
-                    read_u64(ifd_pos).expect("Failed to parse integer or missing required value"),
+                    read_u64(ifd_pos).unwrap_or(0),
                 );
                 (n, ifd_pos + 8, 20usize, ifd_pos + 8 + n * 20)
             } else {
                 if ifd_pos + 2 > data.len() {
                     break;
                 }
-                let n = usize::from(
-                    read_u16(ifd_pos).expect("Failed to parse integer or missing required value"),
-                );
+                let n = read_u16(ifd_pos).map(usize::from).unwrap_or(0);
                 (n, ifd_pos + 2, 12usize, ifd_pos + 2 + n * 12)
             };
 
@@ -146,16 +144,12 @@ pub mod tiff {
                 if next_offset_pos + 8 > data.len() {
                     break;
                 }
-                ifd_offset = read_u64(next_offset_pos)
-                    .expect("Failed to parse integer or missing required value");
+                ifd_offset = read_u64(next_offset_pos).unwrap_or(0);
             } else {
                 if next_offset_pos + 4 > data.len() {
                     break;
                 }
-                ifd_offset = u64::from(
-                    read_u32(next_offset_pos)
-                        .expect("Failed to parse integer or missing required value"),
-                );
+                ifd_offset = u64::from(read_u32(next_offset_pos).unwrap_or(0));
             }
         }
         Ok(true)
@@ -204,9 +198,7 @@ pub mod jpeg {
                         && i + 5 < buffer.len()
                     {
                         let q_value = u32::from(
-                            *buffer
-                                .get(i + 5)
-                                .expect("Required metadata byte missing (out of bounds)"),
+                            *buffer.get(i + 5).ok_or(0).unwrap_or(&0),
                         );
                         return match q_value {
                             0..=2 => 98,
@@ -352,7 +344,7 @@ pub mod webp {
                         let quality = crate::numeric_cast::u32_to_u8_sat(
                             (u32::from(127 - y_ac_qi) * 100)
                                 .checked_div(127)
-                                .expect("Failed to parse integer or missing required value")
+                                .unwrap_or(0)
                                 .min(100),
                         );
                         return Ok(quality);
@@ -414,22 +406,12 @@ pub mod webp {
         let mut pos = 12usize; // RIFF payload start
         let mut total_ms = 0u64;
         while pos + 8 <= data.len() {
-            let chunk_id = data
-                .get(pos..pos + 4)
-                .expect("Required byte slice missing (out of bounds)");
+            let chunk_id = data.get(pos..pos + 4).unwrap_or(b"NULL");
             let chunk_size = crate::numeric_cast::u32_to_usize_sat(u32::from_le_bytes([
-                *data
-                    .get(pos + 4)
-                    .expect("Required metadata byte missing (out of bounds)"),
-                *data
-                    .get(pos + 5)
-                    .expect("Required metadata byte missing (out of bounds)"),
-                *data
-                    .get(pos + 6)
-                    .expect("Required metadata byte missing (out of bounds)"),
-                *data
-                    .get(pos + 7)
-                    .expect("Required metadata byte missing (out of bounds)"),
+                *data.get(pos + 4).unwrap_or(&0),
+                *data.get(pos + 5).unwrap_or(&0),
+                *data.get(pos + 6).unwrap_or(&0),
+                *data.get(pos + 7).unwrap_or(&0),
             ]));
             let payload_start = pos + 8;
             // Strict bounds: if chunk_size is malformed, stop trusting RIFF traversal.
@@ -691,7 +673,7 @@ pub mod avif {
                                 let max_depth = pixi_data
                                     .get(1..=num_ch)
                                     .and_then(|slice| slice.iter().copied().max())
-                                    .expect("Failed to parse integer or missing required value");
+                                    .unwrap_or(8);
                                 if max_depth >= 12 {
                                     return Ok(true);
                                 }
@@ -800,12 +782,7 @@ pub mod jxl {
                 if self.byte_pos >= self.data.len() {
                     return None;
                 }
-                let bit = (*self
-                    .data
-                    .get(self.byte_pos)
-                    .expect("Required metadata byte missing (out of bounds)")
-                    >> self.bit_pos)
-                    & 1;
+                let bit = (*self.data.get(self.byte_pos)? >> self.bit_pos) & 1;
                 result |= u32::from(bit) << i;
                 self.bit_pos += 1;
                 if self.bit_pos == 8 {
@@ -842,8 +819,7 @@ pub mod jxl {
         }
         let mut r = JxlBitReader::new(
             codestream
-                .get(start..)
-                .expect("Required byte slice missing (out of bounds)"),
+                .get(start..)?
         );
 
         // --- SizeHeader ---

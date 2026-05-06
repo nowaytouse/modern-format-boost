@@ -963,8 +963,8 @@ fn video_probe_priority_data(path: &Path) -> (Option<u64>, Option<f64>, Option<f
         None
     };
 
-    let frame_count = if probe.frame_count > 0 {
-        Some(probe.frame_count)
+    let frame_count = if let Some(fc) = probe.frame_count {
+        if fc > 0 { Some(fc) } else { None }
     } else if let (Some(duration), Some(fps)) = (duration_secs, frame_rate) {
         Some(crate::numeric_cast::f64_to_u64_sat(
             (duration * fps).round().max(1.0_f64),
@@ -1318,7 +1318,10 @@ mod tests {
                 let p = u32::try_from(
                     (result.succeeded as u128 * 10_000) / result.total.max(1) as u128,
                 )
-                .expect("Value overflowed or is missing, cannot process ratio");
+                .unwrap_or_else(|_| panic!(
+                    "permille overflow in test assertion: succeeded={}, total={}",
+                    result.succeeded, result.total
+                ));
                 f64::from(p) / 100.0_f64
             };
 

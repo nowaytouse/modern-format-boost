@@ -244,8 +244,7 @@ impl AnalysisCache {
                     let data: Vec<u8> = row.get(0);
                     if let Some(stored_checksum) = row.get::<_, Option<i64>>(2) {
                         if calculate_checksum(&data)
-                            != u32::try_from(stored_checksum)
-                                .expect("Failed to parse integer or missing required value")
+                            != crate::numeric_cast::i64_to_u32_sat(stored_checksum)
                         {
                             warn!(
                                 "⚠️  [Cache] Checksum mismatch for {}. Invalidating.",
@@ -277,8 +276,7 @@ impl AnalysisCache {
                 let data: Vec<u8> = row.get(0);
                 if let Some(stored_checksum) = row.get::<_, Option<i64>>(2) {
                     if calculate_checksum(&data)
-                        != u32::try_from(stored_checksum)
-                            .expect("Failed to parse integer or missing required value")
+                        != crate::numeric_cast::i64_to_u32_sat(stored_checksum)
                     {
                         warn!(
                             "⚠️  [Cache] Checksum mismatch for {}. Invalidating.",
@@ -339,8 +337,7 @@ impl AnalysisCache {
                 let data: Vec<u8> = row.get(0);
                 if let Some(stored_checksum) = row.get::<_, Option<i64>>(1) {
                     if calculate_checksum(&data)
-                        != u32::try_from(stored_checksum)
-                            .expect("Failed to parse integer or missing required value")
+                        != crate::numeric_cast::i64_to_u32_sat(stored_checksum)
                     {
                         warn!("⚠️  [Cache] Quality checksum mismatch (Path).");
                         return Ok(None);
@@ -496,8 +493,7 @@ impl AnalysisCache {
                 let data: Vec<u8> = row.get(0);
                 if let Some(stored_checksum) = row.get::<_, Option<i64>>(1) {
                     if calculate_checksum(&data)
-                        != u32::try_from(stored_checksum)
-                            .expect("Failed to parse integer or missing required value")
+                        != crate::numeric_cast::i64_to_u32_sat(stored_checksum)
                     {
                         warn!("⚠️  [Cache] Video checksum mismatch (Path).");
                         return Ok(None);
@@ -598,7 +594,7 @@ impl AnalysisCache {
             "DELETE FROM analysis_records WHERE created_at < $1",
             &[&threshold],
         )?)
-        .expect("Failed to parse integer or missing required value");
+        .unwrap_or(0);
 
         if removed > 0 {
             info!("🧹 [Cache] Pruned {} old records", removed);
@@ -655,14 +651,10 @@ impl AnalysisCache {
 
         Ok(CacheStatistics {
             db_size_bytes: 0, // In Postgres, tracking actual disk size is complex per-table
-            analysis_records: usize::try_from(analysis_count)
-                .expect("Failed to parse integer or missing required value"),
-            quality_records: usize::try_from(quality_count)
-                .expect("Failed to parse integer or missing required value"),
-            video_records: usize::try_from(video_count)
-                .expect("Failed to parse integer or missing required value"),
-            path_index_entries: usize::try_from(path_index_count)
-                .expect("Failed to parse integer or missing required value"),
+            analysis_records: crate::numeric_cast::i64_to_usize_sat(analysis_count),
+            quality_records: crate::numeric_cast::i64_to_usize_sat(quality_count),
+            video_records: crate::numeric_cast::i64_to_usize_sat(video_count),
+            path_index_entries: crate::numeric_cast::i64_to_usize_sat(path_index_count),
             schema_version,
             algorithm_version_distribution: version_dist,
             current_algorithm_version: cache_algorithm_version(),

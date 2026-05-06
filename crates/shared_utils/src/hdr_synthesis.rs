@@ -522,9 +522,9 @@ fn decode_heif_handle(handle: &ImageHandle, color_space: ColorSpace) -> Result<D
                 let mut buffer = ImageBuffer::new(width, height);
                 for (x, y, pixel) in buffer.enumerate_pixels_mut() {
                     let y_usize = usize::try_from(y)
-                        .expect("Failed to parse integer or missing required value");
+                        .map_err(|_| anyhow!("Y coordinate overflow: {y}"))?;
                     let x_usize = usize::try_from(x)
-                        .expect("Failed to parse integer or missing required value");
+                        .map_err(|_| anyhow!("X coordinate overflow: {x}"))?;
                     let offset = y_usize
                         .saturating_mul(r_plane.stride)
                         .saturating_add(x_usize.saturating_mul(3));
@@ -562,9 +562,9 @@ fn decode_heif_handle(handle: &ImageHandle, color_space: ColorSpace) -> Result<D
                 let mut buffer = ImageBuffer::new(width, height);
                 for (x, y, pixel) in buffer.enumerate_pixels_mut() {
                     let y_usize = usize::try_from(y)
-                        .expect("Failed to parse integer or missing required value");
+                        .map_err(|_| anyhow!("Y coordinate overflow: {y}"))?;
                     let x_usize = usize::try_from(x)
-                        .expect("Failed to parse integer or missing required value");
+                        .map_err(|_| anyhow!("X coordinate overflow: {x}"))?;
                     let offset = y_usize
                         .saturating_mul(y_plane.stride)
                         .saturating_add(x_usize);
@@ -597,9 +597,13 @@ fn is_display_p3(data: &[u8]) -> bool {
     // We search the whole buffer for the signature of Display P3 ICC profile
     let search_limit = 1024 * 1024; // limit search to first 1MB for performance
     let end = data.len().min(search_limit);
-    let slice = data
-        .get(..end)
-        .expect("Required byte slice missing (out of bounds)");
+    let slice = match data.get(..end) {
+        Some(s) => s,
+        None => {
+            warn!("☢️ [ANOMALY] data.get(..{end}) failed for ICC search; using empty slice");
+            &[]
+        }
+    };
 
     // Check for common Display P3 signatures in ICC profiles
     slice.windows(10).any(|w| w == b"Display P3")

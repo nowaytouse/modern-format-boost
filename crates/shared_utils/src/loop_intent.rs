@@ -139,7 +139,7 @@ pub struct LoopMeta {
     pub width: u32,
     pub height: u32,
     pub fps: f64,
-    pub frame_count: u64,
+    pub frame_count: Option<u64>,
     pub file_size_bytes: u64,
 
     // ── Identity ──
@@ -489,7 +489,7 @@ impl LoopMeta {
             width,
             height,
             fps,
-            frame_count: u64::from(frame_count),
+            frame_count: Some(u64::from(frame_count)),
             file_size_bytes: file_size,
             file_name,
             source_extension: Some("gif".to_string()),
@@ -630,9 +630,13 @@ impl DerivedLoopSignals {
         } else {
             0.5_f64 // neutral when no frame type data
         };
-        let bytes_per_frame = if meta.frame_count > 0 {
-            crate::numeric_cast::u64_to_f64(meta.file_size_bytes)
-                / crate::numeric_cast::u64_to_f64(meta.frame_count)
+        let bytes_per_frame = if let Some(fc) = meta.frame_count {
+            if fc > 0 {
+                crate::numeric_cast::u64_to_f64(meta.file_size_bytes)
+                    / crate::numeric_cast::u64_to_f64(fc)
+            } else {
+                0.0_f64
+            }
         } else {
             0.0_f64
         };
@@ -1189,7 +1193,7 @@ fn apply_weak_heuristics(
         } else {
             crate::constants::SHORT_CLIP_FORMAT_BONUS_VIDEO
         };
-        let cadence_bonus = if meta.frame_count > 1 {
+        let cadence_bonus = if meta.frame_count.unwrap_or(0) > 1 {
             crate::constants::SHORT_CLIP_CADENCE_BONUS
         } else {
             0.0_f64
@@ -1296,10 +1300,10 @@ fn apply_weak_heuristics(
         log_odds.add(FILENAME_CONTEXT_POSITIVE_LOG_ODDS);
     }
 
-    if meta.frame_count > 0 {
-        if meta.frame_count <= 8 {
+    if meta.frame_count.unwrap_or(0) > 0 {
+        if meta.frame_count.unwrap_or(0) <= 8 {
             log_odds.add(crate::constants::FRAME_COUNT_SHORT_BONUS);
-        } else if meta.frame_count > 500 {
+        } else if meta.frame_count.unwrap_or(0) > 500 {
             log_odds.add(-crate::constants::FRAME_COUNT_LONG_PENALTY);
         }
     }
@@ -1420,7 +1424,7 @@ pub fn evaluate_loop_tree(
 
     // ── Layer 0: Degenerate Input Guard (Veto/Error) ───────────────────────────
     // Must check BEFORE any fast-path logic to prevent 0-frame inputs from bypassing validation
-    if meta.frame_count <= 1 {
+    if meta.frame_count.unwrap_or(0) <= 1 {
         return finalize(
             LoopIntentVerdict::Error(
                 "Layer 0: single-frame / zero-frame input, cannot loop".to_string(),
@@ -2147,15 +2151,15 @@ fn layer6_directional_arbitration(
     // Frame density normalization: avoid penalizing high-fps short loops (e.g. Live2D 60fps).
     // A 10s @ 60fps loop has 600 frames — that's normal for high-fps animation, not a sign
     // of video-length content. Only penalize when fps < 24 (low-fps + many frames = truly long).
-    if meta.frame_count > 500 && meta.duration_secs > 0.01_f64 {
-        let fps = crate::numeric_cast::u64_to_f64(meta.frame_count) / meta.duration_secs;
+    if meta.frame_count.unwrap_or(0) > 500 && meta.duration_secs > 0.01_f64 {
+        let fps = crate::numeric_cast::u64_to_f64(meta.frame_count.unwrap_or(0)) / meta.duration_secs;
         if fps < 24.0_f64 {
-            let weight = (crate::numeric_cast::u64_to_f64(meta.frame_count.saturating_sub(500))
+            let weight = (crate::numeric_cast::u64_to_f64(meta.frame_count.unwrap_or(0).saturating_sub(500))
                 / 2000.0)
                 .clamp(0.04, 0.14);
             arbitration.add_convert(
                 weight,
-                format!("high frame count {} @ {:.0}fps", meta.frame_count, fps),
+                format!("high frame count {} @ {:.0}fps", meta.frame_count.unwrap_or(0), fps),
             );
         }
     }
@@ -2236,7 +2240,7 @@ pub fn apply_apple_compat_modern_animation_policy(
     }
 
     // Guard: do not synthesize loop policy for single/zero-frame inputs.
-    if meta.frame_count <= 1 {
+    if meta.frame_count.unwrap_or(0) <= 1 {
         return verdict;
     }
 
@@ -2251,16 +2255,16 @@ pub fn apply_apple_compat_modern_animation_policy(
     {
         return LoopIntentVerdict::LoopStrong(format!(
             "Apple compat policy: modern animated format ({ext_lower}) → force GIF (duration={:.2}s, frames={}, audio={})",
-            meta.duration_secs, meta.frame_count, meta.has_audio
+            meta.duration_secs, meta.frame_count.unwrap_or(0), meta.has_audio
         ));
     }
 
     // Degenerate duration fallback: only treat as "short" for apple-compat forcing when the
     // animation is clearly not video-like (small-ish frame count, silent).
-    if meta.duration_secs <= 0.0_f64 && meta.frame_count <= 300 {
+    if meta.duration_secs <= 0.0_f64 && meta.frame_count.unwrap_or(0) <= 300 {
         return LoopIntentVerdict::LoopStrong(format!(
             "Apple compat policy: modern animated format ({ext_lower}) → force GIF (degenerate duration, frames={}, audio={})",
-            meta.frame_count, meta.has_audio
+            meta.frame_count.unwrap_or(0), meta.has_audio
         ));
     }
 
@@ -2370,18 +2374,18 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
         }
 
         // 3. Frame count verification (detect metadata lies)
-        if mutable_meta.frame_count <= 1 || mutable_meta.frame_count > 50000 {
-            match detect_real_frame_count(p, mutable_meta.frame_count) {
+        if mutable_meta.frame_count.unwrap_or(0) <= 1 || mutable_meta.frame_count.unwrap_or(0) > 50000 {
+            match detect_real_frame_count(p, mutable_meta.frame_count.unwrap_or(0)) {
                 crate::media_penetration::PenetrationResult::Verified(real_count) => {
                     mutable_meta.real_frame_count = Some(real_count);
-                    if real_count == mutable_meta.frame_count {
+                    if real_count == mutable_meta.frame_count.unwrap_or(0) {
                         emit_stderr(&format!("✅ Frame count verified: {real_count}"));
                     } else {
                         emit_stderr(&format!(
                             "⚠️  Frame count mismatch: metadata={}, actual={}, overriding",
-                            mutable_meta.frame_count, real_count
+                            mutable_meta.frame_count.unwrap_or(0), real_count
                         ));
-                        mutable_meta.frame_count = real_count;
+                        mutable_meta.frame_count = Some(real_count);
                     }
                 }
                 crate::media_penetration::PenetrationResult::Failed => {
@@ -2961,12 +2965,13 @@ pub fn analyze_filename(name: Option<&str>, keywords: &[String]) -> FilenameAnal
 }
 
 #[must_use]
-pub fn score_loop_frequency(duration_secs: f64, frame_count: u64) -> f64 {
-    if duration_secs <= 0.01_f64 || frame_count == 0 {
+pub fn score_loop_frequency(duration_secs: f64, frame_count: Option<u64>) -> f64 {
+    let fc = frame_count.unwrap_or(0);
+    if duration_secs <= 0.01_f64 || fc == 0 {
         return 0.5;
     }
     let loops_per_minute = 60.0_f64 / duration_secs;
-    let frame_density = crate::numeric_cast::u64_to_f64(frame_count) / duration_secs;
+    let frame_density = crate::numeric_cast::u64_to_f64(fc) / duration_secs;
 
     let loop_score = if loops_per_minute >= 20.0_f64 {
         1.0_f64
@@ -2995,12 +3000,13 @@ pub fn score_loop_frequency(duration_secs: f64, frame_count: u64) -> f64 {
 }
 
 #[must_use]
-pub fn score_sparse_cadence(duration_secs: f64, frame_count: u64) -> f64 {
-    if duration_secs <= 0.01_f64 || frame_count <= 1 {
+pub fn score_sparse_cadence(duration_secs: f64, frame_count: Option<u64>) -> f64 {
+    let fc = frame_count.unwrap_or(0);
+    if duration_secs <= 0.01_f64 || fc <= 1 {
         return 0.5;
     }
-    let frame_density = crate::numeric_cast::u64_to_f64(frame_count) / duration_secs.max(0.01);
-    let avg_gap = duration_secs / crate::numeric_cast::u64_to_f64(frame_count);
+    let frame_density = crate::numeric_cast::u64_to_f64(fc) / duration_secs.max(0.01);
+    let avg_gap = duration_secs / crate::numeric_cast::u64_to_f64(fc);
 
     if duration_secs <= 1.5_f64 && frame_density >= 12.0_f64 {
         return 0.98;
@@ -3008,7 +3014,7 @@ pub fn score_sparse_cadence(duration_secs: f64, frame_count: u64) -> f64 {
     if duration_secs >= 1.5_f64 && avg_gap >= 0.25_f64 {
         return 0.92;
     }
-    if duration_secs >= 4.0_f64 && frame_count <= 12 && avg_gap >= 0.5_f64 {
+    if duration_secs >= 4.0_f64 && fc <= 12 && avg_gap >= 0.5_f64 {
         return 0.95;
     }
 
@@ -3552,7 +3558,7 @@ mod tests {
 
             height: 640,
             fps: 12.0,
-            frame_count: 96,
+            frame_count: Some(96),
             file_size_bytes: 1_200_000,
             source_extension: Some("mp4".to_string()),
             container: Some("mp4".to_string()),
@@ -3599,7 +3605,7 @@ mod tests {
             "Expected duration_secs to be approximately 0.0, got {}",
             meta.duration_secs
         );
-        assert_eq!(meta.frame_count, 1);
+        assert_eq!(meta.frame_count, Some(1));
     }
 
     fn verdict_with_profile(meta: &LoopMeta, profile: &LoopReferenceProfile) -> LoopIntentVerdict {
@@ -3636,7 +3642,7 @@ mod tests {
         meta.duration_secs = 12.0_f64;
         meta.has_audio = true;
         meta.audio_is_silent = Some(false); // Audible audio
-        meta.frame_count = 288; // 24fps × 12s
+        meta.frame_count = Some(288); // 24fps × 12s
                                 // Make this look like a real video: widescreen, large file, scene cuts
         meta.width = 1920;
         meta.height = 1080;
@@ -3684,7 +3690,7 @@ mod tests {
         meta.duration_secs = 4.0_f64;
         meta.width = 150;
         meta.height = 108;
-        meta.frame_count = 40;
+        meta.frame_count = Some(40);
         meta.file_size_bytes = 24_000;
 
         let verdict = verdict_with_profile(&meta, &profile);
@@ -3707,7 +3713,7 @@ mod tests {
         meta.duration_secs = 4.0_f64;
         meta.width = 500;
         meta.height = 500;
-        meta.frame_count = 40;
+        meta.frame_count = Some(40);
         meta.file_size_bytes = 400_000;
 
         let verdict = verdict_with_profile(&meta, &profile);
@@ -3726,7 +3732,7 @@ mod tests {
         meta.duration_secs = 12.0_f64;
         meta.has_audio = true;
         meta.audio_is_silent = Some(false); // Audible audio
-        meta.frame_count = 288;
+        meta.frame_count = Some(288);
         // Make this look like a real video: widescreen, large file
         meta.width = 1920;
         meta.height = 1080;
@@ -3770,7 +3776,7 @@ mod tests {
         meta.app_extensions = Some(vec!["TENOR".to_string()]);
         meta.duration_secs = 14.0_f64; // Long duration - will go to specialized tree
         meta.has_audio = false; // Ensure it's silent
-        meta.frame_count = 168; // Ensure valid frame count
+        meta.frame_count = Some(168); // Ensure valid frame count
         meta.source_extension = Some("mp4".to_string()); // Video container
 
         let verdict = verdict_with_profile(&meta, &profile);
@@ -3790,7 +3796,7 @@ mod tests {
         let mut meta = base_meta();
         meta.duration_secs = 4.0_f64;
         meta.fps = 24.0_f64;
-        meta.frame_count = 96;
+        meta.frame_count = Some(96);
         meta.width = 320;
         meta.height = 320;
         meta.file_size_bytes = 240_000;
@@ -3811,7 +3817,7 @@ mod tests {
         // 28s now hits the ≥15s hard veto. We test that it correctly exits as LoopWeak.
         meta.duration_secs = 28.0_f64;
         meta.fps = 4.0_f64;
-        meta.frame_count = 112;
+        meta.frame_count = Some(112);
         meta.file_size_bytes = 12_000_000;
         meta.width = 1920;
         meta.height = 1080;
@@ -3844,7 +3850,7 @@ mod tests {
         meta.loop_count = Some(1);
         meta.duration_secs = 11.0_f64;
         meta.fps = 8.0_f64;
-        meta.frame_count = 88;
+        meta.frame_count = Some(88);
         meta.file_size_bytes = 3_800_000;
         meta.webp_compression_ratio = Some(3.5_f64);
         meta.has_complex_color_profile = true;
@@ -3864,7 +3870,7 @@ mod tests {
         meta.container = Some("gif".to_string());
         meta.duration_secs = 7.0_f64;
         meta.fps = 10.0_f64;
-        meta.frame_count = 70;
+        meta.frame_count = Some(70);
         meta.file_size_bytes = 500_000;
         meta.has_transparency = true;
         meta.app_extensions = Some(vec!["GIPHY".to_string()]);
@@ -3895,7 +3901,7 @@ mod tests {
         meta.motion_periodicity = Some(0.80_f64);
         meta.filename_loop_intent_score = 0.5_f64;
         meta.directory_loop_intent_score = 0.5_f64;
-        meta.frame_count = 108;
+        meta.frame_count = Some(108);
         meta.source_extension = Some("webp".to_string());
         meta.container = Some("webp".to_string());
         // Add transparency to give a moderate positive signal
@@ -3922,7 +3928,7 @@ mod tests {
             width: 640,
             height: 360,
             fps: 24.0,
-            frame_count: 84,
+            frame_count: Some(84),
             file_size_bytes: 2_000_000,
             has_audio: false,
             source_extension: Some("mp4".to_string()),
@@ -3947,7 +3953,7 @@ mod tests {
             width: 1280,
             height: 720,
             fps: 30.0,
-            frame_count: 255,
+            frame_count: Some(255),
             file_size_bytes: 8_000_000,
             has_audio: false,
             source_extension: Some("mp4".to_string()),
@@ -4115,7 +4121,7 @@ mod tests {
         let profile = base_profile();
         let mut meta = base_meta();
         meta.duration_secs = 2.28_f64;
-        meta.frame_count = 57;
+        meta.frame_count = Some(57);
         meta.has_audio = true; // Audio track exists
         meta.audio_is_silent = Some(true); // But it's silent (-91 dB)
         meta.source_extension = Some("mov".to_string());

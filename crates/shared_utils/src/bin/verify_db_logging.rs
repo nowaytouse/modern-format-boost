@@ -29,7 +29,7 @@ fn main() {
         width: 640,
         height: 480,
         fps: 30.0,
-        frame_count: 75,
+        frame_count: Some(75),
         file_size_bytes: 500_000,
         file_name: Some("test_file.gif".to_string()),
         source_extension: Some("gif".to_string()),

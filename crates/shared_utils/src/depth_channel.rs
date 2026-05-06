@@ -30,14 +30,8 @@ use tempfile::NamedTempFile;
 fn read_native_u16_word(data: &[u8], word_index: usize) -> Option<u16> {
     let byte_index = word_index.checked_mul(2)?;
     let bytes = data.get(byte_index..byte_index + 2)?;
-    Some(u16::from_ne_bytes([
-        *bytes
-            .first()
-            .expect("Required metadata byte missing (out of bounds)"),
-        *bytes
-            .get(1)
-            .expect("Required metadata byte missing (out of bounds)"),
-    ]))
+    // `bytes` is exactly 2 bytes from the `get` above; direct indexing is sound.
+    Some(u16::from_ne_bytes([bytes[0], bytes[1]]))
 }
 
 /// Depth map data extracted from HEIC
@@ -169,7 +163,7 @@ fn decode_depth_handle(handle: &ImageHandle) -> Result<DynamicImage> {
             let val = *y_plane
                 .data
                 .get(offset)
-                .expect("Required metadata byte missing (out of bounds)");
+                .ok_or_else(|| anyhow!("Depth plane buffer shorter than image dimensions: offset {} out of range {}", offset, y_plane.data.len()))?;
             *pixel = Luma([val]);
         }
         // Convert to 16-bit for consistency

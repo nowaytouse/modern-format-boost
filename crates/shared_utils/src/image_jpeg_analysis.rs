@@ -277,10 +277,6 @@ const MARKER_EOI: u8 = 0xD9;
 ///
 /// # Errors
 /// Returns an error if the JPEG data is corrupted or missing DQT markers.
-#[allow(
-    clippy::missing_panics_doc,
-    reason = "Explicit panic on data corruption is intended and documented inline."
-)]
 pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, String> {
     let mut tables = Vec::new();
 
@@ -303,9 +299,13 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
             break;
         }
 
-        let marker = *data
-            .get(pos)
-            .expect("Required metadata byte missing (out of bounds)");
+        let marker = match data.get(pos).copied() {
+            Some(m) => m,
+            None => {
+                warn!("☢️ [FATAL] Truncated JPEG at position {pos}: expected marker byte");
+                return Err(format!("Truncated JPEG at position {pos}: expected marker"));
+            }
+        };
         pos += 1;
 
         if marker == MARKER_SOI || marker == MARKER_EOI || (0xD0..=0xD7).contains(&marker) {
@@ -313,18 +313,25 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
         }
 
         if pos + 2 > data.len() {
-            break;
+            warn!("☢️ [FATAL] Truncated JPEG segment at position {pos}: expected length field");
+            return Err(format!("Truncated JPEG at position {pos}: expected segment length"));
         }
-        let length = (usize::from(
-            *data
-                .get(pos)
-                .expect("Required metadata byte missing (out of bounds)"),
-        ) << 8_i32)
-            | usize::from(
-                *data
-                    .get(pos + 1)
-                    .expect("Required metadata byte missing (out of bounds)"),
-            );
+        
+        let length_high = match data.get(pos).copied() {
+            Some(b) => b,
+            None => {
+                warn!("☢️ [FATAL] Truncated JPEG at position {pos}: failed to read segment length high byte");
+                return Err("Failed to read segment length high byte".to_string());
+            }
+        };
+        let length_low = match data.get(pos + 1).copied() {
+            Some(b) => b,
+            None => {
+                warn!("☢️ [FATAL] Truncated JPEG at position {}: failed to read segment length low byte", pos + 1);
+                return Err("Failed to read segment length low byte".to_string());
+            }
+        };
+        let length = (usize::from(length_high) << 8_i32) | usize::from(length_low);
 
         if marker == MARKER_DQT {
             let segment_end = (pos + length).min(data.len());
@@ -335,9 +342,13 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
                     break;
                 }
 
-                let pq_tq = *data
-                    .get(seg_pos)
-                    .expect("Required metadata byte missing (out of bounds)");
+                let pq_tq = match data.get(seg_pos).copied() {
+                    Some(b) => b,
+                    None => {
+                        warn!("☢️ [FATAL] Truncated DQT segment at position {seg_pos}");
+                        return Err(format!("Truncated DQT segment at position {seg_pos}"));
+                    }
+                };
                 let precision = (pq_tq >> 4_i32) & 0x0F;
                 seg_pos += 1;
 
@@ -345,38 +356,28 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
 
                 if precision == 0 {
                     if seg_pos + 64 > data.len() {
-                        break;
+                        warn!("☢️ [CORRUPTION] DQT segment too short for 8-bit table at {seg_pos}");
+                        return Err(format!("DQT segment too short for 8-bit table at {seg_pos}"));
                     }
                     for &zigzag in &ZIGZAG_ORDER {
                         let row = zigzag / 8;
                         let col = zigzag % 8;
                         if let Some(cell) = table.get_mut(row).and_then(|r| r.get_mut(col)) {
-                            *cell = u16::from(
-                                *data
-                                    .get(seg_pos)
-                                    .expect("Required metadata byte missing (out of bounds)"),
-                            );
+                            *cell = u16::from(data[seg_pos]);
                         }
                         seg_pos += 1;
                     }
                 } else {
                     if seg_pos + 128 > data.len() {
-                        break;
+                        warn!("☢️ [CORRUPTION] DQT segment too short for 16-bit table at {seg_pos}");
+                        return Err(format!("DQT segment too short for 16-bit table at {seg_pos}"));
                     }
                     for &zigzag in &ZIGZAG_ORDER {
                         let row = zigzag / 8;
                         let col = zigzag % 8;
                         if let Some(cell) = table.get_mut(row).and_then(|r| r.get_mut(col)) {
-                            *cell = (u16::from(
-                                *data
-                                    .get(seg_pos)
-                                    .expect("Required metadata byte missing (out of bounds)"),
-                            ) << 8_i32)
-                                | u16::from(
-                                    *data
-                                        .get(seg_pos + 1)
-                                        .expect("Required metadata byte missing (out of bounds)"),
-                                );
+                            *cell = (u16::from(data[seg_pos]) << 8_i32)
+                                | u16::from(data[seg_pos + 1]);
                         }
                         seg_pos += 2;
                     }
@@ -528,10 +529,6 @@ pub fn analyze_jpeg_file(path: &std::path::Path) -> Result<JpegQualityAnalysis, 
 ///
 /// Returns true if the file is a `UltraHDR` JPEG with embedded gainmap.
 #[must_use]
-#[allow(
-    clippy::missing_panics_doc,
-    reason = "Explicit panic on data corruption is intended and documented inline."
-)]
 pub fn is_ultra_hdr_jpeg(data: &[u8]) -> bool {
     if data.len() < 4 || data.get(0..2) != Some(&[0xFF, 0xD8]) {
         return false;
@@ -551,9 +548,13 @@ pub fn is_ultra_hdr_jpeg(data: &[u8]) -> bool {
             break;
         }
 
-        let marker = *data
-            .get(pos + 1)
-            .expect("Required metadata byte missing (out of bounds)");
+        let marker = match data.get(pos + 1).copied() {
+            Some(m) => m,
+            None => {
+                warn!("☢️ [ANOMALY] Truncated JPEG at position {}: expected marker byte", pos + 1);
+                break;
+            }
+        };
         pos += 2;
 
         // Stop if we hit SOS or EOI - metadata is in the header
@@ -568,32 +569,37 @@ pub fn is_ultra_hdr_jpeg(data: &[u8]) -> bool {
 
         // Read length
         if pos + 2 > data.len() {
+            warn!("☢️ [ANOMALY] Truncated JPEG segment length at position {pos}");
             break;
         }
         let seg_len = usize::from(u16::from_be_bytes([
-            *data
-                .get(pos)
-                .expect("Required metadata byte missing (out of bounds)"),
-            *data
-                .get(pos + 1)
-                .expect("Required metadata byte missing (out of bounds)"),
+            data[pos],
+            data[pos + 1],
         ]));
         if seg_len < 2 || pos + seg_len > data.len() {
+            warn!("☢️ [ANOMALY] Invalid segment length {seg_len} at position {pos}");
             break;
         }
 
-        let payload = data
-            .get(pos + 2..pos + seg_len)
-            .expect("Required byte slice missing (out of bounds)");
+        let payload = match data.get(pos + 2..pos + seg_len) {
+            Some(p) => p,
+            None => {
+                warn!("☢️ [ANOMALY] Truncated segment payload at position {}", pos + 2);
+                break;
+            }
+        };
 
         // APP2 (0xE2): check for XMP gainmap or MPF
         if marker == 0xE2 {
             if payload.starts_with(b"http://ns.adobe.com/xap/1.0/\0") && payload.len() > 29 {
-                let xmp = String::from_utf8_lossy(
-                    payload
-                        .get(29..)
-                        .expect("Required byte slice missing (out of bounds)"),
-                );
+                let xmp_slice = match payload.get(29..) {
+                    Some(s) => s,
+                    None => {
+                        warn!("☢️ [ANOMALY] APP1 XMP payload truncated at position 29");
+                        &[]
+                    }
+                };
+                let xmp = String::from_utf8_lossy(xmp_slice);
                 if xmp.contains("hdrgm:") || xmp.contains("GainMap") || xmp.contains("gainmap") {
                     has_gainmap_xmp = true;
                 }
@@ -609,8 +615,7 @@ pub fn is_ultra_hdr_jpeg(data: &[u8]) -> bool {
         {
             let xmp = String::from_utf8_lossy(
                 payload
-                    .get(29..)
-                    .expect("Required byte slice missing (out of bounds)"),
+                    .get(29..).unwrap_or(&[]),
             );
             if xmp.contains("hdrgm:") || xmp.contains("GainMap") || xmp.contains("gainmap") {
                 has_gainmap_xmp = true;
@@ -641,10 +646,6 @@ pub fn is_ultra_hdr_jpeg_file(path: &std::path::Path) -> bool {
 /// # Returns
 /// - `Some(String)`: XMP metadata content
 /// - `None`: No XMP segment found
-#[allow(
-    clippy::missing_panics_doc,
-    reason = "Explicit panic on data corruption is intended and documented inline."
-)]
 pub fn extract_xmp_from_jpeg_data(data: &[u8]) -> Option<Vec<String>> {
     let mut xmp_blocks = Vec::new();
     let mut pos = 0;
@@ -656,12 +657,8 @@ pub fn extract_xmp_from_jpeg_data(data: &[u8]) -> Option<Vec<String>> {
                 break;
             }
             let seg_len = usize::from(u16::from_be_bytes([
-                *data
-                    .get(pos + 2)
-                    .expect("Required metadata byte missing (out of bounds)"),
-                *data
-                    .get(pos + 3)
-                    .expect("Required metadata byte missing (out of bounds)"),
+                data.get(pos + 2).copied().unwrap_or(0),
+                data.get(pos + 3).copied().unwrap_or(0),
             ]));
             if seg_len < 2 || pos + 2 + seg_len > data.len() {
                 pos += 1;
@@ -669,15 +666,13 @@ pub fn extract_xmp_from_jpeg_data(data: &[u8]) -> Option<Vec<String>> {
             }
 
             let payload = data
-                .get(pos + 4..pos + 2 + seg_len)
-                .expect("Required byte slice missing (out of bounds)");
+                .get(pos + 4..pos + 2 + seg_len).unwrap_or(&[]);
 
             // APP1 (0xE1): XMP Standard
             if payload.starts_with(b"http://ns.adobe.com/xap/1.0/\0") && payload.len() > 29 {
                 let xmp = String::from_utf8_lossy(
                     payload
-                        .get(29..)
-                        .expect("Required byte slice missing (out of bounds)"),
+                        .get(29..).unwrap_or(&[]),
                 )
                 .to_string();
                 xmp_blocks.push(xmp);
@@ -688,8 +683,7 @@ pub fn extract_xmp_from_jpeg_data(data: &[u8]) -> Option<Vec<String>> {
             {
                 let xmp = String::from_utf8_lossy(
                     payload
-                        .get(35 + 32 + 8..)
-                        .expect("Required byte slice missing (out of bounds)"),
+                        .get(35 + 32 + 8..).unwrap_or(&[]),
                 )
                 .to_string();
                 xmp_blocks.push(xmp);
@@ -726,10 +720,6 @@ pub fn extract_xmp_from_jpeg_data(data: &[u8]) -> Option<Vec<String>> {
 /// # Errors
 ///
 /// Returns an error if the JPEG is malformed, base image cannot be decoded, or MPF/GainMap is missing.
-#[allow(
-    clippy::missing_panics_doc,
-    reason = "Explicit panic on data corruption is intended and documented inline."
-)]
 pub fn extract_gainmap_from_jpeg(data: &[u8]) -> Result<(DynamicImage, DynamicImage), String> {
     tracing::debug!(size = data.len(), "Extracting gainmap from UltraHDR JPEG");
 
@@ -907,8 +897,7 @@ fn collect_scanned_gainmap_candidates(
     }
 
     for (offset, window) in jpeg_data
-        .get(range_start..bounded_end)
-        .expect("Required byte slice missing (out of bounds)")
+        .get(range_start..bounded_end).unwrap_or(&[])
         .windows(JPEG_SOI_BYTES.len())
         .enumerate()
     {
@@ -1014,8 +1003,7 @@ fn candidate_gainmap_bytes(
     };
 
     let mut candidate = jpeg_data
-        .get(start..end)
-        .expect("Required byte slice missing (out of bounds)")
+        .get(start..end).unwrap_or(&[])
         .to_vec();
     let repaired_eoi = !candidate.ends_with(&JPEG_EOI_BYTES);
     if repaired_eoi {
@@ -1051,7 +1039,13 @@ fn gainmap_candidate_score(
         GainmapCandidateSource::NearbyScan => 2_500.0_f64,
         GainmapCandidateSource::TailScan => 1_500.0_f64,
     };
-    let aspect_penalty = aspect_diff.expect("Required floating point value missing") * 10_000.0_f64;
+    let aspect_penalty = match aspect_diff {
+        Some(d) => d * 10_000.0_f64,
+        None => {
+            warn!("☢️ [ANOMALY] Gainmap candidate aspect ratio missing; using moderate penalty fallback");
+            2_000.0_f64
+        }
+    };
     let length_penalty = if claimed_len == 0 {
         0.0_f64
     } else {
@@ -1198,15 +1192,17 @@ fn find_mpf_segment(data: &[u8]) -> Result<Vec<u8>, String> {
             return Err(format!(
                 "Invalid JPEG structure: expected marker 0xFF at position {}, found 0x{:02X}",
                 pos,
-                data.get(pos)
-                    .copied()
-                    .expect("Failed to parse integer or missing required value")
+                data.get(pos).copied().unwrap_or(0)
             ));
         }
 
-        let marker = *data
-            .get(pos + 1)
-            .expect("Required metadata byte missing (out of bounds)");
+        let marker = match data.get(pos + 1).copied() {
+            Some(m) => m,
+            None => {
+                warn!("☢️ [ANOMALY] Truncated JPEG at position {}: expected marker byte", pos + 1);
+                break;
+            }
+        };
         pos += 2;
 
         if marker == 0xDA || marker == 0xD9 {
@@ -1221,23 +1217,43 @@ fn find_mpf_segment(data: &[u8]) -> Result<Vec<u8>, String> {
             return Err(format!("Truncated segment at position {pos}"));
         }
 
-        let seg_len = usize::from(u16::from_be_bytes([
-            *data
-                .get(pos)
-                .expect("Required metadata byte missing (out of bounds)"),
-            *data
-                .get(pos + 1)
-                .expect("Required metadata byte missing (out of bounds)"),
-        ]));
+        let length_high = match data.get(pos).copied() {
+            Some(b) => b,
+            None => {
+                warn!("☢️ [ANOMALY] Truncated segment at position {pos}: missing length high byte");
+                break;
+            }
+        };
+        let length_low = match data.get(pos + 1).copied() {
+            Some(b) => b,
+            None => {
+                warn!("☢️ [ANOMALY] Truncated segment at position {}: missing length low byte", pos + 1);
+                break;
+            }
+        };
+        let seg_len = usize::from(u16::from_be_bytes([length_high, length_low]));
         if seg_len < 2 || pos + seg_len > data.len() {
             return Err(format!(
                 "Invalid segment length {seg_len} at position {pos} (marker 0x{marker:02X})"
             ));
         }
 
+        let seg_len = usize::from(u16::from_be_bytes([
+            data[pos],
+            data[pos + 1],
+        ]));
+        if seg_len < 2 || pos + seg_len > data.len() {
+            warn!("☢️ [ANOMALY] Invalid APP2 segment length {seg_len} at position {pos}");
+            return Err(format!(
+                "Invalid segment length {seg_len} at position {pos} (marker 0x{marker:02X})"
+            ));
+        }
+
         let payload = data
-            .get(pos + 2..pos + seg_len)
-            .expect("Required byte slice missing (out of bounds)");
+            .get(pos + 2..pos + seg_len).ok_or_else(|| {
+                warn!("☢️ [CORRUPTION] Failed to extract APP2 payload at position {}", pos + 2);
+                format!("Failed to extract APP2 payload at position {}", pos + 2)
+            })?;
 
         if marker == 0xE2 {
             if let Some(mpf_payload) = strip_mpf_identifier(payload) {
@@ -1252,11 +1268,6 @@ fn find_mpf_segment(data: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 /// Extract gainmap image data from MPF segment.
-// Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(
-    clippy::too_many_lines,
-    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
-)]
 fn extract_gainmap_from_mpf(
     jpeg_data: &[u8],
     mpf_data: &[u8],
@@ -1268,12 +1279,13 @@ fn extract_gainmap_from_mpf(
     } else if mpf_data.starts_with(mpf::TIFF_LITTLE_ENDIAN) {
         false
     } else {
+        warn!("☢️ [CORRUPTION] Invalid MPF endianness marker");
         return Err(format!(
             "Invalid MPF endianness marker: expected 'MM\\0*' or 'II*\\0', got {:02X} {:02X} {:02X} {:02X}",
-            mpf_data.first().copied().expect("Failed to parse integer or missing required value"),
-            mpf_data.get(1).copied().expect("Failed to parse integer or missing required value"),
-            mpf_data.get(2).copied().expect("Failed to parse integer or missing required value"),
-            mpf_data.get(3).copied().expect("Failed to parse integer or missing required value")
+            mpf_data.first().copied().unwrap_or(0),
+            mpf_data.get(1).copied().unwrap_or(0),
+            mpf_data.get(2).copied().unwrap_or(0),
+            mpf_data.get(3).copied().unwrap_or(0)
         ));
     };
 
@@ -1289,17 +1301,18 @@ fn extract_gainmap_from_mpf(
     // Read first IFD offset (4 bytes after endianness marker)
     let first_ifd_offset = read_u32(
         mpf_data
-            .get(4..8)
-            .expect("Required byte slice missing (out of bounds)"),
+            .get(4..8).unwrap_or(&[]),
         is_big_endian,
     )?;
     info!("First IFD offset: {}", first_ifd_offset);
 
     // Navigate to first IFD
-    if usize::try_from(first_ifd_offset).expect("Failed to parse integer or missing required value")
-        + 2
-        > mpf_data.len()
-    {
+    // first_ifd_offset is u32 from read_u32(); usize::try_from only fails if u32 > usize::MAX,
+    // which cannot happen on 64-bit targets. Return Err rather than panic on 32-bit overflow.
+    let first_ifd_start = usize::try_from(first_ifd_offset).map_err(|_| {
+        format!("MPF first IFD offset {first_ifd_offset} exceeds usize — file is anomalous")
+    })?;
+    if first_ifd_start + 2 > mpf_data.len() {
         return Err(format!(
             "Invalid first IFD offset {}: exceeds MPF data size {}",
             first_ifd_offset,
@@ -1310,11 +1323,8 @@ fn extract_gainmap_from_mpf(
     // Read number of entries in IFD
     let num_entries = read_u16(
         mpf_data
-            .get(
-                usize::try_from(first_ifd_offset)
-                    .expect("Failed to parse integer or missing required value")..,
-            )
-            .expect("Required byte slice missing (out of bounds)"),
+            .get(first_ifd_start..)
+            .ok_or_else(|| format!("MPF IFD offset {first_ifd_start} out of range {}", mpf_data.len()))?,
         is_big_endian,
     )?;
     info!("IFD entries: {}", num_entries);
@@ -1323,8 +1333,13 @@ fn extract_gainmap_from_mpf(
     let mut mp_entry_offset: Option<u32> = None;
     let mut num_images: Option<u32> = None;
 
-    let ifd_start = usize::try_from(first_ifd_offset)
-        .expect("Failed to parse integer or missing required value");
+    let ifd_start = match usize::try_from(first_ifd_offset) {
+        Ok(s) => s,
+        Err(_) => {
+            warn!("☢️ [ANOMALY] first_ifd_offset {first_ifd_offset} overflows usize");
+            return Err(format!("first_ifd_offset {first_ifd_offset} overflows usize"));
+        }
+    };
     for i in 0..num_entries {
         let entry_offset = ifd_start + 2 + (usize::from(i) * 12);
         if entry_offset + 12 > mpf_data.len() {
@@ -1336,30 +1351,34 @@ fn extract_gainmap_from_mpf(
             ));
         }
 
-        let tag = read_u16(
-            mpf_data
-                .get(entry_offset..)
-                .expect("Required byte slice missing (out of bounds)"),
-            is_big_endian,
-        )?;
-        let _data_type = read_u16(
-            mpf_data
-                .get(entry_offset + 2..)
-                .expect("Required byte slice missing (out of bounds)"),
-            is_big_endian,
-        )?;
-        let num_components = read_u32(
-            mpf_data
-                .get(entry_offset + 4..)
-                .expect("Required byte slice missing (out of bounds)"),
-            is_big_endian,
-        )?;
-        let value_offset = read_u32(
-            mpf_data
-                .get(entry_offset + 8..)
-                .expect("Required byte slice missing (out of bounds)"),
-            is_big_endian,
-        )?;
+        let tag = match mpf_data.get(entry_offset..entry_offset + 2) {
+            Some(p) => read_u16(p, is_big_endian)?,
+            None => {
+                warn!("☢️ [CORRUPTION] IFD entry {} tag at {} truncated", i, entry_offset);
+                return Err(format!("IFD entry {} tag at {} truncated", i, entry_offset));
+            }
+        };
+        let _data_type = match mpf_data.get(entry_offset + 2..entry_offset + 4) {
+            Some(p) => read_u16(p, is_big_endian)?,
+            None => {
+                warn!("☢️ [CORRUPTION] IFD entry {} type at {} truncated", i, entry_offset + 2);
+                return Err(format!("IFD entry {} type at {} truncated", i, entry_offset + 2));
+            }
+        };
+        let num_components = match mpf_data.get(entry_offset + 4..entry_offset + 8) {
+            Some(p) => read_u32(p, is_big_endian)?,
+            None => {
+                warn!("☢️ [CORRUPTION] IFD entry {} count at {} truncated", i, entry_offset + 4);
+                return Err(format!("IFD entry {} count at {} truncated", i, entry_offset + 4));
+            }
+        };
+        let value_offset = match mpf_data.get(entry_offset + 8..entry_offset + 12) {
+            Some(p) => read_u32(p, is_big_endian)?,
+            None => {
+                warn!("☢️ [CORRUPTION] IFD entry {} value/offset at {} truncated", i, entry_offset + 8);
+                return Err(format!("IFD entry {} value/offset at {} truncated", i, entry_offset + 8));
+            }
+        };
 
         match tag {
             mpf::TAG_NUMBER_OF_IMAGES => {
@@ -1401,8 +1420,13 @@ fn extract_gainmap_from_mpf(
     }
 
     // Navigate to MP Entry array
-    let mp_entry_array_offset = usize::try_from(mp_entry_offset)
-        .expect("Failed to parse integer or missing required value");
+    let mp_entry_array_offset = match usize::try_from(mp_entry_offset) {
+        Ok(s) => s,
+        Err(_) => {
+            warn!("☢️ [ANOMALY] mp_entry_offset {mp_entry_offset} overflows usize");
+            return Err(format!("mp_entry_offset {mp_entry_offset} overflows usize"));
+        }
+    };
     if mp_entry_array_offset + 16 > mpf_data.len() {
         return Err(format!(
             "MP entry array offset {} exceeds MPF data size {}",
@@ -1427,24 +1451,27 @@ fn extract_gainmap_from_mpf(
         ));
     }
 
-    let attributes = read_u32(
-        mpf_data
-            .get(gainmap_entry_offset..)
-            .expect("Required byte slice missing (out of bounds)"),
-        is_big_endian,
-    )?;
-    let gainmap_length = read_u32(
-        mpf_data
-            .get(gainmap_entry_offset + 4..)
-            .expect("Required byte slice missing (out of bounds)"),
-        is_big_endian,
-    )?;
-    let gainmap_offset = read_u32(
-        mpf_data
-            .get(gainmap_entry_offset + 8..)
-            .expect("Required byte slice missing (out of bounds)"),
-        is_big_endian,
-    )?;
+    let attributes = match mpf_data.get(gainmap_entry_offset..gainmap_entry_offset + 4) {
+        Some(p) => read_u32(p, is_big_endian)?,
+        None => {
+            warn!("☢️ [CORRUPTION] Gainmap entry attributes truncated at {}", gainmap_entry_offset);
+            return Err("Gainmap entry attributes truncated".to_string());
+        }
+    };
+    let gainmap_length = match mpf_data.get(gainmap_entry_offset + 4..gainmap_entry_offset + 8) {
+        Some(p) => read_u32(p, is_big_endian)?,
+        None => {
+            warn!("☢️ [CORRUPTION] Gainmap entry length truncated at {}", gainmap_entry_offset + 4);
+            return Err("Gainmap entry length truncated".to_string());
+        }
+    };
+    let gainmap_offset = match mpf_data.get(gainmap_entry_offset + 8..gainmap_entry_offset + 12) {
+        Some(p) => read_u32(p, is_big_endian)?,
+        None => {
+            warn!("☢️ [CORRUPTION] Gainmap entry offset truncated at {}", gainmap_entry_offset + 8);
+            return Err("Gainmap entry offset truncated".to_string());
+        }
+    };
 
     info!(
         "Gainmap entry: attributes=0x{:08X}, length={}, offset={}",
@@ -1457,8 +1484,7 @@ fn extract_gainmap_from_mpf(
     }
 
     if gainmap_length
-        > u32::try_from(jpeg_data.len())
-            .expect("Value overflowed or is missing, cannot process ratio")
+        > u32::try_from(jpeg_data.len()).unwrap_or(u32::MAX)
     {
         warn!(
             gainmap_length,
@@ -1468,10 +1494,10 @@ fn extract_gainmap_from_mpf(
     }
 
     let mpf_base_pos = find_mpf_base_position(jpeg_data)?;
-    let gainmap_len_usize =
-        usize::try_from(gainmap_length).expect("Failed to parse integer or missing required value");
-    let gainmap_offset_usize =
-        usize::try_from(gainmap_offset).expect("Failed to parse integer or missing required value");
+    let gainmap_len_usize = usize::try_from(gainmap_length)
+        .map_err(|_| format!("gainmap_length {gainmap_length} overflows usize"))?;
+    let gainmap_offset_usize = usize::try_from(gainmap_offset)
+        .map_err(|_| format!("gainmap_offset {gainmap_offset} overflows usize"))?;
     let gainmap_candidate = recover_gainmap_candidate(
         jpeg_data,
         mpf_base_pos,
@@ -1522,9 +1548,8 @@ fn find_mpf_base_position(jpeg_data: &[u8]) -> Result<usize, String> {
             break;
         }
 
-        let marker = *jpeg_data
-            .get(pos + 1)
-            .expect("Required metadata byte missing (out of bounds)");
+        // Guarded by while pos + 1 < jpeg_data.len()
+        let marker = jpeg_data[pos + 1];
         pos += 2;
 
         if marker == 0xDA || marker == 0xD9 {
@@ -1539,21 +1564,17 @@ fn find_mpf_base_position(jpeg_data: &[u8]) -> Result<usize, String> {
             break;
         }
 
+        // Guarded by pos + 2 > jpeg_data.len()
         let seg_len = usize::from(u16::from_be_bytes([
-            *jpeg_data
-                .get(pos)
-                .expect("Required metadata byte missing (out of bounds)"),
-            *jpeg_data
-                .get(pos + 1)
-                .expect("Required metadata byte missing (out of bounds)"),
+            jpeg_data[pos],
+            jpeg_data[pos + 1],
         ]));
         if seg_len < 2 || pos + seg_len > jpeg_data.len() {
             break;
         }
 
         let payload = jpeg_data
-            .get(pos + 2..pos + seg_len)
-            .expect("Required byte slice missing (out of bounds)");
+            .get(pos + 2..pos + seg_len).unwrap_or(&[]);
 
         if marker == 0xE2 && strip_mpf_identifier(payload).is_some() {
             // Offsets are relative to the TIFF header that begins immediately after
@@ -1575,24 +1596,11 @@ fn read_u16(data: &[u8], big_endian: bool) -> Result<u16, String> {
             data.len()
         ));
     }
+    // Guarded by data.len() < 2
     Ok(if big_endian {
-        u16::from_be_bytes([
-            *data
-                .first()
-                .expect("Required metadata byte missing (out of bounds)"),
-            *data
-                .get(1)
-                .expect("Required metadata byte missing (out of bounds)"),
-        ])
+        u16::from_be_bytes([data[0], data[1]])
     } else {
-        u16::from_le_bytes([
-            *data
-                .first()
-                .expect("Required metadata byte missing (out of bounds)"),
-            *data
-                .get(1)
-                .expect("Required metadata byte missing (out of bounds)"),
-        ])
+        u16::from_le_bytes([data[0], data[1]])
     })
 }
 
@@ -1604,36 +1612,11 @@ fn read_u32(data: &[u8], big_endian: bool) -> Result<u32, String> {
             data.len()
         ));
     }
+    // Guarded by data.len() < 4
     Ok(if big_endian {
-        u32::from_be_bytes([
-            *data
-                .first()
-                .expect("Required metadata byte missing (out of bounds)"),
-            *data
-                .get(1)
-                .expect("Required metadata byte missing (out of bounds)"),
-            *data
-                .get(2)
-                .expect("Required metadata byte missing (out of bounds)"),
-            *data
-                .get(3)
-                .expect("Required metadata byte missing (out of bounds)"),
-        ])
+        u32::from_be_bytes([data[0], data[1], data[2], data[3]])
     } else {
-        u32::from_le_bytes([
-            *data
-                .first()
-                .expect("Required metadata byte missing (out of bounds)"),
-            *data
-                .get(1)
-                .expect("Required metadata byte missing (out of bounds)"),
-            *data
-                .get(2)
-                .expect("Required metadata byte missing (out of bounds)"),
-            *data
-                .get(3)
-                .expect("Required metadata byte missing (out of bounds)"),
-        ])
+        u32::from_le_bytes([data[0], data[1], data[2], data[3]])
     })
 }
 
@@ -1750,8 +1733,7 @@ mod tests {
             0xFF, 0xD8, // SOI
             0xFF, 0xE1, // APP1 for XMP
         ];
-        let xmp_len = u16::try_from(xmp_header.len() + xmp_content.len() + 2)
-            .expect("Failed to parse integer or missing required value");
+        let xmp_len = u16::try_from(xmp_header.len() + xmp_content.len() + 2).unwrap_or(0);
         jpeg_with_xmp.extend_from_slice(&xmp_len.to_be_bytes());
         jpeg_with_xmp.extend_from_slice(xmp_header);
         jpeg_with_xmp.extend_from_slice(xmp_content);
@@ -1789,8 +1771,7 @@ mod tests {
             0xFF, 0xD8, // SOI
             0xFF, 0xE1, // APP1 for XMP
         ];
-        let xmp_len = u16::try_from(xmp_header.len() + xmp_content.len() + 2)
-            .expect("Failed to parse integer or missing required value");
+        let xmp_len = u16::try_from(xmp_header.len() + xmp_content.len() + 2).unwrap_or(0);
         jpeg_with_gainmap.extend_from_slice(&xmp_len.to_be_bytes());
         jpeg_with_gainmap.extend_from_slice(xmp_header);
         jpeg_with_gainmap.extend_from_slice(xmp_content);

@@ -5,6 +5,7 @@
 
 use crate::progress_mode::emit_stderr;
 use std::path::Path;
+use tracing::warn;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PenetrationResult<T> {
@@ -293,10 +294,6 @@ pub fn detect_real_frame_count(path: &Path, claimed_frame_count: u64) -> Penetra
 /// Returns `Verified(true)` if interlacing is physically detected, `Verified(false)` if progressive.
 /// `Skipped` if the check isn't necessary.
 #[must_use]
-#[allow(
-    clippy::missing_panics_doc,
-    reason = "Explicit panic on data corruption is intended and documented inline."
-)]
 pub fn detect_interlacing(path: &Path) -> PenetrationResult<bool> {
     // Only sample the first 24 frames (~1 second) to keep the penetration fast.
     let output = match crate::ffmpeg_builder::FfmpegBuilder::new()
@@ -328,15 +325,23 @@ pub fn detect_interlacing(path: &Path) -> PenetrationResult<bool> {
 
             if let Some(tff_idx) = line.find("TFF:") {
                 let s = line[tff_idx + 4..].split_whitespace().next().unwrap_or("0");
-                tff = s
-                    .parse::<u64>()
-                    .expect("Failed to parse integer or missing required value");
+                tff = match s.parse::<u64>() {
+                    Ok(v) => v,
+                    Err(_) => {
+                        warn!("☢️ [ANOMALY] Failed to parse TFF value '{}' in interlacing check", s);
+                        0
+                    }
+                };
             }
             if let Some(bff_idx) = line.find("BFF:") {
                 let s = line[bff_idx + 4..].split_whitespace().next().unwrap_or("0");
-                bff = s
-                    .parse::<u64>()
-                    .expect("Failed to parse integer or missing required value");
+                bff = match s.parse::<u64>() {
+                    Ok(v) => v,
+                    Err(_) => {
+                        warn!("☢️ [ANOMALY] Failed to parse BFF value '{}' in interlacing check", s);
+                        0
+                    }
+                };
             }
 
             // If we found multiple clear interlaced frames in the short sample, it's interlaced.

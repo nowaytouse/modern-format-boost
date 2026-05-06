@@ -71,6 +71,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
+use tracing::warn;
 
 /// Open an image with relaxed memory limits to handle very large JPEGs.
 ///
@@ -251,9 +252,7 @@ pub struct DetectionResult {
     pub has_alpha: bool,
 
     pub file_size: u64,
-
-    pub frame_count: u32,
-
+    pub frame_count: Option<u32>,
     pub fps: Option<f32>,
 
     pub duration: Option<f32>,
@@ -405,8 +404,13 @@ fn resolve_mif1_from_compatible_brands(path: &Path, major_brand: &[u8]) -> Detec
         return DetectedFormat::HEIC;
     };
     let mut data = vec![0u8; 1_048_576];
-    let read_len = std::io::Read::read(&mut file, &mut data)
-        .expect("Failed to parse integer or missing required value");
+    let read_len = match std::io::Read::read(&mut file, &mut data) {
+        Ok(n) => n,
+        Err(e) => {
+            warn!("☢️ [ANOMALY] Failed to read ftyp box at '{}': {}. Defaulting to HEIC.", path.display(), e);
+            return DetectedFormat::HEIC;
+        }
+    };
     if read_len == 0 {
         // Fallback: mif1 without readable file → HEIC (legacy behavior)
         return DetectedFormat::HEIC;
@@ -417,21 +421,14 @@ fn resolve_mif1_from_compatible_brands(path: &Path, major_brand: &[u8]) -> Detec
         return DetectedFormat::HEIC;
     }
 
-    let box_size = usize::try_from(u32::from_be_bytes([
-        *data
-            .first()
-            .expect("Required metadata byte missing (out of bounds)"),
-        *data
-            .get(1)
-            .expect("Required metadata byte missing (out of bounds)"),
-        *data
-            .get(2)
-            .expect("Required metadata byte missing (out of bounds)"),
-        *data
-            .get(3)
-            .expect("Required metadata byte missing (out of bounds)"),
-    ]))
-    .expect("Failed to parse integer or missing required value");
+    let box_size_u32 = if data.len() >= 4 {
+        u32::from_be_bytes([data[0], data[1], data[2], data[3]])
+    } else {
+        warn!("☢️ [ANOMALY] Truncated ftyp box size at '{}'. Defaulting to HEIC.", path.display());
+        return DetectedFormat::HEIC;
+    };
+
+    let box_size = crate::numeric_cast::u32_to_usize_sat(box_size_u32);
     let ftyp_end = box_size.min(data.len());
 
     // compatible_brands start at offset 16 (after size[4] + "ftyp"[4] + major_brand[4] + minor_version[4])
@@ -439,9 +436,13 @@ fn resolve_mif1_from_compatible_brands(path: &Path, major_brand: &[u8]) -> Detec
         return DetectedFormat::HEIC;
     }
 
-    let compat_data = data
-        .get(16..ftyp_end)
-        .expect("Required byte slice missing (out of bounds)");
+    let compat_data = match data.get(16..ftyp_end) {
+        Some(d) => d,
+        None => {
+            warn!("☢️ [ANOMALY] ftyp box brands out of bounds at '{}'. Defaulting to HEIC.", path.display());
+            return DetectedFormat::HEIC;
+        }
+    };
     let mut brand_heic_found = false;
     let mut format_heif_detected = false;
 
@@ -479,11 +480,10 @@ fn resolve_mif1_from_compatible_brands(path: &Path, major_brand: &[u8]) -> Detec
 ///
 /// # Errors
 /// Returns an error if the file cannot be read or parsed.
-#[allow(
-    clippy::missing_panics_doc,
-    reason = "Explicit panic on data corruption is intended and documented inline."
-)]
-pub fn detect_animation(path: &Path, format: &DetectedFormat) -> Result<(bool, u32, Option<f32>)> {
+pub fn detect_animation(
+    path: &Path,
+    format: &DetectedFormat,
+) -> Result<(bool, Option<u32>, Option<f32>)> {
     // 🚀 Stage 1: Native Fast-Path for Simple Formats
     // GIF, WebP, and PNG have simple, deterministic byte-level frame structures.
     // We can rely on our native parsers for these to save the ffprobe overhead.
@@ -496,7 +496,7 @@ pub fn detect_animation(path: &Path, format: &DetectedFormat) -> Result<(bool, u
             .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
             let data = std::fs::read(path)?;
             let frame_count = crate::image_formats::gif::count_frames_from_bytes(&data);
-            return Ok((frame_count > 1, frame_count, None));
+            return Ok((frame_count > 1, Some(frame_count), None));
         }
         DetectedFormat::WebP => {
             crate::common_utils::validate_file_size_limit(
@@ -507,9 +507,9 @@ pub fn detect_animation(path: &Path, format: &DetectedFormat) -> Result<(bool, u
             let data = std::fs::read(path)?;
             let is_animated = crate::image_formats::webp::is_animated_from_bytes(&data);
             let frame_count = if is_animated {
-                crate::image_formats::webp::count_frames_from_bytes(&data)
+                Some(crate::image_formats::webp::count_frames_from_bytes(&data))
             } else {
-                1
+                Some(1)
             };
             return Ok((is_animated, frame_count, None));
         }
@@ -521,7 +521,7 @@ pub fn detect_animation(path: &Path, format: &DetectedFormat) -> Result<(bool, u
             .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
             let data = std::fs::read(path)?;
             let (is_animated, frame_count) = parse_apng_frames(&data);
-            return Ok((is_animated, frame_count, None));
+            return Ok((is_animated, Some(frame_count), None));
         }
         _ => {} // Fall through for ISOBMFF and unknown formats
     }
@@ -534,17 +534,21 @@ pub fn detect_animation(path: &Path, format: &DetectedFormat) -> Result<(bool, u
     let mut fps = None;
     if crate::ffprobe::is_ffprobe_available() {
         if let Ok(probe) = crate::ffprobe::probe_video(path) {
-            let probe_frames = u32::try_from(probe.frame_count).unwrap_or(1);
+            let probe_frames = probe
+                .frame_count
+                .map(|c| crate::numeric_cast::u64_to_u32_loud(c as u64, "probe_frames"));
             if probe.frame_rate > 0.0_f64 {
                 fps = Some(crate::numeric_cast::f64_to_f32_lossy(probe.frame_rate));
             }
 
-            if probe_frames > 1 {
-                return Ok((true, probe_frames, fps));
-            } else if probe_frames == 1 {
-                return Ok((false, 1, fps));
+            if let Some(fc) = probe_frames {
+                if fc > 1 {
+                    return Ok((true, Some(fc), fps));
+                } else if fc == 1 {
+                    return Ok((false, Some(1), fps));
+                }
             } else if probe.duration > 0.1_f64 && probe.format_name.contains("video") {
-                return Ok((true, 0, fps));
+                return Ok((true, None, fps));
             }
         }
 
@@ -553,33 +557,30 @@ pub fn detect_animation(path: &Path, format: &DetectedFormat) -> Result<(bool, u
         if matches!(format, DetectedFormat::AVIF | DetectedFormat::JXL) {
             if let Some(explicit_count) = crate::ffprobe::get_frame_count(path) {
                 if explicit_count > 1 {
-                    return Ok((
-                        true,
-                        u32::try_from(explicit_count)
-                            .expect("Failed to parse integer or missing required value"),
-                        fps,
-                    ));
+                    let final_count =
+                        crate::numeric_cast::u64_to_u32_loud(explicit_count as u64, "explicit_count");
+                    return Ok((true, Some(final_count), fps));
                 }
-                return Ok((false, 1, fps));
+                return Ok((false, Some(1), fps));
             }
         }
     }
 
     // 🛡️ Stage 3: Ultimate Fallback (if ffprobe is missing or fails entirely)
     let mut is_animated = false;
-    let mut frame_count = 1;
+    let mut frame_count = Some(1);
 
     match format {
         DetectedFormat::AVIF => {
             is_animated = is_isobmff_animated_sequence(path);
             if is_animated {
-                frame_count = 0;
+                frame_count = None;
             }
         }
         DetectedFormat::JXL => {
             is_animated = is_jxl_animated_via_ffprobe(path);
             if is_animated {
-                frame_count = 0;
+                frame_count = None;
             }
         }
         _ => {}
@@ -593,10 +594,6 @@ pub fn detect_animation(path: &Path, format: &DetectedFormat) -> Result<(bool, u
 ///
 /// # Errors
 /// Returns an error if the GIF file is invalid or cannot be read.
-#[allow(
-    clippy::missing_panics_doc,
-    reason = "Explicit panic on data corruption is intended and documented inline."
-)]
 pub fn parse_gif_precision_metadata(path: &Path) -> Result<PrecisionMetadata> {
     let mut file = File::open(path)?;
     let mut header = [0u8; 13];
@@ -638,15 +635,21 @@ pub fn parse_gif_precision_metadata(path: &Path) -> Result<PrecisionMetadata> {
         let mut current_pos = 13 + gct_byte_size;
 
         while current_pos + 10 < data.len() {
-            match *data
-                .get(current_pos)
-                .expect("Required metadata byte missing (out of bounds)")
-            {
+            let marker = match data.get(current_pos) {
+                Some(&m) => m,
+                None => break,
+            };
+
+            match marker {
                 0x2C => {
                     // Image Descriptor
-                    let packed_img = *data
-                        .get(current_pos + 9)
-                        .expect("Required metadata byte missing (out of bounds)");
+                    let packed_img = match data.get(current_pos + 9) {
+                        Some(&p) => p,
+                        None => {
+                            warn!("☢️ [ANOMALY] Truncated GIF image descriptor at '{}'.", path.display());
+                            break;
+                        }
+                    };
                     let local_color_table_flag = (packed_img & 0x80) != 0;
                     if local_color_table_flag {
                         let lct_size_exp = packed_img & 0x07;
@@ -658,11 +661,10 @@ pub fn parse_gif_precision_metadata(path: &Path) -> Result<PrecisionMetadata> {
                     }
                     // Skip image data blocks
                     while current_pos < data.len() && data.get(current_pos) != Some(&0) {
-                        let block_size = usize::from(
-                            *data
-                                .get(current_pos)
-                                .expect("Required metadata byte missing (out of bounds)"),
-                        );
+                        let block_size = match data.get(current_pos) {
+                            Some(&s) => usize::from(s),
+                            None => break,
+                        };
                         current_pos += block_size + 1;
                     }
                     current_pos += 1;
@@ -674,11 +676,10 @@ pub fn parse_gif_precision_metadata(path: &Path) -> Result<PrecisionMetadata> {
                     }
                     current_pos += 2;
                     while current_pos < data.len() && data.get(current_pos) != Some(&0) {
-                        let block_size = usize::from(
-                            *data
-                                .get(current_pos)
-                                .expect("Required metadata byte missing (out of bounds)"),
-                        );
+                        let block_size = match data.get(current_pos) {
+                            Some(&s) => usize::from(s),
+                            None => break,
+                        };
                         current_pos += block_size + 1;
                     }
                     current_pos += 1;
@@ -696,10 +697,6 @@ pub fn parse_gif_precision_metadata(path: &Path) -> Result<PrecisionMetadata> {
 /// Returns true if the ISOBMFF file (AVIF/HEIC/HEIF) is an image sequence (animated).
 /// Checks `major_brand` and `compatible_brands` for known sequence brand codes.
 #[must_use]
-#[allow(
-    clippy::missing_panics_doc,
-    reason = "Explicit panic on data corruption is intended and documented inline."
-)]
 pub fn is_isobmff_animated_sequence(path: &Path) -> bool {
     // Sequence brands: avis=AVIF sequence, msf1=multi-sample ftyp (used by animated HEIC/AVIF)
     const SEQUENCE_BRANDS: &[&[u8]] = &[b"avis", b"msf1"];
@@ -725,10 +722,15 @@ pub fn is_isobmff_animated_sequence(path: &Path) -> bool {
     }
 
     // Scan compatible_brands (each 4 bytes, starting at offset 16)
-    let ftyp_box_size = usize::try_from(u32::from_be_bytes([
+    let ftyp_box_size = match usize::try_from(u32::from_be_bytes([
         header[0], header[1], header[2], header[3],
-    ]))
-    .expect("Failed to parse integer or missing required value");
+    ])) {
+        Ok(s) => s,
+        Err(_) => {
+            warn!("☢️ [ANOMALY] ftyp box size overflows usize");
+            return false;
+        }
+    };
     if !(16..=4096).contains(&ftyp_box_size) {
         return false;
     }
@@ -976,12 +978,10 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
 
         let colors_per_megapixel = {
             let num = Rational::from(
-                u32::try_from(palette_size)
-                    .expect("Value overflowed or is missing, cannot process ratio"),
+                crate::numeric_cast::usize_to_u32_loud(palette_size, "palette_size for ratio component"),
             );
             let den = Rational::from(
-                u32::try_from(pixel_count)
-                    .expect("Value overflowed or is missing, cannot process ratio"),
+                crate::numeric_cast::u64_to_u32_loud(pixel_count as u64, "pixel_count for ratio component"),
             ) / Rational::from(1_000_000_i32);
             (num / den).to_f64().min(1000.0)
         };
@@ -991,12 +991,10 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
         // Large image + small palette = quantization indicator.
         let palette_density = {
             let num = Rational::from(
-                u32::try_from(palette_size)
-                    .expect("Value overflowed or is missing, cannot process ratio"),
+                crate::numeric_cast::usize_to_u32_loud(palette_size, "palette_size for ratio component"),
             );
             let den_f = f64::from(
-                u32::try_from(pixel_count)
-                    .expect("Value overflowed or is missing, cannot process ratio"),
+                crate::numeric_cast::u64_to_u32_loud(pixel_count as u64, "pixel_count for ratio component"),
             )
             .sqrt();
 
@@ -1085,11 +1083,9 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
 
                 if let Some(palette_size) = png_info.palette_size {
                     let usage_ratio = (Rational::from(
-                        u32::try_from(unique_colors)
-                            .expect("Value overflowed or is missing, cannot process ratio"),
+                        crate::numeric_cast::u64_to_u32_loud(unique_colors as u64, "unique_colors"),
                     ) / Rational::from(
-                        u32::try_from(palette_size)
-                            .expect("Value overflowed or is missing, cannot process ratio"),
+                        crate::numeric_cast::u64_to_u32_loud(palette_size as u64, "palette_size"),
                     ))
                     .to_f64();
 
@@ -1193,14 +1189,13 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
     let expected_size = estimate_uncompressed_size(&png_info);
     let actual_size = reader
         .seek(SeekFrom::End(0))
-        .expect("Failed to parse integer or missing required value");
+        .map_err(|e| warn!("☢️ [ANOMALY] Seek failed: {}", e))
+        .unwrap_or(0);
     let compression_ratio = if expected_size > 0 {
         f64::from(
-            u32::try_from(actual_size)
-                .expect("Value overflowed or is missing, cannot process ratio"),
+            crate::numeric_cast::u64_to_u32_loud(actual_size, "actual_size"),
         ) / f64::from(
-            u32::try_from(expected_size)
-                .expect("Value overflowed or is missing, cannot process ratio"),
+            crate::numeric_cast::u64_to_u32_loud(expected_size, "expected_size"),
         )
     } else {
         1.0_f64
@@ -1545,9 +1540,7 @@ pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructure
         match chunk_type {
             b"PLTE" if color_type == 3 => {
                 palette_size = Some(
-                    usize::try_from(chunk_len)
-                        .expect("Failed to parse integer or missing required value")
-                        / 3,
+                    crate::numeric_cast::u64_to_usize_loud(chunk_len as u64, "PLTE chunk_len") / 3,
                 );
                 skip_bytes(&mut reader, chunk_len + 4, "PLTE chunk")?;
             }
@@ -1559,9 +1552,7 @@ pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructure
                 has_text_chunks = true;
                 let mut payload = vec![
                     0u8;
-                    usize::try_from(chunk_len).expect(
-                        "Failed to parse integer or missing required value"
-                    )
+                    crate::numeric_cast::u64_to_usize_loud(chunk_len as u64, "PNG text chunk_len")
                 ];
                 reader.read_exact(&mut payload).map_err(|e| {
                     ImgQualityError::AnalysisError(format!(
@@ -1574,7 +1565,11 @@ pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructure
                         let keyword = String::from_utf8_lossy(
                             payload
                                 .get(..null_pos)
-                                .expect("Required byte slice missing (out of bounds)"),
+                                .ok_or_else(|| {
+                                    ImgQualityError::AnalysisError(
+                                        "Malformed PNG text chunk: missing keyword".to_string(),
+                                    )
+                                })?,
                         );
                         for &(pattern, tool_name) in signatures {
                             if keyword.contains(pattern) {
@@ -1583,9 +1578,11 @@ pub fn parse_png_structure<R: Read + Seek>(mut reader: R) -> Result<PngStructure
                             }
                         }
                         if detected_tool.is_none() && null_pos + 2 < payload.len() {
-                            let compressed = payload
-                                .get(null_pos + 2..)
-                                .expect("Required byte slice missing (out of bounds)");
+                            let compressed = payload.get(null_pos + 2..).ok_or_else(|| {
+                                ImgQualityError::AnalysisError(
+                                    "Malformed PNG zTXt chunk: truncated payload".to_string(),
+                                )
+                            })?;
                             let mut decompressed = Vec::new();
                             if flate2::read::ZlibDecoder::new(compressed)
                                 .read_to_end(&mut decompressed)
@@ -1686,11 +1683,9 @@ fn detect_dithering_pattern(img: &DynamicImage) -> f64 {
     }
 
     let dithering_ratio = f64::from(
-        u32::try_from(high_freq_count)
-            .expect("Value overflowed or is missing, cannot process ratio"),
+        crate::numeric_cast::u64_to_u32_loud(high_freq_count, "high_freq_count"),
     ) / f64::from(
-        u32::try_from(total_comparisons)
-            .expect("Value overflowed or is missing, cannot process ratio"),
+        crate::numeric_cast::u64_to_u32_loud(total_comparisons, "total_comparisons"),
     );
 
     let floyd_steinberg_score = (dithering_ratio * 5.0).min(1.0);
@@ -1717,11 +1712,9 @@ fn detect_dithering_pattern(img: &DynamicImage) -> f64 {
     }
     let bayer_score = if bayer_total > 0 {
         ((f64::from(
-            u32::try_from(bayer_count)
-                .expect("Value overflowed or is missing, cannot process ratio"),
+            crate::numeric_cast::u64_to_u32_loud(bayer_count, "bayer_count"),
         ) / f64::from(
-            u32::try_from(bayer_total)
-                .expect("Value overflowed or is missing, cannot process ratio"),
+            crate::numeric_cast::u64_to_u32_loud(bayer_total, "bayer_total"),
         )) * 4.0)
             .min(1.0)
     } else {
@@ -1763,10 +1756,9 @@ fn sample_unique_color_count(img: &DynamicImage, max_samples: usize) -> usize {
     let total = u64::from(width) * u64::from(height);
     let step = crate::numeric_cast::f64_to_u32_sat(
         (f64::from(
-            u32::try_from(total).expect("Value overflowed or is missing, cannot process ratio"),
+            crate::numeric_cast::u64_to_u32_loud(total, "total"),
         ) / f64::from(
-            u32::try_from(max_samples)
-                .expect("Value overflowed or is missing, cannot process ratio"),
+            crate::numeric_cast::u64_to_u32_loud(max_samples as u64, "max_samples"),
         ))
         .sqrt()
         .ceil(),
@@ -1808,7 +1800,7 @@ fn analyze_color_distribution(img: &DynamicImage, _palette_size: Option<usize>) 
 
     let (width, height) = rgba.dimensions();
     let total_pixels =
-        usize::try_from(width * height).expect("Failed to parse integer or missing required value");
+        crate::numeric_cast::u64_to_usize_loud(u64::from(width * height) as u64, "width * height");
 
     // Target ~50k samples, distributed across a grid of blocks
     let target_samples: usize = 50_000;
@@ -1835,8 +1827,7 @@ fn analyze_color_distribution(img: &DynamicImage, _palette_size: Option<usize>) 
             let y1 = ((by + 1) * block_h).min(height);
             let current_block_width = x1 - x0;
             let current_block_height = y1 - y0;
-            let block_pixels = usize::try_from(current_block_width * current_block_height)
-                .expect("Failed to parse integer or missing required value");
+            let block_pixels = crate::numeric_cast::u64_to_usize_loud(u64::from(current_block_width) * u64::from(current_block_height), "block_pixels");
             if block_pixels == 0 {
                 continue;
             }
@@ -1872,9 +1863,8 @@ fn analyze_color_distribution(img: &DynamicImage, _palette_size: Option<usize>) 
 fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
     let rgba = img.to_rgba8();
     let (width, height) = rgba.dimensions();
-    let total_pixels = usize::try_from(width)
-        .expect("Failed to parse integer or missing required value")
-        * usize::try_from(height).expect("Failed to parse integer or missing required value");
+    let total_pixels = crate::numeric_cast::u64_to_usize_loud(u64::from(width), "width")
+        * crate::numeric_cast::u64_to_usize_loud(u64::from(height), "height");
     if total_pixels < 100 {
         return 0.0;
     }
@@ -1885,19 +1875,15 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
     let target_samples: usize = 50_000.min(total_pixels);
     let block_size = crate::numeric_cast::f64_to_usize_sat(
         (f64::from(
-            u32::try_from(total_pixels)
-                .expect("Value overflowed or is missing, cannot process ratio"),
+            crate::numeric_cast::u64_to_u32_loud(total_pixels as u64, "total_pixels"),
         ) / f64::from(
-            u32::try_from(target_samples)
-                .expect("Value overflowed or is missing, cannot process ratio"),
+            crate::numeric_cast::u64_to_u32_loud(target_samples as u64, "target_samples"),
         ))
         .max(1.0),
     );
-    let blocks_x = usize::try_from(width)
-        .expect("Failed to parse integer or missing required value")
+    let blocks_x = crate::numeric_cast::u64_to_usize_loud(u64::from(width), "width")
         .div_ceil(block_size);
-    let blocks_y = usize::try_from(height)
-        .expect("Failed to parse integer or missing required value")
+    let blocks_y = crate::numeric_cast::u64_to_usize_loud(u64::from(height), "height")
         .div_ceil(block_size);
 
     let mut color_freq: std::collections::HashMap<[u8; 4], u32> = std::collections::HashMap::new();
@@ -1906,11 +1892,9 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
     for by in 0..blocks_y {
         for bx in 0..blocks_x {
             // Pick a pixel near the center of each block (deterministic, no RNG needed)
-            let px = u32::try_from(bx * block_size + block_size / 2)
-                .expect("Value overflowed or is missing, cannot process ratio")
+            let px = crate::numeric_cast::u64_to_u32_loud((bx * block_size + block_size / 2) as u64, "px")
                 .min(width.saturating_sub(1));
-            let py = u32::try_from(by * block_size + block_size / 2)
-                .expect("Value overflowed or is missing, cannot process ratio")
+            let py = crate::numeric_cast::u64_to_u32_loud((by * block_size + block_size / 2) as u64, "py")
                 .min(height.saturating_sub(1));
             let pixel = rgba.get_pixel(px, py);
             let key = [pixel[0], pixel[1], pixel[2], pixel[3]];
@@ -1926,12 +1910,7 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
     let mut freqs: Vec<u32> = color_freq.values().copied().collect();
     freqs.sort_unstable_by(|a, b| b.cmp(a));
 
-    // How many distinct colors cover 85% of sampled pixels?
-    let target = crate::numeric_cast::f64_to_u64_sat(
-        f64::from(
-            u32::try_from(sampled).expect("Value overflowed or is missing, cannot process ratio"),
-        ) * 0.85,
-    );
+    let target = crate::numeric_cast::f64_to_u64_sat(crate::numeric_cast::u64_to_f64(sampled) * 0.85);
     let mut cumulative = 0u64;
     let mut colors_for_85pct = 0usize;
     for &f in &freqs {
@@ -1944,10 +1923,9 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
 
     // Low ratio = few colors dominate = quantized
     let coverage_ratio = f64::from(
-        u32::try_from(colors_for_85pct)
-            .expect("Value overflowed or is missing, cannot process ratio"),
+        crate::numeric_cast::u64_to_u32_loud(colors_for_85pct as u64, "colors_for_85pct"),
     ) / f64::from(
-        u32::try_from(freqs.len()).expect("Value overflowed or is missing, cannot process ratio"),
+        crate::numeric_cast::u64_to_u32_loud(freqs.len() as u64, "freqs_len"),
     );
 
     if coverage_ratio < 0.05 {
@@ -2154,15 +2132,14 @@ pub fn calculate_entropy(img: &DynamicImage) -> f64 {
     }
 
     let total = f64::from(
-        u32::try_from(gray.pixels().count())
-            .expect("Value overflowed or is missing, cannot process ratio"),
+        crate::numeric_cast::u64_to_u32_loud(gray.pixels().count() as u64, "pixel_count"),
     );
     let mut entropy = 0.0_f64;
 
     for &count in &histogram {
         if count > 0 {
             let p = f64::from(
-                u32::try_from(count).expect("Value overflowed or is missing, cannot process ratio"),
+                crate::numeric_cast::u64_to_u32_loud(count, "count"),
             ) / total;
             entropy = p.mul_add(-p.log2(), entropy);
         }
@@ -2185,8 +2162,7 @@ fn calculate_palette_index_entropy(img: &DynamicImage, palette_size: usize) -> (
     let rgba = img.to_rgba8();
     let (width, height) = rgba.dimensions();
     let total = f64::from(
-        u32::try_from(u64::from(width) * u64::from(height))
-            .expect("Value overflowed or is missing, cannot process ratio"),
+        crate::numeric_cast::u64_to_u32_loud(u64::from(width) * u64::from(height), "width * height"),
     );
     if total == 0.0_f64 || palette_size == 0 {
         return (0.0, 0.0, 0.0);
@@ -2206,14 +2182,14 @@ fn calculate_palette_index_entropy(img: &DynamicImage, palette_size: usize) -> (
     for &count in color_freq.values() {
         if count > 0 {
             let p = f64::from(
-                u32::try_from(count).expect("Value overflowed or is missing, cannot process ratio"),
+                crate::numeric_cast::u64_to_u32_loud(count, "count"),
             ) / total;
             entropy = p.mul_add(-p.log2(), entropy);
         }
     }
 
     let max_entropy = f64::from(
-        u32::try_from(palette_size).expect("Value overflowed or is missing, cannot process ratio"),
+        crate::numeric_cast::u64_to_u32_loud(palette_size as u64, "palette_size"),
     )
     .log2();
     let ratio = if max_entropy > 0.0_f64 {
@@ -2231,8 +2207,7 @@ fn calculate_rgb_entropy(img: &DynamicImage) -> f64 {
         for &count in hist {
             if count > 0 {
                 let p = f64::from(
-                    u32::try_from(count)
-                        .expect("Value overflowed or is missing, cannot process ratio"),
+                    crate::numeric_cast::u64_to_u32_loud(count, "count"),
                 ) / total;
                 h = p.mul_add(-p.log2(), h);
             }
@@ -2258,8 +2233,7 @@ fn calculate_rgb_entropy(img: &DynamicImage) -> f64 {
     }
 
     let total = f64::from(
-        u32::try_from(rgba.pixels().count())
-            .expect("Value overflowed or is missing, cannot process ratio"),
+        crate::numeric_cast::u64_to_u32_loud(rgba.pixels().count() as u64, "pixel_count"),
     );
 
     let er = channel_entropy(&hist_r, total);
@@ -2374,13 +2348,15 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
             width,
             height,
             file_size,
-            frame_count,
+            frame_count.unwrap_or(1),
             entropy,
         )?);
     }
 
     let duration = if is_animated {
-        fps.map(|f| crate::numeric_cast::f64_to_f32_lossy(f64::from(frame_count)) / f)
+        fps.map(|f| {
+            crate::numeric_cast::f64_to_f32_lossy(f64::from(frame_count.unwrap_or(1))) / f
+        })
     } else {
         None
     };
@@ -2424,19 +2400,22 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
     }
 
     // Verify frame count for animated images
-    if is_animated && (frame_count <= 1 || frame_count > 50000) {
-        if let crate::media_penetration::PenetrationResult::Verified(real_count) =
-            crate::media_penetration::detect_real_frame_count(path, u64::from(frame_count))
-        {
-            let real_u32 = u32::try_from(real_count).unwrap_or(frame_count);
-            if real_u32 != frame_count {
-                crate::progress_mode::emit_stderr(&format!(
-                    "⚠️  [{}] Image frame count mismatch: metadata={}, actual={}, correcting",
-                    path.file_name().and_then(|n| n.to_str()).unwrap_or("?"),
-                    frame_count,
-                    real_u32
-                ));
-                result.frame_count = real_u32;
+    if is_animated {
+        let current_count = frame_count.unwrap_or(1);
+        if current_count <= 1 || current_count > 50000 {
+            if let crate::media_penetration::PenetrationResult::Verified(real_count) =
+                crate::media_penetration::detect_real_frame_count(path, u64::from(current_count))
+            {
+                let real_u32 = u32::try_from(real_count).unwrap_or(current_count);
+                if real_u32 != current_count {
+                    crate::progress_mode::emit_stderr(&format!(
+                        "⚠️  [{}] Image frame count mismatch: metadata={}, actual={}, correcting",
+                        path.file_name().and_then(|n| n.to_str()).unwrap_or("?"),
+                        current_count,
+                        real_u32
+                    ));
+                    result.frame_count = Some(real_u32);
+                }
             }
         }
     }
@@ -2528,63 +2507,38 @@ pub(crate) fn parse_apng_frames(data: &[u8]) -> (bool, u32) {
     // Look for acTL (Animation Control) chunk
     let mut pos = 8; // Skip PNG signature
     while pos + 12 <= data.len() {
-        if pos + 4 > data.len() {
-            break;
-        }
-
         // Read chunk length (big-endian)
-        let length = u32::from_be_bytes([
-            *data
-                .get(pos)
-                .expect("Required metadata byte missing (out of bounds)"),
-            *data
-                .get(pos + 1)
-                .expect("Required metadata byte missing (out of bounds)"),
-            *data
-                .get(pos + 2)
-                .expect("Required metadata byte missing (out of bounds)"),
-            *data
-                .get(pos + 3)
-                .expect("Required metadata byte missing (out of bounds)"),
-        ]);
+        let length_bytes = match data.get(pos..pos + 4) {
+            Some(b) => b,
+            None => break,
+        };
+        let length = u32::from_be_bytes([length_bytes[0], length_bytes[1], length_bytes[2], length_bytes[3]]);
         pos += 4;
 
-        if pos + 4 > data.len() {
-            break;
-        }
-
         // Read chunk type
-        let chunk_type = data
-            .get(pos..pos + 4)
-            .expect("Required byte slice missing (out of bounds)");
+        let chunk_type = match data.get(pos..pos + 4) {
+            Some(b) => b,
+            None => break,
+        };
         pos += 4;
 
         // Check if this is acTL chunk
         if chunk_type == b"acTL" {
             if pos + 4 <= data.len() {
                 // Read num_frames (first 4 bytes of acTL data)
-                let num_frames = u32::from_be_bytes([
-                    *data
-                        .get(pos)
-                        .expect("Required metadata byte missing (out of bounds)"),
-                    *data
-                        .get(pos + 1)
-                        .expect("Required metadata byte missing (out of bounds)"),
-                    *data
-                        .get(pos + 2)
-                        .expect("Required metadata byte missing (out of bounds)"),
-                    *data
-                        .get(pos + 3)
-                        .expect("Required metadata byte missing (out of bounds)"),
-                ]);
+                let num_frames_bytes = match data.get(pos..pos + 4) {
+                    Some(b) => b,
+                    None => break,
+                };
+                let num_frames = u32::from_be_bytes([num_frames_bytes[0], num_frames_bytes[1], num_frames_bytes[2], num_frames_bytes[3]]);
                 return (num_frames > 1, num_frames.max(1));
             }
             return (true, 2); // Fallback if we can't read frame count
         }
 
         // Skip chunk data and CRC
-        pos +=
-            usize::try_from(length).expect("Failed to parse integer or missing required value") + 4;
+        let chunk_data_size = crate::numeric_cast::u32_to_usize_sat(length);
+        pos += chunk_data_size + 4;
     }
 
     (false, 1)

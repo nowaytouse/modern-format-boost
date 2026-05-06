@@ -1341,7 +1341,10 @@ fn try_jxl_via_apng(path: &Path) -> Option<f32> {
                     .get("nb_read_frames")
                     .and_then(|v| v.as_str())
                     .and_then(|s| s.parse::<u64>().ok())
-                    .expect("Failed to parse integer or missing required value");
+                    .unwrap_or_else(|| {
+                        tracing::warn!("ffprobe output missing nb_read_frames; using 0");
+                        0
+                    });
 
                 let r_frame_rate = stream
                     .get("r_frame_rate")
@@ -1732,7 +1735,7 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> ImageAnalysis {
 
     // Detect animation via ffprobe/jxlinfo
     let (is_animated, _frame_count, _fps) =
-        detect_animation(path, &DetectedFormat::JXL).unwrap_or((false, 1, None));
+        detect_animation(path, &DetectedFormat::JXL).unwrap_or((false, Some(1), None));
     let duration_secs = if is_animated {
         get_animation_duration(path)
     } else {
@@ -1845,7 +1848,7 @@ fn analyze_avif_image(path: &Path, file_size: u64) -> ImageAnalysis {
 
     // Detect animation via ISOBMFF ftyp brand (avis/msf1)
     let (is_animated, _frame_count, _fps) =
-        detect_animation(path, &DetectedFormat::AVIF).unwrap_or((false, 1, None));
+        detect_animation(path, &DetectedFormat::AVIF).unwrap_or((false, Some(1), None));
     let duration_secs = if is_animated {
         get_animation_duration(path)
     } else {
@@ -1911,12 +1914,14 @@ fn parse_jxlinfo_output(output: &str) -> (u32, u32, bool, u8) {
             if let (Some(w_part), Some(h_part)) = (parts.first(), parts.get(1)) {
                 let w_str: String = w_part.chars().filter(char::is_ascii_digit).collect();
                 let h_str: String = h_part.chars().filter(char::is_ascii_digit).collect();
-                width = w_str
-                    .parse()
-                    .expect("Failed to parse integer or missing required value");
-                height = h_str
-                    .parse()
-                    .expect("Failed to parse integer or missing required value");
+                width = w_str.parse().unwrap_or_else(|_| {
+                    tracing::warn!("ImageMagick width parsing failed for '{}'", w_str);
+                    0
+                });
+                height = h_str.parse().unwrap_or_else(|_| {
+                    tracing::warn!("ImageMagick height parsing failed for '{}'", h_str);
+                    0
+                });
             }
         }
 

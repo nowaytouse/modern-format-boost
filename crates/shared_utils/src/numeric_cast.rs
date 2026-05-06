@@ -49,6 +49,110 @@ pub fn option_f64_loud(val: Option<f64>, default: f64, name: &str) -> f64 {
     })
 }
 
+/// Convert `u64` to `u32` with loud warning on overflow.
+/// Follows "Integrity Audit" requirements: Loud, Honest, Non-breaking.
+#[must_use]
+pub fn u64_to_u32_loud(val: u64, name: &str) -> u32 {
+    u32::try_from(val).unwrap_or_else(|_| {
+        warn!(
+            "☢️ [ANOMALY] {} ({}) overflows u32! Forging fallback to u32::MAX to prevent crash. Data integrity is COMPROMISED.",
+            name, val
+        );
+        u32::MAX
+    })
+}
+
+/// Convert `usize` to `u32` with loud warning on overflow.
+#[must_use]
+pub fn usize_to_u32_loud(val: usize, name: &str) -> u32 {
+    u32::try_from(val).unwrap_or_else(|_| {
+        warn!(
+            "☢️ [ANOMALY] {} ({}) overflows u32! Forging fallback to u32::MAX to prevent crash. Data integrity is COMPROMISED.",
+            name, val
+        );
+        u32::MAX
+    })
+}
+
+/// Convert `u64` to `usize` with loud warning on overflow (32-bit targets).
+#[must_use]
+pub fn u64_to_usize_loud(val: u64, name: &str) -> usize {
+    usize::try_from(val).unwrap_or_else(|_| {
+        warn!(
+            "☢️ [ANOMALY] {} ({}) overflows usize! Forging fallback to usize::MAX to prevent crash. Data integrity is COMPROMISED.",
+            name, val
+        );
+        usize::MAX
+    })
+}
+
+/// Convert `Option<u64>` to `u64` with loud warning on None.
+#[must_use]
+pub fn option_u64_loud(val: Option<u64>, default: u64, name: &str) -> u64 {
+    val.unwrap_or_else(|| {
+        warn!(
+            "⚠️ [Precision Audit] Required field '{}' is missing! Forging fallback to {} to prevent calculation failure.",
+            name, default
+        );
+        default
+    })
+}
+
+/// Convert `Option<u8>` to `u8` with loud warning on None.
+#[must_use]
+pub fn option_u8_loud(val: Option<u8>, default: u8, name: &str) -> u8 {
+    val.unwrap_or_else(|| {
+        warn!(
+            "⚠️ [Precision Audit] Required u8 field '{}' is missing! Forging fallback to {} to prevent calculation failure.",
+            name, default
+        );
+        default
+    })
+}
+
+/// Convert `Option<usize>` to `usize` with loud warning on None.
+#[must_use]
+pub fn option_usize_loud(val: Option<usize>, default: usize, name: &str) -> usize {
+    val.unwrap_or_else(|| {
+        warn!(
+            "⚠️ [Precision Audit] Required usize field '{}' is missing! Forging fallback to {} to prevent calculation failure.",
+            name, default
+        );
+        default
+    })
+}
+
+/// Convert `u64` to `u32` with loud warning on overflow, returning None.
+/// Follows "Integrity Audit" requirements: Loud, Honest, Non-breaking.
+#[must_use]
+pub fn try_u32_loud(val: u64, name: &str) -> Option<u32> {
+    match u32::try_from(val) {
+        Ok(v) => Some(v),
+        Err(_) => {
+            warn!(
+                "☢️ [ANOMALY] {} ({}) overflows u32! Refusing to forge data. Returning None for safety.",
+                name, val
+            );
+            None
+        }
+    }
+}
+
+/// Convert `u64` to `usize` with loud warning on overflow, returning None.
+#[must_use]
+pub fn try_usize_loud(val: u64, name: &str) -> Option<usize> {
+    match usize::try_from(val) {
+        Ok(v) => Some(v),
+        Err(_) => {
+            warn!(
+                "☢️ [ANOMALY] {} ({}) overflows usize! Refusing to forge data. Returning None for safety.",
+                name, val
+            );
+            None
+        }
+    }
+}
+
 mod raw {
     #![allow(
         clippy::cast_possible_truncation,

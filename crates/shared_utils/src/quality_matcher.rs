@@ -6,6 +6,7 @@
 #[cfg(feature = "high-precision")]
 use rug::Rational;
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EncoderType {
@@ -297,10 +298,6 @@ impl SourceCodec {
     /// Identifies the file format based on internal magic bytes.
     /// This is the "Tight Entry" mechanism that avoids relying on file extensions.
     #[must_use]
-    #[allow(
-        clippy::missing_panics_doc,
-        reason = "Explicit panic on data corruption is intended and documented inline."
-    )]
     pub fn identify_by_content(path: &std::path::Path) -> Option<Self> {
         use std::io::{Read, Seek, SeekFrom};
         let mut file = std::fs::File::open(path).ok()?;
@@ -310,11 +307,15 @@ impl SourceCodec {
             return None;
         }
 
-        let mut codec = Self::identify_by_header(
-            header
-                .get(..n)
-                .expect("Required byte slice missing (out of bounds)"),
-        );
+        let header_slice = match header.get(..n) {
+            Some(s) => s,
+            None => {
+                warn!("☢️ [ANOMALY] Failed to slice header for identification (n={})", n);
+                return None;
+            }
+        };
+
+        let mut codec = Self::identify_by_header(header_slice);
 
         // Deep WebP animation verification
         // Some WebP files (notably Safari exports) may not place `VP8X` within the first 64 bytes
@@ -327,21 +328,20 @@ impl SourceCodec {
         {
             const SCAN_LIMIT: usize = 1024 * 1024; // 1 MiB cap (safe & fast)
             let mut buf = Vec::with_capacity(SCAN_LIMIT);
-            buf.extend_from_slice(
-                header
-                    .get(..n)
-                    .expect("Required byte slice missing (out of bounds)"),
-            );
+            buf.extend_from_slice(header_slice);
 
             let remaining = SCAN_LIMIT.saturating_sub(n);
             if remaining > 0 {
                 let mut extra = vec![0u8; remaining];
                 if let Ok(read_n) = file.read(&mut extra) {
-                    buf.extend_from_slice(
-                        extra
-                            .get(..read_n)
-                            .expect("Required byte slice missing (out of bounds)"),
-                    );
+                    let extra_slice = match extra.get(..read_n) {
+                        Some(s) => s,
+                        None => {
+                            warn!("☢️ [ANOMALY] Failed to slice extra buffer for WebP scan (read_n={})", read_n);
+                            &[]
+                        }
+                    };
+                    buf.extend_from_slice(extra_slice);
                 }
             }
 
@@ -359,20 +359,35 @@ impl SourceCodec {
                 if file.read_exact(&mut chunk_header).is_err() {
                     break;
                 }
-                let length = u32::from_be_bytes([
-                    *chunk_header
-                        .first()
-                        .expect("Required metadata byte missing (out of bounds)"),
-                    *chunk_header
-                        .get(1)
-                        .expect("Required metadata byte missing (out of bounds)"),
-                    *chunk_header
-                        .get(2)
-                        .expect("Required metadata byte missing (out of bounds)"),
-                    *chunk_header
-                        .get(3)
-                        .expect("Required metadata byte missing (out of bounds)"),
-                ]);
+                let b1 = match chunk_header.first() {
+                    Some(b) => *b,
+                    None => {
+                        warn!("☢️ [CORRUPTION] APNG chunk header missing byte 0 at position {:?}", file.stream_position());
+                        break;
+                    }
+                };
+                let b2 = match chunk_header.get(1) {
+                    Some(b) => *b,
+                    None => {
+                        warn!("☢️ [CORRUPTION] APNG chunk header missing byte 1");
+                        break;
+                    }
+                };
+                let b3 = match chunk_header.get(2) {
+                    Some(b) => *b,
+                    None => {
+                        warn!("☢️ [CORRUPTION] APNG chunk header missing byte 2");
+                        break;
+                    }
+                };
+                let b4 = match chunk_header.get(3) {
+                    Some(b) => *b,
+                    None => {
+                        warn!("☢️ [CORRUPTION] APNG chunk header missing byte 3");
+                        break;
+                    }
+                };
+                let length = u32::from_be_bytes([b1, b2, b3, b4]);
                 let chunk_type = chunk_header
                     .get(4..8)
                     .expect("Required byte slice missing (out of bounds)");
@@ -397,10 +412,6 @@ impl SourceCodec {
 
     /// Identifies format from a byte slice (header).
     #[must_use]
-    #[allow(
-        clippy::missing_panics_doc,
-        reason = "Explicit panic on data corruption is intended and documented inline."
-    )]
     pub fn identify_by_header(header: &[u8]) -> Option<Self> {
         if header.len() < 2 {
             return None;
@@ -444,16 +455,24 @@ impl SourceCodec {
 
         // 2. RIFF Containers (WebP, AVI)
         if header.starts_with(b"RIFF") && header.len() >= 12 {
-            let brand = header
-                .get(8..12)
-                .expect("Required byte slice missing (out of bounds)");
+            let brand = match header.get(8..12) {
+                Some(b) => b,
+                None => {
+                    warn!("☢️ [ANOMALY] RIFF container missing brand field");
+                    return None;
+                }
+            };
             if brand == b"WEBP" {
                 // Check for VP8X extended header which contains the animation flag
                 if header.len() >= 21 && header.get(12..16) == Some(b"VP8X") {
                     // The animation flag is the 2nd bit of the flags byte at offset 20
-                    let flags = *header
-                        .get(20)
-                        .expect("Required metadata byte missing (out of bounds)");
+                    let flags = match header.get(20) {
+                        Some(b) => *b,
+                        None => {
+                            warn!("☢️ [ANOMALY] WebP VP8X header missing flags byte");
+                            0
+                        }
+                    };
                     if (flags & 0x02) != 0 {
                         return Some(Self::WebpAnimated);
                     }

@@ -156,10 +156,6 @@ pub fn robust_move(src: &Path, dst: &Path) -> std::io::Result<()> {
 /// the tail of the actually-informative lines so error messages include the
 /// root-cause diagnostic.
 #[must_use]
-#[allow(
-    clippy::missing_panics_doc,
-    reason = "Explicit panic on data corruption is intended and documented inline."
-)]
 pub fn tail_error_lines(stderr: &str, n: usize) -> String {
     let lines: Vec<&str> = stderr
         .lines()
@@ -169,11 +165,10 @@ pub fn tail_error_lines(stderr: &str, n: usize) -> String {
     if lines.is_empty() {
         return String::new();
     }
+    // `start` is always ≤ `lines.len()` because `saturating_sub` cannot produce a value
+    // larger than the operand; direct indexing is sound.
     let start = lines.len().saturating_sub(n);
-    lines
-        .get(start..)
-        .expect("Required byte slice missing (out of bounds)")
-        .join(" | ")
+    lines[start..].join(" | ")
 }
 
 #[cfg(test)]

@@ -130,7 +130,7 @@ impl<'a> VideoConversionPipeline<'a> {
 
         self.reconcile_animated_image(&mut detection);
 
-        if detection.frame_count <= 1 {
+        if detection.frame_count.unwrap_or(0) <= 1 {
             self.strategy = Some(ConversionStrategy {
                 target: TargetVideoFormat::Skip,
                 reason: "Static image detected (1 frame) - vid ignores static media".to_string(),
@@ -372,7 +372,7 @@ impl<'a> VideoConversionPipeline<'a> {
     }
 
     fn reconcile_animated_image(&self, detection: &mut VideoDetection) {
-        if detection.frame_count <= 1
+        if detection.frame_count.unwrap_or(0) <= 1
             && shared_utils::quality_matcher::SourceCodec::identify_by_content(self.input)
                 .is_some_and(|codec| codec.can_be_animated())
         {
@@ -380,9 +380,9 @@ impl<'a> VideoConversionPipeline<'a> {
                 if matches!(
                     image_det.image_type,
                     shared_utils::image_detection::ImageType::Animated
-                ) || image_det.frame_count > 1
+                ) || image_det.frame_count.unwrap_or(0) > 1
                 {
-                    detection.frame_count = u64::from(image_det.frame_count.max(2));
+                    detection.frame_count = Some(u64::from(image_det.frame_count.unwrap_or(0).max(2)));
                 }
             }
         }
