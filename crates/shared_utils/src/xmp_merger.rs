@@ -1366,7 +1366,7 @@ mod tests {
         std::fs::write(&empty_xmp, "").unwrap_or_else(|_| panic!("test setup error"));
         let _merger = XmpMerger::new(XmpMergerConfig::default());
 
-        let err = XmpMerger::extract_xmp_metadata(&empty_xmp, LogLevel::Quiet)
+        let err = XmpMerger::extract_xmp_metadata(&empty_xmp, LogLevel::Verbose)
             .err()
             .unwrap_or_else(|| anyhow::anyhow!("unknown error"));
         assert!(err

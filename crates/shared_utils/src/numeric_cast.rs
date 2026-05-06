@@ -107,7 +107,7 @@ pub fn f64_to_usize_strict(val: f64, name: &str) -> Option<usize> {
             return None;
         }
     }
-    usize::try_from(val.to_bits()).ok()
+    Some(val as usize)
 }
 
 /// Convert `u32` to `i32` with loud warning on overflow.

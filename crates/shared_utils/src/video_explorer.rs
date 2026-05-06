@@ -4122,7 +4122,7 @@ mod tests {
     fn test_binary_search_precision_proof() {
         let range = 28.0 - 10.0;
         let coarse_iterations = crate::numeric_cast::u64_to_u32_strict(
-            u64::from((range / COARSE_STEP).ceil().to_bits()),
+            (range / COARSE_STEP).ceil() as u64,
             "coarse_iterations",
         )
         .unwrap_or_else(|| {
@@ -4130,7 +4130,7 @@ mod tests {
             0
         });
         let fine_iterations = crate::numeric_cast::u64_to_u32_strict(
-            u64::from((COARSE_STEP / FINE_STEP).ceil().to_bits()),
+            (COARSE_STEP / FINE_STEP).ceil() as u64,
             "fine_iterations",
         )
         .unwrap_or_else(|| {
@@ -4141,7 +4141,7 @@ mod tests {
 
         assert!(
             total <= 15,
-            "Three-phase search should achieve ±0.5 CRF precision within 15 iterations"
+            "Three-phase search should achieve ±0.5 CRF precision within 15 iterations (got {})", total
         );
         assert!(
             coarse_iterations <= 9,

@@ -1,0 +1,12 @@
+---
+source: crates/dev/tests/snapshot_tests.rs
+expression: args
+---
+[
+    "in.png",
+    "out.jxl",
+    "-d",
+    "0.5",
+    "-e",
+    "7",
+]

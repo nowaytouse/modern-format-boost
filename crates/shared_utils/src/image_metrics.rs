@@ -68,11 +68,23 @@ pub fn calculate_psnr(original: &DynamicImage, converted: &DynamicImage) -> Opti
         })
         .sum();
 
-    let pixel_count = crate::numeric_cast::usize_to_f64(orig_pixels.len());
-    let mse = (Rational::from_f64(mse_sum).unwrap_or_else(|| Rational::from(0))
-        / (Rational::from(3)
-            * Rational::from_f64(pixel_count).unwrap_or_else(|| Rational::from(1))))
-    .to_f64();
+    // Calculate MSE with high precision when available
+    let mse = if cfg!(feature = "high-precision") {
+        use rug::Integer;
+        
+        let pixel_count_int = Integer::from(orig_pixels.len());
+        #[allow(clippy::cast_possible_truncation)]
+        let mse_sum_int = Integer::from(mse_sum as i64); // Safe conversion for MSE sum
+        let three_int = Integer::from(3);
+        let denominator = Rational::from(three_int) * Rational::from(pixel_count_int);
+        (Rational::from(mse_sum_int) / denominator).to_f64()
+    } else {
+        let pixel_count = crate::numeric_cast::usize_to_f64(orig_pixels.len());
+        (Rational::from_f64(mse_sum).unwrap_or_else(|| Rational::from(0))
+            / (Rational::from(3)
+                * Rational::from_f64(pixel_count).unwrap_or_else(|| Rational::from(1))))
+            .to_f64()
+    };
 
     if mse < 1e-10_f64 {
         return Some(f64::INFINITY);
@@ -197,48 +209,132 @@ fn calculate_ssim_simple(original: &DynamicImage, converted: &DynamicImage) -> O
     }
 
     // Single-pass: compute sum_x, total_sum_y, sum_xx, sum_yy, products_sum_xy (no Vec allocation).
-    let mut sum_x = Rational::from(0);
-    let mut total_sum_y = Rational::from(0);
-    let mut sum_xx = Rational::from(0);
-    let mut sum_yy = Rational::from(0);
-    let mut products_sum_xy = Rational::from(0);
-    for (p_orig, p_conv) in orig_gray.pixels().zip(conv_gray.pixels()) {
-        let x = u64::from(p_orig[0]);
-        let y = u64::from(p_conv[0]);
-        sum_x += Rational::from(x);
-        total_sum_y += Rational::from(y);
-        sum_xx += Rational::from(x * x);
-        sum_yy += Rational::from(y * y);
-        products_sum_xy += Rational::from(x * y);
+    #[cfg(feature = "high-precision")]
+    {
+        use rug::Integer;
+        
+        let mut sum_x = Rational::from(0);
+        let mut total_sum_y = Rational::from(0);
+        let mut sum_xx = Rational::from(0);
+        let mut sum_yy = Rational::from(0);
+        let mut products_sum_xy = Rational::from(0);
+        
+        for (p_orig, p_conv) in orig_gray.pixels().zip(conv_gray.pixels()) {
+            let x_int = Integer::from(p_orig[0]);
+            let y_int = Integer::from(p_conv[0]);
+            
+            sum_x += Rational::from(&x_int);
+            total_sum_y += Rational::from(&y_int);
+            sum_xx += Rational::from(&x_int * &x_int);
+            sum_yy += Rational::from(&y_int * &y_int);
+            products_sum_xy += Rational::from(&x_int * &y_int);
+        }
+        
+        let n = Rational::from(Integer::from(n_u64));
+        let mean_x = sum_x.clone() / n.clone();
+        let mean_y = total_sum_y.clone() / n.clone();
+        // Unbiased variance/covariance (Wang et al. sample estimator; consistent with windowed path).
+        let n1 = n.clone() - Rational::from(1);
+        let var_x = (sum_xx.clone() - (n.clone() * mean_x.clone() * mean_x.clone())) / n1.clone();
+        let var_y = (sum_yy.clone() - (n.clone() * mean_y.clone() * mean_y.clone())) / n1.clone();
+        let cov_xy = (products_sum_xy - (n * mean_x.clone() * mean_y.clone())) / n1;
+        
+        let c1_rat = Rational::from_f64(C1).unwrap_or_else(|| Rational::from(0));
+        let c2_rat = Rational::from_f64(C2).unwrap_or_else(|| Rational::from(0));
+        
+        let numerator = (Rational::from(2) * mean_x.clone() * mean_y.clone() + c1_rat.clone())
+            * (Rational::from(2) * cov_xy + c2_rat.clone());
+        // mean_x and mean_y each appear twice — clone for squared terms to avoid move.
+        let denominator =
+            (mean_x.clone() * mean_x + mean_y.clone() * mean_y + c1_rat) * (var_x + var_y + c2_rat);
+        
+        let den_abs = if denominator > 0 {
+            denominator.clone()
+        } else {
+            -denominator.clone()
+        };
+        if den_abs < Rational::from_f64(1e-10).unwrap_or_else(|| Rational::from(0)) {
+            return Some(1.0);
+        }
+        Some((numerator / denominator).to_f64())
     }
-
-    let n = Rational::from(n_u64);
-    let mean_x = sum_x.clone() / n.clone();
-    let mean_y = total_sum_y.clone() / n.clone();
-    // Unbiased variance/covariance (Wang et al. sample estimator; consistent with windowed path).
-    let n1 = n.clone() - Rational::from(1);
-    let var_x = (sum_xx.clone() - (n.clone() * mean_x.clone() * mean_x.clone())) / n1.clone();
-    let var_y = (sum_yy.clone() - (n.clone() * mean_y.clone() * mean_y.clone())) / n1.clone();
-    let cov_xy = (products_sum_xy - (n * mean_x.clone() * mean_y.clone())) / n1;
-
-    let c1_rat = Rational::from_f64(C1).unwrap_or_else(|| Rational::from(0));
-    let c2_rat = Rational::from_f64(C2).unwrap_or_else(|| Rational::from(0));
-
-    let numerator = (Rational::from(2) * mean_x.clone() * mean_y.clone() + c1_rat.clone())
-        * (Rational::from(2) * cov_xy + c2_rat.clone());
-    // mean_x and mean_y each appear twice — clone for the squared terms to avoid move.
-    let denominator =
-        (mean_x.clone() * mean_x + mean_y.clone() * mean_y + c1_rat) * (var_x + var_y + c2_rat);
-
-    let den_abs = if denominator > 0 {
-        denominator.clone()
-    } else {
-        -denominator.clone()
-    };
-    if den_abs < Rational::from_f64(1e-10).unwrap_or_else(|| Rational::from(0)) {
-        return Some(1.0);
+    
+    #[cfg(not(feature = "high-precision"))]
+    {
+        let mut sum_x = Rational::from(0);
+        let mut total_sum_y = Rational::from(0);
+        let mut sum_xx = Rational::from(0);
+        let mut sum_yy = Rational::from(0);
+        let mut products_sum_xy = Rational::from(0);
+        for (p_orig, p_conv) in orig_gray.pixels().zip(conv_gray.pixels()) {
+            let x = u64::from(p_orig[0]);
+            let y = u64::from(p_conv[0]);
+            sum_x += Rational::from(x);
+            total_sum_y += Rational::from(y);
+            sum_xx += Rational::from(x * x);
+            sum_yy += Rational::from(y * y);
+            products_sum_xy += Rational::from(x * y);
+        }
+        
+        let n = Rational::from(n_u64);
+        let mean_x = sum_x.clone() / n.clone();
+        let mean_y = total_sum_y.clone() / n.clone();
+        // Unbiased variance/covariance (Wang et al. sample estimator; consistent with windowed path).
+        let n1 = n.clone() - Rational::from(1);
+        let var_x = (sum_xx.clone() - (n.clone() * mean_x.clone() * mean_x.clone())) / n1.clone();
+        let var_y = (sum_yy.clone() - (n.clone() * mean_y.clone() * mean_y.clone())) / n1.clone();
+        let cov_xy = (products_sum_xy - (n * mean_x.clone() * mean_y.clone())) / n1;
+        
+        let c1_rat = Rational::from_f64(C1).unwrap_or_else(|| Rational::from(0));
+        let c2_rat = Rational::from_f64(C2).unwrap_or_else(|| Rational::from(0));
+        
+        let numerator = (Rational::from(2) * mean_x.clone() * mean_y.clone() + c1_rat.clone())
+            * (Rational::from(2) * cov_xy + c2_rat.clone());
+        // mean_x and mean_y each appear twice — clone for squared terms to avoid move.
+        let denominator =
+            (mean_x.clone() * mean_x + mean_y.clone() * mean_y + c1_rat) * (var_x + var_y + c2_rat);
+        
+        let den_abs = if denominator > 0 {
+            denominator.clone()
+        } else {
+            -denominator.clone()
+        };
+        if den_abs < Rational::from_f64(1e-10).unwrap_or_else(|| Rational::from(0)) {
+            return Some(1.0);
+        }
+        Some((numerator / denominator).to_f64())
     }
-    Some((numerator / denominator).to_f64())
+    
+    #[cfg(not(feature = "high-precision"))]
+    {
+        let n = Rational::from(n_u64);
+        let mean_x = sum_x.clone() / n.clone();
+        let mean_y = total_sum_y.clone() / n.clone();
+        // Unbiased variance/covariance (Wang et al. sample estimator; consistent with windowed path).
+        let n1 = n.clone() - Rational::from(1);
+        let var_x = (sum_xx.clone() - (n.clone() * mean_x.clone() * mean_x.clone())) / n1.clone();
+        let var_y = (sum_yy.clone() - (n.clone() * mean_y.clone() * mean_y.clone())) / n1.clone();
+        let cov_xy = (products_sum_xy - (n * mean_x.clone() * mean_y.clone())) / n1;
+        
+        let c1_rat = Rational::from_f64(C1).unwrap_or_else(|| Rational::from(0));
+        let c2_rat = Rational::from_f64(C2).unwrap_or_else(|| Rational::from(0));
+        
+        let numerator = (Rational::from(2) * mean_x.clone() * mean_y.clone() + c1_rat.clone())
+            * (Rational::from(2) * cov_xy + c2_rat.clone());
+        // mean_x and mean_y each appear twice — clone for squared terms to avoid move.
+        let denominator =
+            (mean_x.clone() * mean_x + mean_y.clone() * mean_y + c1_rat) * (var_x + var_y + c2_rat);
+        
+        let den_abs = if denominator > 0 {
+            denominator.clone()
+        } else {
+            -denominator.clone()
+        };
+        if den_abs < Rational::from_f64(1e-10).unwrap_or_else(|| Rational::from(0)) {
+            return Some(1.0);
+        }
+        Some((numerator / denominator).to_f64())
+    }
 }
 
 #[must_use]
