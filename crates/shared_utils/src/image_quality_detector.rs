@@ -176,7 +176,7 @@ pub fn analyze_image_quality(
     let texture_variance = calculate_texture_variance(rgba_data, width, height);
 
     let noise_level =
-        if precision.is_lossless_deterministic && (precision.bit_depth.unwrap_or(8) >= 10) {
+        if precision.is_lossless_deterministic && precision.bit_depth.is_some_and(|bd| bd >= 10) {
             0.0_f64
         } else {
             calculate_noise_level(rgba_data, width, height)
@@ -187,8 +187,8 @@ pub fn analyze_image_quality(
 
     let complexity =
         calculate_overall_complexity(edge_density, color_diversity, texture_variance, noise_level);
-    
-    let is_animated = frame_count.map_or(false, |n| n > 1);
+
+    let is_animated = frame_count.is_some_and(|n| n > 1);
     let content_type = classify_content_type(&ClassifierInput {
         complexity,
         edge_density,
@@ -456,9 +456,17 @@ fn calculate_noise_level(rgba: &[u8], width: u32, height: u32) -> f64 {
             let idx_down = idx + (crate::numeric_cast::u32_to_usize_sat(width) * 4);
 
             if idx_down + 2 < rgba.len() {
-                let curr = (i32::from(rgba[idx]) + i32::from(rgba[idx + 1]) + i32::from(rgba[idx + 2])) / 3_i32;
-                let right = (i32::from(rgba[idx_right]) + i32::from(rgba[idx_right + 1]) + i32::from(rgba[idx_right + 2])) / 3_i32;
-                let down = (i32::from(rgba[idx_down]) + i32::from(rgba[idx_down + 1]) + i32::from(rgba[idx_down + 2])) / 3_i32;
+                let curr =
+                    (i32::from(rgba[idx]) + i32::from(rgba[idx + 1]) + i32::from(rgba[idx + 2]))
+                        / 3_i32;
+                let right = (i32::from(rgba[idx_right])
+                    + i32::from(rgba[idx_right + 1])
+                    + i32::from(rgba[idx_right + 2]))
+                    / 3_i32;
+                let down = (i32::from(rgba[idx_down])
+                    + i32::from(rgba[idx_down + 1])
+                    + i32::from(rgba[idx_down + 2]))
+                    / 3_i32;
 
                 diff_sum += f64::from((curr - right).abs());
                 diff_sum += f64::from((curr - down).abs());
@@ -571,9 +579,12 @@ fn calculate_contrast(rgba: &[u8], width: u32, height: u32) -> f64 {
     for i in (0..pixels).step_by(step) {
         let idx = i * 4;
         if idx + 2 < rgba.len() {
-            let gray = (u64::from(rgba[idx]) * crate::numeric_cast::i32_to_u64_sat(crate::constants::LUMA_COEFF_R)
-                + u64::from(rgba[idx + 1]) * crate::numeric_cast::i32_to_u64_sat(crate::constants::LUMA_COEFF_G)
-                + u64::from(rgba[idx + 2]) * crate::numeric_cast::i32_to_u64_sat(crate::constants::LUMA_COEFF_B))
+            let gray = (u64::from(rgba[idx])
+                * crate::numeric_cast::i32_to_u64_sat(crate::constants::LUMA_COEFF_R)
+                + u64::from(rgba[idx + 1])
+                    * crate::numeric_cast::i32_to_u64_sat(crate::constants::LUMA_COEFF_G)
+                + u64::from(rgba[idx + 2])
+                    * crate::numeric_cast::i32_to_u64_sat(crate::constants::LUMA_COEFF_B))
                 / crate::numeric_cast::i32_to_u64_sat(crate::constants::LUMA_DIVISOR);
             sum += gray;
             sq_sum += gray * gray;

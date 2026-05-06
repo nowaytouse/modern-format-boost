@@ -76,7 +76,7 @@ impl std::fmt::Display for Rational {
 #[cfg(not(feature = "high-precision"))]
 impl std::ops::Neg for Rational {
     type Output = Self;
-    
+
     fn neg(self) -> Self {
         Self(-self.0)
     }
@@ -496,7 +496,7 @@ pub use gpu_accel::{
 
 pub use video_explorer::{
     explore_av1_with_gpu, explore_hevc_with_gpu, explore_with_gpu_coarse_search, is_gif_magic,
-    GpuSearchRequest,
+    GpuSearchFeatures, GpuSearchFlags, GpuSearchRequest, GpuSearchValidation,
 };
 
 pub use modern_ui::{

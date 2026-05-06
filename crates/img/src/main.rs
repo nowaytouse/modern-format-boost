@@ -1044,7 +1044,7 @@ fn dispatch_static_conversion(
         ("WebP" | "AVIF" | "TIFF" | "HEIC" | "HEIF", true) => {
             if format == "HEIC" || format == "HEIF" {
                 if let Some(h) = &analysis.heic_analysis {
-                    if h.has_gainmap {
+                    if h.hdr.has_gainmap {
                         println!("🌈 HDR Synthesis: {} (Gainmap detected)", input.display());
                         return Ok(img::lossless_converter::convert_heic_gainmap_to_jxl(
                             input, options,

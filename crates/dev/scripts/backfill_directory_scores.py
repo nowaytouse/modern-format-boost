@@ -2,7 +2,7 @@
 """
 Backfill `directory_loop_intent_score` by recomputing it from `source_path`.
 
-This script reads keywords from crates/dev/config/directory_keywords.json
+This script reads keywords from crates/dev/src/config/directory_keywords.json
 and updates the database with computed scores based on directory names.
 
 Usage:
@@ -21,7 +21,7 @@ DEFAULT_CONN = os.getenv("MFB_PG_CONNSTR", "host=localhost dbname=modern_format_
 
 # Path to keywords configuration
 SCRIPT_DIR = Path(__file__).parent
-CONFIG_PATH = SCRIPT_DIR.parent / "config" / "directory_keywords.json"
+CONFIG_PATH = SCRIPT_DIR.parent / "src" / "config" / "directory_keywords.json"
 
 
 def load_keywords_config() -> dict:

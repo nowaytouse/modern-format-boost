@@ -466,7 +466,7 @@ impl BatchResult {
             100.0
         } else {
             (crate::numeric_cast::usize_to_f64(self.succeeded)
-                / crate::numeric_cast::usize_to_f64(self.total))
+                / crate::numeric_cast::usize_to_f64(self.total.max(1)))
                 * 100.0
         }
     }
@@ -575,7 +575,8 @@ fn image_pixel_count(path: &Path) -> Option<u64> {
 /// Sortable ordinal key for comparison
 fn float_ord_key(value: f64) -> u64 {
     if value.is_finite() && value >= 0.0 {
-        crate::numeric_cast::f64_to_u64_sat((value * 1000.0).round())
+        crate::numeric_cast::f64_to_u64_strict((value * 1000.0).round(), "float_ord_key")
+            .unwrap_or(u64::MAX)
     } else {
         u64::MAX
     }
@@ -963,15 +964,18 @@ fn video_probe_priority_data(path: &Path) -> (Option<u64>, Option<f64>, Option<f
         None
     };
 
-    let frame_count = if let Some(fc) = probe.frame_count {
-        if fc > 0 { Some(fc) } else { None }
-    } else if let (Some(duration), Some(fps)) = (duration_secs, frame_rate) {
-        Some(crate::numeric_cast::f64_to_u64_sat(
-            (duration * fps).round().max(1.0_f64),
-        ))
-    } else {
-        None
-    };
+    let frame_count = probe.frame_count.map_or_else(
+        || {
+            if let (Some(duration), Some(fps)) = (duration_secs, frame_rate) {
+                Some(crate::numeric_cast::f64_to_u64_sat(
+                    (duration * fps).round().max(1.0_f64),
+                ))
+            } else {
+                None
+            }
+        },
+        |fc| if fc > 0 { Some(fc) } else { None },
+    );
 
     let estimated_work = pixel_count
         .zip(frame_count)
@@ -1318,10 +1322,12 @@ mod tests {
                 let p = u32::try_from(
                     (result.succeeded as u128 * 10_000) / result.total.max(1) as u128,
                 )
-                .unwrap_or_else(|_| panic!(
-                    "permille overflow in test assertion: succeeded={}, total={}",
-                    result.succeeded, result.total
-                ));
+                .unwrap_or_else(|_| {
+                    panic!(
+                        "permille overflow in test assertion: succeeded={}, total={}",
+                        result.succeeded, result.total
+                    )
+                });
                 f64::from(p) / 100.0_f64
             };
 
@@ -1484,7 +1490,9 @@ mod tests {
         assert!(validate_cached_image_tree(&snapshot, root, &["jpg"], true));
 
         let bumped = FileTime::from_unix_time(
-            crate::numeric_cast::u64_to_i64_sat(path_modified_unix_secs(&nested)) + 10,
+            crate::numeric_cast::u64_to_i64_strict(path_modified_unix_secs(&nested), "mtime")
+                .unwrap_or(0)
+                + 10,
             0,
         );
         filetime::set_file_mtime(&nested, bumped).map_err(|e| anyhow::anyhow!("set mtime: {e}"))?;

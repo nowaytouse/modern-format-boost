@@ -195,20 +195,17 @@ fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<StreamSiz
 
     // Duration is required for bitrate-based size estimation. If absent or unparseable,
     // fall through to estimation rather than panicking or using a fictitious value.
-    let duration_secs = match parsed
+    let Some(duration_secs) = parsed
         .format
         .duration
         .as_ref()
         .and_then(|d| d.parse::<f64>().ok())
-    {
-        Some(d) => d,
-        None => {
-            warn!(
-                path = %path.display(),
-                "ffprobe stream-size: format duration missing or unparseable; falling back to estimation"
-            );
-            return None;
-        }
+    else {
+        warn!(
+            path = %path.display(),
+            "ffprobe stream-size: format duration missing or unparseable; falling back to estimation"
+        );
+        return None;
     };
 
     if duration_secs <= 0.0_f64 {
@@ -260,7 +257,8 @@ fn calculate_stream_size_and_bitrate(
         .and_then(|br_str| br_str.parse::<u64>().ok())
         .map_or((0, None), |br| {
             let size_rational = (Rational::from(br)
-                * crate::numeric_cast::f64_to_rational_loud(duration_secs, 0, "duration_secs"))
+                * crate::numeric_cast::f64_to_rational_strict(duration_secs, "duration_secs")
+                    .unwrap_or_else(|| Rational::from(0_i32)))
                 / Rational::from(8_i32);
             let size = crate::numeric_cast::f64_to_u64_sat(size_rational.to_f64());
             (size, Some(br))
@@ -305,7 +303,8 @@ fn estimate_stream_sizes(path: &Path, total_file_size: u64) -> StreamSizeInfo {
     let overhead_percent = get_container_overhead_percent(path);
     let estimated_overhead = {
         let overhead = Rational::from(total_file_size)
-            * crate::numeric_cast::f64_to_rational_loud(overhead_percent, 0, "overhead_percent");
+            * crate::numeric_cast::f64_to_rational_strict(overhead_percent, "overhead_percent")
+                .unwrap_or_else(|| Rational::from(0_i32));
         crate::numeric_cast::f64_to_u64_sat(overhead.to_f64())
     };
     let estimated_video_size = total_file_size.saturating_sub(estimated_overhead);

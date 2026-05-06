@@ -13,20 +13,25 @@ use tracing::{info, warn};
 
 pub const LONG_VIDEO_THRESHOLD: f32 = 300.0;
 
+#[derive(Debug, Clone, Default)]
+pub struct QualityValidationFlags {
+    pub metrics: MetricValidationFlags,
+    pub force_ms_ssim_long: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct MetricValidationFlags {
+    pub validate_ssim: bool,
+    pub validate_psnr: bool,
+    pub validate_ms_ssim: bool,
+}
+
 #[derive(Debug, Clone)]
-// Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(
-    clippy::struct_excessive_bools,
-    reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping."
-)]
 pub struct QualityThresholds {
     pub min_ssim: f64,
     pub min_psnr: f64,
     pub min_ms_ssim: f64,
-    pub validate_ssim: bool,
-    pub validate_psnr: bool,
-    pub validate_ms_ssim: bool,
-    pub force_ms_ssim_long: bool,
+    pub validation: QualityValidationFlags,
 }
 
 impl Default for QualityThresholds {
@@ -35,10 +40,14 @@ impl Default for QualityThresholds {
             min_ssim: 0.95,
             min_psnr: 35.0,
             min_ms_ssim: 0.90,
-            validate_ssim: true,
-            validate_psnr: false,
-            validate_ms_ssim: false,
-            force_ms_ssim_long: false,
+            validation: QualityValidationFlags {
+                metrics: MetricValidationFlags {
+                    validate_ssim: true,
+                    validate_psnr: false,
+                    validate_ms_ssim: false,
+                },
+                force_ms_ssim_long: false,
+            },
         }
     }
 }
@@ -83,7 +92,11 @@ pub fn get_video_duration(input: &Path) -> Option<f64> {
 
 fn count_video_frames(path: &Path) -> Option<u64> {
     if is_gif_magic(path) {
-        let frames = crate::image_formats::gif::get_frame_count(path) as u64;
+        let frames = crate::numeric_cast::usize_to_u64_strict(
+            crate::image_formats::gif::get_frame_count(path),
+            "gif_frame_count",
+        )
+        .unwrap_or(0);
         if frames > 0 {
             return Some(frames);
         }

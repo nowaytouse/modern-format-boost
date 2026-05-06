@@ -594,7 +594,13 @@ impl AnalysisCache {
             "DELETE FROM analysis_records WHERE created_at < $1",
             &[&threshold],
         )?)
-        .unwrap_or(0);
+        .unwrap_or_else(|e| {
+            tracing::warn!(
+                "Failed to parse cache pruning result: {:?}, assuming 0 records removed",
+                e
+            );
+            0
+        });
 
         if removed > 0 {
             info!("🧹 [Cache] Pruned {} old records", removed);

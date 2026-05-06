@@ -307,12 +307,12 @@ impl SourceCodec {
             return None;
         }
 
-        let header_slice = match header.get(..n) {
-            Some(s) => s,
-            None => {
-                warn!("☢️ [ANOMALY] Failed to slice header for identification (n={})", n);
-                return None;
-            }
+        let Some(header_slice) = header.get(..n) else {
+            warn!(
+                "☢️ [ANOMALY] Failed to slice header for identification (n={})",
+                n
+            );
+            return None;
         };
 
         let mut codec = Self::identify_by_header(header_slice);
@@ -334,12 +334,14 @@ impl SourceCodec {
             if remaining > 0 {
                 let mut extra = vec![0u8; remaining];
                 if let Ok(read_n) = file.read(&mut extra) {
-                    let extra_slice = match extra.get(..read_n) {
-                        Some(s) => s,
-                        None => {
-                            warn!("☢️ [ANOMALY] Failed to slice extra buffer for WebP scan (read_n={})", read_n);
-                            &[]
-                        }
+                    let extra_slice = if let Some(s) = extra.get(..read_n) {
+                        s
+                    } else {
+                        warn!(
+                            "☢️ [ANOMALY] Failed to slice extra buffer for WebP scan (read_n={})",
+                            read_n
+                        );
+                        &[]
                     };
                     buf.extend_from_slice(extra_slice);
                 }
@@ -359,38 +361,41 @@ impl SourceCodec {
                 if file.read_exact(&mut chunk_header).is_err() {
                     break;
                 }
-                let b1 = match chunk_header.first() {
-                    Some(b) => *b,
-                    None => {
-                        warn!("☢️ [CORRUPTION] APNG chunk header missing byte 0 at position {:?}", file.stream_position());
-                        break;
-                    }
+                let b1 = if let Some(b) = chunk_header.first() {
+                    *b
+                } else {
+                    warn!(
+                        "☢️ [CORRUPTION] APNG chunk header missing byte 0 at position {:?}",
+                        file.stream_position()
+                    );
+                    break;
                 };
-                let b2 = match chunk_header.get(1) {
-                    Some(b) => *b,
-                    None => {
-                        warn!("☢️ [CORRUPTION] APNG chunk header missing byte 1");
-                        break;
-                    }
+                let b2 = if let Some(b) = chunk_header.get(1) {
+                    *b
+                } else {
+                    warn!("☢️ [CORRUPTION] APNG chunk header missing byte 1");
+                    break;
                 };
-                let b3 = match chunk_header.get(2) {
-                    Some(b) => *b,
-                    None => {
-                        warn!("☢️ [CORRUPTION] APNG chunk header missing byte 2");
-                        break;
-                    }
+                let b3 = if let Some(b) = chunk_header.get(2) {
+                    *b
+                } else {
+                    warn!("☢️ [CORRUPTION] APNG chunk header missing byte 2");
+                    break;
                 };
-                let b4 = match chunk_header.get(3) {
-                    Some(b) => *b,
-                    None => {
-                        warn!("☢️ [CORRUPTION] APNG chunk header missing byte 3");
-                        break;
-                    }
+                let b4 = if let Some(b) = chunk_header.get(3) {
+                    *b
+                } else {
+                    warn!("☢️ [CORRUPTION] APNG chunk header missing byte 3");
+                    break;
                 };
                 let length = u32::from_be_bytes([b1, b2, b3, b4]);
-                let chunk_type = chunk_header
-                    .get(4..8)
-                    .expect("Required byte slice missing (out of bounds)");
+                let Some(chunk_type) = chunk_header.get(4..8) else {
+                    warn!(
+                        "☢️ [ANOMALY] Required APNG chunk type missing at position {:?}",
+                        file.stream_position()
+                    );
+                    break;
+                };
 
                 if chunk_type == b"acTL" {
                     codec = Some(Self::Apng);
@@ -455,24 +460,22 @@ impl SourceCodec {
 
         // 2. RIFF Containers (WebP, AVI)
         if header.starts_with(b"RIFF") && header.len() >= 12 {
-            let brand = match header.get(8..12) {
-                Some(b) => b,
-                None => {
-                    warn!("☢️ [ANOMALY] RIFF container missing brand field");
-                    return None;
-                }
+            let Some(brand) = header.get(8..12) else {
+                warn!("☢️ [ANOMALY] RIFF container missing brand field");
+                return None;
             };
             if brand == b"WEBP" {
                 // Check for VP8X extended header which contains the animation flag
                 if header.len() >= 21 && header.get(12..16) == Some(b"VP8X") {
                     // The animation flag is the 2nd bit of the flags byte at offset 20
-                    let flags = match header.get(20) {
-                        Some(b) => *b,
-                        None => {
+                    let flags = header.get(20).map_or_else(
+                        || {
+                            // Keep map_or_else here for clarity on flag retrieval
                             warn!("☢️ [ANOMALY] WebP VP8X header missing flags byte");
                             0
-                        }
-                    };
+                        },
+                        |b| *b,
+                    );
                     if (flags & 0x02) != 0 {
                         return Some(Self::WebpAnimated);
                     }
@@ -487,15 +490,24 @@ impl SourceCodec {
         // 3. ISO Base Media File Format (MP4, MOV, HEIC, AVIF)
         // [Any 4 bytes] + "ftyp"
         if header.len() >= 12 && header.get(4..8) == Some(b"ftyp") {
-            let brand = header
-                .get(8..12)
-                .expect("Required byte slice missing (out of bounds)");
+            let Some(brand) = header.get(8..12) else {
+                warn!("☢️ [ANOMALY] Required brand field missing in ISO Base Media header. Information invalidated.");
+                return None;
+            };
             match brand {
                 b"heic" | b"heix" | b"heim" | b"heis" | b"mif1" | b"msf1" => {
                     return Some(Self::Heic)
                 }
                 b"avif" | b"avis" => return Some(Self::Avif),
-                _ => return Some(Self::H264), // Assuming H264 (MP4/QT/etc.) - Differentiate via ffprobe later
+                b"isom" | b"mp41" | b"mp42" | b"piso" | b"mp4v" | b"3gp4" | b"3gp5" | b"3g2a" => {
+                    return Some(Self::H264)
+                }
+                _ => {
+                    // Refusing to assume H264 for unknown MP4/MOV brands.
+                    // Information invalidated to prevent false quality matching.
+                    warn!("☢️ [ANOMALY] Unknown ISO Base Media brand '{}'. Refusing to forge codec information.", String::from_utf8_lossy(brand));
+                    return None;
+                }
             }
         }
 
@@ -506,7 +518,10 @@ impl SourceCodec {
 
         // 5. MPEG Transport/Program Stream
         if header.starts_with(&[0x47]) {
-            return Some(Self::Mpeg2); // TS sync byte
+            // Make sure this is not a truncated GIF (which starts with 'G' = 0x47)
+            if header.len() >= 3 && &header[0..3] != b"GIF" {
+                return Some(Self::Mpeg2); // TS sync byte
+            }
         }
         if header.starts_with(&[0x00, 0x00, 0x01, 0xBA]) {
             return Some(Self::Mpeg2); // PS start code
@@ -1014,20 +1029,32 @@ pub fn calculate_effective_bpp_with_options(
     let effective_bpp = {
         #[cfg(feature = "high-precision")]
         {
-            use crate::numeric_cast::f64_to_rational_loud;
-            let mut res = f64_to_rational_loud(raw_bpp, 0, "raw_bpp");
-            res *= f64_to_rational_loud(gop_factor, 1, "gop_factor");
-            res *= f64_to_rational_loud(chroma_factor, 1, "chroma_factor");
-            res *= f64_to_rational_loud(hdr_factor, 1, "hdr_factor");
-            res *= f64_to_rational_loud(aspect_factor, 1, "aspect_factor");
-            res *= f64_to_rational_loud(complexity_factor, 1, "complexity_factor");
-            res *= f64_to_rational_loud(grain_factor, 1, "grain_factor");
-            res *= f64_to_rational_loud(mode_adjustment, 1, "mode_adjustment");
-            res *= f64_to_rational_loud(resolution_factor, 1, "resolution_factor");
-            res *= f64_to_rational_loud(alpha_factor, 1, "alpha_factor");
-            res /= f64_to_rational_loud(codec_factor, 1, "codec_factor");
-            res /= f64_to_rational_loud(color_depth_factor, 1, "color_depth_factor");
-            res /= f64_to_rational_loud(target_adjustment, 1, "target_adjustment");
+            use crate::numeric_cast::f64_to_rational_strict;
+            let mut res = f64_to_rational_strict(raw_bpp, "raw_bpp").ok_or("Invalid raw_bpp")?;
+            res *= f64_to_rational_strict(gop_factor, "gop_factor")
+                .unwrap_or_else(|| Rational::from(1));
+            res *= f64_to_rational_strict(chroma_factor, "chroma_factor")
+                .unwrap_or_else(|| Rational::from(1));
+            res *= f64_to_rational_strict(hdr_factor, "hdr_factor")
+                .unwrap_or_else(|| Rational::from(1));
+            res *= f64_to_rational_strict(aspect_factor, "aspect_factor")
+                .unwrap_or_else(|| Rational::from(1));
+            res *= f64_to_rational_strict(complexity_factor, "complexity_factor")
+                .unwrap_or_else(|| Rational::from(1));
+            res *= f64_to_rational_strict(grain_factor, "grain_factor")
+                .unwrap_or_else(|| Rational::from(1));
+            res *= f64_to_rational_strict(mode_adjustment, "mode_adjustment")
+                .unwrap_or_else(|| Rational::from(1));
+            res *= f64_to_rational_strict(resolution_factor, "resolution_factor")
+                .unwrap_or_else(|| Rational::from(1));
+            res *= f64_to_rational_strict(alpha_factor, "alpha_factor")
+                .unwrap_or_else(|| Rational::from(1));
+            res /= f64_to_rational_strict(codec_factor, "codec_factor")
+                .unwrap_or_else(|| Rational::from(1));
+            res /= f64_to_rational_strict(color_depth_factor, "color_depth_factor")
+                .unwrap_or_else(|| Rational::from(1));
+            res /= f64_to_rational_strict(target_adjustment, "target_adjustment")
+                .unwrap_or_else(|| Rational::from(1));
             res.to_f64()
         }
         #[cfg(not(feature = "high-precision"))]
@@ -1092,7 +1119,8 @@ fn calculate_raw_bpp(analysis: &QualityAnalysis, pixels: u64) -> Result<f64, Str
                     #[cfg(feature = "high-precision")]
                     {
                         let bits_per_frame = Rational::from(video_bitrate)
-                            / crate::numeric_cast::f64_to_rational_loud(fps, 1, "fps");
+                            / crate::numeric_cast::f64_to_rational_strict(fps, "fps")
+                                .ok_or_else(|| "Invalid FPS for rational conversion".to_string())?;
                         return Ok((bits_per_frame / Rational::from(pixels)).to_f64());
                     }
                     #[cfg(not(feature = "high-precision"))]
@@ -1114,7 +1142,11 @@ fn calculate_raw_bpp(analysis: &QualityAnalysis, pixels: u64) -> Result<f64, Str
                 if fps <= 0.0_f64 {
                     return Err("❌ Cannot calculate bpp: FPS is 0 or negative".to_string());
                 }
-                let total_frames = crate::numeric_cast::f64_to_u64_sat(duration * fps);
+                let total_frames =
+                    crate::numeric_cast::f64_to_u64_strict(duration * fps, "total_frames")
+                        .ok_or_else(|| {
+                            "❌ Cannot calculate bpp: total_frames is invalid".to_string()
+                        })?;
                 if total_frames == 0 {
                     return Err("❌ Cannot calculate bpp: total_frames is 0".to_string());
                 }
@@ -1631,11 +1663,14 @@ fn log_high_priority_factors(analysis: &QualityAnalysis, d: &AnalysisDetails) {
     eprintln!("         GOP factor: {:.2}", d.gop_factor);
     if let Some(gop) = analysis.gop_size {
         eprintln!(
-            "            └─ GOP size: {}, B-frames: {}",
+            "            └─ GOP size: {}, B-frames: {:?}",
             gop,
             analysis
                 .b_frame_count
-                .expect("Failed to parse integer or missing required value")
+                .or_else(|| {
+                    warn!("☢️ [ANOMALY] b_frame_count missing during analysis reporting. Information invalidated.");
+                    None
+                })
         );
     }
     eprintln!("         Chroma factor: {:.2}", d.chroma_factor);
@@ -1743,9 +1778,8 @@ pub fn from_video_detection(
     let pixels_per_second = pixels_per_frame * fps;
 
     let bpp = if pixels_per_second > 0.0_f64 && bitrate > 0 {
-        (f64::from(
-            u32::try_from(bitrate).expect("Value overflowed or is missing, cannot process ratio"),
-        )) / pixels_per_second
+        f64::from(crate::numeric_cast::u64_to_u32_strict(bitrate, "bitrate").unwrap_or(0))
+            / pixels_per_second
     } else {
         if pixels_per_second <= 0.0_f64 {
             eprintln!("   ⚠️  Warning: pixels_per_second is {pixels_per_second} for {file_path}");

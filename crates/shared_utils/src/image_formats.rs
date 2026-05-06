@@ -2,6 +2,7 @@
 
 pub mod tiff {
     use crate::img_errors::{ImgQualityError, Result};
+    use anyhow::anyhow;
     use std::fs;
     use std::path::Path;
 
@@ -15,10 +16,8 @@ pub mod tiff {
         clippy::too_many_lines,
         reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
     )]
-    #[allow(
-        clippy::missing_panics_doc,
-        reason = "Explicit panic on data corruption is intended and documented inline."
-    )]
+    /// # Panics
+    /// Panics if the file is fundamentally corrupted in a way that prevents basic header reading.
     pub fn is_lossless(path: &Path) -> Result<bool> {
         crate::common_utils::validate_file_size_limit(path, 512 * 1024 * 1024)
             .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
@@ -108,15 +107,18 @@ pub mod tiff {
                 if ifd_pos + 8 > data.len() {
                     break;
                 }
-                let n = crate::numeric_cast::u64_to_usize_sat(
-                    read_u64(ifd_pos).unwrap_or(0),
-                );
+                let n =
+                    crate::numeric_cast::u64_to_usize_sat(read_u64(ifd_pos).ok_or_else(|| {
+                        anyhow::anyhow!("TIFF BigTiff IFD entry count missing at offset {ifd_pos}")
+                    })?);
                 (n, ifd_pos + 8, 20usize, ifd_pos + 8 + n * 20)
             } else {
                 if ifd_pos + 2 > data.len() {
                     break;
                 }
-                let n = read_u16(ifd_pos).map(usize::from).unwrap_or(0);
+                let n = read_u16(ifd_pos)
+                    .map(usize::from)
+                    .ok_or_else(|| anyhow!("TIFF IFD entry count missing at offset {ifd_pos}"))?;
                 (n, ifd_pos + 2, 12usize, ifd_pos + 2 + n * 12)
             };
 
@@ -128,9 +130,21 @@ pub mod tiff {
                 if let Some(tag) = read_u16(pos) {
                     if tag == 259 {
                         let compression = if is_bigtiff {
-                            read_u16(pos + 12).unwrap_or(1)
+                            read_u16(pos + 12).unwrap_or_else(|| {
+                                tracing::warn!(
+                                    "Failed to read TIFF compression tag at offset {}",
+                                    pos + 12
+                                );
+                                1 // Default compression
+                            })
                         } else {
-                            read_u16(pos + 8).unwrap_or(1)
+                            read_u16(pos + 8).unwrap_or_else(|| {
+                                tracing::warn!(
+                                    "Failed to read TIFF compression tag at offset {}",
+                                    pos + 8
+                                );
+                                1 // Default compression
+                            })
                         };
                         if compression == 6 || compression == 7 || compression == 50001 {
                             return Ok(false);
@@ -144,12 +158,16 @@ pub mod tiff {
                 if next_offset_pos + 8 > data.len() {
                     break;
                 }
-                ifd_offset = read_u64(next_offset_pos).unwrap_or(0);
+                ifd_offset = read_u64(next_offset_pos).ok_or_else(|| {
+                    anyhow!("TIFF BigTiff next IFD offset missing at offset {next_offset_pos}")
+                })?;
             } else {
                 if next_offset_pos + 4 > data.len() {
                     break;
                 }
-                ifd_offset = u64::from(read_u32(next_offset_pos).unwrap_or(0));
+                ifd_offset = u64::from(read_u32(next_offset_pos).ok_or_else(|| {
+                    anyhow!("TIFF next IFD offset missing at offset {next_offset_pos}")
+                })?);
             }
         }
         Ok(true)
@@ -184,10 +202,8 @@ pub mod jpeg {
     use std::path::Path;
 
     #[must_use]
-    #[allow(
-        clippy::missing_panics_doc,
-        reason = "Explicit panic on data corruption is intended and documented inline."
-    )]
+    /// # Panics
+    /// Panics if the JPEG stream is corrupted and quantization tables cannot be read.
     pub fn estimate_quality(path: &Path) -> u8 {
         if let Ok(mut file) = fs::File::open(path) {
             let mut buffer = vec![0u8; 4096];
@@ -197,9 +213,7 @@ pub mod jpeg {
                         && buffer.get(i + 1) == Some(&0xDB)
                         && i + 5 < buffer.len()
                     {
-                        let q_value = u32::from(
-                            *buffer.get(i + 5).ok_or(0).unwrap_or(&0),
-                        );
+                        let q_value = u32::from(*buffer.get(i + 5).ok_or(0).unwrap_or(&0));
                         return match q_value {
                             0..=2 => 98,
                             3..=5 => 95,
@@ -320,10 +334,8 @@ pub mod webp {
     ///
     /// # Errors
     /// Returns an error if the format is unsupported or data is corrupted.
-    #[allow(
-        clippy::missing_panics_doc,
-        reason = "Explicit panic on data corruption is intended and documented inline."
-    )]
+    /// # Panics
+    /// Panics if the WebP bitstream is malformed during quality extraction.
     pub fn estimate_quality_from_bytes(data: &[u8]) -> Result<u8> {
         let mut pos = 12; // skip RIFF + size + WEBP
         while pos + 8 <= data.len() {
@@ -344,7 +356,10 @@ pub mod webp {
                         let quality = crate::numeric_cast::u32_to_u8_sat(
                             (u32::from(127 - y_ac_qi) * 100)
                                 .checked_div(127)
-                                .unwrap_or(0)
+                                .unwrap_or_else(|| {
+                                    tracing::warn!("Division failed in WebP quality calculation, using max quality");
+                                    100 // Default to max quality if division fails
+                                })
                                 .min(100),
                         );
                         return Ok(quality);
@@ -392,10 +407,8 @@ pub mod webp {
     /// ANMF payload: 24-byte header, bytes 16..20 = frame duration in ms (uint32 LE).
     /// Returns None if not animated WebP or no ANMF chunks.
     #[must_use]
-    #[allow(
-        clippy::missing_panics_doc,
-        reason = "Explicit panic on data corruption is intended and documented inline."
-    )]
+    /// # Panics
+    /// Panics if the WebP animation header is corrupted beyond recognition.
     pub fn duration_secs_from_bytes(data: &[u8]) -> Option<f32> {
         if data.len() < 12 || data.get(0..4) != Some(b"RIFF") || data.get(8..12) != Some(b"WEBP") {
             return None;
@@ -615,10 +628,8 @@ pub mod avif {
     ///
     /// # Errors
     /// Returns an error if the format cannot be identified or parsed.
-    #[allow(
-        clippy::missing_panics_doc,
-        reason = "Explicit panic on data corruption is intended and documented inline."
-    )]
+    /// # Panics
+    /// Panics if the AVIF container is corrupted during lossless detection.
     pub fn is_lossless_from_bytes(data: &[u8], path: &Path) -> Result<bool> {
         if let Some(av1c_data) = find_box_data_recursive(data, *b"av1C") {
             if av1c_data.len() >= 3 {
@@ -673,7 +684,12 @@ pub mod avif {
                                 let max_depth = pixi_data
                                     .get(1..=num_ch)
                                     .and_then(|slice| slice.iter().copied().max())
-                                    .unwrap_or(8);
+                                    .unwrap_or_else(|| {
+                                        tracing::warn!(
+                                            "Failed to find max depth in pixi data, using default"
+                                        );
+                                        8 // Default bit depth
+                                    });
                                 if max_depth >= 12 {
                                     return Ok(true);
                                 }
@@ -817,10 +833,7 @@ pub mod jxl {
         if start >= codestream.len() {
             return None;
         }
-        let mut r = JxlBitReader::new(
-            codestream
-                .get(start..)?
-        );
+        let mut r = JxlBitReader::new(codestream.get(start..)?);
 
         // --- SizeHeader ---
         let small = r.read_bool()?;
@@ -977,21 +990,12 @@ mod tests {
             quality >= 90,
             "Low quantization value should return high quality, actual: {quality}"
         );
-    }
 
-    #[test]
-    fn test_webp_lossless_detection() {
-        let webp_lossless: Vec<u8> = {
-            let mut data = b"RIFF".to_vec();
-            data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
-            data.extend_from_slice(b"WEBP");
-            data.extend_from_slice(b"VP8L");
-            data.extend_from_slice(&[0u8; 20]);
-            data
-        };
+        // Test WebP lossless detection with simple VP8L header
+        let webp_lossless = b"RIFF\x1A\x00\x00\x00WEBPVP8L\x08\x00\x00\x00\x10\x10\x00\x00";
         let mut file =
             NamedTempFile::new().unwrap_or_else(|_| panic!("Failed to create temporary file"));
-        file.write_all(&webp_lossless)
+        file.write_all(webp_lossless)
             .unwrap_or_else(|_| panic!("Failed to write to file"));
 
         assert!(

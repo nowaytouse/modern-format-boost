@@ -98,11 +98,13 @@ fn calculate_blake3(path: &Path) -> Result<blake3::Hash> {
         if n == 0 {
             break;
         }
-        hasher.update(
-            buffer
-                .get(..n)
-                .expect("Required byte slice missing (out of bounds)"),
-        );
+        hasher.update(buffer.get(..n).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Required byte slice missing (out of bounds) at index {} with length {}",
+                n,
+                buffer.len()
+            )
+        })?);
     }
     Ok(hasher.finalize())
 }

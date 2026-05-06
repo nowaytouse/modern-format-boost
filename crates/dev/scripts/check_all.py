@@ -305,15 +305,15 @@ Patterns to flag:
 Report format — one line per finding:
   <file>:<line>  [<category-letter>]  <what> → <concrete fix>
 
-After findings (or the single line "No AI smell detected"), update CHANGELOG.md:
+After findings (or the single line "No AI smell detected"), update docs/CHANGELOG.md:
   - Prepend a new H2 section: `## [{date}] Code Quality`
   - Under `### Changed`, list each finding as a bullet (file:line, category, one-sentence description)
   - Do NOT modify any existing content below the new entry
 
 Constraints:
   - No preamble, no closing remarks
-  - Do not rewrite files other than CHANGELOG.md
-  - If CHANGELOG.md does not exist, create it with only the new entry
+  - Do not rewrite files other than docs/CHANGELOG.md
+  - If docs/CHANGELOG.md does not exist, create it with only the new entry
 """.format(date=time.strftime("%Y-%m-%d"))
 
 
@@ -356,11 +356,11 @@ def check_changelog_sync(tracker: Tracker) -> bool:
     tracker.announce_step("required", "CHANGELOG version synchronization")
     root = get_repo_root()
     cargo_path = root / "Cargo.toml"
-    changelog_path = root / "CHANGELOG.md"
+    changelog_path = root / "docs" / "CHANGELOG.md"
 
     if not changelog_path.exists():
         tracker.failed += 1
-        cprint("  [red]FAIL: CHANGELOG.md missing[/red]")
+        cprint("  [red]FAIL: docs/CHANGELOG.md missing[/red]")
         return False
 
     try:
@@ -381,7 +381,7 @@ def check_changelog_sync(tracker: Tracker) -> bool:
         if not re.search(pattern, changelog_content):
             tracker.failed += 1
             cprint(
-                f"  [red]FAIL: Version '{version}' not found as a header in CHANGELOG.md[/red]"
+                f"  [red]FAIL: Version '{version}' not found as a header in docs/CHANGELOG.md[/red]"
             )
             return False
 

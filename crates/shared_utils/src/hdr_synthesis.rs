@@ -521,10 +521,10 @@ fn decode_heif_handle(handle: &ImageHandle, color_space: ColorSpace) -> Result<D
             } else {
                 let mut buffer = ImageBuffer::new(width, height);
                 for (x, y, pixel) in buffer.enumerate_pixels_mut() {
-                    let y_usize = usize::try_from(y)
-                        .map_err(|_| anyhow!("Y coordinate overflow: {y}"))?;
-                    let x_usize = usize::try_from(x)
-                        .map_err(|_| anyhow!("X coordinate overflow: {x}"))?;
+                    let y_usize =
+                        usize::try_from(y).map_err(|_| anyhow!("Y coordinate overflow: {y}"))?;
+                    let x_usize =
+                        usize::try_from(x).map_err(|_| anyhow!("X coordinate overflow: {x}"))?;
                     let offset = y_usize
                         .saturating_mul(r_plane.stride)
                         .saturating_add(x_usize.saturating_mul(3));
@@ -561,10 +561,10 @@ fn decode_heif_handle(handle: &ImageHandle, color_space: ColorSpace) -> Result<D
             } else {
                 let mut buffer = ImageBuffer::new(width, height);
                 for (x, y, pixel) in buffer.enumerate_pixels_mut() {
-                    let y_usize = usize::try_from(y)
-                        .map_err(|_| anyhow!("Y coordinate overflow: {y}"))?;
-                    let x_usize = usize::try_from(x)
-                        .map_err(|_| anyhow!("X coordinate overflow: {x}"))?;
+                    let y_usize =
+                        usize::try_from(y).map_err(|_| anyhow!("Y coordinate overflow: {y}"))?;
+                    let x_usize =
+                        usize::try_from(x).map_err(|_| anyhow!("X coordinate overflow: {x}"))?;
                     let offset = y_usize
                         .saturating_mul(y_plane.stride)
                         .saturating_add(x_usize);
@@ -597,12 +597,11 @@ fn is_display_p3(data: &[u8]) -> bool {
     // We search the whole buffer for the signature of Display P3 ICC profile
     let search_limit = 1024 * 1024; // limit search to first 1MB for performance
     let end = data.len().min(search_limit);
-    let slice = match data.get(..end) {
-        Some(s) => s,
-        None => {
-            warn!("☢️ [ANOMALY] data.get(..{end}) failed for ICC search; using empty slice");
-            &[]
-        }
+    let slice = if let Some(s) = data.get(..end) {
+        s
+    } else {
+        warn!("☢️ [ANOMALY] data.get(..{end}) failed for ICC search; using empty slice");
+        &[]
     };
 
     // Check for common Display P3 signatures in ICC profiles
@@ -1208,6 +1207,9 @@ mod tests {
 
     #[test]
     fn test_resolve_intensity_target_derived_invalid() {
+        // Clear environment variable to ensure clean test
+        std::env::remove_var("MFB_JXL_INTENSITY_TARGET");
+
         // Negative derived value should be rejected
         let got = resolve_intensity_target(-1.0);
         assert_eq!(got, None);

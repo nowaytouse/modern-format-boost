@@ -193,7 +193,7 @@ pub struct VideoQualityInput<'a> {
 impl CompressionLevel {
     #[must_use]
     pub fn from_bpp(bpp: f64, codec_type: VideoCodecType) -> Self {
-        use crate::numeric_cast::f64_to_rational_loud;
+        use crate::numeric_cast::f64_to_rational_strict;
         if bpp <= 0.0_f64 {
             return Self::LowQuality;
         }
@@ -211,8 +211,9 @@ impl CompressionLevel {
             _ => 1.0_f64,
         };
 
-        let bpp_r = f64_to_rational_loud(bpp, 0, "bpp");
-        let efficiency_r = f64_to_rational_loud(efficiency, 1, "efficiency");
+        let bpp_r = f64_to_rational_strict(bpp, "bpp").unwrap_or_else(|| Rational::from(0_i32));
+        let efficiency_r = f64_to_rational_strict(efficiency, "efficiency")
+            .unwrap_or_else(|| Rational::from(1_i32));
         let adjusted_bpp = (bpp_r / efficiency_r).to_f64();
 
         if adjusted_bpp > 1.0 {
@@ -265,8 +266,6 @@ pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualit
         return Err("❌ Invalid duration: must be > 0".to_string());
     }
 
-
-
     let source_codec = parse_source_codec(codec);
     let codec_type = VideoCodecType::from_source_codec(source_codec);
     let is_modern = source_codec.is_modern();
@@ -277,8 +276,9 @@ pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualit
     let bpp = {
         let pixels_per_second = Rational::from(width)
             * Rational::from(height)
-            * crate::numeric_cast::f64_to_rational_loud(fps, 1, "fps");
-        if pixels_per_second > Rational::from(0_i32) {
+            * crate::numeric_cast::f64_to_rational_strict(fps, "fps")
+                .unwrap_or_else(|| Rational::from(1_i32));
+        if pixels_per_second > 0_i32 {
             // effective_bitrate is u64; Rational::from requires i64 or smaller.
             // Saturate to i64::MAX for astronomically large bitrates (>9 Pbps).
             let bits_per_second = Rational::from(
@@ -411,7 +411,14 @@ fn extract_crf_from_params(params: &str) -> Option<u8> {
                 .unwrap_or(rest.len());
             let val_str = rest[..end].trim();
             if let Ok(val) = val_str.parse::<f64>() {
-                return Some(crate::numeric_cast::f64_to_u8_sat(val.round()));
+                return crate::numeric_cast::f64_to_u8_strict(val.round(), "crf_from_params")
+                    .map_or_else(
+                        || {
+                            tracing::warn!("CRF value {} out of valid range, using default", val);
+                            None
+                        },
+                        Some,
+                    );
             }
         }
     }
@@ -443,7 +450,9 @@ pub fn log_media_info_for_quality(analysis: &VideoQualityAnalysis, input_path: &
             analysis.height,
             analysis.fps,
             analysis.duration_secs,
-            analysis.frame_count.unwrap_or(0)
+            analysis
+                .frame_count
+                .map_or_else(|| "unknown".to_string(), |fc| fc.to_string())
         ),
     );
     write_to_log_at_level(
@@ -478,8 +487,17 @@ pub fn log_media_info_for_quality(analysis: &VideoQualityAnalysis, input_path: &
 
 #[must_use]
 pub fn to_quality_analysis(analysis: &VideoQualityAnalysis) -> QualityAnalysis {
-    let gop_fallback =
-        crate::numeric_cast::f64_to_u32_sat((analysis.fps * 2.5).round().clamp(12.0, 250.0));
+    let gop_fallback = crate::numeric_cast::f64_to_u32_strict(
+        (analysis.fps * 2.5).round().clamp(12.0, 250.0),
+        "gop_fallback",
+    )
+    .unwrap_or_else(|| {
+        tracing::warn!(
+            "Invalid FPS {} for GOP calculation, using default",
+            analysis.fps
+        );
+        30 // Default GOP size
+    });
     let color_fallback = if analysis.height <= 576 {
         "bt601"
     } else {
@@ -576,16 +594,19 @@ fn calculate_quality_score(
                 0
             });
             // t is clamped to 0..=5, always fits u8.
-            #[allow(clippy::cast_possible_truncation)]
-            { t.clamp(0, 5) as u8 }
+            u8::try_from(t.clamp(0, 5)).unwrap_or(0)
         }
         CompressionLevel::HighQuality => {
-            let t = crate::numeric_cast::f64_to_u32_sat(
+            let t = crate::numeric_cast::f64_to_u32_strict(
                 ((bpp - 0.3).clamp(0.0, 0.2) / 0.2 * 3.0).round(),
-            );
+                "bpp_tweak",
+            )
+            .unwrap_or_else(|| {
+                tracing::warn!("Invalid BPP value {} for tweak calculation", bpp);
+                1 // Default middle value
+            });
             // t is clamped to 0..=3, always fits u8.
-            #[allow(clippy::cast_possible_truncation)]
-            { t.clamp(0, 3) as u8 }
+            u8::try_from(t.clamp(0, 3)).unwrap_or(0)
         }
         _ => 0,
     };
@@ -605,8 +626,10 @@ fn estimate_crf_from_bpp(bpp: f64, codec_type: VideoCodecType) -> u8 {
         _ => 1.0_f64,
     };
 
-    let bpp_r = crate::numeric_cast::f64_to_rational_loud(bpp, 0, "bpp");
-    let efficiency_r = crate::numeric_cast::f64_to_rational_loud(efficiency, 1, "efficiency");
+    let bpp_r = crate::numeric_cast::f64_to_rational_strict(bpp, "bpp")
+        .unwrap_or_else(|| Rational::from(0_i32));
+    let efficiency_r = crate::numeric_cast::f64_to_rational_strict(efficiency, "efficiency")
+        .unwrap_or_else(|| Rational::from(1_i32));
     let adjusted_bpp = (bpp_r / efficiency_r).to_f64();
 
     for &(threshold, crf) in crate::constants::DENSITY_TO_CRF_LUT {
@@ -637,7 +660,7 @@ fn calculate_video_confidence(
         confidence += crate::constants::VIDEO_CONFIDENCE_DURATION_BONUS;
     }
 
-    if frame_count.unwrap_or(0) > crate::constants::VIDEO_CONFIDENCE_FRAMES_THRESHOLD {
+    if frame_count.is_some_and(|fc| fc > crate::constants::VIDEO_CONFIDENCE_FRAMES_THRESHOLD) {
         confidence += crate::constants::VIDEO_CONFIDENCE_FRAMES_BONUS;
     }
 
@@ -821,7 +844,7 @@ mod tests {
                 color_space: None,
                 file_size: 60_000_000,
                 frame_count: None,
-        })
+            })
             .unwrap_or_else(|e| panic!("{e}"));
             assert!(
                 result.should_skip,
@@ -1917,7 +1940,7 @@ mod tests {
                 color_space: None,
                 file_size: 60_000_000,
                 frame_count: None,
-        })
+            })
             .unwrap_or_else(|e| panic!("{e}"));
             assert_eq!(
                 result.codec_type,
@@ -2264,7 +2287,7 @@ mod tests {
                 color_space: None,
                 file_size: bitrate * 60 / 8,
                 frame_count: None,
-        })
+            })
             .unwrap_or_else(|e| panic!("{e}"));
 
             let expected = f64::from(
@@ -2309,13 +2332,17 @@ mod tests {
                 color_space: None,
                 file_size: 60_000_000,
                 frame_count: Some(expected_frames),
-        })
+            })
             .unwrap_or_else(|e| panic!("{e}"));
 
             assert_eq!(
-                result.frame_count, Some(expected_frames),
+                result.frame_count,
+                Some(expected_frames),
                 "STRICT: Frame count for {}fps * {}s: expected {:?}, got {:?}",
-                fps, duration, expected_frames, result.frame_count
+                fps,
+                duration,
+                expected_frames,
+                result.frame_count
             );
         }
     }
@@ -2349,7 +2376,7 @@ mod tests {
                 color_space: None,
                 file_size: 60_000_000,
                 frame_count: None,
-        })
+            })
             .unwrap_or_else(|e| panic!("{e}"));
 
             assert_eq!(
@@ -2386,7 +2413,7 @@ mod tests {
                 color_space: None,
                 file_size: 60_000_000,
                 frame_count: None,
-        })
+            })
             .unwrap_or_else(|e| panic!("{e}"));
 
             assert!(

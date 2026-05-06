@@ -28,6 +28,7 @@ use std::any::Any;
 use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
+use tracing::{info, warn};
 
 use crate::explore_strategy::CrfCache;
 
@@ -523,7 +524,7 @@ impl GpuAccel {
         if !crate::progress_mode::is_verbose_mode() {
             if self.enabled {
                 // Log to file only (stderr layer filters out target "gpu_detection" for less terminal noise).
-                tracing::info!(target: "gpu_detection", "  GPU: {}", self.gpu_type);
+                info!(target: "gpu_detection", "  GPU: {}", self.gpu_type);
             } else {
                 // Surface why detection failed so the user has context without needing --verbose.
                 let reason = diagnostics
@@ -2519,6 +2520,8 @@ fn gpu_coarse_search_with_log_impl(
     let use_initial =
         config.initial_crf >= config.min_crf + 5.0 && config.initial_crf <= config.max_crf - 5.0;
 
+    let mid_crf = f32::midpoint(config.min_crf, config.max_crf);
+
     let probe_crfs = if use_initial {
         log_msg!(
             "   🎯 [GPU] Using initial_crf {:.0} as search anchor",
@@ -2526,7 +2529,6 @@ fn gpu_coarse_search_with_log_impl(
         );
         vec![config.initial_crf, config.max_crf, config.min_crf]
     } else {
-        let mid_crf = f32::midpoint(config.min_crf, config.max_crf);
         log_msg!(
             "   ⚠️ [GPU] initial_crf {:.0} out of range, using mid_crf {:.0}",
             config.initial_crf,
@@ -2537,10 +2539,9 @@ fn gpu_coarse_search_with_log_impl(
 
     let probe_results = if skip_parallel {
         log_msg!("   ⚡ Skip parallel probe (large file mode)");
-        let test_crf = probe_crfs
-            .first()
-            .copied()
-            .expect("Required floating point value missing");
+        let test_crf =
+            crate::numeric_cast::option_f32_strict(probe_crfs.first().copied(), "probe_crf_anchor")
+                .unwrap_or(mid_crf);
         log_msg!("   🔄 [GPU] Testing CRF {:.0} (anchor point)...", test_crf);
         let single_result = encode_gpu(test_crf);
         if let Ok(size) = &single_result {
@@ -2554,18 +2555,12 @@ fn gpu_coarse_search_with_log_impl(
     } else {
         log_msg!(
             "   🚀 [GPU] Parallel probe: CRF {:.0}, {:.0}, {:.0}",
-            probe_crfs
-                .first()
-                .copied()
-                .expect("Required floating point value missing"),
-            probe_crfs
-                .get(1)
-                .copied()
-                .expect("Required floating point value missing"),
-            probe_crfs
-                .get(2)
-                .copied()
-                .expect("Required floating point value missing")
+            crate::numeric_cast::option_f32_strict(probe_crfs.first().copied(), "parallel_crf_1")
+                .unwrap_or(mid_crf),
+            crate::numeric_cast::option_f32_strict(probe_crfs.get(1).copied(), "parallel_crf_2")
+                .unwrap_or(config.max_crf),
+            crate::numeric_cast::option_f32_strict(probe_crfs.get(2).copied(), "parallel_crf_3")
+                .unwrap_or(config.min_crf)
         );
         encode_parallel(&probe_crfs)
     };
@@ -2582,35 +2577,31 @@ fn gpu_coarse_search_with_log_impl(
         }
     }
 
-    let initial_result = probe_results.iter().find(|(c, _)| {
-        (*c - probe_crfs
-            .first()
-            .copied()
-            .expect("Required floating point value missing"))
-        .abs()
-            < 0.1
-    });
+    let initial_crf_target =
+        crate::numeric_cast::option_f32_strict(probe_crfs.first().copied(), "initial_crf_target")
+            .unwrap_or(mid_crf);
+    let initial_result = probe_results
+        .iter()
+        .find(|(c, _)| (*c - initial_crf_target).abs() < 0.1);
+
+    let max_crf_target =
+        crate::numeric_cast::option_f32_strict(probe_crfs.get(1).copied(), "max_crf_target")
+            .unwrap_or(config.max_crf);
     let max_result = if probe_crfs.len() > 1 {
-        probe_results.iter().find(|(c, _)| {
-            (*c - probe_crfs
-                .get(1)
-                .copied()
-                .expect("Required floating point value missing"))
-            .abs()
-                < 0.1
-        })
+        probe_results
+            .iter()
+            .find(|(c, _)| (*c - max_crf_target).abs() < 0.1)
     } else {
         None
     };
+
+    let min_crf_target =
+        crate::numeric_cast::option_f32_strict(probe_crfs.get(2).copied(), "min_crf_target")
+            .unwrap_or(config.min_crf);
     let min_result = if probe_crfs.len() > 2 {
-        probe_results.iter().find(|(c, _)| {
-            (*c - probe_crfs
-                .get(2)
-                .copied()
-                .expect("Required floating point value missing"))
-            .abs()
-                < 0.1
-        })
+        probe_results
+            .iter()
+            .find(|(c, _)| (*c - min_crf_target).abs() < 0.1)
     } else {
         None
     };
@@ -2691,13 +2682,14 @@ fn gpu_coarse_search_with_log_impl(
 
             let mut stagnation_count = 0u32;
             let mut last_size =
-                best_size.expect("Failed to parse integer or missing required value");
+                crate::numeric_cast::option_u64_strict(best_size, "stage1a_best_size").unwrap_or(0);
             let mut current_step = initial_step;
             let mut wall_hits: u32 = 0;
             let mut test_crf = boundary_low + current_step;
             let mut last_compressible_crf = boundary_low;
             let mut last_compressible_size =
-                best_size.expect("Failed to parse integer or missing required value");
+                crate::numeric_cast::option_u64_strict(best_size, "stage1a_last_compressible_size")
+                    .unwrap_or(0);
 
             while test_crf <= config.max_crf && iterations < max_iterations_limit {
                 let cached = size_cache.get(test_crf).copied();
@@ -2917,10 +2909,13 @@ fn gpu_coarse_search_with_log_impl(
         while lo < hi && iterations < max_iterations_limit && binary_iter < max_binary_iter {
             binary_iter += 1_i32;
             let mid = lo + (hi - lo) / 2_i32;
-            let test_crf = f32::from(
-                u16::try_from(mid.max(0_i32))
-                    .expect("Failed to parse integer or missing required value"),
-            );
+            let test_crf = f32::from(u16::try_from(mid.max(0_i32)).unwrap_or_else(|_| {
+                warn!(
+                    "☢️ [ANOMALY] Binary search mid {} overflows u16; using hi {}",
+                    mid, hi
+                );
+                u16::try_from(hi.max(0_i32)).unwrap_or(u16::MAX)
+            }));
 
             if let Some(&cached_size) = size_cache.get(test_crf) {
                 if cached_size < sample_input_size {

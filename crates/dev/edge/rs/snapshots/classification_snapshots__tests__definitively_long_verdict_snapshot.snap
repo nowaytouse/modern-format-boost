@@ -1,5 +1,0 @@
----
-source: crates/dev/edge/rs/classification_snapshots.rs
-expression: verdict.reason()
----
-"Layer 0-EX (Hard Veto): extreme-long duration 18.50s ≥ 15.0s — definitively video regardless of all other signals"

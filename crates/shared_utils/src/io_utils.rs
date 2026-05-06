@@ -171,6 +171,119 @@ pub fn tail_error_lines(stderr: &str, n: usize) -> String {
     lines[start..].join(" | ")
 }
 
+/// Systematic safe byte access for media metadata parsing.
+///
+/// Follows the "Quality Manifesto": Loud (warns), Honest (returns None/Err on failure),
+/// and Non-blocking (prevents panics).
+pub trait ByteSliceExt {
+    /// Safely read a u32 (Little Endian) with a loud warning on failure.
+    fn get_u32_le_strict(&self, pos: usize, name: &str) -> Option<u32>;
+    /// Safely read a u32 (Big Endian) with a loud warning on failure.
+    fn get_u32_be_strict(&self, pos: usize, name: &str) -> Option<u32>;
+    /// Safely read a u64 (Big Endian) with a loud warning on failure.
+    fn get_u64_be_strict(&self, pos: usize, name: &str) -> Option<u64>;
+    /// Safely read a u16 (Little Endian) with a loud warning on failure.
+    fn get_u16_le_strict(&self, pos: usize, name: &str) -> Option<u16>;
+    /// Safely read a u16 (Big Endian) with a loud warning on failure.
+    fn get_u16_be_strict(&self, pos: usize, name: &str) -> Option<u16>;
+    /// Safely read a single byte with a loud warning on failure.
+    fn get_byte_strict(&self, pos: usize, name: &str) -> Option<u8>;
+}
+
+impl ByteSliceExt for [u8] {
+    fn get_u32_le_strict(&self, pos: usize, name: &str) -> Option<u32> {
+        self.get(pos..pos + 4).map_or_else(
+            || {
+                warn!(
+                    "☢️ [ANOMALY] Required 4 bytes for '{}' missing at pos {}! Refusing to forge data.",
+                    name, pos
+                );
+                None
+            },
+            |b| {
+                // Sound: b.len() is guaranteed 4 by get(pos..pos+4).
+                Some(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            },
+        )
+    }
+
+    fn get_u32_be_strict(&self, pos: usize, name: &str) -> Option<u32> {
+        self.get(pos..pos + 4).map_or_else(
+            || {
+                warn!(
+                    "☢️ [ANOMALY] Required 4 bytes for '{}' missing at pos {}! Refusing to forge data.",
+                    name, pos
+                );
+                None
+            },
+            |b| {
+                // Sound: b.len() is guaranteed 4 by get(pos..pos+4).
+                Some(u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
+            },
+        )
+    }
+
+    fn get_u64_be_strict(&self, pos: usize, name: &str) -> Option<u64> {
+        self.get(pos..pos + 8).map_or_else(
+            || {
+                warn!(
+                    "☢️ [ANOMALY] Required 8 bytes for '{}' missing at pos {}! Refusing to forge data.",
+                    name, pos
+                );
+                None
+            },
+            |b| {
+                // Sound: b.len() is guaranteed 8 by get(pos..pos+8).
+                Some(u64::from_be_bytes([
+                    b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+                ]))
+            },
+        )
+    }
+
+    fn get_u16_le_strict(&self, pos: usize, name: &str) -> Option<u16> {
+        self.get(pos..pos + 2).map_or_else(
+            || {
+                warn!(
+                    "☢️ [ANOMALY] Required 2 bytes for '{}' missing at pos {}! Refusing to forge data.",
+                    name, pos
+                );
+                None
+            },
+            |b| {
+                // Sound: b.len() is guaranteed 2 by get(pos..pos+2).
+                Some(u16::from_le_bytes([b[0], b[1]]))
+            },
+        )
+    }
+
+    fn get_u16_be_strict(&self, pos: usize, name: &str) -> Option<u16> {
+        self.get(pos..pos + 2).map_or_else(
+            || {
+                warn!(
+                    "☢️ [ANOMALY] Required 2 bytes for '{}' missing at pos {}! Refusing to forge data.",
+                    name, pos
+                );
+                None
+            },
+            |b| {
+                // Sound: b.len() is guaranteed 2 by get(pos..pos+2).
+                Some(u16::from_be_bytes([b[0], b[1]]))
+            },
+        )
+    }
+
+    fn get_byte_strict(&self, pos: usize, name: &str) -> Option<u8> {
+        self.get(pos).copied().or_else(|| {
+            warn!(
+                "☢️ [ANOMALY] Required byte for '{}' missing at pos {}! Refusing to forge data.",
+                name, pos
+            );
+            None
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

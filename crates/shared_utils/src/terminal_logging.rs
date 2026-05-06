@@ -256,18 +256,15 @@ impl TerminalLogger {
             // If new >> old such that result > u32::MAX, the ratio is astronomically
             // large; cap at u32::MAX and warn rather than panicking or hiding it.
             let permille_u128 = (u128::from(new) * 10_000) / u128::from(old);
-            let permille = match u32::try_from(permille_u128) {
-                Ok(v) => v,
-                Err(_) => {
-                    tracing::warn!(
-                        old_bytes = old,
-                        new_bytes = new,
-                        permille_raw = permille_u128,
-                        "print_size_change: size ratio overflows u32; capping display at u32::MAX"
-                    );
-                    u32::MAX
-                }
-            };
+            let permille = u32::try_from(permille_u128).unwrap_or_else(|_| {
+                tracing::warn!(
+                    old_bytes = old,
+                    new_bytes = new,
+                    permille_raw = permille_u128,
+                    "print_size_change: size ratio overflows u32; capping display at u32::MAX"
+                );
+                u32::MAX
+            });
             (f64::from(permille) / 100.0_f64) - 100.0_f64
         } else {
             0.0_f64

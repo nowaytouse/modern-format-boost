@@ -364,10 +364,14 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
     for line in info_str.lines() {
         if line.contains("Number of frames:") {
             if let Some(count_str) = line.split(':').nth(1) {
-                frame_count = count_str
-                    .trim()
-                    .parse::<u32>()
-                    .expect("Failed to parse integer or missing required value");
+                frame_count = count_str.trim().parse::<u32>().unwrap_or_else(|e| {
+                    tracing::warn!(
+                        "☢️ [ANOMALY] Failed to parse WebP frame count '{}': {}",
+                        count_str,
+                        e
+                    );
+                    0
+                });
             }
         } else if line.contains("No.: width height") {
             parsing_frames = true;
@@ -390,12 +394,21 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
     // Fallback if mismatch: pad missing frames with the last parsed delay so
     // the animation keeps local continuity near the tail, rather than copying
     // the first frame's delay across every unparsed frame.
-    if u32::try_from(frame_durations_ms.len())
-        .expect("Value overflowed or is missing, cannot process ratio")
-        != frame_count
-    {
+    if u32::try_from(frame_durations_ms.len()).unwrap_or(u32::MAX) != frame_count {
+        tracing::warn!(
+            "☢️ [ANOMALY] WebP frame count mismatch: webpmux says {}, but we parsed {} durations! Adjusting buffer.",
+            frame_count,
+            frame_durations_ms.len()
+        );
         let pad = *frame_durations_ms.last().unwrap_or(&100);
-        frame_durations_ms.resize(usize::try_from(frame_count).unwrap_or(usize::MAX), pad);
+        frame_durations_ms.resize(
+            shared_utils::numeric_cast::u64_to_usize_strict(
+                u64::from(frame_count),
+                "webp_frame_count",
+            )
+            .unwrap_or(0),
+            pad,
+        );
     }
 
     // Guard against degenerate 0-duration WebPs: replace any zero delays with a
@@ -1366,13 +1379,19 @@ pub fn convert_to_mp4_matched(
                     vf_args: vf_args.clone(),
                     baseline_crf: actual_initial_crf,
                     warm_start_crf: None,
-                    ultimate_mode: true,
-                    force_ms_ssim_long: false,
-                    allow_size_tolerance: options.allow_size_tolerance(),
+                    flags: shared_utils::GpuSearchFlags {
+                        features: shared_utils::GpuSearchFeatures {
+                            ultimate_mode: true,
+                            apple_compat: options.apple_compat(),
+                        },
+                        validation: shared_utils::GpuSearchValidation {
+                            force_ms_ssim_long: false,
+                            allow_size_tolerance: options.allow_size_tolerance(),
+                        },
+                    },
                     min_ssim: 0.0, // calculated internally
                     max_threads: options.child_threads,
                     hdr_x265_params: None,
-                    apple_compat: options.apple_compat(),
                     preset: shared_utils::EncoderPreset::Slower,
                 })
             }
@@ -1383,13 +1402,19 @@ pub fn convert_to_mp4_matched(
                     vf_args: vf_args.clone(),
                     baseline_crf: actual_initial_crf,
                     warm_start_crf: None,
-                    ultimate_mode: true,
-                    force_ms_ssim_long: false,
-                    allow_size_tolerance: options.allow_size_tolerance(),
+                    flags: shared_utils::GpuSearchFlags {
+                        features: shared_utils::GpuSearchFeatures {
+                            ultimate_mode: true,
+                            apple_compat: options.apple_compat(),
+                        },
+                        validation: shared_utils::GpuSearchValidation {
+                            force_ms_ssim_long: false,
+                            allow_size_tolerance: options.allow_size_tolerance(),
+                        },
+                    },
                     min_ssim: 0.0, // calculated internally
                     max_threads: options.child_threads,
                     hdr_x265_params: None,
-                    apple_compat: options.apple_compat(),
                     preset: shared_utils::EncoderPreset::Slower,
                 })
             }
@@ -1409,13 +1434,19 @@ pub fn convert_to_mp4_matched(
                     vf_args: vf_args.clone(),
                     baseline_crf: actual_initial_crf,
                     warm_start_crf: None,
-                    ultimate_mode: false,
-                    force_ms_ssim_long: false,
-                    allow_size_tolerance: options.allow_size_tolerance(),
+                    flags: shared_utils::GpuSearchFlags {
+                        features: shared_utils::GpuSearchFeatures {
+                            ultimate_mode: false,
+                            apple_compat: options.apple_compat(),
+                        },
+                        validation: shared_utils::GpuSearchValidation {
+                            force_ms_ssim_long: false,
+                            allow_size_tolerance: options.allow_size_tolerance(),
+                        },
+                    },
                     min_ssim: 0.0, // calculated internally
                     max_threads: options.child_threads,
                     hdr_x265_params: None,
-                    apple_compat: options.apple_compat(),
                     preset: shared_utils::EncoderPreset::Medium,
                 })
             }
@@ -1426,13 +1457,19 @@ pub fn convert_to_mp4_matched(
                     vf_args: vf_args.clone(),
                     baseline_crf: actual_initial_crf,
                     warm_start_crf: None,
-                    ultimate_mode: false,
-                    force_ms_ssim_long: false,
-                    allow_size_tolerance: options.allow_size_tolerance(),
+                    flags: shared_utils::GpuSearchFlags {
+                        features: shared_utils::GpuSearchFeatures {
+                            ultimate_mode: false,
+                            apple_compat: options.apple_compat(),
+                        },
+                        validation: shared_utils::GpuSearchValidation {
+                            force_ms_ssim_long: false,
+                            allow_size_tolerance: options.allow_size_tolerance(),
+                        },
+                    },
                     min_ssim: 0.0, // calculated internally
                     max_threads: options.child_threads,
                     hdr_x265_params: None,
-                    apple_compat: options.apple_compat(),
                     preset: shared_utils::EncoderPreset::Medium,
                 })
             }

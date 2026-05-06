@@ -383,7 +383,7 @@ pub fn detect_video_with_cache(
     cache: Option<&crate::analysis_cache::AnalysisCache>,
 ) -> Result<VideoDetectionResult, FFprobeError> {
     let should_refresh_cached_result = |cached: &VideoDetectionResult| -> bool {
-        if cached.frame_count.unwrap_or(0) > 1 {
+        if cached.frame_count.is_some_and(|fc| fc > 1) {
             return false;
         }
 
@@ -400,7 +400,7 @@ pub fn detect_video_with_cache(
         else {
             return false;
         };
-        is_animated && native_frames.unwrap_or(0) > 1
+        is_animated && native_frames.is_some_and(|nf| nf > 1)
     };
 
     if let Some(cache) = cache {
@@ -594,19 +594,20 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
         }
     }
 
-    let fc_val = result.frame_count.unwrap_or(0);
-    if fc_val <= 1 || fc_val > 50000 {
-        if let crate::media_penetration::PenetrationResult::Verified(real_count) =
-            crate::media_penetration::detect_real_frame_count(path, fc_val)
-        {
-            if real_count != fc_val {
-                crate::progress_mode::emit_stderr(&format!(
-                    "⚠️  [{}] Frame count mismatch: metadata={}, actual={}, correcting",
-                    path.file_name().and_then(|n| n.to_str()).unwrap_or("?"),
-                    fc_val,
-                    real_count
-                ));
-                result.frame_count = Some(real_count);
+    if let Some(fc_val) = result.frame_count {
+        if fc_val <= 1 || fc_val > 50000 {
+            if let crate::media_penetration::PenetrationResult::Verified(real_count) =
+                crate::media_penetration::detect_real_frame_count(path, fc_val)
+            {
+                if real_count != fc_val {
+                    crate::progress_mode::emit_stderr(&format!(
+                        "⚠️  [{}] Frame count mismatch: metadata={}, actual={}, correcting",
+                        path.file_name().and_then(|n| n.to_str()).unwrap_or("?"),
+                        fc_val,
+                        real_count
+                    ));
+                    result.frame_count = Some(real_count);
+                }
             }
         }
     }

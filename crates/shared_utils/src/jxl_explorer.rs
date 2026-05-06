@@ -586,11 +586,11 @@ fn near_best_margin(input_size: u64) -> u64 {
     #[cfg(feature = "high-precision")]
     {
         let margin = Rational::from(input_size)
-            * crate::numeric_cast::f64_to_rational_loud(
+            * crate::numeric_cast::f64_to_rational_strict(
                 JXL_NEAR_BEST_MARGIN_RATIO,
-                0,
                 "JXL_NEAR_BEST_MARGIN_RATIO",
-            );
+            )
+            .unwrap_or_else(|| Rational::from(0_i32));
         crate::numeric_cast::f64_to_u64_sat(margin.to_f64()).max(1)
     }
     #[cfg(not(feature = "high-precision"))]

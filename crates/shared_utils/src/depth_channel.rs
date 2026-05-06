@@ -160,10 +160,13 @@ fn decode_depth_handle(handle: &ImageHandle) -> Result<DynamicImage> {
         let mut buffer: ImageBuffer<Luma<u8>, Vec<u8>> = ImageBuffer::new(width, height);
         for (x, y, pixel) in buffer.enumerate_pixels_mut() {
             let offset = y as usize * y_plane.stride + x as usize;
-            let val = *y_plane
-                .data
-                .get(offset)
-                .ok_or_else(|| anyhow!("Depth plane buffer shorter than image dimensions: offset {} out of range {}", offset, y_plane.data.len()))?;
+            let val = *y_plane.data.get(offset).ok_or_else(|| {
+                anyhow!(
+                    "Depth plane buffer shorter than image dimensions: offset {} out of range {}",
+                    offset,
+                    y_plane.data.len()
+                )
+            })?;
             *pixel = Luma([val]);
         }
         // Convert to 16-bit for consistency

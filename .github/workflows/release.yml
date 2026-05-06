@@ -234,7 +234,7 @@ jobs:
           else
             # Fallback to extracting from CHANGELOG.md
             echo "Extracting from CHANGELOG.md for version ${VERSION}"
-            NOTES=$(awk "/^## \[?${VERSION}\]?/{found=1; next} found && /^## /{exit} found{print}" CHANGELOG.md 2>/dev/null | head -80)
+            NOTES=$(awk "/^## \[?${VERSION}\]?/{found=1; next} found && /^## /{exit} found{print}" docs/CHANGELOG.md 2>/dev/null | head -80)
             if [ -z "$NOTES" ]; then
               NOTES="See commit history for changes in ${TAG}."
             fi

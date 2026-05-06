@@ -32,13 +32,22 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
     let n = buf.len();
 
     if n < 13 {
-        return Ok(GifHeaderScan::default());
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "File too small to be a valid GIF (minimum 13 bytes required)",
+        ));
     }
 
     // GIF87a / GIF89a magic check — `n >= 13` guard above ensures bytes 0..6 exist.
     let magic = &buf[0..6];
     if magic != b"GIF87a" && magic != b"GIF89a" {
-        return Ok(GifHeaderScan::default());
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "Invalid GIF magic: expected 'GIF87a' or 'GIF89a', found '{}'",
+                String::from_utf8_lossy(magic)
+            ),
+        ));
     }
 
     // Logical Screen Descriptor: byte 10 = packed field. Bounds ensured by n >= 13.
@@ -56,6 +65,7 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
     let mut loop_count: Option<u16> = None;
     let mut frame_payload_sizes: Vec<usize> = Vec::new();
     let mut frame_delays_cs: Vec<u16> = Vec::new();
+    let mut frame_count_direct = 0u32; // 直接计数图像描述符
     let mut pos = 13usize;
 
     if has_gct {
@@ -70,10 +80,14 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
         let Some(&block_id) = buf.get(pos) else { break };
         match block_id {
             0x21 if pos + 1 < buf.len() => {
-                let Some(&ext_type) = buf.get(pos + 1) else { break };
+                let Some(&ext_type) = buf.get(pos + 1) else {
+                    break;
+                };
                 match ext_type {
                     0xFF => {
-                        let Some(&block_size) = buf.get(pos + 2) else { break };
+                        let Some(&block_size) = buf.get(pos + 2) else {
+                            break;
+                        };
                         let block_size = block_size as usize;
                         if block_size == 11 && pos + 3 + block_size <= buf.len() {
                             if let Some(vendor_bytes) = buf.get(pos + 3..pos + 3 + block_size) {
@@ -83,11 +97,19 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
                                         if vendor == "NETSCAPE2.0" {
                                             let sub_pos = pos + 3 + block_size;
                                             if sub_pos + 3 < buf.len() {
-                                                let Some(&sub_size) = buf.get(sub_pos) else { break };
-                                                let Some(&sub1) = buf.get(sub_pos + 1) else { break };
+                                                let Some(&sub_size) = buf.get(sub_pos) else {
+                                                    break;
+                                                };
+                                                let Some(&sub1) = buf.get(sub_pos + 1) else {
+                                                    break;
+                                                };
                                                 if sub_size >= 3 && sub1 == 0x01 {
-                                                    let Some(&lo) = buf.get(sub_pos + 2) else { break };
-                                                    let Some(&hi) = buf.get(sub_pos + 3) else { break };
+                                                    let Some(&lo) = buf.get(sub_pos + 2) else {
+                                                        break;
+                                                    };
+                                                    let Some(&hi) = buf.get(sub_pos + 3) else {
+                                                        break;
+                                                    };
                                                     loop_count = Some(
                                                         u16::from(lo) | (u16::from(hi) << 8_i32),
                                                     );
@@ -102,14 +124,25 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
                         pos = skip_sub_blocks(&buf, pos);
                     }
                     0xF9 if pos + 7 < buf.len() => {
-                        let Some(&gce_size) = buf.get(pos + 2) else { break };
-                        if gce_size != 0x04 { pos += 1; continue; }
-                        let Some(&flags) = buf.get(pos + 3) else { break };
+                        let Some(&gce_size) = buf.get(pos + 2) else {
+                            break;
+                        };
+                        if gce_size != 0x04 {
+                            pos += 1;
+                            continue;
+                        }
+                        let Some(&flags) = buf.get(pos + 3) else {
+                            break;
+                        };
                         if flags & 0x01 != 0 {
                             has_transparency = true;
                         }
-                        let Some(&delay_lo) = buf.get(pos + 4) else { break };
-                        let Some(&delay_hi) = buf.get(pos + 5) else { break };
+                        let Some(&delay_lo) = buf.get(pos + 4) else {
+                            break;
+                        };
+                        let Some(&delay_hi) = buf.get(pos + 5) else {
+                            break;
+                        };
                         let delay = u16::from(delay_lo) | (u16::from(delay_hi) << 8_i32);
                         frame_delays_cs.push(delay);
                         pos += 8;
@@ -124,6 +157,9 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
                 }
             }
             0x2C => {
+                // 直接计数图像描述符
+                frame_count_direct += 1;
+
                 if pos + 10 >= buf.len() {
                     break;
                 }
@@ -142,11 +178,11 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
                 }
                 pos += 1;
                 let payload_start = pos;
+                // 使用原始的 skip_sub_blocks 函数来正确处理图像数据块
                 pos = skip_sub_blocks(&buf, pos);
                 let payload_size = pos.saturating_sub(payload_start);
-                if payload_size > 0 {
-                    frame_payload_sizes.push(payload_size);
-                }
+                // Always count frames when we encounter an image descriptor
+                frame_payload_sizes.push(payload_size.max(1));
             }
             0x3B => break,
             _ => {
@@ -211,23 +247,29 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
     // would only fail if the Vec grew beyond u32::MAX entries, which is impossible in
     // practice. If it somehow did, that is anomalous data — return Err rather than
     // silently wrapping or using a sentinel.
-    let payload_count = u32::try_from(frame_payload_sizes.len()).map_err(|_| {
+    let _payload_count = u32::try_from(frame_payload_sizes.len()).map_err(|_| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!("GIF frame payload count {} exceeds u32::MAX — file is anomalous", frame_payload_sizes.len()),
+            format!(
+                "GIF frame payload count {} exceeds u32::MAX — file is anomalous",
+                frame_payload_sizes.len()
+            ),
         )
     })?;
-    let delay_count = u32::try_from(frame_delays_cs.len()).map_err(|_| {
+    let _delay_count = u32::try_from(frame_delays_cs.len()).map_err(|_| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!("GIF frame delay count {} exceeds u32::MAX — file is anomalous", frame_delays_cs.len()),
+            format!(
+                "GIF frame delay count {} exceeds u32::MAX — file is anomalous",
+                frame_delays_cs.len()
+            ),
         )
     })?;
-    let frame_count_calculated = std::cmp::max(payload_count, delay_count);
-    let frame_count_calculated = if frame_count_calculated == 0 {
-        1
+    // 直接使用图像描述符计数，这是最可靠的方法
+    let frame_count_calculated = if frame_count_direct > 0 {
+        frame_count_direct
     } else {
-        frame_count_calculated
+        1 // 如果没有检测到图像描述符，至少返回1
     };
 
     Ok(GifHeaderScan {
@@ -244,15 +286,29 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
 
 fn skip_sub_blocks(buf: &[u8], mut pos: usize) -> usize {
     loop {
+        if pos >= buf.len() {
+            return buf.len();
+        }
+
         let Some(&sub_size) = buf.get(pos) else {
             return buf.len();
         };
         pos += 1;
+
         if sub_size == 0 {
             return pos;
         }
-        pos = pos.saturating_add(sub_size as usize);
-        if pos > buf.len() {
+
+        // 确保不会跳过超过缓冲区长度的数据
+        let next_pos = pos.saturating_add(sub_size as usize);
+        if next_pos > buf.len() {
+            return buf.len();
+        }
+
+        pos = next_pos;
+
+        // 添加安全检查，防止无限循环
+        if pos > buf.len() + 1000 {
             return buf.len();
         }
     }

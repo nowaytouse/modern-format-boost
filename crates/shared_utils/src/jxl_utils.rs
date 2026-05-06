@@ -584,7 +584,10 @@ pub fn try_imagemagick_fallback_with_effort(
 
                         // Check if it's still a decode/pixel error and try 8-bit for 8-bit sources
                         if m && !c && is_decode_or_pixel_cjxl_error(&stderr2) {
-                            let bit_depth = get_png_bit_depth(input).unwrap_or(16);
+                            let bit_depth = get_png_bit_depth(input).unwrap_or_else(|| {
+                                tracing::warn!("Failed to detect PNG bit depth, assuming 16-bit");
+                                16 // Default to 16-bit for safety
+                            });
                             if bit_depth <= 8 {
                                 // Attempt 3: -depth 8 -strip for 8-bit sources (no quality loss)
                                 crate::progress_mode::emit_stderr(
@@ -643,7 +646,10 @@ pub fn try_imagemagick_fallback_with_effort(
                     }
                 }
             } else if magick_ok && !cjxl_ok && is_decode_or_pixel_cjxl_error(&stderr) {
-                let bit_depth = get_png_bit_depth(input).unwrap_or(16);
+                let bit_depth = get_png_bit_depth(input).unwrap_or_else(|| {
+                    tracing::warn!("Failed to detect PNG bit depth, assuming 16-bit");
+                    16 // Default to 16-bit for safety
+                });
                 if bit_depth <= 8 {
                     // Attempt 2: -strip -depth 8 for 8-bit sources (no quality loss)
                     crate::progress_mode::emit_stderr(

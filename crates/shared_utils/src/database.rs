@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::io::Read;
 use std::path::Path;
+use tracing::warn;
 use walkdir::WalkDir;
 
 const PG_DEFAULT_CONNSTR: &str = "host=localhost dbname=modern_format_boost";
@@ -933,14 +934,17 @@ fn lookup_similar_samples_inner(
         }
 
         let relative_distance = (*distance - min_distance).max(0.0);
-        let distance_weight = Rational::from_f64(
-            1.0_f64 / (relative_distance * relative_distance).mul_add(3.0, 1.0),
-        )
-        .unwrap_or_else(|| Rational::from(1));
+        let distance_weight =
+            Rational::from_f64(1.0_f64 / (relative_distance * relative_distance).mul_add(3.0, 1.0))
+                .unwrap_or_else(|| Rational::from(1));
 
         let class_weight = match label {
-            LabelStatus::LoopStrong => Rational::from_f64(w_quality).unwrap_or_else(|| Rational::from(1)),
-            LabelStatus::LoopWeak => Rational::from_f64(w_video).unwrap_or_else(|| Rational::from(1)),
+            LabelStatus::LoopStrong => {
+                Rational::from_f64(w_quality).unwrap_or_else(|| Rational::from(1))
+            }
+            LabelStatus::LoopWeak => {
+                Rational::from_f64(w_video).unwrap_or_else(|| Rational::from(1))
+            }
             _ => Rational::from(1),
         };
 
@@ -948,8 +952,8 @@ fn lookup_similar_samples_inner(
 
         let prob = match label {
             LabelStatus::LoopStrong => Rational::from(1), // Loop intent (Meme/Sticker/Video sticker)
-            LabelStatus::LoopWeak => Rational::from(0),   // Non-loop intent (Clip/Record/Long Video)
-            _ => Rational::from((1, 2)),                  // Uncertain/Fallback
+            LabelStatus::LoopWeak => Rational::from(0), // Non-loop intent (Clip/Record/Long Video)
+            _ => Rational::from((1, 2)),                // Uncertain/Fallback
         };
 
         if prob >= Rational::from((1, 2)) {
@@ -966,8 +970,12 @@ fn lookup_similar_samples_inner(
         return Ok(None);
     }
 
-    let min_weight = Rational::from_f64(1e-6).unwrap_or(Rational::from(1));
-    let divisor = if total_weight > min_weight { total_weight.clone() } else { min_weight };
+    let min_weight = Rational::from_f64(1e-6).unwrap_or_else(|| Rational::from(1));
+    let divisor = if total_weight > min_weight {
+        total_weight.clone()
+    } else {
+        min_weight
+    };
     let local_keep_probability = (weighted_keep / divisor).to_f64();
     let eff_n = effective_sample_size(weight_squares_sum.to_f64(), total_weight.to_f64());
     // With higher imbalance, require stronger local evidence before moving away from global prior.
@@ -1026,9 +1034,11 @@ fn lookup_similar_samples_inner(
     } else {
         loop_durations
             .sort_by(|a: &f64, b: &f64| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let idx = crate::numeric_cast::f64_to_usize_sat(
+        let idx = crate::numeric_cast::f64_to_usize_strict(
             (crate::numeric_cast::usize_to_f64(loop_durations.len()) * 0.90).floor(),
-        );
+            "p90_idx",
+        )
+        .unwrap_or(0);
         Some(
             *loop_durations
                 .get(idx.min(loop_durations.len().saturating_sub(1)))
@@ -1072,14 +1082,26 @@ fn lossless_duration_limit_for_keep_prob(keep_prob: f64) -> f32 {
 }
 
 #[must_use]
-fn resolved_duration_secs(meta: &LoopMeta) -> f64 {
-    let fc = meta.frame_count.unwrap_or(0);
+fn resolved_duration_secs(meta: &LoopMeta) -> Option<f64> {
     if meta.duration_secs > 0.11 {
-        meta.duration_secs
-    } else if fc > 1 && meta.fps > 0.1 {
-        crate::numeric_cast::u64_to_f64(fc) / meta.fps
+        Some(meta.duration_secs)
     } else {
-        crate::numeric_cast::u64_to_f64(fc.max(1)) / 12.0
+        match meta.frame_count {
+            Some(fc) if fc > 1 && meta.fps > 0.1 => {
+                Some(crate::numeric_cast::u64_to_f64(fc) / meta.fps)
+            }
+            Some(_fc) => {
+                // We have a frame count but no reliable duration/FPS.
+                // Refusing to forge a '12fps' baseline. Information invalidated.
+                warn!("☢️ [ANOMALY] Frame count present but duration/FPS missing for resolved_duration! Refusing to forge data.");
+                None
+            }
+            None => {
+                // Total metadata vacuum: neither duration nor frame count.
+                warn!("☢️ [ANOMALY] Duration and frame_count missing for resolved_duration! Refusing to forge data.");
+                None
+            }
+        }
     }
 }
 
@@ -1103,7 +1125,14 @@ pub fn is_lossless_exploration_safe(meta: &LoopMeta, path: Option<&Path>) -> boo
             );
         }
     }
-    current_meta.duration_secs = resolved_duration_secs(&current_meta);
+    if let Some(duration) = resolved_duration_secs(&current_meta) {
+        current_meta.duration_secs = duration;
+    } else {
+        crate::log_eprintln!(
+            "   ☢️  Lossless-first (CRF 0.00) skip: metadata invalidated (duration unknown)."
+        );
+        return false;
+    }
 
     let sample_match = lookup_similar_samples(&current_meta, path);
     let keep_prob = sample_match.as_ref().and_then(|m| m.keep_probability);
@@ -1114,9 +1143,9 @@ pub fn is_lossless_exploration_safe(meta: &LoopMeta, path: Option<&Path>) -> boo
     let threshold = keep_prob.map_or_else(
         || {
             crate::log_eprintln!(
-            "   ⚠️  Lossless-first safety KNN unavailable or unknown — using conservative limit {:.1}s",
-            HIGH_VALUE_LOSSLESS_DURATION_LIMIT
-        );
+                "   ⚠️  Lossless-first safety KNN unavailable or unknown — using conservative limit {:.1}s",
+                HIGH_VALUE_LOSSLESS_DURATION_LIMIT
+            );
             HIGH_VALUE_LOSSLESS_DURATION_LIMIT
         },
         lossless_duration_limit_for_keep_prob,
@@ -1128,12 +1157,15 @@ pub fn is_lossless_exploration_safe(meta: &LoopMeta, path: Option<&Path>) -> boo
         if let Some(keep_prob) = keep_prob {
             crate::log_eprintln!(
                 "   ⚠️  Lossless-first (CRF 0.00) skip: duration {:.1}s exceeds dynamic limit {:.1}s (Value Prob: {:.2})",
-                current_meta.duration_secs, threshold, keep_prob
+                current_meta.duration_secs,
+                threshold,
+                keep_prob
             );
         } else {
             crate::log_eprintln!(
                 "   ⚠️  Lossless-first (CRF 0.00) skip: duration {:.1}s exceeds conservative unknown-evidence limit {:.1}s",
-                current_meta.duration_secs, threshold
+                current_meta.duration_secs,
+                threshold
             );
         }
     }
@@ -1700,17 +1732,17 @@ fn calculate_continuous_features(
     };
 
     let sample_pixels = (f64::from(sample.width) * f64::from(sample.height)).max(1.0);
-    let fc = sample.frame_count.unwrap_or(0);
-    let sample_frame_density =
-        crate::numeric_cast::u64_to_f64(fc) / sample.duration_secs.max(0.05);
-    let sample_frame_gap =
-        sample.duration_secs / crate::numeric_cast::u64_to_f64(fc.max(1));
+    let fc = sample.frame_count.unwrap_or_else(|| {
+        tracing::warn!("Sample missing frame count for density calculation, using 0");
+        0
+    });
+    let sample_frame_density = crate::numeric_cast::u64_to_f64(fc) / sample.duration_secs.max(0.05);
+    let sample_frame_gap = sample.duration_secs / crate::numeric_cast::u64_to_f64(fc.max(1));
 
     (
         sample_pixels / get_std("pixels") * get_w("pixels").sqrt(),
         sample.duration_secs / get_std("duration") * get_w("duration").sqrt(),
-        crate::numeric_cast::u64_to_f64(fc) / get_std("frame_count")
-            * get_w("frame_count").sqrt(),
+        crate::numeric_cast::u64_to_f64(fc) / get_std("frame_count") * get_w("frame_count").sqrt(),
         crate::numeric_cast::u64_to_f64(sample.file_size_bytes) / get_std("file_size_bytes")
             * get_w("file_size_bytes").sqrt(),
         sample_frame_density / get_std("density") * get_w("density").sqrt(),
@@ -1740,34 +1772,30 @@ fn calculate_discrete_features(
             .max(0.01)
     };
 
-    let sample_webp_ratio = crate::numeric_cast::option_f64_loud(
-        sample.webp_compression_ratio,
-        0.0,
-        "sample_webp_ratio",
-    );
+    let sample_webp_ratio =
+        crate::numeric_cast::option_f64_strict(sample.webp_compression_ratio, "sample_webp_ratio")
+            .unwrap_or(0.5);
     let v_wratio = sample_webp_ratio / get_std("webp_ratio") * get_w("webp_ratio").sqrt();
 
-    let v_lfreq =
-        crate::numeric_cast::option_f64_loud(sample.loop_frequency, 0.5, "sample_loop_freq")
-            / get_std("loop_freq")
-            * get_w("loop_freq").sqrt();
-    let v_cadence =
-        crate::numeric_cast::option_f64_loud(sample.cadence_score, 0.5, "sample_cadence")
-            / get_std("cadence")
-            * get_w("cadence").sqrt();
-
-    let v_payload = crate::numeric_cast::option_f64_loud(
+    let v_lfreq = crate::numeric_cast::option_f64_strict(sample.loop_frequency, "sample_loop_freq")
+        .unwrap_or(0.5)
+        / get_std("loop_freq")
+        * get_w("loop_freq").sqrt();
+    let v_cadence = crate::numeric_cast::option_f64_strict(sample.cadence_score, "sample_cadence")
+        .unwrap_or(0.5)
+        / get_std("cadence")
+        * get_w("cadence").sqrt();
+    let v_payload = crate::numeric_cast::option_f64_strict(
         sample.frame_payload_variation,
-        0.5,
         "sample_payload_var",
-    ) / get_std("payload_var")
-        * get_w("payload_var").sqrt();
+    )
+    .unwrap_or(0.5);
     let v_delay =
-        crate::numeric_cast::option_f64_loud(sample.frame_delay_variation, 0.5, "sample_delay_var")
-            / get_std("delay_var")
-            * get_w("delay_var").sqrt();
+        crate::numeric_cast::option_f64_strict(sample.frame_delay_variation, "sample_delay_var")
+            .unwrap_or(0.5);
 
-    let v_aspect = crate::numeric_cast::option_f64_loud(sample.aspect_ratio, 1.0, "sample_aspect")
+    let v_aspect = crate::numeric_cast::option_f64_strict(sample.aspect_ratio, "sample_aspect")
+        .unwrap_or(1.0)
         / get_std("aspect")
         * get_w("aspect").sqrt();
     let v_pal =
@@ -1955,7 +1983,13 @@ fn sample_row_from_meta(meta: &LoopMeta, temporal_bpp: f64, spatial_bpp: f64) ->
 fn bpp_from_meta(meta: &LoopMeta) -> (f64, f64) {
     let pixel_count = (f64::from(meta.width) * f64::from(meta.height)).max(1.0);
     let file_size = crate::numeric_cast::u64_to_f64(meta.file_size_bytes);
-    let frame_count = crate::numeric_cast::u64_to_f64(meta.frame_count.unwrap_or(0).max(1));
+    let frame_count = meta.frame_count.map_or_else(
+        || {
+            tracing::warn!("Missing frame count for BPP calculation, using 1");
+            1.0
+        },
+        |fc| crate::numeric_cast::u64_to_f64(fc.max(1)),
+    );
 
     (
         file_size / (pixel_count * frame_count),
@@ -1990,9 +2024,16 @@ fn sample_distance(
 }
 
 fn adaptive_neighbor_count(total: usize) -> usize {
-    crate::numeric_cast::f64_to_usize_sat((crate::numeric_cast::usize_to_f64(total)).sqrt().round())
-        .clamp(6, 24)
-        .min(total)
+    crate::numeric_cast::u64_to_usize_strict(
+        (crate::numeric_cast::usize_to_f64(total))
+            .sqrt()
+            .round()
+            .to_bits(),
+        "adaptive_neighbor_total",
+    )
+    .unwrap_or_else(|| total.min(6))
+    .clamp(6, 24)
+    .min(total)
 }
 
 fn class_balance_weight(total: i64, class_count: i64) -> f64 {
@@ -2048,8 +2089,16 @@ fn percentile_value(sorted_values: &[f64], quantile: f64) -> Option<f64> {
     let clamped = quantile.clamp(0.0, 1.0);
     let scaled_index =
         clamped * crate::numeric_cast::usize_to_f64(sorted_values.len().saturating_sub(1));
-    let lower_index = crate::numeric_cast::f64_to_usize_sat(scaled_index.floor());
-    let upper_index = crate::numeric_cast::f64_to_usize_sat(scaled_index.ceil());
+    let lower_index = crate::numeric_cast::f64_to_usize_strict(scaled_index.floor(), "lower_index")
+        .unwrap_or_else(|| {
+            tracing::warn!("Failed to calculate lower index for percentile, using 0");
+            0
+        });
+    let upper_index = crate::numeric_cast::f64_to_usize_strict(scaled_index.ceil(), "upper_index")
+        .unwrap_or_else(|| {
+            tracing::warn!("Failed to calculate upper index for percentile, using 0");
+            0
+        });
 
     if lower_index == upper_index {
         return sorted_values.get(lower_index).copied();
@@ -2164,7 +2213,7 @@ pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -
             pb.inc(1);
             if let Some(s) = &res {
                 // Exclude static images: only multi-frame content is valuable for loop intent training
-                if s.frame_count.unwrap_or(0) <= 1 {
+                if s.frame_count.is_none_or(|fc| fc <= 1) {
                     return None;
                 }
                 pb.set_message(format!("Learn: {}", s.file_name.as_deref().unwrap_or("?")));
@@ -2240,12 +2289,46 @@ pub fn batch_ingest_samples(dataset_path: &Path, label_override: Option<&str>) -
     )?;
 
     for sample in samples {
-        let palette_size_i32 = sample.palette_size.map(crate::numeric_cast::u32_to_i32_sat);
-        let total_pixels_i64 = crate::numeric_cast::u64_to_i64_sat(sample.total_pixels);
-        let frame_count_i64 = crate::numeric_cast::u64_to_i64_sat(sample.frame_count.unwrap_or(0));
-        let file_size_i64 = crate::numeric_cast::u64_to_i64_sat(sample.file_size_bytes);
-        let width_i32 = crate::numeric_cast::u32_to_i32_sat(sample.width);
-        let height_i32 = crate::numeric_cast::u32_to_i32_sat(sample.height);
+        let palette_size_i32 = sample.palette_size.map(|s| {
+            crate::numeric_cast::u32_to_i32_strict(s, "db_pal_size").unwrap_or_else(|| {
+                tracing::warn!("Failed to convert palette size, using 0");
+                0
+            })
+        });
+        let total_pixels_i64 =
+            crate::numeric_cast::u64_to_i64_strict(sample.total_pixels, "db_total_pixels")
+                .unwrap_or_else(|| {
+                    tracing::warn!("Failed to convert total pixels, using 0");
+                    0
+                });
+        let frame_count_i64 = sample.frame_count.map_or_else(
+            || {
+                tracing::warn!("Missing frame count, using 0");
+                0
+            },
+            |fc| {
+                crate::numeric_cast::u64_to_i64_strict(fc, "db_frame_count").unwrap_or_else(|| {
+                    tracing::warn!("Failed to convert frame count, using 0");
+                    0
+                })
+            },
+        );
+        let file_size_i64 =
+            crate::numeric_cast::u64_to_i64_strict(sample.file_size_bytes, "db_file_size")
+                .unwrap_or_else(|| {
+                    tracing::warn!("Failed to convert file size, using 0");
+                    0
+                });
+        let width_i32 = crate::numeric_cast::u32_to_i32_strict(sample.width, "db_width")
+            .unwrap_or_else(|| {
+                tracing::warn!("Failed to convert width, using 0");
+                0
+            });
+        let height_i32 = crate::numeric_cast::u32_to_i32_strict(sample.height, "db_height")
+            .unwrap_or_else(|| {
+                tracing::warn!("Failed to convert height, using 0");
+                0
+            });
 
         let sample_row = SampleRow::from(sample.clone());
         let vec_data = compute_sample_vector(&sample_row, &initial_feature_map);
@@ -2390,9 +2473,19 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
         .iter()
         .map(|row| {
             let duration = row.get::<_, f64>(2);
-            let frame_count = f64::from(crate::numeric_cast::i64_to_u32_sat(row.get::<_, i64>(3)));
+            let frame_count = f64::from(
+                crate::numeric_cast::i64_to_u32_strict(row.get::<_, i64>(3), "db_frame_count")
+                    .unwrap_or_else(|| {
+                        tracing::warn!("Failed to convert frame count from DB, using 0");
+                        0
+                    }),
+            );
             let fps =
-                crate::numeric_cast::option_f64_loud(row.get::<_, Option<f64>>(5), 0.0, "db_fps");
+                crate::numeric_cast::option_f64_strict(row.get::<_, Option<f64>>(5), "db_fps")
+                    .unwrap_or_else(|| {
+                        tracing::warn!("Failed to convert FPS from DB, using 0.0");
+                        0.0
+                    });
             let density = if duration > 0.05_f64 {
                 frame_count / duration
             } else {
@@ -2414,11 +2507,8 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
                 gap,
                 row.get::<_, f64>(6), // temporal_bpp
                 row.get::<_, f64>(7), // spatial_bpp
-                crate::numeric_cast::option_f64_loud(
-                    row.get::<_, Option<f64>>(10),
-                    1.0,
-                    "db_aspect",
-                ), // aspect
+                crate::numeric_cast::option_f64_strict(row.get::<_, Option<f64>>(10), "db_aspect")
+                    .unwrap_or(1.0), // aspect
                 row.get::<_, Option<f64>>(11).unwrap_or(0.5_f64), // loop_freq
                 row.get::<_, Option<f64>>(12).unwrap_or(0.5_f64), // cadence
                 row.get::<_, Option<f64>>(8).unwrap_or(0.5_f64), // payload_var
@@ -2427,11 +2517,11 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
                 row.get::<_, Option<f64>>(14).unwrap_or(0.5_f64), // m_gini
                 row.get::<_, Option<f64>>(15).unwrap_or(0.5_f64), // b_skew
                 row.get::<_, Option<f64>>(16).unwrap_or(0.5_f64), // t_flat
-                crate::numeric_cast::option_f64_loud(
+                crate::numeric_cast::option_f64_strict(
                     row.get::<_, Option<f64>>(17),
-                    1.0,
                     "db_webp_ratio",
-                ), // webp_ratio
+                )
+                .unwrap_or(1.0), // webp_ratio
             ]
         })
         .collect();
@@ -2493,11 +2583,8 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
         let values: Vec<f64> = all_data
             .iter()
             .map(|v| {
-                crate::numeric_cast::option_f64_loud(
-                    v.get(idx).copied(),
-                    0.0,
-                    "feature_matrix_entry",
-                )
+                crate::numeric_cast::option_f64_strict(v.get(idx).copied(), "feature_matrix_entry")
+                    .unwrap_or(0.0)
             })
             .collect();
         feature_map
@@ -2600,13 +2687,29 @@ pub fn refresh_feature_stats(conn: &mut Client) -> Result<()> {
         bitrate_avg: bitrate_row.get(1),
         bitrate_max: bitrate_row.get(2),
 
-        width_min: crate::numeric_cast::i32_to_u32_sat(w_min_i32),
+        width_min: crate::numeric_cast::i32_to_u32_strict(w_min_i32, "db_min_width")
+            .unwrap_or_else(|| {
+                tracing::warn!("Failed to convert min width, using 0");
+                0
+            }),
         width_avg: w_avg,
-        width_max: crate::numeric_cast::i32_to_u32_sat(w_max_i32),
+        width_max: crate::numeric_cast::i32_to_u32_strict(w_max_i32, "db_max_width")
+            .unwrap_or_else(|| {
+                tracing::warn!("Failed to convert max width, using 0");
+                0
+            }),
 
-        height_min: crate::numeric_cast::i32_to_u32_sat(h_min_i32),
+        height_min: crate::numeric_cast::i32_to_u32_strict(h_min_i32, "db_min_height")
+            .unwrap_or_else(|| {
+                tracing::warn!("Failed to convert min height, using 0");
+                0
+            }),
         height_avg: h_avg,
-        height_max: crate::numeric_cast::i32_to_u32_sat(h_max_i32),
+        height_max: crate::numeric_cast::i32_to_u32_strict(h_max_i32, "db_max_height")
+            .unwrap_or_else(|| {
+                tracing::warn!("Failed to convert max height, using 0");
+                0
+            }),
 
         aspect_min,
         aspect_avg,
@@ -2667,16 +2770,31 @@ pub fn recompute_all_features(conn: &mut Client) -> Result<()> {
         let file_hash: String = row.get(0);
         let sample = SampleRow {
             _loss_tolerance: row.get(1),
-            width: crate::numeric_cast::i32_to_u32_sat(row.get::<_, i32>(2)),
-            height: crate::numeric_cast::i32_to_u32_sat(row.get::<_, i32>(3)),
+            width: crate::numeric_cast::i32_to_u32_strict(
+                row.get::<_, i32>(2),
+                "db_backfill_width",
+            )
+            .unwrap_or(0),
+            height: crate::numeric_cast::i32_to_u32_strict(
+                row.get::<_, i32>(3),
+                "db_backfill_height",
+            )
+            .unwrap_or(0),
             duration_secs: row.get(4),
-            frame_count: Some(crate::numeric_cast::i64_to_u64_sat(row.get::<_, i64>(5))),
-            file_size_bytes: crate::numeric_cast::i64_to_u64_sat(row.get::<_, i64>(6)),
-            fps: crate::numeric_cast::option_f64_loud(
-                row.get::<_, Option<f64>>(7),
-                0.0,
-                "db_backfill_fps",
+            frame_count: crate::numeric_cast::i64_to_u64_strict(
+                row.get::<_, i64>(5),
+                "db_backfill_frame_count",
             ),
+            file_size_bytes: crate::numeric_cast::i64_to_u64_strict(
+                row.get::<_, i64>(6),
+                "db_backfill_file_size",
+            )
+            .unwrap_or(0),
+            fps: crate::numeric_cast::option_f64_strict(
+                row.get::<_, Option<f64>>(7),
+                "db_backfill_fps",
+            )
+            .unwrap_or(0.0),
             temporal_bpp: row.get(8),
             spatial_bpp: row.get(9),
             has_transparency: row.get(10),
@@ -2684,14 +2802,14 @@ pub fn recompute_all_features(conn: &mut Client) -> Result<()> {
             has_complex_color_profile: row.get(12),
             palette_size: row
                 .get::<_, Option<i32>>(13)
-                .map(crate::numeric_cast::i32_to_u32_sat),
+                .map(|s| crate::numeric_cast::i32_to_u32_strict(s, "db_backfill_pal").unwrap_or(0)),
             frame_payload_variation: row.get(14),
             frame_delay_variation: row.get(15),
             aspect_ratio: row.get(16),
             _labeled_by: row.get(17),
-            _total_pixels: row
-                .get::<_, Option<i64>>(18)
-                .map(crate::numeric_cast::i64_to_u64_sat),
+            _total_pixels: row.get::<_, Option<i64>>(18).map(|s| {
+                crate::numeric_cast::i64_to_u64_strict(s, "db_backfill_total_pixels").unwrap_or(0)
+            }),
             loop_frequency: row.get(19),
             is_meme_platform: row.get(20),
             is_human_semantic_name: row.get(21),
@@ -2782,7 +2900,7 @@ pub fn log_inference_record(
 
     let knn_neighbor_count_i32 = record
         .knn_neighbor_count
-        .map(crate::numeric_cast::usize_to_i32_sat);
+        .map(|s| crate::numeric_cast::usize_to_i32_strict(s, "db_knn_count").unwrap_or(0));
 
     // Explicit type binding for ToSql stability
     let duration_secs = meta.duration_secs;
@@ -2888,11 +3006,11 @@ pub fn query_feature_discriminative_power(
             feature_name: row.get(0),
             mean_loop_strong: row.get(1),
             mean_loop_weak: row.get(2),
-            discriminative_power: crate::numeric_cast::option_f64_loud(
+            discriminative_power: crate::numeric_cast::option_f64_strict(
                 row.get::<_, Option<f64>>(3),
-                0.0,
                 "discriminative_power",
-            ),
+            )
+            .unwrap_or(0.0),
             sample_count: row.get(4),
         })
         .collect())
@@ -3186,16 +3304,16 @@ mod tests {
             audio_is_silent: Some(true), // GIFs never have audio
             frame_types: vec![
                 'P';
-                usize::try_from(frames)
-                    .expect("Failed to parse integer or missing required value")
+                crate::numeric_cast::u64_to_usize_strict(
+                    frames,
+                    "gif_frame_count_types"
+                )
+                .unwrap_or(0)
             ],
             pts_deltas: vec![
-                duration
-                    / f64::from(u32::try_from(frames).expect(
-                        "Value overflowed or is missing, cannot process ratio"
-                    ));
-                usize::try_from(frames)
-                    .expect("Failed to parse integer or missing required value")
+                duration / crate::numeric_cast::u64_to_f64(frames.max(1));
+                crate::numeric_cast::u64_to_usize_strict(frames, "gif_frame_count_pts")
+                    .unwrap_or(0)
             ],
             mv_magnitudes: Vec::new(),
             cached_frame_png: None,
@@ -3312,7 +3430,10 @@ mod tests {
         meta.duration_secs = 0.0_f64;
         meta.frame_count = Some(800);
         meta.fps = 10.0_f64;
-        assert!((resolved_duration_secs(&meta) - 80.0).abs() < 0.01_f64);
+        assert!(
+            (resolved_duration_secs(&meta).expect("Test should have valid duration") - 80.0).abs()
+                < 0.01_f64
+        );
     }
 
     #[test]

@@ -94,9 +94,12 @@ pub fn calculate_ms_ssim_yuv(
     eprintln!("   📹 Video: {duration:.1}s ({duration_min:.1}min)");
 
     if sample_rate > 1 {
-        let estimated_time = crate::numeric_cast::f64_to_u64_sat(
-            duration / f64::from(u32::try_from(sample_rate).unwrap_or(1)) * 3.0,
-        );
+        let sample_rate_u32 = u32::try_from(sample_rate).unwrap_or_else(|_| {
+            tracing::warn!("Invalid sample rate {}, using default", sample_rate);
+            1
+        });
+        let estimated_time =
+            crate::numeric_cast::f64_to_u64_sat(duration / f64::from(sample_rate_u32) * 3.0);
         eprintln!("   ⚡ Sampling: 1/{sample_rate} frames (est. {estimated_time}s)");
     } else {
         let estimated_time = crate::numeric_cast::f64_to_u64_sat(duration * 3.0);

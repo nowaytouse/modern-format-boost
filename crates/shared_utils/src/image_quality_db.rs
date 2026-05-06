@@ -429,7 +429,9 @@ pub fn lookup_image_quality(analysis: &ImageAnalysis) -> Option<QualityScore> {
         let distance: f64 = row.get(1);
 
         // Inverse Distance Weighting (IDW)
-        let mut weight = Rational::from(1) / (Rational::from_f64(distance).unwrap_or(Rational::from(0)) + Rational::from_f64(0.01).unwrap_or(Rational::from(1)));
+        let mut weight = Rational::from(1)
+            / (Rational::from_f64(distance).unwrap_or_else(|| Rational::from(0))
+                + Rational::from_f64(0.01).unwrap_or_else(|| Rational::from(1)));
 
         if label.contains("high") {
             weight *= high_factor.clone();
@@ -440,7 +442,7 @@ pub fn lookup_image_quality(analysis: &ImageAnalysis) -> Option<QualityScore> {
         total_weight += weight;
     }
 
-    if total_weight.clone() <= Rational::from(0) {
+    if total_weight.clone() <= 0 {
         emit_stderr(
             "  ⚠️ Static image KNN produced zero usable weight — using heuristic score only",
         );
@@ -555,15 +557,13 @@ pub fn log_quality_inference_record(
 
 // ── Sample ingestion ──────────────────────────────────────────────────────────
 
-/// Ingest a labelled static image into the quality training set.
 /// Ingest a quality sample into the database.
 ///
 /// # Errors
-/// Returns an error if the sample cannot be ingested.
-#[allow(
-    clippy::missing_panics_doc,
-    reason = "Explicit panic on data corruption is intended and documented inline."
-)]
+/// Returns an error if the image analysis fails or the database execution fails.
+///
+/// # Panics
+/// Panics if the feature vector cannot be calculated (unreachable if analysis is valid).
 pub fn ingest_quality_sample(
     conn: &mut Client,
     path: &Path,
@@ -581,7 +581,11 @@ pub fn ingest_quality_sample(
 
     let file_hash = crate::common_utils::calculate_blake3_hash(path)?;
     let total_pixels_u64 = u64::from(analysis.width).saturating_mul(u64::from(analysis.height));
-    let total_pixels = crate::numeric_cast::u64_to_i64_sat(total_pixels_u64);
+    let total_pixels = crate::numeric_cast::u64_to_i64_strict(total_pixels_u64, "total_pixels")
+        .unwrap_or_else(|| {
+            tracing::warn!("Failed to convert total pixels to i64, using 0");
+            0
+        });
     let spatial_bpp = crate::numeric_cast::u64_to_f64(analysis.file_size)
         / crate::numeric_cast::u64_to_f64(total_pixels_u64).max(1.0);
     let features = get_quality_features(&analysis);
@@ -599,9 +603,9 @@ pub fn ingest_quality_sample(
             &file_hash,
             &path.to_string_lossy().to_string(),
             &analysis.format,
-            &crate::numeric_cast::u32_to_i32_sat(analysis.width),
-            &crate::numeric_cast::u32_to_i32_sat(analysis.height),
-            &crate::numeric_cast::u64_to_i64_sat(analysis.file_size),
+            &crate::numeric_cast::u32_to_i32_strict(analysis.width, "width").unwrap_or(0),
+            &crate::numeric_cast::u32_to_i32_strict(analysis.height, "height").unwrap_or(0),
+            &crate::numeric_cast::u64_to_i64_strict(analysis.file_size, "file_size").unwrap_or(0),
             &analysis.features.entropy,
             &analysis.features.compression_ratio,
             &spatial_bpp,

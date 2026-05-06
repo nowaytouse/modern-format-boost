@@ -67,25 +67,32 @@ pub struct MergeResult {
 }
 
 #[derive(Debug, Clone)]
-// Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(
-    clippy::struct_excessive_bools,
-    reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping."
-)]
 pub struct XmpMergerConfig {
     pub delete_xmp_after_merge: bool,
-    pub overwrite_original: bool,
+    pub overwrite_mode: OverwriteMode,
     pub preserve_timestamps: bool,
-    pub verbose: bool,
+    pub log_level: LogLevel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverwriteMode {
+    Original, // Corresponds to overwrite_original: true
+    Never,    // Corresponds to overwrite_original: false
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogLevel {
+    Quiet,   // Corresponds to verbose: false
+    Verbose, // Corresponds to verbose: true
 }
 
 impl Default for XmpMergerConfig {
     fn default() -> Self {
         Self {
             delete_xmp_after_merge: false,
-            overwrite_original: true,
+            overwrite_mode: OverwriteMode::Original,
             preserve_timestamps: true,
-            verbose: false,
+            log_level: LogLevel::Quiet,
         }
     }
 }
@@ -122,9 +129,10 @@ impl XmpMerger {
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(err) => {
-                    if self.config.verbose {
+                    if matches!(self.config.log_level, LogLevel::Verbose) {
                         eprintln!("  ⚠️ Skipping unreadable path while scanning XMP files: {err}");
                     }
+
                     continue;
                 }
             };
@@ -146,7 +154,7 @@ impl XmpMerger {
         let entries = match std::fs::read_dir(parent) {
             Ok(entries) => entries,
             Err(err) => {
-                if self.config.verbose {
+                if matches!(self.config.log_level, LogLevel::Verbose) {
                     eprintln!(
                         "  ⚠️ Failed to read directory {}: {}",
                         parent.display(),
@@ -162,7 +170,7 @@ impl XmpMerger {
             match entry {
                 Ok(entry) => paths.push(entry.path()),
                 Err(err) => {
-                    if self.config.verbose {
+                    if matches!(self.config.log_level, LogLevel::Verbose) {
                         eprintln!(
                             "  ⚠️ Skipping unreadable directory entry in {}: {}",
                             parent.display(),
@@ -176,7 +184,7 @@ impl XmpMerger {
         Some(paths)
     }
 
-    fn extract_xmp_metadata(xmp_path: &Path) -> Result<XmpFile> {
+    fn extract_xmp_metadata(xmp_path: &Path, log_level: LogLevel) -> Result<XmpFile> {
         let xmp_data = std::fs::read(xmp_path)
             .with_context(|| format!("Failed to read XMP file: {}", xmp_path.display()))?;
 
@@ -238,7 +246,7 @@ impl XmpMerger {
                 .output()
                 .context("Failed to run exiftool")?;
 
-            if !output.status.success() {
+            if !output.status.success() && matches!(log_level, LogLevel::Verbose) {
                 let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
                 let detail = if stderr.is_empty() {
                     format!("status {}", output.status)
@@ -429,7 +437,7 @@ impl XmpMerger {
             {
                 Ok(output) if output.status.success() => output,
                 Ok(output) => {
-                    if self.config.verbose {
+                    if matches!(self.config.log_level, LogLevel::Verbose) {
                         eprintln!(
                             "  ⚠️ exiftool sidecar scan failed for {}: status {}",
                             path.display(),
@@ -439,7 +447,7 @@ impl XmpMerger {
                     continue;
                 }
                 Err(err) => {
-                    if self.config.verbose {
+                    if matches!(self.config.log_level, LogLevel::Verbose) {
                         eprintln!(
                             "  ⚠️ exiftool sidecar scan failed for {}: {}",
                             path.display(),
@@ -504,7 +512,7 @@ impl XmpMerger {
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(err) => {
-                    if self.config.verbose {
+                    if matches!(self.config.log_level, LogLevel::Verbose) {
                         eprintln!(
                             "  ⚠️ Skipping unreadable path while scanning subdirectories for {}: {}",
                             xmp_path.display(),
@@ -571,7 +579,7 @@ impl XmpMerger {
             return None;
         }
 
-        if self.config.verbose {
+        if matches!(self.config.log_level, LogLevel::Verbose) {
             eprintln!("  🔍 Searching by DocumentID: {xmp_doc_id}");
         }
 
@@ -597,7 +605,7 @@ impl XmpMerger {
             {
                 Ok(output) if output.status.success() => output,
                 Ok(output) => {
-                    if self.config.verbose {
+                    if matches!(self.config.log_level, LogLevel::Verbose) {
                         eprintln!(
                             "  ⚠️ exiftool DocumentID scan failed for {}: status {}",
                             path.display(),
@@ -607,7 +615,7 @@ impl XmpMerger {
                     continue;
                 }
                 Err(err) => {
-                    if self.config.verbose {
+                    if matches!(self.config.log_level, LogLevel::Verbose) {
                         eprintln!(
                             "  ⚠️ exiftool DocumentID scan failed for {}: {}",
                             path.display(),
@@ -621,7 +629,7 @@ impl XmpMerger {
             let media_doc_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
 
             if !media_doc_id.is_empty() && media_doc_id == *xmp_doc_id {
-                if self.config.verbose {
+                if matches!(self.config.log_level, LogLevel::Verbose) {
                     eprintln!("  ✅ Found match: {}", path.display());
                 }
                 return Some(path);
@@ -636,76 +644,77 @@ impl XmpMerger {
     /// # Errors
     /// Returns an error if searching fails.
     pub fn find_media_file(&self, xmp_path: &Path) -> Result<(Option<PathBuf>, String)> {
-        if self.config.verbose {
+        if matches!(self.config.log_level, LogLevel::Verbose) {
             eprintln!("🔍 Finding match for: {}", xmp_path.display());
         }
 
         if let Some(media) = Self::find_direct_match(xmp_path) {
-            if self.config.verbose {
+            if matches!(self.config.log_level, LogLevel::Verbose) {
                 eprintln!("  ✅ Strategy 1 (direct): {}", media.display());
             }
+
             return Ok((Some(media), "direct_match".to_string()));
         }
 
         if let Some(media) = self.find_same_name_different_ext(xmp_path) {
-            if self.config.verbose {
+            if matches!(self.config.log_level, LogLevel::Verbose) {
                 eprintln!("  ✅ Strategy 2 (same_name): {}", media.display());
             }
             return Ok((Some(media), "same_name".to_string()));
         }
 
         if let Some(media) = self.find_case_insensitive(xmp_path) {
-            if self.config.verbose {
+            if matches!(self.config.log_level, LogLevel::Verbose) {
                 eprintln!("  ✅ Strategy 2.5 (case_insensitive): {}", media.display());
             }
             return Ok((Some(media), "case_insensitive".to_string()));
         }
 
-        let xmp_info = Self::extract_xmp_metadata(xmp_path)?;
+        let xmp_info = Self::extract_xmp_metadata(xmp_path, self.config.log_level)?;
 
         if let Some(media) = Self::find_by_xmp_metadata(xmp_path, &xmp_info) {
-            if self.config.verbose {
+            if matches!(self.config.log_level, LogLevel::Verbose) {
                 eprintln!("  ✅ Strategy 3 (xmp_metadata): {}", media.display());
             }
             return Ok((Some(media), "xmp_metadata".to_string()));
         }
 
         if let Some(media) = self.find_by_document_id(xmp_path, &xmp_info) {
-            if self.config.verbose {
+            if matches!(self.config.log_level, LogLevel::Verbose) {
                 eprintln!("  ✅ Strategy 4 (document_id): {}", media.display());
             }
             return Ok((Some(media), "document_id".to_string()));
         }
 
         if let Some(media) = self.find_fuzzy_match(xmp_path) {
-            if self.config.verbose {
+            if matches!(self.config.log_level, LogLevel::Verbose) {
                 eprintln!("  ✅ Strategy 5 (fuzzy): {}", media.display());
             }
             return Ok((Some(media), "fuzzy_match".to_string()));
         }
 
         if let Some(media) = self.find_by_xmp_reference_scan(xmp_path) {
-            if self.config.verbose {
+            if matches!(self.config.log_level, LogLevel::Verbose) {
                 eprintln!("  ✅ Strategy 6 (xmp_ref_scan): {}", media.display());
             }
             return Ok((Some(media), "xmp_ref_scan".to_string()));
         }
 
         if let Some(media) = self.find_partial_match(xmp_path) {
-            if self.config.verbose {
+            if matches!(self.config.log_level, LogLevel::Verbose) {
                 eprintln!("  ✅ Strategy 7 (partial_match): {}", media.display());
             }
             return Ok((Some(media), "partial_match".to_string()));
         }
 
         if let Some(media) = self.find_in_subdirectories(xmp_path) {
-            if self.config.verbose {
+            if matches!(self.config.log_level, LogLevel::Verbose) {
                 eprintln!("  ✅ Strategy 8 (subdirectory): {}", media.display());
             }
             return Ok((Some(media), "subdirectory".to_string()));
         }
 
-        if self.config.verbose {
+        if matches!(self.config.log_level, LogLevel::Verbose) {
             eprintln!("  ❌ No match found");
         }
         Ok((None, "no_match".to_string()))
@@ -757,7 +766,7 @@ impl XmpMerger {
             .arg("-FileModifyDate<FileModifyDate")
             .arg(safe_path_arg(media_path).as_ref());
 
-        if self.config.overwrite_original {
+        if matches!(self.config.overwrite_mode, OverwriteMode::Original) {
             builder.overwrite_original();
         }
 
@@ -964,11 +973,13 @@ impl XmpMerger {
             Ok(()) => {
                 if self.config.delete_xmp_after_merge {
                     if let Err(err) = std::fs::remove_file(xmp_path) {
-                        crate::progress_mode::emit_stderr(&format!(
-                            "⚠️ XMP merge succeeded but sidecar delete failed for {}: {}",
-                            xmp_path.display(),
-                            err
-                        ));
+                        if matches!(self.config.log_level, LogLevel::Verbose) {
+                            crate::progress_mode::emit_stderr(&format!(
+                                "⚠️ XMP merge succeeded but sidecar delete failed for {}: {}",
+                                xmp_path.display(),
+                                err
+                            ));
+                        }
                     }
                 }
 
@@ -1069,9 +1080,9 @@ pub fn merge_xmp_for_copied_file(input: &Path, dest: &Path) -> Result<bool> {
 
             let config = XmpMergerConfig {
                 delete_xmp_after_merge: false,
-                overwrite_original: true,
+                overwrite_mode: OverwriteMode::Original,
                 preserve_timestamps: true,
-                verbose: false,
+                log_level: LogLevel::Quiet,
             };
 
             let merger = XmpMerger::new(config);
@@ -1094,10 +1105,6 @@ pub fn merge_xmp_for_copied_file(input: &Path, dest: &Path) -> Result<bool> {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    reason = "Unwrapping in test modules is idiomatic to ensure tests fail loudly and immediately on setup errors."
-)]
 mod tests {
     use super::*;
     use std::fs;
@@ -1296,7 +1303,7 @@ mod tests {
         fs::write(&xmp_path, xmp_content).unwrap_or_else(|_| panic!("error"));
 
         let config = XmpMergerConfig {
-            verbose: true,
+            log_level: LogLevel::Verbose,
             ..Default::default()
         };
         let merger = XmpMerger::new(config);
@@ -1356,10 +1363,10 @@ mod tests {
 
         let temp_dir = TempDir::new().unwrap_or_else(|_| panic!("error"));
         let empty_xmp = temp_dir.path().join("empty.xmp");
-        std::fs::write(&empty_xmp, "").unwrap();
+        std::fs::write(&empty_xmp, "").unwrap_or_else(|_| panic!("test setup error"));
         let _merger = XmpMerger::new(XmpMergerConfig::default());
 
-        let err = XmpMerger::extract_xmp_metadata(&empty_xmp)
+        let err = XmpMerger::extract_xmp_metadata(&empty_xmp, LogLevel::Quiet)
             .err()
             .unwrap_or_else(|| anyhow::anyhow!("unknown error"));
         assert!(err

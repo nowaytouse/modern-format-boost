@@ -543,8 +543,8 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
                 heic_analysis.is_lossless
             );
             // Skip HEIC files with HDR or Dolby Vision
-            if heic_analysis.is_hdr || heic_analysis.is_dolby_vision {
-                let reason = if heic_analysis.is_dolby_vision {
+            if heic_analysis.hdr.is_hdr || heic_analysis.hdr.is_dolby_vision {
+                let reason = if heic_analysis.hdr.is_dolby_vision {
                     "HEIC with Dolby Vision - skipping to preserve HDR metadata"
                 } else {
                     "HEIC with HDR - skipping to preserve HDR metadata"
@@ -553,19 +553,19 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
             }
 
             // Warn about auxiliary data that will be lost on conversion
-            if heic_analysis.has_auxiliary {
+            if heic_analysis.aux.has_auxiliary {
                 log_eprintln!(
                     "⚠️  HEIC depth/focus auxiliary images detected in {} — depth will be saved as sidecar file (e.g., .depth.png)",
                     path.display()
                 );
             }
-            if heic_analysis.has_gainmap {
+            if heic_analysis.hdr.has_gainmap {
                 log_eprintln!(
                     "🌈 HEIC Apple/Google gainmap detected in {} — HDR synthesis will be performed (gainmap → JXL HDR via EXR/PNG intermediate)",
                     path.display()
                 );
             }
-            if heic_analysis.has_vendor_metadata {
+            if heic_analysis.aux.has_vendor_metadata {
                 log_eprintln!(
                     "⚠️  HEIC Samsung/Google vendor XMP metadata detected in {} — XMP will be preserved via exiftool, but vendor-specific rendering may differ",
                     path.display()

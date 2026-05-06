@@ -1177,13 +1177,19 @@ pub fn auto_convert_with_cache(
                         vf_args,
                         baseline_crf: predicted_crf,
                         warm_start_crf,
-                        ultimate_mode: ultimate,
-                        force_ms_ssim_long: config.force_ms_ssim_long(),
-                        allow_size_tolerance: config.allow_size_tolerance(),
+                        flags: shared_utils::GpuSearchFlags {
+                            features: shared_utils::GpuSearchFeatures {
+                                ultimate_mode: ultimate,
+                                apple_compat: config.apple_compat(),
+                            },
+                            validation: shared_utils::GpuSearchValidation {
+                                force_ms_ssim_long: config.force_ms_ssim_long(),
+                                allow_size_tolerance: config.allow_size_tolerance(),
+                            },
+                        },
                         min_ssim: config.min_ssim,
                         max_threads: config.child_threads,
                         hdr_x265_params: hdr_x265_params_opt,
-                        apple_compat: config.apple_compat(),
                         preset: if ultimate {
                             shared_utils::EncoderPreset::Slower
                         } else {
@@ -1198,13 +1204,19 @@ pub fn auto_convert_with_cache(
                         vf_args,
                         baseline_crf: predicted_crf,
                         warm_start_crf,
-                        ultimate_mode: ultimate,
-                        force_ms_ssim_long: config.force_ms_ssim_long(),
-                        allow_size_tolerance: config.allow_size_tolerance(),
+                        flags: shared_utils::GpuSearchFlags {
+                            features: shared_utils::GpuSearchFeatures {
+                                ultimate_mode: ultimate,
+                                apple_compat: config.apple_compat(),
+                            },
+                            validation: shared_utils::GpuSearchValidation {
+                                force_ms_ssim_long: config.force_ms_ssim_long(),
+                                allow_size_tolerance: config.allow_size_tolerance(),
+                            },
+                        },
                         min_ssim: config.min_ssim,
                         max_threads: config.child_threads,
                         hdr_x265_params: None,
-                        apple_compat: config.apple_compat(),
                         preset: if ultimate {
                             shared_utils::EncoderPreset::Slower
                         } else {
@@ -1817,7 +1829,8 @@ fn execute_lossless(
         info!(
             file = %detection.file_path,
             codec = %detection.codec.as_str(),
-            file_size_gb = f64::from(u32::try_from(detection.file_size / (1024 * 1024)).expect("Value overflowed or is missing, cannot process ratio")) / 1_024.0_f64,
+            file_size_gb = shared_utils::numeric_cast::u64_to_f64(detection.file_size)
+                / (1024.0_f64 * 1024.0_f64 * 1024.0_f64),
             "Applying low-memory x265 profile for large/high-fidelity source"
         );
     }

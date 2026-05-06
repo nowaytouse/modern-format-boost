@@ -277,6 +277,7 @@ const MARKER_EOI: u8 = 0xD9;
 ///
 /// # Errors
 /// Returns an error if the JPEG data is corrupted or missing DQT markers.
+#[allow(clippy::too_many_lines)]
 pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, String> {
     let mut tables = Vec::new();
 
@@ -299,12 +300,9 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
             break;
         }
 
-        let marker = match data.get(pos).copied() {
-            Some(m) => m,
-            None => {
-                warn!("☢️ [FATAL] Truncated JPEG at position {pos}: expected marker byte");
-                return Err(format!("Truncated JPEG at position {pos}: expected marker"));
-            }
+        let Some(marker) = data.get(pos).copied() else {
+            warn!("☢️ [FATAL] Truncated JPEG at position {pos}: expected marker byte");
+            return Err(format!("Truncated JPEG at position {pos}: expected marker"));
         };
         pos += 1;
 
@@ -314,22 +312,21 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
 
         if pos + 2 > data.len() {
             warn!("☢️ [FATAL] Truncated JPEG segment at position {pos}: expected length field");
-            return Err(format!("Truncated JPEG at position {pos}: expected segment length"));
+            return Err(format!(
+                "Truncated JPEG at position {pos}: expected segment length"
+            ));
         }
-        
-        let length_high = match data.get(pos).copied() {
-            Some(b) => b,
-            None => {
-                warn!("☢️ [FATAL] Truncated JPEG at position {pos}: failed to read segment length high byte");
-                return Err("Failed to read segment length high byte".to_string());
-            }
+
+        let Some(length_high) = data.get(pos).copied() else {
+            warn!("☢️ [FATAL] Truncated JPEG at position {pos}: failed to read segment length high byte");
+            return Err("Failed to read segment length high byte".to_string());
         };
-        let length_low = match data.get(pos + 1).copied() {
-            Some(b) => b,
-            None => {
-                warn!("☢️ [FATAL] Truncated JPEG at position {}: failed to read segment length low byte", pos + 1);
-                return Err("Failed to read segment length low byte".to_string());
-            }
+        let Some(length_low) = data.get(pos + 1).copied() else {
+            warn!(
+                "☢️ [FATAL] Truncated JPEG at position {}: failed to read segment length low byte",
+                pos + 1
+            );
+            return Err("Failed to read segment length low byte".to_string());
         };
         let length = (usize::from(length_high) << 8_i32) | usize::from(length_low);
 
@@ -342,12 +339,9 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
                     break;
                 }
 
-                let pq_tq = match data.get(seg_pos).copied() {
-                    Some(b) => b,
-                    None => {
-                        warn!("☢️ [FATAL] Truncated DQT segment at position {seg_pos}");
-                        return Err(format!("Truncated DQT segment at position {seg_pos}"));
-                    }
+                let Some(pq_tq) = data.get(seg_pos).copied() else {
+                    warn!("☢️ [FATAL] Truncated DQT segment at position {seg_pos}");
+                    return Err(format!("Truncated DQT segment at position {seg_pos}"));
                 };
                 let precision = (pq_tq >> 4_i32) & 0x0F;
                 seg_pos += 1;
@@ -357,7 +351,9 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
                 if precision == 0 {
                     if seg_pos + 64 > data.len() {
                         warn!("☢️ [CORRUPTION] DQT segment too short for 8-bit table at {seg_pos}");
-                        return Err(format!("DQT segment too short for 8-bit table at {seg_pos}"));
+                        return Err(format!(
+                            "DQT segment too short for 8-bit table at {seg_pos}"
+                        ));
                     }
                     for &zigzag in &ZIGZAG_ORDER {
                         let row = zigzag / 8;
@@ -369,15 +365,19 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
                     }
                 } else {
                     if seg_pos + 128 > data.len() {
-                        warn!("☢️ [CORRUPTION] DQT segment too short for 16-bit table at {seg_pos}");
-                        return Err(format!("DQT segment too short for 16-bit table at {seg_pos}"));
+                        warn!(
+                            "☢️ [CORRUPTION] DQT segment too short for 16-bit table at {seg_pos}"
+                        );
+                        return Err(format!(
+                            "DQT segment too short for 16-bit table at {seg_pos}"
+                        ));
                     }
                     for &zigzag in &ZIGZAG_ORDER {
                         let row = zigzag / 8;
                         let col = zigzag % 8;
                         if let Some(cell) = table.get_mut(row).and_then(|r| r.get_mut(col)) {
-                            *cell = (u16::from(data[seg_pos]) << 8_i32)
-                                | u16::from(data[seg_pos + 1]);
+                            *cell =
+                                (u16::from(data[seg_pos]) << 8_i32) | u16::from(data[seg_pos + 1]);
                         }
                         seg_pos += 2;
                     }
@@ -548,12 +548,12 @@ pub fn is_ultra_hdr_jpeg(data: &[u8]) -> bool {
             break;
         }
 
-        let marker = match data.get(pos + 1).copied() {
-            Some(m) => m,
-            None => {
-                warn!("☢️ [ANOMALY] Truncated JPEG at position {}: expected marker byte", pos + 1);
-                break;
-            }
+        let Some(marker) = data.get(pos + 1).copied() else {
+            warn!(
+                "☢️ [ANOMALY] Truncated JPEG at position {}: expected marker byte",
+                pos + 1
+            );
+            break;
         };
         pos += 2;
 
@@ -572,32 +572,28 @@ pub fn is_ultra_hdr_jpeg(data: &[u8]) -> bool {
             warn!("☢️ [ANOMALY] Truncated JPEG segment length at position {pos}");
             break;
         }
-        let seg_len = usize::from(u16::from_be_bytes([
-            data[pos],
-            data[pos + 1],
-        ]));
+        let seg_len = usize::from(u16::from_be_bytes([data[pos], data[pos + 1]]));
         if seg_len < 2 || pos + seg_len > data.len() {
             warn!("☢️ [ANOMALY] Invalid segment length {seg_len} at position {pos}");
             break;
         }
 
-        let payload = match data.get(pos + 2..pos + seg_len) {
-            Some(p) => p,
-            None => {
-                warn!("☢️ [ANOMALY] Truncated segment payload at position {}", pos + 2);
-                break;
-            }
+        let Some(payload) = data.get(pos + 2..pos + seg_len) else {
+            warn!(
+                "☢️ [ANOMALY] Truncated segment payload at position {}",
+                pos + 2
+            );
+            break;
         };
 
         // APP2 (0xE2): check for XMP gainmap or MPF
         if marker == 0xE2 {
             if payload.starts_with(b"http://ns.adobe.com/xap/1.0/\0") && payload.len() > 29 {
-                let xmp_slice = match payload.get(29..) {
-                    Some(s) => s,
-                    None => {
-                        warn!("☢️ [ANOMALY] APP1 XMP payload truncated at position 29");
-                        &[]
-                    }
+                let xmp_slice = if let Some(s) = payload.get(29..) {
+                    s
+                } else {
+                    warn!("☢️ [ANOMALY] APP1 XMP payload truncated at position 29");
+                    &[]
                 };
                 let xmp = String::from_utf8_lossy(xmp_slice);
                 if xmp.contains("hdrgm:") || xmp.contains("GainMap") || xmp.contains("gainmap") {
@@ -613,10 +609,7 @@ pub fn is_ultra_hdr_jpeg(data: &[u8]) -> bool {
             && payload.starts_with(b"http://ns.adobe.com/xap/1.0/\0")
             && payload.len() > 29
         {
-            let xmp = String::from_utf8_lossy(
-                payload
-                    .get(29..).unwrap_or(&[]),
-            );
+            let xmp = String::from_utf8_lossy(payload.get(29..).unwrap_or(&[]));
             if xmp.contains("hdrgm:") || xmp.contains("GainMap") || xmp.contains("gainmap") {
                 has_gainmap_xmp = true;
             }
@@ -656,36 +649,30 @@ pub fn extract_xmp_from_jpeg_data(data: &[u8]) -> Option<Vec<String>> {
             if pos + 3 >= data.len() {
                 break;
             }
-            let seg_len = usize::from(u16::from_be_bytes([
-                data.get(pos + 2).copied().unwrap_or(0),
-                data.get(pos + 3).copied().unwrap_or(0),
-            ]));
+            let seg_len = if let Some((b1, b2)) = data.get(pos + 2).zip(data.get(pos + 3)) {
+                usize::from(u16::from_be_bytes([*b1, *b2]))
+            } else {
+                tracing::warn!("JPEG segment length bytes missing at position {}", pos);
+                break;
+            };
             if seg_len < 2 || pos + 2 + seg_len > data.len() {
                 pos += 1;
                 continue;
             }
 
-            let payload = data
-                .get(pos + 4..pos + 2 + seg_len).unwrap_or(&[]);
+            let payload = data.get(pos + 4..pos + 2 + seg_len).unwrap_or(&[]);
 
             // APP1 (0xE1): XMP Standard
             if payload.starts_with(b"http://ns.adobe.com/xap/1.0/\0") && payload.len() > 29 {
-                let xmp = String::from_utf8_lossy(
-                    payload
-                        .get(29..).unwrap_or(&[]),
-                )
-                .to_string();
+                let xmp = String::from_utf8_lossy(payload.get(29..).unwrap_or(&[])).to_string();
                 xmp_blocks.push(xmp);
             }
             // APP1 (0xE1): XMP Extended
             else if payload.starts_with(b"http://ns.adobe.com/xmp/extension/\0")
                 && payload.len() > 35 + 32 + 8
             {
-                let xmp = String::from_utf8_lossy(
-                    payload
-                        .get(35 + 32 + 8..).unwrap_or(&[]),
-                )
-                .to_string();
+                let xmp =
+                    String::from_utf8_lossy(payload.get(35 + 32 + 8..).unwrap_or(&[])).to_string();
                 xmp_blocks.push(xmp);
             }
             pos += 2 + seg_len;
@@ -728,8 +715,8 @@ pub fn extract_gainmap_from_jpeg(data: &[u8]) -> Result<(DynamicImage, DynamicIm
         return Err(format!(
             "Invalid JPEG signature: expected FFD8, got {:02X}{:02X}. \
              File size: {} bytes. This is not a valid JPEG file.",
-            data.first().copied().unwrap_or(0),
-            data.get(1).copied().unwrap_or(0),
+            data.first().copied().unwrap_or(0xFF),
+            data.get(1).copied().unwrap_or(0xFF),
             data.len()
         ));
     }
@@ -897,7 +884,8 @@ fn collect_scanned_gainmap_candidates(
     }
 
     for (offset, window) in jpeg_data
-        .get(range_start..bounded_end).unwrap_or(&[])
+        .get(range_start..bounded_end)
+        .unwrap_or(&[])
         .windows(JPEG_SOI_BYTES.len())
         .enumerate()
     {
@@ -1002,9 +990,7 @@ fn candidate_gainmap_bytes(
         _ => return None,
     };
 
-    let mut candidate = jpeg_data
-        .get(start..end).unwrap_or(&[])
-        .to_vec();
+    let mut candidate = jpeg_data.get(start..end).unwrap_or(&[]).to_vec();
     let repaired_eoi = !candidate.ends_with(&JPEG_EOI_BYTES);
     if repaired_eoi {
         candidate.extend_from_slice(&JPEG_EOI_BYTES);
@@ -1039,13 +1025,10 @@ fn gainmap_candidate_score(
         GainmapCandidateSource::NearbyScan => 2_500.0_f64,
         GainmapCandidateSource::TailScan => 1_500.0_f64,
     };
-    let aspect_penalty = match aspect_diff {
-        Some(d) => d * 10_000.0_f64,
-        None => {
+    let aspect_penalty = aspect_diff.map_or_else(|| {
             warn!("☢️ [ANOMALY] Gainmap candidate aspect ratio missing; using moderate penalty fallback");
             2_000.0_f64
-        }
-    };
+        }, |d| d * 10_000.0_f64);
     let length_penalty = if claimed_len == 0 {
         0.0_f64
     } else {
@@ -1192,16 +1175,16 @@ fn find_mpf_segment(data: &[u8]) -> Result<Vec<u8>, String> {
             return Err(format!(
                 "Invalid JPEG structure: expected marker 0xFF at position {}, found 0x{:02X}",
                 pos,
-                data.get(pos).copied().unwrap_or(0)
+                data.get(pos).copied().unwrap_or(0xFF)
             ));
         }
 
-        let marker = match data.get(pos + 1).copied() {
-            Some(m) => m,
-            None => {
-                warn!("☢️ [ANOMALY] Truncated JPEG at position {}: expected marker byte", pos + 1);
-                break;
-            }
+        let Some(marker) = data.get(pos + 1).copied() else {
+            warn!(
+                "☢️ [ANOMALY] Truncated JPEG at position {}: expected marker byte",
+                pos + 1
+            );
+            break;
         };
         pos += 2;
 
@@ -1217,19 +1200,16 @@ fn find_mpf_segment(data: &[u8]) -> Result<Vec<u8>, String> {
             return Err(format!("Truncated segment at position {pos}"));
         }
 
-        let length_high = match data.get(pos).copied() {
-            Some(b) => b,
-            None => {
-                warn!("☢️ [ANOMALY] Truncated segment at position {pos}: missing length high byte");
-                break;
-            }
+        let Some(length_high) = data.get(pos).copied() else {
+            warn!("☢️ [ANOMALY] Truncated segment at position {pos}: missing length high byte");
+            break;
         };
-        let length_low = match data.get(pos + 1).copied() {
-            Some(b) => b,
-            None => {
-                warn!("☢️ [ANOMALY] Truncated segment at position {}: missing length low byte", pos + 1);
-                break;
-            }
+        let Some(length_low) = data.get(pos + 1).copied() else {
+            warn!(
+                "☢️ [ANOMALY] Truncated segment at position {}: missing length low byte",
+                pos + 1
+            );
+            break;
         };
         let seg_len = usize::from(u16::from_be_bytes([length_high, length_low]));
         if seg_len < 2 || pos + seg_len > data.len() {
@@ -1238,10 +1218,7 @@ fn find_mpf_segment(data: &[u8]) -> Result<Vec<u8>, String> {
             ));
         }
 
-        let seg_len = usize::from(u16::from_be_bytes([
-            data[pos],
-            data[pos + 1],
-        ]));
+        let seg_len = usize::from(u16::from_be_bytes([data[pos], data[pos + 1]]));
         if seg_len < 2 || pos + seg_len > data.len() {
             warn!("☢️ [ANOMALY] Invalid APP2 segment length {seg_len} at position {pos}");
             return Err(format!(
@@ -1249,11 +1226,13 @@ fn find_mpf_segment(data: &[u8]) -> Result<Vec<u8>, String> {
             ));
         }
 
-        let payload = data
-            .get(pos + 2..pos + seg_len).ok_or_else(|| {
-                warn!("☢️ [CORRUPTION] Failed to extract APP2 payload at position {}", pos + 2);
-                format!("Failed to extract APP2 payload at position {}", pos + 2)
-            })?;
+        let payload = data.get(pos + 2..pos + seg_len).ok_or_else(|| {
+            warn!(
+                "☢️ [CORRUPTION] Failed to extract APP2 payload at position {}",
+                pos + 2
+            );
+            format!("Failed to extract APP2 payload at position {}", pos + 2)
+        })?;
 
         if marker == 0xE2 {
             if let Some(mpf_payload) = strip_mpf_identifier(payload) {
@@ -1268,6 +1247,7 @@ fn find_mpf_segment(data: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 /// Extract gainmap image data from MPF segment.
+#[allow(clippy::too_many_lines)]
 fn extract_gainmap_from_mpf(
     jpeg_data: &[u8],
     mpf_data: &[u8],
@@ -1282,10 +1262,10 @@ fn extract_gainmap_from_mpf(
         warn!("☢️ [CORRUPTION] Invalid MPF endianness marker");
         return Err(format!(
             "Invalid MPF endianness marker: expected 'MM\\0*' or 'II*\\0', got {:02X} {:02X} {:02X} {:02X}",
-            mpf_data.first().copied().unwrap_or(0),
-            mpf_data.get(1).copied().unwrap_or(0),
-            mpf_data.get(2).copied().unwrap_or(0),
-            mpf_data.get(3).copied().unwrap_or(0)
+            mpf_data.first().copied().unwrap_or(0xFF),
+            mpf_data.get(1).copied().unwrap_or(0xFF),
+            mpf_data.get(2).copied().unwrap_or(0xFF),
+            mpf_data.get(3).copied().unwrap_or(0xFF)
         ));
     };
 
@@ -1299,11 +1279,7 @@ fn extract_gainmap_from_mpf(
     );
 
     // Read first IFD offset (4 bytes after endianness marker)
-    let first_ifd_offset = read_u32(
-        mpf_data
-            .get(4..8).unwrap_or(&[]),
-        is_big_endian,
-    )?;
+    let first_ifd_offset = read_u32(mpf_data.get(4..8).unwrap_or(&[]), is_big_endian)?;
     info!("First IFD offset: {}", first_ifd_offset);
 
     // Navigate to first IFD
@@ -1322,9 +1298,12 @@ fn extract_gainmap_from_mpf(
 
     // Read number of entries in IFD
     let num_entries = read_u16(
-        mpf_data
-            .get(first_ifd_start..)
-            .ok_or_else(|| format!("MPF IFD offset {first_ifd_start} out of range {}", mpf_data.len()))?,
+        mpf_data.get(first_ifd_start..).ok_or_else(|| {
+            format!(
+                "MPF IFD offset {first_ifd_start} out of range {}",
+                mpf_data.len()
+            )
+        })?,
         is_big_endian,
     )?;
     info!("IFD entries: {}", num_entries);
@@ -1333,12 +1312,11 @@ fn extract_gainmap_from_mpf(
     let mut mp_entry_offset: Option<u32> = None;
     let mut num_images: Option<u32> = None;
 
-    let ifd_start = match usize::try_from(first_ifd_offset) {
-        Ok(s) => s,
-        Err(_) => {
-            warn!("☢️ [ANOMALY] first_ifd_offset {first_ifd_offset} overflows usize");
-            return Err(format!("first_ifd_offset {first_ifd_offset} overflows usize"));
-        }
+    let Ok(ifd_start) = usize::try_from(first_ifd_offset) else {
+        warn!("☢️ [ANOMALY] first_ifd_offset {first_ifd_offset} overflows usize");
+        return Err(format!(
+            "first_ifd_offset {first_ifd_offset} overflows usize"
+        ));
     };
     for i in 0..num_entries {
         let entry_offset = ifd_start + 2 + (usize::from(i) * 12);
@@ -1351,33 +1329,51 @@ fn extract_gainmap_from_mpf(
             ));
         }
 
-        let tag = match mpf_data.get(entry_offset..entry_offset + 2) {
-            Some(p) => read_u16(p, is_big_endian)?,
-            None => {
-                warn!("☢️ [CORRUPTION] IFD entry {} tag at {} truncated", i, entry_offset);
-                return Err(format!("IFD entry {} tag at {} truncated", i, entry_offset));
-            }
+        let tag = if let Some(p) = mpf_data.get(entry_offset..entry_offset + 2) {
+            read_u16(p, is_big_endian)?
+        } else {
+            warn!("☢️ [CORRUPTION] IFD entry {i} tag at {entry_offset} truncated");
+            return Err(format!("IFD entry {i} tag at {entry_offset} truncated"));
         };
-        let _data_type = match mpf_data.get(entry_offset + 2..entry_offset + 4) {
-            Some(p) => read_u16(p, is_big_endian)?,
-            None => {
-                warn!("☢️ [CORRUPTION] IFD entry {} type at {} truncated", i, entry_offset + 2);
-                return Err(format!("IFD entry {} type at {} truncated", i, entry_offset + 2));
-            }
+        let _data_type = if let Some(p) = mpf_data.get(entry_offset + 2..entry_offset + 4) {
+            read_u16(p, is_big_endian)?
+        } else {
+            warn!(
+                "☢️ [CORRUPTION] IFD entry {i} type at {} truncated",
+                entry_offset + 2
+            );
+            return Err(format!(
+                "IFD entry {i} type at {} truncated",
+                entry_offset + 2
+            ));
         };
-        let num_components = match mpf_data.get(entry_offset + 4..entry_offset + 8) {
-            Some(p) => read_u32(p, is_big_endian)?,
-            None => {
-                warn!("☢️ [CORRUPTION] IFD entry {} count at {} truncated", i, entry_offset + 4);
-                return Err(format!("IFD entry {} count at {} truncated", i, entry_offset + 4));
-            }
+        let num_components = if let Some(p) = mpf_data.get(entry_offset + 4..entry_offset + 8) {
+            read_u32(p, is_big_endian)?
+        } else {
+            warn!(
+                "☢️ [CORRUPTION] IFD entry {} count at {} truncated",
+                i,
+                entry_offset + 4
+            );
+            return Err(format!(
+                "IFD entry {} count at {} truncated",
+                i,
+                entry_offset + 4
+            ));
         };
-        let value_offset = match mpf_data.get(entry_offset + 8..entry_offset + 12) {
-            Some(p) => read_u32(p, is_big_endian)?,
-            None => {
-                warn!("☢️ [CORRUPTION] IFD entry {} value/offset at {} truncated", i, entry_offset + 8);
-                return Err(format!("IFD entry {} value/offset at {} truncated", i, entry_offset + 8));
-            }
+        let value_offset = if let Some(p) = mpf_data.get(entry_offset + 8..entry_offset + 12) {
+            read_u32(p, is_big_endian)?
+        } else {
+            warn!(
+                "☢️ [CORRUPTION] IFD entry {} value/offset at {} truncated",
+                i,
+                entry_offset + 8
+            );
+            return Err(format!(
+                "IFD entry {} value/offset at {} truncated",
+                i,
+                entry_offset + 8
+            ));
         };
 
         match tag {
@@ -1420,12 +1416,9 @@ fn extract_gainmap_from_mpf(
     }
 
     // Navigate to MP Entry array
-    let mp_entry_array_offset = match usize::try_from(mp_entry_offset) {
-        Ok(s) => s,
-        Err(_) => {
-            warn!("☢️ [ANOMALY] mp_entry_offset {mp_entry_offset} overflows usize");
-            return Err(format!("mp_entry_offset {mp_entry_offset} overflows usize"));
-        }
+    let Ok(mp_entry_array_offset) = usize::try_from(mp_entry_offset) else {
+        warn!("☢️ [ANOMALY] mp_entry_offset {mp_entry_offset} overflows usize");
+        return Err(format!("mp_entry_offset {mp_entry_offset} overflows usize"));
     };
     if mp_entry_array_offset + 16 > mpf_data.len() {
         return Err(format!(
@@ -1451,27 +1444,35 @@ fn extract_gainmap_from_mpf(
         ));
     }
 
-    let attributes = match mpf_data.get(gainmap_entry_offset..gainmap_entry_offset + 4) {
-        Some(p) => read_u32(p, is_big_endian)?,
-        None => {
-            warn!("☢️ [CORRUPTION] Gainmap entry attributes truncated at {}", gainmap_entry_offset);
-            return Err("Gainmap entry attributes truncated".to_string());
-        }
+    let attributes = if let Some(p) = mpf_data.get(gainmap_entry_offset..gainmap_entry_offset + 4) {
+        read_u32(p, is_big_endian)?
+    } else {
+        warn!(
+            "☢️ [CORRUPTION] Gainmap entry attributes truncated at {}",
+            gainmap_entry_offset
+        );
+        return Err("Gainmap entry attributes truncated".to_string());
     };
-    let gainmap_length = match mpf_data.get(gainmap_entry_offset + 4..gainmap_entry_offset + 8) {
-        Some(p) => read_u32(p, is_big_endian)?,
-        None => {
-            warn!("☢️ [CORRUPTION] Gainmap entry length truncated at {}", gainmap_entry_offset + 4);
+    let gainmap_length =
+        if let Some(p) = mpf_data.get(gainmap_entry_offset + 4..gainmap_entry_offset + 8) {
+            read_u32(p, is_big_endian)?
+        } else {
+            warn!(
+                "☢️ [CORRUPTION] Gainmap entry length truncated at {}",
+                gainmap_entry_offset + 4
+            );
             return Err("Gainmap entry length truncated".to_string());
-        }
-    };
-    let gainmap_offset = match mpf_data.get(gainmap_entry_offset + 8..gainmap_entry_offset + 12) {
-        Some(p) => read_u32(p, is_big_endian)?,
-        None => {
-            warn!("☢️ [CORRUPTION] Gainmap entry offset truncated at {}", gainmap_entry_offset + 8);
+        };
+    let gainmap_offset =
+        if let Some(p) = mpf_data.get(gainmap_entry_offset + 8..gainmap_entry_offset + 12) {
+            read_u32(p, is_big_endian)?
+        } else {
+            warn!(
+                "☢️ [CORRUPTION] Gainmap entry offset truncated at {}",
+                gainmap_entry_offset + 8
+            );
             return Err("Gainmap entry offset truncated".to_string());
-        }
-    };
+        };
 
     info!(
         "Gainmap entry: attributes=0x{:08X}, length={}, offset={}",
@@ -1483,9 +1484,7 @@ fn extract_gainmap_from_mpf(
         return Err("Gainmap length is 0. Invalid MPF structure.".to_string());
     }
 
-    if gainmap_length
-        > u32::try_from(jpeg_data.len()).unwrap_or(u32::MAX)
-    {
+    if gainmap_length > u32::try_from(jpeg_data.len()).unwrap_or(u32::MAX) {
         warn!(
             gainmap_length,
             jpeg_len = jpeg_data.len(),
@@ -1565,16 +1564,12 @@ fn find_mpf_base_position(jpeg_data: &[u8]) -> Result<usize, String> {
         }
 
         // Guarded by pos + 2 > jpeg_data.len()
-        let seg_len = usize::from(u16::from_be_bytes([
-            jpeg_data[pos],
-            jpeg_data[pos + 1],
-        ]));
+        let seg_len = usize::from(u16::from_be_bytes([jpeg_data[pos], jpeg_data[pos + 1]]));
         if seg_len < 2 || pos + seg_len > jpeg_data.len() {
             break;
         }
 
-        let payload = jpeg_data
-            .get(pos + 2..pos + seg_len).unwrap_or(&[]);
+        let payload = jpeg_data.get(pos + 2..pos + seg_len).unwrap_or(&[]);
 
         if marker == 0xE2 && strip_mpf_identifier(payload).is_some() {
             // Offsets are relative to the TIFF header that begins immediately after
@@ -1725,7 +1720,7 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_xmp_from_jpeg_data_with_xmp() {
+    fn test_extract_xmp_from_jpeg_data_with_xmp() -> Result<(), Box<dyn std::error::Error>> {
         let xmp_header = b"http://ns.adobe.com/xap/1.0/\0";
         let xmp_content = b"<x:xmpmeta>test content</x:xmpmeta>";
 
@@ -1733,7 +1728,8 @@ mod tests {
             0xFF, 0xD8, // SOI
             0xFF, 0xE1, // APP1 for XMP
         ];
-        let xmp_len = u16::try_from(xmp_header.len() + xmp_content.len() + 2).unwrap_or(0);
+        let xmp_len = u16::try_from(xmp_header.len() + xmp_content.len() + 2)
+            .map_err(|_| "XMP segment length overflow")?;
         jpeg_with_xmp.extend_from_slice(&xmp_len.to_be_bytes());
         jpeg_with_xmp.extend_from_slice(xmp_header);
         jpeg_with_xmp.extend_from_slice(xmp_content);
@@ -1743,11 +1739,9 @@ mod tests {
         assert!(extracted.is_some());
         let xmp_blocks = extracted.unwrap_or_default();
         assert_eq!(xmp_blocks.len(), 1);
-        let xmp_str = xmp_blocks
-            .first()
-            .unwrap_or_else(|| panic!("No XMP blocks found"));
-        assert!(xmp_str.contains("<x:xmpmeta>"));
+        let xmp_str = xmp_blocks.first().cloned().unwrap_or_default();
         assert!(xmp_str.contains("test content"));
+        Ok(())
     }
 
     #[test]
@@ -1762,7 +1756,7 @@ mod tests {
     }
 
     #[test]
-    fn test_is_ultra_hdr_jpeg_true_with_xmp_gainmap() {
+    fn test_is_ultra_hdr_jpeg_true_with_xmp_gainmap() -> Result<(), Box<dyn std::error::Error>> {
         let xmp_header = b"http://ns.adobe.com/xap/1.0/\0";
         // Use actual gainmap metadata format that contains "hdrgm:"
         let xmp_content = b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF><rdf:Description hdrgm:GainMapMax=\"1.0\" xmlns:hdrgm=\"http://ns.adobe.com/hdr-gain-map/1.0/\"/></rdf:RDF></x:xmpmeta>";
@@ -1771,7 +1765,8 @@ mod tests {
             0xFF, 0xD8, // SOI
             0xFF, 0xE1, // APP1 for XMP
         ];
-        let xmp_len = u16::try_from(xmp_header.len() + xmp_content.len() + 2).unwrap_or(0);
+        let xmp_len = u16::try_from(xmp_header.len() + xmp_content.len() + 2)
+            .map_err(|_| "XMP segment length overflow")?;
         jpeg_with_gainmap.extend_from_slice(&xmp_len.to_be_bytes());
         jpeg_with_gainmap.extend_from_slice(xmp_header);
         jpeg_with_gainmap.extend_from_slice(xmp_content);
@@ -1786,6 +1781,7 @@ mod tests {
         jpeg_with_gainmap.extend_from_slice(&[0xFF, 0xD9]); // EOI
 
         assert!(is_ultra_hdr_jpeg(&jpeg_with_gainmap));
+        Ok(())
     }
 
     #[test]

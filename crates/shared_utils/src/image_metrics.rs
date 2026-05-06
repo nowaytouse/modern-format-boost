@@ -5,8 +5,8 @@
 //! - PSNR: Peak Signal-to-Noise Ratio with parallel MSE calculation
 //! - SSIM: Structural Similarity Index with 11x11 Gaussian window (Wang et al. 2004)
 
-use crate::Rational;
 use crate::types::ssim::Ssim;
+use crate::Rational;
 use image::{DynamicImage, GenericImageView, GrayImage};
 use rayon::prelude::*;
 
@@ -69,7 +69,10 @@ pub fn calculate_psnr(original: &DynamicImage, converted: &DynamicImage) -> Opti
         .sum();
 
     let pixel_count = crate::numeric_cast::usize_to_f64(orig_pixels.len());
-    let mse = (Rational::from_f64(mse_sum).unwrap_or(Rational::from(0)) / (Rational::from(3) * Rational::from_f64(pixel_count).unwrap_or(Rational::from(1)))).to_f64();
+    let mse = (Rational::from_f64(mse_sum).unwrap_or_else(|| Rational::from(0))
+        / (Rational::from(3)
+            * Rational::from_f64(pixel_count).unwrap_or_else(|| Rational::from(1))))
+    .to_f64();
 
     if mse < 1e-10_f64 {
         return Some(f64::INFINITY);
@@ -116,7 +119,11 @@ pub fn calculate_ssim(original: &DynamicImage, converted: &DynamicImage) -> Opti
         return None;
     }
     let count = crate::numeric_cast::usize_to_f64(positions.len());
-    Some((Rational::from_f64(ssim_sum).unwrap_or(Rational::from(0)) / Rational::from_f64(count).unwrap_or(Rational::from(1))).to_f64())
+    Some(
+        (Rational::from_f64(ssim_sum).unwrap_or_else(|| Rational::from(0))
+            / Rational::from_f64(count).unwrap_or_else(|| Rational::from(1)))
+        .to_f64(),
+    )
 }
 
 fn calculate_window_ssim(
@@ -214,15 +221,21 @@ fn calculate_ssim_simple(original: &DynamicImage, converted: &DynamicImage) -> O
     let var_y = (sum_yy.clone() - (n.clone() * mean_y.clone() * mean_y.clone())) / n1.clone();
     let cov_xy = (products_sum_xy - (n * mean_x.clone() * mean_y.clone())) / n1;
 
-    let c1_rat = Rational::from_f64(C1).unwrap_or(Rational::from(0));
-    let c2_rat = Rational::from_f64(C2).unwrap_or(Rational::from(0));
+    let c1_rat = Rational::from_f64(C1).unwrap_or_else(|| Rational::from(0));
+    let c2_rat = Rational::from_f64(C2).unwrap_or_else(|| Rational::from(0));
 
-    let numerator = (Rational::from(2) * mean_x.clone() * mean_y.clone() + c1_rat.clone()) * (Rational::from(2) * cov_xy + c2_rat.clone());
+    let numerator = (Rational::from(2) * mean_x.clone() * mean_y.clone() + c1_rat.clone())
+        * (Rational::from(2) * cov_xy + c2_rat.clone());
     // mean_x and mean_y each appear twice — clone for the squared terms to avoid move.
-    let denominator = (mean_x.clone() * mean_x + mean_y.clone() * mean_y + c1_rat) * (var_x + var_y + c2_rat);
-    
-    let den_abs = if denominator > Rational::from(0) { denominator.clone() } else { -denominator.clone() };
-    if den_abs < Rational::from_f64(1e-10).unwrap_or(Rational::from(0)) {
+    let denominator =
+        (mean_x.clone() * mean_x + mean_y.clone() * mean_y + c1_rat) * (var_x + var_y + c2_rat);
+
+    let den_abs = if denominator > 0 {
+        denominator.clone()
+    } else {
+        -denominator.clone()
+    };
+    if den_abs < Rational::from_f64(1e-10).unwrap_or_else(|| Rational::from(0)) {
         return Some(1.0);
     }
     Some((numerator / denominator).to_f64())

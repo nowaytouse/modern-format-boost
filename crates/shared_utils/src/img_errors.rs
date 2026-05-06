@@ -38,6 +38,10 @@ pub enum ImgQualityError {
     #[error("Not implemented: {0}")]
     NotImplemented(String),
 
+    /// Anyhow error conversion.
+    #[error("Analysis error: {0}")]
+    AnyhowError(#[from] anyhow::Error),
+
     /// The file was intentionally skipped (e.g. anti-duplicate).
     #[error("Skip file: {0}")]
     SkipFile(String),

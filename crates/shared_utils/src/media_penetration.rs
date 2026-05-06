@@ -141,7 +141,10 @@ pub fn detect_real_transparency(path: &Path, duration: Option<f64>) -> Penetrati
         // Parse "lavfi.stats.0.Min" from stderr
         for line in stderr.lines() {
             if let Some(idx) = line.find("lavfi.stats.0.Min:") {
-                let min_str = line[idx + 18..].split_whitespace().next().unwrap_or("");
+                let min_str = line[idx + 18..].split_whitespace().next().unwrap_or_else(|| {
+                    tracing::warn!("☢️ [ANOMALY] Failed to parse Min value from ffmpeg stats output for {}", path.display());
+                    ""
+                });
                 if let Ok(min_val) = min_str.parse::<f64>() {
                     if min_val < 255.0_f64 {
                         found_transparency = true;
@@ -207,7 +210,16 @@ fn run_full_decode_transparency(path: &Path) -> PenetrationResult<bool> {
     // Check all frames for any Min < 255
     for line in stderr.lines() {
         if let Some(idx) = line.find("lavfi.stats.0.Min:") {
-            let min_str = line[idx + 18..].split_whitespace().next().unwrap_or("");
+            let min_str = line[idx + 18..]
+                .split_whitespace()
+                .next()
+                .unwrap_or_else(|| {
+                    tracing::warn!(
+                        "☢️ [ANOMALY] Failed to parse Min value from ffmpeg stats output for {}",
+                        path.display()
+                    );
+                    ""
+                });
             if let Ok(min_val) = min_str.parse::<f64>() {
                 if min_val < 255.0_f64 {
                     emit_stderr("   Full decode found transparency in at least one frame");
@@ -262,7 +274,13 @@ pub fn detect_real_frame_count(path: &Path, claimed_frame_count: u64) -> Penetra
     for line in stderr.lines().rev() {
         if let Some(pos) = line.find("frame=") {
             let part = &line[pos + 6..];
-            let count_str = part.split_whitespace().next().unwrap_or("");
+            let count_str = part.split_whitespace().next().unwrap_or_else(|| {
+                tracing::warn!(
+                    "☢️ [ANOMALY] Failed to parse frame count from ffmpeg summary for {}",
+                    path.display()
+                );
+                ""
+            });
             if let Ok(count) = count_str.parse::<u64>() {
                 actual_u64 = Some(count);
                 break;
@@ -324,24 +342,42 @@ pub fn detect_interlacing(path: &Path) -> PenetrationResult<bool> {
             let mut bff = 0;
 
             if let Some(tff_idx) = line.find("TFF:") {
-                let s = line[tff_idx + 4..].split_whitespace().next().unwrap_or("0");
-                tff = match s.parse::<u64>() {
-                    Ok(v) => v,
-                    Err(_) => {
-                        warn!("☢️ [ANOMALY] Failed to parse TFF value '{}' in interlacing check", s);
-                        0
-                    }
-                };
+                let s = line[tff_idx + 4..]
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or_else(|| {
+                        tracing::warn!(
+                            "☢️ [ANOMALY] Failed to parse TFF string from idet output for {}",
+                            path.display()
+                        );
+                        "0"
+                    });
+                tff = s.parse::<u64>().unwrap_or_else(|_| {
+                    warn!(
+                        "☢️ [ANOMALY] Failed to parse TFF value '{}' in interlacing check",
+                        s
+                    );
+                    0
+                });
             }
             if let Some(bff_idx) = line.find("BFF:") {
-                let s = line[bff_idx + 4..].split_whitespace().next().unwrap_or("0");
-                bff = match s.parse::<u64>() {
-                    Ok(v) => v,
-                    Err(_) => {
-                        warn!("☢️ [ANOMALY] Failed to parse BFF value '{}' in interlacing check", s);
-                        0
-                    }
-                };
+                let s = line[bff_idx + 4..]
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or_else(|| {
+                        tracing::warn!(
+                            "☢️ [ANOMALY] Failed to parse BFF string from idet output for {}",
+                            path.display()
+                        );
+                        "0"
+                    });
+                bff = s.parse::<u64>().unwrap_or_else(|_| {
+                    warn!(
+                        "☢️ [ANOMALY] Failed to parse BFF value '{}' in interlacing check",
+                        s
+                    );
+                    0
+                });
             }
 
             // If we found multiple clear interlaced frames in the short sample, it's interlaced.

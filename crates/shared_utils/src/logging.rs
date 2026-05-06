@@ -26,8 +26,8 @@ use anyhow::{Context, Result};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-use tracing::field::Field;
 use tracing::Level;
+use tracing::{field::Field, warn};
 // use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{
     field::Visit,
@@ -285,9 +285,12 @@ pub fn strip_ansi_str(s: &str) -> String {
             // Consume ESC [ <params> <final_byte>, where final is 0x40..=0x7E
             i += 2;
             while i < bytes.len() {
-                let b = *bytes
-                    .get(i)
-                    .expect("Required metadata byte missing (out of bounds)");
+                let b = *bytes.get(i).unwrap_or_else(|| {
+                    // This path is technically unreachable due to the loop condition,
+                    // but we use a loud non-blocking fallback for absolute safety.
+                    warn!("Required metadata byte missing (out of bounds) in strip_ansi_str");
+                    &0
+                });
                 i += 1;
                 if (0x40..=0x7e).contains(&b) {
                     break;

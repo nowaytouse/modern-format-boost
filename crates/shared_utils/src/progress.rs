@@ -647,11 +647,10 @@ impl DetailedCoarseProgressBar {
         let ssim_str = ssim.map_or_else(String::new, |s| format!("SSIM {s:.4}"));
 
         let best_crf = f32::from_bits(
-            u32::try_from(self.best_crf.load(Ordering::Relaxed))
-                .unwrap_or_else(|_| {
-                    warn!("☢️ [ANOMALY] Progress position overflowed usize; using 0");
-                    0
-                }),
+            u32::try_from(self.best_crf.load(Ordering::Relaxed)).unwrap_or_else(|_| {
+                warn!("☢️ [ANOMALY] Progress position overflowed usize; using 0");
+                0
+            }),
         );
         let best_str = if best_crf > 0.0 {
             format!("Best: {best_crf:.1}")
@@ -717,11 +716,10 @@ impl DetailedCoarseProgressBar {
 
         let iter = self.current_iteration.load(Ordering::Relaxed);
         let crf = f32::from_bits(
-            u32::try_from(self.current_crf.load(Ordering::Relaxed))
-                .unwrap_or_else(|_| {
-                    warn!("☢️ [ANOMALY] Progress total overflowed usize; using 0");
-                    0
-                }),
+            u32::try_from(self.current_crf.load(Ordering::Relaxed)).unwrap_or_else(|_| {
+                warn!("☢️ [ANOMALY] Progress total overflowed usize; using 0");
+                0
+            }),
         );
         let size = self.current_size.load(Ordering::Relaxed);
         let ssim = if self.has_ssim.load(Ordering::Relaxed) {

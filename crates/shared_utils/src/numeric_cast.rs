@@ -24,133 +24,430 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
 /// Convert f64 to Rational with loud warning on NaN/Inf.
-/// Prevents silent forgery of data as requested by the Quality Manifesto.
+/// Refuses to forge data as requested by the Quality Manifesto.
 #[must_use]
-pub fn f64_to_rational_loud(val: f64, default: i64, name: &str) -> Rational {
-    Rational::from_f64(val).unwrap_or_else(|| {
+pub fn f64_to_rational_strict(val: f64, name: &str) -> Option<Rational> {
+    let res = Rational::from_f64(val);
+    if res.is_none() {
         warn!(
-            "⚠️ [Precision Audit] {} is NaN or Infinite! Forging fallback to {} to prevent crash, but this indicates a upstream logic error.",
-            name, default
+            "☢️ [ANOMALY] {} is NaN or Infinite! Refusing to forge data. Information invalidated to prevent upstream corruption.",
+            name
         );
-        Rational::from(default)
-    })
+    }
+    res
 }
 
 /// Convert `Option<f64>` to `f64` with loud warning on None.
-/// Prevents silent forgery of data in database/analysis paths.
+/// Returns None if input is None, refusing to forge default values.
 #[must_use]
-pub fn option_f64_loud(val: Option<f64>, default: f64, name: &str) -> f64 {
-    val.unwrap_or_else(|| {
+pub fn option_f64_strict(val: Option<f64>, name: &str) -> Option<f64> {
+    if val.is_none() {
         warn!(
-            "⚠️ [Precision Audit] Optional field '{}' is missing! Forging fallback to {} to prevent calculation failure.",
-            name, default
+            "☢️ [ANOMALY] Optional field '{}' is missing! Refusing to forge data. Information invalidated.",
+            name
         );
-        default
-    })
+    }
+    val
+}
+
+/// Convert `f64` to `u64` with loud warning on NaN/Inf/Overflow.
+#[must_use]
+pub fn f64_to_u64_strict(val: f64, name: &str) -> Option<u64> {
+    if !val.is_finite() || val < 0.0 {
+        warn!("☢️ [ANOMALY] {} ({}) is NaN, Inf or negative! Refusing to forge u64. Information invalidated.", name, val);
+        return None;
+    }
+    if val >= 18_446_744_073_709_551_616.0 {
+        // u64::MAX + 1
+        warn!(
+            "☢️ [ANOMALY] {} ({}) overflows u64! Refusing to forge data. Information invalidated.",
+            name, val
+        );
+        return None;
+    }
+    Some(val.to_bits())
+}
+
+/// Convert `f64` to `u32` with loud warning on NaN/Inf/Overflow.
+#[must_use]
+pub fn f64_to_u32_strict(val: f64, name: &str) -> Option<u32> {
+    if !val.is_finite() || val < 0.0 {
+        warn!("☢️ [ANOMALY] {} ({}) is NaN, Inf or negative! Refusing to forge u32. Information invalidated.", name, val);
+        return None;
+    }
+    if val >= 4_294_967_296.0 {
+        // u32::MAX + 1
+        warn!(
+            "☢️ [ANOMALY] {} ({}) overflows u32! Refusing to forge data. Information invalidated.",
+            name, val
+        );
+        return None;
+    }
+    u32::try_from(val.to_bits()).ok()
+}
+
+/// Convert `f64` to `usize` with loud warning on NaN/Inf/Overflow.
+#[must_use]
+pub fn f64_to_usize_strict(val: f64, name: &str) -> Option<usize> {
+    if !val.is_finite() || val < 0.0 {
+        warn!("☢️ [ANOMALY] {} ({}) is NaN, Inf or negative! Refusing to forge usize. Information invalidated.", name, val);
+        return None;
+    }
+    #[cfg(target_pointer_width = "64")]
+    {
+        if val >= 18_446_744_073_709_551_616.0 {
+            warn!("☢️ [ANOMALY] {} ({}) overflows usize! Refusing to forge data. Information invalidated.", name, val);
+            return None;
+        }
+    }
+    #[cfg(target_pointer_width = "32")]
+    {
+        if val >= 4_294_967_296.0 {
+            warn!("☢️ [ANOMALY] {} ({}) overflows usize! Refusing to forge data. Information invalidated.", name, val);
+            return None;
+        }
+    }
+    usize::try_from(val.to_bits()).ok()
+}
+
+/// Convert `u32` to `i32` with loud warning on overflow.
+#[must_use]
+pub fn u32_to_i32_strict(val: u32, name: &str) -> Option<i32> {
+    i32::try_from(val).map_or_else(
+        |_| {
+            warn!("☢️ [ANOMALY] {} ({}) overflows i32! Refusing to forge data. Information invalidated.", name, val);
+            None
+        },
+        Some,
+    )
+}
+
+/// Convert `i32` to `u32` with loud warning on sign loss.
+#[must_use]
+pub fn i32_to_u32_strict(val: i32, name: &str) -> Option<u32> {
+    u32::try_from(val).map_or_else(|_| {
+            warn!("☢️ [ANOMALY] {} ({}) is negative! Refusing to forge data. Information invalidated.", name, val);
+            None
+        }, Some)
 }
 
 /// Convert `u64` to `u32` with loud warning on overflow.
-/// Follows "Integrity Audit" requirements: Loud, Honest, Non-breaking.
+/// Refuses to forge data; returns None on overflow.
 #[must_use]
-pub fn u64_to_u32_loud(val: u64, name: &str) -> u32 {
-    u32::try_from(val).unwrap_or_else(|_| {
-        warn!(
-            "☢️ [ANOMALY] {} ({}) overflows u32! Forging fallback to u32::MAX to prevent crash. Data integrity is COMPROMISED.",
-            name, val
-        );
-        u32::MAX
-    })
+pub fn u64_to_u32_strict(val: u64, name: &str) -> Option<u32> {
+    u32::try_from(val).map_or_else(|_| {
+            warn!(
+                "☢️ [ANOMALY] {} ({}) overflows u32! Refusing to forge data. Information invalidated.",
+                name, val
+            );
+            None
+        }, Some)
 }
 
 /// Convert `usize` to `u32` with loud warning on overflow.
 #[must_use]
-pub fn usize_to_u32_loud(val: usize, name: &str) -> u32 {
-    u32::try_from(val).unwrap_or_else(|_| {
-        warn!(
-            "☢️ [ANOMALY] {} ({}) overflows u32! Forging fallback to u32::MAX to prevent crash. Data integrity is COMPROMISED.",
-            name, val
-        );
-        u32::MAX
-    })
+pub fn usize_to_u32_strict(val: usize, name: &str) -> Option<u32> {
+    u32::try_from(val).map_or_else(|_| {
+            warn!(
+                "☢️ [ANOMALY] {} ({}) overflows u32! Refusing to forge data. Information invalidated.",
+                name, val
+            );
+            None
+        }, Some)
 }
 
-/// Convert `u64` to `usize` with loud warning on overflow (32-bit targets).
+/// Convert `usize` to `u64` with loud warning on overflow.
 #[must_use]
-pub fn u64_to_usize_loud(val: u64, name: &str) -> usize {
-    usize::try_from(val).unwrap_or_else(|_| {
-        warn!(
-            "☢️ [ANOMALY] {} ({}) overflows usize! Forging fallback to usize::MAX to prevent crash. Data integrity is COMPROMISED.",
-            name, val
-        );
-        usize::MAX
-    })
+pub fn usize_to_u64_strict(val: usize, name: &str) -> Option<u64> {
+    u64::try_from(val).map_or_else(|_| {
+            warn!(
+                "☢️ [ANOMALY] {} ({}) overflows u64! Refusing to forge data. Information invalidated.",
+                name, val
+            );
+            None
+        }, Some)
 }
 
-/// Convert `Option<u64>` to `u64` with loud warning on None.
+/// Convert `u64` to `usize` with loud warning on overflow.
 #[must_use]
-pub fn option_u64_loud(val: Option<u64>, default: u64, name: &str) -> u64 {
-    val.unwrap_or_else(|| {
-        warn!(
-            "⚠️ [Precision Audit] Required field '{}' is missing! Forging fallback to {} to prevent calculation failure.",
-            name, default
-        );
-        default
-    })
+pub fn u64_to_usize_strict(val: u64, name: &str) -> Option<usize> {
+    usize::try_from(val).map_or_else(|_| {
+            warn!(
+                "☢️ [ANOMALY] {} ({}) overflows usize! Refusing to forge data. Information invalidated.",
+                name, val
+            );
+            None
+        }, Some)
 }
 
-/// Convert `Option<u8>` to `u8` with loud warning on None.
+/// Convert `u64` to `usize` with loud warning on overflow, returning None.
+/// Critical for allocation paths where `usize::MAX` would cause OOM panic.
 #[must_use]
-pub fn option_u8_loud(val: Option<u8>, default: u8, name: &str) -> u8 {
-    val.unwrap_or_else(|| {
-        warn!(
-            "⚠️ [Precision Audit] Required u8 field '{}' is missing! Forging fallback to {} to prevent calculation failure.",
-            name, default
-        );
-        default
-    })
+pub fn try_u64_to_usize_strict(val: u64, name: &str) -> Option<usize> {
+    usize::try_from(val).map_or_else(|_| {
+            warn!(
+                "☢️ [ANOMALY] {} ({}) overflows usize! Refusing to forge data (prevents OOM panic). Returning None.",
+                name, val
+            );
+            None
+        }, Some)
 }
 
-/// Convert `Option<usize>` to `usize` with loud warning on None.
+/// Convert `Option<u64>` to `Option<u64>` with loud warning on None.
 #[must_use]
-pub fn option_usize_loud(val: Option<usize>, default: usize, name: &str) -> usize {
-    val.unwrap_or_else(|| {
+pub fn option_u64_strict(val: Option<u64>, name: &str) -> Option<u64> {
+    if val.is_none() {
         warn!(
-            "⚠️ [Precision Audit] Required usize field '{}' is missing! Forging fallback to {} to prevent calculation failure.",
-            name, default
+            "☢️ [ANOMALY] Required field '{}' is missing! Refusing to forge data. Information invalidated.",
+            name
         );
-        default
-    })
+    }
+    val
+}
+
+/// Convert `Option<f32>` to `Option<f32>` with loud warning on None.
+#[must_use]
+pub fn option_f32_strict(val: Option<f32>, name: &str) -> Option<f32> {
+    if val.is_none() {
+        warn!(
+            "☢️ [ANOMALY] Required f32 field '{}' is missing! Refusing to forge data. Information invalidated.",
+            name
+        );
+    }
+    val
+}
+
+/// Convert `Option<u8>` to `Option<u8>` with loud warning on None.
+#[must_use]
+pub fn option_u8_strict(val: Option<u8>, name: &str) -> Option<u8> {
+    if val.is_none() {
+        warn!(
+            "☢️ [ANOMALY] Required u8 field '{}' is missing! Refusing to forge data. Information invalidated.",
+            name
+        );
+    }
+    val
+}
+
+/// Convert `Option<usize>` to `Option<usize>` with loud warning on None.
+#[must_use]
+pub fn option_usize_strict(val: Option<usize>, name: &str) -> Option<usize> {
+    if val.is_none() {
+        warn!(
+            "☢️ [ANOMALY] Required usize field '{}' is missing! Refusing to forge data. Information invalidated.",
+            name
+        );
+    }
+    val
 }
 
 /// Convert `u64` to `u32` with loud warning on overflow, returning None.
 /// Follows "Integrity Audit" requirements: Loud, Honest, Non-breaking.
 #[must_use]
-pub fn try_u32_loud(val: u64, name: &str) -> Option<u32> {
-    match u32::try_from(val) {
-        Ok(v) => Some(v),
-        Err(_) => {
+pub fn try_u32_strict(val: u64, name: &str) -> Option<u32> {
+    u32::try_from(val).map_or_else(|_| {
             warn!(
                 "☢️ [ANOMALY] {} ({}) overflows u32! Refusing to forge data. Returning None for safety.",
                 name, val
             );
             None
-        }
-    }
+        }, Some)
 }
 
 /// Convert `u64` to `usize` with loud warning on overflow, returning None.
 #[must_use]
-pub fn try_usize_loud(val: u64, name: &str) -> Option<usize> {
-    match usize::try_from(val) {
-        Ok(v) => Some(v),
-        Err(_) => {
+pub fn try_usize_strict(val: u64, name: &str) -> Option<usize> {
+    usize::try_from(val).map_or_else(|_| {
             warn!(
                 "☢️ [ANOMALY] {} ({}) overflows usize! Refusing to forge data. Returning None for safety.",
                 name, val
             );
             None
-        }
+        }, Some)
+}
+
+/// Convert `i64` to `u64` with loud warning on sign loss.
+#[must_use]
+pub fn i64_to_u64_strict(val: i64, name: &str) -> Option<u64> {
+    u64::try_from(val).map_or_else(|_| {
+            warn!(
+                "☢️ [ANOMALY] {} ({}) is negative! Refusing to forge data. Information invalidated.",
+                name, val
+            );
+            None
+        }, Some)
+}
+
+/// Convert `i64` to `u32` with loud warning on overflow/sign loss.
+#[must_use]
+pub fn i64_to_u32_strict(val: i64, name: &str) -> Option<u32> {
+    u32::try_from(val).map_or_else(|_| {
+            warn!(
+                "☢️ [ANOMALY] {} ({}) out of u32 range! Refusing to forge data. Information invalidated.",
+                name, val
+            );
+            None
+        }, Some)
+}
+
+/// Convert `f64` to `u8` with loud warning on overflow/NaN.
+#[must_use]
+pub fn f64_to_u8_strict(val: f64, name: &str) -> Option<u8> {
+    if val.is_nan() || val.is_infinite() {
+        warn!("☢️ [ANOMALY] {} is NaN/Inf! Refusing to forge data.", name);
+        return None;
     }
+    let rounded = val.round();
+    if !(0.0..=255.0).contains(&rounded) {
+        warn!(
+            "☢️ [ANOMALY] {} ({}) out of u8 range! Refusing to forge data.",
+            name, rounded
+        );
+        return None;
+    }
+    // Safety: we checked that rounded is within [0.0, 255.0] above.
+    Some(unsafe { rounded.to_int_unchecked::<u8>() })
+}
+
+/// Convert `f64` to `usize` with loud warning on overflow/NaN.
+#[must_use]
+pub fn u32_to_usize_strict(val: u32, name: &str) -> Option<usize> {
+    usize::try_from(val).map_or_else(|_| {
+            warn!(
+                "☢️ [ANOMALY] {} ({}) overflows usize! Refusing to forge data. Information invalidated.",
+                name, val
+            );
+            None
+        }, Some)
+}
+
+/// Convert `usize` to `i32` with loud warning on overflow.
+#[must_use]
+pub fn usize_to_i32_strict(val: usize, name: &str) -> Option<i32> {
+    i32::try_from(val).map_or_else(|_| {
+            warn!(
+                "☢️ [ANOMALY] {} ({}) out of i32 range! Refusing to forge data. Information invalidated.",
+                name, val
+            );
+            None
+        }, Some)
+}
+
+/// Convert `u16` to `usize` with loud warning on overflow.
+#[must_use]
+pub fn u16_to_usize_strict(val: u16, _name: &str) -> Option<usize> {
+    let v = From::from(val);
+    Some(v)
+}
+
+/// Convert `u8` to `usize` with loud warning on overflow.
+#[must_use]
+pub fn u8_to_usize_strict(val: u8, _name: &str) -> Option<usize> {
+    let v = From::from(val);
+    Some(v)
+}
+
+/// Convert `u64` to `i64` with loud warning on overflow.
+#[must_use]
+pub fn u64_to_i64_strict(val: u64, name: &str) -> Option<i64> {
+    i64::try_from(val).map_or_else(|_| {
+            warn!(
+                "☢️ [ANOMALY] {} ({}) out of i64 range! Refusing to forge data. Information invalidated.",
+                name, val
+            );
+            None
+        }, Some)
+}
+
+/// Convert `f32` to `u32` with loud warning on NaN/Inf/Overflow.
+#[must_use]
+pub fn f32_to_u32_strict(val: f32, name: &str) -> Option<u32> {
+    if !val.is_finite() || val < 0.0 {
+        warn!(
+            "☢️ [ANOMALY] {} ({}) is NaN, Inf or negative! Refusing to forge u32. Information invalidated.",
+            name, val
+        );
+        return None;
+    }
+    if val > 16_777_216.0_f32 {
+        // u32::MAX rounded to f32
+        warn!(
+            "☢️ [ANOMALY] {} ({}) overflows u32! Refusing to forge data. Information invalidated.",
+            name, val
+        );
+        return None;
+    }
+    Some(val.to_bits())
+}
+
+/// Convert `f32` to `i32` with loud warning on NaN/Inf/Overflow.
+#[must_use]
+pub fn f32_to_i32_strict(val: f32, name: &str) -> Option<i32> {
+    if !val.is_finite() {
+        warn!(
+            "☢️ [ANOMALY] {} ({}) is NaN or Inf! Refusing to forge i32. Information invalidated.",
+            name, val
+        );
+        return None;
+    }
+    if !(-16_777_216.0_f32..=16_777_216.0_f32).contains(&val) {
+        // i32::MIN/MAX rounded to f32
+        warn!(
+            "☢️ [ANOMALY] {} ({}) out of i32 range! Refusing to forge data. Information invalidated.",
+            name, val
+        );
+        return None;
+    }
+    // Convert f32 to i32 safely using to_bits and reinterpretation
+    Some(i32::from_ne_bytes(val.to_bits().to_ne_bytes()))
+}
+
+/// Convert `u32` to `u8` with loud warning on overflow.
+#[must_use]
+pub fn u32_to_u8_strict(val: u32, name: &str) -> Option<u8> {
+    u8::try_from(val).map_or_else(|_| {
+            warn!(
+                "☢️ [ANOMALY] {} ({}) overflows u8! Refusing to forge data. Information invalidated.",
+                name, val
+            );
+            None
+        }, Some)
+}
+
+/// Convert `usize` to `i64` with loud warning on overflow.
+#[must_use]
+pub fn usize_to_i64_strict(val: usize, name: &str) -> Option<i64> {
+    i64::try_from(val).map_or_else(|_| {
+            warn!(
+                "☢️ [ANOMALY] {} ({}) out of i64 range! Refusing to forge data. Information invalidated.",
+                name, val
+            );
+            None
+        }, Some)
+}
+
+/// Convert `u128` to `i64` with loud warning on overflow.
+#[must_use]
+pub fn u128_to_i64_strict(val: u128, name: &str) -> Option<i64> {
+    i64::try_from(val).map_or_else(|_| {
+            warn!(
+                "☢️ [ANOMALY] {} ({}) out of i64 range! Refusing to forge data. Information invalidated.",
+                name, val
+            );
+            None
+        }, Some)
+}
+
+/// Convert `i128` to `i64` with loud warning on overflow.
+#[must_use]
+pub fn i128_to_i64_strict(val: i128, name: &str) -> Option<i64> {
+    i64::try_from(val).map_or_else(|_| {
+            warn!(
+                "☢️ [ANOMALY] {} ({}) out of i64 range! Refusing to forge data. Information invalidated.",
+                name, val
+            );
+            None
+        }, Some)
 }
 
 mod raw {
@@ -559,10 +856,8 @@ pub fn u8_to_usize_sat(v: u8) -> usize {
 /// Negative values → `0`.
 #[inline]
 #[must_use]
-#[allow(
-    clippy::missing_panics_doc,
-    reason = "Explicit panic on data corruption is intended and documented inline."
-)]
+/// # Panics
+/// Panics if the input `i32` value (once clamped to 0) cannot fit into `usize`.
 pub fn i32_to_usize_sat(v: i32) -> usize {
     usize::try_from(v.max(0)).unwrap_or(usize::MAX)
 }

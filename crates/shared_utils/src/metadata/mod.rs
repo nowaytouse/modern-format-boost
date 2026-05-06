@@ -636,9 +636,9 @@ fn merge_xmp_sidecar(src: &Path, dst: &Path) {
 
         let config = crate::xmp_merger::XmpMergerConfig {
             delete_xmp_after_merge: false,
-            overwrite_original: true,
+            overwrite_mode: crate::xmp_merger::OverwriteMode::Original,
             preserve_timestamps: true,
-            verbose: false,
+            log_level: crate::xmp_merger::LogLevel::Quiet,
         };
 
         let merger = crate::xmp_merger::XmpMerger::new(config);

@@ -89,13 +89,13 @@ pub fn calculate_metadata_margin(input_size: u64) -> u64 {
     let percent_based = {
         #[cfg(feature = "high-precision")]
         {
-            let margin = Rational::from(input_size)
-                * crate::numeric_cast::f64_to_rational_loud(
-                    METADATA_MARGIN_PERCENT,
-                    0,
-                    "METADATA_MARGIN_PERCENT",
-                );
-            crate::numeric_cast::f64_to_u64_sat(margin.to_f64())
+            let margin = crate::numeric_cast::f64_to_rational_strict(
+                METADATA_MARGIN_PERCENT,
+                "METADATA_MARGIN_PERCENT",
+            )
+            .map(|r| Rational::from(input_size) * r);
+
+            margin.map_or(0, |m| crate::numeric_cast::f64_to_u64_sat(m.to_f64()))
         }
         #[cfg(not(feature = "high-precision"))]
         {
@@ -595,12 +595,9 @@ impl ExploreResult {
 }
 
 /// Quality thresholds and validation flags for an exploration.
+pub use stream_analysis::{MetricValidationFlags, QualityValidationFlags};
+
 #[derive(Debug, Clone)]
-// Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(
-    clippy::struct_excessive_bools,
-    reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping."
-)]
 pub struct QualityThresholds {
     /// Minimum acceptable SSIM score.
     pub min_ssim: f64,
@@ -608,14 +605,7 @@ pub struct QualityThresholds {
     pub min_psnr: f64,
     /// Minimum acceptable Multi-Scale SSIM score.
     pub min_ms_ssim: f64,
-    /// Whether to validate SSIM during quality checks.
-    pub validate_ssim: bool,
-    /// Whether to validate PSNR during quality checks.
-    pub validate_psnr: bool,
-    /// Whether to validate MS-SSIM during quality checks.
-    pub validate_ms_ssim: bool,
-    /// Force MS-SSIM validation even for long videos (normally skipped for performance).
-    pub force_ms_ssim_long: bool,
+    pub validation: QualityValidationFlags,
 }
 
 impl Default for QualityThresholds {
@@ -624,10 +614,14 @@ impl Default for QualityThresholds {
             min_ssim: EXPLORE_DEFAULT_MIN_SSIM,
             min_psnr: EXPLORE_DEFAULT_MIN_PSNR,
             min_ms_ssim: EXPLORE_DEFAULT_MIN_MS_SSIM,
-            validate_ssim: true,
-            validate_psnr: false,
-            validate_ms_ssim: false,
-            force_ms_ssim_long: false,
+            validation: QualityValidationFlags {
+                metrics: MetricValidationFlags {
+                    validate_ssim: true,
+                    validate_psnr: false,
+                    validate_ms_ssim: false,
+                },
+                force_ms_ssim_long: false,
+            },
         }
     }
 }
@@ -684,9 +678,17 @@ impl ExploreConfig {
             initial_crf,
             max_crf,
             quality_thresholds: QualityThresholds {
-                validate_ssim: false,
-                validate_psnr: false,
-                ..Default::default()
+                min_ssim: EXPLORE_DEFAULT_MIN_SSIM,
+                min_psnr: EXPLORE_DEFAULT_MIN_PSNR,
+                min_ms_ssim: EXPLORE_DEFAULT_MIN_MS_SSIM,
+                validation: QualityValidationFlags {
+                    metrics: MetricValidationFlags {
+                        validate_ssim: false,
+                        validate_psnr: false,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
             },
             ..Default::default()
         }
@@ -700,9 +702,17 @@ impl ExploreConfig {
             initial_crf: predicted_crf,
             max_iterations: 1,
             quality_thresholds: QualityThresholds {
-                validate_ssim: true,
-                validate_psnr: false,
-                ..Default::default()
+                min_ssim: EXPLORE_DEFAULT_MIN_SSIM,
+                min_psnr: EXPLORE_DEFAULT_MIN_PSNR,
+                min_ms_ssim: EXPLORE_DEFAULT_MIN_MS_SSIM,
+                validation: QualityValidationFlags {
+                    metrics: MetricValidationFlags {
+                        validate_ssim: true,
+                        validate_psnr: false,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
             },
             ..Default::default()
         }
@@ -719,10 +729,14 @@ impl ExploreConfig {
                 min_ssim,
                 min_psnr: 40.0,
                 min_ms_ssim: 90.0,
-                validate_ssim: true,
-                validate_psnr: false,
-                validate_ms_ssim: false,
-                ..Default::default()
+                validation: QualityValidationFlags {
+                    metrics: MetricValidationFlags {
+                        validate_ssim: true,
+                        validate_psnr: false,
+                        validate_ms_ssim: false,
+                    },
+                    ..Default::default()
+                },
             },
             ..Default::default()
         }
@@ -743,10 +757,14 @@ impl ExploreConfig {
                 min_ssim,
                 min_psnr: 40.0,
                 min_ms_ssim: 90.0,
-                validate_ssim: true,
-                validate_psnr: false,
-                validate_ms_ssim: false,
-                ..Default::default()
+                validation: QualityValidationFlags {
+                    metrics: MetricValidationFlags {
+                        validate_ssim: true,
+                        validate_psnr: false,
+                        validate_ms_ssim: false,
+                    },
+                    ..Default::default()
+                },
             },
             ..Default::default()
         }
@@ -760,10 +778,17 @@ impl ExploreConfig {
             initial_crf,
             max_crf,
             quality_thresholds: QualityThresholds {
-                validate_ssim: false,
-                validate_psnr: false,
-                validate_ms_ssim: false,
-                ..Default::default()
+                min_ssim: EXPLORE_DEFAULT_MIN_SSIM,
+                min_psnr: EXPLORE_DEFAULT_MIN_PSNR,
+                min_ms_ssim: EXPLORE_DEFAULT_MIN_MS_SSIM,
+                validation: QualityValidationFlags {
+                    metrics: MetricValidationFlags {
+                        validate_ssim: false,
+                        validate_psnr: false,
+                        validate_ms_ssim: false,
+                    },
+                    ..Default::default()
+                },
             },
             max_iterations: 8,
             ..Default::default()
@@ -779,10 +804,16 @@ impl ExploreConfig {
             max_crf,
             quality_thresholds: QualityThresholds {
                 min_ssim: 0.95,
-                validate_ssim: true,
-                validate_psnr: false,
-                validate_ms_ssim: false,
-                ..Default::default()
+                min_psnr: EXPLORE_DEFAULT_MIN_PSNR,
+                min_ms_ssim: EXPLORE_DEFAULT_MIN_MS_SSIM,
+                validation: QualityValidationFlags {
+                    metrics: MetricValidationFlags {
+                        validate_ssim: true,
+                        validate_psnr: false,
+                        validate_ms_ssim: false,
+                    },
+                    ..Default::default()
+                },
             },
             max_iterations: 10,
             ..Default::default()
@@ -2100,10 +2131,17 @@ impl VideoExplorer {
         macro_rules! log_progress {
             ($stage:expr, $crf:expr, $size:expr, $iter:expr) => {{
                 let size_pct = if self.input_size > 0 {
-                    let permille = u32::try_from(
-                        (u128::from($size) * 10_000) / u128::from(self.input_size.max(1)),
+                    let permille = crate::numeric_cast::u64_to_u32_strict(
+                        u64::try_from(
+                            (u128::from($size) * 10_000) / u128::from(self.input_size.max(1)),
+                        )
+                        .unwrap_or(u64::MAX),
+                        "size_percentage_permille",
                     )
-                    .expect("Value overflowed or is missing, cannot process ratio");
+                    .unwrap_or_else(|| {
+                        tracing::warn!("Failed to calculate size percentage for stage {}", $stage);
+                        0
+                    });
                     (f64::from(permille) / 100.0_f64) - 100.0_f64
                 } else {
                     0.0_f64
@@ -2799,8 +2837,14 @@ impl VideoExplorer {
                     last_speed = val.to_string();
                 } else if line == "progress=continue" || line == "progress=end" {
                     let current_secs = f64::from(crate::numeric_cast::f64_to_f32_lossy({
-                        let millis = u32::try_from(last_time_us / 1_000)
-                            .expect("Value overflowed or is missing, cannot process ratio");
+                        let millis = crate::numeric_cast::u64_to_u32_strict(
+                            last_time_us / 1_000,
+                            "progress_time_millis",
+                        )
+                        .unwrap_or_else(|| {
+                            tracing::warn!("Failed to convert progress time");
+                            0
+                        });
                         f64::from(millis) / 1_000.0
                     }));
                     if let Some(total_duration) = duration_secs.filter(|d| *d > 0.0_f64) {
@@ -2907,19 +2951,37 @@ impl VideoExplorer {
     }
 
     fn validate_quality(&self) -> Result<(Option<f64>, Option<f64>, Option<f64>)> {
-        let ssim = if self.config.quality_thresholds.validate_ssim {
+        let ssim = if self
+            .config
+            .quality_thresholds
+            .validation
+            .metrics
+            .validate_ssim
+        {
             self.calculate_ssim()
         } else {
             None
         };
 
-        let psnr = if self.config.quality_thresholds.validate_psnr {
+        let psnr = if self
+            .config
+            .quality_thresholds
+            .validation
+            .metrics
+            .validate_psnr
+        {
             self.calculate_psnr()?
         } else {
             None
         };
 
-        let ms_ssim = if self.config.quality_thresholds.validate_ms_ssim {
+        let ms_ssim = if self
+            .config
+            .quality_thresholds
+            .validation
+            .metrics
+            .validate_ms_ssim
+        {
             let duration = get_video_duration(&self.input_path);
             let ms_ssim_skip_threshold_secs = if self.config.ultimate_mode {
                 f64::from(VMAF_SKIP_THRESHOLD_ULTIMATE_SECS)
@@ -2935,7 +2997,7 @@ impl VideoExplorer {
                 },
                 |d| {
                     d >= ms_ssim_skip_threshold_secs
-                        && !self.config.quality_thresholds.force_ms_ssim_long
+                        && !self.config.quality_thresholds.validation.force_ms_ssim_long
                 },
             );
 
@@ -3261,7 +3323,7 @@ impl VideoExplorer {
     ) -> CheckResult {
         let t = &self.config.quality_thresholds;
 
-        if t.validate_ssim {
+        if t.validation.metrics.validate_ssim {
             match ssim {
                 Some(s) => {
                     let epsilon = precision::SSIM_COMPARE_EPSILON;
@@ -3278,7 +3340,7 @@ impl VideoExplorer {
             }
         }
 
-        if t.validate_psnr {
+        if t.validation.metrics.validate_psnr {
             match psnr {
                 Some(p) => {
                     if p < t.min_psnr && !p.is_infinite() {
@@ -3294,7 +3356,7 @@ impl VideoExplorer {
             }
         }
 
-        if t.validate_ms_ssim {
+        if t.validation.metrics.validate_ms_ssim {
             match vmaf {
                 Some(v) => {
                     if v < t.min_ms_ssim {
@@ -3976,7 +4038,8 @@ pub mod dynamic_mapping;
 /// GPU-accelerated coarse search implementations.
 pub mod gpu_coarse_search;
 pub use gpu_coarse_search::{
-    explore_av1_with_gpu, explore_hevc_with_gpu, explore_with_gpu_coarse_search, GpuSearchRequest,
+    explore_av1_with_gpu, explore_hevc_with_gpu, explore_with_gpu_coarse_search, GpuSearchFeatures,
+    GpuSearchFlags, GpuSearchRequest, GpuSearchValidation,
 };
 
 #[cfg(test)]
@@ -4058,8 +4121,22 @@ mod tests {
 
     fn test_binary_search_precision_proof() {
         let range = 28.0 - 10.0;
-        let coarse_iterations = crate::numeric_cast::f32_to_u32_sat((range / COARSE_STEP).ceil());
-        let fine_iterations = crate::numeric_cast::f32_to_u32_sat((COARSE_STEP / FINE_STEP).ceil());
+        let coarse_iterations = crate::numeric_cast::u64_to_u32_strict(
+            u64::from((range / COARSE_STEP).ceil().to_bits()),
+            "coarse_iterations",
+        )
+        .unwrap_or_else(|| {
+            tracing::warn!("Failed to calculate coarse iterations");
+            0
+        });
+        let fine_iterations = crate::numeric_cast::u64_to_u32_strict(
+            u64::from((COARSE_STEP / FINE_STEP).ceil().to_bits()),
+            "fine_iterations",
+        )
+        .unwrap_or_else(|| {
+            tracing::warn!("Failed to calculate fine iterations");
+            0
+        });
         let total = coarse_iterations + fine_iterations;
 
         assert!(
@@ -4097,20 +4174,24 @@ mod tests {
             min_ssim: 0.95,
             min_psnr: 35.0,
             min_ms_ssim: 85.0,
-            validate_ssim: true,
-            validate_psnr: false,
-            validate_ms_ssim: false,
-            ..Default::default()
+            validation: QualityValidationFlags {
+                metrics: MetricValidationFlags {
+                    validate_ssim: true,
+                    validate_psnr: false,
+                    validate_ms_ssim: false,
+                },
+                ..Default::default()
+            },
         };
 
         let check = |ssim: Option<f64>, psnr: Option<f64>| -> bool {
-            if thresholds.validate_ssim {
+            if thresholds.validation.metrics.validate_ssim {
                 match ssim {
                     Some(s) if s >= thresholds.min_ssim => {}
                     _ => return false,
                 }
             }
-            if thresholds.validate_psnr {
+            if thresholds.validation.metrics.validate_psnr {
                 match psnr {
                     Some(p) if p >= thresholds.min_psnr => {}
                     _ => return false,
@@ -4134,20 +4215,24 @@ mod tests {
             min_ssim: 0.95,
             min_psnr: 35.0,
             min_ms_ssim: 85.0,
-            validate_ssim: true,
-            validate_psnr: true,
-            validate_ms_ssim: false,
-            ..Default::default()
+            validation: QualityValidationFlags {
+                metrics: MetricValidationFlags {
+                    validate_ssim: true,
+                    validate_psnr: true,
+                    validate_ms_ssim: false,
+                },
+                ..Default::default()
+            },
         };
 
         let check = |ssim: Option<f64>, psnr: Option<f64>| -> bool {
-            if thresholds.validate_ssim {
+            if thresholds.validation.metrics.validate_ssim {
                 match ssim {
                     Some(s) if s >= thresholds.min_ssim => {}
                     _ => return false,
                 }
             }
-            if thresholds.validate_psnr {
+            if thresholds.validation.metrics.validate_psnr {
                 match psnr {
                     Some(p) if p >= thresholds.min_psnr => {}
                     _ => return false,
@@ -4224,20 +4309,24 @@ mod tests {
             min_ssim: 0.95,
             min_psnr: 35.0,
             min_ms_ssim: 85.0,
-            validate_ssim: true,
-            validate_psnr: false,
-            validate_ms_ssim: true,
-            ..Default::default()
+            validation: QualityValidationFlags {
+                metrics: MetricValidationFlags {
+                    validate_ssim: true,
+                    validate_psnr: false,
+                    validate_ms_ssim: true,
+                },
+                ..Default::default()
+            },
         };
 
         let check = |ssim: Option<f64>, vmaf: Option<f64>| -> bool {
-            if thresholds.validate_ssim {
+            if thresholds.validation.metrics.validate_ssim {
                 match ssim {
                     Some(s) if s + SSIM_COMPARE_EPSILON >= thresholds.min_ssim => {}
                     _ => return false,
                 }
             }
-            if thresholds.validate_ms_ssim {
+            if thresholds.validation.metrics.validate_ms_ssim {
                 match vmaf {
                     Some(v) if v >= thresholds.min_ms_ssim => {}
                     _ => return false,

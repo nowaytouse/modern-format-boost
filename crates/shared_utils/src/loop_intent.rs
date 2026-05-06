@@ -630,16 +630,14 @@ impl DerivedLoopSignals {
         } else {
             0.5_f64 // neutral when no frame type data
         };
-        let bytes_per_frame = if let Some(fc) = meta.frame_count {
+        let bytes_per_frame = meta.frame_count.map_or(0.0_f64, |fc| {
             if fc > 0 {
                 crate::numeric_cast::u64_to_f64(meta.file_size_bytes)
                     / crate::numeric_cast::u64_to_f64(fc)
             } else {
                 0.0_f64
             }
-        } else {
-            0.0_f64
-        };
+        });
         let is_portrait = if meta.width > 0 && meta.height > 0 {
             let ratio = f64::from(meta.height) / f64::from(meta.width);
             (ratio - crate::constants::ASPECT_RATIO_WIDESCREEN).abs()
@@ -1193,7 +1191,7 @@ fn apply_weak_heuristics(
         } else {
             crate::constants::SHORT_CLIP_FORMAT_BONUS_VIDEO
         };
-        let cadence_bonus = if meta.frame_count.unwrap_or(0) > 1 {
+        let cadence_bonus = if meta.frame_count.is_some_and(|fc| fc > 1) {
             crate::constants::SHORT_CLIP_CADENCE_BONUS
         } else {
             0.0_f64
@@ -1300,10 +1298,10 @@ fn apply_weak_heuristics(
         log_odds.add(FILENAME_CONTEXT_POSITIVE_LOG_ODDS);
     }
 
-    if meta.frame_count.unwrap_or(0) > 0 {
-        if meta.frame_count.unwrap_or(0) <= 8 {
+    if let Some(fc) = meta.frame_count {
+        if fc <= 8 {
             log_odds.add(crate::constants::FRAME_COUNT_SHORT_BONUS);
-        } else if meta.frame_count.unwrap_or(0) > 500 {
+        } else if fc > 500 {
             log_odds.add(-crate::constants::FRAME_COUNT_LONG_PENALTY);
         }
     }
@@ -1354,6 +1352,7 @@ fn apply_weak_heuristics(
     }
 
     let bias_enabled = std::env::var(crate::constants::ENV_MODERN_FORMAT_CONVERT_BIAS)
+        .as_ref()
         .map_or(true, |value| value == "1");
     let is_modern = crate::constants::MODERN_ANIMATED_EXTENSIONS.contains(&ext_lower.as_str());
     let bias_threshold = thresholds.modern_bias_duration_secs;
@@ -1424,7 +1423,7 @@ pub fn evaluate_loop_tree(
 
     // ── Layer 0: Degenerate Input Guard (Veto/Error) ───────────────────────────
     // Must check BEFORE any fast-path logic to prevent 0-frame inputs from bypassing validation
-    if meta.frame_count.unwrap_or(0) <= 1 {
+    if meta.frame_count.is_none_or(|fc| fc <= 1) {
         return finalize(
             LoopIntentVerdict::Error(
                 "Layer 0: single-frame / zero-frame input, cannot loop".to_string(),
@@ -2151,15 +2150,21 @@ fn layer6_directional_arbitration(
     // Frame density normalization: avoid penalizing high-fps short loops (e.g. Live2D 60fps).
     // A 10s @ 60fps loop has 600 frames — that's normal for high-fps animation, not a sign
     // of video-length content. Only penalize when fps < 24 (low-fps + many frames = truly long).
-    if meta.frame_count.unwrap_or(0) > 500 && meta.duration_secs > 0.01_f64 {
-        let fps = crate::numeric_cast::u64_to_f64(meta.frame_count.unwrap_or(0)) / meta.duration_secs;
+    if meta.frame_count.is_some_and(|fc| fc > 500) && meta.duration_secs > 0.01_f64 {
+        let fps =
+            crate::numeric_cast::u64_to_f64(meta.frame_count.unwrap_or(0)) / meta.duration_secs;
         if fps < 24.0_f64 {
-            let weight = (crate::numeric_cast::u64_to_f64(meta.frame_count.unwrap_or(0).saturating_sub(500))
-                / 2000.0)
+            let weight = (crate::numeric_cast::u64_to_f64(
+                meta.frame_count.unwrap_or(0).saturating_sub(500),
+            ) / 2000.0)
                 .clamp(0.04, 0.14);
             arbitration.add_convert(
                 weight,
-                format!("high frame count {} @ {:.0}fps", meta.frame_count.unwrap_or(0), fps),
+                format!(
+                    "high frame count {} @ {:.0}fps",
+                    meta.frame_count.unwrap_or(0),
+                    fps
+                ),
             );
         }
     }
@@ -2240,7 +2245,7 @@ pub fn apply_apple_compat_modern_animation_policy(
     }
 
     // Guard: do not synthesize loop policy for single/zero-frame inputs.
-    if meta.frame_count.unwrap_or(0) <= 1 {
+    if meta.frame_count.is_none_or(|fc| fc <= 1) {
         return verdict;
     }
 
@@ -2255,16 +2260,16 @@ pub fn apply_apple_compat_modern_animation_policy(
     {
         return LoopIntentVerdict::LoopStrong(format!(
             "Apple compat policy: modern animated format ({ext_lower}) → force GIF (duration={:.2}s, frames={}, audio={})",
-            meta.duration_secs, meta.frame_count.unwrap_or(0), meta.has_audio
+            meta.duration_secs, meta.frame_count.map_or(0, |fc| fc), meta.has_audio
         ));
     }
 
     // Degenerate duration fallback: only treat as "short" for apple-compat forcing when the
     // animation is clearly not video-like (small-ish frame count, silent).
-    if meta.duration_secs <= 0.0_f64 && meta.frame_count.unwrap_or(0) <= 300 {
+    if meta.duration_secs <= 0.0_f64 && meta.frame_count.is_none_or(|fc| fc <= 300) {
         return LoopIntentVerdict::LoopStrong(format!(
             "Apple compat policy: modern animated format ({ext_lower}) → force GIF (degenerate duration, frames={}, audio={})",
-            meta.frame_count.unwrap_or(0), meta.has_audio
+            meta.frame_count.map_or(0, |fc| fc), meta.has_audio
         ));
     }
 
@@ -2374,16 +2379,19 @@ pub fn assess_loop_intent_from_meta(meta: &LoopMeta, path: Option<&Path>) -> Loo
         }
 
         // 3. Frame count verification (detect metadata lies)
-        if mutable_meta.frame_count.unwrap_or(0) <= 1 || mutable_meta.frame_count.unwrap_or(0) > 50000 {
-            match detect_real_frame_count(p, mutable_meta.frame_count.unwrap_or(0)) {
+        if mutable_meta
+            .frame_count
+            .is_none_or(|fc| fc <= 1 || fc > 50000)
+        {
+            let fc_for_detection = mutable_meta.frame_count.unwrap_or(0);
+            match detect_real_frame_count(p, fc_for_detection) {
                 crate::media_penetration::PenetrationResult::Verified(real_count) => {
                     mutable_meta.real_frame_count = Some(real_count);
-                    if real_count == mutable_meta.frame_count.unwrap_or(0) {
+                    if real_count == fc_for_detection {
                         emit_stderr(&format!("✅ Frame count verified: {real_count}"));
                     } else {
                         emit_stderr(&format!(
-                            "⚠️  Frame count mismatch: metadata={}, actual={}, overriding",
-                            mutable_meta.frame_count.unwrap_or(0), real_count
+                            "⚠️  Frame count mismatch: metadata={fc_for_detection}, actual={real_count}, overriding"
                         ));
                         mutable_meta.frame_count = Some(real_count);
                     }
@@ -2966,10 +2974,10 @@ pub fn analyze_filename(name: Option<&str>, keywords: &[String]) -> FilenameAnal
 
 #[must_use]
 pub fn score_loop_frequency(duration_secs: f64, frame_count: Option<u64>) -> f64 {
-    let fc = frame_count.unwrap_or(0);
-    if duration_secs <= 0.01_f64 || fc == 0 {
+    if duration_secs <= 0.01_f64 || frame_count.is_none_or(|fc| fc == 0) {
         return 0.5;
     }
+    let fc = frame_count.unwrap_or(0);
     let loops_per_minute = 60.0_f64 / duration_secs;
     let frame_density = crate::numeric_cast::u64_to_f64(fc) / duration_secs;
 
@@ -3001,10 +3009,10 @@ pub fn score_loop_frequency(duration_secs: f64, frame_count: Option<u64>) -> f64
 
 #[must_use]
 pub fn score_sparse_cadence(duration_secs: f64, frame_count: Option<u64>) -> f64 {
-    let fc = frame_count.unwrap_or(0);
-    if duration_secs <= 0.01_f64 || fc <= 1 {
+    if duration_secs <= 0.01_f64 || frame_count.is_none_or(|fc| fc <= 1) {
         return 0.5;
     }
+    let fc = frame_count.unwrap_or(0);
     let frame_density = crate::numeric_cast::u64_to_f64(fc) / duration_secs.max(0.01);
     let avg_gap = duration_secs / crate::numeric_cast::u64_to_f64(fc);
 
@@ -3643,7 +3651,7 @@ mod tests {
         meta.has_audio = true;
         meta.audio_is_silent = Some(false); // Audible audio
         meta.frame_count = Some(288); // 24fps × 12s
-                                // Make this look like a real video: widescreen, large file, scene cuts
+                                      // Make this look like a real video: widescreen, large file, scene cuts
         meta.width = 1920;
         meta.height = 1080;
         meta.file_size_bytes = 8_000_000;

@@ -705,14 +705,17 @@ fn evaluate_processing_recommendation(
 
     let resolution_factor =
         (Rational::from(width) * Rational::from(height)) / Rational::from(1_920_i32 * 1_080_i32);
-    let fps_factor =
-        crate::numeric_cast::f64_to_rational_loud(fps, 1, "fps") / Rational::from(30_i32);
+    let fps_factor = crate::numeric_cast::f64_to_rational_strict(fps, "fps")
+        .unwrap_or_else(|| Rational::from(1_i32))
+        / Rational::from(30_i32);
     let codec_efficiency_r =
-        crate::numeric_cast::f64_to_rational_loud(codec_efficiency, 1, "codec_efficiency");
+        crate::numeric_cast::f64_to_rational_strict(codec_efficiency, "codec_efficiency")
+            .unwrap_or_else(|| Rational::from(1_i32));
 
     let base_bitrate_1080p30_h264 = 2_500.0_f64;
     let expected_min_bitrate =
-        (crate::numeric_cast::f64_to_rational_loud(base_bitrate_1080p30_h264, 0, "base_bitrate")
+        (crate::numeric_cast::f64_to_rational_strict(base_bitrate_1080p30_h264, "base_bitrate")
+            .unwrap_or_else(|| Rational::from(0_i32))
             * resolution_factor
             * fps_factor
             * codec_efficiency_r)

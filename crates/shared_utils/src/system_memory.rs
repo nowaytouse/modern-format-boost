@@ -238,7 +238,7 @@ pub fn get_available_disk_bytes(path: &std::path::Path) -> Option<u64> {
         let ret = unsafe { libc::statvfs(c_path.as_ptr(), &raw mut stat) };
         if ret == 0 {
             // f_bavail: blocks available to unprivileged processes; f_frsize: fundamental block size
-            let avail = u64::from(stat.f_bavail) * stat.f_frsize as u64;
+            let avail = u64::from(stat.f_bavail).saturating_mul(stat.f_frsize);
             return Some(avail);
         }
         warn!(path = %existing.display(), errno = std::io::Error::last_os_error().to_string(), "statvfs failed during disk-space probe");

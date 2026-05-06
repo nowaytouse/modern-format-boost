@@ -362,7 +362,10 @@ pub fn dv_x265_profile_string(dv_profile: Option<u8>, compat_id: Option<u8>) -> 
             Some("8.1".to_string())
         }
         Some(8) => {
-            let sub = compat_id.unwrap_or(1);
+            let sub = compat_id.unwrap_or_else(|| {
+                tracing::warn!("Missing compatibility ID for HDR profile 8, using default");
+                1
+            });
             Some(format!("8.{sub}"))
         }
         _ => None,

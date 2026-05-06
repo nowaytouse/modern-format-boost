@@ -324,13 +324,26 @@ fn stream_size_change_pct(output_size: u64, input_size: u64) -> f64 {
     (crate::numeric_cast::u64_to_f64(output_size) / denom - 1.0) * 100.0
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct GpuSearchFlags {
+    pub features: GpuSearchFeatures,
+    pub validation: GpuSearchValidation,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GpuSearchFeatures {
+    pub ultimate_mode: bool,
+    pub apple_compat: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GpuSearchValidation {
+    pub force_ms_ssim_long: bool,
+    pub allow_size_tolerance: bool,
+}
+
 /// Arguments for GPU-accelerated CRF exploration.
 #[derive(Debug, Clone)]
-// Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(
-    clippy::struct_excessive_bools,
-    reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping."
-)]
 pub struct GpuSearchArgs<'a> {
     pub input: &'a Path,
     pub output: &'a Path,
@@ -339,45 +352,48 @@ pub struct GpuSearchArgs<'a> {
     pub initial_crf: f32,
     pub max_crf: f32,
     pub min_ssim: f64,
-    pub ultimate_mode: bool,
-    pub force_ms_ssim_long: bool,
-    pub allow_size_tolerance: bool,
+    pub flags: GpuSearchFlags,
     pub max_threads: usize,
     pub hdr_x265_params: Option<String>,
-    pub apple_compat: bool,
     pub preset: EncoderPreset,
     pub final_output_preset: EncoderPreset,
 }
 
 /// A request for a GPU-backed video quality exploration.
 #[derive(Debug, Clone)]
-// Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(
-    clippy::struct_excessive_bools,
-    reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping."
-)]
 pub struct GpuSearchRequest {
     pub input: std::path::PathBuf,
     pub output: std::path::PathBuf,
     pub vf_args: Vec<String>,
     pub baseline_crf: f32,
     pub warm_start_crf: Option<f32>,
-    pub ultimate_mode: bool,
-    pub force_ms_ssim_long: bool,
-    pub allow_size_tolerance: bool,
+    pub flags: GpuSearchFlags,
     pub min_ssim: f64,
     pub max_threads: usize,
     pub hdr_x265_params: Option<String>,
-    pub apple_compat: bool,
     pub preset: EncoderPreset,
 }
 
+#[derive(Debug, Clone, Default)]
+struct FineTuneFlags {
+    pub features: FineTuneFeatures,
+    pub status: FineTuneStatus,
+}
+
+#[derive(Debug, Clone, Default)]
+struct FineTuneFeatures {
+    pub ultimate_mode: bool,
+    pub apple_compat: bool,
+    pub is_gif_magic: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+struct FineTuneStatus {
+    pub allow_size_tolerance: bool,
+    pub gpu_executed: bool,
+}
+
 /// Arguments for CPU fine-tuning phase.
-// Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(
-    clippy::struct_excessive_bools,
-    reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping."
-)]
 struct FineTuneArgs<'a> {
     input: &'a Path,
     output: &'a Path,
@@ -387,15 +403,11 @@ struct FineTuneArgs<'a> {
     min_crf: f32,
     max_crf: f32,
     min_ssim: f64,
-    ultimate_mode: bool,
-    allow_size_tolerance: bool,
+    flags: FineTuneFlags,
     max_threads: usize,
     duration: f32,
     probe_info: Option<&'a crate::ffprobe::FFprobeResult>,
-    gpu_executed: bool,
-    is_gif_magic: bool,
     hdr_x265_params: Option<String>,
-    apple_compat: bool,
     preset: EncoderPreset,
     final_output_preset: EncoderPreset,
 }
@@ -457,14 +469,9 @@ pub(crate) fn format_quality_check_line(
 /// # Errors
 /// Returns an error if exploration fails.
 // Rationale: This function handles complex, sequential initialization or business logic where further fragmentation would hinder readability and maintainability.
-#[allow(
-    clippy::too_many_lines,
-    reason = "Complex orchestration logic where fragmenting state into smaller helpers would decrease readability and increase cognitive overhead."
-)]
-#[allow(
-    clippy::missing_panics_doc,
-    reason = "Explicit panic on data corruption is intended and documented inline."
-)]
+/// # Panics
+/// Panics if the output path cannot be derived from input path.
+#[allow(clippy::too_many_lines)]
 pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<ExploreResult> {
     use crate::gpu_accel::{CrfMapping, GpuAccel, GpuCoarseConfig};
     let GpuSearchArgs {
@@ -475,15 +482,24 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
         initial_crf,
         max_crf,
         min_ssim,
-        ultimate_mode,
-        force_ms_ssim_long,
-        allow_size_tolerance,
+        flags,
         max_threads,
         hdr_x265_params,
-        apple_compat,
         preset,
         final_output_preset,
     } = args;
+
+    let GpuSearchFlags {
+        features: GpuSearchFeatures {
+            ultimate_mode,
+            apple_compat,
+        },
+        validation:
+            GpuSearchValidation {
+                force_ms_ssim_long,
+                allow_size_tolerance,
+            },
+    } = flags;
 
     let _ = precheck::run_precheck(input)?;
     crate::log_eprintln!();
@@ -870,15 +886,21 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
         min_crf: cpu_min_crf,
         max_crf: cpu_max_crf,
         min_ssim,
-        ultimate_mode,
-        allow_size_tolerance,
+        flags: FineTuneFlags {
+            features: FineTuneFeatures {
+                ultimate_mode,
+                apple_compat,
+                is_gif_magic,
+            },
+            status: FineTuneStatus {
+                allow_size_tolerance,
+                gpu_executed,
+            },
+        },
         max_threads,
         duration,
         probe_info: probe_result.as_ref(),
-        gpu_executed,
-        is_gif_magic,
         hdr_x265_params,
-        apple_compat,
         preset,
         final_output_preset,
     };
@@ -1253,11 +1275,11 @@ pub fn explore_with_gpu_coarse_search(args: GpuSearchArgs<'_>) -> Result<Explore
                 (Some(ms), Some(ss)) => {
                     crate::log_eprintln!(
                         "   FUSION SCORE: {:.4}",
-                        crate::numeric_cast::option_f64_loud(
+                        crate::numeric_cast::option_f64_strict(
                             evaluation.fusion_score,
-                            0.0,
                             "fusion_score_logging"
                         )
+                        .unwrap_or(0.0)
                     );
                     crate::log_eprintln!(
                         "      Formula: {:.1}×MS-SSIM + {:.1}×SSIM_All",
@@ -1613,18 +1635,28 @@ fn cpu_fine_tune_from_gpu_boundary(
         min_crf,
         max_crf,
         min_ssim,
-        ultimate_mode,
-        allow_size_tolerance,
+        flags,
         max_threads,
         duration,
         probe_info,
-        gpu_executed,
-        is_gif_magic,
         hdr_x265_params,
-        apple_compat,
         preset,
         final_output_preset,
     } = args;
+
+    let FineTuneFlags {
+        features:
+            FineTuneFeatures {
+                ultimate_mode,
+                apple_compat,
+                is_gif_magic,
+            },
+        status:
+            FineTuneStatus {
+                allow_size_tolerance,
+                gpu_executed,
+            },
+    } = flags;
     let log = Vec::new();
     let mut early_insight_triggered = false;
 
@@ -4278,7 +4310,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         total_file_compressed && ssim_ok
     };
 
-    let ssim_val = crate::numeric_cast::option_f64_loud(ssim, 0.0, "final_ssim");
+    let ssim_val = crate::numeric_cast::option_f64_strict(ssim, "final_ssim").unwrap_or(0.0);
 
     let sampling_coverage = 1.0_f64;
 
@@ -4523,12 +4555,9 @@ fn run_hevc_gpu_search_to_output(
         initial_crf: initial_crf.clamp(ABSOLUTE_MIN_CRF, max_crf),
         max_crf,
         min_ssim,
-        ultimate_mode: req.ultimate_mode,
-        force_ms_ssim_long: req.force_ms_ssim_long,
-        allow_size_tolerance: req.allow_size_tolerance,
+        flags: req.flags.clone(),
         max_threads: req.max_threads,
         hdr_x265_params: req.hdr_x265_params.clone(),
-        apple_compat: req.apple_compat,
         preset: search_preset.sanitize_hevc(),
         final_output_preset: final_output_preset.sanitize_hevc(),
     })
@@ -4541,7 +4570,7 @@ fn run_hevc_gpu_search_to_output(
 pub fn explore_hevc_with_gpu(req: &GpuSearchRequest) -> Result<ExploreResult> {
     let (max_crf, _) = calculate_smart_thresholds(req.baseline_crf, VideoEncoder::Hevc);
     let screening_anchor = search_anchor_crf(req.baseline_crf, req.warm_start_crf, max_crf);
-    let plan = hevc_preset_plan(req.preset, req.ultimate_mode);
+    let plan = hevc_preset_plan(req.preset, req.flags.features.ultimate_mode);
 
     if plan.search_preset != plan.final_output_preset {
         crate::log_eprintln!(
@@ -4578,12 +4607,9 @@ pub fn explore_av1_with_gpu(req: &GpuSearchRequest) -> Result<ExploreResult> {
         initial_crf: search_anchor_crf,
         max_crf,
         min_ssim,
-        ultimate_mode: req.ultimate_mode,
-        force_ms_ssim_long: req.force_ms_ssim_long,
-        allow_size_tolerance: req.allow_size_tolerance,
+        flags: req.flags.clone(),
         max_threads: req.max_threads,
         hdr_x265_params: None, // AV1 doesn't use x265 params
-        apple_compat: req.apple_compat,
         preset: req.preset,
         final_output_preset: req.preset,
     })

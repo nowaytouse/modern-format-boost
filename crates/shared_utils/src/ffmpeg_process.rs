@@ -20,7 +20,7 @@
 //! use std::path::Path;
 //!
 //! // Use a lightweight asset from the edge directory
-//! let input = Path::new("../../crates/dev/edge/videos/non_monotonic.mp4");
+//! let input = Path::new("../../crates/dev/src/edge/videos/non_monotonic.mp4");
 //! if input.exists() {
 //!     let mut cmd = Command::new("ffmpeg");
 //!     cmd.arg("-y")

@@ -218,14 +218,12 @@ static SPINNER_FRAME: AtomicU64 = AtomicU64::new(0);
 
 /// Returns the next spinner animation frame (rotating through dash, slash, pipe, backslash).
 pub fn spinner_frame() -> &'static str {
-    let frame = match usize::try_from(SPINNER_FRAME.fetch_add(1, Ordering::Relaxed)) {
-        Ok(f) => f,
-        Err(_) => {
+    let frame =
+        usize::try_from(SPINNER_FRAME.fetch_add(1, Ordering::Relaxed)).unwrap_or_else(|_| {
             warn!("☢️ [ANOMALY] Spinner frame counter overflowed; resetting to 0");
             SPINNER_FRAME.store(0, Ordering::Relaxed);
             0
-        }
-    };
+        });
     SPINNER_FRAMES
         .get(frame % SPINNER_FRAMES.len())
         .copied()
@@ -234,14 +232,12 @@ pub fn spinner_frame() -> &'static str {
 
 /// Returns the next spinner dots animation frame (rotating through asterisk, dot, small o, capital O).
 pub fn spinner_dots() -> &'static str {
-    let frame = match usize::try_from(SPINNER_FRAME.fetch_add(1, Ordering::Relaxed)) {
-        Ok(f) => f,
-        Err(_) => {
+    let frame =
+        usize::try_from(SPINNER_FRAME.fetch_add(1, Ordering::Relaxed)).unwrap_or_else(|_| {
             warn!("☢️ [ANOMALY] Spinner frame counter overflowed; resetting to 0");
             SPINNER_FRAME.store(0, Ordering::Relaxed);
             0
-        }
-    };
+        });
     SPINNER_DOTS
         .get(frame % SPINNER_DOTS.len())
         .copied()
@@ -481,7 +477,10 @@ pub fn print_result_box(title: &str, lines: &[&str]) {
         .iter()
         .map(|l| strip_ansi(l).len())
         .max()
-        .unwrap_or(40)
+        .unwrap_or_else(|| {
+            // If no lines, use title length or default
+            strip_ansi(title).len().max(40)
+        })
         .max(strip_ansi(title).len())
         .max(40);
 

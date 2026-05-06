@@ -1,0 +1,5 @@
+---
+source: crates/dev/src/bin/classification_snapshots.rs
+expression: verdict.reason()
+---
+"Layer 0-EX (Hard Veto): extreme-short duration 3.50s ≤ 6.0s — definitively animated image regardless of all other signals"

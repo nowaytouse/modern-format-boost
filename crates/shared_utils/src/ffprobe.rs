@@ -367,8 +367,11 @@ fn parse_probe_format(format: &serde_json::Value) -> Result<ProbeFormatInfo, FFp
     }
 
     // `duration` is required; without it frame-count and loop-intent are undefined.
-    let duration = parse_f64_string_field(&format["duration"])
-        .ok_or_else(|| FFprobeError::ParseError("Missing or unparseable format duration".to_string()))?;
+    let duration = parse_f64_string_field(&format["duration"]).ok_or_else(|| {
+        let msg = "Missing or unparseable 'duration' in ffprobe format section".to_string();
+        warn!(%msg, "ffprobe data integrity failure");
+        FFprobeError::ParseError(msg)
+    })?;
 
     Ok(ProbeFormatInfo {
         format_name,
@@ -406,8 +409,8 @@ fn select_video_stream<'a>(
 
     // A stream with zero or absent dimensions is not selectable as the primary stream.
     let has_valid_dimensions = |stream: &serde_json::Value| -> bool {
-        stream["width"].as_u64().map_or(false, |w| w > 0)
-            && stream["height"].as_u64().map_or(false, |h| h > 0)
+        stream["width"].as_u64().is_some_and(|w| w > 0)
+            && stream["height"].as_u64().is_some_and(|h| h > 0)
     };
 
     let (fallback_index, stream) = if video_streams.len() > 1 {
@@ -417,7 +420,9 @@ fn select_video_stream<'a>(
                 // `nb_frames` absent → treat as 0 (lowest sort priority); this is
                 // intentional: a stream with unknown frame count loses to one with known count.
                 let nb = parse_u64_string_field(&stream["nb_frames"]).unwrap_or_else(|| {
-                    warn!("ffprobe stream missing nb_frames; using 0 for stream selection");
+                    warn!(
+                        "ffprobe stream missing nb_frames; using 0 for stream selection priority"
+                    );
                     0
                 });
                 (u8::from(has_valid_dimensions(stream)), nb)
@@ -461,17 +466,14 @@ fn resolve_probe_duration(
     // the stream-level fallback is a secondary source for edge cases.
     let mut duration = if format_duration > 0.0_f64 {
         format_duration
+    } else if let Some(d) = parse_f64_string_field(&video_stream["duration"]) {
+        d
     } else {
-        match parse_f64_string_field(&video_stream["duration"]) {
-            Some(d) => d,
-            None => {
-                warn!(
-                    path = %path.display(),
-                    "Neither format nor stream reports a valid duration; using 0.0"
-                );
-                0.0_f64
-            }
-        }
+        warn!(
+            path = %path.display(),
+            "Neither format nor stream reports a valid duration; using 0.0"
+        );
+        0.0_f64
     };
 
     // Root fix: ffprobe often reports 0/N/A duration for animated WebP (`webp_pipe`).
@@ -536,6 +538,7 @@ fn parse_required_u32_field(
 ///
 /// # Returns
 /// Parsed video stream fields, or `FFprobeError` if parsing fails
+#[allow(clippy::too_many_lines)]
 fn parse_video_stream_fields(
     video_stream: &serde_json::Value,
     format_name: &str,
@@ -590,9 +593,13 @@ fn parse_video_stream_fields(
                     {
                         let duration_secs = f64::from(duration_secs);
                         if duration_secs > 0.0_f64 {
-                            avg_frame_rate =
-                                crate::numeric_cast::u64_to_f64(frame_count.unwrap_or(1))
-                                    / duration_secs;
+                            avg_frame_rate = frame_count.map_or_else(
+                                || {
+                                    tracing::warn!("Missing frame count for FPS calculation");
+                                    0.0
+                                },
+                                |fc| crate::numeric_cast::u64_to_f64(fc) / duration_secs,
+                            );
                         }
                     }
                 }
@@ -608,16 +615,21 @@ fn parse_video_stream_fields(
     // `has_b_frames` is an optional stream field; absent means the codec/container
     // did not advertise B-frame usage — treat as 0, but warn so it's visible.
     let max_b_frames_raw = video_stream["has_b_frames"].as_i64();
-    let max_b_frames = match max_b_frames_raw {
-        Some(v) => u8::try_from(v.clamp(0, i64::from(u8::MAX))).unwrap_or_else(|_| {
-            warn!(has_b_frames_raw = v, "has_b_frames out of u8 range; clamping to 255");
-            u8::MAX
-        }),
-        None => {
+    let max_b_frames = max_b_frames_raw.map_or_else(
+        || {
             warn!("ffprobe stream missing has_b_frames; treating as 0");
             0_u8
-        }
-    };
+        },
+        |v| {
+            u8::try_from(v.clamp(0, i64::from(u8::MAX))).unwrap_or_else(|_| {
+                warn!(
+                    has_b_frames_raw = v,
+                    "has_b_frames out of u8 range; clamping to 255"
+                );
+                u8::MAX
+            })
+        },
+    );
 
     Ok(VideoStreamFields {
         video_codec,
@@ -731,10 +743,9 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         bit_rate,
         duration: format_duration,
         tags,
-    } = parse_probe_format(
-        json.get("format")
-            .ok_or_else(|| FFprobeError::ParseError("ffprobe JSON missing 'format' object".to_string()))?,
-    )?;
+    } = parse_probe_format(json.get("format").ok_or_else(|| {
+        FFprobeError::ParseError("ffprobe JSON missing 'format' object".to_string())
+    })?)?;
     let streams = json
         .get("streams")
         .and_then(serde_json::Value::as_array)
@@ -775,7 +786,7 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         is_variable_frame_rate: video.is_variable_frame_rate,
         stream_index,
         tags,
-        loop_count: json.get("format").and_then(|f| extract_loop_count(f)),
+        loop_count: json.get("format").and_then(extract_loop_count),
         frame_types: extract_frame_types(&json),
         pts_deltas: extract_pts_deltas(&json),
         pkt_sizes: extract_pkt_sizes(&json),
@@ -794,13 +805,14 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         }
     }
 
-    let fc_val = result.frame_count.unwrap_or(0);
-    if fc_val <= 1 || fc_val > 50000 {
-        if let crate::media_penetration::PenetrationResult::Verified(real_count) =
-            crate::media_penetration::detect_real_frame_count(path, fc_val)
-        {
-            if real_count > 0 {
-                result.frame_count = Some(result.frame_count.unwrap_or(0).max(real_count));
+    if let Some(fc_val) = result.frame_count {
+        if fc_val <= 1 || fc_val > 50000 {
+            if let crate::media_penetration::PenetrationResult::Verified(real_count) =
+                crate::media_penetration::detect_real_frame_count(path, fc_val)
+            {
+                if real_count > 0 {
+                    result.frame_count = Some(fc_val.max(real_count));
+                }
             }
         }
     }
@@ -939,15 +951,20 @@ fn extract_hdr_side_data(json: &serde_json::Value) -> FFprobeHdrInfo {
             // Parse DOVI configuration record fields.
             // DV profile is u8 (0–9); values >255 are malformed side-data — warn and skip.
             if let Some(profile) = sd["dv_profile"].as_u64() {
-                match u8::try_from(profile) {
-                    Ok(v) => dolby_vision.profile = Some(v),
-                    Err(_) => warn!(dv_profile = profile, "DV profile out of u8 range; ignoring"),
+                if let Ok(v) = u8::try_from(profile) {
+                    dolby_vision.profile = Some(v);
+                } else {
+                    warn!(dv_profile = profile, "DV profile out of u8 range; ignoring");
                 }
             }
             if let Some(compat_id) = sd["dv_bl_signal_compatibility_id"].as_u64() {
-                match u8::try_from(compat_id) {
-                    Ok(v) => dolby_vision.bl_signal_compatibility_id = Some(v),
-                    Err(_) => warn!(dv_compat_id = compat_id, "DV bl_signal_compatibility_id out of u8 range; ignoring"),
+                if let Ok(v) = u8::try_from(compat_id) {
+                    dolby_vision.bl_signal_compatibility_id = Some(v);
+                } else {
+                    warn!(
+                        dv_compat_id = compat_id,
+                        "DV bl_signal_compatibility_id out of u8 range; ignoring"
+                    );
                 }
             }
         }
@@ -1389,7 +1406,7 @@ mod tests {
             result.is_ok(),
             "parse_probe_format must not panic when bit_rate is absent: {result:?}"
         );
-        let info = result.unwrap();
+        let info = result.expect("parse_probe_format should succeed in test");
         assert!(
             info.bit_rate.is_none(),
             "bit_rate should be None when absent from format section"
@@ -1408,7 +1425,10 @@ mod tests {
         });
         let result = parse_probe_format(&format);
         assert!(result.is_ok());
-        assert!(result.unwrap().bit_rate.is_none());
+        assert!(result
+            .expect("parse_probe_format should succeed in test")
+            .bit_rate
+            .is_none());
     }
 
     /// Missing `duration` must return `Err`, not panic or use a bogus default.
@@ -1424,7 +1444,10 @@ mod tests {
             result.is_err(),
             "parse_probe_format must return Err when duration is absent: {result:?}"
         );
-        let msg = format!("{:?}", result.unwrap_err());
+        let msg = format!(
+            "{:?}",
+            result.expect_err("parse_probe_format should return Err when duration is absent")
+        );
         assert!(
             msg.contains("duration"),
             "error message should mention 'duration', got: {msg}"
@@ -1464,10 +1487,13 @@ mod tests {
             // nb_frames absent — common for some containers
         })];
         let result = select_video_stream(&streams);
-        assert!(result.is_ok(), "absent nb_frames must not panic: {result:?}");
+        assert!(
+            result.is_ok(),
+            "absent nb_frames must not panic: {result:?}"
+        );
     }
 
-    /// `has_b_frames` absent — parse_video_stream_fields must not panic.
+    /// `has_b_frames` absent — `parse_video_stream_fields` must not panic.
     #[test]
     fn parse_video_stream_fields_absent_has_b_frames_does_not_panic() {
         // Test the lower-level parse_video_stream_fields directly.
@@ -1493,9 +1519,12 @@ mod tests {
             result.is_ok(),
             "absent has_b_frames must not cause panic or Err: {result:?}"
         );
-        let fields = result.unwrap();
+        let fields = result.expect("parse_video_stream_fields should succeed in test");
         // has_b_frames absent → treated as 0
-        assert_eq!(fields.max_b_frames, 0, "absent has_b_frames should default to 0");
+        assert_eq!(
+            fields.max_b_frames, 0,
+            "absent has_b_frames should default to 0"
+        );
     }
 
     /// DV profile > 255 must not panic — should warn and skip.
@@ -1533,5 +1562,29 @@ mod tests {
             result.is_ok(),
             "out-of-range DV profile must not panic: {result:?}"
         );
+    }
+
+    /// Test a comprehensive edge case: WebP with missing metadata that mirrors the reported failure mode.
+    /// identify failed, ffprobe has limited info, animated media detected.
+    #[test]
+    fn test_webp_missing_metadata_flow() {
+        // Mirrored from real-world failure: 0x0 dimensions and missing nb_frames
+        let streams = vec![serde_json::json!({
+            "codec_type": "video",
+            "codec_name": "webp",
+            "width": 0,
+            "height": 0,
+            "r_frame_rate": "25/1",
+            "avg_frame_rate": "0/0"
+        })];
+        let result = select_video_stream(&streams);
+        // Should succeed by picking the only available video stream, even if 0x0
+        assert!(
+            result.is_ok(),
+            "select_video_stream must fallback to picking the stream even if dimensions are 0"
+        );
+        let (idx, stream) = result.expect("select_video_stream should succeed in test");
+        assert_eq!(idx, 0);
+        assert_eq!(stream["codec_name"], "webp");
     }
 }

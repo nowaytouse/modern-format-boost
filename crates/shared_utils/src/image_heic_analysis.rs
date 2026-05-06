@@ -10,25 +10,28 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tracing::{debug, warn};
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HeicHdrInfo {
+    pub is_hdr: bool,
+    pub is_dolby_vision: bool,
+    pub has_gainmap: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HeicAuxInfo {
+    pub has_auxiliary: bool,
+    pub has_vendor_metadata: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
-// Rationale: This struct serves as a comprehensive configuration or state container where individual boolean flags are the most idiomatic and explicit way to represent discrete options.
-#[allow(
-    clippy::struct_excessive_bools,
-    reason = "Data models naturally require multiple boolean flags to map independent configuration features. Grouping them into bitflags would break explicit serde mapping."
-)]
 pub struct HeicAnalysis {
     pub bit_depth: u8,
     pub codec: String,
     pub is_lossless: bool,
     pub has_alpha: bool,
-    pub has_auxiliary: bool,
     pub image_count: usize,
-    pub is_hdr: bool,
-    pub is_dolby_vision: bool,
-    /// Apple Gainmap / Google `GCamera` HDR gainmap detected in XMP
-    pub has_gainmap: bool,
-    /// Samsung/Google vendor-specific XMP metadata detected
-    pub has_vendor_metadata: bool,
+    pub hdr: HeicHdrInfo,
+    pub aux: HeicAuxInfo,
 }
 
 /// Detect HEIC/HEIF lossless encoding — multi-dimension analysis.
@@ -84,42 +87,47 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
         debug!("   hvcc_data.len: {}", hvcc_data.len());
 
         if hvcc_data.len() >= 20 {
-            let profile_idc = match hvcc_data.get(1) {
-                Some(b) => b & 0x1F,
-                None => {
-                    warn!("☢️ [CORRUPTION] HEIC hvcC box truncated: missing profile_idc");
-                    return Err(ImgQualityError::AnalysisError("hvcC truncated".to_string()));
-                }
+            let profile_idc = if let Some(b) = hvcc_data.get(1) {
+                b & 0x1F
+            } else {
+                warn!("☢️ [CORRUPTION] HEIC hvcC box truncated: missing profile_idc");
+                return Err(ImgQualityError::AnalysisError("hvcC truncated".to_string()));
             };
-            
+
             // Bytes 2-5: general_profile_compatibility_flags (32 bits)
             let mut compat_bytes = [0u8; 4];
             for (i, byte) in compat_bytes.iter_mut().enumerate() {
-                *byte = match hvcc_data.get(2 + i) {
-                    Some(b) => *b,
-                    None => {
-                        warn!("☢️ [CORRUPTION] HEIC hvcC box truncated at compatibility flags byte {}", i);
-                        return Err(ImgQualityError::AnalysisError("hvcC flags truncated".to_string()));
-                    }
+                *byte = if let Some(b) = hvcc_data.get(2 + i) {
+                    *b
+                } else {
+                    warn!(
+                        "☢️ [CORRUPTION] HEIC hvcC box truncated at compatibility flags byte {}",
+                        i
+                    );
+                    return Err(ImgQualityError::AnalysisError(
+                        "hvcC flags truncated".to_string(),
+                    ));
                 };
             }
             let compat_flags = u32::from_be_bytes(compat_bytes);
 
             // HEVCDecoderConfigurationRecord fixed fields
-            let chroma_format_idc = match hvcc_data.get(16) {
-                Some(b) => b & 0x03,
-                None => {
-                    warn!("☢️ [CORRUPTION] HEIC hvcC box truncated at chroma_format_idc");
-                    return Err(ImgQualityError::AnalysisError("hvcC chroma truncated".to_string()));
-                }
+            let chroma_format_idc = if let Some(b) = hvcc_data.get(16) {
+                b & 0x03
+            } else {
+                warn!("☢️ [CORRUPTION] HEIC hvcC box truncated at chroma_format_idc");
+                return Err(ImgQualityError::AnalysisError(
+                    "hvcC chroma truncated".to_string(),
+                ));
             };
-            
-            let byte_17 = match hvcc_data.get(17) {
-                Some(b) => *b,
-                None => {
-                    warn!("☢️ [CORRUPTION] HEIC hvcC box truncated at bit_depth field");
-                    return Err(ImgQualityError::AnalysisError("hvcC bit_depth truncated".to_string()));
-                }
+
+            let byte_17 = if let Some(b) = hvcc_data.get(17) {
+                *b
+            } else {
+                warn!("☢️ [CORRUPTION] HEIC hvcC box truncated at bit_depth field");
+                return Err(ImgQualityError::AnalysisError(
+                    "hvcC bit_depth truncated".to_string(),
+                ));
             };
             let bit_depth_luma = ((byte_17 >> 5_i32) & 0x07) + 8;
             let bit_depth_chroma = (byte_17 & 0x07) + 8;
@@ -164,15 +172,13 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
                         if pixi_data.is_empty() {
                             None
                         } else {
-                            let num_ch = crate::numeric_cast::u8_to_usize_sat(*pixi_data.first()?);
+                            let num_ch = crate::numeric_cast::u8_to_usize_strict(
+                                *pixi_data.first()?,
+                                "heic_pixi_num_ch",
+                            )
+                            .unwrap_or(0);
                             if num_ch > 0 && pixi_data.len() > num_ch {
-                                Some(
-                                    pixi_data
-                                        .get(1..=num_ch)?
-                                        .iter()
-                                        .copied()
-                                        .max()?,
-                                )
+                                Some(pixi_data.get(1..=num_ch)?.iter().copied().max()?)
                             } else {
                                 None
                             }
@@ -242,40 +248,49 @@ fn parse_sps_for_transquant_bypass_flag(hvcc_data: &[u8]) -> Option<bool> {
     if hvcc_data.len() < 25 {
         return None;
     }
-    let num_nalu_arrays = match hvcc_data.get(24) {
-        Some(b) => crate::numeric_cast::u8_to_usize_sat(*b),
-        None => {
-            warn!("☢️ [CORRUPTION] hvcC box too short to read num_nalu_arrays");
-            return None;
-        }
+    let num_nalu_arrays = if let Some(b) = hvcc_data.get(24) {
+        crate::numeric_cast::u8_to_usize_strict(*b, "heic_num_nalu").unwrap_or(0)
+    } else {
+        warn!("☢️ [CORRUPTION] hvcC box too short to read num_nalu_arrays");
+        return None;
     };
     let mut pos = 25;
     for _ in 0..num_nalu_arrays {
         if pos + 3 > hvcc_data.len() {
             return None;
         }
-        let nal_unit_type = match hvcc_data.get(pos) {
-            Some(b) => b & 0x3F,
-            None => {
-                warn!("☢️ [CORRUPTION] hvcC box truncated at NAL unit type byte at {}", pos);
-                return None;
-            }
+        let nal_unit_type = if let Some(b) = hvcc_data.get(pos) {
+            b & 0x3F
+        } else {
+            warn!(
+                "☢️ [CORRUPTION] hvcC box truncated at NAL unit type byte at {}",
+                pos
+            );
+            return None;
         };
-        let b1 = match hvcc_data.get(pos + 1) {
-            Some(b) => *b,
-            None => {
-                warn!("☢️ [CORRUPTION] hvcC box truncated at NAL unit length high byte at {}", pos + 1);
-                return None;
-            }
+        let b1 = if let Some(b) = hvcc_data.get(pos + 1) {
+            *b
+        } else {
+            warn!(
+                "☢️ [CORRUPTION] hvcC box truncated at NAL unit length high byte at {}",
+                pos + 1
+            );
+            return None;
         };
-        let b2 = match hvcc_data.get(pos + 2) {
-            Some(b) => *b,
-            None => {
-                warn!("☢️ [CORRUPTION] hvcC box truncated at NAL unit length low byte at {}", pos + 2);
-                return None;
-            }
+        let b2 = if let Some(b) = hvcc_data.get(pos + 2) {
+            *b
+        } else {
+            warn!(
+                "☢️ [CORRUPTION] hvcC box truncated at NAL unit length low byte at {}",
+                pos + 2
+            );
+            return None;
         };
-        let num_nalus = crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([b1, b2]));
+        let num_nalus = crate::numeric_cast::u16_to_usize_strict(
+            u16::from_be_bytes([b1, b2]),
+            "heic_num_nalus",
+        )
+        .unwrap_or(0);
         pos += 3;
         if nal_unit_type == 33 {
             for _ in 0..num_nalus {
@@ -284,7 +299,11 @@ fn parse_sps_for_transquant_bypass_flag(hvcc_data: &[u8]) -> Option<bool> {
                 }
                 let b1 = *hvcc_data.get(pos)?;
                 let b2 = *hvcc_data.get(pos + 1)?;
-                let nal_unit_length = crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([b1, b2]));
+                let nal_unit_length = crate::numeric_cast::u16_to_usize_strict(
+                    u16::from_be_bytes([b1, b2]),
+                    "heic_nal_len",
+                )
+                .unwrap_or(0);
                 pos += 2;
                 if pos + nal_unit_length > hvcc_data.len() {
                     return None;
@@ -303,7 +322,11 @@ fn parse_sps_for_transquant_bypass_flag(hvcc_data: &[u8]) -> Option<bool> {
                 }
                 let b1 = *hvcc_data.get(pos)?;
                 let b2 = *hvcc_data.get(pos + 1)?;
-                let nal_unit_length = crate::numeric_cast::u16_to_usize_sat(u16::from_be_bytes([b1, b2]));
+                let nal_unit_length = crate::numeric_cast::u16_to_usize_strict(
+                    u16::from_be_bytes([b1, b2]),
+                    "heic_nal_len",
+                )
+                .unwrap_or(0);
                 pos += 2 + nal_unit_length;
             }
         }
@@ -346,7 +369,10 @@ fn parse_sps_rbsp_for_transquant_bypass(sps_payload: &[u8]) -> Option<bool> {
                 leading_zeros += 1;
             }
             let info = if leading_zeros > 0 {
-                self.read_bits(crate::numeric_cast::u32_to_usize_sat(leading_zeros))?
+                self.read_bits(
+                    crate::numeric_cast::u32_to_usize_strict(leading_zeros, "heic_ue_zeros")
+                        .unwrap_or(0),
+                )?
             } else {
                 0
             };
@@ -463,12 +489,12 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
                 // Fallback 1: Try to find ftyp box manually
                 if let Some(pos) = data.windows(4).position(|w| w == b"ftyp") {
                     if pos >= 4 {
-                        let sliced_data = match data.get(pos - 4..) {
-                            Some(s) => s,
-                            None => {
-                                warn!("☢️ [ANOMALY] HEIC data truncated before 'ftyp' box at position {}", pos);
-                                return Err(e);
-                            }
+                        let Some(sliced_data) = data.get(pos - 4..) else {
+                            warn!(
+                                "☢️ [ANOMALY] HEIC data truncated before 'ftyp' box at position {}",
+                                pos
+                            );
+                            return Err(e);
                         };
                         if matches!(ctx.read_bytes(sliced_data), Ok(())) {
                             return Ok(());
@@ -581,12 +607,16 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
         codec,
         is_lossless,
         has_alpha,
-        has_auxiliary,
         image_count,
-        is_hdr,
-        is_dolby_vision,
-        has_gainmap,
-        has_vendor_metadata,
+        hdr: HeicHdrInfo {
+            is_hdr,
+            is_dolby_vision,
+            has_gainmap,
+        },
+        aux: HeicAuxInfo {
+            has_auxiliary,
+            has_vendor_metadata,
+        },
     };
 
     debug!(
@@ -638,11 +668,9 @@ pub fn is_heic_file(path: &Path) -> bool {
 /// in the raw bytes (they are always UTF-8 / ASCII-compatible).
 ///
 /// Returns `None` if no XMP data is found.
+/// # Panics
+/// Panics if the HEIC data is corrupted and XMP markers are found but the following data is inaccessible.
 #[must_use]
-#[allow(
-    clippy::missing_panics_doc,
-    reason = "Explicit panic on data corruption is intended and documented inline."
-)]
 pub fn extract_xmp_from_heic_data(data: &[u8]) -> Option<String> {
     // 🛡️ Security: Limit total data size to 100MB for XMP scanning to prevent timeouts
     if data.len() > 100 * 1024 * 1024 {
@@ -656,8 +684,8 @@ pub fn extract_xmp_from_heic_data(data: &[u8]) -> Option<String> {
             // XMP is always UTF-8; grab up to 64 KB from the start marker
             let end = (start + 65536).min(data.len());
             return String::from_utf8_lossy(data.get(start..end)?)
-            .into_owned()
-            .into();
+                .into_owned()
+                .into();
         }
     }
     None
@@ -671,15 +699,18 @@ fn find_box_payload_by_magic(data: &[u8], box_type: [u8; 4]) -> Option<&[u8]> {
         if pos >= 4 {
             let mut size_bytes = [0u8; 4];
             for (i, byte) in size_bytes.iter_mut().enumerate() {
-                *byte = match data.get(pos - 4 + i) {
-                    Some(b) => *b,
-                    None => {
-                        warn!("☢️ [CORRUPTION] Truncated box size before type at {}", pos);
-                        return None;
-                    }
+                *byte = if let Some(b) = data.get(pos - 4 + i) {
+                    *b
+                } else {
+                    warn!("☢️ [CORRUPTION] Truncated box size before type at {}", pos);
+                    return None;
                 };
             }
-            let size = crate::numeric_cast::u32_to_usize_sat(u32::from_be_bytes(size_bytes));
+            let size = crate::numeric_cast::u32_to_usize_strict(
+                u32::from_be_bytes(size_bytes),
+                "heic_box_size",
+            )
+            .unwrap_or(0);
             if size >= 8 && pos + size - 4 <= data.len() {
                 return data.get(pos + 4..pos - 4 + size);
             }
