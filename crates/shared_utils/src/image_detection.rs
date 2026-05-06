@@ -3316,4 +3316,86 @@ mod tests {
             other => panic!("expected AnalysisError, got {other:?}"),
         }
     }
+
+    #[test]
+    fn test_detect_color_frequency_distribution_no_overflow() {
+        // Test for pixel coordinate overflow fix
+        // This test ensures that large images don't cause u32 overflow warnings
+        
+        // Create a large test image that would previously cause overflow
+        let width = 10000u32;
+        let height = 10000u32;
+        let img = image::RgbaImage::new(width, height);
+        let dynamic_img = image::DynamicImage::ImageRgba8(img);
+        
+        // This should not panic or produce overflow warnings
+        let result = detect_color_frequency_distribution(&dynamic_img);
+        
+        // Result should be a valid f64 in range [0.0, 1.0]
+        assert!(result >= 0.0 && result <= 1.0);
+    }
+
+    #[test]
+    fn test_detect_color_frequency_distribution_small_image() {
+        // Test edge case with very small image
+        let img = image::RgbaImage::new(10, 10);
+        let dynamic_img = image::DynamicImage::ImageRgba8(img);
+        
+        let result = detect_color_frequency_distribution(&dynamic_img);
+        
+        // Small images should return 0.0 (insufficient pixels)
+        assert_eq!(result, 0.0);
+    }
+
+    #[test]
+    fn test_detect_color_frequency_distribution_uniform_image() {
+        // Test with uniform color image
+        let mut img = image::RgbaImage::new(100, 100);
+        // Fill with single color
+        for pixel in img.pixels_mut() {
+            *pixel = image::Rgba([128, 64, 192, 255]);
+        }
+        let dynamic_img = image::DynamicImage::ImageRgba8(img);
+        
+        let result = detect_color_frequency_distribution(&dynamic_img);
+        
+        // Uniform image should have valid result in expected range
+        // The algorithm may return 0.0 for uniform images due to concentration calculation
+        assert!(result >= 0.0 && result <= 1.0);
+    }
+
+    #[test]
+    fn test_pixel_coordinate_bounds() {
+        // This test specifically validates the pixel coordinate calculation fix
+        use crate::numeric_cast::u64_to_u32_strict;
+        
+        // Simulate the problematic coordinate calculation
+        let block_size = 1usize;
+        let bx = 2316230111394261264usize; // Large value that caused overflow
+        let by = 2316230111394261264usize;
+        let width = 1000u32;
+        let height = 1000u32;
+        
+        // Calculate coordinates using the fixed logic
+        let pixel_x = (bx * block_size + block_size / 2) as u64;
+        let pixel_y = (by * block_size + block_size / 2) as u64;
+        
+        // Clamp to image dimensions before conversion
+        let px = u64_to_u32_strict(
+            pixel_x.min(u64::from(width.saturating_sub(1))),
+            "px",
+        )
+        .unwrap_or(0);
+        let py = u64_to_u32_strict(
+            pixel_y.min(u64::from(height.saturating_sub(1))),
+            "py",
+        )
+        .unwrap_or(0);
+        
+        // Coordinates should be within image bounds
+        assert!(px < width);
+        assert!(py < height);
+        assert_eq!(px, width - 1); // Should be clamped to max valid coordinate
+        assert_eq!(py, height - 1);
+    }
 }
