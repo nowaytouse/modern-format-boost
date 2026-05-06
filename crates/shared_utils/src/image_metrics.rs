@@ -256,7 +256,7 @@ fn calculate_ssim_simple(original: &DynamicImage, converted: &DynamicImage) -> O
         if den_abs < Rational::from_f64(1e-10).unwrap_or_else(|| Rational::from(0)) {
             return Some(1.0);
         }
-        Some((numerator / denominator).to_f64())
+        return Some((numerator / denominator).to_f64());
     }
     
     #[cfg(not(feature = "high-precision"))]
@@ -294,7 +294,7 @@ fn calculate_ssim_simple(original: &DynamicImage, converted: &DynamicImage) -> O
         let denominator =
             (mean_x.clone() * mean_x + mean_y.clone() * mean_y + c1_rat) * (var_x + var_y + c2_rat);
         
-        let den_abs = if denominator > 0 {
+        let den_abs = if denominator > Rational::from(0) {
             denominator.clone()
         } else {
             -denominator.clone()
@@ -325,7 +325,7 @@ fn calculate_ssim_simple(original: &DynamicImage, converted: &DynamicImage) -> O
         let denominator =
             (mean_x.clone() * mean_x + mean_y.clone() * mean_y + c1_rat) * (var_x + var_y + c2_rat);
         
-        let den_abs = if denominator > 0 {
+        let den_abs = if denominator > Rational::from(0) {
             denominator.clone()
         } else {
             -denominator.clone()

@@ -1073,16 +1073,16 @@ fn test_encoder(encoder: &GpuEncoder) -> Result<(), String> {
     // compression session" when the GPU is briefly contended.  We therefore
     // try once without software fallback, and on failure retry with
     // `-allow_sw 1` before giving up.
-    let mut attempts: &[bool] = &[false];
+    let mut attempts = vec![false];
     #[cfg(target_os = "macos")]
     {
         if encoder.gpu_type == GpuType::Apple {
-            attempts = &[false, true];
+            attempts = vec![false, true];
         }
     }
 
     let mut last_err = String::new();
-    for &allow_sw in attempts {
+    for allow_sw in &attempts {
         let mut builder = crate::tool_builders::FfmpegBuilder::new();
         builder
             .hide_banner()
@@ -1096,7 +1096,7 @@ fn test_encoder(encoder: &GpuEncoder) -> Result<(), String> {
         for arg in encoder.extra_args() {
             builder.arg(arg);
         }
-        if allow_sw {
+        if *allow_sw {
             builder.arg("-allow_sw").arg("1");
         }
 

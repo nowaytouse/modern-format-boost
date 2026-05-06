@@ -1002,7 +1002,7 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
                     1
                 }),
             ) / Rational::from(1_000_000_i32);
-            if den == 0 {
+            if den == Rational::from(0) {
                 1000.0
             } else {
                 (num / den).to_f64().min(1000.0)
