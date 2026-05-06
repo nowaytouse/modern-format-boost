@@ -50,12 +50,6 @@ pub fn option_f64_strict(val: Option<f64>, name: &str) -> Option<f64> {
     val
 }
 
-/// Convert `Option<f64>` to `f64` without warnings.
-/// Returns None if input is None, silently.
-#[must_use]
-pub fn option_f64_silent(val: Option<f64>) -> Option<f64> {
-    val
-}
 
 /// Convert `f64` to `u64` with loud warning on NaN/Inf/Overflow.
 #[must_use]
