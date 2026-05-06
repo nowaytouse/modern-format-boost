@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## ⚡ Performance Tuning & Test Suite Hardening (2026-05-06)
+
+- **High-Precision Performance Optimization**:
+  - **Metric Accumulation**: Moved `rug` high-precision arithmetic out of hot pixel loops in `image_metrics.rs`. Switched to primitive `f64` for SSIM/PSNR accumulation, significantly reducing heap allocation overhead during large image analysis.
+  - **Coordinate Math**: Replaced `rug::Integer` with native `u64` in `image_detection.rs` for block coordinate and clamping logic, eliminating FFI overhead in quantization detection loops.
+  - **BPP Calculation**: Optimized Bit-Per-Pixel and Resolution Factor calculations in `precheck.rs` by using primitive intermediate products before transitioning to `Rational` for final threshold comparisons.
+
+- **Test Suite Reliability & Compilation**:
+  - **Borrow Checker Fixes**: Resolved multiple "move" errors in `blocking_behavior_tests.rs` by properly cloning `PathBuf` and `Vec<u8>` assets before they are captured by `with_timeout!` threads.
+  - **Result Handling**: Fixed incorrect `Result` unwrapping in timeout-wrapped I/O operations, ensuring `fs::read` and `scan_gif_headers` results are correctly propagated.
+  - **Syntax Correction**: Restored missing conditional branches in the header-only GIF scan test suite.
+
+- **English-Only Standardization**:
+  - Completed a workspace-wide audit to remove legacy non-ASCII characters from `crates/shared_utils` and `crates/dev/tests`.
+  - Standardized all internal `tracing` logs and panic messages to English-only.
+
+- **Warning Cleanup**:
+  - Eliminated all "unused import" and "unused variable" warnings triggered by the transition from `rug` to primitive types in hot paths.
+
 ## 🗂️ Project Structure Reorganization & Code Quality Audit (2026-05-06)
 
 - **Comprehensive Directory Restructuring**:

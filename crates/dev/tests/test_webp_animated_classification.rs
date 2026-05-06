@@ -4,11 +4,11 @@ mod synth_webp;
 use shared_utils::quality_matcher::SourceCodec;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("运行 WebP 动画分类测试...");
+    println!("Running WebP animated classification tests...");
 
     classify_animated_webp_even_without_vp8x_in_first_64_bytes()?;
 
-    println!("✅ WebP 动画分类测试通过！");
+    println!("✅ WebP animated classification tests passed!");
     Ok(())
 }
 

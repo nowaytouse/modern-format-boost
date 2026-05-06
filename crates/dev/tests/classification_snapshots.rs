@@ -2,7 +2,7 @@ use insta::assert_debug_snapshot;
 use shared_utils::loop_intent::{assess_loop_intent_from_meta, LoopMeta};
 
 fn main() {
-    println!("运行分类快照测试...");
+    println!("Running classification snapshot tests...");
 
     test_prores_debug_verdict_snapshot();
     test_definitively_long_verdict_snapshot();
@@ -11,7 +11,7 @@ fn main() {
     test_long_clip_verdict_snapshot();
     test_silent_technical_verdict_snapshot();
 
-    println!("✅ 所有分类快照测试通过！");
+    println!("✅ All classification snapshot tests passed!");
 }
 
 fn test_prores_debug_verdict_snapshot() {

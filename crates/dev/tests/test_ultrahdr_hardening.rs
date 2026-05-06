@@ -1,11 +1,11 @@
 use shared_utils::image_jpeg_analysis::{extract_gainmap_from_jpeg, is_ultra_hdr_jpeg};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("运行 Ultra HDR 硬化测试...");
+    println!("Running Ultra HDR hardening tests...");
 
     test_ultrahdr_absolute_offset_fallback()?;
 
-    println!("✅ Ultra HDR 硬化测试通过！");
+    println!("✅ Ultra HDR hardening tests passed!");
     Ok(())
 }
 

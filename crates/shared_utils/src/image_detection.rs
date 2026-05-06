@@ -1942,71 +1942,22 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
         for bx in 0..blocks_x {
             // Pick a pixel near the center of each block (deterministic, no RNG needed)
             // Calculate coordinates using high-precision arithmetic to prevent overflow
-            #[cfg(feature = "high-precision")]
-            #[allow(clippy::similar_names)]
-            {
-                use rug::Integer;
-                
-                // Use rug Integer for precise coordinate calculation
-                let block_idx_x = Integer::from(bx);
-                let block_idx_y = Integer::from(by);
-                let block_size_val = Integer::from(block_size);
-                let img_width = Integer::from(width);
-                let img_height = Integer::from(height);
-                
-                // Calculate center coordinates with high precision
-                let coord_x = &block_idx_x * &block_size_val + &block_size_val / Integer::from(2);
-                let coord_y = &block_idx_y * &block_size_val + &block_size_val / Integer::from(2);
-                
-                // Clamp to image bounds using high-precision comparison
-                let max_coord_x = &img_width - Integer::from(1);
-                let max_coord_y = &img_height - Integer::from(1);
-                
-                let pixel_x = std::cmp::min(&coord_x, &max_coord_x);
-                let pixel_y = std::cmp::min(&coord_y, &max_coord_y);
-                
-                // Convert to u32 safely (should never overflow now)
-                let u32_max = Integer::from(u32::MAX);
-                let px = if *pixel_x <= u32_max {
-                    pixel_x.to_u32().unwrap_or(0)
-                } else {
-                    0
-                };
-                let py = if *pixel_y <= u32_max {
-                    pixel_y.to_u32().unwrap_or(0)
-                } else {
-                    0
-                };
-                
-                let pixel = rgba.get_pixel(px, py);
-                let key = [pixel[0], pixel[1], pixel[2], pixel[3]];
-                *color_freq.entry(key).or_insert(0) += 1;
-                sampled += 1;
-            }
-            
-            #[cfg(not(feature = "high-precision"))]
-            {
-                // Fallback to standard calculation without rug
-                let pixel_x = (bx * block_size + block_size / 2) as u64;
-                let pixel_y = (by * block_size + block_size / 2) as u64;
-                
-                // Clamp coordinates to image dimensions before conversion to prevent overflow
-                let px = crate::numeric_cast::u64_to_u32_strict(
-                    pixel_x.min(u64::from(width.saturating_sub(1))),
-                    "px",
-                )
-                .unwrap_or(0);
-                let py = crate::numeric_cast::u64_to_u32_strict(
-                    pixel_y.min(u64::from(height.saturating_sub(1))),
-                    "py",
-                )
-                .unwrap_or(0);
-                
-                let pixel = rgba.get_pixel(px, py);
-                let key = [pixel[0], pixel[1], pixel[2], pixel[3]];
-                *color_freq.entry(key).or_insert(0) += 1;
-                sampled += 1;
-            }
+            // Calculate coordinates using u64 to prevent overflow (sufficient for any practical image)
+            let px = {
+                let x = (bx as u64) * (block_size as u64) + (block_size as u64) / 2;
+                let max_x = (width as u64).saturating_sub(1);
+                x.min(max_x) as u32
+            };
+            let py = {
+                let y = (by as u64) * (block_size as u64) + (block_size as u64) / 2;
+                let max_y = (height as u64).saturating_sub(1);
+                y.min(max_y) as u32
+            };
+
+            let pixel = rgba.get_pixel(px, py);
+            let key = [pixel[0], pixel[1], pixel[2], pixel[3]];
+            *color_freq.entry(key).or_insert(0) += 1;
+            sampled += 1;
         }
     }
 
@@ -3369,16 +3320,16 @@ mod tests {
     fn test_detect_color_frequency_distribution_no_overflow() {
         // Test for pixel coordinate overflow fix
         // This test ensures that large images don't cause u32 overflow warnings
-        
+
         // Create a large test image that would previously cause overflow
         let width = 10000u32;
         let height = 10000u32;
         let img = image::RgbaImage::new(width, height);
         let dynamic_img = image::DynamicImage::ImageRgba8(img);
-        
+
         // This should not panic or produce overflow warnings
         let result = detect_color_frequency_distribution(&dynamic_img);
-        
+
         // Result should be a valid f64 in range [0.0, 1.0]
         assert!((0.0..=1.0).contains(&result));
     }
@@ -3388,9 +3339,9 @@ mod tests {
         // Test edge case with very small image
         let img = image::RgbaImage::new(10, 10);
         let dynamic_img = image::DynamicImage::ImageRgba8(img);
-        
+
         let result = detect_color_frequency_distribution(&dynamic_img);
-        
+
         // Small images should return 0.0 (insufficient pixels)
         assert!(result.abs() < f64::EPSILON);
     }
@@ -3404,9 +3355,9 @@ mod tests {
             *pixel = image::Rgba([128, 64, 192, 255]);
         }
         let dynamic_img = image::DynamicImage::ImageRgba8(img);
-        
+
         let result = detect_color_frequency_distribution(&dynamic_img);
-        
+
         // Uniform image should have valid result in expected range
         // The algorithm may return 0.0 for uniform images due to concentration calculation
         assert!((0.0..=1.0).contains(&result));
@@ -3416,30 +3367,24 @@ mod tests {
     fn test_pixel_coordinate_bounds() {
         // This test specifically validates the pixel coordinate calculation fix
         use crate::numeric_cast::u64_to_u32_strict;
-        
+
         // Simulate the problematic coordinate calculation
         let block_size = 1usize;
         let bx = 2_316_230_111_394_261_264_usize; // Large value that caused overflow
         let by = 2_316_230_111_394_261_264_usize;
         let width = 1000u32;
         let height = 1000u32;
-        
+
         // Calculate coordinates using the fixed logic
         let pixel_x = (bx * block_size + block_size / 2) as u64;
         let pixel_y = (by * block_size + block_size / 2) as u64;
-        
+
         // Clamp to image dimensions before conversion
-        let px = u64_to_u32_strict(
-            pixel_x.min(u64::from(width.saturating_sub(1))),
-            "px",
-        )
-        .unwrap_or(0);
-        let py = u64_to_u32_strict(
-            pixel_y.min(u64::from(height.saturating_sub(1))),
-            "py",
-        )
-        .unwrap_or(0);
-        
+        let px =
+            u64_to_u32_strict(pixel_x.min(u64::from(width.saturating_sub(1))), "px").unwrap_or(0);
+        let py =
+            u64_to_u32_strict(pixel_y.min(u64::from(height.saturating_sub(1))), "py").unwrap_or(0);
+
         // Coordinates should be within image bounds
         assert!(px < width);
         assert!(py < height);

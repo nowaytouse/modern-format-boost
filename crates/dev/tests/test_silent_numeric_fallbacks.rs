@@ -1,12 +1,12 @@
-// 静默数值回退检测单元测试
+// Silent numeric fallback detection unit tests
 //
-// 专门检测代码中是否存在静默的数值回退行为，特别是：
-// - unwrap_or(0) - 整数默认值回退
-// - unwrap_or(0.0) - 浮点数默认值回退
-// - unwrap_or(1) - 计数器默认值回退
-// - 其他静默数值回退模式
+// Specifically detects the presence of silent numeric fallback behavior in code, particularly:
+// - unwrap_or(0) - Integer default value fallback
+// - unwrap_or(0.0) - Float default value fallback
+// - unwrap_or(1) - Counter default value fallback
+// - Other silent numeric fallback patterns
 
-// 模拟测试场景的数据结构
+// Data structure for simulated test scenarios
 #[derive(Debug, Clone)]
 struct TestMediaInfo {
     width: Option<u32>,
@@ -31,34 +31,34 @@ impl TestMediaInfo {
         }
     }
 
-    // ❌ 错误示例：静默回退到0
+    // ❌ Error example: silent fallback to 0
     fn get_width_silent(&self) -> u32 {
-        self.width.unwrap_or(0) // 静默回退到0
+        self.width.unwrap_or(0) // Silent fallback to 0
     }
 
-    // ❌ 错误示例：静默回退到0.0
+    // ❌ Error example: silent fallback to 0.0
     fn get_fps_silent(&self) -> f64 {
-        self.fps.unwrap_or(0.0) // 静默回退到0.0
+        self.fps.unwrap_or(0.0) // Silent fallback to 0.0
     }
 
-    // ❌ 错误示例：静默回退到1
+    // ❌ Error example: silent fallback to 1
     fn get_frame_count_silent(&self) -> u64 {
-        self.frame_count.unwrap_or(1) // 静默回退到1
+        self.frame_count.unwrap_or(1) // Silent fallback to 1
     }
 
-    // ✅ 正确示例：显式处理
+    // ✅ Correct example: explicit handling
     const fn get_width_explicit(&self) -> Option<u32> {
-        self.width // 保持None状态
+        self.width // Maintain None state
     }
 
-    // ✅ 正确示例：错误传播
+    // ✅ Correct example: error propagation
     fn get_quality_result(&self) -> Result<f64, String> {
         self.quality_score
-            .ok_or_else(|| "Quality score missing".to_string()) // 明确错误
+            .ok_or_else(|| "Quality score missing".to_string()) // Explicit error
     }
 }
 
-// 模拟配置结构
+// Simulated configuration structure
 #[derive(Debug)]
 struct TestConfig {
     max_width: Option<u32>,
@@ -75,21 +75,21 @@ impl TestConfig {
         }
     }
 
-    // ❌ 错误示例：静默回退
+    // ❌ Error example: silent fallback
     fn get_max_width_silent(&self) -> u32 {
-        self.max_width.unwrap_or(1920) // 静默回退到默认值
+        self.max_width.unwrap_or(1920) // Silent fallback to default value
     }
 
-    // ✅ 正确示例：显式处理
+    // ✅ Correct example: explicit handling
     fn get_max_width_explicit(&self) -> Result<u32, String> {
         self.max_width
             .ok_or_else(|| "Max width not configured".to_string())
     }
 }
 
-// 测试辅助函数
+// Test helper functions
 const fn create_test_media_with_missing_data() -> TestMediaInfo {
-    TestMediaInfo::new() // 所有字段都是None
+    TestMediaInfo::new() // All fields are None
 }
 
 const fn create_test_media_with_partial_data() -> TestMediaInfo {
@@ -105,47 +105,59 @@ const fn create_test_media_with_partial_data() -> TestMediaInfo {
 }
 
 const fn create_test_config_missing() -> TestConfig {
-    TestConfig::new() // 所有字段都是None
+    TestConfig::new() // All fields are None
 }
 
 fn test_detect_silent_integer_fallback_to_zero() {
     let info = create_test_media_with_missing_data();
 
-    // ❌ 检测静默回退到0的行为
+    // ❌ Detect silent fallback to 0 behavior
     let width = info.get_width_silent();
-    assert_eq!(width, 0, "静默回退应该返回0");
+    assert_eq!(width, 0, "Silent fallback should return 0");
 
-    // ✅ 验证显式处理
+    // ✅ Verify explicit handling
     let width_explicit = info.get_width_explicit();
-    assert_eq!(width_explicit, None, "显式处理应该保持None");
+    assert_eq!(
+        width_explicit, None,
+        "Explicit handling should maintain None"
+    );
 }
 
 fn test_detect_silent_float_fallback_to_zero() {
     let info = create_test_media_with_missing_data();
 
-    // ❌ 检测静默回退到0.0的行为
+    // ❌ Detect silent fallback to 0.0 behavior
     let fps = info.get_fps_silent();
-    assert!(fps.abs() < f64::EPSILON, "静默回退应该返回0.0");
+    assert!(
+        fps.abs() < f64::EPSILON,
+        "Silent fallback should return 0.0"
+    );
 }
 
 fn test_detect_silent_counter_fallback_to_one() {
     let info = create_test_media_with_missing_data();
 
-    // ❌ 检测静默回退到1的行为
+    // ❌ Detect silent fallback to 1 behavior
     let frame_count = info.get_frame_count_silent();
-    assert_eq!(frame_count, 1, "静默回退应该返回1");
+    assert_eq!(frame_count, 1, "Silent fallback should return 1");
 }
 
 fn test_detect_silent_config_fallback() {
     let config = create_test_config_missing();
 
-    // ❌ 检测配置中的静默回退
+    // ❌ Detect silent fallback in configuration
     let max_width = config.get_max_width_silent();
-    assert_eq!(max_width, 1920, "配置静默回退应该返回默认值");
+    assert_eq!(
+        max_width, 1920,
+        "Config silent fallback should return default value"
+    );
 
-    // ✅ 验证显式处理
+    // ✅ Verify explicit handling
     let max_width_explicit = config.get_max_width_explicit();
-    assert!(max_width_explicit.is_err(), "显式处理应该返回错误");
+    assert!(
+        max_width_explicit.is_err(),
+        "Explicit handling should return an error"
+    );
 }
 
 fn test_detect_all_silent_fallbacks() {
@@ -176,7 +188,7 @@ fn test_detect_all_silent_fallbacks() {
 }
 
 fn main() {
-    println!("运行静默数值回退检测测试...");
+    println!("Running silent numeric fallback detection tests...");
 
     test_detect_silent_integer_fallback_to_zero();
     test_detect_silent_float_fallback_to_zero();
@@ -184,5 +196,5 @@ fn main() {
     test_detect_silent_config_fallback();
     test_detect_all_silent_fallbacks();
 
-    println!("✅ 静默数值回退检测测试通过！");
+    println!("✅ Silent numeric fallback detection tests passed!");
 }

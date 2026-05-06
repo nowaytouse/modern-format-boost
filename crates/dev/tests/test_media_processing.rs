@@ -1,6 +1,6 @@
-//! 综合媒体处理测试程序
+//! Comprehensive Media Processing Test Program
 //!
-//! 测试图片、视频、动画的正常处理流程，防止回归问题
+//! Tests normal processing flows for images, videos, and animations to prevent regressions
 
 use shared_utils::loop_intent::{evaluate_loop_tree, LoopMeta};
 use shared_utils::media_meta_utils::scan_gif_headers;
@@ -8,13 +8,13 @@ use shared_utils::quality_matcher::SourceCodec;
 use std::io::Write;
 use tempfile::NamedTempFile;
 
-// 测试工具函数
+// Test utility functions
 fn create_test_jpeg() -> Vec<u8> {
-    // 创建最小有效的JPEG文件
+    // Create a minimal valid JPEG file
     let mut jpeg = Vec::new();
     jpeg.extend_from_slice(&[0xFF, 0xD8]); // SOI
     jpeg.extend_from_slice(&[0xFF, 0xE0]); // APP0
-    jpeg.extend_from_slice(&[0x00, 0x10]); // 长度
+    jpeg.extend_from_slice(&[0x00, 0x10]); // Length
     jpeg.extend_from_slice(b"JFIF");
     jpeg.extend_from_slice(&[0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00]);
     jpeg.extend_from_slice(&[0xFF, 0xD9]); // EOI
@@ -22,103 +22,110 @@ fn create_test_jpeg() -> Vec<u8> {
 }
 
 fn create_test_png() -> Vec<u8> {
-    // 创建最小有效的PNG文件
+    // Create a minimal valid PNG file
     let mut png = Vec::new();
-    png.extend_from_slice(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]); // PNG签名
-    png.extend_from_slice(&[0x00, 0x00, 0x00, 0x0D]); // IHDR长度
+    png.extend_from_slice(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]); // PNG signature
+    png.extend_from_slice(&[0x00, 0x00, 0x00, 0x0D]); // IHDR length
     png.extend_from_slice(b"IHDR");
-    png.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]); // 宽度1
-    png.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]); // 高度1
-    png.extend_from_slice(&[0x08, 0x02, 0x00, 0x00, 0x00]); // 位深度、颜色类型等
+    png.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]); // Width 1
+    png.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]); // Height 1
+    png.extend_from_slice(&[0x08, 0x02, 0x00, 0x00, 0x00]); // bit depth, color type, etc.
     png.extend_from_slice(&[0x90, 0x77, 0x53, 0xDE]); // CRC
-    png.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // IDAT长度0
+    png.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // IDAT length 0
     png.extend_from_slice(b"IDAT");
     png.extend_from_slice(&[0x82, 0x75, 0xEC, 0x4A]); // CRC
-    png.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // IEND长度0
+    png.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // IEND length 0
     png.extend_from_slice(b"IEND");
     png.extend_from_slice(&[0xAE, 0x42, 0x60, 0x82]); // CRC
     png
 }
 
 fn create_test_gif() -> Vec<u8> {
-    // 创建最小有效的GIF文件
+    // Create a minimal valid GIF file
     let mut gif = Vec::new();
-    gif.extend_from_slice(b"GIF87a"); // GIF87a签名
-    gif.extend_from_slice(&[0x01, 0x00, 0x01, 0x00]); // 1x1尺寸
-    gif.extend_from_slice(&[0x00, 0x00]); // 全局颜色表标志
-    gif.extend_from_slice(&[0x00, 0x00, 0x00]); // 背景色
-    gif.extend_from_slice(&[0x00, 0x00]); // 像素宽高比
-    gif.extend_from_slice(&[0x2C, 0x00, 0x00, 0x00, 0x00]); // 图像描述符
-    gif.extend_from_slice(&[0x01, 0x00, 0x01, 0x00]); // 1x1尺寸
-    gif.extend_from_slice(&[0x00, 0x00]); // 本地颜色表标志
-    gif.extend_from_slice(&[0x02]); // LZW最小码长
-    gif.extend_from_slice(&[0x02, 0x44, 0x01]); // 压缩数据
-    gif.extend_from_slice(&[0x00]); // 块终止符
-    gif.extend_from_slice(&[0x3B]); // GIF终止符
+    gif.extend_from_slice(b"GIF87a"); // GIF87a signature
+    gif.extend_from_slice(&[0x01, 0x00, 0x01, 0x00]); // 1x1 size
+    gif.extend_from_slice(&[0x00, 0x00]); // Global color table flag
+    gif.extend_from_slice(&[0x00, 0x00, 0x00]); // Background color
+    gif.extend_from_slice(&[0x00, 0x00]); // Pixel aspect ratio
+    gif.extend_from_slice(&[0x2C, 0x00, 0x00, 0x00, 0x00]); // Image descriptor
+    gif.extend_from_slice(&[0x01, 0x00, 0x01, 0x00]); // 1x1 size
+    gif.extend_from_slice(&[0x00, 0x00]); // Local color table flag
+    gif.extend_from_slice(&[0x02]); // LZW minimum code size
+    gif.extend_from_slice(&[0x02, 0x44, 0x01]); // Compressed data
+    gif.extend_from_slice(&[0x00]); // Block terminator
+    gif.extend_from_slice(&[0x3B]); // GIF terminator
     gif
 }
 
 fn create_test_webp() -> Vec<u8> {
-    // 创建最小有效的WebP文件
+    // Create a minimal valid WebP file
     let mut webp = Vec::new();
     webp.extend_from_slice(b"RIFF");
-    webp.extend_from_slice(&[0x1A, 0x00, 0x00, 0x00]); // 文件大小
+    webp.extend_from_slice(&[0x1A, 0x00, 0x00, 0x00]); // File size
     webp.extend_from_slice(b"WEBP");
-    webp.extend_from_slice(b"VP8L"); // VP8L块
-    webp.extend_from_slice(&[0x0C, 0x00, 0x00, 0x00]); // 块大小
-    webp.extend_from_slice(&[0x2F, 0x01, 0x00, 0x00]); // VP8L头部
-    webp.extend_from_slice(&[0x01, 0x00]); // 图片信息
-    webp.extend_from_slice(&[0x00, 0x00]); // 颜色信息
-    webp.extend_from_slice(&[0x00, 0x00]); // 其他信息
-    webp.extend_from_slice(&[0x00, 0x00]); // 填充
+    webp.extend_from_slice(b"VP8L"); // VP8L chunk
+    webp.extend_from_slice(&[0x0C, 0x00, 0x00, 0x00]); // Chunk size
+    webp.extend_from_slice(&[0x2F, 0x01, 0x00, 0x00]); // VP8L header
+    webp.extend_from_slice(&[0x01, 0x00]); // Image info
+    webp.extend_from_slice(&[0x00, 0x00]); // Color info
+    webp.extend_from_slice(&[0x00, 0x00]); // Other info
+    webp.extend_from_slice(&[0x00, 0x00]); // Padding
+    webp.extend_from_slice(b"VP8L"); // VP8L chunk
+    webp.extend_from_slice(&[0x0C, 0x00, 0x00, 0x00]); // Chunk size
+    webp.extend_from_slice(&[0x2F, 0x01, 0x00, 0x00]); // VP8L header
+    webp.extend_from_slice(&[0x01, 0x00]); // Image info
+    webp.extend_from_slice(&[0x00, 0x00]); // Color info
+    webp.extend_from_slice(&[0x00, 0x00]); // Other info
+    webp.extend_from_slice(&[0x00, 0x00]); // Padding
     webp
 }
 
 fn create_test_animated_gif() -> Vec<u8> {
-    // 创建3帧动画GIF，使用更规范的结构
+    // Create a 3-frame animated GIF with a more standardized structure
     let mut gif = Vec::new();
-    gif.extend_from_slice(b"GIF87a"); // GIF87a签名
-    gif.extend_from_slice(&[0x01, 0x00, 0x01, 0x00]); // 1x1尺寸
-    gif.extend_from_slice(&[0x80, 0x00]); // 全局颜色表标志 + 2色
-    gif.extend_from_slice(&[0x00, 0x00, 0x00]); // 背景色
-    gif.extend_from_slice(&[0x00, 0x00]); // 像素宽高比
-                                          // 全局颜色表 (2种颜色)
-    gif.extend_from_slice(&[0xFF, 0xFF, 0xFF]); // 白色
-    gif.extend_from_slice(&[0x00, 0x00, 0x00]); // 黑色
+    gif.extend_from_slice(b"GIF87a"); // GIF87a signature
+    gif.extend_from_slice(&[0x01, 0x00, 0x01, 0x00]); // 1x1 size
+    gif.extend_from_slice(&[0x80, 0x00]); // Global color table flag + 2 colors
+    gif.extend_from_slice(&[0x00, 0x00, 0x00]); // Background color
+    gif.extend_from_slice(&[0x00, 0x00]); // Pixel aspect ratio
+                                          // Global color table (2 colors)
+    gif.extend_from_slice(&[0xFF, 0xFF, 0xFF]); // White
+    gif.extend_from_slice(&[0x00, 0x00, 0x00]); // Black
 
-    // 第一帧
-    gif.extend_from_slice(&[0x21, 0xF9, 0x04, 0x00, 0x0A, 0x00, 0x00, 0x00]); // 图形控制扩展
+    // Frame 1
+    gif.extend_from_slice(&[0x21, 0xF9, 0x04, 0x00, 0x0A, 0x00, 0x00, 0x00]); // Graphic control extension
     gif.extend_from_slice(&[
         0x2C, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00,
-    ]); // 图像描述符
-    gif.extend_from_slice(&[0x02]); // LZW最小码长
-    gif.extend_from_slice(&[0x02, 0x44, 0x01]); // 图像数据
-    gif.extend_from_slice(&[0x00]); // 块终止符
+    ]); // Image descriptor
+    gif.extend_from_slice(&[0x02]); // LZW minimum code size
+    gif.extend_from_slice(&[0x02, 0x44, 0x01]); // Image data
+    gif.extend_from_slice(&[0x00]); // Block terminator
 
-    // 第二帧
-    gif.extend_from_slice(&[0x21, 0xF9, 0x04, 0x00, 0x0A, 0x00, 0x00, 0x00]); // 图形控制扩展
+    // Frame 2
+    gif.extend_from_slice(&[0x21, 0xF9, 0x04, 0x00, 0x0A, 0x00, 0x00, 0x00]); // Graphic control extension
     gif.extend_from_slice(&[
         0x2C, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00,
-    ]); // 图像描述符
-    gif.extend_from_slice(&[0x02]); // LZW最小码长
-    gif.extend_from_slice(&[0x02, 0x44, 0x01]); // 图像数据
-    gif.extend_from_slice(&[0x00]); // 块终止符
+    ]); // Image descriptor
+    gif.extend_from_slice(&[0x02]); // LZW minimum code size
+    gif.extend_from_slice(&[0x02, 0x44, 0x01]); // Image data
+    gif.extend_from_slice(&[0x00]); // Block terminator
 
-    // 第三帧
-    gif.extend_from_slice(&[0x21, 0xF9, 0x04, 0x00, 0x0A, 0x00, 0x00, 0x00]); // 图形控制扩展
+    // Frame 3
+    gif.extend_from_slice(&[0x21, 0xF9, 0x04, 0x00, 0x0A, 0x00, 0x00, 0x00]); // Graphic control extension
     gif.extend_from_slice(&[
         0x2C, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00,
-    ]); // 图像描述符
-    gif.extend_from_slice(&[0x02]); // LZW最小码长
-    gif.extend_from_slice(&[0x02, 0x44, 0x01]); // 图像数据
-    gif.extend_from_slice(&[0x00]); // 块终止符
+    ]); // Image descriptor
+    gif.extend_from_slice(&[0x02]); // LZW minimum code size
+    gif.extend_from_slice(&[0x02, 0x44, 0x01]); // Image data
+    gif.extend_from_slice(&[0x00]); // Block terminator
 
-    gif.extend_from_slice(&[0x3B]); // GIF终止符
+    gif.extend_from_slice(&[0x3B]); // GIF terminator
     gif
 }
 
 fn main() {
-    println!("运行媒体处理测试...");
+    println!("Running media processing tests...");
 
     test_jpeg_processing_normal_flow();
     test_png_processing_normal_flow();
@@ -131,135 +138,165 @@ fn main() {
     test_frame_count_consistency();
     test_silent_behavior_elimination();
 
-    println!("所有测试通过！✅");
+    println!("All tests passed! ✅");
 }
 
 fn test_jpeg_processing_normal_flow() {
     let jpeg_data = create_test_jpeg();
 
-    // 测试编解码器识别
+    // Test codec identification
     let codec = SourceCodec::identify_by_header(&jpeg_data);
-    assert_eq!(codec, Some(SourceCodec::Jpeg), "应该识别为JPEG");
+    assert_eq!(
+        codec,
+        Some(SourceCodec::Jpeg),
+        "Should be identified as JPEG"
+    );
 
-    // 测试文件写入和读取
-    let mut temp_file = NamedTempFile::new().expect("创建临时文件失败");
-    temp_file.write_all(&jpeg_data).expect("写入JPEG失败");
+    // Test file writing and reading
+    let mut temp_file = NamedTempFile::new().expect("Failed to create temporary file");
+    temp_file
+        .write_all(&jpeg_data)
+        .expect("Failed to write JPEG");
 
-    // 测试GIF扫描器（应该失败，因为这不是GIF）
+    // Test GIF scanner (should fail, as this is not a GIF)
     let scan_result = scan_gif_headers(temp_file.path());
-    assert!(scan_result.is_err(), "JPEG文件不应该被识别为GIF");
+    assert!(
+        scan_result.is_err(),
+        "JPEG file should not be identified as GIF"
+    );
 
-    // 测试LoopMeta（应该失败，因为JPEG不是动画）
+    // Test LoopMeta (should fail, as JPEG is not an animation)
     let loop_meta = LoopMeta::from_gif_path(temp_file.path());
-    assert!(loop_meta.is_none(), "JPEG不应该生成LoopMeta");
+    assert!(loop_meta.is_none(), "JPEG should not generate LoopMeta");
 }
 
 fn test_png_processing_normal_flow() {
     let png_data = create_test_png();
 
-    // 测试编解码器识别
+    // Test codec identification
     let codec = SourceCodec::identify_by_header(&png_data);
-    assert_eq!(codec, Some(SourceCodec::Png), "应该识别为PNG");
+    assert_eq!(codec, Some(SourceCodec::Png), "Should be identified as PNG");
 
-    // 测试文件写入和读取
-    let mut temp_file = NamedTempFile::new().expect("创建临时文件失败");
-    temp_file.write_all(&png_data).expect("写入PNG失败");
+    // Test file writing and reading
+    let mut temp_file = NamedTempFile::new().expect("Failed to create temporary file");
+    temp_file.write_all(&png_data).expect("Failed to write PNG");
 
-    // 测试GIF扫描器（应该失败）
+    // Test GIF scanner (should fail)
     let scan_result = scan_gif_headers(temp_file.path());
-    assert!(scan_result.is_err(), "PNG文件不应该被识别为GIF");
+    assert!(
+        scan_result.is_err(),
+        "PNG file should not be identified as GIF"
+    );
 
-    // 测试LoopMeta（应该失败）
+    // Test LoopMeta (should fail)
     let loop_meta = LoopMeta::from_gif_path(temp_file.path());
-    assert!(loop_meta.is_none(), "PNG不应该生成LoopMeta");
+    assert!(loop_meta.is_none(), "PNG should not generate LoopMeta");
 }
 
 fn test_webp_processing_normal_flow() {
     let webp_data = create_test_webp();
 
-    // 测试编解码器识别
+    // Test codec identification
     let codec = SourceCodec::identify_by_header(&webp_data);
-    assert_eq!(codec, Some(SourceCodec::WebpStatic), "应该识别为WebP静态");
+    assert_eq!(
+        codec,
+        Some(SourceCodec::WebpStatic),
+        "Should be identified as static WebP"
+    );
 
-    // 测试文件写入和读取
-    let mut temp_file = NamedTempFile::new().expect("创建临时文件失败");
-    temp_file.write_all(&webp_data).expect("写入WebP失败");
+    // Test file writing and reading
+    let mut temp_file = NamedTempFile::new().expect("Failed to create temporary file");
+    temp_file
+        .write_all(&webp_data)
+        .expect("Failed to write WebP");
 
-    // 测试GIF扫描器（应该失败）
+    // Test GIF scanner (should fail)
     let scan_result = scan_gif_headers(temp_file.path());
-    assert!(scan_result.is_err(), "WebP文件不应该被识别为GIF");
+    assert!(
+        scan_result.is_err(),
+        "WebP file should not be identified as GIF"
+    );
 
-    // 测试LoopMeta（应该失败）
+    // Test LoopMeta (should fail)
     let loop_meta = LoopMeta::from_gif_path(temp_file.path());
-    assert!(loop_meta.is_none(), "WebP不应该生成LoopMeta");
+    assert!(loop_meta.is_none(), "WebP should not generate LoopMeta");
 }
 
 fn test_static_gif_processing_normal_flow() {
     let gif_data = create_test_gif();
 
-    // 测试编解码器识别
+    // Test codec identification
     let codec = SourceCodec::identify_by_header(&gif_data);
-    assert_eq!(codec, Some(SourceCodec::Gif), "应该识别为GIF");
+    assert_eq!(codec, Some(SourceCodec::Gif), "Should be identified as GIF");
 
-    // 测试文件写入和读取
-    let mut temp_file = NamedTempFile::new().expect("创建临时文件失败");
-    temp_file.write_all(&gif_data).expect("写入GIF失败");
+    // Test file writing and reading
+    let mut temp_file = NamedTempFile::new().expect("Failed to create temporary file");
+    temp_file.write_all(&gif_data).expect("Failed to write GIF");
 
-    // 测试GIF扫描器
-    let scan = scan_gif_headers(temp_file.path()).expect("扫描GIF失败");
-    assert_eq!(scan.frame_count, 1, "静态GIF应该有1帧");
-    // 静态GIF可能没有持续时间，这是正常的
+    // Test GIF scanner
+    let scan = scan_gif_headers(temp_file.path()).expect("Failed to scan GIF");
+    assert_eq!(scan.frame_count, 1, "Static GIF should have 1 frame");
+    // Static GIF may not have a duration, which is normal
     assert!(
         scan.duration_secs.is_none_or(|d| d >= 0.0),
-        "持续时间应该有效或不存在"
+        "Duration should be valid or non-existent"
     );
 
-    // 测试LoopMeta
-    let loop_meta = LoopMeta::from_gif_path(temp_file.path()).expect("应该生成LoopMeta");
-    assert_eq!(loop_meta.frame_count, Some(1), "LoopMeta帧数应该匹配");
+    // Test LoopMeta
+    let loop_meta = LoopMeta::from_gif_path(temp_file.path()).expect("Should generate LoopMeta");
+    assert_eq!(
+        loop_meta.frame_count,
+        Some(1),
+        "LoopMeta frame count should match"
+    );
 
-    // 测试循环意图评估
+    // Test loop intent evaluation
     let verdict = evaluate_loop_tree(&loop_meta, None).verdict;
-    // 单帧GIF通常不被认为是循环
+    // Single-frame GIFs are usually not considered a loop
     match verdict {
         shared_utils::loop_intent::LoopIntentVerdict::LoopStrong(_)
         | shared_utils::loop_intent::LoopIntentVerdict::LoopWeak(_) => {
-            panic!("单帧GIF不应该被认为是循环");
+            panic!("Single-frame GIF should not be considered a loop");
         }
-        _ => {} // 其他状态是正常的
+        _ => {} // Other states are normal
     }
 }
 
 fn test_animated_gif_processing_normal_flow() {
     let gif_data = create_test_animated_gif();
 
-    // 测试编解码器识别
+    // Test codec identification
     let codec = SourceCodec::identify_by_header(&gif_data);
-    assert_eq!(codec, Some(SourceCodec::Gif), "应该识别为GIF");
+    assert_eq!(codec, Some(SourceCodec::Gif), "Should be identified as GIF");
 
-    // 测试文件写入和读取
-    let mut temp_file = NamedTempFile::new().expect("创建临时文件失败");
-    temp_file.write_all(&gif_data).expect("写入动画GIF失败");
+    // Test file writing and reading
+    let mut temp_file = NamedTempFile::new().expect("Failed to create temporary file");
+    temp_file
+        .write_all(&gif_data)
+        .expect("Failed to write animated GIF");
 
-    // 测试GIF扫描器
-    let scan = scan_gif_headers(temp_file.path()).expect("扫描动画GIF失败");
-    assert_eq!(scan.frame_count, 1, "动画GIF检测到1帧（基于当前解析逻辑）");
+    // Test GIF scanner
+    let scan = scan_gif_headers(temp_file.path()).expect("Failed to scan animated GIF");
+    assert_eq!(
+        scan.frame_count, 1,
+        "Animated GIF detected as 1 frame (based on current parsing logic)"
+    );
     assert!(
         scan.duration_secs.is_some_and(|d| d >= 0.0),
-        "持续时间应该有效"
+        "Duration should be valid"
     );
 
-    // 测试LoopMeta
-    let loop_meta = LoopMeta::from_gif_path(temp_file.path()).expect("应该生成LoopMeta");
+    // Test LoopMeta
+    let loop_meta = LoopMeta::from_gif_path(temp_file.path()).expect("Should generate LoopMeta");
     assert_eq!(
         loop_meta.frame_count,
         Some(1),
-        "LoopMeta帧数应该匹配扫描结果"
+        "LoopMeta frame count should match scan results"
     );
 
-    // 测试循环意图评估
+    // Test loop intent evaluation
     let verdict = evaluate_loop_tree(&loop_meta, None).verdict;
-    // 由于实际只检测到1帧，所以不应该被认为是循环
+    // Since only 1 frame was actually detected, it should not be considered a loop
     match verdict {
         shared_utils::loop_intent::LoopIntentVerdict::LoopStrong(_)
         | shared_utils::loop_intent::LoopIntentVerdict::LoopWeak(_) => {
@@ -272,68 +309,76 @@ fn test_animated_gif_processing_normal_flow() {
 }
 
 fn test_error_handling_clarity() {
-    // 测试错误处理的清晰度
+    // Test error handling clarity
 
-    // 测试无效的JPEG
+    // Test invalid JPEG
     let invalid_data = b"NOT_A_JPEG";
     let codec = SourceCodec::identify_by_header(invalid_data);
-    assert_eq!(codec, None, "无效数据不应该被识别");
+    assert_eq!(codec, None, "Invalid data should not be identified");
 
-    // 测试空文件
+    // Test empty file
     let empty_data = b"";
     let codec = SourceCodec::identify_by_header(empty_data);
-    assert_eq!(codec, None, "空文件不应该被识别");
+    assert_eq!(codec, None, "Empty file should not be identified");
 
-    // 测试截断的GIF
+    // Test truncated GIF
     let truncated_gif = b"GIF87";
     let codec = SourceCodec::identify_by_header(truncated_gif);
-    assert_eq!(codec, None, "截断的GIF不应该被识别");
+    assert_eq!(codec, None, "Truncated GIF should not be identified");
 
-    // 测试GIF扫描器错误处理
-    let mut temp_file = NamedTempFile::new().expect("创建临时文件失败");
-    temp_file.write_all(truncated_gif).expect("写入截断GIF失败");
+    // Test GIF scanner error handling
+    let mut temp_file = NamedTempFile::new().expect("Failed to create temporary file");
+    temp_file
+        .write_all(truncated_gif)
+        .expect("Failed to write truncated GIF");
 
     let scan_result = scan_gif_headers(temp_file.path());
-    assert!(scan_result.is_err(), "截断的GIF扫描应该失败");
+    assert!(scan_result.is_err(), "Truncated GIF scan should fail");
 
-    // 验证错误消息是具体的
+    // Verify error messages are specific
     let error_msg = format!("{:?}", scan_result.unwrap_err());
     assert!(
         !error_msg.contains("missing required value"),
-        "错误消息应该是具体的，不是通用的"
+        "Error message should be specific, not generic"
     );
 }
 
 fn test_silent_behavior_elimination() {
-    // 测试静默行为的消除
+    // Test elimination of silent behavior
 
-    // 测试Option处理而不是unwrap_or(0)
+    // Test Option handling instead of unwrap_or(0)
     let optional_frame_count: Option<u64> = Some(5);
     let is_multi_frame = optional_frame_count.is_some_and(|fc| fc > 1);
-    assert!(is_multi_frame, "应该使用显式Option处理");
+    assert!(is_multi_frame, "Should use explicit Option handling");
 
     let none_frame_count: Option<u64> = None;
     let is_not_multi_frame = none_frame_count.is_some_and(|fc| fc > 1);
-    assert!(!is_not_multi_frame, "应该正确处理None情况");
+    assert!(!is_not_multi_frame, "Should correctly handle None case");
 
-    // 测试错误传播而不是静默默认值
+    // Test error propagation instead of silent default values
     let invalid_gif_data = b"INVALID_GIF";
-    let mut temp_file = NamedTempFile::new().expect("创建临时文件失败");
+    let mut temp_file = NamedTempFile::new().expect("Failed to create temporary file");
     temp_file
         .write_all(invalid_gif_data)
-        .expect("写入无效GIF失败");
+        .expect("Failed to write invalid GIF");
 
-    // 应该返回错误，而不是静默返回默认值
+    // Should return an error, not a silent default
     let scan_result = scan_gif_headers(temp_file.path());
-    assert!(scan_result.is_err(), "无效GIF应该返回错误，不是默认值");
+    assert!(
+        scan_result.is_err(),
+        "Invalid GIF should return an error, not a default value"
+    );
 
-    // 测试LoopMeta错误处理
+    // Test LoopMeta error handling
     let loop_meta = LoopMeta::from_gif_path(temp_file.path());
-    assert!(loop_meta.is_none(), "无效GIF不应该生成LoopMeta");
+    assert!(
+        loop_meta.is_none(),
+        "Invalid GIF should not generate LoopMeta"
+    );
 }
 
 fn test_media_type_detection_accuracy() {
-    // 测试媒体类型检测的准确性
+    // Test media type detection accuracy
 
     let test_cases = vec![
         (create_test_jpeg(), SourceCodec::Jpeg, "JPEG"),
@@ -347,40 +392,44 @@ fn test_media_type_detection_accuracy() {
         assert_eq!(
             detected,
             Some(expected_codec),
-            "{name}应该被正确识别为{expected_codec:?}"
+            "{name} should be correctly identified as {expected_codec:?}"
         );
     }
 }
 
 fn test_frame_count_consistency() {
-    // 测试帧数一致性
+    // Test frame count consistency
 
     let gif_data = create_test_animated_gif();
-    let mut temp_file = NamedTempFile::new().expect("创建临时文件失败");
-    temp_file.write_all(&gif_data).expect("写入动画GIF失败");
+    let mut temp_file = NamedTempFile::new().expect("Failed to create temporary file");
+    temp_file
+        .write_all(&gif_data)
+        .expect("Failed to write animated GIF");
 
-    // 扫描器和LoopMeta应该报告相同的帧数
-    let scan = scan_gif_headers(temp_file.path()).expect("扫描失败");
-    let loop_meta = LoopMeta::from_gif_path(temp_file.path()).expect("生成LoopMeta失败");
+    // Scanner and LoopMeta should report the same frame count
+    let scan = scan_gif_headers(temp_file.path()).expect("Scan failed");
+    let loop_meta = LoopMeta::from_gif_path(temp_file.path()).expect("Failed to generate LoopMeta");
 
     assert_eq!(
         u64::from(scan.frame_count),
         loop_meta.frame_count.unwrap_or(0),
-        "扫描器和LoopMeta的帧数应该一致"
+        "Scanner and LoopMeta frame count should be consistent"
     );
 }
 
 fn test_duration_handling() {
-    // 测试持续时间处理
+    // Test duration handling
 
     let gif_data = create_test_animated_gif();
-    let mut temp_file = NamedTempFile::new().expect("创建临时文件失败");
-    temp_file.write_all(&gif_data).expect("写入动画GIF失败");
+    let mut temp_file = NamedTempFile::new().expect("Failed to create temporary file");
+    temp_file
+        .write_all(&gif_data)
+        .expect("Failed to write animated GIF");
 
-    let scan = scan_gif_headers(temp_file.path()).expect("扫描失败");
+    let scan = scan_gif_headers(temp_file.path()).expect("Scan failed");
 
-    // 持续时间应该是有效的（可能为0）
+    // Duration should be valid (could be 0)
     if let Some(duration) = scan.duration_secs {
-        assert!(duration >= 0.0, "持续时间应该非负");
+        assert!(duration >= 0.0, "Duration should be non-negative");
     }
 }

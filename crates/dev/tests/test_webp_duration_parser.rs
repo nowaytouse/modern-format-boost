@@ -2,9 +2,9 @@
 mod synth_webp;
 
 fn main() {
-    println!("运行 WebP 持续时间解析测试...");
+    println!("Running WebP duration parser tests...");
     parse_duration_from_synthetic_animated_webp_anmf_payloads();
-    println!("✅ WebP 持续时间解析测试通过！");
+    println!("✅ WebP duration parser tests passed!");
 }
 
 fn parse_duration_from_synthetic_animated_webp_anmf_payloads() {

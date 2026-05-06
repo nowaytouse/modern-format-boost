@@ -1,9 +1,9 @@
 use std::path::Path;
 
 fn main() {
-    println!("运行 headless GIF 回归测试...");
+    println!("Running headless GIF regression tests...");
     test_headless_gif_regression_frame_count_and_loop_intent();
-    println!("✅ headless GIF 回归测试通过！");
+    println!("✅ Headless GIF regression tests passed!");
 }
 
 fn test_headless_gif_regression_frame_count_and_loop_intent() {

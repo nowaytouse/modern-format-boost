@@ -50,7 +50,6 @@ pub fn option_f64_strict(val: Option<f64>, name: &str) -> Option<f64> {
     val
 }
 
-
 /// Convert `f64` to `u64` with loud warning on NaN/Inf/Overflow.
 #[must_use]
 pub fn f64_to_u64_strict(val: f64, name: &str) -> Option<u64> {

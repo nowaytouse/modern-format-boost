@@ -1,6 +1,6 @@
-//! 媒体处理流程单元测试
+//! Media Processing Flow Unit Tests
 //!
-//! 全面测试图像、动图、视频的处理流程，确保功能正常
+//! Comprehensive testing of image, animated GIF/WebP, and video processing flows to ensure normal functionality
 
 use anyhow::Result;
 use shared_utils::{
@@ -13,7 +13,7 @@ use std::io::Write;
 use std::path::Path;
 use tempfile::NamedTempFile;
 
-// 测试工具函数
+// Test utility functions
 mod test_utils {
     use super::*;
 
@@ -21,30 +21,33 @@ mod test_utils {
         let mut jpeg = Vec::new();
         jpeg.extend_from_slice(&[0xFF, 0xD8]); // SOI
         jpeg.extend_from_slice(&[0xFF, 0xE0]); // APP0
-        jpeg.extend_from_slice(&[0x00, 0x10]); // 长度
+        jpeg.extend_from_slice(&[0x00, 0x10]); // Length
         jpeg.extend_from_slice(b"JFIF");
         jpeg.extend_from_slice(&[0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00]);
         jpeg.extend_from_slice(&[0xFF, 0xDB]); // DQT
-        jpeg.extend_from_slice(&[0x00, 0x43]); // 长度
-        jpeg.extend_from_slice(&[0x01]); // 表ID
-        jpeg.extend_from_slice(&[0u8; 64]); // 量化表
+        jpeg.extend_from_slice(&[0x00, 0x43]); // Length
+        jpeg.extend_from_slice(&[0x01]); // Table ID
+        jpeg.extend_from_slice(&[0u8; 64]); // Quantization table
         jpeg.extend_from_slice(&[0xFF, 0xD9]); // EOI
         jpeg
     }
 
     pub fn create_test_png() -> Vec<u8> {
         let mut png = Vec::new();
-        png.extend_from_slice(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]); // PNG签名
-        png.extend_from_slice(&[0x00, 0x00, 0x00, 0x0D]); // IHDR长度
+        png.extend_from_slice(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]); // PNG signature
+        png.extend_from_slice(&[0x00, 0x00, 0x00, 0x0D]); // IHDR length
         png.extend_from_slice(b"IHDR");
-        png.extend_from_slice(&[0x00, 0x00, 0x00, 0x10]); // 宽度16
-        png.extend_from_slice(&[0x00, 0x00, 0x00, 0x10]); // 高度16
-        png.extend_from_slice(&[0x08, 0x02, 0x00, 0x00, 0x00]); // 位深度、颜色类型等
+        png.extend_from_slice(&[0x00, 0x00, 0x00, 0x10]); // Width 16
+        png.extend_from_slice(&[0x00, 0x00, 0x00, 0x10]); // Height 16
+        png.extend_from_slice(&[0x08, 0x02, 0x00, 0x00, 0x00]); // bit depth, color type, etc.
         png.extend_from_slice(&[0x2B, 0x7E, 0xE6, 0x73]); // CRC
-        png.extend_from_slice(&[0x00, 0x00, 0x00, 0x0C]); // IDAT长度
+        png.extend_from_slice(&[0x00, 0x00, 0x00, 0x0C]); // IDAT length
         png.extend_from_slice(b"IDAT");
-        png.extend_from_slice(&[0x08, 0x99, 0x01, 0x01, 0x01, 0x00, 0x00, 0xFE, 0xFF, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01]); // 压缩数据
-        png.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // IEND长度0
+        png.extend_from_slice(&[
+            0x08, 0x99, 0x01, 0x01, 0x01, 0x00, 0x00, 0xFE, 0xFF, 0x00, 0x00, 0x00, 0x02, 0x00,
+            0x01,
+        ]); // Compressed data
+        png.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // IEND length 0
         png.extend_from_slice(b"IEND");
         png.extend_from_slice(&[0xAE, 0x42, 0x60, 0x82]); // CRC
         png
@@ -54,56 +57,62 @@ mod test_utils {
         let mut webp = Vec::new();
         // RIFF header
         webp.extend_from_slice(b"RIFF");
-        webp.extend_from_slice(&[0x20, 0x00, 0x00, 0x00]); // 文件大小
+        webp.extend_from_slice(&[0x20, 0x00, 0x00, 0x00]); // File size
         webp.extend_from_slice(b"WEBP");
         // VP8 chunk
         webp.extend_from_slice(b"VP8 ");
         webp.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // chunk size
         webp.extend_from_slice(&[0x30, 0x01, 0x00, 0x9D, 0x01, 0x2A]); // VP8 frame header
-        webp.extend_from_slice(&[0u8; 16]); // 最小VP8数据
+        webp.extend_from_slice(&[0u8; 16]); // Minimal VP8 data
         webp
     }
 
     pub fn create_static_gif() -> Vec<u8> {
         let mut gif = Vec::new();
-        gif.extend_from_slice(b"GIF87a"); // GIF87a签名
-        gif.extend_from_slice(&[0x10, 0x00, 0x10, 0x00]); // 16x16尺寸
-        gif.extend_from_slice(&[0x00, 0x00]); // 全局颜色表标志
-        gif.extend_from_slice(&[0x00, 0x00, 0x00]); // 背景色
-        gif.extend_from_slice(&[0x00, 0x00]); // 像素宽高比
-        
-        // 图像描述符
-        gif.extend_from_slice(&[0x2C, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x10, 0x00, 0x00, 0x00]);
-        gif.extend_from_slice(&[0x02]); // LZW最小码长
-        gif.extend_from_slice(&[0x02, 0x44, 0x01, 0x00]); // 图像数据
-        gif.extend_from_slice(&[0x00]); // 块终止符
-        gif.extend_from_slice(&[0x3B]); // GIF终止符
+        gif.extend_from_slice(b"GIF87a"); // GIF87a signature
+        gif.extend_from_slice(&[0x10, 0x00, 0x10, 0x00]); // 16x16 size
+        gif.extend_from_slice(&[0x00, 0x00]); // Global color table flag
+        gif.extend_from_slice(&[0x00, 0x00, 0x00]); // Background color
+        gif.extend_from_slice(&[0x00, 0x00]); // Pixel aspect ratio
+
+        // Image Descriptor
+        gif.extend_from_slice(&[
+            0x2C, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x10, 0x00, 0x00, 0x00,
+        ]);
+        gif.extend_from_slice(&[0x02]); // LZW minimum code size
+        gif.extend_from_slice(&[0x02, 0x44, 0x01, 0x00]); // Image data
+        gif.extend_from_slice(&[0x00]); // Block terminator
+        gif.extend_from_slice(&[0x3B]); // GIF terminator
         gif
     }
 
     pub fn create_animated_gif() -> Vec<u8> {
         let mut gif = Vec::new();
-        gif.extend_from_slice(b"GIF89a"); // GIF89a签名
-        gif.extend_from_slice(&[0x10, 0x00, 0x10, 0x00]); // 16x16尺寸
-        gif.extend_from_slice(&[0x00, 0x00]); // 全局颜色表标志
-        gif.extend_from_slice(&[0x00, 0x00, 0x00]); // 背景色
-        gif.extend_from_slice(&[0x00, 0x00]); // 像素宽高比
+        gif.extend_from_slice(b"GIF89a"); // GIF89a signature
+        gif.extend_from_slice(&[0x10, 0x00, 0x10, 0x00]); // 16x16 size
+        gif.extend_from_slice(&[0x00, 0x00]); // Global color table flag
+        gif.extend_from_slice(&[0x00, 0x00, 0x00]); // Background color
+        gif.extend_from_slice(&[0x00, 0x00]); // Pixel aspect ratio
 
-        // 第一帧
-        gif.extend_from_slice(&[0x21, 0xF9, 0x04, 0x00, 0x0A, 0x00, 0x00, 0x00]); // 图形控制扩展
-        gif.extend_from_slice(&[0x2C, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x10, 0x00, 0x00, 0x00]);
-        gif.extend_from_slice(&[0x02]); // LZW最小码长
-        gif.extend_from_slice(&[0x02, 0x44, 0x01]); // 图像数据
-        gif.extend_from_slice(&[0x00]); // 块终止符
+        // Frame 1
+        gif.extend_from_slice(&[0x21, 0xF9, 0x04, 0x00, 0x0A, 0x00, 0x00, 0x00]); // Graphic control extension
+        gif.extend_from_slice(&[
+            0x2C, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x10, 0x00, 0x00, 0x00,
+        ]);
+        gif.extend_from_slice(&[0x02]); // LZW minimum code size
+        gif.extend_from_slice(&[0x02, 0x44, 0x01]); // Image data
+        gif.extend_from_slice(&[0x00]); // Block terminator
 
-        // 第二帧
-        gif.extend_from_slice(&[0x21, 0xF9, 0x04, 0x00, 0x0A, 0x00, 0x00, 0x00]); // 图形控制扩展
-        gif.extend_from_slice(&[0x2C, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x10, 0x00, 0x00, 0x00]);
-        gif.extend_from_slice(&[0x02]); // LZW最小码长
-        gif.extend_from_slice(&[0x02, 0x44, 0x01]); // 图像数据
-        gif.extend_from_slice(&[0x00]); // 块终止符
+        // Frame 2
+        gif.extend_from_slice(&[0x21, 0xF9, 0x04, 0x00, 0x0A, 0x00, 0x00, 0x00]); // Graphic control extension
+        gif.extend_from_slice(&[
+            0x2C, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x10, 0x00, 0x00, 0x00,
+        ]);
+        gif.extend_from_slice(&[0x02]); // LZW minimum code size
+        gif.extend_from_slice(&[0x02, 0x44, 0x01]); // Image data
+        gif.extend_from_slice(&[0x00]); // Block terminator
 
-        gif.extend_from_slice(&[0x3B]); // GIF终止符
+        gif.extend_from_slice(&[0x3B]); // GIF terminator
         gif
     }
 
@@ -111,7 +120,7 @@ mod test_utils {
         let mut webp = Vec::new();
         // RIFF header
         webp.extend_from_slice(b"RIFF");
-        webp.extend_from_slice(&[0x40, 0x00, 0x00, 0x00]); // 文件大小
+        webp.extend_from_slice(&[0x40, 0x00, 0x00, 0x00]); // File size
         webp.extend_from_slice(b"WEBP");
         // VP8X chunk (for animation)
         webp.extend_from_slice(b"VP8X");
@@ -119,12 +128,12 @@ mod test_utils {
         webp.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // flags (animation)
         webp.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // width
         webp.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // height
-        // ANIM chunk
+                                                           // ANIM chunk
         webp.extend_from_slice(b"ANIM");
         webp.extend_from_slice(&[0x06, 0x00, 0x00, 0x00]); // chunk size
         webp.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]); // background color
         webp.extend_from_slice(&[0x00, 0x00]); // loop count
-        // ANMF chunk (first frame)
+                                               // ANMF chunk (first frame)
         webp.extend_from_slice(b"ANMF");
         webp.extend_from_slice(&[0x10, 0x00, 0x00, 0x00]); // chunk size
         webp.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // frame X
@@ -144,7 +153,7 @@ mod test_utils {
         mp4.extend_from_slice(b"isom"); // major brand
         mp4.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // minor version
         mp4.extend_from_slice(b"isomiso2avc1mp41"); // compatible brands
-        // mdat box (minimal)
+                                                    // mdat box (minimal)
         mp4.extend_from_slice(&[0x00, 0x00, 0x00, 0x08]); // box size
         mp4.extend_from_slice(b"mdat");
         mp4.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // minimal data
@@ -158,190 +167,236 @@ mod test_utils {
     }
 }
 
-// ============================================================================
-// 图像处理流程测试
+// Image processing flow tests
 // ============================================================================
 
 #[test]
 fn test_jpeg_processing_flow() -> Result<()> {
     use test_utils::*;
-    
-    println!("🖼️ 测试JPEG处理流程...");
-    
-    // 1. 编解码器识别
+
+    println!("🖼️ Testing JPEG processing flow...");
+
+    // 1. Codec identification
     let jpeg_data = create_test_jpeg();
     let codec = SourceCodec::identify_by_header(&jpeg_data);
-    assert_eq!(codec, Some(SourceCodec::Jpeg), "应该识别为JPEG编解码器");
-    
-    // 2. 临时文件处理
+    assert_eq!(
+        codec,
+        Some(SourceCodec::Jpeg),
+        "Should be identified as JPEG codec"
+    );
+
+    // 2. Temporary file processing
     let temp_file = NamedTempFile::new()?;
     write_test_file(&jpeg_data, temp_file.path())?;
-    
-    // 3. 文件验证
-    assert!(temp_file.path().exists(), "临时文件应该存在");
+
+    // 3. File verification
+    assert!(temp_file.path().exists(), "Temporary file should exist");
     let file_size = fs::metadata(temp_file.path())?.len();
-    assert!(file_size > 0, "文件大小应该大于0");
-    
-    // 4. 重新识别验证
+    assert!(file_size > 0, "File size should be greater than 0");
+
+    // 4. Re-identification verification
     let file_data = fs::read(temp_file.path())?;
     let reidentified_codec = SourceCodec::identify_by_header(&file_data);
-    assert_eq!(reidentified_codec, Some(SourceCodec::Jpeg), "重新识别应该一致");
-    
-    println!("✅ JPEG处理流程测试通过");
+    assert_eq!(
+        reidentified_codec,
+        Some(SourceCodec::Jpeg),
+        "Re-identification should be consistent"
+    );
+
+    println!("✅ JPEG processing flow test passed");
     Ok(())
 }
 
 #[test]
 fn test_png_processing_flow() -> Result<()> {
     use test_utils::*;
-    
-    println!("🖼️ 测试PNG处理流程...");
-    
+
+    println!("🖼️ Testing PNG processing flow...");
+
     let png_data = create_test_png();
     let codec = SourceCodec::identify_by_header(&png_data);
-    assert_eq!(codec, Some(SourceCodec::Png), "应该识别为PNG编解码器");
-    
+    assert_eq!(
+        codec,
+        Some(SourceCodec::Png),
+        "Should be identified as PNG codec"
+    );
+
     let temp_file = NamedTempFile::new()?;
     write_test_file(&png_data, temp_file.path())?;
-    
-    // 验证PNG特定的处理
+
+    // Verify PNG-specific processing
     let file_data = fs::read(temp_file.path())?;
-    assert!(file_data.starts_with(&[0x89, 0x50, 0x4E, 0x47]), "应该以PNG签名开头");
-    
-    println!("✅ PNG处理流程测试通过");
+    assert!(
+        file_data.starts_with(&[0x89, 0x50, 0x4E, 0x47]),
+        "Should start with PNG signature"
+    );
+
+    println!("✅ PNG processing flow test passed");
     Ok(())
 }
 
 #[test]
 fn test_webp_processing_flow() -> Result<()> {
     use test_utils::*;
-    
-    println!("🖼️ 测试WebP处理流程...");
-    
+
+    println!("🖼️ Testing WebP processing flow...");
+
     let webp_data = create_test_webp();
     let codec = SourceCodec::identify_by_header(&webp_data);
-    assert_eq!(codec, Some(SourceCodec::WebpStatic), "应该识别为WebP编解码器");
-    
+    assert_eq!(
+        codec,
+        Some(SourceCodec::WebpStatic),
+        "Should be identified as WebP codec"
+    );
+
     let temp_file = NamedTempFile::new()?;
     write_test_file(&webp_data, temp_file.path())?;
-    
-    // 验证WebP特定的处理
+
+    // Verify WebP-specific processing
     let file_data = fs::read(temp_file.path())?;
-    assert!(file_data.starts_with(b"RIFF"), "应该以RIFF开头");
-    assert!(file_data[8..12].starts_with(b"WEBP"), "应该包含WEBP标识");
-    
-    println!("✅ WebP处理流程测试通过");
+    assert!(file_data.starts_with(b"RIFF"), "Should start with RIFF");
+    assert!(
+        file_data[8..12].starts_with(b"WEBP"),
+        "Should contain WEBP identifier"
+    );
+
+    println!("✅ WebP processing flow test passed");
     Ok(())
 }
 
-// ============================================================================
-// 动图处理流程测试
+// Animated image processing flow tests
 // ============================================================================
 
 #[test]
 fn test_static_gif_processing_flow() -> Result<()> {
     use test_utils::*;
-    
-    println!("🎬 测试静态GIF处理流程...");
-    
+
+    println!("🎬 Testing static GIF processing flow...");
+
     let gif_data = create_static_gif();
     let codec = SourceCodec::identify_by_header(&gif_data);
-    assert_eq!(codec, Some(SourceCodec::Gif), "应该识别为GIF编解码器");
-    
+    assert_eq!(
+        codec,
+        Some(SourceCodec::Gif),
+        "Should be identified as GIF codec"
+    );
+
     let temp_file = NamedTempFile::new()?;
     write_test_file(&gif_data, temp_file.path())?;
-    
-    // 测试GIF头扫描
+
+    // Test GIF header scan
     let scan_result = scan_gif_headers(temp_file.path());
-    assert!(scan_result.is_ok(), "GIF头扫描应该成功");
-    
+    assert!(scan_result.is_ok(), "GIF header scan should succeed");
+
     let headers = scan_result?;
-    assert!(headers.frame_count > 0, "应该检测到帧信息");
-    println!("   📊 检测到帧数: {}", headers.frame_count);
-    
-    // 测试循环意图评估
-    let loop_meta = LoopMeta::from_gif_path(temp_file.path()).expect("应该能创建LoopMeta");
+    assert!(
+        headers.frame_count > 0,
+        "Frame information should be detected"
+    );
+    println!("   📊 Detected frame count: {}", headers.frame_count);
+
+    // Test loop intent evaluation
+    let loop_meta =
+        LoopMeta::from_gif_path(temp_file.path()).expect("Should be able to create LoopMeta");
     let _tree_result = evaluate_loop_tree(&loop_meta, None);
-    // TreeEvaluation 总是返回有效结果，不需要检查 is_ok
-    
-    println!("✅ 静态GIF处理流程测试通过");
+    // TreeEvaluation always returns valid result
+
+    println!("✅ Static GIF processing flow test passed");
     Ok(())
 }
 
 #[test]
 fn test_animated_gif_processing_flow() -> Result<()> {
     use test_utils::*;
-    
-    println!("🎬 测试动画GIF处理流程...");
-    
+
+    println!("🎬 Testing animated GIF processing flow...");
+
     let gif_data = create_animated_gif();
     let codec = SourceCodec::identify_by_header(&gif_data);
-    assert_eq!(codec, Some(SourceCodec::Gif), "应该识别为GIF编解码器");
-    
+    assert_eq!(
+        codec,
+        Some(SourceCodec::Gif),
+        "Should be identified as GIF codec"
+    );
+
     let temp_file = NamedTempFile::new()?;
     write_test_file(&gif_data, temp_file.path())?;
-    
-    // 测试GIF头扫描
+
+    // Test GIF header scan
     let scan_result = scan_gif_headers(temp_file.path());
-    assert!(scan_result.is_ok(), "动画GIF头扫描应该成功");
-    
+    assert!(
+        scan_result.is_ok(),
+        "Animated GIF header scan should succeed"
+    );
+
     let headers = scan_result?;
-    assert!(headers.frame_count >= 1, "应该检测到至少1帧");
-    println!("   📊 检测到帧数: {}", headers.frame_count);
-    
-    // 测试动画检测 - 基于GIF数据结构而不是帧计数
-    let loop_meta = LoopMeta::from_gif_path(temp_file.path()).expect("应该能创建LoopMeta");
-    // 动画GIF有图形控制扩展，可以认为它是动画的
+    assert!(
+        headers.frame_count >= 1,
+        "At least 1 frame should be detected"
+    );
+    println!("   📊 Detected frame count: {}", headers.frame_count);
+
+    // Test animation detection - based on GIF structure rather than frame count
+    let loop_meta =
+        LoopMeta::from_gif_path(temp_file.path()).expect("Should be able to create LoopMeta");
+    // Animated GIF has graphic control extension
     let is_animated = gif_data.windows(3).any(|w| w == [0x21, 0xF9, 0x04]);
-    assert!(is_animated, "应该被识别为动画");
-    
-    // 测试循环意图评估
+    assert!(is_animated, "Should be identified as animated");
+
+    // Test loop intent evaluation
     let _tree_result = evaluate_loop_tree(&loop_meta, None);
-    // TreeEvaluation 总是返回有效结果
-    
-    println!("✅ 动画GIF处理流程测试通过");
+
+    println!("✅ Animated GIF processing flow test passed");
     Ok(())
 }
 
 // Note: animated WebP test removed as scan_webp_headers function doesn't exist
 // WebP animation detection is handled through other mechanisms
 
-// ============================================================================
-// 视频处理流程测试
+// Video processing flow tests
 // ============================================================================
 
 #[test]
 fn test_mp4_processing_flow() -> Result<()> {
     use test_utils::*;
-    
-    println!("🎥 测试MP4处理流程...");
-    
+
+    println!("🎥 Testing MP4 processing flow...");
+
     let mp4_data = create_test_mp4();
     let codec = SourceCodec::identify_by_header(&mp4_data);
-    assert_eq!(codec, Some(SourceCodec::H264), "应该识别为H264编解码器");
-    
+    assert_eq!(
+        codec,
+        Some(SourceCodec::H264),
+        "Should be identified as H264 codec"
+    );
+
     let temp_file = NamedTempFile::new()?;
     write_test_file(&mp4_data, temp_file.path())?;
-    
-    // 验证MP4特定的处理
+
+    // Verify MP4-specific processing
     let file_data = fs::read(temp_file.path())?;
-    assert!(file_data.starts_with(&[0x00, 0x00, 0x00, 0x20]), "应该以ftyp box开头");
-    assert!(file_data[4..8].starts_with(b"ftyp"), "应该包含ftyp标识");
-    
-    println!("✅ MP4处理流程测试通过");
+    assert!(
+        file_data.starts_with(&[0x00, 0x00, 0x00, 0x20]),
+        "Should start with ftyp box"
+    );
+    assert!(
+        file_data[4..8].starts_with(b"ftyp"),
+        "Should contain ftyp identifier"
+    );
+
+    println!("✅ MP4 processing flow test passed");
     Ok(())
 }
 
-// ============================================================================
-// 端到端集成测试
+// End-to-end integration tests
 // ============================================================================
 
 #[test]
 fn test_complete_media_processing_workflow() -> Result<()> {
     use test_utils::*;
-    
-    println!("🔄 测试完整媒体处理工作流...");
-    
+
+    println!("🔄 Testing complete media processing workflow...");
+
     let temp_dir = std::env::temp_dir();
     let test_files = vec![
         ("test.jpg", create_test_jpeg()),
@@ -351,33 +406,37 @@ fn test_complete_media_processing_workflow() -> Result<()> {
         ("animated.gif", create_animated_gif()),
         ("test.mp4", create_test_mp4()),
     ];
-    
-    // 1. 创建所有测试文件
+
+    // 1. Create all test files
     for (filename, data) in &test_files {
         let file_path = temp_dir.join(filename);
         write_test_file(data, &file_path)?;
-        assert!(file_path.exists(), "{}应该存在", filename);
+        assert!(file_path.exists(), "{} should exist", filename);
     }
-    
-    // 2. 批量处理测试
+
+    // 2. Batch processing test
     let mut processed_count = 0;
     let mut animated_count = 0;
-    
+
     for (filename, _) in &test_files {
         let file_path = temp_dir.join(filename);
         let file_data = fs::read(&file_path)?;
-        
-        // 编解码器识别
+
+        // Codec identification
         let codec = SourceCodec::identify_by_header(&file_data);
-        assert!(codec.is_some(), "{}应该能识别编解码器", filename);
-        
-        // 特殊格式处理
+        assert!(
+            codec.is_some(),
+            "{} should be able to identify codec",
+            filename
+        );
+
+        // Special format processing
         match filename {
             name if name.ends_with(".gif") => {
                 let scan_result = scan_gif_headers(&file_path);
                 if scan_result.is_ok() {
                     let headers = scan_result?;
-                    // 检查是否是动画GIF（通过文件数据中的图形控制扩展）
+                    // Check if animated GIF (via graphic control extension)
                     let file_data = fs::read(&file_path)?;
                     let is_animated = file_data.windows(3).any(|w| w == [0x21, 0xF9, 0x04]);
                     if is_animated {
@@ -387,84 +446,94 @@ fn test_complete_media_processing_workflow() -> Result<()> {
                 processed_count += 1;
             }
             name if name.ends_with(".webp") => {
-                // WebP动画检测通过其他机制，这里简单计数
+                // WebP animation detection handled via other mechanisms, counting here
                 processed_count += 1;
             }
             _ => processed_count += 1,
         }
     }
-    
-    // 3. 验证结果
-    assert_eq!(processed_count, 6, "应该处理6个文件");
-    assert_eq!(animated_count, 1, "应该检测到1个动画文件(动画GIF)");
-    
-    println!("✅ 完整媒体处理工作流测试通过");
-    println!("   📊 处理文件数: {}", processed_count);
-    println!("   🎬 动画文件数: {}", animated_count);
+
+    // 3. Verify results
+    assert_eq!(processed_count, 6, "Should process 6 files");
+    assert_eq!(
+        animated_count, 1,
+        "Should detect 1 animated file (animated GIF)"
+    );
+
+    println!("✅ Complete media processing workflow test passed");
+    println!("   📊 Processed file count: {}", processed_count);
+    println!("   🎬 Animated file count: {}", animated_count);
     Ok(())
 }
 
 #[test]
 fn test_error_handling_and_recovery() -> Result<()> {
     use test_utils::*;
-    
-    println!("🛡️ 测试错误处理和恢复...");
-    
-    // 1. 测试无效文件处理
+
+    println!("🛡️ Testing error handling and recovery...");
+
+    // 1. Test invalid file processing
     let invalid_data = vec![0x00, 0x01, 0x02, 0x03];
     let codec = SourceCodec::identify_by_header(&invalid_data);
-    assert!(codec.is_none(), "无效数据不应该识别出编解码器");
-    
-    // 2. 测试空文件处理
+    assert!(codec.is_none(), "Invalid data should not identify a codec");
+
+    // 2. Test empty file processing
     let temp_file = NamedTempFile::new()?;
     let empty_data = vec![];
     write_test_file(&empty_data, temp_file.path())?;
-    
+
     let file_data = fs::read(temp_file.path())?;
     let codec = SourceCodec::identify_by_header(&file_data);
-    assert!(codec.is_none(), "空文件不应该识别出编解码器");
-    
-    // 3. 测试损坏文件处理
+    assert!(codec.is_none(), "Empty file should not identify a codec");
+
+    // 3. Test corrupted file processing
     let mut corrupted_jpeg = create_test_jpeg();
-    corrupted_jpeg.remove(0); // 删除第一个字节，破坏文件头
+    corrupted_jpeg.remove(0); // Remove first byte to break header
     let codec = SourceCodec::identify_by_header(&corrupted_jpeg);
-    assert!(codec.is_none(), "损坏的JPEG不应该识别出编解码器");
-    
-    // 4. 测试GIF扫描错误处理
+    assert!(
+        codec.is_none(),
+        "Corrupted JPEG should not identify a codec"
+    );
+
+    // 4. Test GIF scan error handling
     let temp_file = NamedTempFile::new()?;
     write_test_file(&invalid_data, temp_file.path())?;
     let scan_result = scan_gif_headers(temp_file.path());
-    assert!(scan_result.is_err(), "无效GIF文件扫描应该失败");
-    
-    println!("✅ 错误处理和恢复测试通过");
+    assert!(scan_result.is_err(), "Invalid GIF file scan should fail");
+
+    println!("✅ Error handling and recovery test passed");
     Ok(())
 }
 
 #[test]
 fn test_performance_and_memory_safety() -> Result<()> {
     use test_utils::*;
-    
-    println!("⚡ 测试性能和内存安全...");
-    
-    // 1. 测试大文件处理
+
+    println!("⚡ Testing performance and memory safety...");
+
+    // 1. Test large file processing
     let mut large_jpeg = create_test_jpeg();
-    let padding = vec![0xFF; 10_000]; // 10KB填充
+    let padding = vec![0xFF; 10_000]; // 10KB padding
     large_jpeg.extend_from_slice(&padding);
-    
+
     let codec = SourceCodec::identify_by_header(&large_jpeg);
-    assert_eq!(codec, Some(SourceCodec::Jpeg), "大文件应该正确识别");
-    
-    // 2. 测试批量文件处理
+    assert_eq!(
+        codec,
+        Some(SourceCodec::Jpeg),
+        "Large file should be correctly identified"
+    );
+
+    // 2. Test batch file processing
     let temp_dir = std::env::temp_dir().join("media_flow_test_perf");
     fs::create_dir_all(&temp_dir)?;
-    
+
     for i in 0..100 {
         let filename = format!("test_{}.jpg", i);
         let file_path = temp_dir.join(filename);
         write_test_file(&create_test_jpeg(), &file_path)?;
     }
-    
-    // 验证所有文件都正确创建
+
+    // Verify all files created correctly
     let entries: Vec<_> = fs::read_dir(&temp_dir)?
         .filter_map(|e| e.ok())
         .filter(|e| {
@@ -474,26 +543,29 @@ fn test_performance_and_memory_safety() -> Result<()> {
                 .unwrap_or(false)
         })
         .collect();
-    assert!(entries.len() >= 99, "应该创建至少99个文件");
-    
-    // 3. 测试内存使用
+    assert!(entries.len() >= 99, "Should create at least 99 files");
+
+    // 3. Test memory usage
     for entry in &entries {
         let file_data = fs::read(entry.path())?;
         let codec = SourceCodec::identify_by_header(&file_data);
-        assert!(codec.is_some(), "每个文件都应该能识别编解码器");
+        assert!(
+            codec.is_some(),
+            "Every file should be able to identify its codec"
+        );
     }
-    
-    // 清理测试文件
+
+    // Cleanup test files
     fs::remove_dir_all(&temp_dir)?;
-    
-    println!("✅ 性能和内存安全测试通过");
-    println!("   📊 处理文件数: 100");
-    println!("   💾 内存使用: 正常");
+
+    println!("✅ Performance and memory safety test passed");
+    println!("   📊 Processed file count: 100");
+    println!("   💾 Memory usage: Normal");
     Ok(())
 }
 
 // ============================================================================
-// 主测试运行器
+// Main test runner
 // ============================================================================
 
 #[cfg(test)]
@@ -502,33 +574,33 @@ mod tests {
 
     #[test]
     fn run_all_media_flow_tests() -> Result<()> {
-        println!("🚀 开始运行所有媒体处理流程测试...\n");
-        
-        // 图像测试
+        println!("🚀 Starting all media processing flow tests...\n");
+
+        // Image tests
         test_jpeg_processing_flow()?;
         test_png_processing_flow()?;
         test_webp_processing_flow()?;
-        
-        // 动图测试
+
+        // Animated image tests
         test_static_gif_processing_flow()?;
         test_animated_gif_processing_flow()?;
-        
-        // 视频测试
+
+        // Video tests
         test_mp4_processing_flow()?;
-        
-        // 集成测试
+
+        // Integration tests
         test_complete_media_processing_workflow()?;
         test_error_handling_and_recovery()?;
         test_performance_and_memory_safety()?;
-        
-        println!("\n🎉 所有媒体处理流程测试通过！");
-        println!("✅ 图像处理: JPEG, PNG, WebP");
-        println!("✅ 动图处理: 静态GIF, 动画GIF, 动画WebP");
-        println!("✅ 视频处理: MP4");
-        println!("✅ 集成测试: 端到端工作流");
-        println!("✅ 错误处理: 异常情况处理");
-        println!("✅ 性能测试: 大文件和批量处理");
-        
+
+        println!("\n🎉 All media processing flow tests passed!");
+        println!("✅ Image processing: JPEG, PNG, WebP");
+        println!("✅ Animated image processing: Static GIF, Animated GIF, Animated WebP");
+        println!("✅ Video processing: MP4");
+        println!("✅ Integration tests: End-to-end workflow");
+        println!("✅ Error handling: Exception handling");
+        println!("✅ Performance tests: Huge files and batch processing");
+
         Ok(())
     }
 }

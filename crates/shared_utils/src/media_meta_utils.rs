@@ -65,7 +65,7 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
     let mut loop_count: Option<u16> = None;
     let mut frame_payload_sizes: Vec<usize> = Vec::new();
     let mut frame_delays_cs: Vec<u16> = Vec::new();
-    let mut frame_count_direct = 0u32; // 直接计数图像描述符
+    let mut frame_count_direct = 0u32; // Direct count of image descriptors
     let mut pos = 13usize;
 
     if has_gct {
@@ -157,7 +157,7 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
                 }
             }
             0x2C => {
-                // 直接计数图像描述符
+                // Direct count of image descriptors
                 frame_count_direct += 1;
 
                 if pos + 10 >= buf.len() {
@@ -178,7 +178,7 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
                 }
                 pos += 1;
                 let payload_start = pos;
-                // 使用原始的 skip_sub_blocks 函数来正确处理图像数据块
+                // Use original skip_sub_blocks to correctly handle image data blocks
                 pos = skip_sub_blocks(&buf, pos);
                 let payload_size = pos.saturating_sub(payload_start);
                 // Always count frames when we encounter an image descriptor
@@ -265,11 +265,11 @@ pub fn scan_gif_headers(path: &Path) -> std::io::Result<GifHeaderScan> {
             ),
         )
     })?;
-    // 直接使用图像描述符计数，这是最可靠的方法
+    // Directly use image descriptor count, which is the most reliable method
     let frame_count_calculated = if frame_count_direct > 0 {
         frame_count_direct
     } else {
-        1 // 如果没有检测到图像描述符，至少返回1
+        1 // If no image descriptors detected, return at least 1
     };
 
     Ok(GifHeaderScan {
@@ -299,7 +299,7 @@ fn skip_sub_blocks(buf: &[u8], mut pos: usize) -> usize {
             return pos;
         }
 
-        // 确保不会跳过超过缓冲区长度的数据
+        // Ensure we don't skip past the buffer length
         let next_pos = pos.saturating_add(sub_size as usize);
         if next_pos > buf.len() {
             return buf.len();
@@ -307,7 +307,7 @@ fn skip_sub_blocks(buf: &[u8], mut pos: usize) -> usize {
 
         pos = next_pos;
 
-        // 添加安全检查，防止无限循环
+        // Add safety check to prevent infinite loop
         if pos > buf.len() + 1000 {
             return buf.len();
         }

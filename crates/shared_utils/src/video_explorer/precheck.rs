@@ -319,17 +319,18 @@ fn bpp_from_precheck_json(json: &serde_json::Value, file_size: u64, input: &Path
     #[cfg(feature = "high-precision")]
     {
         use rug::Integer;
-        
-        let total_pixels_int = Integer::from(width) * Integer::from(height) * Integer::from(frame_count);
-        if total_pixels_int > 0 {
-            let bytes_int = Integer::from(bytes_for_bpp) * Integer::from(8);
-            let bpp = Rational::from(bytes_int) / Rational::from(total_pixels_int);
+
+        let total_pixels_u64 = (width as u64) * (height as u64) * frame_count;
+        if total_pixels_u64 > 0 {
+            let total_pixels_int = Integer::from(total_pixels_u64);
+            let bits_int = Integer::from(bytes_for_bpp) * Integer::from(8);
+            let bpp = Rational::from(bits_int) / Rational::from(total_pixels_int);
             Ok(bpp.to_f64())
         } else {
             bail!("Total pixels is 0, cannot calculate BPP")
         }
     }
-    
+
     #[cfg(not(feature = "high-precision"))]
     {
         let total_pixels = u64::from(width) * u64::from(height) * frame_count;
@@ -548,18 +549,16 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
     } else {
         file_size
     };
-    
+
     // Calculate total pixels with high precision when available
     let bpp = if cfg!(feature = "high-precision") && !cfg!(feature = "ci-static-build") {
         #[cfg(feature = "high-precision")]
-        use rug::Integer;
-        
-        #[cfg(feature = "high-precision")]
         {
-            let total_pixels_int = Integer::from(width) * Integer::from(height) * Integer::from(frame_count);
-            if total_pixels_int > 0 {
-                let bytes_int = Integer::from(bytes_for_bpp) * Integer::from(8);
-                let bpp_rational = Rational::from(bytes_int) / Rational::from(total_pixels_int);
+            let total_pixels_u64 = (width as u64) * (height as u64) * frame_count;
+            if total_pixels_u64 > 0 {
+                let total_pixels_int = rug::Integer::from(total_pixels_u64);
+                let bits_int = rug::Integer::from(bytes_for_bpp) * rug::Integer::from(8);
+                let bpp_rational = Rational::from(bits_int) / Rational::from(total_pixels_int);
                 bpp_rational.to_f64()
             } else {
                 bail!("Total pixels is 0, cannot calculate BPP");
@@ -586,8 +585,8 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
             bail!("Total pixels is 0, cannot calculate BPP");
         }
     };
-    
-// ... (rest of the code remains the same)
+
+    // ... (rest of the code remains the same)
     let _recommendation =
         evaluate_processing_recommendation(&codec, width, height, duration, fps, bitrate_kbps, bpp);
 
@@ -756,13 +755,14 @@ fn evaluate_processing_recommendation(
     let codec_efficiency = source_codec.efficiency_factor();
 
     // Calculate resolution factor with high precision when available
-    let resolution_factor = if cfg!(feature = "high-precision") && !cfg!(feature = "ci-static-build") {
+    let resolution_factor = if cfg!(feature = "high-precision")
+        && !cfg!(feature = "ci-static-build")
+    {
         #[cfg(feature = "high-precision")]
         {
-            use rug::Integer;
-            let resolution_int = Integer::from(width) * Integer::from(height);
-            let reference_int = Integer::from(1920) * Integer::from(1080);
-            Rational::from(resolution_int) / Rational::from(reference_int)
+            let resolution_u64 = (width as u64) * (height as u64);
+            let reference_u64 = 1920_u64 * 1080_u64;
+            Rational::from((resolution_u64, reference_u64))
         }
         #[cfg(not(feature = "high-precision"))]
         {

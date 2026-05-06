@@ -4141,7 +4141,8 @@ mod tests {
 
         assert!(
             total <= 15,
-            "Three-phase search should achieve ±0.5 CRF precision within 15 iterations (got {})", total
+            "Three-phase search should achieve ±0.5 CRF precision within 15 iterations (got {})",
+            total
         );
         assert!(
             coarse_iterations <= 9,

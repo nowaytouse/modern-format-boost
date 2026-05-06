@@ -10,21 +10,21 @@ fn create_test_animated_gif() -> Vec<u8> {
     gif.extend_from_slice(&[0x00, 0x00, 0x00]);
     gif.extend_from_slice(&[0x00, 0x00]);
 
-    // 第一帧
+    // First frame
     gif.extend_from_slice(&[0x21, 0xF9, 0x04, 0x00, 0x0A, 0x00, 0x00, 0x00]);
     gif.extend_from_slice(&[
         0x2C, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00,
     ]);
     gif.extend_from_slice(&[0x02, 0x02, 0x44, 0x01, 0x00]);
 
-    // 第二帧
+    // Second frame
     gif.extend_from_slice(&[0x21, 0xF9, 0x04, 0x00, 0x0A, 0x00, 0x00, 0x00]);
     gif.extend_from_slice(&[
         0x2C, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00,
     ]);
     gif.extend_from_slice(&[0x02, 0x02, 0x44, 0x01, 0x00]);
 
-    // 第三帧
+    // Third frame
     gif.extend_from_slice(&[0x21, 0xF9, 0x04, 0x00, 0x0A, 0x00, 0x00, 0x00]);
     gif.extend_from_slice(&[
         0x2C, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00,
@@ -39,7 +39,7 @@ fn main() {
     let gif = create_test_animated_gif();
     println!("GIF length: {}", gif.len());
 
-    // 打印完整的GIF字节结构，标记关键位置
+    // Print complete GIF byte structure with key markers
     println!("GIF structure with markers:");
     for (i, chunk) in gif.chunks(16).enumerate() {
         print!("{:04X}: ", i * 16);
@@ -49,7 +49,7 @@ fn main() {
         println!();
     }
 
-    // 手动标记关键位置
+    // Manually mark key positions
     println!("\nKey positions:");
     for (i, &byte) in gif.iter().enumerate() {
         if byte == 0x21 {
@@ -64,8 +64,10 @@ fn main() {
         }
     }
 
-    let mut temp_file = NamedTempFile::new().expect("创建临时文件失败");
-    temp_file.write_all(&gif).expect("写入动画GIF失败");
+    let mut temp_file = NamedTempFile::new().expect("Failed to create temp file");
+    temp_file
+        .write_all(&gif)
+        .expect("Failed to write animated GIF");
 
     let scan_result = scan_gif_headers(temp_file.path());
     match &scan_result {

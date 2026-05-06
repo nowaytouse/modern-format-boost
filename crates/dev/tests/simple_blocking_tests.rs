@@ -1,6 +1,6 @@
-//! 简化的阻塞行为测试
+//! Simplified blocking behavior tests
 //!
-//! 测试异常媒体文件是否会导致程序阻塞、卡死或无限循环
+//! Tests whether abnormal media files cause program blocking, freezing, or infinite loops
 
 use anyhow::Result;
 use shared_utils::{
@@ -14,71 +14,73 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 use tempfile::NamedTempFile;
 
-// 测试工具函数
+// Test utility functions
 mod test_utils {
     use super::*;
 
-    // 创建超大JPEG文件（可能导致内存问题）
+    // Create oversized JPEG file (may cause memory issues)
     pub fn create_large_jpeg() -> Vec<u8> {
         let mut jpeg = Vec::new();
         jpeg.extend_from_slice(&[0xFF, 0xD8]); // SOI
         jpeg.extend_from_slice(&[0xFF, 0xE0]); // APP0
-        jpeg.extend_from_slice(&[0x00, 0x10]); // 长度
+        jpeg.extend_from_slice(&[0x00, 0x10]); // Length
         jpeg.extend_from_slice(b"JFIF");
         jpeg.extend_from_slice(&[0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00]);
-        
-        // 添加适量数据（1MB）
+
+        // Add appropriate data (1MB)
         let large_data = vec![0xFF; 1024 * 1024];
         jpeg.extend_from_slice(&large_data);
-        
+
         jpeg.extend_from_slice(&[0xFF, 0xD9]); // EOI
         jpeg
     }
 
-    // 创建多帧GIF文件
+    // Create multi-frame GIF file
     pub fn create_multi_frame_gif() -> Vec<u8> {
         let mut gif = Vec::new();
-        gif.extend_from_slice(b"GIF89a"); // GIF89a签名
-        gif.extend_from_slice(&[0x10, 0x00, 0x10, 0x00]); // 16x16尺寸
-        gif.extend_from_slice(&[0x00, 0x00]); // 全局颜色表标志
-        gif.extend_from_slice(&[0x00, 0x00, 0x00]); // 背景色
-        gif.extend_from_slice(&[0x00, 0x00]); // 像素宽高比
+        gif.extend_from_slice(b"GIF89a"); // GIF89a signature
+        gif.extend_from_slice(&[0x10, 0x00, 0x10, 0x00]); // 16x16 size
+        gif.extend_from_slice(&[0x00, 0x00]); // Global color table flag
+        gif.extend_from_slice(&[0x00, 0x00, 0x00]); // Background color
+        gif.extend_from_slice(&[0x00, 0x00]); // Pixel aspect ratio
 
-        // 创建100帧
+        // Create 100 frames
         for _i in 0..100 {
-            gif.extend_from_slice(&[0x21, 0xF9, 0x04, 0x00, 0x0A, 0x00, 0x00, 0x00]); // 图形控制扩展
-            gif.extend_from_slice(&[0x2C, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x10, 0x00, 0x00, 0x00]);
-            gif.extend_from_slice(&[0x02]); // LZW最小码长
-            gif.extend_from_slice(&[0x02, 0x44, 0x01]); // 图像数据
-            gif.extend_from_slice(&[0x00]); // 块终止符
+            gif.extend_from_slice(&[0x21, 0xF9, 0x04, 0x00, 0x0A, 0x00, 0x00, 0x00]); // Graphics control extension
+            gif.extend_from_slice(&[
+                0x2C, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x10, 0x00, 0x00, 0x00,
+            ]);
+            gif.extend_from_slice(&[0x02]); // LZW minimum code size
+            gif.extend_from_slice(&[0x02, 0x44, 0x01]); // Image data
+            gif.extend_from_slice(&[0x00]); // Block terminator
         }
 
-        gif.extend_from_slice(&[0x3B]); // GIF终止符
+        gif.extend_from_slice(&[0x3B]); // GIF terminator
         gif
     }
 
-    // 创建损坏的PNG文件
+    // Create corrupted PNG file
     pub fn create_corrupted_png() -> Vec<u8> {
         let mut png = Vec::new();
-        png.extend_from_slice(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]); // PNG签名
-        png.extend_from_slice(&[0x00, 0x00, 0x00, 0x0D]); // IHDR长度
+        png.extend_from_slice(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]); // PNG signature
+        png.extend_from_slice(&[0x00, 0x00, 0x00, 0x0D]); // IHDR length
         png.extend_from_slice(b"IHDR");
-        png.extend_from_slice(&[0x00, 0x00, 0x00, 0x10]); // 宽度16
-        png.extend_from_slice(&[0x00, 0x00, 0x00, 0x10]); // 高度16
-        png.extend_from_slice(&[0x08, 0x02, 0x00, 0x00, 0x00]); // 位深度、颜色类型等
+        png.extend_from_slice(&[0x00, 0x00, 0x00, 0x10]); // Width 16
+        png.extend_from_slice(&[0x00, 0x00, 0x00, 0x10]); // Height 16
+        png.extend_from_slice(&[0x08, 0x02, 0x00, 0x00, 0x00]); // Bit depth, color type, etc
         png.extend_from_slice(&[0x2B, 0x7E, 0xE6, 0x73]); // CRC
-        
-        // 添加损坏的IDAT块
-        png.extend_from_slice(&[0x00, 0x00, 0x00, 0x0C]); // 错误的长度
+
+        // Add corrupted IDAT block
+        png.extend_from_slice(&[0x00, 0x00, 0x00, 0x0C]); // Wrong length
         png.extend_from_slice(b"IDAT");
-        png.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]); // 损坏数据
-        png.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // 错误的CRC
+        png.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]); // Corrupted data
+        png.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Wrong CRC
         png.extend_from_slice(b"IEND");
         png.extend_from_slice(&[0xAE, 0x42, 0x60, 0x82]); // CRC
         png
     }
 
-    // 创建零字节文件
+    // Create zero-byte file
     pub fn create_empty_file() -> Vec<u8> {
         Vec::new()
     }
@@ -90,177 +92,184 @@ mod test_utils {
     }
 }
 
-// 简单的超时检查函数
-fn check_timeout<T>(operation: impl FnOnce() -> T, timeout_secs: u64, operation_name: &str) -> Result<T> {
+// Simple timeout check function
+fn check_timeout<T>(
+    operation: impl FnOnce() -> T,
+    timeout_secs: u64,
+    operation_name: &str,
+) -> Result<T> {
     let start = Instant::now();
     let result = operation();
     let elapsed = start.elapsed();
-    
+
     if elapsed > Duration::from_secs(timeout_secs) {
-        return Err(anyhow::anyhow!("操作 '{}' 超时: {:?}", operation_name, elapsed));
+        return Err(anyhow::anyhow!(
+            "Operation '{}' timed out: {:?}",
+            operation_name,
+            elapsed
+        ));
     }
-    
-    println!("   ✅ {}: 耗时 {:?}", operation_name, elapsed);
+
+    println!("   ✅ {}: took {:?}", operation_name, elapsed);
     Ok(result)
 }
 
 // ============================================================================
-// 阻塞行为测试
+// Blocking behavior tests
 // ============================================================================
 
 #[test]
 fn test_large_file_blocking() -> Result<()> {
     use test_utils::*;
-    
-    println!("🚫 测试大文件阻塞行为...");
-    
+
+    println!("🚫 Testing large file blocking behavior...");
+
     let jpeg_data = create_large_jpeg();
     let temp_file = NamedTempFile::new()?;
     write_test_file(&jpeg_data, temp_file.path())?;
-    
-    // 测试编解码器识别是否阻塞
+
+    // Test codec identification blocking
     let result = check_timeout(
         || SourceCodec::identify_by_header(&jpeg_data),
         5,
-        "编解码器识别"
+        "Codec identification",
     )?;
-    
-    assert!(result.is_some(), "大文件应该能识别编解码器");
-    println!("   ✅ 编解码器识别: {:?}", result);
-    
-    // 测试文件读取是否阻塞
-    let file_data = check_timeout(
-        || fs::read(temp_file.path()).unwrap(),
-        10,
-        "文件读取"
-    )?;
-    
-    assert_eq!(file_data.len(), jpeg_data.len(), "应该能读取完整文件");
-    println!("   ✅ 文件读取: {} bytes", file_data.len());
-    
-    println!("✅ 大文件阻塞测试通过");
+
+    assert!(result.is_some(), "Large file should identify codec");
+    println!("   ✅ Codec identification: {:?}", result);
+
+    // Test file reading blocking
+    let file_data = check_timeout(|| fs::read(temp_file.path()).unwrap(), 10, "File reading")?;
+
+    assert_eq!(
+        file_data.len(),
+        jpeg_data.len(),
+        "Should read complete file"
+    );
+    println!("   ✅ File reading: {} bytes", file_data.len());
+
+    println!("✅ Large file blocking test passed");
     Ok(())
 }
 
 #[test]
 fn test_multi_frame_gif_blocking() -> Result<()> {
     use test_utils::*;
-    
-    println!("🔄 测试多帧GIF阻塞行为...");
-    
+
+    println!("🔄 Testing multi-frame GIF blocking behavior...");
+
     let gif_data = create_multi_frame_gif();
     let temp_file = NamedTempFile::new()?;
     write_test_file(&gif_data, temp_file.path())?;
-    
-    // 测试GIF头扫描是否阻塞
+
+    // Test GIF header scanning blocking
     let headers = check_timeout(
         || scan_gif_headers(temp_file.path()).unwrap(),
         30,
-        "GIF头扫描"
+        "GIF header scanning",
     )?;
-    
-    println!("   ✅ GIF头扫描: {} 帧", headers.frame_count);
-    
-    // 测试循环意图评估是否阻塞
+
+    println!("   ✅ GIF header scanning: {} frames", headers.frame_count);
+
+    // Test loop intent evaluation blocking
     let loop_meta = LoopMeta::from_gif_path(temp_file.path())
-        .ok_or_else(|| anyhow::anyhow!("无法创建LoopMeta"))?;
-    
+        .ok_or_else(|| anyhow::anyhow!("Cannot create LoopMeta"))?;
+
     let _result = check_timeout(
         || evaluate_loop_tree(&loop_meta, None),
         10,
-        "循环意图评估"
+        "Loop intent evaluation",
     )?;
-    
-    println!("✅ 多帧GIF阻塞测试通过");
+
+    println!("✅ Multi-frame GIF blocking test passed");
     Ok(())
 }
 
 #[test]
 fn test_corrupted_file_blocking() -> Result<()> {
     use test_utils::*;
-    
-    println!("💥 测试损坏文件阻塞行为...");
-    
+
+    println!("💥 Testing corrupted file blocking behavior...");
+
     let png_data = create_corrupted_png();
     let temp_file = NamedTempFile::new()?;
     write_test_file(&png_data, temp_file.path())?;
-    
-    // 测试编解码器识别是否阻塞
+
+    // Test codec identification blocking
     let result = check_timeout(
         || SourceCodec::identify_by_header(&png_data),
         5,
-        "编解码器识别"
+        "Codec identification",
     )?;
-    
-    assert!(result.is_some(), "损坏PNG应该能识别为PNG");
-    println!("   ✅ 编解码器识别: {:?}", result);
-    
-    // 测试文件读取是否阻塞
-    let file_data = check_timeout(
-        || fs::read(temp_file.path()).unwrap(),
-        5,
-        "文件读取"
-    )?;
-    
-    assert_eq!(file_data.len(), png_data.len(), "应该能读取损坏文件");
-    println!("   ✅ 文件读取: {} bytes", file_data.len());
-    
-    println!("✅ 损坏文件阻塞测试通过");
+
+    assert!(
+        result.is_some(),
+        "Corrupted PNG should be identified as PNG"
+    );
+    println!("   ✅ Codec identification: {:?}", result);
+
+    // Test file reading blocking
+    let file_data = check_timeout(|| fs::read(temp_file.path()).unwrap(), 5, "File reading")?;
+
+    assert_eq!(
+        file_data.len(),
+        png_data.len(),
+        "Should read corrupted file"
+    );
+    println!("   ✅ File reading: {} bytes", file_data.len());
+
+    println!("✅ Corrupted file blocking test passed");
     Ok(())
 }
 
 #[test]
 fn test_empty_file_blocking() -> Result<()> {
     use test_utils::*;
-    
-    println!("📄 测试空文件阻塞行为...");
-    
+
+    println!("📄 Testing empty file blocking behavior...");
+
     let empty_data = create_empty_file();
     let temp_file = NamedTempFile::new()?;
     write_test_file(&empty_data, temp_file.path())?;
-    
-    // 测试编解码器识别是否阻塞
+
+    // Test codec identification blocking
     let result = check_timeout(
         || SourceCodec::identify_by_header(&empty_data),
         5,
-        "编解码器识别"
+        "Codec identification",
     )?;
-    
-    assert!(result.is_none(), "空文件不应该识别出编解码器");
-    println!("   ✅ 编解码器识别: None");
-    
-    // 测试文件读取是否阻塞
-    let file_data = check_timeout(
-        || fs::read(temp_file.path()).unwrap(),
-        5,
-        "文件读取"
-    )?;
-    
-    assert_eq!(file_data.len(), 0, "空文件应该读取为空");
-    println!("   ✅ 文件读取: {} bytes", file_data.len());
-    
-    println!("✅ 空文件阻塞测试通过");
+
+    assert!(result.is_none(), "Empty file should not identify codec");
+    println!("   ✅ Codec identification: None");
+
+    // Test file reading blocking
+    let file_data = check_timeout(|| fs::read(temp_file.path()).unwrap(), 5, "File reading")?;
+
+    assert_eq!(file_data.len(), 0, "Empty file should read as empty");
+    println!("   ✅ File reading: {} bytes", file_data.len());
+
+    println!("✅ Empty file blocking test passed");
     Ok(())
 }
 
 // ============================================================================
-// 并发访问测试
+// Concurrent access tests
 // ============================================================================
 
 #[test]
 fn test_concurrent_access_blocking() -> Result<()> {
     use test_utils::*;
-    
-    println!("🔀 测试并发访问阻塞行为...");
-    
+
+    println!("🔀 Testing concurrent access blocking behavior...");
+
     let gif_data = create_multi_frame_gif();
     let temp_file = NamedTempFile::new()?;
     write_test_file(&gif_data, temp_file.path())?;
-    
+
     let file_path = temp_file.path().to_path_buf();
     let mut handles = Vec::new();
-    
-    // 创建多个线程同时访问同一文件
+
+    // Create multiple threads accessing the same file simultaneously
     for i in 0..10 {
         let path = file_path.clone();
         let handle = std::thread::spawn(move || {
@@ -271,74 +280,83 @@ fn test_concurrent_access_blocking() -> Result<()> {
         });
         handles.push(handle);
     }
-    
-    // 等待所有线程完成
+
+    // Wait for all threads to complete
     let mut success_count = 0;
     let mut total_time = Duration::ZERO;
-    
+
     for handle in handles {
         let (thread_id, success, elapsed) = handle.join().unwrap();
         if success {
             success_count += 1;
         }
         total_time += elapsed;
-        println!("   ✅ 线程 {}: 成功={}, 耗时={:?}", thread_id, success, elapsed);
+        println!(
+            "   ✅ Thread {}: success={}, took={:?}",
+            thread_id, success, elapsed
+        );
     }
-    
-    assert!(success_count >= 8, "至少8个线程应该成功");
+
+    assert!(success_count >= 8, "At least 8 threads should succeed");
     let avg_time = total_time / 10;
-    println!("   📊 成功率: {}/10, 平均耗时: {:?}", success_count, avg_time);
-    
-    println!("✅ 并发访问阻塞测试通过");
+    println!(
+        "   📊 Success rate: {}/10, average time: {:?}",
+        success_count, avg_time
+    );
+
+    println!("✅ Concurrent access blocking test passed");
     Ok(())
 }
 
 // ============================================================================
-// 内存压力测试
+// Memory pressure tests
 // ============================================================================
 
 #[test]
 fn test_memory_pressure_blocking() -> Result<()> {
     use test_utils::*;
-    
-    println!("🧠 测试内存压力阻塞行为...");
-    
-    // 创建多个大文件同时处理
+
+    println!("🧠 Testing memory pressure blocking behavior...");
+
+    // Create multiple large files for simultaneous processing
     let mut handles = Vec::new();
-    
+
     for i in 0..5 {
-        let jpeg_data = create_large_jpeg();
         let handle = std::thread::spawn(move || {
             let start = Instant::now();
+            let jpeg_data = create_large_jpeg();
             let result = SourceCodec::identify_by_header(&jpeg_data);
             let elapsed = start.elapsed();
-            (i, result, elapsed)
+            (i, result.is_some(), elapsed)
         });
         handles.push(handle);
     }
-    
-    // 等待所有线程完成
+
+    // Wait for all threads to complete
     let mut completed = 0;
-    
+
     for handle in handles {
         match handle.join() {
             Ok((thread_id, result, elapsed)) => {
                 completed += 1;
-                println!("   ✅ 线程 {}: {:?} (耗时: {:?})", thread_id, result, elapsed);
+                println!(
+                    "   ✅ Thread {}: {:?} (took: {:?})",
+                    thread_id, result, elapsed
+                );
             }
             Err(_) => {
-                println!("   ❌ 线程 panicked");
+                println!("   ❌ Thread panicked");
             }
         }
     }
-    
-    assert!(completed == 5, "所有线程应该完成");
-    println!("✅ 内存压力阻塞测试通过");
+
+    assert!(completed == 5, "All threads should complete");
+    println!("✅ Memory pressure blocking test passed");
     Ok(())
 }
 
 // ============================================================================
-// 主测试运行器
+// Main test runner
 // ============================================================================
 
 #[cfg(test)]
@@ -347,26 +365,26 @@ mod tests {
 
     #[test]
     fn run_all_simple_blocking_tests() -> Result<()> {
-        println!("🚫 开始运行所有简化阻塞行为测试...\n");
-        
-        // 基础阻塞测试
+        println!("🚫 Starting all simplified blocking behavior tests...\n");
+
+        // Basic blocking tests
         test_large_file_blocking()?;
         test_multi_frame_gif_blocking()?;
         test_corrupted_file_blocking()?;
         test_empty_file_blocking()?;
-        
-        // 并发和压力测试
+
+        // Concurrent and pressure tests
         test_concurrent_access_blocking()?;
         test_memory_pressure_blocking()?;
-        
-        println!("\n🎉 所有简化阻塞行为测试通过！");
-        println!("✅ 大文件处理: 无阻塞");
-        println!("✅ 多帧GIF处理: 无阻塞");
-        println!("✅ 损坏文件处理: 无阻塞");
-        println!("✅ 空文件处理: 无阻塞");
-        println!("✅ 并发访问测试: 无阻塞");
-        println!("✅ 内存压力测试: 无阻塞");
-        
+
+        println!("\n🎉 All simplified blocking behavior tests passed!");
+        println!("✅ Large file processing: No blocking");
+        println!("✅ Multi-frame GIF processing: No blocking");
+        println!("✅ Corrupted file processing: No blocking");
+        println!("✅ Empty file processing: No blocking");
+        println!("✅ Concurrent access test: No blocking");
+        println!("✅ Memory pressure test: No blocking");
+
         Ok(())
     }
 }
