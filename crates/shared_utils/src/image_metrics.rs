@@ -69,7 +69,7 @@ pub fn calculate_psnr(original: &DynamicImage, converted: &DynamicImage) -> Opti
         .sum();
 
     // Calculate MSE with high precision when available
-    let mse = if cfg!(feature = "high-precision") {
+    let mse = if cfg!(feature = "high-precision") && !cfg!(feature = "ci-static-build") {
         use rug::Integer;
         
         let pixel_count_int = Integer::from(orig_pixels.len());

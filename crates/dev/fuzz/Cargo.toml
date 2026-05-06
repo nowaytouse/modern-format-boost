@@ -15,7 +15,7 @@ arbitrary = { version = "1.4", features = ["derive"] }
 image = { workspace = true }
 # Keep default shared_utils features off here. Vendored libjxl builds its own
 # fuzzers under sanitizer instrumentation, which conflicts with ClusterFuzzLite.
-shared_utils = { path = "../../shared_utils", default-features = false, features = ["ci-static-build", "fuzzing"] }
+shared_utils = { path = "../../shared_utils", default-features = false, features = ["ci-static-build", "fuzzing", "high-precision"] }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

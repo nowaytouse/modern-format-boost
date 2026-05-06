@@ -549,7 +549,7 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
         file_size
     };
     // Calculate total pixels with high precision when available
-    let bpp = if cfg!(feature = "high-precision") {
+    let bpp = if cfg!(feature = "high-precision") && !cfg!(feature = "ci-static-build") {
         use rug::Integer;
         
         let total_pixels_int = Integer::from(width) * Integer::from(height) * Integer::from(frame_count);
@@ -739,7 +739,7 @@ fn evaluate_processing_recommendation(
     let codec_efficiency = source_codec.efficiency_factor();
 
     // Calculate resolution factor with high precision when available
-    let resolution_factor = if cfg!(feature = "high-precision") {
+    let resolution_factor = if cfg!(feature = "high-precision") && !cfg!(feature = "ci-static-build") {
         use rug::Integer;
         
         let resolution_int = Integer::from(width) * Integer::from(height);
