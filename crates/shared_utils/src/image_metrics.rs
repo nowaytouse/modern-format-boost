@@ -302,39 +302,9 @@ fn calculate_ssim_simple(original: &DynamicImage, converted: &DynamicImage) -> O
         if den_abs < Rational::from_f64(1e-10).unwrap_or_else(|| Rational::from(0)) {
             return Some(1.0);
         }
-        Some((numerator / denominator).to_f64())
+        return Some((numerator / denominator).to_f64());
     }
     
-    #[cfg(not(feature = "high-precision"))]
-    {
-        let n = Rational::from(n_u64);
-        let mean_x = sum_x.clone() / n.clone();
-        let mean_y = total_sum_y.clone() / n.clone();
-        // Unbiased variance/covariance (Wang et al. sample estimator; consistent with windowed path).
-        let n1 = n.clone() - Rational::from(1);
-        let var_x = (sum_xx.clone() - (n.clone() * mean_x.clone() * mean_x.clone())) / n1.clone();
-        let var_y = (sum_yy.clone() - (n.clone() * mean_y.clone() * mean_y.clone())) / n1.clone();
-        let cov_xy = (products_sum_xy - (n * mean_x.clone() * mean_y.clone())) / n1;
-        
-        let c1_rat = Rational::from_f64(C1).unwrap_or_else(|| Rational::from(0));
-        let c2_rat = Rational::from_f64(C2).unwrap_or_else(|| Rational::from(0));
-        
-        let numerator = (Rational::from(2) * mean_x.clone() * mean_y.clone() + c1_rat.clone())
-            * (Rational::from(2) * cov_xy + c2_rat.clone());
-        // mean_x and mean_y each appear twice — clone for squared terms to avoid move.
-        let denominator =
-            (mean_x.clone() * mean_x + mean_y.clone() * mean_y + c1_rat) * (var_x + var_y + c2_rat);
-        
-        let den_abs = if denominator > Rational::from(0) {
-            denominator.clone()
-        } else {
-            -denominator.clone()
-        };
-        if den_abs < Rational::from_f64(1e-10).unwrap_or_else(|| Rational::from(0)) {
-            return Some(1.0);
-        }
-        Some((numerator / denominator).to_f64())
-    }
 }
 
 #[must_use]

@@ -278,7 +278,7 @@ pub fn analyze_video_quality(input: VideoQualityInput<'_>) -> Result<VideoQualit
             * Rational::from(height)
             * crate::numeric_cast::f64_to_rational_strict(fps, "fps")
                 .unwrap_or_else(|| Rational::from(1_i32));
-        if pixels_per_second > 0_i32 {
+        if pixels_per_second > Rational::from(0) {
             // effective_bitrate is u64; Rational::from requires i64 or smaller.
             // Saturate to i64::MAX for astronomically large bitrates (>9 Pbps).
             let bits_per_second = Rational::from(
