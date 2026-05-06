@@ -548,17 +548,33 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
     } else {
         file_size
     };
+    
     // Calculate total pixels with high precision when available
     let bpp = if cfg!(feature = "high-precision") && !cfg!(feature = "ci-static-build") {
+        #[cfg(feature = "high-precision")]
         use rug::Integer;
         
-        let total_pixels_int = Integer::from(width) * Integer::from(height) * Integer::from(frame_count);
-        if total_pixels_int > 0 {
-            let bytes_int = Integer::from(bytes_for_bpp) * Integer::from(8);
-            let bpp_rational = Rational::from(bytes_int) / Rational::from(total_pixels_int);
-            bpp_rational.to_f64()
-        } else {
-            bail!("Total pixels is 0, cannot calculate BPP");
+        #[cfg(feature = "high-precision")]
+        {
+            let total_pixels_int = Integer::from(width) * Integer::from(height) * Integer::from(frame_count);
+            if total_pixels_int > 0 {
+                let bytes_int = Integer::from(bytes_for_bpp) * Integer::from(8);
+                let bpp_rational = Rational::from(bytes_int) / Rational::from(total_pixels_int);
+                bpp_rational.to_f64()
+            } else {
+                bail!("Total pixels is 0, cannot calculate BPP");
+            }
+        }
+        #[cfg(not(feature = "high-precision"))]
+        {
+            let total_pixels = u64::from(width) * u64::from(height) * frame_count;
+            if total_pixels > 0 {
+                ((Rational::from(bytes_for_bpp) * Rational::from(8_i32))
+                    / Rational::from(total_pixels.max(1)))
+                .to_f64()
+            } else {
+                bail!("Total pixels is 0, cannot calculate BPP");
+            }
         }
     } else {
         let total_pixels = u64::from(width) * u64::from(height) * frame_count;
@@ -571,6 +587,7 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
         }
     };
     
+// ... (rest of the code remains the same)
     let _recommendation =
         evaluate_processing_recommendation(&codec, width, height, duration, fps, bitrate_kbps, bpp);
 
@@ -740,11 +757,17 @@ fn evaluate_processing_recommendation(
 
     // Calculate resolution factor with high precision when available
     let resolution_factor = if cfg!(feature = "high-precision") && !cfg!(feature = "ci-static-build") {
-        use rug::Integer;
-        
-        let resolution_int = Integer::from(width) * Integer::from(height);
-        let reference_int = Integer::from(1920) * Integer::from(1080);
-        Rational::from(resolution_int) / Rational::from(reference_int)
+        #[cfg(feature = "high-precision")]
+        {
+            use rug::Integer;
+            let resolution_int = Integer::from(width) * Integer::from(height);
+            let reference_int = Integer::from(1920) * Integer::from(1080);
+            Rational::from(resolution_int) / Rational::from(reference_int)
+        }
+        #[cfg(not(feature = "high-precision"))]
+        {
+            (Rational::from(width) * Rational::from(height)) / Rational::from(1_920_i32 * 1_080_i32)
+        }
     } else {
         (Rational::from(width) * Rational::from(height)) / Rational::from(1_920_i32 * 1_080_i32)
     };

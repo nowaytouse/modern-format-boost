@@ -70,14 +70,24 @@ pub fn calculate_psnr(original: &DynamicImage, converted: &DynamicImage) -> Opti
 
     // Calculate MSE with high precision when available
     let mse = if cfg!(feature = "high-precision") && !cfg!(feature = "ci-static-build") {
-        use rug::Integer;
-        
-        let pixel_count_int = Integer::from(orig_pixels.len());
-        #[allow(clippy::cast_possible_truncation)]
-        let mse_sum_int = Integer::from(mse_sum as i64); // Safe conversion for MSE sum
-        let three_int = Integer::from(3);
-        let denominator = Rational::from(three_int) * Rational::from(pixel_count_int);
-        (Rational::from(mse_sum_int) / denominator).to_f64()
+        #[cfg(feature = "high-precision")]
+        {
+            use rug::Integer;
+            let pixel_count_int = Integer::from(orig_pixels.len());
+            #[allow(clippy::cast_possible_truncation)]
+            let mse_sum_int = Integer::from(mse_sum as i64); // Safe conversion for MSE sum
+            let three_int = Integer::from(3);
+            let denominator = Rational::from(three_int) * Rational::from(pixel_count_int);
+            (Rational::from(mse_sum_int) / denominator).to_f64()
+        }
+        #[cfg(not(feature = "high-precision"))]
+        {
+            let pixel_count = crate::numeric_cast::usize_to_f64(orig_pixels.len());
+            (Rational::from_f64(mse_sum).unwrap_or_else(|| Rational::from(0))
+                / (Rational::from(3)
+                    * Rational::from_f64(pixel_count).unwrap_or_else(|| Rational::from(1))))
+                .to_f64()
+        }
     } else {
         let pixel_count = crate::numeric_cast::usize_to_f64(orig_pixels.len());
         (Rational::from_f64(mse_sum).unwrap_or_else(|| Rational::from(0))

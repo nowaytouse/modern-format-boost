@@ -1773,28 +1773,27 @@ fn calculate_discrete_features(
     };
 
     let sample_webp_ratio =
-        crate::numeric_cast::option_f64_strict(sample.webp_compression_ratio, "sample_webp_ratio")
+        crate::numeric_cast::option_f64_silent(sample.webp_compression_ratio)
             .unwrap_or(0.5);
     let v_wratio = sample_webp_ratio / get_std("webp_ratio") * get_w("webp_ratio").sqrt();
 
-    let v_lfreq = crate::numeric_cast::option_f64_strict(sample.loop_frequency, "sample_loop_freq")
+    let v_lfreq = crate::numeric_cast::option_f64_silent(sample.loop_frequency)
         .unwrap_or(0.5)
         / get_std("loop_freq")
         * get_w("loop_freq").sqrt();
-    let v_cadence = crate::numeric_cast::option_f64_strict(sample.cadence_score, "sample_cadence")
+    let v_cadence = crate::numeric_cast::option_f64_silent(sample.cadence_score)
         .unwrap_or(0.5)
         / get_std("cadence")
         * get_w("cadence").sqrt();
-    let v_payload = crate::numeric_cast::option_f64_strict(
+    let v_payload = crate::numeric_cast::option_f64_silent(
         sample.frame_payload_variation,
-        "sample_payload_var",
     )
     .unwrap_or(0.5);
     let v_delay =
-        crate::numeric_cast::option_f64_strict(sample.frame_delay_variation, "sample_delay_var")
+        crate::numeric_cast::option_f64_silent(sample.frame_delay_variation)
             .unwrap_or(0.5);
 
-    let v_aspect = crate::numeric_cast::option_f64_strict(sample.aspect_ratio, "sample_aspect")
+    let v_aspect = crate::numeric_cast::option_f64_silent(sample.aspect_ratio)
         .unwrap_or(1.0)
         / get_std("aspect")
         * get_w("aspect").sqrt();
