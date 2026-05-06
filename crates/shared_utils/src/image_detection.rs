@@ -1940,18 +1940,21 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
     for by in 0..blocks_y {
         for bx in 0..blocks_x {
             // Pick a pixel near the center of each block (deterministic, no RNG needed)
+            // Calculate coordinates safely to prevent overflow
+            let pixel_x = (bx * block_size + block_size / 2) as u64;
+            let pixel_y = (by * block_size + block_size / 2) as u64;
+            
+            // Clamp coordinates to image dimensions before conversion to prevent overflow
             let px = crate::numeric_cast::u64_to_u32_strict(
-                (bx * block_size + block_size / 2) as u64,
+                pixel_x.min(u64::from(width.saturating_sub(1))),
                 "px",
             )
-            .unwrap_or(0)
-            .min(width.saturating_sub(1));
+            .unwrap_or(0);
             let py = crate::numeric_cast::u64_to_u32_strict(
-                (by * block_size + block_size / 2) as u64,
+                pixel_y.min(u64::from(height.saturating_sub(1))),
                 "py",
             )
-            .unwrap_or(0)
-            .min(height.saturating_sub(1));
+            .unwrap_or(0);
             let pixel = rgba.get_pixel(px, py);
             let key = [pixel[0], pixel[1], pixel[2], pixel[3]];
             *color_freq.entry(key).or_insert(0) += 1;
