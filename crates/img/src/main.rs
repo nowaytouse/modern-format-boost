@@ -581,6 +581,13 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    {
+        use std::io::IsTerminal;
+        if std::io::stdout().is_terminal() {
+            shared_utils::macos_ui::wait_for_exit_confirmation();
+        }
+    }
+
     Ok(())
 }
 
@@ -1530,6 +1537,13 @@ fn auto_convert_directory(
             }
         } else if let Err(e) = cp.release_lock() {
             shared_utils::log_eprintln!("⚠️ [checkpoint] Release lock failed: {}", e);
+        }
+    }
+
+    {
+        use std::io::IsTerminal;
+        if std::io::stdout().is_terminal() {
+            shared_utils::macos_ui::wait_for_exit_confirmation();
         }
     }
 

@@ -320,7 +320,7 @@ fn bpp_from_precheck_json(json: &serde_json::Value, file_size: u64, input: &Path
     {
         use rug::Integer;
 
-        let total_pixels_u64 = (width as u64) * (height as u64) * frame_count;
+        let total_pixels_u64 = u64::from(width) * u64::from(height) * frame_count;
         if total_pixels_u64 > 0 {
             let total_pixels_int = Integer::from(total_pixels_u64);
             let bits_int = Integer::from(bytes_for_bpp) * Integer::from(8);
@@ -554,7 +554,7 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
     let bpp = if cfg!(feature = "high-precision") && !cfg!(feature = "ci-static-build") {
         #[cfg(feature = "high-precision")]
         {
-            let total_pixels_u64 = (width as u64) * (height as u64) * frame_count;
+            let total_pixels_u64 = u64::from(width) * u64::from(height) * frame_count;
             if total_pixels_u64 > 0 {
                 let total_pixels_int = rug::Integer::from(total_pixels_u64);
                 let bits_int = rug::Integer::from(bytes_for_bpp) * rug::Integer::from(8);
@@ -760,7 +760,7 @@ fn evaluate_processing_recommendation(
     {
         #[cfg(feature = "high-precision")]
         {
-            let resolution_u64 = (width as u64) * (height as u64);
+            let resolution_u64 = u64::from(width) * u64::from(height);
             let reference_u64 = 1920_u64 * 1080_u64;
             Rational::from((resolution_u64, reference_u64))
         }

@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## 🛡️ Ultra-Strict Clippy Compliance & App Shell Hardening (2026-05-06)
+
+- **Strict Clippy & Lint Resolution**:
+  - **Zero-Warning Workspace**: Achieved full `cargo clippy` green status across the entire workspace (`shared_utils`, `vid`, `img`, `dev`) under the most restrictive lint set (`-D warnings -W clippy::pedantic -W clippy::nursery -W clippy::cargo`).
+  - **Arithmetic Hardening**: Replaced raw floating-point `to_bits()` casts with audited `f64_to_u64_strict` and `f64_to_i64_strict` helpers to prevent sign loss and bit-mode confusion.
+  - **Redundant Clone Elimination**: Systematically removed unnecessary `.clone()` calls on `Rational` and `PathBuf` types in hot paths.
+  - **Naming Standardization**: Resolved `clippy::similar_names` in `image_metrics.rs` by renaming PSNR/SSIM rational variables for better clarity.
+
+- **macOS App & Pipeline Stability**:
+  - **App Shell Refactoring**: Rewrote the macOS `.app` wrapper script to eliminate "quoting hell" that caused shell mangling with emojis (💡, 💾) and special characters.
+  - **Consolidated GUI Experience**: Moved all "Task Finished" and "Exit Confirmation" GUI logic into the Python `drag_and_drop_processor.py`, ensuring a consistent and non-redundant user interface.
+  - **Signal Safety Hardening**: Improved `SIGHUP` and `SIGTERM` handlers in the Python processor to robustly protect active tasks from accidental terminal window closure.
+  - **Terminal Auto-Activation**: Added AppleScript logic to force Terminal foreground activation before showing process completion dialogs.
+
+- **Test Suite Modernization**:
+  - **Lint-Clean Tests**: Cleaned up all integration tests to satisfy strict clippy rules, including fixing `unnecessary_wraps`, `dead_code`, and `branches_sharing_code`.
+  - **Path Comparison Reliability**: Standardized on `Path::extension().eq_ignore_ascii_case()` for robust, platform-agnostic media type detection in tests.
+  - **Success Rate Reporting**: Enhanced the final output of `drag_and_drop_processor.py` with detailed success/skip/fail counters and success rate percentage.
+
+
 ## ⚡ Performance Tuning & Test Suite Hardening (2026-05-06)
 
 - **High-Precision Performance Optimization**:

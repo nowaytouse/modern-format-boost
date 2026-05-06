@@ -1002,7 +1002,7 @@ pub fn analyze_png_quantization_from_reader<R: Read + Seek>(
                     1
                 }),
             ) / Rational::from(1_000_000_i32);
-            if den == Rational::from(0) {
+            if den == 0 {
                 1000.0
             } else {
                 (num / den).to_f64().min(1000.0)
@@ -1945,13 +1945,13 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
             // Calculate coordinates using u64 to prevent overflow (sufficient for any practical image)
             let px = {
                 let x = (bx as u64) * (block_size as u64) + (block_size as u64) / 2;
-                let max_x = (width as u64).saturating_sub(1);
-                x.min(max_x) as u32
+                let max_x = u64::from(width).saturating_sub(1);
+                u32::try_from(x.min(max_x)).expect("Coordinate bounds guaranteed by logic")
             };
             let py = {
                 let y = (by as u64) * (block_size as u64) + (block_size as u64) / 2;
-                let max_y = (height as u64).saturating_sub(1);
-                y.min(max_y) as u32
+                let max_y = u64::from(height).saturating_sub(1);
+                u32::try_from(y.min(max_y)).expect("Coordinate bounds guaranteed by logic")
             };
 
             let pixel = rgba.get_pixel(px, py);

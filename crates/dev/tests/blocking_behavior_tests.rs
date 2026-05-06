@@ -103,7 +103,7 @@ mod test_utils {
     }
 
     // Create a zero-byte file
-    pub fn create_empty_file() -> Vec<u8> {
+    pub const fn create_empty_file() -> Vec<u8> {
         Vec::new()
     }
 
@@ -172,7 +172,7 @@ fn test_huge_file_blocking() -> Result<()> {
         result.is_some(),
         "Huge file should be able to identify codec"
     );
-    println!("   ✅ Codec identification: {:?}", result);
+    println!("   ✅ Codec identification: {result:?}");
 
     // Test if file reading blocks
     let file_data = with_timeout!(10, { fs::read(temp_file.path()) })??;
@@ -235,7 +235,7 @@ fn test_corrupted_file_blocking() -> Result<()> {
         result.is_some(),
         "Corrupted PNG should be identified as PNG"
     );
-    println!("   ✅ Codec identification: {:?}", result);
+    println!("   ✅ Codec identification: {result:?}");
 
     // Test if file reading blocks
     let file_data = with_timeout!(5, { fs::read(temp_file.path()) })??;
@@ -262,11 +262,11 @@ fn test_infinite_webp_blocking() -> Result<()> {
     write_test_file(&webp_data, temp_file.path())?;
 
     // Test if codec identification blocks
-    let webp_data_clone = webp_data.clone();
+    let webp_data_clone = webp_data;
     let result = with_timeout!(5, { SourceCodec::identify_by_header(&webp_data_clone) })?;
 
     assert!(result.is_some(), "Infinite loop WebP should be identified");
-    println!("   ✅ Codec identification: {:?}", result);
+    println!("   ✅ Codec identification: {result:?}");
 
     println!("✅ Infinite loop WebP blocking test passed");
     Ok(())
@@ -283,7 +283,7 @@ fn test_empty_file_blocking() -> Result<()> {
     write_test_file(&empty_data, temp_file.path())?;
 
     // Test if codec identification blocks
-    let empty_data_clone = empty_data.clone();
+    let empty_data_clone = empty_data;
     let result = with_timeout!(5, { SourceCodec::identify_by_header(&empty_data_clone) })?;
 
     assert!(result.is_none(), "Empty file should not identify any codec");
@@ -318,11 +318,8 @@ fn test_header_only_file_blocking() -> Result<()> {
 
         if ext == "gif" {
             assert!(result.is_some(), "GIF header should be identified");
-            println!("   ✅ {}: {:?}", ext, result);
-        } else {
-            // Other formats may fail to identify, which is normal
-            println!("   ✅ {}: {:?}", ext, result);
         }
+        println!("   ✅ {ext}: {result:?}");
     }
 
     println!("✅ Header-only file blocking test passed");
@@ -334,7 +331,7 @@ fn test_header_only_file_blocking() -> Result<()> {
 // ============================================================================
 
 #[test]
-fn test_memory_pressure_blocking() -> Result<()> {
+fn test_memory_pressure_blocking() {
     use test_utils::*;
 
     println!("🧠 Testing memory pressure blocking behavior...");
@@ -362,8 +359,7 @@ fn test_memory_pressure_blocking() -> Result<()> {
             Ok((thread_id, result, elapsed)) => {
                 completed += 1;
                 println!(
-                    "   ✅ Thread {}: {:?} (Time: {:?})",
-                    thread_id, result, elapsed
+                    "   ✅ Thread {thread_id}: {result:?} (Time: {elapsed:?})"
                 );
             }
             Err(_) => {
@@ -374,7 +370,6 @@ fn test_memory_pressure_blocking() -> Result<()> {
 
     assert!(completed == total_handles, "All threads should complete");
     println!("✅ Memory pressure blocking test passed");
-    Ok(())
 }
 
 // ============================================================================
@@ -416,16 +411,14 @@ fn test_concurrent_access_blocking() -> Result<()> {
         }
         total_time += elapsed;
         println!(
-            "   ✅ Thread {}: Success={}, Time={:?}",
-            thread_id, success, elapsed
+            "   ✅ Thread {thread_id}: Success={success}, Time={elapsed:?}"
         );
     }
 
     assert!(success_count >= 15, "At least 15 threads should succeed");
     let avg_time = total_time / 20;
     println!(
-        "   📊 Success rate: {}/20, Avg time: {:?}",
-        success_count, avg_time
+        "   📊 Success rate: {success_count}/20, Avg time: {avg_time:?}"
     );
 
     println!("✅ Concurrent access blocking test passed");
@@ -459,7 +452,7 @@ fn test_extreme_case_blocking() -> Result<()> {
             result.is_some(),
             "Huge file concurrent identification should succeed"
         );
-        println!("   ✅ Huge file concurrency {}: Success", i);
+        println!("   ✅ Huge file concurrency {i}: Success");
     }
 
     // Test 2: Corrupted file + mass processing
@@ -486,8 +479,7 @@ fn test_extreme_case_blocking() -> Result<()> {
         "At least 40 corrupted files should be identified successfully"
     );
     println!(
-        "   ✅ Corrupted file batch processing: {}/50 success",
-        success_count
+        "   ✅ Corrupted file batch processing: {success_count}/50 success"
     );
 
     println!("✅ Extreme case blocking test passed");
@@ -515,7 +507,7 @@ mod tests {
         test_header_only_file_blocking()?;
 
         // Stress tests
-        test_memory_pressure_blocking()?;
+        test_memory_pressure_blocking();
         test_concurrent_access_blocking()?;
         test_extreme_case_blocking()?;
 

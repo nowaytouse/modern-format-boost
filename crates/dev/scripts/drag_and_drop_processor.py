@@ -12,7 +12,54 @@ import shutil
 import threading
 import datetime
 import pty
+import signal
 from pathlib import Path
+
+
+def window_close_handler(signum, _frame):
+    """
+    Handles terminal window closure (SIGHUP) or app termination (SIGTERM).
+    Shows a GUI confirmation dialog on macOS to prevent accidental session loss.
+    """
+    # Only relevant for macOS interactive sessions
+    if sys.platform != "darwin" or os.environ.get("FROM_APP") != "1":
+        return
+
+    # Prevent re-entry if multiple signals arrive
+    if getattr(window_close_handler, "active", False):
+        return
+    window_close_handler.active = True
+
+    msg = "⚠️ A processing task is currently active.\n\nAre you sure you want to close this window and interrupt the process?"
+    script = f'''
+    tell application "System Events"
+        activate
+        set theResponse to button returned of (display dialog "{msg}" buttons {{"❌ Cancel", "✅ Exit Anyway"}} default button "❌ Cancel" with icon caution with title "Modern Format Boost")
+        return theResponse
+    end tell
+    '''
+    try:
+        # Use a timeout to ensure we don't hang the process if AppleScript fails
+        proc = subprocess.run(['osascript', '-e', script], capture_output=True, text=True, timeout=30)
+        if proc.returncode == 0 and "✅ Exit Anyway" in proc.stdout:
+            # User confirmed; allow exit
+            os._exit(0) # Use os._exit to bypass any further python cleanup/traps
+        else:
+            # User cancelled; keep running
+            print("\n   \x1b[32m✅ Interruption cancelled. Resuming task...\x1b[0m")
+    except Exception:
+        pass
+    finally:
+        window_close_handler.active = False
+
+
+# Register exit guards for window closure and termination
+if sys.platform == "darwin":
+    # Ignore signals initially to avoid early triggers during setup
+    signal.signal(signal.SIGHUP, window_close_handler)
+    signal.signal(signal.SIGTERM, window_close_handler)
+    # We don't trap SIGINT here as we want standard KeyboardInterrupt behavior for Ctrl+C
+
 
 
 class ReturnToHomeException(Exception):
@@ -1760,7 +1807,48 @@ def main():
 
     try:
         drain_stdin()
-        input(f"\n{DIM}Press Enter to exit...{RESET}")
+        if sys.platform == "darwin" and os.environ.get("FROM_APP") == "1":
+            # macOS App Mode: Show GUI dialog for "windowed" feel
+            # Use a slightly more robust AppleScript that activates the app first
+            script = '''
+            tell application "System Events"
+                set mfbApp to first process whose name is "Terminal"
+                set frontmost of mfbApp to true
+            end tell
+            tell application "System Events"
+                activate
+                set theResponse to button returned of (display dialog "⚠️ Modern Format Boost has finished its task.\n\nDo you want to close this session?" buttons {"❌ Keep Open", "✅ Exit Now"} default button "✅ Exit Now" with icon caution with title "Modern Format Boost")
+                return theResponse
+            end tell
+            '''
+            try:
+                # Disable our own signal handlers during this final dialog to avoid recursion if user tries to close window NOW
+                signal.signal(signal.SIGHUP, signal.SIG_DFL)
+                signal.signal(signal.SIGTERM, signal.SIG_DFL)
+
+                proc = subprocess.run(['osascript', '-e', script], capture_output=True, text=True, timeout=120)
+                if proc.returncode == 0 and "✅ Exit Now" in proc.stdout:
+                    # User wants to exit
+                    pass
+                else:
+                    # User wants to keep open or dialog failed
+                    print(f"\n   {CYAN}💡 Session kept open.{RESET}")
+                    print(f"   {DIM}You can review the logs or press Enter to exit.{RESET}")
+                    try:
+                        input(f"{DIM}Press Enter to exit...{RESET}")
+                    except EOFError:
+                        pass
+            except Exception:
+                try:
+                    input(f"\n{DIM}Task finished. Press Enter to exit...{RESET}")
+                except EOFError:
+                    pass
+        else:
+            # Standard CLI Mode
+            try:
+                input(f"\n{DIM}Task finished. Press Enter to exit...{RESET}")
+            except EOFError:
+                pass
     except (EOFError, KeyboardInterrupt):
         pass
 

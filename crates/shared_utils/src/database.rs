@@ -2025,10 +2025,11 @@ fn sample_distance(
 
 fn adaptive_neighbor_count(total: usize) -> usize {
     crate::numeric_cast::u64_to_usize_strict(
-        (crate::numeric_cast::usize_to_f64(total))
-            .sqrt()
-            .round()
-            .to_bits(),
+        crate::numeric_cast::f64_to_u64_strict(
+            (crate::numeric_cast::usize_to_f64(total)).sqrt().round(),
+            "adaptive_neighbor_total_rounded",
+        )
+        .unwrap_or(6),
         "adaptive_neighbor_total",
     )
     .unwrap_or_else(|| total.min(6))

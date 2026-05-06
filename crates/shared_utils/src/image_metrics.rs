@@ -76,7 +76,10 @@ pub fn calculate_psnr(original: &DynamicImage, converted: &DynamicImage) -> Opti
             use rug::Integer;
             // mse_sum is a sum of squared differences (f64).
             // Convert to Integer only after summing to avoid heap allocs in loop.
-            let mse_sum_int = Integer::from(mse_sum.round() as i64);
+            let mse_sum_int = Integer::from(
+                crate::numeric_cast::f64_to_i64_strict(mse_sum.round(), "mse_sum_rounded")
+                    .unwrap_or(0),
+            );
             let pixel_count_int = Integer::from(orig_pixels.len());
             let three_int = Integer::from(3);
             let denominator = Rational::from(three_int) * Rational::from(pixel_count_int);
@@ -238,19 +241,19 @@ fn calculate_ssim_simple(original: &DynamicImage, converted: &DynamicImage) -> O
     {
         use rug::Integer;
         let n = Rational::from(Integer::from(n_u64));
-        let sum_x_r = Rational::from(Integer::from(sum_x));
-        let sum_y_r = Rational::from(Integer::from(total_sum_y));
-        let sum_xx_r = Rational::from(Integer::from(sum_xx));
-        let sum_yy_r = Rational::from(Integer::from(sum_yy));
-        let sum_xy_r = Rational::from(Integer::from(products_sum_xy));
+        let x_total_rational = Rational::from(Integer::from(sum_x));
+        let y_accumulated_rat = Rational::from(Integer::from(total_sum_y));
+        let xx_sq_sum = Rational::from(Integer::from(sum_xx));
+        let yy_sq_sum = Rational::from(Integer::from(sum_yy));
+        let xy_cross_sum = Rational::from(Integer::from(products_sum_xy));
 
-        let mean_x = sum_x_r.clone() / n.clone();
-        let mean_y = sum_y_r.clone() / n.clone();
+        let mean_x = x_total_rational / n.clone();
+        let mean_y = y_accumulated_rat / n.clone();
         let n1 = n.clone() - Rational::from(1);
 
-        let var_x = (sum_xx_r - (n.clone() * mean_x.clone() * mean_x.clone())) / n1.clone();
-        let var_y = (sum_yy_r - (n.clone() * mean_y.clone() * mean_y.clone())) / n1.clone();
-        let cov_xy = (sum_xy_r - (n * mean_x.clone() * mean_y.clone())) / n1;
+        let var_x = (xx_sq_sum - (n.clone() * mean_x.clone() * mean_x.clone())) / n1.clone();
+        let var_y = (yy_sq_sum - (n.clone() * mean_y.clone() * mean_y.clone())) / n1.clone();
+        let cov_xy = (xy_cross_sum - (n * mean_x.clone() * mean_y.clone())) / n1;
 
         let c1_rat = Rational::from_f64(C1).unwrap_or_else(|| Rational::from(0));
         let c2_rat = Rational::from_f64(C2).unwrap_or_else(|| Rational::from(0));

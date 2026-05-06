@@ -67,13 +67,16 @@ launch_in_terminal() {
     local target_path="$1"
     local mode_flag="$2"
     local keep_open="${3:-false}"
-    local inner_cmd="export PATH=$(shell_quote "$APP_PATH")"
-    inner_cmd+=" && export LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 FROM_APP=1"
-    inner_cmd+=" && cd $(shell_quote "$PROJECT_ROOT")"
-    inner_cmd+=" && $(shell_quote "$PYTHON_BIN") $(shell_quote "$PROCESSOR_SCRIPT")"
+
+    # Build the environment and command
+    # We use a simple structure that avoids deep nesting of quotes
+    local cmd="export PATH=$(shell_quote "$APP_PATH") && "
+    cmd+="export LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 FROM_APP=1 && "
+    cmd+="cd $(shell_quote "$PROJECT_ROOT") && "
+    cmd+="$(shell_quote "$PYTHON_BIN") $(shell_quote "$PROCESSOR_SCRIPT")"
 
     if [[ -n "$mode_flag" ]]; then
-        inner_cmd+=" $mode_flag"
+        cmd+=" $mode_flag"
     fi
 
     if [[ -n "$target_path" ]]; then
@@ -81,27 +84,23 @@ launch_in_terminal() {
             osascript -e 'display alert "Invalid Path" message "Selected path contains unsupported control characters." as critical'
             return 1
         fi
-        inner_cmd+=" $(shell_quote "$target_path")"
+        cmd+=" $(shell_quote "$target_path")"
     fi
 
-    if [[ "$keep_open" == "true" ]]; then
-        inner_cmd+="; status=\$?; echo; echo 'Press any key to close...'; read -n 1; exit \$status"
-    else
-        inner_cmd+="; exit \$?"
-    fi
-
-    # Use single-quote quoting (qq) for the inner command to prevent history expansion issues (like '!')
-    local cmd="clear; exec /bin/zsh -f -c ${(qq)inner_cmd}"
+    # Final command to be executed in the new terminal
+    # We wrap everything in 'zsh -f -c' for a clean environment
+    # Note: We don't use 'exec' here so the terminal can stay open if needed
+    local full_cmd="clear; /bin/zsh -f -c ${(qq)cmd}"
 
     local escaped_cmd
-    escaped_cmd=$(escape_applescript_string "$cmd")
+    escaped_cmd=$(escape_applescript_string "$full_cmd")
 
     osascript <<EOF
 tell application "Terminal"
+    activate
     set new_tab to do script "$escaped_cmd"
     set number of columns of new_tab to 223
     set number of rows of new_tab to 45
-    activate
 end tell
 EOF
 }
@@ -161,7 +160,7 @@ else
         exit 1
     fi
 
-    # Directly launch terminal without redundant confirmation popups
-    launch_in_terminal "$SELECTED_DIR" "$MODE_FLAG"
+    # Directly launch terminal with exit guard
+    launch_in_terminal "$SELECTED_DIR" "$MODE_FLAG" "true"
     exit 0
 fi

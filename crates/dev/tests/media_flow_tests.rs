@@ -116,6 +116,7 @@ mod test_utils {
         gif
     }
 
+    #[allow(dead_code)]
     pub fn create_animated_webp() -> Vec<u8> {
         let mut webp = Vec::new();
         // RIFF header
@@ -411,7 +412,7 @@ fn test_complete_media_processing_workflow() -> Result<()> {
     for (filename, data) in &test_files {
         let file_path = temp_dir.join(filename);
         write_test_file(data, &file_path)?;
-        assert!(file_path.exists(), "{} should exist", filename);
+        assert!(file_path.exists(), "{filename} should exist");
     }
 
     // 2. Batch processing test
@@ -426,16 +427,15 @@ fn test_complete_media_processing_workflow() -> Result<()> {
         let codec = SourceCodec::identify_by_header(&file_data);
         assert!(
             codec.is_some(),
-            "{} should be able to identify codec",
-            filename
+            "{filename} should be able to identify codec"
         );
 
         // Special format processing
         match filename {
-            name if name.ends_with(".gif") => {
+            name if std::path::Path::new(name).extension().is_some_and(|ext| ext.eq_ignore_ascii_case("gif")) => {
                 let scan_result = scan_gif_headers(&file_path);
                 if scan_result.is_ok() {
-                    let headers = scan_result?;
+                    let _headers = scan_result?;
                     // Check if animated GIF (via graphic control extension)
                     let file_data = fs::read(&file_path)?;
                     let is_animated = file_data.windows(3).any(|w| w == [0x21, 0xF9, 0x04]);
@@ -445,7 +445,7 @@ fn test_complete_media_processing_workflow() -> Result<()> {
                 }
                 processed_count += 1;
             }
-            name if name.ends_with(".webp") => {
+            name if std::path::Path::new(name).extension().is_some_and(|ext| ext.eq_ignore_ascii_case("webp")) => {
                 // WebP animation detection handled via other mechanisms, counting here
                 processed_count += 1;
             }
@@ -461,8 +461,8 @@ fn test_complete_media_processing_workflow() -> Result<()> {
     );
 
     println!("✅ Complete media processing workflow test passed");
-    println!("   📊 Processed file count: {}", processed_count);
-    println!("   🎬 Animated file count: {}", animated_count);
+    println!("   📊 Processed file count: {processed_count}");
+    println!("   🎬 Animated file count: {animated_count}");
     Ok(())
 }
 
@@ -528,19 +528,18 @@ fn test_performance_and_memory_safety() -> Result<()> {
     fs::create_dir_all(&temp_dir)?;
 
     for i in 0..100 {
-        let filename = format!("test_{}.jpg", i);
+        let filename = format!("test_{i}.jpg");
         let file_path = temp_dir.join(filename);
         write_test_file(&create_test_jpeg(), &file_path)?;
     }
 
     // Verify all files created correctly
     let entries: Vec<_> = fs::read_dir(&temp_dir)?
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .filter(|e| {
             e.file_name()
                 .to_str()
-                .map(|n| n.starts_with("test_") && n.ends_with(".jpg"))
-                .unwrap_or(false)
+                .is_some_and(|n| n.starts_with("test_") && std::path::Path::new(n).extension().is_some_and(|ext| ext.eq_ignore_ascii_case("jpg")))
         })
         .collect();
     assert!(entries.len() >= 99, "Should create at least 99 files");

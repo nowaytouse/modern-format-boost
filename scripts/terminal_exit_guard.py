@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-import os
 import sys
 import signal
 import subprocess
@@ -19,7 +18,7 @@ def confirm_exit():
             return result.stdout.strip() == "✅ OK"
         else:
             return False
-    except:
+    except Exception:
         return False
 
 def handle_exit(signum=None, frame=None):

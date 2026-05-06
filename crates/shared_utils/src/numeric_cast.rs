@@ -65,7 +65,7 @@ pub fn f64_to_u64_strict(val: f64, name: &str) -> Option<u64> {
         );
         return None;
     }
-    Some(val.to_bits())
+    Some(raw::f64_to_u64(val))
 }
 
 /// Convert `f64` to `u32` with loud warning on NaN/Inf/Overflow.
@@ -83,7 +83,7 @@ pub fn f64_to_u32_strict(val: f64, name: &str) -> Option<u32> {
         );
         return None;
     }
-    u32::try_from(val.to_bits()).ok()
+    Some(raw::f64_to_u32(val))
 }
 
 /// Convert `f64` to `usize` with loud warning on NaN/Inf/Overflow.
@@ -107,7 +107,7 @@ pub fn f64_to_usize_strict(val: f64, name: &str) -> Option<usize> {
             return None;
         }
     }
-    Some(val as usize)
+    Some(raw::f64_to_usize(val))
 }
 
 /// Convert `u32` to `i32` with loud warning on overflow.
@@ -309,6 +309,28 @@ pub fn f64_to_u8_strict(val: f64, name: &str) -> Option<u8> {
     Some(unsafe { rounded.to_int_unchecked::<u8>() })
 }
 
+/// Convert `f64` to `i64` with loud warning on NaN/Inf/Overflow.
+#[must_use]
+pub fn f64_to_i64_strict(val: f64, name: &str) -> Option<i64> {
+    if !val.is_finite() {
+        warn!(
+            "☢️ [ANOMALY] {} ({}) is NaN or Inf! Refusing to forge i64.",
+            name, val
+        );
+        return None;
+    }
+    if !(-9_223_372_036_854_775_808.0..=9_223_372_036_854_775_807.0).contains(&val) {
+        warn!(
+            "☢️ [ANOMALY] {} ({}) overflows i64! Refusing to forge data.",
+            name, val
+        );
+        return None;
+    }
+    #[allow(clippy::cast_possible_truncation, reason = "Checked range above")]
+    Some(val as i64)
+}
+
+
 /// Convert `f64` to `usize` with loud warning on overflow/NaN.
 #[must_use]
 pub fn u32_to_usize_strict(val: u32, name: &str) -> Option<usize> {
@@ -377,7 +399,7 @@ pub fn f32_to_u32_strict(val: f32, name: &str) -> Option<u32> {
         );
         return None;
     }
-    Some(val.to_bits())
+    Some(raw::f32_to_u32(val))
 }
 
 /// Convert `f32` to `i32` with loud warning on NaN/Inf/Overflow.
@@ -399,7 +421,7 @@ pub fn f32_to_i32_strict(val: f32, name: &str) -> Option<i32> {
         return None;
     }
     // Convert f32 to i32 safely using to_bits and reinterpretation
-    Some(i32::from_ne_bytes(val.to_bits().to_ne_bytes()))
+    Some(raw::f32_to_i32(val))
 }
 
 /// Convert `u32` to `u8` with loud warning on overflow.

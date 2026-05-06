@@ -456,5 +456,12 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    {
+        use std::io::IsTerminal;
+        if std::io::stdout().is_terminal() {
+            shared_utils::macos_ui::wait_for_exit_confirmation();
+        }
+    }
+
     Ok(())
 }

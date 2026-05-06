@@ -81,7 +81,7 @@ mod test_utils {
     }
 
     // Create zero-byte file
-    pub fn create_empty_file() -> Vec<u8> {
+    pub const fn create_empty_file() -> Vec<u8> {
         Vec::new()
     }
 
@@ -104,13 +104,11 @@ fn check_timeout<T>(
 
     if elapsed > Duration::from_secs(timeout_secs) {
         return Err(anyhow::anyhow!(
-            "Operation '{}' timed out: {:?}",
-            operation_name,
-            elapsed
+            "Operation '{operation_name}' timed out: {elapsed:?}"
         ));
     }
 
-    println!("   ✅ {}: took {:?}", operation_name, elapsed);
+    println!("   ✅ {operation_name}: took {elapsed:?}");
     Ok(result)
 }
 
@@ -136,7 +134,7 @@ fn test_large_file_blocking() -> Result<()> {
     )?;
 
     assert!(result.is_some(), "Large file should identify codec");
-    println!("   ✅ Codec identification: {:?}", result);
+    println!("   ✅ Codec identification: {result:?}");
 
     // Test file reading blocking
     let file_data = check_timeout(|| fs::read(temp_file.path()).unwrap(), 10, "File reading")?;
@@ -206,7 +204,7 @@ fn test_corrupted_file_blocking() -> Result<()> {
         result.is_some(),
         "Corrupted PNG should be identified as PNG"
     );
-    println!("   ✅ Codec identification: {:?}", result);
+    println!("   ✅ Codec identification: {result:?}");
 
     // Test file reading blocking
     let file_data = check_timeout(|| fs::read(temp_file.path()).unwrap(), 5, "File reading")?;
@@ -292,16 +290,14 @@ fn test_concurrent_access_blocking() -> Result<()> {
         }
         total_time += elapsed;
         println!(
-            "   ✅ Thread {}: success={}, took={:?}",
-            thread_id, success, elapsed
+            "   ✅ Thread {thread_id}: success={success}, took={elapsed:?}"
         );
     }
 
     assert!(success_count >= 8, "At least 8 threads should succeed");
     let avg_time = total_time / 10;
     println!(
-        "   📊 Success rate: {}/10, average time: {:?}",
-        success_count, avg_time
+        "   📊 Success rate: {success_count}/10, average time: {avg_time:?}"
     );
 
     println!("✅ Concurrent access blocking test passed");
@@ -313,7 +309,7 @@ fn test_concurrent_access_blocking() -> Result<()> {
 // ============================================================================
 
 #[test]
-fn test_memory_pressure_blocking() -> Result<()> {
+fn test_memory_pressure_blocking() {
     use test_utils::*;
 
     println!("🧠 Testing memory pressure blocking behavior...");
@@ -340,8 +336,7 @@ fn test_memory_pressure_blocking() -> Result<()> {
             Ok((thread_id, result, elapsed)) => {
                 completed += 1;
                 println!(
-                    "   ✅ Thread {}: {:?} (took: {:?})",
-                    thread_id, result, elapsed
+                    "   ✅ Thread {thread_id}: {result:?} (took: {elapsed:?})"
                 );
             }
             Err(_) => {
@@ -352,7 +347,6 @@ fn test_memory_pressure_blocking() -> Result<()> {
 
     assert!(completed == 5, "All threads should complete");
     println!("✅ Memory pressure blocking test passed");
-    Ok(())
 }
 
 // ============================================================================
@@ -375,7 +369,7 @@ mod tests {
 
         // Concurrent and pressure tests
         test_concurrent_access_blocking()?;
-        test_memory_pressure_blocking()?;
+        test_memory_pressure_blocking();
 
         println!("\n🎉 All simplified blocking behavior tests passed!");
         println!("✅ Large file processing: No blocking");

@@ -246,6 +246,7 @@ pub mod video_explorer;
 // mod video_explorer_tests;
 // #[cfg(test)]
 // mod image_detection_tests;
+pub mod macos_ui;
 /// Video quality analytics and scoring.
 pub mod video_quality_detector;
 /// Metadata-aware `XMP` merging logic.

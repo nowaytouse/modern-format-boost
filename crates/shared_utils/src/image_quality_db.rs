@@ -442,7 +442,7 @@ pub fn lookup_image_quality(analysis: &ImageAnalysis) -> Option<QualityScore> {
         total_weight += weight;
     }
 
-    if total_weight.clone() <= Rational::from(0) {
+    if total_weight <= 0 {
         emit_stderr(
             "  ⚠️ Static image KNN produced zero usable weight — using heuristic score only",
         );
